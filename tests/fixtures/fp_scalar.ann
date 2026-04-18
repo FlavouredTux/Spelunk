@@ -1,0 +1,6 @@
+# Signatures for fp_scalar.c so the body substitution can render the
+# declared param names (a, b, c, x) inside arithmetic expressions.
+sig 401150 double|double|a|double|b
+sig 401160 double|double|x
+sig 401180 double|double|a|double|b|double|c
+sig 4011a0 float|float|a|float|b

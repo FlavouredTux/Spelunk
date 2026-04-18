@@ -1,0 +1,6 @@
+// block_copy
+void block_copy(u64 a1) {
+  // bb_4011b0
+  rep.movsq();
+  return rax;
+}

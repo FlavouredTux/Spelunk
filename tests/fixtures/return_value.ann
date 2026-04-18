@@ -1,0 +1,5 @@
+# User-declared signature for `big` in return_value.c. Used by the
+# signature-propagation golden to lock in that SysV arg-regs get rewritten
+# to the declared param names throughout the function body.
+rename 401140 add_mix
+sig 401140 u64|u64|a|u64|b|u64|c

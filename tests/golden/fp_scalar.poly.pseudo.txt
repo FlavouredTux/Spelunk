@@ -1,0 +1,5 @@
+// poly
+double poly(double x) {
+  // bb_401160
+  return (((x * x) + x) + *(double*)(0x402008));
+}

@@ -1,0 +1,6 @@
+// sse_memclr
+void sse_memclr(void) {
+  // bb_4011d0
+  rep.stosq();
+  return rax;
+}

@@ -1,0 +1,5 @@
+// big
+void big(u64 a1, u64 a2, u64 a3) {
+  // bb_401140
+  return ((rdi ^ rsi) + (rdx * 0x4));
+}

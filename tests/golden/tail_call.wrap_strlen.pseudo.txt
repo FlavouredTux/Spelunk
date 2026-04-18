@@ -1,0 +1,5 @@
+// wrap_strlen
+void wrap_strlen(void) {
+  // bb_401160
+  return strlen(rdi);
+}

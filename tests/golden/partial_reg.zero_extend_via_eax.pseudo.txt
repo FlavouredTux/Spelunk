@@ -1,0 +1,7 @@
+// zero_extend_via_eax
+void zero_extend_via_eax(u64 a1) {
+  // bb_401140
+  u64 t2 = (u64)(u32)(rdi + 0x1);
+  sink_u64 = t2;
+  return t2;
+}

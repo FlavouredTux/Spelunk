@@ -1,0 +1,534 @@
+#include <ember/analysis/cfg_builder.hpp>
+
+#include <ember/ir/ssa.hpp>  // canonical_reg
+
+#include <algorithm>
+#include <cstring>
+#include <deque>
+#include <format>
+#include <map>
+#include <optional>
+#include <set>
+#include <unordered_set>
+#include <utility>
+
+namespace ember {
+
+namespace {
+
+struct JumpTable {
+    std::vector<addr_t> targets;
+    std::vector<i64>    values;          // parallel to targets (0, 1, 2, …)
+    std::optional<addr_t> default_tgt;
+    Reg                 index_reg = Reg::None;
+};
+
+struct WalkState {
+    std::map<addr_t, Instruction> insns;
+    std::set<addr_t>              leaders;
+    std::unordered_set<addr_t>    call_seen;
+    std::vector<addr_t>           calls;
+    // Switch tables, keyed by the address of the indirect jmp that reads them.
+    std::map<addr_t, JumpTable>   tables;
+    // Addresses of `jmp`s that are tail calls (target is a known function
+    // entry or PLT stub). Partition converts these into TailCall blocks.
+    std::set<addr_t>              tail_calls;
+};
+
+// A jmp is a tail call if its target is the entry of some function — either
+// a defined non-import function symbol, or a PLT stub for an imported one.
+// Self-recursive tail calls (target == current function's entry) also count.
+[[nodiscard]] bool is_tail_call_target(const Binary& b, addr_t target) noexcept {
+    if (const Symbol* s = b.defined_object_at(target);
+        s && s->kind == SymbolKind::Function && s->addr == target) {
+        return true;
+    }
+    if (b.import_at_plt(target) != nullptr) return true;
+    return false;
+}
+
+// ---------- Jump-table detection ----------------------------------------------
+//
+// Recognizes two common x86-64 idioms produced by GCC/Clang:
+//
+// (A) PIC / RIP-relative offset table:
+//       lea     rT, [rip + .Ltable]
+//       ...
+//       movsxd  rB, dword ptr [rT + rI*4]
+//       add     rT, rB
+//       jmp     rT
+//     Each table entry is a 32-bit signed offset from .Ltable;
+//     the case target is .Ltable + *(i32*)&table[idx].
+//
+// (B) Absolute memory-indirect table:
+//       jmp     qword ptr [rip + .Ltable + rI*8]
+//     Each entry is a 64-bit absolute target address.
+//
+// Case-count is derived from a preceding `cmp rI, N` + `ja/jae default` guard
+// (GCC's canonical shape). If that guard isn't found, we probe the table
+// forward and stop as soon as an entry doesn't land inside an executable
+// section — good enough for v1.
+
+[[nodiscard]] const Section*
+find_exec_section_for(const Binary& b, addr_t a) noexcept {
+    for (const auto& s : b.sections()) {
+        if (!s.flags.executable) continue;
+        if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool read_i32_at(const Binary& b, addr_t a, i32& out) noexcept {
+    auto span = b.bytes_at(a);
+    if (span.size() < 4) return false;
+    u32 raw;
+    std::memcpy(&raw, span.data(), 4);
+    out = static_cast<i32>(raw);
+    return true;
+}
+
+[[nodiscard]] bool read_u64_at(const Binary& b, addr_t a, u64& out) noexcept {
+    auto span = b.bytes_at(a);
+    if (span.size() < 8) return false;
+    std::memcpy(&out, span.data(), 8);
+    return true;
+}
+
+// Resolve a `lea rT, [rip + disp]` anywhere in insns_view whose destination
+// matches reg. Returns the rip-relative target, or nullopt.
+[[nodiscard]] std::optional<addr_t>
+find_lea_rip_for(const std::vector<const Instruction*>& insns_view, Reg reg) noexcept {
+    const Reg want = canonical_reg(reg);
+    for (auto it = insns_view.rbegin(); it != insns_view.rend(); ++it) {
+        const Instruction& insn = **it;
+        if (insn.mnemonic != Mnemonic::Lea) continue;
+        if (insn.num_operands != 2) continue;
+        const auto& d = insn.operands[0];
+        const auto& s = insn.operands[1];
+        if (d.kind != Operand::Kind::Register) continue;
+        if (canonical_reg(d.reg) != want) continue;
+        if (s.kind != Operand::Kind::Memory) continue;
+        if (s.mem.base != Reg::Rip || s.mem.index != Reg::None) continue;
+        if (!s.mem.has_disp) continue;
+        const i64 base = static_cast<i64>(insn.address + insn.length);
+        return static_cast<addr_t>(base + s.mem.disp);
+    }
+    return std::nullopt;
+}
+
+// Try to extract (index_reg, case_count, default_target) from predecessor blocks.
+// Looks for a `cmp idx, N` immediately followed by `ja default` (unsigned >),
+// which means cases are 0..N.
+struct BoundGuess {
+    u32                   count       = 0;
+    std::optional<addr_t> default_tgt;
+    Reg                   index_reg   = Reg::None;
+};
+
+[[nodiscard]] std::optional<BoundGuess>
+detect_bound(const std::map<addr_t, Instruction>& insns,
+             const std::set<addr_t>& leaders,
+             addr_t jmp_addr,
+             Reg /*index_reg_hint*/) {
+    // Walk backward from the jmp, scanning up to ~48 instructions (spanning
+    // predecessor blocks is fine — we ignore control flow for this heuristic).
+    // Match `cmp rX, N` immediately followed by `ja/jae target`; the
+    // register name doesn't need to equal the jmp's index register because
+    // the compiler often moves it through one or two aliases.
+    auto it = insns.find(jmp_addr);
+    if (it == insns.end() || it == insns.begin()) return std::nullopt;
+
+    std::vector<const Instruction*> recent;
+    recent.reserve(48);
+    auto cur = it;
+    for (int i = 0; i < 48 && cur != insns.begin(); ++i) {
+        --cur;
+        recent.push_back(&cur->second);
+    }
+
+    for (std::size_t i = 0; i + 1 < recent.size(); ++i) {
+        const Instruction* ja  = recent[i];
+        const Instruction* cmp = recent[i + 1];
+        if (ja->mnemonic != Mnemonic::Ja && ja->mnemonic != Mnemonic::Jae) continue;
+        if (cmp->mnemonic != Mnemonic::Cmp) continue;
+        if (cmp->num_operands != 2) continue;
+        const auto& a = cmp->operands[0];
+        const auto& b = cmp->operands[1];
+        if (a.kind != Operand::Kind::Register) continue;
+        if (b.kind != Operand::Kind::Immediate) continue;
+
+        BoundGuess g;
+        g.index_reg = a.reg;
+        const auto n = static_cast<u32>(b.imm.value);
+        // ja:  idx > N  → default → valid range 0..N   → count = N+1
+        // jae: idx >= N → default → valid range 0..N-1 → count = N
+        g.count = (ja->mnemonic == Mnemonic::Ja) ? (n + 1) : n;
+        if (ja->num_operands >= 1 && ja->operands[0].kind == Operand::Kind::Relative) {
+            g.default_tgt = ja->operands[0].rel.target;
+        }
+        (void)leaders;
+        return g;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<JumpTable>
+detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
+    auto it = ws.insns.find(jmp_addr);
+    if (it == ws.insns.end()) return std::nullopt;
+    const Instruction& jmp = it->second;
+    if (jmp.mnemonic != Mnemonic::Jmp || jmp.num_operands != 1) return std::nullopt;
+
+    const Operand& jop = jmp.operands[0];
+
+    // -------- Pattern (B): jmp qword ptr [rip + table + idx*8] --------
+    if (jop.kind == Operand::Kind::Memory &&
+        jop.mem.base == Reg::Rip &&
+        jop.mem.index != Reg::None &&
+        jop.mem.scale == 8 &&
+        jop.mem.has_disp) {
+        const addr_t table = jmp.address + jmp.length +
+                             static_cast<addr_t>(jop.mem.disp);
+        const Reg idx_reg = jop.mem.index;
+        auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
+        const u32 max_count = bound ? bound->count : 256;
+
+        JumpTable jt;
+        jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
+        if (bound) jt.default_tgt = bound->default_tgt;
+        for (u32 k = 0; k < max_count; ++k) {
+            u64 entry = 0;
+            if (!read_u64_at(b, table + k * 8u, entry)) break;
+            const addr_t tgt = static_cast<addr_t>(entry);
+            if (!find_exec_section_for(b, tgt)) {
+                if (!bound) break;   // probe-mode: stop on first invalid
+                // With a known bound, trust it even if a single entry looks odd.
+                continue;
+            }
+            jt.targets.push_back(tgt);
+            jt.values.push_back(static_cast<i64>(k));
+        }
+        if (jt.targets.empty()) return std::nullopt;
+        return jt;
+    }
+
+    // -------- Pattern (A): PIC / rip-relative offset table --------
+    if (jop.kind != Operand::Kind::Register) return std::nullopt;
+    const Reg jmp_reg = canonical_reg(jop.reg);
+
+    // Collect up to ~8 predecessor instructions (in address order) for pattern matching.
+    std::vector<const Instruction*> recent;  // reverse-chronological
+    auto cur = it;
+    for (int i = 0; i < 12 && cur != ws.insns.begin(); ++i) {
+        --cur;
+        recent.push_back(&cur->second);
+    }
+    // Also gather forward order for lea-lookup helper.
+    std::vector<const Instruction*> forward(recent.rbegin(), recent.rend());
+
+    // Pattern:
+    //   lea  rTAB, [rip + .table]
+    //   movsxd rOFF, [rTAB + rIDX*4]
+    //   add  rJMP, rTAB   ; OR  add rTAB, rOFF  (GCC vs. Clang flavor)
+    //   jmp  rJMP
+    // Where rJMP == dst of the `add` and holds `rTAB + rOFF`, i.e. the final
+    // case target. rTAB has a preceding `lea rTAB, [rip+disp]`; rOFF is
+    // whichever of {add.dst, add.src} isn't rTAB.
+    const Instruction* add_insn = nullptr;
+    Reg                add_other = Reg::None;
+    for (std::size_t i = 0; i < recent.size(); ++i) {
+        const Instruction* in = recent[i];
+        if (in->mnemonic != Mnemonic::Add || in->num_operands != 2) continue;
+        const auto& d = in->operands[0];
+        const auto& s = in->operands[1];
+        if (d.kind != Operand::Kind::Register) continue;
+        if (s.kind != Operand::Kind::Register) continue;
+        if (canonical_reg(d.reg) != jmp_reg) continue;
+        add_insn  = in;
+        add_other = canonical_reg(s.reg);
+        break;
+    }
+    if (!add_insn) return std::nullopt;
+
+    // Try both (rTAB, rOFF) orderings.
+    struct Cand { Reg tab; Reg off; };
+    const Cand cands[] = {
+        { add_other, jmp_reg },      // GCC: add rJMP, rTAB → rTAB=add.src
+        { jmp_reg,  add_other },     // Clang: add rTAB, rOFF → rTAB=add.dst
+    };
+
+    addr_t table  = 0;
+    Reg    idx_reg = Reg::None;
+    bool   matched = false;
+
+    for (const auto& c : cands) {
+        // Need a movsxd/mov whose dst is rOFF and whose mem base is rTAB.
+        const Instruction* movsxd_insn = nullptr;
+        for (std::size_t i = 0; i < recent.size(); ++i) {
+            const Instruction* in = recent[i];
+            if (in->mnemonic != Mnemonic::Movsxd && in->mnemonic != Mnemonic::Mov) continue;
+            if (in->num_operands != 2) continue;
+            const auto& d = in->operands[0];
+            const auto& s = in->operands[1];
+            if (d.kind != Operand::Kind::Register) continue;
+            if (canonical_reg(d.reg) != c.off) continue;
+            if (s.kind != Operand::Kind::Memory) continue;
+            if (s.mem.index == Reg::None || s.mem.scale != 4) continue;
+            if (canonical_reg(s.mem.base) != c.tab) continue;
+            movsxd_insn = in;
+            break;
+        }
+        if (!movsxd_insn) continue;
+
+        auto t = find_lea_rip_for(forward, c.tab);
+        if (!t) continue;
+
+        table   = *t;
+        idx_reg = movsxd_insn->operands[1].mem.index;
+        matched = true;
+        break;
+    }
+    if (!matched) return std::nullopt;
+
+    auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
+    const u32 max_count = bound ? bound->count : 256;
+
+    JumpTable jt;
+    jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
+    if (bound) jt.default_tgt = bound->default_tgt;
+
+    for (u32 k = 0; k < max_count; ++k) {
+        i32 entry = 0;
+        if (!read_i32_at(b, table + k * 4u, entry)) break;
+        const addr_t tgt = table + static_cast<addr_t>(static_cast<i64>(entry));
+        if (!find_exec_section_for(b, tgt)) {
+            if (!bound) break;
+            continue;
+        }
+        jt.targets.push_back(tgt);
+        jt.values.push_back(static_cast<i64>(k));
+    }
+    if (jt.targets.empty()) return std::nullopt;
+    return jt;
+}
+
+void walk_from(const Binary& b, const X64Decoder& dec, WalkState& ws, addr_t entry) {
+    std::deque<addr_t> wl;
+    wl.push_back(entry);
+    ws.leaders.insert(entry);
+
+    while (!wl.empty()) {
+        addr_t ip = wl.front();
+        wl.pop_front();
+
+        while (true) {
+            if (ws.insns.contains(ip)) break;
+
+            const auto bytes = b.bytes_at(ip);
+            if (bytes.empty()) break;
+
+            auto decoded = dec.decode(bytes, ip);
+            if (!decoded) break;
+
+            auto [it, _] = ws.insns.emplace(ip, std::move(*decoded));
+            const Instruction& insn = it->second;
+            const addr_t fallthrough = ip + insn.length;
+            const Mnemonic mn = insn.mnemonic;
+
+            if (is_return_like(mn)) break;
+
+            if (is_call(mn)) {
+                if (auto t = branch_target(insn); t) {
+                    if (ws.call_seen.insert(*t).second) {
+                        ws.calls.push_back(*t);
+                    }
+                }
+                ip = fallthrough;
+                continue;
+            }
+            if (is_conditional_branch(mn)) {
+                if (auto t = branch_target(insn); t) {
+                    if (ws.leaders.insert(*t).second) wl.push_back(*t);
+                }
+                if (ws.leaders.insert(fallthrough).second) wl.push_back(fallthrough);
+                break;
+            }
+            if (is_unconditional_jmp(mn)) {
+                if (auto t = branch_target(insn); t) {
+                    if (is_tail_call_target(b, *t)) {
+                        // Tail call: don't walk into the target; record the
+                        // call for xrefs and mark this jmp so partition()
+                        // can materialize a TailCall block.
+                        if (ws.call_seen.insert(*t).second) {
+                            ws.calls.push_back(*t);
+                        }
+                        ws.tail_calls.insert(ip);
+                    } else if (ws.leaders.insert(*t).second) {
+                        wl.push_back(*t);
+                    }
+                }
+                break;
+            }
+
+            ip = fallthrough;
+        }
+    }
+}
+
+void partition(const WalkState& ws, Function& fn) {
+    for (addr_t leader : ws.leaders) {
+        auto it = ws.insns.find(leader);
+        if (it == ws.insns.end()) continue;
+
+        BasicBlock bb;
+        bb.start = leader;
+
+        while (it != ws.insns.end()) {
+            const Instruction& insn = it->second;
+            const addr_t addr = it->first;
+            const addr_t next = addr + insn.length;
+
+            bb.instructions.push_back(insn);
+            bb.end = next;
+
+            const Mnemonic mn = insn.mnemonic;
+            if (ends_basic_block(mn)) {
+                if (is_return_like(mn)) {
+                    bb.kind = BlockKind::Return;
+                } else if (is_conditional_branch(mn)) {
+                    bb.kind = BlockKind::Conditional;
+                    if (auto t = branch_target(insn); t) {
+                        bb.successors.push_back(*t);
+                    }
+                    bb.successors.push_back(next);
+                } else if (is_unconditional_jmp(mn)) {
+                    auto ti = ws.tables.find(addr);
+                    if (ti != ws.tables.end()) {
+                        const JumpTable& jt = ti->second;
+                        bb.kind = BlockKind::Switch;
+                        bb.successors   = jt.targets;
+                        bb.case_values  = jt.values;
+                        bb.switch_index = jt.index_reg;
+                        if (jt.default_tgt) {
+                            bb.successors.push_back(*jt.default_tgt);
+                            bb.has_default = true;
+                        }
+                    } else if (ws.tail_calls.contains(addr)) {
+                        // Record the target as the single successor so later
+                        // stages (lifter, emitter) can recover `return fn(...);`.
+                        bb.kind = BlockKind::TailCall;
+                        if (auto t = branch_target(insn); t) {
+                            bb.successors.push_back(*t);
+                        }
+                    } else if (auto t = branch_target(insn); t) {
+                        bb.kind = BlockKind::Unconditional;
+                        bb.successors.push_back(*t);
+                    } else {
+                        bb.kind = BlockKind::IndirectJmp;
+                    }
+                }
+                break;
+            }
+
+            if (ws.leaders.contains(next) && next != leader) {
+                bb.kind = BlockKind::Fallthrough;
+                bb.successors.push_back(next);
+                break;
+            }
+
+            auto next_it = ws.insns.find(next);
+            if (next_it == ws.insns.end()) {
+                bb.kind = BlockKind::Fallthrough;
+                bb.successors.push_back(next);
+                break;
+            }
+            it = next_it;
+        }
+
+        fn.block_at[bb.start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(bb));
+    }
+
+    for (const auto& b : fn.blocks) {
+        if (b.end > fn.end) fn.end = b.end;
+    }
+}
+
+void compute_predecessors(Function& fn) {
+    for (const auto& bb : fn.blocks) {
+        for (addr_t succ : bb.successors) {
+            auto it = fn.block_at.find(succ);
+            if (it != fn.block_at.end()) {
+                fn.blocks[it->second].predecessors.push_back(bb.start);
+            }
+        }
+    }
+    for (auto& bb : fn.blocks) {
+        std::ranges::sort(bb.predecessors);
+        const auto dup = std::ranges::unique(bb.predecessors);
+        bb.predecessors.erase(dup.begin(), dup.end());
+    }
+}
+
+}  // namespace
+
+Result<Function>
+CfgBuilder::build(addr_t entry, std::string name) const {
+    if (binary_.bytes_at(entry).empty()) {
+        return std::unexpected(Error::out_of_bounds(std::format(
+            "cfg: no mapped bytes at entry {:#x}", entry)));
+    }
+
+    WalkState ws;
+    walk_from(binary_, decoder_, ws, entry);
+
+    if (ws.insns.empty()) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "cfg: failed to decode any instructions at {:#x}", entry)));
+    }
+
+    // Iteratively discover jump-table switches: each indirect jmp may reveal
+    // case-target blocks that need walking, and those blocks can themselves
+    // contain more switches. Bounded to avoid pathological runaway.
+    for (int iter = 0; iter < 8; ++iter) {
+        bool added_work = false;
+        for (const auto& [ip, insn] : ws.insns) {
+            if (insn.mnemonic != Mnemonic::Jmp) continue;
+            if (ws.tables.contains(ip)) continue;
+            if (insn.num_operands != 1) continue;
+            const auto& op = insn.operands[0];
+            // Only consider "indirect" forms — register or rip-based memory.
+            if (op.kind == Operand::Kind::Relative) continue;
+
+            auto table = detect_jump_table(binary_, ws, ip);
+            if (!table) continue;
+
+            for (addr_t t : table->targets) {
+                if (ws.leaders.insert(t).second) {
+                    walk_from(binary_, decoder_, ws, t);
+                    added_work = true;
+                }
+            }
+            if (table->default_tgt) {
+                if (ws.leaders.insert(*table->default_tgt).second) {
+                    walk_from(binary_, decoder_, ws, *table->default_tgt);
+                    added_work = true;
+                }
+            }
+            ws.tables.emplace(ip, std::move(*table));
+        }
+        if (!added_work) break;
+    }
+
+    Function fn;
+    fn.start        = entry;
+    fn.name         = std::move(name);
+    fn.call_targets = std::move(ws.calls);
+
+    partition(ws, fn);
+    compute_predecessors(fn);
+
+    return fn;
+}
+
+}  // namespace ember

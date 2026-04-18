@@ -1,0 +1,14 @@
+function zero_extend_via_eax @ 0x401140
+  blocks: 1
+
+bb_401140  (entry):
+  ; 0x401140
+  t0 = add i64 rdi, 0x1
+  t1 = trunc i32 t0
+  t2 = zext i64 t1
+  rax_1 = t2
+  ; 0x401143
+  store i64 [0x404020], rax_1
+  ; 0x40114a
+  return rax_1, xmm0
+

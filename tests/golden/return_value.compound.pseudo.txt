@@ -1,0 +1,5 @@
+// compound
+void compound(u64 a1) {
+  // bb_401130
+  return (u64)(u32)((rdi + (rdi * 0x2)) + 0x7);
+}

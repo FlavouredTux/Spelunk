@@ -1,0 +1,7 @@
+// redundant
+void redundant(u64 a1) {
+  // bb_401106
+  local_10 = rdi;
+  s = rdi;
+  return rdi;
+}

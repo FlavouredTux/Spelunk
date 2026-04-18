@@ -1,0 +1,5 @@
+// double_wrap
+void double_wrap(u64 a1, u64 a2) {
+  // bb_401170
+  return inner(rdi, rsi);
+}

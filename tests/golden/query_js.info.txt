@@ -1,0 +1,6 @@
+format   mach-o
+arch     x86_64
+entry    0x100001000
+sections 1
+defined  2
+imports  0

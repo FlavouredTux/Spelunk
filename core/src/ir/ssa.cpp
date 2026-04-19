@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <ember/analysis/cfg_util.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {
@@ -19,7 +20,7 @@ namespace {
 
 // Map every sub-register (al/ah/ax/eax) to its 64-bit canonical form. Xmm
 // registers are self-canonical — we don't model sub-xmm slicing.
-constexpr std::array<Reg, 92> kCanonical = {
+constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::None,
     Reg::Rax, Reg::Rcx, Reg::Rdx, Reg::Rbx,
     Reg::Rax, Reg::Rcx, Reg::Rdx, Reg::Rbx,
@@ -46,6 +47,11 @@ constexpr std::array<Reg, 92> kCanonical = {
     Reg::Xmm12, Reg::Xmm13, Reg::Xmm14, Reg::Xmm15,
 };
 
+// Canonical form of the last entry must still map to itself; this catches
+// out-of-order sentinel moves where Xmm15 drifts off the end of the table.
+static_assert(kCanonical.back() == Reg::Xmm15,
+              "kCanonical must be updated to match Reg enum");
+
 struct VarKey {
     u8 kind = 0;   // 0 = Reg, 1 = Flag
     u8 id   = 0;   // Reg enum value or Flag enum value
@@ -66,76 +72,43 @@ struct VarKey {
     return std::nullopt;
 }
 
-// ===== CFG analyses =====
+}  // namespace
 
-[[nodiscard]] std::vector<addr_t> compute_rpo(const IrFunction& fn) {
-    std::vector<addr_t> post;
-    std::set<addr_t>    seen;
+// ===== SSA identity helpers (shared across passes + emitter) =====
 
-    std::function<void(addr_t)> visit = [&](addr_t a) {
-        if (!seen.insert(a).second) return;
-        auto it = fn.block_at.find(a);
-        if (it == fn.block_at.end()) return;
-        const auto& bb = fn.blocks[it->second];
-        for (addr_t s : bb.successors) visit(s);
-        post.push_back(a);
-    };
-
-    visit(fn.start);
-    std::reverse(post.begin(), post.end());
-    return post;
-}
-
-[[nodiscard]] std::map<addr_t, addr_t>
-compute_idoms(const IrFunction& fn, const std::vector<addr_t>& rpo) {
-    std::map<addr_t, std::size_t> rpo_index;
-    for (std::size_t i = 0; i < rpo.size(); ++i) rpo_index[rpo[i]] = i;
-
-    std::map<addr_t, addr_t> idom;
-    idom[fn.start] = fn.start;
-
-    auto intersect = [&](addr_t b1, addr_t b2) noexcept -> addr_t {
-        while (b1 != b2) {
-            while (rpo_index[b1] > rpo_index[b2]) {
-                auto it = idom.find(b1);
-                if (it == idom.end()) return b2;
-                b1 = it->second;
-            }
-            while (rpo_index[b2] > rpo_index[b1]) {
-                auto it = idom.find(b2);
-                if (it == idom.end()) return b1;
-                b2 = it->second;
-            }
+std::optional<SsaKey> ssa_key(const IrValue& v) noexcept {
+    switch (v.kind) {
+        case IrValueKind::Reg:
+            return SsaKey{0, static_cast<u32>(canonical_reg(v.reg)), v.version};
+        case IrValueKind::Flag:
+            return SsaKey{1, static_cast<u32>(v.flag), v.version};
+        case IrValueKind::Temp:
+            return SsaKey{2, v.temp, 0};
+        case IrValueKind::Imm: {
+            // Synthesize a stable key so memory passes can treat
+            // `store [0x404018], v` as a write to a known address.
+            const u64 uv = static_cast<u64>(v.imm);
+            return SsaKey{3,
+                          static_cast<u32>(uv & 0xFFFFFFFFu),
+                          static_cast<u32>(uv >> 32)};
         }
-        return b1;
-    };
-
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (std::size_t i = 1; i < rpo.size(); ++i) {
-            const addr_t b = rpo[i];
-            auto it = fn.block_at.find(b);
-            if (it == fn.block_at.end()) continue;
-            const auto& bb = fn.blocks[it->second];
-
-            std::optional<addr_t> new_idom;
-            for (addr_t p : bb.predecessors) {
-                if (!idom.contains(p)) continue;
-                new_idom = new_idom ? intersect(p, *new_idom) : p;
-            }
-            if (!new_idom) continue;
-
-            auto cur = idom.find(b);
-            if (cur == idom.end() || cur->second != *new_idom) {
-                idom[b] = *new_idom;
-                changed = true;
-            }
-        }
+        default:
+            return std::nullopt;
     }
-
-    return idom;
 }
+
+bool same_ssa_value(const IrValue& a, const IrValue& b) noexcept {
+    if (a.kind != b.kind) return false;
+    if (a.type != b.type) return false;
+    if (a.kind == IrValueKind::Imm) return a.imm == b.imm;
+    const auto ka = ssa_key(a);
+    const auto kb = ssa_key(b);
+    return ka && kb && *ka == *kb;
+}
+
+namespace {
+
+// compute_rpo + compute_idoms live in <ember/analysis/cfg_util.hpp>.
 
 [[nodiscard]] std::map<addr_t, std::set<addr_t>>
 compute_df(const IrFunction& fn, const std::map<addr_t, addr_t>& idom) {
@@ -308,7 +281,10 @@ Result<void> SsaBuilder::convert(IrFunction& fn) const {
     const auto rpo = compute_rpo(fn);
     if (rpo.empty()) return {};
 
-    const auto idoms = compute_idoms(fn, rpo);
+    std::map<addr_t, std::size_t> rpo_index;
+    for (std::size_t i = 0; i < rpo.size(); ++i) rpo_index[rpo[i]] = i;
+
+    const auto idoms = compute_idoms(fn, rpo, rpo_index);
     const auto df    = compute_df(fn, idoms);
 
     insert_phis(fn, df);

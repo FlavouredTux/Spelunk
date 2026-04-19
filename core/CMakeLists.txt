@@ -6,6 +6,7 @@ add_library(ember_core STATIC
     src/disasm/instruction.cpp
     src/disasm/x64/decoder.cpp
     src/analysis/cfg_builder.cpp
+    src/analysis/cfg_util.cpp
     src/analysis/arity.cpp
     src/analysis/strings.cpp
     src/analysis/pipeline.cpp

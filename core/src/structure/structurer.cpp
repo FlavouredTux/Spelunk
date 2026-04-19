@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include <ember/analysis/cfg_util.hpp>
+
 namespace ember {
 
 namespace {
@@ -40,79 +42,7 @@ struct CfgInfo {
     std::map<addr_t, addr_t>                loop_exit;     // header -> exit successor
 };
 
-[[nodiscard]] std::vector<addr_t> compute_rpo(const IrFunction& fn) {
-    std::vector<addr_t> post;
-    std::set<addr_t>    seen;
-
-    std::function<void(addr_t)> visit = [&](addr_t a) {
-        if (!seen.insert(a).second) return;
-        auto it = fn.block_at.find(a);
-        if (it == fn.block_at.end()) return;
-        for (addr_t s : fn.blocks[it->second].successors) visit(s);
-        post.push_back(a);
-    };
-
-    visit(fn.start);
-    std::reverse(post.begin(), post.end());
-    return post;
-}
-
-[[nodiscard]] std::map<addr_t, addr_t>
-compute_idoms(const IrFunction& fn,
-              const std::vector<addr_t>& rpo,
-              const std::map<addr_t, std::size_t>& rpo_index) {
-    std::map<addr_t, addr_t> idom;
-    idom[fn.start] = fn.start;
-
-    auto intersect = [&](addr_t b1, addr_t b2) noexcept -> addr_t {
-        while (b1 != b2) {
-            auto i1 = rpo_index.find(b1);
-            auto i2 = rpo_index.find(b2);
-            if (i1 == rpo_index.end() || i2 == rpo_index.end()) return b1;
-            while (i1->second > i2->second) {
-                auto it = idom.find(b1);
-                if (it == idom.end()) return b2;
-                b1 = it->second;
-                i1 = rpo_index.find(b1);
-                if (i1 == rpo_index.end()) return b2;
-            }
-            while (i2->second > i1->second) {
-                auto it = idom.find(b2);
-                if (it == idom.end()) return b1;
-                b2 = it->second;
-                i2 = rpo_index.find(b2);
-                if (i2 == rpo_index.end()) return b1;
-            }
-        }
-        return b1;
-    };
-
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (std::size_t i = 1; i < rpo.size(); ++i) {
-            const addr_t b = rpo[i];
-            auto it = fn.block_at.find(b);
-            if (it == fn.block_at.end()) continue;
-            const auto& bb = fn.blocks[it->second];
-
-            std::optional<addr_t> new_idom;
-            for (addr_t p : bb.predecessors) {
-                if (!idom.contains(p)) continue;
-                new_idom = new_idom ? intersect(p, *new_idom) : p;
-            }
-            if (!new_idom) continue;
-
-            auto cur = idom.find(b);
-            if (cur == idom.end() || cur->second != *new_idom) {
-                idom[b] = *new_idom;
-                changed = true;
-            }
-        }
-    }
-
-    return idom;
-}
+// compute_rpo + compute_idoms live in <ember/analysis/cfg_util.hpp>.
 
 // Cooper-Harvey-Kennedy on the reverse CFG: compute immediate post-dominators.
 // The virtual exit (kNoAddr) is the root; forward-terminating blocks are its

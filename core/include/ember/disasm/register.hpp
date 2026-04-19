@@ -30,6 +30,11 @@ enum class Reg : u8 {
     // (one float or double each); packed/SIMD semantics are not modeled.
     Xmm0,  Xmm1,  Xmm2,  Xmm3,  Xmm4,  Xmm5,  Xmm6,  Xmm7,
     Xmm8,  Xmm9,  Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15,
+
+    // Sentinel. Always last. Size tables (kCanonical in ir/ssa.cpp,
+    // reg_name in disasm/register.cpp) static_assert against this so adding
+    // a register without updating them is a compile error.
+    Count,
 };
 
 [[nodiscard]] constexpr unsigned reg_size(Reg r) noexcept {

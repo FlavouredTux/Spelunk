@@ -330,6 +330,10 @@ void walk_from(const Binary& b, const X64Decoder& dec, WalkState& ws, addr_t ent
 
         while (true) {
             if (ws.insns.contains(ip)) break;
+            // LC_DATA_IN_CODE / analogous: the linker flagged these bytes
+            // as non-code (jump tables, ARM switch constants, etc.). Don't
+            // try to decode them as instructions.
+            if (b.is_data_in_code(ip)) break;
 
             const auto bytes = b.bytes_at(ip);
             if (bytes.empty()) break;

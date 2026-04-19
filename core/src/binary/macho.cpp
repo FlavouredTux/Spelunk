@@ -24,10 +24,12 @@ constexpr u32 CPU_TYPE_ARM64      = 0x0100000Cu;
 
 // Load command IDs (only the ones we consume).
 constexpr u32 LC_SEGMENT_64       = 0x19u;
-constexpr u32 LC_SYMTAB           = 0x02u;
-constexpr u32 LC_DYSYMTAB         = 0x0Bu;
-constexpr u32 LC_DYLD_INFO        = 0x22u;
-constexpr u32 LC_DYLD_INFO_ONLY   = 0x80000022u;
+constexpr u32 LC_SYMTAB               = 0x02u;
+constexpr u32 LC_DYSYMTAB             = 0x0Bu;
+constexpr u32 LC_DYLD_INFO            = 0x22u;
+constexpr u32 LC_DYLD_INFO_ONLY       = 0x80000022u;
+constexpr u32 LC_DYLD_CHAINED_FIXUPS  = 0x80000034u;
+constexpr u32 LC_DATA_IN_CODE         = 0x29u;
 constexpr u32 LC_MAIN             = 0x80000028u;
 constexpr u32 LC_FUNCTION_STARTS  = 0x26u;
 
@@ -109,9 +111,9 @@ constexpr u8 BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0u;
     return result;
 }
 
-// Bind records collected from the LC_DYLD_INFO opcode stream. For imports
-// we only need the slot address and the symbol name — ordinal/addend/type
-// don't affect how the emitter renders a call.
+// Bind records collected from the LC_DYLD_INFO opcode stream OR from the
+// modern LC_DYLD_CHAINED_FIXUPS format. Both converge on (slot vaddr,
+// imported-symbol name) — ordinal/addend/type don't affect rendering.
 struct BindRec { addr_t vaddr; std::string name; };
 
 // One LC_SEGMENT_64 we've processed, used while resolving section vmaddrs
@@ -206,6 +208,131 @@ void parse_bind_stream(
         default:
             // Unknown opcode — bail rather than corrupt the stream.
             return;
+        }
+    }
+}
+
+// LC_DYLD_CHAINED_FIXUPS decoder. Modern Mach-O (macOS 11+ target) stops
+// emitting LC_DYLD_INFO bind opcodes and instead stamps 64-bit chained
+// pointers directly into the binary, linked via `__chainfixups` metadata
+// in __LINKEDIT.
+//
+// Layout we produce the same as parse_bind_stream: (slot_vaddr, name).
+// Scope: handles the x86_64 / arm64 macOS pointer formats (DYLD_CHAINED_
+// PTR_64 = 6 and PTR_ARM64E = 2 with bind bit set). Unknown pointer
+// formats are skipped cleanly; the loader falls back to whatever symbols
+// the nlist table alone yielded.
+void parse_chained_fixups(
+    std::span<const std::byte> data,
+    std::span<const SegInfo> segs,
+    std::span<const std::byte> image,
+    std::vector<BindRec>& out)
+{
+    if (data.size() < 32) return;
+    auto rd32 = [&](std::size_t off) -> std::optional<u32> {
+        if (off + 4 > data.size()) return std::nullopt;
+        u32 v = 0; std::memcpy(&v, data.data() + off, 4); return v;
+    };
+    auto rd16 = [&](std::size_t off) -> std::optional<u16> {
+        if (off + 2 > data.size()) return std::nullopt;
+        u16 v = 0; std::memcpy(&v, data.data() + off, 2); return v;
+    };
+    auto rd64 = [&](std::size_t off) -> std::optional<u64> {
+        if (off + 8 > data.size()) return std::nullopt;
+        u64 v = 0; std::memcpy(&v, data.data() + off, 8); return v;
+    };
+
+    auto version       = rd32(0);
+    auto starts_off    = rd32(4);
+    auto imports_off   = rd32(8);
+    auto symbols_off   = rd32(12);
+    auto imports_count = rd32(16);
+    auto imports_fmt   = rd32(20);
+    if (!version || *version != 0) return;
+    if (!starts_off || !imports_off || !symbols_off || !imports_count || !imports_fmt)
+        return;
+
+    // Resolve each ordinal to its symbol name. Only imports_format == 1
+    // (DYLD_CHAINED_IMPORT) is handled; formats 2/3 add a 32/64-bit addend
+    // but have the same name_offset semantics up to an entry-size delta.
+    const std::size_t entry_size =
+        (*imports_fmt == 1) ? 4 : (*imports_fmt == 2) ? 8 : 16;
+    if (*imports_fmt < 1 || *imports_fmt > 3) return;
+
+    auto import_name = [&](u32 ordinal) -> std::string {
+        if (ordinal >= *imports_count) return {};
+        const std::size_t ent = *imports_off +
+            static_cast<std::size_t>(ordinal) * entry_size;
+        auto raw = rd32(ent);
+        if (!raw) return {};
+        const u32 name_offset = (*raw >> 9);
+        const std::size_t nameoff = *symbols_off + name_offset;
+        if (nameoff >= data.size()) return {};
+        std::string s;
+        for (std::size_t i = nameoff;
+             i < data.size() && i < nameoff + 1024; ++i) {
+            char c = static_cast<char>(data[i]);
+            if (c == 0) break;
+            s.push_back(c);
+        }
+        return s;
+    };
+
+    // Walk starts_in_image → starts_in_segment → each page's chain.
+    auto seg_count = rd32(*starts_off);
+    if (!seg_count) return;
+    for (u32 si = 0; si < *seg_count; ++si) {
+        auto seg_info_off = rd32(*starts_off + 4 + si * 4);
+        if (!seg_info_off || *seg_info_off == 0) continue;
+        const std::size_t sig = *starts_off + *seg_info_off;
+        auto size        = rd32(sig);
+        auto page_size   = rd16(sig + 4);
+        auto ptr_format  = rd16(sig + 6);
+        auto seg_offset  = rd64(sig + 8);
+        auto page_count  = rd16(sig + 18);
+        if (!size || !page_size || !ptr_format || !seg_offset || !page_count)
+            continue;
+
+        // Only DYLD_CHAINED_PTR_64 (6) and its kernel-variant (12) are the
+        // common formats for user binaries on x86_64 / arm64. arm64e uses
+        // format 2 which needs different bit-packing; skip for now.
+        if (*ptr_format != 6 && *ptr_format != 12) continue;
+        if (si >= segs.size()) continue;
+        const u64 seg_vaddr = segs[si].vmaddr;
+
+        for (u16 pi = 0; pi < *page_count; ++pi) {
+            auto page_start = rd16(sig + 20 + pi * 2);
+            if (!page_start) break;
+            if (*page_start == 0xFFFF) continue;   // DYLD_CHAINED_PTR_START_NONE
+
+            u64 chain_vaddr = seg_vaddr + *seg_offset +
+                              static_cast<u64>(pi) * *page_size + *page_start;
+            // Walk the chain via image bytes. `image` spans the whole file,
+            // but chained pointers live in mapped segments where fileoff
+            // offset = vaddr - seg_vaddr + seg.fileoff.
+            u32 steps = 0;
+            while (steps++ < 1'000'000) {
+                // Map vaddr back to file offset.
+                const auto& sref = segs[si];
+                if (chain_vaddr < sref.vmaddr ||
+                    chain_vaddr >= sref.vmaddr + sref.vmsize) break;
+                const u64 fo = sref.fileoff + (chain_vaddr - sref.vmaddr);
+                if (fo + 8 > image.size()) break;
+                u64 raw = 0;
+                std::memcpy(&raw, image.data() + fo, 8);
+                const bool is_bind = (raw >> 63) & 1;
+                const u64  next    = (raw >> 51) & 0xFFFu;
+                if (is_bind) {
+                    const u32 ordinal = static_cast<u32>(raw & 0xFFFFFFu);
+                    std::string name = import_name(ordinal);
+                    if (!name.empty()) {
+                        out.push_back({static_cast<addr_t>(chain_vaddr),
+                                       std::move(name)});
+                    }
+                }
+                if (next == 0) break;
+                chain_vaddr += next * 4u;  // stride is 4 on format 6
+            }
         }
     }
 }
@@ -398,6 +525,8 @@ Result<void> MachOBinary::parse() {
     std::span<const std::byte> bind_bytes;
     std::span<const std::byte> lazy_bind_bytes;
     std::span<const std::byte> weak_bind_bytes;
+    std::span<const std::byte> chained_fixups_bytes;
+    std::span<const std::byte> data_in_code_bytes;
 
     bool     have_entryoff = false;
     u64      entryoff      = 0;
@@ -457,6 +586,22 @@ Result<void> MachOBinary::parse() {
             const u32 datasize = read_le_at<u32>(p + 12);
             if (datasize > 0) {
                 if (auto s = r.slice(dataoff, datasize); s) fn_starts_bytes = *s;
+            }
+            break;
+        }
+        case LC_DYLD_CHAINED_FIXUPS: {
+            const u32 dataoff  = read_le_at<u32>(p + 8);
+            const u32 datasize = read_le_at<u32>(p + 12);
+            if (datasize > 0) {
+                if (auto s = r.slice(dataoff, datasize); s) chained_fixups_bytes = *s;
+            }
+            break;
+        }
+        case LC_DATA_IN_CODE: {
+            const u32 dataoff  = read_le_at<u32>(p + 8);
+            const u32 datasize = read_le_at<u32>(p + 12);
+            if (datasize > 0) {
+                if (auto s = r.slice(dataoff, datasize); s) data_in_code_bytes = *s;
             }
             break;
         }
@@ -536,6 +681,37 @@ Result<void> MachOBinary::parse() {
     if (!bind_bytes.empty())      parse_bind_stream(bind_bytes,      seg_info, binds, false);
     if (!weak_bind_bytes.empty()) parse_bind_stream(weak_bind_bytes, seg_info, binds, false);
     if (!lazy_bind_bytes.empty()) parse_bind_stream(lazy_bind_bytes, seg_info, binds, true);
+    // Modern builds emit LC_DYLD_CHAINED_FIXUPS instead of LC_DYLD_INFO
+    // opcodes. Parse both — newer linkers occasionally emit both, older
+    // ones only one.
+    if (!chained_fixups_bytes.empty()) {
+        parse_chained_fixups(chained_fixups_bytes, seg_info, buffer_, binds);
+    }
+
+    // LC_DATA_IN_CODE: list of (file_offset, length, kind) marking embedded
+    // data inside __TEXT. Convert each file offset into a VA using the
+    // segment map so the CFG walker can steer around them.
+    if (!data_in_code_bytes.empty()) {
+        const std::size_t n = data_in_code_bytes.size() / 8;
+        data_in_code_.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            const std::byte* e = data_in_code_bytes.data() + i * 8;
+            const u32 foff   = read_le_at<u32>(e + 0);
+            const u16 len    = read_le_at<u16>(e + 4);
+            const u16 kind   = read_le_at<u16>(e + 6);
+            // Resolve file offset to vaddr via the segment map.
+            addr_t va = 0;
+            for (const auto& s : seg_info) {
+                if (foff >= s.fileoff && foff < s.fileoff + s.filesize) {
+                    va = static_cast<addr_t>(s.vmaddr + (foff - s.fileoff));
+                    break;
+                }
+            }
+            if (va != 0) {
+                data_in_code_.push_back({va, len, kind});
+            }
+        }
+    }
 
     std::unordered_map<addr_t, std::string> slot_to_name;
     slot_to_name.reserve(binds.size());

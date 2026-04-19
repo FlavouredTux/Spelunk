@@ -36,6 +36,14 @@ public:
 
     [[nodiscard]] virtual std::span<const std::byte> image() const noexcept = 0;
 
+    // True when `addr` lives inside a region the linker flagged as
+    // non-code data embedded in __TEXT (LC_DATA_IN_CODE on Mach-O, or
+    // analogous metadata on other formats). The CFG walker stops before
+    // decoding such bytes as instructions. Default says "no such metadata"
+    // for formats that don't carry it.
+    [[nodiscard]] virtual bool
+    is_data_in_code(addr_t) const noexcept { return false; }
+
     // Default: walk `sections()` to resolve a virtual address to file bytes.
     // Format-specific loaders (e.g. ElfBinary with PT_LOAD) should override
     // this to use their authoritative mapping table; for binaries that

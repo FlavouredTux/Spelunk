@@ -17,6 +17,7 @@
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/function.hpp>
+#include <ember/analysis/objc.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/strings.hpp>
@@ -60,6 +61,7 @@ struct Args {
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
+    bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool help   = false;
 };
 
@@ -90,6 +92,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--fingerprints", &Args::fingerprints},
     {"",   "--ipa",       &Args::ipa},
     {"",   "--eh",        &Args::eh},
+    {"",   "--objc-names", &Args::objc_names},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -343,6 +346,19 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         if (s.size == 0 || s.name.empty()) continue;
         const auto a = ember::infer_sysv_arity(b, s.addr);
         out += std::format("{:#x} {}\n", s.addr, a);
+    }
+    return out;
+}
+
+// TSV: one row per ObjC method recovered from __objc_classlist. Format:
+//   <imp-hex>\t<[+-]>\t<class>\t<selector>
+[[nodiscard]] std::string build_objc_names_output(const ember::Binary& b) {
+    std::string out;
+    for (const auto& m : ember::parse_objc_methods(b)) {
+        out += std::format("{:x}\t{}\t{}\t{}\n",
+                           m.imp,
+                           m.is_class ? '+' : '-',
+                           m.cls, m.selector);
     }
     return out;
 }
@@ -699,6 +715,7 @@ void print_help() {
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
     std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
+    std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector)");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
@@ -773,6 +790,10 @@ int main(int argc, char** argv) {
     if (args.fingerprints) {
         return run_cached(args, fingerprints_cache_tag(),
                           [&] { return build_fingerprints_output(b); });
+    }
+    if (args.objc_names) {
+        return run_cached(args, "objc-names",
+                          [&] { return build_objc_names_output(b); });
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });

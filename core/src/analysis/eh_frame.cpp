@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include <ember/binary/binary.hpp>
+#include <ember/binary/macho.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/common/types.hpp>
 
@@ -329,8 +330,14 @@ void parse_lsda(std::span<const std::byte> lsda_bytes,
 
     const std::size_t cs_end = lr.pos + static_cast<std::size_t>(cs_len);
     if (cs_end > lr.buf.size()) return;
+    // Real LSDAs have dozens to a few hundred call-site entries. A bogus
+    // one (misaligned parse, wrong encoding guess) can drive us through
+    // megabytes of unrelated bytes. Cap at something generous but bounded.
+    constexpr std::size_t kMaxEntriesPerLsda = 2048;
+    std::size_t emitted = 0;
 
     while (lr.pos < cs_end) {
+        if (emitted >= kMaxEntriesPerLsda) return;
         auto cs_start = read_encoded(lr, cs_enc, lsda_vaddr,
                                      lsda_vaddr + lr.pos);
         if (!cs_start) return;
@@ -342,6 +349,7 @@ void parse_lsda(std::span<const std::byte> lsda_bytes,
         if (!cs_lp) return;
         u64 cs_action = 0;
         if (!lr.get_uleb128(cs_action)) return;
+        ++emitted;
 
         if (*cs_lp == 0) continue;  // no landing pad for this range
 
@@ -363,10 +371,129 @@ void parse_lsda(std::span<const std::byte> lsda_bytes,
     }
 }
 
+// --------- Apple compact-unwind (__TEXT,__unwind_info) LSDA extraction -------
+
+// The header, sentinel index entry, and LSDA-index entries are all fixed-
+// layout little-endian structs. For our purposes we only need the LSDA
+// pointer per function; compact-encoding semantics themselves don't matter.
+struct CompactUnwindLsda { u64 function_vaddr; u64 lsda_vaddr; };
+
+// The mach_header sits at the __TEXT segment's vmaddr, which is the base
+// that compact-unwind offsets are measured from. This is strictly lower
+// than the __TEXT,__text section's vmaddr (the header itself + any load
+// commands + any preceding sections take up the first N bytes of __TEXT).
+// MachOBinary exposes segments directly; for anything else we fall back
+// to the lowest readable section vaddr, which is usually close enough.
+[[nodiscard]] u64 mach_text_base(const Binary& b) {
+    if (const auto* mo = dynamic_cast<const MachOBinary*>(&b); mo) {
+        // __PAGEZERO has vaddr 0 + no permissions; skip it and pick the
+        // lowest *readable* segment (== __TEXT on every real Mach-O).
+        u64 best = ~u64{0};
+        for (const auto& seg : mo->segments()) {
+            if (!seg.readable) continue;
+            if (seg.vaddr == 0) continue;
+            if (seg.vaddr < best) best = seg.vaddr;
+        }
+        if (best != ~u64{0}) return best;
+    }
+    u64 best = ~u64{0};
+    for (const auto& s : b.sections()) {
+        if (s.vaddr == 0) continue;
+        if (static_cast<u64>(s.vaddr) < best) best = static_cast<u64>(s.vaddr);
+    }
+    return best == ~u64{0} ? 0u : best;
+}
+
+[[nodiscard]] std::vector<CompactUnwindLsda>
+parse_compact_unwind(const Binary& b) {
+    std::vector<CompactUnwindLsda> out;
+    u64 sec_vaddr = 0;
+    std::span<const std::byte> bytes;
+    for (const auto& s : b.sections()) {
+        const std::string_view n = s.name;
+        if (n == "__unwind_info" || n == "__TEXT,__unwind_info" ||
+            n.ends_with(",__unwind_info")) {
+            bytes = s.data;
+            sec_vaddr = static_cast<u64>(s.vaddr);
+            break;
+        }
+    }
+    if (bytes.size() < 28) return out;
+
+    auto rd32 = [&](std::size_t off) -> std::optional<u32> {
+        if (off + 4 > bytes.size()) return std::nullopt;
+        u32 v = 0;
+        std::memcpy(&v, bytes.data() + off, 4);
+        return v;
+    };
+
+    auto version = rd32(0);
+    if (!version || *version != 1) return out;
+    auto idx_off = rd32(20);
+    auto idx_cnt = rd32(24);
+    if (!idx_off || !idx_cnt || *idx_cnt < 2) return out;
+
+    const u64 text_base = mach_text_base(b);
+
+    // First-level index entries are 12 bytes each.
+    // (functionOffset, secondLevelPagesSectionOffset, lsdaIndexArraySectionOffset)
+    struct FirstIdx { u32 fn_off, pages_off, lsda_idx_off; };
+    std::vector<FirstIdx> first;
+    first.reserve(*idx_cnt);
+    for (u32 i = 0; i < *idx_cnt; ++i) {
+        const std::size_t p = *idx_off + i * 12;
+        auto a = rd32(p), bp = rd32(p + 4), c = rd32(p + 8);
+        if (!a || !bp || !c) return out;
+        first.push_back({*a, *bp, *c});
+    }
+
+    // The LSDA index array is contiguous bytes between consecutive first-
+    // level entries' lsda_idx_off fields. Each entry is
+    //   (functionOffset, lsdaOffset)
+    // both u32, offsets from text_base.
+    //
+    // Sanity: real LSDAs must live inside the __unwind_info section bounds,
+    // and real groups produce <= a few thousand entries. Anything wildly
+    // outside that is a sign we mis-walked the format and we bail.
+    constexpr u32 kMaxGroupEntries = 8192;
+    const u32 sec_end = static_cast<u32>(bytes.size());
+    for (std::size_t i = 0; i + 1 < first.size(); ++i) {
+        const u32 start = first[i].lsda_idx_off;
+        const u32 end   = first[i + 1].lsda_idx_off;
+        if (start == 0 || end <= start) continue;
+        if (start >= sec_end || end > sec_end) continue;
+        const u32 n = (end - start) / 8;
+        if (n > kMaxGroupEntries) continue;
+        for (u32 k = 0; k < n; ++k) {
+            const std::size_t p = start + k * 8;
+            auto fn = rd32(p), lsda = rd32(p + 4);
+            if (!fn || !lsda) break;
+            if (*lsda == 0) continue;
+            CompactUnwindLsda e;
+            e.function_vaddr = text_base + *fn;
+            e.lsda_vaddr     = text_base + *lsda;
+            out.push_back(e);
+        }
+    }
+    (void)sec_vaddr;
+    return out;
+}
+
 }  // namespace
 
 LpMap parse_landing_pads(const Binary& b) {
     LpMap out;
+
+    // Apple compact-unwind contributes LSDA pointers too — Mach-O binaries
+    // built on modern SDKs use compact encoding primarily, with .eh_frame
+    // only as backup or omitted entirely for leaf functions.
+    for (const auto& cu : parse_compact_unwind(b)) {
+        auto lsda_bytes = b.bytes_at(static_cast<addr_t>(cu.lsda_vaddr));
+        if (!lsda_bytes.empty()) {
+            parse_lsda(lsda_bytes, cu.lsda_vaddr, cu.function_vaddr, out);
+        }
+    }
+
     auto eh = find_eh_frame(b);
     if (!eh) return out;
 

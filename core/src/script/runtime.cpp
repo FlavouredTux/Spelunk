@@ -15,6 +15,8 @@
 #include <utility>
 
 #include <ember/analysis/fingerprint.hpp>
+#include <ember/analysis/libcxx_string.hpp>
+#include <ember/analysis/objc.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
@@ -413,6 +415,37 @@ JSValue js_bin_cfg(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto rv = format_cfg(*b, *win);
     if (!rv) return throw_err(ctx, rv.error().message);
     return make_str(ctx, *rv);
+}
+
+// Decode a libc++ std::string object at `addr`. Returns the string
+// contents or null when the bytes don't look like a valid string object.
+// Useful when a local is constructed via std::string's ctor and you want
+// to see what literal / runtime value it holds in memory.
+JSValue js_bin_std_string(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return throw_err(ctx, "stdString: missing addr");
+    const Binary* b = ctx_of(ctx)->binary;
+    u64 addr = 0;
+    if (!to_u64(ctx, argv[0], &addr)) return throw_err(ctx, "stdString: bad addr");
+    auto s = decode_libcxx_string(*b, static_cast<addr_t>(addr));
+    if (!s) return JS_NULL;
+    return make_str(ctx, *s);
+}
+
+// Every Objective-C method the runtime parser could recover from
+// __objc_classlist. Each entry is {addr, class, selector, isClass}.
+JSValue js_bin_objc_methods(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const Binary* b = ctx_of(ctx)->binary;
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+    for (const auto& m : parse_objc_methods(*b)) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "addr",     JS_NewBigUint64(ctx, m.imp));
+        JS_SetPropertyStr(ctx, o, "class",    make_str(ctx, m.cls));
+        JS_SetPropertyStr(ctx, o, "selector", make_str(ctx, m.selector));
+        JS_SetPropertyStr(ctx, o, "isClass",  JS_NewBool(ctx, m.is_class));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
 }
 
 // Address-independent content hash of the function at `addr`. Scripts use
@@ -861,6 +894,10 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_fingerprint, "fingerprint", 1));
     JS_SetPropertyStr(ctx, bin, "functions",
         JS_NewCFunction(ctx, js_bin_functions,   "functions",   0));
+    JS_SetPropertyStr(ctx, bin, "stdString",
+        JS_NewCFunction(ctx, js_bin_std_string,  "stdString",   1));
+    JS_SetPropertyStr(ctx, bin, "objcMethods",
+        JS_NewCFunction(ctx, js_bin_objc_methods, "objcMethods", 0));
 
     JS_SetPropertyStr(ctx, global, "binary", bin);
     JS_FreeValue(ctx, global);

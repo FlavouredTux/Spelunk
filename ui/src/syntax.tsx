@@ -129,6 +129,16 @@ export function highlightLine(
         else if (/^local_[0-9a-f]+$/.test(lower) || /^arg_[0-9a-f]+$/.test(lower)) {
           pushStr(word, { color: SH.reg });
         }
+        // Function params injected by the emitter when no user signature
+        // is present. `a1`, `a2`, ... bound in the function header.
+        else if (/^a\d+$/.test(word)) {
+          pushStr(word, { color: SH.arg });
+        }
+        // Call-return locals introduced by the emitter's rax-aliasing fix.
+        // Shape: r_<callee-name>, optionally with a _<n> disambiguator.
+        else if (/^r_[A-Za-z_]\w*$/.test(word)) {
+          pushStr(word, { color: SH.bound });
+        }
         else if (C_KEYWORDS.has(word)) {
           pushStr(word, { color: SH.keyword, bold: true });
         }

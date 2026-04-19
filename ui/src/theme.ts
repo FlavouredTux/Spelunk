@@ -44,6 +44,8 @@ export const SH = {
   reg:        "#c9c2af",
   flag:       "#b0a486",
   label:      "#8b7bb5",
+  arg:        "#b5a0d8",   // function params: a1, a2, ...
+  bound:      "#c8a87a",   // call-return locals: r_fopen, r_strlen, ...
 };
 
 const fontHref =

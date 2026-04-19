@@ -243,6 +243,13 @@ ember_golden_test(
     ARGS    "-p|-s|width_star"
     GOLDEN  printf_noise.width_star.pseudo.txt
 )
+# Exercises argv-style pointer indexing: *(u64*)(a2+8) → a2[1].
+ember_golden_test(
+    NAME    printf_main_argv_pseudo
+    FIXTURE printf_noise
+    ARGS    "-p|-s|main"
+    GOLDEN  printf_noise.main.pseudo.txt
+)
 
 # Stack-canary prologue+check suppression (-fstack-protector-strong).
 ember_golden_test(

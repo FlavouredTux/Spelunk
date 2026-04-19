@@ -986,6 +986,50 @@ struct Emitter {
                            static_cast<u64>(off));
     }
 
+    // Chase Assigns/Imm to resolve a value to a constant integer, if one exists.
+    [[nodiscard]] std::optional<i64> resolve_imm(const IrValue& v) const {
+        if (v.kind == IrValueKind::Imm) return v.imm;
+        IrValue cur = v;
+        for (int hop = 0; hop < 8; ++hop) {
+            const IrInst* d = def_of(cur);
+            if (!d || d->op != IrOp::Assign || d->src_count < 1) return std::nullopt;
+            if (d->srcs[0].kind == IrValueKind::Imm) return d->srcs[0].imm;
+            cur = d->srcs[0];
+        }
+        return std::nullopt;
+    }
+
+    // Pointer-indexing fold: `*(u64*)(base)` and `*(u64*)(base + 8*N)` render
+    // as `base[N]` when base isn't stack- or global-relative. Restricted to
+    // u64 loads — that's the common argv/table-of-pointers pattern and the
+    // width the reader expects. Smaller loads keep their `*(T*)(addr)` form
+    // so struct-field accesses stay semantically honest.
+    [[nodiscard]] std::optional<std::string>
+    try_render_array_index(const IrValue& addr, IrType t) const {
+        if (t != IrType::I64) return std::nullopt;
+        IrValue base = addr;
+        i64     off  = 0;
+        if (const IrInst* d = def_stripped(addr);
+            d && d->op == IrOp::Add && d->src_count >= 2) {
+            if (auto r = resolve_imm(d->srcs[1])) {
+                base = d->srcs[0];
+                off  = *r;
+            } else if (auto l = resolve_imm(d->srcs[0])) {
+                base = d->srcs[1];
+                off  = *l;
+            } else {
+                return std::nullopt;
+            }
+        }
+        if (off < 0) return std::nullopt;
+        if ((off & 0x7) != 0) return std::nullopt;
+        if (stack_offset(base).has_value()) return std::nullopt;
+        if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
+            return std::nullopt;
+        }
+        return std::format("{}[{}]", expr(base), off >> 3);
+    }
+
     [[nodiscard]] std::string format_mem(const IrValue& addr, IrType t, Reg seg) const {
         if (seg == Reg::None) {
             if (auto off = stack_offset(addr); off) {
@@ -993,6 +1037,9 @@ struct Emitter {
             }
             if (auto g = render_global_mem(addr, t); g) {
                 return *g;
+            }
+            if (auto s = try_render_array_index(addr, t); s) {
+                return *s;
             }
             return std::format("*({}*)({})", c_type_name(t), expr(addr));
         }

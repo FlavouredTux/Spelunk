@@ -1,0 +1,15 @@
+// shared_tail
+void shared_tail(u64 a1) {
+  local_20 = a1;
+  local_c = 0x0;
+  if ((a1 == 0x0)) {
+  } else {
+    if ((*(u8*)(local_20) == 0x0)) {
+    } else {
+      u64 r_strlen = strlen(local_20);
+      local_c = (u32)r_strlen;
+    }
+  }
+  g_log = local_c;
+  return (u64)local_c;
+}

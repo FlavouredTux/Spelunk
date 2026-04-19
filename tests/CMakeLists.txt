@@ -274,6 +274,12 @@ ember_golden_test(
     ARGS    "-p|-s|cleanup_on_fail"
     GOLDEN  gotos.cleanup_on_fail.pseudo.txt
 )
+ember_golden_test(
+    NAME    gotos_shared_tail_pseudo
+    FIXTURE gotos
+    ARGS    "-p|-s|shared_tail"
+    GOLDEN  gotos.shared_tail.pseudo.txt
+)
 
 ember_golden_test(
     NAME    tail_call_double_wrap_pseudo

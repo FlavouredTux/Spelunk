@@ -364,6 +364,13 @@ public:
                     seq->children.push_back(std::move(inlined));
                     return seq;
                 }
+                // Fallback: try inlining the full subtree rooted at the goto
+                // target. Only accepted if the result is small and contains
+                // no further gotos (strict improvement, not a swap).
+                if (auto inlined = try_inline_bounded_tail(current); inlined) {
+                    seq->children.push_back(std::move(inlined));
+                    return seq;
+                }
                 seq->children.push_back(make_goto(current));
                 return seq;
             }
@@ -638,12 +645,52 @@ public:
         return seq;
     }
 
+    // Fallback for non-Return tails: re-enter build_sequence from `target`
+    // with a fresh visited context, cap the resulting subtree at a node
+    // budget, and reject the result if it still contains any Goto (we want
+    // strict improvement, not a goto-for-goto swap). Used when a simple
+    // trivial-tail inline doesn't apply but the target's full subtree is
+    // reasonably small.
+    [[nodiscard]] std::unique_ptr<Region> try_inline_bounded_tail(addr_t target) {
+        if (inlining_bounded_) return nullptr;
+        constexpr std::size_t kMaxNodes = 30;
+
+        auto saved_visited = visited_;
+        visited_.erase(target);
+        inlining_bounded_ = true;
+        auto subtree = build_sequence(target, kNoAddr);
+        inlining_bounded_ = false;
+        visited_ = std::move(saved_visited);
+
+        if (!subtree) return nullptr;
+        if (count_regions(*subtree) > kMaxNodes) return nullptr;
+        if (contains_goto(*subtree)) return nullptr;
+        return subtree;
+    }
+
+    static std::size_t count_regions(const Region& r) noexcept {
+        std::size_t n = 1;
+        for (const auto& c : r.children) {
+            if (c) n += count_regions(*c);
+        }
+        return n;
+    }
+
+    static bool contains_goto(const Region& r) noexcept {
+        if (r.kind == RegionKind::Goto) return true;
+        for (const auto& c : r.children) {
+            if (c && contains_goto(*c)) return true;
+        }
+        return false;
+    }
+
 private:
     const IrFunction& fn_;
     const CfgInfo&    info_;
     std::set<addr_t>  visited_;
     std::set<addr_t>  loop_headers_stack_;
     std::set<addr_t>  loop_exits_stack_;
+    bool              inlining_bounded_ = false;
 };
 
 // ============================================================================

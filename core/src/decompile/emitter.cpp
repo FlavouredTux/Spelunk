@@ -344,9 +344,14 @@ struct Emitter {
 
     // Render a Reg IrValue's leaf name. Resolution order:
     //   1. A Call-return binding for this (canonical reg, version).
-    //   2. Chase Assign aliases; any arg-reg live-in along the way wins.
+    //   2. Chase Assign aliases:
+    //        - reg = reg              → keep chasing
+    //        - reg = non-reg          → render the rvalue expression (this is
+    //          what turns `r12` into `*(u64*)((a2 + 0x8))` when the compiler
+    //          stashed a computed pointer into a callee-saved reg at prologue)
+    //        - version 0 + arg-reg    → parameter name
     //   3. Raw register mnemonic.
-    [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version) const {
+    [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version, int depth = 0) const {
         Reg cur_reg = r;
         u32 cur_ver = version;
         for (int hop = 0; hop < 8; ++hop) {
@@ -365,9 +370,13 @@ struct Emitter {
             const IrInst* d = def_of(v);
             if (!d || d->op != IrOp::Assign || d->src_count < 1) break;
             const auto& src = d->srcs[0];
-            if (src.kind != IrValueKind::Reg) break;
-            cur_reg = src.reg;
-            cur_ver = src.version;
+            if (src.kind == IrValueKind::Reg) {
+                cur_reg = src.reg;
+                cur_ver = src.version;
+                continue;
+            }
+            if (depth < 10) return expr(src, depth + 1);
+            break;
         }
         return std::string(reg_name(r));
     }
@@ -1293,12 +1302,12 @@ std::string Emitter::expr(const IrValue& v, int depth) const {
                     const auto& src = d->srcs[0];
                     if (src.kind == IrValueKind::Imm) return expr(src, depth + 1);
                     if (src.kind == IrValueKind::Reg && src.version == 0) {
-                        return render_reg_leaf(src.reg, src.version);
+                        return render_reg_leaf(src.reg, src.version, depth + 1);
                     }
                     break;
                 }
             }
-            return render_reg_leaf(v.reg, v.version);
+            return render_reg_leaf(v.reg, v.version, depth);
         }
         case IrValueKind::Flag:
             return std::string(flag_name(v.flag));
@@ -1424,7 +1433,10 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
         case IrOp::Assign: {
             if (inst.src_count < 1) return "";
             if (inst.dst.kind == IrValueKind::Reg) {
-                if (use_count(inst.dst) == 0) return "";
+                // With rvalue forwarding in render_reg_leaf, a single reader
+                // inlines the source expression directly. The `reg = expr;`
+                // line becomes redundant in that case.
+                if (visible_use_count(inst.dst) <= 1) return "";
                 return std::format("{} = {};",
                                    reg_name(inst.dst.reg), expr(inst.srcs[0]));
             }

@@ -1,5 +1,4 @@
 // single_sum
 float single_sum(float a, float b) {
-  xmm0 = (a + b);
-  return xmm0;
+  return (a + b);
 }

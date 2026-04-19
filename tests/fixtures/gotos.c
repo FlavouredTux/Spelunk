@@ -25,6 +25,20 @@ bad:
     return -1;
 }
 
+// A non-trivial tail: the target does work (a call, an assignment) before
+// returning. Trivial-tail inliner can't handle this; the bounded-tail
+// fallback should.
+static int g_log;
+int shared_tail(const char* s) {
+    int result = 0;
+    if (s == 0) goto done;
+    if (*s == 0) goto done;
+    result = (int)strlen(s);
+done:
+    g_log = result;
+    return result;
+}
+
 int main(void) {
-    return multi_exit("a", "b") + cleanup_on_fail("x");
+    return multi_exit("a", "b") + cleanup_on_fail("x") + shared_tail("y");
 }

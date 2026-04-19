@@ -410,17 +410,24 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 // Read the cached fingerprints TSV for `binary_path`, or compute + store it.
 // Matches the cache-key logic of run_cached() but doesn't touch stdout — used
 // by run_diff() to pull TSVs for both binaries into memory for comparison.
+// Cache tag for fingerprint TSVs includes the fingerprint schema version
+// so schema bumps orphan old entries without nuking unrelated caches.
+[[nodiscard]] std::string fingerprints_cache_tag() {
+    return std::format("fingerprints-{}", ember::kFingerprintSchema);
+}
+
 [[nodiscard]] std::string
 fingerprints_cached_or_compute(const std::filesystem::path& binary_path,
                                const std::filesystem::path& cache_dir,
                                bool no_cache) {
+    const std::string tag = fingerprints_cache_tag();
     std::string key;
     if (!no_cache) {
         auto k = ember::cache::key_for(binary_path);
         if (k) key = std::move(*k);
     }
     if (!key.empty()) {
-        if (auto hit = ember::cache::read(cache_dir, key, "fingerprints"); hit) {
+        if (auto hit = ember::cache::read(cache_dir, key, tag); hit) {
             return std::move(*hit);
         }
     }
@@ -432,7 +439,7 @@ fingerprints_cached_or_compute(const std::filesystem::path& binary_path,
     }
     std::string out = build_fingerprints_output(**bin);
     if (!key.empty()) {
-        if (auto rv = ember::cache::write(cache_dir, key, "fingerprints", out); !rv) {
+        if (auto rv = ember::cache::write(cache_dir, key, tag, out); !rv) {
             std::println(stderr, "ember: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);
         }
@@ -709,7 +716,8 @@ int main(int argc, char** argv) {
         return run_cached(args, "strings", [&] { return build_strings_output(b); });
     }
     if (args.fingerprints) {
-        return run_cached(args, "fingerprints", [&] { return build_fingerprints_output(b); });
+        return run_cached(args, fingerprints_cache_tag(),
+                          [&] { return build_fingerprints_output(b); });
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });

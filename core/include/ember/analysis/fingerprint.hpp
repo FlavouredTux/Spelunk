@@ -1,9 +1,16 @@
 #pragma once
 
+#include <string_view>
+
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {
+
+// Schema token for the fingerprint algorithm. Folded into the hash itself
+// AND into cache tags so bumping it invalidates on-disk TSVs without
+// breaking unrelated cache entries (xrefs, strings, arities).
+inline constexpr std::string_view kFingerprintSchema = "v2";
 
 // Address-independent content hash of one function. Same algorithm compiled
 // in the same way across two shifted binaries → same hash, so names learned

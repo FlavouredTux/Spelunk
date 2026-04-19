@@ -248,10 +248,9 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     std::set<std::string> string_refs;
     std::set<std::string> global_refs;
 
-    // Fingerprint schema — bump on any incompatible change. Previously
-    // exported DBs stop matching when this changes. v2 added global-data
-    // symbol references to the side-sets.
-    h.token("v2");
+    // Schema token is also used as part of the cache tag so bumping it
+    // orphans prior on-disk TSVs without invalidating unrelated caches.
+    h.token(kFingerprintSchema);
     h.u32_tok(static_cast<u32>(ir_r->blocks.size()));
     h.sep();
 

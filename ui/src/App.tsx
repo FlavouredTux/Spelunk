@@ -55,18 +55,29 @@ export default function App() {
   const [recents, setRecents] = useState<string[]>([]);
 
   // Strings are only consumed by StringsView and the payload can be hundreds
-  // of MB on string-heavy binaries. Fetch on first open, cache in state.
+  // In-flight async analyses — shown in the status bar so huge binaries
+  // don't look frozen while xrefs/arities/etc. churn in the background.
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const track = useCallback(<T,>(tag: string, p: Promise<T>): Promise<T> => {
+    setPending((s) => { const n = new Set(s); n.add(tag); return n; });
+    const done = () => setPending((s) => { const n = new Set(s); n.delete(tag); return n; });
+    p.then(done, done);
+    return p;
+  }, []);
+
+  // Strings are consumed only by StringsView and can be hundreds of MB.
+  // Fetch on first open of the view, cache in state.
   const [stringsLoading, setStringsLoading] = useState(false);
   useEffect(() => {
     if (!stringsOpen) return;
     if (strings.length > 0 || stringsLoading) return;
     if (!info) return;
     setStringsLoading(true);
-    loadStrings()
+    track("strings", loadStrings()
       .then(setStrings)
       .catch(() => {})
-      .finally(() => setStringsLoading(false));
-  }, [stringsOpen, strings.length, stringsLoading, info]);
+      .finally(() => setStringsLoading(false)));
+  }, [stringsOpen, strings.length, stringsLoading, info, track]);
 
   // Edit dialog
   const [editing, setEditing] =
@@ -132,9 +143,9 @@ export default function App() {
       setInfo(summary);
       // Strings are lazy; see stringsLoading below.
       setStrings(EMPTY_STRINGS);
-      loadAnnotations(summary.path).then(setAnnotations).catch(() => {});
-      loadXrefs().then(setXrefs).catch(() => {});
-      loadArities().then(setArities).catch(() => {});
+      track("annotations", loadAnnotations(summary.path).then(setAnnotations).catch(() => {}));
+      track("xrefs",       loadXrefs().then(setXrefs).catch(() => {}));
+      track("arities",     loadArities().then(setArities).catch(() => {}));
       getRecents().then(setRecents).catch(() => {});
       const main = summary.functions.find((f) => f.name === "main");
       const start = main ?? summary.functions[0] ?? null;
@@ -472,7 +483,7 @@ export default function App() {
         />
       </div>
 
-      <StatusBar current={current} view={view} lines={lines} loading={loading} />
+      <StatusBar current={current} view={view} lines={lines} loading={loading} pending={pending} />
 
       {paletteOpen && (
         <CommandPalette

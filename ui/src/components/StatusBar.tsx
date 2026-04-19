@@ -7,8 +7,12 @@ export function StatusBar(props: {
   view: ViewKind;
   lines: number;
   loading: boolean;
+  pending?: Set<string>;
 }) {
-  const { current, view, lines, loading } = props;
+  const { current, view, lines, loading, pending } = props;
+  const pendingList = pending && pending.size > 0
+    ? Array.from(pending).sort().join(", ")
+    : null;
   return (
     <div
       style={{
@@ -28,8 +32,8 @@ export function StatusBar(props: {
       <span
         style={{
           width: 6, height: 6, borderRadius: 3,
-          background: loading ? C.accent : current ? C.green : C.textFaint,
-          animation: loading ? "pulse 1s ease-in-out infinite" : "none",
+          background: (loading || pendingList) ? C.accent : current ? C.green : C.textFaint,
+          animation: (loading || pendingList) ? "pulse 1s ease-in-out infinite" : "none",
         }}
       />
       {current ? (
@@ -40,20 +44,28 @@ export function StatusBar(props: {
           </span>
           <span>{formatSize(current.size)}</span>
           <span>{lines} lines</span>
-          <span
-            style={{
-              marginLeft: "auto",
-              fontFamily: serif,
-              fontStyle: "italic",
-            }}
-          >
-            viewing <span style={{ color: C.text }}>{view}</span>
+          <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 18 }}>
+            {pendingList && (
+              <span style={{ color: C.accent, fontSize: 10 }}>
+                loading {pendingList}…
+              </span>
+            )}
+            <span style={{ fontFamily: serif, fontStyle: "italic" }}>
+              viewing <span style={{ color: C.text }}>{view}</span>
+            </span>
           </span>
         </>
       ) : (
-        <span style={{ fontFamily: serif, fontStyle: "italic" }}>
-          no function selected
-        </span>
+        <>
+          <span style={{ fontFamily: serif, fontStyle: "italic" }}>
+            no function selected
+          </span>
+          {pendingList && (
+            <span style={{ marginLeft: "auto", color: C.accent, fontSize: 10 }}>
+              loading {pendingList}…
+            </span>
+          )}
+        </>
       )}
     </div>
   );

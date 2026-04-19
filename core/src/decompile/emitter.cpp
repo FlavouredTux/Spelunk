@@ -376,9 +376,10 @@ struct Emitter {
         std::string bare = (pos != std::string_view::npos)
             ? std::string(n.substr(0, pos))
             : std::string(n);
-        // C++ names come out of the linker mangled. Demangle them here so
-        // the pseudo-C reads as the source language instead of ABI noise.
-        return pretty_symbol(bare);
+        // C++ names come out of the linker mangled. For use at the call site
+        // we only want the qualified identifier, not the parenthesized arg
+        // list from the demangler (the emitter will render the actual args).
+        return pretty_symbol_base(bare);
     }
 
     // For `call <abs_target>`: if the target is a PLT stub, return the
@@ -580,7 +581,7 @@ struct Emitter {
             if (const Symbol* s = binary->defined_object_at(target); s) {
                 if (s->kind == SymbolKind::Function && s->addr == target &&
                     !s->name.empty()) {
-                    return pretty_symbol(s->name);
+                    return pretty_symbol_base(s->name);
                 }
             }
         }
@@ -690,6 +691,49 @@ struct Emitter {
     // Self-arg slots (a1..a6) known to flow into a libc char* parameter.
     // Populated by infer_charp_args(); consumed by the header builder.
     std::array<bool, 6> charp_arg = {false, false, false, false, false, false};
+
+    // For-loop update-instruction positions, pulled from every RegionKind::For
+    // in the structured body. emit_block skips these so the increment doesn't
+    // double-render: once in the body, once in the for-header. Keyed by
+    // (block_index, inst_index) to match the `hidden` bookkeeping.
+    std::set<std::pair<std::size_t, std::size_t>> for_update_positions;
+
+    // Walk the structured body, populate for_update_positions.
+    void collect_for_updates(const Region& r) {
+        if (r.kind == RegionKind::For && r.has_update) {
+            auto it = fn->block_at.find(r.update_block);
+            if (it != fn->block_at.end()) {
+                for_update_positions.emplace(it->second, r.update_inst);
+            }
+        }
+        for (const auto& c : r.children) if (c) collect_for_updates(*c);
+    }
+
+    // Render a single instruction at (block_addr, inst_idx) as its compound-
+    // assign form — e.g. `i++`, `i += 2`, `x <<= 1`. Used for the update
+    // clause of a for-loop. Returns empty on no-match; caller falls back to
+    // suppressing the For and emitting as a While.
+    [[nodiscard]] std::string
+    render_update_inst(addr_t block_addr, u32 inst_idx) const {
+        auto it = fn->block_at.find(block_addr);
+        if (it == fn->block_at.end()) return {};
+        const auto& bb = fn->blocks[it->second];
+        if (inst_idx >= bb.insts.size()) return {};
+        const auto& inst = bb.insts[inst_idx];
+        if (inst.op != IrOp::Store || inst.src_count < 2) return {};
+        const auto& addr = inst.srcs[0];
+        const auto& val  = inst.srcs[1];
+        std::string lhs;
+        if (auto off = stack_offset(addr); off) lhs = stack_name(*off);
+        if (lhs.empty()) lhs = format_mem(addr, val.type, inst.segment);
+        std::string stmt = try_compound_store(lhs, addr, val);
+        if (stmt.empty()) return {};
+        // Strip the trailing ';' so it fits in a for-header slot.
+        while (!stmt.empty() && (stmt.back() == ';' || stmt.back() == '\n')) {
+            stmt.pop_back();
+        }
+        return stmt;
+    }
 
     // Trace `v` back through Assign copies and trivial phis to a version-0
     // SysV int-arg register (rdi..r9). Returns the 0-based slot (0..5), or
@@ -2074,11 +2118,29 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     if (options.show_bb_labels) {
         out += std::format("{}// bb_{:x}\n", ind, bb.start);
     }
-    // Pattern-level exception-handler detection. Full LSDA decoding would
-    // give us real try/catch region structuring; until then, this one-line
-    // hint tells the reader the block is on a non-trivial control path.
-    if (auto h = eh_pattern_hint(bb, binary); h) {
-        out += std::format("{}// [eh] {}\n", ind, *h);
+    // Real LSDA-driven landing-pad annotation when we have the map; fall
+    // back to the __cxa_*-pattern hint when LSDA isn't parsed. The two are
+    // complementary: LSDA tells us which CALL-range instructions protected
+    // this block (emitted on the protected range's start address), while
+    // the pattern check tells us which block IS the catch body.
+    bool annotated = false;
+    if (options.landing_pads) {
+        if (auto lp = landing_pad_for(*options.landing_pads, bb.start); lp) {
+            if (lp->lp_addr == bb.start) {
+                out += std::format("{}// [eh] landing pad (action {})\n",
+                                   ind, lp->action_index);
+                annotated = true;
+            } else if (lp->lp_addr != 0) {
+                out += std::format("{}// [eh] may throw → landing pad at bb_{:x}\n",
+                                   ind, lp->lp_addr);
+                annotated = true;
+            }
+        }
+    }
+    if (!annotated) {
+        if (auto h = eh_pattern_hint(bb, binary); h) {
+            out += std::format("{}// [eh] {}\n", ind, *h);
+        }
     }
 
     std::vector<IrValue> pending_args;
@@ -2123,6 +2185,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         const auto& inst = bb.insts[ii];
         // Skip ABI-noise prologue/epilogue insts detected during analysis.
         if (hidden.contains({it->second, ii})) continue;
+        // Skip the for-loop update statement; it'll render in the for-header.
+        if (for_update_positions.contains({it->second, ii})) continue;
         switch (inst.op) {
             case IrOp::Branch:
             case IrOp::CondBranch:
@@ -2334,6 +2398,24 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
             return;
         }
 
+        case RegionKind::For: {
+            // The update slot renders the increment inst. If rendering fails
+            // (pattern didn't reduce), degrade gracefully to a plain while —
+            // the body will include the update statement at its natural spot.
+            std::string update = r.has_update
+                ? render_update_inst(r.update_block, r.update_inst)
+                : std::string{};
+            const std::string cond = render_condition(r.condition, r.invert);
+            if (update.empty()) {
+                out += std::format("{}while ({}) {{\n", ind, cond);
+            } else {
+                out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
+            }
+            for (const auto& c : r.children) emit_region(*c, depth + 1, out);
+            out += std::format("{}}}\n", ind);
+            return;
+        }
+
         case RegionKind::Return: {
             if (r.condition.kind != IrValueKind::None) {
                 if (auto k = ssa_key(r.condition); k) {
@@ -2458,6 +2540,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (sf.body) {
         e.suppress_canary_regions(*sf.body);
         e.analyze_return_folds(*sf.body);
+        e.collect_for_updates(*sf.body);
     }
     if (!has_user_sig) e.bump_arity_from_body_reads();
     if (!has_user_sig) e.infer_charp_args();
@@ -2508,7 +2591,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 if (s.kind != SymbolKind::Function) continue;
                 if (s.addr != sf.ir->start) continue;
                 if (s.name.empty()) continue;
-                return pretty_symbol(s.name);
+                // Header position — we'll add our own arg list, so the
+                // demangled signature suffix would be duplicated noise.
+                return pretty_symbol_base(s.name);
             }
         }
         return std::format("sub_{:x}", sf.ir->start);

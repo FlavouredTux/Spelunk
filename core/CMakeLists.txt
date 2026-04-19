@@ -13,6 +13,7 @@ add_library(ember_core STATIC
     src/analysis/fingerprint.cpp
     src/analysis/demangle.cpp
     src/analysis/sig_inference.cpp
+    src/analysis/eh_frame.cpp
     src/common/annotations.cpp
     src/common/cache.cpp
     src/ir/ir.cpp

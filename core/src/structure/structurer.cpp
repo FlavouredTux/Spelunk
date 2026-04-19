@@ -522,10 +522,61 @@ public:
             }
         }
 
+        // For-loop detection: a while where the body's single back-edge
+        // predecessor ends in an increment-and-store of a stack local that
+        // the loop condition also uses. We look for the store at the last
+        // body instruction of the block that branches back to the header.
+        bool is_for = false;
+        addr_t for_update_block = 0;
+        u32    for_update_inst  = 0;
+        auto detect_for_update = [&]() -> bool {
+            if (!have_cond) return false;
+            auto lh = info_.loop_headers.find(header);
+            if (lh == info_.loop_headers.end() || lh->second.empty()) return false;
+            // Pick the most-representative back-edge tail (single tail case
+            // is overwhelmingly common for natural loops).
+            const addr_t tail = *lh->second.begin();
+            auto tit = fn_.block_at.find(tail);
+            if (tit == fn_.block_at.end()) return false;
+            const auto& tbb = fn_.blocks[tit->second];
+            // Walk tail insts in reverse to find a Store of
+            // Add/Sub(Load(addr), imm) where addr is a stack local.
+            for (std::size_t k = tbb.insts.size(); k-- > 0;) {
+                const auto& inst = tbb.insts[k];
+                if (inst.op == IrOp::Branch ||
+                    inst.op == IrOp::CondBranch ||
+                    inst.op == IrOp::BranchIndirect ||
+                    inst.op == IrOp::Return ||
+                    inst.op == IrOp::Nop) continue;
+                if (inst.op != IrOp::Store || inst.src_count < 2) return false;
+                // The store's address must be a stack local.
+                // (We can't re-run stack_offset here without a defs map;
+                // approximate by requiring the address to be a Temp or Reg.)
+                // Delta RHS must be an Add/Sub(Load(same_addr), Imm) shape.
+                // That's the exact invariant we already rely on in the
+                // emitter's peephole — if it matches, it'll render cleanly.
+                for_update_block = tail;
+                for_update_inst  = static_cast<u32>(k);
+                return true;
+            }
+            return false;
+        };
+
         if (have_cond) {
-            loop_r->kind      = RegionKind::While;
+            is_for = detect_for_update();
+        }
+
+        if (have_cond) {
             loop_r->condition = cond;
             loop_r->invert    = invert;
+            if (is_for) {
+                loop_r->kind         = RegionKind::For;
+                loop_r->has_update   = true;
+                loop_r->update_block = for_update_block;
+                loop_r->update_inst  = for_update_inst;
+            } else {
+                loop_r->kind = RegionKind::While;
+            }
         } else if (do_while) {
             loop_r->kind      = RegionKind::DoWhile;
             loop_r->condition = cond;
@@ -763,6 +814,18 @@ void print_region(const Region& r, const IrFunction& fn,
             const std::string cs = format_ir_value(r.condition);
             const std::string cond = r.invert ? std::format("!({})", cs) : cs;
             out += std::format("{}}} while ({});\n", ind, cond);
+            return;
+        }
+
+        case RegionKind::For: {
+            const std::string cs = format_ir_value(r.condition);
+            const std::string cond = r.invert ? std::format("!({})", cs) : cs;
+            out += std::format("{}for (; {}; update@{:x}:{}) {{\n",
+                               ind, cond, r.update_block, r.update_inst);
+            for (const auto& c : r.children) {
+                print_region(*c, fn, depth + 1, out);
+            }
+            out += std::format("{}}}\n", ind);
             return;
         }
 

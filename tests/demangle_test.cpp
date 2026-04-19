@@ -57,6 +57,26 @@ int main() {
     check("not_mangled", "not_mangled");
     check("main",         "main");
 
+    // pretty_symbol_base strips the trailing signature so the header
+    // builder can attach its own argument list without duplication.
+    auto check_base = [](std::string_view m, std::string_view want) {
+        const std::string got = ember::pretty_symbol_base(m);
+        if (got != want) {
+            std::fprintf(stderr, "FAIL base: %.*s\n  got:      %s\n  expected: %.*s\n",
+                         static_cast<int>(m.size()), m.data(),
+                         got.c_str(),
+                         static_cast<int>(want.size()), want.data());
+            ++fails;
+        }
+    };
+    check_base("_Z3foov",                     "foo");
+    check_base("_ZN3foo3barEi",               "foo::bar");
+    check_base("_ZNK3foo3barEv",              "foo::bar");
+    check_base("_ZN3std6stringC1EPKc",        "std::string::string");
+    check_base("_ZNSt6vectorIiSaIiEE9push_backEOi",
+               "std::vector<int, std::allocator<int>>::push_back");
+    check_base("plain_name", "plain_name");
+
     if (fails) {
         std::fprintf(stderr, "%d failure(s)\n", fails);
         return EXIT_FAILURE;

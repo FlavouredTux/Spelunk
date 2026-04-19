@@ -686,4 +686,40 @@ std::string pretty_symbol(std::string_view name) {
     return std::string(name);
 }
 
+std::string strip_signature_suffix(std::string_view s) {
+    // Trailing CV/ref-qualifier suffix on member functions.
+    while (!s.empty()) {
+        if (s.ends_with(" const"))     s.remove_suffix(6);
+        else if (s.ends_with(" volatile")) s.remove_suffix(9);
+        else if (s.ends_with(" &"))     s.remove_suffix(2);
+        else if (s.ends_with(" &&"))    s.remove_suffix(3);
+        else break;
+    }
+    // Trailing arg list. Match the `(` that pairs with the final `)`.
+    if (s.empty() || s.back() != ')') return std::string(s);
+    int depth = 1;
+    std::size_t i = s.size() - 1;
+    while (i > 0) {
+        --i;
+        const char c = s[i];
+        if (c == ')') ++depth;
+        else if (c == '(') {
+            --depth;
+            if (depth == 0) {
+                // If what remains ends in `operator` (with no trailing char),
+                // the `()` we'd strip is actually part of the call-operator's
+                // own name — e.g. `operator()`. Restore.
+                std::string_view head = s.substr(0, i);
+                if (head.ends_with("operator")) return std::string(s);
+                return std::string(head);
+            }
+        }
+    }
+    return std::string(s);
+}
+
+std::string pretty_symbol_base(std::string_view name) {
+    return strip_signature_suffix(pretty_symbol(name));
+}
+
 }  // namespace ember

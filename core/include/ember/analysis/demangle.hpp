@@ -33,4 +33,14 @@ demangle_itanium(std::string_view mangled);
 // otherwise return the input as-is. Useful wherever we display symbol names.
 [[nodiscard]] std::string pretty_symbol(std::string_view name);
 
+// Strip the trailing (arg-list) and CV/ref suffix from a demangled name,
+// leaving just the qualified identifier. `foo::bar(int) const` → `foo::bar`.
+// No-op on anything that doesn't look like a demangled signature.
+[[nodiscard]] std::string strip_signature_suffix(std::string_view demangled);
+
+// Convenience: like pretty_symbol but for function-header use — demangles
+// and strips the arg list, so the name can go in a declaration where the
+// header builder will attach its own argument list.
+[[nodiscard]] std::string pretty_symbol_base(std::string_view name);
+
 }  // namespace ember

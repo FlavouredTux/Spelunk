@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <format>
+#include <map>
 #include <optional>
 #include <print>
 #include <set>
@@ -13,9 +14,11 @@
 
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/function.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/annotations.hpp>
@@ -55,6 +58,8 @@ struct Args {
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
+    bool ipa    = false;            // run interprocedural signature inference for -p
+    bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
     bool help   = false;
 };
 
@@ -83,6 +88,8 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--strings",   &Args::strings},
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
+    {"",   "--ipa",       &Args::ipa},
+    {"",   "--eh",        &Args::eh},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -690,6 +697,8 @@ void print_help() {
     std::println("      --arities        dump inferred SysV arity per function (addr N)");
     std::println("      --fingerprints   dump address-independent content hash per function");
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
+    std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
+    std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
@@ -787,6 +796,24 @@ int main(int argc, char** argv) {
 
     ember::EmitOptions emit_opts;
     emit_opts.show_bb_labels = args.labels;
+    // IPA: one-shot fixed-point over the call graph before emission so
+    // char*-arg propagation can cross function boundaries. Expensive on
+    // large binaries — opt-in via --ipa.
+    std::map<ember::addr_t, ember::InferredSig> sigs;
+    if (args.ipa && (args.pseudo || args.strct)) {
+        std::println(stderr, "ember: running IPA (this pass lifts every function once)...");
+        std::fflush(stderr);
+        sigs = ember::infer_signatures(b);
+        std::println(stderr, "ember: IPA done: {} functions analyzed", sigs.size());
+        emit_opts.signatures = &sigs;
+    }
+    ember::LpMap lp_map;
+    if (args.eh && (args.pseudo || args.strct)) {
+        lp_map = ember::parse_landing_pads(b);
+        std::println(stderr, "ember: EH data: {} landing-pad ranges parsed",
+                     lp_map.size());
+        emit_opts.landing_pads = &lp_map;
+    }
     if (args.pseudo) {
         return run_struct(b, args.symbol, /*pseudo=*/true, ann_ptr, emit_opts);
     }

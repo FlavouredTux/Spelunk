@@ -3,6 +3,7 @@
 #include <map>
 #include <string>
 
+#include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/annotations.hpp>
@@ -22,6 +23,10 @@ struct EmitOptions {
     // for char*-arg propagation across function boundaries instead of
     // being limited to the direct libc-sink pass.
     const std::map<addr_t, InferredSig>* signatures = nullptr;
+    // Pre-parsed landing-pad map from parse_landing_pads(). When set, the
+    // emitter annotates blocks that begin a catch range with real LSDA
+    // info instead of falling back to __cxa_* pattern matching.
+    const LpMap* landing_pads = nullptr;
 };
 
 class PseudoCEmitter {

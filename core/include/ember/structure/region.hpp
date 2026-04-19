@@ -17,6 +17,7 @@ enum class RegionKind : u8 {
     IfElse,
     While,      // while (cond) { body }  — condition tested at top
     DoWhile,    // do { body } while (cond)  — condition tested after body
+    For,        // for (; cond; update) { body } — induction-var pattern
     Loop,       // for (;;) { … }  — no recognized exit condition
     Switch,
     Return,
@@ -39,6 +40,12 @@ struct Region {
     bool                                 has_default = false;
     // For Switch: the register whose value selects the case (display-only).
     Reg                                  switch_index = Reg::None;
+    // For For: location of the update statement in the IR, so the emitter
+    // can render it in the for-header and suppress it in the body. Only
+    // meaningful when kind == For.
+    addr_t                               update_block  = 0;
+    u32                                  update_inst   = 0;
+    bool                                 has_update    = false;
 };
 
 struct StructuredFunction {

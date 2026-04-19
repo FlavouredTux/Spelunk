@@ -1,13 +1,16 @@
 #include <ember/script/runtime.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include <ember/analysis/pipeline.hpp>
@@ -34,12 +37,37 @@ struct PendingAnnotations {
     void clear() noexcept { renames.clear(); signatures.clear(); notes.clear(); }
 };
 
-struct ScriptCtx {
-    const Binary*            binary  = nullptr;
-    ProjectContext*          project = nullptr;   // null: mutation API raises
-    PendingAnnotations       pending{};
-    std::vector<std::string> argv{};
+// Lazy call graph, built once per ScriptRuntime. The first xrefs.callers /
+// xrefs.callees / xrefs.to call pays the cost of building a CFG per
+// function; subsequent queries are hash lookups.
+struct CallGraphCache {
+    std::unordered_map<addr_t, std::vector<addr_t>> callers_by_callee;
+    std::unordered_map<addr_t, std::vector<addr_t>> callees_by_caller;
 };
+
+struct ScriptCtx {
+    const Binary*                   binary  = nullptr;
+    ProjectContext*                 project = nullptr;   // null: mutation API raises
+    PendingAnnotations              pending{};
+    std::vector<std::string>        argv{};
+    std::unique_ptr<CallGraphCache> call_graph{};        // lazy
+};
+
+const CallGraphCache& ensure_call_graph(ScriptCtx& hc) {
+    if (hc.call_graph) return *hc.call_graph;
+    hc.call_graph = std::make_unique<CallGraphCache>();
+    for (const auto& e : compute_call_graph(*hc.binary)) {
+        hc.call_graph->callers_by_callee[e.callee].push_back(e.caller);
+        hc.call_graph->callees_by_caller[e.caller].push_back(e.callee);
+    }
+    auto dedup = [](std::vector<addr_t>& v) {
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+    };
+    for (auto& [_, v] : hc.call_graph->callers_by_callee) dedup(v);
+    for (auto& [_, v] : hc.call_graph->callees_by_caller) dedup(v);
+    return *hc.call_graph;
+}
 
 ScriptCtx* ctx_of(JSContext* ctx) noexcept {
     return static_cast<ScriptCtx*>(JS_GetContextOpaque(ctx));
@@ -54,12 +82,33 @@ JSValue throw_err(JSContext* ctx, std::string_view msg) {
         static_cast<int>(msg.size()), msg.data());
 }
 
+// RAII wrapper around JS_ToCString / JS_FreeCString. `valid()` is false when
+// the target value can't be stringified (exception pending on `ctx`).
+class ScopedCString {
+public:
+    ScopedCString(JSContext* ctx, JSValueConst v) noexcept
+        : ctx_(ctx), s_(JS_ToCString(ctx, v)) {}
+    ~ScopedCString() { if (s_) JS_FreeCString(ctx_, s_); }
+    ScopedCString(const ScopedCString&)            = delete;
+    ScopedCString& operator=(const ScopedCString&) = delete;
+
+    [[nodiscard]] bool             valid() const noexcept { return s_ != nullptr; }
+    [[nodiscard]] const char*      c_str() const noexcept { return s_; }
+    [[nodiscard]] std::string_view view() const noexcept {
+        return s_ ? std::string_view{s_} : std::string_view{};
+    }
+
+private:
+    JSContext*  ctx_;
+    const char* s_;
+};
+
 std::string join_args(JSContext* ctx, int argc, JSValueConst* argv) {
     std::string out;
     for (int i = 0; i < argc; ++i) {
         if (i > 0) out += ' ';
-        const char* s = JS_ToCString(ctx, argv[i]);
-        if (s) { out += s; JS_FreeCString(ctx, s); }
+        ScopedCString s(ctx, argv[i]);
+        if (s.valid()) out += s.c_str();
     }
     return out;
 }
@@ -134,11 +183,9 @@ JSValue make_symbol_obj(JSContext* ctx, const Symbol& s) {
 std::optional<FuncWindow>
 resolve_js_target(JSContext* ctx, const Binary& b, JSValueConst v) {
     if (JS_IsString(v)) {
-        const char* s = JS_ToCString(ctx, v);
-        if (!s) return std::nullopt;
-        std::string name(s);
-        JS_FreeCString(ctx, s);
-        return resolve_function(b, name);
+        ScopedCString s(ctx, v);
+        if (!s.valid()) return std::nullopt;
+        return resolve_function(b, s.view());
     }
     u64 addr = 0;
     if (!to_u64(ctx, v, &addr)) return std::nullopt;
@@ -174,14 +221,10 @@ JSValue js_sections(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 JSValue js_find_symbol(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
-    const char* n = JS_ToCString(ctx, argv[0]);
-    if (!n) return JS_NULL;
-    std::string name(n);
-    JS_FreeCString(ctx, n);
+    ScopedCString n(ctx, argv[0]);
+    if (!n.valid()) return JS_NULL;
     const Binary* b = ctx_of(ctx)->binary;
-    for (const auto& s : b->symbols()) {
-        if (s.name == name) return make_symbol_obj(ctx, s);
-    }
+    if (const Symbol* s = b->find_by_name(n.view()); s) return make_symbol_obj(ctx, *s);
     return JS_NULL;
 }
 
@@ -236,16 +279,16 @@ JSValue js_symbol_at(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
 
 JSValue js_find_bytes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return throw_err(ctx, "findBytes: missing pattern");
-    const char* p = JS_ToCString(ctx, argv[0]);
-    if (!p) return throw_err(ctx, "findBytes: bad pattern");
-    std::string pattern(p);
-    JS_FreeCString(ctx, p);
+    ScopedCString pattern(ctx, argv[0]);
+    if (!pattern.valid()) return throw_err(ctx, "findBytes: bad pattern");
 
     std::vector<u8> needle;
     std::vector<u8> mask;
-    if (!parse_hex_pattern(pattern, needle, mask)) {
+    if (!parse_hex_pattern(pattern.view(), needle, mask)) {
         return throw_err(ctx, "findBytes: bad hex pattern");
     }
+    // findBytes scans executable sections only; data matches are usually
+    // coincidental. Callers wanting data search should use a different API.
 
     u64 cap = 1024;
     if (argc >= 2 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) {
@@ -349,6 +392,17 @@ JSValue js_bin_disasm(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     return make_str(ctx, *rv);
 }
 
+JSValue js_bin_disasm_range(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return throw_err(ctx, "disasmRange: need (start, end)");
+    const Binary* b = ctx_of(ctx)->binary;
+    u64 start = 0, end = 0;
+    if (!to_u64(ctx, argv[0], &start)) return throw_err(ctx, "disasmRange: bad start");
+    if (!to_u64(ctx, argv[1], &end))   return throw_err(ctx, "disasmRange: bad end");
+    auto rv = format_disasm_range(*b, start, end);
+    if (!rv) return throw_err(ctx, rv.error().message);
+    return make_str(ctx, *rv);
+}
+
 JSValue js_bin_cfg(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return throw_err(ctx, "cfg: missing addr");
     const Binary* b = ctx_of(ctx)->binary;
@@ -378,12 +432,15 @@ JSValue js_xrefs_callees(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     if (argc < 1) return JS_NewArray(ctx);
     u64 addr = 0;
     if (!to_u64(ctx, argv[0], &addr)) return JS_NewArray(ctx);
-    const Binary* b = ctx_of(ctx)->binary;
-    auto targets = compute_callees(*b, static_cast<addr_t>(addr));
+    auto& hc = *ctx_of(ctx);
+    const auto& g = ensure_call_graph(hc);
     JSValue arr = JS_NewArray(ctx);
     u32 i = 0;
-    for (addr_t t : targets) {
-        JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *b, t));
+    auto it = g.callees_by_caller.find(static_cast<addr_t>(addr));
+    if (it != g.callees_by_caller.end()) {
+        for (addr_t t : it->second) {
+            JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *hc.binary, t));
+        }
     }
     return arr;
 }
@@ -392,12 +449,15 @@ JSValue js_xrefs_callers(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     if (argc < 1) return JS_NewArray(ctx);
     u64 addr = 0;
     if (!to_u64(ctx, argv[0], &addr)) return JS_NewArray(ctx);
-    const Binary* b = ctx_of(ctx)->binary;
-    auto callers = compute_callers(*b, static_cast<addr_t>(addr));
+    auto& hc = *ctx_of(ctx);
+    const auto& g = ensure_call_graph(hc);
     JSValue arr = JS_NewArray(ctx);
     u32 i = 0;
-    for (addr_t c : callers) {
-        JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *b, c));
+    auto it = g.callers_by_callee.find(static_cast<addr_t>(addr));
+    if (it != g.callers_by_callee.end()) {
+        for (addr_t c : it->second) {
+            JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *hc.binary, c));
+        }
     }
     return arr;
 }
@@ -424,19 +484,14 @@ bool build_regex(JSContext* ctx, JSValueConst v,
     bool icase = false;
 
     if (JS_IsString(v)) {
-        const char* s = JS_ToCString(ctx, v);
-        if (!s) { err = "strings: invalid pattern"; return false; }
-        pattern.assign(s);
-        JS_FreeCString(ctx, s);
+        ScopedCString s(ctx, v);
+        if (!s.valid()) { err = "strings: invalid pattern"; return false; }
+        pattern.assign(s.view());
     } else if (JS_IsObject(v)) {
         JSValue src = JS_GetPropertyStr(ctx, v, "source");
         JSValue flg = JS_GetPropertyStr(ctx, v, "flags");
-        const char* p = JS_ToCString(ctx, src);
-        const char* f = JS_ToCString(ctx, flg);
-        if (p) pattern.assign(p);
-        if (f) { std::string fs(f); icase = fs.find('i') != std::string::npos; }
-        if (p) JS_FreeCString(ctx, p);
-        if (f) JS_FreeCString(ctx, f);
+        if (ScopedCString p(ctx, src); p.valid()) pattern.assign(p.view());
+        if (ScopedCString f(ctx, flg); f.valid()) icase = f.view().find('i') != std::string_view::npos;
         JS_FreeValue(ctx, src);
         JS_FreeValue(ctx, flg);
         if (pattern.empty()) { err = "strings: RegExp missing source"; return false; }
@@ -554,10 +609,9 @@ JSValue js_project_rename(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     if (argc < 2) return throw_err(ctx, "rename: (addr, name[, opts])");
     addr_t a = 0;
     if (!parse_addr_arg(ctx, argv[0], &a)) return throw_err(ctx, "rename: bad addr");
-    const char* n = JS_ToCString(ctx, argv[1]);
-    if (!n) return throw_err(ctx, "rename: bad name");
-    std::string name(n);
-    JS_FreeCString(ctx, n);
+    ScopedCString n(ctx, argv[1]);
+    if (!n.valid()) return throw_err(ctx, "rename: bad name");
+    std::string name{n.view()};
 
     auto* hc = ctx_of(ctx);
     const bool dry = argc >= 3 && is_dry_run(ctx, argv[2]);
@@ -578,8 +632,7 @@ JSValue js_project_set_signature(JSContext* ctx, JSValueConst,
     FunctionSig sig;
     {
         JSValue rt = JS_GetPropertyStr(ctx, argv[1], "returnType");
-        const char* s = JS_ToCString(ctx, rt);
-        if (s) { sig.return_type = s; JS_FreeCString(ctx, s); }
+        if (ScopedCString s(ctx, rt); s.valid()) sig.return_type = s.view();
         JS_FreeValue(ctx, rt);
     }
     {
@@ -594,8 +647,8 @@ JSValue js_project_set_signature(JSContext* ctx, JSValueConst,
                 ParamSig ps;
                 JSValue t = JS_GetPropertyStr(ctx, p, "type");
                 JSValue nm = JS_GetPropertyStr(ctx, p, "name");
-                if (const char* s = JS_ToCString(ctx, t))  { ps.type = s; JS_FreeCString(ctx, s); }
-                if (const char* s = JS_ToCString(ctx, nm)) { ps.name = s; JS_FreeCString(ctx, s); }
+                if (ScopedCString s(ctx, t);  s.valid()) ps.type = s.view();
+                if (ScopedCString s(ctx, nm); s.valid()) ps.name = s.view();
                 JS_FreeValue(ctx, t);
                 JS_FreeValue(ctx, nm);
                 JS_FreeValue(ctx, p);
@@ -624,10 +677,9 @@ JSValue js_project_note(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     if (argc < 2) return throw_err(ctx, "note: (addr, text[, opts])");
     addr_t a = 0;
     if (!parse_addr_arg(ctx, argv[0], &a)) return throw_err(ctx, "note: bad addr");
-    const char* n = JS_ToCString(ctx, argv[1]);
-    if (!n) return throw_err(ctx, "note: bad text");
-    std::string text(n);
-    JS_FreeCString(ctx, n);
+    ScopedCString n(ctx, argv[1]);
+    if (!n.valid()) return throw_err(ctx, "note: bad text");
+    std::string text{n.view()};
 
     auto* hc = ctx_of(ctx);
     const bool dry = argc >= 3 && is_dry_run(ctx, argv[2]);
@@ -753,6 +805,8 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_decompile, "decompile",  1));
     JS_SetPropertyStr(ctx, bin, "disasm",
         JS_NewCFunction(ctx, js_bin_disasm,   "disasm",      2));
+    JS_SetPropertyStr(ctx, bin, "disasmRange",
+        JS_NewCFunction(ctx, js_bin_disasm_range, "disasmRange", 2));
     JS_SetPropertyStr(ctx, bin, "cfg",
         JS_NewCFunction(ctx, js_bin_cfg,      "cfg",         1));
 
@@ -786,14 +840,17 @@ void install_log_global(JSContext* ctx) {
 void dump_exception(JSContext* ctx) {
     JSValue exc = JS_GetException(ctx);
     const bool is_err = JS_IsError(ctx, exc);
-    const char* msg = JS_ToCString(ctx, exc);
-    std::fprintf(stderr, "ember: script error: %s\n", msg ? msg : "(no message)");
-    if (msg) JS_FreeCString(ctx, msg);
+    {
+        ScopedCString msg(ctx, exc);
+        std::fprintf(stderr, "ember: script error: %s\n",
+                     msg.valid() ? msg.c_str() : "(no message)");
+    }
     if (is_err) {
         JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
         if (!JS_IsUndefined(stack)) {
-            const char* s = JS_ToCString(ctx, stack);
-            if (s) { std::fprintf(stderr, "%s", s); JS_FreeCString(ctx, s); }
+            if (ScopedCString s(ctx, stack); s.valid()) {
+                std::fprintf(stderr, "%s", s.c_str());
+            }
         }
         JS_FreeValue(ctx, stack);
     }
@@ -809,11 +866,19 @@ struct ScriptRuntime::Impl {
 };
 
 ScriptRuntime::ScriptRuntime(const Binary& binary, ProjectContext* project) noexcept
-    : impl_(new Impl) {
+    : impl_(std::make_unique<Impl>()) {
     impl_->host.binary  = &binary;
     impl_->host.project = project;
     impl_->rt  = JS_NewRuntime();
+    if (!impl_->rt) {
+        std::fprintf(stderr, "ember: JS_NewRuntime failed (out of memory)\n");
+        std::abort();
+    }
     impl_->ctx = JS_NewContext(impl_->rt);
+    if (!impl_->ctx) {
+        std::fprintf(stderr, "ember: JS_NewContext failed (out of memory)\n");
+        std::abort();
+    }
     JS_SetContextOpaque(impl_->ctx, &impl_->host);
     install_log_global(impl_->ctx);
     install_binary_global(impl_->ctx);
@@ -831,7 +896,6 @@ void ScriptRuntime::set_argv(std::vector<std::string> argv) {
 ScriptRuntime::~ScriptRuntime() {
     if (impl_->ctx) JS_FreeContext(impl_->ctx);
     if (impl_->rt)  JS_FreeRuntime(impl_->rt);
-    delete impl_;
 }
 
 Result<void>

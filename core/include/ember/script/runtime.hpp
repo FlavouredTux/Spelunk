@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,8 @@ struct ProjectContext {
     Annotations           loaded{};
 };
 
+// Holds references (not copies) to `binary` and `project`; both must outlive
+// the ScriptRuntime.
 class ScriptRuntime {
 public:
     explicit ScriptRuntime(const Binary& binary,
@@ -35,7 +38,7 @@ public:
 
 private:
     struct Impl;
-    Impl* impl_;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace ember

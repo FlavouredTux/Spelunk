@@ -30,6 +30,9 @@ Result<std::string>
 format_disasm(const Binary& b, const FuncWindow& w);
 
 Result<std::string>
+format_disasm_range(const Binary& b, addr_t start, addr_t end);
+
+Result<std::string>
 format_cfg(const Binary& b, const FuncWindow& w);
 
 Result<std::string>

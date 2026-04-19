@@ -134,19 +134,9 @@ clamp_bytes(std::span<const std::byte> avail, u64 size) {
 
 std::optional<FuncWindow>
 resolve_function(const Binary& b, std::string_view symbol) {
-    const Symbol* chosen = nullptr;
-    if (!symbol.empty()) {
-        for (const auto& s : b.symbols()) {
-            if (!s.is_import && s.name == symbol) { chosen = &s; break; }
-        }
-    } else {
-        for (const auto& s : b.symbols()) {
-            if (!s.is_import && s.kind == SymbolKind::Function && s.name == "main") {
-                chosen = &s;
-                break;
-            }
-        }
-    }
+    const Symbol* chosen = b.find_by_name(symbol.empty() ? "main" : symbol);
+    if (chosen && chosen->is_import) chosen = nullptr;
+    if (!symbol.empty() && chosen && chosen->is_import) chosen = nullptr;
 
     if (chosen) {
         if (b.bytes_at(chosen->addr).empty()) return std::nullopt;
@@ -208,6 +198,44 @@ format_disasm(const Binary& b, const FuncWindow& w) {
         ip  += insn.length;
         off += insn.length;
         if (!size_known && is_terminator(insn.mnemonic)) break;
+    }
+    return out;
+}
+
+Result<std::string>
+format_disasm_range(const Binary& b, addr_t start, addr_t end) {
+    if (end <= start) {
+        return std::unexpected(Error::invalid_format(
+            std::format("disasm range end {:#x} <= start {:#x}", end, start)));
+    }
+    auto avail = b.bytes_at(start);
+    if (avail.empty()) {
+        return std::unexpected(Error::invalid_format(
+            std::format("no bytes mapped at {:#x}", start)));
+    }
+    auto bytes = clamp_bytes(avail, end - start);
+
+    std::string out;
+    const X64Decoder dec;
+    addr_t ip = start;
+    std::size_t off = 0;
+    while (off < bytes.size()) {
+        const auto remaining = bytes.subspan(off);
+        auto decoded = dec.decode(remaining, ip);
+        if (!decoded) {
+            out += std::format("{:#018x}  {:<30}  ; decode error: {}\n",
+                               ip, hex_bytes(remaining.first(1)),
+                               decoded.error().message);
+            ip  += 1;
+            off += 1;
+            continue;
+        }
+        const auto& insn = *decoded;
+        const auto bv = remaining.first(insn.length);
+        out += std::format("{:#018x}  {:<30}  {}\n",
+                           ip, hex_bytes(bv), format_instruction(insn));
+        ip  += insn.length;
+        off += insn.length;
     }
     return out;
 }

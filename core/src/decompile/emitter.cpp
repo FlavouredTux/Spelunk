@@ -219,7 +219,8 @@ enum class Prec : int {
     Add     = 11,   // + -
     Mul     = 12,   // * / %
     Unary   = 13,   // ! ~ unary- (T)x *x &x
-    Primary = 15,   // ident, literal, call, t[i], foo()
+    Postfix = 14,   // a[i] a->b a.b f(x) — binds tighter than unary
+    Primary = 15,   // ident, literal
 };
 
 [[nodiscard]] inline std::string
@@ -669,6 +670,21 @@ struct Emitter {
             }
         }
         analyze_abi_noise();
+        // Second scan: after defs/uses are populated (so def_stripped works),
+        // collect offsets for every pointer that participates in loads/stores.
+        // A base observed at multiple distinct offsets is treated as a struct
+        // pointer in format_mem.
+        for (const auto& bb : f.blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op == IrOp::Load && inst.src_count >= 1 &&
+                    inst.segment == Reg::None) {
+                    record_struct_access(inst.srcs[0]);
+                } else if (inst.op == IrOp::Store && inst.src_count >= 1 &&
+                           inst.segment == Reg::None) {
+                    record_struct_access(inst.srcs[0]);
+                }
+            }
+        }
     }
 
     // Self-arg slots (a1..a6) known to flow into a libc char* parameter.
@@ -736,11 +752,28 @@ struct Emitter {
                     continue;
                 }
                 if (inst.op == IrOp::Call) {
-                    const Symbol* s = binary->import_at_plt(inst.target1);
-                    if (!s) { args.clear(); continue; }
-                    const std::string callee = clean_import_name(s->name);
-                    for (std::size_t i = 0; i < args.size(); ++i) {
-                        if (!libc_arg_is_charp(callee, static_cast<u8>(i + 1))) continue;
+                    // Callee-side char*-slot bitset: for a libc import, look
+                    // up the direct-sink table; for an internal function,
+                    // consult the pre-computed IPA map when one was passed.
+                    std::array<bool, 6> callee_charp{};
+                    bool have_info = false;
+                    if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
+                        const std::string callee = clean_import_name(s->name);
+                        for (u8 i = 0; i < 6; ++i) {
+                            callee_charp[i] = libc_arg_is_charp(
+                                callee, static_cast<u8>(i + 1));
+                            if (callee_charp[i]) have_info = true;
+                        }
+                    } else if (options.signatures) {
+                        auto it = options.signatures->find(inst.target1);
+                        if (it != options.signatures->end()) {
+                            callee_charp = it->second.charp;
+                            for (bool v : callee_charp) if (v) { have_info = true; break; }
+                        }
+                    }
+                    if (!have_info) { args.clear(); continue; }
+                    for (std::size_t i = 0; i < args.size() && i < callee_charp.size(); ++i) {
+                        if (!callee_charp[i]) continue;
                         auto slot = trace_to_self_arg_slot(args[i]);
                         if (slot && *slot < charp_arg.size()) charp_arg[*slot] = true;
                     }
@@ -1342,6 +1375,51 @@ struct Emitter {
         return std::nullopt;
     }
 
+    // For an address value, decompose into (base, offset) where base is a
+    // Reg or Temp and offset is a signed immediate. If the address is just a
+    // bare base, offset is 0. Returns nullopt on anything we can't flatten.
+    [[nodiscard]] std::optional<std::pair<IrValue, i64>>
+    try_base_plus_offset(const IrValue& addr) const {
+        // Direct base with implicit 0 offset.
+        if (addr.kind == IrValueKind::Reg || addr.kind == IrValueKind::Temp) {
+            if (const IrInst* d = def_stripped(addr);
+                d && d->op == IrOp::Add && d->src_count >= 2) {
+                if (auto r = resolve_imm(d->srcs[1])) {
+                    return std::pair{d->srcs[0], *r};
+                }
+                if (auto l = resolve_imm(d->srcs[0])) {
+                    return std::pair{d->srcs[1], *l};
+                }
+            }
+            return std::pair{addr, static_cast<i64>(0)};
+        }
+        return std::nullopt;
+    }
+
+    // Collected during analyze(): for each pointer-like SSA value, the set of
+    // distinct offsets at which loads/stores occurred. When a base has >=2
+    // distinct offsets we treat it as a struct pointer and render accesses
+    // as `base->field_<offset>` instead of `*(T*)(base + off)`.
+    std::map<SsaKey, std::set<i64>> struct_offsets;
+
+    [[nodiscard]] bool is_struct_pointer(const IrValue& base) const {
+        auto k = ssa_key(base);
+        if (!k) return false;
+        auto it = struct_offsets.find(*k);
+        return it != struct_offsets.end() && it->second.size() >= 2;
+    }
+
+    void record_struct_access(const IrValue& addr) {
+        auto bo = try_base_plus_offset(addr);
+        if (!bo) return;
+        // Skip stack-relative and global bases — those have richer rendering
+        // paths already.
+        if (stack_offset(bo->first).has_value()) return;
+        if (auto k = ssa_key(bo->first); k) {
+            struct_offsets[*k].insert(bo->second);
+        }
+    }
+
     // Pointer-indexing fold: `*(u64*)(base)` and `*(u64*)(base + 8*N)` render
     // as `base[N]` when base isn't stack- or global-relative. Restricted to
     // u64 loads — that's the common argv/table-of-pointers pattern and the
@@ -1381,8 +1459,31 @@ struct Emitter {
             if (auto g = render_global_mem(addr, t); g) {
                 return *g;
             }
+            // Array-indexing form takes priority over the struct-field
+            // rendering when both apply — u64 stride-8 accesses usually mean
+            // "argv-style pointer-to-pointer", which reads more naturally
+            // as `a[i]` than `a->field_N`.
             if (auto s = try_render_array_index(addr, t); s) {
                 return *s;
+            }
+            // Struct-field form: if this base has been observed at multiple
+            // distinct offsets, render as base->field_<hex>. Width cast goes
+            // inside the member expression so the reader still sees the
+            // access type (`*(u32*)&obj->field_18`) when it differs from the
+            // presumed u64 field default.
+            if (auto bo = try_base_plus_offset(addr);
+                bo && is_struct_pointer(bo->first)) {
+                const IrValue& base = bo->first;
+                const i64 off = bo->second;
+                const std::string base_expr =
+                    expr(base, 0, static_cast<int>(Prec::Unary));
+                if (t == IrType::I64) {
+                    return std::format("{}->field_{:x}", base_expr,
+                                       static_cast<u64>(off));
+                }
+                return std::format("*({}*)&{}->field_{:x}",
+                                   c_type_name(t), base_expr,
+                                   static_cast<u64>(off));
             }
             return std::format("*({}*)({})", c_type_name(t), expr(addr));
         }
@@ -1940,6 +2041,30 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
     }
 }
 
+// A block is an exception-handler landing pad when its first (non-ABI) call
+// is to a C++/Itanium unwinder helper. We don't have LSDA parsed yet, so the
+// next best signal is pattern-matching these names — they make the reader
+// aware that control arrived here by throw, not by normal flow.
+[[nodiscard]] static std::optional<std::string_view>
+eh_pattern_hint(const IrBlock& bb, const Binary* binary) {
+    if (!binary) return std::nullopt;
+    for (const auto& inst : bb.insts) {
+        if (inst.op != IrOp::Call) continue;
+        const Symbol* s = binary->import_at_plt(inst.target1);
+        if (!s) continue;
+        std::string_view n = s->name;
+        if (auto at = n.find('@'); at != std::string_view::npos) n = n.substr(0, at);
+        if (n == "__cxa_begin_catch")  return std::string_view{"catch (...)"};
+        if (n == "__cxa_throw")        return std::string_view{"throw"};
+        if (n == "__cxa_rethrow")      return std::string_view{"throw  // rethrow"};
+        if (n == "_Unwind_Resume")     return std::string_view{"unwind-resume"};
+        if (n == "__cxa_end_catch")    return std::string_view{"end-catch"};
+        if (n == "__cxa_allocate_exception") return std::string_view{"throw  // allocate"};
+        return std::nullopt;  // first call wasn't an EH helper
+    }
+    return std::nullopt;
+}
+
 void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     auto it = fn->block_at.find(block_addr);
     if (it == fn->block_at.end()) return;
@@ -1948,6 +2073,12 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     if (options.show_bb_labels) {
         out += std::format("{}// bb_{:x}\n", ind, bb.start);
+    }
+    // Pattern-level exception-handler detection. Full LSDA decoding would
+    // give us real try/catch region structuring; until then, this one-line
+    // hint tells the reader the block is on a non-trivial control path.
+    if (auto h = eh_pattern_hint(bb, binary); h) {
+        out += std::format("{}// [eh] {}\n", ind, *h);
     }
 
     std::vector<IrValue> pending_args;
@@ -2081,7 +2212,18 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 call_expr = std::format("{}({})", *name, args);
             } else {
                 const std::string args = format_call_args_fallback(pending_args);
-                call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
+                // Virtual-call form: when the callee expression is a
+                // member-access / identifier, emit it directly — `fn(args)`
+                // reads more naturally than `(*fn)(args)`. Only dereference
+                // syntax gets the outer-paren wrapping treatment, and only
+                // when strictly necessary.
+                const std::string tgt =
+                    expr(inst.srcs[0], 0, static_cast<int>(Prec::Postfix));
+                if (!tgt.empty() && tgt.front() == '*') {
+                    call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
+                } else {
+                    call_expr = std::format("{}({})", tgt, args);
+                }
             }
             pending_args.clear();
             have_pending = false;
@@ -2179,6 +2321,18 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
             for (const auto& c : r.children) emit_region(*c, depth + 1, out);
             out += std::format("{}}}\n", ind);
             return;
+
+        case RegionKind::DoWhile: {
+            // Body runs at least once, condition tested at the tail.
+            // r.invert is set when the decoded back-edge is a "loop-on-false"
+            // test — mirror it here so the rendered `while (...)` expresses
+            // the actual loop-continue condition.
+            out += std::format("{}do {{\n", ind);
+            for (const auto& c : r.children) emit_region(*c, depth + 1, out);
+            const std::string cond = render_condition(r.condition, r.invert);
+            out += std::format("{}}} while ({});\n", ind, cond);
+            return;
+        }
 
         case RegionKind::Return: {
             if (r.condition.kind != IrValueKind::None) {

@@ -485,8 +485,49 @@ public:
             }
         }
 
+        // Do-while detection: header has no usable top-of-loop condition,
+        // but the single back-edge source is conditional and one of its
+        // successors is the loop's exit. The tail test drives the loop,
+        // body runs at least once.
+        bool do_while = false;
+        addr_t dw_tail = kNoAddr;
+        if (!have_cond) {
+            auto lh = info_.loop_headers.find(header);
+            if (lh != info_.loop_headers.end() && lh->second.size() == 1) {
+                const addr_t tail = *lh->second.begin();
+                auto tit = fn_.block_at.find(tail);
+                if (tit != fn_.block_at.end()) {
+                    const auto& tbb = fn_.blocks[tit->second];
+                    if (tbb.kind == BlockKind::Conditional && tbb.successors.size() == 2) {
+                        const addr_t t1 = tbb.successors[0];
+                        const addr_t t2 = tbb.successors[1];
+                        // One successor is header (back-edge), the other is
+                        // the exit.
+                        addr_t ex = kNoAddr;
+                        bool back_first = false;
+                        if (t1 == header) { ex = t2; back_first = true; }
+                        else if (t2 == header) { ex = t1; }
+                        if (ex != kNoAddr) {
+                            do_while = true;
+                            dw_tail  = tail;
+                            exit     = ex;
+                            cond     = extract_condition(tbb);
+                            // If back-edge is the "true" side, the raw
+                            // condition already expresses "keep looping"; if
+                            // "false" side is back-edge, invert.
+                            invert   = !back_first;
+                        }
+                    }
+                }
+            }
+        }
+
         if (have_cond) {
             loop_r->kind      = RegionKind::While;
+            loop_r->condition = cond;
+            loop_r->invert    = invert;
+        } else if (do_while) {
+            loop_r->kind      = RegionKind::DoWhile;
             loop_r->condition = cond;
             loop_r->invert    = invert;
         } else {
@@ -499,9 +540,20 @@ public:
         loop_headers_stack_.insert(header);
         if (exit != kNoAddr) loop_exits_stack_.insert(exit);
 
+        // For a do-while the body continues through fallthrough / block
+        // successors from the header until (but not including) the exit.
+        // For a while, body starts at body_entry.
         if (body_entry != kNoAddr) {
             auto body = build_sequence(body_entry, header);
             loop_r->children.push_back(std::move(body));
+        } else if (do_while) {
+            // Walk header → tail via the body path. build_sequence handles
+            // most shapes; the tail block's contents still need to emit
+            // (minus its branch), because the tail is the last body block.
+            if (header != dw_tail && !bb.successors.empty()) {
+                auto body = build_sequence(bb.successors.front(), kNoAddr);
+                loop_r->children.push_back(std::move(body));
+            }
         }
 
         loop_headers_stack_.erase(header);
@@ -700,6 +752,17 @@ void print_region(const Region& r, const IrFunction& fn,
                 print_region(*c, fn, depth + 1, out);
             }
             out += std::format("{}}}\n", ind);
+            return;
+        }
+
+        case RegionKind::DoWhile: {
+            out += std::format("{}do {{\n", ind);
+            for (const auto& c : r.children) {
+                print_region(*c, fn, depth + 1, out);
+            }
+            const std::string cs = format_ir_value(r.condition);
+            const std::string cond = r.invert ? std::format("!({})", cs) : cs;
+            out += std::format("{}}} while ({});\n", ind, cond);
             return;
         }
 

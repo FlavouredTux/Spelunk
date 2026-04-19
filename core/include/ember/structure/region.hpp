@@ -15,8 +15,9 @@ enum class RegionKind : u8 {
     Seq,
     IfThen,
     IfElse,
-    While,
-    Loop,
+    While,      // while (cond) { body }  — condition tested at top
+    DoWhile,    // do { body } while (cond)  — condition tested after body
+    Loop,       // for (;;) { … }  — no recognized exit condition
     Switch,
     Return,
     Unreachable,

@@ -1465,6 +1465,10 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
         }
 
         case IrOp::Intrinsic:
+            // CET markers are emitted at every function entry on toolchains
+            // with -fcf-protection (Ubuntu 24.04's gcc-14 defaults to it).
+            // They're NOPs semantically, so suppress them from the output.
+            if (inst.name == "endbr64" || inst.name == "endbr32") return "";
             return std::format("{}();", inst.name);
 
         default:

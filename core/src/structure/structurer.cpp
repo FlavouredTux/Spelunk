@@ -357,6 +357,13 @@ public:
                 return seq;
             }
             if (visited_.contains(current)) {
+                // Common idiom: `if (err) goto fail; ... fail: cleanup; return -1;`
+                // When the target is a short unconditional chain ending in a
+                // Return, duplicate it here instead of emitting the goto.
+                if (auto inlined = try_inline_trivial_tail(current); inlined) {
+                    seq->children.push_back(std::move(inlined));
+                    return seq;
+                }
                 seq->children.push_back(make_goto(current));
                 return seq;
             }
@@ -564,6 +571,71 @@ public:
         if (exit != kNoAddr) loop_exits_stack_.erase(exit);
 
         return loop_r;
+    }
+
+    // Emit a Return region carrying the best available return-value source
+    // from `bb`'s Return instruction (same policy the Conditional switch uses).
+    [[nodiscard]] std::unique_ptr<Region> make_return_from_block(const IrBlock& bb) {
+        auto r = make_simple(RegionKind::Return);
+        auto is_live_in_reg = [](const IrValue& v) {
+            return v.kind == IrValueKind::Reg && v.version == 0;
+        };
+        for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
+            if (it->op != IrOp::Return || it->src_count == 0) continue;
+            const IrValue* best = nullptr;
+            for (u8 k = 0; k < it->src_count && k < it->srcs.size(); ++k) {
+                const IrValue& s = it->srcs[k];
+                if (s.kind == IrValueKind::None) continue;
+                if (!best) best = &s;
+                if (!is_live_in_reg(s)) { best = &s; break; }
+            }
+            if (best) r->condition = *best;
+            break;
+        }
+        return r;
+    }
+
+    // A "trivial tail" is a chain of at most 6 blocks linked by Unconditional/
+    // Fallthrough edges, ending in a Return or TailCall block. Phi nodes and
+    // Calls are fine: duplicating them in the textual pseudo-C doesn't change
+    // observed behaviour — both paths still execute the same IR at runtime.
+    [[nodiscard]] std::optional<std::vector<addr_t>>
+    collect_trivial_tail(addr_t start) const {
+        constexpr std::size_t kMaxLen = 6;
+        std::vector<addr_t> chain;
+        std::set<addr_t> seen;
+        addr_t cur = start;
+        while (chain.size() < kMaxLen) {
+            if (seen.contains(cur)) return std::nullopt;
+            seen.insert(cur);
+            auto bit = fn_.block_at.find(cur);
+            if (bit == fn_.block_at.end()) return std::nullopt;
+            const auto& bb = fn_.blocks[bit->second];
+            chain.push_back(cur);
+            if (bb.kind == BlockKind::Return || bb.kind == BlockKind::TailCall) {
+                return chain;
+            }
+            if (bb.kind != BlockKind::Unconditional &&
+                bb.kind != BlockKind::Fallthrough) {
+                return std::nullopt;
+            }
+            if (bb.successors.empty()) return std::nullopt;
+            cur = bb.successors[0];
+        }
+        return std::nullopt;
+    }
+
+    // If `start` heads a trivial tail, produce a Seq that inlines the chain
+    // followed by the appropriate Return region. Null otherwise.
+    [[nodiscard]] std::unique_ptr<Region> try_inline_trivial_tail(addr_t start) {
+        auto chain = collect_trivial_tail(start);
+        if (!chain) return nullptr;
+        auto seq = std::make_unique<Region>();
+        seq->kind = RegionKind::Seq;
+        for (addr_t a : *chain) seq->children.push_back(make_block(a));
+        auto bit = fn_.block_at.find(chain->back());
+        seq->children.push_back(make_return_from_block(fn_.blocks[bit->second]));
+        return seq;
     }
 
 private:

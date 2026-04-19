@@ -66,6 +66,8 @@ ember_build_fixture(fp_scalar)
 ember_build_fixture(printf_noise)
 # Stack-protector on so the canary prologue/epilogue actually get emitted.
 ember_build_fixture(canary PROTECTOR "-fstack-protector-strong")
+# -O0 so the explicit gotos survive for the tail-duplication test.
+ember_build_fixture(gotos OPT "-O0")
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by
 # the driver script), because CTest's own quoting gets ugly with ";" in
@@ -257,6 +259,20 @@ ember_golden_test(
     FIXTURE canary
     ARGS    "-p|-s|uses_buffer"
     GOLDEN  canary.uses_buffer.pseudo.txt
+)
+
+# Trivial-tail goto inlining: goto fail; ... fail: cleanup; return -1;
+ember_golden_test(
+    NAME    gotos_multi_exit_pseudo
+    FIXTURE gotos
+    ARGS    "-p|-s|multi_exit"
+    GOLDEN  gotos.multi_exit.pseudo.txt
+)
+ember_golden_test(
+    NAME    gotos_cleanup_on_fail_pseudo
+    FIXTURE gotos
+    ARGS    "-p|-s|cleanup_on_fail"
+    GOLDEN  gotos.cleanup_on_fail.pseudo.txt
 )
 
 ember_golden_test(

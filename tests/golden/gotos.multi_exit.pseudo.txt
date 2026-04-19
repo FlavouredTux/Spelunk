@@ -1,0 +1,19 @@
+// multi_exit
+void multi_exit(u64 a1, u64 a2) {
+  local_20 = a1;
+  local_28 = a2;
+  if ((a1 == 0x0)) {
+  } else {
+    if ((local_28 == 0x0)) {
+      return rax;
+    } else {
+      u64 r_strlen = strlen(local_20);
+      u64 r_strlen_2 = strlen(local_28);
+      if ((r_strlen != r_strlen_2)) {
+        return rax;
+      } else {
+      }
+    }
+  }
+  return rax;
+}

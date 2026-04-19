@@ -14,6 +14,7 @@ namespace ember {
 //   - operand shape: kind + type + (for Reg) canonical register
 //   - import call targets by name (not by address)
 //   - referenced string literals (by content)
+//   - referenced global data symbols by name (not by address)
 //   - CFG topology (block count + per-block successor count sequence)
 //
 // What gets explicitly *excluded*:

@@ -120,6 +120,19 @@ struct Hasher {
     return at == std::string::npos ? s->name : s->name.substr(0, at);
 }
 
+// If `addr` resolves to a named defined-object symbol, return its name.
+// Used to fold global-data references into the fingerprint — a function
+// that writes to `g_current_player` is uniquely identified by that xref
+// even if the surrounding code is otherwise shared with similar helpers.
+[[nodiscard]] std::string data_global_name_at(const Binary& b, u64 addr) {
+    const Symbol* s = b.defined_object_at(static_cast<addr_t>(addr));
+    if (!s) return {};
+    if (s->kind != SymbolKind::Object) return {};
+    if (s->name.empty()) return {};
+    const auto at = s->name.find('@');
+    return at == std::string::npos ? s->name : s->name.substr(0, at);
+}
+
 // Append a token description of `v` to the hasher. Stable across SSA
 // versions, temp ids, concrete immediate values (beyond the small bucket),
 // and absolute addresses.
@@ -144,7 +157,8 @@ void hash_operand(Hasher& h, const IrValue& v) {
 
 void hash_inst(Hasher& h, const IrInst& inst, const Binary& b,
                std::set<std::string>& called_imports,
-               std::set<std::string>& string_refs) {
+               std::set<std::string>& string_refs,
+               std::set<std::string>& global_refs) {
     h.token(op_name(inst.op));
     if (inst.dst.kind != IrValueKind::None) {
         h.token("dst");
@@ -173,13 +187,18 @@ void hash_inst(Hasher& h, const IrInst& inst, const Binary& b,
         for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
             hash_operand(h, inst.srcs[i]);
             // Any Imm operand that looks like it points at a string in the
-            // image contributes the string content to the sorted side-set.
+            // image contributes the string content to the sorted side-set;
+            // anything that resolves to a named global data symbol
+            // contributes the symbol name. Both are stable across PIE slides
+            // and reliable signals for function identity.
             const auto& s = inst.srcs[i];
             if (s.kind == IrValueKind::Imm && s.imm > 0 &&
                 static_cast<u64>(s.imm) >= 0x100) {
-                if (auto str = try_string_at(b, static_cast<u64>(s.imm));
-                    !str.empty()) {
+                const auto v = static_cast<u64>(s.imm);
+                if (auto str = try_string_at(b, v); !str.empty()) {
                     string_refs.insert(std::move(str));
+                } else if (auto g = data_global_name_at(b, v); !g.empty()) {
+                    global_refs.insert(std::move(g));
                 }
             }
         }
@@ -227,8 +246,12 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     Hasher h;
     std::set<std::string> called_imports;
     std::set<std::string> string_refs;
+    std::set<std::string> global_refs;
 
-    h.token("v1");  // fingerprint schema — bump on any incompatible change
+    // Fingerprint schema — bump on any incompatible change. Previously
+    // exported DBs stop matching when this changes. v2 added global-data
+    // symbol references to the side-sets.
+    h.token("v2");
     h.u32_tok(static_cast<u32>(ir_r->blocks.size()));
     h.sep();
 
@@ -245,7 +268,7 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
 
         for (const auto& inst : bb.insts) {
             if (inst.op == IrOp::Nop) continue;
-            hash_inst(h, inst, b, called_imports, string_refs);
+            hash_inst(h, inst, b, called_imports, string_refs, global_refs);
             ++insts;
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) ++calls;
         }
@@ -259,6 +282,8 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     for (const auto& s : called_imports) h.token(s);
     h.token("strings");
     for (const auto& s : string_refs) h.token(s);
+    h.token("globals");
+    for (const auto& s : global_refs) h.token(s);
 
     out.hash   = h.state;
     out.blocks = static_cast<u32>(ir_r->blocks.size());

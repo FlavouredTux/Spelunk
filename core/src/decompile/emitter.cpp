@@ -1215,10 +1215,16 @@ struct Emitter {
                                          bool signed_cmp) const {
         std::string left  = expr(a, depth + 1);
         std::string right = expr(b, depth + 1);
-        if (signed_cmp) {
-            const std::string_view cast = "i64";
-            return std::format("(({}){} {} ({}){})", cast, left, op, cast, right);
+        if (!signed_cmp) {
+            return std::format("({} {} {})", left, op, right);
         }
+        // Literals are implicitly promoted to the signedness of the other
+        // operand, so we only need the cast on the non-Imm side(s).
+        const bool cast_l = a.kind != IrValueKind::Imm;
+        const bool cast_r = b.kind != IrValueKind::Imm;
+        const std::string_view c = "i64";
+        if (cast_l) left  = std::format("({}){}", c, left);
+        if (cast_r) right = std::format("({}){}", c, right);
         return std::format("({} {} {})", left, op, right);
     }
 

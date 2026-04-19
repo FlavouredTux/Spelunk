@@ -41,6 +41,7 @@ struct Args {
     std::string script_path;        // optional JS script to run against the binary
     std::vector<std::string> script_argv; // args passed to the script after `--`
     std::string cache_dir;          // override for the disk cache location
+    std::string diff_path;          // --diff OLD: compare this older binary against args.binary
     bool no_cache = false;          // disable the disk cache entirely
     bool disasm = false;
     bool cfg    = false;
@@ -92,6 +93,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--cache-dir",   &Args::cache_dir},
     {"",   "--project",     &Args::project_path},
     {"",   "--script",      &Args::script_path},
+    {"",   "--diff",        &Args::diff_path},
 });
 
 template <class F>
@@ -405,6 +407,39 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
     return out;
 }
 
+// Read the cached fingerprints TSV for `binary_path`, or compute + store it.
+// Matches the cache-key logic of run_cached() but doesn't touch stdout — used
+// by run_diff() to pull TSVs for both binaries into memory for comparison.
+[[nodiscard]] std::string
+fingerprints_cached_or_compute(const std::filesystem::path& binary_path,
+                               const std::filesystem::path& cache_dir,
+                               bool no_cache) {
+    std::string key;
+    if (!no_cache) {
+        auto k = ember::cache::key_for(binary_path);
+        if (k) key = std::move(*k);
+    }
+    if (!key.empty()) {
+        if (auto hit = ember::cache::read(cache_dir, key, "fingerprints"); hit) {
+            return std::move(*hit);
+        }
+    }
+    auto bin = ember::load_binary(binary_path);
+    if (!bin) {
+        std::println(stderr, "ember: {}: {}",
+                     bin.error().kind_name(), bin.error().message);
+        std::exit(EXIT_FAILURE);
+    }
+    std::string out = build_fingerprints_output(**bin);
+    if (!key.empty()) {
+        if (auto rv = ember::cache::write(cache_dir, key, "fingerprints", out); !rv) {
+            std::println(stderr, "ember: warning: {}: {}",
+                         rv.error().kind_name(), rv.error().message);
+        }
+    }
+    return out;
+}
+
 template <class Compute>
 int run_cached(const Args& args, std::string_view tag, Compute compute) {
     const auto dir = args.cache_dir.empty()
@@ -439,6 +474,137 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
     return EXIT_SUCCESS;
 }
 
+struct FpEntry {
+    ember::addr_t addr = 0;
+    std::string fp;
+    std::string name;
+};
+struct ParsedFps {
+    std::unordered_map<std::string, std::vector<FpEntry>> by_fp;
+    std::size_t total = 0;
+};
+
+// Parse the TSV that build_fingerprints_output produces:
+//   <addr>\t<fp>\t<blocks>\t<insts>\t<calls>\t<name>
+[[nodiscard]] ParsedFps parse_fingerprints_tsv(const std::string& tsv) {
+    ParsedFps out;
+    std::size_t pos = 0;
+    while (pos < tsv.size()) {
+        const auto nl = tsv.find('\n', pos);
+        const std::size_t end = (nl == std::string::npos) ? tsv.size() : nl;
+        const std::string_view line(tsv.data() + pos, end - pos);
+        pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
+        if (line.empty() || line.front() == '#') continue;
+        std::array<std::string_view, 6> f{};
+        std::size_t s = 0, fi = 0;
+        for (std::size_t i = 0; i <= line.size() && fi < f.size(); ++i) {
+            if (i == line.size() || line[i] == '\t') {
+                f[fi++] = line.substr(s, i - s);
+                s = i + 1;
+            }
+        }
+        if (fi < 6) continue;
+        ember::addr_t addr = 0;
+        const auto r = std::from_chars(f[0].data(),
+                                       f[0].data() + f[0].size(), addr, 16);
+        if (r.ec != std::errc{}) continue;
+        out.by_fp[std::string{f[1]}].push_back(
+            FpEntry{addr, std::string{f[1]}, std::string{f[5]}});
+        ++out.total;
+    }
+    return out;
+}
+
+// Diff two fingerprint maps. Output is one TSV row per function pairing:
+//   kept     <fp> <old_addr> <new_addr> <old_name> <new_name>
+//   moved    <fp> <old_addr> <new_addr> <old_name> <new_name>
+//   added    <fp> -          <new_addr> -          <new_name>
+//   removed  <fp> <old_addr> -          <old_name> -
+// `kept` = same fp, same addr, same name. `moved` = same fp, anything else.
+// Summary line prefixed with '#' so awk filters stay simple.
+[[nodiscard]] std::string
+format_diff(const ParsedFps& old_p, const ParsedFps& new_p,
+            const std::string& old_label, const std::string& new_label) {
+    std::size_t kept = 0, moved = 0, added = 0, removed = 0;
+    std::string body;
+
+    for (const auto& [fp, nvec] : new_p.by_fp) {
+        const auto it = old_p.by_fp.find(fp);
+        if (it == old_p.by_fp.end()) {
+            for (const auto& ne : nvec) {
+                body += std::format("added\t{}\t-\t{:x}\t-\t{}\n",
+                                    fp, ne.addr, ne.name);
+                ++added;
+            }
+            continue;
+        }
+        const auto& ovec = it->second;
+        const auto pairs = std::min(ovec.size(), nvec.size());
+        for (std::size_t i = 0; i < pairs; ++i) {
+            const auto& oe = ovec[i];
+            const auto& ne = nvec[i];
+            const bool identical = oe.addr == ne.addr && oe.name == ne.name;
+            body += std::format("{}\t{}\t{:x}\t{:x}\t{}\t{}\n",
+                                identical ? "kept" : "moved",
+                                fp, oe.addr, ne.addr, oe.name, ne.name);
+            if (identical) ++kept; else ++moved;
+        }
+        // Leftover instances on either side (collision-count mismatches) show
+        // up as added/removed for the uncovered entries.
+        for (std::size_t i = pairs; i < nvec.size(); ++i) {
+            body += std::format("added\t{}\t-\t{:x}\t-\t{}\n",
+                                fp, nvec[i].addr, nvec[i].name);
+            ++added;
+        }
+        for (std::size_t i = pairs; i < ovec.size(); ++i) {
+            body += std::format("removed\t{}\t{:x}\t-\t{}\t-\n",
+                                fp, ovec[i].addr, ovec[i].name);
+            ++removed;
+        }
+    }
+    for (const auto& [fp, ovec] : old_p.by_fp) {
+        if (new_p.by_fp.contains(fp)) continue;
+        for (const auto& oe : ovec) {
+            body += std::format("removed\t{}\t{:x}\t-\t{}\t-\n",
+                                fp, oe.addr, oe.name);
+            ++removed;
+        }
+    }
+
+    std::string out;
+    out += std::format("# ember diff\n");
+    out += std::format("# old: {} ({} functions)\n", old_label, old_p.total);
+    out += std::format("# new: {} ({} functions)\n", new_label, new_p.total);
+    out += std::format("# summary: kept={} moved={} added={} removed={}\n",
+                       kept, moved, added, removed);
+    out += "# columns: tag\tfp\told_addr\tnew_addr\told_name\tnew_name\n";
+    out += body;
+    return out;
+}
+
+int run_diff(const Args& args) {
+    if (args.binary.empty()) {
+        std::println(stderr, "ember: --diff requires the new binary as the final arg");
+        return EXIT_FAILURE;
+    }
+    const auto cache_dir = args.cache_dir.empty()
+        ? ember::cache::default_dir()
+        : std::filesystem::path(args.cache_dir);
+
+    std::println(stderr, "ember: diff OLD={}", args.diff_path);
+    std::println(stderr, "ember: diff NEW={}", args.binary);
+    const std::string old_tsv =
+        fingerprints_cached_or_compute(args.diff_path, cache_dir, args.no_cache);
+    const std::string new_tsv =
+        fingerprints_cached_or_compute(args.binary,   cache_dir, args.no_cache);
+    const auto old_p = parse_fingerprints_tsv(old_tsv);
+    const auto new_p = parse_fingerprints_tsv(new_tsv);
+    const std::string out =
+        format_diff(old_p, new_p, args.diff_path, args.binary);
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    return EXIT_SUCCESS;
+}
+
 int run_struct(const ember::Binary& b, std::string_view symbol, bool pseudo,
                const ember::Annotations* annotations, ember::EmitOptions opts) {
     auto win = ember::resolve_function(b, symbol);
@@ -470,6 +636,7 @@ void print_help() {
     std::println("      --strings        dump printable strings (addr|text|xrefs)");
     std::println("      --arities        dump inferred SysV arity per function (addr N)");
     std::println("      --fingerprints   dump address-independent content hash per function");
+    std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
@@ -495,6 +662,10 @@ int main(int argc, char** argv) {
     if (args.help) {
         print_help();
         return EXIT_SUCCESS;
+    }
+
+    if (!args.diff_path.empty()) {
+        return run_diff(args);
     }
 
     auto bin = ember::load_binary(args.binary);

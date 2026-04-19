@@ -14,7 +14,7 @@ inline constexpr int kVersion = 1;
 
 std::filesystem::path default_dir();
 
-std::string key_for(const std::filesystem::path& binary);
+Result<std::string> key_for(const std::filesystem::path& binary);
 
 std::optional<std::string>
 read(const std::filesystem::path& cache_dir,

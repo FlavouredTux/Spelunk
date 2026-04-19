@@ -4,6 +4,9 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <ember/binary/arch.hpp>
 #include <ember/binary/format.hpp>
@@ -55,39 +58,37 @@ public:
     // that callers targeting the middle of a slot (e.g. skipping a leading
     // endbr64 prefix) still resolve to the right import.
     [[nodiscard]] const Symbol*
-    import_at_plt(addr_t plt_addr, unsigned slot_size = 16) const noexcept {
-        if (plt_addr == 0) return nullptr;
-        for (const auto& s : symbols()) {
-            if (!s.is_import) continue;
-            if (s.addr == 0) continue;
-            if (plt_addr >= s.addr && plt_addr < s.addr + slot_size) return &s;
-        }
-        return nullptr;
-    }
+    import_at_plt(addr_t plt_addr, unsigned slot_size = 16) const noexcept;
 
     // Look up the import whose GOT slot is at `got_addr` (the address the
     // dynamic linker fills with the resolved function pointer).
-    [[nodiscard]] const Symbol* import_at_got(addr_t got_addr) const noexcept {
-        if (got_addr == 0) return nullptr;
-        for (const auto& s : symbols()) {
-            if (!s.is_import) continue;
-            if (s.got_addr == got_addr) return &s;
-        }
-        return nullptr;
-    }
+    [[nodiscard]] const Symbol* import_at_got(addr_t got_addr) const noexcept;
 
     // Find a named defined symbol (Object or Function) that contains the
     // given virtual address. Used by the emitter to render `*(u64*)(0x404020)`
     // as `g_name` where a matching global exists.
-    [[nodiscard]] const Symbol* defined_object_at(addr_t vaddr) const noexcept {
-        for (const auto& s : symbols()) {
-            if (s.is_import) continue;
-            if (s.kind != SymbolKind::Object && s.kind != SymbolKind::Function) continue;
-            if (s.addr == 0 || s.size == 0) continue;
-            if (vaddr >= s.addr && vaddr < s.addr + s.size) return &s;
-        }
-        return nullptr;
-    }
+    [[nodiscard]] const Symbol* defined_object_at(addr_t vaddr) const noexcept;
+
+    // Find a symbol by name. O(1) average (hashed); returns the first
+    // matching symbol, preferring a defined one if both exist.
+    [[nodiscard]] const Symbol* find_by_name(std::string_view name) const noexcept;
+
+private:
+    // Lazy lookup caches. Built on first call to any of the lookup helpers
+    // above; invalidated only by the loader during parse (which the base
+    // class is not involved in — loaders should not call the lookup helpers
+    // while they are still mutating symbols_).
+    struct LookupCaches {
+        std::unordered_map<std::string_view, const Symbol*> by_name;
+        std::unordered_map<addr_t, const Symbol*>           import_by_got;
+        // Sorted by addr; every element has is_import && addr != 0.
+        std::vector<const Symbol*> imports_by_addr;
+        // Sorted by addr; every element has !is_import && size != 0
+        // && (kind == Function || kind == Object).
+        std::vector<const Symbol*> defined_objects_by_addr;
+    };
+    mutable std::unique_ptr<LookupCaches> caches_;
+    const LookupCaches& caches() const;
 };
 
 [[nodiscard]] Result<std::unique_ptr<Binary>>

@@ -346,9 +346,19 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
     const auto dir = args.cache_dir.empty()
         ? ember::cache::default_dir()
         : std::filesystem::path(args.cache_dir);
-    const std::string key = args.no_cache ? std::string{}
-                                          : ember::cache::key_for(args.binary);
-    if (!args.no_cache) {
+    std::string key;
+    bool cacheable = !args.no_cache;
+    if (cacheable) {
+        auto k = ember::cache::key_for(args.binary);
+        if (k) {
+            key = std::move(*k);
+        } else {
+            std::println(stderr, "ember: warning: {}: {} (caching disabled)",
+                         k.error().kind_name(), k.error().message);
+            cacheable = false;
+        }
+    }
+    if (cacheable) {
         if (auto hit = ember::cache::read(dir, key, tag); hit) {
             std::fwrite(hit->data(), 1, hit->size(), stdout);
             return EXIT_SUCCESS;
@@ -356,7 +366,7 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
     }
     const std::string out = compute();
     std::fwrite(out.data(), 1, out.size(), stdout);
-    if (!args.no_cache) {
+    if (cacheable) {
         if (auto rv = ember::cache::write(dir, key, tag, out); !rv) {
             std::println(stderr, "ember: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);

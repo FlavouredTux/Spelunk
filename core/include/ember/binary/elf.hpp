@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <memory>
 #include <span>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <ember/binary/binary.hpp>
@@ -63,6 +65,38 @@ private:
         : buffer_(std::move(buffer)) {}
 
     [[nodiscard]] Result<void> parse();
+
+    // Parse phases. Each stage reads from buffer_ and appends to the
+    // appropriate vector. Ordering matters: segments and sections have no
+    // dependency, symbols must come after sections, and the PLT/GOT
+    // attachment needs symbols + sections.
+    struct ParsedEhdr {
+        u16 e_machine;
+        u64 e_entry;
+        u64 e_phoff, e_shoff;
+        u16 e_phentsize, e_phnum;
+        u16 e_shentsize, e_shnum, e_shstrndx;
+    };
+    [[nodiscard]] Result<ParsedEhdr>   parse_ehdr();
+    [[nodiscard]] Result<void>         parse_segments(const ParsedEhdr& h);
+    [[nodiscard]] Result<void>         parse_sections(const ParsedEhdr& h);
+    // Parses SYMTAB + DYNSYM into symbols_; records dynsym string names so
+    // that relocations keyed by dynsym index can look up the name back.
+    [[nodiscard]] Result<void>
+    parse_symbols(const ParsedEhdr& h,
+                  std::vector<std::string>& dynsym_names,
+                  u16& dynsym_section,
+                  bool& dynsym_section_seen);
+    // Walks RELA sections and attaches GOT-slot addrs to matching imports.
+    [[nodiscard]] Result<void>
+    attach_got_addrs(const ParsedEhdr& h,
+                     const std::vector<std::string>& dynsym_names,
+                     u16 dynsym_section,
+                     std::unordered_map<addr_t, std::string>& got_to_name);
+    // Scans .plt* sections for the jmp-through-GOT stub pattern; sets
+    // Symbol.addr on imports whose stub is found.
+    void scan_plt_stubs(const std::unordered_map<addr_t, std::string>& got_to_name);
+    void sort_and_dedupe_symbols();
 
     std::vector<std::byte>    buffer_;
     Arch                      arch_  = Arch::Unknown;

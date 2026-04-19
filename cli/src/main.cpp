@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/cfg_builder.hpp>
@@ -350,30 +351,46 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 // Sorted by address. Address-independent — same algorithm across two PIE
 // builds of the same code produces the same fingerprint column.
 [[nodiscard]] std::string build_fingerprints_output(const ember::Binary& b) {
-    std::set<ember::addr_t> fns;
+    // Build a one-shot addr -> name map; previously this was an O(n²) linear
+    // rescan per function which took minutes on large stripped binaries.
+    std::unordered_map<ember::addr_t, std::string> name_by_addr;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != ember::SymbolKind::Function) continue;
         if (s.addr == 0 || s.name.empty()) continue;
-        fns.insert(s.addr);
+        name_by_addr.try_emplace(s.addr, s.name);
     }
+
+    std::set<ember::addr_t> fns;
+    for (const auto& [a, _] : name_by_addr) fns.insert(a);
     for (const auto& e : ember::compute_call_graph(b)) {
         if (!b.import_at_plt(e.callee)) fns.insert(e.callee);
     }
+
     std::string out;
+    const auto total = fns.size();
+    std::size_t done = 0;
+    const auto tick = std::max<std::size_t>(1, total / 40);  // 40 dots ≈ 2.5%
+    std::println(stderr, "ember: fingerprinting {} functions...", total);
+
     for (ember::addr_t a : fns) {
         const auto fp = ember::compute_fingerprint(b, a);
+        ++done;
+        if (done % tick == 0 || done == total) {
+            std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
+            std::fflush(stderr);
+        }
         if (fp.hash == 0) continue;
         std::string name;
-        for (const auto& s : b.symbols()) {
-            if (s.is_import) continue;
-            if (s.kind != ember::SymbolKind::Function) continue;
-            if (s.addr == a && !s.name.empty()) { name = s.name; break; }
+        if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
+            name = it->second;
+        } else {
+            name = std::format("sub_{:x}", a);
         }
-        if (name.empty()) name = std::format("sub_{:x}", a);
         out += std::format("{:x}\t{:016x}\t{}\t{}\t{}\t{}\n",
                            a, fp.hash, fp.blocks, fp.insts, fp.calls, name);
     }
+    std::fputc('\n', stderr);
     return out;
 }
 

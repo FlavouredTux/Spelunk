@@ -17,7 +17,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-option(EMBER_WERROR    "Treat warnings as errors"     OFF)
+option(EMBER_WERROR    "Treat warnings as errors"     ON)
 option(EMBER_SANITIZE  "Enable AddressSanitizer+UBSan" OFF)
 option(EMBER_BUILD_CLI "Build the command-line tool"  ON)
 

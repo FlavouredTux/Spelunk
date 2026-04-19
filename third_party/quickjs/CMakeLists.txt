@@ -11,7 +11,7 @@ add_library(ember_quickjs STATIC
 )
 add_library(ember::quickjs ALIAS ember_quickjs)
 
-target_include_directories(ember_quickjs PUBLIC
+target_include_directories(ember_quickjs SYSTEM PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 

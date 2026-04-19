@@ -23,6 +23,17 @@ template <typename T>
     return v;
 }
 
+template <typename T>
+    requires std::is_trivially_copyable_v<T>
+[[nodiscard]] inline T read_be_at(const std::byte* p) noexcept {
+    T v{};
+    std::memcpy(&v, p, sizeof(T));
+    if constexpr (std::endian::native == std::endian::little) {
+        if constexpr (sizeof(T) > 1) v = std::byteswap(v);
+    }
+    return v;
+}
+
 class ByteReader {
 public:
     explicit ByteReader(std::span<const std::byte> bytes) noexcept : bytes_(bytes) {}
@@ -39,6 +50,17 @@ public:
                 sizeof(T), offset, bytes_.size())));
         }
         return read_le_at<T>(bytes_.data() + offset);
+    }
+
+    template <typename T>
+        requires std::is_trivially_copyable_v<T>
+    [[nodiscard]] Result<T> read_be(std::size_t offset) const noexcept {
+        if (offset > bytes_.size() || bytes_.size() - offset < sizeof(T)) {
+            return std::unexpected(Error::truncated(std::format(
+                "read_be<{}> at offset {:#x} past end {:#x}",
+                sizeof(T), offset, bytes_.size())));
+        }
+        return read_be_at<T>(bytes_.data() + offset);
     }
 
     [[nodiscard]] Result<std::span<const std::byte>>

@@ -34,15 +34,30 @@ std::filesystem::path default_dir() {
     return fs::current_path() / ".ember-cache";
 }
 
-std::string key_for(const std::filesystem::path& binary) {
+Result<std::string> key_for(const std::filesystem::path& binary) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    const auto abs   = fs::weakly_canonical(binary, ec).string();
-    const auto size  = fs::file_size(binary, ec);
+    const auto abs = fs::weakly_canonical(binary, ec).string();
+    if (ec) {
+        return std::unexpected(Error::io(std::format(
+            "cache key: cannot canonicalize '{}': {}",
+            binary.string(), ec.message())));
+    }
+    const auto size = fs::file_size(binary, ec);
+    if (ec) {
+        return std::unexpected(Error::io(std::format(
+            "cache key: cannot stat '{}': {}",
+            binary.string(), ec.message())));
+    }
     const auto mtime = fs::last_write_time(binary, ec);
-    const auto mts   = mtime.time_since_epoch().count();
-
-    std::string manifest = std::format("{}|{}|{}|v{}", abs, size, mts, kVersion);
+    if (ec) {
+        return std::unexpected(Error::io(std::format(
+            "cache key: cannot read mtime of '{}': {}",
+            binary.string(), ec.message())));
+    }
+    const auto mts = mtime.time_since_epoch().count();
+    const std::string manifest = std::format(
+        "{}|{}|{}|v{}", abs, size, mts, kVersion);
     return std::format("{:016x}", fnv1a_64(manifest));
 }
 
@@ -50,7 +65,9 @@ std::optional<std::string>
 read(const std::filesystem::path& cache_dir,
      std::string_view key, std::string_view tag) {
     namespace fs = std::filesystem;
-    const auto p = cache_dir / std::string(key) / std::string(tag);
+    const std::string key_s(key);
+    const std::string tag_s(tag);
+    const auto p = cache_dir / key_s / tag_s;
     std::error_code ec;
     if (!fs::exists(p, ec) || ec) return std::nullopt;
     std::ifstream f(p, std::ios::binary);
@@ -65,7 +82,9 @@ write(const std::filesystem::path& cache_dir,
       std::string_view key, std::string_view tag,
       std::string_view content) {
     namespace fs = std::filesystem;
-    const auto dir = cache_dir / std::string(key);
+    const std::string key_s(key);
+    const std::string tag_s(tag);
+    const auto dir = cache_dir / key_s;
 
     std::error_code ec;
     fs::create_directories(dir, ec);
@@ -75,8 +94,8 @@ write(const std::filesystem::path& cache_dir,
     }
 
     // Atomic: write to tmp then rename so readers never see a partial file.
-    const auto tmp = dir / (std::string(tag) + ".tmp");
-    const auto final_path = dir / std::string(tag);
+    const auto tmp = dir / (tag_s + ".tmp");
+    const auto final_path = dir / tag_s;
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) {

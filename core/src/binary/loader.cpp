@@ -1,6 +1,8 @@
 #include <ember/binary/binary.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <format>
 #include <fstream>
 #include <system_error>
@@ -12,6 +14,96 @@
 #include <ember/common/bytes.hpp>
 
 namespace ember {
+
+const Binary::LookupCaches& Binary::caches() const {
+    if (caches_) return *caches_;
+    caches_ = std::make_unique<LookupCaches>();
+    auto& c = *caches_;
+
+    const auto syms = symbols();
+    c.imports_by_addr.reserve(syms.size());
+    c.defined_objects_by_addr.reserve(syms.size());
+
+    for (const auto& s : syms) {
+        // Prefer defined symbols on name collision (imports have stub addrs
+        // that callers expect to resolve to imports via import_at_plt, not
+        // via find_by_name; find_by_name is for user intent like "resolve
+        // this source-level name").
+        auto [it, inserted] = c.by_name.try_emplace(s.name, &s);
+        if (!inserted && it->second->is_import && !s.is_import) it->second = &s;
+
+        if (s.is_import) {
+            if (s.got_addr != 0) c.import_by_got.emplace(s.got_addr, &s);
+            if (s.addr != 0)     c.imports_by_addr.push_back(&s);
+        } else if (s.size != 0 &&
+                   (s.kind == SymbolKind::Function || s.kind == SymbolKind::Object)) {
+            c.defined_objects_by_addr.push_back(&s);
+        }
+    }
+
+    // Sort both vectors by (addr, name, size) to match the loader's
+    // symbols() sort order. defined_object_at must return the same alias the
+    // original linear scan did when multiple symbols share a vaddr (e.g.
+    // `stdout` + `stdout@GLIBC_2.2.5` on a copy-relocated import).
+    auto by_addr_name_size = [](const Symbol* a, const Symbol* b) noexcept {
+        if (a->addr != b->addr) return a->addr < b->addr;
+        if (a->name != b->name) return a->name < b->name;
+        return a->size < b->size;
+    };
+    std::ranges::sort(c.imports_by_addr, by_addr_name_size);
+    std::ranges::sort(c.defined_objects_by_addr, by_addr_name_size);
+    return c;
+}
+
+const Symbol* Binary::import_at_plt(addr_t plt_addr, unsigned slot_size) const noexcept {
+    if (plt_addr == 0) return nullptr;
+    const auto& c = caches();
+    // Stubs are fixed-width slots — upper_bound on addr gives the slot whose
+    // base is > plt_addr; step one back to get the slot that could contain it.
+    auto it = std::upper_bound(
+        c.imports_by_addr.begin(), c.imports_by_addr.end(), plt_addr,
+        [](addr_t a, const Symbol* s) noexcept { return a < s->addr; });
+    if (it == c.imports_by_addr.begin()) return nullptr;
+    --it;
+    // Rewind to the first entry with this addr so ties break the same way
+    // the original linear scan did.
+    while (it != c.imports_by_addr.begin() && (*(it - 1))->addr == (*it)->addr) --it;
+    const Symbol* s = *it;
+    if (plt_addr >= s->addr && plt_addr < s->addr + slot_size) return s;
+    return nullptr;
+}
+
+const Symbol* Binary::import_at_got(addr_t got_addr) const noexcept {
+    if (got_addr == 0) return nullptr;
+    const auto& c = caches();
+    auto it = c.import_by_got.find(got_addr);
+    return it == c.import_by_got.end() ? nullptr : it->second;
+}
+
+const Symbol* Binary::defined_object_at(addr_t vaddr) const noexcept {
+    const auto& c = caches();
+    auto it = std::upper_bound(
+        c.defined_objects_by_addr.begin(), c.defined_objects_by_addr.end(), vaddr,
+        [](addr_t a, const Symbol* s) noexcept { return a < s->addr; });
+    if (it == c.defined_objects_by_addr.begin()) return nullptr;
+    --it;
+    while (it != c.defined_objects_by_addr.begin() && (*(it - 1))->addr == (*it)->addr) --it;
+    // Among aliases at the same addr, return the first that contains vaddr —
+    // this preserves the (name, size)-sorted preference of the original
+    // linear scan over symbols().
+    const addr_t group_addr = (*it)->addr;
+    for (; it != c.defined_objects_by_addr.end() && (*it)->addr == group_addr; ++it) {
+        const Symbol* s = *it;
+        if (vaddr >= s->addr && vaddr < s->addr + s->size) return s;
+    }
+    return nullptr;
+}
+
+const Symbol* Binary::find_by_name(std::string_view name) const noexcept {
+    const auto& c = caches();
+    auto it = c.by_name.find(name);
+    return it == c.by_name.end() ? nullptr : it->second;
+}
 
 namespace {
 
@@ -69,17 +161,6 @@ read_file(const std::filesystem::path& path) {
         && (b[3] == std::byte{0xBE} || b[3] == std::byte{0xBF});
 }
 
-[[nodiscard]] u32 read_be32(const std::byte* p) noexcept {
-    return (static_cast<u32>(p[0]) << 24) |
-           (static_cast<u32>(p[1]) << 16) |
-           (static_cast<u32>(p[2]) << 8)  |
-            static_cast<u32>(p[3]);
-}
-
-[[nodiscard]] u64 read_be64(const std::byte* p) noexcept {
-    return (static_cast<u64>(read_be32(p)) << 32) | read_be32(p + 4);
-}
-
 // CPU types from <mach/machine.h>.
 constexpr u32 CPU_TYPE_X86_64 = 0x01000007u;
 constexpr u32 CPU_TYPE_ARM64  = 0x0100000Cu;
@@ -90,12 +171,17 @@ constexpr u32 CPU_TYPE_ARM64  = 0x0100000Cu;
 // decoder will fail on instructions but the binary is browsable).
 [[nodiscard]] Result<std::vector<std::byte>>
 slice_fat(std::vector<std::byte>& buf) {
+    const ByteReader r(buf);
     const bool is_64 = buf[3] == std::byte{0xBF};
-    const std::byte* const p = buf.data();
-    const u32 nfat = read_be32(p + 4);
     const std::size_t arch_size = is_64 ? 32u : 20u;
-    const std::size_t hdr_size  = 8 + static_cast<std::size_t>(nfat) * arch_size;
-    if (hdr_size > buf.size()) {
+
+    auto nfat_r = r.read_be<u32>(4);
+    if (!nfat_r) return std::unexpected(std::move(nfat_r).error());
+    const u32 nfat = *nfat_r;
+
+    // Reject nfat values that can't possibly fit — avoids a huge reserve()
+    // on a corrupt header before the per-entry bounds checks run.
+    if (nfat > (buf.size() - 8) / arch_size) {
         return std::unexpected(Error::truncated(std::format(
             "fat: header claims {} arch entries, file only {} bytes", nfat, buf.size())));
     }
@@ -104,30 +190,47 @@ slice_fat(std::vector<std::byte>& buf) {
     std::vector<Slice> slices;
     slices.reserve(nfat);
     for (u32 i = 0; i < nfat; ++i) {
-        const std::byte* const a = p + 8 + i * arch_size;
-        const u32 cputype = read_be32(a + 0);
-        u64 offset, size;
+        const std::size_t a = 8 + static_cast<std::size_t>(i) * arch_size;
+        auto cputype = r.read_be<u32>(a + 0);
+        if (!cputype) return std::unexpected(std::move(cputype).error());
+        u64 offset = 0, size = 0;
         if (is_64) {
-            offset = read_be64(a + 8);
-            size   = read_be64(a + 16);
+            auto o = r.read_be<u64>(a + 8);
+            if (!o) return std::unexpected(std::move(o).error());
+            auto s = r.read_be<u64>(a + 16);
+            if (!s) return std::unexpected(std::move(s).error());
+            offset = *o; size = *s;
         } else {
-            offset = read_be32(a + 8);
-            size   = read_be32(a + 12);
+            auto o = r.read_be<u32>(a + 8);
+            if (!o) return std::unexpected(std::move(o).error());
+            auto s = r.read_be<u32>(a + 12);
+            if (!s) return std::unexpected(std::move(s).error());
+            offset = *o; size = *s;
         }
-        slices.push_back({cputype, offset, size});
+        slices.push_back({*cputype, offset, size});
     }
 
     const Slice* pick = nullptr;
     for (const auto& s : slices) if (s.cputype == CPU_TYPE_X86_64) { pick = &s; break; }
     if (!pick) for (const auto& s : slices) if (s.cputype == CPU_TYPE_ARM64)  { pick = &s; break; }
-    if (!pick && !slices.empty()) pick = &slices[0];
+    if (!pick && !slices.empty()) {
+        pick = &slices[0];
+        // The slice is browsable (symbols/sections still parse) but the
+        // decoder will fail on instructions. Warn loudly so users don't
+        // wonder why decompile/disasm output is empty.
+        std::fprintf(stderr,
+            "ember: fat binary has no x86_64 or arm64 slice; "
+            "falling back to cputype %#x (instructions will not decode)\n",
+            pick->cputype);
+    }
     if (!pick) {
         return std::unexpected(Error::invalid_format("fat: no arch slices"));
     }
-    if (pick->offset + pick->size > buf.size()) {
+    // offset + size overflow guard, then end-of-file check.
+    if (pick->offset > buf.size() || pick->size > buf.size() - pick->offset) {
         return std::unexpected(Error::truncated(std::format(
-            "fat: arch slice [{:#x}, {:#x}) extends past {:#x}-byte file",
-            pick->offset, pick->offset + pick->size, buf.size())));
+            "fat: arch slice [{:#x}, +{:#x}) extends past {:#x}-byte file",
+            pick->offset, pick->size, buf.size())));
     }
     std::vector<std::byte> out(buf.begin() + static_cast<std::ptrdiff_t>(pick->offset),
                                buf.begin() + static_cast<std::ptrdiff_t>(pick->offset + pick->size));

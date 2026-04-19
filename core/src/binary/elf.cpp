@@ -102,6 +102,10 @@ struct Shdr {
     };
 }
 
+[[nodiscard]] Shdr shdr_at(const std::byte* shtab, u16 idx) noexcept {
+    return read_shdr(shtab + static_cast<std::size_t>(idx) * kShdr64Size);
+}
+
 [[nodiscard]] Arch arch_from_machine(u16 em, bool is_64bit) noexcept {
     switch (em) {
         case em::I386:    return Arch::X86;
@@ -134,7 +138,7 @@ ElfBinary::load_from_buffer(std::vector<std::byte> buffer) {
     return self;
 }
 
-Result<void> ElfBinary::parse() {
+Result<ElfBinary::ParsedEhdr> ElfBinary::parse_ehdr() {
     const ByteReader r(buffer_);
 
     if (r.size() < kEhdr64Size) {
@@ -161,93 +165,92 @@ Result<void> ElfBinary::parse() {
             "elf: only ELFDATA2LSB supported (got {})", ei_data)));
     }
 
-    const u16 e_machine   = read_le_at<u16>(ident + 0x12);
-    const u64 e_entry     = read_le_at<u64>(ident + 0x18);
-    const u64 e_phoff     = read_le_at<u64>(ident + 0x20);
-    const u64 e_shoff     = read_le_at<u64>(ident + 0x28);
-    const u16 e_phentsize = read_le_at<u16>(ident + 0x36);
-    const u16 e_phnum     = read_le_at<u16>(ident + 0x38);
-    const u16 e_shentsize = read_le_at<u16>(ident + 0x3a);
-    const u16 e_shnum     = read_le_at<u16>(ident + 0x3c);
-    const u16 e_shstrndx  = read_le_at<u16>(ident + 0x3e);
+    return ParsedEhdr{
+        .e_machine   = read_le_at<u16>(ident + 0x12),
+        .e_entry     = read_le_at<u64>(ident + 0x18),
+        .e_phoff     = read_le_at<u64>(ident + 0x20),
+        .e_shoff     = read_le_at<u64>(ident + 0x28),
+        .e_phentsize = read_le_at<u16>(ident + 0x36),
+        .e_phnum     = read_le_at<u16>(ident + 0x38),
+        .e_shentsize = read_le_at<u16>(ident + 0x3a),
+        .e_shnum     = read_le_at<u16>(ident + 0x3c),
+        .e_shstrndx  = read_le_at<u16>(ident + 0x3e),
+    };
+}
 
-    arch_  = arch_from_machine(e_machine, /*is_64bit=*/true);
-    entry_ = e_entry;
+// PT_LOAD is the authoritative runtime mapping. Relocatable .o files have
+// no program headers; callers fall back to section-table lookup there.
+Result<void> ElfBinary::parse_segments(const ParsedEhdr& h) {
+    if (h.e_phnum == 0) return {};
+    if (h.e_phentsize != kPhdr64Size) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "elf: unexpected e_phentsize {} (want {})",
+            h.e_phentsize, kPhdr64Size)));
+    }
+    const ByteReader r(buffer_);
+    const std::size_t phtab_bytes =
+        static_cast<std::size_t>(h.e_phentsize) * h.e_phnum;
+    auto phtab = r.slice(h.e_phoff, phtab_bytes);
+    if (!phtab) return std::unexpected(std::move(phtab).error());
 
-    // ---- Parse program headers (PT_LOAD segments) --------------------------
-    // PT_LOAD is the authoritative runtime mapping. For relocatable .o files
-    // there are no program headers; we fall through to sections in that case.
-    if (e_phnum > 0) {
-        if (e_phentsize != kPhdr64Size) {
-            return std::unexpected(Error::invalid_format(std::format(
-                "elf: unexpected e_phentsize {} (want {})",
-                e_phentsize, kPhdr64Size)));
-        }
-        const std::size_t phtab_bytes =
-            static_cast<std::size_t>(e_phentsize) * e_phnum;
-        auto phtab = r.slice(e_phoff, phtab_bytes);
-        if (!phtab) return std::unexpected(std::move(phtab).error());
+    segments_.reserve(h.e_phnum);
+    for (u16 i = 0; i < h.e_phnum; ++i) {
+        const std::byte* const p =
+            phtab->data() + static_cast<std::size_t>(i) * kPhdr64Size;
+        const u32 p_type   = read_le_at<u32>(p + 0x00);
+        const u32 p_flags  = read_le_at<u32>(p + 0x04);
+        const u64 p_offset = read_le_at<u64>(p + 0x08);
+        const u64 p_vaddr  = read_le_at<u64>(p + 0x10);
+        const u64 p_filesz = read_le_at<u64>(p + 0x20);
+        const u64 p_memsz  = read_le_at<u64>(p + 0x28);
 
-        segments_.reserve(e_phnum);
-        for (u16 i = 0; i < e_phnum; ++i) {
-            const std::byte* const p =
-                phtab->data() + static_cast<std::size_t>(i) * kPhdr64Size;
-            const u32 p_type   = read_le_at<u32>(p + 0x00);
-            const u32 p_flags  = read_le_at<u32>(p + 0x04);
-            const u64 p_offset = read_le_at<u64>(p + 0x08);
-            const u64 p_vaddr  = read_le_at<u64>(p + 0x10);
-            const u64 p_filesz = read_le_at<u64>(p + 0x20);
-            const u64 p_memsz  = read_le_at<u64>(p + 0x28);
+        if (p_type != pt::LOAD) continue;
+        if (p_memsz == 0) continue;
 
-            if (p_type != pt::LOAD) continue;
-            if (p_memsz == 0) continue;
-
-            LoadSegment seg;
-            seg.vaddr      = p_vaddr;
-            seg.memsz      = p_memsz;
-            seg.filesz     = p_filesz;
-            seg.readable   = (p_flags & pf::R) != 0;
-            seg.writable   = (p_flags & pf::W) != 0;
-            seg.executable = (p_flags & pf::X) != 0;
-            if (p_filesz > 0) {
-                if (auto bytes = r.slice(p_offset, p_filesz); bytes) {
-                    seg.data = *bytes;
-                } else {
-                    return std::unexpected(std::move(bytes).error());
-                }
+        LoadSegment seg;
+        seg.vaddr      = p_vaddr;
+        seg.memsz      = p_memsz;
+        seg.filesz     = p_filesz;
+        seg.readable   = (p_flags & pf::R) != 0;
+        seg.writable   = (p_flags & pf::W) != 0;
+        seg.executable = (p_flags & pf::X) != 0;
+        if (p_filesz > 0) {
+            if (auto bytes = r.slice(p_offset, p_filesz); bytes) {
+                seg.data = *bytes;
+            } else {
+                return std::unexpected(std::move(bytes).error());
             }
-            segments_.push_back(std::move(seg));
         }
+        segments_.push_back(std::move(seg));
     }
+    return {};
+}
 
-    // No sections? That's fine — we already have segments. Nothing else to do.
-    if (e_shnum == 0) return {};
-
-    if (e_shentsize != kShdr64Size) {
+Result<void> ElfBinary::parse_sections(const ParsedEhdr& h) {
+    if (h.e_shnum == 0) return {};
+    if (h.e_shentsize != kShdr64Size) {
         return std::unexpected(Error::invalid_format(std::format(
-            "elf: unexpected e_shentsize {} (want {})", e_shentsize, kShdr64Size)));
+            "elf: unexpected e_shentsize {} (want {})", h.e_shentsize, kShdr64Size)));
     }
-    if (e_shstrndx >= e_shnum) {
+    if (h.e_shstrndx >= h.e_shnum) {
         return std::unexpected(Error::invalid_format(std::format(
-            "elf: e_shstrndx {} >= e_shnum {}", e_shstrndx, e_shnum)));
+            "elf: e_shstrndx {} >= e_shnum {}", h.e_shstrndx, h.e_shnum)));
     }
 
-    const std::size_t shtab_bytes = static_cast<std::size_t>(e_shentsize) * e_shnum;
-    auto shtab = r.slice(e_shoff, shtab_bytes);
+    const ByteReader r(buffer_);
+    const std::size_t shtab_bytes =
+        static_cast<std::size_t>(h.e_shentsize) * h.e_shnum;
+    auto shtab = r.slice(h.e_shoff, shtab_bytes);
     if (!shtab) return std::unexpected(std::move(shtab).error());
 
-    const auto shdr_at = [&](u16 idx) noexcept -> Shdr {
-        return read_shdr(shtab->data() + static_cast<std::size_t>(idx) * kShdr64Size);
-    };
-
-    const Shdr shstr_hdr = shdr_at(e_shstrndx);
+    const Shdr shstr_hdr = shdr_at(shtab->data(), h.e_shstrndx);
     auto shstr_bytes = r.slice(shstr_hdr.offset, shstr_hdr.size);
     if (!shstr_bytes) return std::unexpected(std::move(shstr_bytes).error());
     const ByteReader shstr_r(*shstr_bytes);
 
-    sections_.reserve(e_shnum);
-    for (u16 i = 0; i < e_shnum; ++i) {
-        const Shdr sh = shdr_at(i);
+    sections_.reserve(h.e_shnum);
+    for (u16 i = 0; i < h.e_shnum; ++i) {
+        const Shdr sh = shdr_at(shtab->data(), i);
 
         Section s;
         if (auto name = shstr_r.read_cstr(sh.name); name) {
@@ -270,28 +273,49 @@ Result<void> ElfBinary::parse() {
         }
         sections_.push_back(std::move(s));
     }
+    return {};
+}
 
-    // dynsym_names[k] is the raw name at position k in the .dynsym table,
-    // indexed as relocations see it (empty string for unnamed entries).
-    // This is what .rela.* relocation `sym` fields point into.
-    std::vector<std::string> dynsym_names;
-    u16 dynsym_section = 0;
-    bool dynsym_section_seen = false;
+Result<void>
+ElfBinary::parse_symbols(const ParsedEhdr& h,
+                         std::vector<std::string>& dynsym_names,
+                         u16& dynsym_section,
+                         bool& dynsym_section_seen) {
+    if (h.e_shnum == 0) return {};
 
-    for (u16 i = 0; i < e_shnum; ++i) {
-        const Shdr sh = shdr_at(i);
+    const ByteReader r(buffer_);
+    const std::size_t shtab_bytes =
+        static_cast<std::size_t>(h.e_shentsize) * h.e_shnum;
+    auto shtab = r.slice(h.e_shoff, shtab_bytes);
+    if (!shtab) return std::unexpected(std::move(shtab).error());
+
+    // Count symtab entries up-front so the one reserve() covers both tables.
+    // Cap by buffer size: a corrupt sh.size must not drive a huge reserve()
+    // before the per-section slice() bounds-check runs below.
+    const std::size_t abs_max_syms = buffer_.size() / kSym64Size;
+    std::size_t total_syms = 0;
+    for (u16 i = 0; i < h.e_shnum; ++i) {
+        const Shdr sh = shdr_at(shtab->data(), i);
+        if (sh.type != sht::SYMTAB && sh.type != sht::DYNSYM) continue;
+        if (sh.entsize == kSym64Size) total_syms += sh.size / kSym64Size;
+    }
+    if (total_syms > abs_max_syms) total_syms = abs_max_syms;
+    symbols_.reserve(total_syms);
+
+    for (u16 i = 0; i < h.e_shnum; ++i) {
+        const Shdr sh = shdr_at(shtab->data(), i);
         if (sh.type != sht::SYMTAB && sh.type != sht::DYNSYM) continue;
         if (sh.entsize != kSym64Size) {
             return std::unexpected(Error::invalid_format(std::format(
                 "elf: unexpected sym entsize {} in section {} (want {})",
                 sh.entsize, i, kSym64Size)));
         }
-        if (sh.link >= e_shnum) {
+        if (sh.link >= h.e_shnum) {
             return std::unexpected(Error::invalid_format(std::format(
                 "elf: symtab {} has bad strtab link {}", i, sh.link)));
         }
 
-        const Shdr strtab_hdr = shdr_at(static_cast<u16>(sh.link));
+        const Shdr strtab_hdr = shdr_at(shtab->data(), static_cast<u16>(sh.link));
         auto strtab_bytes = r.slice(strtab_hdr.offset, strtab_hdr.size);
         if (!strtab_bytes) return std::unexpected(std::move(strtab_bytes).error());
         const ByteReader str_r(*strtab_bytes);
@@ -301,7 +325,6 @@ Result<void> ElfBinary::parse() {
 
         const bool is_dynsym = (sh.type == sht::DYNSYM);
         const std::size_t count = sh.size / kSym64Size;
-        symbols_.reserve(symbols_.size() + count);
         const std::byte* const base = sym_bytes->data();
 
         if (is_dynsym) {
@@ -339,116 +362,121 @@ Result<void> ElfBinary::parse() {
             symbols_.push_back(std::move(sym));
         }
     }
+    return {};
+}
 
-    // ---- Parse .rela.* sections: build got_addr → dynsym_name map ----------
-    //
-    // On x86-64 the dynamic linker fills GOT slots via JUMP_SLOT (for lazy
-    // PLT binding of function imports) and GLOB_DAT (for global data
-    // imports) relocations. Both give us (slot_vaddr, dynsym_index), which
-    // we use to attach got_addr to each import Symbol by name.
-    std::unordered_map<addr_t, std::string> got_to_name;
+// On x86-64 the dynamic linker fills GOT slots via JUMP_SLOT (lazy PLT
+// binding) or GLOB_DAT (global data imports). Both give us (slot_vaddr,
+// dynsym_index) → name; we attach got_addr on each import by name.
+Result<void>
+ElfBinary::attach_got_addrs(const ParsedEhdr& h,
+                            const std::vector<std::string>& dynsym_names,
+                            u16 dynsym_section,
+                            std::unordered_map<addr_t, std::string>& got_to_name) {
+    if (h.e_shnum == 0) return {};
 
-    if (dynsym_section_seen) {
-        for (u16 i = 0; i < e_shnum; ++i) {
-            const Shdr sh = shdr_at(i);
-            if (sh.type != sht::RELA) continue;
-            if (sh.link != dynsym_section) continue;  // only rela→dynsym
-            if (sh.entsize != kRela64Size) continue;
-            if (sh.size == 0) continue;
+    const ByteReader r(buffer_);
+    const std::size_t shtab_bytes =
+        static_cast<std::size_t>(h.e_shentsize) * h.e_shnum;
+    auto shtab = r.slice(h.e_shoff, shtab_bytes);
+    if (!shtab) return std::unexpected(std::move(shtab).error());
 
-            auto rela_bytes = r.slice(sh.offset, sh.size);
-            if (!rela_bytes) continue;
-            const std::size_t count = sh.size / kRela64Size;
-            const std::byte* const base = rela_bytes->data();
+    for (u16 i = 0; i < h.e_shnum; ++i) {
+        const Shdr sh = shdr_at(shtab->data(), i);
+        if (sh.type != sht::RELA) continue;
+        if (sh.link != dynsym_section) continue;  // only rela→dynsym
+        if (sh.entsize != kRela64Size) continue;
+        if (sh.size == 0) continue;
 
-            for (std::size_t k = 0; k < count; ++k) {
-                const std::byte* const p = base + k * kRela64Size;
-                const u64 r_offset = read_le_at<u64>(p + 0);
-                const u64 r_info   = read_le_at<u64>(p + 8);
-                const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
-                const u32 r_sym    = static_cast<u32>(r_info >> 32);
+        auto rela_bytes = r.slice(sh.offset, sh.size);
+        if (!rela_bytes) continue;
+        const std::size_t count = sh.size / kRela64Size;
+        const std::byte* const base = rela_bytes->data();
 
-                if (r_type != rx64::JUMP_SLOT && r_type != rx64::GLOB_DAT) continue;
-                if (r_sym >= dynsym_names.size()) continue;
-                const std::string& name = dynsym_names[r_sym];
-                if (name.empty()) continue;
-                got_to_name.emplace(static_cast<addr_t>(r_offset), name);
-            }
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::byte* const p = base + k * kRela64Size;
+            const u64 r_offset = read_le_at<u64>(p + 0);
+            const u64 r_info   = read_le_at<u64>(p + 8);
+            const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
+            const u32 r_sym    = static_cast<u32>(r_info >> 32);
+
+            if (r_type != rx64::JUMP_SLOT && r_type != rx64::GLOB_DAT) continue;
+            if (r_sym >= dynsym_names.size()) continue;
+            const std::string& name = dynsym_names[r_sym];
+            if (name.empty()) continue;
+            got_to_name.emplace(static_cast<addr_t>(r_offset), name);
         }
     }
 
-    // Attach got_addr to import Symbols by name (first match wins; dynamic
-    // symbol names are unique within a binary).
-    if (!got_to_name.empty()) {
-        std::unordered_map<std::string, addr_t> name_to_got;
-        name_to_got.reserve(got_to_name.size());
-        for (const auto& [g, n] : got_to_name) name_to_got.emplace(n, g);
-        for (auto& sym : symbols_) {
-            if (!sym.is_import) continue;
-            auto it = name_to_got.find(sym.name);
-            if (it == name_to_got.end()) continue;
-            sym.got_addr = it->second;
-        }
+    if (got_to_name.empty()) return {};
+    std::unordered_map<std::string, addr_t> name_to_got;
+    name_to_got.reserve(got_to_name.size());
+    for (const auto& [g, n] : got_to_name) name_to_got.emplace(n, g);
+    for (auto& sym : symbols_) {
+        if (!sym.is_import) continue;
+        auto it = name_to_got.find(sym.name);
+        if (it == name_to_got.end()) continue;
+        sym.got_addr = it->second;
     }
+    return {};
+}
 
-    // ---- Scan PLT sections: populate Symbol.addr for imports ---------------
-    //
-    // Walk each executable section whose name starts with ".plt". Decode
-    // instructions linearly; every `jmp qword [rip + D]` either points at
-    // a GOT slot we've already mapped (then we know the import) or isn't
-    // an import stub (ignored). The stub's caller-visible address is taken
-    // as the 16-byte-aligned slot start — this covers both classic
-    // `jmp [GOT]; push; jmp .plt[0]` entries and modern
-    // `endbr64; bnd jmp [GOT]` .plt.sec entries without needing to
-    // enumerate prefix bytes.
-    if (!got_to_name.empty() && arch_ == Arch::X86_64) {
-        std::unordered_map<std::string, addr_t> import_stub_addr;
-        const X64Decoder dec;
+// Walks each executable .plt* section; every `jmp qword [rip + D]` whose
+// target GOT slot is in `got_to_name` gives us an import stub whose
+// caller-visible address is the 16-byte-aligned slot start. Covers both
+// classic `jmp [GOT]; push; jmp .plt[0]` and modern `endbr64; bnd jmp [GOT]`
+// entries without enumerating prefix bytes.
+void ElfBinary::scan_plt_stubs(
+    const std::unordered_map<addr_t, std::string>& got_to_name) {
+    if (got_to_name.empty() || arch_ != Arch::X86_64) return;
 
-        for (const auto& sec : sections_) {
-            if (!sec.flags.executable) continue;
-            if (sec.data.empty()) continue;
-            if (sec.name.rfind(".plt", 0) != 0) continue;  // starts with ".plt"
+    std::unordered_map<std::string, addr_t> import_stub_addr;
+    const X64Decoder dec;
 
-            addr_t ip = sec.vaddr;
-            std::size_t off = 0;
-            while (off < sec.data.size()) {
-                auto remaining = sec.data.subspan(off);
-                auto decoded = dec.decode(remaining, ip);
-                if (!decoded) { ip += 1; off += 1; continue; }
-                const Instruction& insn = *decoded;
+    for (const auto& sec : sections_) {
+        if (!sec.flags.executable) continue;
+        if (sec.data.empty()) continue;
+        if (sec.name.rfind(".plt", 0) != 0) continue;  // starts with ".plt"
 
-                if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1) {
-                    const Operand& op = insn.operands[0];
-                    if (op.kind == Operand::Kind::Memory &&
-                        op.mem.base == Reg::Rip &&
-                        op.mem.index == Reg::None &&
-                        op.mem.has_disp) {
-                        const addr_t got = ip + insn.length +
-                                           static_cast<addr_t>(op.mem.disp);
-                        auto it = got_to_name.find(got);
-                        if (it != got_to_name.end()) {
-                            // Stub start = 16-byte-aligned floor of this jmp.
-                            const addr_t stub_start = ip & ~static_cast<addr_t>(0xF);
-                            import_stub_addr.try_emplace(it->second, stub_start);
-                        }
+        addr_t ip = sec.vaddr;
+        std::size_t off = 0;
+        while (off < sec.data.size()) {
+            auto remaining = sec.data.subspan(off);
+            auto decoded = dec.decode(remaining, ip);
+            if (!decoded) { ip += 1; off += 1; continue; }
+            const Instruction& insn = *decoded;
+
+            if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1) {
+                const Operand& op = insn.operands[0];
+                if (op.kind == Operand::Kind::Memory &&
+                    op.mem.base == Reg::Rip &&
+                    op.mem.index == Reg::None &&
+                    op.mem.has_disp) {
+                    const addr_t got = ip + insn.length +
+                                       static_cast<addr_t>(op.mem.disp);
+                    auto it = got_to_name.find(got);
+                    if (it != got_to_name.end()) {
+                        const addr_t stub_start = ip & ~static_cast<addr_t>(0xF);
+                        import_stub_addr.try_emplace(it->second, stub_start);
                     }
                 }
-
-                ip  += insn.length;
-                off += insn.length;
             }
-        }
 
-        for (auto& sym : symbols_) {
-            if (!sym.is_import) continue;
-            if (sym.addr != 0) continue;
-            auto it = import_stub_addr.find(sym.name);
-            if (it == import_stub_addr.end()) continue;
-            sym.addr = it->second;
+            ip  += insn.length;
+            off += insn.length;
         }
     }
 
+    for (auto& sym : symbols_) {
+        if (!sym.is_import) continue;
+        if (sym.addr != 0) continue;
+        auto it = import_stub_addr.find(sym.name);
+        if (it == import_stub_addr.end()) continue;
+        sym.addr = it->second;
+    }
+}
+
+void ElfBinary::sort_and_dedupe_symbols() {
     std::ranges::sort(symbols_, [](const Symbol& a, const Symbol& b) noexcept {
         if (a.is_import != b.is_import) return a.is_import < b.is_import;
         if (a.addr      != b.addr)      return a.addr < b.addr;
@@ -463,6 +491,39 @@ Result<void> ElfBinary::parse() {
                 && a.name == b.name;
         });
     symbols_.erase(dups.begin(), dups.end());
+}
+
+Result<void> ElfBinary::parse() {
+    auto hdr = parse_ehdr();
+    if (!hdr) return std::unexpected(std::move(hdr).error());
+
+    arch_  = arch_from_machine(hdr->e_machine, /*is_64bit=*/true);
+    entry_ = hdr->e_entry;
+
+    if (auto rv = parse_segments(*hdr);  !rv) return std::unexpected(rv.error());
+    if (hdr->e_shnum == 0) return {};  // sectionless — segments are enough
+    if (auto rv = parse_sections(*hdr);  !rv) return std::unexpected(rv.error());
+
+    std::vector<std::string> dynsym_names;
+    u16 dynsym_section = 0;
+    bool dynsym_section_seen = false;
+    if (auto rv = parse_symbols(*hdr, dynsym_names, dynsym_section,
+                                dynsym_section_seen);
+        !rv) {
+        return std::unexpected(rv.error());
+    }
+
+    if (dynsym_section_seen) {
+        std::unordered_map<addr_t, std::string> got_to_name;
+        if (auto rv = attach_got_addrs(*hdr, dynsym_names, dynsym_section,
+                                       got_to_name);
+            !rv) {
+            return std::unexpected(rv.error());
+        }
+        scan_plt_stubs(got_to_name);
+    }
+
+    sort_and_dedupe_symbols();
     return {};
 }
 

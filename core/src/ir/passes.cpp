@@ -17,55 +17,17 @@ namespace ember {
 namespace {
 
 // ============================================================================
-// SSA name key
-// ============================================================================
-
-using SsaKey = std::tuple<u8, u32, u32>;  // (kind: 0=Reg,1=Flag,2=Temp), id, version
-
-[[nodiscard]] std::optional<SsaKey> ssa_key(const IrValue& v) noexcept {
-    switch (v.kind) {
-        case IrValueKind::Reg:
-            return SsaKey{0, static_cast<u32>(canonical_reg(v.reg)), v.version};
-        case IrValueKind::Flag:
-            return SsaKey{1, static_cast<u32>(v.flag), v.version};
-        case IrValueKind::Temp:
-            return SsaKey{2, v.temp, 0};
-        case IrValueKind::Imm: {
-            // Imm values get a synthetic stable key so the memory passes can
-            // treat `store [0x404018], v` as a write to a known address.
-            // Kind tag 3 ensures no collision with reg/flag/temp keys; the
-            // imm value is split across the two u32 slots.
-            const u64 uv = static_cast<u64>(v.imm);
-            return SsaKey{3,
-                          static_cast<u32>(uv & 0xFFFFFFFFu),
-                          static_cast<u32>(uv >> 32)};
-        }
-        default:
-            return std::nullopt;
-    }
-}
-
-[[nodiscard]] bool same_value(const IrValue& a, const IrValue& b) noexcept {
-    if (a.kind != b.kind) return false;
-    if (a.type != b.type) return false;
-    if (a.kind == IrValueKind::Imm) return a.imm == b.imm;
-    auto ka = ssa_key(a);
-    auto kb = ssa_key(b);
-    return ka && kb && *ka == *kb;
-}
-
-// ============================================================================
 // Mask i64 result to an IrType width (sign-extending from low bits)
 // ============================================================================
 
 [[nodiscard]] i64 mask_signed(i64 v, IrType t) noexcept {
     const unsigned bits = type_bits(t);
     if (bits == 0 || bits >= 64) return v;
-    const u64 mask = (bits == 64) ? ~u64(0) : ((u64(1) << bits) - 1);
+    // bits ∈ [1,63] here, so sign_bit and mask are always well-defined.
+    const unsigned sign_bit = bits - 1;
+    const u64 mask = (u64(1) << bits) - 1;
     u64 u = static_cast<u64>(v) & mask;
-    if (bits < 64 && (u & (u64(1) << (bits - 1)))) {
-        u |= ~mask;
-    }
+    if (u & (u64(1) << sign_bit)) u |= ~mask;
     return static_cast<i64>(u);
 }
 
@@ -143,7 +105,7 @@ try_fold(const IrInst& inst) noexcept {
                 break;
             case IrOp::Sub:
                 if (bi && b.imm == 0) return a;
-                if (same_value(a, b)) return IrValue::make_imm(0, dt);
+                if (same_ssa_value(a, b)) return IrValue::make_imm(0, dt);
                 break;
             case IrOp::Mul:
                 if (ai && a.imm == 0) return IrValue::make_imm(0, dt);
@@ -154,17 +116,17 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::And:
                 if (ai && a.imm == 0) return IrValue::make_imm(0, dt);
                 if (bi && b.imm == 0) return IrValue::make_imm(0, dt);
-                if (same_value(a, b)) return a;
+                if (same_ssa_value(a, b)) return a;
                 break;
             case IrOp::Or:
                 if (ai && a.imm == 0) return b;
                 if (bi && b.imm == 0) return a;
-                if (same_value(a, b)) return a;
+                if (same_ssa_value(a, b)) return a;
                 break;
             case IrOp::Xor:
                 if (ai && a.imm == 0) return b;
                 if (bi && b.imm == 0) return a;
-                if (same_value(a, b)) return IrValue::make_imm(0, dt);
+                if (same_ssa_value(a, b)) return IrValue::make_imm(0, dt);
                 break;
             case IrOp::Shl:
             case IrOp::Lshr:
@@ -284,7 +246,7 @@ try_fold(const IrInst& inst) noexcept {
         auto it = subst.find(*k);
         if (it == subst.end()) return;
         if (it->second.type != v.type) return;
-        if (same_value(v, it->second)) return;
+        if (same_ssa_value(v, it->second)) return;
         v = it->second;
         ++count;
     };
@@ -320,7 +282,7 @@ try_fold(const IrInst& inst) noexcept {
                 if (op_key && *op_key == *dst_key) continue;  // self-reference
                 if (!unique) {
                     unique = op;
-                } else if (!same_value(*unique, op)) {
+                } else if (!same_ssa_value(*unique, op)) {
                     trivial = false;
                     break;
                 }
@@ -734,7 +696,7 @@ struct GvnOp {
         auto [bi, ii] = wl.front();
         wl.pop_front();
         const auto& inst = fn.blocks[bi].insts[ii];
-        for_each_use(const_cast<IrInst&>(inst), [&](IrValue& v) {
+        for_each_use(inst, [&](const IrValue& v) {
             auto k = ssa_key(v);
             if (!k) return;
             auto it = defs.find(*k);

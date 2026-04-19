@@ -191,7 +191,12 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
                              static_cast<addr_t>(jop.mem.disp);
         const Reg idx_reg = jop.mem.index;
         auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
-        const u32 max_count = bound ? bound->count : 256;
+        // Hard cap regardless of the decoded `cmp; ja` bound — a corrupt
+        // immediate in that guard could otherwise drive a billions-wide loop.
+        // Real compilers fall back to other codegen well below this.
+        constexpr u32 kJumpTableMax = 4096;
+        const u32 max_count =
+            std::min(bound ? bound->count : 256u, kJumpTableMax);
 
         JumpTable jt;
         jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
@@ -291,7 +296,9 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     if (!matched) return std::nullopt;
 
     auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
-    const u32 max_count = bound ? bound->count : 256;
+    constexpr u32 kJumpTableMax = 4096;
+    const u32 max_count =
+        std::min(bound ? bound->count : 256u, kJumpTableMax);
 
     JumpTable jt;
     jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);

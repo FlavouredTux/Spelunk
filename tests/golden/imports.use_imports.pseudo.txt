@@ -1,26 +1,19 @@
 // use_imports
 void use_imports(u64 a1, u64 a2) {
-  // bb_401190
   if ((rdi != 0x0)) {
-    // bb_40119c
     local_10 = rsi;
     local_18 = rdi;
-    strlen(rdi);
-    g_count = (rax + g_count);
+    u64 r_strlen = strlen(rdi);
+    g_count = (r_strlen + g_count);
     puts(local_18);
   }
-  // bb_4011c9
   if ((rdx != 0x0)) {
-    // bb_4011ce
     fputs(rdx, stdout);
   }
-  // bb_4011dd
-  getenv("HOME");
-  if ((rax != 0x0)) {
-    // bb_4011ee
+  u64 r_getenv = getenv("HOME");
+  if ((r_getenv != 0x0)) {
     u64 t28 = (g_count + 0x1);
     g_count = t28;
   }
-  // bb_401200
   return rax;
 }

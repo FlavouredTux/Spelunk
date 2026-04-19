@@ -10,6 +10,7 @@
 #include <ember/common/annotations.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
+#include <ember/decompile/emitter.hpp>
 
 namespace ember {
 
@@ -33,7 +34,8 @@ format_cfg(const Binary& b, const FuncWindow& w);
 
 Result<std::string>
 format_struct(const Binary& b, const FuncWindow& w,
-              bool pseudo, const Annotations* ann);
+              bool pseudo, const Annotations* ann,
+              EmitOptions options = {});
 
 struct CallEdge { addr_t caller = 0; addr_t callee = 0; };
 std::vector<CallEdge> compute_call_graph(const Binary& b);

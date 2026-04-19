@@ -26,18 +26,21 @@ set(_build_dir   "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 file(MAKE_DIRECTORY "${_build_dir}")
 
 function(ember_build_fixture name)
-    cmake_parse_arguments(F "" "OPT" "" ${ARGN})
+    cmake_parse_arguments(F "" "OPT;PROTECTOR" "" ${ARGN})
     if(NOT F_OPT)
         set(F_OPT "-O2")
+    endif()
+    if(NOT F_PROTECTOR)
+        set(F_PROTECTOR "-fno-stack-protector")
     endif()
     set(_src "${_fixture_dir}/${name}.c")
     set(_out "${_build_dir}/${name}")
     add_custom_command(
         OUTPUT "${_out}"
-        COMMAND ${CMAKE_C_COMPILER} ${F_OPT} -g -fno-stack-protector
+        COMMAND ${CMAKE_C_COMPILER} ${F_OPT} -g ${F_PROTECTOR}
                 -no-pie -o "${_out}" "${_src}"
         DEPENDS "${_src}"
-        COMMENT "Compiling fixture ${name} (${F_OPT})"
+        COMMENT "Compiling fixture ${name} (${F_OPT} ${F_PROTECTOR})"
         VERBATIM
     )
     add_custom_target(ember_fixture_${name} ALL DEPENDS "${_out}")
@@ -60,6 +63,9 @@ ember_build_fixture(tail_call)
 # compiler would DSE itself and leave nothing for us to test.
 ember_build_fixture(dead_store OPT "-O0")
 ember_build_fixture(fp_scalar)
+ember_build_fixture(printf_noise)
+# Stack-protector on so the canary prologue/epilogue actually get emitted.
+ember_build_fixture(canary PROTECTOR "-fstack-protector-strong")
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by
 # the driver script), because CTest's own quoting gets ugly with ";" in
@@ -210,6 +216,40 @@ ember_golden_test(
     FIXTURE tail_call
     ARGS    "-p|-s|wrap_strlen"
     GOLDEN  tail_call.wrap_strlen.pseudo.txt
+)
+
+# printf/fprintf — variadic arg trimming driven by format-string parsing.
+ember_golden_test(
+    NAME    printf_one_arg_pseudo
+    FIXTURE printf_noise
+    ARGS    "-p|-s|one_arg"
+    GOLDEN  printf_noise.one_arg.pseudo.txt
+)
+ember_golden_test(
+    NAME    printf_two_args_pseudo
+    FIXTURE printf_noise
+    ARGS    "-p|-s|two_args"
+    GOLDEN  printf_noise.two_args.pseudo.txt
+)
+ember_golden_test(
+    NAME    printf_no_args_pseudo
+    FIXTURE printf_noise
+    ARGS    "-p|-s|no_args"
+    GOLDEN  printf_noise.no_args.pseudo.txt
+)
+ember_golden_test(
+    NAME    printf_width_star_pseudo
+    FIXTURE printf_noise
+    ARGS    "-p|-s|width_star"
+    GOLDEN  printf_noise.width_star.pseudo.txt
+)
+
+# Stack-canary prologue+check suppression (-fstack-protector-strong).
+ember_golden_test(
+    NAME    canary_uses_buffer_pseudo
+    FIXTURE canary
+    ARGS    "-p|-s|uses_buffer"
+    GOLDEN  canary.uses_buffer.pseudo.txt
 )
 
 ember_golden_test(

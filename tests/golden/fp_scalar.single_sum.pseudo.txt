@@ -1,6 +1,5 @@
 // single_sum
 float single_sum(float a, float b) {
-  // bb_4011a0
   xmm0 = (a + b);
   return xmm0;
 }

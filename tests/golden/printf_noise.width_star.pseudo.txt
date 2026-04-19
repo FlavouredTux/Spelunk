@@ -1,0 +1,5 @@
+// width_star
+void width_star(u64 a1, u64 a2) {
+  printf("%*d\n", (u32)rdi, (u32)rsi);
+  return 0x0;
+}

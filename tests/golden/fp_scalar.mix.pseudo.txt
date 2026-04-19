@@ -1,5 +1,4 @@
 // mix
 double mix(double a, double b, double c) {
-  // bb_401180
   return (((b + a) * c) - a);
 }

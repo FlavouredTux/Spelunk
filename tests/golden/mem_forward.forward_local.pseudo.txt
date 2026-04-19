@@ -1,6 +1,5 @@
 // forward_local
 void forward_local(u64 a1) {
-  // bb_401106
   u32 t1 = (u32)rdi;
   local_1c = t1;
   u32 t9 = (t1 + 0x1);

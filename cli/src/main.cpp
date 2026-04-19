@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <format>
@@ -48,81 +49,88 @@ struct Args {
     bool xrefs  = false;
     bool strings = false;
     bool arities = false;
+    bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool help   = false;
 };
+
+struct BoolFlag {
+    std::string_view short_;        // may be empty
+    std::string_view long_;
+    bool Args::* field;
+};
+
+struct ValueFlag {
+    std::string_view short_;        // may be empty
+    std::string_view long_;
+    std::string Args::* field;
+};
+
+constexpr auto kBoolFlags = std::to_array<BoolFlag>({
+    {"-h", "--help",      &Args::help},
+    {"-d", "--disasm",    &Args::disasm},
+    {"-c", "--cfg",       &Args::cfg},
+    {"-i", "--ir",        &Args::ir},
+    {"",   "--ssa",       &Args::ssa},
+    {"-O", "--opt",       &Args::opt},
+    {"",   "--struct",    &Args::strct},
+    {"-p", "--pseudo",    &Args::pseudo},
+    {"-X", "--xrefs",     &Args::xrefs},
+    {"",   "--strings",   &Args::strings},
+    {"",   "--arities",   &Args::arities},
+    {"",   "--no-cache",  &Args::no_cache},
+    {"",   "--labels",    &Args::labels},
+});
+
+constexpr auto kValueFlags = std::to_array<ValueFlag>({
+    {"-s", "--symbol",      &Args::symbol},
+    {"",   "--annotations", &Args::annotations_path},
+    {"",   "--cache-dir",   &Args::cache_dir},
+    {"",   "--project",     &Args::project_path},
+    {"",   "--script",      &Args::script_path},
+});
+
+template <class F>
+bool matches(std::string_view s, const F& f) {
+    return (!f.short_.empty() && s == f.short_) || s == f.long_;
+}
+
+// Stage implications: picking a later stage requires all earlier ones.
+void apply_stage_implications(Args& a) {
+    if (a.pseudo) a.strct = true;
+    if (a.strct)  a.opt   = true;
+    if (a.opt)    a.ssa   = true;
+    if (a.ssa)    a.ir    = true;
+}
 
 [[nodiscard]] ember::Result<Args> parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
         const std::string_view s = argv[i];
         if (s == "--") {
-            // Everything after `--` is passed verbatim to the script as argv.
             for (int j = i + 1; j < argc; ++j) a.script_argv.emplace_back(argv[j]);
             break;
         }
-        if (s == "-h" || s == "--help") {
-            a.help = true;
-        } else if (s == "-d" || s == "--disasm") {
-            a.disasm = true;
-        } else if (s == "-c" || s == "--cfg") {
-            a.cfg = true;
-        } else if (s == "-i" || s == "--ir") {
-            a.ir = true;
-        } else if (s == "--ssa") {
-            a.ssa = true;
-            a.ir = true;
-        } else if (s == "-O" || s == "--opt") {
-            a.opt = true;
-            a.ssa = true;
-            a.ir  = true;
-        } else if (s == "--struct") {
-            a.strct = true;
-            a.opt   = true;
-            a.ssa   = true;
-        } else if (s == "-p" || s == "--pseudo") {
-            a.pseudo = true;
-            a.strct  = true;
-            a.opt    = true;
-            a.ssa    = true;
-        } else if (s == "-X" || s == "--xrefs") {
-            a.xrefs = true;
-        } else if (s == "--strings") {
-            a.strings = true;
-        } else if (s == "--arities") {
-            a.arities = true;
-        } else if (s == "-s" || s == "--symbol") {
-            if (++i >= argc) {
-                return std::unexpected(ember::Error::invalid_format(
-                    "-s requires an argument"));
+
+        bool hit = false;
+        for (const auto& f : kBoolFlags) {
+            if (matches(s, f)) { a.*f.field = true; hit = true; break; }
+        }
+        if (hit) continue;
+
+        for (const auto& f : kValueFlags) {
+            if (matches(s, f)) {
+                if (++i >= argc) {
+                    return std::unexpected(ember::Error::invalid_format(
+                        std::format("{} requires an argument", s)));
+                }
+                a.*f.field = argv[i];
+                hit = true;
+                break;
             }
-            a.symbol = argv[i];
-        } else if (s == "--annotations") {
-            if (++i >= argc) {
-                return std::unexpected(ember::Error::invalid_format(
-                    "--annotations requires a path"));
-            }
-            a.annotations_path = argv[i];
-        } else if (s == "--cache-dir") {
-            if (++i >= argc) {
-                return std::unexpected(ember::Error::invalid_format(
-                    "--cache-dir requires a path"));
-            }
-            a.cache_dir = argv[i];
-        } else if (s == "--no-cache") {
-            a.no_cache = true;
-        } else if (s == "--project") {
-            if (++i >= argc) {
-                return std::unexpected(ember::Error::invalid_format(
-                    "--project requires a path"));
-            }
-            a.project_path = argv[i];
-        } else if (s == "--script") {
-            if (++i >= argc) {
-                return std::unexpected(ember::Error::invalid_format(
-                    "--script requires a path"));
-            }
-            a.script_path = argv[i];
-        } else if (s.starts_with("-")) {
+        }
+        if (hit) continue;
+
+        if (s.starts_with("-")) {
             return std::unexpected(ember::Error::invalid_format(
                 std::format("unknown flag: {}", s)));
         } else if (a.binary.empty()) {
@@ -135,6 +143,7 @@ struct Args {
     if (!a.help && a.binary.empty()) {
         return std::unexpected(ember::Error::invalid_format("no binary specified"));
     }
+    apply_stage_implications(a);
     return a;
 }
 
@@ -357,13 +366,13 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
 }
 
 int run_struct(const ember::Binary& b, std::string_view symbol, bool pseudo,
-               const ember::Annotations* annotations) {
+               const ember::Annotations* annotations, ember::EmitOptions opts) {
     auto win = ember::resolve_function(b, symbol);
     if (!win) {
         std::println(stderr, "ember: symbol '{}' not found", symbol);
         return EXIT_FAILURE;
     }
-    auto out = ember::format_struct(b, *win, pseudo, annotations);
+    auto out = ember::format_struct(b, *win, pseudo, annotations, opts);
     if (!out) {
         std::println(stderr, "ember: {}: {}",
                      out.error().kind_name(), out.error().message);
@@ -388,6 +397,7 @@ void print_help() {
     std::println("      --arities        dump inferred SysV arity per function (addr N)");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
+    std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --project PATH   project file scripts may read/write via project.*");
     std::println("      --script PATH    run a JavaScript file against the loaded binary");
     std::println("      -- ARG...        pass remaining args to the script as argv");
@@ -472,11 +482,13 @@ int main(int argc, char** argv) {
     const ember::Annotations* ann_ptr =
         (!args.annotations_path.empty()) ? &annotations : nullptr;
 
+    ember::EmitOptions emit_opts;
+    emit_opts.show_bb_labels = args.labels;
     if (args.pseudo) {
-        return run_struct(b, args.symbol, /*pseudo=*/true, ann_ptr);
+        return run_struct(b, args.symbol, /*pseudo=*/true, ann_ptr, emit_opts);
     }
     if (args.strct) {
-        return run_struct(b, args.symbol, /*pseudo=*/false, ann_ptr);
+        return run_struct(b, args.symbol, /*pseudo=*/false, ann_ptr, emit_opts);
     }
     if (args.ir) {
         return run_ir(b, args.symbol, args.ssa, args.opt);

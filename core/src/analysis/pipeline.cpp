@@ -225,7 +225,8 @@ format_cfg(const Binary& b, const FuncWindow& w) {
 
 Result<std::string>
 format_struct(const Binary& b, const FuncWindow& w,
-              bool pseudo, const Annotations* ann) {
+              bool pseudo, const Annotations* ann,
+              EmitOptions options) {
     const X64Decoder dec;
     const CfgBuilder builder(b, dec);
     auto fn_r = builder.build(w.start, w.label);
@@ -246,7 +247,7 @@ format_struct(const Binary& b, const FuncWindow& w,
 
     if (pseudo) {
         const PseudoCEmitter emitter;
-        auto c_r = emitter.emit(*s_r, &b, ann);
+        auto c_r = emitter.emit(*s_r, &b, ann, options);
         if (!c_r) return std::unexpected(c_r.error());
         return std::move(*c_r);
     }

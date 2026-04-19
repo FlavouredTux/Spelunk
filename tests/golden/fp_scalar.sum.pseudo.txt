@@ -1,5 +1,4 @@
 // sum
 double sum(double a, double b) {
-  // bb_401150
   return (a + b);
 }

@@ -1,5 +1,4 @@
 // main
 void main(void) {
-  // bb_100001000
   return 0x2a;
 }

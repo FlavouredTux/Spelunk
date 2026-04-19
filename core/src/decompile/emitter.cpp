@@ -34,10 +34,66 @@ using SsaKey = std::tuple<u8, u32, u32>;
     }
 }
 
+// Printf/scanf family. `format_index` is the zero-based position of the
+// format-string argument in the call.
+struct VariadicImport {
+    std::string_view name;
+    u8               format_index;
+};
+
+constexpr VariadicImport kVariadicImports[] = {
+    {"printf",    0}, {"vprintf",   0},
+    {"fprintf",   1}, {"vfprintf",  1},
+    {"dprintf",   1}, {"vdprintf",  1},
+    {"sprintf",   1}, {"vsprintf",  1},
+    {"snprintf",  2}, {"vsnprintf", 2},
+    {"asprintf",  1}, {"vasprintf", 1},
+    {"syslog",    1}, {"vsyslog",   1},
+    {"warn",      0}, {"warnx",     0},
+    {"err",       1}, {"errx",      1},
+    {"scanf",     0}, {"vscanf",    0},
+    {"fscanf",    1}, {"vfscanf",   1},
+    {"sscanf",    1}, {"vsscanf",   1},
+};
+
+[[nodiscard]] std::optional<u8> variadic_format_index(std::string_view n) noexcept {
+    for (const auto& v : kVariadicImports) {
+        if (v.name == n) return v.format_index;
+    }
+    return std::nullopt;
+}
+
+// Count arg-consuming `%` specifiers in a printf-style format string.
+// `%%` is ignored; `%*` adds one for the width/precision arg. We skip length
+// modifiers rather than understanding them; the only thing that matters is
+// how many args the format wants.
+[[nodiscard]] u8 count_printf_specifiers(std::string_view fmt) noexcept {
+    u8 n = 0;
+    for (std::size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] != '%') continue;
+        ++i;
+        if (i >= fmt.size()) break;
+        if (fmt[i] == '%') continue;                       // literal %%
+        // Walk flags/width/precision/length until we hit a conversion.
+        while (i < fmt.size()) {
+            const char c = fmt[i];
+            if (c == '*') ++n;                              // dynamic width/precision
+            const bool is_conv =
+                (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+            if (is_conv && c != 'l' && c != 'h' && c != 'L' && c != 'z' &&
+                c != 'j' && c != 't') {
+                ++n;
+                break;
+            }
+            ++i;
+        }
+    }
+    return n;
+}
+
 // Fixed-arity libc/POSIX imports we recognize by name so that
 // `puts(local_18, rsi, rdx, ...)` trims to `puts(local_18)`.
-// Variadic entries (printf, scanf, ...) are deliberately omitted —
-// those keep the live-in-drop fallback so real varargs pass through.
+// Variadic entries live in `kVariadicImports` above.
 [[nodiscard]] std::optional<u8> libc_arity_by_name(std::string_view n) noexcept {
     static const std::pair<std::string_view, u8> kTable[] = {
         {"strlen", 1}, {"strdup", 1}, {"strchr", 2}, {"strrchr", 2},
@@ -83,6 +139,7 @@ struct Emitter {
     const IrFunction*                                fn = nullptr;
     const Binary*                                    binary = nullptr;
     const Annotations*                               annotations = nullptr;
+    EmitOptions                                      options{};
     std::map<SsaKey, const IrInst*>                  defs;
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
     std::map<SsaKey, u32>                            uses;
@@ -95,6 +152,11 @@ struct Emitter {
     std::set<std::pair<std::size_t, std::size_t>>    fold_call_positions;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> fold_call_ssa_key;
     mutable std::map<SsaKey, std::string>            fold_return_expr;
+    // rax/xmm0 SSA key → bound local name for Call returns whose result is
+    // read downstream. Makes `fopen(...); if (rax == 0)` render as
+    // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
+    std::map<SsaKey, std::string>                    call_return_names;
+    std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
 
     // Try to resolve an integer immediate as a pointer to a NUL-terminated
     // printable string in the binary image. Results are cached.
@@ -163,6 +225,38 @@ struct Emitter {
         return std::nullopt;
     }
 
+    // Walk Assign copies until we hit something that's plausibly the
+    // address of a string (an Imm, or a Reg). For an Imm, try to read the
+    // NUL-terminated string at that address.
+    [[nodiscard]] std::optional<std::string>
+    resolve_string_value(const IrValue& v) const {
+        IrValue cur = v;
+        for (int step = 0; step < 8; ++step) {
+            if (cur.kind == IrValueKind::Imm) {
+                return try_string_at(static_cast<u64>(cur.imm));
+            }
+            const IrInst* d = def_of(cur);
+            if (!d) return std::nullopt;
+            if (d->op == IrOp::Assign && d->src_count >= 1) {
+                cur = d->srcs[0];
+                continue;
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    // Compute arity for a printf/scanf family call given its format-arg
+    // index in `args`. Falls back to `format_index + 1` (emit format, drop
+    // the rest) when the format isn't a literal string.
+    [[nodiscard]] u8 variadic_arity(const std::vector<IrValue>& args,
+                                    u8 format_index) const {
+        if (format_index >= args.size()) return format_index;
+        auto fmt = resolve_string_value(args[format_index]);
+        if (!fmt) return static_cast<u8>(format_index + 1);
+        return static_cast<u8>(format_index + 1 + count_printf_specifiers(*fmt));
+    }
+
     // For `call.ind <expr>`: if `expr` traces back to a Load of a constant
     // address that matches a known GOT slot, return the import's name.
     [[nodiscard]] std::optional<std::string>
@@ -221,11 +315,33 @@ struct Emitter {
         return nullptr;
     }
 
-    // Render a Reg IrValue's leaf name. If the register is an SysV arg-reg
-    // at version 0 (the function's live-in value) AND the user has declared
-    // a signature for the current function, substitute the declared param
-    // name. Otherwise, fall back to the raw register mnemonic.
+    // Render a Reg IrValue's leaf name. In order:
+    //   1. A Call whose return was bound to a named local and which the IR
+    //      aliases back to this reg.
+    //   2. A declared-signature param name for SysV arg-regs at version 0.
+    //   3. The raw register mnemonic.
     [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version) const {
+        // Chase Assign aliases so `rax_2 = rax_1` still resolves to rax_1's
+        // bound call-return name.
+        Reg cur_reg = r;
+        u32 cur_ver = version;
+        for (int hop = 0; hop < 8; ++hop) {
+            SsaKey k{0, static_cast<u32>(canonical_reg(cur_reg)), cur_ver};
+            if (auto it = call_return_names.find(k); it != call_return_names.end()) {
+                return it->second;
+            }
+            if (cur_ver == 0) break;
+            IrValue v{};
+            v.kind = IrValueKind::Reg;
+            v.reg = cur_reg;
+            v.version = cur_ver;
+            const IrInst* d = def_of(v);
+            if (!d || d->op != IrOp::Assign || d->src_count < 1) break;
+            const auto& src = d->srcs[0];
+            if (src.kind != IrValueKind::Reg) break;
+            cur_reg = src.reg;
+            cur_ver = src.version;
+        }
         if (version == 0 && annotations && fn) {
             if (const FunctionSig* sig = annotations->signature_for(fn->start); sig) {
                 if (const std::string* nm = sysv_param_for(*sig, r); nm && !nm->empty()) {
@@ -370,6 +486,94 @@ struct Emitter {
         }
     }
 
+    // For each Call with a downstream-used rax return, pick a display name
+    // and record (call position → rax SsaKey). `analyze_return_folds` must
+    // run first so calls whose return folds straight into a Return are
+    // skipped here.
+    void bind_call_returns() {
+        std::set<std::string> used;
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                const auto& inst = bb.insts[ii];
+                if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
+                if (fold_call_positions.contains({bi, ii})) continue;
+
+                // The rax Clobber for this call is the next inst (Clobbers
+                // run immediately post-Call in the lifter's output).
+                std::optional<SsaKey> rax_key;
+                for (std::size_t jj = ii + 1; jj < bb.insts.size(); ++jj) {
+                    const auto& c = bb.insts[jj];
+                    if (c.op != IrOp::Clobber) break;
+                    if (c.dst.kind != IrValueKind::Reg) continue;
+                    if (canonical_reg(c.dst.reg) != Reg::Rax) continue;
+                    rax_key = ssa_key_of(c.dst);
+                    break;
+                }
+                if (!rax_key) continue;
+                // Use count here must include uses inside call.args.* intrinsics
+                // (which `uses` intentionally ignores for inlining decisions).
+                if (count_uses_with_call_args(*rax_key) == 0) continue;
+
+                std::string base = callee_display_short(inst);
+                std::string name = "r_" + base;
+                for (int n = 2; used.contains(name); ++n) {
+                    name = std::format("r_{}_{}", base, n);
+                }
+                used.insert(name);
+                call_return_names.emplace(*rax_key, name);
+                bound_call_key.emplace(std::pair{bi, ii}, *rax_key);
+            }
+        }
+    }
+
+    [[nodiscard]] u32 use_count_by_key(const SsaKey& k) const {
+        auto it = uses.find(k);
+        return it != uses.end() ? it->second : 0u;
+    }
+
+    [[nodiscard]] u32 count_uses_with_call_args(const SsaKey& k) const {
+        u32 n = 0;
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op == IrOp::Phi) {
+                    for (const auto& op : inst.phi_operands) {
+                        if (auto ok = ssa_key_of(op); ok && *ok == k) ++n;
+                    }
+                } else {
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        if (auto ok = ssa_key_of(inst.srcs[i]); ok && *ok == k) ++n;
+                    }
+                }
+            }
+        }
+        return n;
+    }
+
+    // A short identifier derived from the callee's display name, sanitized
+    // to valid C identifier chars.
+    [[nodiscard]] std::string callee_display_short(const IrInst& call_inst) const {
+        std::string raw;
+        if (call_inst.op == IrOp::Call) {
+            if (auto n = import_name_for_direct_call(call_inst.target1)) raw = *n;
+            else raw = std::format("sub_{:x}", call_inst.target1);
+        } else if (call_inst.op == IrOp::CallIndirect && call_inst.src_count >= 1) {
+            if (auto n = import_name_for_indirect_call(call_inst.srcs[0])) raw = *n;
+            else raw = "ind";
+        } else {
+            raw = "call";
+        }
+        std::string out;
+        out.reserve(raw.size());
+        for (char c : raw) {
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_') {
+                out += c;
+            }
+        }
+        return out.empty() ? std::string("call") : out;
+    }
+
     // Detect prologue/epilogue noise: saves/restores of callee-saved regs, rsp/rbp
     // frame manipulation, plus any temps whose uses are entirely within hidden insts.
     void analyze_abi_noise() {
@@ -423,11 +627,39 @@ struct Emitter {
         }
     }
 
+    [[nodiscard]] static bool is_canary_load(const IrInst& inst) noexcept {
+        return inst.op == IrOp::Load && inst.segment == Reg::Fs &&
+               inst.src_count >= 1 &&
+               inst.srcs[0].kind == IrValueKind::Imm &&
+               inst.srcs[0].imm == 0x28;
+    }
+
+    // Walk Assigns back to a real producer and return its def (or null).
+    [[nodiscard]] const IrInst* def_through_assigns(const IrValue& v) const {
+        const IrInst* d = def_of(v);
+        while (d && d->op == IrOp::Assign && d->src_count == 1) {
+            d = def_of(d->srcs[0]);
+        }
+        return d;
+    }
+
+    [[nodiscard]] bool traces_to_canary_load(const IrValue& v) const {
+        if (const IrInst* d = def_through_assigns(v); d) return is_canary_load(*d);
+        return false;
+    }
+
     [[nodiscard]] bool is_abi_noise(const IrInst& inst) const {
         // rsp/rbp = <anything>  → frame manipulation
         if (inst.op == IrOp::Assign && inst.dst.kind == IrValueKind::Reg) {
             const Reg c = canonical_reg(inst.dst.reg);
             if (c == Reg::Rsp || c == Reg::Rbp) return true;
+        }
+        // Prologue canary: Store of fs:[0x28] into a stack slot.
+        if (inst.op == IrOp::Store && inst.src_count >= 2) {
+            if (stack_offset(inst.srcs[0]).has_value() &&
+                traces_to_canary_load(inst.srcs[1])) {
+                return true;
+            }
         }
         // Store of a live-in callee-saved reg into a stack slot → prologue save
         if (inst.op == IrOp::Store && inst.src_count >= 2) {
@@ -449,6 +681,110 @@ struct Emitter {
         return false;
     }
 
+    // The canary check is a compare/sub/xor whose operands are:
+    //   - a Load from fs:[0x28]  AND
+    //   - a Load from a stack slot (the saved cookie).
+    [[nodiscard]] bool is_canary_compare_inst(const IrInst& inst) const {
+        if (inst.src_count < 2) return false;
+        switch (inst.op) {
+            case IrOp::Sub: case IrOp::Xor:
+            case IrOp::CmpEq: case IrOp::CmpNe:
+                break;
+            default:
+                return false;
+        }
+        const IrInst* a = def_through_assigns(inst.srcs[0]);
+        const IrInst* b = def_through_assigns(inst.srcs[1]);
+        if (!a || !b) return false;
+        auto is_stack_load = [&](const IrInst* d) {
+            return d && d->op == IrOp::Load && d->src_count >= 1 &&
+                   stack_offset(d->srcs[0]).has_value() && d->segment == Reg::None;
+        };
+        auto is_fs28 = [&](const IrInst* d) { return d && is_canary_load(*d); };
+        return (is_stack_load(a) && is_fs28(b)) ||
+               (is_stack_load(b) && is_fs28(a));
+    }
+
+    // Chase a branch condition back until we hit a Sub/Xor/CmpEq/CmpNe between
+    // the canary cookie and fs:[0x28]. Handles the typical `zf = cmp.eq(x,0)`
+    // followed by `not` wrapper that x86 condition codes produce.
+    [[nodiscard]] bool is_canary_condition(const IrValue& cond) const {
+        IrValue cur = cond;
+        for (int step = 0; step < 10; ++step) {
+            const IrInst* d = def_of(cur);
+            if (!d) return false;
+            if (is_canary_compare_inst(*d)) return true;
+            // Follow Assign, Not, and Cmp chains.
+            if (d->op == IrOp::Assign && d->src_count >= 1) { cur = d->srcs[0]; continue; }
+            if (d->op == IrOp::Not && d->src_count >= 1)    { cur = d->srcs[0]; continue; }
+            if ((d->op == IrOp::CmpEq || d->op == IrOp::CmpNe) && d->src_count >= 1) {
+                // Compare against a constant (`cmp.eq(x, 0)` / zf). Peek through
+                // to x and try again — the real canary compare is one step up.
+                if (d->src_count >= 2 &&
+                    d->srcs[1].kind == IrValueKind::Imm && d->srcs[1].imm == 0) {
+                    cur = d->srcs[0];
+                    continue;
+                }
+                return false;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool region_calls_stack_chk_fail(const Region& r) const {
+        // Find a Block/Seq whose body contains a Call to __stack_chk_fail.
+        auto block_matches = [&](addr_t block_addr) {
+            auto it = fn->block_at.find(block_addr);
+            if (it == fn->block_at.end()) return false;
+            const auto& bb = fn->blocks[it->second];
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Call) continue;
+                if (!binary) continue;
+                if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
+                    if (clean_import_name(s->name) == "__stack_chk_fail") return true;
+                }
+            }
+            return false;
+        };
+        if (r.kind == RegionKind::Block) return block_matches(r.block_start);
+        for (const auto& c : r.children) {
+            if (c && region_calls_stack_chk_fail(*c)) return true;
+        }
+        return false;
+    }
+
+    // Rewrite If/IfElse regions whose condition is a canary check: replace the
+    // region with its non-fail branch so the canary guard vanishes entirely.
+    void suppress_canary_regions(Region& r) const {
+        for (auto& c : r.children) {
+            if (c) suppress_canary_regions(*c);
+        }
+        if (r.kind != RegionKind::IfThen && r.kind != RegionKind::IfElse) return;
+        if (!is_canary_condition(r.condition)) return;
+
+        const bool has_else = r.kind == RegionKind::IfElse;
+        auto* then_branch = r.children.empty() ? nullptr : r.children[0].get();
+        auto* else_branch = (has_else && r.children.size() >= 2) ? r.children[1].get() : nullptr;
+
+        const bool then_fails = then_branch && region_calls_stack_chk_fail(*then_branch);
+        const bool else_fails = else_branch && region_calls_stack_chk_fail(*else_branch);
+        if (!then_fails && !else_fails) return;
+
+        // Pull the surviving branch up; if neither survives, collapse to Empty.
+        std::unique_ptr<Region> keep;
+        if (then_fails && else_branch) keep = std::move(r.children[1]);
+        else if (else_fails && !r.children.empty()) keep = std::move(r.children[0]);
+
+        if (keep) {
+            r = std::move(*keep);
+        } else {
+            r.kind = RegionKind::Empty;
+            r.children.clear();
+            r.condition = {};
+        }
+    }
+
     [[nodiscard]] const IrInst* def_of(const IrValue& v) const {
         auto k = ssa_key_of(v);
         if (!k) return nullptr;
@@ -461,6 +797,32 @@ struct Emitter {
         if (!k) return 0;
         auto it = uses.find(*k);
         return it != uses.end() ? it->second : 0u;
+    }
+
+    // Uses that actually survive into emitted output: skip hidden insts
+    // (ABI noise) and call.args barriers. A temp with visible_use_count <= 1
+    // can be inlined / its declaration dropped, even if raw use_count > 1
+    // due to flag-feeder or hidden reads.
+    [[nodiscard]] u32 visible_use_count(const IrValue& v) const {
+        auto key = ssa_key_of(v);
+        if (!key) return 0u;
+        u32 n = 0;
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                if (hidden.contains({bi, ii})) continue;
+                const auto& inst = bb.insts[ii];
+                if (is_call_arg_barrier(inst)) continue;
+                if (inst.op == IrOp::Phi) {
+                    for (const auto& op : inst.phi_operands)
+                        if (auto ok = ssa_key_of(op); ok && *ok == *key) ++n;
+                } else {
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                        if (auto ok = ssa_key_of(inst.srcs[i]); ok && *ok == *key) ++n;
+                }
+            }
+        }
+        return n;
     }
 
     [[nodiscard]] static bool inlinable_op(IrOp op) noexcept {
@@ -934,8 +1296,26 @@ std::string Emitter::expand(const IrInst& d, int depth) const {
 
         case IrOp::ZExt:
         case IrOp::SExt:
-        case IrOp::Trunc:
-            return std::format("({}){}", c_type_name(d.dst.type), expr(d.srcs[0], depth));
+        case IrOp::Trunc: {
+            const IrValue& src = d.srcs[0];
+            // No-op: cast to the same type the value already has.
+            if (src.type == d.dst.type) {
+                return expr(src, depth);
+            }
+            // `zext(trunc(x, T))` → `(T)x`. The trunc already produces the
+            // observable value; widening back to a bigger type is redundant
+            // for the reader.
+            if (d.op == IrOp::ZExt) {
+                if (const IrInst* inner = def_stripped(src);
+                    inner && inner->op == IrOp::Trunc && inner->src_count >= 1 &&
+                    type_bits(inner->dst.type) <= type_bits(d.dst.type)) {
+                    return std::format("({}){}",
+                                       c_type_name(inner->dst.type),
+                                       expr(inner->srcs[0], depth));
+                }
+            }
+            return std::format("({}){}", c_type_name(d.dst.type), expr(src, depth));
+        }
 
         case IrOp::Load:
             return format_mem(d.srcs[0], d.dst.type, d.segment);
@@ -1010,8 +1390,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
 
         default:
             if (inlinable_op(inst.op) && inst.dst.kind == IrValueKind::Temp) {
-                if (use_count(inst.dst) <= 1) return "";
-                // Stack-relative address temps are re-rendered inline at each use.
+                if (visible_use_count(inst.dst) <= 1) return "";
                 if (stack_offset(inst.dst).has_value()) return "";
                 return std::format("{} t{} = {};",
                                    c_type_name(inst.dst.type),
@@ -1028,7 +1407,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     const auto& bb = fn->blocks[it->second];
 
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    out += std::format("{}// bb_{:x}\n", ind, bb.start);
+    if (options.show_bb_labels) {
+        out += std::format("{}// bb_{:x}\n", ind, bb.start);
+    }
 
     std::vector<IrValue> pending_args;
     bool                 have_pending = false;
@@ -1104,11 +1485,17 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         if (inst.op == IrOp::Call) {
             auto import_name = import_name_for_direct_call(inst.target1);
             // Arity sources: imports → user sig at PLT / baked-in libc table;
+            // printf/scanf family → parse format string to count args;
             // defined functions → infer_sysv_arity. No arity known → fallback
             // drops stale-looking args.
             std::optional<u8> arity;
             if (import_name) {
                 arity = import_arity(inst.target1, *import_name);
+                if (!arity) {
+                    if (auto fi = variadic_format_index(*import_name); fi) {
+                        arity = variadic_arity(pending_args, *fi);
+                    }
+                }
             } else {
                 arity = infer_arity(inst.target1);
             }
@@ -1125,6 +1512,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             if (fold_call_positions.contains(pos)) {
                 auto k = fold_call_ssa_key.find(pos);
                 if (k != fold_call_ssa_key.end()) fold_return_expr[k->second] = call_expr;
+            } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
+                out += std::format("{}u64 {} = {};\n", ind,
+                                   call_return_names.at(bk->second), call_expr);
             } else {
                 out += std::format("{}{};\n", ind, call_expr);
             }
@@ -1141,6 +1531,11 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             if (auto name = import_name_for_indirect_call(inst.srcs[0]); name) {
                 // No PLT address here, so user-sig lookup can't key off one.
                 auto arity = libc_arity_by_name(*name);
+                if (!arity) {
+                    if (auto fi = variadic_format_index(*name); fi) {
+                        arity = variadic_arity(pending_args, *fi);
+                    }
+                }
                 const std::string args = arity
                     ? format_call_args_with_arity(pending_args, *arity)
                     : format_call_args_fallback(pending_args);
@@ -1155,6 +1550,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             if (fold_call_positions.contains(pos)) {
                 auto k = fold_call_ssa_key.find(pos);
                 if (k != fold_call_ssa_key.end()) fold_return_expr[k->second] = call_expr;
+            } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
+                out += std::format("{}u64 {} = {};\n", ind,
+                                   call_return_names.at(bk->second), call_expr);
             } else {
                 out += std::format("{}{};\n", ind, call_expr);
             }
@@ -1314,7 +1712,8 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
 
 Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                          const Binary* binary,
-                                         const Annotations* annotations) const {
+                                         const Annotations* annotations,
+                                         EmitOptions options) const {
     if (!sf.ir) {
         return std::unexpected(Error::invalid_format(
             "pseudo-c: StructuredFunction has no IR"));
@@ -1323,8 +1722,13 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     Emitter e;
     e.binary      = binary;
     e.annotations = annotations;
+    e.options     = options;
     e.analyze(*sf.ir);
-    if (sf.body) e.analyze_return_folds(*sf.body);
+    if (sf.body) {
+        e.suppress_canary_regions(*sf.body);
+        e.analyze_return_folds(*sf.body);
+    }
+    e.bind_call_returns();
 
     std::string out;
     out += std::format("// {}\n", sf.ir->name.empty()

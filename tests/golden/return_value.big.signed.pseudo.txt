@@ -1,5 +1,4 @@
 // big
 u64 add_mix(u64 a, u64 b, u64 c) {
-  // bb_401140
   return ((a ^ b) + (c * 0x4));
 }

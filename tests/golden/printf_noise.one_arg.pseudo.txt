@@ -1,0 +1,6 @@
+// one_arg
+void one_arg(void) {
+  u64 r_strlen = strlen(rdi);
+  printf("len=%zu\n", r_strlen);
+  return 0x0;
+}

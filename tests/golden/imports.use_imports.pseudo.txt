@@ -4,7 +4,7 @@ u64 use_imports(char* a1, u64 a2) {
     local_10 = a2;
     local_18 = a1;
     u64 r_strlen = strlen(a1);
-    g_count = r_strlen + g_count;
+    g_count += r_strlen;
     puts(local_18);
   }
   if (rdx_5) {
@@ -12,7 +12,7 @@ u64 use_imports(char* a1, u64 a2) {
   }
   u64 r_getenv = getenv("HOME");
   if (r_getenv) {
-    g_count = g_count + 1;
+    g_count++;
   }
   return rax_10;
 }

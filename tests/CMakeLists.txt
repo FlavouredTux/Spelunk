@@ -92,6 +92,12 @@ function(ember_golden_test)
     )
 endfunction()
 
+# Unit tests for the Itanium demangler: not a golden, just a self-checking
+# binary. Wired as a CTest so it runs with the rest of the suite.
+add_executable(ember_demangle_test demangle_test.cpp)
+target_link_libraries(ember_demangle_test PRIVATE ember::core ember::flags)
+add_test(NAME demangle_unit COMMAND ember_demangle_test)
+
 # ---- switch_basic -----------------------------------------------------------
 
 ember_golden_test(

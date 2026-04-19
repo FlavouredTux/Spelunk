@@ -3,6 +3,7 @@
 #include <array>
 #include <cctype>
 #include <cstddef>
+#include <cstring>
 #include <format>
 #include <functional>
 #include <map>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include <ember/analysis/arity.hpp>
+#include <ember/analysis/demangle.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/ssa.hpp>
@@ -370,8 +372,12 @@ struct Emitter {
     // names in pseudo-C (e.g. "puts@GLIBC_2.2.5" → "puts").
     [[nodiscard]] static std::string clean_import_name(std::string_view n) {
         auto pos = n.find('@');
-        if (pos != std::string_view::npos) return std::string(n.substr(0, pos));
-        return std::string(n);
+        std::string bare = (pos != std::string_view::npos)
+            ? std::string(n.substr(0, pos))
+            : std::string(n);
+        // C++ names come out of the linker mangled. Demangle them here so
+        // the pseudo-C reads as the source language instead of ABI noise.
+        return pretty_symbol(bare);
     }
 
     // For `call <abs_target>`: if the target is a PLT stub, return the
@@ -573,7 +579,7 @@ struct Emitter {
             if (const Symbol* s = binary->defined_object_at(target); s) {
                 if (s->kind == SymbolKind::Function && s->addr == target &&
                     !s->name.empty()) {
-                    return s->name;
+                    return pretty_symbol(s->name);
                 }
             }
         }
@@ -1242,6 +1248,20 @@ struct Emitter {
     }
 
     [[nodiscard]] std::string format_imm(const IrValue& v) const {
+        // Float-typed immediates arrive as an i64 bit pattern; decode into
+        // a decimal literal so `xmm0 = 0x40490fdb` becomes `3.141593f`.
+        if (v.type == IrType::F32) {
+            float f;
+            const u32 bits = static_cast<u32>(static_cast<u64>(v.imm));
+            std::memcpy(&f, &bits, sizeof(f));
+            return std::format("{}f", f);
+        }
+        if (v.type == IrType::F64) {
+            double d;
+            const u64 bits = static_cast<u64>(v.imm);
+            std::memcpy(&d, &bits, sizeof(d));
+            return std::format("{}", d);
+        }
         // If the immediate points into the binary and resolves to a NUL-terminated
         // printable string, render as a C string literal.
         if (binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
@@ -1386,6 +1406,9 @@ struct Emitter {
 
     [[nodiscard]] std::string format_stmt(const IrInst& inst) const;
     [[nodiscard]] std::string format_store(const IrInst& inst) const;
+    [[nodiscard]] std::string try_compound_store(std::string_view lhs_text,
+                                                 const IrValue& addr,
+                                                 const IrValue& val) const;
 
     void emit_region(const Region& r, int depth, std::string& out) const;
     void emit_block(addr_t block_addr, int depth, std::string& out) const;
@@ -1783,16 +1806,79 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
     }
 }
 
+// Peephole: `store addr, (op load(addr), K)` → `<name> += K;` / `--name;` etc.
+// `lhs_text` is the already-rendered name of the storage location (stack,
+// global, or `*(T*)…`). Returns empty if no idiom match; caller falls back
+// to `lhs = expr;`.
+std::string Emitter::try_compound_store(std::string_view lhs_text,
+                                        const IrValue& addr,
+                                        const IrValue& val) const {
+    // val must be a binary op we know how to compound-assign.
+    const IrInst* d = def_stripped(val);
+    if (!d || d->src_count < 2) return {};
+
+    std::string_view op_text;
+    switch (d->op) {
+        case IrOp::Add:  op_text = "+"; break;
+        case IrOp::Sub:  op_text = "-"; break;
+        case IrOp::Mul:  op_text = "*"; break;
+        case IrOp::And:  op_text = "&"; break;
+        case IrOp::Or:   op_text = "|"; break;
+        case IrOp::Xor:  op_text = "^"; break;
+        case IrOp::Shl:  op_text = "<<"; break;
+        case IrOp::Lshr: op_text = ">>"; break;
+        case IrOp::Ashr: op_text = ">>"; break;
+        default: return {};
+    }
+
+    // LHS of the binop must be a Load of the same storage as `addr`. For
+    // commutative ops we also accept the RHS as the load.
+    const bool commutative = d->op == IrOp::Add || d->op == IrOp::Mul ||
+                             d->op == IrOp::And || d->op == IrOp::Or  ||
+                             d->op == IrOp::Xor;
+
+    auto is_load_of_same_addr = [&](const IrValue& v) {
+        const IrInst* ld = def_stripped(v);
+        if (!ld || ld->op != IrOp::Load || ld->src_count < 1) return false;
+        return same_ssa(ld->srcs[0], addr);
+    };
+
+    const IrValue* delta = nullptr;
+    if (is_load_of_same_addr(d->srcs[0])) {
+        delta = &d->srcs[1];
+    } else if (commutative && is_load_of_same_addr(d->srcs[1])) {
+        delta = &d->srcs[0];
+    } else {
+        return {};
+    }
+
+    // Integer +/- 1 collapses further to ++/--.
+    if ((d->op == IrOp::Add || d->op == IrOp::Sub) &&
+        delta->kind == IrValueKind::Imm && delta->imm == 1 &&
+        !is_float_type(val.type)) {
+        const char* sym = (d->op == IrOp::Add) ? "++" : "--";
+        return std::format("{}{};", lhs_text, sym);
+    }
+    return std::format("{} {}= {};", lhs_text, op_text, expr(*delta));
+}
+
 std::string Emitter::format_store(const IrInst& inst) const {
     if (inst.src_count < 2) return "";
     const auto& addr = inst.srcs[0];
     const auto& val  = inst.srcs[1];
+    std::string lhs;
     if (inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {
-            return std::format("{} = {};", stack_name(*off), expr(val));
+            lhs = stack_name(*off);
         }
     }
-    return std::format("{} = {};", format_mem(addr, val.type, inst.segment), expr(val));
+    if (lhs.empty()) {
+        lhs = format_mem(addr, val.type, inst.segment);
+    }
+    if (auto compound = try_compound_store(lhs, addr, val); !compound.empty()) {
+        return compound;
+    }
+    return std::format("{} = {};", lhs, expr(val));
 }
 
 std::string Emitter::format_stmt(const IrInst& inst) const {
@@ -2268,7 +2354,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 if (s.kind != SymbolKind::Function) continue;
                 if (s.addr != sf.ir->start) continue;
                 if (s.name.empty()) continue;
-                return s.name;
+                return pretty_symbol(s.name);
             }
         }
         return std::format("sub_{:x}", sf.ir->start);

@@ -267,6 +267,33 @@ try_fold(const IrInst& inst) noexcept {
     std::map<SsaKey, IrValue> subst;
     std::size_t removed = 0;
 
+    // Pre-index all defs so we can chase Assign chains when comparing phi
+    // operands. Without this, `phi(rax_7, t28)` where `t28 = Assign(rax_7)`
+    // looks non-trivial to the operand-equality check, and rax stays phi'd
+    // — the pattern that produces the `rax_10` leaks in the emitter.
+    std::map<SsaKey, const IrInst*> defs;
+    for (const auto& bb : fn.blocks) {
+        for (const auto& inst : bb.insts) {
+            if (auto k = ssa_key(inst.dst); k) defs[*k] = &inst;
+        }
+    }
+    auto strip_assigns = [&](IrValue v) {
+        for (int hop = 0; hop < 16; ++hop) {
+            auto k = ssa_key(v);
+            if (!k) return v;
+            auto it = defs.find(*k);
+            if (it == defs.end()) return v;
+            const IrInst* d = it->second;
+            if (d->op != IrOp::Assign || d->src_count != 1) return v;
+            if (d->srcs[0].type != v.type) return v;  // type-shifting assign
+            v = d->srcs[0];
+        }
+        return v;
+    };
+    auto equivalent = [&](const IrValue& a, const IrValue& b) {
+        return same_ssa_value(strip_assigns(a), strip_assigns(b));
+    };
+
     for (auto& bb : fn.blocks) {
         for (auto& inst : bb.insts) {
             if (inst.op != IrOp::Phi) continue;
@@ -282,14 +309,14 @@ try_fold(const IrInst& inst) noexcept {
                 if (op_key && *op_key == *dst_key) continue;  // self-reference
                 if (!unique) {
                     unique = op;
-                } else if (!same_ssa_value(*unique, op)) {
+                } else if (!equivalent(*unique, op)) {
                     trivial = false;
                     break;
                 }
             }
 
             if (trivial && unique) {
-                subst[*dst_key] = *unique;
+                subst[*dst_key] = strip_assigns(*unique);
                 inst.op = IrOp::Nop;
                 inst.phi_operands.clear();
                 inst.phi_preds.clear();

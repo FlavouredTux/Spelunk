@@ -341,9 +341,55 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 }
 
 [[nodiscard]] std::string build_xrefs_output(const ember::Binary& b) {
+    // Order edges so leaves come first and the rough `main`-ward hierarchy
+    // reads top-down. Topological sort (Kahn's algorithm) over the caller
+    // graph; cycles fall through in arbitrary order at the tail.
+    const auto edges = ember::compute_call_graph(b);
+    std::unordered_map<ember::addr_t, std::vector<ember::addr_t>> succs;
+    std::unordered_map<ember::addr_t, std::size_t> indeg;
+    std::set<ember::addr_t> nodes;
+    for (const auto& e : edges) {
+        succs[e.caller].push_back(e.callee);
+        indeg[e.callee] += 1;
+        if (!indeg.contains(e.caller)) indeg[e.caller] += 0;
+        nodes.insert(e.caller);
+        nodes.insert(e.callee);
+    }
+    // Kahn: start with leaves (no outgoing edges → no callers above them yet).
+    // We invert the intuition: emit callers before callees, so nodes with
+    // zero in-degree (never called) go first. That matches reader habit —
+    // main at top, helpers below.
+    std::vector<ember::addr_t> order;
+    std::vector<ember::addr_t> ready;
+    for (ember::addr_t n : nodes) if (indeg[n] == 0) ready.push_back(n);
+    std::ranges::sort(ready);  // deterministic output on ties
+    while (!ready.empty()) {
+        const auto v = ready.back();
+        ready.pop_back();
+        order.push_back(v);
+        auto it = succs.find(v);
+        if (it == succs.end()) continue;
+        for (ember::addr_t w : it->second) {
+            if (--indeg[w] == 0) ready.push_back(w);
+        }
+    }
+    // Append any remaining nodes (those on cycles) in addr order.
+    std::set<ember::addr_t> emitted(order.begin(), order.end());
+    for (ember::addr_t n : nodes) if (!emitted.contains(n)) order.push_back(n);
+
+    // Group edges by caller in topo order, sort each group by callee for
+    // stability within a caller.
+    std::unordered_map<ember::addr_t, std::vector<ember::addr_t>> by_caller;
+    for (const auto& e : edges) by_caller[e.caller].push_back(e.callee);
+    for (auto& [_, v] : by_caller) std::ranges::sort(v);
+
     std::string out;
-    for (const auto& e : ember::compute_call_graph(b)) {
-        out += std::format("{:#x} -> {:#x}\n", e.caller, e.callee);
+    for (ember::addr_t caller : order) {
+        auto it = by_caller.find(caller);
+        if (it == by_caller.end()) continue;
+        for (ember::addr_t callee : it->second) {
+            out += std::format("{:#x} -> {:#x}\n", caller, callee);
+        }
     }
     return out;
 }

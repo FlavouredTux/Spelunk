@@ -35,3 +35,4 @@ dist-electron/
 Testing/
 nohup.out
 *.log
+ROADMAP.md

@@ -432,17 +432,61 @@ JSValue js_bin_std_string(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
 }
 
 // Every Objective-C method the runtime parser could recover from
-// __objc_classlist. Each entry is {addr, class, selector, isClass}.
+// __objc_classlist. Each entry is
+//   {addr, class, selector, isClass, types, signature}
 JSValue js_bin_objc_methods(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const Binary* b = ctx_of(ctx)->binary;
     JSValue arr = JS_NewArray(ctx);
     u32 i = 0;
     for (const auto& m : parse_objc_methods(*b)) {
         JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "addr",     JS_NewBigUint64(ctx, m.imp));
-        JS_SetPropertyStr(ctx, o, "class",    make_str(ctx, m.cls));
-        JS_SetPropertyStr(ctx, o, "selector", make_str(ctx, m.selector));
-        JS_SetPropertyStr(ctx, o, "isClass",  JS_NewBool(ctx, m.is_class));
+        JS_SetPropertyStr(ctx, o, "addr",      JS_NewBigUint64(ctx, m.imp));
+        JS_SetPropertyStr(ctx, o, "class",     make_str(ctx, m.cls));
+        JS_SetPropertyStr(ctx, o, "selector",  make_str(ctx, m.selector));
+        JS_SetPropertyStr(ctx, o, "isClass",   JS_NewBool(ctx, m.is_class));
+        JS_SetPropertyStr(ctx, o, "types",     make_str(ctx, m.type_encoding));
+        JS_SetPropertyStr(ctx, o, "signature", make_str(ctx, decode_objc_type(m.type_encoding)));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+// Every formal Obj-C protocol with its method signatures. Protocols
+// carry signatures only (no IMPs). Each entry:
+//   { name, conformsTo: [], required: {instance: [], class: []},
+//     optional: {instance: [], class: []} }
+JSValue js_bin_objc_protocols(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const Binary* b = ctx_of(ctx)->binary;
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+    auto method_arr = [&](const std::vector<ObjcMethod>& methods) {
+        JSValue a = JS_NewArray(ctx);
+        u32 j = 0;
+        for (const auto& m : methods) {
+            JSValue mv = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, mv, "selector",  make_str(ctx, m.selector));
+            JS_SetPropertyStr(ctx, mv, "types",     make_str(ctx, m.type_encoding));
+            JS_SetPropertyStr(ctx, mv, "signature", make_str(ctx, decode_objc_type(m.type_encoding)));
+            JS_SetPropertyUint32(ctx, a, j++, mv);
+        }
+        return a;
+    };
+    for (const auto& p : parse_objc_protocols(*b)) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "name", make_str(ctx, p.name));
+        JSValue c = JS_NewArray(ctx);
+        for (u32 j = 0; j < p.conforms_to.size(); ++j) {
+            JS_SetPropertyUint32(ctx, c, j, make_str(ctx, p.conforms_to[j]));
+        }
+        JS_SetPropertyStr(ctx, o, "conformsTo", c);
+        JSValue req = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, req, "instance", method_arr(p.required_instance));
+        JS_SetPropertyStr(ctx, req, "class",    method_arr(p.required_class));
+        JS_SetPropertyStr(ctx, o, "required", req);
+        JSValue opt = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, opt, "instance", method_arr(p.optional_instance));
+        JS_SetPropertyStr(ctx, opt, "class",    method_arr(p.optional_class));
+        JS_SetPropertyStr(ctx, o, "optional", opt);
         JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;
@@ -898,6 +942,8 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_std_string,  "stdString",   1));
     JS_SetPropertyStr(ctx, bin, "objcMethods",
         JS_NewCFunction(ctx, js_bin_objc_methods, "objcMethods", 0));
+    JS_SetPropertyStr(ctx, bin, "objcProtocols",
+        JS_NewCFunction(ctx, js_bin_objc_protocols, "objcProtocols", 0));
 
     JS_SetPropertyStr(ctx, global, "binary", bin);
     JS_FreeValue(ctx, global);

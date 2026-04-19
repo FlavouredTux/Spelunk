@@ -85,18 +85,22 @@ find_section(const Binary& b, std::string_view name, u64& out_vaddr) {
 
 // method_t in absolute-pointer form (24 bytes):
 //     u64 name  (points at a C-string selector)
-//     u64 types (type encoding — we ignore)
-//     u64 imp   (function pointer)
+//     u64 types (type encoding C-string)
+//     u64 imp   (function pointer; 0 for protocol signatures)
 [[nodiscard]] std::optional<ObjcMethod>
-read_abs_method(const Binary& b, addr_t entry_va, std::string_view cls) {
-    auto sel_p  = load_u64(b, entry_va + 0);
-    auto imp_p  = load_u64(b, entry_va + 16);
-    if (!sel_p || !imp_p) return std::nullopt;
+read_abs_method(const Binary& b, addr_t entry_va, std::string_view cls,
+                bool allow_zero_imp) {
+    auto sel_p   = load_u64(b, entry_va + 0);
+    auto types_p = load_u64(b, entry_va + 8);
+    auto imp_p   = load_u64(b, entry_va + 16);
+    if (!sel_p) return std::nullopt;
     ObjcMethod m;
     m.cls      = std::string(cls);
     m.selector = read_cstring(b, static_cast<addr_t>(*sel_p));
-    m.imp      = static_cast<addr_t>(*imp_p);
-    if (m.selector.empty() || m.imp == 0) return std::nullopt;
+    if (types_p) m.type_encoding = read_cstring(b, static_cast<addr_t>(*types_p));
+    m.imp      = imp_p ? static_cast<addr_t>(*imp_p) : addr_t{0};
+    if (m.selector.empty()) return std::nullopt;
+    if (!allow_zero_imp && m.imp == 0) return std::nullopt;
     return m;
 }
 
@@ -108,35 +112,43 @@ read_abs_method(const Binary& b, addr_t entry_va, std::string_view cls) {
 // is the offset to a selref slot instead of the selector string directly.
 [[nodiscard]] std::optional<ObjcMethod>
 read_rel_method(const Binary& b, addr_t entry_va,
-                std::string_view cls, bool preopt_sel) {
-    auto name_d = load_i32(b, entry_va + 0);
-    auto imp_d  = load_i32(b, entry_va + 8);
-    if (!name_d || !imp_d) return std::nullopt;
+                std::string_view cls, bool preopt_sel, bool allow_zero_imp) {
+    auto name_d  = load_i32(b, entry_va + 0);
+    auto types_d = load_i32(b, entry_va + 4);
+    auto imp_d   = load_i32(b, entry_va + 8);
+    if (!name_d || !types_d || !imp_d) return std::nullopt;
 
     ObjcMethod m;
     m.cls = std::string(cls);
     const addr_t sel_or_ref = static_cast<addr_t>(
         static_cast<i64>(entry_va) + static_cast<i64>(*name_d));
     if (preopt_sel) {
-        // Indirection: the offset points to a pointer to the selector.
         auto ptr = load_u64(b, sel_or_ref);
         if (!ptr) return std::nullopt;
         m.selector = read_cstring(b, static_cast<addr_t>(*ptr));
     } else {
         m.selector = read_cstring(b, sel_or_ref);
     }
+    // Types are always a direct (non-indirect) relative offset to a C string.
+    const addr_t types_va = static_cast<addr_t>(
+        static_cast<i64>(entry_va + 4) + static_cast<i64>(*types_d));
+    m.type_encoding = read_cstring(b, types_va);
+
     m.imp = static_cast<addr_t>(
         static_cast<i64>(entry_va + 8) + static_cast<i64>(*imp_d));
-    if (m.selector.empty() || m.imp == 0) return std::nullopt;
+    if (m.selector.empty()) return std::nullopt;
+    if (!allow_zero_imp && m.imp == 0) return std::nullopt;
     return m;
 }
 
 // Walk one method_list_t at `ml_va`. Adds entries into `out` tagged with
-// `cls` and `is_class`. Returns false on malformed data; we still keep any
-// methods already parsed.
+// `cls` and `is_class`. `allow_zero_imp` accepts entries whose IMP is zero
+// — required for protocol method lists, which carry signatures without
+// implementations.
 bool read_method_list(const Binary& b, addr_t ml_va,
                       std::string_view cls, bool is_class,
-                      std::vector<ObjcMethod>& out) {
+                      std::vector<ObjcMethod>& out,
+                      bool allow_zero_imp = false) {
     if (ml_va == 0) return true;
     auto entsize_raw = load_u32(b, ml_va + 0);
     auto count       = load_u32(b, ml_va + 4);
@@ -150,8 +162,8 @@ bool read_method_list(const Binary& b, addr_t ml_va,
     for (u32 i = 0; i < *count; ++i) {
         const addr_t entry_va = ml_va + 8 + static_cast<addr_t>(i) * entsize;
         std::optional<ObjcMethod> m;
-        if (relative) m = read_rel_method(b, entry_va, cls, preopt);
-        else          m = read_abs_method(b, entry_va, cls);
+        if (relative) m = read_rel_method(b, entry_va, cls, preopt, allow_zero_imp);
+        else          m = read_abs_method(b, entry_va, cls, allow_zero_imp);
         if (!m) continue;
         m->is_class = is_class;
         out.push_back(std::move(*m));
@@ -218,7 +230,222 @@ void walk_class(const Binary& b, addr_t cls_va,
     }
 }
 
+// ---- ObjC type encoding decoder --------------------------------------------
+
+// Spec reference: Apple's "Type Encodings" documentation. Input is a
+// return type immediately followed by the sum of arg sizes (decimal),
+// then `<argtype><argoffset>` for each argument. self (id at 0) and _cmd
+// (SEL at 8) are always the first two args; we hide them from the output
+// signature since every ObjC method has them.
+
+struct EncCursor {
+    std::string_view s;
+    std::size_t pos = 0;
+    char peek(std::size_t k = 0) const {
+        return pos + k < s.size() ? s[pos + k] : '\0';
+    }
+    char take() { return pos < s.size() ? s[pos++] : '\0'; }
+    bool eat(char c) { if (peek() == c) { ++pos; return true; } return false; }
+};
+
+std::string decode_one(EncCursor& st);
+
+void skip_digits(EncCursor& st) {
+    while (st.peek() >= '0' && st.peek() <= '9') ++st.pos;
+}
+
+std::string decode_one(EncCursor& st) {
+    // Discard leading qualifier prefixes.
+    while (true) {
+        const char c = st.peek();
+        if (c == 'r' || c == 'R' || c == 'n' || c == 'N' ||
+            c == 'o' || c == 'O' || c == 'V' || c == '!') {
+            ++st.pos;
+            continue;
+        }
+        break;
+    }
+    const char c = st.take();
+    switch (c) {
+        case 'v': return "void";
+        case 'c': return "char";
+        case 'C': return "unsigned char";
+        case 's': return "short";
+        case 'S': return "unsigned short";
+        case 'i': return "int";
+        case 'I': return "unsigned int";
+        case 'l': return "long";
+        case 'L': return "unsigned long";
+        case 'q': return "long long";
+        case 'Q': return "unsigned long long";
+        case 'f': return "float";
+        case 'd': return "double";
+        case 'D': return "long double";
+        case 'B': return "bool";
+        case '*': return "char*";
+        case '#': return "Class";
+        case ':': return "SEL";
+        case '?': return "unknown";
+        case '@': {
+            // @"ClassName" → named object type
+            // @?            → block
+            if (st.eat('"')) {
+                std::string name;
+                while (st.peek() != '"' && st.pos < st.s.size())
+                    name.push_back(st.take());
+                st.eat('"');
+                if (name.empty()) return "id";
+                // Protocol conformance: @"<ProtoName>" shows up as "<Proto>".
+                if (!name.empty() && name.front() == '<') return "id " + name;
+                return name + "*";
+            }
+            if (st.eat('?')) return "block";
+            return "id";
+        }
+        case '^': {
+            std::string inner = decode_one(st);
+            return inner + "*";
+        }
+        case '{': {
+            std::string name;
+            while (st.peek() != '=' && st.peek() != '}' && st.pos < st.s.size())
+                name.push_back(st.take());
+            if (st.eat('=')) {
+                while (st.peek() != '}' && st.pos < st.s.size())
+                    (void)decode_one(st);
+            }
+            st.eat('}');
+            return name.empty() ? "struct" : ("struct " + name);
+        }
+        case '(': {
+            std::string name;
+            while (st.peek() != '=' && st.peek() != ')' && st.pos < st.s.size())
+                name.push_back(st.take());
+            if (st.eat('=')) {
+                while (st.peek() != ')' && st.pos < st.s.size())
+                    (void)decode_one(st);
+            }
+            st.eat(')');
+            return name.empty() ? "union" : ("union " + name);
+        }
+        case '[': {
+            std::string count;
+            while (st.peek() >= '0' && st.peek() <= '9')
+                count.push_back(st.take());
+            std::string inner = decode_one(st);
+            st.eat(']');
+            return inner + "[" + count + "]";
+        }
+        case 'b': {
+            std::string count;
+            while (st.peek() >= '0' && st.peek() <= '9')
+                count.push_back(st.take());
+            return "bitfield:" + count;
+        }
+        default:
+            return std::string{};
+    }
+}
+
+std::string decode_objc_type_impl(std::string_view enc) {
+    if (enc.empty()) return {};
+    EncCursor st{enc, 0};
+    std::string ret = decode_one(st);
+    if (ret.empty()) return {};
+    skip_digits(st);  // total arg size
+
+    std::vector<std::string> args;
+    while (st.pos < st.s.size()) {
+        std::string t = decode_one(st);
+        skip_digits(st);
+        if (!t.empty()) args.push_back(std::move(t));
+    }
+
+    // Hide self (arg 0, always id) and _cmd (arg 1, always SEL).
+    std::string out = ret;
+    out += " (";
+    if (args.size() <= 2) {
+        out += ")";
+        return out;
+    }
+    for (std::size_t i = 2; i < args.size(); ++i) {
+        if (i > 2) out += ", ";
+        out += args[i];
+    }
+    out += ")";
+    return out;
+}
+
+// ---- Protocol parser -------------------------------------------------------
+
+std::string read_protocol_name_from_ptr(const Binary& b, addr_t proto_p) {
+    auto name_p = load_u64(b, proto_p + 8);
+    if (!name_p) return {};
+    return read_cstring(b, static_cast<addr_t>(*name_p));
+}
+
+std::optional<ObjcProtocol>
+read_protocol(const Binary& b, addr_t proto_va) {
+    ObjcProtocol p;
+    p.name = read_protocol_name_from_ptr(b, proto_va);
+    if (p.name.empty()) return std::nullopt;
+
+    auto conforms_p = load_u64(b, proto_va + 16);
+    auto inst_req_p = load_u64(b, proto_va + 24);
+    auto cls_req_p  = load_u64(b, proto_va + 32);
+    auto inst_opt_p = load_u64(b, proto_va + 40);
+    auto cls_opt_p  = load_u64(b, proto_va + 48);
+
+    if (inst_req_p && *inst_req_p)
+        read_method_list(b, static_cast<addr_t>(*inst_req_p),
+                         p.name, false, p.required_instance, true);
+    if (cls_req_p && *cls_req_p)
+        read_method_list(b, static_cast<addr_t>(*cls_req_p),
+                         p.name, true,  p.required_class,    true);
+    if (inst_opt_p && *inst_opt_p)
+        read_method_list(b, static_cast<addr_t>(*inst_opt_p),
+                         p.name, false, p.optional_instance, true);
+    if (cls_opt_p && *cls_opt_p)
+        read_method_list(b, static_cast<addr_t>(*cls_opt_p),
+                         p.name, true,  p.optional_class,    true);
+
+    if (conforms_p && *conforms_p) {
+        // protocol_list_t: u64 count, followed by count u64 pointers.
+        auto cnt = load_u64(b, static_cast<addr_t>(*conforms_p));
+        if (cnt && *cnt <= 256) {
+            for (u64 j = 0; j < *cnt; ++j) {
+                auto ptr = load_u64(b, static_cast<addr_t>(*conforms_p + 8 + j * 8));
+                if (!ptr || !*ptr) continue;
+                std::string cn = read_protocol_name_from_ptr(b, static_cast<addr_t>(*ptr));
+                if (!cn.empty()) p.conforms_to.push_back(std::move(cn));
+            }
+        }
+    }
+    return p;
+}
+
 }  // namespace
+
+std::string decode_objc_type(std::string_view encoding) {
+    return decode_objc_type_impl(encoding);
+}
+
+std::vector<ObjcProtocol> parse_objc_protocols(const Binary& b) {
+    std::vector<ObjcProtocol> out;
+    u64 vaddr = 0;
+    auto proto_list = find_section(b, "__objc_protolist", vaddr);
+    if (proto_list.empty()) return out;
+    const std::size_t n = proto_list.size() / 8;
+    for (std::size_t i = 0; i < n; ++i) {
+        u64 proto_p = 0;
+        std::memcpy(&proto_p, proto_list.data() + i * 8, 8);
+        if (proto_p == 0) continue;
+        if (auto p = read_protocol(b, static_cast<addr_t>(proto_p)); p) {
+            out.push_back(std::move(*p));
+        }
+    }
+    return out;
+}
 
 std::vector<ObjcMethod> parse_objc_methods(const Binary& b) {
     std::vector<ObjcMethod> out;

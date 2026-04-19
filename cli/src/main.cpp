@@ -62,6 +62,7 @@ struct Args {
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
+    bool objc_protos = false;       // dump ObjC protocol signatures
     bool help   = false;
 };
 
@@ -93,6 +94,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--ipa",       &Args::ipa},
     {"",   "--eh",        &Args::eh},
     {"",   "--objc-names", &Args::objc_names},
+    {"",   "--objc-protocols", &Args::objc_protos},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -351,14 +353,38 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 }
 
 // TSV: one row per ObjC method recovered from __objc_classlist. Format:
-//   <imp-hex>\t<[+-]>\t<class>\t<selector>
+//   <imp-hex>\t<[+-]>\t<class>\t<selector>\t<decoded-signature>
 [[nodiscard]] std::string build_objc_names_output(const ember::Binary& b) {
     std::string out;
     for (const auto& m : ember::parse_objc_methods(b)) {
-        out += std::format("{:x}\t{}\t{}\t{}\n",
+        out += std::format("{:x}\t{}\t{}\t{}\t{}\n",
                            m.imp,
                            m.is_class ? '+' : '-',
-                           m.cls, m.selector);
+                           m.cls, m.selector,
+                           ember::decode_objc_type(m.type_encoding));
+    }
+    return out;
+}
+
+// Formal protocol signatures: one block per protocol, each line a method
+// formatted as `protocol\t[+-][!?]\tselector\tsignature`. `!` marks
+// required, `?` marks optional. Useful for lifting class-method names
+// into typed signatures where a class conforms to a known protocol.
+[[nodiscard]] std::string build_objc_protocols_output(const ember::Binary& b) {
+    std::string out;
+    auto emit = [&](const ember::ObjcProtocol& p, const std::vector<ember::ObjcMethod>& ml,
+                    char tag, char req) {
+        for (const auto& m : ml) {
+            out += std::format("{}\t{}{}\t{}\t{}\n",
+                               p.name, tag, req, m.selector,
+                               ember::decode_objc_type(m.type_encoding));
+        }
+    };
+    for (const auto& p : ember::parse_objc_protocols(b)) {
+        emit(p, p.required_instance, '-', '!');
+        emit(p, p.required_class,    '+', '!');
+        emit(p, p.optional_instance, '-', '?');
+        emit(p, p.optional_class,    '+', '?');
     }
     return out;
 }
@@ -715,7 +741,8 @@ void print_help() {
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
     std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
-    std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector)");
+    std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");
+    std::println("      --objc-protocols dump Obj-C protocol method signatures");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
@@ -794,6 +821,10 @@ int main(int argc, char** argv) {
     if (args.objc_names) {
         return run_cached(args, "objc-names",
                           [&] { return build_objc_names_output(b); });
+    }
+    if (args.objc_protos) {
+        return run_cached(args, "objc-protocols",
+                          [&] { return build_objc_protocols_output(b); });
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });

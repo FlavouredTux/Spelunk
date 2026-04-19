@@ -1,6 +1,5 @@
 // set_and_swap
-void set_and_swap(u64 a1, u64 a2) {
-  u64 t8 = (a1 - a2);
+u64 set_and_swap(u64 a1, u64 a2) {
   g_flag = (u32)(u64)((i64)a1 > (i64)a2);
   cmovl();
   bswap();

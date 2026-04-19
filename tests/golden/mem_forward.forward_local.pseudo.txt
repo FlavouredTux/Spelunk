@@ -1,9 +1,9 @@
 // forward_local
-void forward_local(u64 a1) {
+u64 forward_local(u64 a1) {
   u32 t1 = (u32)a1;
   local_1c = t1;
-  u32 t9 = (t1 + 0x1);
+  u32 t9 = t1 + 1;
   local_c = t9;
   local_10 = t9;
-  return (u64)(t9 + 0x2);
+  return t9 + 2;
 }

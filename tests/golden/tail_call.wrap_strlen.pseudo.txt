@@ -1,4 +1,4 @@
 // wrap_strlen
-void wrap_strlen(void) {
+u64 wrap_strlen(void) {
   return strlen(rdi);
 }

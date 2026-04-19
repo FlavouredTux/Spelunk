@@ -1,7 +1,7 @@
 // describe
-void describe(u64 a1) {
+u64 describe(u64 a1) {
   u32 t0 = (u32)a1;
-  if ((t0 > 0x5)) {
+  if (t0 > 5) {
     return 0xffffffff;
   } else {
     return (u32)(a1 + 0x64);

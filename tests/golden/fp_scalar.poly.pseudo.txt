@@ -1,4 +1,4 @@
 // poly
 double poly(double x) {
-  return (((x * x) + x) + *(double*)(0x402008));
+  return x * x + x + *(double*)(0x402008);
 }

@@ -1,5 +1,5 @@
 // redundant
-void redundant(u64 a1) {
+u64 redundant(u64 a1) {
   local_10 = a1;
   s = a1;
   return a1;

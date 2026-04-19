@@ -1,7 +1,10 @@
 #include <ember/decompile/emitter.hpp>
 
+#include <array>
+#include <cctype>
 #include <cstddef>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -19,20 +22,7 @@ namespace ember {
 
 namespace {
 
-using SsaKey = std::tuple<u8, u32, u32>;
-
-[[nodiscard]] std::optional<SsaKey> ssa_key_of(const IrValue& v) noexcept {
-    switch (v.kind) {
-        case IrValueKind::Reg:
-            return SsaKey{0, static_cast<u32>(canonical_reg(v.reg)), v.version};
-        case IrValueKind::Flag:
-            return SsaKey{1, static_cast<u32>(v.flag), v.version};
-        case IrValueKind::Temp:
-            return SsaKey{2, v.temp, 0};
-        default:
-            return std::nullopt;
-    }
-}
+// SsaKey and ssa_key() live in <ember/ir/ssa.hpp>.
 
 // Printf/scanf family. `format_index` is the zero-based position of the
 // format-string argument in the call.
@@ -64,31 +54,70 @@ constexpr VariadicImport kVariadicImports[] = {
 }
 
 // Count arg-consuming `%` specifiers in a printf-style format string.
-// `%%` is ignored; `%*` adds one for the width/precision arg. We skip length
-// modifiers rather than understanding them; the only thing that matters is
-// how many args the format wants.
+// `%%` is ignored; `%*` and `%*N$` add one for the width/precision arg.
+// Positional `%N$` specifiers make arg count = max(N) across all specs; when
+// present we assume the author was consistent (mixing with non-positional is
+// UB per POSIX). Without positionals, we count specs left-to-right.
+// Length modifiers are skipped, not understood.
 [[nodiscard]] u8 count_printf_specifiers(std::string_view fmt) noexcept {
-    u8 n = 0;
-    for (std::size_t i = 0; i < fmt.size(); ++i) {
-        if (fmt[i] != '%') continue;
+    u8 sequential = 0;
+    u8 max_pos    = 0;
+    bool seen_pos = false;
+
+    auto parse_pos = [&](std::size_t& i) -> u8 {
+        // `\d+\$` starting at i. On match, advance i past the `$` and
+        // return the decoded position (clamped to u8). On no match, leave i.
+        std::size_t j = i;
+        u32 v = 0;
+        while (j < fmt.size() && fmt[j] >= '0' && fmt[j] <= '9') {
+            v = v * 10 + static_cast<u32>(fmt[j] - '0');
+            if (v > 255) v = 255;
+            ++j;
+        }
+        if (j == i || j >= fmt.size() || fmt[j] != '$') return 0;
+        i = j + 1;
+        return static_cast<u8>(v);
+    };
+
+    for (std::size_t i = 0; i < fmt.size(); ) {
+        if (fmt[i] != '%') { ++i; continue; }
         ++i;
         if (i >= fmt.size()) break;
-        if (fmt[i] == '%') continue;                       // literal %%
+        if (fmt[i] == '%') { ++i; continue; }               // literal %%
+
+        const u8 pos = parse_pos(i);
+        if (pos > 0) { seen_pos = true; if (pos > max_pos) max_pos = pos; }
+
         // Walk flags/width/precision/length until we hit a conversion.
+        bool converted = false;
         while (i < fmt.size()) {
             const char c = fmt[i];
-            if (c == '*') ++n;                              // dynamic width/precision
+            if (c == '*') {
+                ++i;
+                const u8 wpos = parse_pos(i);
+                if (wpos > 0) {
+                    seen_pos = true;
+                    if (wpos > max_pos) max_pos = wpos;
+                } else if (sequential < 255) {
+                    ++sequential;
+                }
+                continue;
+            }
             const bool is_conv =
                 (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
             if (is_conv && c != 'l' && c != 'h' && c != 'L' && c != 'z' &&
                 c != 'j' && c != 't') {
-                ++n;
+                if (pos == 0 && sequential < 255) ++sequential;
+                ++i;
+                converted = true;
                 break;
             }
             ++i;
         }
+        if (!converted) break;                              // malformed tail
     }
-    return n;
+
+    return seen_pos ? max_pos : sequential;
 }
 
 // Fixed-arity libc/POSIX imports we recognize by name so that
@@ -96,30 +125,156 @@ constexpr VariadicImport kVariadicImports[] = {
 // Variadic entries live in `kVariadicImports` above.
 [[nodiscard]] std::optional<u8> libc_arity_by_name(std::string_view n) noexcept {
     static const std::pair<std::string_view, u8> kTable[] = {
-        {"strlen", 1}, {"strdup", 1}, {"strchr", 2}, {"strrchr", 2},
-        {"strstr", 2}, {"strcmp", 2}, {"strncmp", 3}, {"strcpy", 2},
-        {"strncpy", 3}, {"strcat", 2}, {"strncat", 3},
+        {"strlen", 1}, {"strnlen", 2}, {"strdup", 1}, {"strndup", 2},
+        {"strchr", 2}, {"strrchr", 2}, {"strstr", 2}, {"strcasestr", 2},
+        {"strcmp", 2}, {"strncmp", 3}, {"strcasecmp", 2}, {"strncasecmp", 3},
+        {"strcpy", 2}, {"strncpy", 3}, {"stpcpy", 2}, {"stpncpy", 3},
+        {"strcat", 2}, {"strncat", 3},
+        {"strtok", 2}, {"strtok_r", 3}, {"strsep", 2},
+        {"strpbrk", 2}, {"strspn", 2}, {"strcspn", 2},
+        {"index", 2}, {"rindex", 2},
+        {"basename", 1}, {"dirname", 1},
         {"memcpy", 3}, {"memmove", 3}, {"memset", 3}, {"memcmp", 3},
-        {"memchr", 3},
+        {"memchr", 3}, {"memrchr", 3}, {"mempcpy", 3},
+        {"bzero", 2}, {"explicit_bzero", 2}, {"bcopy", 3},
         {"puts", 1}, {"fputs", 2}, {"fgets", 3}, {"fputc", 2},
         {"fgetc", 1}, {"getc", 1}, {"putc", 2}, {"ungetc", 2},
-        {"fopen", 2}, {"fclose", 1}, {"fflush", 1},
+        {"putchar", 1}, {"getchar", 0}, {"gets", 1},
+        {"fopen", 2}, {"fdopen", 2}, {"freopen", 3}, {"fclose", 1},
+        {"fflush", 1}, {"setbuf", 2}, {"setvbuf", 4},
         {"fread", 4}, {"fwrite", 4}, {"fseek", 3}, {"ftell", 1},
+        {"fseeko", 3}, {"ftello", 1}, {"rewind", 1},
+        {"fgetpos", 2}, {"fsetpos", 2},
         {"ferror", 1}, {"feof", 1}, {"clearerr", 1}, {"perror", 1},
-        {"open", 2}, {"close", 1}, {"read", 3}, {"write", 3},
-        {"lseek", 3}, {"dup", 1}, {"dup2", 2},
-        {"getenv", 1}, {"setenv", 3}, {"unsetenv", 1}, {"putenv", 1},
+        {"fileno", 1}, {"tmpfile", 0}, {"tmpnam", 1},
+        {"remove", 1}, {"rename", 2},
+        {"open", 2}, {"openat", 3}, {"close", 1},
+        {"read", 3}, {"write", 3}, {"pread", 4}, {"pwrite", 4},
+        {"readv", 3}, {"writev", 3},
+        {"lseek", 3}, {"dup", 1}, {"dup2", 2}, {"dup3", 3}, {"pipe", 1},
+        {"fcntl", 2}, {"ioctl", 2},
+        {"stat", 2}, {"lstat", 2}, {"fstat", 2}, {"access", 2},
+        {"chmod", 2}, {"fchmod", 2}, {"chown", 3}, {"fchown", 3}, {"lchown", 3},
+        {"unlink", 1}, {"unlinkat", 3}, {"link", 2}, {"symlink", 2},
+        {"mkdir", 2}, {"rmdir", 1}, {"chdir", 1}, {"getcwd", 2},
+        {"getenv", 1}, {"secure_getenv", 1},
+        {"setenv", 3}, {"unsetenv", 1}, {"putenv", 1}, {"clearenv", 0},
         {"atoi", 1}, {"atol", 1}, {"atoll", 1}, {"atof", 1},
         {"strtol", 3}, {"strtoul", 3}, {"strtoll", 3}, {"strtoull", 3},
-        {"strtod", 2}, {"strtof", 2},
-        {"malloc", 1}, {"calloc", 2}, {"realloc", 2}, {"free", 1},
-        {"aligned_alloc", 2}, {"posix_memalign", 3},
-        {"exit", 1}, {"_exit", 1}, {"abort", 0}, {"atexit", 1},
+        {"strtod", 2}, {"strtof", 2}, {"strtold", 2},
+        {"malloc", 1}, {"calloc", 2}, {"realloc", 2}, {"reallocarray", 3},
+        {"free", 1}, {"aligned_alloc", 2}, {"posix_memalign", 3},
+        {"memalign", 2}, {"valloc", 1}, {"pvalloc", 1},
+        {"mmap", 6}, {"munmap", 2}, {"mprotect", 3}, {"madvise", 3},
+        {"mremap", 4}, {"msync", 3},
+        {"exit", 1}, {"_exit", 1}, {"_Exit", 1}, {"abort", 0}, {"atexit", 1},
+        {"quick_exit", 1}, {"at_quick_exit", 1},
+        {"signal", 2}, {"raise", 1}, {"kill", 2}, {"sigaction", 3},
+        {"sigprocmask", 3}, {"sigemptyset", 1}, {"sigfillset", 1},
+        {"sigaddset", 2}, {"sigdelset", 2}, {"sigismember", 2},
+        {"getpid", 0}, {"getppid", 0}, {"getuid", 0}, {"geteuid", 0},
+        {"getgid", 0}, {"getegid", 0},
+        {"fork", 0}, {"vfork", 0}, {"execv", 2}, {"execvp", 2},
+        {"execve", 3}, {"execl", 2}, {"execlp", 2},
+        {"waitpid", 3}, {"wait", 1}, {"system", 1},
+        {"time", 1}, {"clock", 0}, {"gettimeofday", 2},
+        {"clock_gettime", 2}, {"clock_settime", 2},
+        {"sleep", 1}, {"usleep", 1}, {"nanosleep", 2},
+        {"pthread_create", 4}, {"pthread_join", 2}, {"pthread_detach", 1},
+        {"pthread_mutex_init", 2}, {"pthread_mutex_destroy", 1},
+        {"pthread_mutex_lock", 1}, {"pthread_mutex_unlock", 1},
+        {"pthread_mutex_trylock", 1},
+        {"pthread_cond_init", 2}, {"pthread_cond_destroy", 1},
+        {"pthread_cond_wait", 2}, {"pthread_cond_signal", 1},
+        {"pthread_cond_broadcast", 1},
+        {"qsort", 4}, {"bsearch", 5},
+        {"abs", 1}, {"labs", 1}, {"llabs", 1},
+        {"rand", 0}, {"srand", 1}, {"random", 0}, {"srandom", 1},
+        {"isalpha", 1}, {"isdigit", 1}, {"isalnum", 1}, {"isspace", 1},
+        {"isupper", 1}, {"islower", 1}, {"isprint", 1}, {"ispunct", 1},
+        {"iscntrl", 1}, {"isxdigit", 1}, {"tolower", 1}, {"toupper", 1},
     };
     for (const auto& [k, v] : kTable) {
         if (k == n) return v;
     }
     return std::nullopt;
+}
+
+// C operator precedence, scaled so "tighter binds" = higher value. Used to
+// decide whether a sub-expression needs wrapping in parens. Only the handful
+// of levels the emitter actually produces are enumerated; add more as new
+// operator kinds start rendering.
+enum class Prec : int {
+    Stmt    = 0,
+    LogOr   = 3,
+    LogAnd  = 4,
+    BitOr   = 5,
+    BitXor  = 6,
+    BitAnd  = 7,
+    Eq      = 8,    // == !=
+    Rel     = 9,    // < <= > >=
+    Shift   = 10,   // << >>
+    Add     = 11,   // + -
+    Mul     = 12,   // * / %
+    Unary   = 13,   // ! ~ unary- (T)x *x &x
+    Primary = 15,   // ident, literal, call, t[i], foo()
+};
+
+[[nodiscard]] inline std::string
+wrap_if_lt(std::string s, Prec own, int min_prec) {
+    if (static_cast<int>(own) < min_prec) return "(" + std::move(s) + ")";
+    return s;
+}
+
+// Libc/POSIX functions whose parameter at `arg_index_1based` is a
+// NUL-terminated string. Used to back-propagate `char*` onto the caller's
+// own arg slots. Positions listed are 1-based.
+[[nodiscard]] bool libc_arg_is_charp(std::string_view name, u8 arg_idx_1) noexcept {
+    struct Entry { std::string_view fn; u8 slot; };
+    static const Entry kTable[] = {
+        {"strlen", 1}, {"strnlen", 1},
+        {"strdup", 1}, {"strndup", 1},
+        {"strchr", 1}, {"strrchr", 1},
+        {"strstr", 1}, {"strstr", 2},
+        {"strcasestr", 1}, {"strcasestr", 2},
+        {"strcmp", 1}, {"strcmp", 2},
+        {"strncmp", 1}, {"strncmp", 2},
+        {"strcasecmp", 1}, {"strcasecmp", 2},
+        {"strncasecmp", 1}, {"strncasecmp", 2},
+        {"strcpy", 1}, {"strcpy", 2},
+        {"strncpy", 1}, {"strncpy", 2},
+        {"stpcpy", 1}, {"stpcpy", 2},
+        {"stpncpy", 1}, {"stpncpy", 2},
+        {"strcat", 1}, {"strcat", 2},
+        {"strncat", 1}, {"strncat", 2},
+        {"strpbrk", 1}, {"strpbrk", 2},
+        {"strspn", 1}, {"strspn", 2},
+        {"strcspn", 1}, {"strcspn", 2},
+        {"strtok", 1}, {"strtok", 2},
+        {"strtok_r", 1}, {"strtok_r", 2},
+        {"strsep", 2},
+        {"index", 1}, {"rindex", 1},
+        {"basename", 1}, {"dirname", 1},
+        {"puts", 1}, {"fputs", 1}, {"perror", 1}, {"gets", 1},
+        {"fopen", 1}, {"fopen", 2},
+        {"freopen", 1}, {"freopen", 2},
+        {"fdopen", 2},
+        {"getenv", 1}, {"secure_getenv", 1},
+        {"setenv", 1}, {"setenv", 2},
+        {"unsetenv", 1}, {"putenv", 1},
+        {"atoi", 1}, {"atol", 1}, {"atoll", 1}, {"atof", 1},
+        {"strtol", 1}, {"strtoul", 1}, {"strtoll", 1}, {"strtoull", 1},
+        {"strtod", 1}, {"strtof", 1}, {"strtold", 1},
+        {"remove", 1}, {"rename", 1}, {"rename", 2},
+        {"unlink", 1}, {"mkdir", 1}, {"rmdir", 1},
+        {"chdir", 1}, {"access", 1}, {"chmod", 1}, {"chown", 1},
+        {"stat", 1}, {"lstat", 1},
+        {"open", 1}, {"system", 1},
+    };
+    for (const auto& e : kTable) {
+        if (e.fn == name && e.slot == arg_idx_1) return true;
+    }
+    return false;
 }
 
 [[nodiscard]] std::string_view c_type_name(IrType t) noexcept {
@@ -368,15 +523,40 @@ struct Emitter {
             v.reg = cur_reg;
             v.version = cur_ver;
             const IrInst* d = def_of(v);
-            if (!d || d->op != IrOp::Assign || d->src_count < 1) break;
-            const auto& src = d->srcs[0];
-            if (src.kind == IrValueKind::Reg) {
-                cur_reg = src.reg;
-                cur_ver = src.version;
-                continue;
+            if (!d) break;
+            if (d->op == IrOp::Assign && d->src_count >= 1) {
+                const auto& src = d->srcs[0];
+                if (src.kind == IrValueKind::Reg) {
+                    cur_reg = src.reg;
+                    cur_ver = src.version;
+                    continue;
+                }
+                if (depth < 10) return expr(src, depth + 1);
+                break;
             }
-            if (depth < 10) return expr(src, depth + 1);
+            // Phi-merged reg: if every incoming operand renders to the
+            // same expression (common for `rax = phi(rax_v1, t17)` where
+            // t17 traces back to the same call's return), emit that.
+            if (d->op == IrOp::Phi && depth < 10 && !d->phi_operands.empty()) {
+                std::string unified;
+                bool all_match = true;
+                for (const auto& op : d->phi_operands) {
+                    auto opk = ssa_key(op);
+                    if (opk && *opk == k) continue;  // self-reference
+                    const std::string s = expr(op, depth + 1);
+                    if (s.empty()) { all_match = false; break; }
+                    if (unified.empty()) unified = s;
+                    else if (s != unified) { all_match = false; break; }
+                }
+                if (all_match && !unified.empty()) return unified;
+            }
             break;
+        }
+        // Phi/merged value with divergent incoming edges or a non-inlinable
+        // producer: render a stable name rather than a raw register so the
+        // output never mentions architectural names like `rax`, `rdx`.
+        if (version > 0) {
+            return std::format("{}_{}", reg_name(r), version);
         }
         return std::string(reg_name(r));
     }
@@ -466,7 +646,7 @@ struct Emitter {
             const auto& bb = f.blocks[bi];
             for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
                 const auto& inst = bb.insts[ii];
-                if (auto k = ssa_key_of(inst.dst); k) {
+                if (auto k = ssa_key(inst.dst); k) {
                     defs[*k] = &inst;
                     def_pos[*k] = {bi, ii};
                 }
@@ -475,14 +655,141 @@ struct Emitter {
                 if (is_call_arg_barrier(inst)) continue;
                 if (inst.op == IrOp::Phi) {
                     for (const auto& op : inst.phi_operands)
-                        if (auto k = ssa_key_of(op); k) uses[*k]++;
+                        if (auto k = ssa_key(op); k) uses[*k]++;
                 } else {
                     for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
-                        if (auto k = ssa_key_of(inst.srcs[i]); k) uses[*k]++;
+                        if (auto k = ssa_key(inst.srcs[i]); k) uses[*k]++;
                 }
             }
         }
         analyze_abi_noise();
+    }
+
+    // Self-arg slots (a1..a6) known to flow into a libc char* parameter.
+    // Populated by infer_charp_args(); consumed by the header builder.
+    std::array<bool, 6> charp_arg = {false, false, false, false, false, false};
+
+    // Trace `v` back through Assign copies and trivial phis to a version-0
+    // SysV int-arg register (rdi..r9). Returns the 0-based slot (0..5), or
+    // nullopt if the value isn't live-in from a self arg.
+    [[nodiscard]] std::optional<u8>
+    trace_to_self_arg_slot(const IrValue& v, int depth = 0) const {
+        if (depth > 8) return std::nullopt;
+        static constexpr Reg kArgs[6] = {
+            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
+        };
+        IrValue cur = v;
+        for (int hop = 0; hop < 8; ++hop) {
+            if (cur.kind != IrValueKind::Reg) return std::nullopt;
+            const Reg canon = canonical_reg(cur.reg);
+            if (cur.version == 0) {
+                for (u8 i = 0; i < 6; ++i) if (kArgs[i] == canon) return i;
+                return std::nullopt;
+            }
+            const IrInst* d = def_of(cur);
+            if (!d) return std::nullopt;
+            if (d->op == IrOp::Assign && d->src_count == 1) {
+                cur = d->srcs[0];
+                continue;
+            }
+            if (d->op == IrOp::Phi && !d->phi_operands.empty()) {
+                std::optional<u8> common;
+                for (const auto& op : d->phi_operands) {
+                    auto opk = ssa_key(op);
+                    if (opk && *opk == ssa_key(cur)) continue;  // self-ref
+                    auto slot = trace_to_self_arg_slot(op, depth + 1);
+                    if (!slot) return std::nullopt;
+                    if (!common) common = *slot;
+                    else if (*common != *slot) return std::nullopt;
+                }
+                return common;
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    // For each call-to-libc in the body, consult the call.args.1/2 packing
+    // to recover per-arg IrValues; if an arg is a self live-in reg and the
+    // callee takes a `char*` at that position, tag the caller's own slot.
+    void infer_charp_args() {
+        if (!binary) return;
+        for (const auto& bb : fn->blocks) {
+            std::vector<IrValue> args;
+            args.reserve(6);
+            for (const auto& inst : bb.insts) {
+                if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
+                    args.clear();
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                        args.push_back(inst.srcs[i]);
+                    continue;
+                }
+                if (inst.op == IrOp::Intrinsic && inst.name == "call.args.2") {
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                        args.push_back(inst.srcs[i]);
+                    continue;
+                }
+                if (inst.op == IrOp::Call) {
+                    const Symbol* s = binary->import_at_plt(inst.target1);
+                    if (!s) { args.clear(); continue; }
+                    const std::string callee = clean_import_name(s->name);
+                    for (std::size_t i = 0; i < args.size(); ++i) {
+                        if (!libc_arg_is_charp(callee, static_cast<u8>(i + 1))) continue;
+                        auto slot = trace_to_self_arg_slot(args[i]);
+                        if (slot && *slot < charp_arg.size()) charp_arg[*slot] = true;
+                    }
+                    args.clear();
+                    continue;
+                }
+                // Any non-arg, non-Clobber inst between the packing and the
+                // Call invalidates the accumulator.
+                if (inst.op != IrOp::Clobber &&
+                    !is_call_arg_barrier(inst)) {
+                    // Nothing: but stash in case Call follows after pure
+                    // side-effect-free compute (common with lea).
+                }
+            }
+        }
+    }
+
+    // Raise self_arity when the body reads a live-in SysV int-arg register
+    // (rdi..r9) that the inferred arity didn't cover. Without this, raw
+    // register names leak into the emitted C as e.g. `fputs(rdx, stdout)`.
+    // Call only when the caller hasn't pinned an explicit signature.
+    void bump_arity_from_body_reads() {
+        static constexpr Reg kIntArgs[6] = {
+            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
+        };
+        u8 need = self_arity;
+        auto check = [&](const IrValue& v) {
+            if (v.kind != IrValueKind::Reg) return;
+            if (v.version != 0) return;
+            const Reg canon = canonical_reg(v.reg);
+            for (u8 i = 0; i < 6; ++i) {
+                if (kIntArgs[i] == canon) {
+                    if (i + 1 > need) need = static_cast<u8>(i + 1);
+                    return;
+                }
+            }
+        };
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                if (hidden.contains({bi, ii})) continue;
+                const auto& inst = bb.insts[ii];
+                // call.args.* packs live-in regs as trailing placeholders the
+                // callee may never consume; Clobbers are ABI markers; Phis
+                // conservatively name every arg reg at join points regardless
+                // of whether anything downstream reads it. None of these
+                // represents a real body read.
+                if (is_call_arg_barrier(inst)) continue;
+                if (inst.op == IrOp::Clobber)  continue;
+                if (inst.op == IrOp::Phi)      continue;
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                    check(inst.srcs[i]);
+            }
+        }
+        self_arity = need;
     }
 
     // Find Return regions whose value is rax coming directly from a call's
@@ -494,7 +801,7 @@ struct Emitter {
         const IrValue& cond = r.condition;
         if (cond.kind != IrValueKind::Reg) return;
         if (canonical_reg(cond.reg) != Reg::Rax) return;
-        auto cond_key = ssa_key_of(cond);
+        auto cond_key = ssa_key(cond);
         if (!cond_key) return;
         const IrInst* def = def_of(cond);
         if (!def || def->op != IrOp::Clobber) return;
@@ -536,13 +843,16 @@ struct Emitter {
                     if (c.op != IrOp::Clobber) break;
                     if (c.dst.kind != IrValueKind::Reg) continue;
                     if (canonical_reg(c.dst.reg) != Reg::Rax) continue;
-                    rax_key = ssa_key_of(c.dst);
+                    rax_key = ssa_key(c.dst);
                     break;
                 }
                 if (!rax_key) continue;
-                // Use count here must include uses inside call.args.* intrinsics
-                // (which `uses` intentionally ignores for inlining decisions).
-                if (count_uses_with_call_args(*rax_key) == 0) continue;
+                // Always bind a name for the rax clobber when the call wasn't
+                // folded into a Return. Reads that happen only through
+                // structured-region conditions (e.g. `return rax;`) don't
+                // appear in IR srcs and so can't be counted up-front; the
+                // dead-decl pass at the end strips any binding nothing ended
+                // up referencing.
 
                 std::string base = callee_display_short(inst);
                 std::string name = "r_" + base;
@@ -567,11 +877,11 @@ struct Emitter {
             for (const auto& inst : bb.insts) {
                 if (inst.op == IrOp::Phi) {
                     for (const auto& op : inst.phi_operands) {
-                        if (auto ok = ssa_key_of(op); ok && *ok == k) ++n;
+                        if (auto ok = ssa_key(op); ok && *ok == k) ++n;
                     }
                 } else {
                     for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                        if (auto ok = ssa_key_of(inst.srcs[i]); ok && *ok == k) ++n;
+                        if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == k) ++n;
                     }
                 }
             }
@@ -625,7 +935,7 @@ struct Emitter {
                     const auto& inst = bb.insts[ii];
                     if (inst.dst.kind != IrValueKind::Temp) continue;
                     if (!inlinable_op(inst.op)) continue;
-                    auto target_key = ssa_key_of(inst.dst);
+                    auto target_key = ssa_key(inst.dst);
                     if (!target_key) continue;
                     bool has_use = false, all_hidden = true;
                     for (std::size_t bj = 0; bj < fn->blocks.size() && all_hidden; ++bj) {
@@ -633,7 +943,7 @@ struct Emitter {
                         for (std::size_t ij = 0; ij < bb2.insts.size() && all_hidden; ++ij) {
                             const auto& inst2 = bb2.insts[ij];
                             auto check = [&](const IrValue& v) {
-                                if (ssa_key_of(v) == target_key) {
+                                if (ssa_key(v) == target_key) {
                                     has_use = true;
                                     if (!hidden.contains({bj, ij}) && !is_call_arg_barrier(inst2))
                                         all_hidden = false;
@@ -815,14 +1125,14 @@ struct Emitter {
     }
 
     [[nodiscard]] const IrInst* def_of(const IrValue& v) const {
-        auto k = ssa_key_of(v);
+        auto k = ssa_key(v);
         if (!k) return nullptr;
         auto it = defs.find(*k);
         return it != defs.end() ? it->second : nullptr;
     }
 
     [[nodiscard]] u32 use_count(const IrValue& v) const {
-        auto k = ssa_key_of(v);
+        auto k = ssa_key(v);
         if (!k) return 0;
         auto it = uses.find(*k);
         return it != uses.end() ? it->second : 0u;
@@ -834,7 +1144,7 @@ struct Emitter {
     // whether we need to materialize a local). A temp with visible_use_count
     // <= 1 can be inlined / its declaration dropped.
     [[nodiscard]] u32 visible_use_count(const IrValue& v) const {
-        auto key = ssa_key_of(v);
+        auto key = ssa_key(v);
         if (!key) return 0u;
         u32 n = 0;
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
@@ -845,7 +1155,7 @@ struct Emitter {
                 if (is_call_arg_barrier(inst)) continue;
                 if (inst.op == IrOp::Phi) continue;
                 for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
-                    if (auto ok = ssa_key_of(inst.srcs[i]); ok && *ok == *key) ++n;
+                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == *key) ++n;
             }
         }
         return n;
@@ -939,6 +1249,11 @@ struct Emitter {
                 return escape_string(*s);
             }
         }
+        // Small single-digit ints read much better as decimal; larger values
+        // are generally addresses, masks, or byte counts where hex carries
+        // information.
+        if (v.imm >= 0 && v.imm <= 9) return std::format("{}", v.imm);
+        if (v.imm < 0 && v.imm >= -9) return std::format("{}", v.imm);
         if (v.imm < 0) {
             const u64 abs_v = static_cast<u64>(0) - static_cast<u64>(v.imm);
             return std::format("-{:#x}", abs_v);
@@ -946,8 +1261,10 @@ struct Emitter {
         return std::format("{:#x}", static_cast<u64>(v.imm));
     }
 
-    [[nodiscard]] std::string expr(const IrValue& v, int depth = 0) const;
-    [[nodiscard]] std::string expand(const IrInst& d, int depth) const;
+    [[nodiscard]] std::string expr(const IrValue& v, int depth = 0,
+                                   int min_prec = 0) const;
+    [[nodiscard]] std::string expand(const IrInst& d, int depth,
+                                     int min_prec = 0) const;
 
     // Try to resolve an address IrValue to a concrete immediate address,
     // drilling through single-assign copies. Returns nullopt for any
@@ -1053,11 +1370,18 @@ struct Emitter {
                            c_type_name(t), reg_name(seg), expr(addr));
     }
 
-    [[nodiscard]] std::string format_binop(const IrInst& d, std::string_view op, int depth) const {
-        return std::format("({} {} {})",
-                           expr(d.srcs[0], depth),
-                           op,
-                           expr(d.srcs[1], depth));
+    [[nodiscard]] std::string format_binop(const IrInst& d, std::string_view op,
+                                            int depth, int min_prec,
+                                            Prec self_prec,
+                                            bool commutative) const {
+        const int p = static_cast<int>(self_prec);
+        // Left operand can share our precedence (left-assoc). Right operand
+        // of a non-commutative op must bind strictly tighter to avoid
+        // reassociation — e.g. `a - (b - c)` must stay parenthesized.
+        std::string L = expr(d.srcs[0], depth, p);
+        std::string R = expr(d.srcs[1], depth, commutative ? p : p + 1);
+        std::string result = std::format("{} {} {}", L, op, R);
+        return wrap_if_lt(std::move(result), self_prec, min_prec);
     }
 
     [[nodiscard]] std::string format_stmt(const IrInst& inst) const;
@@ -1094,7 +1418,7 @@ struct Emitter {
     [[nodiscard]] bool same_ssa(const IrValue& a, const IrValue& b) const noexcept {
         if (a.kind != b.kind) return false;
         if (a.kind == IrValueKind::Imm) return a.imm == b.imm && a.type == b.type;
-        return ssa_key_of(a) == ssa_key_of(b);
+        return ssa_key(a) == ssa_key(b);
     }
 
     [[nodiscard]] std::optional<SubOps> match_sub_result(const IrValue& v) const {
@@ -1209,37 +1533,60 @@ struct Emitter {
 
     [[nodiscard]] std::string render_cmp(std::string_view op, const IrValue& a,
                                          const IrValue& b, int depth,
-                                         bool signed_cmp) const {
-        std::string left  = expr(a, depth + 1);
-        std::string right = expr(b, depth + 1);
-        if (!signed_cmp) {
-            return std::format("({} {} {})", left, op, right);
+                                         bool signed_cmp,
+                                         bool in_bool_ctx = false,
+                                         int min_prec = 0) const {
+        // In boolean context, `x != 0` is spelled `x` and `x == 0` is `!x`.
+        // Applies to either operand being an Imm(0).
+        if (in_bool_ctx && (op == "!=" || op == "==")) {
+            const IrValue* nonzero = nullptr;
+            if (a.kind == IrValueKind::Imm && a.imm == 0) nonzero = &b;
+            else if (b.kind == IrValueKind::Imm && b.imm == 0) nonzero = &a;
+            if (nonzero) {
+                if (op == "!=") {
+                    return expr(*nonzero, depth + 1, min_prec);
+                }
+                std::string rendered = expr(*nonzero, depth + 1,
+                                            static_cast<int>(Prec::Unary));
+                return wrap_if_lt("!" + rendered, Prec::Unary, min_prec);
+            }
         }
-        // Literals are implicitly promoted to the signedness of the other
-        // operand, so we only need the cast on the non-Imm side(s).
-        const bool cast_l = a.kind != IrValueKind::Imm;
-        const bool cast_r = b.kind != IrValueKind::Imm;
+        const Prec own = (op == "==" || op == "!=") ? Prec::Eq : Prec::Rel;
+        const int p = static_cast<int>(own);
         const std::string_view c = "i64";
+        const bool cast_l = signed_cmp && a.kind != IrValueKind::Imm;
+        const bool cast_r = signed_cmp && b.kind != IrValueKind::Imm;
+        // If we're going to wrap in `(i64)`, the inner must bind at Unary;
+        // otherwise the compare's own precedence is enough.
+        const int lp = cast_l ? static_cast<int>(Prec::Unary) : p;
+        const int rp = cast_r ? static_cast<int>(Prec::Unary) : p + 1;
+        std::string left  = expr(a, depth + 1, lp);
+        std::string right = expr(b, depth + 1, rp);
         if (cast_l) left  = std::format("({}){}", c, left);
         if (cast_r) right = std::format("({}){}", c, right);
-        return std::format("({} {} {})", left, op, right);
+        return wrap_if_lt(std::format("{} {} {}", left, op, right), own, min_prec);
     }
 
     // `negate`: emit the semantic NOT of the matched compare (e.g., Je → ==, with negate → !=).
     // This cleanly cancels double-negation when the structurer wraps a CondBranch that
     // was itself a Not-of-flag.
+    // `in_bool_ctx`: caller is rendering an `if`/`while` condition, so `x != 0`
+    // can collapse to `x` and `x == 0` to `!x`.
     [[nodiscard]] std::optional<std::string>
-    try_simplify_flag(const IrValue& v, int depth, bool negate = false) const {
+    try_simplify_flag(const IrValue& v, int depth, bool negate = false,
+                      bool in_bool_ctx = false, int min_prec = 0) const {
         if (depth >= 12) return std::nullopt;
         if (v.type != IrType::I1) return std::nullopt;
 
         auto emit_sub = [&](std::string_view op, std::string_view neg_op,
                             const SubOps& s, bool sign_cmp) {
-            return render_cmp(negate ? neg_op : op, s.a, s.b, depth, sign_cmp);
+            return render_cmp(negate ? neg_op : op, s.a, s.b, depth, sign_cmp,
+                              in_bool_ctx, min_prec);
         };
         auto emit_cmp = [&](std::string_view op, std::string_view neg_op,
                             const IrValue& a, const IrValue& b, bool sign_cmp) {
-            return render_cmp(negate ? neg_op : op, a, b, depth, sign_cmp);
+            return render_cmp(negate ? neg_op : op, a, b, depth, sign_cmp,
+                              in_bool_ctx, min_prec);
         };
 
         // Compound sub-flag patterns (most specific first)
@@ -1253,7 +1600,9 @@ struct Emitter {
 
         // Not(x): recurse with flipped negate (cancels double-negation cleanly).
         if (d && d->op == IrOp::Not && d->src_count == 1) {
-            if (auto r = try_simplify_flag(d->srcs[0], depth + 1, !negate); r) return r;
+            if (auto r = try_simplify_flag(d->srcs[0], depth + 1, !negate,
+                                           in_bool_ctx, min_prec);
+                r) return r;
         }
 
         // Atomic sub-flag patterns
@@ -1281,17 +1630,21 @@ struct Emitter {
     }
 
     [[nodiscard]] std::string render_condition(const IrValue& v, bool invert) const {
-        if (auto s = try_simplify_flag(v, 0, invert); s) return *s;
-        std::string base = expr(v, 0);
-        return invert ? std::format("!({})", base) : base;
+        // Condition is rendered into `if (...)`, so no outer wrapping needed.
+        if (auto s = try_simplify_flag(v, 0, invert, /*in_bool_ctx=*/true, 0); s) return *s;
+        if (invert) {
+            std::string base = expr(v, 0, static_cast<int>(Prec::Unary));
+            return std::format("!{}", base);
+        }
+        return expr(v, 0, 0);
     }
 };
 
-std::string Emitter::expr(const IrValue& v, int depth) const {
+std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
     // Recognize compiler flag-based compare idioms and emit direct C comparisons.
     if (v.type == IrType::I1 &&
         (v.kind == IrValueKind::Temp || v.kind == IrValueKind::Flag)) {
-        if (auto s = try_simplify_flag(v, depth); s) return *s;
+        if (auto s = try_simplify_flag(v, depth, false, false, min_prec); s) return *s;
     }
     switch (v.kind) {
         case IrValueKind::None:
@@ -1303,7 +1656,7 @@ std::string Emitter::expr(const IrValue& v, int depth) const {
                 const IrInst* d = def_of(v);
                 while (d && d->op == IrOp::Assign && d->src_count == 1) {
                     const auto& src = d->srcs[0];
-                    if (src.kind == IrValueKind::Imm) return expr(src, depth + 1);
+                    if (src.kind == IrValueKind::Imm) return expr(src, depth + 1, min_prec);
                     if (src.kind == IrValueKind::Reg && src.version == 0) {
                         return render_reg_leaf(src.reg, src.version, depth + 1);
                     }
@@ -1323,7 +1676,7 @@ std::string Emitter::expr(const IrValue& v, int depth) const {
                 return std::format("&{}", stack_name(*off));
             }
             if (depth < 12 && should_inline(v)) {
-                if (const auto* d = def_of(v)) return expand(*d, depth + 1);
+                if (const auto* d = def_of(v)) return expand(*d, depth + 1, min_prec);
             }
             return std::format("t{}", v.temp);
         }
@@ -1331,47 +1684,51 @@ std::string Emitter::expr(const IrValue& v, int depth) const {
     return "";
 }
 
-std::string Emitter::expand(const IrInst& d, int depth) const {
+std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
     switch (d.op) {
         case IrOp::Assign:
-            return d.src_count >= 1 ? expr(d.srcs[0], depth) : "";
+            return d.src_count >= 1 ? expr(d.srcs[0], depth, min_prec) : "";
 
         case IrOp::Add: {
             if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
                 return std::format("&{}", stack_name(*off));
             }
-            return format_binop(d, "+", depth);
+            return format_binop(d, "+", depth, min_prec, Prec::Add, /*commutative=*/true);
         }
         case IrOp::Sub: {
             if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
                 return std::format("&{}", stack_name(*off));
             }
-            return format_binop(d, "-", depth);
+            return format_binop(d, "-", depth, min_prec, Prec::Add, /*commutative=*/false);
         }
-        case IrOp::Mul:  return format_binop(d, "*", depth);
-        case IrOp::And:  return format_binop(d, "&", depth);
-        case IrOp::Or:   return format_binop(d, "|", depth);
-        case IrOp::Xor:  return format_binop(d, "^", depth);
-        case IrOp::Shl:  return format_binop(d, "<<", depth);
-        case IrOp::Lshr: return format_binop(d, ">>", depth);
-        case IrOp::Ashr: return format_binop(d, ">>", depth);
+        case IrOp::Mul:  return format_binop(d, "*", depth, min_prec, Prec::Mul,   true);
+        case IrOp::And:  return format_binop(d, "&", depth, min_prec, Prec::BitAnd, true);
+        case IrOp::Or:   return format_binop(d, "|", depth, min_prec, Prec::BitOr,  true);
+        case IrOp::Xor:  return format_binop(d, "^", depth, min_prec, Prec::BitXor, true);
+        case IrOp::Shl:  return format_binop(d, "<<", depth, min_prec, Prec::Shift, false);
+        case IrOp::Lshr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
+        case IrOp::Ashr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
 
-        case IrOp::Neg: return std::format("(-{})", expr(d.srcs[0], depth));
+        case IrOp::Neg: {
+            std::string inner = expr(d.srcs[0], depth, static_cast<int>(Prec::Unary));
+            return wrap_if_lt("-" + inner, Prec::Unary, min_prec);
+        }
         case IrOp::Not: {
             const char* op = (d.dst.type == IrType::I1) ? "!" : "~";
-            return std::format("({}{})", op, expr(d.srcs[0], depth));
+            std::string inner = expr(d.srcs[0], depth, static_cast<int>(Prec::Unary));
+            return wrap_if_lt(std::string(op) + inner, Prec::Unary, min_prec);
         }
 
-        case IrOp::CmpEq:  return format_binop(d, "==", depth);
-        case IrOp::CmpNe:  return format_binop(d, "!=", depth);
+        case IrOp::CmpEq:  return format_binop(d, "==", depth, min_prec, Prec::Eq,  true);
+        case IrOp::CmpNe:  return format_binop(d, "!=", depth, min_prec, Prec::Eq,  true);
         case IrOp::CmpSlt:
-        case IrOp::CmpUlt: return format_binop(d, "<",  depth);
+        case IrOp::CmpUlt: return format_binop(d, "<",  depth, min_prec, Prec::Rel, false);
         case IrOp::CmpSle:
-        case IrOp::CmpUle: return format_binop(d, "<=", depth);
+        case IrOp::CmpUle: return format_binop(d, "<=", depth, min_prec, Prec::Rel, false);
         case IrOp::CmpSgt:
-        case IrOp::CmpUgt: return format_binop(d, ">",  depth);
+        case IrOp::CmpUgt: return format_binop(d, ">",  depth, min_prec, Prec::Rel, false);
         case IrOp::CmpSge:
-        case IrOp::CmpUge: return format_binop(d, ">=", depth);
+        case IrOp::CmpUge: return format_binop(d, ">=", depth, min_prec, Prec::Rel, false);
 
         case IrOp::ZExt:
         case IrOp::SExt:
@@ -1379,7 +1736,7 @@ std::string Emitter::expand(const IrInst& d, int depth) const {
             const IrValue& src = d.srcs[0];
             // No-op: cast to the same type the value already has.
             if (src.type == d.dst.type) {
-                return expr(src, depth);
+                return expr(src, depth, min_prec);
             }
             // `zext(trunc(x, T))` → `(T)x`. The trunc already produces the
             // observable value; widening back to a bigger type is redundant
@@ -1388,25 +1745,35 @@ std::string Emitter::expand(const IrInst& d, int depth) const {
                 if (const IrInst* inner = def_stripped(src);
                     inner && inner->op == IrOp::Trunc && inner->src_count >= 1 &&
                     type_bits(inner->dst.type) <= type_bits(d.dst.type)) {
-                    return std::format("({}){}",
-                                       c_type_name(inner->dst.type),
-                                       expr(inner->srcs[0], depth));
+                    std::string casted = std::format(
+                        "({}){}",
+                        c_type_name(inner->dst.type),
+                        expr(inner->srcs[0], depth, static_cast<int>(Prec::Unary)));
+                    return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
                 }
             }
-            return std::format("({}){}", c_type_name(d.dst.type), expr(src, depth));
+            std::string casted = std::format(
+                "({}){}",
+                c_type_name(d.dst.type),
+                expr(src, depth, static_cast<int>(Prec::Unary)));
+            return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
         }
 
         case IrOp::Load:
             return format_mem(d.srcs[0], d.dst.type, d.segment);
 
         case IrOp::AddCarry:
-            return std::format("carry_add({}, {})", expr(d.srcs[0], depth), expr(d.srcs[1], depth));
+            return std::format("carry_add({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
         case IrOp::SubBorrow:
-            return std::format("borrow_sub({}, {})", expr(d.srcs[0], depth), expr(d.srcs[1], depth));
+            return std::format("borrow_sub({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
         case IrOp::AddOverflow:
-            return std::format("overflow_add({}, {})", expr(d.srcs[0], depth), expr(d.srcs[1], depth));
+            return std::format("overflow_add({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
         case IrOp::SubOverflow:
-            return std::format("overflow_sub({}, {})", expr(d.srcs[0], depth), expr(d.srcs[1], depth));
+            return std::format("overflow_sub({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
 
         case IrOp::Intrinsic:
             return std::format("__{}()", d.name);
@@ -1679,11 +2046,26 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
         }
 
         case RegionKind::IfElse: {
-            const std::string cond = render_condition(r.condition, r.invert);
+            std::string then_buf;
+            if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, then_buf);
+            std::string else_buf;
+            if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, else_buf);
+            // If only the else arm has content, invert the condition and
+            // drop the dead then. Reads much cleaner than `if (!x) {} else {…}`.
+            const bool then_empty = then_buf.empty();
+            const bool else_empty = else_buf.empty();
+            bool invert_effective = r.invert;
+            if (then_empty && !else_empty) {
+                invert_effective = !invert_effective;
+                std::swap(then_buf, else_buf);
+            }
+            const std::string cond = render_condition(r.condition, invert_effective);
             out += std::format("{}if ({}) {{\n", ind, cond);
-            if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, out);
-            out += std::format("{}}} else {{\n", ind);
-            if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, out);
+            out += then_buf;
+            if (!else_buf.empty()) {
+                out += std::format("{}}} else {{\n", ind);
+                out += else_buf;
+            }
             out += std::format("{}}}\n", ind);
             return;
         }
@@ -1714,14 +2096,27 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
 
         case RegionKind::Return: {
             if (r.condition.kind != IrValueKind::None) {
-                if (auto k = ssa_key_of(r.condition); k) {
+                if (auto k = ssa_key(r.condition); k) {
                     auto f = fold_return_expr.find(*k);
                     if (f != fold_return_expr.end()) {
                         out += std::format("{}return {};\n", ind, f->second);
                         return;
                     }
                 }
-                out += std::format("{}return {};\n", ind, expr(r.condition));
+                // Strip a redundant outer widen: in a return context the
+                // caller's declared type already coerces, so `return (u64)x;`
+                // where `x` has the return type reads as noise.
+                IrValue v = r.condition;
+                while (true) {
+                    const IrInst* d = def_of(v);
+                    if (!d || d->src_count < 1) break;
+                    if (d->op != IrOp::ZExt && d->op != IrOp::SExt) break;
+                    const auto& src = d->srcs[0];
+                    if (type_bits(src.type) > type_bits(d->dst.type)) break;
+                    v = src;
+                    break;  // one hop only — deeper casts are semantically real
+                }
+                out += std::format("{}return {};\n", ind, expr(v));
             } else {
                 out += std::format("{}return;\n", ind);
             }
@@ -1809,9 +2204,11 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.binary      = binary;
     e.annotations = annotations;
     e.options     = options;
+    bool has_user_sig = false;
     if (annotations) {
         if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
             e.self_arity = static_cast<u8>(std::min<std::size_t>(sig->params.size(), 6));
+            has_user_sig = true;
         }
     }
     if (e.self_arity == 0) {
@@ -1822,11 +2219,40 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         e.suppress_canary_regions(*sf.body);
         e.analyze_return_folds(*sf.body);
     }
+    if (!has_user_sig) e.bump_arity_from_body_reads();
+    if (!has_user_sig) e.infer_charp_args();
     e.bind_call_returns();
 
     std::string out;
     out += std::format("// {}\n", sf.ir->name.empty()
                                     ? std::string("<unknown>") : sf.ir->name);
+
+    // Infer return type from body: any Return region carrying a non-None
+    // condition means the function yields a value. We use the condition's
+    // IrType to pick an appropriate C type rather than always saying `u64`.
+    auto inferred_return_type = [&](const Emitter&, const StructuredFunction& s) -> std::string {
+        if (!s.body) return "void";
+        std::optional<IrType> t;
+        std::function<void(const Region&)> walk = [&](const Region& r) {
+            if (r.kind == RegionKind::Return &&
+                r.condition.kind != IrValueKind::None) {
+                if (!t) t = r.condition.type;
+            }
+            for (const auto& c : r.children) if (c) walk(*c);
+        };
+        walk(*s.body);
+        if (!t) return "void";
+        switch (*t) {
+            case IrType::F32: return "float";
+            case IrType::F64: return "double";
+            case IrType::I1:  return "bool";
+            case IrType::I8:  return "u8";
+            case IrType::I16: return "u16";
+            case IrType::I32: return "u32";
+            case IrType::I64: return "u64";
+        }
+        return "u64";
+    };
 
     // Pick a display name: user rename beats binary symbol beats the
     // sub_<hex> fallback. Used below for the header so named functions
@@ -1864,23 +2290,31 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                           sig->params[i].name);
                 }
             }
-            const std::string ret = sig->return_type.empty() ? std::string("void")
-                                                             : sig->return_type;
+            const std::string ret = sig->return_type.empty()
+                ? inferred_return_type(e, sf)
+                : sig->return_type;
             header = std::format("{} {}({}) {{\n", ret, display_name(), params);
         }
     }
     if (header.empty()) {
-        const u8 self_arity = binary ? infer_sysv_arity(*binary, sf.ir->start) : u8{0};
+        // Use the Emitter's bumped self_arity rather than re-inferring: the
+        // body may have read live-in regs beyond the conservative inference.
+        const u8 arity = e.self_arity;
         std::string params;
-        if (self_arity == 0) {
+        if (arity == 0) {
             params = "void";
         } else {
-            for (u8 i = 0; i < self_arity; ++i) {
+            for (u8 i = 0; i < arity; ++i) {
                 if (i > 0) params += ", ";
-                params += std::format("u64 a{}", i + 1);
+                const std::string_view t = (i < e.charp_arg.size() && e.charp_arg[i])
+                    ? std::string_view{"char*"}
+                    : std::string_view{"u64"};
+                params += std::format("{} a{}", t, i + 1);
             }
         }
-        header = std::format("void {}({}) {{\n", display_name(), params);
+        header = std::format("{} {}({}) {{\n",
+                             inferred_return_type(e, sf),
+                             display_name(), params);
     }
     out += header;
 
@@ -1889,6 +2323,77 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
 
     out += "}\n";
+
+    // Dead-temp pass: drop `T tN = ...;` lines whose `tN` doesn't appear
+    // anywhere else in the output. visible_use_count can over-count when
+    // the sole reader folds the value through a register-assign chain.
+    {
+        std::vector<std::string> lines;
+        {
+            std::string buf;
+            for (char c : out) {
+                if (c == '\n') { lines.push_back(std::move(buf)); buf.clear(); }
+                else { buf.push_back(c); }
+            }
+            if (!buf.empty()) lines.push_back(std::move(buf));
+        }
+        auto ident_char = [](char c) {
+            return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+        };
+        auto is_decl = [&](const std::string& line, std::string& name) {
+            std::size_t i = 0;
+            while (i < line.size() && line[i] == ' ') ++i;
+            // Type token (one word like u32, u64, bool, double).
+            const std::size_t type_start = i;
+            while (i < line.size() && line[i] != ' ') ++i;
+            if (i == type_start || i >= line.size()) return false;
+            while (i < line.size() && line[i] == ' ') ++i;
+            // Identifier token.
+            const std::size_t name_start = i;
+            if (i >= line.size()) return false;
+            const char c0 = line[i];
+            if (!(std::isalpha(static_cast<unsigned char>(c0)) || c0 == '_')) return false;
+            ++i;
+            while (i < line.size() && ident_char(line[i])) ++i;
+            const std::size_t name_end = i;
+            while (i < line.size() && line[i] == ' ') ++i;
+            if (i >= line.size() || line[i] != '=') return false;
+            name = line.substr(name_start, name_end - name_start);
+            return true;
+        };
+        auto name_appears_elsewhere = [&](const std::string& name,
+                                          std::size_t skip_idx) {
+            for (std::size_t li = 0; li < lines.size(); ++li) {
+                if (li == skip_idx) continue;
+                std::size_t pos = 0;
+                const std::string& l = lines[li];
+                while ((pos = l.find(name, pos)) != std::string::npos) {
+                    const bool left_ok  = pos == 0 ||
+                        !(std::isalnum(static_cast<unsigned char>(l[pos-1])) || l[pos-1] == '_');
+                    const std::size_t end = pos + name.size();
+                    const bool right_ok = end >= l.size() ||
+                        !(std::isalnum(static_cast<unsigned char>(l[end])) || l[end] == '_');
+                    if (left_ok && right_ok) return true;
+                    pos = end;
+                }
+            }
+            return false;
+        };
+
+        std::string cleaned;
+        cleaned.reserve(out.size());
+        for (std::size_t li = 0; li < lines.size(); ++li) {
+            std::string name;
+            if (is_decl(lines[li], name) &&
+                !name_appears_elsewhere(name, li)) {
+                continue;  // dead declaration
+            }
+            cleaned += lines[li];
+            cleaned += '\n';
+        }
+        out = std::move(cleaned);
+    }
+
     return out;
 }
 

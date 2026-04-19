@@ -1,4 +1,4 @@
 // mix
 double mix(double a, double b, double c) {
-  return (((b + a) * c) - a);
+  return (b + a) * c - a;
 }

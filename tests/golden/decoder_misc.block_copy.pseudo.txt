@@ -1,5 +1,5 @@
 // block_copy
-void block_copy(u64 a1) {
+u64 block_copy(u64 a1) {
   rep.movsq();
   return rax;
 }

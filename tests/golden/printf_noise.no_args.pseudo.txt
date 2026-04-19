@@ -1,6 +1,6 @@
 // no_args
-void no_args(void) {
-  fwrite("hello\n", 0x1, 0x6, stdout);
+u64 no_args(void) {
+  fwrite("hello\n", 1, 6, stdout);
   puts("ready");
-  return 0x0;
+  return 0;
 }

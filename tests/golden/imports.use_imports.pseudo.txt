@@ -1,18 +1,18 @@
 // use_imports
-void use_imports(u64 a1, u64 a2) {
-  if ((a1 != 0x0)) {
+u64 use_imports(char* a1, u64 a2) {
+  if (a1) {
     local_10 = a2;
     local_18 = a1;
     u64 r_strlen = strlen(a1);
-    g_count = (r_strlen + g_count);
+    g_count = r_strlen + g_count;
     puts(local_18);
   }
-  if ((rdx != 0x0)) {
-    fputs(rdx, stdout);
+  if (rdx_5) {
+    fputs(rdx_5, stdout);
   }
   u64 r_getenv = getenv("HOME");
-  if ((r_getenv != 0x0)) {
-    g_count = (g_count + 0x1);
+  if (r_getenv) {
+    g_count = g_count + 1;
   }
-  return rax;
+  return rax_10;
 }

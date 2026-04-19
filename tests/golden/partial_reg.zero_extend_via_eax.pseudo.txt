@@ -1,6 +1,6 @@
 // zero_extend_via_eax
-void zero_extend_via_eax(u64 a1) {
-  u64 t2 = (u32)(a1 + 0x1);
+u64 zero_extend_via_eax(u64 a1) {
+  u64 t2 = (u32)(a1 + 1);
   sink_u64 = t2;
-  return t2;
+  return (u32)(a1 + 1);
 }

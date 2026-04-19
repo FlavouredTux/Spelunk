@@ -1,4 +1,4 @@
 // main
-void main(void) {
+u64 main(void) {
   return 0x2a;
 }

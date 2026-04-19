@@ -1,4 +1,4 @@
 // single_sum
 float single_sum(float a, float b) {
-  return (a + b);
+  return a + b;
 }

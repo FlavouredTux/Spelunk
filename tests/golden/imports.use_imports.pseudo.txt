@@ -12,8 +12,7 @@ void use_imports(u64 a1, u64 a2) {
   }
   u64 r_getenv = getenv("HOME");
   if ((r_getenv != 0x0)) {
-    u64 t28 = (g_count + 0x1);
-    g_count = t28;
+    g_count = (g_count + 0x1);
   }
   return rax;
 }

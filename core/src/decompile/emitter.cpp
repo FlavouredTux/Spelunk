@@ -829,9 +829,10 @@ struct Emitter {
     }
 
     // Uses that actually survive into emitted output: skip hidden insts
-    // (ABI noise) and call.args barriers. A temp with visible_use_count <= 1
-    // can be inlined / its declaration dropped, even if raw use_count > 1
-    // due to flag-feeder or hidden reads.
+    // (ABI noise), call.args barriers, AND phi instructions (phis aren't
+    // emitted as statements, so their operand reads don't count toward
+    // whether we need to materialize a local). A temp with visible_use_count
+    // <= 1 can be inlined / its declaration dropped.
     [[nodiscard]] u32 visible_use_count(const IrValue& v) const {
         auto key = ssa_key_of(v);
         if (!key) return 0u;
@@ -842,13 +843,9 @@ struct Emitter {
                 if (hidden.contains({bi, ii})) continue;
                 const auto& inst = bb.insts[ii];
                 if (is_call_arg_barrier(inst)) continue;
-                if (inst.op == IrOp::Phi) {
-                    for (const auto& op : inst.phi_operands)
-                        if (auto ok = ssa_key_of(op); ok && *ok == *key) ++n;
-                } else {
-                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
-                        if (auto ok = ssa_key_of(inst.srcs[i]); ok && *ok == *key) ++n;
-                }
+                if (inst.op == IrOp::Phi) continue;
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                    if (auto ok = ssa_key_of(inst.srcs[i]); ok && *ok == *key) ++n;
             }
         }
         return n;
@@ -881,7 +878,7 @@ struct Emitter {
         const auto* d = def_of(v);
         if (!d) return false;
         if (!inlinable_op(d->op)) return false;
-        if (use_count(v) > 1) return false;
+        if (visible_use_count(v) > 1) return false;
         return true;
     }
 

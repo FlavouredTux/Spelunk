@@ -1,0 +1,10 @@
+401000	37644290c44c60cf	3	11	1	_init
+401070	b86f7104783ff592	3	18	1	main
+4010a0	49323ce08bb1f9d3	1	13	1	_start
+4010d0	0142e72600c79a06	1	2	0	_dl_relocate_static_pie
+4010e0	025f02dc99a4b90a	4	7	0	deregister_tm_clones
+401110	025f02dc99a4b90a	4	7	0	register_tm_clones
+401150	021d3add0a05666d	3	14	1	__do_global_dtors_aux
+401180	6fab90db52f2af4f	5	9	0	frame_dummy
+401190	2afdecdb98d2b2e1	7	61	4	use_imports
+401208	0142e72600c79a06	1	2	0	_fini

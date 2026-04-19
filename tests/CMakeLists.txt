@@ -184,6 +184,17 @@ ember_golden_test(
     GOLDEN  imports.use_imports.pseudo.txt
 )
 
+# Fingerprint stability: the address-independent content hash per function.
+# If this drifts, scripts/names.js (cross-version name carryover) stops
+# matching old databases — bump the "v1" schema token in fingerprint.cpp
+# when that's intentional, and regenerate goldens.
+ember_golden_test(
+    NAME    imports_fingerprints
+    FIXTURE imports
+    ARGS    "--no-cache|--fingerprints"
+    GOLDEN  imports.fingerprints.txt
+)
+
 # ---- decoder_misc (coverage of formerly-unhandled opcodes) -----------------
 #
 # Every function here hits a decoder path that previously produced

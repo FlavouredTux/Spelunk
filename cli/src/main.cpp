@@ -5,12 +5,14 @@
 #include <format>
 #include <optional>
 #include <print>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
 
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/function.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/strings.hpp>
@@ -49,6 +51,7 @@ struct Args {
     bool xrefs  = false;
     bool strings = false;
     bool arities = false;
+    bool fingerprints = false;      // dump address-independent content hash per function
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool help   = false;
 };
@@ -77,6 +80,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"-X", "--xrefs",     &Args::xrefs},
     {"",   "--strings",   &Args::strings},
     {"",   "--arities",   &Args::arities},
+    {"",   "--fingerprints", &Args::fingerprints},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -341,6 +345,38 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
     return out;
 }
 
+// Per-function content hash. One TSV row per entry:
+//   <addr-hex>\t<fingerprint-hex>\t<blocks>\t<insts>\t<calls>\t<symbol-or-sub>
+// Sorted by address. Address-independent — same algorithm across two PIE
+// builds of the same code produces the same fingerprint column.
+[[nodiscard]] std::string build_fingerprints_output(const ember::Binary& b) {
+    std::set<ember::addr_t> fns;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != ember::SymbolKind::Function) continue;
+        if (s.addr == 0 || s.name.empty()) continue;
+        fns.insert(s.addr);
+    }
+    for (const auto& e : ember::compute_call_graph(b)) {
+        if (!b.import_at_plt(e.callee)) fns.insert(e.callee);
+    }
+    std::string out;
+    for (ember::addr_t a : fns) {
+        const auto fp = ember::compute_fingerprint(b, a);
+        if (fp.hash == 0) continue;
+        std::string name;
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != ember::SymbolKind::Function) continue;
+            if (s.addr == a && !s.name.empty()) { name = s.name; break; }
+        }
+        if (name.empty()) name = std::format("sub_{:x}", a);
+        out += std::format("{:x}\t{:016x}\t{}\t{}\t{}\t{}\n",
+                           a, fp.hash, fp.blocks, fp.insts, fp.calls, name);
+    }
+    return out;
+}
+
 template <class Compute>
 int run_cached(const Args& args, std::string_view tag, Compute compute) {
     const auto dir = args.cache_dir.empty()
@@ -405,6 +441,7 @@ void print_help() {
     std::println("  -X, --xrefs          emit full call graph (all fn -> call targets)");
     std::println("      --strings        dump printable strings (addr|text|xrefs)");
     std::println("      --arities        dump inferred SysV arity per function (addr N)");
+    std::println("      --fingerprints   dump address-independent content hash per function");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
@@ -471,6 +508,9 @@ int main(int argc, char** argv) {
     }
     if (args.strings) {
         return run_cached(args, "strings", [&] { return build_strings_output(b); });
+    }
+    if (args.fingerprints) {
+        return run_cached(args, "fingerprints", [&] { return build_fingerprints_output(b); });
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });

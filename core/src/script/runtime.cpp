@@ -7,12 +7,14 @@
 #include <fstream>
 #include <memory>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
 
+#include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
@@ -413,6 +415,27 @@ JSValue js_bin_cfg(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return make_str(ctx, *rv);
 }
 
+// Address-independent content hash of the function at `addr`. Scripts use
+// this to move names forward across binary versions — see
+// scripts/apply-names.js.
+JSValue js_bin_fingerprint(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return throw_err(ctx, "fingerprint: missing addr");
+    const Binary* b = ctx_of(ctx)->binary;
+    auto win = resolve_js_target(ctx, *b, argv[0]);
+    if (!win) return throw_err(ctx, "fingerprint: address/symbol not found");
+    const auto fp = compute_fingerprint(*b, win->start);
+    if (fp.hash == 0) return JS_NULL;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "hash",
+        make_str(ctx, std::format("{:016x}", fp.hash)));
+    JS_SetPropertyStr(ctx, o, "blocks", JS_NewUint32(ctx, fp.blocks));
+    JS_SetPropertyStr(ctx, o, "insts",  JS_NewUint32(ctx, fp.insts));
+    JS_SetPropertyStr(ctx, o, "calls",  JS_NewUint32(ctx, fp.calls));
+    return o;
+}
+
+JSValue js_bin_functions(JSContext* ctx, JSValueConst, int, JSValueConst*);
+
 JSValue addr_name_obj(JSContext* ctx, const Binary& b, addr_t a) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "addr", JS_NewBigUint64(ctx, a));
@@ -426,6 +449,31 @@ JSValue addr_name_obj(JSContext* ctx, const Binary& b, addr_t a) {
     }
     JS_SetPropertyStr(ctx, o, "name", make_str(ctx, name));
     return o;
+}
+
+// Every function entry the CFG builder can walk from. Union of named
+// function symbols and direct call targets, deduplicated. Lets scripts
+// iterate the binary without re-discovering entry points themselves.
+JSValue js_bin_functions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const Binary* b = ctx_of(ctx)->binary;
+    std::set<addr_t> fns;
+    for (const auto& s : b->symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.addr == 0 || s.name.empty()) continue;
+        fns.insert(s.addr);
+    }
+    for (const auto& e : compute_call_graph(*b)) {
+        // Call targets that aren't import stubs land here — the `sub_*`
+        // functions the user actually wants to name.
+        if (!b->import_at_plt(e.callee)) fns.insert(e.callee);
+    }
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+    for (addr_t a : fns) {
+        JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *b, a));
+    }
+    return arr;
 }
 
 JSValue js_xrefs_callees(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -809,6 +857,10 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_disasm_range, "disasmRange", 2));
     JS_SetPropertyStr(ctx, bin, "cfg",
         JS_NewCFunction(ctx, js_bin_cfg,      "cfg",         1));
+    JS_SetPropertyStr(ctx, bin, "fingerprint",
+        JS_NewCFunction(ctx, js_bin_fingerprint, "fingerprint", 1));
+    JS_SetPropertyStr(ctx, bin, "functions",
+        JS_NewCFunction(ctx, js_bin_functions,   "functions",   0));
 
     JS_SetPropertyStr(ctx, global, "binary", bin);
     JS_FreeValue(ctx, global);
@@ -834,6 +886,43 @@ void install_log_global(JSContext* ctx) {
     JS_SetPropertyStr(ctx, log, "error", JS_NewCFunction(ctx, js_log_error, "error", 1));
     JS_SetPropertyStr(ctx, global, "log", log);
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_print, "print", 1));
+    JS_FreeValue(ctx, global);
+}
+
+// Minimal text file I/O — enough for scripts to manage their own sidecar
+// databases (fingerprint tables, custom signature packs, etc.). Path is
+// whatever the host resolves; no chroot. Scripts run with the same
+// privileges as the `ember` process invoking them.
+JSValue js_io_read(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return throw_err(ctx, "io.read: missing path");
+    ScopedCString p(ctx, argv[0]);
+    if (!p.valid()) return throw_err(ctx, "io.read: bad path");
+    std::ifstream f(std::string{p.view()});
+    if (!f) return throw_err(ctx, std::format("io.read: cannot open '{}'", p.view()));
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return make_str(ctx, ss.str());
+}
+
+JSValue js_io_write(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return throw_err(ctx, "io.write: (path, content)");
+    ScopedCString p(ctx, argv[0]);
+    ScopedCString c(ctx, argv[1]);
+    if (!p.valid() || !c.valid()) return throw_err(ctx, "io.write: bad args");
+    std::ofstream f(std::string{p.view()}, std::ios::trunc);
+    if (!f) return throw_err(ctx, std::format("io.write: cannot open '{}'", p.view()));
+    const auto sv = c.view();
+    f.write(sv.data(), static_cast<std::streamsize>(sv.size()));
+    if (!f) return throw_err(ctx, std::format("io.write: short write to '{}'", p.view()));
+    return JS_UNDEFINED;
+}
+
+void install_io_global(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue io = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, io, "read",  JS_NewCFunction(ctx, js_io_read,  "read",  1));
+    JS_SetPropertyStr(ctx, io, "write", JS_NewCFunction(ctx, js_io_write, "write", 2));
+    JS_SetPropertyStr(ctx, global, "io", io);
     JS_FreeValue(ctx, global);
 }
 
@@ -882,6 +971,7 @@ ScriptRuntime::ScriptRuntime(const Binary& binary, ProjectContext* project) noex
     JS_SetContextOpaque(impl_->ctx, &impl_->host);
     install_log_global(impl_->ctx);
     install_binary_global(impl_->ctx);
+    install_io_global(impl_->ctx);
     install_xrefs_global(impl_->ctx);
     install_strings_global(impl_->ctx);
     install_project_global(impl_->ctx);

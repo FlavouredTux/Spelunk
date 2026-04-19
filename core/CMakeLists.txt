@@ -10,6 +10,7 @@ add_library(ember_core STATIC
     src/analysis/arity.cpp
     src/analysis/strings.cpp
     src/analysis/pipeline.cpp
+    src/analysis/fingerprint.cpp
     src/common/annotations.cpp
     src/common/cache.cpp
     src/ir/ir.cpp

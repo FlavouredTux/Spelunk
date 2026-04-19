@@ -353,6 +353,8 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 [[nodiscard]] std::string build_fingerprints_output(const ember::Binary& b) {
     // Build a one-shot addr -> name map; previously this was an O(n²) linear
     // rescan per function which took minutes on large stripped binaries.
+    std::println(stderr, "ember: collecting named functions...");
+    std::fflush(stderr);
     std::unordered_map<ember::addr_t, std::string> name_by_addr;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
@@ -361,17 +363,26 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         name_by_addr.try_emplace(s.addr, s.name);
     }
 
+    std::println(stderr, "ember: {} named functions; walking call graph "
+                         "(this is the slow first step on big binaries)...",
+                         name_by_addr.size());
+    std::fflush(stderr);
+    const auto edges = ember::compute_call_graph(b);
+    std::println(stderr, "ember: {} call edges discovered", edges.size());
+    std::fflush(stderr);
+
     std::set<ember::addr_t> fns;
     for (const auto& [a, _] : name_by_addr) fns.insert(a);
-    for (const auto& e : ember::compute_call_graph(b)) {
+    for (const auto& e : edges) {
         if (!b.import_at_plt(e.callee)) fns.insert(e.callee);
     }
 
     std::string out;
     const auto total = fns.size();
     std::size_t done = 0;
-    const auto tick = std::max<std::size_t>(1, total / 40);  // 40 dots ≈ 2.5%
+    const auto tick = std::max<std::size_t>(1, total / 40);
     std::println(stderr, "ember: fingerprinting {} functions...", total);
+    std::fflush(stderr);
 
     for (ember::addr_t a : fns) {
         const auto fp = ember::compute_fingerprint(b, a);

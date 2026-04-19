@@ -1,6 +1,8 @@
 #include <ember/analysis/pipeline.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdio>
 #include <format>
 #include <span>
 #include <string>
@@ -286,14 +288,32 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
     std::vector<CallEdge> out;
     const X64Decoder dec;
     const CfgBuilder builder(b, dec);
+
+    std::size_t candidates = 0;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.size == 0 || s.name.empty()) continue;
+        ++candidates;
+    }
+    const auto tick = std::max<std::size_t>(1, candidates / 20);
+    std::size_t done = 0;
+    const bool show = candidates >= 500;  // skip chatter on tiny fixtures
+
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.size == 0 || s.name.empty()) continue;
         auto fn_r = builder.build(s.addr, s.name);
+        ++done;
+        if (show && (done % tick == 0 || done == candidates)) {
+            std::fprintf(stderr, "\r  call graph: [%zu/%zu]", done, candidates);
+            std::fflush(stderr);
+        }
         if (!fn_r) continue;
         for (auto t : fn_r->call_targets) out.push_back({s.addr, t});
     }
+    if (show) std::fputc('\n', stderr);
     return out;
 }
 

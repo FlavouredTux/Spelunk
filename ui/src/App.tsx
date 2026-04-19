@@ -9,6 +9,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { CfgGraph } from "./components/CfgGraph";
 import { CallGraphView } from "./components/CallGraphView";
 import { StringsView } from "./components/StringsView";
+import { NotesView } from "./components/NotesView";
 import { XrefsPanel } from "./components/XrefsPanel";
 import { EditDialog } from "./components/EditDialog";
 import {
@@ -46,6 +47,7 @@ export default function App() {
   const [xrefsOpen, setXrefsOpen] = useState(true);
   const [callGraphOpen, setCallGraphOpen] = useState(false);
   const [stringsOpen, setStringsOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
 
   // Data: cross-refs + user annotations + strings + arities
   const [xrefs, setXrefs] = useState<Xrefs>(EMPTY_XREFS);
@@ -213,6 +215,7 @@ export default function App() {
       if (e.key === "Escape") {
         if (editing)        { setEditing(null);        return; }
         if (stringsOpen)    { setStringsOpen(false);   return; }
+        if (notesOpen)      { setNotesOpen(false);     return; }
         if (callGraphOpen)  { setCallGraphOpen(false); return; }
         if (paletteOpen)    { setPaletteOpen(false);   return; }
         if (searchOpen)     { setSearchOpen(false);    return; }
@@ -236,6 +239,10 @@ export default function App() {
       }
       if (mod && (e.key === "t" || e.key === "T")) {
         if (info) { e.preventDefault(); setStringsOpen((o) => !o); }
+        return;
+      }
+      if (mod && (e.key === "j" || e.key === "J")) {
+        if (info) { e.preventDefault(); setNotesOpen((o) => !o); }
         return;
       }
       if (mod && (e.key === "[" || e.key === "{")) { e.preventDefault(); navBack(); return; }
@@ -265,7 +272,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, navBack, navForward, current]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, navBack, navForward, current]);
 
   // Load code whenever selection or view changes
   useEffect(() => {
@@ -501,6 +508,14 @@ export default function App() {
           annotations={annotations}
           onSelect={(f) => navigateTo(f)}
           onClose={() => setStringsOpen(false)}
+        />
+      )}
+      {notesOpen && (
+        <NotesView
+          info={info}
+          annotations={annotations}
+          onSelect={(f) => navigateTo(f)}
+          onClose={() => setNotesOpen(false)}
         />
       )}
       {callGraphOpen && (

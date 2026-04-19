@@ -1,4 +1,4 @@
 // add42
 void add42(u64 a1) {
-  return (u32)(rdi + 0x2a);
+  return (u32)(a1 + 0x2a);
 }

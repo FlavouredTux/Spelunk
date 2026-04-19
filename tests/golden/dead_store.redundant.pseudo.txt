@@ -1,6 +1,6 @@
 // redundant
 void redundant(u64 a1) {
-  local_10 = rdi;
-  s = rdi;
-  return rdi;
+  local_10 = a1;
+  s = a1;
+  return a1;
 }

@@ -1,4 +1,4 @@
 // big
 void big(u64 a1, u64 a2, u64 a3) {
-  return ((rdi ^ rsi) + (rdx * 0x4));
+  return ((a1 ^ a2) + (a3 * 0x4));
 }

@@ -1,5 +1,5 @@
 // preserve_upper_via_al
 void preserve_upper_via_al(u64 a1, u64 a2) {
-  sink_u64 = ((rdi & -0x100) | (u8)rsi);
+  sink_u64 = ((a1 & -0x100) | (u8)a2);
   return rax;
 }

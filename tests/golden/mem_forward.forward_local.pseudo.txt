@@ -1,6 +1,6 @@
 // forward_local
 void forward_local(u64 a1) {
-  u32 t1 = (u32)rdi;
+  u32 t1 = (u32)a1;
   local_1c = t1;
   u32 t9 = (t1 + 0x1);
   local_c = t9;

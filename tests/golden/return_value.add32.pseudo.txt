@@ -1,4 +1,4 @@
 // add32
 void add32(u64 a1, u64 a2) {
-  return (u32)(rdi + rsi);
+  return (u32)(a1 + a2);
 }

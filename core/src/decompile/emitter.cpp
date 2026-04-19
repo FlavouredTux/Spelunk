@@ -140,6 +140,11 @@ struct Emitter {
     const Binary*                                    binary = nullptr;
     const Annotations*                               annotations = nullptr;
     EmitOptions                                      options{};
+    // Number of int-register args for the function being emitted. Set once
+    // at the start of emit() from infer_sysv_arity() or the declared sig, and
+    // used to name raw rdi/rsi/... reads as a1/a2/... when no annotation
+    // overrides them.
+    u8                                               self_arity = 0;
     std::map<SsaKey, const IrInst*>                  defs;
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
     std::map<SsaKey, u32>                            uses;
@@ -315,14 +320,33 @@ struct Emitter {
         return nullptr;
     }
 
-    // Render a Reg IrValue's leaf name. In order:
-    //   1. A Call whose return was bound to a named local and which the IR
-    //      aliases back to this reg.
-    //   2. A declared-signature param name for SysV arg-regs at version 0.
-    //   3. The raw register mnemonic.
+    // If `r` is a SysV int-arg register and the current function actually
+    // takes that arg (per annotations or inferred arity), return the param's
+    // display name. Otherwise nullopt.
+    [[nodiscard]] std::optional<std::string>
+    arg_name_for_live_in(Reg r) const {
+        if (annotations && fn) {
+            if (const FunctionSig* sig = annotations->signature_for(fn->start); sig) {
+                if (const std::string* nm = sysv_param_for(*sig, r); nm && !nm->empty()) {
+                    return *nm;
+                }
+            }
+        }
+        static constexpr Reg kIntArgs[6] = {
+            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
+        };
+        const Reg canon = canonical_reg(r);
+        for (u8 i = 0; i < 6 && i < self_arity; ++i) {
+            if (kIntArgs[i] == canon) return std::format("a{}", i + 1);
+        }
+        return std::nullopt;
+    }
+
+    // Render a Reg IrValue's leaf name. Resolution order:
+    //   1. A Call-return binding for this (canonical reg, version).
+    //   2. Chase Assign aliases; any arg-reg live-in along the way wins.
+    //   3. Raw register mnemonic.
     [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version) const {
-        // Chase Assign aliases so `rax_2 = rax_1` still resolves to rax_1's
-        // bound call-return name.
         Reg cur_reg = r;
         u32 cur_ver = version;
         for (int hop = 0; hop < 8; ++hop) {
@@ -330,7 +354,10 @@ struct Emitter {
             if (auto it = call_return_names.find(k); it != call_return_names.end()) {
                 return it->second;
             }
-            if (cur_ver == 0) break;
+            if (cur_ver == 0) {
+                if (auto n = arg_name_for_live_in(cur_reg)) return *n;
+                break;
+            }
             IrValue v{};
             v.kind = IrValueKind::Reg;
             v.reg = cur_reg;
@@ -341,13 +368,6 @@ struct Emitter {
             if (src.kind != IrValueKind::Reg) break;
             cur_reg = src.reg;
             cur_ver = src.version;
-        }
-        if (version == 0 && annotations && fn) {
-            if (const FunctionSig* sig = annotations->signature_for(fn->start); sig) {
-                if (const std::string* nm = sysv_param_for(*sig, r); nm && !nm->empty()) {
-                    return *nm;
-                }
-            }
         }
         return std::string(reg_name(r));
     }
@@ -1723,6 +1743,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.binary      = binary;
     e.annotations = annotations;
     e.options     = options;
+    if (annotations) {
+        if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
+            e.self_arity = static_cast<u8>(std::min<std::size_t>(sig->params.size(), 6));
+        }
+    }
+    if (e.self_arity == 0) {
+        e.self_arity = binary ? infer_sysv_arity(*binary, sf.ir->start) : u8{0};
+    }
     e.analyze(*sf.ir);
     if (sf.body) {
         e.suppress_canary_regions(*sf.body);

@@ -1,4 +1,4 @@
 // compound
 void compound(u64 a1) {
-  return (u32)((rdi + (rdi * 0x2)) + 0x7);
+  return (u32)((a1 + (a1 * 0x2)) + 0x7);
 }

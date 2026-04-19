@@ -1,9 +1,9 @@
 // use_imports
 void use_imports(u64 a1, u64 a2) {
-  if ((rdi != 0x0)) {
-    local_10 = rsi;
-    local_18 = rdi;
-    u64 r_strlen = strlen(rdi);
+  if ((a1 != 0x0)) {
+    local_10 = a2;
+    local_18 = a1;
+    u64 r_strlen = strlen(a1);
     g_count = (r_strlen + g_count);
     puts(local_18);
   }

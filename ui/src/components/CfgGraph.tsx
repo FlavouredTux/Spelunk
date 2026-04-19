@@ -57,6 +57,40 @@ function parseCfg(text: string): { blocks: CfgBlock[]; entry: string | null } {
   return { blocks, entry };
 }
 
+// Collapse single-succ / single-pred fallthrough chains into one node.
+function mergeFallthroughs(blocks: CfgBlock[]): CfgBlock[] {
+  const byId = new Map<string, CfgBlock>();
+  for (const b of blocks) {
+    byId.set(b.id, { ...b, preds: [...b.preds], succs: [...b.succs], lines: [...b.lines] });
+  }
+  const isFallthrough = (label: string) => label === "" || label === "fallthrough";
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const p of Array.from(byId.values())) {
+      if (p.succs.length !== 1) continue;
+      const edge = p.succs[0];
+      if (edge.target.startsWith("<")) continue;
+      if (!isFallthrough(edge.label)) continue;
+      const b = byId.get(edge.target);
+      if (!b || b === p) continue;
+      if (b.preds.length !== 1 || b.preds[0] !== p.id) continue;
+
+      p.lines = p.lines.concat(b.lines);
+      p.succs = b.succs;
+      for (const s of b.succs) {
+        const t = byId.get(s.target);
+        if (!t) continue;
+        t.preds = t.preds.map((x) => (x === b.id ? p.id : x));
+      }
+      byId.delete(b.id);
+      changed = true;
+    }
+  }
+  return Array.from(byId.values());
+}
+
 const NODE_W   = 288;
 const HEADER_H = 24;
 const LINE_H   = 14;
@@ -286,15 +320,16 @@ const Edges = memo(function Edges(props: {
       const y2 = ep.y;
       if (!segmentInRect(x1, y1, x2, y2, viewRect)) continue;
       const isBack = (layout.ranks.get(s.target) ?? 0) <= (layout.ranks.get(b.id) ?? 0);
+      const isFall = s.label === "" || s.label === "fallthrough";
       const color =
-        s.label === "taken"       ? C.green    :
-        s.label === "fallthrough" ? C.accent   :
-        s.label === "indirect"    ? C.violet   :
+        isFall                 ? C.textFaint :
+        s.label === "taken"    ? C.green     :
+        s.label === "indirect" ? C.violet    :
         C.textMuted;
       const marker =
-        s.label === "taken"       ? "url(#arrow-taken)" :
-        s.label === "fallthrough" ? "url(#arrow-fall)"  :
-        s.label === "indirect"    ? "url(#arrow-indirect)" :
+        isFall                 ? "url(#arrow-fall)"     :
+        s.label === "taken"    ? "url(#arrow-taken)"    :
+        s.label === "indirect" ? "url(#arrow-indirect)" :
         "url(#arrow-uncond)";
       const d = isBack
         ? backEdgePath(x1, y1, x2, y2)
@@ -304,10 +339,11 @@ const Edges = memo(function Edges(props: {
           key={b.id + "-" + i}
           d={d}
           stroke={color}
-          strokeWidth={1.4}
+          strokeWidth={isFall ? 1.1 : 1.4}
+          strokeDasharray={isFall ? "4 3" : undefined}
           fill="none"
           markerEnd={marker}
-          opacity={0.85}
+          opacity={isFall ? 0.5 : 0.85}
         />
       );
     }
@@ -316,7 +352,10 @@ const Edges = memo(function Edges(props: {
 });
 
 export function CfgGraph(props: { text: string; onXref?: (addr: number) => void }) {
-  const parsed = useMemo(() => parseCfg(props.text), [props.text]);
+  const parsed = useMemo(() => {
+    const raw = parseCfg(props.text);
+    return { blocks: mergeFallthroughs(raw.blocks), entry: raw.entry };
+  }, [props.text]);
   const layout = useMemo(() => {
     if (!parsed.entry) return {
       positions: new Map(), ranks: new Map(),
@@ -504,7 +543,7 @@ export function CfgGraph(props: { text: string; onXref?: (addr: number) => void 
           </marker>
           <marker id="arrow-fall" viewBox="0 0 10 10" refX="8" refY="5"
                   markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" fill={C.accent}/>
+            <path d="M0,0 L10,5 L0,10 z" fill={C.textFaint}/>
           </marker>
           <marker id="arrow-uncond" viewBox="0 0 10 10" refX="8" refY="5"
                   markerWidth="6" markerHeight="6" orient="auto">
@@ -540,9 +579,9 @@ export function CfgGraph(props: { text: string; onXref?: (addr: number) => void 
         pointerEvents: "none",
       }}>
         <LegendSwatch color={C.green}     label="taken" />
-        <LegendSwatch color={C.accent}    label="fallthrough" />
         <LegendSwatch color={C.textMuted} label="uncond" />
         <LegendSwatch color={C.violet}    label="indirect" />
+        <LegendSwatch color={C.textFaint} label="fallthrough" dashed />
       </div>
       <div style={{
         position: "absolute", bottom: 10, right: 12,
@@ -557,10 +596,17 @@ export function CfgGraph(props: { text: string; onXref?: (addr: number) => void 
   );
 }
 
-function LegendSwatch(props: { color: string; label: string }) {
+function LegendSwatch(props: { color: string; label: string; dashed?: boolean }) {
   return (
     <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      <span style={{ width: 10, height: 2, background: props.color }} />
+      <span
+        style={{
+          width: 10, height: 2,
+          background: props.dashed
+            ? `repeating-linear-gradient(90deg, ${props.color} 0 3px, transparent 3px 5px)`
+            : props.color,
+        }}
+      />
       <span>{props.label}</span>
     </span>
   );

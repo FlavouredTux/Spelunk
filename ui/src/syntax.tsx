@@ -137,7 +137,21 @@ export function highlightLine(
         // Call-return locals introduced by the emitter's rax-aliasing fix.
         // Shape: r_<callee-name>, optionally with a _<n> disambiguator.
         else if (/^r_[A-Za-z_]\w*$/.test(word)) {
-          pushStr(word, { color: SH.bound });
+          const bare = word.slice(2);
+          const fnAddr =
+            fnAddrByName?.get(bare) ??
+            fnAddrByName?.get(bare.replace(/_\d+$/, ""));
+          if (fnAddr !== undefined) {
+            tokens.push({
+              text: word,
+              color: SH.bound,
+              onClick: () => onXref(fnAddr),
+              onContextMenu: onFnContext ? (ev) => onFnContext(fnAddr, ev) : undefined,
+              className: "fn-link",
+            });
+          } else {
+            pushStr(word, { color: SH.bound });
+          }
         }
         else if (C_KEYWORDS.has(word)) {
           pushStr(word, { color: SH.keyword, bold: true });

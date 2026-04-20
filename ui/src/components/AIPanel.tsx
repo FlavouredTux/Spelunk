@@ -34,11 +34,21 @@ export function SparkIcon(props: { size?: number; style?: React.CSSProperties })
   );
 }
 
+type ToolEntry = {
+  name:    string;
+  args:    Record<string, unknown>;
+  status:  "pending" | "ok" | "err";
+  chars?:  number;
+};
 type ChatTurn = {
   role:    "user" | "assistant";
   content: string;
   // For assistant turns: still being streamed?
   pending?: boolean;
+  // For assistant turns: trail of agentic tool calls the model made
+  // while producing this answer. Persists after streaming so the
+  // user can audit "what did it look at?" later.
+  tools?:  ToolEntry[];
 };
 
 export function AIPanel(props: {
@@ -58,12 +68,6 @@ export function AIPanel(props: {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  // Live trail of agentic tool calls for the in-flight turn. Cleared
-  // on a new submit; appended on each `onTool`, marked done on each
-  // `onToolDone`. Renders as a status row above the streaming
-  // assistant message.
-  type ToolEntry = { name: string; args: Record<string, unknown>; status: "pending" | "ok" | "err"; chars?: number };
-  const [toolTrail, setToolTrail] = useState<ToolEntry[]>([]);
   const streamRef = useRef<ChatStream | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
@@ -163,7 +167,6 @@ export function AIPanel(props: {
       messages.pop();
     }
 
-    setToolTrail([]);
     const stream = streamChat(
       { messages, model },
       (delta) => {
@@ -175,21 +178,30 @@ export function AIPanel(props: {
         });
       },
       (info) => {
-        // Tool invocation started — append to the trail in pending state.
-        setToolTrail((cur) => [...cur, { name: info.name, args: info.args || {}, status: "pending" }]);
+        // Tool invocation started — append to the assistant turn's
+        // trail in pending state.
+        setTurns((cur) => {
+          const last = cur[cur.length - 1];
+          if (last?.role !== "assistant") return cur;
+          const tools = [...(last.tools || []),
+            { name: info.name, args: info.args || {}, status: "pending" as const }];
+          return [...cur.slice(0, -1), { ...last, tools }];
+        });
       },
       (info) => {
         // Tool finished — match the most recent pending entry by name
-        // (LIFO works because tools are sequential within a turn).
-        setToolTrail((cur) => {
-          for (let i = cur.length - 1; i >= 0; i--) {
-            if (cur[i].name === info.name && cur[i].status === "pending") {
-              const copy = cur.slice();
-              copy[i] = { ...copy[i], status: info.ok ? "ok" : "err", chars: info.chars };
-              return copy;
+        // and mark it ok / err.
+        setTurns((cur) => {
+          const last = cur[cur.length - 1];
+          if (last?.role !== "assistant" || !last.tools) return cur;
+          const tools = last.tools.slice();
+          for (let i = tools.length - 1; i >= 0; i--) {
+            if (tools[i].name === info.name && tools[i].status === "pending") {
+              tools[i] = { ...tools[i], status: info.ok ? "ok" : "err", chars: info.chars };
+              break;
             }
           }
-          return cur;
+          return [...cur.slice(0, -1), { ...last, tools }];
         });
       },
     );
@@ -362,9 +374,6 @@ export function AIPanel(props: {
           {turns.map((t, i) => (
             <Turn key={i} turn={t} />
           ))}
-          {toolTrail.length > 0 && busy && (
-            <ToolTrail entries={toolTrail} />
-          )}
         </div>
 
         {/* Retry affordance — surfaces when the last assistant turn
@@ -664,53 +673,88 @@ function EmptyState(props: {
 // inline (paragraphs, fenced code, single-back-tick code spans). Full
 // Markdown isn't worth the dep — the system prompt steers the model
 // away from headers / lists / horizontal rules.
-// Renders the live agentic tool-call trail. Each entry is a
-// monospace pill: tool name + a one-arg preview, with a status dot
-// (pending / ok / error). Compact so it doesn't push the streamed
-// answer off-screen — typically 1-3 calls per turn.
+// Renders the agentic tool-call trail attached to an assistant turn.
+// Each entry is one row: tool name + one-arg preview + status dot
+// (pending / ok / err) + result size. Defaults to collapsed when the
+// turn is finished (`startCollapsed`) so multi-turn history stays
+// readable; expanded while streaming so the user sees progress live.
 function ToolTrail(props: {
-  entries: { name: string; args: Record<string, unknown>; status: "pending" | "ok" | "err"; chars?: number }[];
+  entries: ToolEntry[];
+  startCollapsed?: boolean;
 }) {
+  const [open, setOpen] = useState(!props.startCollapsed);
+  const okCount  = props.entries.filter((e) => e.status === "ok").length;
+  const errCount = props.entries.filter((e) => e.status === "err").length;
+  const pending  = props.entries.filter((e) => e.status === "pending").length;
+  const summary =
+    pending > 0 ? `${props.entries.length} call${props.entries.length === 1 ? "" : "s"} · ${pending} pending`
+    : errCount > 0 ? `${props.entries.length} call${props.entries.length === 1 ? "" : "s"} · ${errCount} failed`
+    :                `${props.entries.length} tool call${props.entries.length === 1 ? "" : "s"}`;
   return (
     <div style={{
-      display: "flex", flexDirection: "column", gap: 4,
-      padding: "8px 12px",
       borderLeft: `2px solid ${C.accent}`,
       background: "rgba(217,119,87,0.05)",
       borderRadius: 4,
       fontFamily: mono, fontSize: 10,
       color: C.textMuted,
+      overflow: "hidden",
     }}>
-      {props.entries.map((e, i) => {
-        const dot = e.status === "pending" ? "·"
-                  : e.status === "ok"      ? "✓"
-                  :                          "×";
-        const dotColor = e.status === "pending" ? C.textFaint
-                       : e.status === "ok"      ? C.green
-                       :                          C.red;
-        const previewArg = Object.values(e.args)[0];
-        const preview = typeof previewArg === "string"
-          ? previewArg.length > 60 ? previewArg.slice(0, 60) + "…" : previewArg
-          : "";
-        return (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: dotColor, width: 10, textAlign: "center" }}>{dot}</span>
-            <span style={{ color: C.text }}>{e.name}</span>
-            {preview && (
-              <span style={{ color: C.textFaint }}>({preview})</span>
-            )}
-            {typeof e.chars === "number" && e.status !== "pending" && (
-              <span style={{ color: C.textFaint, marginLeft: "auto" }}>{e.chars} chars</span>
-            )}
-          </div>
-        );
-      })}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          all: "unset",
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "6px 12px",
+          width: "100%", boxSizing: "border-box",
+          cursor: "pointer",
+          color: C.textMuted,
+        }}
+      >
+        <span style={{ color: C.textFaint, width: 10 }}>{open ? "▾" : "▸"}</span>
+        <span>{summary}</span>
+        {okCount > 0 && open === false && (
+          <span style={{ color: C.green, marginLeft: "auto" }}>✓ {okCount}</span>
+        )}
+      </button>
+      {open && (
+        <div style={{
+          display: "flex", flexDirection: "column", gap: 4,
+          padding: "0 12px 8px 12px",
+        }}>
+          {props.entries.map((e, i) => {
+            const dot = e.status === "pending" ? "·"
+                      : e.status === "ok"      ? "✓"
+                      :                          "×";
+            const dotColor = e.status === "pending" ? C.textFaint
+                           : e.status === "ok"      ? C.green
+                           :                          C.red;
+            const previewArg = Object.values(e.args)[0];
+            const preview = typeof previewArg === "string"
+              ? previewArg.length > 60 ? previewArg.slice(0, 60) + "…" : previewArg
+              : "";
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: dotColor, width: 10, textAlign: "center" }}>{dot}</span>
+                <span style={{ color: C.text }}>{e.name}</span>
+                {preview && (
+                  <span style={{ color: C.textFaint }}>({preview})</span>
+                )}
+                {typeof e.chars === "number" && e.status !== "pending" && (
+                  <span style={{ color: C.textFaint, marginLeft: "auto" }}>{e.chars} chars</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
 function Turn(props: { turn: ChatTurn }) {
   const isUser = props.turn.role === "user";
+  const tools = props.turn.tools;
   return (
     <div style={{
       marginBottom: 14,
@@ -726,6 +770,15 @@ function Turn(props: { turn: ChatTurn }) {
           <span style={{ marginLeft: 6, color: C.accent }}>· streaming…</span>
         )}
       </div>
+      {/* Tool trail above the answer body, scoped to this turn — so
+          users can audit what the model looked at even after the
+          response is done. Collapsible to keep multi-turn history
+          tidy when calls pile up. */}
+      {tools && tools.length > 0 && (
+        <div style={{ maxWidth: "92%", width: "92%", marginBottom: 6 }}>
+          <ToolTrail entries={tools} startCollapsed={!props.turn.pending} />
+        </div>
+      )}
       <div style={{
         maxWidth: "92%",
         padding: "10px 14px",
@@ -736,7 +789,10 @@ function Turn(props: { turn: ChatTurn }) {
         color: C.text, whiteSpace: "pre-wrap",
       }}>
         {renderMarkdown(props.turn.content)}
-        {props.turn.pending && !props.turn.content && (
+        {props.turn.pending && !props.turn.content && tools && tools.some((t) => t.status === "pending") && (
+          <span style={{ color: C.textFaint, fontStyle: "italic" }}>navigating…</span>
+        )}
+        {props.turn.pending && !props.turn.content && (!tools || !tools.some((t) => t.status === "pending")) && (
           <span style={{ color: C.textFaint, fontStyle: "italic" }}>thinking…</span>
         )}
       </div>

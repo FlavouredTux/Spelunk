@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron");
 const { spawn } = require("node:child_process");
+const https = require("node:https");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -193,6 +194,200 @@ ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, JSON.stringify(data, null, 2), "utf8");
   return true;
+});
+
+// ----- AI / OpenRouter -----
+//
+// The renderer never sees the API key — it only sees streamed deltas
+// labelled with a request id. We hold the key, plus the user-chosen
+// model and a few canned model presets, in a small JSON sidecar in
+// userData. Key bytes are encrypted with Electron's safeStorage when
+// the OS supports it (Keychain on macOS, libsecret on Linux, DPAPI on
+// Windows); when it doesn't, we fall back to plaintext with a flag in
+// the sidecar so the renderer can warn the user.
+
+const AI_CONFIG_PATH = () => path.join(app.getPath("userData"), "ai.json");
+
+// Default models we surface in the picker. The user can paste any
+// OpenRouter model id; this list is just the well-known set so the
+// dropdown isn't empty on first run. Update freely — there's no
+// version-pinning that depends on these strings.
+const AI_DEFAULT_MODELS = [
+  "assistant/assistant-sonnet-4.5",
+  "assistant/assistant-haiku-4.5",
+  "assistant/assistant-opus-4.6",
+  "openai/gpt-5",
+  "openai/gpt-5-mini",
+  "google/gemini-2.5-pro",
+  "google/gemini-2.5-flash",
+  "deepseek/deepseek-chat-v3.5",
+  "x-ai/grok-4",
+  "meta-llama/llama-4-maverick",
+];
+
+async function loadAiConfig() {
+  try {
+    const raw = await fs.readFile(AI_CONFIG_PATH(), "utf8");
+    const j   = JSON.parse(raw);
+    let key = "";
+    if (j.keyEncrypted && safeStorage.isEncryptionAvailable()) {
+      try { key = safeStorage.decryptString(Buffer.from(j.keyEncrypted, "base64")); }
+      catch { key = ""; }
+    } else if (j.keyPlain) {
+      key = j.keyPlain;
+    }
+    return {
+      hasKey:    !!key,
+      model:     j.model || AI_DEFAULT_MODELS[0],
+      encrypted: !!j.keyEncrypted,
+    };
+  } catch {
+    return { hasKey: false, model: AI_DEFAULT_MODELS[0], encrypted: false };
+  }
+}
+
+async function loadAiKey() {
+  try {
+    const raw = await fs.readFile(AI_CONFIG_PATH(), "utf8");
+    const j   = JSON.parse(raw);
+    if (j.keyEncrypted && safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(Buffer.from(j.keyEncrypted, "base64"));
+    }
+    return j.keyPlain || "";
+  } catch { return ""; }
+}
+
+async function saveAiConfig({ apiKey, model }) {
+  const out = { model };
+  if (typeof apiKey === "string") {
+    if (safeStorage.isEncryptionAvailable()) {
+      out.keyEncrypted = safeStorage.encryptString(apiKey).toString("base64");
+    } else {
+      // Plaintext fallback. Renderer surfaces this in the settings UI
+      // so the user knows the file isn't safe to share.
+      out.keyPlain = apiKey;
+    }
+  } else {
+    // Caller didn't touch the key — preserve whatever's already on disk.
+    try {
+      const raw = await fs.readFile(AI_CONFIG_PATH(), "utf8");
+      const j   = JSON.parse(raw);
+      if (j.keyEncrypted) out.keyEncrypted = j.keyEncrypted;
+      if (j.keyPlain)     out.keyPlain     = j.keyPlain;
+    } catch { /* fresh config */ }
+  }
+  await fs.mkdir(path.dirname(AI_CONFIG_PATH()), { recursive: true });
+  await fs.writeFile(AI_CONFIG_PATH(), JSON.stringify(out, null, 2), "utf8");
+}
+
+ipcMain.handle("ember:ai:getConfig", async () => loadAiConfig());
+
+ipcMain.handle("ember:ai:setConfig", async (_e, c) => {
+  await saveAiConfig({ apiKey: c.apiKey, model: c.model });
+  return loadAiConfig();
+});
+
+ipcMain.handle("ember:ai:listModels", async () => AI_DEFAULT_MODELS.slice());
+
+// Active in-flight requests, keyed by id so `ai:cancel` can abort.
+const AI_INFLIGHT = new Map();
+let AI_NEXT_ID    = 1;
+
+ipcMain.handle("ember:ai:cancel", async (_e, id) => {
+  const ent = AI_INFLIGHT.get(id);
+  if (!ent) return false;
+  try { ent.req.destroy(new Error("cancelled")); } catch {}
+  AI_INFLIGHT.delete(id);
+  return true;
+});
+
+ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
+  const apiKey = await loadAiKey();
+  if (!apiKey) throw new Error("no OpenRouter API key configured");
+
+  const id    = String(AI_NEXT_ID++);
+  const win   = BrowserWindow.fromWebContents(e.sender);
+  const send  = (channel, ...args) => {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, id, ...args);
+  };
+
+  const body = JSON.stringify({
+    model:       model || (await loadAiConfig()).model,
+    messages,
+    stream:      true,
+    temperature: typeof temperature === "number" ? temperature : 0.4,
+  });
+
+  const req = https.request({
+    method:   "POST",
+    hostname: "openrouter.ai",
+    path:     "/api/v1/chat/completions",
+    headers:  {
+      "Authorization":   `Bearer ${apiKey}`,
+      "Content-Type":    "application/json",
+      "Content-Length":  Buffer.byteLength(body),
+      // OpenRouter recommends these for the request to be attributed
+      // back to the calling app in their dashboards.
+      "HTTP-Referer":    "https://github.com/FlavouredTux/Ember",
+      "X-Title":         "Ember",
+    },
+  }, (res) => {
+    if (res.statusCode && res.statusCode >= 400) {
+      let buf = "";
+      res.on("data", (d) => { buf += d.toString(); });
+      res.on("end", () => {
+        send("ember:ai:error",
+             `OpenRouter ${res.statusCode}: ${buf.slice(0, 400)}`);
+        AI_INFLIGHT.delete(id);
+      });
+      return;
+    }
+    // Server-Sent Events parsing. The OpenAI-compatible streaming
+    // format chunks JSON deltas as `data: {...}\n\n` events; the
+    // sentinel `data: [DONE]` ends the stream.
+    let pending = "";
+    let total   = 0;
+    res.on("data", (chunk) => {
+      pending += chunk.toString();
+      let idx;
+      while ((idx = pending.indexOf("\n\n")) !== -1) {
+        const event = pending.slice(0, idx);
+        pending = pending.slice(idx + 2);
+        for (const rawLine of event.split("\n")) {
+          const line = rawLine.startsWith("data: ") ? rawLine.slice(6) : rawLine;
+          if (!line || !line.startsWith("{")) {
+            if (line === "[DONE]") { /* handled at end */ }
+            continue;
+          }
+          try {
+            const j = JSON.parse(line);
+            const delta = j.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta.length > 0) {
+              total += delta.length;
+              send("ember:ai:chunk", delta);
+            }
+          } catch {
+            // Stray non-JSON keepalive comment — OpenRouter sends `: …`
+            // every 15s. Ignore.
+          }
+        }
+      }
+    });
+    res.on("end", () => {
+      send("ember:ai:done", { chars: total });
+      AI_INFLIGHT.delete(id);
+    });
+  });
+
+  req.on("error", (err) => {
+    send("ember:ai:error", err.message || String(err));
+    AI_INFLIGHT.delete(id);
+  });
+
+  AI_INFLIGHT.set(id, { req });
+  req.write(body);
+  req.end();
+  return id;
 });
 
 // ----- Recents -----

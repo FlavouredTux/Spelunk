@@ -53,6 +53,14 @@ export type StringEntry = {
 // addrNum (function start) -> inferred SysV arity (0..6)
 export type Arities = Record<number, number>;
 
+export type AiMessage = { role: "system" | "user" | "assistant"; content: string };
+export type AiConfig  = { hasKey: boolean; model: string; encrypted: boolean };
+export type AiChatRequest = {
+  messages:    AiMessage[];
+  model?:      string;
+  temperature?: number;
+};
+
 declare global {
   interface Window {
     ember: {
@@ -66,6 +74,17 @@ declare global {
 
       recents:          () => Promise<string[]>;
       openRecent:       (bp: string) => Promise<string>;
+
+      ai: {
+        getConfig:    () => Promise<AiConfig>;
+        setConfig:    (c: { apiKey?: string; model?: string }) => Promise<AiConfig>;
+        listModels:   () => Promise<string[]>;
+        chat:         (req: AiChatRequest) => Promise<string>;
+        cancel:       (id: string) => Promise<boolean>;
+        onChunk:      (cb: (id: string, delta: string) => void) => () => void;
+        onDone:       (cb: (id: string, info: { chars: number }) => void) => () => void;
+        onError:      (cb: (id: string, msg: string) => void) => () => void;
+      };
     };
   }
 }

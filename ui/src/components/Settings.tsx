@@ -3,6 +3,7 @@ import { C, sans, serif, mono } from "../theme";
 import type { AppSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
 import { clearRendererCaches } from "../api";
+import type { AiConfig } from "../types";
 
 // Settings gear. Stroked-outline style (matches the rest of the
 // title-bar glyphs), 24×24 viewBox so the curved tooth flanks
@@ -159,6 +160,10 @@ export function SettingsPanel(props: {
             </Row>
           </Section>
 
+          <Section title="AI (OpenRouter)">
+            <AiConfigSection />
+          </Section>
+
           <Section title="Defaults">
             <Row label="Reset all settings" hint="Restores every option above to its factory value.">
               <button
@@ -293,6 +298,131 @@ const stepBtnStyle: React.CSSProperties = {
   fontFamily: mono, fontSize: 13,
   cursor: "pointer",
   display: "flex", alignItems: "center", justifyContent: "center",
+};
+
+// AI key + model picker. Talks to the main process directly so the
+// API key never lives in renderer state — we hold an opaque "have a
+// key" boolean and only ever ship a fresh string back when the user
+// pastes a new one.
+function AiConfigSection() {
+  const [cfg, setCfg]   = useState<AiConfig | null>(null);
+  const [models, setMs] = useState<string[]>([]);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [revealed, setRevealed] = useState(false);
+  const [saving, setSaving]     = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    Promise.all([window.ember.ai.getConfig(), window.ember.ai.listModels()])
+      .then(([c, m]) => { if (!cancel) { setCfg(c); setMs(m); } })
+      .catch(() => {});
+    return () => { cancel = true; };
+  }, []);
+
+  if (!cfg) {
+    return <div style={{ color: C.textFaint, fontFamily: serif, fontStyle: "italic" }}>
+      loading…
+    </div>;
+  }
+
+  async function saveKey(k: string) {
+    setSaving(true);
+    try {
+      const next = await window.ember.ai.setConfig({ apiKey: k });
+      setCfg(next);
+      setKeyDraft("");
+    } finally { setSaving(false); }
+  }
+  async function changeModel(m: string) {
+    const next = await window.ember.ai.setConfig({ model: m });
+    setCfg(next);
+  }
+
+  return (
+    <>
+      <Row
+        label="OpenRouter API key"
+        hint={cfg.hasKey
+          ? (cfg.encrypted
+              ? "Stored encrypted via the OS keychain (safeStorage). Paste a new key to replace."
+              : "Stored as plaintext — your platform doesn't expose a keychain. Treat the userData dir as sensitive.")
+          : "Paste a key from openrouter.ai/keys — never leaves the main process."}
+      >
+        <div style={{ display: "flex", gap: 4 }}>
+          <input
+            type={revealed ? "text" : "password"}
+            value={keyDraft}
+            onChange={(e) => setKeyDraft(e.target.value)}
+            placeholder={cfg.hasKey ? "•••••• (key set)" : "sk-or-v1-…"}
+            style={{
+              width: 200,
+              fontFamily: mono, fontSize: 11,
+              color: C.text,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              padding: "5px 8px",
+            }}
+          />
+          <button
+            onClick={() => setRevealed((r) => !r)}
+            title={revealed ? "Hide" : "Reveal"}
+            style={iconBtnStyle}
+          >{revealed ? "hide" : "show"}</button>
+          <button
+            onClick={() => keyDraft && saveKey(keyDraft)}
+            disabled={!keyDraft || saving}
+            style={{
+              ...iconBtnStyle,
+              background: keyDraft ? C.accent : C.bgMuted,
+              color:      keyDraft ? "#fff"   : C.textMuted,
+              cursor:     keyDraft ? "pointer" : "not-allowed",
+            }}
+          >save</button>
+        </div>
+      </Row>
+
+      {cfg.hasKey && (
+        <Row label="Default model" hint="Any OpenRouter model id works; the dropdown is just convenience.">
+          <select
+            value={cfg.model}
+            onChange={(e) => changeModel(e.target.value)}
+            style={{
+              background: C.bgMuted, color: C.text,
+              border: `1px solid ${C.border}`, borderRadius: 4,
+              padding: "5px 8px",
+              fontFamily: mono, fontSize: 11,
+              minWidth: 220,
+            }}
+          >
+            {models.map((m) => <option key={m} value={m}>{m}</option>)}
+            {!models.includes(cfg.model) && (
+              <option value={cfg.model}>{cfg.model}</option>
+            )}
+          </select>
+        </Row>
+      )}
+
+      {cfg.hasKey && (
+        <Row label="Forget stored key" hint="Removes the key from disk. Settings panel can re-add it later.">
+          <button
+            onClick={() => saveKey("")}
+            style={{
+              ...iconBtnStyle,
+              borderColor: C.red, color: C.red,
+            }}
+          >forget key</button>
+        </Row>
+      )}
+    </>
+  );
+}
+
+const iconBtnStyle: React.CSSProperties = {
+  padding: "5px 10px",
+  background: C.bgMuted, color: C.text,
+  border: `1px solid ${C.border}`, borderRadius: 4,
+  fontFamily: mono, fontSize: 10, cursor: "pointer",
 };
 
 function Segmented<T extends string>(props: {

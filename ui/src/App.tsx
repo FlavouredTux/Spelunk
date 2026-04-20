@@ -7,6 +7,7 @@ import { Tabs } from "./components/Tabs";
 import { StatusBar } from "./components/StatusBar";
 import { CommandPalette } from "./components/CommandPalette";
 import { CfgGraph } from "./components/CfgGraph";
+import { AIPanel, SparkIcon } from "./components/AIPanel";
 import { GearIcon, SettingsPanel } from "./components/Settings";
 import { loadSettings, saveSettings } from "./settings";
 import type { AppSettings } from "./settings";
@@ -40,6 +41,7 @@ export default function App() {
   // flashing defaults first.
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const updateSettings = useCallback((s: AppSettings) => {
     setSettings(s);
     saveSettings(s);
@@ -273,6 +275,10 @@ export default function App() {
         if (info) { e.preventDefault(); setNotesOpen((o) => !o); }
         return;
       }
+      if (mod && (e.key === "k" || e.key === "K")) {
+        if (info) { e.preventDefault(); setAiOpen((o) => !o); }
+        return;
+      }
       if (mod && (e.key === "[" || e.key === "{")) { e.preventDefault(); navBack(); return; }
       if (mod && (e.key === "]" || e.key === "}")) { e.preventDefault(); navForward(); return; }
 
@@ -462,6 +468,34 @@ export default function App() {
             {info.arch.toUpperCase()} · {info.format.toUpperCase()}
           </span>
           <button
+            onClick={() => setAiOpen(true)}
+            style={{
+              padding: 5,
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: "transparent",
+              border: `1px solid transparent`,
+              borderRadius: 4,
+              cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = C.accent;
+              e.currentTarget.style.background = C.bgMuted;
+              e.currentTarget.style.borderColor = C.border;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = C.textMuted;
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.borderColor = "transparent";
+            }}
+            title="Ember AI (⌘K / Ctrl+K)"
+            aria-label="AI assistant"
+          >
+            <SparkIcon size={14} />
+          </button>
+          <button
             onClick={() => setSettingsOpen(true)}
             style={{
               padding: 5,
@@ -574,6 +608,20 @@ export default function App() {
           settings={settings}
           onChange={updateSettings}
           onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {aiOpen && (
+        <AIPanel
+          context={current ? {
+            fnName: current.name,
+            fnAddr: current.addr,
+            view:   fetchView,
+            code,
+          } : undefined}
+          current={current}
+          annotations={annotations}
+          onApplyRename={(fn, name) => saveRename(fn, name)}
+          onClose={() => setAiOpen(false)}
         />
       )}
       {stringsOpen && (

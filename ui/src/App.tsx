@@ -469,7 +469,7 @@ export default function App() {
               >{error}</div>
             </div>
           ) : view === "cfg" ? (
-            <CfgGraph text={code} onXref={onXref} />
+            <CfgGraph text={code} onXref={onXref} fnAddrByName={fnAddrByName} />
           ) : (
             <CodeView
               text={code}

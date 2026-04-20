@@ -350,7 +350,12 @@ struct Emitter {
                 }
                 s.push_back(static_cast<char>(c));
             }
-            if (terminated && s.size() >= 1) {
+            // Single-char "strings" (e.g. 0x20 0x00 in a ObjC ivar-size
+            // byte) are usually false positives — the byte happens to be
+            // printable-then-null. Real string constants are longer;
+            // require 4+ chars so `*(u64*)(" ")` doesn't hide a legit
+            // hex address.
+            if (terminated && s.size() >= 4) {
                 result = std::move(s);
             }
         }

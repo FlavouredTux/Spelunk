@@ -29,8 +29,11 @@ async function loadassistantSdk() {
   return _assistantSdk;
 }
 
+// Windows MSVC / MinGW builds emit `ember.exe`; *nix builds emit
+// bare `ember`. Honour an explicit EMBER_BIN override regardless.
 const EMBER_BIN = process.env.EMBER_BIN ||
-  path.join(__dirname, "..", "..", "build", "cli", "ember");
+  path.join(__dirname, "..", "..", "build", "cli",
+            process.platform === "win32" ? "ember.exe" : "ember");
 
 const state = { binary: null };
 

@@ -370,13 +370,16 @@ function AiConfigSection() {
       )}
 
       {cfg.provider === "assistant-cli" && (
-        <CliStatusSection
-          kind="assistant-cli"
-          status={assistant}
-          onRefresh={reloadProbes}
-          loginCmd="assistant auth login"
-          note="Uses assistant Code's logged-in subscription (Pro / Max / Team) or assistant Console API billing — whichever `assistant auth login` was run with. Ember spawns the installed `assistant` binary per request; no OAuth tokens cross into Ember."
-        />
+        <>
+          <CliStatusSection
+            kind="assistant-cli"
+            status={assistant}
+            onRefresh={reloadProbes}
+            loginCmd="assistant auth login"
+            note="Ember spawns the installed `assistant` binary per request. For Pro / Max subscriptions, `assistant -p` (headless mode) needs the long-lived token below — the interactive `auth login` session doesn't carry over. assistant Console API billing works without a token."
+          />
+          <assistantTokenSection cfg={cfg} onSaved={(c) => setCfg(c)} />
+        </>
       )}
 
       {cfg.provider === "codex-cli" && (
@@ -458,6 +461,65 @@ function OpenRouterKeySection(props: {
           >forget key</button>
         </Row>
       )}
+    </>
+  );
+}
+
+// assistant Code long-lived OAuth token, for Pro / Max users whose `-p`
+// headless calls can't use the interactive auth session. The token
+// comes from `assistant setup-token`; the CLI prints it to stdout and
+// tells the user to set assistant_CODE_OAUTH_TOKEN. Ember stores it in
+// safeStorage and injects it into every assistant spawn's env.
+function assistantTokenSection(props: {
+  cfg: AiConfig;
+  onSaved: (c: AiConfig) => void;
+}) {
+  const [draft, setDraft]   = useState("");
+  const [revealed, setRev]  = useState(false);
+  const [saving, setSaving] = useState(false);
+  return (
+    <>
+      <Row
+        label="assistant OAuth token"
+        hint={props.cfg.hasassistantToken
+          ? "Stored (encrypted where the OS keychain is available). Paste a new token to replace; leave blank and hit save to forget."
+          : "Run `assistant setup-token` in a terminal, copy the sk-ant-oat01-… string it prints, paste here."}
+      >
+        <div style={{ display: "flex", gap: 4 }}>
+          <input
+            type={revealed ? "text" : "password"}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={props.cfg.hasassistantToken ? "•••••• (token set)" : "sk-ant-oat01-…"}
+            style={{
+              width: 220,
+              fontFamily: mono, fontSize: 11,
+              color: C.text, background: C.bg,
+              border: `1px solid ${C.border}`, borderRadius: 4,
+              padding: "5px 8px",
+            }}
+          />
+          <button onClick={() => setRev((r) => !r)} style={iconBtnStyle}>
+            {revealed ? "hide" : "show"}
+          </button>
+          <button
+            onClick={async () => {
+              setSaving(true);
+              try {
+                const next = await window.ember.ai.setConfig({ assistantToken: draft });
+                props.onSaved(next);
+                setDraft("");
+              } finally { setSaving(false); }
+            }}
+            disabled={saving}
+            style={{
+              ...iconBtnStyle,
+              background: draft ? C.accent : C.bgMuted,
+              color:      draft ? "#fff"   : C.textMuted,
+            }}
+          >save</button>
+        </div>
+      </Row>
     </>
   );
 }

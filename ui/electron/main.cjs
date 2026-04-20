@@ -299,6 +299,7 @@ async function loadAiConfig() {
     model,
     hasKey,
     encrypted: !!j.keyEncrypted,
+    hasassistantToken: !!(j.assistantTokenEnc || j.assistantTokenPlain),
   };
 }
 
@@ -311,6 +312,27 @@ async function loadAiKey() {
     }
     return j.keyPlain || "";
   } catch { return ""; }
+}
+
+// Separate storage for the assistant Code long-lived OAuth token
+// (`assistant setup-token` output). Pro/Max subscriptions can't use
+// their interactive `assistant auth login` session with the `-p`
+// headless mode Ember relies on — the CLI refuses with
+// "Not logged in · Please run /login". The setup-token flow is
+// assistant's explicit answer: paste the token here, Ember passes
+// it to every `assistant -p` spawn via assistant_CODE_OAUTH_TOKEN.
+async function loadassistantToken() {
+  try {
+    const raw = await fs.readFile(AI_CONFIG_PATH(), "utf8");
+    const j   = JSON.parse(raw);
+    if (j.assistantTokenEnc && safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(Buffer.from(j.assistantTokenEnc, "base64"));
+    }
+    return j.assistantTokenPlain || "";
+  } catch { return ""; }
+}
+async function hasassistantToken() {
+  return !!(await loadassistantToken());
 }
 
 async function saveAiConfig(patch) {
@@ -334,6 +356,18 @@ async function saveAiConfig(patch) {
         cur.keyEncrypted = safeStorage.encryptString(patch.apiKey).toString("base64");
       } else {
         cur.keyPlain = patch.apiKey;
+      }
+    }
+  }
+  if (typeof patch.assistantToken === "string") {
+    delete cur.assistantTokenEnc;
+    delete cur.assistantTokenPlain;
+    if (patch.assistantToken) {
+      if (safeStorage.isEncryptionAvailable()) {
+        cur.assistantTokenEnc =
+          safeStorage.encryptString(patch.assistantToken).toString("base64");
+      } else {
+        cur.assistantTokenPlain = patch.assistantToken;
       }
     }
   }
@@ -427,10 +461,16 @@ function extractSystemPrompt(messages) {
 // line-oriented transformer — CLI tools that emit JSONL streaming
 // events use it to pull out just the text delta; text-mode tools
 // pass chunks through unchanged.
-function spawnCliStream(id, send, cmd, args, stdinData, parseChunk) {
+function spawnCliStream(id, send, cmd, args, stdinData, parseChunk, env) {
   let proc;
   try {
-    proc = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    proc = spawn(cmd, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      // Merge caller env on top of process.env so a missing entry
+      // falls through to whatever the user's shell had when Ember
+      // was launched. Undefined env leaves spawn's default (inherit).
+      env: env ? { ...process.env, ...env } : undefined,
+    });
   } catch (e) {
     send("ember:ai:error", `${cmd}: ${e.message || String(e)}`);
     return null;
@@ -489,7 +529,7 @@ function spawnCliStream(id, send, cmd, args, stdinData, parseChunk) {
     let msg;
     if (/not logged in|please run \/login|unauthorized|not authenticated/.test(diag)) {
       msg = cmd === "assistant"
-        ? `${cmd} is not signed in for headless use. Run \`assistant setup-token\` (long-lived token for scripted calls) or \`assistant auth login\` in a terminal, then retry.`
+        ? `assistant -p (headless mode) can't use the \`assistant auth login\` session on its own. Run \`assistant setup-token\` in a terminal and paste the token into Settings → AI → "assistant OAuth token". Ember passes it to assistant via assistant_CODE_OAUTH_TOKEN on every spawn.`
         : `${cmd} is not signed in. Run \`codex login\` in a terminal, then retry.`;
     } else if (/rate[- ]?limit|429|exceeded your/i.test(diag)) {
       msg = `${cmd}: rate-limited by the provider. Wait a bit and retry, or switch provider.`;
@@ -669,8 +709,19 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
     if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
     args.push(flat);
 
+    // Pro/Max users: interactive `assistant auth login` doesn't carry
+    // over to `-p` mode — assistant steers scripted callers to the
+    // long-lived token from `assistant setup-token`, consumed via
+    // assistant_CODE_OAUTH_TOKEN. If the user stored one via Settings,
+    // pass it through; otherwise fall through to whatever session
+    // assistant Code finds on its own (works for assistant Console API
+    // keys, and for Pro/Max when setup-token env is already set in
+    // the shell Ember was launched from).
+    const assistantToken = await loadassistantToken();
+    const env = assistantToken ? { assistant_CODE_OAUTH_TOKEN: assistantToken } : undefined;
+
     const proc = spawnCliStream(id, send, "assistant", args, null,
-                                parseassistantStreamEvent);
+                                parseassistantStreamEvent, env);
     if (proc) AI_INFLIGHT.set(id, { cancel: () => proc.kill("SIGTERM") });
     return id;
   }

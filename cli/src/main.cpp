@@ -866,6 +866,14 @@ int main(int argc, char** argv) {
                      lp_map.size());
         emit_opts.landing_pads = &lp_map;
     }
+    // __objc_selrefs is cheap to walk — do it unconditionally on Mach-O
+    // so `objc_msgSend(*(u64*)(0x10...))` renders as `@selector(foo:)`
+    // without requiring a separate flag.
+    std::map<ember::addr_t, std::string> selrefs;
+    if ((args.pseudo || args.strct) && b.format() == ember::Format::MachO) {
+        selrefs = ember::parse_objc_selrefs(b);
+        if (!selrefs.empty()) emit_opts.objc_selrefs = &selrefs;
+    }
     if (args.pseudo) {
         return run_struct(b, args.symbol, /*pseudo=*/true, ann_ptr, emit_opts);
     }

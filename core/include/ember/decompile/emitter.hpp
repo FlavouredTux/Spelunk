@@ -27,6 +27,9 @@ struct EmitOptions {
     // emitter annotates blocks that begin a catch range with real LSDA
     // info instead of falling back to __cxa_* pattern matching.
     const LpMap* landing_pads = nullptr;
+    // __objc_selrefs address → selector-name. When set, the emitter
+    // renders `*(u64*)(0x105e61378)` as `@selector(initWithHandler:)`.
+    const std::map<addr_t, std::string>* objc_selrefs = nullptr;
 };
 
 class PseudoCEmitter {

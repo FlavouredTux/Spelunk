@@ -16,6 +16,7 @@
 
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/demangle.hpp>
+#include <ember/analysis/objc.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/ssa.hpp>
@@ -1505,6 +1506,19 @@ struct Emitter {
             if (auto off = stack_offset(addr); off) {
                 return stack_name(*off);
             }
+            // Selref load: `*(u64*)(<selref_addr>)` where the address lives
+            // in __objc_selrefs is always the dynamic selector for that
+            // entry. Render as the source-level `@selector(sel)` so ObjC
+            // method dispatches read like Obj-C source.
+            if (options.objc_selrefs && t == IrType::I64) {
+                if (auto imm = try_resolve_imm_addr(addr); imm) {
+                    auto it = options.objc_selrefs->find(
+                        static_cast<addr_t>(*imm));
+                    if (it != options.objc_selrefs->end()) {
+                        return std::format("@selector({})", it->second);
+                    }
+                }
+            }
             if (auto g = render_global_mem(addr, t); g) {
                 return *g;
             }
@@ -2531,6 +2545,17 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.binary      = binary;
     e.annotations = annotations;
     e.options     = options;
+    // Opportunistic selref lookup for Mach-O binaries when the caller
+    // didn't supply one — cheap enough to parse per emit (one section
+    // walk, a few hundred cstring reads on typical Cocoa-linked code).
+    std::map<addr_t, std::string> local_selrefs;
+    if (!e.options.objc_selrefs && binary &&
+        binary->format() == Format::MachO) {
+        local_selrefs = parse_objc_selrefs(*binary);
+        if (!local_selrefs.empty()) {
+            e.options.objc_selrefs = &local_selrefs;
+        }
+    }
     bool has_user_sig = false;
     if (annotations) {
         if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {

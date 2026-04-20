@@ -437,10 +437,14 @@ function spawnCliStream(id, send, cmd, args, stdinData, parseChunk) {
   }
 
   let stderr = "";
-  let total  = 0;
+  let stdoutTail = "";   // keep a small tail so we can surface diagnostic
+                         // text that the CLI writes to stdout on failure
+                         // instead of stderr (assistant -p does this).
+  let total   = 0;
   let pending = "";
   proc.stdout.on("data", (chunk) => {
     const s = chunk.toString();
+    stdoutTail = (stdoutTail + s).slice(-1024);
     if (!parseChunk) {
       total += s.length;
       send("ember:ai:chunk", s);
@@ -474,9 +478,26 @@ function spawnCliStream(id, send, cmd, args, stdinData, parseChunk) {
       const d = parseChunk(pending); pending = "";
       if (d) { total += d.length; send("ember:ai:chunk", d); }
     }
-    if (code === 0) send("ember:ai:done", { chars: total });
-    else send("ember:ai:error",
-              `${cmd} exited ${code}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ""}`);
+    if (code === 0) { send("ember:ai:done", { chars: total }); AI_INFLIGHT.delete(id); return; }
+
+    // Map common CLI exit patterns to actionable guidance. Both
+    // tools report "not logged in" via slightly different phrasings;
+    // assistant's "-p" mode sends its diagnostic to stdout (not stderr)
+    // and suggests the REPL-only "/login" command, which is not a
+    // shell command at all. Rewrite it to something copy-pasteable.
+    const diag = `${stderr}\n${stdoutTail}`.toLowerCase();
+    let msg;
+    if (/not logged in|please run \/login|unauthorized|not authenticated/.test(diag)) {
+      msg = cmd === "assistant"
+        ? `${cmd} is not signed in for headless use. Run \`assistant setup-token\` (long-lived token for scripted calls) or \`assistant auth login\` in a terminal, then retry.`
+        : `${cmd} is not signed in. Run \`codex login\` in a terminal, then retry.`;
+    } else if (/rate[- ]?limit|429|exceeded your/i.test(diag)) {
+      msg = `${cmd}: rate-limited by the provider. Wait a bit and retry, or switch provider.`;
+    } else {
+      const tail = (stderr.trim() || stdoutTail.trim()).slice(-400);
+      msg = `${cmd} exited ${code}${tail ? `: ${tail}` : ""}`;
+    }
+    send("ember:ai:error", msg);
     AI_INFLIGHT.delete(id);
   });
 

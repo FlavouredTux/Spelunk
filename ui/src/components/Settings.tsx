@@ -3,7 +3,7 @@ import { C, sans, serif, mono } from "../theme";
 import type { AppSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
 import { clearRendererCaches } from "../api";
-import type { AiConfig } from "../types";
+import type { AiConfig, AiCliStatus, AiProvider } from "../types";
 
 // Settings gear. Stroked-outline style (matches the rest of the
 // title-bar glyphs), 24×24 viewBox so the curved tooth flanks
@@ -300,22 +300,33 @@ const stepBtnStyle: React.CSSProperties = {
   display: "flex", alignItems: "center", justifyContent: "center",
 };
 
-// AI key + model picker. Talks to the main process directly so the
-// API key never lives in renderer state — we hold an opaque "have a
-// key" boolean and only ever ship a fresh string back when the user
-// pastes a new one.
+// AI provider + key + model picker. Talks to the main process
+// directly so credentials never live in renderer state — we hold an
+// opaque "have a key" boolean and only ever ship a fresh string back
+// when the user pastes a new one. The CLI providers don't need keys
+// at all; their auth lives inside the installed CLI.
 function AiConfigSection() {
-  const [cfg, setCfg]   = useState<AiConfig | null>(null);
-  const [models, setMs] = useState<string[]>([]);
-  const [keyDraft, setKeyDraft] = useState("");
-  const [revealed, setRevealed] = useState(false);
-  const [saving, setSaving]     = useState(false);
+  const [cfg,    setCfg]   = useState<AiConfig | null>(null);
+  const [models, setMs]    = useState<string[]>([]);
+  const [assistant, setassistant] = useState<AiCliStatus | null>(null);
+  const [codex,  setCodex]  = useState<AiCliStatus | null>(null);
+
+  const reloadProbes = () => {
+    window.ember.ai.detectCli("assistant-cli").then(setassistant).catch(() => {});
+    window.ember.ai.detectCli("codex-cli").then(setCodex).catch(() => {});
+  };
 
   useEffect(() => {
     let cancel = false;
-    Promise.all([window.ember.ai.getConfig(), window.ember.ai.listModels()])
-      .then(([c, m]) => { if (!cancel) { setCfg(c); setMs(m); } })
+    window.ember.ai.getConfig()
+      .then((c) => {
+        if (cancel) return;
+        setCfg(c);
+        return window.ember.ai.listModels(c.provider);
+      })
+      .then((m) => { if (!cancel && m) setMs(m); })
       .catch(() => {});
+    reloadProbes();
     return () => { cancel = true; };
   }, []);
 
@@ -325,13 +336,16 @@ function AiConfigSection() {
     </div>;
   }
 
+  async function changeProvider(p: AiProvider) {
+    const next = await window.ember.ai.setConfig({ provider: p });
+    setCfg(next);
+    const m = await window.ember.ai.listModels(p);
+    setMs(m);
+    if (p !== "openrouter") reloadProbes();
+  }
   async function saveKey(k: string) {
-    setSaving(true);
-    try {
-      const next = await window.ember.ai.setConfig({ apiKey: k });
-      setCfg(next);
-      setKeyDraft("");
-    } finally { setSaving(false); }
+    const next = await window.ember.ai.setConfig({ apiKey: k });
+    setCfg(next);
   }
   async function changeModel(m: string) {
     const next = await window.ember.ai.setConfig({ model: m });
@@ -341,9 +355,65 @@ function AiConfigSection() {
   return (
     <>
       <Row
+        label="Provider"
+        hint="Which backend handles AI requests. CLI paths use the logged-in subscription of the matching tool — no API key lives in Ember."
+      >
+        <Segmented
+          value={cfg.provider}
+          options={["openrouter", "assistant-cli", "codex-cli"] as const}
+          onChange={changeProvider}
+        />
+      </Row>
+
+      {cfg.provider === "openrouter" && (
+        <OpenRouterKeySection cfg={cfg} onSave={saveKey} />
+      )}
+
+      {cfg.provider === "assistant-cli" && (
+        <CliStatusSection
+          kind="assistant-cli"
+          status={assistant}
+          onRefresh={reloadProbes}
+          loginCmd="assistant auth login"
+          note="Uses assistant Code's logged-in subscription (Pro / Max / Team) or assistant Console API billing — whichever `assistant auth login` was run with. Ember spawns the installed `assistant` binary per request; no OAuth tokens cross into Ember."
+        />
+      )}
+
+      {cfg.provider === "codex-cli" && (
+        <CliStatusSection
+          kind="codex-cli"
+          status={codex}
+          onRefresh={reloadProbes}
+          loginCmd="codex login"
+          note="Uses the ChatGPT Plus / Pro / Business / Edu / Enterprise subscription linked via `codex login`. OpenAI explicitly supports subscription OAuth in third-party tools for Codex."
+        />
+      )}
+
+      <Row label="Default model" hint="Type any model id, or pick from the list.">
+        <ModelCombobox
+          value={cfg.model}
+          options={models}
+          onChange={changeModel}
+          width={240}
+        />
+      </Row>
+    </>
+  );
+}
+
+function OpenRouterKeySection(props: {
+  cfg: AiConfig;
+  onSave: (k: string) => Promise<void>;
+}) {
+  const [draft, setDraft]   = useState("");
+  const [revealed, setRev]  = useState(false);
+  const [saving, setSaving] = useState(false);
+  return (
+    <>
+      <Row
         label="OpenRouter API key"
-        hint={cfg.hasKey
-          ? (cfg.encrypted
+        hint={props.cfg.hasKey
+          ? (props.cfg.encrypted
               ? "Stored encrypted via the OS keychain (safeStorage). Paste a new key to replace."
               : "Stored as plaintext — your platform doesn't expose a keychain. Treat the userData dir as sensitive.")
           : "Paste a key from openrouter.ai/keys — never leaves the main process."}
@@ -351,57 +421,91 @@ function AiConfigSection() {
         <div style={{ display: "flex", gap: 4 }}>
           <input
             type={revealed ? "text" : "password"}
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            placeholder={cfg.hasKey ? "•••••• (key set)" : "sk-or-v1-…"}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={props.cfg.hasKey ? "•••••• (key set)" : "sk-or-v1-…"}
             style={{
               width: 200,
               fontFamily: mono, fontSize: 11,
-              color: C.text,
-              background: C.bg,
-              border: `1px solid ${C.border}`,
-              borderRadius: 4,
+              color: C.text, background: C.bg,
+              border: `1px solid ${C.border}`, borderRadius: 4,
               padding: "5px 8px",
             }}
           />
+          <button onClick={() => setRev((r) => !r)} style={iconBtnStyle}>
+            {revealed ? "hide" : "show"}
+          </button>
           <button
-            onClick={() => setRevealed((r) => !r)}
-            title={revealed ? "Hide" : "Reveal"}
-            style={iconBtnStyle}
-          >{revealed ? "hide" : "show"}</button>
-          <button
-            onClick={() => keyDraft && saveKey(keyDraft)}
-            disabled={!keyDraft || saving}
+            onClick={async () => { if (!draft) return;
+              setSaving(true);
+              try { await props.onSave(draft); setDraft(""); }
+              finally { setSaving(false); } }}
+            disabled={!draft || saving}
             style={{
               ...iconBtnStyle,
-              background: keyDraft ? C.accent : C.bgMuted,
-              color:      keyDraft ? "#fff"   : C.textMuted,
-              cursor:     keyDraft ? "pointer" : "not-allowed",
+              background: draft ? C.accent : C.bgMuted,
+              color:      draft ? "#fff"   : C.textMuted,
+              cursor:     draft ? "pointer" : "not-allowed",
             }}
           >save</button>
         </div>
       </Row>
-
-      {cfg.hasKey && (
-        <Row label="Default model" hint="Type any OpenRouter model id, or pick from the list.">
-          <ModelCombobox
-            value={cfg.model}
-            options={models}
-            onChange={changeModel}
-            width={240}
-          />
-        </Row>
-      )}
-
-      {cfg.hasKey && (
+      {props.cfg.hasKey && (
         <Row label="Forget stored key" hint="Removes the key from disk. Settings panel can re-add it later.">
           <button
-            onClick={() => saveKey("")}
-            style={{
-              ...iconBtnStyle,
-              borderColor: C.red, color: C.red,
-            }}
+            onClick={() => props.onSave("")}
+            style={{ ...iconBtnStyle, borderColor: C.red, color: C.red }}
           >forget key</button>
+        </Row>
+      )}
+    </>
+  );
+}
+
+function CliStatusSection(props: {
+  kind:     "assistant-cli" | "codex-cli";
+  status:   AiCliStatus | null;
+  onRefresh: () => void;
+  loginCmd: string;
+  note:     string;
+}) {
+  const s = props.status;
+  const statusLabel =
+    !s               ? "probing…"
+    : !s.installed   ? "not installed"
+    : !s.loggedIn    ? "installed · not signed in"
+    :                  `signed in · ${s.version}`;
+  const statusColor =
+    !s               ? C.textFaint
+    : !s.installed   ? C.red
+    : !s.loggedIn    ? C.red
+    :                  C.green;
+
+  return (
+    <>
+      <Row label="Auth status" hint={props.note}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: 4,
+            background: statusColor, flexShrink: 0,
+          }} />
+          <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>
+            {statusLabel}
+          </span>
+          <button onClick={props.onRefresh} style={iconBtnStyle}>recheck</button>
+        </div>
+      </Row>
+      {s && !s.loggedIn && (
+        <Row label="To sign in" hint="Run in a terminal, then click recheck above.">
+          <code style={{
+            fontFamily: mono, fontSize: 11,
+            color: C.accent,
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            padding: "5px 10px",
+            whiteSpace: "nowrap",
+          }}>{props.loginCmd}</code>
         </Row>
       )}
     </>

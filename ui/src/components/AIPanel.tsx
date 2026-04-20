@@ -102,6 +102,14 @@ export function AIPanel(props: {
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
+  // Per-provider "ready to chat" check. OpenRouter needs an API key
+  // in our config; CLI providers defer to the installed tool — the
+  // user's auth status lives inside `assistant` / `codex` themselves and
+  // we'll surface any failure as a chat error rather than gating here.
+  const ready = !!config && (
+    config.provider === "openrouter" ? config.hasKey : true
+  );
+
   function cancel() {
     streamRef.current?.cancel();
     streamRef.current = null;
@@ -118,7 +126,7 @@ export function AIPanel(props: {
   }
 
   function submit(rawInput: string, opts?: { quickAction?: boolean }) {
-    if (!config?.hasKey) return;
+    if (!ready) return;
     const text = rawInput.trim();
     if (!text) return;
 
@@ -271,10 +279,8 @@ export function AIPanel(props: {
           flex: 1, overflowY: "auto", padding: "14px 18px",
           fontFamily: sans, fontSize: 13, lineHeight: 1.55, color: C.text,
         }}>
-          {!config?.hasKey && (
-            <NoKeyHint />
-          )}
-          {config?.hasKey && turns.length === 0 && (
+          {config && !ready && <NoKeyHint provider={config.provider} />}
+          {ready && turns.length === 0 && (
             <EmptyState
               context={props.context}
               onPrompt={(p) => submit(p, { quickAction: true })}
@@ -323,7 +329,7 @@ export function AIPanel(props: {
           display: "flex", flexDirection: "column", gap: 8,
         }}>
           {/* Quick actions */}
-          {config?.hasKey && turns.length === 0 && props.context && (
+          {ready && turns.length === 0 && props.context && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {QUICK_ACTIONS.map((qa) => (
                 <button
@@ -350,8 +356,8 @@ export function AIPanel(props: {
                   submit(input);
                 }
               }}
-              disabled={busy || !config?.hasKey}
-              placeholder={config?.hasKey
+              disabled={busy || !ready}
+              placeholder={ready
                 ? (turns.length === 0 && props.context
                     ? "Ask about this function — or pick a quick action above. ⏎ to send, ⇧⏎ for newline."
                     : "Follow up on the analysis…")
@@ -365,16 +371,16 @@ export function AIPanel(props: {
             />
             <button
               onClick={() => busy ? cancel() : submit(input)}
-              disabled={!busy && (!input.trim() || !config?.hasKey)}
+              disabled={!busy && (!input.trim() || !ready)}
               style={{
                 padding: "6px 14px",
                 background: busy ? C.red : C.accent,
                 color: "#fff",
                 border: "none", borderRadius: 4,
                 fontFamily: mono, fontSize: 11, fontWeight: 600,
-                cursor: (!busy && (!input.trim() || !config?.hasKey))
+                cursor: (!busy && (!input.trim() || !ready))
                   ? "not-allowed" : "pointer",
-                opacity: (!busy && (!input.trim() || !config?.hasKey)) ? 0.5 : 1,
+                opacity: (!busy && (!input.trim() || !ready)) ? 0.5 : 1,
               }}
             >{busy ? "stop" : "send"}</button>
           </div>
@@ -391,7 +397,12 @@ const quickBtnStyle: React.CSSProperties = {
   fontFamily: mono, fontSize: 10, cursor: "pointer",
 };
 
-function NoKeyHint() {
+function NoKeyHint(props: { provider: "openrouter" | "assistant-cli" | "codex-cli" }) {
+  // Only openrouter is gated by a "missing key" state at this layer.
+  // CLI providers defer their readiness check to the spawn itself —
+  // if assistant/codex isn't installed or isn't logged in, the resulting
+  // chat error surfaces the fix (`assistant auth login`, install codex,
+  // etc.) right in the chat stream.
   return (
     <div style={{
       padding: 24, color: C.textMuted, fontFamily: serif, fontSize: 13,
@@ -401,14 +412,24 @@ function NoKeyHint() {
       <div style={{ color: C.text, fontWeight: 600, fontFamily: sans, fontStyle: "normal" }}>
         Ember AI is not configured.
       </div>
-      <div>
-        Drop an <span style={{ fontFamily: mono, color: C.text }}>OPENROUTER_API_KEY</span> into
-        Settings → AI to enable. Keys live in your platform keychain via Electron's safeStorage,
-        not in plaintext config or browser storage.
-      </div>
-      <div style={{ fontFamily: mono, fontStyle: "normal", fontSize: 11, color: C.textFaint }}>
-        get one at <span style={{ color: C.text }}>openrouter.ai/keys</span>
-      </div>
+      {props.provider === "openrouter" ? (
+        <>
+          <div>
+            Drop an <span style={{ fontFamily: mono, color: C.text }}>OPENROUTER_API_KEY</span>{" "}
+            into Settings → AI to enable, or switch the provider there to{" "}
+            <span style={{ fontFamily: mono, color: C.text }}>assistant-cli</span> /{" "}
+            <span style={{ fontFamily: mono, color: C.text }}>codex-cli</span> if you'd rather use
+            a assistant Pro/Max or ChatGPT Plus subscription via the installed CLI.
+          </div>
+          <div style={{ fontFamily: mono, fontStyle: "normal", fontSize: 11, color: C.textFaint }}>
+            get an OpenRouter key at <span style={{ color: C.text }}>openrouter.ai/keys</span>
+          </div>
+        </>
+      ) : (
+        <div>
+          No active configuration. Open Settings → AI and check the provider's auth status.
+        </div>
+      )}
     </div>
   );
 }

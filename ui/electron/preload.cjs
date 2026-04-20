@@ -18,7 +18,8 @@ contextBridge.exposeInMainWorld("ember", {
   ai: {
     getConfig:    ()        => ipcRenderer.invoke("ember:ai:getConfig"),
     setConfig:    (c)       => ipcRenderer.invoke("ember:ai:setConfig", c),
-    listModels:   ()        => ipcRenderer.invoke("ember:ai:listModels"),
+    listModels:   (provider) => ipcRenderer.invoke("ember:ai:listModels", provider),
+    detectCli:    (kind)    => ipcRenderer.invoke("ember:ai:detectCli", kind),
     // Returns a request id; the caller subscribes to onChunk/onDone/onError
     // with the same id to receive the streamed response.
     chat:         (req)     => ipcRenderer.invoke("ember:ai:chat", req),

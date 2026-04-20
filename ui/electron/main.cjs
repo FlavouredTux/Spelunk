@@ -196,54 +196,103 @@ ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
   return true;
 });
 
-// ----- AI / OpenRouter -----
+// ----- AI providers -----
 //
-// The renderer never sees the API key — it only sees streamed deltas
-// labelled with a request id. We hold the key, plus the user-chosen
-// model and a few canned model presets, in a small JSON sidecar in
-// userData. Key bytes are encrypted with Electron's safeStorage when
-// the OS supports it (Keychain on macOS, libsecret on Linux, DPAPI on
-// Windows); when it doesn't, we fall back to plaintext with a flag in
-// the sidecar so the renderer can warn the user.
+// Three backend paths, all funnelling through the same IPC streaming
+// protocol so the renderer doesn't care which is active:
+//
+//   openrouter  — HTTPS to openrouter.ai. Requires an API key, billed
+//                 per-token. The only path that works out of the box
+//                 without installing extra binaries.
+//   assistant-cli  — spawns `assistant -p` as a subprocess. Uses the
+//                 user's logged-in assistant session (Pro/Max
+//                 subscription or assistant Console API billing;
+//                 configured by running `assistant auth login` once).
+//                 No API key lives in Ember — assistant Code owns its
+//                 own credentials.
+//   codex-cli   — spawns `codex exec` as a subprocess. Uses the
+//                 user's logged-in ChatGPT Plus/Pro subscription
+//                 (configured via `codex login`). OpenAI explicitly
+//                 supports subscription OAuth in third-party tools
+//                 for Codex, so this is on the clean side of ToS.
+//
+// The renderer never sees credentials — the main process handles
+// every key / token / subprocess stdin. All three paths emit the same
+// `ai:chunk` / `ai:done` / `ai:error` IPC events keyed on a request
+// id, so the chat panel's streaming UI just works uniformly.
 
 const AI_CONFIG_PATH = () => path.join(app.getPath("userData"), "ai.json");
 
-// Default models we surface in the picker. The user can paste any
-// OpenRouter model id; this list is just the well-known set so the
-// dropdown isn't empty on first run. Update freely — there's no
-// version-pinning that depends on these strings.
-const AI_DEFAULT_MODELS = [
-  "assistant/assistant-sonnet-4.5",
-  "assistant/assistant-haiku-4.5",
-  "assistant/assistant-opus-4.6",
-  "openai/gpt-5",
-  "openai/gpt-5-mini",
-  "google/gemini-2.5-pro",
-  "google/gemini-2.5-flash",
-  "deepseek/deepseek-chat-v3.5",
-  "x-ai/grok-4",
-  "meta-llama/llama-4-maverick",
-];
+const AI_PROVIDERS = ["openrouter", "assistant-cli", "codex-cli"];
+const AI_DEFAULT_PROVIDER = "openrouter";
+
+// Per-provider model lists surfaced as autocomplete suggestions. The
+// combobox in the UI lets users type any model id regardless — these
+// are just the well-known defaults so the dropdown isn't empty on
+// first run.
+const AI_MODEL_SUGGESTIONS = {
+  "openrouter": [
+    "assistant/assistant-sonnet-4.5",
+    "assistant/assistant-haiku-4.5",
+    "assistant/assistant-opus-4.6",
+    "openai/gpt-5",
+    "openai/gpt-5-mini",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "deepseek/deepseek-chat-v3.5",
+    "x-ai/grok-4",
+    "meta-llama/llama-4-maverick",
+  ],
+  "assistant-cli": [
+    "sonnet",
+    "opus",
+    "haiku",
+    "assistant-sonnet-4-6",
+    "assistant-opus-4-7",
+  ],
+  "codex-cli": [
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "o3",
+    "gpt-5.4",
+  ],
+};
+
+function defaultModelFor(provider) {
+  const list = AI_MODEL_SUGGESTIONS[provider] || [];
+  return list[0] || "";
+}
 
 async function loadAiConfig() {
-  try {
-    const raw = await fs.readFile(AI_CONFIG_PATH(), "utf8");
-    const j   = JSON.parse(raw);
-    let key = "";
-    if (j.keyEncrypted && safeStorage.isEncryptionAvailable()) {
-      try { key = safeStorage.decryptString(Buffer.from(j.keyEncrypted, "base64")); }
-      catch { key = ""; }
-    } else if (j.keyPlain) {
-      key = j.keyPlain;
-    }
-    return {
-      hasKey:    !!key,
-      model:     j.model || AI_DEFAULT_MODELS[0],
-      encrypted: !!j.keyEncrypted,
-    };
-  } catch {
-    return { hasKey: false, model: AI_DEFAULT_MODELS[0], encrypted: false };
+  let raw;
+  try { raw = await fs.readFile(AI_CONFIG_PATH(), "utf8"); }
+  catch { raw = "{}"; }
+  let j; try { j = JSON.parse(raw); } catch { j = {}; }
+
+  const provider = AI_PROVIDERS.includes(j.provider)
+    ? j.provider
+    : AI_DEFAULT_PROVIDER;
+
+  // Decrypt only enough to know whether a key is present — we never
+  // surface the plaintext back to the renderer.
+  let hasKey = false;
+  if (j.keyEncrypted && safeStorage.isEncryptionAvailable()) {
+    try { hasKey = !!safeStorage.decryptString(Buffer.from(j.keyEncrypted, "base64")); }
+    catch { hasKey = false; }
+  } else if (j.keyPlain) {
+    hasKey = true;
   }
+
+  const models = j.models || {};
+  const model  = models[provider] || defaultModelFor(provider);
+
+  return {
+    provider,
+    model,
+    hasKey,
+    encrypted: !!j.keyEncrypted,
+  };
 }
 
 async function loadAiKey() {
@@ -257,137 +306,355 @@ async function loadAiKey() {
   } catch { return ""; }
 }
 
-async function saveAiConfig({ apiKey, model }) {
-  const out = { model };
-  if (typeof apiKey === "string") {
-    if (safeStorage.isEncryptionAvailable()) {
-      out.keyEncrypted = safeStorage.encryptString(apiKey).toString("base64");
-    } else {
-      // Plaintext fallback. Renderer surfaces this in the settings UI
-      // so the user knows the file isn't safe to share.
-      out.keyPlain = apiKey;
+async function saveAiConfig(patch) {
+  // Read-modify-write so partial updates (just the provider, just the
+  // model, just the key) don't clobber other fields.
+  let cur;
+  try { cur = JSON.parse(await fs.readFile(AI_CONFIG_PATH(), "utf8")); }
+  catch { cur = {}; }
+
+  if (AI_PROVIDERS.includes(patch.provider)) cur.provider = patch.provider;
+  if (typeof patch.model === "string" && patch.model) {
+    const prov = cur.provider || AI_DEFAULT_PROVIDER;
+    cur.models = cur.models || {};
+    cur.models[prov] = patch.model;
+  }
+  if (typeof patch.apiKey === "string") {
+    delete cur.keyEncrypted;
+    delete cur.keyPlain;
+    if (patch.apiKey) {
+      if (safeStorage.isEncryptionAvailable()) {
+        cur.keyEncrypted = safeStorage.encryptString(patch.apiKey).toString("base64");
+      } else {
+        cur.keyPlain = patch.apiKey;
+      }
     }
-  } else {
-    // Caller didn't touch the key — preserve whatever's already on disk.
-    try {
-      const raw = await fs.readFile(AI_CONFIG_PATH(), "utf8");
-      const j   = JSON.parse(raw);
-      if (j.keyEncrypted) out.keyEncrypted = j.keyEncrypted;
-      if (j.keyPlain)     out.keyPlain     = j.keyPlain;
-    } catch { /* fresh config */ }
   }
   await fs.mkdir(path.dirname(AI_CONFIG_PATH()), { recursive: true });
-  await fs.writeFile(AI_CONFIG_PATH(), JSON.stringify(out, null, 2), "utf8");
+  await fs.writeFile(AI_CONFIG_PATH(), JSON.stringify(cur, null, 2), "utf8");
+}
+
+// Probe whether a CLI is on PATH and whether the user is logged in.
+// Uses the CLI's own `auth status` / `login status` subcommand so we
+// stay aligned with whatever the official tool thinks is "logged in".
+async function detectCli(kind) {
+  const bin = kind === "assistant-cli" ? "assistant"
+            : kind === "codex-cli"  ? "codex"
+            : null;
+  if (!bin) return { installed: false, loggedIn: false, version: "" };
+
+  // `assistant -v` / `codex --version`: both exit 0 when the binary is
+  // present, fail with ENOENT otherwise. We catch both.
+  const version = await new Promise((resolve) => {
+    const p = spawn(bin, ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    p.stdout.on("data", (d) => { out += d.toString(); });
+    p.on("error",  () => resolve(""));
+    p.on("close",  () => resolve(out.trim()));
+  });
+  if (!version) return { installed: false, loggedIn: false, version: "" };
+
+  // assistant: `assistant auth status` exits 0 when logged in.
+  // codex:  `codex login status` exits 0 when logged in.
+  const statusArgs = kind === "assistant-cli"
+    ? ["auth", "status"]
+    : ["login", "status"];
+  const loggedIn = await new Promise((resolve) => {
+    const p = spawn(bin, statusArgs, { stdio: ["ignore", "ignore", "ignore"] });
+    p.on("error", () => resolve(false));
+    p.on("close", (code) => resolve(code === 0));
+  });
+  return { installed: true, loggedIn, version };
 }
 
 ipcMain.handle("ember:ai:getConfig", async () => loadAiConfig());
 
 ipcMain.handle("ember:ai:setConfig", async (_e, c) => {
-  await saveAiConfig({ apiKey: c.apiKey, model: c.model });
+  await saveAiConfig(c || {});
   return loadAiConfig();
 });
 
-ipcMain.handle("ember:ai:listModels", async () => AI_DEFAULT_MODELS.slice());
+ipcMain.handle("ember:ai:listModels", async (_e, provider) => {
+  const p = provider || (await loadAiConfig()).provider;
+  return (AI_MODEL_SUGGESTIONS[p] || []).slice();
+});
+
+ipcMain.handle("ember:ai:detectCli", async (_e, kind) => detectCli(kind));
 
 // Active in-flight requests, keyed by id so `ai:cancel` can abort.
+// Each entry records a {cancel} hook — HTTP requests use req.destroy,
+// spawned CLIs use proc.kill. The renderer just calls cancel(id).
 const AI_INFLIGHT = new Map();
 let AI_NEXT_ID    = 1;
 
 ipcMain.handle("ember:ai:cancel", async (_e, id) => {
   const ent = AI_INFLIGHT.get(id);
   if (!ent) return false;
-  try { ent.req.destroy(new Error("cancelled")); } catch {}
+  try { ent.cancel(); } catch {}
   AI_INFLIGHT.delete(id);
   return true;
 });
 
-ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
-  const apiKey = await loadAiKey();
-  if (!apiKey) throw new Error("no OpenRouter API key configured");
+// Flatten the chat-history message list into a single prompt string
+// for CLI providers that take a one-shot query. The system prompt is
+// lifted out to the CLI's --system-prompt flag; we preserve roles with
+// "User:" / "Assistant:" prefixes on everything else so multi-turn
+// conversations still make sense when replayed.
+function flattenMessages(messages) {
+  const lines = [];
+  for (const m of messages) {
+    if (m.role === "system") continue;  // carried separately
+    const tag = m.role === "assistant" ? "Assistant:" : "User:";
+    lines.push(`${tag} ${m.content}`);
+  }
+  return lines.join("\n\n");
+}
+function extractSystemPrompt(messages) {
+  for (const m of messages) if (m.role === "system") return m.content;
+  return "";
+}
 
-  const id    = String(AI_NEXT_ID++);
-  const win   = BrowserWindow.fromWebContents(e.sender);
-  const send  = (channel, ...args) => {
-    if (win && !win.isDestroyed()) win.webContents.send(channel, id, ...args);
-  };
+// Shared helper: spawn a subprocess, forward every stdout chunk to
+// the renderer as `ai:chunk`, emit `ai:done` on clean exit, `ai:error`
+// on non-zero exit or spawn failure. `parseChunk` is an optional
+// line-oriented transformer — CLI tools that emit JSONL streaming
+// events use it to pull out just the text delta; text-mode tools
+// pass chunks through unchanged.
+function spawnCliStream(id, send, cmd, args, stdinData, parseChunk) {
+  let proc;
+  try {
+    proc = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+  } catch (e) {
+    send("ember:ai:error", `${cmd}: ${e.message || String(e)}`);
+    return null;
+  }
 
-  const body = JSON.stringify({
-    model:       model || (await loadAiConfig()).model,
-    messages,
-    stream:      true,
-    temperature: typeof temperature === "number" ? temperature : 0.4,
-  });
-
-  const req = https.request({
-    method:   "POST",
-    hostname: "openrouter.ai",
-    path:     "/api/v1/chat/completions",
-    headers:  {
-      "Authorization":   `Bearer ${apiKey}`,
-      "Content-Type":    "application/json",
-      "Content-Length":  Buffer.byteLength(body),
-      // OpenRouter recommends these for the request to be attributed
-      // back to the calling app in their dashboards.
-      "HTTP-Referer":    "https://github.com/FlavouredTux/Ember",
-      "X-Title":         "Ember",
-    },
-  }, (res) => {
-    if (res.statusCode && res.statusCode >= 400) {
-      let buf = "";
-      res.on("data", (d) => { buf += d.toString(); });
-      res.on("end", () => {
-        send("ember:ai:error",
-             `OpenRouter ${res.statusCode}: ${buf.slice(0, 400)}`);
-        AI_INFLIGHT.delete(id);
-      });
+  let stderr = "";
+  let total  = 0;
+  let pending = "";
+  proc.stdout.on("data", (chunk) => {
+    const s = chunk.toString();
+    if (!parseChunk) {
+      total += s.length;
+      send("ember:ai:chunk", s);
       return;
     }
-    // Server-Sent Events parsing. The OpenAI-compatible streaming
-    // format chunks JSON deltas as `data: {...}\n\n` events; the
-    // sentinel `data: [DONE]` ends the stream.
-    let pending = "";
-    let total   = 0;
-    res.on("data", (chunk) => {
-      pending += chunk.toString();
-      let idx;
-      while ((idx = pending.indexOf("\n\n")) !== -1) {
-        const event = pending.slice(0, idx);
-        pending = pending.slice(idx + 2);
-        for (const rawLine of event.split("\n")) {
-          const line = rawLine.startsWith("data: ") ? rawLine.slice(6) : rawLine;
-          if (!line || !line.startsWith("{")) {
-            if (line === "[DONE]") { /* handled at end */ }
-            continue;
-          }
-          try {
-            const j = JSON.parse(line);
-            const delta = j.choices?.[0]?.delta?.content;
-            if (typeof delta === "string" && delta.length > 0) {
-              total += delta.length;
-              send("ember:ai:chunk", delta);
-            }
-          } catch {
-            // Stray non-JSON keepalive comment — OpenRouter sends `: …`
-            // every 15s. Ignore.
-          }
-        }
+    // Line-oriented: buffer partial lines across TCP-style chunk
+    // boundaries so JSONL events don't get split mid-object.
+    pending += s;
+    let idx;
+    while ((idx = pending.indexOf("\n")) !== -1) {
+      const line = pending.slice(0, idx);
+      pending = pending.slice(idx + 1);
+      const delta = parseChunk(line);
+      if (delta) {
+        total += delta.length;
+        send("ember:ai:chunk", delta);
       }
-    });
-    res.on("end", () => {
-      send("ember:ai:done", { chars: total });
-      AI_INFLIGHT.delete(id);
-    });
+    }
   });
-
-  req.on("error", (err) => {
-    send("ember:ai:error", err.message || String(err));
+  proc.stderr.on("data", (d) => { stderr += d.toString(); });
+  proc.on("error", (err) => {
+    send("ember:ai:error",
+         err.code === "ENOENT"
+           ? `${cmd} not found on PATH — install it and run "${cmd} ${cmd === "assistant" ? "auth login" : "login"}"`
+           : `${cmd}: ${err.message}`);
+    AI_INFLIGHT.delete(id);
+  });
+  proc.on("close", (code) => {
+    // Flush trailing partial line if any.
+    if (pending && parseChunk) {
+      const d = parseChunk(pending); pending = "";
+      if (d) { total += d.length; send("ember:ai:chunk", d); }
+    }
+    if (code === 0) send("ember:ai:done", { chars: total });
+    else send("ember:ai:error",
+              `${cmd} exited ${code}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ""}`);
     AI_INFLIGHT.delete(id);
   });
 
-  AI_INFLIGHT.set(id, { req });
-  req.write(body);
-  req.end();
-  return id;
+  if (stdinData !== undefined && stdinData !== null) {
+    proc.stdin.write(stdinData);
+    proc.stdin.end();
+  } else {
+    proc.stdin.end();
+  }
+  return proc;
+}
+
+// Try to extract the text delta from one line of `assistant -p
+// --output-format stream-json`. The format is one JSON event per
+// line; text deltas arrive as `{"type":"assistant","message":{...}}`
+// with nested content. Be permissive about shape drift between
+// versions — any string field nested under content[] is a candidate.
+function parseassistantStreamEvent(line) {
+  if (!line || line[0] !== "{") return "";
+  let j; try { j = JSON.parse(line); } catch { return ""; }
+  // The SDK spec's streaming event for an assistant delta looks like
+  //   { "type": "assistant", "message": { "content": [ {"type":"text","text":"..."} ] } }
+  // but some versions emit partials as `content_block_delta` with a
+  // `delta.text`. Handle both.
+  if (j.type === "content_block_delta" && j.delta?.type === "text_delta") {
+    return j.delta.text || "";
+  }
+  const content = j.message?.content;
+  if (Array.isArray(content)) {
+    let buf = "";
+    for (const part of content) {
+      if (part && part.type === "text" && typeof part.text === "string") {
+        buf += part.text;
+      }
+    }
+    return buf;
+  }
+  return "";
+}
+
+// Codex `exec --json` prints newline-delimited JSON events; the text
+// deltas sit under `{ "msg": { "type": "agent_message_delta",
+// "delta": "..." } }` in recent versions. Older versions emit the
+// full assistant message under `agent_message` — we dedupe by only
+// emitting deltas once the first `agent_message_delta` has appeared.
+function makeCodexParser() {
+  let sawDelta = false;
+  let lastMessage = "";
+  return (line) => {
+    if (!line || line[0] !== "{") return "";
+    let j; try { j = JSON.parse(line); } catch { return ""; }
+    const msg = j.msg || j;
+    if (msg.type === "agent_message_delta" && typeof msg.delta === "string") {
+      sawDelta = true;
+      return msg.delta;
+    }
+    if (!sawDelta && msg.type === "agent_message" &&
+        typeof msg.message === "string") {
+      // Non-streaming variant: emit the whole message once.
+      const delta = msg.message.slice(lastMessage.length);
+      lastMessage = msg.message;
+      return delta;
+    }
+    return "";
+  };
+}
+
+ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
+  const cfg = await loadAiConfig();
+  const id  = String(AI_NEXT_ID++);
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const send = (channel, ...args) => {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, id, ...args);
+  };
+  const chosenModel = model || cfg.model;
+
+  // ---- OpenRouter ----------------------------------------------------
+  if (cfg.provider === "openrouter") {
+    const apiKey = await loadAiKey();
+    if (!apiKey) throw new Error("no OpenRouter API key configured");
+
+    const body = JSON.stringify({
+      model:       chosenModel,
+      messages,
+      stream:      true,
+      temperature: typeof temperature === "number" ? temperature : 0.4,
+    });
+    const req = https.request({
+      method:   "POST",
+      hostname: "openrouter.ai",
+      path:     "/api/v1/chat/completions",
+      headers:  {
+        "Authorization":   `Bearer ${apiKey}`,
+        "Content-Type":    "application/json",
+        "Content-Length":  Buffer.byteLength(body),
+        "HTTP-Referer":    "https://github.com/FlavouredTux/Ember",
+        "X-Title":         "Ember",
+      },
+    }, (res) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        let buf = "";
+        res.on("data", (d) => { buf += d.toString(); });
+        res.on("end", () => {
+          send("ember:ai:error",
+               `OpenRouter ${res.statusCode}: ${buf.slice(0, 400)}`);
+          AI_INFLIGHT.delete(id);
+        });
+        return;
+      }
+      let pending = "";
+      let total   = 0;
+      res.on("data", (chunk) => {
+        pending += chunk.toString();
+        let idx;
+        while ((idx = pending.indexOf("\n\n")) !== -1) {
+          const event = pending.slice(0, idx);
+          pending = pending.slice(idx + 2);
+          for (const rawLine of event.split("\n")) {
+            const line = rawLine.startsWith("data: ") ? rawLine.slice(6) : rawLine;
+            if (!line || !line.startsWith("{")) continue;
+            try {
+              const j = JSON.parse(line);
+              const delta = j.choices?.[0]?.delta?.content;
+              if (typeof delta === "string" && delta.length > 0) {
+                total += delta.length;
+                send("ember:ai:chunk", delta);
+              }
+            } catch { /* keepalive */ }
+          }
+        }
+      });
+      res.on("end", () => {
+        send("ember:ai:done", { chars: total });
+        AI_INFLIGHT.delete(id);
+      });
+    });
+    req.on("error", (err) => {
+      send("ember:ai:error", err.message || String(err));
+      AI_INFLIGHT.delete(id);
+    });
+    AI_INFLIGHT.set(id, { cancel: () => req.destroy(new Error("cancelled")) });
+    req.write(body);
+    req.end();
+    return id;
+  }
+
+  // ---- assistant Code CLI ----------------------------------------------
+  if (cfg.provider === "assistant-cli") {
+    const systemPrompt = extractSystemPrompt(messages);
+    const flat         = flattenMessages(messages);
+    const args = [
+      "-p",                       // print/headless
+      "--bare",                   // skip auto-discovery (faster, no hooks/skills)
+      "--no-session-persistence", // don't pollute the user's session history
+      "--output-format", "stream-json",
+      "--include-partial-messages",
+      "--verbose",                // stream-json requires verbose on recent versions
+    ];
+    if (chosenModel) args.push("--model", chosenModel);
+    if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
+    args.push(flat);
+
+    const proc = spawnCliStream(id, send, "assistant", args, null,
+                                parseassistantStreamEvent);
+    if (proc) AI_INFLIGHT.set(id, { cancel: () => proc.kill("SIGTERM") });
+    return id;
+  }
+
+  // ---- Codex (ChatGPT) CLI ------------------------------------------
+  if (cfg.provider === "codex-cli") {
+    const systemPrompt = extractSystemPrompt(messages);
+    const flat         = flattenMessages(messages);
+    const fullPrompt   = systemPrompt
+      ? `${systemPrompt}\n\n---\n\n${flat}`
+      : flat;
+    const args = ["exec", "--json", "-"];  // read prompt from stdin
+    if (chosenModel) { args.splice(1, 0, "--model", chosenModel); }
+
+    const proc = spawnCliStream(id, send, "codex", args, fullPrompt,
+                                makeCodexParser());
+    if (proc) AI_INFLIGHT.set(id, { cancel: () => proc.kill("SIGTERM") });
+    return id;
+  }
+
+  throw new Error(`unknown AI provider: ${cfg.provider}`);
 });
 
 // ----- Recents -----

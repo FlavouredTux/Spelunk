@@ -53,8 +53,19 @@ export type StringEntry = {
 // addrNum (function start) -> inferred SysV arity (0..6)
 export type Arities = Record<number, number>;
 
-export type AiMessage = { role: "system" | "user" | "assistant"; content: string };
-export type AiConfig  = { hasKey: boolean; model: string; encrypted: boolean };
+export type AiMessage  = { role: "system" | "user" | "assistant"; content: string };
+export type AiProvider = "openrouter" | "assistant-cli" | "codex-cli";
+export type AiConfig   = {
+  provider:  AiProvider;
+  model:     string;
+  hasKey:    boolean;     // only meaningful for openrouter
+  encrypted: boolean;
+};
+export type AiCliStatus = {
+  installed: boolean;
+  loggedIn:  boolean;
+  version:   string;
+};
 export type AiChatRequest = {
   messages:    AiMessage[];
   model?:      string;
@@ -77,8 +88,9 @@ declare global {
 
       ai: {
         getConfig:    () => Promise<AiConfig>;
-        setConfig:    (c: { apiKey?: string; model?: string }) => Promise<AiConfig>;
-        listModels:   () => Promise<string[]>;
+        setConfig:    (c: { apiKey?: string; model?: string; provider?: AiProvider }) => Promise<AiConfig>;
+        listModels:   (provider?: AiProvider) => Promise<string[]>;
+        detectCli:    (kind: "assistant-cli" | "codex-cli") => Promise<AiCliStatus>;
         chat:         (req: AiChatRequest) => Promise<string>;
         cancel:       (id: string) => Promise<boolean>;
         onChunk:      (cb: (id: string, delta: string) => void) => () => void;

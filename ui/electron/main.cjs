@@ -64,12 +64,24 @@ function createWindow() {
 
   win.once("ready-to-show", () => win.show());
 
-  const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
-  if (process.env.NODE_ENV !== "production") {
+  // `app.isPackaged` is the only reliable dev/prod signal — a packaged
+  // Electron app does NOT set NODE_ENV, so gating on it means the
+  // installer tries to load the Vite dev server URL, loadURL fails
+  // silently, `ready-to-show` never fires, and the window stays hidden
+  // forever. Users see the process launch and nothing appear.
+  if (!app.isPackaged) {
+    const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
     win.loadURL(devUrl);
   } else {
     win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
+
+  // Belt and braces: if the renderer fails to load for any reason,
+  // show the window anyway so the user isn't staring at nothing.
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.error(`renderer load failed: ${code} ${desc} ${url}`);
+    if (!win.isDestroyed() && !win.isVisible()) win.show();
+  });
 }
 
 function runEmber(args) {

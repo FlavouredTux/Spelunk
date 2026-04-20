@@ -33,6 +33,10 @@ struct EmitOptions {
     // __objc_classrefs address → class-name. When set, the emitter
     // renders `*(u64*)(0x105e63820)` as `[NSApplication class]`.
     const std::map<addr_t, std::string>* objc_classrefs = nullptr;
+    // Itanium RTTI-derived method names: IMP address → "<Class>::vfn_<N>".
+    // Consulted by function_display_name after the Obj-C IMP check and
+    // before the generic symbol-table lookup.
+    const std::map<addr_t, std::string>* rtti_methods = nullptr;
 };
 
 class PseudoCEmitter {

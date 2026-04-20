@@ -17,6 +17,7 @@
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/demangle.hpp>
 #include <ember/analysis/objc.hpp>
+#include <ember/analysis/rtti.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/ssa.hpp>
@@ -591,6 +592,13 @@ struct Emitter {
                                it->second->is_class ? '+' : '-',
                                it->second->cls,
                                it->second->selector);
+        }
+        // Itanium RTTI-derived virtual-method label: `Class::vfn_<idx>`.
+        // Beats the generic symbol-table lookup for stripped C++ binaries
+        // where only typeinfos survive.
+        if (options.rtti_methods) {
+            auto it = options.rtti_methods->find(target);
+            if (it != options.rtti_methods->end()) return it->second;
         }
         if (binary) {
             if (const Symbol* s = binary->defined_object_at(target); s) {
@@ -2650,10 +2658,18 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // render any call target whose IMP matches as `-[Class selector]`.
     // Storage lives on the Emitter so pointers into it stay stable.
     std::vector<ObjcMethod> local_objc_methods;
+    std::map<addr_t, std::string> local_rtti_methods;
     if (binary && binary->format() == Format::MachO) {
         local_objc_methods = parse_objc_methods(*binary);
         for (const auto& m : local_objc_methods) {
             if (m.imp != 0) e.objc_by_imp.emplace(m.imp, &m);
+        }
+        // Itanium RTTI: names virtual methods on stripped C++ binaries.
+        if (!e.options.rtti_methods) {
+            local_rtti_methods = rtti_method_names(parse_itanium_rtti(*binary));
+            if (!local_rtti_methods.empty()) {
+                e.options.rtti_methods = &local_rtti_methods;
+            }
         }
         // Cache the __cfstring section bounds for constant-NSString
         // decoding in format_imm.

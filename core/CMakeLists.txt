@@ -16,6 +16,7 @@ add_library(ember_core STATIC
     src/analysis/eh_frame.cpp
     src/analysis/objc.cpp
     src/analysis/libcxx_string.cpp
+    src/analysis/rtti.cpp
     src/common/annotations.cpp
     src/common/cache.cpp
     src/ir/ir.cpp

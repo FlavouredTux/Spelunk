@@ -21,6 +21,7 @@
 #include <ember/analysis/function.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/rtti.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
@@ -92,6 +93,7 @@ struct Args {
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
+    bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool help   = false;
 };
 
@@ -124,6 +126,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--eh",        &Args::eh},
     {"",   "--objc-names", &Args::objc_names},
     {"",   "--objc-protocols", &Args::objc_protos},
+    {"",   "--rtti",     &Args::rtti},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -401,6 +404,24 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
                            m.is_class ? '+' : '-',
                            m.cls, m.selector,
                            ember::decode_objc_type(m.type_encoding));
+    }
+    return out;
+}
+
+// Dump Itanium C++ RTTI classes + vtables. One row per (class, vfn_idx,
+// imp_addr). Separate meta row per class with vtable address + method
+// count so a consumer can regroup if needed.
+[[nodiscard]] std::string build_rtti_output(const ember::Binary& b) {
+    std::string out;
+    const auto classes = ember::parse_itanium_rtti(b);
+    for (const auto& c : classes) {
+        out += std::format("class\t{:x}\t{:x}\t{}\t{}\t{}\n",
+                           c.typeinfo, c.vtable, c.methods.size(),
+                           c.demangled_name, c.mangled_name);
+        for (std::size_t i = 0; i < c.methods.size(); ++i) {
+            out += std::format("vfn\t{:x}\t{}\t{}::vfn_{}\n",
+                               c.methods[i], i, c.demangled_name, i);
+        }
     }
     return out;
 }
@@ -1025,6 +1046,7 @@ void print_help() {
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
     std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");
     std::println("      --objc-protocols dump Obj-C protocol method signatures");
+    std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
@@ -1217,6 +1239,10 @@ int main(int argc, char** argv) {
     if (args.objc_protos) {
         return run_cached(args, "objc-protocols",
                           [&] { return build_objc_protocols_output(b); });
+    }
+    if (args.rtti) {
+        return run_cached(args, "rtti",
+                          [&] { return build_rtti_output(b); });
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });

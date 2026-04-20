@@ -1,11 +1,14 @@
 #include <ember/analysis/pipeline.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdio>
 #include <format>
 #include <span>
 #include <string>
+
+#include <ember/analysis/objc.hpp>
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/decompile/emitter.hpp>
@@ -134,8 +137,92 @@ clamp_bytes(std::span<const std::byte> avail, u64 size) {
 
 }  // namespace
 
+namespace {
+
+// Try to parse `s` as a hex VA. Accepts `0x...`, `0X...`, or `sub_...`
+// only — bare hex strings collide with legitimate symbol names like
+// `add32`, so we require an explicit prefix.
+[[nodiscard]] std::optional<addr_t> try_parse_va(std::string_view s) {
+    if (s.starts_with("sub_"))          s.remove_prefix(4);
+    else if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+    else return std::nullopt;
+    if (s.empty() || s.size() > 16) return std::nullopt;
+    u64 v = 0;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return std::nullopt;
+    return static_cast<addr_t>(v);
+}
+
+// Find the Obj-C IMP matching a `-[Class sel]` / `+[Class sel]` string.
+[[nodiscard]] std::optional<addr_t>
+try_parse_objc_bracket(const Binary& b, std::string_view s) {
+    if (s.size() < 4) return std::nullopt;
+    const char sign = s.front();
+    if (sign != '-' && sign != '+') return std::nullopt;
+    if (s[1] != '[' || s.back() != ']') return std::nullopt;
+    const auto inner = s.substr(2, s.size() - 3);
+    const auto sp = inner.find(' ');
+    if (sp == std::string_view::npos) return std::nullopt;
+    const auto cls_name = inner.substr(0, sp);
+    const auto sel      = inner.substr(sp + 1);
+    const bool want_class = (sign == '+');
+    for (const auto& m : parse_objc_methods(b)) {
+        if (m.cls == cls_name && m.selector == sel &&
+            m.is_class == want_class && m.imp != 0) {
+            return m.imp;
+        }
+    }
+    return std::nullopt;
+}
+
+// Resolve `addr` to the nearest containing function entry. Uses the
+// defined-objects cache for an O(log n) lookup. Returns a FuncWindow
+// whose `start` is the function entry (NOT `addr` itself) when `addr`
+// lies inside a known function's extent; the label carries the offset
+// so the caller can annotate the output. Nullopt when nothing contains
+// `addr` and `addr` itself has no bytes mapped.
+[[nodiscard]] std::optional<FuncWindow>
+resolve_containing_function(const Binary& b, addr_t addr) {
+    const Symbol* c = b.defined_object_at(addr);
+    if (c && c->kind == SymbolKind::Function && c->addr != 0) {
+        if (b.bytes_at(c->addr).empty()) return std::nullopt;
+        if (c->addr == addr) {
+            return window_from_addr(c->addr, c->size, c->name);
+        }
+        const u64 off = addr - c->addr;
+        if (c->size == 0 || off < c->size) {
+            std::fprintf(stderr,
+                "ember: note: %#llx is inside %s at +%#llx\n",
+                static_cast<unsigned long long>(addr),
+                c->name.c_str(),
+                static_cast<unsigned long long>(off));
+            return window_from_addr(c->addr, c->size,
+                                    std::format("{}+{:#x}", c->name, off));
+        }
+    }
+    if (b.bytes_at(addr).empty()) return std::nullopt;
+    return window_from_addr(addr, 0, std::format("sub_{:x}", addr));
+}
+
+}  // namespace
+
 std::optional<FuncWindow>
 resolve_function(const Binary& b, std::string_view symbol) {
+    // Obj-C bracket form: -[Class sel] / +[Class sel] — look up the IMP
+    // in the classlist, then resolve by VA.
+    if (!symbol.empty() && (symbol.front() == '-' || symbol.front() == '+') &&
+        symbol.size() > 1 && symbol[1] == '[') {
+        if (auto addr = try_parse_objc_bracket(b, symbol); addr) {
+            return resolve_containing_function(b, *addr);
+        }
+    }
+    // Hex VA / sub_<hex> form: jump straight to VA-driven resolution so a
+    // mid-function address gets resolved to its container rather than
+    // silently failing.
+    if (auto va = try_parse_va(symbol); va) {
+        return resolve_containing_function(b, *va);
+    }
+
     const Symbol* chosen = b.find_by_name(symbol.empty() ? "main" : symbol);
     if (chosen && chosen->is_import) chosen = nullptr;
     if (!symbol.empty() && chosen && chosen->is_import) chosen = nullptr;
@@ -153,15 +240,7 @@ resolve_function(const Binary& b, std::string_view symbol) {
 
 std::optional<FuncWindow>
 resolve_function_at(const Binary& b, addr_t addr) {
-    for (const auto& s : b.symbols()) {
-        if (s.is_import) continue;
-        if (s.addr == addr && !s.name.empty()) {
-            if (b.bytes_at(addr).empty()) return std::nullopt;
-            return window_from_addr(addr, s.size, s.name);
-        }
-    }
-    if (b.bytes_at(addr).empty()) return std::nullopt;
-    return window_from_addr(addr, 0, std::format("sub_{:x}", addr));
+    return resolve_containing_function(b, addr);
 }
 
 Result<std::string>

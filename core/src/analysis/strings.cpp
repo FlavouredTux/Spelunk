@@ -30,8 +30,38 @@ struct AddrRange {
 // entries (one per start offset).
 void scan_section(const Section& sec, std::vector<StringEntry>& out) {
     if (sec.data.empty()) return;
-    if (sec.flags.executable) return;
     if (!sec.flags.readable) return;
+    // Mach-O puts `__cstring` (and `__const`, `__ustring`, etc.) inside the
+    // executable `__TEXT` segment — so filtering by the segment's X bit
+    // means we miss the overwhelming majority of string literals on Mach-O.
+    // The printable-run + NUL-terminated checks below filter out code bytes
+    // perfectly well; trust them instead of a permissions heuristic.
+    // Still skip obviously-code sections (__text itself, __stubs, ...) to
+    // keep the scan fast and avoid occasional ASCII-looking instruction
+    // sequences. We treat any section named `__text*` / `__stubs*` /
+    // `__stub_helper` / `__init` / `__unwind*` / `__eh_frame` as code.
+    const std::string_view sn = sec.name;
+    auto is_code_section = [&]() {
+        for (const std::string_view skip : {
+            std::string_view{"__text"},
+            std::string_view{"__stubs"},
+            std::string_view{"__stub_helper"},
+            std::string_view{"__unwind_info"},
+            std::string_view{"__eh_frame"},
+            std::string_view{"__init"},
+            std::string_view{"__mod_init_func"},
+            std::string_view{"__mod_term_func"},
+            std::string_view{".text"},
+            std::string_view{".plt"},
+            std::string_view{".init"},
+            std::string_view{".fini"},
+        }) {
+            if (sn == skip) return true;
+            if (sn.ends_with(std::string{","} + std::string{skip})) return true;
+        }
+        return false;
+    };
+    if (is_code_section()) return;
 
     const auto* data = reinterpret_cast<const unsigned char*>(sec.data.data());
     const std::size_t n = sec.data.size();

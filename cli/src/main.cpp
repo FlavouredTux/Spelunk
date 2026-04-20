@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <print>
@@ -37,6 +39,26 @@
 
 namespace {
 
+// Parse an address from the command line. Accepts `0x…`, `0X…`,
+// `sub_…`, or plain hex (requires a-f/A-F letter to disambiguate from
+// decimal-looking names). Nullopt on malformed input.
+[[nodiscard]] std::optional<ember::addr_t>
+parse_cli_addr(std::string_view s) {
+    if (s.starts_with("sub_"))          s.remove_prefix(4);
+    else if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+    if (s.empty() || s.size() > 16) return std::nullopt;
+    for (char c : s) {
+        const bool ok = (c >= '0' && c <= '9') ||
+                        (c >= 'a' && c <= 'f') ||
+                        (c >= 'A' && c <= 'F');
+        if (!ok) return std::nullopt;
+    }
+    ember::u64 v = 0;
+    auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
+    if (r.ec != std::errc{}) return std::nullopt;
+    return static_cast<ember::addr_t>(v);
+}
+
 struct Args {
     std::string binary;
     std::string symbol;
@@ -46,6 +68,13 @@ struct Args {
     std::vector<std::string> script_argv; // args passed to the script after `--`
     std::string cache_dir;          // override for the disk cache location
     std::string diff_path;          // --diff OLD: compare this older binary against args.binary
+    std::string diff_format;        // --diff-format: "tsv" (default) or "json"
+    std::string fp_out;             // --fingerprint-out PATH: also write fingerprints TSV here
+    std::string fp_old_in;          // --fingerprint-old PATH: read OLD side fingerprints from PATH
+    std::string fp_new_in;          // --fingerprint-new PATH: read NEW side fingerprints from PATH
+    std::string refs_to;            // --refs-to VA: print callers of VA
+    std::string disasm_at;          // --disasm-at VA: disasm window at VA
+    std::string disasm_count;       // --count N: instructions for --disasm-at
     bool no_cache = false;          // disable the disk cache entirely
     bool disasm = false;
     bool cfg    = false;
@@ -106,6 +135,13 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--project",     &Args::project_path},
     {"",   "--script",      &Args::script_path},
     {"",   "--diff",        &Args::diff_path},
+    {"",   "--diff-format", &Args::diff_format},
+    {"",   "--fingerprint-out", &Args::fp_out},
+    {"",   "--fingerprint-old", &Args::fp_old_in},
+    {"",   "--fingerprint-new", &Args::fp_new_in},
+    {"",   "--refs-to",     &Args::refs_to},
+    {"",   "--disasm-at",   &Args::disasm_at},
+    {"",   "--count",       &Args::disasm_count},
 });
 
 template <class F>
@@ -159,7 +195,10 @@ void apply_stage_implications(Args& a) {
                 std::format("unexpected positional argument: {}", s)));
         }
     }
-    if (!a.help && a.binary.empty()) {
+    // A positional binary is not required when the user is diffing two
+    // already-computed fingerprint TSVs — no bytes to parse.
+    const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
+    if (!a.help && a.binary.empty() && !diffs_from_tsvs) {
         return std::unexpected(ember::Error::invalid_format("no binary specified"));
     }
     apply_stage_implications(a);
@@ -580,6 +619,12 @@ struct FpEntry {
     ember::addr_t addr = 0;
     std::string fp;
     std::string name;
+    // Shape metadata retained for fuzzy-matching: two functions with the
+    // same (blocks, insts, calls) triple are very likely the same function
+    // edited by a few instructions across versions.
+    ember::u32 blocks = 0;
+    ember::u32 insts  = 0;
+    ember::u32 calls  = 0;
 };
 struct ParsedFps {
     std::unordered_map<std::string, std::vector<FpEntry>> by_fp;
@@ -610,10 +655,92 @@ struct ParsedFps {
         const auto r = std::from_chars(f[0].data(),
                                        f[0].data() + f[0].size(), addr, 16);
         if (r.ec != std::errc{}) continue;
-        out.by_fp[std::string{f[1]}].push_back(
-            FpEntry{addr, std::string{f[1]}, std::string{f[5]}});
+        auto parse_u32 = [](std::string_view sv) -> ember::u32 {
+            ember::u32 v = 0;
+            std::from_chars(sv.data(), sv.data() + sv.size(), v, 10);
+            return v;
+        };
+        out.by_fp[std::string{f[1]}].push_back(FpEntry{
+            addr,
+            std::string{f[1]},
+            std::string{f[5]},
+            parse_u32(f[2]),
+            parse_u32(f[3]),
+            parse_u32(f[4]),
+        });
         ++out.total;
     }
+    return out;
+}
+
+// Fuzzy-pair unmatched "removed" and "added" entries. Two heuristics,
+// applied in order:
+//   1. Exact-name match across versions — obvious case of "same named
+//      function, body differs by a few instructions". Tagged `edited`.
+//   2. Shape proximity — equal (blocks, insts, calls) tuple plus (sub_*
+//      in both OR close hash-prefix). Tagged `fuzzy`.
+// Works on the raw vectors; caller passes in the leftover entries after
+// the exact-fp pass.
+struct FuzzyPair {
+    FpEntry old_e;
+    FpEntry new_e;
+    const char* tag;  // "edited" or "fuzzy"
+};
+[[nodiscard]] std::vector<FuzzyPair>
+fuzzy_pair(std::vector<FpEntry>& removed, std::vector<FpEntry>& added) {
+    std::vector<FuzzyPair> out;
+    // Pass 1: name equality.
+    auto is_sub = [](std::string_view n) {
+        return n.starts_with("sub_");
+    };
+    std::vector<bool> rm_taken(removed.size(), false);
+    std::vector<bool> ad_taken(added.size(),   false);
+    for (std::size_t i = 0; i < removed.size(); ++i) {
+        if (is_sub(removed[i].name)) continue;
+        for (std::size_t j = 0; j < added.size(); ++j) {
+            if (ad_taken[j]) continue;
+            if (added[j].name != removed[i].name) continue;
+            out.push_back({removed[i], added[j], "edited"});
+            rm_taken[i] = true;
+            ad_taken[j] = true;
+            break;
+        }
+    }
+    // Pass 2: shape proximity on sub_* pairs. Both sides must be sub_*
+    // (named collisions were handled in pass 1), same shape tuple, and a
+    // shared 4-hex-char fingerprint prefix — that's a generous-but-sane
+    // signal that they started as the same function.
+    for (std::size_t i = 0; i < removed.size(); ++i) {
+        if (rm_taken[i]) continue;
+        if (!is_sub(removed[i].name)) continue;
+        std::size_t best = std::size_t(-1);
+        for (std::size_t j = 0; j < added.size(); ++j) {
+            if (ad_taken[j]) continue;
+            if (!is_sub(added[j].name)) continue;
+            if (added[j].blocks != removed[i].blocks) continue;
+            if (added[j].insts  != removed[i].insts)  continue;
+            if (added[j].calls  != removed[i].calls)  continue;
+            if (removed[i].fp.size() < 4 || added[j].fp.size() < 4) continue;
+            if (removed[i].fp.substr(0, 4) != added[j].fp.substr(0, 4)) continue;
+            best = j;
+            break;
+        }
+        if (best != std::size_t(-1)) {
+            out.push_back({removed[i], added[best], "fuzzy"});
+            rm_taken[i] = true;
+            ad_taken[best] = true;
+        }
+    }
+    // Compact the "still unmatched" entries back into the caller's vectors.
+    std::vector<FpEntry> rm_left, ad_left;
+    rm_left.reserve(removed.size());
+    ad_left.reserve(added.size());
+    for (std::size_t i = 0; i < removed.size(); ++i)
+        if (!rm_taken[i]) rm_left.push_back(std::move(removed[i]));
+    for (std::size_t j = 0; j < added.size(); ++j)
+        if (!ad_taken[j]) ad_left.push_back(std::move(added[j]));
+    removed = std::move(rm_left);
+    added   = std::move(ad_left);
     return out;
 }
 
@@ -622,22 +749,29 @@ struct ParsedFps {
 //   moved    <fp> <old_addr> <new_addr> <old_name> <new_name>
 //   added    <fp> -          <new_addr> -          <new_name>
 //   removed  <fp> <old_addr> -          <old_name> -
-// `kept` = same fp, same addr, same name. `moved` = same fp, anything else.
+//   edited   <fp_old>>< fp_new> <old>   <new>     <name>    <name>
+//   fuzzy    <fp_old>>< fp_new> <old>   <new>     <name>    <name>
+// `kept`  = same fp, same addr, same name.
+// `moved` = same fp, different addr or name.
+// `edited`/`fuzzy` = fuzzy-paired leftovers (see fuzzy_pair).
 // Summary line prefixed with '#' so awk filters stay simple.
-[[nodiscard]] std::string
-format_diff(const ParsedFps& old_p, const ParsedFps& new_p,
-            const std::string& old_label, const std::string& new_label) {
-    std::size_t kept = 0, moved = 0, added = 0, removed = 0;
-    std::string body;
 
+// Gather paired entries + unmatched leftovers from an exact-fp diff.
+// The caller then runs fuzzy_pair() over the leftovers and renders.
+struct DiffBuckets {
+    std::vector<std::pair<FpEntry, FpEntry>> kept;   // same addr + name
+    std::vector<std::pair<FpEntry, FpEntry>> moved;  // same fp, different addr/name
+    std::vector<FpEntry>                     added_left;
+    std::vector<FpEntry>                     removed_left;
+};
+
+[[nodiscard]] DiffBuckets
+bucket_exact(const ParsedFps& old_p, const ParsedFps& new_p) {
+    DiffBuckets b;
     for (const auto& [fp, nvec] : new_p.by_fp) {
         const auto it = old_p.by_fp.find(fp);
         if (it == old_p.by_fp.end()) {
-            for (const auto& ne : nvec) {
-                body += std::format("added\t{}\t-\t{:x}\t-\t{}\n",
-                                    fp, ne.addr, ne.name);
-                ++added;
-            }
+            for (const auto& ne : nvec) b.added_left.push_back(ne);
             continue;
         }
         const auto& ovec = it->second;
@@ -645,64 +779,206 @@ format_diff(const ParsedFps& old_p, const ParsedFps& new_p,
         for (std::size_t i = 0; i < pairs; ++i) {
             const auto& oe = ovec[i];
             const auto& ne = nvec[i];
-            const bool identical = oe.addr == ne.addr && oe.name == ne.name;
-            body += std::format("{}\t{}\t{:x}\t{:x}\t{}\t{}\n",
-                                identical ? "kept" : "moved",
-                                fp, oe.addr, ne.addr, oe.name, ne.name);
-            if (identical) ++kept; else ++moved;
+            if (oe.addr == ne.addr && oe.name == ne.name) b.kept.emplace_back(oe, ne);
+            else                                           b.moved.emplace_back(oe, ne);
         }
-        // Leftover instances on either side (collision-count mismatches) show
-        // up as added/removed for the uncovered entries.
-        for (std::size_t i = pairs; i < nvec.size(); ++i) {
-            body += std::format("added\t{}\t-\t{:x}\t-\t{}\n",
-                                fp, nvec[i].addr, nvec[i].name);
-            ++added;
-        }
-        for (std::size_t i = pairs; i < ovec.size(); ++i) {
-            body += std::format("removed\t{}\t{:x}\t-\t{}\t-\n",
-                                fp, ovec[i].addr, ovec[i].name);
-            ++removed;
-        }
+        for (std::size_t i = pairs; i < nvec.size(); ++i) b.added_left.push_back(nvec[i]);
+        for (std::size_t i = pairs; i < ovec.size(); ++i) b.removed_left.push_back(ovec[i]);
     }
     for (const auto& [fp, ovec] : old_p.by_fp) {
         if (new_p.by_fp.contains(fp)) continue;
-        for (const auto& oe : ovec) {
-            body += std::format("removed\t{}\t{:x}\t-\t{}\t-\n",
-                                fp, oe.addr, oe.name);
-            ++removed;
-        }
+        for (const auto& oe : ovec) b.removed_left.push_back(oe);
+    }
+    return b;
+}
+
+[[nodiscard]] std::string
+format_diff(const ParsedFps& old_p, const ParsedFps& new_p,
+            const std::string& old_label, const std::string& new_label) {
+    auto b = bucket_exact(old_p, new_p);
+    auto fuzzy = fuzzy_pair(b.removed_left, b.added_left);
+
+    std::string body;
+    auto emit = [&](std::string_view tag,
+                    const FpEntry* oe, const FpEntry* ne,
+                    std::string_view fp) {
+        body += std::format("{}\t{}\t{}\t{}\t{}\t{}\n",
+            tag, fp,
+            oe ? std::format("{:x}", oe->addr) : std::string{"-"},
+            ne ? std::format("{:x}", ne->addr) : std::string{"-"},
+            oe ? oe->name                      : std::string{"-"},
+            ne ? ne->name                      : std::string{"-"});
+    };
+    for (const auto& [oe, ne] : b.kept)   emit("kept",  &oe, &ne, oe.fp);
+    for (const auto& [oe, ne] : b.moved)  emit("moved", &oe, &ne, oe.fp);
+    for (const auto& p : fuzzy)           emit(p.tag, &p.old_e, &p.new_e,
+                                               std::format("{}>{}", p.old_e.fp.substr(0, 4),
+                                                           p.new_e.fp.substr(0, 4)));
+    for (const auto& ne : b.added_left)   emit("added",   nullptr, &ne, ne.fp);
+    for (const auto& oe : b.removed_left) emit("removed", &oe, nullptr, oe.fp);
+
+    std::size_t edited = 0, fuz = 0;
+    for (const auto& p : fuzzy) {
+        if (std::string_view(p.tag) == "edited") ++edited; else ++fuz;
     }
 
     std::string out;
     out += std::format("# ember diff\n");
     out += std::format("# old: {} ({} functions)\n", old_label, old_p.total);
     out += std::format("# new: {} ({} functions)\n", new_label, new_p.total);
-    out += std::format("# summary: kept={} moved={} added={} removed={}\n",
-                       kept, moved, added, removed);
+    out += std::format(
+        "# summary: kept={} moved={} edited={} fuzzy={} added={} removed={}\n",
+        b.kept.size(), b.moved.size(), edited, fuz,
+        b.added_left.size(), b.removed_left.size());
     out += "# columns: tag\tfp\told_addr\tnew_addr\told_name\tnew_name\n";
     out += body;
     return out;
 }
 
-int run_diff(const Args& args) {
-    if (args.binary.empty()) {
-        std::println(stderr, "ember: --diff requires the new binary as the final arg");
-        return EXIT_FAILURE;
+// Minimal JSON string-escape — we emit a tight, machine-readable form.
+[[nodiscard]] std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    out += std::format("\\u{:04x}", static_cast<unsigned>(c));
+                } else {
+                    out += c;
+                }
+        }
     }
+    return out;
+}
+
+[[nodiscard]] std::string
+format_diff_json(const ParsedFps& old_p, const ParsedFps& new_p,
+                 const std::string& old_label, const std::string& new_label) {
+    auto b = bucket_exact(old_p, new_p);
+    auto fuzzy = fuzzy_pair(b.removed_left, b.added_left);
+
+    std::string body;
+    auto emit = [&](std::string_view tag, std::string_view fp,
+                    std::optional<ember::addr_t> old_addr,
+                    std::optional<ember::addr_t> new_addr,
+                    std::string_view old_name, std::string_view new_name) {
+        if (!body.empty()) body += ",\n";
+        body += std::format(
+            "  {{\"tag\":\"{}\",\"fp\":\"{}\","
+            "\"old_addr\":{},\"new_addr\":{},"
+            "\"old_name\":\"{}\",\"new_name\":\"{}\"}}",
+            tag, fp,
+            old_addr ? std::format("\"{:#x}\"", *old_addr) : std::string{"null"},
+            new_addr ? std::format("\"{:#x}\"", *new_addr) : std::string{"null"},
+            json_escape(old_name), json_escape(new_name));
+    };
+    for (const auto& [oe, ne] : b.kept)
+        emit("kept",  oe.fp, oe.addr, ne.addr, oe.name, ne.name);
+    for (const auto& [oe, ne] : b.moved)
+        emit("moved", oe.fp, oe.addr, ne.addr, oe.name, ne.name);
+    for (const auto& p : fuzzy) {
+        const std::string fp_tag = std::format("{}>{}",
+            p.old_e.fp.substr(0, 4), p.new_e.fp.substr(0, 4));
+        emit(p.tag, fp_tag, p.old_e.addr, p.new_e.addr, p.old_e.name, p.new_e.name);
+    }
+    for (const auto& ne : b.added_left)
+        emit("added",   ne.fp, std::nullopt, ne.addr, "",      ne.name);
+    for (const auto& oe : b.removed_left)
+        emit("removed", oe.fp, oe.addr, std::nullopt, oe.name, "");
+
+    std::size_t edited = 0, fuz = 0;
+    for (const auto& p : fuzzy) {
+        if (std::string_view(p.tag) == "edited") ++edited; else ++fuz;
+    }
+
+    std::string out;
+    out += "{\n";
+    out += std::format("  \"old\": {{\"path\":\"{}\",\"functions\":{}}},\n",
+                       json_escape(old_label), old_p.total);
+    out += std::format("  \"new\": {{\"path\":\"{}\",\"functions\":{}}},\n",
+                       json_escape(new_label), new_p.total);
+    out += std::format(
+        "  \"summary\": {{\"kept\":{},\"moved\":{},\"edited\":{},\"fuzzy\":{},\"added\":{},\"removed\":{}}},\n",
+        b.kept.size(), b.moved.size(), edited, fuz,
+        b.added_left.size(), b.removed_left.size());
+    out += "  \"entries\": [\n";
+    out += body;
+    out += "\n  ]\n}\n";
+    return out;
+}
+
+[[nodiscard]] std::string slurp_file(const std::filesystem::path& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) return {};
+    const auto n = f.tellg();
+    if (n < 0) return {};
+    f.seekg(0, std::ios::beg);
+    std::string s;
+    s.resize(static_cast<std::size_t>(n));
+    if (!s.empty()) f.read(s.data(), static_cast<std::streamsize>(s.size()));
+    if (!f && !f.eof()) return {};
+    return s;
+}
+
+int run_diff(const Args& args) {
     const auto cache_dir = args.cache_dir.empty()
         ? ember::cache::default_dir()
         : std::filesystem::path(args.cache_dir);
 
-    std::println(stderr, "ember: diff OLD={}", args.diff_path);
-    std::println(stderr, "ember: diff NEW={}", args.binary);
-    const std::string old_tsv =
-        fingerprints_cached_or_compute(args.diff_path, cache_dir, args.no_cache);
-    const std::string new_tsv =
-        fingerprints_cached_or_compute(args.binary,   cache_dir, args.no_cache);
+    // Pre-computed fingerprint TSVs via --fingerprint-old / --fingerprint-new
+    // skip the lift-SSA-cleanup pipeline entirely. Useful for iterative
+    // version diffs: export v717 once, then diff v717→v718 / v718→v719 /
+    // … against that stored TSV without recomputing v717.
+    std::string old_tsv, new_tsv;
+    std::string old_label = args.diff_path;
+    std::string new_label = args.binary;
+
+    if (!args.fp_old_in.empty()) {
+        old_tsv = slurp_file(args.fp_old_in);
+        if (old_tsv.empty()) {
+            std::println(stderr, "ember: --fingerprint-old: cannot read '{}'",
+                         args.fp_old_in);
+            return EXIT_FAILURE;
+        }
+        old_label = args.fp_old_in;
+    }
+    if (!args.fp_new_in.empty()) {
+        new_tsv = slurp_file(args.fp_new_in);
+        if (new_tsv.empty()) {
+            std::println(stderr, "ember: --fingerprint-new: cannot read '{}'",
+                         args.fp_new_in);
+            return EXIT_FAILURE;
+        }
+        new_label = args.fp_new_in;
+    }
+
+    if (old_tsv.empty()) {
+        if (args.diff_path.empty()) {
+            std::println(stderr, "ember: --diff needs --fingerprint-old PATH or --diff OLD_BINARY");
+            return EXIT_FAILURE;
+        }
+        std::println(stderr, "ember: diff OLD={}", args.diff_path);
+        old_tsv = fingerprints_cached_or_compute(args.diff_path, cache_dir, args.no_cache);
+    }
+    if (new_tsv.empty()) {
+        if (args.binary.empty()) {
+            std::println(stderr, "ember: --diff needs --fingerprint-new PATH or a positional binary");
+            return EXIT_FAILURE;
+        }
+        std::println(stderr, "ember: diff NEW={}", args.binary);
+        new_tsv = fingerprints_cached_or_compute(args.binary, cache_dir, args.no_cache);
+    }
     const auto old_p = parse_fingerprints_tsv(old_tsv);
     const auto new_p = parse_fingerprints_tsv(new_tsv);
-    const std::string out =
-        format_diff(old_p, new_p, args.diff_path, args.binary);
+    const std::string out = (args.diff_format == "json")
+        ? format_diff_json(old_p, new_p, old_label, new_label)
+        : format_diff     (old_p, new_p, old_label, new_label);
     std::fwrite(out.data(), 1, out.size(), stdout);
     return EXIT_SUCCESS;
 }
@@ -739,6 +1015,12 @@ void print_help() {
     std::println("      --arities        dump inferred SysV arity per function (addr N)");
     std::println("      --fingerprints   dump address-independent content hash per function");
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
+    std::println("      --diff-format    'tsv' (default) or 'json' for --diff output");
+    std::println("      --fingerprint-out P  also write --fingerprints TSV to P (portable across machines)");
+    std::println("      --fingerprint-old P  skip OLD-side fingerprint compute in --diff; read TSV from P");
+    std::println("      --fingerprint-new P  skip NEW-side fingerprint compute in --diff; read TSV from P");
+    std::println("      --refs-to VA     list callers of VA (one-shot reverse xref)");
+    std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns; --count N to override)");
     std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
     std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");
@@ -770,7 +1052,9 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
-    if (!args.diff_path.empty()) {
+    if (!args.diff_path.empty() ||
+        !args.fp_old_in.empty() ||
+        !args.fp_new_in.empty()) {
         return run_diff(args);
     }
 
@@ -811,12 +1095,120 @@ int main(int argc, char** argv) {
     if (args.xrefs) {
         return run_cached(args, "xrefs",   [&] { return build_xrefs_output(b);   });
     }
+    // --refs-to VA: callers of a specific address. Reuses the xrefs cache
+    // to avoid recomputing the full call graph on every invocation; if no
+    // cache entry exists it's built once, then every subsequent query is
+    // a grep of the cached TSV.
+    if (!args.refs_to.empty()) {
+        auto va = parse_cli_addr(args.refs_to);
+        if (!va) {
+            std::println(stderr, "ember: --refs-to: bad address '{}'", args.refs_to);
+            return EXIT_FAILURE;
+        }
+        std::string xrefs_tsv;
+        const auto dir = args.cache_dir.empty()
+            ? ember::cache::default_dir()
+            : std::filesystem::path(args.cache_dir);
+        std::string key;
+        if (!args.no_cache) {
+            auto k = ember::cache::key_for(args.binary);
+            if (k) key = std::move(*k);
+        }
+        if (!key.empty()) {
+            if (auto hit = ember::cache::read(dir, key, "xrefs"); hit) {
+                xrefs_tsv = std::move(*hit);
+            }
+        }
+        if (xrefs_tsv.empty()) {
+            // Populate the cache now. First run is expensive (one full
+            // call-graph walk); every subsequent --refs-to hit is instant.
+            std::println(stderr,
+                "ember: --refs-to: building xrefs cache (one-time)...");
+            std::fflush(stderr);
+            xrefs_tsv = build_xrefs_output(b);
+            if (!key.empty()) {
+                (void)ember::cache::write(dir, key, "xrefs", xrefs_tsv);
+            }
+        }
+        const std::string needle = std::format("-> {:#x}\n", *va);
+        std::size_t pos = 0;
+        std::string out;
+        while ((pos = xrefs_tsv.find(needle, pos)) != std::string::npos) {
+            // Walk back to the start of the line to pull the caller addr.
+            std::size_t ls = pos;
+            while (ls > 0 && xrefs_tsv[ls - 1] != '\n') --ls;
+            out.append(xrefs_tsv, ls, (pos + needle.size()) - ls);
+            pos += needle.size();
+        }
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+    // --disasm-at VA [--count N]: bounded disasm window anywhere in the
+    // binary, including mid-function. Count defaults to 32 instructions.
+    if (!args.disasm_at.empty()) {
+        auto va = parse_cli_addr(args.disasm_at);
+        if (!va) {
+            std::println(stderr, "ember: --disasm-at: bad address '{}'", args.disasm_at);
+            return EXIT_FAILURE;
+        }
+        std::size_t count = 32;
+        if (!args.disasm_count.empty()) {
+            ember::u64 n = 0;
+            auto r = std::from_chars(args.disasm_count.data(),
+                                     args.disasm_count.data() + args.disasm_count.size(),
+                                     n, 10);
+            if (r.ec == std::errc{}) count = static_cast<std::size_t>(n);
+        }
+        // 8 bytes/insn is the typical x86-64 average; ~15 bytes is the max.
+        const ember::addr_t end = static_cast<ember::addr_t>(*va) +
+                                  static_cast<ember::addr_t>(count * 15);
+        auto rv = ember::format_disasm_range(b, static_cast<ember::addr_t>(*va), end);
+        if (!rv) {
+            std::println(stderr, "ember: {}: {}",
+                         rv.error().kind_name(), rv.error().message);
+            return EXIT_FAILURE;
+        }
+        // Trim to N lines of disassembly (skip the header/comments).
+        std::size_t emitted = 0;
+        std::string out;
+        std::size_t line_start = 0;
+        for (std::size_t i = 0; i <= rv->size(); ++i) {
+            if (i == rv->size() || (*rv)[i] == '\n') {
+                const std::string_view line(rv->data() + line_start, i - line_start);
+                out.append(line);
+                out += '\n';
+                // Count only disasm lines (start with address or whitespace
+                // on continuation). Comments start with ';'.
+                if (!line.empty() && line.front() != ';') ++emitted;
+                if (emitted >= count) break;
+                line_start = i + 1;
+            }
+        }
+        std::print("{}", out);
+        return EXIT_SUCCESS;
+    }
     if (args.strings) {
         return run_cached(args, "strings", [&] { return build_strings_output(b); });
     }
     if (args.fingerprints) {
-        return run_cached(args, fingerprints_cache_tag(),
-                          [&] { return build_fingerprints_output(b); });
+        const int rc = run_cached(args, fingerprints_cache_tag(),
+                                  [&] { return build_fingerprints_output(b); });
+        // Mirror the output to --fingerprint-out PATH so the fingerprints
+        // can travel between machines / repo checkouts where the disk
+        // cache doesn't apply.
+        if (rc == EXIT_SUCCESS && !args.fp_out.empty()) {
+            const auto dir = args.cache_dir.empty()
+                ? ember::cache::default_dir()
+                : std::filesystem::path(args.cache_dir);
+            auto k = ember::cache::key_for(args.binary);
+            if (k) {
+                if (auto hit = ember::cache::read(dir, *k, fingerprints_cache_tag()); hit) {
+                    std::ofstream f(args.fp_out, std::ios::binary | std::ios::trunc);
+                    if (f) f.write(hit->data(), static_cast<std::streamsize>(hit->size()));
+                }
+            }
+        }
+        return rc;
     }
     if (args.objc_names) {
         return run_cached(args, "objc-names",

@@ -1605,6 +1605,15 @@ struct Emitter {
                 const i64 off = bo->second;
                 const std::string base_expr =
                     expr(base, 0, static_cast<int>(Prec::Unary));
+                // Negative offsets (pointer adjusted above its struct base,
+                // e.g. vtable slots at base-8) don't have clean C syntax;
+                // fall back to the explicit cast form so we don't emit
+                // garbage like `field_fffffffffffffff4`.
+                if (off < 0) {
+                    return std::format("*({}*)({} - {:#x})",
+                                       c_type_name(t), base_expr,
+                                       static_cast<u64>(-off));
+                }
                 if (t == IrType::I64) {
                     return std::format("{}->field_{:x}", base_expr,
                                        static_cast<u64>(off));
@@ -2027,8 +2036,14 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             return std::format("overflow_sub({}, {})",
                                expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
 
-        case IrOp::Intrinsic:
-            return std::format("__{}()", d.name);
+        case IrOp::Intrinsic: {
+            std::string args;
+            for (u8 i = 0; i < d.src_count && i < d.srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(d.srcs[i], depth, 0);
+            }
+            return std::format("__{}({})", d.name, args);
+        }
 
         default:
             return std::format("t{}", d.dst.temp);
@@ -2149,12 +2164,18 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                                format_mem(inst.srcs[0], inst.dst.type, inst.segment));
         }
 
-        case IrOp::Intrinsic:
+        case IrOp::Intrinsic: {
             // CET markers are emitted at every function entry on toolchains
             // with -fcf-protection (Ubuntu 24.04's gcc-14 defaults to it).
             // They're NOPs semantically, so suppress them from the output.
             if (inst.name == "endbr64" || inst.name == "endbr32") return "";
-            return std::format("{}();", inst.name);
+            std::string args;
+            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(inst.srcs[i], 0, 0);
+            }
+            return std::format("{}({});", inst.name, args);
+        }
 
         default:
             if (inlinable_op(inst.op) && inst.dst.kind == IrValueKind::Temp) {

@@ -44,6 +44,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif()
 elseif(MSVC)
     target_compile_options(ember_flags INTERFACE /W4 /permissive- /Zc:preprocessor)
+    # MSVC's CRT deprecates standard C functions (getenv, sprintf, ...) in
+    # favour of its _s variants; with /WX every getenv call would be a
+    # build failure. We use the standard names deliberately for portability.
+    target_compile_definitions(ember_flags INTERFACE
+        _CRT_SECURE_NO_WARNINGS
+        _CRT_NONSTDC_NO_WARNINGS
+    )
     if(EMBER_WERROR)
         target_compile_options(ember_flags INTERFACE /WX)
     endif()

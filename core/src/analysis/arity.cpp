@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/register.hpp>
@@ -12,14 +13,10 @@ namespace ember {
 
 namespace {
 
-constexpr std::array<Reg, 6> kArgRegs = {
-    Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
-};
-
-[[nodiscard]] int arg_reg_index(Reg r) noexcept {
+[[nodiscard]] int arg_reg_index(std::span<const Reg> args, Reg r) noexcept {
     const Reg c = canonical_reg(r);
-    for (std::size_t i = 0; i < kArgRegs.size(); ++i) {
-        if (c == kArgRegs[i]) return static_cast<int>(i);
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (c == args[i]) return static_cast<int>(i);
     }
     return -1;
 }
@@ -49,7 +46,10 @@ enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 
 }  // namespace
 
-u8 infer_sysv_arity(const Binary& b, addr_t target) noexcept {
+u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
+    const auto args = int_arg_regs(abi);
+    const u8 max_arity = static_cast<u8>(args.size());
+
     // Transparently follow a single leading unconditional `jmp <rel>` so
     // wrappers report the underlying callee's arity. Depth-limited to avoid
     // pathological chains.
@@ -69,7 +69,7 @@ u8 infer_sysv_arity(const Binary& b, addr_t target) noexcept {
     }
 
     auto entry_bytes = b.bytes_at(target);
-    if (entry_bytes.empty()) return 6;
+    if (entry_bytes.empty()) return max_arity;
 
     std::array<bool, 6> written{};
     int max_live_in = -1;
@@ -88,7 +88,7 @@ u8 infer_sysv_arity(const Binary& b, addr_t target) noexcept {
         const bool dst_reads  = (role == DstRole::ReadOnly  || role == DstRole::ReadWrite);
 
         auto touch = [&](Reg r, bool read, bool write) {
-            const int idx = arg_reg_index(r);
+            const int idx = arg_reg_index(args, r);
             if (idx < 0) return;
             const auto u = static_cast<std::size_t>(idx);
             if (read && !written[u]) {
@@ -120,6 +120,10 @@ u8 infer_sysv_arity(const Binary& b, addr_t target) noexcept {
     }
 
     return static_cast<u8>(max_live_in + 1);
+}
+
+u8 infer_arity(const Binary& b, addr_t target) noexcept {
+    return infer_arity(b, target, abi_for(b.format(), b.arch()));
 }
 
 }  // namespace ember

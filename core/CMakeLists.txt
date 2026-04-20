@@ -1,6 +1,7 @@
 add_library(ember_core STATIC
     src/binary/elf.cpp
     src/binary/macho.cpp
+    src/binary/pe.cpp
     src/binary/loader.cpp
     src/disasm/register.cpp
     src/disasm/instruction.cpp
@@ -12,13 +13,17 @@ add_library(ember_core STATIC
     src/analysis/pipeline.cpp
     src/analysis/fingerprint.cpp
     src/analysis/demangle.cpp
+    src/analysis/msvc_demangle.cpp
     src/analysis/sig_inference.cpp
     src/analysis/eh_frame.cpp
     src/analysis/objc.cpp
+    src/analysis/pe_unwind.cpp
     src/analysis/libcxx_string.cpp
     src/analysis/rtti.cpp
+    src/analysis/msvc_rtti.cpp
     src/common/annotations.cpp
     src/common/cache.cpp
+    src/ir/abi.cpp
     src/ir/ir.cpp
     src/ir/x64_lifter.cpp
     src/ir/ssa.cpp

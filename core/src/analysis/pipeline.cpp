@@ -14,6 +14,7 @@
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
@@ -341,7 +342,7 @@ format_struct(const Binary& b, const FuncWindow& w,
     auto fn_r = builder.build(w.start, w.label);
     if (!fn_r) return std::unexpected(fn_r.error());
 
-    const X64Lifter lifter;
+    const X64Lifter lifter{abi_for(b.format(), b.arch())};
     auto ir_r = lifter.lift(*fn_r);
     if (!ir_r) return std::unexpected(ir_r.error());
 

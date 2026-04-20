@@ -1,0 +1,631 @@
+#include <ember/binary/pe.hpp>
+
+#include <algorithm>
+#include <cstring>
+#include <format>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+
+#include <ember/analysis/pe_unwind.hpp>
+#include <ember/common/bytes.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/x64_decoder.hpp>
+
+namespace ember {
+
+namespace {
+
+constexpr std::size_t kDosHdrMinSize = 0x40;
+constexpr std::size_t kDosLfanewOff  = 0x3C;
+constexpr std::size_t kNtSigSize     = 4;
+constexpr std::size_t kCoffHdrSize   = 20;
+constexpr std::size_t kSectionHdrSize = 40;
+constexpr std::size_t kDataDirEntry  = 8;
+
+// Optional header magic values.
+constexpr u16 kOptMagicPe32    = 0x010b;
+constexpr u16 kOptMagicPe32Plus = 0x020b;
+
+// Offsets inside the IMAGE_FILE_HEADER (COFF header).
+constexpr std::size_t kCoffMachineOff       = 0x00;
+constexpr std::size_t kCoffNumSectionsOff   = 0x02;
+constexpr std::size_t kCoffSizeOfOptHdrOff  = 0x10;
+
+// Offsets inside the PE32+ IMAGE_OPTIONAL_HEADER64.
+constexpr std::size_t kOptMagicOff            = 0x00;
+constexpr std::size_t kOptAddressOfEntryOff   = 0x10;
+constexpr std::size_t kOptImageBaseOff        = 0x18;
+constexpr std::size_t kOptNumRvaAndSizesOff   = 0x6C;
+constexpr std::size_t kOptDataDirOff          = 0x70;
+
+// Machine types we care about.
+constexpr u16 kMachineI386  = 0x014c;
+constexpr u16 kMachineAmd64 = 0x8664;
+constexpr u16 kMachineArm   = 0x01c0;
+constexpr u16 kMachineArm64 = 0xaa64;
+
+// IMAGE_SCN_* flags we map to SectionFlags.
+constexpr u32 kScnCntCode    = 0x00000020;
+constexpr u32 kScnCntInit    = 0x00000040;
+constexpr u32 kScnCntUninit  = 0x00000080;
+constexpr u32 kScnMemExecute = 0x20000000;
+constexpr u32 kScnMemRead    = 0x40000000;
+constexpr u32 kScnMemWrite   = 0x80000000;
+
+// Data-directory indices we consume. The optional header carries 16 of
+// these by convention; we only read the ones we use.
+constexpr std::size_t kDdExport      = 0;
+constexpr std::size_t kDdImport      = 1;
+constexpr std::size_t kDdTls         = 9;
+constexpr std::size_t kDdDelayImport = 13;
+
+// Import descriptor + export directory layout constants.
+constexpr std::size_t kImportDescSize       = 20;
+constexpr std::size_t kDelayImportDescSize  = 32;
+constexpr u32         kDelayAttrRvaBased    = 0x1;
+constexpr u64         kOrdinalFlagBit       = 0x8000'0000'0000'0000ULL;
+constexpr std::size_t kExportDirSize        = 40;
+
+[[nodiscard]] Arch arch_from_machine(u16 m) noexcept {
+    switch (m) {
+        case kMachineI386:  return Arch::X86;
+        case kMachineAmd64: return Arch::X86_64;
+        case kMachineArm:   return Arch::Arm;
+        case kMachineArm64: return Arch::Arm64;
+        default:            return Arch::Unknown;
+    }
+}
+
+// Section names live in an 8-byte slot, NUL-padded on the right. Strings
+// longer than 8 chars use a "/N" convention pointing into the COFF string
+// table — COFF-object-only and rare in EXE/DLL images; we accept the
+// short form and pass the "/N" literal through unmodified for v1.
+[[nodiscard]] std::string read_section_name(const std::byte* p) noexcept {
+    std::size_t len = 0;
+    while (len < 8 && static_cast<char>(p[len]) != '\0') ++len;
+    return std::string(reinterpret_cast<const char*>(p), len);
+}
+
+}  // namespace
+
+Result<std::unique_ptr<PeBinary>>
+PeBinary::load_from_buffer(std::vector<std::byte> buffer) {
+    std::unique_ptr<PeBinary> self(new PeBinary(std::move(buffer)));
+    if (auto rv = self->parse(); !rv) {
+        return std::unexpected(std::move(rv).error());
+    }
+    return self;
+}
+
+Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
+    const ByteReader r(buffer_);
+
+    if (r.size() < kDosHdrMinSize) {
+        return std::unexpected(Error::truncated(std::format(
+            "pe: file smaller than DOS header ({} < {})", r.size(), kDosHdrMinSize)));
+    }
+
+    // DOS magic "MZ". load_binary already sniffed this, but re-checking
+    // here makes PeBinary::load_from_buffer standalone-callable.
+    if (buffer_[0] != std::byte{'M'} || buffer_[1] != std::byte{'Z'}) {
+        return std::unexpected(Error::invalid_format("pe: bad DOS 'MZ' magic"));
+    }
+
+    auto e_lfanew_r = r.read_le<u32>(kDosLfanewOff);
+    if (!e_lfanew_r) return std::unexpected(std::move(e_lfanew_r).error());
+    const std::size_t coff_sig_off = *e_lfanew_r;
+
+    // PE signature: "PE\0\0".
+    auto sig = r.slice(coff_sig_off, kNtSigSize);
+    if (!sig) return std::unexpected(std::move(sig).error());
+    if ((*sig)[0] != std::byte{'P'} || (*sig)[1] != std::byte{'E'} ||
+        (*sig)[2] != std::byte{0}   || (*sig)[3] != std::byte{0}) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "pe: bad NT signature at offset {:#x}", coff_sig_off)));
+    }
+
+    const std::size_t coff_off = coff_sig_off + kNtSigSize;
+    auto coff = r.slice(coff_off, kCoffHdrSize);
+    if (!coff) return std::unexpected(std::move(coff).error());
+
+    const u16 machine      = read_le_at<u16>(coff->data() + kCoffMachineOff);
+    const u16 num_sections = read_le_at<u16>(coff->data() + kCoffNumSectionsOff);
+    const u16 opt_size     = read_le_at<u16>(coff->data() + kCoffSizeOfOptHdrOff);
+
+    arch_ = arch_from_machine(machine);
+
+    // Optional header. Must be at least large enough for the PE32+ fixed
+    // portion (0x70 bytes) plus the data-directory count field itself.
+    const std::size_t opt_off = coff_off + kCoffHdrSize;
+    auto opt = r.slice(opt_off, opt_size);
+    if (!opt) return std::unexpected(std::move(opt).error());
+
+    if (opt_size < kOptDataDirOff) {
+        return std::unexpected(Error::truncated(std::format(
+            "pe: optional header size {:#x} < {:#x}", opt_size, kOptDataDirOff)));
+    }
+
+    const u16 opt_magic = read_le_at<u16>(opt->data() + kOptMagicOff);
+    if (opt_magic == kOptMagicPe32) {
+        return std::unexpected(Error::unsupported(
+            "pe: PE32 (32-bit) not supported — PE32+ only"));
+    }
+    if (opt_magic != kOptMagicPe32Plus) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "pe: unknown optional header magic {:#x}", opt_magic)));
+    }
+
+    const u32 entry_rva  = read_le_at<u32>(opt->data() + kOptAddressOfEntryOff);
+    const u64 image_base = read_le_at<u64>(opt->data() + kOptImageBaseOff);
+    const u32 num_rva    = read_le_at<u32>(opt->data() + kOptNumRvaAndSizesOff);
+
+    return ParsedHeaders{
+        .coff_off          = coff_off,
+        .opt_off           = opt_off,
+        .sec_tab_off       = opt_off + opt_size,
+        .num_sections      = num_sections,
+        .opt_size          = opt_size,
+        .num_rva_and_sizes = num_rva,
+        .image_base        = image_base,
+        .entry_rva         = entry_rva,
+    };
+}
+
+Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
+    const ByteReader r(buffer_);
+    const std::size_t sec_bytes =
+        static_cast<std::size_t>(h.num_sections) * kSectionHdrSize;
+    auto sec_tab = r.slice(h.sec_tab_off, sec_bytes);
+    if (!sec_tab) return std::unexpected(std::move(sec_tab).error());
+
+    sections_.reserve(h.num_sections);
+    for (u16 i = 0; i < h.num_sections; ++i) {
+        const std::byte* const p =
+            sec_tab->data() + static_cast<std::size_t>(i) * kSectionHdrSize;
+
+        const u32 virt_size      = read_le_at<u32>(p + 0x08);
+        const u32 virt_rva       = read_le_at<u32>(p + 0x0C);
+        const u32 raw_size       = read_le_at<u32>(p + 0x10);
+        const u32 raw_ptr        = read_le_at<u32>(p + 0x14);
+        const u32 characteristics = read_le_at<u32>(p + 0x24);
+
+        Section s;
+        s.name        = read_section_name(p + 0x00);
+        s.vaddr       = h.image_base + static_cast<addr_t>(virt_rva);
+        s.file_offset = static_cast<offset_t>(raw_ptr);
+        s.size        = static_cast<u64>(virt_size);
+        s.flags.readable   = (characteristics & kScnMemRead)    != 0;
+        s.flags.writable   = (characteristics & kScnMemWrite)   != 0;
+        s.flags.executable = (characteristics & kScnMemExecute) != 0;
+        s.flags.allocated  = (characteristics & (kScnCntCode | kScnCntInit
+                                                 | kScnCntUninit)) != 0;
+
+        // File-backed bytes: min(VirtualSize, SizeOfRawData). SizeOfRawData
+        // is rounded up to FileAlignment, so it can be larger than VS —
+        // bytes past VS inside the raw-data slot are padding, not valid.
+        // Uninitialized-data sections (.bss) usually have raw_size == 0;
+        // their Section.data stays empty and the default bytes_at() walks
+        // past them correctly.
+        if (raw_size != 0 && virt_size != 0) {
+            const std::size_t backed =
+                std::min(static_cast<std::size_t>(raw_size),
+                         static_cast<std::size_t>(virt_size));
+            if (auto data = r.slice(raw_ptr, backed); data) {
+                s.data = *data;
+            }
+            // A slice() failure here is either a short-read header (file
+            // truncated) or a lying raw_ptr/raw_size; both are recoverable
+            // by leaving Section.data empty — downstream will treat the
+            // range as zero-init, same as .bss.
+        }
+
+        sections_.push_back(std::move(s));
+    }
+    return {};
+}
+
+Result<void> PeBinary::parse() {
+    auto hdrs = parse_headers();
+    if (!hdrs) return std::unexpected(std::move(hdrs).error());
+
+    image_base_ = hdrs->image_base;
+    entry_      = hdrs->image_base + static_cast<addr_t>(hdrs->entry_rva);
+
+    // Data-directory array follows the fixed optional-header fields. Cap
+    // the count at whatever fits inside the optional-header slice so a
+    // malicious NumberOfRvaAndSizes can't read past it. The PE spec caps
+    // this at 16 in practice but the field is u32 — trust the header size,
+    // not the count.
+    const std::size_t dd_capacity =
+        (hdrs->opt_size > kOptDataDirOff)
+            ? (hdrs->opt_size - kOptDataDirOff) / kDataDirEntry
+            : 0;
+    const std::size_t dd_count =
+        std::min<std::size_t>(hdrs->num_rva_and_sizes, dd_capacity);
+
+    const ByteReader r(buffer_);
+    const std::size_t dd_off = hdrs->opt_off + kOptDataDirOff;
+    data_dirs_.reserve(dd_count);
+    for (std::size_t i = 0; i < dd_count; ++i) {
+        const std::size_t p = dd_off + i * kDataDirEntry;
+        auto va = r.read_le<u32>(p + 0);
+        auto sz = r.read_le<u32>(p + 4);
+        if (!va || !sz) break;
+        data_dirs_.push_back({*va, *sz});
+    }
+
+    if (auto rv = parse_sections(*hdrs); !rv) return std::unexpected(rv.error());
+
+    // Imports first (so got_addr lives on each Symbol before thunk scan
+    // uses it to resolve stubs), then exports, then the thunk scan.
+    std::unordered_map<addr_t, std::string> got_to_name;
+    if (auto rv = parse_imports(got_to_name);       !rv) return std::unexpected(rv.error());
+    if (auto rv = parse_delay_imports(got_to_name); !rv) return std::unexpected(rv.error());
+    if (auto rv = parse_exports();                  !rv) return std::unexpected(rv.error());
+    scan_iat_thunks(got_to_name);
+    if (auto rv = parse_tls_callbacks();            !rv) return std::unexpected(rv.error());
+    absorb_pdata_function_starts();
+    sort_and_dedupe_symbols();
+    return {};
+}
+
+Result<void> PeBinary::parse_tls_callbacks() {
+    if (data_dirs_.size() <= kDdTls) return {};
+    const auto& dd = data_dirs_[kDdTls];
+    if (dd.size == 0 || dd.virtual_address == 0) return {};
+
+    // IMAGE_TLS_DIRECTORY64 fields we use:
+    //   +0x18: AddressOfCallBacks (u64 absolute VA → NULL-terminated u64[])
+    // Other fields (StartAddressOfRawData, AddressOfIndex, SizeOfZeroFill,
+    // Characteristics) describe the TLS data slot itself, which static
+    // analysis doesn't act on.
+    const auto tls = bytes_at_rva(dd.virtual_address);
+    if (tls.size() < 40) return {};
+
+    const u64 cb_array_va = read_le_at<u64>(tls.data() + 0x18);
+    if (cb_array_va == 0) return {};
+
+    // Walk callback array. Each entry is an absolute VA on PE+, terminated
+    // by a zero entry. Cap at 256 to avoid a runaway loop on a corrupt
+    // TLS directory pointing into junk.
+    constexpr std::size_t kMaxCallbacks = 256;
+    for (std::size_t i = 0; i < kMaxCallbacks; ++i) {
+        const auto slot = bytes_at(cb_array_va + i * 8);
+        if (slot.size() < 8) break;
+        const u64 cb = read_le_at<u64>(slot.data());
+        if (cb == 0) break;
+
+        Symbol sym;
+        sym.name = std::format("tls_callback_{}", i);
+        sym.addr = cb;
+        sym.kind = SymbolKind::Function;
+        symbols_.push_back(std::move(sym));
+    }
+    return {};
+}
+
+std::span<const std::byte> PeBinary::bytes_at_rva(u32 rva) const noexcept {
+    return Binary::bytes_at(image_base_ + static_cast<addr_t>(rva));
+}
+
+std::string_view PeBinary::cstr_at_rva(u32 rva) const noexcept {
+    const auto span = bytes_at_rva(rva);
+    if (span.empty()) return {};
+    const char* const start = reinterpret_cast<const char*>(span.data());
+    std::size_t len = 0;
+    while (len < span.size() && start[len] != '\0') ++len;
+    if (len == span.size()) return {};  // unterminated → treat as missing
+    return std::string_view(start, len);
+}
+
+Result<void>
+PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
+    if (data_dirs_.size() <= kDdImport) return {};
+    const auto& dd = data_dirs_[kDdImport];
+    if (dd.size == 0 || dd.virtual_address == 0) return {};
+
+    // Array of IMAGE_IMPORT_DESCRIPTOR terminated by an all-zero record.
+    // Cap the loop at dd.size / kImportDescSize so a malicious missing
+    // terminator can't walk forever.
+    const std::size_t max_descs = dd.size / kImportDescSize;
+    u32 cur = dd.virtual_address;
+
+    for (std::size_t i = 0; i < max_descs; ++i, cur += kImportDescSize) {
+        const auto desc = bytes_at_rva(cur);
+        if (desc.size() < kImportDescSize) break;
+
+        const u32 oft_rva     = read_le_at<u32>(desc.data() + 0x00);
+        const u32 name_rva    = read_le_at<u32>(desc.data() + 0x0C);
+        const u32 iat_rva     = read_le_at<u32>(desc.data() + 0x10);
+        if ((oft_rva | name_rva | iat_rva) == 0) break;   // terminator
+
+        // Walk INT and IAT in lockstep. INT gives us the hint/name; IAT
+        // is the slot the loader overwrites with the resolved pointer.
+        // If OriginalFirstThunk is zero (bound imports, older linkers),
+        // fall back to FirstThunk for name lookup — the loader will
+        // have overwritten it at runtime, but on the static image the
+        // name entries are still intact.
+        const u32 int_rva = (oft_rva != 0) ? oft_rva : iat_rva;
+
+        for (u32 k = 0;; ++k) {
+            const auto int_bytes = bytes_at_rva(int_rva + k * 8);
+            const auto iat_bytes = bytes_at_rva(iat_rva + k * 8);
+            if (int_bytes.size() < 8 || iat_bytes.size() < 8) break;
+            const u64 thunk = read_le_at<u64>(int_bytes.data());
+            if (thunk == 0) break;
+
+            Symbol sym;
+            sym.kind      = SymbolKind::Function;
+            sym.is_import = true;
+            sym.got_addr  = image_base_ + static_cast<addr_t>(iat_rva) + k * 8;
+
+            if ((thunk & kOrdinalFlagBit) != 0) {
+                const u16 ordinal = static_cast<u16>(thunk & 0xFFFFu);
+                sym.name = std::format("Ordinal#{}", ordinal);
+            } else {
+                // IMAGE_IMPORT_BY_NAME: u16 hint, then C-string.
+                const u32 hintname_rva = static_cast<u32>(thunk & 0xFFFF'FFFFULL);
+                const auto nm = cstr_at_rva(hintname_rva + 2);
+                if (nm.empty()) continue;  // corrupt: no name, skip slot
+                sym.name = std::string(nm);
+            }
+
+            got_to_name.emplace(sym.got_addr, sym.name);
+            symbols_.push_back(std::move(sym));
+        }
+    }
+    return {};
+}
+
+// Delay-load descriptor format (ImgDelayDescr, 32 bytes):
+//   u32 grAttrs;        // bit 0 set → all subsequent fields are RVAs
+//   u32 rvaDLLName;
+//   u32 rvaHmod;        // module-handle slot, populated at runtime
+//   u32 rvaIAT;         // we treat this exactly like a regular IAT
+//   u32 rvaINT;         // hint/name table, identical encoding to IMPORT
+//   u32 rvaBoundIAT;    // pre-bound IAT (if linker bound at build time)
+//   u32 rvaUnloadIAT;   // for FUnloadDelayLoadedDLL — we ignore
+//   u32 dwTimeStamp;
+// Walks identically to parse_imports once we've extracted INT/IAT RVAs.
+// Older (non-x64) images had grAttrs == 0 with absolute VAs in every
+// field — we reject those rather than try to guess the image base from
+// addresses that may have been written under a different load address.
+Result<void>
+PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
+    if (data_dirs_.size() <= kDdDelayImport) return {};
+    const auto& dd = data_dirs_[kDdDelayImport];
+    if (dd.size == 0 || dd.virtual_address == 0) return {};
+
+    const std::size_t max_descs = dd.size / kDelayImportDescSize;
+    u32 cur = dd.virtual_address;
+
+    for (std::size_t i = 0; i < max_descs; ++i, cur += kDelayImportDescSize) {
+        const auto desc = bytes_at_rva(cur);
+        if (desc.size() < kDelayImportDescSize) break;
+
+        const u32 attrs    = read_le_at<u32>(desc.data() + 0x00);
+        const u32 name_rva = read_le_at<u32>(desc.data() + 0x04);
+        const u32 iat_rva  = read_le_at<u32>(desc.data() + 0x0C);
+        const u32 int_rva  = read_le_at<u32>(desc.data() + 0x10);
+        if ((attrs | name_rva | iat_rva | int_rva) == 0) break;  // terminator
+        // Pre-x64 layout: ignore the slice rather than misread VAs as RVAs.
+        if ((attrs & kDelayAttrRvaBased) == 0) continue;
+        // Some linkers ship descriptors with no INT (rvaINT == 0); for the
+        // statically-recorded names we *need* the INT, so skip — the IAT
+        // alone is just patched function pointers at runtime.
+        if (int_rva == 0 || iat_rva == 0) continue;
+
+        for (u32 k = 0;; ++k) {
+            const auto int_bytes = bytes_at_rva(int_rva + k * 8);
+            const auto iat_bytes = bytes_at_rva(iat_rva + k * 8);
+            if (int_bytes.size() < 8 || iat_bytes.size() < 8) break;
+            const u64 thunk = read_le_at<u64>(int_bytes.data());
+            if (thunk == 0) break;
+
+            Symbol sym;
+            sym.kind      = SymbolKind::Function;
+            sym.is_import = true;
+            sym.got_addr  = image_base_ + static_cast<addr_t>(iat_rva) + k * 8;
+
+            if ((thunk & kOrdinalFlagBit) != 0) {
+                const u16 ordinal = static_cast<u16>(thunk & 0xFFFFu);
+                sym.name = std::format("Ordinal#{}", ordinal);
+            } else {
+                const u32 hintname_rva = static_cast<u32>(thunk & 0xFFFF'FFFFULL);
+                const auto nm = cstr_at_rva(hintname_rva + 2);
+                if (nm.empty()) continue;
+                sym.name = std::string(nm);
+            }
+
+            got_to_name.emplace(sym.got_addr, sym.name);
+            symbols_.push_back(std::move(sym));
+        }
+    }
+    return {};
+}
+
+Result<void> PeBinary::parse_exports() {
+    if (data_dirs_.size() <= kDdExport) return {};
+    const auto& dd = data_dirs_[kDdExport];
+    if (dd.size == 0 || dd.virtual_address == 0) return {};
+
+    const auto edir = bytes_at_rva(dd.virtual_address);
+    if (edir.size() < kExportDirSize) return {};
+
+    const u32 ordinal_base = read_le_at<u32>(edir.data() + 0x10);
+    const u32 num_funcs    = read_le_at<u32>(edir.data() + 0x14);
+    const u32 num_names    = read_le_at<u32>(edir.data() + 0x18);
+    const u32 eat_rva      = read_le_at<u32>(edir.data() + 0x1C);
+    const u32 ent_rva      = read_le_at<u32>(edir.data() + 0x20);
+    const u32 eot_rva      = read_le_at<u32>(edir.data() + 0x24);
+
+    // Forwarder exports point *into* the export data directory itself —
+    // the RVA there is the "DLL.Symbol" redirect string, not a function
+    // address. Skip them instead of emitting a garbage Symbol at a
+    // string VA.
+    const u32 dd_end = dd.virtual_address + dd.size;
+    const auto is_forwarder = [&](u32 rva) noexcept {
+        return rva >= dd.virtual_address && rva < dd_end;
+    };
+
+    // Named exports: walk ENT + EOT in parallel. EOT[i] is an index
+    // into EAT (0-based, not ordinal-based).
+    for (u32 i = 0; i < num_names; ++i) {
+        const auto name_rva_bytes = bytes_at_rva(ent_rva + i * 4);
+        const auto ord_bytes      = bytes_at_rva(eot_rva + i * 2);
+        if (name_rva_bytes.size() < 4 || ord_bytes.size() < 2) break;
+        const u32 name_rva = read_le_at<u32>(name_rva_bytes.data());
+        const u16 eat_idx  = read_le_at<u16>(ord_bytes.data());
+        if (eat_idx >= num_funcs) continue;
+
+        const auto eat_bytes = bytes_at_rva(eat_rva + eat_idx * 4);
+        if (eat_bytes.size() < 4) continue;
+        const u32 func_rva = read_le_at<u32>(eat_bytes.data());
+        if (func_rva == 0 || is_forwarder(func_rva)) continue;
+
+        const auto name = cstr_at_rva(name_rva);
+        if (name.empty()) continue;
+
+        Symbol sym;
+        sym.name      = std::string(name);
+        sym.addr      = image_base_ + static_cast<addr_t>(func_rva);
+        sym.kind      = SymbolKind::Function;
+        sym.is_export = true;
+        symbols_.push_back(std::move(sym));
+    }
+
+    // Unnamed (ordinal-only) exports: any EAT slot not reached by EOT.
+    // Build a bitmap of referenced indices, then emit "Ordinal#N" entries
+    // for the gaps. Keeps addresses resolvable even without a name.
+    std::vector<bool> named(num_funcs, false);
+    for (u32 i = 0; i < num_names; ++i) {
+        const auto ord_bytes = bytes_at_rva(eot_rva + i * 2);
+        if (ord_bytes.size() < 2) break;
+        const u16 eat_idx = read_le_at<u16>(ord_bytes.data());
+        if (eat_idx < num_funcs) named[eat_idx] = true;
+    }
+    for (u32 i = 0; i < num_funcs; ++i) {
+        if (named[i]) continue;
+        const auto eat_bytes = bytes_at_rva(eat_rva + i * 4);
+        if (eat_bytes.size() < 4) break;
+        const u32 func_rva = read_le_at<u32>(eat_bytes.data());
+        if (func_rva == 0 || is_forwarder(func_rva)) continue;
+
+        Symbol sym;
+        sym.name      = std::format("Ordinal#{}", ordinal_base + i);
+        sym.addr      = image_base_ + static_cast<addr_t>(func_rva);
+        sym.kind      = SymbolKind::Function;
+        sym.is_export = true;
+        symbols_.push_back(std::move(sym));
+    }
+    return {};
+}
+
+// Mirror of ElfBinary::scan_plt_stubs. Every `jmp qword ptr [rip + disp]`
+// in an executable section whose RIP-relative target lands on a known IAT
+// slot gives us the import stub's VA. MSVC and clang both emit these
+// inline rather than in a dedicated section, so we scan *every* executable
+// section rather than filtering by name.
+void PeBinary::scan_iat_thunks(
+    const std::unordered_map<addr_t, std::string>& got_to_name) {
+    if (got_to_name.empty() || arch_ != Arch::X86_64) return;
+
+    std::unordered_map<std::string, addr_t> stub_by_name;
+    const X64Decoder dec;
+
+    for (const auto& sec : sections_) {
+        if (!sec.flags.executable) continue;
+        if (sec.data.empty()) continue;
+
+        addr_t ip = sec.vaddr;
+        std::size_t off = 0;
+        while (off < sec.data.size()) {
+            auto decoded = dec.decode(sec.data.subspan(off), ip);
+            if (!decoded) { ip += 1; off += 1; continue; }
+            const Instruction& insn = *decoded;
+
+            if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1) {
+                const Operand& op = insn.operands[0];
+                if (op.kind == Operand::Kind::Memory &&
+                    op.mem.base == Reg::Rip &&
+                    op.mem.index == Reg::None &&
+                    op.mem.has_disp) {
+                    const addr_t got = ip + insn.length +
+                                       static_cast<addr_t>(op.mem.disp);
+                    auto it = got_to_name.find(got);
+                    if (it != got_to_name.end()) {
+                        // First thunk wins for a given name — MSVC can
+                        // emit duplicate __imp_ thunks when a function
+                        // is called from multiple TUs with LTCG off.
+                        stub_by_name.try_emplace(it->second, ip);
+                    }
+                }
+            }
+
+            ip  += insn.length;
+            off += insn.length;
+        }
+    }
+
+    for (auto& sym : symbols_) {
+        if (!sym.is_import) continue;
+        if (sym.addr != 0) continue;
+        auto it = stub_by_name.find(sym.name);
+        if (it == stub_by_name.end()) continue;
+        sym.addr = it->second;
+    }
+}
+
+// Every non-leaf function on x64 carries a RUNTIME_FUNCTION in .pdata —
+// this is PE's analogue of Mach-O LC_FUNCTION_STARTS. We (a) set size on
+// every existing function symbol whose addr matches a .pdata begin, and
+// (b) synthesize `sub_<hex>` entries for starts with no matching symbol.
+// Without this, stripped PE EXEs show only exports + whatever linear
+// sweep finds during CFG construction.
+void PeBinary::absorb_pdata_function_starts() {
+    const auto entries = parse_pe_pdata(*this);
+    if (entries.empty()) return;
+
+    std::unordered_map<addr_t, std::size_t> existing_by_addr;
+    for (std::size_t i = 0; i < symbols_.size(); ++i) {
+        const auto& s = symbols_[i];
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        existing_by_addr.emplace(s.addr, i);
+    }
+
+    for (const auto& e : entries) {
+        const u64 size = (e.end > e.begin) ? (e.end - e.begin) : 0;
+        if (auto it = existing_by_addr.find(e.begin); it != existing_by_addr.end()) {
+            if (symbols_[it->second].size == 0) symbols_[it->second].size = size;
+            continue;
+        }
+        Symbol synth;
+        synth.name = std::format("sub_{:x}", e.begin);
+        synth.addr = e.begin;
+        synth.size = size;
+        synth.kind = SymbolKind::Function;
+        symbols_.push_back(std::move(synth));
+    }
+}
+
+void PeBinary::sort_and_dedupe_symbols() {
+    std::ranges::sort(symbols_, [](const Symbol& a, const Symbol& b) noexcept {
+        if (a.is_import != b.is_import) return a.is_import < b.is_import;
+        if (a.addr      != b.addr)      return a.addr < b.addr;
+        if (a.name      != b.name)      return a.name < b.name;
+        return a.size < b.size;
+    });
+    auto dups = std::ranges::unique(symbols_,
+        [](const Symbol& a, const Symbol& b) noexcept {
+            return a.addr == b.addr
+                && a.size == b.size
+                && a.is_import == b.is_import
+                && a.name == b.name;
+        });
+    symbols_.erase(dups.begin(), dups.end());
+}
+
+}  // namespace ember

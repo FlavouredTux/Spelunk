@@ -13,6 +13,7 @@
 #include <ember/analysis/pipeline.hpp>
 #include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
@@ -233,7 +234,7 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
-    const X64Lifter lifter;
+    const X64Lifter lifter{abi_for(b.format(), b.arch())};
     auto ir_r = lifter.lift(*fn_r);
     if (!ir_r) return out;
 

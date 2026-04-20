@@ -440,4 +440,44 @@ if(Python3_Interpreter_FOUND)
         ARGS    "--script|${_query_js}|__BINARY__|--|find-bytes|b8 2a ?? ?? ?? c3"
         GOLDEN  query_js.find_bytes.txt
     )
+
+    # ---- pe_tiny (hand-built PE32+: DOS + NT + COFF + optional header +
+    #               .text/.rdata/.pdata, one IAT import, one export,
+    #               Win64 prologue, RUNTIME_FUNCTION table) ------------------
+    #
+    # Same Python-generator approach as macho_tiny — no Windows toolchain
+    # required, so tests run on Linux CI. Exercises the PE loader end-to-end:
+    # headers, sections, IAT import resolution, named export, PDATA-driven
+    # function-start discovery, and the Win64 ABI path in the lifter.
+    set(_pe_tiny "${_build_dir}/pe_tiny")
+    add_custom_command(
+        OUTPUT "${_pe_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_pe_tiny.py"
+                "${_pe_tiny}"
+        DEPENDS "${_fixture_dir}/make_pe_tiny.py"
+        COMMENT "Generating PE fixture pe_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_pe_tiny ALL DEPENDS "${_pe_tiny}")
+    set(EMBER_FIXTURE_pe_tiny_PATH "${_pe_tiny}")
+
+    ember_golden_test(
+        NAME    pe_tiny_main_pseudo
+        FIXTURE pe_tiny
+        ARGS    "-p|-s|sub_140001000"
+        GOLDEN  pe_tiny.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_tiny_add42_pseudo
+        FIXTURE pe_tiny
+        ARGS    "-p|-s|add42"
+        GOLDEN  pe_tiny.add42.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_tiny_script
+        FIXTURE pe_tiny
+        ARGS    "--script|${_fixture_dir}/pe_tiny_scan.js"
+        GOLDEN  pe_tiny.script.txt
+    )
 endif()

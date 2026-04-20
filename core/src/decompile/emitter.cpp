@@ -17,9 +17,11 @@
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/demangle.hpp>
 #include <ember/analysis/objc.hpp>
+#include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/rtti.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/x64_decoder.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/ssa.hpp>
 
 namespace ember {
@@ -296,12 +298,19 @@ wrap_if_lt(std::string s, Prec own, int min_prec) {
 }
 
 struct Emitter {
+    // Calling convention the emitted function uses. Drives which int-arg
+    // register set maps to a1/a2/..., which slots are considered arg regs
+    // for live-in-from-caller detection, and which registers a callee may
+    // legitimately clobber. Defaults to SysV — back-compat with the
+    // pre-Win64 world — and is set by the driver when the binary carries
+    // a Win64 hint (PE on x86_64).
+    Abi abi = Abi::SysVAmd64;
     const IrFunction*                                fn = nullptr;
     const Binary*                                    binary = nullptr;
     const Annotations*                               annotations = nullptr;
     EmitOptions                                      options{};
     // Number of int-register args for the function being emitted. Set once
-    // at the start of emit() from infer_sysv_arity() or the declared sig, and
+    // at the start of emit() from infer_arity() or the declared sig, and
     // used to name raw rdi/rsi/... reads as a1/a2/... when no annotation
     // overrides them.
     u8                                               self_arity = 0;
@@ -365,13 +374,13 @@ struct Emitter {
         return result;
     }
 
-    // Cached per-target arity via infer_sysv_arity().
+    // Cached per-target arity via infer_arity().
     mutable std::map<u64, u8> arity_cache;
 
-    [[nodiscard]] u8 infer_arity(addr_t target) const {
+    [[nodiscard]] u8 cached_arity(addr_t target) const {
         auto it = arity_cache.find(static_cast<u64>(target));
         if (it != arity_cache.end()) return it->second;
-        const u8 a = binary ? infer_sysv_arity(*binary, target) : u8{6};
+        const u8 a = binary ? infer_arity(*binary, target) : u8{6};
         arity_cache.emplace(static_cast<u64>(target), a);
         return a;
     }
@@ -458,20 +467,22 @@ struct Emitter {
         return std::nullopt;
     }
 
-    // SysV x86-64 calling convention: integer/pointer params consume the
-    // int-reg sequence rdi, rsi, rdx, rcx, r8, r9 in order; float/double
-    // params consume the xmm sequence xmm0..xmm7. The two sequences are
-    // independent. Given a declared signature and a canonical register,
-    // return the matching param's name (or null if nothing matches).
+    // Integer/pointer params consume the ABI's int-arg sequence in order;
+    // float/double params consume xmm0..xmm7 on both SysV and Win64.
+    // Given a declared signature and a canonical register, return the
+    // matching param's name (or null if nothing matches).
+    //
+    // Win64 passes only 4 int args in regs (rcx, rdx, r8, r9); the 5th+
+    // sit on the stack — we can't name those from a register here, so
+    // they render as raw rsp-relative loads. That's a v1 limitation,
+    // consistent with how SysV 7th+ args already render.
     [[nodiscard]] const std::string*
-    sysv_param_for(const FunctionSig& sig, Reg r) const noexcept {
-        static constexpr Reg kIntRegs[6] = {
-            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
-        };
+    abi_param_for(const FunctionSig& sig, Reg r) const noexcept {
         static constexpr Reg kFpRegs[8] = {
             Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3,
             Reg::Xmm4, Reg::Xmm5, Reg::Xmm6, Reg::Xmm7,
         };
+        const auto int_regs = int_arg_regs(abi);
         const Reg canon = canonical_reg(r);
         std::size_t int_idx = 0;
         std::size_t fp_idx  = 0;
@@ -483,31 +494,29 @@ struct Emitter {
                 if (fp_idx < 8 && kFpRegs[fp_idx] == canon) return &p.name;
                 ++fp_idx;
             } else {
-                if (int_idx < 6 && kIntRegs[int_idx] == canon) return &p.name;
+                if (int_idx < int_regs.size() && int_regs[int_idx] == canon) return &p.name;
                 ++int_idx;
             }
         }
         return nullptr;
     }
 
-    // If `r` is a SysV int-arg register and the current function actually
-    // takes that arg (per annotations or inferred arity), return the param's
-    // display name. Otherwise nullopt.
+    // If `r` is an int-arg register for the current ABI and the current
+    // function actually takes that arg (per annotations or inferred
+    // arity), return the param's display name. Otherwise nullopt.
     [[nodiscard]] std::optional<std::string>
     arg_name_for_live_in(Reg r) const {
         if (annotations && fn) {
             if (const FunctionSig* sig = annotations->signature_for(fn->start); sig) {
-                if (const std::string* nm = sysv_param_for(*sig, r); nm && !nm->empty()) {
+                if (const std::string* nm = abi_param_for(*sig, r); nm && !nm->empty()) {
                     return *nm;
                 }
             }
         }
-        static constexpr Reg kIntArgs[6] = {
-            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
-        };
+        const auto int_args = int_arg_regs(abi);
         const Reg canon = canonical_reg(r);
-        for (u8 i = 0; i < 6 && i < self_arity; ++i) {
-            if (kIntArgs[i] == canon) return std::format("a{}", i + 1);
+        for (u8 i = 0; i < int_args.size() && i < self_arity; ++i) {
+            if (int_args[i] == canon) return std::format("a{}", i + 1);
         }
         return std::nullopt;
     }
@@ -638,7 +647,7 @@ struct Emitter {
         if (a.version == 0) {
             if (annotations && fn) {
                 if (const FunctionSig* sig = annotations->signature_for(fn->start); sig) {
-                    if (sysv_param_for(*sig, a.reg)) return false;
+                    if (abi_param_for(*sig, a.reg)) return false;
                 }
             }
             return true;
@@ -799,20 +808,18 @@ struct Emitter {
     }
 
     // Trace `v` back through Assign copies and trivial phis to a version-0
-    // SysV int-arg register (rdi..r9). Returns the 0-based slot (0..5), or
+    // int-arg register for the current ABI. Returns the 0-based slot, or
     // nullopt if the value isn't live-in from a self arg.
     [[nodiscard]] std::optional<u8>
     trace_to_self_arg_slot(const IrValue& v, int depth = 0) const {
         if (depth > 8) return std::nullopt;
-        static constexpr Reg kArgs[6] = {
-            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
-        };
+        const auto args = int_arg_regs(abi);
         IrValue cur = v;
         for (int hop = 0; hop < 8; ++hop) {
             if (cur.kind != IrValueKind::Reg) return std::nullopt;
             const Reg canon = canonical_reg(cur.reg);
             if (cur.version == 0) {
-                for (u8 i = 0; i < 6; ++i) if (kArgs[i] == canon) return i;
+                for (u8 i = 0; i < args.size(); ++i) if (args[i] == canon) return i;
                 return std::nullopt;
             }
             const IrInst* d = def_of(cur);
@@ -898,21 +905,19 @@ struct Emitter {
         }
     }
 
-    // Raise self_arity when the body reads a live-in SysV int-arg register
-    // (rdi..r9) that the inferred arity didn't cover. Without this, raw
-    // register names leak into the emitted C as e.g. `fputs(rdx, stdout)`.
-    // Call only when the caller hasn't pinned an explicit signature.
+    // Raise self_arity when the body reads a live-in int-arg register
+    // that the inferred arity didn't cover. Without this, raw register
+    // names leak into the emitted C as e.g. `fputs(rdx, stdout)`. Call
+    // only when the caller hasn't pinned an explicit signature.
     void bump_arity_from_body_reads() {
-        static constexpr Reg kIntArgs[6] = {
-            Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
-        };
+        const auto int_args = int_arg_regs(abi);
         u8 need = self_arity;
         auto check = [&](const IrValue& v) {
             if (v.kind != IrValueKind::Reg) return;
             if (v.version != 0) return;
             const Reg canon = canonical_reg(v.reg);
-            for (u8 i = 0; i < 6; ++i) {
-                if (kIntArgs[i] == canon) {
+            for (u8 i = 0; i < int_args.size(); ++i) {
+                if (int_args[i] == canon) {
                     if (i + 1 > need) need = static_cast<u8>(i + 1);
                     return;
                 }
@@ -2344,7 +2349,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                 }
             } else {
-                arity = infer_arity(inst.target1);
+                arity = cached_arity(inst.target1);
             }
             const std::string args = arity
                 ? format_call_args_with_arity(pending_args, *arity)
@@ -2639,6 +2644,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.binary      = binary;
     e.annotations = annotations;
     e.options     = options;
+    e.abi         = binary
+        ? abi_for(binary->format(), binary->arch())
+        : Abi::SysVAmd64;
     // Opportunistic selref lookup for Mach-O binaries when the caller
     // didn't supply one — cheap enough to parse per emit (one section
     // walk, a few hundred cstring reads on typical Cocoa-linked code).
@@ -2681,6 +2689,17 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 break;
             }
         }
+    } else if (binary && binary->format() == Format::Pe) {
+        // MSVC RTTI on PE: same rtti_method_names API the Mach-O path
+        // uses, so the emitter's `options.rtti_methods` consumer stays
+        // format-agnostic. Itanium RTTI calls would emit nothing on
+        // a PE since the typeinfo structure layout differs, so skip it.
+        if (!e.options.rtti_methods) {
+            local_rtti_methods = rtti_method_names(parse_msvc_rtti(*binary));
+            if (!local_rtti_methods.empty()) {
+                e.options.rtti_methods = &local_rtti_methods;
+            }
+        }
     }
     bool has_user_sig = false;
     if (annotations) {
@@ -2690,7 +2709,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         }
     }
     if (e.self_arity == 0) {
-        e.self_arity = binary ? infer_sysv_arity(*binary, sf.ir->start) : u8{0};
+        e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
     }
     e.analyze(*sf.ir);
     if (sf.body) {
@@ -2748,6 +2767,12 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                it->second->is_class ? '+' : '-',
                                it->second->cls,
                                it->second->selector);
+        }
+        // Itanium RTTI-derived virtual-method name — usable as the header
+        // label on stripped C++ binaries where only typeinfos survive.
+        if (e.options.rtti_methods) {
+            auto it = e.options.rtti_methods->find(sf.ir->start);
+            if (it != e.options.rtti_methods->end()) return it->second;
         }
         if (binary) {
             for (const auto& s : binary->symbols()) {
@@ -2835,6 +2860,33 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         header = std::format("{} {}({}) {{\n",
                              inferred_return_type(e, sf),
                              display_name(), params);
+    }
+    // When the header name is a long RTTI `Class::vfn_N` — especially for
+    // templates — advertise a shorter alias the user can type with `-s`.
+    // Purely a discoverability comment; the resolver accepts the short form
+    // via the same class_aliases machinery used here.
+    if (e.options.rtti_methods) {
+        auto it = e.options.rtti_methods->find(sf.ir->start);
+        if (it != e.options.rtti_methods->end()) {
+            const std::string& full = it->second;
+            const auto vfn_pos = full.rfind("::vfn_");
+            if (vfn_pos != std::string::npos) {
+                std::string_view cls_sv{full.data(), vfn_pos};
+                std::string_view base_sv = cls_sv;
+                for (std::size_t i = 0; i < cls_sv.size(); ++i) {
+                    if (cls_sv[i] == '<') { base_sv = cls_sv.substr(0, i); break; }
+                }
+                const auto slash = base_sv.rfind("::");
+                const std::string_view short_sv = slash == std::string_view::npos
+                    ? base_sv
+                    : base_sv.substr(slash + 2);
+                if (!short_sv.empty() && short_sv != cls_sv) {
+                    out += std::format("// alias: {}{}\n",
+                                       short_sv,
+                                       std::string_view{full}.substr(vfn_pos));
+                }
+            }
+        }
     }
     out += header;
 

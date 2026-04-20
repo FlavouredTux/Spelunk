@@ -1,8 +1,8 @@
 // set_and_swap
 u64 set_and_swap(u64 a1, u64 a2) {
   g_flag = (u32)(u64)((i64)a1 > (i64)a2);
-  cmovl();
-  bswap();
+  cmovl(a1, a2);
+  bswap(a1);
   g_swap = a1;
   g_max = a1;
   return a1;

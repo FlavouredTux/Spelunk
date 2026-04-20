@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <ember/disasm/register.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/ssa.hpp>  // canonical_reg
 
 namespace ember {
@@ -21,6 +22,7 @@ struct LiftCtx {
     IrFunction*        fn   = nullptr;
     IrBlock*           blk  = nullptr;
     const Instruction* insn = nullptr;
+    Abi                abi  = Abi::SysVAmd64;
 
     [[nodiscard]] u32 new_temp_id() noexcept { return fn->next_temp_id++; }
 
@@ -538,14 +540,8 @@ void lift_leave(LiftCtx& ctx) {
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
 }
 
-// SysV x86-64 caller-saved registers — any call may destroy these.
-static constexpr Reg kCallerSaved[] = {
-    Reg::Rax, Reg::Rcx, Reg::Rdx, Reg::Rsi, Reg::Rdi,
-    Reg::R8,  Reg::R9,  Reg::R10, Reg::R11,
-};
-
 void emit_call_clobbers(LiftCtx& ctx) {
-    for (Reg r : kCallerSaved) {
+    for (Reg r : caller_saved_int_regs(ctx.abi)) {
         IrInst c;
         c.op  = IrOp::Clobber;
         c.dst = ctx.reg(r);
@@ -553,34 +549,35 @@ void emit_call_clobbers(LiftCtx& ctx) {
     }
 }
 
+// Emit the ABI barriers that keep argument-register setup code live
+// through DCE. `call.args.1` carries slots 0-2 and `call.args.2` carries
+// slots 3-5; Win64 only uses 4 slots so slots 4-5 are unset there. Every
+// slot is looked up from the current ABI's int_arg_regs table so the
+// same sig_inference logic that reads these can decode Win64 too.
+void emit_arg_barriers(LiftCtx& ctx) {
+    const auto args = int_arg_regs(ctx.abi);
+    auto fill = [&](std::string_view name, std::size_t lo) {
+        IrInst in;
+        in.op   = IrOp::Intrinsic;
+        in.name = std::string(name);
+        u8 cnt = 0;
+        for (std::size_t i = 0; i < 3 && lo + i < args.size(); ++i) {
+            in.srcs[cnt++] = ctx.reg(args[lo + i]);
+        }
+        if (cnt == 0) return;
+        in.src_count = cnt;
+        ctx.emit(std::move(in));
+    };
+    fill("call.args.1", 0);
+    fill("call.args.2", 3);
+}
+
 void lift_call(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 1) return;
     const auto& op = insn.operands[0];
 
-    // Emit ABI barriers so DCE keeps argument-register setup code alive.
-    // Calls don't textually reference arg regs in our IR, so without this,
-    // the optimizer would delete code that sets them.
-    {
-        IrInst abc;
-        abc.op        = IrOp::Intrinsic;
-        abc.name      = "call.args.1";
-        abc.srcs[0]   = ctx.reg(Reg::Rdi);
-        abc.srcs[1]   = ctx.reg(Reg::Rsi);
-        abc.srcs[2]   = ctx.reg(Reg::Rdx);
-        abc.src_count = 3;
-        ctx.emit(std::move(abc));
-    }
-    {
-        IrInst def;
-        def.op        = IrOp::Intrinsic;
-        def.name      = "call.args.2";
-        def.srcs[0]   = ctx.reg(Reg::Rcx);
-        def.srcs[1]   = ctx.reg(Reg::R8);
-        def.srcs[2]   = ctx.reg(Reg::R9);
-        def.src_count = 3;
-        ctx.emit(std::move(def));
-    }
+    emit_arg_barriers(ctx);
 
     IrInst i;
     if (op.kind == Operand::Kind::Relative) {
@@ -719,9 +716,20 @@ void lift_unreachable(LiftCtx& ctx) {
 }
 
 void lift_intrinsic(LiftCtx& ctx, std::string_view name) {
+    const auto& insn = *ctx.insn;
     IrInst i;
     i.op   = IrOp::Intrinsic;
     i.name = std::string(name);
+    // Pull up to 3 operands through as sources so atomics (xadd, cmpxchg,
+    // lock xchg, ...) render with their arguments instead of as empty
+    // `xadd();` calls. Memory operands lift as loads, which is accurate
+    // for the read-modify-write side and at worst slightly lossy for the
+    // write-back — still more useful than nothing.
+    for (u8 j = 0; j < insn.num_operands && j < 3; ++j) {
+        IrValue v = materialize_rvalue(insn.operands[j], ctx);
+        if (v.kind == IrValueKind::None) break;
+        i.srcs[i.src_count++] = v;
+    }
     ctx.emit(std::move(i));
 }
 
@@ -1044,6 +1052,7 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
         LiftCtx ctx;
         ctx.fn  = &ir;
         ctx.blk = &dst_bb;
+        ctx.abi = abi_;
 
         for (const auto& insn : src_bb.instructions) {
             ctx.insn = &insn;

@@ -1,0 +1,4 @@
+// sub_140001000
+u64 sub_140001000(void) {
+  return GetTickCount();
+}

@@ -12,6 +12,7 @@
 #include <ember/binary/symbol.hpp>
 #include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
@@ -93,7 +94,7 @@ IrFunction* get_ir(IrCache& cache, const Binary& b, addr_t fn) {
     const CfgBuilder cfg(b, dec);
     auto fn_r = cfg.build(fn, {});
     if (!fn_r) { cache.failed.insert(fn); return nullptr; }
-    const X64Lifter lifter;
+    const X64Lifter lifter{abi_for(b.format(), b.arch())};
     auto ir_r = lifter.lift(*fn_r);
     if (!ir_r) { cache.failed.insert(fn); return nullptr; }
     const SsaBuilder ssa;
@@ -107,21 +108,21 @@ IrFunction* get_ir(IrCache& cache, const Binary& b, addr_t fn) {
 }
 
 // For an IrValue, trace through Assigns and trivial phis to a version-0
-// SysV int-arg register. Returns the 0-based arg slot or nullopt.
+// int-arg register for the given ABI. Returns the 0-based arg slot or
+// nullopt.
 [[nodiscard]] std::optional<u8>
 trace_to_arg_slot(const IrFunction& fn,
                   const std::map<SsaKey, const IrInst*>& defs,
+                  Abi abi,
                   const IrValue& v, int depth = 0) {
     if (depth > 8) return std::nullopt;
-    static constexpr Reg kArgs[6] = {
-        Reg::Rdi, Reg::Rsi, Reg::Rdx, Reg::Rcx, Reg::R8, Reg::R9,
-    };
+    const auto args = int_arg_regs(abi);
     IrValue cur = v;
     for (int hop = 0; hop < 8; ++hop) {
         if (cur.kind != IrValueKind::Reg) return std::nullopt;
         const Reg canon = canonical_reg(cur.reg);
         if (cur.version == 0) {
-            for (u8 i = 0; i < 6; ++i) if (kArgs[i] == canon) return i;
+            for (u8 i = 0; i < args.size(); ++i) if (args[i] == canon) return i;
             return std::nullopt;
         }
         auto k = ssa_key(cur);
@@ -138,7 +139,7 @@ trace_to_arg_slot(const IrFunction& fn,
             for (const auto& op : d->phi_operands) {
                 auto opk = ssa_key(op);
                 if (opk && *opk == *k) continue;
-                auto slot = trace_to_arg_slot(fn, defs, op, depth + 1);
+                auto slot = trace_to_arg_slot(fn, defs, abi, op, depth + 1);
                 if (!slot) return std::nullopt;
                 if (!common) common = *slot;
                 else if (*common != *slot) return std::nullopt;
@@ -154,6 +155,7 @@ trace_to_arg_slot(const IrFunction& fn,
 // propagation via `caller_tags` (the current best-known sig for already-seen
 // callees). Returns the new charp bitset for this function.
 void scan_function(const Binary& b,
+                   Abi abi,
                    const IrFunction& fn,
                    const std::map<addr_t, InferredSig>& known,
                    std::array<bool, 6>& charp) {
@@ -202,7 +204,7 @@ void scan_function(const Binary& b,
 
             for (std::size_t i = 0; i < args.size() && i < callee_charp.size(); ++i) {
                 if (!callee_charp[i]) continue;
-                if (auto slot = trace_to_arg_slot(fn, defs, args[i]);
+                if (auto slot = trace_to_arg_slot(fn, defs, abi, args[i]);
                     slot && *slot < charp.size()) {
                     charp[*slot] = true;
                 }
@@ -234,6 +236,7 @@ std::map<addr_t, InferredSig> infer_signatures(const Binary& b) {
     std::map<addr_t, InferredSig> sigs;
     IrCache ir_cache;
     const auto entries = collect_entries(b);
+    const Abi abi = abi_for(b.format(), b.arch());
 
     // Fixed-point: rescan every function until nobody's charp bitset grows.
     // Worst case is the diameter of the call graph; practical cases converge
@@ -247,7 +250,7 @@ std::map<addr_t, InferredSig> infer_signatures(const Binary& b) {
             if (!ir) continue;
             auto& sig = sigs[fn];
             std::array<bool, 6> before = sig.charp;
-            scan_function(b, *ir, sigs, sig.charp);
+            scan_function(b, abi, *ir, sigs, sig.charp);
             if (sig.charp != before) changed = true;
         }
     }

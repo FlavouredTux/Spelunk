@@ -388,7 +388,7 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         if (s.is_import) continue;
         if (s.kind != ember::SymbolKind::Function) continue;
         if (s.size == 0 || s.name.empty()) continue;
-        const auto a = ember::infer_sysv_arity(b, s.addr);
+        const auto a = ember::infer_arity(b, s.addr);
         out += std::format("{:#x} {}\n", s.addr, a);
     }
     return out;
@@ -1033,7 +1033,7 @@ void print_help() {
     std::println("  -p, --pseudo         pseudo-C output (implies --struct)");
     std::println("  -X, --xrefs          emit full call graph (all fn -> call targets)");
     std::println("      --strings        dump printable strings (addr|text|xrefs)");
-    std::println("      --arities        dump inferred SysV arity per function (addr N)");
+    std::println("      --arities        dump inferred arity per function (addr N)");
     std::println("      --fingerprints   dump address-independent content hash per function");
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
     std::println("      --diff-format    'tsv' (default) or 'json' for --diff output");

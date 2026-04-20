@@ -10,7 +10,12 @@ namespace ember {
 // Schema token for the fingerprint algorithm. Folded into the hash itself
 // AND into cache tags so bumping it invalidates on-disk TSVs without
 // breaking unrelated cache entries (xrefs, strings, arities).
-inline constexpr std::string_view kFingerprintSchema = "v2";
+// Bumped to v3 when Win64 support landed — the call.args.* barrier carries
+// different arg-reg slots under Win64 vs SysV, so hashes of the same
+// x86-64 function emitted with the two ABIs now diverge. Existing v2
+// fingerprint databases are stale after the bump; callers must
+// regenerate.
+inline constexpr std::string_view kFingerprintSchema = "v3";
 
 // Address-independent content hash of one function. Same algorithm compiled
 // in the same way across two shifted binaries → same hash, so names learned

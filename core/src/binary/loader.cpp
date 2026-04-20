@@ -11,6 +11,7 @@
 
 #include <ember/binary/elf.hpp>
 #include <ember/binary/macho.hpp>
+#include <ember/binary/pe.hpp>
 #include <ember/common/bytes.hpp>
 
 namespace ember {
@@ -152,6 +153,21 @@ read_file(const std::filesystem::path& path) {
         && b[3] == std::byte{0xFE};
 }
 
+// PE starts with an MZ DOS stub whose `e_lfanew` field at offset 0x3C
+// points at the real NT header ("PE\0\0"). Checking both hops avoids
+// mis-firing on non-PE files that happen to start with the "MZ" magic
+// (old DOS .COM/.EXE stubs, some batch files with MZ banners).
+[[nodiscard]] bool looks_like_pe(std::span<const std::byte> b) noexcept {
+    if (b.size() < 0x40) return false;
+    if (b[0] != std::byte{'M'} || b[1] != std::byte{'Z'}) return false;
+    const u32 e_lfanew = read_le_at<u32>(b.data() + 0x3C);
+    if (e_lfanew + 4 > b.size()) return false;
+    return b[e_lfanew + 0] == std::byte{'P'}
+        && b[e_lfanew + 1] == std::byte{'E'}
+        && b[e_lfanew + 2] == std::byte{0}
+        && b[e_lfanew + 3] == std::byte{0};
+}
+
 // CAFEBABE (32-bit fat) or CAFEBABF (64-bit fat) — the wrapper around a
 // universal binary. Big-endian on disk regardless of host.
 [[nodiscard]] bool looks_like_fat(std::span<const std::byte> b) noexcept {
@@ -262,9 +278,14 @@ load_binary(const std::filesystem::path& path) {
         if (!m) return std::unexpected(std::move(m).error());
         return std::unique_ptr<Binary>(std::move(*m));
     }
+    if (looks_like_pe(*buffer)) {
+        auto pe = PeBinary::load_from_buffer(std::move(*buffer));
+        if (!pe) return std::unexpected(std::move(pe).error());
+        return std::unique_ptr<Binary>(std::move(*pe));
+    }
 
     return std::unexpected(Error::unsupported(
-        "unrecognized binary format (only ELF and Mach-O 64-bit supported)"));
+        "unrecognized binary format (only ELF, Mach-O 64-bit, and PE32+ supported)"));
 }
 
 }  // namespace ember

@@ -42,6 +42,14 @@ export type Annotations = {
   // output — they don't flow through the C++ analysis pipeline (so
   // they don't show in asm / ir / ssa views, only in pseudo).
   localRenames?: Record<string, Record<string, string>>;
+  // Byte patches keyed by virtual-address hex. Each entry replaces
+  // `orig` bytes (kept for revert + display) with `bytes` at that
+  // address. Both stored as space-free uppercase hex strings (e.g.
+  // "9090C3"). Applied through the C++ CLI's --apply-patches: the
+  // main process materializes a patched temp binary and routes all
+  // analysis through it, so the disasm and pseudo-C views reflect
+  // patches live.
+  patches?: Record<string, { bytes: string; orig?: string; comment?: string }>;
 };
 
 export type Xrefs = {
@@ -93,6 +101,7 @@ declare global {
 
       loadAnnotations:  (bp: string) => Promise<Annotations>;
       saveAnnotations:  (bp: string, data: Annotations) => Promise<boolean>;
+      savePatchedAs:    () => Promise<string | null>;
 
       recents:          () => Promise<string[]>;
       openRecent:       (bp: string) => Promise<string>;

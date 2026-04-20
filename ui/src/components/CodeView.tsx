@@ -5,6 +5,12 @@ import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { demangle, displayName, formatSize } from "../api";
 import type { FunctionInfo, Annotations } from "../types";
 
+// Match an asm-view instruction line emitted by ember -d. Captures
+// addr, the bytes column (space-separated hex pairs), and the
+// disasm tail. Format example:
+//   "0x0000000000401120  83 ff 05                        cmp edi, 0x5"
+const ASM_INSN_RE = /^\s*(0x[0-9a-fA-F]+)\s+((?:[0-9a-fA-F]{2}\s+)+?)\s{2,}(.+)$/;
+
 export function CodeView(props: {
   text: string;
   onXref: (addr: number) => void;
@@ -18,6 +24,10 @@ export function CodeView(props: {
   onRename?: (fn: FunctionInfo) => void;
   onAddNote?: (fn: FunctionInfo) => void;
   onEditSignature?: (fn: FunctionInfo) => void;
+  // Right-click on an asm instruction → opens patch dialog. Caller
+  // passes the parsed virtual address and the current bytes (already
+  // reflecting any in-flight patches via the CLI temp-file routing).
+  onPatchInsn?: (vaddr: number, origBytes: string, disasm: string) => void;
   // Pixel font size for the main code body. Driven from app settings
   // so the user can dial it up on a 4K display without DevTools.
   fontSize?: number;
@@ -157,10 +167,25 @@ export function CodeView(props: {
               : [];
             const isActiveLine = props.searchActive &&
               matches[activeMatch] && matches[activeMatch].line === i;
+            // Asm-line right-click → patch. We parse here so the
+            // expensive regex only runs on the lines the user actually
+            // interacts with (the onContextMenu handler captures `line`
+            // by closure).
+            const onLineContext = props.onPatchInsn
+              ? (ev: React.MouseEvent) => {
+                  const m = ASM_INSN_RE.exec(line);
+                  if (!m) return;       // not an asm line — let default menu show
+                  ev.preventDefault();
+                  const vaddr = parseInt(m[1], 16);
+                  if (!Number.isFinite(vaddr)) return;
+                  props.onPatchInsn!(vaddr, m[2].trim(), m[3].trim());
+                }
+              : undefined;
             return (
               <div
                 key={i}
                 data-line={i}
+                onContextMenu={onLineContext}
                 style={{
                   display: "flex",
                   padding: "0 24px",

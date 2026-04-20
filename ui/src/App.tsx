@@ -14,8 +14,10 @@ import type { AppSettings } from "./settings";
 import { CallGraphView } from "./components/CallGraphView";
 import { StringsView } from "./components/StringsView";
 import { NotesView } from "./components/NotesView";
+import { PatchesView } from "./components/PatchesView";
 import { XrefsPanel } from "./components/XrefsPanel";
 import { EditDialog } from "./components/EditDialog";
+import { PatchDialog } from "./components/PatchDialog";
 import {
   loadSummary, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
@@ -28,7 +30,7 @@ import type {
 } from "./types";
 
 const EMPTY_XREFS: Xrefs = { callers: {}, callees: {} };
-const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {}, localRenames: {} };
+const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {}, localRenames: {}, patches: {} };
 const EMPTY_STRINGS: StringEntry[] = [];
 const EMPTY_ARITIES: Arities = {};
 
@@ -90,6 +92,7 @@ export default function App() {
   const [callGraphOpen, setCallGraphOpen] = useState(false);
   const [stringsOpen, setStringsOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [patchesOpen, setPatchesOpen] = useState(false);
 
   // Data: cross-refs + user annotations + strings + arities
   const [xrefs, setXrefs] = useState<Xrefs>(EMPTY_XREFS);
@@ -126,6 +129,12 @@ export default function App() {
   // Edit dialog
   const [editing, setEditing] =
     useState<{ fn: FunctionInfo; mode: "rename" | "note" | "signature" } | null>(null);
+
+  // Byte-patch dialog. Opened from a right-click on an asm-view
+  // instruction line. `origBytes` is the bytes string we display
+  // (post-existing-patch — i.e. what the disasm currently shows).
+  const [patching, setPatching] =
+    useState<{ vaddr: number; origBytes: string; disasm: string } | null>(null);
 
   const fnByAddr = useMemo(() => {
     const m = new Map<number, FunctionInfo>();
@@ -257,6 +266,8 @@ export default function App() {
       const mod = e.metaKey || e.ctrlKey;
 
       if (e.key === "Escape") {
+        if (patching)       { setPatching(null);       return; }
+        if (patchesOpen)    { setPatchesOpen(false);   return; }
         if (editing)        { setEditing(null);        return; }
         if (stringsOpen)    { setStringsOpen(false);   return; }
         if (notesOpen)      { setNotesOpen(false);     return; }
@@ -268,7 +279,7 @@ export default function App() {
       if (e.altKey && e.key === "ArrowLeft")  { e.preventDefault(); navBack();    return; }
       if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); navForward(); return; }
 
-      if (mod && (e.key === "p" || e.key === "P")) {
+      if (mod && !e.shiftKey && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         setPaletteOpen(true);
         return;
@@ -291,6 +302,10 @@ export default function App() {
       }
       if (mod && (e.key === "k" || e.key === "K")) {
         if (info) { e.preventDefault(); setAiOpen((o) => !o); }
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === "p" || e.key === "P")) {
+        if (info) { e.preventDefault(); setPatchesOpen((o) => !o); }
         return;
       }
       if (mod && (e.key === "[" || e.key === "{")) { e.preventDefault(); navBack(); return; }
@@ -320,7 +335,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, navBack, navForward, current]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, patching, navBack, navForward, current]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
   // Pseudo-C views also get local-rename substitution applied on top
@@ -367,6 +382,7 @@ export default function App() {
     notes:        { ...annotations.notes      },
     signatures:   { ...annotations.signatures },
     localRenames: { ...(annotations.localRenames || {}) },
+    patches:      { ...(annotations.patches      || {}) },
   }), [annotations]);
 
   const saveRename = useCallback((fn: FunctionInfo, value: string) => {
@@ -389,6 +405,29 @@ export default function App() {
     else delete next.signatures[fn.addr];
     writeAnnotations(next);
   }, [cloneAnn, writeAnnotations]);
+
+  // Add / update / remove a single byte patch by virtual address.
+  // Empty `bytes` removes the entry. Hex strings get normalised to
+  // uppercase and whitespace-stripped so equality comparison and
+  // sidecar diffs stay clean.
+  const savePatch = useCallback(
+    (vaddrHex: string, bytes: string, opts?: { orig?: string; comment?: string }) => {
+      const next = cloneAnn();
+      next.patches = next.patches || {};
+      const cleanBytes = bytes.replace(/\s+/g, "").toUpperCase();
+      if (cleanBytes) {
+        next.patches[vaddrHex] = {
+          bytes: cleanBytes,
+          ...(opts?.orig    ? { orig:    opts.orig.replace(/\s+/g, "").toUpperCase() } : {}),
+          ...(opts?.comment ? { comment: opts.comment } : {}),
+        };
+      } else {
+        delete next.patches[vaddrHex];
+      }
+      writeAnnotations(next);
+    },
+    [cloneAnn, writeAnnotations],
+  );
 
   // Bulk-apply per-function local renames. `pairs` is { from: to }.
   // Empty `to` removes the entry (the user can revert a single rename
@@ -620,6 +659,8 @@ export default function App() {
               onRename={(fn) => setEditing({ fn, mode: "rename" })}
               onAddNote={(fn) => setEditing({ fn, mode: "note" })}
               onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
+              onPatchInsn={view === "asm" ? (vaddr, origBytes, disasm) =>
+                setPatching({ vaddr, origBytes, disasm }) : undefined}
             />
           )}
         </div>
@@ -684,6 +725,23 @@ export default function App() {
           onClose={() => setNotesOpen(false)}
         />
       )}
+      {patchesOpen && (
+        <PatchesView
+          info={info}
+          annotations={annotations}
+          onSelect={(f) => navigateTo(f)}
+          onRevert={(addr) => savePatch(addr, "")}
+          onSaveAs={async () => {
+            try {
+              const out = await window.ember.savePatchedAs();
+              if (out) console.info(`patched binary saved -> ${out}`);
+            } catch (e) {
+              console.error("save patched failed:", e);
+            }
+          }}
+          onClose={() => setPatchesOpen(false)}
+        />
+      )}
       {callGraphOpen && (
         <CallGraphView
           info={info}
@@ -729,6 +787,27 @@ export default function App() {
             }
           }}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {patching && (
+        <PatchDialog
+          vaddr={patching.vaddr}
+          origBytes={patching.origBytes}
+          disasm={patching.disasm}
+          onSave={(addrHex, bytesHex) => {
+            // Stash the original bytes only on the first patch at this
+            // address so revert returns to truth, not to a previous
+            // patched value.
+            const existing = annotations.patches?.[addrHex];
+            const orig = existing?.orig
+              ?? patching.origBytes.replace(/\s+/g, "").toUpperCase();
+            savePatch(addrHex, bytesHex, { orig });
+            setPatching(null);
+          }}
+          onRevert={annotations.patches?.[`0x${patching.vaddr.toString(16)}`]
+            ? () => savePatch(`0x${patching.vaddr.toString(16)}`, "")
+            : undefined}
+          onClose={() => setPatching(null)}
         />
       )}
     </div>

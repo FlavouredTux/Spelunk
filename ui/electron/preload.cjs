@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld("ember", {
 
   loadAnnotations:  (bp) => ipcRenderer.invoke("ember:loadAnnotations", bp),
   saveAnnotations:  (bp, data) => ipcRenderer.invoke("ember:saveAnnotations", bp, data),
+  // Prompts a save dialog and writes a patched copy of the current
+  // binary to the chosen path. Returns the chosen path, or null if the
+  // user cancelled.
+  savePatchedAs:    () => ipcRenderer.invoke("ember:savePatchedAs"),
 
   recents:          () => ipcRenderer.invoke("ember:recents"),
   openRecent:       (bp) => ipcRenderer.invoke("ember:openRecent", bp),

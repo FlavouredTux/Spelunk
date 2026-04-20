@@ -136,6 +136,75 @@ ipcMain.handle("ember:setBinary", async (_e, p) => {
   return state.binary;
 });
 
+// Pull the raw sidecar JSON for a binary, or {} if missing / unreadable.
+async function readSidecar(binaryPath) {
+  try { return JSON.parse(await fs.readFile(sidecarPath(binaryPath), "utf8")); }
+  catch { return {}; }
+}
+
+// Stable per-patch-set hash used as the patched-binary filename suffix
+// so a given patch combination materialises to one cached file. Cheap
+// FNV-1a is fine — collision risk is irrelevant given the file is
+// re-derivable, and it avoids dragging in node:crypto for one call.
+function hashPatches(patches) {
+  let h = 0xcbf29ce484222325n;
+  const m = 0x100000001b3n;
+  const keys = Object.keys(patches).sort();
+  for (const k of keys) {
+    const s = `${k}=${patches[k].bytes};`;
+    for (let i = 0; i < s.length; i++) {
+      h ^= BigInt(s.charCodeAt(i));
+      h = (h * m) & 0xffffffffffffffffn;
+    }
+  }
+  return h.toString(16).padStart(16, "0");
+}
+
+// If the sidecar has byte patches, materialise (or reuse cached) a
+// patched copy of the original binary and return that path. Otherwise
+// return the original. Failing to apply patches falls back to the
+// original with a stderr warning — analysis is more useful than a
+// hard error here, and the patches panel will surface the issue.
+async function materializePatchedBinary(originalPath) {
+  const ann = await readSidecar(originalPath);
+  const patches = ann.patches || {};
+  if (Object.keys(patches).length === 0) return originalPath;
+
+  const tag = hashPatches(patches);
+  const patchedPath = path.join(app.getPath("userData"), "projects",
+                                sanitize(originalPath) + `.${tag}.patched`);
+
+  // Reuse a previously-materialised file if it's still newer than the
+  // original binary. The hash already covers patch-set identity, so
+  // mtime is a belt-and-braces guard for the user editing the binary
+  // in place.
+  const origMtime    = await safeMtime(originalPath);
+  const patchedMtime = await safeMtime(patchedPath);
+  if (patchedMtime && origMtime && patchedMtime >= origMtime) {
+    return patchedPath;
+  }
+
+  // Write the patches file in the format ember --apply-patches expects.
+  const patchesFile = path.join(app.getPath("userData"), "projects",
+                                sanitize(originalPath) + ".patches.txt");
+  const lines = Object.entries(patches).map(([addr, p]) => {
+    // Insert spaces every 2 hex chars for readability — the parser
+    // strips whitespace anyway. Address keeps its 0x prefix.
+    const grouped = (p.bytes.match(/.{1,2}/g) || []).join(" ");
+    return `${addr} ${grouped}`;
+  });
+  await fs.mkdir(path.dirname(patchesFile), { recursive: true });
+  await fs.writeFile(patchesFile, lines.join("\n") + "\n", "utf8");
+
+  try {
+    await runEmber(["--apply-patches", patchesFile, "-o", patchedPath, originalPath]);
+    return patchedPath;
+  } catch (e) {
+    console.warn(`ember: patch materialisation failed; falling back to original (${e.message})`);
+    return originalPath;
+  }
+}
+
 // Convert the on-disk JSON sidecar into the plain-text format the CLI
 // expects. Returns the temp file path, or null if there's nothing to write.
 async function writeCliAnnotations(binaryPath) {
@@ -172,13 +241,18 @@ async function writeCliAnnotations(binaryPath) {
 ipcMain.handle("ember:run", async (_e, args) => {
   if (!state.binary) throw new Error("no binary selected");
   if (!Array.isArray(args)) throw new Error("args must be array");
-  const annPath = await writeCliAnnotations(state.binary);
+  const annPath  = await writeCliAnnotations(state.binary);
+  // Resolve the binary path to the patched copy when patches exist.
+  // All downstream analysis sees the patched bytes, so disasm and
+  // pseudo-C reflect patches live without a UI reload.
+  const effective = await materializePatchedBinary(state.binary);
 
-  const binMtime = await safeMtime(state.binary);
+  const binMtime = await safeMtime(effective);
   const annMtime = await safeMtime(annPath);
-  // Embed mtimes in the key. When the binary or annotations change,
-  // the new key won't hit prior entries — they fall out via LRU.
-  const key = `${state.binary}|${binMtime}|${annMtime}|${args.join("\x00")}`;
+  // Embed mtimes in the key. When the binary, patches or annotations
+  // change, the new key won't hit prior entries — they fall out via
+  // LRU. The patched-copy mtime captures the patches themselves.
+  const key = `${effective}|${binMtime}|${annMtime}|${args.join("\x00")}`;
 
   if (RUN_CACHE.has(key)) {
     const v = RUN_CACHE.get(key);
@@ -189,7 +263,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
   if (RUN_INFLIGHT.has(key)) return RUN_INFLIGHT.get(key);
 
   const extra = annPath ? ["--annotations", annPath] : [];
-  const p = runEmber([...args, ...extra, state.binary])
+  const p = runEmber([...args, ...extra, effective])
     .then((out) => { lruTouch(RUN_CACHE, key, out); return out; })
     .finally(() => { RUN_INFLIGHT.delete(key); });
   RUN_INFLIGHT.set(key, p);
@@ -200,6 +274,37 @@ ipcMain.handle("ember:binary", async () => state.binary);
 
 // ----- Annotations sidecar -----
 
+// Save patches applied to a user-chosen output path. Prompts a save
+// dialog, then re-runs the patcher with that destination — same code
+// path as the temp materialisation, so format / translation logic
+// can't drift between the two flows.
+ipcMain.handle("ember:savePatchedAs", async () => {
+  if (!state.binary) throw new Error("no binary selected");
+  const ann = await readSidecar(state.binary);
+  const patches = ann.patches || {};
+  if (Object.keys(patches).length === 0) {
+    throw new Error("no patches to save");
+  }
+  const defaultName = path.basename(state.binary) + ".patched";
+  const r = await dialog.showSaveDialog({
+    title: "Save patched binary",
+    defaultPath: defaultName,
+    properties: ["createDirectory"],
+  });
+  if (r.canceled || !r.filePath) return null;
+
+  const patchesFile = path.join(app.getPath("userData"), "projects",
+                                sanitize(state.binary) + ".patches.txt");
+  const lines = Object.entries(patches).map(([addr, p]) => {
+    const grouped = (p.bytes.match(/.{1,2}/g) || []).join(" ");
+    return `${addr} ${grouped}`;
+  });
+  await fs.mkdir(path.dirname(patchesFile), { recursive: true });
+  await fs.writeFile(patchesFile, lines.join("\n") + "\n", "utf8");
+  await runEmber(["--apply-patches", patchesFile, "-o", r.filePath, state.binary]);
+  return r.filePath;
+});
+
 ipcMain.handle("ember:loadAnnotations", async (_e, bp) => {
   try {
     const data = await fs.readFile(sidecarPath(bp), "utf8");
@@ -209,9 +314,10 @@ ipcMain.handle("ember:loadAnnotations", async (_e, bp) => {
       notes:        parsed.notes        || {},
       signatures:   parsed.signatures   || {},
       localRenames: parsed.localRenames || {},
+      patches:      parsed.patches      || {},
     };
   } catch {
-    return { renames: {}, notes: {}, signatures: {}, localRenames: {} };
+    return { renames: {}, notes: {}, signatures: {}, localRenames: {}, patches: {} };
   }
 });
 
@@ -632,10 +738,11 @@ function makeCodexParser() {
 // to single-turn answers over whatever the user already attached.
 async function buildAiTools() {
   if (!state.binary) return null;
-  const annPath = await writeCliAnnotations(state.binary);
+  const annPath   = await writeCliAnnotations(state.binary);
+  const effective = await materializePatchedBinary(state.binary);
   return makeTools(() => ({
     emberBin:   EMBER_BIN,
-    binaryPath: state.binary,
+    binaryPath: effective,
     annPath,
   }));
 }

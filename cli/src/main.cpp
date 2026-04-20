@@ -78,6 +78,8 @@ struct Args {
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at
+    std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
+    std::string output_path;        // -o / --output PATH: destination for --apply-patches
     bool no_cache = false;          // disable the disk cache entirely
     bool disasm = false;
     bool cfg    = false;
@@ -152,6 +154,8 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--refs-to",     &Args::refs_to},
     {"",   "--disasm-at",   &Args::disasm_at},
     {"",   "--count",       &Args::disasm_count},
+    {"",   "--apply-patches", &Args::apply_patches},
+    {"-o", "--output",      &Args::output_path},
 });
 
 template <class F>
@@ -1095,7 +1099,147 @@ void print_help() {
     std::println("      -- ARG...        pass remaining args to the script as argv");
     std::println("      --cache-dir DIR  override ~/.cache/ember for disk cache");
     std::println("      --no-cache       bypass the disk cache (--xrefs/strings/arities)");
+    std::println("      --apply-patches FILE  apply byte patches (vaddr_hex bytes_hex per line)");
+    std::println("  -o, --output PATH    output path (required with --apply-patches)");
     std::println("  -h, --help           show this help");
+}
+
+// Read a patches file: one patch per line, `<vaddr_hex> <bytes_hex>`.
+// `vaddr_hex` is required to be 0x-prefixed for clarity; `bytes_hex` is
+// a contiguous hex string (whitespace tolerated, but no 0x prefixes
+// inside). Comments (`#`) and blank lines skipped.
+struct Patch { ember::addr_t vaddr; std::vector<std::byte> bytes; };
+[[nodiscard]] ember::Result<std::vector<Patch>>
+parse_patches_file(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return std::unexpected(
+        ember::Error::io(std::format("cannot open patches file '{}'", path)));
+    std::vector<Patch> out;
+    std::string line;
+    std::size_t line_no = 0;
+    while (std::getline(f, line)) {
+        ++line_no;
+        std::size_t p = 0;
+        while (p < line.size() && std::isspace(static_cast<unsigned char>(line[p]))) ++p;
+        if (p == line.size() || line[p] == '#') continue;
+
+        // Address token.
+        std::size_t addr_end = p;
+        while (addr_end < line.size() &&
+               !std::isspace(static_cast<unsigned char>(line[addr_end]))) ++addr_end;
+        std::string_view addr_tok(line.data() + p, addr_end - p);
+        if (!addr_tok.starts_with("0x") && !addr_tok.starts_with("0X")) {
+            return std::unexpected(ember::Error::invalid_format(std::format(
+                "patches '{}' line {}: vaddr must be 0x-prefixed", path, line_no)));
+        }
+        addr_tok.remove_prefix(2);
+        ember::u64 va = 0;
+        auto ar = std::from_chars(addr_tok.data(), addr_tok.data() + addr_tok.size(), va, 16);
+        if (ar.ec != std::errc{} || ar.ptr != addr_tok.data() + addr_tok.size()) {
+            return std::unexpected(ember::Error::invalid_format(std::format(
+                "patches '{}' line {}: bad hex vaddr", path, line_no)));
+        }
+
+        // Bytes: pairs of hex digits, whitespace ignored.
+        std::string hex;
+        for (std::size_t i = addr_end; i < line.size(); ++i) {
+            if (!std::isspace(static_cast<unsigned char>(line[i]))) hex.push_back(line[i]);
+        }
+        if (hex.empty()) {
+            return std::unexpected(ember::Error::invalid_format(std::format(
+                "patches '{}' line {}: missing bytes", path, line_no)));
+        }
+        if (hex.size() % 2 != 0) {
+            return std::unexpected(ember::Error::invalid_format(std::format(
+                "patches '{}' line {}: odd hex digit count", path, line_no)));
+        }
+        std::vector<std::byte> bytes;
+        bytes.reserve(hex.size() / 2);
+        for (std::size_t i = 0; i < hex.size(); i += 2) {
+            unsigned b = 0;
+            auto br = std::from_chars(hex.data() + i, hex.data() + i + 2, b, 16);
+            if (br.ec != std::errc{} || br.ptr != hex.data() + i + 2) {
+                return std::unexpected(ember::Error::invalid_format(std::format(
+                    "patches '{}' line {}: bad hex byte", path, line_no)));
+            }
+            bytes.push_back(static_cast<std::byte>(b));
+        }
+        out.push_back({static_cast<ember::addr_t>(va), std::move(bytes)});
+    }
+    return out;
+}
+
+// Apply --apply-patches: load the binary's section table for vaddr→
+// file-offset translation, slurp the original file bytes, mutate per
+// patch, write to args.output_path. Returns process exit code.
+int run_apply_patches(const Args& args) {
+    if (args.output_path.empty()) {
+        std::println(stderr, "ember: --apply-patches requires -o/--output PATH");
+        return EXIT_FAILURE;
+    }
+    auto patches_r = parse_patches_file(args.apply_patches);
+    if (!patches_r) {
+        std::println(stderr, "ember: {}", patches_r.error().message);
+        return EXIT_FAILURE;
+    }
+    auto bin = ember::load_binary(args.binary);
+    if (!bin) {
+        std::println(stderr, "ember: {}: {}",
+                     bin.error().kind_name(), bin.error().message);
+        return EXIT_FAILURE;
+    }
+    const auto sections = (**bin).sections();
+
+    // Slurp the original binary file.
+    std::ifstream src(args.binary, std::ios::binary | std::ios::ate);
+    if (!src) {
+        std::println(stderr, "ember: cannot read '{}'", args.binary);
+        return EXIT_FAILURE;
+    }
+    const auto sz = src.tellg();
+    src.seekg(0, std::ios::beg);
+    std::vector<char> buf(static_cast<std::size_t>(sz));
+    src.read(buf.data(), sz);
+
+    // Apply each patch.
+    std::size_t applied = 0;
+    for (const auto& p : *patches_r) {
+        const ember::Section* host = nullptr;
+        for (const auto& s : sections) {
+            if (p.vaddr >= s.vaddr && p.vaddr < s.vaddr + s.size) {
+                host = &s; break;
+            }
+        }
+        if (!host) {
+            std::println(stderr, "ember: patch @ 0x{:x}: no containing section",
+                         p.vaddr);
+            return EXIT_FAILURE;
+        }
+        const auto file_off = host->file_offset + (p.vaddr - host->vaddr);
+        if (file_off + p.bytes.size() > buf.size()) {
+            std::println(stderr, "ember: patch @ 0x{:x}: extends past EOF",
+                         p.vaddr);
+            return EXIT_FAILURE;
+        }
+        for (std::size_t i = 0; i < p.bytes.size(); ++i) {
+            buf[file_off + i] = static_cast<char>(p.bytes[i]);
+        }
+        ++applied;
+    }
+
+    std::ofstream dst(args.output_path, std::ios::binary | std::ios::trunc);
+    if (!dst) {
+        std::println(stderr, "ember: cannot write '{}'", args.output_path);
+        return EXIT_FAILURE;
+    }
+    dst.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    if (!dst) {
+        std::println(stderr, "ember: write failed for '{}'", args.output_path);
+        return EXIT_FAILURE;
+    }
+    std::println(stderr, "ember: applied {} patch(es) -> {}",
+                 applied, args.output_path);
+    return EXIT_SUCCESS;
 }
 
 }  // namespace
@@ -1118,6 +1262,13 @@ int main(int argc, char** argv) {
         !args.fp_old_in.empty() ||
         !args.fp_new_in.empty()) {
         return run_diff(args);
+    }
+
+    // --apply-patches is a one-shot file operation: it loads the
+    // binary only to consult the section table for vaddr→file-offset
+    // translation, then writes a patched copy. No analysis runs.
+    if (!args.apply_patches.empty()) {
+        return run_apply_patches(args);
     }
 
     auto bin = ember::load_binary(args.binary);

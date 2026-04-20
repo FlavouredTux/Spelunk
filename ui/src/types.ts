@@ -54,14 +54,12 @@ export type StringEntry = {
 export type Arities = Record<number, number>;
 
 export type AiMessage  = { role: "system" | "user" | "assistant"; content: string };
-export type AiProvider = "openrouter" | "assistant-pro" | "assistant-cli" | "codex-cli";
-export type AiOAuthProbe = { found: boolean; expired: boolean; expiresAt?: number };
+export type AiProvider = "openrouter" | "assistant-cli" | "codex-cli";
 export type AiConfig   = {
-  provider:       AiProvider;
-  model:          string;
-  hasKey:         boolean;     // only meaningful for openrouter
-  encrypted:      boolean;
-  hasassistantToken: boolean;     // assistant-cli setup-token env, if stored
+  provider:  AiProvider;
+  model:     string;
+  hasKey:    boolean;     // only meaningful for openrouter
+  encrypted: boolean;
 };
 export type AiCliStatus = {
   installed: boolean;
@@ -91,14 +89,12 @@ declare global {
       ai: {
         getConfig:    () => Promise<AiConfig>;
         setConfig:    (c: {
-          apiKey?:      string;
-          assistantToken?: string;
-          model?:       string;
-          provider?:    AiProvider;
+          apiKey?:   string;
+          model?:    string;
+          provider?: AiProvider;
         }) => Promise<AiConfig>;
         listModels:   (provider?: AiProvider) => Promise<string[]>;
         detectCli:    (kind: "assistant-cli" | "codex-cli") => Promise<AiCliStatus>;
-        probeassistantOAuth: () => Promise<AiOAuthProbe>;
         chat:         (req: AiChatRequest) => Promise<string>;
         cancel:       (id: string) => Promise<boolean>;
         onChunk:      (cb: (id: string, delta: string) => void) => () => void;

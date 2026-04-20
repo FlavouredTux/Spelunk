@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import type { AppSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
@@ -340,7 +340,7 @@ function AiConfigSection() {
     setCfg(next);
     const m = await window.ember.ai.listModels(p);
     setMs(m);
-    if (p !== "openrouter") reloadProbes();
+    if (p === "assistant-cli" || p === "codex-cli") reloadProbes();
   }
   async function saveKey(k: string) {
     const next = await window.ember.ai.setConfig({ apiKey: k });
@@ -359,13 +359,17 @@ function AiConfigSection() {
       >
         <Segmented
           value={cfg.provider}
-          options={["openrouter", "assistant-cli", "codex-cli"] as const}
+          options={["openrouter", "9router", "assistant-cli", "codex-cli"] as const}
           onChange={changeProvider}
         />
       </Row>
 
       {cfg.provider === "openrouter" && (
         <OpenRouterKeySection cfg={cfg} onSave={saveKey} />
+      )}
+
+      {cfg.provider === "9router" && (
+        <NineRouterSection cfg={cfg} onSave={saveKey} />
       )}
 
       {cfg.provider === "assistant-cli" && (
@@ -461,6 +465,76 @@ function OpenRouterKeySection(props: {
   );
 }
 
+function NineRouterSection(props: {
+  cfg: AiConfig;
+  onSave: (k: string) => Promise<void>;
+}) {
+  const [draft, setDraft]   = useState("");
+  const [revealed, setRev]  = useState(false);
+  const [saving, setSaving] = useState(false);
+  return (
+    <>
+      <Row
+        label="9Router endpoint"
+        hint="Local proxy that fans out to 40+ providers with subscription / cheap / free tier fallback. Defaults to http://localhost:20128 — override with EMBER_9ROUTER_URL."
+      >
+        <code style={{
+          fontFamily: mono, fontSize: 11,
+          color: C.text, background: C.bg,
+          border: `1px solid ${C.border}`, borderRadius: 4,
+          padding: "5px 10px",
+        }}>http://localhost:20128</code>
+      </Row>
+      <Row
+        label="API key (optional)"
+        hint={props.cfg.hasKey
+          ? "Stored. Only needed if you set REQUIRE_API_KEY=true on the proxy (e.g. you exposed it to the internet)."
+          : "Leave blank for local use. Set only if your 9router proxy requires a Bearer key."}
+      >
+        <div style={{ display: "flex", gap: 4 }}>
+          <input
+            type={revealed ? "text" : "password"}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={props.cfg.hasKey ? "•••••• (key set)" : "(blank for local)"}
+            style={{
+              width: 200,
+              fontFamily: mono, fontSize: 11,
+              color: C.text, background: C.bg,
+              border: `1px solid ${C.border}`, borderRadius: 4,
+              padding: "5px 8px",
+            }}
+          />
+          <button onClick={() => setRev((r) => !r)} style={iconBtnStyle}>
+            {revealed ? "hide" : "show"}
+          </button>
+          <button
+            onClick={async () => { if (!draft) return;
+              setSaving(true);
+              try { await props.onSave(draft); setDraft(""); }
+              finally { setSaving(false); } }}
+            disabled={!draft || saving}
+            style={{
+              ...iconBtnStyle,
+              background: draft ? C.accent : C.bgMuted,
+              color:      draft ? "#fff"   : C.textMuted,
+              cursor:     draft ? "pointer" : "not-allowed",
+            }}
+          >save</button>
+        </div>
+      </Row>
+      {props.cfg.hasKey && (
+        <Row label="Forget stored key" hint="Removes the key from disk.">
+          <button
+            onClick={() => props.onSave("")}
+            style={{ ...iconBtnStyle, borderColor: C.red, color: C.red }}
+          >forget key</button>
+        </Row>
+      )}
+    </>
+  );
+}
+
 function CliStatusSection(props: {
   kind:     "assistant-cli" | "codex-cli";
   status:   AiCliStatus | null;
@@ -518,41 +592,82 @@ const iconBtnStyle: React.CSSProperties = {
   fontFamily: mono, fontSize: 10, cursor: "pointer",
 };
 
-// Free-text input with native autocomplete from a list of suggestions.
-// Beats <select> because the OpenRouter model namespace evolves
-// faster than we can hard-code it — users want to type
-// `qwen/qwen3-coder` or whatever shipped this morning. The datalist
-// gives them the canned options as autocomplete without locking them
-// in. Commits on blur or Enter so per-keystroke spam doesn't churn
-// the IPC config write.
+// Free-text input with a custom dropdown of suggestions. Beats
+// `<input list>` + `<datalist>` because the native datalist popup is
+// styled by the host OS (white box on Linux, ugly grey on Windows)
+// and can't be themed to match the rest of the UI. We render the
+// popup ourselves so it picks up Ember's dark tokens. Still
+// free-text-editable so the user can type any model id the proxy
+// supports — the suggestion list is just a hinted shortlist.
 export function ModelCombobox(props: {
   value:    string;
   options:  string[];
   onChange: (v: string) => void;
   width?:   number;
 }) {
-  const [draft, setDraft] = useState(props.value);
-  // Keep the input in sync if the parent's value changes via some
-  // other path (e.g. main process write from another window).
+  const [draft, setDraft]   = useState(props.value);
+  const [open,  setOpen]    = useState(false);
+  const [active, setActive] = useState(-1);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => { setDraft(props.value); }, [props.value]);
 
-  const commit = () => {
-    const v = draft.trim();
-    if (v && v !== props.value) props.onChange(v);
-    else if (!v) setDraft(props.value);   // empty input → revert
+  // Close on outside-click. Inside-clicks (input, popup) bubble to
+  // the wrapper and don't trigger this.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = draft.trim().toLowerCase();
+    if (!q) return props.options;
+    return props.options.filter((m) => m.toLowerCase().includes(q));
+  }, [draft, props.options]);
+
+  const commit = (v: string) => {
+    const t = v.trim();
+    if (t && t !== props.value) props.onChange(t);
+    else if (!t) setDraft(props.value);
+    setOpen(false);
+    setActive(-1);
   };
 
-  const listId = "ai-model-suggestions";
+  const width = props.width ?? 220;
   return (
-    <>
+    <div ref={wrapRef} style={{ position: "relative", width }}>
       <input
-        list={listId}
+        ref={inputRef}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onChange={(e) => { setDraft(e.target.value); setOpen(true); setActive(-1); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          // Defer so a click on a popup row registers before close.
+          setTimeout(() => commit(draft), 100);
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); commit(); (e.currentTarget as HTMLInputElement).blur(); }
-          else if (e.key === "Escape") { setDraft(props.value); (e.currentTarget as HTMLInputElement).blur(); }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit(active >= 0 && filtered[active] ? filtered[active] : draft);
+            inputRef.current?.blur();
+          } else if (e.key === "Escape") {
+            setDraft(props.value); setOpen(false); setActive(-1);
+            inputRef.current?.blur();
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+            setActive((a) => Math.min(filtered.length - 1, a + 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((a) => Math.max(-1, a - 1));
+          }
         }}
         spellCheck={false}
         autoCapitalize="off"
@@ -560,16 +675,55 @@ export function ModelCombobox(props: {
         placeholder="vendor/model-id"
         style={{
           background: C.bgMuted, color: C.text,
-          border: `1px solid ${C.border}`, borderRadius: 4,
+          border: `1px solid ${open ? C.borderStrong : C.border}`,
+          borderRadius: 4,
           padding: "5px 8px",
           fontFamily: mono, fontSize: 11,
-          width: props.width ?? 220,
+          width: "100%",
+          boxSizing: "border-box",
+          outline: "none",
         }}
       />
-      <datalist id={listId}>
-        {props.options.map((m) => <option key={m} value={m} />)}
-      </datalist>
-    </>
+      {open && filtered.length > 0 && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0,
+            width: "100%",
+            maxHeight: 240, overflowY: "auto",
+            background: C.bgAlt,
+            border: `1px solid ${C.borderStrong}`,
+            borderRadius: 4,
+            boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
+            zIndex: 4000,
+            padding: 2,
+          }}
+          // Keep input focused when clicking the popup chrome.
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {filtered.map((m, i) => {
+            const isActive = i === active;
+            return (
+              <div
+                key={m}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => commit(m)}
+                style={{
+                  padding: "5px 8px",
+                  fontFamily: mono, fontSize: 11,
+                  color: isActive ? "#fff" : C.text,
+                  background: isActive ? C.accent : "transparent",
+                  borderRadius: 3,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >{m}</div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

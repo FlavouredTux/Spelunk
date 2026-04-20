@@ -54,7 +54,7 @@ export type StringEntry = {
 export type Arities = Record<number, number>;
 
 export type AiMessage  = { role: "system" | "user" | "assistant"; content: string };
-export type AiProvider = "openrouter" | "assistant-cli" | "codex-cli";
+export type AiProvider = "openrouter" | "9router" | "assistant-cli" | "codex-cli";
 export type AiConfig   = {
   provider:  AiProvider;
   model:     string;

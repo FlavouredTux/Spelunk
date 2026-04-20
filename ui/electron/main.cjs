@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron");
 const { spawn } = require("node:child_process");
 const https = require("node:https");
+const http  = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 // Official assistant SDK that wraps the user's installed `assistant` binary
@@ -221,6 +222,11 @@ ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
 //   openrouter  — HTTPS to openrouter.ai. Requires an API key, billed
 //                 per-token. The only path that works out of the box
 //                 without installing extra binaries.
+//   9router     — HTTP to localhost:20128 (9Router local proxy). Same
+//                 OpenAI-compatible wire format as OpenRouter so it
+//                 reuses the same streaming parser. API key is
+//                 optional (the proxy only requires one when exposed
+//                 to the internet via REQUIRE_API_KEY=true).
 //   assistant-cli  — spawns `assistant -p` as a subprocess. Uses the
 //                 user's logged-in assistant session (Pro/Max
 //                 subscription or assistant Console API billing;
@@ -240,8 +246,13 @@ ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
 
 const AI_CONFIG_PATH = () => path.join(app.getPath("userData"), "ai.json");
 
-const AI_PROVIDERS = ["openrouter", "assistant-cli", "codex-cli"];
+const AI_PROVIDERS = ["openrouter", "9router", "assistant-cli", "codex-cli"];
 const AI_DEFAULT_PROVIDER = "openrouter";
+
+// 9Router local proxy. The upstream project defaults to this port; a
+// user who ran it on a different port can override with EMBER_9ROUTER_URL.
+const NINE_ROUTER_URL =
+  process.env.EMBER_9ROUTER_URL || "http://localhost:20128";
 
 // Per-provider model lists surfaced as autocomplete suggestions. The
 // combobox in the UI lets users type any model id regardless — these
@@ -259,6 +270,22 @@ const AI_MODEL_SUGGESTIONS = {
     "deepseek/deepseek-chat-v3.5",
     "x-ai/grok-4",
     "meta-llama/llama-4-maverick",
+  ],
+  // 9router speaks OpenAI-compatible over its own namespace of free /
+  // subscription / cheap tiers. Most identifiers map to the same
+  // vendor/model id that OpenRouter uses; the free tier slugs (iflow-*,
+  // qwen-*, kiro-assistant) are the headline draw for a user with no
+  // OpenRouter credits.
+  "9router": [
+    "kiro-assistant-sonnet-4-5",
+    "iflow-qwen3-coder",
+    "iflow-glm-4.6",
+    "qwen3-coder-plus",
+    "gemini-2.5-pro",
+    "assistant/assistant-sonnet-4.5",
+    "assistant/assistant-haiku-4.5",
+    "openai/gpt-5-mini",
+    "deepseek/deepseek-chat-v3.5",
   ],
   "assistant-cli": [
     "sonnet",
@@ -609,10 +636,11 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
       ? model
       : cfg.model;
 
-  // ---- OpenRouter ----------------------------------------------------
-  if (cfg.provider === "openrouter") {
+  // ---- OpenRouter & 9Router (both OpenAI-compatible wire format) ---
+  if (cfg.provider === "openrouter" || cfg.provider === "9router") {
+    const is9r   = cfg.provider === "9router";
     const apiKey = await loadAiKey();
-    if (!apiKey) throw new Error("no OpenRouter API key configured");
+    if (!is9r && !apiKey) throw new Error("no OpenRouter API key configured");
 
     const body = JSON.stringify({
       model:       chosenModel,
@@ -620,24 +648,50 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
       stream:      true,
       temperature: typeof temperature === "number" ? temperature : 0.4,
     });
-    const req = https.request({
-      method:   "POST",
-      hostname: "openrouter.ai",
-      path:     "/api/v1/chat/completions",
-      headers:  {
-        "Authorization":   `Bearer ${apiKey}`,
-        "Content-Type":    "application/json",
-        "Content-Length":  Buffer.byteLength(body),
-        "HTTP-Referer":    "https://github.com/FlavouredTux/Ember",
-        "X-Title":         "Ember",
-      },
-    }, (res) => {
+
+    // 9router runs on localhost over plain HTTP; OpenRouter is HTTPS
+    // on openrouter.ai. Shape the URL + transport accordingly and share
+    // the streaming parser below.
+    let reqOpts, transport, label;
+    if (is9r) {
+      const u = new URL(NINE_ROUTER_URL);
+      transport = u.protocol === "https:" ? https : http;
+      label = "9Router";
+      reqOpts = {
+        method:   "POST",
+        hostname: u.hostname,
+        port:     u.port || (u.protocol === "https:" ? 443 : 80),
+        path:     (u.pathname.replace(/\/$/, "") || "") + "/v1/chat/completions",
+        headers:  {
+          "Content-Type":   "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {}),
+        },
+      };
+    } else {
+      transport = https;
+      label = "OpenRouter";
+      reqOpts = {
+        method:   "POST",
+        hostname: "openrouter.ai",
+        path:     "/api/v1/chat/completions",
+        headers:  {
+          "Authorization":   `Bearer ${apiKey}`,
+          "Content-Type":    "application/json",
+          "Content-Length":  Buffer.byteLength(body),
+          "HTTP-Referer":    "https://github.com/FlavouredTux/Ember",
+          "X-Title":         "Ember",
+        },
+      };
+    }
+
+    const req = transport.request(reqOpts, (res) => {
       if (res.statusCode && res.statusCode >= 400) {
         let buf = "";
         res.on("data", (d) => { buf += d.toString(); });
         res.on("end", () => {
           send("ember:ai:error",
-               `OpenRouter ${res.statusCode}: ${buf.slice(0, 400)}`);
+               `${label} ${res.statusCode}: ${buf.slice(0, 400)}`);
           AI_INFLIGHT.delete(id);
         });
         return;
@@ -670,7 +724,11 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
       });
     });
     req.on("error", (err) => {
-      send("ember:ai:error", err.message || String(err));
+      const m = err?.message || String(err);
+      const friendly = is9r && /ECONNREFUSED|ENOTFOUND/.test(m)
+        ? `${label} not reachable at ${NINE_ROUTER_URL}. Start the 9router proxy, or override with EMBER_9ROUTER_URL.`
+        : m;
+      send("ember:ai:error", friendly);
       AI_INFLIGHT.delete(id);
     });
     AI_INFLIGHT.set(id, { cancel: () => req.destroy(new Error("cancelled")) });

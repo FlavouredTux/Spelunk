@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
-import type { AiMessage, AiConfig, FunctionInfo, Annotations } from "../types";
+import type { AiMessage, AiConfig, AiProvider, FunctionInfo, Annotations } from "../types";
 import {
   SYSTEM_PROMPT,
   QUICK_ACTIONS,
@@ -454,7 +454,7 @@ const quickBtnStyle: React.CSSProperties = {
   fontFamily: mono, fontSize: 10, cursor: "pointer",
 };
 
-function NoKeyHint(props: { provider: "openrouter" | "assistant-cli" | "codex-cli" }) {
+function NoKeyHint(props: { provider: AiProvider }) {
   // Only openrouter is gated by a "missing key" state at this layer.
   // CLI providers defer their readiness check to the spawn itself —
   // if assistant/codex isn't installed or isn't logged in, the resulting

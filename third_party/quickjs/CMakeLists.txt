@@ -21,6 +21,16 @@ target_compile_definitions(ember_quickjs PRIVATE
     CONFIG_VERSION="2024-01-13-ember"
 )
 
+# On MSVC, cutils.c includes <windows.h> directly while cutils.h includes
+# <winsock2.h> ahead of <windows.h>. Without WIN32_LEAN_AND_MEAN the
+# old winsock1 from windows.h defines sockaddr et al, which then redefine
+# when cutils.h later pulls in winsock2 — hundreds of C2011/C2375 errors.
+if(WIN32)
+    target_compile_definitions(ember_quickjs PRIVATE
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
+
 # QuickJS is performance-sensitive C; suppress pedantic warnings that would
 # drown out Ember's own diagnostics. We don't link it to ember::flags.
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

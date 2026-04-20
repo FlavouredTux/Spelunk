@@ -225,9 +225,28 @@ void parse_bind_stream(
 void parse_chained_fixups(
     std::span<const std::byte> data,
     std::span<const SegInfo> segs,
-    std::span<const std::byte> image,
+    std::span<std::byte> image,
     std::vector<BindRec>& out)
 {
+    // Preferred load address of the image — chained-rebase `target` fields
+    // are encoded relative to this, matching dyld's `runtimeOffset`
+    // semantics. On typical PIE binaries this is __TEXT.vmaddr (the
+    // segment whose fileoff==0 and which hosts the mach_header). Fall
+    // back to any segment with fileoff==0 for non-standard layouts
+    // (renamed __TEXT, single-segment dylibs, etc.); finally to the
+    // first non-__PAGEZERO segment so we degrade gracefully rather
+    // than emit zero-based rebases.
+    u64 image_base = 0;
+    for (const auto& s : segs) {
+        if (s.fileoff == 0 && s.name == "__TEXT") { image_base = s.vmaddr; break; }
+    }
+    if (image_base == 0) {
+        for (const auto& s : segs) {
+            if (s.fileoff == 0 && s.vmaddr != 0) { image_base = s.vmaddr; break; }
+        }
+    }
+    if (image_base == 0 && !segs.empty()) image_base = segs.front().vmaddr;
+
     if (data.size() < 32) return;
     auto rd32 = [&](std::size_t off) -> std::optional<u32> {
         if (off + 4 > data.size()) return std::nullopt;
@@ -329,6 +348,25 @@ void parse_chained_fixups(
                         out.push_back({static_cast<addr_t>(chain_vaddr),
                                        std::move(name)});
                     }
+                } else {
+                    // Rebase. Resolve to a real VA and write it back to
+                    // the in-memory buffer so later consumers (RTTI
+                    // walker, ObjC scanner, generic section reads) see
+                    // a plain pointer rather than the chain descriptor.
+                    // Without this, every pointer in __DATA_CONST that
+                    // lives on a fixup chain reads as a packed bitfield.
+                    //
+                    // dyld_chained_ptr_64_rebase bit layout:
+                    //   target  [ 0:35]  vmaddr offset from image base
+                    //   high8   [36:43]  ObjC tagged-pointer / type bits,
+                    //                    dyld OR's these into the top byte
+                    //   reserved[44:50]  zero
+                    //   next    [51:62]  4-byte stride to next chain entry
+                    //   bind    [   63]  == 0 here (we're in the rebase arm)
+                    const u64 target = raw & ((u64{1} << 36) - 1);
+                    const u64 high8  = (raw >> 36) & 0xFFu;
+                    const u64 real   = (image_base + target) | (high8 << 56);
+                    std::memcpy(image.data() + fo, &real, 8);
                 }
                 if (next == 0) break;
                 chain_vaddr += next * 4u;  // stride is 4 on format 6

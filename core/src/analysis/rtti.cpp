@@ -91,6 +91,25 @@ struct CodeRanges {
     for (const auto& s : b.sections()) {
         if (!s.flags.executable) continue;
         if (s.size == 0) continue;
+        // Mach-O segment protections bleed into section flags, so `__TEXT`
+        // data sections (`__cstring`, `__const`, `__literal*`, `__unwind_info`,
+        // `__eh_frame`, `__gcc_except_tab`) all show up as "executable" even
+        // though they aren't real code. If the walker accepts pointers into
+        // them as vtable entries, we end up labelling the addresses of
+        // typeinfo-name C strings as methods — the exact Bug C failure.
+        const std::string_view n = s.name;
+        auto contains = [&](std::string_view needle) {
+            return n.find(needle) != std::string_view::npos;
+        };
+        if (contains("__cstring") || contains("__const") ||
+            contains("__literal") || contains("__eh_frame") ||
+            contains("__unwind_info") || contains("__gcc_except_tab") ||
+            contains("__objc_methname") || contains("__objc_classname") ||
+            contains("__objc_methtype") || contains("__swift5") ||
+            contains("__TEXT,__init") || contains("__TEXT,__oslogstring") ||
+            contains(",__info_plist") || contains(",__ustring")) {
+            continue;
+        }
         r.ranges.emplace_back(static_cast<addr_t>(s.vaddr),
                               static_cast<addr_t>(s.vaddr + s.size));
     }
@@ -153,8 +172,18 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
 
     // Pass 2: find vtables. A primary vtable begins with (i64 offset_to_top
     // == 0, u64 typeinfo_ptr → one of our recorded typeinfos). Subsequent
-    // u64s are method IMPs; stop on the first pointer outside __TEXT (that
-    // boundary is where the next vtable / padding / data starts).
+    // u64s are method IMPs; walk until we hit the start of the next
+    // vtable, the next typeinfo struct, or a clearly non-vtable slot.
+    //
+    // Key subtlety: a pure-virtual slot points at `__cxa_pure_virtual`,
+    // which on Mach-O binaries that link against the dyld shared cache
+    // is an *imported* symbol — its address lives outside our __TEXT
+    // ranges, and on chained-fixups images it may read as 0 or a fixup
+    // descriptor. Bailing on the first such slot under-counts abstract
+    // interfaces (HttpClient, RakPeerInterface, NetworkStream etc.) and
+    // cascades into every subclass's pseudo-C losing its vfn_N labels.
+    // We record those slots as 0 placeholders and keep walking; callers
+    // that build (imp → name) maps simply skip zeros.
     for (const auto& sec : consts) {
         const std::size_t n = sec.bytes.size() / 8;
         for (std::size_t i = 0; i + 1 < n; ++i) {
@@ -171,13 +200,60 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
             RttiClass& cls = out[it->second];
             if (cls.vtable != 0) continue;  // already recorded the primary
             cls.vtable = static_cast<addr_t>(sec.vaddr + (i + 1) * 8);
+            constexpr std::size_t kMaxVtableSlots    = 4096;
+            constexpr std::size_t kMaxTrailingZeros  = 8;
+            std::size_t trailing_zeros = 0;
             for (std::size_t k = i + 2; k < n; ++k) {
+                if (cls.methods.size() >= kMaxVtableSlots) break;
                 u64 m = 0;
                 std::memcpy(&m, sec.bytes.data() + k * 8, 8);
-                if (!code.contains(static_cast<addr_t>(m))) break;
+                // Structural boundary #1: current slot IS a typeinfo vptr
+                // — we've walked straight into the next RTTI struct.
+                if (ti_by_addr.count(static_cast<addr_t>(m))) break;
+                // Structural boundary #2: the NEXT slot is a known
+                // typeinfo, so this slot is the offset_to_top of a
+                // new (primary or secondary) vtable.
+                if (k + 1 < n) {
+                    u64 next = 0;
+                    std::memcpy(&next, sec.bytes.data() + (k + 1) * 8, 8);
+                    if (ti_by_addr.count(static_cast<addr_t>(next))) {
+                        const i64 oot = static_cast<i64>(m);
+                        if (oot == 0 ||
+                            (oot > -(i64{1} << 20) && oot < (i64{1} << 20))) {
+                            break;
+                        }
+                    }
+                }
+                if (m == 0 || !code.contains(static_cast<addr_t>(m))) {
+                    // Pure-virtual / imported / padding — placeholder so
+                    // downstream slot indices stay aligned with the real
+                    // vtable layout.
+                    cls.methods.push_back(0);
+                    if (++trailing_zeros >= kMaxTrailingZeros) break;
+                    continue;
+                }
+                trailing_zeros = 0;
                 cls.methods.push_back(static_cast<addr_t>(m));
             }
-            i += cls.methods.size() + 1;  // skip past this vtable
+            // Trim trailing zero placeholders only when there's real
+            // content before them — an all-zero method list means the
+            // class is purely abstract (every slot is __cxa_pure_virtual
+            // routed through chained-fixups), and we still want the
+            // class registered so the resolver can report it exists.
+            bool has_nonzero = false;
+            for (addr_t a : cls.methods) if (a != 0) { has_nonzero = true; break; }
+            if (has_nonzero) {
+                while (!cls.methods.empty() && cls.methods.back() == 0) {
+                    cls.methods.pop_back();
+                }
+            }
+            // Don't skip ahead here: the vtable-header pattern
+            // `(offset_to_top, known_ti)` is unambiguous enough that
+            // re-scanning the method slots as outer-loop positions is
+            // cheap, and skipping risks stepping over a back-to-back
+            // vtable whose offset_to_top landed inside what we just
+            // recorded as a method. `cls.vtable != 0` prevents any
+            // duplicate re-entry for the same class.
         }
     }
 
@@ -186,12 +262,25 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
 
 std::map<addr_t, std::string>
 rtti_method_names(const std::vector<RttiClass>& classes) {
+    // Count how many vtable slots each IMP appears in. Addresses that show
+    // up across many classes are almost always shared thunks — most
+    // commonly `__cxa_pure_virtual`, but also deleting-destructor stubs
+    // and ICF-folded methods. Labelling call sites `SomeRandomClass::vfn_3`
+    // when the target is really the pure-virtual trampoline is worse than
+    // leaving them as `sub_<hex>`, so we drop addresses with a wide fan-in.
+    std::map<addr_t, std::size_t> fanin;
+    for (const auto& c : classes) {
+        for (addr_t a : c.methods) if (a != 0) ++fanin[a];
+    }
+    constexpr std::size_t kMaxFanin = 3;
     std::map<addr_t, std::string> out;
     for (const auto& c : classes) {
         if (c.demangled_name.empty()) continue;
         for (std::size_t i = 0; i < c.methods.size(); ++i) {
-            out.emplace(c.methods[i],
-                        std::format("{}::vfn_{}", c.demangled_name, i));
+            const addr_t a = c.methods[i];
+            if (a == 0) continue;
+            if (fanin[a] > kMaxFanin) continue;
+            out.emplace(a, std::format("{}::vfn_{}", c.demangled_name, i));
         }
     }
     return out;

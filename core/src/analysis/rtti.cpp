@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>

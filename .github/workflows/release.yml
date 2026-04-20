@@ -73,12 +73,8 @@ jobs:
       - name: Build CLI
         run: cmake --build build --target ember_cli
 
-      - name: Test CLI
-        # Skip on Windows for now — the test suite assumes POSIX paths
-        # in golden fixtures; the binary itself is exercised by the
-        # Electron app at runtime.
-        if: matrix.target != 'win'
-        run: ctest --test-dir build --output-on-failure
+      # No ctest here — release is gated on successful build only.
+      # Golden tests live in ci.yml and have their own drift to chase.
 
       - uses: actions/setup-node@v4
         with: { node-version: '20' }

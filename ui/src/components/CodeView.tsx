@@ -18,6 +18,9 @@ export function CodeView(props: {
   onRename?: (fn: FunctionInfo) => void;
   onAddNote?: (fn: FunctionInfo) => void;
   onEditSignature?: (fn: FunctionInfo) => void;
+  // Pixel font size for the main code body. Driven from app settings
+  // so the user can dial it up on a 4K display without DevTools.
+  fontSize?: number;
 }) {
   const lines = useMemo(() => props.text.split("\n"), [props.text]);
 
@@ -142,7 +145,7 @@ export function CodeView(props: {
           minHeight: 0,   // same — lets overflow: auto actually scroll instead of pushing past the clip
           overflow: "auto",
           fontFamily: mono,
-          fontSize: 12.5,
+          fontSize: props.fontSize ?? 12.5,
           lineHeight: 1.65,
           padding: "16px 0",
         }}

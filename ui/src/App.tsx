@@ -7,6 +7,9 @@ import { Tabs } from "./components/Tabs";
 import { StatusBar } from "./components/StatusBar";
 import { CommandPalette } from "./components/CommandPalette";
 import { CfgGraph } from "./components/CfgGraph";
+import { GearIcon, SettingsPanel } from "./components/Settings";
+import { loadSettings, saveSettings } from "./settings";
+import type { AppSettings } from "./settings";
 import { CallGraphView } from "./components/CallGraphView";
 import { StringsView } from "./components/StringsView";
 import { NotesView } from "./components/NotesView";
@@ -32,12 +35,24 @@ export default function App() {
   const [info, setInfo] = useState<BinaryInfo | null>(null);
   const [current, setCurrent] = useState<FunctionInfo | null>(null);
   const [view, setView] = useState<ViewKind>("pseudo");
-  // CFG view sub-mode: "pseudo" renders Ember's per-block pseudo-C
-  // inside each node, "asm" renders raw disasm. Pseudo is the default
-  // because most users want to see what the code does, not the byte-
-  // level encoding; the toggle in the bottom-right of the graph
-  // switches modes per-binary-session.
-  const [cfgMode, setCfgMode] = useState<"pseudo" | "asm">("pseudo");
+  // App-wide settings. Loaded synchronously from localStorage on mount
+  // so the initial render uses the user's saved values rather than
+  // flashing defaults first.
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const updateSettings = useCallback((s: AppSettings) => {
+    setSettings(s);
+    saveSettings(s);
+    // Pseudo-C output depends on `--labels` — toggling it would serve
+    // stale text from the renderer cache otherwise.
+    clearRendererCaches();
+  }, []);
+  // CFG view sub-mode. Initialized from the user's setting; the toggle
+  // in the graph's bottom-right corner overrides for the current
+  // session without touching the saved default.
+  const [cfgMode, setCfgMode] = useState<"pseudo" | "asm">(
+    () => settings.cfgDefaultMode
+  );
   // Effective view used for fetching: when on the CFG tab, choose the
   // backend route based on the sub-mode toggle.
   const fetchView: ViewKind =
@@ -294,12 +309,12 @@ export default function App() {
     setLoading(true);
     setError(null);
     setCode("");
-    loadFunction(current.name, fetchView)
+    loadFunction(current.name, fetchView, { showBbLabels: settings.showBbLabels })
       .then((text) => { if (!cancel) setCode(text); })
       .catch((e) => { if (!cancel) setError(e?.message ?? String(e)); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [current, fetchView, info]);
+  }, [current, fetchView, info, settings.showBbLabels]);
 
   const onXref = useCallback((addr: number) => {
     if (!info) return;
@@ -446,6 +461,35 @@ export default function App() {
           <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint, letterSpacing: 1, marginLeft: 4 }}>
             {info.arch.toUpperCase()} · {info.format.toUpperCase()}
           </span>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            style={{
+              padding: 5,
+              marginLeft: 4,
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: "transparent",
+              border: `1px solid transparent`,
+              borderRadius: 4,
+              cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = C.text;
+              e.currentTarget.style.background = C.bgMuted;
+              e.currentTarget.style.borderColor = C.border;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = C.textMuted;
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.borderColor = "transparent";
+            }}
+            title="Settings"
+            aria-label="Settings"
+          >
+            <GearIcon size={14} />
+          </button>
         </div>
       </div>
 
@@ -489,6 +533,7 @@ export default function App() {
           ) : (
             <CodeView
               text={code}
+              fontSize={settings.codeFontSize}
               onXref={onXref}
               search={searchOpen ? searchQuery : ""}
               searchActive={searchOpen}
@@ -522,6 +567,13 @@ export default function App() {
           annotations={annotations}
           onSelect={(f) => navigateTo(f)}
           onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsPanel
+          settings={settings}
+          onChange={updateSettings}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
       {stringsOpen && (

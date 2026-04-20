@@ -99,8 +99,21 @@ export async function loadSummary(): Promise<BinaryInfo> {
   );
 }
 
-export async function loadFunction(sym: string, view: ViewKind): Promise<string> {
-  const key = `${view}|${sym}`;
+export type LoadFunctionOptions = {
+  // Pass --labels to the CLI so pseudo-C / cfg-pseudo output carries
+  // `// bb_xxxxxx` markers before each block. Cache key includes this
+  // so toggling it doesn't return stale unlabelled text.
+  showBbLabels?: boolean;
+};
+
+export async function loadFunction(
+  sym: string,
+  view: ViewKind,
+  opts: LoadFunctionOptions = {},
+): Promise<string> {
+  const wantsLabels = !!opts.showBbLabels &&
+    (view === "pseudo" || view === "cfgPseudo");
+  const key = `${view}|${sym}|labels=${wantsLabels ? 1 : 0}`;
   const hit = FUNC_CACHE.get(key);
   if (hit) return hit;
   const args: Record<ViewKind, string[]> = {
@@ -111,7 +124,9 @@ export async function loadFunction(sym: string, view: ViewKind): Promise<string>
     ir:        ["-i", "-s", sym],
     ssa:       ["-i", "--ssa", "-s", sym],
   };
-  const p = window.ember.run(args[view]).catch((e) => {
+  const finalArgs = [...args[view]];
+  if (wantsLabels) finalArgs.push("--labels");
+  const p = window.ember.run(finalArgs).catch((e) => {
     FUNC_CACHE.delete(key);
     throw e;
   });

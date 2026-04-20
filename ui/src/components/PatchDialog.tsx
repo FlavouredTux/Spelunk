@@ -1,59 +1,87 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, mono, serif } from "../theme";
+import { assemble, bytesToHex } from "../asm";
 
-// Modal for editing a single byte patch. The user lands here from a
-// right-click on an asm-view instruction. We pre-fill with the current
-// bytes (already reflecting in-flight patches via the CLI temp-file
-// routing), offer a one-click NOP preset, and show a length warning
-// when the patch differs from the original instruction's length —
-// shorter is fine (a NOP fill is a common pattern), longer means
-// later instructions get clobbered.
+type Mode = "asm" | "hex";
+
+// Modal for editing a single byte patch. Two input modes:
+//   asm — type x86-64 assembly (multi-line); branch targets are
+//         absolute addresses, the assembler resolves them to rel32
+//         against the patch site.
+//   hex — raw bytes, space-tolerant (the original IDA-style entry).
+// Length warning surfaces matches / shorter / clobbers-next so
+// you don't accidentally overrun the next instruction.
 export function PatchDialog(props: {
-  vaddr:    number;     // virtual address of the instruction
-  origBytes: string;    // existing bytes, space-separated hex pairs
-  disasm:   string;     // mnemonic preview, used as a hint
+  vaddr:    number;
+  origBytes: string;
+  disasm:   string;
   onSave:   (vaddrHex: string, bytesHex: string) => void;
-  onRevert?: () => void;        // present when there's already a patch at this addr
+  onRevert?: () => void;
   onClose:  () => void;
 }) {
-  // Normalise to "9090C3" form for editing convenience; we re-pretty
-  // the value on display.
   const stripped = props.origBytes.replace(/\s+/g, "").toUpperCase();
-  const [draft, setDraft] = useState(stripped);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const origLen  = stripped.length / 2;
+
+  const [mode,    setMode]    = useState<Mode>("asm");
+  const [hexDraft, setHexDraft] = useState(stripped);
+  const [asmDraft, setAsmDraft] = useState("");
+  const inputHexRef = useRef<HTMLInputElement>(null);
+  const inputAsmRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
+    if (mode === "hex") { inputHexRef.current?.focus(); inputHexRef.current?.select(); }
+    else                 { inputAsmRef.current?.focus(); }
+  }, [mode]);
 
-  const cleaned   = draft.replace(/\s+/g, "").toUpperCase();
-  const validHex  = /^[0-9A-F]*$/.test(cleaned);
-  const evenHex   = cleaned.length > 0 && cleaned.length % 2 === 0;
-  const ok        = validHex && evenHex;
-  const newLen    = ok ? cleaned.length / 2 : 0;
-  const origLen   = stripped.length / 2;
-  const lenDelta  = newLen - origLen;
+  // Resolve the current draft into a canonical hex string + status.
+  const resolved = useMemo(() => {
+    if (mode === "hex") {
+      const cleaned  = hexDraft.replace(/\s+/g, "").toUpperCase();
+      const validHex = /^[0-9A-F]*$/.test(cleaned);
+      const evenHex  = cleaned.length > 0 && cleaned.length % 2 === 0;
+      return {
+        hex:    cleaned,
+        ok:     validHex && evenHex,
+        errors: !validHex ? ["non-hex characters"]
+              : (cleaned.length > 0 && !evenHex) ? ["odd hex digit count"]
+              : [],
+      };
+    }
+    const r = assemble(asmDraft, props.vaddr);
+    return {
+      hex:    bytesToHex(r.bytes),
+      ok:     r.errs.length === 0 && r.bytes.length > 0,
+      errors: r.errs.map(e => `line ${e.line + 1}: ${e.error}`),
+    };
+  }, [mode, hexDraft, asmDraft, props.vaddr]);
+
+  const newLen   = resolved.ok ? resolved.hex.length / 2 : 0;
+  const lenDelta = newLen - origLen;
 
   const submit = () => {
-    if (!ok) return;
-    props.onSave(`0x${props.vaddr.toString(16)}`, cleaned);
+    if (!resolved.ok) return;
+    props.onSave(`0x${props.vaddr.toString(16)}`, resolved.hex);
   };
 
-  // NOP fill the original instruction length so the new bytes line up
-  // with the existing instruction boundary — common case for "kill
-  // this conditional" / "skip this call" patches.
-  const nopFill = () => setDraft("90".repeat(origLen).toUpperCase());
+  const nopFill = () => {
+    if (mode === "hex") setHexDraft("90".repeat(origLen).toUpperCase());
+    else                 setAsmDraft(Array(origLen).fill("nop").join("\n"));
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); props.onClose(); }
-      if (e.key === "Enter")  { e.preventDefault(); submit(); }
+      // Cmd/Ctrl+Enter to submit (plain Enter would be a newline in
+      // the asm textarea).
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        submit();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
+  }, [mode, hexDraft, asmDraft]);
 
   return (
     <div
@@ -63,12 +91,12 @@ export function PatchDialog(props: {
         background: "rgba(10,10,9,0.55)",
         backdropFilter: "blur(3px)",
         zIndex: 2100,
-        display: "flex", justifyContent: "center", paddingTop: "18vh",
+        display: "flex", justifyContent: "center", paddingTop: "14vh",
         animation: "fadeIn .12s ease-out",
       }}
     >
       <div style={{
-        width: 520, maxWidth: "92%",
+        width: 560, maxWidth: "92%",
         background: C.bgAlt,
         border: `1px solid ${C.borderStrong}`,
         borderRadius: 8,
@@ -79,7 +107,7 @@ export function PatchDialog(props: {
         <div style={{
           padding: "14px 20px",
           borderBottom: `1px solid ${C.border}`,
-          display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap",
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
         }}>
           <span style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: C.text }}>
             Patch instruction
@@ -95,6 +123,8 @@ export function PatchDialog(props: {
           }} title={props.disasm}>
             {props.disasm}
           </span>
+          <span style={{ flex: 1 }} />
+          <ModeToggle mode={mode} onChange={setMode} />
         </div>
 
         <div style={{ padding: 20 }}>
@@ -110,48 +140,83 @@ export function PatchDialog(props: {
             <span style={{ color: C.textFaint }}>·</span>
             <span style={{ color: C.textFaint }}>{origLen} byte{origLen === 1 ? "" : "s"}</span>
           </div>
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value.toUpperCase())}
-            placeholder="hex bytes, e.g. 90 90 90"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              fontFamily: mono, fontSize: 13,
-              color: C.text,
-              background: C.bgMuted,
-              border: `1px solid ${ok ? C.border : C.red}`,
-              borderRadius: 4,
-              boxSizing: "border-box",
-              outline: "none",
-            }}
-          />
+
+          {mode === "hex" ? (
+            <input
+              ref={inputHexRef}
+              value={hexDraft}
+              onChange={(e) => setHexDraft(e.target.value.toUpperCase())}
+              placeholder="hex bytes, e.g. 90 90 90"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                fontFamily: mono, fontSize: 13,
+                color: C.text, background: C.bgMuted,
+                border: `1px solid ${resolved.ok ? C.border : C.red}`,
+                borderRadius: 4, boxSizing: "border-box", outline: "none",
+              }}
+            />
+          ) : (
+            <>
+              <textarea
+                ref={inputAsmRef}
+                value={asmDraft}
+                onChange={(e) => setAsmDraft(e.target.value)}
+                placeholder={`xor eax, eax\nret`}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                rows={5}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  fontFamily: mono, fontSize: 13,
+                  color: C.text, background: C.bgMuted,
+                  border: `1px solid ${resolved.errors.length === 0 ? C.border : C.red}`,
+                  borderRadius: 4, boxSizing: "border-box",
+                  outline: "none", resize: "vertical",
+                }}
+              />
+              {/* Live bytes preview — what we'd write to the sidecar. */}
+              <div style={{
+                marginTop: 6,
+                padding: "6px 10px",
+                fontFamily: mono, fontSize: 10,
+                color: C.textMuted,
+                background: C.bg,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                minHeight: 20,
+                wordBreak: "break-all",
+              }}>
+                {resolved.hex
+                  ? (resolved.hex.match(/.{1,2}/g) || []).join(" ")
+                  : <span style={{ color: C.textFaint, fontStyle: "italic" }}>bytes appear here</span>}
+              </div>
+            </>
+          )}
 
           <div style={{
-            display: "flex", alignItems: "center", gap: 10,
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
             marginTop: 8,
             fontFamily: mono, fontSize: 10,
           }}>
-            {!validHex && (
-              <span style={{ color: C.red }}>non-hex characters</span>
-            )}
-            {validHex && cleaned.length > 0 && !evenHex && (
-              <span style={{ color: C.red }}>odd hex digit count</span>
-            )}
-            {ok && lenDelta === 0 && (
+            {resolved.errors.map((m, i) => (
+              <span key={i} style={{ color: C.red }}>{m}</span>
+            ))}
+            {resolved.ok && lenDelta === 0 && (
               <span style={{ color: C.green }}>{newLen} byte{newLen === 1 ? "" : "s"} · matches</span>
             )}
-            {ok && lenDelta < 0 && (
+            {resolved.ok && lenDelta < 0 && (
               <span style={{ color: C.textMuted }}>
                 {newLen} byte{newLen === 1 ? "" : "s"} · {-lenDelta} short of original
                 {" "}<span style={{ color: C.textFaint }}>(later bytes untouched)</span>
               </span>
             )}
-            {ok && lenDelta > 0 && (
+            {resolved.ok && lenDelta > 0 && (
               <span style={{ color: "#dba85a" }}>
                 {newLen} byte{newLen === 1 ? "" : "s"} · {lenDelta} past original
                 {" "}<span style={{ color: C.textFaint }}>(clobbers next instruction)</span>
@@ -203,18 +268,51 @@ export function PatchDialog(props: {
           <button
             type="button"
             onClick={submit}
-            disabled={!ok}
+            disabled={!resolved.ok}
             style={{
               padding: "6px 14px",
-              background: ok ? C.accent : C.bgMuted,
-              color:      ok ? "#fff"   : C.textMuted,
+              background: resolved.ok ? C.accent : C.bgMuted,
+              color:      resolved.ok ? "#fff"   : C.textMuted,
               border: "none", borderRadius: 4,
               fontFamily: mono, fontSize: 11, fontWeight: 600,
-              cursor: ok ? "pointer" : "not-allowed",
+              cursor: resolved.ok ? "pointer" : "not-allowed",
             }}
           >apply patch</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ModeToggle(props: { mode: Mode; onChange: (m: Mode) => void }) {
+  return (
+    <div style={{
+      display: "flex",
+      background: C.bgMuted,
+      border: `1px solid ${C.border}`,
+      borderRadius: 4,
+      overflow: "hidden",
+    }}>
+      {(["asm", "hex"] as const).map((m, i) => {
+        const active = m === props.mode;
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => props.onChange(m)}
+            style={{
+              padding: "3px 10px",
+              background: active ? C.accent : "transparent",
+              color: active ? "#fff" : C.textMuted,
+              border: "none",
+              borderLeft: i > 0 ? `1px solid ${C.border}` : "none",
+              fontFamily: mono, fontSize: 10,
+              fontWeight: active ? 600 : 400,
+              cursor: "pointer",
+            }}
+          >{m}</button>
+        );
+      })}
     </div>
   );
 }

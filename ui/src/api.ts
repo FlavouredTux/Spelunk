@@ -2,6 +2,79 @@ import type {
   BinaryInfo, FunctionInfo, ViewKind, Xrefs, Annotations, StringEntry, Arities,
 } from "./types";
 
+// ---------- Renderer-side result cache ------------------------------------
+//
+// Every UI gesture used to spawn a fresh `ember` process via IPC, which
+// re-loaded the entire binary off disk. On a 150 MB PE that's a one- to
+// three-second wall on EVERY tab switch. The fix is two-tier: a
+// promise-cache here in the renderer (zero IPC for repeats), and a
+// matching stdout cache in the Electron main process keyed by binary
+// mtime so even cold renderer cache misses stay snappy as long as the
+// binary hasn't been rebuilt.
+//
+// Entries are Promises rather than resolved values so concurrent
+// duplicate requests dedupe to a single underlying CLI call (matters
+// during route changes that fire multiple effects).
+
+class Lru<K, V> {
+  private m = new Map<K, V>();
+  constructor(private cap: number) {}
+  get(k: K): V | undefined {
+    const v = this.m.get(k);
+    if (v === undefined) return undefined;
+    // Bubble to most-recent position. Map iteration order = insertion
+    // order, so re-insert on hit.
+    this.m.delete(k);
+    this.m.set(k, v);
+    return v;
+  }
+  set(k: K, v: V): void {
+    if (this.m.has(k)) this.m.delete(k);
+    this.m.set(k, v);
+    while (this.m.size > this.cap) {
+      const first = this.m.keys().next().value as K | undefined;
+      if (first === undefined) break;
+      this.m.delete(first);
+    }
+  }
+  delete(k: K): boolean { return this.m.delete(k); }
+  clear(): void { this.m.clear(); }
+  get size(): number { return this.m.size; }
+}
+
+// Sized to comfortably hold a session's worth of (function × view)
+// browsing on a multi-thousand-function binary (5 views × ~100 functions
+// before LRU eviction kicks in).
+const FUNC_CACHE = new Lru<string, Promise<string>>(512);
+let SUMMARY_PROMISE:  Promise<BinaryInfo>    | null = null;
+let XREFS_PROMISE:    Promise<Xrefs>         | null = null;
+let STRINGS_PROMISE:  Promise<StringEntry[]> | null = null;
+let ARITIES_PROMISE:  Promise<Arities>       | null = null;
+
+// Drop everything cached. Call when:
+//   - a new binary is opened (results are per-binary)
+//   - annotations change (renames flow into pseudo-C output, so cached
+//     pre-rename text is stale)
+//   - a manual "refresh" gesture
+export function clearRendererCaches(): void {
+  FUNC_CACHE.clear();
+  SUMMARY_PROMISE = null;
+  XREFS_PROMISE   = null;
+  STRINGS_PROMISE = null;
+  ARITIES_PROMISE = null;
+}
+
+// Promise-cache wrapper that evicts on rejection so a transient error
+// (binary momentarily absent during rebuild, etc.) doesn't pin a stale
+// failure forever.
+function memoOnce<T>(get: () => Promise<T>, set: (p: Promise<T> | null) => void,
+                    cur: Promise<T> | null): Promise<T> {
+  if (cur) return cur;
+  const p = get().catch((e) => { set(null); throw e; });
+  set(p);
+  return p;
+}
+
 export async function pickBinary(): Promise<string | null> {
   return await window.ember.pick();
 }
@@ -15,12 +88,21 @@ export async function getRecents(): Promise<string[]> {
 }
 
 export async function loadSummary(): Promise<BinaryInfo> {
-  const path = (await window.ember.binary()) ?? "";
-  const raw = await window.ember.run([]);
-  return parseSummary(raw, path);
+  return memoOnce<BinaryInfo>(
+    async () => {
+      const path = (await window.ember.binary()) ?? "";
+      const raw = await window.ember.run([]);
+      return parseSummary(raw, path);
+    },
+    (p) => { SUMMARY_PROMISE = p; },
+    SUMMARY_PROMISE,
+  );
 }
 
 export async function loadFunction(sym: string, view: ViewKind): Promise<string> {
+  const key = `${view}|${sym}`;
+  const hit = FUNC_CACHE.get(key);
+  if (hit) return hit;
   const args: Record<ViewKind, string[]> = {
     pseudo: ["-p", "-s", sym],
     asm:    ["-d", "-s", sym],
@@ -28,10 +110,23 @@ export async function loadFunction(sym: string, view: ViewKind): Promise<string>
     ir:     ["-i", "-s", sym],
     ssa:    ["-i", "--ssa", "-s", sym],
   };
-  return await window.ember.run(args[view]);
+  const p = window.ember.run(args[view]).catch((e) => {
+    FUNC_CACHE.delete(key);
+    throw e;
+  });
+  FUNC_CACHE.set(key, p);
+  return p;
 }
 
 export async function loadXrefs(): Promise<Xrefs> {
+  return memoOnce<Xrefs>(
+    () => loadXrefsImpl(),
+    (p) => { XREFS_PROMISE = p; },
+    XREFS_PROMISE,
+  );
+}
+
+async function loadXrefsImpl(): Promise<Xrefs> {
   const raw = await window.ember.run(["--xrefs"]);
   const callers: Record<number, number[]> = {};
   const callees: Record<number, number[]> = {};
@@ -50,6 +145,14 @@ export async function loadXrefs(): Promise<Xrefs> {
 }
 
 export async function loadStrings(): Promise<StringEntry[]> {
+  return memoOnce<StringEntry[]>(
+    () => loadStringsImpl(),
+    (p) => { STRINGS_PROMISE = p; },
+    STRINGS_PROMISE,
+  );
+}
+
+async function loadStringsImpl(): Promise<StringEntry[]> {
   const raw = await window.ember.run(["--strings"]);
   const out: StringEntry[] = [];
   for (const line of raw.split("\n")) {
@@ -70,6 +173,14 @@ export async function loadStrings(): Promise<StringEntry[]> {
 }
 
 export async function loadArities(): Promise<Arities> {
+  return memoOnce<Arities>(
+    () => loadAritiesImpl(),
+    (p) => { ARITIES_PROMISE = p; },
+    ARITIES_PROMISE,
+  );
+}
+
+async function loadAritiesImpl(): Promise<Arities> {
   const raw = await window.ember.run(["--arities"]);
   const out: Arities = {};
   for (const line of raw.split("\n")) {

@@ -15,6 +15,7 @@ import { EditDialog } from "./components/EditDialog";
 import {
   loadSummary, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
+  clearRendererCaches,
   displayName, demangle,
 } from "./api";
 import type {
@@ -141,6 +142,8 @@ export default function App() {
         if (!p) { setLoading(false); return; }
         binaryPath = p;
       }
+      // New binary → previous binary's cached results are stale.
+      clearRendererCaches();
       const summary = await loadSummary();
       setInfo(summary);
       // Strings are lazy; see stringsLoading below.
@@ -297,6 +300,11 @@ export default function App() {
   // Annotation mutations
   const writeAnnotations = useCallback(async (a: Annotations) => {
     setAnnotations(a);
+    // Renames and signature changes flow into pseudo-C output via the
+    // CLI's --annotations file, so cached function bodies are stale
+    // after any mutation. Drop them so the next view reload picks up
+    // the fresh names.
+    clearRendererCaches();
     if (info) await saveAnnotations(info.path, a).catch(() => {});
   }, [info]);
 

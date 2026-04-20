@@ -50,6 +50,35 @@ function runEmber(args) {
   });
 }
 
+// ----- ember:run result cache --------------------------------------------
+//
+// Each ember CLI invocation re-loads the binary off disk, re-parses
+// headers/sections/symbols, and runs the requested analysis. On a
+// 150 MB PE that's seconds of latency on every UI tab switch. Cache
+// stdout keyed by (binary path, binary mtime, annotations file mtime,
+// args) so repeat queries skip the spawn entirely. Mtime comparison
+// invalidates the cache automatically when the user rebuilds the
+// binary or commits annotation changes.
+
+const RUN_CACHE     = new Map();   // key → stdout string
+const RUN_CACHE_CAP = 200;          // entries; bound memory on giant inputs
+const RUN_INFLIGHT  = new Map();   // key → in-flight Promise (dedup concurrent)
+
+async function safeMtime(p) {
+  if (!p) return 0;
+  try { return (await fs.stat(p)).mtimeMs; }
+  catch { return 0; }
+}
+
+function lruTouch(map, key, value) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > RUN_CACHE_CAP) {
+    const first = map.keys().next().value;
+    map.delete(first);
+  }
+}
+
 function sanitize(p) {
   return p.replace(/[^a-zA-Z0-9.-]/g, "_");
 }
@@ -118,8 +147,27 @@ ipcMain.handle("ember:run", async (_e, args) => {
   if (!state.binary) throw new Error("no binary selected");
   if (!Array.isArray(args)) throw new Error("args must be array");
   const annPath = await writeCliAnnotations(state.binary);
+
+  const binMtime = await safeMtime(state.binary);
+  const annMtime = await safeMtime(annPath);
+  // Embed mtimes in the key. When the binary or annotations change,
+  // the new key won't hit prior entries — they fall out via LRU.
+  const key = `${state.binary}|${binMtime}|${annMtime}|${args.join("\x00")}`;
+
+  if (RUN_CACHE.has(key)) {
+    const v = RUN_CACHE.get(key);
+    lruTouch(RUN_CACHE, key, v);   // bubble to MRU
+    return v;
+  }
+  // Concurrent identical requests — coalesce to a single spawn.
+  if (RUN_INFLIGHT.has(key)) return RUN_INFLIGHT.get(key);
+
   const extra = annPath ? ["--annotations", annPath] : [];
-  return runEmber([...args, ...extra, state.binary]);
+  const p = runEmber([...args, ...extra, state.binary])
+    .then((out) => { lruTouch(RUN_CACHE, key, out); return out; })
+    .finally(() => { RUN_INFLIGHT.delete(key); });
+  RUN_INFLIGHT.set(key, p);
+  return p;
 });
 
 ipcMain.handle("ember:binary", async () => state.binary);

@@ -104,11 +104,12 @@ export async function loadFunction(sym: string, view: ViewKind): Promise<string>
   const hit = FUNC_CACHE.get(key);
   if (hit) return hit;
   const args: Record<ViewKind, string[]> = {
-    pseudo: ["-p", "-s", sym],
-    asm:    ["-d", "-s", sym],
-    cfg:    ["-c", "-s", sym],
-    ir:     ["-i", "-s", sym],
-    ssa:    ["-i", "--ssa", "-s", sym],
+    pseudo:    ["-p", "-s", sym],
+    asm:       ["-d", "-s", sym],
+    cfg:       ["-c", "-s", sym],
+    cfgPseudo: ["--cfg-pseudo", "-s", sym],
+    ir:        ["-i", "-s", sym],
+    ssa:       ["-i", "--ssa", "-s", sym],
   };
   const p = window.ember.run(args[view]).catch((e) => {
     FUNC_CACHE.delete(key);

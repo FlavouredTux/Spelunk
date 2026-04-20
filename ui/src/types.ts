@@ -17,7 +17,10 @@ export type BinaryInfo = {
   imports: FunctionInfo[];
 };
 
-export type ViewKind = "pseudo" | "asm" | "cfg" | "ir" | "ssa";
+// `cfg` and `cfgPseudo` differ only in body content — both render in
+// the graph view. The CfgGraph component owns a toggle that switches
+// between them.
+export type ViewKind = "pseudo" | "asm" | "cfg" | "cfgPseudo" | "ir" | "ssa";
 
 export type ParamSig = {
   type: string;    // e.g. "const char *"

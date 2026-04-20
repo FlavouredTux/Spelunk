@@ -32,6 +32,16 @@ export default function App() {
   const [info, setInfo] = useState<BinaryInfo | null>(null);
   const [current, setCurrent] = useState<FunctionInfo | null>(null);
   const [view, setView] = useState<ViewKind>("pseudo");
+  // CFG view sub-mode: "pseudo" renders Ember's per-block pseudo-C
+  // inside each node, "asm" renders raw disasm. Pseudo is the default
+  // because most users want to see what the code does, not the byte-
+  // level encoding; the toggle in the bottom-right of the graph
+  // switches modes per-binary-session.
+  const [cfgMode, setCfgMode] = useState<"pseudo" | "asm">("pseudo");
+  // Effective view used for fetching: when on the CFG tab, choose the
+  // backend route based on the sub-mode toggle.
+  const fetchView: ViewKind =
+    view === "cfg" ? (cfgMode === "pseudo" ? "cfgPseudo" : "cfg") : view;
   const [code, setCode] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -277,19 +287,19 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, navBack, navForward, current]);
 
-  // Load code whenever selection or view changes
+  // Load code whenever selection or view (or CFG sub-mode) changes.
   useEffect(() => {
     if (!current || !info) return;
     let cancel = false;
     setLoading(true);
     setError(null);
     setCode("");
-    loadFunction(current.name, view)
+    loadFunction(current.name, fetchView)
       .then((text) => { if (!cancel) setCode(text); })
       .catch((e) => { if (!cancel) setError(e?.message ?? String(e)); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [current, view, info]);
+  }, [current, fetchView, info]);
 
   const onXref = useCallback((addr: number) => {
     if (!info) return;
@@ -469,7 +479,13 @@ export default function App() {
               >{error}</div>
             </div>
           ) : view === "cfg" ? (
-            <CfgGraph text={code} onXref={onXref} fnAddrByName={fnAddrByName} />
+            <CfgGraph
+              text={code}
+              onXref={onXref}
+              fnAddrByName={fnAddrByName}
+              mode={cfgMode}
+              onModeChange={setCfgMode}
+            />
           ) : (
             <CodeView
               text={code}

@@ -35,6 +35,17 @@ format_disasm_range(const Binary& b, addr_t start, addr_t end);
 Result<std::string>
 format_cfg(const Binary& b, const FuncWindow& w);
 
+// CFG view with each block's body rendered as pseudo-C statements
+// (PseudoCEmitter::emit_per_block) instead of raw disasm. Output uses
+// the same `bb_<addr>:` / `-> bb_xxx (label)` framing as `format_cfg`
+// so a single CFG parser handles both modes — only the body lines
+// differ. Annotations / hash-name / RTTI / Win64-vs-SysV ABI all flow
+// through the same way they do for `format_struct`.
+Result<std::string>
+format_cfg_pseudo(const Binary& b, const FuncWindow& w,
+                  const Annotations* ann = nullptr,
+                  EmitOptions options = {});
+
 Result<std::string>
 format_struct(const Binary& b, const FuncWindow& w,
               bool pseudo, const Annotations* ann,

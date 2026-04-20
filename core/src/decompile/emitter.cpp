@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <ember/analysis/arity.hpp>
+#include <ember/analysis/cfg_util.hpp>
 #include <ember/analysis/demangle.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
@@ -1675,6 +1676,12 @@ struct Emitter {
 
     void emit_region(const Region& r, int depth, std::string& out) const;
     void emit_block(addr_t block_addr, int depth, std::string& out) const;
+    // Renders the trailing summary line for a block when its kind
+    // implies one — the conditional / switch test, the return value,
+    // or an explicit `goto *...` for indirect jumps. Plain
+    // unconditional / fallthrough blocks emit nothing here; their
+    // successor edge is enough for the consumer.
+    void emit_block_terminator(const IrBlock& bb, int depth, std::string& out) const;
 
     // ===== Flag-pattern simplification =====
     // Maps compiler idioms from CMP/SUB + Jcc into direct C compare expressions.
@@ -2444,6 +2451,76 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     flush_args_as_intrinsics();
 }
 
+void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
+                                    std::string& out) const {
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+
+    // Find the block's explicit IR terminator (last non-Nop instruction
+    // with a control-flow op). Terminators are normally the very last
+    // entry but Phi/Nop padding can sit after them in some passes.
+    const IrInst* term = nullptr;
+    for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
+        const auto op = it->op;
+        if (op == IrOp::Branch         || op == IrOp::CondBranch ||
+            op == IrOp::BranchIndirect || op == IrOp::Return     ||
+            op == IrOp::Unreachable) { term = &*it; break; }
+    }
+
+    switch (bb.kind) {
+        case BlockKind::Return: {
+            if (term && term->op == IrOp::Return && term->src_count > 0) {
+                // Reuse the return-fold table populated during region
+                // analysis — when a call directly feeds the return,
+                // `fold_return_expr` carries the rendered call expr.
+                if (auto k = ssa_key(term->srcs[0]); k) {
+                    auto f = fold_return_expr.find(*k);
+                    if (f != fold_return_expr.end()) {
+                        out += std::format("{}return {};\n", ind, f->second);
+                        break;
+                    }
+                }
+                out += std::format("{}return {};\n", ind, expr(term->srcs[0]));
+            } else {
+                out += std::format("{}return;\n", ind);
+            }
+            break;
+        }
+        case BlockKind::Conditional: {
+            if (term && term->op == IrOp::CondBranch && term->src_count > 0) {
+                out += std::format("{}if ({})\n", ind, expr(term->srcs[0]));
+            } else {
+                out += std::format("{}if (?)\n", ind);
+            }
+            break;
+        }
+        case BlockKind::Switch: {
+            if (bb.switch_index != Reg::None) {
+                out += std::format("{}switch ({})\n", ind,
+                                   reg_name(bb.switch_index));
+            } else {
+                out += std::format("{}switch (?)\n", ind);
+            }
+            break;
+        }
+        case BlockKind::IndirectJmp: {
+            if (term && term->op == IrOp::BranchIndirect && term->src_count > 0) {
+                out += std::format("{}goto *{};\n", ind, expr(term->srcs[0]));
+            } else {
+                out += std::format("{}goto *(?);\n", ind);
+            }
+            break;
+        }
+        // Unconditional / Fallthrough / TailCall: no extra summary line.
+        // The successor edge tells the consumer where execution goes,
+        // and tail-calls already render a `tgt(args)` from emit_block
+        // via the lifter's call+return rewrite.
+        case BlockKind::Unconditional:
+        case BlockKind::Fallthrough:
+        case BlockKind::TailCall:
+            break;
+    }
+}
+
 void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
 
@@ -2976,6 +3053,158 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             cleaned += '\n';
         }
         out = std::move(cleaned);
+    }
+
+    return out;
+}
+
+Result<std::string>
+PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
+                               const Binary* binary,
+                               const Annotations* annotations,
+                               EmitOptions options) const {
+    if (!sf.ir) {
+        return std::unexpected(Error::invalid_format(
+            "pseudo-c per-block: StructuredFunction has no IR"));
+    }
+
+    // Setup mirrors emit() — same ABI plumbing, same ObjC / RTTI lookup,
+    // same per-emit signature inference. We deliberately skip the
+    // body-tree walks (suppress_canary_regions / analyze_return_folds /
+    // collect_for_updates) since per-block output has no structured body
+    // to reason about.
+    Emitter e;
+    e.binary      = binary;
+    e.annotations = annotations;
+    e.options     = options;
+    e.abi         = binary
+        ? abi_for(binary->format(), binary->arch())
+        : Abi::SysVAmd64;
+
+    std::map<addr_t, std::string> local_selrefs;
+    std::map<addr_t, std::string> local_classrefs;
+    std::vector<ObjcMethod>       local_objc_methods;
+    std::map<addr_t, std::string> local_rtti_methods;
+    if (binary && binary->format() == Format::MachO) {
+        if (!e.options.objc_selrefs) {
+            local_selrefs = parse_objc_selrefs(*binary);
+            if (!local_selrefs.empty()) e.options.objc_selrefs = &local_selrefs;
+        }
+        if (!e.options.objc_classrefs) {
+            local_classrefs = parse_objc_classrefs(*binary);
+            if (!local_classrefs.empty()) e.options.objc_classrefs = &local_classrefs;
+        }
+        local_objc_methods = parse_objc_methods(*binary);
+        for (const auto& m : local_objc_methods) {
+            if (m.imp != 0) e.objc_by_imp.emplace(m.imp, &m);
+        }
+        if (!e.options.rtti_methods) {
+            local_rtti_methods = rtti_method_names(parse_itanium_rtti(*binary));
+            if (!local_rtti_methods.empty()) {
+                e.options.rtti_methods = &local_rtti_methods;
+            }
+        }
+        for (const auto& s : binary->sections()) {
+            const std::string_view n = s.name;
+            if (n == "__cfstring" || n.ends_with(",__cfstring")) {
+                e.cfstring_lo = static_cast<addr_t>(s.vaddr);
+                e.cfstring_hi = static_cast<addr_t>(s.vaddr + s.size);
+                break;
+            }
+        }
+    } else if (binary && binary->format() == Format::Pe) {
+        if (!e.options.rtti_methods) {
+            local_rtti_methods = rtti_method_names(parse_msvc_rtti(*binary));
+            if (!local_rtti_methods.empty()) {
+                e.options.rtti_methods = &local_rtti_methods;
+            }
+        }
+    }
+
+    bool has_user_sig = false;
+    if (annotations) {
+        if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
+            e.self_arity = static_cast<u8>(std::min<std::size_t>(sig->params.size(), 6));
+            has_user_sig = true;
+        }
+    }
+    if (e.self_arity == 0) {
+        e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
+    }
+    e.analyze(*sf.ir);
+    if (!has_user_sig) e.bump_arity_from_body_reads();
+    if (!has_user_sig) e.infer_charp_args();
+    e.bind_call_returns();
+
+    // Output mirrors format_cfg's framing — same `bb_<addr>` headers,
+    // same `<-` predecessor list, same `-> bb_xxx (label)` arrows — so
+    // any consumer parsing the asm CFG view (UI, scripts) parses this
+    // identically up to the body content swap.
+    std::string out;
+    out += std::format("// {}\n", sf.ir->name.empty()
+                                    ? std::string("<unknown>") : sf.ir->name);
+    out += std::format("//   per-block pseudo-C ({} blocks)\n",
+                       sf.ir->blocks.size());
+
+    const auto rpo = compute_rpo(*sf.ir);
+    for (addr_t ba : rpo) {
+        auto it = sf.ir->block_at.find(ba);
+        if (it == sf.ir->block_at.end()) continue;
+        const auto& bb = sf.ir->blocks[it->second];
+
+        std::string header = std::format("\nbb_{:x}", bb.start);
+        if (bb.start == sf.ir->start) header += "  (entry)";
+        if (!bb.predecessors.empty()) {
+            header += "  <-";
+            for (addr_t p : bb.predecessors) header += std::format(" bb_{:x}", p);
+        }
+        out += header + ":\n";
+
+        e.emit_block(bb.start, 1, out);
+        e.emit_block_terminator(bb, 1, out);
+
+        // Successor arrows — copy the format used by append_function_text
+        // in pipeline.cpp's `format_cfg` so a single CFG parser handles
+        // both rendering modes.
+        switch (bb.kind) {
+            case BlockKind::Return:
+                out += "  -> <return>\n";
+                break;
+            case BlockKind::TailCall:
+                if (!bb.successors.empty())
+                    out += std::format("  -> bb_{:x}  (tail-call)\n",
+                                       bb.successors[0]);
+                break;
+            case BlockKind::Conditional:
+                if (bb.successors.size() >= 2) {
+                    out += std::format("  -> bb_{:x}  (taken)\n", bb.successors[0]);
+                    out += std::format("  -> bb_{:x}  (fallthrough)\n",
+                                       bb.successors[1]);
+                } else if (bb.successors.size() == 1) {
+                    out += std::format("  -> bb_{:x}  (fallthrough)\n",
+                                       bb.successors[0]);
+                }
+                break;
+            case BlockKind::Unconditional:
+            case BlockKind::Fallthrough:
+                if (!bb.successors.empty())
+                    out += std::format("  -> bb_{:x}\n", bb.successors[0]);
+                break;
+            case BlockKind::IndirectJmp:
+                out += "  -> <indirect>\n";
+                break;
+            case BlockKind::Switch: {
+                const std::size_t ncases = bb.case_values.size();
+                for (std::size_t i = 0; i < ncases && i < bb.successors.size(); ++i) {
+                    out += std::format("  -> bb_{:x}  (case {})\n",
+                                       bb.successors[i], bb.case_values[i]);
+                }
+                if (bb.has_default && !bb.successors.empty())
+                    out += std::format("  -> bb_{:x}  (default)\n",
+                                       bb.successors.back());
+                break;
+            }
+        }
     }
 
     return out;

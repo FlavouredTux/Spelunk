@@ -334,6 +334,39 @@ format_cfg(const Binary& b, const FuncWindow& w) {
 }
 
 Result<std::string>
+format_cfg_pseudo(const Binary& b, const FuncWindow& w,
+                  const Annotations* ann, EmitOptions options) {
+    const X64Decoder dec;
+    const CfgBuilder builder(b, dec);
+    auto fn_r = builder.build(w.start, w.label);
+    if (!fn_r) return std::unexpected(fn_r.error());
+
+    const X64Lifter lifter{abi_for(b.format(), b.arch())};
+    auto ir_r = lifter.lift(*fn_r);
+    if (!ir_r) return std::unexpected(ir_r.error());
+
+    const SsaBuilder ssa;
+    if (auto rv = ssa.convert(*ir_r); !rv) return std::unexpected(rv.error());
+    if (auto rv = run_cleanup(*ir_r); !rv) return std::unexpected(rv.error());
+
+    // Bypass the structurer entirely. Per-block emission needs the SSA-
+    // cleaned IR but explicitly does NOT want regions collapsing block
+    // boundaries — that's the whole point of the per-bb view.
+    // StructuredFunction holds a non-owning raw IR pointer; the IR
+    // itself stays in the local `ir` value for the lifetime of the
+    // emit call.
+    IrFunction ir = std::move(*ir_r);
+    StructuredFunction sf;
+    sf.ir   = &ir;
+    sf.body = nullptr;
+
+    const PseudoCEmitter emitter;
+    auto c_r = emitter.emit_per_block(sf, &b, ann, options);
+    if (!c_r) return std::unexpected(c_r.error());
+    return std::move(*c_r);
+}
+
+Result<std::string>
 format_struct(const Binary& b, const FuncWindow& w,
               bool pseudo, const Annotations* ann,
               EmitOptions options) {

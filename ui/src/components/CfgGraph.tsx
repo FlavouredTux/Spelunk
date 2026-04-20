@@ -57,10 +57,15 @@ function parseCfg(text: string): { blocks: CfgBlock[]; entry: string | null } {
 
   const header = /^(bb_[0-9a-f]+)\s*(\(entry\))?\s*(?:<-\s*([^:]+?))?\s*:\s*$/;
   const succ   = /^\s+->\s+(bb_[0-9a-f]+|<[^>]+>)(?:\s+\((.+?)\))?\s*$/;
-  // "  0x0000000000401120  83 ff 05                        cmp edi, 0x5"
-  //   ↓
-  // addr=401120, bytes="83 ff 05", disasm="cmp edi, 0x5"
+  // Asm-body line:
+  //   "  0x0000000000401120  83 ff 05                        cmp edi, 0x5"
+  //   → addr=401120, bytes="83 ff 05", disasm="cmp edi, 0x5"
   const inst   = /^\s+0x([0-9a-f]+)\s+((?:[0-9a-f]{2}\s+)+)(.*\S)\s*$/;
+  // Pseudo-body line: any other indented non-arrow text. The cfg-pseudo
+  // emitter doesn't carry per-line VAs (block scope is enough), so we
+  // just keep the source line verbatim and let the syntax highlighter
+  // colour it.
+  const pseudoInst = /^\s{2,}(\S.*\S?)\s*$/;
 
   for (const raw of rawLines) {
     const l = raw.replace(/\r$/, "");
@@ -94,6 +99,15 @@ function parseCfg(text: string): { blocks: CfgBlock[]; entry: string | null } {
     if (m2 && cur) {
       const shortAddr = m2[1].replace(/^0+/, "") || "0";
       cur.insts.push({ addr: shortAddr, text: m2[3] });
+      continue;
+    }
+    // Pseudo-body fallback. The `cur` check naturally excludes the
+    // file-preamble comments (which appear before any block opens);
+    // in-block comments (landing-pad / EH notes from emit_block) are
+    // kept verbatim as body lines.
+    const pm = pseudoInst.exec(l);
+    if (pm && cur) {
+      cur.insts.push({ addr: "", text: pm[1] });
     }
   }
   if (cur) {
@@ -415,9 +429,13 @@ const Node = memo(function Node(props: {
               >
                 {shown.map((ins, i) => (
                   <div key={i} style={{ display: "flex", gap: 8 }}>
-                    <span style={{ color: C.textFaint, flexShrink: 0, opacity: 0.7 }}>
-                      {ins.addr.padStart(5, " ")}
-                    </span>
+                    {/* Pseudo lines have no per-instruction VA, so the
+                        gutter would just be empty space — hide it. */}
+                    {ins.addr && (
+                      <span style={{ color: C.textFaint, flexShrink: 0, opacity: 0.7 }}>
+                        {ins.addr.padStart(5, " ")}
+                      </span>
+                    )}
                     <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
                       {highlightLine(ins.text, onXref ?? noop, fnAddrByName)}
                     </span>
@@ -444,7 +462,7 @@ const Node = memo(function Node(props: {
             >
               {shown.map((ins, i) => (
                 <tspan key={i} x={PAD} dy={i === 0 ? 0 : LINE_H}>
-                  {truncate(`${ins.addr}  ${ins.text}`, 38)}
+                  {truncate(ins.addr ? `${ins.addr}  ${ins.text}` : ins.text, 42)}
                 </tspan>
               ))}
               {extra > 0 && (
@@ -610,6 +628,12 @@ export function CfgGraph(props: {
   text: string;
   onXref?: (addr: number) => void;
   fnAddrByName?: Map<string, number>;
+  // Sub-mode toggle: "pseudo" → bodies are Ember pseudo-C statements,
+  // "asm" → raw disasm. Owned by the parent so the cached fetch result
+  // sticks to the right backend route. Optional for back-compat with
+  // older mounts that don't surface the toggle.
+  mode?: "pseudo" | "asm";
+  onModeChange?: (m: "pseudo" | "asm") => void;
 }) {
   const parsed = useMemo(() => {
     const raw = parseCfg(props.text);
@@ -856,14 +880,56 @@ export function CfgGraph(props: {
         <LegendSwatch color={C.violet}    label="indirect" />
         <LegendSwatch color={C.textFaint} label="fallthrough" dashed />
       </div>
+      {/* Mode toggle + zoom indicator. Two pills sharing the bottom-right
+          corner; toggling re-fetches via the parent's effect, which
+          hits the renderer cache on second visit. */}
       <div style={{
         position: "absolute", bottom: 10, right: 12,
-        padding: "6px 10px",
-        background: C.bgAlt, border: `1px solid ${C.border}`, borderRadius: 4,
-        fontFamily: mono, fontSize: 9, color: C.textFaint,
-        pointerEvents: "none",
+        display: "flex", gap: 6, alignItems: "center",
+        fontFamily: mono, fontSize: 9,
       }}>
-        {parsed.blocks.length} blocks · {Math.round(displayScale * 100)}%
+        {props.onModeChange && (
+          <div
+            style={{
+              display: "flex",
+              background: C.bgAlt,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              overflow: "hidden",
+            }}
+          >
+            {(["pseudo", "asm"] as const).map((m) => {
+              const active = (props.mode ?? "pseudo") === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => props.onModeChange?.(m)}
+                  title={m === "pseudo"
+                    ? "Render each block as Ember pseudo-C statements"
+                    : "Render each block as raw x86 disassembly"}
+                  style={{
+                    padding: "5px 9px",
+                    background: active ? C.bgMuted : "transparent",
+                    color:      active ? C.text    : C.textMuted,
+                    border:     "none",
+                    borderRight: m === "pseudo" ? `1px solid ${C.border}` : "none",
+                    fontFamily: mono,
+                    fontSize:   9,
+                    fontWeight: active ? 600 : 400,
+                    cursor:     "pointer",
+                  }}
+                >{m}</button>
+              );
+            })}
+          </div>
+        )}
+        <div style={{
+          padding: "6px 10px",
+          background: C.bgAlt, border: `1px solid ${C.border}`, borderRadius: 4,
+          color: C.textFaint, pointerEvents: "none",
+        }}>
+          {parsed.blocks.length} blocks · {Math.round(displayScale * 100)}%
+        </div>
       </div>
     </div>
   );

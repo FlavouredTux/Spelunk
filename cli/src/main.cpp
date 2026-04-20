@@ -97,6 +97,7 @@ struct Args {
     bool objc_protos = false;       // dump ObjC protocol signatures
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool vm_detect = false;         // scan for interpreter-style VM dispatchers
+    bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool help   = false;
 };
 
@@ -131,6 +132,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--objc-protocols", &Args::objc_protos},
     {"",   "--rtti",     &Args::rtti},
     {"",   "--vm-detect", &Args::vm_detect},
+    {"",   "--cfg-pseudo", &Args::cfg_pseudo},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -286,6 +288,23 @@ int run_cfg(const ember::Binary& b, std::string_view symbol) {
         return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
     auto out = ember::format_cfg(b, *win);
+    if (!out) {
+        std::println(stderr, "ember: {}: {}",
+                     out.error().kind_name(), out.error().message);
+        return EXIT_FAILURE;
+    }
+    std::print("{}", *out);
+    return EXIT_SUCCESS;
+}
+
+int run_cfg_pseudo(const ember::Binary& b, std::string_view symbol,
+                   const ember::Annotations* ann,
+                   ember::EmitOptions opts) {
+    auto win = ember::resolve_function(b, symbol);
+    if (!win) {
+        return EXIT_FAILURE;
+    }
+    auto out = ember::format_cfg_pseudo(b, *win, ann, opts);
     if (!out) {
         std::println(stderr, "ember: {}: {}",
                      out.error().kind_name(), out.error().message);
@@ -1043,7 +1062,8 @@ void print_help() {
     std::println("usage: ember [-d|-c|-i|--ssa|-O|--struct|-p] [-s SYMBOL] <binary>");
     std::println("");
     std::println("  -d, --disasm         linear disassembly of a function");
-    std::println("  -c, --cfg            control-flow graph of a function");
+    std::println("  -c, --cfg            control-flow graph of a function (asm bodies)");
+    std::println("      --cfg-pseudo     control-flow graph of a function (pseudo-C bodies)");
     std::println("  -i, --ir             lifted IR of a function");
     std::println("      --ssa            IR in SSA form (implies -i)");
     std::println("  -O, --opt            run cleanup passes (implies --ssa)");
@@ -1373,6 +1393,9 @@ int main(int argc, char** argv) {
     }
     if (args.ir) {
         return run_ir(b, args.symbol, args.ssa, args.opt);
+    }
+    if (args.cfg_pseudo) {
+        return run_cfg_pseudo(b, args.symbol, ann_ptr, emit_opts);
     }
     if (args.cfg) {
         return run_cfg(b, args.symbol);

@@ -48,13 +48,31 @@ sub_140001260 → RunUinputDaemon
 a1 → argc
 a2 → argv
 local_248 → line_buf
+r_sub_434050 → io
+r_sub_4309b0 → style
+r_sub_34b3b0 → should_close
 \`\`\`
 
 The UI parses only this block; rename suggestions outside it are ignored.
 
+**Don't stop at \`a1 → argc\`.** Trivial renames are not the goal —
+substantive ones are. Whenever you see \`u64 r_sub_<hex> = NamedCall(...)\`,
+the result holder is begging for a semantic name (\`io\`, \`style\`, \`fd\`,
+\`should_close\`, \`game_ok\`). Same for \`local_<hex>\` whose role is
+visible from how it's used. If you only suggest renames for the args
+of a function whose purpose is clear, you're leaving the most useful
+ones on the table.
+
 **The function's name is the identifier in the function header**, not its entry-block address. If the snippet starts with \`// main\\nu64 main(...)\` then the function is \`main\` — your rename row must read \`main → ...\`, not \`sub_1260 → ...\`. Only use \`sub_<hex>\` form when the snippet's function header literally says \`sub_<hex>\` (i.e. the function had no recovered name). The same applies inside callees: refer to a callee by the name shown at its call site (\`fopen\`, \`strtok_r\`, \`SomeNamedFunction\`), not by an inferred address.
 
-Don't suggest renames for register-suffixed temps (\`r12_5\`, \`rdi_333\`) — those are SSA versions of registers, not user-renameable identifiers. Stick to \`sub_<addr>\` (only when the function lacks a name), \`a1\`/\`a2\`/..., \`local_<hex>\`, and \`g_<name>\` for globals the snippet explicitly references.
+Renameable identifiers fall into these buckets:
+- \`sub_<addr>\` — only when the function header literally shows that, i.e. the function lacks a recovered name.
+- \`a1\` / \`a2\` / ... — argument slots whose role is evident from how they're consumed.
+- \`local_<hex>\` — stack locals; rename when their use makes the role clear.
+- \`r_sub_<hex>\` — the SSA holder for a *named* call's return value (e.g. \`u64 r_sub_434050 = ImGui::GetIO();\`). Rename to the value the named call returns (\`io\`, \`style\`, \`fd\`, \`should_close\`).
+- \`g_<name>\` — globals the snippet explicitly references.
+
+Do **not** rename register-suffixed temps (\`r12_5\`, \`rdi_333\`, \`rax_42\`) — those are SSA versions of raw registers, not user-renameable identifiers. The \`r_sub_<hex>\` form is different: it holds a named call's result and *is* renameable.
 
 ## Output shape
 
@@ -97,7 +115,10 @@ export const QUICK_ACTIONS: { id: string; label: string; prompt: string }[] = [
     id: "rename",
     label: "Suggest names",
     prompt:
-      "Suggest a name for this function and for any unnamed args / locals whose role is evident from the APIs and strings in the body. Return ONLY the renames block — no prose. Omit suggestions you aren't confident in; an empty block is acceptable.",
+      "Suggest renames for this function and every identifier in its body whose role is evident from the calls and strings around it. " +
+      "Walk the body line by line — for every `u64 r_sub_<hex> = NamedCall(...)` line, the holder almost always wants a semantic name from the call's return (e.g. `r_sub_434050 = ImGui::GetIO()` → `io`, `r_sub_34b3b0 = glfwWindowShouldClose(wind)` → `should_close`). Same for `local_<hex>` whose use makes its role obvious. " +
+      "Args (`a1`, `a2`, ...) are easy targets but don't stop at them — those alone are a weak suggestion list. " +
+      "Return ONLY the renames block, no prose. An empty block is fine if literally nothing has a clear role; otherwise the block should have several entries.",
   },
   {
     id: "algorithm",

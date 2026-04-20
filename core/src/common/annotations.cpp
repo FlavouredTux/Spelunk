@@ -44,6 +44,10 @@ split(std::string_view s, char delim) {
     return true;
 }
 
+[[nodiscard]] bool parse_hex_u64(std::string_view s, u64& out) noexcept {
+    return parse_hex_addr(s, out);  // same wire format as addr_t
+}
+
 }  // namespace
 
 Result<Annotations>
@@ -112,6 +116,15 @@ Annotations::load(const std::filesystem::path& path) {
             const std::string_view text = trim(rest.substr(sp + 1));
             out.notes[addr] = std::string(text);
         }
+        else if (kind == "const") {
+            const std::size_t sp = rest.find(' ');
+            if (sp == std::string_view::npos) continue;
+            u64 value = 0;
+            if (!parse_hex_u64(rest.substr(0, sp), value)) continue;
+            const std::string_view name = trim(rest.substr(sp + 1));
+            if (name.empty()) continue;
+            out.named_constants[value] = std::string(name);
+        }
     }
 
     return out;
@@ -166,6 +179,9 @@ Annotations::save(const std::filesystem::path& path) const {
     }
     for (const auto& [addr, text] : notes) {
         f << std::format("note {:x} {}\n", addr, escape_note(text));
+    }
+    for (const auto& [value, name] : named_constants) {
+        f << std::format("const {:x} {}\n", value, name);
     }
     if (!f) {
         return std::unexpected(Error::io(std::format(

@@ -386,7 +386,7 @@ void walk_from(const Binary& b, const X64Decoder& dec, WalkState& ws, addr_t ent
     }
 }
 
-void partition(const WalkState& ws, Function& fn) {
+void partition(const Binary& b, const WalkState& ws, Function& fn) {
     for (addr_t leader : ws.leaders) {
         auto it = ws.insns.find(leader);
         if (it == ws.insns.end()) continue;
@@ -434,6 +434,15 @@ void partition(const WalkState& ws, Function& fn) {
                     } else if (auto t = branch_target(insn); t) {
                         bb.kind = BlockKind::Unconditional;
                         bb.successors.push_back(*t);
+                    } else if (auto edges = b.indirect_edges_from(addr);
+                               !edges.empty()) {
+                        // Oracle-resolved indirect jmp. Render as a
+                        // Switch-like block so the structurer sees the
+                        // full successor set; case_values stay empty
+                        // because we have no opcode-to-target mapping
+                        // yet (the CLI flag carries pairs only).
+                        bb.kind = BlockKind::Switch;
+                        bb.successors.assign(edges.begin(), edges.end());
                     } else {
                         bb.kind = BlockKind::IndirectJmp;
                     }
@@ -460,8 +469,8 @@ void partition(const WalkState& ws, Function& fn) {
         fn.blocks.push_back(std::move(bb));
     }
 
-    for (const auto& b : fn.blocks) {
-        if (b.end > fn.end) fn.end = b.end;
+    for (const auto& blk : fn.blocks) {
+        if (blk.end > fn.end) fn.end = blk.end;
     }
 }
 
@@ -536,7 +545,7 @@ CfgBuilder::build(addr_t entry, std::string name) const {
     fn.name         = std::move(name);
     fn.call_targets = std::move(ws.calls);
 
-    partition(ws, fn);
+    partition(binary_, ws, fn);
     compute_predecessors(fn);
 
     return fn;

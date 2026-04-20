@@ -81,6 +81,22 @@ public:
     // matching symbol, preferring a defined one if both exist.
     [[nodiscard]] const Symbol* find_by_name(std::string_view name) const noexcept;
 
+    // ---- Indirect-edge oracle ----------------------------------------
+    // User-populated map: instruction VA of an indirect call/jmp →
+    // concrete target VAs observed at runtime (or otherwise known).
+    // Populated by JS scripts (binary.recordIndirectEdge) or `--trace`
+    // CLI input from a dynamic-instrumentation tool. The CFG builder
+    // consults this when it would otherwise leave the block as
+    // BlockKind::IndirectJmp; if the oracle has entries, it materializes
+    // them as concrete successors so the rest of the pipeline sees a
+    // resolved CFG. The store is per-`Binary` instance, in-memory only
+    // — restart Ember and you start fresh.
+    void record_indirect_edge(addr_t from, addr_t to) const;
+    [[nodiscard]] std::span<const addr_t>
+    indirect_edges_from(addr_t from) const noexcept;
+    [[nodiscard]] std::size_t indirect_edge_count() const noexcept;
+    void clear_indirect_edges() const noexcept;
+
 private:
     // Lazy lookup caches. Built on first call to any of the lookup helpers
     // above; invalidated only by the loader during parse (which the base
@@ -97,6 +113,11 @@ private:
     };
     mutable std::unique_ptr<LookupCaches> caches_;
     const LookupCaches& caches() const;
+
+    // Side-channel populated by the trace-replay surface; deduped on
+    // insertion. Never invalidated by symbol mutations (the oracle keys
+    // off instruction VAs, not symbol identity).
+    mutable std::unordered_map<addr_t, std::vector<addr_t>> indirect_edges_;
 };
 
 [[nodiscard]] Result<std::unique_ptr<Binary>>

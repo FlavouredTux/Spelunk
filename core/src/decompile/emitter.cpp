@@ -1393,6 +1393,18 @@ struct Emitter {
     }
 
     [[nodiscard]] std::string format_imm(const IrValue& v) const {
+        // Annotated constant? Lets users name a hash, magic value, or
+        // sentinel without touching the binary. The original hex stays
+        // in a trailing comment so the user can audit the substitution.
+        // Skip for tiny values where the name would be misleading
+        // (loop bounds, struct offsets etc. are not worth annotating).
+        if (annotations && v.kind == IrValueKind::Imm &&
+            v.imm >= 0 && static_cast<u64>(v.imm) >= 0x10) {
+            const u64 uv = static_cast<u64>(v.imm);
+            if (const std::string* nm = annotations->constant_name_for(uv); nm) {
+                return std::format("{} /* {:#x} */", *nm, uv);
+            }
+        }
         // Float-typed immediates arrive as an i64 bit pattern; decode into
         // a decimal literal so `xmm0 = 0x40490fdb` becomes `3.141593f`.
         if (v.type == IrType::F32) {

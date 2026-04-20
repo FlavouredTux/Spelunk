@@ -22,16 +22,24 @@ struct FunctionSig {
 
 // On-disk format, one record per line:
 //
-//   rename <hex-addr> <new-name>
-//   sig    <hex-addr> <return-type>|<param-type>|<param-name>|...
-//   note   <hex-addr> <text>
+//   rename <hex-addr>  <new-name>
+//   sig    <hex-addr>  <return-type>|<param-type>|<param-name>|...
+//   note   <hex-addr>  <text>
+//   const  <hex-value> <name>
 //
-// Addresses are hex without a 0x prefix. Blank lines and lines starting
-// with `#` are ignored. Unknown record kinds are skipped.
+// Addresses are hex without a 0x prefix. The `const` record names a
+// numeric immediate (width-agnostic) — its primary use is mapping a
+// runtime-resolver hash like `0xDEADBEEF` to the API it resolves to,
+// e.g. `kernel32!CreateFileW`. Per-version Hyperion-style hash tables
+// are dropped in via this record.
+//
+// Blank lines and lines starting with `#` are ignored. Unknown record
+// kinds are skipped.
 struct Annotations {
     std::map<addr_t, std::string>  renames;
     std::map<addr_t, FunctionSig>  signatures;
     std::map<addr_t, std::string>  notes;
+    std::map<u64,    std::string>  named_constants;
 
     static Result<Annotations>
     load(const std::filesystem::path& path);
@@ -52,6 +60,11 @@ struct Annotations {
     const std::string* note_for(addr_t a) const noexcept {
         auto it = notes.find(a);
         return it == notes.end() ? nullptr : &it->second;
+    }
+
+    const std::string* constant_name_for(u64 v) const noexcept {
+        auto it = named_constants.find(v);
+        return it == named_constants.end() ? nullptr : &it->second;
     }
 };
 

@@ -106,6 +106,32 @@ const Symbol* Binary::find_by_name(std::string_view name) const noexcept {
     return it == c.by_name.end() ? nullptr : it->second;
 }
 
+void Binary::record_indirect_edge(addr_t from, addr_t to) const {
+    auto& vec = indirect_edges_[from];
+    // Linear-scan dedupe — N is tiny per call site (a handful of
+    // observed targets on real traces), and keeping the order means
+    // downstream sees edges in the order they were learned.
+    for (addr_t existing : vec) if (existing == to) return;
+    vec.push_back(to);
+}
+
+std::span<const addr_t>
+Binary::indirect_edges_from(addr_t from) const noexcept {
+    auto it = indirect_edges_.find(from);
+    if (it == indirect_edges_.end()) return {};
+    return it->second;
+}
+
+std::size_t Binary::indirect_edge_count() const noexcept {
+    std::size_t n = 0;
+    for (const auto& [from, vec] : indirect_edges_) n += vec.size();
+    return n;
+}
+
+void Binary::clear_indirect_edges() const noexcept {
+    indirect_edges_.clear();
+}
+
 namespace {
 
 [[nodiscard]] Result<std::vector<std::byte>>

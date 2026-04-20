@@ -18,6 +18,7 @@
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/libcxx_string.hpp>
 #include <ember/analysis/objc.hpp>
+#include <ember/analysis/vm_detect.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
@@ -35,11 +36,16 @@ struct PendingAnnotations {
     std::map<addr_t, std::string> renames;
     std::map<addr_t, FunctionSig> signatures;
     std::map<addr_t, std::string> notes;
+    std::map<u64,    std::string> named_constants;
 
     bool empty() const noexcept {
-        return renames.empty() && signatures.empty() && notes.empty();
+        return renames.empty() && signatures.empty()
+            && notes.empty() && named_constants.empty();
     }
-    void clear() noexcept { renames.clear(); signatures.clear(); notes.clear(); }
+    void clear() noexcept {
+        renames.clear(); signatures.clear();
+        notes.clear();   named_constants.clear();
+    }
 };
 
 // Lazy call graph, built once per ScriptRuntime. The first xrefs.callers /
@@ -453,6 +459,70 @@ JSValue js_bin_objc_methods(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return arr;
 }
 
+// Each entry: {functionAddr, dispatchAddr, tableAddr, handlers: [u64,...]}.
+// Mirrors detect_vm_dispatchers exactly. Useful for scripted "tag every
+// VM handler" workflows: the script enumerates dispatchers, names the
+// handlers via project.rename(addr, "vm_handler_N"), and re-runs.
+// Oracle: record (from → to) for an indirect call/jmp at `from`.
+// Idempotent on duplicates. Returns the new total edge count for the
+// caller to confirm the write took.
+JSValue js_bin_record_indirect_edge(JSContext* ctx, JSValueConst,
+                                    int argc, JSValueConst* argv) {
+    if (argc < 2) return throw_err(ctx, "recordIndirectEdge: (from, to)");
+    u64 from = 0, to = 0;
+    if (!to_u64(ctx, argv[0], &from) || !to_u64(ctx, argv[1], &to)) {
+        return throw_err(ctx, "recordIndirectEdge: bad addr");
+    }
+    const Binary* b = ctx_of(ctx)->binary;
+    b->record_indirect_edge(static_cast<addr_t>(from), static_cast<addr_t>(to));
+    return JS_NewBigUint64(ctx, b->indirect_edge_count());
+}
+
+// Read the oracle: returns [to, ...] for the given indirect-call site.
+JSValue js_bin_indirect_edges(JSContext* ctx, JSValueConst,
+                              int argc, JSValueConst* argv) {
+    if (argc < 1) return throw_err(ctx, "indirectEdges: (from)");
+    u64 from = 0;
+    if (!to_u64(ctx, argv[0], &from))
+        return throw_err(ctx, "indirectEdges: bad addr");
+    const Binary* b = ctx_of(ctx)->binary;
+    auto edges = b->indirect_edges_from(static_cast<addr_t>(from));
+    JSValue arr = JS_NewArray(ctx);
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        JS_SetPropertyUint32(ctx, arr, static_cast<u32>(i),
+                             JS_NewBigUint64(ctx, edges[i]));
+    }
+    return arr;
+}
+
+// Forget every recorded indirect edge. Useful for scripted experiments
+// that load multiple traces back-to-back against the same binary.
+JSValue js_bin_clear_indirect_edges(JSContext* ctx, JSValueConst,
+                                    int, JSValueConst*) {
+    ctx_of(ctx)->binary->clear_indirect_edges();
+    return JS_UNDEFINED;
+}
+
+JSValue js_bin_vm_dispatchers(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const Binary* b = ctx_of(ctx)->binary;
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+    for (const auto& d : detect_vm_dispatchers(*b)) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "functionAddr", JS_NewBigUint64(ctx, d.function_addr));
+        JS_SetPropertyStr(ctx, o, "dispatchAddr", JS_NewBigUint64(ctx, d.dispatch_addr));
+        JS_SetPropertyStr(ctx, o, "tableAddr",    JS_NewBigUint64(ctx, d.table_addr));
+        JSValue h = JS_NewArray(ctx);
+        u32 j = 0;
+        for (addr_t a : d.handlers) {
+            JS_SetPropertyUint32(ctx, h, j++, JS_NewBigUint64(ctx, a));
+        }
+        JS_SetPropertyStr(ctx, o, "handlers", h);
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
 // Every formal Obj-C protocol with its method signatures. Protocols
 // carry signatures only (no IMPs). Each entry:
 //   { name, conformsTo: [], required: {instance: [], class: []},
@@ -830,6 +900,23 @@ JSValue js_project_set_signature(JSContext* ctx, JSValueConst,
     return diff;
 }
 
+JSValue js_project_name_constant(JSContext* ctx, JSValueConst,
+                                 int argc, JSValueConst* argv) {
+    if (JSValue err = require_project(ctx); !JS_IsUndefined(err)) return err;
+    if (argc < 2) return throw_err(ctx, "nameConstant: (value, name[, opts])");
+    u64 v = 0;
+    if (!to_u64(ctx, argv[0], &v)) return throw_err(ctx, "nameConstant: bad value");
+    ScopedCString n(ctx, argv[1]);
+    if (!n.valid()) return throw_err(ctx, "nameConstant: bad name");
+    std::string name{n.view()};
+
+    auto* hc = ctx_of(ctx);
+    const bool dry = argc >= 3 && is_dry_run(ctx, argv[2]);
+    JSValue diff = make_diff_entry(ctx, "const", static_cast<addr_t>(v), name);
+    if (!dry) hc->pending.named_constants[v] = std::move(name);
+    return diff;
+}
+
 JSValue js_project_note(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (JSValue err = require_project(ctx); !JS_IsUndefined(err)) return err;
     if (argc < 2) return throw_err(ctx, "note: (addr, text[, opts])");
@@ -866,6 +953,10 @@ JSValue js_project_diff(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     for (const auto& [a, t] : hc->pending.notes) {
         JS_SetPropertyUint32(ctx, arr, i++, make_diff_entry(ctx, "note", a, t));
     }
+    for (const auto& [v, n] : hc->pending.named_constants) {
+        JS_SetPropertyUint32(ctx, arr, i++,
+            make_diff_entry(ctx, "const", static_cast<addr_t>(v), n));
+    }
     return arr;
 }
 
@@ -877,10 +968,13 @@ JSValue js_project_commit(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     for (auto& [a, n] : hc->pending.renames)    hc->project->loaded.renames[a]    = n;
     for (auto& [a, s] : hc->pending.signatures) hc->project->loaded.signatures[a] = s;
     for (auto& [a, t] : hc->pending.notes)      hc->project->loaded.notes[a]      = t;
+    for (auto& [v, n] : hc->pending.named_constants)
+        hc->project->loaded.named_constants[v] = n;
 
     const std::size_t n = hc->pending.renames.size()
                         + hc->pending.signatures.size()
-                        + hc->pending.notes.size();
+                        + hc->pending.notes.size()
+                        + hc->pending.named_constants.size();
 
     auto rv = hc->project->loaded.save(hc->project->path);
     if (!rv) return throw_err(ctx, rv.error().message);
@@ -893,7 +987,8 @@ JSValue js_project_revert(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* hc = ctx_of(ctx);
     const std::size_t n = hc->pending.renames.size()
                         + hc->pending.signatures.size()
-                        + hc->pending.notes.size();
+                        + hc->pending.notes.size()
+                        + hc->pending.named_constants.size();
     hc->pending.clear();
     return JS_NewInt32(ctx, static_cast<int32_t>(n));
 }
@@ -907,6 +1002,8 @@ void install_project_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_project_set_signature, "setSignature", 3));
     JS_SetPropertyStr(ctx, obj, "note",
         JS_NewCFunction(ctx, js_project_note,          "note",         3));
+    JS_SetPropertyStr(ctx, obj, "nameConstant",
+        JS_NewCFunction(ctx, js_project_name_constant, "nameConstant", 3));
     JS_SetPropertyStr(ctx, obj, "diff",
         JS_NewCFunction(ctx, js_project_diff,          "diff",         0));
     JS_SetPropertyStr(ctx, obj, "commit",
@@ -979,6 +1076,17 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_objc_methods, "objcMethods", 0));
     JS_SetPropertyStr(ctx, bin, "objcProtocols",
         JS_NewCFunction(ctx, js_bin_objc_protocols, "objcProtocols", 0));
+    JS_SetPropertyStr(ctx, bin, "vmDispatchers",
+        JS_NewCFunction(ctx, js_bin_vm_dispatchers, "vmDispatchers", 0));
+    JS_SetPropertyStr(ctx, bin, "recordIndirectEdge",
+        JS_NewCFunction(ctx, js_bin_record_indirect_edge,
+                        "recordIndirectEdge", 2));
+    JS_SetPropertyStr(ctx, bin, "indirectEdges",
+        JS_NewCFunction(ctx, js_bin_indirect_edges,
+                        "indirectEdges", 1));
+    JS_SetPropertyStr(ctx, bin, "clearIndirectEdges",
+        JS_NewCFunction(ctx, js_bin_clear_indirect_edges,
+                        "clearIndirectEdges", 0));
 
     JS_SetPropertyStr(ctx, global, "binary", bin);
     JS_FreeValue(ctx, global);

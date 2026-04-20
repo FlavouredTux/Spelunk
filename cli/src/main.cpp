@@ -22,6 +22,7 @@
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
+#include <ember/analysis/vm_detect.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
@@ -64,6 +65,7 @@ struct Args {
     std::string binary;
     std::string symbol;
     std::string annotations_path;   // optional project-file for user edits (read-only load)
+    std::string trace_path;         // optional indirect-edge trace TSV (from\tto per line)
     std::string project_path;       // optional project-file authorising script mutations
     std::string script_path;        // optional JS script to run against the binary
     std::vector<std::string> script_argv; // args passed to the script after `--`
@@ -94,6 +96,7 @@ struct Args {
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
+    bool vm_detect = false;         // scan for interpreter-style VM dispatchers
     bool help   = false;
 };
 
@@ -127,6 +130,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--objc-names", &Args::objc_names},
     {"",   "--objc-protocols", &Args::objc_protos},
     {"",   "--rtti",     &Args::rtti},
+    {"",   "--vm-detect", &Args::vm_detect},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
 });
@@ -134,6 +138,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"-s", "--symbol",      &Args::symbol},
     {"",   "--annotations", &Args::annotations_path},
+    {"",   "--trace",       &Args::trace_path},
     {"",   "--cache-dir",   &Args::cache_dir},
     {"",   "--project",     &Args::project_path},
     {"",   "--script",      &Args::script_path},
@@ -263,8 +268,7 @@ void print_info(const ember::Binary& b, std::string_view path) {
 int run_disasm(const ember::Binary& b, std::string_view symbol) {
     auto win = ember::resolve_function(b, symbol);
     if (!win) {
-        std::println(stderr, "ember: symbol '{}' not found", symbol);
-        return EXIT_FAILURE;
+        return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
     auto out = ember::format_disasm(b, *win);
     if (!out) {
@@ -279,8 +283,7 @@ int run_disasm(const ember::Binary& b, std::string_view symbol) {
 int run_cfg(const ember::Binary& b, std::string_view symbol) {
     auto win = ember::resolve_function(b, symbol);
     if (!win) {
-        std::println(stderr, "ember: symbol '{}' not found", symbol);
-        return EXIT_FAILURE;
+        return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
     auto out = ember::format_cfg(b, *win);
     if (!out) {
@@ -296,8 +299,7 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
            bool run_ssa, bool run_opt) {
     auto win = ember::resolve_function(b, symbol);
     if (!win) {
-        std::println(stderr, "ember: symbol '{}' not found", symbol);
-        return EXIT_FAILURE;
+        return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
 
     const ember::X64Decoder  dec;
@@ -378,6 +380,23 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
             xrefs += std::format("{:x}", e.xrefs[i]);
         }
         out += std::format("{:x}|{}|{}\n", e.addr, escape_for_line(e.text), xrefs);
+    }
+    return out;
+}
+
+// TSV: one row per detected VM dispatcher. Format:
+//   <function-addr>\t<dispatch-addr>\t<table-addr>\t<handler-count>\t<comma-sep handler addrs>
+[[nodiscard]] std::string build_vm_detect_output(const ember::Binary& b) {
+    std::string out;
+    for (const auto& d : ember::detect_vm_dispatchers(b)) {
+        std::string handlers;
+        for (std::size_t i = 0; i < d.handlers.size(); ++i) {
+            if (i) handlers += ',';
+            handlers += std::format("{:x}", d.handlers[i]);
+        }
+        out += std::format("{:x}\t{:x}\t{:x}\t{}\t{}\n",
+                           d.function_addr, d.dispatch_addr,
+                           d.table_addr, d.handlers.size(), handlers);
     }
     return out;
 }
@@ -1008,8 +1027,7 @@ int run_struct(const ember::Binary& b, std::string_view symbol, bool pseudo,
                const ember::Annotations* annotations, ember::EmitOptions opts) {
     auto win = ember::resolve_function(b, symbol);
     if (!win) {
-        std::println(stderr, "ember: symbol '{}' not found", symbol);
-        return EXIT_FAILURE;
+        return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
     auto out = ember::format_struct(b, *win, pseudo, annotations, opts);
     if (!out) {
@@ -1047,8 +1065,10 @@ void print_help() {
     std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");
     std::println("      --objc-protocols dump Obj-C protocol method signatures");
     std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
+    std::println("      --vm-detect      scan for interpreter-style VM dispatchers (TSV)");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  path to a project file with renames/signatures");
+    std::println("      --trace PATH     load indirect-edge trace (TSV: from\\tto per line)");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --project PATH   project file scripts may read/write via project.*");
     std::println("      --script PATH    run a JavaScript file against the loaded binary");
@@ -1087,6 +1107,51 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     const ember::Binary& b = **bin;
+
+    // Indirect-edge trace, if any, must seed the oracle BEFORE any
+    // analysis runs — the CFG builder consults it lazily but the result
+    // gets cached in IR caches downstream, so late-loading wouldn't
+    // take effect on subsequent passes.
+    if (!args.trace_path.empty()) {
+        std::ifstream tf(args.trace_path);
+        if (!tf) {
+            std::println(stderr, "ember: cannot open trace '{}'", args.trace_path);
+            return EXIT_FAILURE;
+        }
+        std::string line;
+        std::size_t loaded = 0, line_no = 0;
+        while (std::getline(tf, line)) {
+            ++line_no;
+            if (line.empty() || line.front() == '#') continue;
+            const auto tab = line.find('\t');
+            if (tab == std::string::npos) {
+                std::println(stderr,
+                    "ember: trace '{}' line {}: missing tab — expected `from\\tto`",
+                    args.trace_path, line_no);
+                continue;
+            }
+            auto parse_hex = [](std::string_view s, ember::addr_t& out) {
+                if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+                ember::u64 v = 0;
+                auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
+                if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+                out = static_cast<ember::addr_t>(v);
+                return true;
+            };
+            ember::addr_t from = 0, to = 0;
+            if (!parse_hex(std::string_view(line).substr(0, tab), from) ||
+                !parse_hex(std::string_view(line).substr(tab + 1), to)) {
+                std::println(stderr,
+                    "ember: trace '{}' line {}: bad hex addr",
+                    args.trace_path, line_no);
+                continue;
+            }
+            b.record_indirect_edge(from, to);
+            ++loaded;
+        }
+        std::println(stderr, "ember: loaded {} indirect edge(s) from '{}'",
+                     loaded, args.trace_path);
+    }
 
     if (!args.script_path.empty()) {
         std::optional<ember::ProjectContext> project;
@@ -1210,7 +1275,11 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     if (args.strings) {
-        return run_cached(args, "strings", [&] { return build_strings_output(b); });
+        // Cache tag bumped to v2 when the scanner started covering
+        // executable-flagged sections (Mach-O __cstring lives in __TEXT).
+        // Old "strings" cache entries from before that change are now
+        // orphaned.
+        return run_cached(args, "strings-v2", [&] { return build_strings_output(b); });
     }
     if (args.fingerprints) {
         const int rc = run_cached(args, fingerprints_cache_tag(),
@@ -1243,6 +1312,10 @@ int main(int argc, char** argv) {
     if (args.rtti) {
         return run_cached(args, "rtti",
                           [&] { return build_rtti_output(b); });
+    }
+    if (args.vm_detect) {
+        return run_cached(args, "vm-detect",
+                          [&] { return build_vm_detect_output(b); });
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });

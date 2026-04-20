@@ -141,35 +141,72 @@ export function buildUserMessage(
   ].filter(Boolean).join("\n");
 }
 
-// Parse the AI's renames block out of a response. The block is fenced
-// as ```renames\n...\n``` per the system prompt. Tolerant of stray
-// whitespace, missing fences (some models drop the language tag), and
-// arrows in either direction (→ or ->).
+// Parse the AI's renames block out of a response. Canonical form is
+// a fenced ```renames block, but models drop the label, swap ``` for
+// ~~~, or produce a "**Renames:**" header + bullet list instead. This
+// accepts all of those. A line counts as a rename if (after stripping
+// bullet / numbered-list prefixes) it matches `<ident> → <ident>`.
 export type RenameSuggestion = { from: string; to: string };
+const RENAME_LINE =
+  /^(?:[-*\u2022]\s+|\d+[.)]\s+)?`?([A-Za-z_][\w.:<>$]*)`?\s*(?:→|->)\s*`?([A-Za-z_][\w]*)`?\s*$/;
 export function parseRenames(text: string): RenameSuggestion[] {
   const out: RenameSuggestion[] = [];
-  // Try the labelled block first; fall back to any code fence whose
-  // body is exclusively rename-shaped lines.
-  const blocks: string[] = [];
-  const labelled = text.matchAll(/```renames\s*\n([\s\S]*?)```/g);
-  for (const m of labelled) blocks.push(m[1]);
-  if (blocks.length === 0) {
-    for (const m of text.matchAll(/```\s*\n([\s\S]*?)```/g)) {
-      const body = m[1];
-      // Heuristic: a fence that's all `X → Y` lines is a renames
-      // block even without the label.
-      const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
-      if (lines.length > 0 && lines.every((l) => /(?:→|->)/.test(l))) {
-        blocks.push(body);
+  const seen = new Set<string>();
+  const push = (from: string, to: string) => {
+    const k = `${from}→${to}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ from, to });
+  };
+
+  // 1. Labelled fences: ```renames ... ``` and ~~~renames ... ~~~.
+  const labelled = [
+    ...text.matchAll(/```renames\s*\n([\s\S]*?)```/g),
+    ...text.matchAll(/~~~renames\s*\n([\s\S]*?)~~~/g),
+  ];
+  for (const m of labelled) {
+    for (const raw of m[1].split("\n")) {
+      const r = raw.trim().match(RENAME_LINE);
+      if (r) push(r[1], r[2]);
+    }
+  }
+  if (out.length > 0) return out;
+
+  // 2. Any unlabelled fence whose body is exclusively rename-shaped.
+  const fences = [
+    ...text.matchAll(/```[a-zA-Z]*\s*\n([\s\S]*?)```/g),
+    ...text.matchAll(/~~~[a-zA-Z]*\s*\n([\s\S]*?)~~~/g),
+  ];
+  for (const m of fences) {
+    const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length > 0 && lines.every((l) => RENAME_LINE.test(l))) {
+      for (const l of lines) {
+        const r = l.match(RENAME_LINE);
+        if (r) push(r[1], r[2]);
       }
     }
   }
-  for (const block of blocks) {
-    for (const raw of block.split("\n")) {
-      const m = raw.trim().match(/^([A-Za-z_][\w.:<>$]*)\s*(?:→|->)\s*([A-Za-z_][\w]*)\s*$/);
-      if (m) out.push({ from: m[1], to: m[2] });
+  if (out.length > 0) return out;
+
+  // 3. A "Renames" header (markdown, bold, or plain) followed by
+  // rename-shaped lines until the next blank line or next header.
+  // Catches assistant's habit of rendering the block as a heading + list
+  // instead of a code fence.
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const h = lines[i].trim();
+    if (!/^(?:#{1,6}\s+|\*\*\s*)?renames\s*:?\s*\*{0,2}\s*$/i.test(h)) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j].trim();
+      if (!l) break;
+      if (/^#{1,6}\s+/.test(l)) break;
+      const r = l.match(RENAME_LINE);
+      if (r) push(r[1], r[2]);
+      else if (out.length > 0) break;
     }
+    if (out.length > 0) return out;
   }
+
   return out;
 }
 

@@ -722,6 +722,11 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
             // hooks, MCP servers. Keeps responses focused on the
             // Ember context we attached, no environmental drift.
             settingSources: [],
+            // Extended thinking is pure latency for the short,
+            // pattern-recognition answers this panel asks for — the
+            // analyst wants the verb-led one-liner now, not after a
+            // reasoning preamble.
+            thinking: { type: "disabled" },
             includePartialMessages: true,
             persistSession: false,
             permissionMode: "bypassPermissions",

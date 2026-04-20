@@ -1,5 +1,6 @@
 #include <ember/script/runtime.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,6 +56,7 @@ struct ScriptCtx {
     PendingAnnotations              pending{};
     std::vector<std::string>        argv{};
     std::unique_ptr<CallGraphCache> call_graph{};        // lazy
+    std::vector<addr_t>             function_starts{};   // lazy, sorted
 };
 
 const CallGraphCache& ensure_call_graph(ScriptCtx& hc) {
@@ -553,6 +555,37 @@ JSValue js_bin_functions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return arr;
 }
 
+// Return the entry address of the function whose extent contains `addr`,
+// or null when no containing function is known. Uses the discovered set
+// from binary.functions() — O(log n) per query after a one-shot sort
+// cached on the ScriptCtx.
+JSValue js_bin_function_at(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    u64 addr = 0;
+    if (!to_u64(ctx, argv[0], &addr)) return JS_NULL;
+    auto& hc = *ctx_of(ctx);
+    if (hc.function_starts.empty()) {
+        std::set<addr_t> fns;
+        for (const auto& s : hc.binary->symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.addr == 0 || s.name.empty()) continue;
+            fns.insert(s.addr);
+        }
+        for (const auto& e : compute_call_graph(*hc.binary)) {
+            if (!hc.binary->import_at_plt(e.callee)) fns.insert(e.callee);
+        }
+        hc.function_starts.assign(fns.begin(), fns.end());
+    }
+    // upper_bound - 1 gives the largest start <= addr.
+    auto it = std::upper_bound(hc.function_starts.begin(),
+                               hc.function_starts.end(),
+                               static_cast<addr_t>(addr));
+    if (it == hc.function_starts.begin()) return JS_NULL;
+    --it;
+    return addr_name_obj(ctx, *hc.binary, *it);
+}
+
 JSValue js_xrefs_callees(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NewArray(ctx);
     u64 addr = 0;
@@ -938,6 +971,8 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_fingerprint, "fingerprint", 1));
     JS_SetPropertyStr(ctx, bin, "functions",
         JS_NewCFunction(ctx, js_bin_functions,   "functions",   0));
+    JS_SetPropertyStr(ctx, bin, "functionAt",
+        JS_NewCFunction(ctx, js_bin_function_at,  "functionAt",  1));
     JS_SetPropertyStr(ctx, bin, "stdString",
         JS_NewCFunction(ctx, js_bin_std_string,  "stdString",   1));
     JS_SetPropertyStr(ctx, bin, "objcMethods",

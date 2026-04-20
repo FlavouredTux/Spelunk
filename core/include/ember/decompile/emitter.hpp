@@ -30,6 +30,9 @@ struct EmitOptions {
     // __objc_selrefs address → selector-name. When set, the emitter
     // renders `*(u64*)(0x105e61378)` as `@selector(initWithHandler:)`.
     const std::map<addr_t, std::string>* objc_selrefs = nullptr;
+    // __objc_classrefs address → class-name. When set, the emitter
+    // renders `*(u64*)(0x105e63820)` as `[NSApplication class]`.
+    const std::map<addr_t, std::string>* objc_classrefs = nullptr;
 };
 
 class PseudoCEmitter {

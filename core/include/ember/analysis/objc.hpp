@@ -41,6 +41,13 @@ struct ObjcProtocol {
 // Returns an empty string on malformed input.
 [[nodiscard]] std::string decode_objc_type(std::string_view encoding);
 
+// Structured variant of decode_objc_type: returns the separated
+// [return_type, arg0_type, arg1_type, ...] list. self and _cmd are kept
+// as the first two args (consumers that want them hidden slice [2..]).
+// Empty vector on malformed input.
+[[nodiscard]] std::vector<std::string>
+decode_objc_type_parts(std::string_view encoding);
+
 // Walks __objc_classlist (+ protocols/categories) and returns every
 // method's (class, selector, IMP) triple. Empty on non-Mach-O binaries or
 // when the expected __objc_* sections are absent.
@@ -56,5 +63,11 @@ struct ObjcProtocol {
 // instructions to actual selector names at call sites. Returned map is
 // (selref_addr → selector_string).
 [[nodiscard]] std::map<addr_t, std::string> parse_objc_selrefs(const Binary& b);
+
+// Walks __objc_classrefs — an array of pointers into __objc_classlist
+// entries — so a RIP-relative `mov rdi, [rip + classref]` can render as
+// `[ClassName class]` instead of a raw address load. Map is
+// (classref_slot_addr → class_name).
+[[nodiscard]] std::map<addr_t, std::string> parse_objc_classrefs(const Binary& b);
 
 }  // namespace ember

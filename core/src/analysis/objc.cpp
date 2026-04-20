@@ -347,31 +347,34 @@ std::string decode_one(EncCursor& st) {
     }
 }
 
-std::string decode_objc_type_impl(std::string_view enc) {
-    if (enc.empty()) return {};
+std::vector<std::string> decode_objc_type_parts_impl(std::string_view enc) {
+    std::vector<std::string> parts;
+    if (enc.empty()) return parts;
     EncCursor st{enc, 0};
     std::string ret = decode_one(st);
     if (ret.empty()) return {};
-    skip_digits(st);  // total arg size
-
-    std::vector<std::string> args;
+    skip_digits(st);
+    parts.push_back(std::move(ret));
     while (st.pos < st.s.size()) {
         std::string t = decode_one(st);
         skip_digits(st);
-        if (!t.empty()) args.push_back(std::move(t));
+        if (!t.empty()) parts.push_back(std::move(t));
     }
+    return parts;
+}
 
-    // Hide self (arg 0, always id) and _cmd (arg 1, always SEL).
-    std::string out = ret;
+std::string decode_objc_type_impl(std::string_view enc) {
+    auto parts = decode_objc_type_parts_impl(enc);
+    if (parts.empty()) return {};
+    std::string out = parts[0];
     out += " (";
-    if (args.size() <= 2) {
-        out += ")";
-        return out;
+    // Hide self (arg 0, always id) and _cmd (arg 1, always SEL).
+    for (std::size_t i = 3; i < parts.size(); ++i) {
+        if (i > 3) out += ", ";
+        out += parts[i];
     }
-    for (std::size_t i = 2; i < args.size(); ++i) {
-        if (i > 2) out += ", ";
-        out += args[i];
-    }
+    // When there are exactly self + _cmd (parts.size() == 3) or only return
+    // type, the loop is empty — close the parens.
     out += ")";
     return out;
 }
@@ -430,6 +433,10 @@ std::string decode_objc_type(std::string_view encoding) {
     return decode_objc_type_impl(encoding);
 }
 
+std::vector<std::string> decode_objc_type_parts(std::string_view encoding) {
+    return decode_objc_type_parts_impl(encoding);
+}
+
 std::vector<ObjcProtocol> parse_objc_protocols(const Binary& b) {
     std::vector<ObjcProtocol> out;
     u64 vaddr = 0;
@@ -451,14 +458,60 @@ std::vector<ObjcMethod> parse_objc_methods(const Binary& b) {
     std::vector<ObjcMethod> out;
     u64 vaddr = 0;
     auto cls_list = find_section(b, "__objc_classlist", vaddr);
-    if (cls_list.empty()) return out;
-    // Each entry is a pointer to a class_t.
-    const std::size_t n = cls_list.size() / 8;
-    for (std::size_t i = 0; i < n; ++i) {
-        u64 cls_p = 0;
-        std::memcpy(&cls_p, cls_list.data() + i * 8, 8);
-        if (cls_p == 0) continue;
-        walk_class(b, static_cast<addr_t>(cls_p), out);
+    if (!cls_list.empty()) {
+        // Each entry is a pointer to a class_t.
+        const std::size_t n = cls_list.size() / 8;
+        for (std::size_t i = 0; i < n; ++i) {
+            u64 cls_p = 0;
+            std::memcpy(&cls_p, cls_list.data() + i * 8, 8);
+            if (cls_p == 0) continue;
+            walk_class(b, static_cast<addr_t>(cls_p), out);
+        }
+    }
+
+    // __objc_catlist holds category_t pointers. A category adds
+    // (instance_methods, class_methods, protocols) to an existing class
+    // post-hoc. The category_t layout (64-bit):
+    //   u64 name              // C-string, e.g. "Extensions"
+    //   u64 cls               // class_t* the category extends
+    //   u64 instance_methods
+    //   u64 class_methods
+    //   u64 protocols
+    //   u64 instance_properties
+    //   u64 class_properties
+    u64 cat_vaddr = 0;
+    auto cat_list = find_section(b, "__objc_catlist", cat_vaddr);
+    if (!cat_list.empty()) {
+        const std::size_t n = cat_list.size() / 8;
+        for (std::size_t i = 0; i < n; ++i) {
+            u64 cat_p = 0;
+            std::memcpy(&cat_p, cat_list.data() + i * 8, 8);
+            if (cat_p == 0) continue;
+            auto name_p   = load_u64(b, static_cast<addr_t>(cat_p + 0));
+            auto cls_p    = load_u64(b, static_cast<addr_t>(cat_p + 8));
+            auto imeth_p  = load_u64(b, static_cast<addr_t>(cat_p + 16));
+            auto cmeth_p  = load_u64(b, static_cast<addr_t>(cat_p + 24));
+            if (!name_p) continue;
+            std::string cat_name = read_cstring(b, static_cast<addr_t>(*name_p));
+            // Category target class name — the method list belongs to it,
+            // tagged with `(CategoryName)` so the reader can tell it apart
+            // from the base class's own methods.
+            std::string target_cls;
+            if (cls_p && *cls_p) {
+                auto ro = read_class_ro_from_class(b, static_cast<addr_t>(*cls_p));
+                if (ro) target_cls = read_cstring(b, ro->name_va);
+            }
+            if (target_cls.empty()) target_cls = "?";
+            const std::string tagged = cat_name.empty()
+                ? target_cls
+                : target_cls + "(" + cat_name + ")";
+            if (imeth_p && *imeth_p)
+                read_method_list(b, static_cast<addr_t>(*imeth_p),
+                                 tagged, false, out);
+            if (cmeth_p && *cmeth_p)
+                read_method_list(b, static_cast<addr_t>(*cmeth_p),
+                                 tagged, true,  out);
+        }
     }
     return out;
 }
@@ -476,6 +529,27 @@ std::map<addr_t, std::string> parse_objc_selrefs(const Binary& b) {
         std::string s = read_cstring(b, static_cast<addr_t>(sel_p));
         if (s.empty()) continue;
         out.emplace(static_cast<addr_t>(vaddr + i * 8), std::move(s));
+    }
+    return out;
+}
+
+std::map<addr_t, std::string> parse_objc_classrefs(const Binary& b) {
+    std::map<addr_t, std::string> out;
+    u64 vaddr = 0;
+    auto cls_refs = find_section(b, "__objc_classrefs", vaddr);
+    if (cls_refs.empty()) return out;
+    const std::size_t n = cls_refs.size() / 8;
+    for (std::size_t i = 0; i < n; ++i) {
+        u64 cls_p = 0;
+        std::memcpy(&cls_p, cls_refs.data() + i * 8, 8);
+        if (cls_p == 0) continue;
+        // classref → class_t → class_ro_t → name. Follow the same chain the
+        // method walker uses.
+        auto ro = read_class_ro_from_class(b, static_cast<addr_t>(cls_p));
+        if (!ro) continue;
+        std::string name = read_cstring(b, ro->name_va);
+        if (name.empty()) continue;
+        out.emplace(static_cast<addr_t>(vaddr + i * 8), std::move(name));
     }
     return out;
 }

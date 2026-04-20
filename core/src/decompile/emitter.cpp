@@ -583,6 +583,15 @@ struct Emitter {
         if (annotations) {
             if (const std::string* n = annotations->name_for(target); n) return *n;
         }
+        // Obj-C IMPs outrank the ELF / Mach-O symbol table — a class method
+        // with `-[Foo bar:]` shape reads at the call site better than any
+        // mangled function-pointer name.
+        if (auto it = objc_by_imp.find(target); it != objc_by_imp.end()) {
+            return std::format("{}[{} {}]",
+                               it->second->is_class ? '+' : '-',
+                               it->second->cls,
+                               it->second->selector);
+        }
         if (binary) {
             if (const Symbol* s = binary->defined_object_at(target); s) {
                 if (s->kind == SymbolKind::Function && s->addr == target &&
@@ -697,6 +706,46 @@ struct Emitter {
     // Self-arg slots (a1..a6) known to flow into a libc char* parameter.
     // Populated by infer_charp_args(); consumed by the header builder.
     std::array<bool, 6> charp_arg = {false, false, false, false, false, false};
+
+    // Mach-O Obj-C method table, keyed by IMP address. Populated lazily in
+    // PseudoCEmitter::emit when the binary carries __objc_classlist; used
+    // by function_display_name to render `-[Class sel]` for any call
+    // target that matches a known IMP.
+    std::map<addr_t, const ObjcMethod*> objc_by_imp;
+
+    // Mach-O __DATA,__cfstring section bounds. When set, any Imm that falls
+    // inside this range is decoded as a Core Foundation string literal via
+    // the standard 32-byte CFString-in-cfstring layout.
+    addr_t cfstring_lo = 0;
+    addr_t cfstring_hi = 0;
+
+    [[nodiscard]] std::optional<std::string>
+    try_decode_cfstring(u64 addr) const {
+        if (!binary) return std::nullopt;
+        if (cfstring_lo == 0 || addr < cfstring_lo || addr >= cfstring_hi)
+            return std::nullopt;
+        // Each entry is 32 bytes: u64 isa; u32 flags; u32 pad; u64 data;
+        // u64 length. Offsets: data at +16, length at +24.
+        auto bytes = binary->bytes_at(static_cast<addr_t>(addr));
+        if (bytes.size() < 32) return std::nullopt;
+        u64 data_ptr = 0, length = 0;
+        std::memcpy(&data_ptr, bytes.data() + 16, 8);
+        std::memcpy(&length,   bytes.data() + 24, 8);
+        if (data_ptr == 0 || length == 0 || length > 1'000'000) return std::nullopt;
+        auto strb = binary->bytes_at(static_cast<addr_t>(data_ptr));
+        if (strb.size() < length) return std::nullopt;
+        std::string s;
+        s.reserve(static_cast<std::size_t>(length));
+        for (u64 i = 0; i < length; ++i) {
+            const auto c = static_cast<unsigned char>(strb[i]);
+            if (c == 0) break;
+            // CFString can be UTF-8 or UTF-16; be generous and accept any
+            // UTF-8 byte. Escape non-printable for display.
+            if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return std::nullopt;
+            s.push_back(static_cast<char>(c));
+        }
+        return s;
+    }
 
     // For-loop update-instruction positions, pulled from every RegionKind::For
     // in the structured body. emit_block skips these so the increment doesn't
@@ -1345,6 +1394,15 @@ struct Emitter {
             std::memcpy(&d, &bits, sizeof(d));
             return std::format("{}", d);
         }
+        // Core Foundation string literal? `__DATA,__cfstring` holds 32-byte
+        // `{isa, flags, data, length}` records for compile-time NSString/
+        // CFString constants. Rendering as `@"..."` matches what the
+        // source-level code actually wrote.
+        if (binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
+            if (auto s = try_decode_cfstring(static_cast<u64>(v.imm)); s) {
+                return "@" + escape_string(*s);
+            }
+        }
         // If the immediate points into the binary and resolves to a NUL-terminated
         // printable string, render as a C string literal.
         if (binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
@@ -1506,16 +1564,23 @@ struct Emitter {
             if (auto off = stack_offset(addr); off) {
                 return stack_name(*off);
             }
-            // Selref load: `*(u64*)(<selref_addr>)` where the address lives
-            // in __objc_selrefs is always the dynamic selector for that
-            // entry. Render as the source-level `@selector(sel)` so ObjC
-            // method dispatches read like Obj-C source.
-            if (options.objc_selrefs && t == IrType::I64) {
+            // Selref / classref loads: renders `*(u64*)(addr)` as its
+            // source-level equivalent when the address lives in
+            // __objc_selrefs / __objc_classrefs.
+            if (t == IrType::I64) {
                 if (auto imm = try_resolve_imm_addr(addr); imm) {
-                    auto it = options.objc_selrefs->find(
-                        static_cast<addr_t>(*imm));
-                    if (it != options.objc_selrefs->end()) {
-                        return std::format("@selector({})", it->second);
+                    const addr_t a = static_cast<addr_t>(*imm);
+                    if (options.objc_selrefs) {
+                        auto it = options.objc_selrefs->find(a);
+                        if (it != options.objc_selrefs->end()) {
+                            return std::format("@selector({})", it->second);
+                        }
+                    }
+                    if (options.objc_classrefs) {
+                        auto it = options.objc_classrefs->find(a);
+                        if (it != options.objc_classrefs->end()) {
+                            return std::format("[{} class]", it->second);
+                        }
                     }
                 }
             }
@@ -2549,11 +2614,35 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // didn't supply one — cheap enough to parse per emit (one section
     // walk, a few hundred cstring reads on typical Cocoa-linked code).
     std::map<addr_t, std::string> local_selrefs;
-    if (!e.options.objc_selrefs && binary &&
-        binary->format() == Format::MachO) {
-        local_selrefs = parse_objc_selrefs(*binary);
-        if (!local_selrefs.empty()) {
-            e.options.objc_selrefs = &local_selrefs;
+    std::map<addr_t, std::string> local_classrefs;
+    if (binary && binary->format() == Format::MachO) {
+        if (!e.options.objc_selrefs) {
+            local_selrefs = parse_objc_selrefs(*binary);
+            if (!local_selrefs.empty()) e.options.objc_selrefs = &local_selrefs;
+        }
+        if (!e.options.objc_classrefs) {
+            local_classrefs = parse_objc_classrefs(*binary);
+            if (!local_classrefs.empty()) e.options.objc_classrefs = &local_classrefs;
+        }
+    }
+    // Same deal for the classlist method table: parse once per emit, then
+    // render any call target whose IMP matches as `-[Class selector]`.
+    // Storage lives on the Emitter so pointers into it stay stable.
+    std::vector<ObjcMethod> local_objc_methods;
+    if (binary && binary->format() == Format::MachO) {
+        local_objc_methods = parse_objc_methods(*binary);
+        for (const auto& m : local_objc_methods) {
+            if (m.imp != 0) e.objc_by_imp.emplace(m.imp, &m);
+        }
+        // Cache the __cfstring section bounds for constant-NSString
+        // decoding in format_imm.
+        for (const auto& s : binary->sections()) {
+            const std::string_view n = s.name;
+            if (n == "__cfstring" || n.ends_with(",__cfstring")) {
+                e.cfstring_lo = static_cast<addr_t>(s.vaddr);
+                e.cfstring_hi = static_cast<addr_t>(s.vaddr + s.size);
+                break;
+            }
         }
     }
     bool has_user_sig = false;
@@ -2615,14 +2704,20 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             if (const std::string* n = annotations->name_for(sf.ir->start); n)
                 return *n;
         }
+        // Obj-C IMP match — the function header gets `-[Class sel]` directly.
+        if (auto it = e.objc_by_imp.find(sf.ir->start);
+            it != e.objc_by_imp.end()) {
+            return std::format("{}[{} {}]",
+                               it->second->is_class ? '+' : '-',
+                               it->second->cls,
+                               it->second->selector);
+        }
         if (binary) {
             for (const auto& s : binary->symbols()) {
                 if (s.is_import) continue;
                 if (s.kind != SymbolKind::Function) continue;
                 if (s.addr != sf.ir->start) continue;
                 if (s.name.empty()) continue;
-                // Header position — we'll add our own arg list, so the
-                // demangled signature suffix would be duplicated noise.
                 return pretty_symbol_base(s.name);
             }
         }
@@ -2649,6 +2744,39 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 ? inferred_return_type(e, sf)
                 : sig->return_type;
             header = std::format("{} {}({}) {{\n", ret, display_name(), params);
+        }
+    }
+    if (header.empty()) {
+        // Obj-C IMP: derive the header from the method's ObjC type
+        // encoding. Gives us proper self / _cmd / typed args instead of
+        // u64 placeholders — for a method with encoding "v40@0:8@16i32"
+        // we get `void -[Foo bar:](Foo* self, SEL _cmd, id arg0, int arg1)`.
+        auto objc_it = e.objc_by_imp.find(sf.ir->start);
+        if (objc_it != e.objc_by_imp.end() &&
+            !objc_it->second->type_encoding.empty()) {
+            const auto& meth  = *objc_it->second;
+            const auto parts  = decode_objc_type_parts(meth.type_encoding);
+            if (!parts.empty()) {
+                const std::string& ret_ty = parts[0];
+                std::string params;
+                if (parts.size() <= 1) {
+                    params = "void";
+                } else {
+                    // `self` is typed as `Class*` when we know the class,
+                    // otherwise `id`.
+                    const std::string self_ty = meth.cls.empty()
+                        ? std::string{"id"}
+                        : meth.cls + "*";
+                    params = self_ty + " self";
+                    if (parts.size() > 1) params += ", SEL _cmd";
+                    for (std::size_t i = 3; i < parts.size(); ++i) {
+                        params += std::format(", {} arg{}",
+                                              parts[i], i - 3);
+                    }
+                }
+                header = std::format("{} {}({}) {{\n",
+                                     ret_ty, display_name(), params);
+            }
         }
     }
     if (header.empty()) {

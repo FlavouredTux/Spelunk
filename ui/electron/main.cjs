@@ -768,11 +768,14 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
           prompt: flat,
           options: {
             ...(chosenModel ? { model: chosenModel } : {}),
-            // Append vs replace: keeps assistant Code's built-in tool /
-            // safety preamble intact while injecting Ember's RE
-            // analyst directives. Replace would strip the file-read
-            // / edit / safety guardrails the SDK ships with.
-            ...(systemPrompt ? { appendSystemPrompt: systemPrompt } : {}),
+            // REPLACE assistant Code's default system prompt — we don't
+            // want the autonomous-coding-agent preamble (use tools,
+            // edit files, long explanations). It was diluting our
+            // RE-analyst directives, in particular making the model
+            // ignore the strict ```renames fenced-block requirement.
+            // Tools are off (tools: []) so the safety guardrails the
+            // default preamble ships with don't apply here anyway.
+            ...(systemPrompt ? { systemPrompt: systemPrompt } : {}),
             // Empty tool list = pure chat. We're not running an
             // agent loop with file edits / bash — Ember already
             // owns the binary analysis surface.

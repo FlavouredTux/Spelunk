@@ -2,24 +2,31 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron")
 const { spawn } = require("node:child_process");
 const https = require("node:https");
 const http  = require("node:http");
+const { makeTools } = require("./ai_tools.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 // Official assistant SDK that wraps the user's installed `assistant` binary
 // and handles subscription auth (Pro/Max OAuth) correctly. Loaded
 // lazily so the renderer doesn't pay the import cost on startup.
 // SDK ships as ESM (sdk.mjs), so we can't `require()` it from this CJS
-// file — Node mandates dynamic `import()`.
-let _assistantQuery = null;
+// file — Node mandates dynamic `import()`. We expose query + the in-
+// process MCP helpers (tool, createSdkMcpServer) since the agentic
+// flow needs all three.
+let _assistantSdk = null;
 async function loadassistantSdk() {
-  if (_assistantQuery) return _assistantQuery;
+  if (_assistantSdk) return _assistantSdk;
   try {
     const sdk = await import("@assistant-ai/assistant-agent-sdk");
-    _assistantQuery = sdk.query;
+    _assistantSdk = {
+      query:               sdk.query,
+      tool:                sdk.tool,
+      createSdkMcpServer:  sdk.createSdkMcpServer,
+    };
   } catch (e) {
-    _assistantQuery = null;
+    _assistantSdk = null;
     throw new Error(`@assistant-ai/assistant-agent-sdk not installed: ${e.message}`);
   }
-  return _assistantQuery;
+  return _assistantSdk;
 }
 
 const EMBER_BIN = process.env.EMBER_BIN ||
@@ -619,40 +626,124 @@ function makeCodexParser() {
   };
 }
 
-ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
-  const cfg = await loadAiConfig();
-  const id  = String(AI_NEXT_ID++);
-  const win = BrowserWindow.fromWebContents(e.sender);
-  const send = (channel, ...args) => {
-    if (win && !win.isDestroyed()) win.webContents.send(channel, id, ...args);
-  };
-  // The renderer's model state can drift from the persisted per-
-  // provider config (e.g. user opened the AI panel, then swapped
-  // provider in Settings). Config is authoritative — only honour an
-  // explicit model override if it belongs to this provider's known
-  // suggestion list, otherwise fall back to what we have on disk.
-  const providerModels = AI_MODEL_SUGGESTIONS[cfg.provider] || [];
-  const chosenModel =
-    (typeof model === "string" && model && providerModels.includes(model))
-      ? model
-      : cfg.model;
+// Build the per-conversation tool context. `state.binary` is the
+// currently-loaded binary path; without it there's nothing for the
+// model to navigate, so tools are disabled and the chat falls back
+// to single-turn answers over whatever the user already attached.
+async function buildAiTools() {
+  if (!state.binary) return null;
+  const annPath = await writeCliAnnotations(state.binary);
+  return makeTools(() => ({
+    emberBin:   EMBER_BIN,
+    binaryPath: state.binary,
+    annPath,
+  }));
+}
 
-  // ---- OpenRouter & 9Router (both OpenAI-compatible wire format) ---
-  if (cfg.provider === "openrouter" || cfg.provider === "9router") {
-    const is9r   = cfg.provider === "9router";
-    const apiKey = await loadAiKey();
-    if (!is9r && !apiKey) throw new Error("no OpenRouter API key configured");
+// OpenAI-compatible tool definitions in the format chat completions
+// expects. Mapped from our shared tool list — same descriptions, same
+// JSON Schemas.
+function tools_openaiFormat(tools) {
+  if (!tools) return undefined;
+  return tools.map((t) => ({
+    type: "function",
+    function: {
+      name:        t.name,
+      description: t.description,
+      parameters:  t.jsonSchema,
+    },
+  }));
+}
 
+// Run one OpenAI-format chat completion turn against the given
+// transport. Streams text deltas through `send` and accumulates any
+// tool_call deltas (which arrive piecewise per OpenAI's spec —
+// `id` + `name` + per-chunk `arguments` strings, keyed by `index`).
+// Resolves to { contentLen, toolCalls } when the stream ends. The
+// caller decides whether to loop (when toolCalls is non-empty) or
+// finish.
+function openaiTurn({ transport, reqOpts, body, send, label, registerCancel }) {
+  return new Promise((resolve, reject) => {
+    const req = transport.request(reqOpts, (res) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        let buf = "";
+        res.on("data", (d) => { buf += d.toString(); });
+        res.on("end", () => reject(
+          new Error(`${label} ${res.statusCode}: ${buf.slice(0, 400)}`)));
+        return;
+      }
+      let pending     = "";
+      let contentLen  = 0;
+      const calls     = new Map();    // index -> { id, name, args }
+      res.on("data", (chunk) => {
+        pending += chunk.toString();
+        let idx;
+        while ((idx = pending.indexOf("\n\n")) !== -1) {
+          const event = pending.slice(0, idx);
+          pending = pending.slice(idx + 2);
+          for (const rawLine of event.split("\n")) {
+            const line = rawLine.startsWith("data: ") ? rawLine.slice(6) : rawLine;
+            if (!line || !line.startsWith("{")) continue;
+            try {
+              const j = JSON.parse(line);
+              const delta = j.choices?.[0]?.delta;
+              if (!delta) continue;
+              if (typeof delta.content === "string" && delta.content.length > 0) {
+                contentLen += delta.content.length;
+                send("ember:ai:chunk", delta.content);
+              }
+              if (Array.isArray(delta.tool_calls)) {
+                for (const tc of delta.tool_calls) {
+                  const i = tc.index ?? 0;
+                  let cur = calls.get(i);
+                  if (!cur) { cur = { id: "", name: "", args: "" }; calls.set(i, cur); }
+                  if (tc.id) cur.id = tc.id;
+                  if (tc.function?.name) cur.name = tc.function.name;
+                  if (typeof tc.function?.arguments === "string") cur.args += tc.function.arguments;
+                }
+              }
+            } catch { /* keepalive / partial */ }
+          }
+        }
+      });
+      res.on("end", () => {
+        const toolCalls = [...calls.values()]
+          .filter((c) => c.name)
+          .map((c) => {
+            let parsed = {};
+            try { parsed = c.args ? JSON.parse(c.args) : {}; } catch { /* bad json */ }
+            return { id: c.id, name: c.name, args: parsed, argsRaw: c.args };
+          });
+        resolve({ contentLen, toolCalls });
+      });
+    });
+    req.on("error", reject);
+    registerCancel(() => req.destroy(new Error("cancelled")));
+    req.write(body);
+    req.end();
+  });
+}
+
+// Drive an OpenAI-format agentic loop: send messages, execute any
+// tool_calls the model emits, append the results, send again. Stop
+// when the model answers without tool calls or the iteration cap is
+// hit. Cap is conservative — most real questions resolve in 1-3
+// rounds; anything more usually means the model is stuck.
+async function openrouterAgenticLoop({
+  cfg, apiKey, chosenModel, messages, temperature, tools,
+  send, registerCancel,
+}) {
+  const is9r = cfg.provider === "9router";
+  let totalChars = 0;
+  for (let iter = 0; iter < 8; iter++) {
     const body = JSON.stringify({
       model:       chosenModel,
       messages,
       stream:      true,
       temperature: typeof temperature === "number" ? temperature : 0.4,
+      ...(tools && tools.length ? { tools: tools_openaiFormat(tools) } : {}),
     });
 
-    // 9router runs on localhost over plain HTTP; OpenRouter is HTTPS
-    // on openrouter.ai. Shape the URL + transport accordingly and share
-    // the streaming parser below.
     let reqOpts, transport, label;
     if (is9r) {
       const u = new URL(NINE_ROUTER_URL);
@@ -686,55 +777,103 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
       };
     }
 
-    const req = transport.request(reqOpts, (res) => {
-      if (res.statusCode && res.statusCode >= 400) {
-        let buf = "";
-        res.on("data", (d) => { buf += d.toString(); });
-        res.on("end", () => {
-          send("ember:ai:error",
-               `${label} ${res.statusCode}: ${buf.slice(0, 400)}`);
-          AI_INFLIGHT.delete(id);
-        });
-        return;
+    const { contentLen, toolCalls } = await openaiTurn({
+      transport, reqOpts, body, send, label, registerCancel,
+    });
+    totalChars += contentLen;
+
+    if (toolCalls.length === 0) return totalChars;
+
+    // Append the assistant's tool_call message verbatim — OpenAI
+    // requires this exact shape so the follow-up can reference each
+    // call by id when supplying the tool result.
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: toolCalls.map((tc) => ({
+        id:       tc.id,
+        type:     "function",
+        function: { name: tc.name, arguments: tc.argsRaw || "{}" },
+      })),
+    });
+
+    // Execute every tool call this turn, appending each result as
+    // its own `tool` role message keyed by tool_call_id.
+    for (const tc of toolCalls) {
+      send("ember:ai:tool", { name: tc.name, args: tc.args });
+      let result, ok = true;
+      try {
+        const def = tools.find((t) => t.name === tc.name);
+        if (!def) throw new Error(`unknown tool: ${tc.name}`);
+        result = await def.exec(tc.args);
+      } catch (err) {
+        ok = false;
+        result = `Error: ${err?.message || String(err)}`;
       }
-      let pending = "";
-      let total   = 0;
-      res.on("data", (chunk) => {
-        pending += chunk.toString();
-        let idx;
-        while ((idx = pending.indexOf("\n\n")) !== -1) {
-          const event = pending.slice(0, idx);
-          pending = pending.slice(idx + 2);
-          for (const rawLine of event.split("\n")) {
-            const line = rawLine.startsWith("data: ") ? rawLine.slice(6) : rawLine;
-            if (!line || !line.startsWith("{")) continue;
-            try {
-              const j = JSON.parse(line);
-              const delta = j.choices?.[0]?.delta?.content;
-              if (typeof delta === "string" && delta.length > 0) {
-                total += delta.length;
-                send("ember:ai:chunk", delta);
-              }
-            } catch { /* keepalive */ }
-          }
-        }
+      send("ember:ai:toolDone", { name: tc.name, ok, chars: result.length });
+      messages.push({
+        role:         "tool",
+        tool_call_id: tc.id,
+        content:      result,
       });
-      res.on("end", () => {
+    }
+  }
+  throw new Error("agentic loop hit iteration cap (8); model may be stuck");
+}
+
+ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
+  const cfg = await loadAiConfig();
+  const id  = String(AI_NEXT_ID++);
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const send = (channel, ...args) => {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, id, ...args);
+  };
+  // The renderer's model state can drift from the persisted per-
+  // provider config (e.g. user opened the AI panel, then swapped
+  // provider in Settings). Config is authoritative — only honour an
+  // explicit model override if it belongs to this provider's known
+  // suggestion list, otherwise fall back to what we have on disk.
+  const providerModels = AI_MODEL_SUGGESTIONS[cfg.provider] || [];
+  const chosenModel =
+    (typeof model === "string" && model && providerModels.includes(model))
+      ? model
+      : cfg.model;
+
+  // ---- OpenRouter & 9Router (both OpenAI-compatible wire format) ---
+  if (cfg.provider === "openrouter" || cfg.provider === "9router") {
+    const is9r   = cfg.provider === "9router";
+    const apiKey = await loadAiKey();
+    if (!is9r && !apiKey) throw new Error("no OpenRouter API key configured");
+
+    const tools = await buildAiTools();   // null when no binary loaded
+    let cancelled = false;
+    let currentCancel = () => {};
+    AI_INFLIGHT.set(id, {
+      cancel: () => { cancelled = true; currentCancel(); },
+    });
+
+    // Run the agentic loop in the background — the IPC handler returns
+    // the request id immediately so the renderer can subscribe.
+    (async () => {
+      try {
+        // Operate on a mutable copy so the renderer's array isn't
+        // mutated by tool-result appends.
+        const convo = messages.slice();
+        const total = await openrouterAgenticLoop({
+          cfg, apiKey, chosenModel, messages: convo, temperature, tools, send,
+          registerCancel: (fn) => { currentCancel = fn; if (cancelled) fn(); },
+        });
         send("ember:ai:done", { chars: total });
+      } catch (err) {
+        const m = err?.message || String(err);
+        const friendly = is9r && /ECONNREFUSED|ENOTFOUND/.test(m)
+          ? `9Router not reachable at ${NINE_ROUTER_URL}. Start the 9router proxy, or override with EMBER_9ROUTER_URL.`
+          : m;
+        send("ember:ai:error", friendly);
+      } finally {
         AI_INFLIGHT.delete(id);
-      });
-    });
-    req.on("error", (err) => {
-      const m = err?.message || String(err);
-      const friendly = is9r && /ECONNREFUSED|ENOTFOUND/.test(m)
-        ? `${label} not reachable at ${NINE_ROUTER_URL}. Start the 9router proxy, or override with EMBER_9ROUTER_URL.`
-        : m;
-      send("ember:ai:error", friendly);
-      AI_INFLIGHT.delete(id);
-    });
-    AI_INFLIGHT.set(id, { cancel: () => req.destroy(new Error("cancelled")) });
-    req.write(body);
-    req.end();
+      }
+    })();
     return id;
   }
 
@@ -747,9 +886,10 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
   // raw `-p` flag forces assistant_API_KEY billing. Same path t3code
   // uses; nothing token-scraping or ToS-grey here.
   if (cfg.provider === "assistant-cli") {
-    let queryFn;
-    try { queryFn = await loadassistantSdk(); }
+    let sdk;
+    try { sdk = await loadassistantSdk(); }
     catch (e) { throw new Error(e.message); }
+    const { query: queryFn, tool: toolFn, createSdkMcpServer } = sdk;
 
     const systemPrompt = extractSystemPrompt(messages);
     // The SDK's `prompt` field takes one user turn for one-shot
@@ -757,6 +897,37 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
     // with role prefixes — same approach as the previous CLI path
     // and good enough for the chat panel's typical 2-3 turn arc.
     const flat = flattenMessages(messages);
+
+    // Wire Ember's binary-navigation tools into assistant's agent loop
+    // via an in-process MCP server. The SDK runs the loop itself —
+    // we just supply tool definitions and the model decides when to
+    // call them. Each MCP tool name becomes `mcp__ember__<name>`
+    // from the model's perspective.
+    const emberTools = await buildAiTools();
+    let mcpServers, allowedTools;
+    if (emberTools) {
+      const { z } = require("zod");
+      const sdkTools = emberTools.map((t) => toolFn(
+        t.name,
+        t.description,
+        t.zod,
+        async (args) => {
+          send("ember:ai:tool", { name: t.name, args });
+          let text;
+          try {
+            text = await t.exec(args);
+            send("ember:ai:toolDone", { name: t.name, ok: true, chars: text.length });
+          } catch (err) {
+            text = `Error: ${err?.message || String(err)}`;
+            send("ember:ai:toolDone", { name: t.name, ok: false, chars: text.length });
+          }
+          return { content: [{ type: "text", text }] };
+        },
+      ));
+      const server = createSdkMcpServer({ name: "ember", version: "0.1.0", tools: sdkTools });
+      mcpServers = { ember: server };
+      allowedTools = emberTools.map((t) => `mcp__ember__${t.name}`);
+    }
 
     const abort = new AbortController();
     AI_INFLIGHT.set(id, { cancel: () => abort.abort() });
@@ -773,13 +944,13 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
             // edit files, long explanations). It was diluting our
             // RE-analyst directives, in particular making the model
             // ignore the strict ```renames fenced-block requirement.
-            // Tools are off (tools: []) so the safety guardrails the
-            // default preamble ships with don't apply here anyway.
             ...(systemPrompt ? { systemPrompt: systemPrompt } : {}),
-            // Empty tool list = pure chat. We're not running an
-            // agent loop with file edits / bash — Ember already
-            // owns the binary analysis surface.
-            tools: [],
+            // Allow only Ember's MCP tools. The SDK's built-in tools
+            // (Bash, Read, Write, etc.) stay disabled — the analyst
+            // shouldn't be reading random files; only navigating the
+            // loaded binary via our query helpers.
+            ...(allowedTools ? { allowedTools } : { allowedTools: [] }),
+            ...(mcpServers ? { mcpServers } : {}),
             // Bare-mode equivalent: don't load user/project assistant.md,
             // hooks, MCP servers. Keeps responses focused on the
             // Ember context we attached, no environmental drift.

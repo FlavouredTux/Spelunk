@@ -11,8 +11,21 @@ import type { AiMessage, AiChatRequest } from "./types";
 //
 // Versioning: bump SYSTEM_PROMPT_VERSION when the prompt changes
 // substantively so any downstream cache key invalidates.
-export const SYSTEM_PROMPT_VERSION = 2;
+export const SYSTEM_PROMPT_VERSION = 3;
 export const SYSTEM_PROMPT = `You are Ember's reverse-engineering assistant. The user is analyzing a compiled x86-64 binary in a static decompiler. They paste Ember's pseudo-C (or disasm / IR / CFG dumps) and ask you about it.
+
+## Tools — use them, don't guess
+
+You have live access to the loaded binary through these tools:
+
+- \`get_function(target)\` — fetch the pseudo-C of any function by name or 0x-prefixed hex address. Use this whenever the snippet calls a function you'd want to read (helpers, callees), not just the one the user attached.
+- \`find_function(query)\` — search defined functions by case-insensitive name regex. Use to locate something the user named partially or to discover what's available.
+- \`list_callers(target)\` / \`list_callees(target)\` — caller / callee xrefs. Use to map call chains, find every site that invokes a helper, etc.
+- \`find_strings(pattern)\` — string literals + their referencing instructions. Use to track down handlers by error message, find protocol fields, etc.
+
+When the snippet says \`init_imgui_glfw()\` or \`should_close_window(wind)\`, READ them via \`get_function\` before describing what they do. When the user asks "where is X used", call \`list_callers\`. When you'd otherwise hand-wave with "this likely…", call a tool first. Tools are cheap; speculation isn't.
+
+Don't over-call: 1-3 tools per turn is the sweet spot. After tool results land, write the analysis. Don't narrate "I'll look at X now" before each call — the UI shows the trail.
 
 ## Method — follow this in order
 
@@ -234,6 +247,10 @@ export function parseRenames(text: string): RenameSuggestion[] {
 // Stream a chat call. Returns a controller with a Promise that resolves
 // with the full response text and a `cancel()` method. Yields each
 // delta to `onDelta` as it arrives so the UI can incrementally render.
+// `onTool` / `onToolDone` surface the agentic loop: the model invoked
+// a binary-navigation tool, and (eventually) it returned. Either is
+// optional — chat works fine without subscribing.
+export type ToolEvent = { name: string; args?: Record<string, unknown>; ok?: boolean; chars?: number };
 export type ChatStream = {
   promise:  Promise<string>;
   cancel:   () => void;
@@ -241,7 +258,9 @@ export type ChatStream = {
 };
 
 export function streamChat(req: AiChatRequest,
-                           onDelta: (delta: string) => void): ChatStream {
+                           onDelta: (delta: string) => void,
+                           onTool?: (e: ToolEvent) => void,
+                           onToolDone?: (e: ToolEvent) => void): ChatStream {
   const ai = window.ember.ai;
   let assembled = "";
   let resolveId!: (id: string) => void;
@@ -256,19 +275,27 @@ export function streamChat(req: AiChatRequest,
     });
     const offDone = ai.onDone((id) => {
       if (id !== myId) return;
-      offChunk(); offDone(); offError();
+      offChunk(); offDone(); offError(); offTool(); offToolDone();
       resolve(assembled);
     });
     const offError = ai.onError((id, msg) => {
       if (id !== myId) return;
-      offChunk(); offDone(); offError();
+      offChunk(); offDone(); offError(); offTool(); offToolDone();
       reject(new Error(msg));
+    });
+    const offTool     = ai.onTool((id, info) => {
+      if (id !== myId || !onTool) return;
+      onTool(info);
+    });
+    const offToolDone = ai.onToolDone((id, info) => {
+      if (id !== myId || !onToolDone) return;
+      onToolDone(info);
     });
 
     ai.chat(req)
       .then((id) => { myId = id; resolveId(id); })
       .catch((e) => {
-        offChunk(); offDone(); offError();
+        offChunk(); offDone(); offError(); offTool(); offToolDone();
         reject(e);
       });
   });

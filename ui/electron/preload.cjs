@@ -39,5 +39,19 @@ contextBridge.exposeInMainWorld("ember", {
       ipcRenderer.on("ember:ai:error", h);
       return () => ipcRenderer.removeListener("ember:ai:error", h);
     },
+    // Agentic tool events. `onTool` fires when the model invokes one
+    // of Ember's binary-navigation tools; `onToolDone` fires once the
+    // call returns (or fails). The chat panel renders these as a
+    // status row so the user can see the model's reasoning trail.
+    onTool:       (cb)      => {
+      const h = (_e, id, info) => cb(id, info);
+      ipcRenderer.on("ember:ai:tool", h);
+      return () => ipcRenderer.removeListener("ember:ai:tool", h);
+    },
+    onToolDone:   (cb)      => {
+      const h = (_e, id, info) => cb(id, info);
+      ipcRenderer.on("ember:ai:toolDone", h);
+      return () => ipcRenderer.removeListener("ember:ai:toolDone", h);
+    },
   },
 });

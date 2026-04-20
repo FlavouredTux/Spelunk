@@ -58,6 +58,12 @@ export function AIPanel(props: {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Live trail of agentic tool calls for the in-flight turn. Cleared
+  // on a new submit; appended on each `onTool`, marked done on each
+  // `onToolDone`. Renders as a status row above the streaming
+  // assistant message.
+  type ToolEntry = { name: string; args: Record<string, unknown>; status: "pending" | "ok" | "err"; chars?: number };
+  const [toolTrail, setToolTrail] = useState<ToolEntry[]>([]);
   const streamRef = useRef<ChatStream | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
@@ -157,14 +163,36 @@ export function AIPanel(props: {
       messages.pop();
     }
 
-    const stream = streamChat({ messages, model }, (delta) => {
-      setTurns((cur) => {
-        const last = cur[cur.length - 1];
-        if (last?.role !== "assistant" || !last.pending) return cur;
-        return [...cur.slice(0, -1),
-                { ...last, content: last.content + delta }];
-      });
-    });
+    setToolTrail([]);
+    const stream = streamChat(
+      { messages, model },
+      (delta) => {
+        setTurns((cur) => {
+          const last = cur[cur.length - 1];
+          if (last?.role !== "assistant" || !last.pending) return cur;
+          return [...cur.slice(0, -1),
+                  { ...last, content: last.content + delta }];
+        });
+      },
+      (info) => {
+        // Tool invocation started — append to the trail in pending state.
+        setToolTrail((cur) => [...cur, { name: info.name, args: info.args || {}, status: "pending" }]);
+      },
+      (info) => {
+        // Tool finished — match the most recent pending entry by name
+        // (LIFO works because tools are sequential within a turn).
+        setToolTrail((cur) => {
+          for (let i = cur.length - 1; i >= 0; i--) {
+            if (cur[i].name === info.name && cur[i].status === "pending") {
+              const copy = cur.slice();
+              copy[i] = { ...copy[i], status: info.ok ? "ok" : "err", chars: info.chars };
+              return copy;
+            }
+          }
+          return cur;
+        });
+      },
+    );
     streamRef.current = stream;
     stream.promise
       .then(() => {
@@ -334,6 +362,9 @@ export function AIPanel(props: {
           {turns.map((t, i) => (
             <Turn key={i} turn={t} />
           ))}
+          {toolTrail.length > 0 && busy && (
+            <ToolTrail entries={toolTrail} />
+          )}
         </div>
 
         {/* Retry affordance — surfaces when the last assistant turn
@@ -633,6 +664,51 @@ function EmptyState(props: {
 // inline (paragraphs, fenced code, single-back-tick code spans). Full
 // Markdown isn't worth the dep — the system prompt steers the model
 // away from headers / lists / horizontal rules.
+// Renders the live agentic tool-call trail. Each entry is a
+// monospace pill: tool name + a one-arg preview, with a status dot
+// (pending / ok / error). Compact so it doesn't push the streamed
+// answer off-screen — typically 1-3 calls per turn.
+function ToolTrail(props: {
+  entries: { name: string; args: Record<string, unknown>; status: "pending" | "ok" | "err"; chars?: number }[];
+}) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 4,
+      padding: "8px 12px",
+      borderLeft: `2px solid ${C.accent}`,
+      background: "rgba(217,119,87,0.05)",
+      borderRadius: 4,
+      fontFamily: mono, fontSize: 10,
+      color: C.textMuted,
+    }}>
+      {props.entries.map((e, i) => {
+        const dot = e.status === "pending" ? "·"
+                  : e.status === "ok"      ? "✓"
+                  :                          "×";
+        const dotColor = e.status === "pending" ? C.textFaint
+                       : e.status === "ok"      ? C.green
+                       :                          C.red;
+        const previewArg = Object.values(e.args)[0];
+        const preview = typeof previewArg === "string"
+          ? previewArg.length > 60 ? previewArg.slice(0, 60) + "…" : previewArg
+          : "";
+        return (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: dotColor, width: 10, textAlign: "center" }}>{dot}</span>
+            <span style={{ color: C.text }}>{e.name}</span>
+            {preview && (
+              <span style={{ color: C.textFaint }}>({preview})</span>
+            )}
+            {typeof e.chars === "number" && e.status !== "pending" && (
+              <span style={{ color: C.textFaint, marginLeft: "auto" }}>{e.chars} chars</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Turn(props: { turn: ChatTurn }) {
   const isUser = props.turn.role === "user";
   return (

@@ -77,6 +77,11 @@ export type AiChatRequest = {
   model?:      string;
   temperature?: number;
 };
+// Agentic tool-call events. `args` is the parsed arguments object the
+// model passed; `chars` on Done is the result length (rough proxy for
+// how much context just got pulled in).
+export type AiToolInvocation = { name: string; args: Record<string, unknown> };
+export type AiToolResult     = { name: string; ok: boolean; chars: number };
 
 declare global {
   interface Window {
@@ -106,6 +111,8 @@ declare global {
         onChunk:      (cb: (id: string, delta: string) => void) => () => void;
         onDone:       (cb: (id: string, info: { chars: number }) => void) => () => void;
         onError:      (cb: (id: string, msg: string) => void) => () => void;
+        onTool:       (cb: (id: string, info: AiToolInvocation) => void) => () => void;
+        onToolDone:   (cb: (id: string, info: AiToolResult) => void) => () => void;
       };
     };
   }

@@ -104,4 +104,7 @@ jobs:
         with:
           files: ${{ matrix.package_glob }}
           fail_on_unmatched_files: false
-          generate_release_notes: true
+          # Only the first matrix job generates notes; the others just
+          # attach their artifacts. Otherwise the body gets stamped
+          # once per matrix leg (three "Full Changelog" lines).
+          generate_release_notes: ${{ matrix.target == 'linux' }}

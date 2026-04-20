@@ -79,9 +79,19 @@ function runEmber(args) {
     proc.stdout.on("data", (d) => { stdout += d.toString(); });
     proc.stderr.on("data", (d) => { stderr += d.toString(); });
     proc.on("error", (e) => reject(e));
-    proc.on("close", (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(stderr.trim() || `ember exited ${code}`));
+    proc.on("close", (code, signal) => {
+      if (code === 0) return resolve(stdout);
+      // code === null means the process was killed by a signal (segfault,
+      // OOM, SIGTERM, ...). Surface the signal + whatever stderr we got
+      // so the renderer can show something actionable instead of a
+      // mysterious "exited null".
+      const how = code === null
+        ? `ember killed by ${signal || "signal"}`
+        : `ember exited ${code}`;
+      const tail = stderr.trim();
+      const msg = tail ? `${how}\n${tail.slice(-2000)}` : how;
+      const full = `${msg}\n(cmd: ${EMBER_BIN} ${args.join(" ")})`;
+      reject(new Error(full));
     });
   });
 }

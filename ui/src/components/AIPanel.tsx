@@ -198,6 +198,31 @@ export function AIPanel(props: {
     }
     return null;
   }, [turns]);
+  // If the last assistant turn is a pure error (nothing streamed
+  // before the error marker), surface a retry pill so the user can
+  // re-run the same question after fixing the cause (switching
+  // provider, topping up credits, logging into the CLI, etc.) without
+  // having to retype the prompt. The retry strips off the last two
+  // turns (user + failed assistant) and resubmits the user message.
+  const lastFailed = useMemo(() => {
+    const last = turns[turns.length - 1];
+    if (!last || last.role !== "assistant" || last.pending) return false;
+    return last.content.startsWith("[error]") || /\n\[error\] /.test(last.content);
+  }, [turns]);
+  function retryLast() {
+    if (busy) return;
+    // Find the user message immediately before the failed assistant
+    // turn and resubmit it. Trim any quick-action pre-amble context
+    // we'd appended on the first turn by re-pulling from the raw
+    // user content — the model already saw the code body, no need to
+    // attach it again.
+    const lastUser = [...turns].reverse().find((t) => t.role === "user");
+    if (!lastUser) return;
+    // Drop the failed pair; the new submit appends a fresh user+asst.
+    setTurns((cur) => cur.slice(0, -2));
+    // Give React a beat to apply the slice before submit walks `turns`.
+    setTimeout(() => submit(lastUser.content), 0);
+  }
   const renames = useMemo<RenameSuggestion[]>(
     () => lastAssistant ? parseRenames(lastAssistant.content) : [],
     [lastAssistant],
@@ -290,6 +315,38 @@ export function AIPanel(props: {
             <Turn key={i} turn={t} />
           ))}
         </div>
+
+        {/* Retry affordance — surfaces when the last assistant turn
+            was an error (no credits / CLI not logged in / network).
+            Lets the user re-run the same question after fixing the
+            cause without having to retype it. */}
+        {lastFailed && (
+          <div style={{
+            padding: "8px 16px",
+            borderTop: `1px solid ${C.border}`,
+            background: "rgba(220,95,95,0.08)",
+            display: "flex", alignItems: "center", gap: 10,
+            fontFamily: mono, fontSize: 11,
+          }}>
+            <span style={{ color: C.red }}>●</span>
+            <span style={{ color: C.textMuted, flex: 1 }}>
+              Request failed. Fix the cause (switch provider in Settings,
+              top up credits, `assistant auth login`, …) then retry.
+            </span>
+            <button
+              onClick={retryLast}
+              disabled={busy}
+              style={{
+                padding: "4px 12px",
+                background: busy ? C.bgMuted : C.accent,
+                color: busy ? C.textMuted : "#fff",
+                border: "none", borderRadius: 4,
+                fontFamily: mono, fontSize: 10, fontWeight: 600,
+                cursor: busy ? "not-allowed" : "pointer",
+              }}
+            >retry</button>
+          </div>
+        )}
 
         {/* Apply-rename action — surfaces when the AI suggested a rename
             for the currently selected function. One-click commits to

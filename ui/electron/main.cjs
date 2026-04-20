@@ -274,6 +274,16 @@ async function loadAiConfig() {
     ? j.provider
     : AI_DEFAULT_PROVIDER;
 
+  // Migrate old single-provider config (pre-provider-split) — a
+  // top-level `model` field gets hoisted into `models[provider]` if
+  // the per-provider entry doesn't already exist. Keeps the old
+  // user's picked model around instead of dropping it to the default.
+  const models = j.models || {};
+  if (typeof j.model === "string" && j.model && !models[provider]) {
+    models[provider] = j.model;
+  }
+  const model = models[provider] || defaultModelFor(provider);
+
   // Decrypt only enough to know whether a key is present — we never
   // surface the plaintext back to the renderer.
   let hasKey = false;
@@ -283,9 +293,6 @@ async function loadAiConfig() {
   } else if (j.keyPlain) {
     hasKey = true;
   }
-
-  const models = j.models || {};
-  const model  = models[provider] || defaultModelFor(provider);
 
   return {
     provider,
@@ -544,7 +551,16 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
   const send = (channel, ...args) => {
     if (win && !win.isDestroyed()) win.webContents.send(channel, id, ...args);
   };
-  const chosenModel = model || cfg.model;
+  // The renderer's model state can drift from the persisted per-
+  // provider config (e.g. user opened the AI panel, then swapped
+  // provider in Settings). Config is authoritative — only honour an
+  // explicit model override if it belongs to this provider's known
+  // suggestion list, otherwise fall back to what we have on disk.
+  const providerModels = AI_MODEL_SUGGESTIONS[cfg.provider] || [];
+  const chosenModel =
+    (typeof model === "string" && model && providerModels.includes(model))
+      ? model
+      : cfg.model;
 
   // ---- OpenRouter ----------------------------------------------------
   if (cfg.provider === "openrouter") {

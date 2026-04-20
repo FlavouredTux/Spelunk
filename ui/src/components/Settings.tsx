@@ -160,7 +160,7 @@ export function SettingsPanel(props: {
             </Row>
           </Section>
 
-          <Section title="AI (OpenRouter)">
+          <Section title="AI">
             <AiConfigSection />
           </Section>
 
@@ -592,16 +592,18 @@ function Segmented<T extends string>(props: {
         return (
           <button
             key={o}
+            type="button"
             onClick={() => props.onChange(o)}
             style={{
               padding: "5px 12px",
-              background: active ? C.bgAlt : "transparent",
-              color: active ? C.text : C.textMuted,
+              background: active ? C.accent : "transparent",
+              color: active ? "#fff" : C.textMuted,
               border: "none",
               borderLeft: i > 0 ? `1px solid ${C.border}` : "none",
               fontFamily: mono, fontSize: 11,
               fontWeight: active ? 600 : 400,
               cursor: "pointer",
+              transition: "background .12s, color .12s",
             }}
           >{o}</button>
         );

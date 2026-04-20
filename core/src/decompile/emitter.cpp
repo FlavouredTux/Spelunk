@@ -556,13 +556,13 @@ struct Emitter {
                     cur_ver = src.version;
                     continue;
                 }
-                if (depth < 10) return expr(src, depth + 1);
+                if (depth < kMaxExprDepth) return expr(src, depth + 1);
                 break;
             }
             // Phi-merged reg: if every incoming operand renders to the
             // same expression (common for `rax = phi(rax_v1, t17)` where
             // t17 traces back to the same call's return), emit that.
-            if (d->op == IrOp::Phi && depth < 10 && !d->phi_operands.empty()) {
+            if (d->op == IrOp::Phi && depth < kMaxExprDepth && !d->phi_operands.empty()) {
                 std::string unified;
                 bool all_match = true;
                 for (const auto& op : d->phi_operands) {
@@ -1448,6 +1448,13 @@ struct Emitter {
         return std::format("{:#x}", static_cast<u64>(v.imm));
     }
 
+    // Hard depth cap for recursive expression expansion. The emitter
+    // inlines SSA defs during render — a long def-use chain without a
+    // cap recurses until the stack (or kernel OOM-killer) stops it.
+    // Deeply-nested expressions past ~6 levels are illegible anyway;
+    // we stop inlining and render the raw register/temp instead.
+    static constexpr int kMaxExprDepth = 6;
+
     [[nodiscard]] std::string expr(const IrValue& v, int depth = 0,
                                    int min_prec = 0) const;
     [[nodiscard]] std::string expand(const IrInst& d, int depth,
@@ -1560,7 +1567,7 @@ struct Emitter {
     // width the reader expects. Smaller loads keep their `*(T*)(addr)` form
     // so struct-field accesses stay semantically honest.
     [[nodiscard]] std::optional<std::string>
-    try_render_array_index(const IrValue& addr, IrType t) const {
+    try_render_array_index(const IrValue& addr, IrType t, int depth = 0) const {
         if (t != IrType::I64) return std::nullopt;
         IrValue base = addr;
         i64     off  = 0;
@@ -1582,10 +1589,11 @@ struct Emitter {
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;
         }
-        return std::format("{}[{}]", expr(base), off >> 3);
+        return std::format("{}[{}]", expr(base, depth + 1), off >> 3);
     }
 
-    [[nodiscard]] std::string format_mem(const IrValue& addr, IrType t, Reg seg) const {
+    [[nodiscard]] std::string format_mem(const IrValue& addr, IrType t, Reg seg,
+                                          int depth = 0) const {
         if (seg == Reg::None) {
             if (auto off = stack_offset(addr); off) {
                 return stack_name(*off);
@@ -1617,7 +1625,7 @@ struct Emitter {
             // rendering when both apply — u64 stride-8 accesses usually mean
             // "argv-style pointer-to-pointer", which reads more naturally
             // as `a[i]` than `a->field_N`.
-            if (auto s = try_render_array_index(addr, t); s) {
+            if (auto s = try_render_array_index(addr, t, depth); s) {
                 return *s;
             }
             // Struct-field form: if this base has been observed at multiple
@@ -1630,7 +1638,7 @@ struct Emitter {
                 const IrValue& base = bo->first;
                 const i64 off = bo->second;
                 const std::string base_expr =
-                    expr(base, 0, static_cast<int>(Prec::Unary));
+                    expr(base, depth + 1, static_cast<int>(Prec::Unary));
                 // Negative offsets (pointer adjusted above its struct base,
                 // e.g. vtable slots at base-8) don't have clean C syntax;
                 // fall back to the explicit cast form so we don't emit
@@ -1648,10 +1656,12 @@ struct Emitter {
                                    c_type_name(t), base_expr,
                                    static_cast<u64>(off));
             }
-            return std::format("*({}*)({})", c_type_name(t), expr(addr));
+            return std::format("*({}*)({})", c_type_name(t),
+                               expr(addr, depth + 1));
         }
         return std::format("*({}*){}:[{}]",
-                           c_type_name(t), reg_name(seg), expr(addr));
+                           c_type_name(t), reg_name(seg),
+                           expr(addr, depth + 1));
     }
 
     [[nodiscard]] std::string format_binop(const IrInst& d, std::string_view op,
@@ -1945,7 +1955,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
         case IrValueKind::Reg: {
             // For versioned regs, inline a trivial Imm assignment — lets the
             // absorbed call() show the actual constant instead of an orphan reg name.
-            if (v.version > 0 && depth < 12) {
+            if (v.version > 0 && depth < kMaxExprDepth) {
                 const IrInst* d = def_of(v);
                 while (d && d->op == IrOp::Assign && d->src_count == 1) {
                     const auto& src = d->srcs[0];
@@ -1968,7 +1978,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
             if (auto off = stack_offset(v); off) {
                 return std::format("&{}", stack_name(*off));
             }
-            if (depth < 12 && should_inline(v)) {
+            if (depth < kMaxExprDepth && should_inline(v)) {
                 if (const auto* d = def_of(v)) return expand(*d, depth + 1, min_prec);
             }
             return std::format("t{}", v.temp);
@@ -2053,7 +2063,7 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         }
 
         case IrOp::Load:
-            return format_mem(d.srcs[0], d.dst.type, d.segment);
+            return format_mem(d.srcs[0], d.dst.type, d.segment, depth);
 
         case IrOp::AddCarry:
             return std::format("carry_add({}, {})",

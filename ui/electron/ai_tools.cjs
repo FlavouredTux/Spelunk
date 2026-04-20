@@ -15,7 +15,22 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { z } = require("zod");
 
-const QUERY_SCRIPT = path.join(__dirname, "..", "..", "scripts", "query.js");
+// In dev the script lives at the repo root; in packaged Electron it
+// gets copied into `resources/scripts/`. EMBER_QUERY_SCRIPT lets
+// integrators override (e.g. when testing a fork of query.js).
+const QUERY_SCRIPT = process.env.EMBER_QUERY_SCRIPT || (() => {
+  // The `app` import is heavy and only available in main; we resolve
+  // lazily so this module also works under plain `node` for tests.
+  let isPackaged = false, resPath = "";
+  try {
+    const { app } = require("electron");
+    isPackaged = app.isPackaged;
+    resPath    = process.resourcesPath || "";
+  } catch { /* not running in electron */ }
+  return isPackaged && resPath
+    ? path.join(resPath, "scripts", "query.js")
+    : path.join(__dirname, "..", "..", "scripts", "query.js");
+})();
 const MAX_TOOL_OUTPUT = 16000;     // chars; ~4k tokens per call
 
 // Cap result strings so a curious model can't blow the context window

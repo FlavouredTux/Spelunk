@@ -30,10 +30,17 @@ async function loadassistantSdk() {
 }
 
 // Windows MSVC / MinGW builds emit `ember.exe`; *nix builds emit
-// bare `ember`. Honour an explicit EMBER_BIN override regardless.
-const EMBER_BIN = process.env.EMBER_BIN ||
-  path.join(__dirname, "..", "..", "build", "cli",
-            process.platform === "win32" ? "ember.exe" : "ember");
+// bare `ember`. In packaged Electron the CLI ships in resources;
+// in dev we run from the cmake build dir. Honour EMBER_BIN as an
+// explicit override either way.
+function defaultEmberBin() {
+  const exe = process.platform === "win32" ? "ember.exe" : "ember";
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "cli", exe);
+  }
+  return path.join(__dirname, "..", "..", "build", "cli", exe);
+}
+const EMBER_BIN = process.env.EMBER_BIN || defaultEmberBin();
 
 const state = { binary: null };
 

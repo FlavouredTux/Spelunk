@@ -4,10 +4,48 @@
   "version": "0.1.0",
   "type": "module",
   "main": "electron/main.cjs",
+  "homepage": "https://github.com/FlavouredTux/Ember",
+  "author": {
+    "name": "FlavouredTux",
+    "email": "noreply@github.com"
+  },
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c magenta,cyan \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
-    "start": "electron ."
+    "start": "electron .",
+    "package": "vite build && electron-builder",
+    "package:linux":   "vite build && electron-builder --linux",
+    "package:mac":     "vite build && electron-builder --mac",
+    "package:win":     "vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "ai.ember.app",
+    "productName": "Ember",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../scripts", "to": "scripts" }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Development",
+      "extraResources": [{ "from": "../build/cli/ember", "to": "cli/ember" }]
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools",
+      "extraResources": [{ "from": "../build/cli/ember", "to": "cli/ember" }]
+    },
+    "win": {
+      "target": ["nsis", "portable"],
+      "extraResources": [{ "from": "../build/cli/ember.exe", "to": "cli/ember.exe" }]
+    }
   },
   "dependencies": {
     "@assistant-ai/assistant-agent-sdk": "^0.2.114",
@@ -20,6 +58,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^8.2.2",
     "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
     "typescript": "^5.5.3",
     "vite": "^5.4.0",
     "wait-on": "^7.2.0"

@@ -6,11 +6,14 @@ const path = require("node:path");
 // Official assistant SDK that wraps the user's installed `assistant` binary
 // and handles subscription auth (Pro/Max OAuth) correctly. Loaded
 // lazily so the renderer doesn't pay the import cost on startup.
+// SDK ships as ESM (sdk.mjs), so we can't `require()` it from this CJS
+// file — Node mandates dynamic `import()`.
 let _assistantQuery = null;
-function loadassistantSdk() {
+async function loadassistantSdk() {
   if (_assistantQuery) return _assistantQuery;
   try {
-    _assistantQuery = require("@assistant-ai/assistant-agent-sdk").query;
+    const sdk = await import("@assistant-ai/assistant-agent-sdk");
+    _assistantQuery = sdk.query;
   } catch (e) {
     _assistantQuery = null;
     throw new Error(`@assistant-ai/assistant-agent-sdk not installed: ${e.message}`);
@@ -686,7 +689,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
   // uses; nothing token-scraping or ToS-grey here.
   if (cfg.provider === "assistant-cli") {
     let queryFn;
-    try { queryFn = loadassistantSdk(); }
+    try { queryFn = await loadassistantSdk(); }
     catch (e) { throw new Error(e.message); }
 
     const systemPrompt = extractSystemPrompt(messages);

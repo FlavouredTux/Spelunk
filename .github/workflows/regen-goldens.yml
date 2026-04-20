@@ -1,0 +1,50 @@
+name: regen-goldens
+
+# Manual one-shot: rebuild on the CI runner with UPDATE_GOLDEN=1 and
+# upload the regenerated tests/golden/ tree as an artifact. Trigger
+# this whenever the emitter's output drifts from the checked-in
+# goldens (e.g. after a sig-inference improvement) and the goldens
+# need to match the canonical CI toolchain.
+#
+# Not on push/pr — intentionally dispatch-only so it doesn't run on
+# every commit.
+on:
+  workflow_dispatch:
+
+jobs:
+  regen:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc-14 g++-14 python3
+
+      - name: Configure
+        env:
+          CC:  gcc-14
+          CXX: g++-14
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Regenerate goldens
+        env:
+          UPDATE_GOLDEN: "1"
+        # Run twice — first run writes updates, second run verifies
+        # everything passes with the new goldens. If the second run
+        # fails, the regen itself is nondeterministic and we need to
+        # find out why before committing.
+        run: |
+          ctest --test-dir build --output-on-failure || true
+          ctest --test-dir build --output-on-failure
+
+      - name: Upload regenerated goldens
+        uses: actions/upload-artifact@v4
+        with:
+          name: goldens
+          path: tests/golden/
+          if-no-files-found: error

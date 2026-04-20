@@ -1,7 +1,7 @@
 {
   "name": "ember-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "electron/main.cjs",
   "homepage": "https://github.com/FlavouredTux/Ember",
@@ -24,6 +24,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "assets/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -35,15 +36,18 @@
     "linux": {
       "target": ["AppImage", "deb"],
       "category": "Development",
+      "icon": "assets/icon.png",
       "extraResources": [{ "from": "../build/cli/ember", "to": "cli/ember" }]
     },
     "mac": {
       "target": ["dmg", "zip"],
       "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.png",
       "extraResources": [{ "from": "../build/cli/ember", "to": "cli/ember" }]
     },
     "win": {
       "target": ["nsis", "portable"],
+      "icon": "assets/icon.png",
       "extraResources": [{ "from": "../build/cli/ember.exe", "to": "cli/ember.exe" }]
     }
   },

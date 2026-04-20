@@ -1,4 +1,5 @@
 import { C, sans, serif, mono } from "../theme";
+import mascot from "../../assets/ember-mascot.png";
 
 export function Welcome(props: {
   onOpen: () => void;
@@ -22,19 +23,19 @@ export function Welcome(props: {
     >
       <div style={{ textAlign: "center", maxWidth: 620, padding: 32 }}>
 
-        <div
+        <img
+          src={mascot}
+          alt="Ember"
           style={{
-            fontFamily: sans,
-            fontSize: 72,
-            fontWeight: 700,
-            letterSpacing: -3,
-            lineHeight: 1,
-            marginBottom: 12,
-            color: C.text,
+            display: "block",
+            width: 280,
+            height: "auto",
+            margin: "0 auto 8px",
+            userSelect: "none",
+            pointerEvents: "none",
           }}
-        >
-          Ember
-        </div>
+          draggable={false}
+        />
         <div
           style={{
             fontFamily: serif,

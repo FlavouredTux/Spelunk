@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/mascot.png" alt="Ember" width="360">
+</p>
+
 # Ember
 
 A from-scratch reverse-engineering toolkit: ELF + Mach-O loader, x86-64

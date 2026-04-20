@@ -10,6 +10,7 @@ import {
   type ChatStream,
   type RenameSuggestion,
 } from "../ai";
+import { ModelCombobox } from "./Settings";
 
 // Sparkle / wand glyph for the title-bar AI button. Smaller four-point
 // star (the AI / assistant / Gemini convention) plus a tiny accent star
@@ -231,27 +232,17 @@ export function AIPanel(props: {
             Ember AI
           </span>
           <span style={{ flex: 1 }} />
-          {models.length > 0 && (
-            <select
+          {(models.length > 0 || model) && (
+            <ModelCombobox
               value={model}
-              onChange={(e) => {
-                setModel(e.target.value);
-                window.ember.ai.setConfig({ model: e.target.value })
+              options={models}
+              onChange={(v) => {
+                setModel(v);
+                window.ember.ai.setConfig({ model: v })
                   .then((c) => setConfig(c)).catch(() => {});
               }}
-              style={{
-                background: C.bgMuted, color: C.text,
-                border: `1px solid ${C.border}`, borderRadius: 4,
-                padding: "3px 6px",
-                fontFamily: mono, fontSize: 10,
-              }}
-              title="OpenRouter model"
-            >
-              {models.map((m) => <option key={m} value={m}>{m}</option>)}
-              {!models.includes(model) && model && (
-                <option value={model}>{model}</option>
-              )}
-            </select>
+              width={240}
+            />
           )}
           <span style={{ fontFamily: mono, fontSize: 9, color: C.textFaint }}>esc</span>
         </div>

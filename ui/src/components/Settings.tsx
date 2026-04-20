@@ -383,23 +383,13 @@ function AiConfigSection() {
       </Row>
 
       {cfg.hasKey && (
-        <Row label="Default model" hint="Any OpenRouter model id works; the dropdown is just convenience.">
-          <select
+        <Row label="Default model" hint="Type any OpenRouter model id, or pick from the list.">
+          <ModelCombobox
             value={cfg.model}
-            onChange={(e) => changeModel(e.target.value)}
-            style={{
-              background: C.bgMuted, color: C.text,
-              border: `1px solid ${C.border}`, borderRadius: 4,
-              padding: "5px 8px",
-              fontFamily: mono, fontSize: 11,
-              minWidth: 220,
-            }}
-          >
-            {models.map((m) => <option key={m} value={m}>{m}</option>)}
-            {!models.includes(cfg.model) && (
-              <option value={cfg.model}>{cfg.model}</option>
-            )}
-          </select>
+            options={models}
+            onChange={changeModel}
+            width={240}
+          />
         </Row>
       )}
 
@@ -424,6 +414,61 @@ const iconBtnStyle: React.CSSProperties = {
   border: `1px solid ${C.border}`, borderRadius: 4,
   fontFamily: mono, fontSize: 10, cursor: "pointer",
 };
+
+// Free-text input with native autocomplete from a list of suggestions.
+// Beats <select> because the OpenRouter model namespace evolves
+// faster than we can hard-code it — users want to type
+// `qwen/qwen3-coder` or whatever shipped this morning. The datalist
+// gives them the canned options as autocomplete without locking them
+// in. Commits on blur or Enter so per-keystroke spam doesn't churn
+// the IPC config write.
+export function ModelCombobox(props: {
+  value:    string;
+  options:  string[];
+  onChange: (v: string) => void;
+  width?:   number;
+}) {
+  const [draft, setDraft] = useState(props.value);
+  // Keep the input in sync if the parent's value changes via some
+  // other path (e.g. main process write from another window).
+  useEffect(() => { setDraft(props.value); }, [props.value]);
+
+  const commit = () => {
+    const v = draft.trim();
+    if (v && v !== props.value) props.onChange(v);
+    else if (!v) setDraft(props.value);   // empty input → revert
+  };
+
+  const listId = "ai-model-suggestions";
+  return (
+    <>
+      <input
+        list={listId}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); (e.currentTarget as HTMLInputElement).blur(); }
+          else if (e.key === "Escape") { setDraft(props.value); (e.currentTarget as HTMLInputElement).blur(); }
+        }}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        placeholder="vendor/model-id"
+        style={{
+          background: C.bgMuted, color: C.text,
+          border: `1px solid ${C.border}`, borderRadius: 4,
+          padding: "5px 8px",
+          fontFamily: mono, fontSize: 11,
+          width: props.width ?? 220,
+        }}
+      />
+      <datalist id={listId}>
+        {props.options.map((m) => <option key={m} value={m} />)}
+      </datalist>
+    </>
+  );
+}
 
 function Segmented<T extends string>(props: {
   value: T;

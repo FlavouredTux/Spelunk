@@ -3,12 +3,14 @@ function zero_extend_via_eax @ 0x401140
 
 bb_401140  (entry):
   ; 0x401140
+  intrinsic "endbr64"
+  ; 0x401144
   t0 = add i64 rdi, 0x1
   t1 = trunc i32 t0
   t2 = zext i64 t1
   rax_1 = t2
-  ; 0x401143
+  ; 0x401147
   store i64 [0x404020], rax_1
-  ; 0x40114a
+  ; 0x40114e
   return rax_1, xmm0
 

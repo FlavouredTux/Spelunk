@@ -1,23 +1,24 @@
 function describe
-  entry    0x0000000000401120
-  extent   0x0000000000401120 - 0x0000000000401136  (22 bytes)
+  entry    0x0000000000401130
+  extent   0x0000000000401130 - 0x0000000000401146  (22 bytes)
   blocks   3
   edges    2
   calls    0
 
-bb_401120  (entry):
-  0x0000000000401120  83 ff 05                        cmp edi, 0x5
-  0x0000000000401123  77 0b                           ja 0x401130
-  -> bb_401130  (taken)
-  -> bb_401125  (fallthrough)
+bb_401130  (entry):
+  0x0000000000401130  f3 0f 1e fa                     endbr64
+  0x0000000000401134  83 ff 05                        cmp edi, 0x5
+  0x0000000000401137  77 07                           ja 0x401140
+  -> bb_401140  (taken)
+  -> bb_401139  (fallthrough)
 
-bb_401125  <- bb_401120:
-  0x0000000000401125  8d 47 64                        lea eax, [rdi + 0x64]
-  0x0000000000401128  c3                              ret
+bb_401139  <- bb_401130:
+  0x0000000000401139  8d 47 64                        lea eax, [rdi + 0x64]
+  0x000000000040113c  c3                              ret
   -> <return>
 
-bb_401130  <- bb_401120:
-  0x0000000000401130  b8 ff ff ff ff                  mov eax, 0xffffffff
-  0x0000000000401135  c3                              ret
+bb_401140  <- bb_401130:
+  0x0000000000401140  b8 ff ff ff ff                  mov eax, 0xffffffff
+  0x0000000000401145  c3                              ret
   -> <return>
 

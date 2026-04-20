@@ -198,12 +198,13 @@ ipcMain.handle("ember:loadAnnotations", async (_e, bp) => {
     const data = await fs.readFile(sidecarPath(bp), "utf8");
     const parsed = JSON.parse(data);
     return {
-      renames:    parsed.renames    || {},
-      notes:      parsed.notes      || {},
-      signatures: parsed.signatures || {},
+      renames:      parsed.renames      || {},
+      notes:        parsed.notes        || {},
+      signatures:   parsed.signatures   || {},
+      localRenames: parsed.localRenames || {},
     };
   } catch {
-    return { renames: {}, notes: {}, signatures: {} };
+    return { renames: {}, notes: {}, signatures: {}, localRenames: {} };
   }
 });
 

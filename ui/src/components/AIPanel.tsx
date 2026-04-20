@@ -49,6 +49,7 @@ export function AIPanel(props: {
   current?: FunctionInfo | null;
   annotations?: Annotations;
   onApplyRename?: (fn: FunctionInfo, newName: string) => void;
+  onApplyLocalRenames?: (fn: FunctionInfo, pairs: Record<string, string>) => void;
   onClose: () => void;
 }) {
   const [config, setConfig] = useState<AiConfig | null>(null);
@@ -248,6 +249,25 @@ export function AIPanel(props: {
     });
   }, [renames, props.current]);
 
+  // Everything else in the renames block is a per-function local /
+  // arg / SSA-result rename. We track which ones are already applied
+  // so the pill can render a "applied" badge instead of the apply
+  // button — clicking it then reverts. Live-derived from annotations
+  // each render to stay in sync if the user mutates from elsewhere.
+  const localRenames = useMemo(
+    () => renames.filter((r) => r !== fnRename),
+    [renames, fnRename],
+  );
+  const appliedLocals = useMemo(() => {
+    const map = props.current
+      ? props.annotations?.localRenames?.[props.current.addr] || {}
+      : {};
+    const set = new Set<string>();
+    for (const r of localRenames) if (map[r.from] === r.to) set.add(r.from);
+    return set;
+  }, [localRenames, props.annotations, props.current]);
+  const allApplied = localRenames.length > 0 && appliedLocals.size === localRenames.length;
+
   return (
     <div
       onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
@@ -359,7 +379,7 @@ export function AIPanel(props: {
             display: "flex", alignItems: "center", gap: 10,
             fontFamily: mono, fontSize: 11,
           }}>
-            <span style={{ color: C.textMuted }}>suggested:</span>
+            <span style={{ color: C.textMuted }}>function:</span>
             <span style={{ color: C.textFaint, textDecoration: "line-through" }}>
               {fnRename.from}
             </span>
@@ -374,7 +394,85 @@ export function AIPanel(props: {
                 border: "none", borderRadius: 4,
                 fontFamily: mono, fontSize: 10, cursor: "pointer",
               }}
-            >apply rename</button>
+            >apply</button>
+          </div>
+        )}
+
+        {/* Per-function local / arg / SSA-result rename pills. Each
+            pill is a one-click toggle: apply / revert. "apply all" /
+            "revert all" handle the bulk case. Renders as a wrapping
+            row so a body with a dozen suggestions stays compact. */}
+        {localRenames.length > 0 && props.onApplyLocalRenames && props.current && (
+          <div style={{
+            padding: "8px 16px",
+            borderTop: `1px solid ${C.border}`,
+            background: "rgba(217,119,87,0.04)",
+            display: "flex", flexDirection: "column", gap: 6,
+            fontFamily: mono, fontSize: 10,
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              color: C.textMuted, fontSize: 10,
+            }}>
+              <span>locals ({localRenames.length}):</span>
+              <span style={{ flex: 1 }} />
+              <button
+                onClick={() => {
+                  if (!props.current) return;
+                  if (allApplied) {
+                    const revert: Record<string, string> = {};
+                    for (const r of localRenames) revert[r.from] = "";
+                    props.onApplyLocalRenames!(props.current, revert);
+                  } else {
+                    const pairs: Record<string, string> = {};
+                    for (const r of localRenames) pairs[r.from] = r.to;
+                    props.onApplyLocalRenames!(props.current, pairs);
+                  }
+                }}
+                style={{
+                  padding: "4px 10px",
+                  background: allApplied ? C.bgMuted : C.accent,
+                  color: allApplied ? C.textMuted : "#fff",
+                  border: "none", borderRadius: 4,
+                  fontFamily: mono, fontSize: 10, cursor: "pointer",
+                }}
+              >{allApplied ? "revert all" : "apply all"}</button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {localRenames.map((r) => {
+                const applied = appliedLocals.has(r.from);
+                return (
+                  <button
+                    key={`${r.from}-${r.to}`}
+                    onClick={() => {
+                      if (!props.current) return;
+                      props.onApplyLocalRenames!(props.current, {
+                        [r.from]: applied ? "" : r.to,
+                      });
+                    }}
+                    style={{
+                      padding: "3px 8px",
+                      background: applied ? "rgba(217,119,87,0.18)" : C.bgMuted,
+                      color: applied ? C.text : C.textMuted,
+                      border: `1px solid ${applied ? C.accent : C.border}`,
+                      borderRadius: 4,
+                      fontFamily: mono, fontSize: 10, cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={applied ? "click to revert" : "click to apply"}
+                  >
+                    <span style={{
+                      color: C.textFaint,
+                      textDecoration: applied ? "none" : "line-through",
+                    }}>{r.from}</span>
+                    <span style={{ color: C.textFaint, padding: "0 4px" }}>→</span>
+                    <span style={{ color: applied ? C.accent : C.text, fontWeight: 600 }}>
+                      {r.to}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 

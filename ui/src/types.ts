@@ -36,6 +36,12 @@ export type Annotations = {
   renames:    Record<string, string>;        // addr hex ("0x6661") -> user-given name
   notes:      Record<string, string>;        // addr hex -> note text
   signatures: Record<string, FunctionSig>;   // addr hex -> declared signature
+  // Per-function local / arg / SSA-result renames. Outer key is the
+  // owning function's address hex; inner map is `from-name → to-name`.
+  // Applied renderer-side as word-boundary substitutions on pseudo-C
+  // output — they don't flow through the C++ analysis pipeline (so
+  // they don't show in asm / ir / ssa views, only in pseudo).
+  localRenames?: Record<string, Record<string, string>>;
 };
 
 export type Xrefs = {

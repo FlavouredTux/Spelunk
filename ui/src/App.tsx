@@ -28,9 +28,23 @@ import type {
 } from "./types";
 
 const EMPTY_XREFS: Xrefs = { callers: {}, callees: {} };
-const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {} };
+const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {}, localRenames: {} };
 const EMPTY_STRINGS: StringEntry[] = [];
 const EMPTY_ARITIES: Arities = {};
+
+// Word-boundary substitute every key in `pairs` with its mapped value
+// in one pass. One-pass matters because rename A → B and rename B → C
+// applied sequentially would chain (A → C); applied atomically they
+// don't. Identifier-shape `from` keys make `\b` anchors safe.
+function applyLocalRenames(text: string, pairs: Record<string, string>): string {
+  const keys = Object.keys(pairs).filter(Boolean);
+  if (keys.length === 0) return text;
+  const escaped = keys
+    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .sort((a, b) => b.length - a.length);   // longest-first to avoid prefix shadowing
+  const re = new RegExp(`\\b(?:${escaped.join("|")})\\b`, "g");
+  return text.replace(re, (m) => pairs[m] ?? m);
+}
 
 export default function App() {
   const [info, setInfo] = useState<BinaryInfo | null>(null);
@@ -309,6 +323,10 @@ export default function App() {
   }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, navBack, navForward, current]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
+  // Pseudo-C views also get local-rename substitution applied on top
+  // of whatever the C++ emitter produced, since localRenames live in
+  // the UI sidecar only and never round-trip through the analysis
+  // pipeline.
   useEffect(() => {
     if (!current || !info) return;
     let cancel = false;
@@ -316,11 +334,16 @@ export default function App() {
     setError(null);
     setCode("");
     loadFunction(current.name, fetchView, { showBbLabels: settings.showBbLabels })
-      .then((text) => { if (!cancel) setCode(text); })
+      .then((text) => {
+        if (cancel) return;
+        const locals = annotations.localRenames?.[current.addr];
+        const isPseudo = fetchView === "pseudo" || fetchView === "cfgPseudo";
+        setCode(isPseudo && locals ? applyLocalRenames(text, locals) : text);
+      })
       .catch((e) => { if (!cancel) setError(e?.message ?? String(e)); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [current, fetchView, info, settings.showBbLabels]);
+  }, [current, fetchView, info, settings.showBbLabels, annotations.localRenames]);
 
   const onXref = useCallback((addr: number) => {
     if (!info) return;
@@ -340,9 +363,10 @@ export default function App() {
   }, [info]);
 
   const cloneAnn = useCallback((): Annotations => ({
-    renames:    { ...annotations.renames    },
-    notes:      { ...annotations.notes      },
-    signatures: { ...annotations.signatures },
+    renames:      { ...annotations.renames    },
+    notes:        { ...annotations.notes      },
+    signatures:   { ...annotations.signatures },
+    localRenames: { ...(annotations.localRenames || {}) },
   }), [annotations]);
 
   const saveRename = useCallback((fn: FunctionInfo, value: string) => {
@@ -363,6 +387,23 @@ export default function App() {
     const next = cloneAnn();
     if (sig) next.signatures[fn.addr] = sig;
     else delete next.signatures[fn.addr];
+    writeAnnotations(next);
+  }, [cloneAnn, writeAnnotations]);
+
+  // Bulk-apply per-function local renames. `pairs` is { from: to }.
+  // Empty `to` removes the entry (the user can revert a single rename
+  // by passing { from: "" }). Merges into any existing per-fn map so
+  // applying a partial AI suggestion doesn't blow away earlier ones.
+  const saveLocalRenames = useCallback((fn: FunctionInfo, pairs: Record<string, string>) => {
+    const next = cloneAnn();
+    next.localRenames = next.localRenames || {};
+    const cur = { ...(next.localRenames[fn.addr] || {}) };
+    for (const [from, to] of Object.entries(pairs)) {
+      if (to) cur[from] = to;
+      else delete cur[from];
+    }
+    if (Object.keys(cur).length > 0) next.localRenames[fn.addr] = cur;
+    else delete next.localRenames[fn.addr];
     writeAnnotations(next);
   }, [cloneAnn, writeAnnotations]);
 
@@ -621,6 +662,7 @@ export default function App() {
           current={current}
           annotations={annotations}
           onApplyRename={(fn, name) => saveRename(fn, name)}
+          onApplyLocalRenames={saveLocalRenames}
           onClose={() => setAiOpen(false)}
         />
       )}

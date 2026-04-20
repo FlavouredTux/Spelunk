@@ -223,8 +223,15 @@ ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
 
 const AI_CONFIG_PATH = () => path.join(app.getPath("userData"), "ai.json");
 
-const AI_PROVIDERS = ["openrouter", "assistant-cli", "codex-cli"];
+const AI_PROVIDERS = ["openrouter", "assistant-pro", "assistant-cli", "codex-cli"];
 const AI_DEFAULT_PROVIDER = "openrouter";
+
+// Path to assistant Code's on-disk OAuth credentials. Linux & Windows
+// store the JSON here; macOS keeps the same shape in the Keychain
+// under service `com.assistant.assistant` (we read the file path first
+// and fall back to env-var-supplied tokens for the keychain case).
+const assistant_CREDENTIALS_PATH = () =>
+  path.join(require("node:os").homedir(), ".assistant", ".credentials.json");
 
 // Per-provider model lists surfaced as autocomplete suggestions. The
 // combobox in the UI lets users type any model id regardless — these
@@ -242,6 +249,15 @@ const AI_MODEL_SUGGESTIONS = {
     "deepseek/deepseek-chat-v3.5",
     "x-ai/grok-4",
     "meta-llama/llama-4-maverick",
+  ],
+  // OAuth-mode model ids must use the API's full-name format —
+  // sonnet/opus/haiku aliases are CLI-only conveniences.
+  "assistant-pro": [
+    "assistant-sonnet-4-6-20251015",
+    "assistant-opus-4-7-20260301",
+    "assistant-haiku-4-5-20251001",
+    "assistant-sonnet-4-6",
+    "assistant-opus-4-7",
   ],
   "assistant-cli": [
     "sonnet",
@@ -335,6 +351,28 @@ async function hasassistantToken() {
   return !!(await loadassistantToken());
 }
 
+// Read assistant Code's on-disk OAuth credentials. Used by the
+// `assistant-pro` provider, which talks to the assistant Messages API
+// directly with the subscription's OAuth token because `assistant -p`
+// doesn't accept OAuth — it requires assistant_API_KEY billing.
+// Returns { accessToken, refreshToken, expiresAt } or null if the
+// file isn't there or has an unexpected shape.
+async function loadassistantOAuth() {
+  let raw;
+  try { raw = await fs.readFile(assistant_CREDENTIALS_PATH(), "utf8"); }
+  catch { return null; }
+  let j; try { j = JSON.parse(raw); } catch { return null; }
+  // Schema verified against `assistant auth login` output:
+  //   { "assistantAiOauth": { accessToken, refreshToken, expiresAt, ... } }
+  // Older revisions used flat keys; accept both shapes.
+  const oauth = j.assistantAiOauth || j;
+  const accessToken  = oauth.accessToken  || oauth.access_token;
+  const refreshToken = oauth.refreshToken || oauth.refresh_token;
+  const expiresAt    = oauth.expiresAt    || oauth.expires_at;
+  if (!accessToken) return null;
+  return { accessToken, refreshToken, expiresAt };
+}
+
 async function saveAiConfig(patch) {
   // Read-modify-write so partial updates (just the provider, just the
   // model, just the key) don't clobber other fields.
@@ -421,6 +459,20 @@ ipcMain.handle("ember:ai:listModels", async (_e, provider) => {
 });
 
 ipcMain.handle("ember:ai:detectCli", async (_e, kind) => detectCli(kind));
+
+// Probe assistant OAuth credentials on disk for the assistant-pro provider.
+// The Settings panel uses this to render a green/red status pill
+// without exposing the actual token bytes.
+ipcMain.handle("ember:ai:probeassistantOAuth", async () => {
+  const cred = await loadassistantOAuth();
+  if (!cred) return { found: false, expired: false };
+  const expired = !!(cred.expiresAt && cred.expiresAt < Date.now());
+  return {
+    found:    true,
+    expired,
+    expiresAt: cred.expiresAt || 0,
+  };
+});
 
 // Active in-flight requests, keyed by id so `ai:cancel` can abort.
 // Each entry records a {cancel} hook — HTTP requests use req.destroy,
@@ -675,6 +727,110 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
                 send("ember:ai:chunk", delta);
               }
             } catch { /* keepalive */ }
+          }
+        }
+      });
+      res.on("end", () => {
+        send("ember:ai:done", { chars: total });
+        AI_INFLIGHT.delete(id);
+      });
+    });
+    req.on("error", (err) => {
+      send("ember:ai:error", err.message || String(err));
+      AI_INFLIGHT.delete(id);
+    });
+    AI_INFLIGHT.set(id, { cancel: () => req.destroy(new Error("cancelled")) });
+    req.write(body);
+    req.end();
+    return id;
+  }
+
+  // ---- assistant Pro/Max (OAuth direct to assistant API) ---------------
+  // Subscription users can't use `assistant -p` for headless calls
+  // (it forces assistant_API_KEY billing). The community fix is to
+  // read the OAuth token assistant Code stored after `assistant auth login`
+  // and call the Messages API ourselves with the oauth-2025-04-20
+  // beta header. ToS note: assistant banned third-party tools from
+  // doing this in April 2026 — surfaces in the Settings panel as a
+  // warning, but we let the user opt in if they accept the risk.
+  if (cfg.provider === "assistant-pro") {
+    const cred = await loadassistantOAuth();
+    if (!cred) {
+      throw new Error("no assistant OAuth credentials at ~/.assistant/.credentials.json — run `assistant auth login` first");
+    }
+    if (cred.expiresAt && cred.expiresAt < Date.now()) {
+      throw new Error("assistant OAuth access token has expired — run `assistant auth login` again to refresh");
+    }
+
+    // The system prompt becomes the API's `system` field; the rest
+    // of the conversation history goes in `messages` as-is. assistant's
+    // Messages API expects role: "user" | "assistant" only.
+    const systemPrompt = extractSystemPrompt(messages);
+    const apiMessages  = messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    const body = JSON.stringify({
+      model:       chosenModel,
+      max_tokens:  4096,
+      stream:      true,
+      system:      systemPrompt || undefined,
+      messages:    apiMessages,
+      temperature: typeof temperature === "number" ? temperature : 0.4,
+    });
+
+    const req = https.request({
+      method:   "POST",
+      hostname: "api.assistant.com",
+      path:     "/v1/messages",
+      headers:  {
+        "Authorization":     `Bearer ${cred.accessToken}`,
+        "Content-Type":      "application/json",
+        "Content-Length":    Buffer.byteLength(body),
+        "assistant-version": "2023-06-01",
+        // The OAuth flag tells assistant this request is using a
+        // subscription token rather than an API key. Without it
+        // the server returns 401 "API key required".
+        "assistant-beta":    "oauth-2025-04-20",
+        // Mimic the real CLI's UA so traffic looks identical to
+        // what `assistant` itself would send. The exact version doesn't
+        // matter — the format does.
+        "User-Agent":        "assistant-cli/2.1.114 (external, cli)",
+      },
+    }, (res) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        let buf = "";
+        res.on("data", (d) => { buf += d.toString(); });
+        res.on("end", () => {
+          send("ember:ai:error",
+               `assistant ${res.statusCode}: ${buf.slice(0, 400)}`);
+          AI_INFLIGHT.delete(id);
+        });
+        return;
+      }
+      // SSE parsing — assistant's stream emits `event: <name>\ndata: {...}`
+      // pairs separated by blank lines. Text deltas come as
+      // `content_block_delta` events with `delta.type === "text_delta"`.
+      let pending = "";
+      let total   = 0;
+      res.on("data", (chunk) => {
+        pending += chunk.toString();
+        let idx;
+        while ((idx = pending.indexOf("\n\n")) !== -1) {
+          const event = pending.slice(0, idx);
+          pending = pending.slice(idx + 2);
+          for (const rawLine of event.split("\n")) {
+            const line = rawLine.startsWith("data: ") ? rawLine.slice(6) : "";
+            if (!line || !line.startsWith("{")) continue;
+            try {
+              const j = JSON.parse(line);
+              if (j.type === "content_block_delta" &&
+                  j.delta?.type === "text_delta" &&
+                  typeof j.delta.text === "string") {
+                total += j.delta.text.length;
+                send("ember:ai:chunk", j.delta.text);
+              }
+            } catch { /* keepalive comment */ }
           }
         }
       });

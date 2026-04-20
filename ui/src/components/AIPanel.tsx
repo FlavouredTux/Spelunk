@@ -454,7 +454,7 @@ const quickBtnStyle: React.CSSProperties = {
   fontFamily: mono, fontSize: 10, cursor: "pointer",
 };
 
-function NoKeyHint(props: { provider: "openrouter" | "assistant-cli" | "codex-cli" }) {
+function NoKeyHint(props: { provider: "openrouter" | "assistant-pro" | "assistant-cli" | "codex-cli" }) {
   // Only openrouter is gated by a "missing key" state at this layer.
   // CLI providers defer their readiness check to the spawn itself —
   // if assistant/codex isn't installed or isn't logged in, the resulting

@@ -3,7 +3,7 @@ import { C, sans, serif, mono } from "../theme";
 import type { AppSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
 import { clearRendererCaches } from "../api";
-import type { AiConfig, AiCliStatus, AiProvider } from "../types";
+import type { AiConfig, AiCliStatus, AiProvider, AiOAuthProbe } from "../types";
 
 // Settings gear. Stroked-outline style (matches the rest of the
 // title-bar glyphs), 24×24 viewBox so the curved tooth flanks
@@ -310,10 +310,12 @@ function AiConfigSection() {
   const [models, setMs]    = useState<string[]>([]);
   const [assistant, setassistant] = useState<AiCliStatus | null>(null);
   const [codex,  setCodex]  = useState<AiCliStatus | null>(null);
+  const [oauth,  setOauth]  = useState<AiOAuthProbe | null>(null);
 
   const reloadProbes = () => {
     window.ember.ai.detectCli("assistant-cli").then(setassistant).catch(() => {});
     window.ember.ai.detectCli("codex-cli").then(setCodex).catch(() => {});
+    window.ember.ai.probeassistantOAuth().then(setOauth).catch(() => {});
   };
 
   useEffect(() => {
@@ -360,13 +362,17 @@ function AiConfigSection() {
       >
         <Segmented
           value={cfg.provider}
-          options={["openrouter", "assistant-cli", "codex-cli"] as const}
+          options={["openrouter", "assistant-pro", "assistant-cli", "codex-cli"] as const}
           onChange={changeProvider}
         />
       </Row>
 
       {cfg.provider === "openrouter" && (
         <OpenRouterKeySection cfg={cfg} onSave={saveKey} />
+      )}
+
+      {cfg.provider === "assistant-pro" && (
+        <assistantOAuthSection probe={oauth} onRefresh={reloadProbes} />
       )}
 
       {cfg.provider === "assistant-cli" && (
@@ -376,7 +382,7 @@ function AiConfigSection() {
             status={assistant}
             onRefresh={reloadProbes}
             loginCmd="assistant auth login"
-            note="Ember spawns the installed `assistant` binary per request. For Pro / Max subscriptions, `assistant -p` (headless mode) needs the long-lived token below — the interactive `auth login` session doesn't carry over. assistant Console API billing works without a token."
+            note="Ember spawns the installed `assistant` binary per request. Works for assistant Console API billing (any account with `sk-ant-api03-…` keys configured). For Pro / Max subscription billing, use the `assistant-pro` provider instead — `assistant -p` doesn't accept subscription OAuth tokens by design."
           />
           <assistantTokenSection cfg={cfg} onSaved={(c) => setCfg(c)} />
         </>
@@ -461,6 +467,75 @@ function OpenRouterKeySection(props: {
           >forget key</button>
         </Row>
       )}
+    </>
+  );
+}
+
+// assistant-pro provider section. Reads OAuth credentials directly from
+// ~/.assistant/.credentials.json (where assistant Code writes them after
+// `assistant auth login`) and calls the assistant Messages API on the
+// user's subscription. The community fix for the headless gap that
+// assistant left when they made `assistant -p` API-key-only.
+//
+// ToS warning: assistant banned third-party tools from using
+// subscription OAuth in April 2026. We surface the warning so the
+// user knows; they choose whether to use it.
+function assistantOAuthSection(props: {
+  probe: AiOAuthProbe | null;
+  onRefresh: () => void;
+}) {
+  const p = props.probe;
+  const dot =
+    !p             ? C.textFaint :
+    !p.found       ? C.red       :
+    p.expired      ? C.red       :
+                     C.green;
+  const label =
+    !p             ? "probing…" :
+    !p.found       ? "no credentials at ~/.assistant/.credentials.json" :
+    p.expired      ? "credentials expired — re-run `assistant auth login`" :
+                     `signed in${p.expiresAt ? ` · expires ${new Date(p.expiresAt).toLocaleString()}` : ""}`;
+  return (
+    <>
+      <Row
+        label="OAuth status"
+        hint="Reads the access token assistant Code wrote during `assistant auth login`. Calls assistant's Messages API directly with the OAuth flag — bypasses the `assistant -p` API-key requirement so Pro / Max billing actually works."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: 4,
+            background: dot, flexShrink: 0,
+          }} />
+          <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>
+            {label}
+          </span>
+          <button onClick={props.onRefresh} style={iconBtnStyle}>recheck</button>
+        </div>
+      </Row>
+      {p && !p.found && (
+        <Row label="To sign in" hint="Run in a terminal, then click recheck above.">
+          <code style={{
+            fontFamily: mono, fontSize: 11,
+            color: C.accent, background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4, padding: "5px 10px",
+            whiteSpace: "nowrap",
+          }}>assistant auth login</code>
+        </Row>
+      )}
+      <Row
+        label="ToS notice"
+        hint="Read this before relying on this provider for production work."
+      >
+        <span style={{
+          fontFamily: serif, fontStyle: "italic",
+          fontSize: 11, color: C.red,
+          maxWidth: 320, lineHeight: 1.4,
+        }}>
+          assistant banned third-party tools from using subscription
+          OAuth in April 2026. Account flagging is a real risk.
+        </span>
+      </Row>
     </>
   );
 }

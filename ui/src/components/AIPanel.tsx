@@ -194,7 +194,26 @@ export function AIPanel(props: {
     () => lastAssistant ? parseRenames(lastAssistant.content) : [],
     [lastAssistant],
   );
-  const fnRename = renames.find((r) => props.current?.name === r.from);
+  // Match the suggested rename against the currently-selected function
+  // by either name (`main`) or address-form (`sub_1260` ↔ addr 0x1260).
+  // Models routinely take the entry-block address as the function's
+  // identifier even when the function has a real name printed at the
+  // top of the snippet, so we accept both spellings rather than miss
+  // the suggestion. Also strips a leading `bb_` in case the model
+  // confused entry-block syntax for function syntax.
+  const fnRename = useMemo(() => {
+    if (!props.current) return undefined;
+    const cur = props.current;
+    return renames.find((r) => {
+      if (cur.name === r.from) return true;
+      const m = /^(?:sub_|bb_)([0-9a-fA-F]+)$/.exec(r.from);
+      if (m) {
+        const addr = parseInt(m[1], 16);
+        if (Number.isFinite(addr) && addr === cur.addrNum) return true;
+      }
+      return false;
+    });
+  }, [renames, props.current]);
 
   return (
     <div

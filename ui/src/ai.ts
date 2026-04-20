@@ -50,7 +50,11 @@ a2 → argv
 local_248 → line_buf
 \`\`\`
 
-The UI parses only this block; rename suggestions outside it are ignored. Use the literal identifiers visible in the snippet — never invent addresses (\`sub_140001000\` isn't valid if the snippet shows \`main\` or \`bb_1260\`).
+The UI parses only this block; rename suggestions outside it are ignored.
+
+**The function's name is the identifier in the function header**, not its entry-block address. If the snippet starts with \`// main\\nu64 main(...)\` then the function is \`main\` — your rename row must read \`main → ...\`, not \`sub_1260 → ...\`. Only use \`sub_<hex>\` form when the snippet's function header literally says \`sub_<hex>\` (i.e. the function had no recovered name). The same applies inside callees: refer to a callee by the name shown at its call site (\`fopen\`, \`strtok_r\`, \`SomeNamedFunction\`), not by an inferred address.
+
+Don't suggest renames for register-suffixed temps (\`r12_5\`, \`rdi_333\`) — those are SSA versions of registers, not user-renameable identifiers. Stick to \`sub_<addr>\` (only when the function lacks a name), \`a1\`/\`a2\`/..., \`local_<hex>\`, and \`g_<name>\` for globals the snippet explicitly references.
 
 ## Output shape
 

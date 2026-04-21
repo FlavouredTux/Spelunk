@@ -475,18 +475,36 @@ export default function App() {
   // Empty `to` removes the entry (the user can revert a single rename
   // by passing { from: "" }). Merges into any existing per-fn map so
   // applying a partial AI suggestion doesn't blow away earlier ones.
+  //
+  // Chain-collapse: when `from` matches some existing entry's `to`
+  // (user renamed an already-renamed token), rewrite that entry in
+  // place rather than stacking a second rename. This keeps the map
+  // keyed on canonical emitter names (`local_10`, `a1`, `r_strlen`)
+  // so `applyLocalRenames` does the substitution in one pass.
   const saveLocalRenames = useCallback((fn: FunctionInfo, pairs: Record<string, string>) => {
     const next = cloneAnn();
     next.localRenames = next.localRenames || {};
     const cur = { ...(next.localRenames[fn.addr] || {}) };
     for (const [from, to] of Object.entries(pairs)) {
-      if (to) cur[from] = to;
-      else delete cur[from];
+      let key = from;
+      for (const [k, v] of Object.entries(cur)) {
+        if (v === from) { key = k; break; }
+      }
+      if (to) cur[key] = to;
+      else delete cur[key];
     }
     if (Object.keys(cur).length > 0) next.localRenames[fn.addr] = cur;
     else delete next.localRenames[fn.addr];
     writeAnnotations(next);
   }, [cloneAnn, writeAnnotations]);
+
+  // Adapter for CodeView: single-token rename from the pseudo-C context
+  // menu. Empty `newName` removes the rename (resets to the emitter's
+  // canonical form).
+  const renameLocalFromCode = useCallback((oldName: string, newName: string) => {
+    if (!current) return;
+    saveLocalRenames(current, { [oldName]: newName });
+  }, [current, saveLocalRenames]);
 
   const lines = useMemo(() => code.split("\n").length, [code]);
   const canBack    = histIdx > 0;
@@ -703,6 +721,7 @@ export default function App() {
               onRename={(fn) => setEditing({ fn, mode: "rename" })}
               onAddNote={(fn) => setEditing({ fn, mode: "note" })}
               onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
+              onRenameLocal={view === "pseudo" ? renameLocalFromCode : undefined}
               onPatchInsn={view === "asm" ? (vaddr, origBytes, disasm) =>
                 setPatching({ vaddr, origBytes, disasm }) : undefined}
             />

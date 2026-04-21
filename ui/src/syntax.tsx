@@ -51,6 +51,7 @@ export function highlightLine(
   onXref: (addr: number) => void,
   fnAddrByName?: Map<string, number>,
   onFnContext?: (addr: number, ev: React.MouseEvent) => void,
+  onLocalContext?: (name: string, ev: React.MouseEvent) => void,
 ): JSX.Element[] {
   const tokens: Token[] = [];
   const len = line.length;
@@ -127,12 +128,18 @@ export function highlightLine(
           pushStr(word, { color: SH.label });
         }
         else if (/^local_[0-9a-f]+$/.test(lower) || /^arg_[0-9a-f]+$/.test(lower)) {
-          pushStr(word, { color: SH.reg });
+          tokens.push({
+            text: word, color: SH.reg,
+            onContextMenu: onLocalContext ? (ev) => onLocalContext(word, ev) : undefined,
+          });
         }
         // Function params injected by the emitter when no user signature
         // is present. `a1`, `a2`, ... bound in the function header.
         else if (/^a\d+$/.test(word)) {
-          pushStr(word, { color: SH.arg });
+          tokens.push({
+            text: word, color: SH.arg,
+            onContextMenu: onLocalContext ? (ev) => onLocalContext(word, ev) : undefined,
+          });
         }
         // Call-return locals introduced by the emitter's rax-aliasing fix.
         // Shape: r_<callee-name>, optionally with a _<n> disambiguator.
@@ -181,7 +188,14 @@ export function highlightLine(
           } else if (next === "(") {
             pushStr(word, { color: SH.func });
           } else {
-            pushStr(word);
+            // Fall-through identifier: most commonly a user-renamed local
+            // (applied renderer-side) or a column header like `rax_5`.
+            // Expose the rename context menu — that's the only way a
+            // user can click an already-renamed token to rename it again.
+            tokens.push({
+              text: word,
+              onContextMenu: onLocalContext ? (ev) => onLocalContext(word, ev) : undefined,
+            });
           }
         }
         i += word.length;

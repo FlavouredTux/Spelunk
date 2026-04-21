@@ -24,6 +24,11 @@ export function CodeView(props: {
   onRename?: (fn: FunctionInfo) => void;
   onAddNote?: (fn: FunctionInfo) => void;
   onEditSignature?: (fn: FunctionInfo) => void;
+  // Right-click on a pseudo-C identifier → rename the local. `oldName`
+  // is the token as shown to the user (may already be a user-chosen
+  // rename); `newName` empty means reset. App handles chain-collapse
+  // against the canonical original name on the storage side.
+  onRenameLocal?: (oldName: string, newName: string) => void;
   // Right-click on an asm instruction → opens patch dialog. Caller
   // passes the parsed virtual address and the current bytes (already
   // reflecting any in-flight patches via the CLI temp-file routing).
@@ -35,6 +40,16 @@ export function CodeView(props: {
   const lines = useMemo(() => props.text.split("\n"), [props.text]);
 
   const [fnCtx, setFnCtx] = useState<{ x: number; y: number; fn: FunctionInfo } | null>(null);
+  const [localCtx, setLocalCtx] = useState<{ x: number; y: number; name: string } | null>(null);
+
+  const handleLocalContext = useMemo(() => {
+    if (!props.onRenameLocal) return undefined;
+    return (name: string, ev: React.MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setLocalCtx({ x: ev.clientX, y: ev.clientY, name });
+    };
+  }, [props.onRenameLocal]);
 
   const handleFnContext = useMemo(() => {
     if (!props.fnByAddr || !(props.onRename || props.onAddNote || props.onEditSignature)) {
@@ -211,6 +226,7 @@ export function CodeView(props: {
                   onXref={props.onXref}
                   fnAddrByName={props.fnAddrByName}
                   onFnContext={handleFnContext}
+                  onLocalContext={handleLocalContext}
                   matches={lineMatches}
                   isActiveMatch={(start) =>
                     isActiveLine &&
@@ -233,6 +249,32 @@ export function CodeView(props: {
           onClose={() => setFnCtx(null)}
         />
       )}
+      {localCtx && (
+        <ContextMenu
+          x={localCtx.x}
+          y={localCtx.y}
+          items={[
+            { kind: "header", label: localCtx.name, meta: "local / arg" },
+            { kind: "item", label: "Rename…", onClick: () => {
+                const name = localCtx.name;
+                setLocalCtx(null);
+                // Deferred so the menu closes cleanly before the prompt
+                // blocks the UI thread. Without this the menu stays drawn
+                // under the prompt on Linux.
+                setTimeout(() => {
+                  const next = window.prompt(`Rename "${name}" to:`, name);
+                  if (next && next !== name) props.onRenameLocal?.(name, next);
+                }, 0);
+              } },
+            { kind: "item", label: "Reset to original", onClick: () => {
+                const name = localCtx.name;
+                setLocalCtx(null);
+                props.onRenameLocal?.(name, "");
+              } },
+          ]}
+          onClose={() => setLocalCtx(null)}
+        />
+      )}
     </div>
   );
 }
@@ -242,15 +284,16 @@ function LineContent(props: {
   onXref: (addr: number) => void;
   fnAddrByName?: Map<string, number>;
   onFnContext?: (addr: number, ev: React.MouseEvent) => void;
+  onLocalContext?: (name: string, ev: React.MouseEvent) => void;
   matches: { line: number; start: number; end: number }[];
   isActiveMatch: (start: number) => boolean;
 }) {
-  const { line, onXref, matches, fnAddrByName, onFnContext } = props;
+  const { line, onXref, matches, fnAddrByName, onFnContext, onLocalContext } = props;
   if (line === "") return <span>&nbsp;</span>;
 
   // If no matches, fall through to regular syntax highlighting.
   if (matches.length === 0) {
-    return <span style={{ color: C.text }}>{highlightLine(line, onXref, fnAddrByName, onFnContext)}</span>;
+    return <span style={{ color: C.text }}>{highlightLine(line, onXref, fnAddrByName, onFnContext, onLocalContext)}</span>;
   }
 
   // Render the line as slices: before-match | match | between | match | after
@@ -283,7 +326,7 @@ function LineContent(props: {
             >{s.text}</span>
           );
         }
-        return <span key={k}>{highlightLine(s.text, onXref, fnAddrByName, onFnContext)}</span>;
+        return <span key={k}>{highlightLine(s.text, onXref, fnAddrByName, onFnContext, onLocalContext)}</span>;
       })}
     </span>
   );

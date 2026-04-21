@@ -584,4 +584,65 @@ LpMap parse_landing_pads(const Binary& b) {
     return out;
 }
 
+// Same CIE/FDE walk as parse_landing_pads, but collecting (pc_begin,
+// pc_range) for every FDE instead of landing-pad entries. Used for
+// function-boundary recovery on stripped binaries where .eh_frame is
+// often the only remaining source of function starts.
+std::vector<FdeExtent> enumerate_fde_extents(const Binary& b) {
+    std::vector<FdeExtent> out;
+    auto eh = find_eh_frame(b);
+    if (!eh) return out;
+
+    std::map<std::size_t, CieInfo> cies;
+    Reader top{eh->bytes, 0};
+
+    while (top.pos + 4 <= top.buf.size()) {
+        const std::size_t entry_off = top.pos;
+        u32 length = 0;
+        if (!top.get_le(length)) break;
+        if (length == 0) break;
+        if (length == 0xFFFFFFFFu) break;
+
+        const std::size_t payload_end = top.pos + length;
+        if (payload_end > top.buf.size()) break;
+
+        u32 cie_id = 0;
+        if (!top.get_le(cie_id)) break;
+
+        std::span<const std::byte> inner(
+            eh->bytes.data() + top.pos,
+            payload_end - top.pos);
+        Reader rd{inner, 0};
+
+        const u64 entry_vaddr = eh->vaddr + entry_off;
+
+        if (cie_id == 0) {
+            auto info = parse_cie(rd, entry_vaddr);
+            if (info) cies[entry_off] = *info;
+        } else {
+            const std::size_t cie_ptr_pos = top.pos - 4;
+            const std::size_t cie_off = (cie_id <= cie_ptr_pos)
+                ? (cie_ptr_pos - cie_id) : 0;
+            auto ci_it = cies.find(cie_off);
+            if (ci_it == cies.end()) { top.pos = payload_end; continue; }
+            const CieInfo& ci = ci_it->second;
+
+            const u64 pc_begin_vaddr = entry_vaddr + 4 + 4 + rd.pos;
+            auto pc_begin_v = read_encoded(rd, ci.fde_ptr_enc,
+                                           eh->vaddr, pc_begin_vaddr);
+            if (!pc_begin_v) { top.pos = payload_end; continue; }
+            auto pc_range_v = read_encoded(
+                rd, ci.fde_ptr_enc & 0x0F,
+                eh->vaddr, entry_vaddr + 4 + 4 + rd.pos);
+            if (!pc_range_v) { top.pos = payload_end; continue; }
+
+            if (*pc_begin_v != 0 && *pc_range_v != 0) {
+                out.push_back({static_cast<addr_t>(*pc_begin_v), *pc_range_v});
+            }
+        }
+        top.pos = payload_end;
+    }
+    return out;
+}
+
 }  // namespace ember

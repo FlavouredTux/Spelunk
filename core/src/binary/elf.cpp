@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include <ember/analysis/eh_frame.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -34,6 +35,8 @@ constexpr u64 PLTRELSZ    = 2;
 constexpr u64 HASH        = 4;
 constexpr u64 STRTAB      = 5;
 constexpr u64 SYMTAB      = 6;
+constexpr u64 RELA        = 7;
+constexpr u64 RELASZ      = 8;
 constexpr u64 STRSZ       = 10;
 constexpr u64 SYMENT      = 11;
 constexpr u64 JMPREL      = 23;
@@ -448,10 +451,19 @@ void ElfBinary::scan_plt_stubs(
     std::unordered_map<std::string, addr_t> import_stub_addr;
     const X64Decoder dec;
 
+    // Prefer .plt-named sections (normal ELFs with a section table). When
+    // none exist — sectionless binaries synthesize their exec segment as
+    // ".text" — fall back to scanning every executable section.
+    bool any_plt = false;
+    for (const auto& sec : sections_) {
+        if (sec.flags.executable && sec.name.rfind(".plt", 0) == 0) {
+            any_plt = true; break;
+        }
+    }
     for (const auto& sec : sections_) {
         if (!sec.flags.executable) continue;
         if (sec.data.empty()) continue;
-        if (sec.name.rfind(".plt", 0) != 0) continue;  // starts with ".plt"
+        if (any_plt && sec.name.rfind(".plt", 0) != 0) continue;
 
         addr_t ip = sec.vaddr;
         std::size_t off = 0;
@@ -628,13 +640,15 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
 
     // Parse PT_DYNAMIC entries. Each is a pair of 64-bit words (tag, val).
     std::span<const std::byte> dynsym_bytes, dynstr_bytes, hash_bytes, gnu_hash_bytes;
-    std::span<const std::byte> jmprel_bytes;
+    std::span<const std::byte> jmprel_bytes, rela_bytes;
     addr_t dynsym_vaddr = 0;
     u64    syment       = kSym64Size;
     u64    jmprel_sz    = 0;
+    u64    rela_sz      = 0;
     if (dyn_vaddr != 0 && dyn_memsz >= 16) {
         auto dyn = vaddr_slice(segments_, dyn_vaddr, dyn_memsz);
-        addr_t hash_vaddr = 0, gnu_hash_vaddr = 0, jmprel_vaddr = 0, strtab_vaddr = 0;
+        addr_t hash_vaddr = 0, gnu_hash_vaddr = 0, jmprel_vaddr = 0;
+        addr_t strtab_vaddr = 0, rela_vaddr = 0;
         u64    strsz = 0;
         const std::size_t entries = dyn.size() / 16;
         for (std::size_t i = 0; i < entries; ++i) {
@@ -649,6 +663,8 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
             if (tag == dt::GNU_HASH)  gnu_hash_vaddr = val;
             if (tag == dt::JMPREL)    jmprel_vaddr   = val;
             if (tag == dt::PLTRELSZ)  jmprel_sz      = val;
+            if (tag == dt::RELA)      rela_vaddr     = val;
+            if (tag == dt::RELASZ)    rela_sz        = val;
         }
         if (strtab_vaddr != 0 && strsz > 0) {
             dynstr_bytes = vaddr_slice(segments_, strtab_vaddr, strsz);
@@ -661,6 +677,9 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         }
         if (jmprel_vaddr != 0 && jmprel_sz > 0) {
             jmprel_bytes = vaddr_slice(segments_, jmprel_vaddr, jmprel_sz);
+        }
+        if (rela_vaddr != 0 && rela_sz > 0) {
+            rela_bytes = vaddr_slice(segments_, rela_vaddr, rela_sz);
         }
     }
 
@@ -756,29 +775,72 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         }
         sections_.push_back(make_section(".dynstr", va, dynstr_bytes, false, false));
     }
-    if (eh_hdr_vaddr != 0 && eh_hdr_memsz > 0) {
+    // .eh_frame_hdr lives at the PT_GNU_EH_FRAME vaddr; its first four
+    // bytes are (version=1, eh_frame_ptr_enc, fde_count_enc, table_enc),
+    // followed by the encoded eh_frame_ptr. Decoding that pointer gives us
+    // .eh_frame's vaddr, which we can't recover any other way in a section-
+    // less binary. We only need to support the one encoding GCC/clang
+    // actually emit for eh_frame_ptr — DW_EH_PE_pcrel | DW_EH_PE_sdata4
+    // (0x1B), a 4-byte signed offset relative to the byte being read.
+    addr_t eh_frame_vaddr = 0;
+    if (eh_hdr_vaddr != 0 && eh_hdr_memsz >= 8) {
         auto eh_hdr = vaddr_slice(segments_, eh_hdr_vaddr, eh_hdr_memsz);
-        if (!eh_hdr.empty()) {
+        if (eh_hdr.size() >= 8) {
             sections_.push_back(make_section(".eh_frame_hdr", eh_hdr_vaddr, eh_hdr,
                                              false, false));
-            // .eh_frame_hdr[0]=version, [1]=eh_frame_ptr_enc, [2]=fde_count_enc,
-            // [3]=table_enc, then the encoded eh_frame_ptr. Decoding DWARF
-            // pointer encodings is more work than we need right now — the
-            // existing eh_frame analyser finds `.eh_frame` by section name,
-            // so if we can't synthesise it here we just skip landing-pad
-            // recovery. Pass 2.
+            const u8 eh_frame_ptr_enc = static_cast<u8>(eh_hdr[1]);
+            if (eh_frame_ptr_enc == 0x1B) {  // pcrel | sdata4 — the common case
+                const i32 raw = read_le_at<i32>(eh_hdr.data() + 4);
+                // The pointer is read_at = eh_hdr_vaddr + 4 (offset of the
+                // sdata4 field within .eh_frame_hdr).
+                eh_frame_vaddr = static_cast<addr_t>(
+                    static_cast<i64>(eh_hdr_vaddr + 4) + raw);
+            }
         }
     }
 
-    // Seed the function list with `_start` at the entry point. If dynsym
-    // already named something at the entry address (rare but possible for
-    // a non-stripped binary missing only its section table), skip to avoid
-    // a duplicate.
-    bool entry_named = false;
-    for (const auto& s : symbols_) {
-        if (!s.is_import && s.addr == entry_) { entry_named = true; break; }
+    // Synthesize .eh_frame: we know the start vaddr but not a hard upper
+    // bound. Hand the FDE walker the full rest of the containing segment;
+    // its CIE/FDE length walk stops at the length==0 terminator naturally.
+    if (eh_frame_vaddr != 0) {
+        auto eh_bytes = vaddr_slice(segments_, eh_frame_vaddr, 0);
+        if (!eh_bytes.empty()) {
+            sections_.push_back(make_section(".eh_frame", eh_frame_vaddr, eh_bytes,
+                                             false, false));
+        }
     }
-    if (!entry_named && entry_ != 0) {
+
+    // Walk every FDE in .eh_frame and seed a Function symbol for each.
+    // On x86-64 GCC/clang emit unwind tables by default (-funwind-tables
+    // is on unless you `-fno-*`), so this recovers essentially every
+    // function in a stripped C++/C binary — what IDA/Ghidra do as well.
+    // Named only if dynsym didn't already name that address; the FDE at
+    // the entry point keeps the canonical `_start` name instead of `sub_`.
+    std::unordered_map<addr_t, bool> named_defined;
+    for (const auto& s : symbols_) {
+        if (!s.is_import && s.addr != 0) named_defined[s.addr] = true;
+    }
+    const auto fdes = enumerate_fde_extents(*this);
+    for (const auto& fde : fdes) {
+        if (named_defined.count(fde.pc_begin)) continue;
+        Symbol s;
+        s.name      = (fde.pc_begin == entry_ && entry_ != 0)
+                        ? std::string{"_start"}
+                        : std::format("sub_{:x}", fde.pc_begin);
+        s.addr      = fde.pc_begin;
+        s.size      = fde.pc_range;
+        s.kind      = SymbolKind::Function;
+        s.is_import = false;
+        s.is_export = true;
+        symbols_.push_back(std::move(s));
+        named_defined[fde.pc_begin] = true;
+    }
+
+    // Seed `_start` at the entry point if no FDE/dynsym already claimed it.
+    // GCC does not emit an FDE for the hand-written _start stub in crt1.o
+    // (leaf, no unwind), so when FDE recovery doesn't cover the entry this
+    // fallback still surfaces one clickable function.
+    if (entry_ != 0 && !named_defined.count(entry_)) {
         Symbol s;
         s.name      = "_start";
         s.addr      = entry_;
@@ -789,9 +851,47 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         symbols_.push_back(std::move(s));
     }
 
-    // Stub references to jmprel_bytes / dynsym_names to keep the compiler
-    // quiet; the full PLT→import attachment is pass 2.
-    (void)jmprel_bytes; (void)dynsym_names;
+    // PLT → import attachment. Both DT_JMPREL (the PLT-specific rela
+    // table on binaries that use lazy binding) and DT_RELA (the general
+    // rela table; holds GLOB_DAT entries for imports on binaries that
+    // bind at load time — tiny executables, -fno-plt builds) contribute
+    // GOT-slot → name mappings. scan_plt_stubs then walks the executable
+    // segments looking for `jmp [rip+disp]` stubs that target those slots
+    // and attaches the resolved name to each import Symbol.
+    std::unordered_map<addr_t, std::string> got_to_name;
+    auto ingest_rela = [&](std::span<const std::byte> bytes) {
+        if (bytes.empty() || dynsym_names.empty()) return;
+        const std::size_t count = bytes.size() / kRela64Size;
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::byte* const p = bytes.data() + k * kRela64Size;
+            const u64 r_offset = read_le_at<u64>(p + 0);
+            const u64 r_info   = read_le_at<u64>(p + 8);
+            const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
+            const u32 r_sym    = static_cast<u32>(r_info >> 32);
+            if (r_type != rx64::JUMP_SLOT && r_type != rx64::GLOB_DAT) continue;
+            if (r_sym >= dynsym_names.size()) continue;
+            const std::string& name = dynsym_names[r_sym];
+            if (name.empty()) continue;
+            got_to_name.emplace(static_cast<addr_t>(r_offset), name);
+        }
+    };
+    ingest_rela(jmprel_bytes);
+    ingest_rela(rela_bytes);
+    if (!got_to_name.empty()) {
+        // Mirror attach_got_addrs's effect: set Symbol.got_addr on matching
+        // imports so the emitter can render indirect calls through the
+        // correct name.
+        std::unordered_map<std::string, addr_t> name_to_got;
+        name_to_got.reserve(got_to_name.size());
+        for (const auto& [g, n] : got_to_name) name_to_got.emplace(n, g);
+        for (auto& sym : symbols_) {
+            if (!sym.is_import) continue;
+            auto it = name_to_got.find(sym.name);
+            if (it == name_to_got.end()) continue;
+            sym.got_addr = it->second;
+        }
+        scan_plt_stubs(got_to_name);
+    }
 
     sort_and_dedupe_symbols();
     return {};

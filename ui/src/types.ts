@@ -99,9 +99,11 @@ declare global {
       binary:           () => Promise<string | null>;
       run:              (args: string[]) => Promise<string>;
 
-      loadAnnotations:  (bp: string) => Promise<Annotations>;
-      saveAnnotations:  (bp: string, data: Annotations) => Promise<boolean>;
-      savePatchedAs:    () => Promise<string | null>;
+      loadAnnotations:   (bp: string) => Promise<Annotations>;
+      saveAnnotations:   (bp: string, data: Annotations) => Promise<boolean>;
+      exportAnnotations: (bp: string, data: Annotations) => Promise<string | null>;
+      importAnnotations: () => Promise<(Annotations & { path: string }) | null>;
+      savePatchedAs:     () => Promise<string | null>;
 
       recents:          () => Promise<string[]>;
       openRecent:       (bp: string) => Promise<string>;

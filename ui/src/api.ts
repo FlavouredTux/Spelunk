@@ -260,6 +260,15 @@ export async function saveAnnotations(binaryPath: string, data: Annotations): Pr
   await window.ember.saveAnnotations(binaryPath, data);
 }
 
+export async function exportAnnotations(binaryPath: string, data: Annotations): Promise<string | null> {
+  return await window.ember.exportAnnotations(binaryPath, data);
+}
+
+export type ImportedAnnotations = Annotations & { path: string };
+export async function importAnnotations(): Promise<ImportedAnnotations | null> {
+  return await window.ember.importAnnotations();
+}
+
 function parseSummary(raw: string, path: string): BinaryInfo {
   const lines = raw.split("\n");
   const info: BinaryInfo = {

@@ -6,8 +6,10 @@ contextBridge.exposeInMainWorld("ember", {
   binary:           () => ipcRenderer.invoke("ember:binary"),
   run:              (args) => ipcRenderer.invoke("ember:run", args),
 
-  loadAnnotations:  (bp) => ipcRenderer.invoke("ember:loadAnnotations", bp),
-  saveAnnotations:  (bp, data) => ipcRenderer.invoke("ember:saveAnnotations", bp, data),
+  loadAnnotations:   (bp) => ipcRenderer.invoke("ember:loadAnnotations", bp),
+  saveAnnotations:   (bp, data) => ipcRenderer.invoke("ember:saveAnnotations", bp, data),
+  exportAnnotations: (bp, data) => ipcRenderer.invoke("ember:exportAnnotations", bp, data),
+  importAnnotations: () => ipcRenderer.invoke("ember:importAnnotations"),
   // Prompts a save dialog and writes a patched copy of the current
   // binary to the chosen path. Returns the chosen path, or null if the
   // user cancelled.

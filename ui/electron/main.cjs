@@ -361,6 +361,57 @@ ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
   return true;
 });
 
+// Export the caller's in-memory annotations object to a user-chosen file.
+// We accept the object directly (rather than re-reading the sidecar) so
+// unsaved edits are captured. The file format is just the raw Annotations
+// JSON — importing on another machine feeds this back into saveAnnotations.
+ipcMain.handle("ember:exportAnnotations", async (_e, bp, data) => {
+  const defaultName = (bp ? path.basename(bp) : "annotations") + ".ember.json";
+  const r = await dialog.showSaveDialog({
+    title: "Export annotations",
+    defaultPath: defaultName,
+    filters: [{ name: "Ember annotations", extensions: ["json"] }],
+    properties: ["createDirectory", "showOverwriteConfirmation"],
+  });
+  if (r.canceled || !r.filePath) return null;
+  const out = {
+    // Small self-describing header so a human opening the file can tell
+    // what it belongs to; ember version is advisory, we don't gate on it.
+    ember: { version: 1, exported_for: bp ? path.basename(bp) : null },
+    renames:      data?.renames      || {},
+    notes:        data?.notes        || {},
+    signatures:   data?.signatures   || {},
+    localRenames: data?.localRenames || {},
+    patches:      data?.patches      || {},
+  };
+  await fs.writeFile(r.filePath, JSON.stringify(out, null, 2), "utf8");
+  return r.filePath;
+});
+
+// Pick a file and return its parsed annotations payload. The renderer
+// decides the merge strategy (replace vs merge) so this stays a dumb
+// reader. Unknown fields pass through; missing fields default to empty.
+ipcMain.handle("ember:importAnnotations", async () => {
+  const r = await dialog.showOpenDialog({
+    title: "Import annotations",
+    filters: [{ name: "Ember annotations", extensions: ["json"] }],
+    properties: ["openFile"],
+  });
+  if (r.canceled || r.filePaths.length === 0) return null;
+  const raw = await fs.readFile(r.filePaths[0], "utf8");
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch (e) { throw new Error(`not valid JSON: ${e.message}`); }
+  return {
+    path:         r.filePaths[0],
+    renames:      parsed.renames      || {},
+    notes:        parsed.notes        || {},
+    signatures:   parsed.signatures   || {},
+    localRenames: parsed.localRenames || {},
+    patches:      parsed.patches      || {},
+  };
+});
+
 // ----- AI providers -----
 //
 // Three backend paths, all funnelling through the same IPC streaming

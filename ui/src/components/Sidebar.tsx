@@ -14,9 +14,11 @@ export function Sidebar(props: {
   onRename: (fn: FunctionInfo) => void;
   onAddNote: (fn: FunctionInfo) => void;
   onEditSignature: (fn: FunctionInfo) => void;
+  onExport?: () => void;
+  onImport?: () => void;
 }) {
   const { info, currentAddr, annotations, onSelect, onOpen, onReopen,
-          onRename, onAddNote, onEditSignature } = props;
+          onRename, onAddNote, onEditSignature, onExport, onImport } = props;
   const [q, setQ] = useState("");
   const [showImports, setShowImports] = useState(false);
   const [sortBy, setSortBy] = useState<"addr" | "size">("addr");
@@ -164,6 +166,35 @@ export function Sidebar(props: {
           <span><span style={{ color: C.textMuted }}>arch</span> {info.arch}</span>
           <span><span style={{ color: C.textMuted }}>entry</span> {info.entry.replace(/^0x0+/, "0x")}</span>
         </div>
+        {(onExport || onImport) && (
+          <div style={{
+            display: "flex", gap: 6, marginTop: 10,
+            fontFamily: sans, fontSize: 10,
+          }}>
+            {onImport && (
+              <button
+                onClick={onImport}
+                title="Merge renames / notes / signatures / patches from a JSON file"
+                style={{
+                  flex: 1, padding: "4px 8px",
+                  background: "transparent", border: `1px solid ${C.border}`,
+                  borderRadius: 3, color: C.textMuted,
+                }}
+              >import renames</button>
+            )}
+            {onExport && (
+              <button
+                onClick={onExport}
+                title="Save all current annotations to a JSON file"
+                style={{
+                  flex: 1, padding: "4px 8px",
+                  background: "transparent", border: `1px solid ${C.border}`,
+                  borderRadius: 3, color: C.textMuted,
+                }}
+              >export</button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Search */}

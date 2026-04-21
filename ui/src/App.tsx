@@ -21,6 +21,7 @@ import { PatchDialog } from "./components/PatchDialog";
 import {
   loadSummary, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
+  exportAnnotations, importAnnotations,
   clearRendererCaches,
   displayName, demangle,
 } from "./api";
@@ -385,6 +386,47 @@ export default function App() {
     patches:      { ...(annotations.patches      || {}) },
   }), [annotations]);
 
+  // Export all current annotations to a user-chosen JSON file. The main
+  // process handles the save dialog; we pass the in-memory annotations
+  // (not the on-disk sidecar) so unsaved edits are captured too.
+  const handleExport = useCallback(async () => {
+    if (!info) return;
+    try {
+      const out = await exportAnnotations(info.path, annotations);
+      if (out) setError(`Exported to ${out}`);
+    } catch (e: unknown) {
+      setError(`Export failed: ${(e as Error).message}`);
+    }
+  }, [info, annotations]);
+
+  // Import annotations from a user-chosen JSON file, merging into the
+  // current set. Strategy: per-map union, with imported values winning
+  // on collisions — the user is explicitly pulling in someone else's
+  // work, so their renames override. A replace-instead-of-merge flow
+  // can be added later if the use case shows up.
+  const handleImport = useCallback(async () => {
+    if (!info) return;
+    try {
+      const imp = await importAnnotations();
+      if (!imp) return;
+      const merged: Annotations = {
+        renames:      { ...annotations.renames,    ...imp.renames    },
+        notes:        { ...annotations.notes,      ...imp.notes      },
+        signatures:   { ...annotations.signatures, ...imp.signatures },
+        localRenames: { ...(annotations.localRenames || {}) },
+        patches:      { ...(annotations.patches || {}),   ...(imp.patches || {}) },
+      };
+      for (const [fnAddr, lr] of Object.entries(imp.localRenames || {})) {
+        merged.localRenames![fnAddr] = { ...(merged.localRenames![fnAddr] || {}), ...lr };
+      }
+      clearRendererCaches();
+      setAnnotations(merged);
+      await saveAnnotations(info.path, merged);
+    } catch (e: unknown) {
+      setError(`Import failed: ${(e as Error).message}`);
+    }
+  }, [info, annotations]);
+
   const saveRename = useCallback((fn: FunctionInfo, value: string) => {
     const next = cloneAnn();
     if (value) next.renames[fn.addr] = value;
@@ -619,6 +661,8 @@ export default function App() {
           onRename={(fn) => setEditing({ fn, mode: "rename" })}
           onAddNote={(fn) => setEditing({ fn, mode: "note" })}
           onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
+          onExport={handleExport}
+          onImport={handleImport}
         />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <FunctionHeader current={current} annotations={annotations} arities={arities} />

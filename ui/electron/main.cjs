@@ -875,7 +875,7 @@ async function openrouterAgenticLoop({
 }) {
   const is9r = cfg.provider === "9router";
   let totalChars = 0;
-  for (let iter = 0; iter < 8; iter++) {
+  for (let iter = 0; ; iter++) {
     const body = JSON.stringify({
       model:       chosenModel,
       messages,
@@ -958,7 +958,6 @@ async function openrouterAgenticLoop({
       });
     }
   }
-  throw new Error("agentic loop hit iteration cap (8); model may be stuck");
 }
 
 ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {

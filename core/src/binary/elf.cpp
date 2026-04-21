@@ -711,11 +711,42 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     if (!hash_bytes.empty()) {
         dynsym_count = count_dynsym_sysv(hash_bytes);
     }
+    // The max r_sym referenced by any relocation is an exact lower bound
+    // on dynsym size. DT_GNU_HASH alone can't give us the total (imports
+    // live at indices [0, symoffset) and aren't in the hash), but every
+    // import IS referenced by a relocation — so max_rsym+1 captures them.
+    if (dynsym_count == 0) {
+        u32 max_rsym = 0;
+        auto scan_rela_for_max = [&](std::span<const std::byte> bytes) {
+            const std::size_t count = bytes.size() / kRela64Size;
+            for (std::size_t k = 0; k < count; ++k) {
+                const u64 r_info = read_le_at<u64>(bytes.data() + k * kRela64Size + 8);
+                const u32 r_sym  = static_cast<u32>(r_info >> 32);
+                if (r_sym > max_rsym) max_rsym = r_sym;
+            }
+        };
+        scan_rela_for_max(jmprel_bytes);
+        scan_rela_for_max(rela_bytes);
+        if (max_rsym > 0) dynsym_count = max_rsym + 1;
+    }
+    // strtab-dynsym adjacency is exact when both live in the same PT_LOAD
+    // segment (the common linker layout). If they're in different segments
+    // — as on obfuscated binaries that move .dynstr into a writable segment
+    // — the gap spans unrelated bytes and the count is meaningless.
     if (dynsym_count == 0
         && dynsym_vaddr != 0 && strtab_for_count_vaddr > dynsym_vaddr
         && syment > 0) {
-        const u64 span = strtab_for_count_vaddr - dynsym_vaddr;
-        dynsym_count = static_cast<std::size_t>(span / syment);
+        bool same_segment = false;
+        for (const auto& seg : segments_) {
+            if (dynsym_vaddr < seg.vaddr) continue;
+            if (dynsym_vaddr >= seg.vaddr + seg.memsz) continue;
+            same_segment = (strtab_for_count_vaddr < seg.vaddr + seg.memsz);
+            break;
+        }
+        if (same_segment) {
+            const u64 span = strtab_for_count_vaddr - dynsym_vaddr;
+            dynsym_count = static_cast<std::size_t>(span / syment);
+        }
     }
     if (dynsym_count == 0 && !gnu_hash_bytes.empty()) {
         dynsym_count = count_dynsym_gnu(gnu_hash_bytes);

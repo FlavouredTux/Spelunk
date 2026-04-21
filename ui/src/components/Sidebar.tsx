@@ -19,6 +19,7 @@ export function Sidebar(props: {
           onRename, onAddNote, onEditSignature } = props;
   const [q, setQ] = useState("");
   const [showImports, setShowImports] = useState(false);
+  const [sortBy, setSortBy] = useState<"addr" | "size">("addr");
   const [ctx, setCtx] = useState<{ x: number; y: number; fn: FunctionInfo } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -34,8 +35,7 @@ export function Sidebar(props: {
   const list = useMemo(() => {
     const pool = showImports ? info.imports : info.functions;
     const needle = q.trim().toLowerCase();
-    if (!needle) return pool;
-    return pool.filter((f) => {
+    const filtered = !needle ? pool : pool.filter((f) => {
       const rn = annotations.renames[f.addr];
       return (
         f.name.toLowerCase().includes(needle) ||
@@ -44,7 +44,15 @@ export function Sidebar(props: {
         (rn && rn.toLowerCase().includes(needle))
       );
     });
-  }, [q, info, showImports, annotations]);
+    // Imports don't have real addresses or sizes, so the sort is a no-op
+    // there — keep pool order (matches dynsym insertion order).
+    if (showImports || sortBy === "addr") return filtered;
+    // Clone before sort — pool is a memoised prop, mutating it would
+    // invalidate the parent's reference and break referential equality
+    // checks in VirtualList. Sort biggest first: the large functions are
+    // almost always the ones worth opening.
+    return [...filtered].sort((a, b) => b.size - a.size);
+  }, [q, info, showImports, sortBy, annotations]);
 
   const buildMenu = (fn: FunctionInfo): MenuItem[] => {
     const hasRename = !!annotations.renames[fn.addr];
@@ -215,6 +223,37 @@ export function Sidebar(props: {
           );
         })}
       </div>
+
+      {/* Sort toggle — disabled when viewing imports (they have no real size). */}
+      {!showImports && (
+        <div style={{
+          padding: "2px 14px 6px",
+          display: "flex", justifyContent: "flex-end", gap: 6,
+          fontFamily: sans, fontSize: 10,
+        }}>
+          <span style={{ color: C.textFaint, alignSelf: "center" }}>sort</span>
+          {([
+            { k: "addr", label: "addr" },
+            { k: "size", label: "size" },
+          ] as const).map((s) => {
+            const active = sortBy === s.k;
+            return (
+              <button
+                key={s.k}
+                onClick={() => setSortBy(s.k)}
+                style={{
+                  padding: "2px 8px",
+                  background: active ? C.bgMuted : "transparent",
+                  border: `1px solid ${active ? C.border : "transparent"}`,
+                  borderRadius: 3,
+                  color: active ? C.text : C.textMuted,
+                  fontWeight: active ? 600 : 400,
+                }}
+              >{s.label}</button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Virtualized; 50k-symbol binaries would otherwise OOM the renderer. */}
       <VirtualList

@@ -326,8 +326,11 @@ function parseSummary(raw: string, path: string): BinaryInfo {
     }
   }
 
+  // Keep real named functions, drop placeholders (<section-N>, etc.).
+  // `size > 0` used to gate here too, but dynsym on stripped binaries
+  // has no size info — `_start` and library exports would vanish.
   info.functions = info.functions.filter(
-    (f) => f.kind === "function" && f.size > 0 && f.name && !f.name.startsWith("<"),
+    (f) => f.kind === "function" && f.name && !f.name.startsWith("<"),
   );
 
   return info;

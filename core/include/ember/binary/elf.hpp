@@ -98,6 +98,14 @@ private:
     void scan_plt_stubs(const std::unordered_map<addr_t, std::string>& got_to_name);
     void sort_and_dedupe_symbols();
 
+    // Fallback path for stripped binaries with no section table (e_shnum==0).
+    // Recovers symbols from PT_DYNAMIC (dynsym + hash tables), synthesizes
+    // .text/.plt/.got/.eh_frame/.dynsym/.dynstr sections from program-header
+    // metadata so downstream analyses keep working, and seeds `_start` at
+    // the entry point. Runs instead of parse_sections/parse_symbols/etc.
+    [[nodiscard]] Result<void>
+    parse_from_phdr(const ParsedEhdr& h);
+
     std::vector<std::byte>    buffer_;
     Arch                      arch_  = Arch::Unknown;
     addr_t                    entry_ = 0;

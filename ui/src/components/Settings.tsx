@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import type { AppSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
-import { clearRendererCaches } from "../api";
-import type { AiConfig, AiCliStatus, AiProvider } from "../types";
+import { clearRendererCaches, listPlugins, runPluginCommand } from "../api";
+import type {
+  AiConfig, AiCliStatus, AiProvider, Annotations, PluginInfo, PluginRunResult,
+} from "../types";
 
 // Settings gear. Stroked-outline style (matches the rest of the
 // title-bar glyphs), 24×24 viewBox so the curved tooth flanks
@@ -37,6 +39,8 @@ export function GearIcon(props: { size?: number; style?: React.CSSProperties }) 
 export function SettingsPanel(props: {
   settings: AppSettings;
   onChange: (s: AppSettings) => void;
+  binaryPath?: string | null;
+  onAnnotationsApplied?: (a: Annotations) => void;
   onClose: () => void;
 }) {
   const [cleared, setCleared] = useState(false);
@@ -138,6 +142,18 @@ export function SettingsPanel(props: {
             </Row>
           </Section>
 
+          <Section title="Git">
+            <Row
+              label="Release update popup"
+              hint="Checks GitHub Releases and shows a small notice when a newer packaged app is available."
+            >
+              <Toggle
+                value={props.settings.releaseUpdatePopup}
+                onChange={(v) => set("releaseUpdatePopup", v)}
+              />
+            </Row>
+          </Section>
+
           <Section title="Cache">
             <Row
               label="Cleared cached results"
@@ -162,6 +178,13 @@ export function SettingsPanel(props: {
 
           <Section title="AI">
             <AiConfigSection />
+          </Section>
+
+          <Section title="Plugins">
+            <PluginSection
+              binaryPath={props.binaryPath ?? null}
+              onAnnotationsApplied={props.onAnnotationsApplied}
+            />
           </Section>
 
           <Section title="Defaults">
@@ -196,6 +219,217 @@ export function SettingsPanel(props: {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function PluginSection(props: {
+  binaryPath: string | null;
+  onAnnotationsApplied?: (a: Annotations) => void;
+}) {
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null);
+  const [busyRef, setBusyRef] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PluginRunResult | null>(null);
+  const [status, setStatus] = useState<string>("");
+
+  useEffect(() => {
+    let cancel = false;
+    listPlugins().then((p) => { if (!cancel) setPlugins(p); }).catch(() => {
+      if (!cancel) setPlugins([]);
+    });
+    return () => { cancel = true; };
+  }, []);
+
+  if (!props.binaryPath) {
+    return <div style={{ color: C.textFaint, fontFamily: serif, fontStyle: "italic" }}>
+      open a binary to preview or apply plugin proposals
+    </div>;
+  }
+  if (!plugins) {
+    return <div style={{ color: C.textFaint, fontFamily: serif, fontStyle: "italic" }}>
+      loading plugins…
+    </div>;
+  }
+  if (plugins.length === 0) {
+    return <div style={{ color: C.textFaint, fontFamily: serif, fontStyle: "italic" }}>
+      no local plugins found
+    </div>;
+  }
+
+  async function previewCommand(pluginId: string, commandId: string) {
+    const ref = `${pluginId}:${commandId}`;
+    setBusyRef(ref);
+    try {
+      const res = await runPluginCommand(pluginId, commandId, { apply: false });
+      setPreview(res);
+      setStatus(res.summary);
+    } catch (e: any) {
+      setStatus(`Plugin preview failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBusyRef(null);
+    }
+  }
+
+  async function applyPreview() {
+    if (!preview) return;
+    setBusyRef(`${preview.pluginId}:${preview.commandId}:apply`);
+    try {
+      const res = await runPluginCommand(preview.pluginId, preview.commandId, { apply: true });
+      setPreview(res);
+      setStatus(`${res.summary} Applied ${res.appliedCount} rename${res.appliedCount === 1 ? "" : "s"}.`);
+      if (res.annotations && props.onAnnotationsApplied) props.onAnnotationsApplied(res.annotations);
+    } catch (e: any) {
+      setStatus(`Plugin apply failed: ${e?.message ?? String(e)}`);
+    } finally {
+      setBusyRef(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {plugins.map((plugin) => (
+        <div
+          key={plugin.id}
+          style={{
+            border: `1px solid ${plugin.invalid ? C.red : C.border}`,
+            borderRadius: 6,
+            padding: "10px 12px",
+            background: C.bg,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={{ fontFamily: sans, fontSize: 12, color: C.text, fontWeight: 600 }}>
+              {plugin.name}
+            </span>
+            <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
+              {plugin.version}
+            </span>
+          </div>
+          <div style={{
+            marginTop: 3,
+            fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint,
+          }}>
+            {plugin.description}
+          </div>
+          {plugin.permissions.length > 0 && (
+            <div style={{
+              marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4,
+            }}>
+              {plugin.permissions.map((perm) => (
+                <span
+                  key={perm}
+                  style={{
+                    fontFamily: mono, fontSize: 9, color: C.textFaint,
+                    padding: "2px 6px", borderRadius: 999,
+                    border: `1px solid ${C.border}`, background: C.bgAlt,
+                  }}
+                >{perm}</span>
+              ))}
+            </div>
+          )}
+          {plugin.invalid ? null : (
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {plugin.commands.map((cmd) => {
+                const ref = `${plugin.id}:${cmd.id}`;
+                const active = busyRef === ref;
+                return (
+                  <button
+                    key={cmd.ref}
+                    title={cmd.description}
+                    disabled={!!busyRef}
+                    onClick={() => previewCommand(plugin.id, cmd.id)}
+                    style={{
+                      padding: "5px 10px",
+                      background: C.bgMuted,
+                      color: C.text,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 4,
+                      fontFamily: mono,
+                      fontSize: 10,
+                      cursor: busyRef ? "not-allowed" : "pointer",
+                    }}
+                  >{active ? "previewing…" : cmd.title}</button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {status && (
+        <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint }}>
+          {status}
+        </div>
+      )}
+
+      {preview && (
+        <div style={{
+          border: `1px solid ${C.borderStrong}`,
+          borderRadius: 6,
+          background: C.bg,
+          padding: "10px 12px",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+            <div>
+              <div style={{ fontFamily: sans, fontSize: 12, color: C.text, fontWeight: 600 }}>
+                Proposal Preview
+              </div>
+              <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint }}>
+                {preview.summary}
+              </div>
+            </div>
+            <button
+              onClick={applyPreview}
+              disabled={!!busyRef || preview.proposals.length === 0}
+              style={{
+                padding: "5px 10px",
+                background: preview.proposals.length > 0 ? C.accent : C.bgMuted,
+                color: preview.proposals.length > 0 ? "#fff" : C.textMuted,
+                border: `1px solid ${preview.proposals.length > 0 ? C.accent : C.border}`,
+                borderRadius: 4,
+                fontFamily: mono,
+                fontSize: 10,
+                cursor: busyRef || preview.proposals.length === 0 ? "not-allowed" : "pointer",
+              }}
+            >{busyRef?.endsWith(":apply") ? "applying…" : "apply proposals"}</button>
+          </div>
+          {preview.notes && (
+            <div style={{
+              marginTop: 8, fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint,
+            }}>
+              {preview.notes}
+            </div>
+          )}
+          <div style={{ marginTop: 10, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+            {preview.proposals.length === 0 && (
+              <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint }}>
+                no proposals
+              </div>
+            )}
+            {preview.proposals.map((p) => (
+              <div key={`${p.addr}:${p.name}`} style={{
+                padding: "7px 8px",
+                borderRadius: 4,
+                border: `1px solid ${C.border}`,
+                background: C.bgAlt,
+              }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>{p.addr}</span>
+                  <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>{p.name}</span>
+                  <span style={{ fontFamily: mono, fontSize: 9, color: C.accent }}>
+                    {Math.round(p.confidence * 100)}%
+                  </span>
+                </div>
+                <div style={{
+                  marginTop: 3, fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint,
+                }}>
+                  {p.reason}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

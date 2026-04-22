@@ -1,10 +1,13 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const https = require("node:https");
 const http  = require("node:http");
 const { makeTools } = require("./ai_tools.cjs");
+const { makePluginHost } = require("./plugins.cjs");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const path = require("node:path");
+const { pipeline } = require("node:stream/promises");
 // Official assistant SDK that wraps the user's installed `assistant` binary
 // and handles subscription auth (Pro/Max OAuth) correctly. Loaded
 // lazily so the renderer doesn't pay the import cost on startup.
@@ -109,6 +112,128 @@ function runEmber(args) {
   });
 }
 
+function runCapture(bin, args, cwd = process.cwd()) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(bin, args, { cwd });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d) => { stdout += d.toString(); });
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) return resolve(stdout.trim());
+      const msg = stderr.trim() || `${bin} exited ${code}`;
+      reject(new Error(msg));
+    });
+  });
+}
+
+function parseGitHubRepo(url) {
+  const m = /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?$/i.exec(url || "");
+  if (!m) return null;
+  return { owner: m[1], repo: m[2] };
+}
+
+function compareVersions(a, b) {
+  const pa = String(a || "").replace(/^v/i, "").split(".").map((x) => parseInt(x, 10) || 0);
+  const pb = String(b || "").replace(/^v/i, "").split(".").map((x) => parseInt(x, 10) || 0);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; ++i) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da !== db) return da - db;
+  }
+  return 0;
+}
+
+function getJson(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    https.get(url, {
+      headers: {
+        "User-Agent": "Ember-Updater",
+        "Accept": "application/vnd.github+json",
+        ...headers,
+      },
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(getJson(res.headers.location, headers));
+      }
+      if (res.statusCode !== 200) {
+        const code = res.statusCode;
+        res.resume();
+        return reject(new Error(`HTTP ${code} while fetching ${url}`));
+      }
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { body += d; });
+      res.on("end", () => {
+        try { resolve(JSON.parse(body)); }
+        catch (e) { reject(new Error(`invalid JSON from ${url}: ${e.message}`)); }
+      });
+    }).on("error", reject);
+  });
+}
+
+function downloadFile(url, outPath) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { "User-Agent": "Ember-Updater" } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(downloadFile(res.headers.location, outPath));
+      }
+      if (res.statusCode !== 200) {
+        const code = res.statusCode;
+        res.resume();
+        return reject(new Error(`HTTP ${code} while downloading ${url}`));
+      }
+      fs.mkdir(path.dirname(outPath), { recursive: true })
+        .then(() => pipeline(res, fsSync.createWriteStream(outPath)))
+        .then(() => resolve(outPath))
+        .catch(reject);
+    }).on("error", reject);
+  });
+}
+
+function pickReleaseAsset(release) {
+  const assets = Array.isArray(release?.assets) ? release.assets : [];
+  const choices = process.platform === "win32"
+    ? [".exe"]
+    : process.platform === "darwin"
+      ? [".dmg", ".zip"]
+      : [".AppImage", ".deb"];
+  for (const ext of choices) {
+    const hit = assets.find((a) => typeof a?.name === "string" && a.name.endsWith(ext));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function fetchLatestReleaseInfo() {
+  const homepage = (() => {
+    try { return require("../package.json").homepage; }
+    catch { return ""; }
+  })();
+  const repo = parseGitHubRepo(homepage);
+  if (!repo) throw new Error("package homepage is not a GitHub repo URL");
+  const rel = await getJson(`https://api.github.com/repos/${repo.owner}/${repo.repo}/releases/latest`);
+  const currentVersion = app.getVersion();
+  const latestVersion = String(rel.tag_name || rel.name || "").replace(/^v/i, "");
+  const asset = pickReleaseAsset(rel);
+  return {
+    ok: true,
+    currentVersion,
+    latestVersion,
+    tag: rel.tag_name || "",
+    releaseName: rel.name || rel.tag_name || "",
+    url: rel.html_url || homepage,
+    assetName: asset?.name || "",
+    assetUrl: asset?.browser_download_url || "",
+    notes: typeof rel.body === "string" ? rel.body : "",
+    available: compareVersions(latestVersion, currentVersion) > 0 && !!asset,
+  };
+}
+
 // ----- ember:run result cache --------------------------------------------
 //
 // Each ember CLI invocation re-loads the binary off disk, re-parses
@@ -173,6 +298,12 @@ ipcMain.handle("ember:setBinary", async (_e, p) => {
 async function readSidecar(binaryPath) {
   try { return JSON.parse(await fs.readFile(sidecarPath(binaryPath), "utf8")); }
   catch { return {}; }
+}
+
+async function saveSidecar(binaryPath, data) {
+  const p = sidecarPath(binaryPath);
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  await fs.writeFile(p, JSON.stringify(data, null, 2), "utf8");
 }
 
 // Stable per-patch-set hash used as the patched-binary filename suffix
@@ -305,6 +436,57 @@ ipcMain.handle("ember:run", async (_e, args) => {
 
 ipcMain.handle("ember:binary", async () => state.binary);
 
+ipcMain.handle("ember:update:check", async () => {
+  try {
+    return await fetchLatestReleaseInfo();
+  } catch (e) {
+    return {
+      ok: false,
+      error: e?.message ?? String(e),
+    };
+  }
+});
+
+ipcMain.handle("ember:update:downloadAndInstall", async () => {
+  try {
+    const rel = await fetchLatestReleaseInfo();
+    if (!rel.available) {
+      return { ok: false, error: "no newer release available for this platform" };
+    }
+    if (!rel.assetUrl || !rel.assetName) {
+      return { ok: false, error: "latest release has no matching downloadable asset" };
+    }
+    const outPath = path.join(app.getPath("downloads"), "Ember Updates", rel.assetName);
+    await downloadFile(rel.assetUrl, outPath);
+    const opened = await shell.openPath(outPath);
+    return {
+      ok: true,
+      path: outPath,
+      message: opened
+        ? `Downloaded to ${outPath}. Open it manually if it did not launch: ${opened}`
+        : `Downloaded and opened ${rel.assetName}.`,
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+});
+
+const pluginHost = makePluginHost({
+  app,
+  runEmber,
+  getCurrentBinary: () => state.binary,
+  readAnnotations: readSidecar,
+  saveAnnotations: saveSidecar,
+});
+
+ipcMain.handle("ember:plugins:list", async () => {
+  return await pluginHost.listPlugins();
+});
+
+ipcMain.handle("ember:plugins:run", async (_e, pluginId, commandId, opts) => {
+  return await pluginHost.runCommand(pluginId, commandId, opts || {});
+});
+
 // ----- Annotations sidecar -----
 
 // Save patches applied to a user-chosen output path. Prompts a save
@@ -355,9 +537,7 @@ ipcMain.handle("ember:loadAnnotations", async (_e, bp) => {
 });
 
 ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
-  const p = sidecarPath(bp);
-  await fs.mkdir(path.dirname(p), { recursive: true });
-  await fs.writeFile(p, JSON.stringify(data, null, 2), "utf8");
+  await saveSidecar(bp, data);
   return true;
 });
 

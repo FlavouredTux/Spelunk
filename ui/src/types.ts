@@ -92,6 +92,56 @@ export type AiChatRequest = {
 export type AiToolInvocation = { name: string; args: Record<string, unknown> };
 export type AiToolResult     = { name: string; ok: boolean; chars: number };
 
+export type PluginCommand = {
+  id: string;
+  ref: string;
+  title: string;
+  description: string;
+};
+
+export type PluginInfo = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  permissions: string[];
+  commands: PluginCommand[];
+  invalid?: boolean;
+};
+
+export type PluginRenameProposal = {
+  kind: "rename";
+  addr: string;
+  name: string;
+  confidence: number;
+  reason: string;
+};
+
+export type PluginRunResult = {
+  pluginId: string;
+  commandId: string;
+  summary: string;
+  notes: string;
+  proposals: PluginRenameProposal[];
+  applied: boolean;
+  appliedCount: number;
+  annotations?: Annotations;
+};
+
+export type ReleaseUpdateStatus = {
+  ok: boolean;
+  currentVersion?: string;
+  latestVersion?: string;
+  tag?: string;
+  releaseName?: string;
+  url?: string;
+  assetName?: string;
+  assetUrl?: string;
+  notes?: string;
+  available?: boolean;
+  error?: string;
+};
+
 declare global {
   interface Window {
     ember: {
@@ -108,6 +158,22 @@ declare global {
 
       recents:          () => Promise<string[]>;
       openRecent:       (bp: string) => Promise<string>;
+      updates: {
+        check: () => Promise<ReleaseUpdateStatus>;
+        downloadAndInstall: () => Promise<{
+          ok: boolean;
+          path?: string;
+          message?: string;
+          error?: string;
+        }>;
+      };
+      plugins: {
+        list: () => Promise<PluginInfo[]>;
+        run: (pluginId: string, commandId: string, opts?: {
+          apply?: boolean;
+          args?: Record<string, unknown>;
+        }) => Promise<PluginRunResult>;
+      };
 
       ai: {
         getConfig:    () => Promise<AiConfig>;

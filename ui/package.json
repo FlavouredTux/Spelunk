@@ -28,7 +28,8 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "../scripts", "to": "scripts" }
+      { "from": "../scripts", "to": "scripts" },
+      { "from": "../plugins", "to": "plugins" }
     ],
     "directories": {
       "output": "release"

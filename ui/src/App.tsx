@@ -22,12 +22,13 @@ import {
   loadSummary, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
   exportAnnotations, importAnnotations,
+  checkForReleaseUpdate, downloadAndInstallReleaseUpdate,
   clearRendererCaches,
   displayName, demangle,
 } from "./api";
 import type {
   BinaryInfo, FunctionInfo, ViewKind, Xrefs, Annotations, StringEntry, Arities,
-  FunctionSig,
+  FunctionSig, ReleaseUpdateStatus,
 } from "./types";
 
 const EMPTY_XREFS: Xrefs = { callers: {}, callees: {} };
@@ -66,6 +67,13 @@ export default function App() {
     // stale text from the renderer cache otherwise.
     clearRendererCaches();
   }, []);
+  const patchSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((cur) => {
+      const next = { ...cur, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
   // CFG view sub-mode. Initialized from the user's setting; the toggle
   // in the graph's bottom-right corner overrides for the current
   // session without touching the saved default.
@@ -101,6 +109,7 @@ export default function App() {
   const [strings, setStrings] = useState<StringEntry[]>(EMPTY_STRINGS);
   const [arities, setArities] = useState<Arities>(EMPTY_ARITIES);
   const [recents, setRecents] = useState<string[]>([]);
+  const [releaseUpdate, setReleaseUpdate] = useState<ReleaseUpdateStatus | null>(null);
 
   // Strings are only consumed by StringsView and the payload can be hundreds
   // In-flight async analyses — shown in the status bar so huge binaries
@@ -183,6 +192,50 @@ export default function App() {
     // Initial recents load (for welcome screen)
     getRecents().then(setRecents).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!settings.releaseUpdatePopup) {
+      setReleaseUpdate(null);
+      return;
+    }
+
+    let cancel = false;
+    const seen = settings.seenReleaseTag || "";
+
+    const poll = async () => {
+      try {
+        const status = await checkForReleaseUpdate();
+        if (cancel || !status.ok || !status.tag) return;
+        if (!status.available) {
+          setReleaseUpdate(null);
+          return;
+        }
+        if (seen === status.tag) {
+          if (releaseUpdate?.tag === status.tag) setReleaseUpdate(null);
+          return;
+        }
+        setReleaseUpdate(status);
+      } catch {
+        // Release polling is best-effort.
+      }
+    };
+
+    poll();
+    const t = window.setInterval(poll, 120000);
+    return () => { cancel = true; window.clearInterval(t); };
+  }, [settings.releaseUpdatePopup, settings.seenReleaseTag, releaseUpdate?.tag]);
+
+  const dismissReleaseUpdate = useCallback((status?: ReleaseUpdateStatus | null) => {
+    const s = status ?? releaseUpdate;
+    if (!s?.tag) {
+      setReleaseUpdate(null);
+      return;
+    }
+    patchSettings({
+      seenReleaseTag: s.tag,
+    });
+    setReleaseUpdate(null);
+  }, [releaseUpdate, patchSettings]);
 
   const openBinaryAt = useCallback(async (binaryPath: string | null) => {
     setLoading(true);
@@ -512,13 +565,21 @@ export default function App() {
 
   if (!info) {
     return (
-      <Welcome
-        onOpen={handleOpen}
-        loading={loading}
-        error={error}
-        recents={recents}
-        onOpenRecent={handleOpenRecent}
-      />
+      <>
+        <Welcome
+          onOpen={handleOpen}
+          loading={loading}
+          error={error}
+          recents={recents}
+          onOpenRecent={handleOpenRecent}
+        />
+        {releaseUpdate && (
+          <ReleaseUpdatePopup
+            status={releaseUpdate}
+            onDismiss={() => dismissReleaseUpdate(releaseUpdate)}
+          />
+        )}
+      </>
     );
   }
 
@@ -752,6 +813,11 @@ export default function App() {
         <SettingsPanel
           settings={settings}
           onChange={updateSettings}
+          binaryPath={info?.path ?? null}
+          onAnnotationsApplied={(a) => {
+            clearRendererCaches();
+            setAnnotations(a);
+          }}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -877,6 +943,156 @@ export default function App() {
           onClose={() => setPatching(null)}
         />
       )}
+      {releaseUpdate && (
+        <ReleaseUpdatePopup
+          status={releaseUpdate}
+          onDismiss={() => dismissReleaseUpdate(releaseUpdate)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ReleaseUpdatePopup(props: {
+  status: ReleaseUpdateStatus;
+  onDismiss: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const notes = (props.status.notes || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+
+  const onUpdate = async () => {
+    setBusy(true);
+    setMsg("");
+    try {
+      const res = await downloadAndInstallReleaseUpdate();
+      if (res.ok) {
+        setMsg(res.message || "Update downloaded.");
+        props.onDismiss();
+      } else {
+        setMsg(res.error || "Update failed.");
+      }
+    } catch (e: any) {
+      setMsg(e?.message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 48,
+        right: 16,
+        width: 320,
+        padding: "12px 14px",
+        background: C.bgAlt,
+        border: `1px solid ${C.borderStrong}`,
+        borderRadius: 8,
+        boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+        zIndex: 2200,
+        animation: "fadeIn .14s ease-out",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{
+          width: 8, height: 8, borderRadius: 4, background: C.green, flexShrink: 0,
+        }} />
+        <span style={{ fontFamily: sans, fontSize: 12, color: C.text, fontWeight: 600 }}>
+          Update available
+        </span>
+        <button
+          onClick={props.onDismiss}
+          style={{
+            marginLeft: "auto",
+            color: C.textFaint,
+            fontFamily: mono,
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+          aria-label="Dismiss update popup"
+          title="Dismiss"
+        >×</button>
+      </div>
+      <div style={{
+        marginTop: 6,
+        fontFamily: serif,
+        fontStyle: "italic",
+        fontSize: 11,
+        color: C.textFaint,
+      }}>
+        Ember {props.status.latestVersion} is available. You’re on {props.status.currentVersion}.
+      </div>
+      <div style={{
+        marginTop: 8,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontFamily: mono,
+        fontSize: 10,
+        color: C.textMuted,
+        flexWrap: "wrap",
+      }}>
+        {props.status.releaseName && <span>{props.status.releaseName}</span>}
+        {props.status.assetName && <span style={{ color: C.accent }}>{props.status.assetName}</span>}
+      </div>
+      {notes.length > 0 && (
+        <div style={{
+          marginTop: 8,
+          display: "flex",
+          flexDirection: "column",
+          gap: 3,
+          fontFamily: serif,
+          fontStyle: "italic",
+          fontSize: 11,
+          color: C.textFaint,
+        }}>
+          {notes.map((line, i) => <span key={i}>{line}</span>)}
+        </div>
+      )}
+      {msg && (
+        <div style={{
+          marginTop: 8,
+          fontFamily: mono,
+          fontSize: 10,
+          color: C.textMuted,
+        }}>
+          {msg}
+        </div>
+      )}
+      <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+        <button
+          onClick={onUpdate}
+          disabled={busy}
+          style={{
+            padding: "5px 10px",
+            background: busy ? C.bgMuted : C.accent,
+            border: `1px solid ${busy ? C.border : C.accent}`,
+            borderRadius: 4,
+            color: busy ? C.textMuted : "#fff",
+            fontFamily: mono,
+            fontSize: 10,
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >{busy ? "downloading…" : "update"}</button>
+        <button
+          onClick={props.onDismiss}
+          style={{
+            padding: "5px 10px",
+            background: "transparent",
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            color: C.textMuted,
+            fontFamily: mono,
+            fontSize: 10,
+            cursor: "pointer",
+          }}
+        >dismiss</button>
+      </div>
     </div>
   );
 }

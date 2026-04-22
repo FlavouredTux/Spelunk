@@ -22,12 +22,19 @@ export type AppSettings = {
   // affect CFG graph node bodies — those are sized by the layout
   // algorithm and trying to scale them breaks layout reasoning.
   codeFontSize: number;
+  // Poll GitHub Releases and surface a small notice when a newer tagged
+  // app release exists.
+  releaseUpdatePopup: boolean;
+  // Latest dismissed / handled release tag.
+  seenReleaseTag: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
   cfgDefaultMode: "pseudo",
   showBbLabels:   false,
   codeFontSize:   12,
+  releaseUpdatePopup: true,
+  seenReleaseTag: "",
 };
 
 export function loadSettings(): AppSettings {

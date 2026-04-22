@@ -93,6 +93,13 @@ buffer; `project.commit()` writes them back to the project file. Every
 mutator also accepts `{ dryRun: true }` so agents can preview changes
 before committing.
 
+## Plugin Platform
+
+The current scripting surface is the foundation for a larger plugin
+ecosystem aimed at domain-specific reversing workflows, especially around
+games, engines, protocols, and build-to-build knowledge carryover. The
+proposed platform design lives in [docs/plugin-platform.md](docs/plugin-platform.md).
+
 ## Layout
 
 ```

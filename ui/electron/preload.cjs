@@ -17,6 +17,15 @@ contextBridge.exposeInMainWorld("ember", {
 
   recents:          () => ipcRenderer.invoke("ember:recents"),
   openRecent:       (bp) => ipcRenderer.invoke("ember:openRecent", bp),
+  updates: {
+    check: () => ipcRenderer.invoke("ember:update:check"),
+    downloadAndInstall: () => ipcRenderer.invoke("ember:update:downloadAndInstall"),
+  },
+  plugins: {
+    list: () => ipcRenderer.invoke("ember:plugins:list"),
+    run:  (pluginId, commandId, opts) =>
+      ipcRenderer.invoke("ember:plugins:run", pluginId, commandId, opts),
+  },
 
   // AI / OpenRouter proxy. The API key is held in the main process and
   // never crosses the IPC boundary to the renderer — only the resulting

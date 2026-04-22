@@ -135,6 +135,14 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
     const u16 opt_size     = read_le_at<u16>(coff->data() + kCoffSizeOfOptHdrOff);
 
     arch_ = arch_from_machine(machine);
+    if (arch_ == Arch::Unknown) {
+        return std::unexpected(Error::unsupported(std::format(
+            "pe: unsupported machine type {:#x}", machine)));
+    }
+    if (num_sections == 0) {
+        return std::unexpected(Error::invalid_format(
+            "pe: COFF header reports zero sections"));
+    }
 
     // Optional header. Must be at least large enough for the PE32+ fixed
     // portion (0x70 bytes) plus the data-directory count field itself.
@@ -257,6 +265,7 @@ Result<void> PeBinary::parse() {
     }
 
     if (auto rv = parse_sections(*hdrs); !rv) return std::unexpected(rv.error());
+    if (auto rv = validate_entry_rva(); !rv) return std::unexpected(rv.error());
 
     // Imports first (so got_addr lives on each Symbol before thunk scan
     // uses it to resolve stubs), then exports, then the thunk scan.
@@ -271,10 +280,21 @@ Result<void> PeBinary::parse() {
     return {};
 }
 
+Result<void> PeBinary::validate_entry_rva() const {
+    if (entry_ == image_base_) return {};
+    const auto entry_rva = static_cast<u32>(entry_ - image_base_);
+    if (!rva_is_mapped(entry_rva)) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "pe: entry RVA {:#x} does not map to file-backed bytes", entry_rva)));
+    }
+    return {};
+}
+
 Result<void> PeBinary::parse_tls_callbacks() {
     if (data_dirs_.size() <= kDdTls) return {};
     const auto& dd = data_dirs_[kDdTls];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
+    if (!rva_is_mapped(dd.virtual_address, 40)) return {};
 
     // IMAGE_TLS_DIRECTORY64 fields we use:
     //   +0x18: AddressOfCallBacks (u64 absolute VA → NULL-terminated u64[])
@@ -296,6 +316,7 @@ Result<void> PeBinary::parse_tls_callbacks() {
         if (slot.size() < 8) break;
         const u64 cb = read_le_at<u64>(slot.data());
         if (cb == 0) break;
+        if (bytes_at(static_cast<addr_t>(cb)).empty()) continue;
 
         Symbol sym;
         sym.name = std::format("tls_callback_{}", i);
@@ -308,6 +329,10 @@ Result<void> PeBinary::parse_tls_callbacks() {
 
 std::span<const std::byte> PeBinary::bytes_at_rva(u32 rva) const noexcept {
     return Binary::bytes_at(image_base_ + static_cast<addr_t>(rva));
+}
+
+bool PeBinary::rva_is_mapped(u32 rva, std::size_t min_size) const noexcept {
+    return bytes_at_rva(rva).size() >= min_size;
 }
 
 std::string_view PeBinary::cstr_at_rva(u32 rva) const noexcept {
@@ -325,6 +350,7 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
     if (data_dirs_.size() <= kDdImport) return {};
     const auto& dd = data_dirs_[kDdImport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
+    if (!rva_is_mapped(dd.virtual_address, kImportDescSize)) return {};
 
     // Array of IMAGE_IMPORT_DESCRIPTOR terminated by an all-zero record.
     // Cap the loop at dd.size / kImportDescSize so a malicious missing
@@ -340,6 +366,7 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
         const u32 name_rva    = read_le_at<u32>(desc.data() + 0x0C);
         const u32 iat_rva     = read_le_at<u32>(desc.data() + 0x10);
         if ((oft_rva | name_rva | iat_rva) == 0) break;   // terminator
+        if (!rva_is_mapped(name_rva)) continue;
 
         // Walk INT and IAT in lockstep. INT gives us the hint/name; IAT
         // is the slot the loader overwrites with the resolved pointer.
@@ -397,6 +424,7 @@ PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_na
     if (data_dirs_.size() <= kDdDelayImport) return {};
     const auto& dd = data_dirs_[kDdDelayImport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
+    if (!rva_is_mapped(dd.virtual_address, kDelayImportDescSize)) return {};
 
     const std::size_t max_descs = dd.size / kDelayImportDescSize;
     u32 cur = dd.virtual_address;
@@ -410,6 +438,7 @@ PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_na
         const u32 iat_rva  = read_le_at<u32>(desc.data() + 0x0C);
         const u32 int_rva  = read_le_at<u32>(desc.data() + 0x10);
         if ((attrs | name_rva | iat_rva | int_rva) == 0) break;  // terminator
+        if (!rva_is_mapped(name_rva)) continue;
         // Pre-x64 layout: ignore the slice rather than misread VAs as RVAs.
         if ((attrs & kDelayAttrRvaBased) == 0) continue;
         // Some linkers ship descriptors with no INT (rvaINT == 0); for the
@@ -450,6 +479,7 @@ Result<void> PeBinary::parse_exports() {
     if (data_dirs_.size() <= kDdExport) return {};
     const auto& dd = data_dirs_[kDdExport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
+    if (!rva_is_mapped(dd.virtual_address, kExportDirSize)) return {};
 
     const auto edir = bytes_at_rva(dd.virtual_address);
     if (edir.size() < kExportDirSize) return {};

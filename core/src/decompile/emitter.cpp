@@ -147,6 +147,17 @@ constexpr VariadicImport kVariadicImports[] = {
         {"puts", 1}, {"fputs", 2}, {"fgets", 3}, {"fputc", 2},
         {"fgetc", 1}, {"getc", 1}, {"putc", 2}, {"ungetc", 2},
         {"putchar", 1}, {"getchar", 0}, {"gets", 1},
+        {"GetTickCount", 0}, {"GetLastError", 0}, {"Sleep", 1},
+        {"ExitProcess", 1}, {"CloseHandle", 1},
+        {"OutputDebugStringA", 1}, {"OutputDebugStringW", 1},
+        {"GetModuleHandleA", 1}, {"GetModuleHandleW", 1},
+        {"LoadLibraryA", 1}, {"LoadLibraryW", 1},
+        {"FreeLibrary", 1}, {"GetProcAddress", 2},
+        {"VirtualAlloc", 4}, {"VirtualFree", 3}, {"VirtualProtect", 4},
+        {"HeapAlloc", 3}, {"HeapFree", 3},
+        {"TlsAlloc", 0}, {"TlsGetValue", 1}, {"TlsSetValue", 2}, {"TlsFree", 1},
+        {"CreateFileA", 7}, {"CreateFileW", 7},
+        {"DeleteFileA", 1}, {"DeleteFileW", 1},
         {"fopen", 2}, {"fdopen", 2}, {"freopen", 3}, {"fclose", 1},
         {"fflush", 1}, {"setbuf", 2}, {"setvbuf", 4},
         {"fread", 4}, {"fwrite", 4}, {"fseek", 3}, {"ftell", 1},
@@ -264,6 +275,12 @@ wrap_if_lt(std::string s, Prec own, int min_prec) {
         {"index", 1}, {"rindex", 1},
         {"basename", 1}, {"dirname", 1},
         {"puts", 1}, {"fputs", 1}, {"perror", 1}, {"gets", 1},
+        {"lstrlenA", 1}, {"lstrlenW", 1},
+        {"OutputDebugStringA", 1}, {"OutputDebugStringW", 1},
+        {"GetModuleHandleA", 1}, {"GetModuleHandleW", 1},
+        {"LoadLibraryA", 1}, {"LoadLibraryW", 1},
+        {"GetProcAddress", 2}, {"CreateFileA", 1}, {"CreateFileW", 1},
+        {"DeleteFileA", 1}, {"DeleteFileW", 1},
         {"fopen", 1}, {"fopen", 2},
         {"freopen", 1}, {"freopen", 2},
         {"fdopen", 2},
@@ -393,6 +410,7 @@ struct Emitter {
         std::string bare = (pos != std::string_view::npos)
             ? std::string(n.substr(0, pos))
             : std::string(n);
+        if (bare.starts_with("__imp_")) bare.erase(0, 6);
         // C++ names come out of the linker mangled. For use at the call site
         // we only want the qualified identifier, not the parenthesized arg
         // list from the demangler (the emitter will render the actual args).
@@ -671,7 +689,9 @@ struct Emitter {
 
     [[nodiscard]] static bool is_call_arg_barrier(const IrInst& inst) noexcept {
         return inst.op == IrOp::Intrinsic &&
-               (inst.name == "call.args.1" || inst.name == "call.args.2");
+               (inst.name == "call.args.1" ||
+                inst.name == "call.args.2" ||
+                inst.name == "call.args.3");
     }
 
     [[nodiscard]] static bool is_callee_saved(Reg r) noexcept {
@@ -721,9 +741,9 @@ struct Emitter {
         }
     }
 
-    // Self-arg slots (a1..a6) known to flow into a libc char* parameter.
+    // Self-arg slots (a1..aN) known to flow into a libc char* parameter.
     // Populated by infer_charp_args(); consumed by the header builder.
-    std::array<bool, 6> charp_arg = {false, false, false, false, false, false};
+    std::array<bool, kMaxAbiIntArgs> charp_arg = {};
 
     // Mach-O Obj-C method table, keyed by IMP address. Populated lazily in
     // PseudoCEmitter::emit when the binary carries __objc_classlist; used
@@ -846,14 +866,14 @@ struct Emitter {
         return std::nullopt;
     }
 
-    // For each call-to-libc in the body, consult the call.args.1/2 packing
+    // For each call-to-libc in the body, consult the call.args.* packing
     // to recover per-arg IrValues; if an arg is a self live-in reg and the
     // callee takes a `char*` at that position, tag the caller's own slot.
     void infer_charp_args() {
         if (!binary) return;
         for (const auto& bb : fn->blocks) {
             std::vector<IrValue> args;
-            args.reserve(6);
+            args.reserve(kMaxAbiIntArgs);
             for (const auto& inst : bb.insts) {
                 if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
                     args.clear();
@@ -861,7 +881,8 @@ struct Emitter {
                         args.push_back(inst.srcs[i]);
                     continue;
                 }
-                if (inst.op == IrOp::Intrinsic && inst.name == "call.args.2") {
+                if (inst.op == IrOp::Intrinsic &&
+                    (inst.name == "call.args.2" || inst.name == "call.args.3")) {
                     for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
                         args.push_back(inst.srcs[i]);
                     continue;
@@ -870,11 +891,11 @@ struct Emitter {
                     // Callee-side char*-slot bitset: for a libc import, look
                     // up the direct-sink table; for an internal function,
                     // consult the pre-computed IPA map when one was passed.
-                    std::array<bool, 6> callee_charp{};
+                    std::array<bool, kMaxAbiIntArgs> callee_charp{};
                     bool have_info = false;
                     if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
                         const std::string callee = clean_import_name(s->name);
-                        for (u8 i = 0; i < 6; ++i) {
+                        for (u8 i = 0; i < callee_charp.size(); ++i) {
                             callee_charp[i] = libc_arg_is_charp(
                                 callee, static_cast<u8>(i + 1));
                             if (callee_charp[i]) have_info = true;
@@ -944,15 +965,16 @@ struct Emitter {
         self_arity = need;
     }
 
-    // Find Return regions whose value is rax coming directly from a call's
-    // Clobber — record the Call position and the rax SSA key so emit_block
+    // Find Return regions whose value is the ABI integer return register
+    // coming directly from a call's Clobber — record the Call position and
+    // the SSA key so emit_block
     // suppresses the statement and the Return handler folds the expression.
     void analyze_return_folds(const Region& r) {
         for (const auto& c : r.children) analyze_return_folds(*c);
         if (r.kind != RegionKind::Return) return;
         const IrValue& cond = r.condition;
         if (cond.kind != IrValueKind::Reg) return;
-        if (canonical_reg(cond.reg) != Reg::Rax) return;
+        if (canonical_reg(cond.reg) != int_return_reg(abi)) return;
         auto cond_key = ssa_key(cond);
         if (!cond_key) return;
         const IrInst* def = def_of(cond);
@@ -974,12 +996,13 @@ struct Emitter {
         }
     }
 
-    // For each Call with a downstream-used rax return, pick a display name
-    // and record (call position → rax SsaKey). `analyze_return_folds` must
+    // For each Call with a downstream-used ABI return value, pick a display
+    // name and record (call position → return SsaKey). `analyze_return_folds` must
     // run first so calls whose return folds straight into a Return are
     // skipped here.
     void bind_call_returns() {
         std::set<std::string> used;
+        const Reg ret_reg = int_return_reg(abi);
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
             const auto& bb = fn->blocks[bi];
             for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
@@ -987,21 +1010,22 @@ struct Emitter {
                 if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
                 if (fold_call_positions.contains({bi, ii})) continue;
 
-                // The rax Clobber for this call is the next inst (Clobbers
+                // The return-register clobber for this call is the next inst
+                // (Clobbers
                 // run immediately post-Call in the lifter's output).
-                std::optional<SsaKey> rax_key;
+                std::optional<SsaKey> ret_key;
                 for (std::size_t jj = ii + 1; jj < bb.insts.size(); ++jj) {
                     const auto& c = bb.insts[jj];
                     if (c.op != IrOp::Clobber) break;
                     if (c.dst.kind != IrValueKind::Reg) continue;
-                    if (canonical_reg(c.dst.reg) != Reg::Rax) continue;
-                    rax_key = ssa_key(c.dst);
+                    if (canonical_reg(c.dst.reg) != ret_reg) continue;
+                    ret_key = ssa_key(c.dst);
                     break;
                 }
-                if (!rax_key) continue;
-                // Always bind a name for the rax clobber when the call wasn't
+                if (!ret_key) continue;
+                // Always bind a name for the return-register clobber when the call wasn't
                 // folded into a Return. Reads that happen only through
-                // structured-region conditions (e.g. `return rax;`) don't
+                // structured-region conditions (e.g. `return r3;`) don't
                 // appear in IR srcs and so can't be counted up-front; the
                 // dead-decl pass at the end strips any binding nothing ended
                 // up referencing.
@@ -1012,8 +1036,8 @@ struct Emitter {
                     name = std::format("r_{}_{}", base, n);
                 }
                 used.insert(name);
-                call_return_names.emplace(*rax_key, name);
-                bound_call_key.emplace(std::pair{bi, ii}, *rax_key);
+                call_return_names.emplace(*ret_key, name);
+                bound_call_key.emplace(std::pair{bi, ii}, *ret_key);
             }
         }
     }
@@ -2356,7 +2380,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             have_pending = true;
             continue;
         }
-        if (inst.op == IrOp::Intrinsic && inst.name == "call.args.2") {
+        if (inst.op == IrOp::Intrinsic &&
+            (inst.name == "call.args.2" || inst.name == "call.args.3")) {
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
                 pending_args.push_back(inst.srcs[i]);
             }
@@ -2744,7 +2769,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.annotations = annotations;
     e.options     = options;
     e.abi         = binary
-        ? abi_for(binary->format(), binary->arch())
+        ? abi_for(binary->format(), binary->arch(), binary->endian())
         : Abi::SysVAmd64;
     // Opportunistic selref lookup for Mach-O binaries when the caller
     // didn't supply one — cheap enough to parse per emit (one section
@@ -2803,7 +2828,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     bool has_user_sig = false;
     if (annotations) {
         if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
-            e.self_arity = static_cast<u8>(std::min<std::size_t>(sig->params.size(), 6));
+            e.self_arity = static_cast<u8>(std::min(sig->params.size(), int_arg_regs(e.abi).size()));
             has_user_sig = true;
         }
     }
@@ -3088,7 +3113,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     e.annotations = annotations;
     e.options     = options;
     e.abi         = binary
-        ? abi_for(binary->format(), binary->arch())
+        ? abi_for(binary->format(), binary->arch(), binary->endian())
         : Abi::SysVAmd64;
 
     std::map<addr_t, std::string> local_selrefs;
@@ -3134,7 +3159,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     bool has_user_sig = false;
     if (annotations) {
         if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
-            e.self_arity = static_cast<u8>(std::min<std::size_t>(sig->params.size(), 6));
+            e.self_arity = static_cast<u8>(std::min(sig->params.size(), int_arg_regs(e.abi).size()));
             has_user_sig = true;
         }
     }

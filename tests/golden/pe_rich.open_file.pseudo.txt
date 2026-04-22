@@ -1,0 +1,7 @@
+// sub_1800010c0
+u64 sub_1800010c0(u64 a1, u64 a2, u64 a3, u64 a4) {
+  local_18 = 3;
+  local_10 = 0;
+  local_8 = 0;
+  return CreateFileA("ashtrace.txt", 0, 0, 0, local_18, local_10, local_8);
+}

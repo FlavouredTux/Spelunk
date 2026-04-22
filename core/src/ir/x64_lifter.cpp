@@ -556,13 +556,25 @@ void emit_call_clobbers(LiftCtx& ctx) {
 // same sig_inference logic that reads these can decode Win64 too.
 void emit_arg_barriers(LiftCtx& ctx) {
     const auto args = int_arg_regs(ctx.abi);
+    auto arg_value = [&](std::size_t slot) -> IrValue {
+        if (slot < args.size()) return ctx.reg(args[slot]);
+        if (ctx.abi == Abi::Win64 && slot < kMaxAbiIntArgs) {
+            const i64 off = 0x20 + static_cast<i64>(slot - args.size()) * 8;
+            IrValue rsp = ctx.reg(Reg::Rsp);
+            IrValue addr = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(off, IrType::I64));
+            return ctx.emit_load(addr, IrType::I64);
+        }
+        return {};
+    };
     auto fill = [&](std::string_view name, std::size_t lo) {
         IrInst in;
         in.op   = IrOp::Intrinsic;
         in.name = std::string(name);
         u8 cnt = 0;
-        for (std::size_t i = 0; i < 3 && lo + i < args.size(); ++i) {
-            in.srcs[cnt++] = ctx.reg(args[lo + i]);
+        for (std::size_t i = 0; i < 3 && lo + i < kMaxAbiIntArgs; ++i) {
+            IrValue v = arg_value(lo + i);
+            if (v.kind == IrValueKind::None) break;
+            in.srcs[cnt++] = v;
         }
         if (cnt == 0) return;
         in.src_count = cnt;
@@ -570,6 +582,7 @@ void emit_arg_barriers(LiftCtx& ctx) {
     };
     fill("call.args.1", 0);
     fill("call.args.2", 3);
+    fill("call.args.3", 6);
 }
 
 void lift_call(LiftCtx& ctx) {

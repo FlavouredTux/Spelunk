@@ -228,6 +228,45 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         --cur;
         recent.push_back(&cur->second);
     }
+
+    // -------- Pattern (C): mov rJmp, [rip + table + idx*8]; jmp rJmp ----
+    for (const Instruction* in : recent) {
+        if (in->mnemonic != Mnemonic::Mov) continue;
+        if (in->num_operands != 2) continue;
+        const auto& d = in->operands[0];
+        const auto& s = in->operands[1];
+        if (d.kind != Operand::Kind::Register) continue;
+        if (canonical_reg(d.reg) != jmp_reg) continue;
+        if (s.kind != Operand::Kind::Memory) continue;
+        if (s.mem.base != Reg::Rip || s.mem.index == Reg::None ||
+            s.mem.scale != 8 || !s.mem.has_disp) {
+            continue;
+        }
+        const addr_t table = in->address + in->length +
+                             static_cast<addr_t>(s.mem.disp);
+        const Reg idx_reg = s.mem.index;
+        auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
+        constexpr u32 kJumpTableMax = 4096;
+        const u32 max_count =
+            std::min(bound ? bound->count : 256u, kJumpTableMax);
+
+        JumpTable jt;
+        jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
+        if (bound) jt.default_tgt = bound->default_tgt;
+        for (u32 k = 0; k < max_count; ++k) {
+            u64 entry = 0;
+            if (!read_u64_at(b, table + k * 8u, entry)) break;
+            const addr_t tgt = static_cast<addr_t>(entry);
+            if (!find_exec_section_for(b, tgt)) {
+                if (!bound) break;
+                continue;
+            }
+            jt.targets.push_back(tgt);
+            jt.values.push_back(static_cast<i64>(k));
+        }
+        if (!jt.targets.empty()) return jt;
+    }
+
     // Also gather forward order for lea-lookup helper.
     std::vector<const Instruction*> forward(recent.rbegin(), recent.rend());
 
@@ -319,7 +358,7 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     return jt;
 }
 
-void walk_from(const Binary& b, const X64Decoder& dec, WalkState& ws, addr_t entry) {
+void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry) {
     std::deque<addr_t> wl;
     wl.push_back(entry);
     ws.leaders.insert(entry);

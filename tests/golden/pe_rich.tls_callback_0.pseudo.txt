@@ -1,0 +1,4 @@
+// tls_callback_0
+u64 tls_callback_0(void) {
+  return OutputDebugStringA("tls callback fired");
+}

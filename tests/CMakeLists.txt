@@ -92,6 +92,26 @@ function(ember_golden_test)
     )
 endfunction()
 
+function(ember_expect_fail_test)
+    cmake_parse_arguments(T "" "NAME;FIXTURE;ERR_SUBSTR;ARGS" "" ${ARGN})
+    if(NOT T_NAME OR NOT T_FIXTURE OR NOT T_ERR_SUBSTR)
+        message(FATAL_ERROR "ember_expect_fail_test: NAME/FIXTURE/ERR_SUBSTR required")
+    endif()
+    add_test(
+        NAME ${T_NAME}
+        COMMAND ${CMAKE_COMMAND}
+            -DEMBER=$<TARGET_FILE:ember_cli>
+            -DBINARY=${EMBER_FIXTURE_${T_FIXTURE}_PATH}
+            -DARGS=${T_ARGS}
+            -DERR_SUBSTR=${T_ERR_SUBSTR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_cli_expect_fail.cmake
+    )
+    set_tests_properties(${T_NAME} PROPERTIES
+        DEPENDS ember_cli
+        LABELS golden
+    )
+endfunction()
+
 # Unit tests for the Itanium demangler: not a golden, just a self-checking
 # binary. Wired as a CTest so it runs with the rest of the suite.
 add_executable(ember_demangle_test demangle_test.cpp)
@@ -441,6 +461,113 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  query_js.find_bytes.txt
     )
 
+    # ---- ppc64_tiny (hand-built ELF64, both endian modes) -----------------
+    #
+    # Synthetic fixtures so PPC64 loader + disasm coverage runs on Linux
+    # without a cross compiler.
+    set(_ppc64le_tiny "${_build_dir}/ppc64le_tiny")
+    add_custom_command(
+        OUTPUT "${_ppc64le_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                le
+                "${_ppc64le_tiny}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating ELF PPC64LE fixture ppc64le_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc64le_tiny ALL DEPENDS "${_ppc64le_tiny}")
+    set(EMBER_FIXTURE_ppc64le_tiny_PATH "${_ppc64le_tiny}")
+
+    set(_ppc64be_tiny "${_build_dir}/ppc64be_tiny")
+    add_custom_command(
+        OUTPUT "${_ppc64be_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                be
+                "${_ppc64be_tiny}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating ELF PPC64BE fixture ppc64be_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc64be_tiny ALL DEPENDS "${_ppc64be_tiny}")
+    set(EMBER_FIXTURE_ppc64be_tiny_PATH "${_ppc64be_tiny}")
+
+    set(_ppc64be_opd_tiny "${_build_dir}/ppc64be_opd_tiny")
+    add_custom_command(
+        OUTPUT "${_ppc64be_opd_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                be-opd
+                "${_ppc64be_opd_tiny}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating ELF PPC64BE descriptor fixture ppc64be_opd_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc64be_opd_tiny ALL DEPENDS "${_ppc64be_opd_tiny}")
+    set(EMBER_FIXTURE_ppc64be_opd_tiny_PATH "${_ppc64be_opd_tiny}")
+
+    ember_golden_test(
+        NAME    ppc64le_tiny_info
+        FIXTURE ppc64le_tiny
+        ARGS    "--script|${_query_js}|__BINARY__|--|info"
+        GOLDEN  ppc64le_tiny.info.txt
+    )
+    ember_golden_test(
+        NAME    ppc64le_tiny_disasm
+        FIXTURE ppc64le_tiny
+        ARGS    "-d"
+        GOLDEN  ppc64le_tiny.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_tiny_info
+        FIXTURE ppc64be_tiny
+        ARGS    "--script|${_query_js}|__BINARY__|--|info"
+        GOLDEN  ppc64be_tiny.info.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_tiny_disasm
+        FIXTURE ppc64be_tiny
+        ARGS    "-d"
+        GOLDEN  ppc64be_tiny.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc64le_tiny_ssa
+        FIXTURE ppc64le_tiny
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc64le_tiny.ssa.txt
+    )
+    ember_golden_test(
+        NAME    ppc64le_tiny_pseudo
+        FIXTURE ppc64le_tiny
+        ARGS    "-p"
+        GOLDEN  ppc64le_tiny.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_tiny_ssa
+        FIXTURE ppc64be_tiny
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc64be_tiny.ssa.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_tiny_pseudo
+        FIXTURE ppc64be_tiny
+        ARGS    "-p"
+        GOLDEN  ppc64be_tiny.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_opd_tiny_info
+        FIXTURE ppc64be_opd_tiny
+        ARGS    "--script|${_query_js}|__BINARY__|--|info"
+        GOLDEN  ppc64be_opd_tiny.info.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_opd_tiny_pseudo
+        FIXTURE ppc64be_opd_tiny
+        ARGS    "-p"
+        GOLDEN  ppc64be_opd_tiny.pseudo.txt
+    )
+
     # ---- pe_tiny (hand-built PE32+: DOS + NT + COFF + optional header +
     #               .text/.rdata/.pdata, one IAT import, one export,
     #               Win64 prologue, RUNTIME_FUNCTION table) ------------------
@@ -479,5 +606,68 @@ if(Python3_Interpreter_FOUND)
         FIXTURE pe_tiny
         ARGS    "--script|${_fixture_dir}/pe_tiny_scan.js"
         GOLDEN  pe_tiny.script.txt
+    )
+
+    set(_pe_rich "${_build_dir}/pe_rich")
+    add_custom_command(
+        OUTPUT "${_pe_rich}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_pe_rich.py"
+                "${_pe_rich}"
+        DEPENDS "${_fixture_dir}/make_pe_rich.py"
+        COMMENT "Generating PE fixture pe_rich"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_pe_rich ALL DEPENDS "${_pe_rich}")
+    set(EMBER_FIXTURE_pe_rich_PATH "${_pe_rich}")
+
+    ember_golden_test(
+        NAME    pe_rich_main_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|sub_180001000"
+        GOLDEN  pe_rich.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_add7_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|add7"
+        GOLDEN  pe_rich.add7.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_tls_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|tls_callback_0"
+        GOLDEN  pe_rich.tls_callback_0.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_open_file_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|sub_1800010c0"
+        GOLDEN  pe_rich.open_file.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_script
+        FIXTURE pe_rich
+        ARGS    "--script|${_fixture_dir}/pe_rich_scan.js"
+        GOLDEN  pe_rich.script.txt
+    )
+
+    set(_pe32_bad "${_build_dir}/pe32_bad")
+    add_custom_command(
+        OUTPUT "${_pe32_bad}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_pe32_bad.py"
+                "${_pe32_bad}"
+        DEPENDS "${_fixture_dir}/make_pe32_bad.py"
+        COMMENT "Generating malformed PE32 fixture pe32_bad"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_pe32_bad ALL DEPENDS "${_pe32_bad}")
+    set(EMBER_FIXTURE_pe32_bad_PATH "${_pe32_bad}")
+
+    ember_expect_fail_test(
+        NAME       pe32_rejected
+        FIXTURE    pe32_bad
+        ERR_SUBSTR "PE32 (32-bit) not supported"
     )
 endif()

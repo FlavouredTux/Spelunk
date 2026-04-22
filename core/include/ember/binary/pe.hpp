@@ -20,6 +20,7 @@ public:
 
     [[nodiscard]] Format format() const noexcept override { return Format::Pe; }
     [[nodiscard]] Arch   arch() const noexcept   override { return arch_;  }
+    [[nodiscard]] Endian endian() const noexcept override { return Endian::Little; }
     [[nodiscard]] addr_t entry_point() const noexcept override { return entry_; }
 
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
@@ -59,6 +60,7 @@ private:
     };
     [[nodiscard]] Result<ParsedHeaders> parse_headers();
     [[nodiscard]] Result<void>          parse_sections(const ParsedHeaders& h);
+    [[nodiscard]] Result<void>          validate_entry_rva() const;
     // Walks IMAGE_DIRECTORY_ENTRY_IMPORT. Populates is_import=true
     // Symbols with got_addr set to the IAT slot VA. got_to_name carries
     // the slot-VA → import-name mapping used by scan_iat_thunks.
@@ -100,6 +102,8 @@ private:
     // the zero-init tail of a section.
     [[nodiscard]] std::span<const std::byte>
     bytes_at_rva(u32 rva) const noexcept;
+    [[nodiscard]] bool
+    rva_is_mapped(u32 rva, std::size_t min_size = 1) const noexcept;
     // Resolve an RVA to a null-terminated ASCII string. Caps length at
     // the remaining bytes of the containing section.
     [[nodiscard]] std::string_view cstr_at_rva(u32 rva) const noexcept;

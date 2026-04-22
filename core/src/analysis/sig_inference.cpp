@@ -10,13 +10,13 @@
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/disasm/decoder.hpp>
 #include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
+#include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
-#include <ember/ir/x64_lifter.hpp>
 
 namespace ember {
 
@@ -52,6 +52,12 @@ namespace {
         {"index", 1}, {"rindex", 1},
         {"basename", 1}, {"dirname", 1},
         {"puts", 1}, {"fputs", 1}, {"perror", 1}, {"gets", 1},
+        {"lstrlenA", 1}, {"lstrlenW", 1},
+        {"OutputDebugStringA", 1}, {"OutputDebugStringW", 1},
+        {"GetModuleHandleA", 1}, {"GetModuleHandleW", 1},
+        {"LoadLibraryA", 1}, {"LoadLibraryW", 1},
+        {"GetProcAddress", 2}, {"CreateFileA", 1}, {"CreateFileW", 1},
+        {"DeleteFileA", 1}, {"DeleteFileW", 1},
         {"fopen", 1}, {"fopen", 2},
         {"freopen", 1}, {"freopen", 2},
         {"fdopen", 2},
@@ -75,7 +81,9 @@ namespace {
 
 [[nodiscard]] std::string clean_import_name(const std::string& n) {
     const auto at = n.find('@');
-    return at == std::string::npos ? n : n.substr(0, at);
+    std::string bare = at == std::string::npos ? n : n.substr(0, at);
+    if (bare.starts_with("__imp_")) bare.erase(0, 6);
+    return bare;
 }
 
 // Build the SSA+cleanup IR for one function, memoized. Returns nullptr if
@@ -90,12 +98,14 @@ IrFunction* get_ir(IrCache& cache, const Binary& b, addr_t fn) {
     auto it = cache.by_addr.find(fn);
     if (it != cache.by_addr.end()) return it->second.get();
 
-    const X64Decoder dec;
-    const CfgBuilder cfg(b, dec);
+    auto dec_r = make_decoder(b);
+    if (!dec_r) { cache.failed.insert(fn); return nullptr; }
+    const CfgBuilder cfg(b, **dec_r);
     auto fn_r = cfg.build(fn, {});
     if (!fn_r) { cache.failed.insert(fn); return nullptr; }
-    const X64Lifter lifter{abi_for(b.format(), b.arch())};
-    auto ir_r = lifter.lift(*fn_r);
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) { cache.failed.insert(fn); return nullptr; }
+    auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) { cache.failed.insert(fn); return nullptr; }
     const SsaBuilder ssa;
     if (auto rv = ssa.convert(*ir_r); !rv) { cache.failed.insert(fn); return nullptr; }
@@ -158,7 +168,7 @@ void scan_function(const Binary& b,
                    Abi abi,
                    const IrFunction& fn,
                    const std::map<addr_t, InferredSig>& known,
-                   std::array<bool, 6>& charp) {
+                   std::array<bool, kMaxAbiIntArgs>& charp) {
     // Index defs once per scan.
     std::map<SsaKey, const IrInst*> defs;
     for (const auto& bb : fn.blocks) {
@@ -171,7 +181,7 @@ void scan_function(const Binary& b,
     // which IrValues feed the following Call.
     for (const auto& bb : fn.blocks) {
         std::vector<IrValue> args;
-        args.reserve(6);
+        args.reserve(kMaxAbiIntArgs);
         for (const auto& inst : bb.insts) {
             if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
                 args.clear();
@@ -179,7 +189,8 @@ void scan_function(const Binary& b,
                     args.push_back(inst.srcs[i]);
                 continue;
             }
-            if (inst.op == IrOp::Intrinsic && inst.name == "call.args.2") {
+            if (inst.op == IrOp::Intrinsic &&
+                (inst.name == "call.args.2" || inst.name == "call.args.3")) {
                 for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
                     args.push_back(inst.srcs[i]);
                 continue;
@@ -187,11 +198,11 @@ void scan_function(const Binary& b,
             if (inst.op != IrOp::Call) continue;
 
             // What does the target tell us?
-            std::array<bool, 6> callee_charp{};
+            std::array<bool, kMaxAbiIntArgs> callee_charp{};
             bool have_callee_info = false;
             if (const Symbol* s = b.import_at_plt(inst.target1); s) {
                 const std::string name = clean_import_name(s->name);
-                for (u8 k = 0; k < 6; ++k) {
+                for (u8 k = 0; k < callee_charp.size(); ++k) {
                     callee_charp[k] = libc_arg_is_charp(name,
                                                         static_cast<u8>(k + 1));
                     if (callee_charp[k]) have_callee_info = true;
@@ -236,7 +247,7 @@ std::map<addr_t, InferredSig> infer_signatures(const Binary& b) {
     std::map<addr_t, InferredSig> sigs;
     IrCache ir_cache;
     const auto entries = collect_entries(b);
-    const Abi abi = abi_for(b.format(), b.arch());
+    const Abi abi = abi_for(b.format(), b.arch(), b.endian());
 
     // Fixed-point: rescan every function until nobody's charp bitset grows.
     // Worst case is the diameter of the call graph; practical cases converge
@@ -249,7 +260,7 @@ std::map<addr_t, InferredSig> infer_signatures(const Binary& b) {
             IrFunction* ir = get_ir(ir_cache, b, fn);
             if (!ir) continue;
             auto& sig = sigs[fn];
-            std::array<bool, 6> before = sig.charp;
+            std::array<bool, kMaxAbiIntArgs> before = sig.charp;
             scan_function(b, abi, *ir, sigs, sig.charp);
             if (sig.charp != before) changed = true;
         }

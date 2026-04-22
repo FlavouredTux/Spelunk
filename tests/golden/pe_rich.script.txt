@@ -1,0 +1,13 @@
+format: pe
+arch:   x86_64
+entry:  0x180001000
+symbols:
+  import — CreateFileA got=0x180002058
+  import — GetTickCount got=0x180002048
+  import — OutputDebugStringA got=0x180002050
+  import — Sleep got=0x1800020ec
+  local  0x180001000 sub_180001000
+  local  0x180001040 tls_callback_0
+  export 0x180001080 add7
+  local  0x1800010c0 sub_1800010c0
+entry bytes: 48 83 ec 28 ff 15 3e 10

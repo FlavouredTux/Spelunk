@@ -42,6 +42,8 @@ std::vector<PeUnwindEntry> parse_pe_pdata(const Binary& b) {
         // Reject malformed entries where end <= begin rather than
         // silently emitting a zero-size function.
         if (end_rva <= begin_rva) continue;
+        if (b.bytes_at(image_base + begin_rva).empty()) continue;
+        if (b.bytes_at(image_base + unwind_rva).empty()) continue;
 
         out.push_back({
             .begin       = image_base + begin_rva,

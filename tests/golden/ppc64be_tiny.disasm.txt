@@ -1,0 +1,3 @@
+; disassembly of <entry> at 0x0000000000100078 (8 bytes)
+0x0000000000100078  38 60 00 2a                     addi r3, 0x2a
+0x000000000010007c  4e 80 00 20                     ret

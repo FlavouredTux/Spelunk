@@ -458,6 +458,7 @@ Result<void> MachOBinary::parse() {
         return std::unexpected(Error::invalid_format(std::format(
             "macho: not a 64-bit Mach-O (magic = {:#x})", magic)));
     }
+    endian_ = Endian::Little;
     const u32 cputype  = read_le_at<u32>(hdr + 4);
     const u32 ncmds    = read_le_at<u32>(hdr + 16);
     const u32 sizeofcmds = read_le_at<u32>(hdr + 20);

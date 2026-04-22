@@ -1025,9 +1025,18 @@ void install_binary_global(JSContext* ctx) {
             case Arch::X86:     return "x86";
             case Arch::Arm64:   return "arm64";
             case Arch::Arm:     return "arm";
+            case Arch::Ppc32:   return "ppc32";
+            case Arch::Ppc64:   return "ppc64";
             case Arch::Riscv32: return "riscv32";
             case Arch::Riscv64: return "riscv64";
             default:            return "unknown";
+        }
+    }();
+    const char* endian = [&]() {
+        switch (b->endian()) {
+            case Endian::Little: return "little";
+            case Endian::Big:    return "big";
+            default:             return "unknown";
         }
     }();
     const char* fmt = [&]() {
@@ -1039,6 +1048,7 @@ void install_binary_global(JSContext* ctx) {
         }
     }();
     JS_SetPropertyStr(ctx, bin, "arch",   make_str(ctx, arch));
+    JS_SetPropertyStr(ctx, bin, "endian", make_str(ctx, endian));
     JS_SetPropertyStr(ctx, bin, "format", make_str(ctx, fmt));
     JS_SetPropertyStr(ctx, bin, "entry",  JS_NewBigUint64(ctx, b->entry_point()));
 

@@ -41,6 +41,7 @@ function fmtSymKind(s) {
 function cmd_info() {
     print(`format   ${binary.format}`);
     print(`arch     ${binary.arch}`);
+    print(`endian   ${binary.endian}`);
     print(`entry    ${hex(binary.entry)}`);
     const secs = binary.sections();
     const syms = binary.symbols();

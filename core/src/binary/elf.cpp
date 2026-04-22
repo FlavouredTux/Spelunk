@@ -56,10 +56,13 @@ constexpr std::size_t DATA     = 5;
 
 constexpr u8 CLASS_64 = 2;
 constexpr u8 DATA_LSB = 1;
+constexpr u8 DATA_MSB = 2;
 }  // namespace ei
 
 namespace em {
 constexpr u16 I386    = 3;
+constexpr u16 PPC     = 20;
+constexpr u16 PPC64   = 21;
 constexpr u16 ARM     = 40;
 constexpr u16 X86_64  = 62;
 constexpr u16 AARCH64 = 183;
@@ -105,28 +108,35 @@ struct Shdr {
     u64 entsize;
 };
 
-[[nodiscard]] Shdr read_shdr(const std::byte* p) noexcept {
+template <typename T>
+[[nodiscard]] T read_at(Endian endian, const std::byte* p) noexcept {
+    return endian == Endian::Big ? read_be_at<T>(p) : read_le_at<T>(p);
+}
+
+[[nodiscard]] Shdr read_shdr(Endian endian, const std::byte* p) noexcept {
     return {
-        read_le_at<u32>(p + 0x00),
-        read_le_at<u32>(p + 0x04),
-        read_le_at<u64>(p + 0x08),
-        read_le_at<u64>(p + 0x10),
-        read_le_at<u64>(p + 0x18),
-        read_le_at<u64>(p + 0x20),
-        read_le_at<u32>(p + 0x28),
-        read_le_at<u32>(p + 0x2c),
-        read_le_at<u64>(p + 0x30),
-        read_le_at<u64>(p + 0x38),
+        read_at<u32>(endian, p + 0x00),
+        read_at<u32>(endian, p + 0x04),
+        read_at<u64>(endian, p + 0x08),
+        read_at<u64>(endian, p + 0x10),
+        read_at<u64>(endian, p + 0x18),
+        read_at<u64>(endian, p + 0x20),
+        read_at<u32>(endian, p + 0x28),
+        read_at<u32>(endian, p + 0x2c),
+        read_at<u64>(endian, p + 0x30),
+        read_at<u64>(endian, p + 0x38),
     };
 }
 
-[[nodiscard]] Shdr shdr_at(const std::byte* shtab, u16 idx) noexcept {
-    return read_shdr(shtab + static_cast<std::size_t>(idx) * kShdr64Size);
+[[nodiscard]] Shdr shdr_at(Endian endian, const std::byte* shtab, u16 idx) noexcept {
+    return read_shdr(endian, shtab + static_cast<std::size_t>(idx) * kShdr64Size);
 }
 
 [[nodiscard]] Arch arch_from_machine(u16 em, bool is_64bit) noexcept {
     switch (em) {
         case em::I386:    return Arch::X86;
+        case em::PPC:     return Arch::Ppc32;
+        case em::PPC64:   return Arch::Ppc64;
         case em::ARM:     return Arch::Arm;
         case em::X86_64:  return Arch::X86_64;
         case em::AARCH64: return Arch::Arm64;
@@ -178,21 +188,22 @@ Result<ElfBinary::ParsedEhdr> ElfBinary::parse_ehdr() {
         return std::unexpected(Error::unsupported(std::format(
             "elf: only ELFCLASS64 supported (got {})", ei_class)));
     }
-    if (ei_data != ei::DATA_LSB) {
+    if (ei_data != ei::DATA_LSB && ei_data != ei::DATA_MSB) {
         return std::unexpected(Error::unsupported(std::format(
-            "elf: only ELFDATA2LSB supported (got {})", ei_data)));
+            "elf: unsupported ELF byte order {}", ei_data)));
     }
+    endian_ = (ei_data == ei::DATA_MSB) ? Endian::Big : Endian::Little;
 
     return ParsedEhdr{
-        .e_machine   = read_le_at<u16>(ident + 0x12),
-        .e_entry     = read_le_at<u64>(ident + 0x18),
-        .e_phoff     = read_le_at<u64>(ident + 0x20),
-        .e_shoff     = read_le_at<u64>(ident + 0x28),
-        .e_phentsize = read_le_at<u16>(ident + 0x36),
-        .e_phnum     = read_le_at<u16>(ident + 0x38),
-        .e_shentsize = read_le_at<u16>(ident + 0x3a),
-        .e_shnum     = read_le_at<u16>(ident + 0x3c),
-        .e_shstrndx  = read_le_at<u16>(ident + 0x3e),
+        .e_machine   = read_at<u16>(endian_, ident + 0x12),
+        .e_entry     = read_at<u64>(endian_, ident + 0x18),
+        .e_phoff     = read_at<u64>(endian_, ident + 0x20),
+        .e_shoff     = read_at<u64>(endian_, ident + 0x28),
+        .e_phentsize = read_at<u16>(endian_, ident + 0x36),
+        .e_phnum     = read_at<u16>(endian_, ident + 0x38),
+        .e_shentsize = read_at<u16>(endian_, ident + 0x3a),
+        .e_shnum     = read_at<u16>(endian_, ident + 0x3c),
+        .e_shstrndx  = read_at<u16>(endian_, ident + 0x3e),
     };
 }
 
@@ -215,12 +226,12 @@ Result<void> ElfBinary::parse_segments(const ParsedEhdr& h) {
     for (u16 i = 0; i < h.e_phnum; ++i) {
         const std::byte* const p =
             phtab->data() + static_cast<std::size_t>(i) * kPhdr64Size;
-        const u32 p_type   = read_le_at<u32>(p + 0x00);
-        const u32 p_flags  = read_le_at<u32>(p + 0x04);
-        const u64 p_offset = read_le_at<u64>(p + 0x08);
-        const u64 p_vaddr  = read_le_at<u64>(p + 0x10);
-        const u64 p_filesz = read_le_at<u64>(p + 0x20);
-        const u64 p_memsz  = read_le_at<u64>(p + 0x28);
+        const u32 p_type   = read_at<u32>(endian_, p + 0x00);
+        const u32 p_flags  = read_at<u32>(endian_, p + 0x04);
+        const u64 p_offset = read_at<u64>(endian_, p + 0x08);
+        const u64 p_vaddr  = read_at<u64>(endian_, p + 0x10);
+        const u64 p_filesz = read_at<u64>(endian_, p + 0x20);
+        const u64 p_memsz  = read_at<u64>(endian_, p + 0x28);
 
         if (p_type != pt::LOAD) continue;
         if (p_memsz == 0) continue;
@@ -261,14 +272,14 @@ Result<void> ElfBinary::parse_sections(const ParsedEhdr& h) {
     auto shtab = r.slice(h.e_shoff, shtab_bytes);
     if (!shtab) return std::unexpected(std::move(shtab).error());
 
-    const Shdr shstr_hdr = shdr_at(shtab->data(), h.e_shstrndx);
+    const Shdr shstr_hdr = shdr_at(endian_, shtab->data(), h.e_shstrndx);
     auto shstr_bytes = r.slice(shstr_hdr.offset, shstr_hdr.size);
     if (!shstr_bytes) return std::unexpected(std::move(shstr_bytes).error());
     const ByteReader shstr_r(*shstr_bytes);
 
     sections_.reserve(h.e_shnum);
     for (u16 i = 0; i < h.e_shnum; ++i) {
-        const Shdr sh = shdr_at(shtab->data(), i);
+        const Shdr sh = shdr_at(endian_, shtab->data(), i);
 
         Section s;
         if (auto name = shstr_r.read_cstr(sh.name); name) {
@@ -313,7 +324,7 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
     const std::size_t abs_max_syms = buffer_.size() / kSym64Size;
     std::size_t total_syms = 0;
     for (u16 i = 0; i < h.e_shnum; ++i) {
-        const Shdr sh = shdr_at(shtab->data(), i);
+        const Shdr sh = shdr_at(endian_, shtab->data(), i);
         if (sh.type != sht::SYMTAB && sh.type != sht::DYNSYM) continue;
         if (sh.entsize == kSym64Size) total_syms += sh.size / kSym64Size;
     }
@@ -321,7 +332,7 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
     symbols_.reserve(total_syms);
 
     for (u16 i = 0; i < h.e_shnum; ++i) {
-        const Shdr sh = shdr_at(shtab->data(), i);
+        const Shdr sh = shdr_at(endian_, shtab->data(), i);
         if (sh.type != sht::SYMTAB && sh.type != sht::DYNSYM) continue;
         if (sh.entsize != kSym64Size) {
             return std::unexpected(Error::invalid_format(std::format(
@@ -333,7 +344,7 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
                 "elf: symtab {} has bad strtab link {}", i, sh.link)));
         }
 
-        const Shdr strtab_hdr = shdr_at(shtab->data(), static_cast<u16>(sh.link));
+        const Shdr strtab_hdr = shdr_at(endian_, shtab->data(), static_cast<u16>(sh.link));
         auto strtab_bytes = r.slice(strtab_hdr.offset, strtab_hdr.size);
         if (!strtab_bytes) return std::unexpected(std::move(strtab_bytes).error());
         const ByteReader str_r(*strtab_bytes);
@@ -353,11 +364,11 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
 
         for (std::size_t k = 0; k < count; ++k) {
             const std::byte* const p = base + k * kSym64Size;
-            const u32 st_name  = read_le_at<u32>(p + 0);
-            const u8  st_info  = read_le_at<u8>(p + 4);
-            const u16 st_shndx = read_le_at<u16>(p + 6);
-            const u64 st_value = read_le_at<u64>(p + 8);
-            const u64 st_size  = read_le_at<u64>(p + 16);
+            const u32 st_name  = read_at<u32>(endian_, p + 0);
+            const u8  st_info  = read_at<u8>(endian_, p + 4);
+            const u16 st_shndx = read_at<u16>(endian_, p + 6);
+            const u64 st_value = read_at<u64>(endian_, p + 8);
+            const u64 st_size  = read_at<u64>(endian_, p + 16);
 
             std::string name;
             if (auto nm = str_r.read_cstr(st_name); nm) {
@@ -400,7 +411,7 @@ ElfBinary::attach_got_addrs(const ParsedEhdr& h,
     if (!shtab) return std::unexpected(std::move(shtab).error());
 
     for (u16 i = 0; i < h.e_shnum; ++i) {
-        const Shdr sh = shdr_at(shtab->data(), i);
+        const Shdr sh = shdr_at(endian_, shtab->data(), i);
         if (sh.type != sht::RELA) continue;
         if (sh.link != dynsym_section) continue;  // only rela→dynsym
         if (sh.entsize != kRela64Size) continue;
@@ -413,8 +424,8 @@ ElfBinary::attach_got_addrs(const ParsedEhdr& h,
 
         for (std::size_t k = 0; k < count; ++k) {
             const std::byte* const p = base + k * kRela64Size;
-            const u64 r_offset = read_le_at<u64>(p + 0);
-            const u64 r_info   = read_le_at<u64>(p + 8);
+            const u64 r_offset = read_at<u64>(endian_, p + 0);
+            const u64 r_info   = read_at<u64>(endian_, p + 8);
             const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
             const u32 r_sym    = static_cast<u32>(r_info >> 32);
 
@@ -520,6 +531,44 @@ void ElfBinary::sort_and_dedupe_symbols() {
     symbols_.erase(dups.begin(), dups.end());
 }
 
+bool ElfBinary::is_executable_addr(addr_t vaddr) const noexcept {
+    for (const auto& seg : segments_) {
+        if (vaddr < seg.vaddr) continue;
+        if (vaddr >= seg.vaddr + seg.memsz) continue;
+        return seg.executable;
+    }
+    for (const auto& sec : sections_) {
+        if (vaddr < sec.vaddr) continue;
+        if (vaddr >= sec.vaddr + sec.size) continue;
+        return sec.flags.executable;
+    }
+    return false;
+}
+
+std::optional<addr_t>
+ElfBinary::resolve_ppc64_descriptor_target(addr_t vaddr) const noexcept {
+    if (arch_ != Arch::Ppc64 || endian_ != Endian::Big) return std::nullopt;
+    if (vaddr == 0 || is_executable_addr(vaddr)) return std::nullopt;
+    const auto bytes = bytes_at(vaddr);
+    if (bytes.size() < sizeof(u64)) return std::nullopt;
+    const addr_t target = read_at<u64>(endian_, bytes.data());
+    if (target == 0 || target == vaddr) return std::nullopt;
+    if (!is_executable_addr(target)) return std::nullopt;
+    return target;
+}
+
+void ElfBinary::normalize_ppc64_descriptors() noexcept {
+    if (auto target = resolve_ppc64_descriptor_target(entry_); target) {
+        entry_ = *target;
+    }
+    for (auto& sym : symbols_) {
+        if (sym.is_import || sym.kind != SymbolKind::Function || sym.addr == 0) continue;
+        if (auto target = resolve_ppc64_descriptor_target(sym.addr); target) {
+            sym.addr = *target;
+        }
+    }
+}
+
 // Resolve a runtime virtual address to a span of file bytes, using the
 // parsed PT_LOAD segments. Returns an empty span if the address falls
 // outside any loadable segment's file-backed region (BSS tail or beyond).
@@ -545,11 +594,11 @@ vaddr_slice(std::span<const LoadSegment> segs, addr_t vaddr, u64 want) {
 // (end-of-chain marker); the symbol index at that point is the last
 // symbol in the bucket. The maximum across buckets + 1 is the count.
 [[nodiscard]] static std::size_t
-count_dynsym_gnu(std::span<const std::byte> gh) {
+count_dynsym_gnu(std::span<const std::byte> gh, Endian endian) {
     if (gh.size() < 16) return 0;
-    const u32 nbuckets   = read_le_at<u32>(gh.data() + 0);
-    const u32 symoffset  = read_le_at<u32>(gh.data() + 4);
-    const u32 bloom_size = read_le_at<u32>(gh.data() + 8);
+    const u32 nbuckets   = read_at<u32>(endian, gh.data() + 0);
+    const u32 symoffset  = read_at<u32>(endian, gh.data() + 4);
+    const u32 bloom_size = read_at<u32>(endian, gh.data() + 8);
     const std::size_t header = 16;
     const std::size_t bloom  = static_cast<std::size_t>(bloom_size) * 8;  // 64-bit words
     const std::size_t buckets_off = header + bloom;
@@ -558,7 +607,7 @@ count_dynsym_gnu(std::span<const std::byte> gh) {
 
     u32 max_idx = symoffset == 0 ? 0 : symoffset - 1;
     for (u32 i = 0; i < nbuckets; ++i) {
-        const u32 b = read_le_at<u32>(gh.data() + buckets_off + i * 4);
+        const u32 b = read_at<u32>(endian, gh.data() + buckets_off + i * 4);
         if (b == 0) continue;
         if (b < symoffset) continue;  // malformed — skip
         u32 idx = b;
@@ -566,7 +615,7 @@ count_dynsym_gnu(std::span<const std::byte> gh) {
             const std::size_t chain_off =
                 chains_off + static_cast<std::size_t>(idx - symoffset) * 4;
             if (chain_off + 4 > gh.size()) return 0;
-            const u32 ch = read_le_at<u32>(gh.data() + chain_off);
+            const u32 ch = read_at<u32>(endian, gh.data() + chain_off);
             if (ch & 1u) break;
             idx++;
         }
@@ -577,9 +626,9 @@ count_dynsym_gnu(std::span<const std::byte> gh) {
 
 // DT_HASH is the SysV hash table. Second word is nchain == dynsym count.
 [[nodiscard]] static std::size_t
-count_dynsym_sysv(std::span<const std::byte> h) {
+count_dynsym_sysv(std::span<const std::byte> h, Endian endian) {
     if (h.size() < 8) return 0;
-    return read_le_at<u32>(h.data() + 4);
+    return read_at<u32>(endian, h.data() + 4);
 }
 
 // Build a synthetic Section record from a file-backed region, tagged
@@ -617,9 +666,9 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     for (u16 i = 0; i < h.e_phnum; ++i) {
         const std::byte* const p =
             phtab->data() + static_cast<std::size_t>(i) * kPhdr64Size;
-        const u32 p_type  = read_le_at<u32>(p + 0x00);
-        const u64 p_vaddr = read_le_at<u64>(p + 0x10);
-        const u64 p_memsz = read_le_at<u64>(p + 0x28);
+        const u32 p_type  = read_at<u32>(endian_, p + 0x00);
+        const u64 p_vaddr = read_at<u64>(endian_, p + 0x10);
+        const u64 p_memsz = read_at<u64>(endian_, p + 0x28);
         if (p_type == pt::DYNAMIC)      { dyn_vaddr    = p_vaddr; dyn_memsz    = p_memsz; }
         if (p_type == pt::GNU_EH_FRAME) { eh_hdr_vaddr = p_vaddr; eh_hdr_memsz = p_memsz; }
     }
@@ -652,8 +701,8 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         u64    strsz = 0;
         const std::size_t entries = dyn.size() / 16;
         for (std::size_t i = 0; i < entries; ++i) {
-            const u64 tag = read_le_at<u64>(dyn.data() + i * 16 + 0);
-            const u64 val = read_le_at<u64>(dyn.data() + i * 16 + 8);
+            const u64 tag = read_at<u64>(endian_, dyn.data() + i * 16 + 0);
+            const u64 val = read_at<u64>(endian_, dyn.data() + i * 16 + 8);
             if (tag == dt::NULL_)     break;
             if (tag == dt::STRTAB)    strtab_vaddr   = val;
             if (tag == dt::SYMTAB)    dynsym_vaddr   = val;
@@ -702,14 +751,14 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         auto dyn = vaddr_slice(segments_, dyn_vaddr, dyn_memsz);
         const std::size_t entries = dyn.size() / 16;
         for (std::size_t i = 0; i < entries; ++i) {
-            const u64 tag = read_le_at<u64>(dyn.data() + i * 16 + 0);
-            const u64 val = read_le_at<u64>(dyn.data() + i * 16 + 8);
+            const u64 tag = read_at<u64>(endian_, dyn.data() + i * 16 + 0);
+            const u64 val = read_at<u64>(endian_, dyn.data() + i * 16 + 8);
             if (tag == dt::NULL_)  break;
             if (tag == dt::STRTAB) strtab_for_count_vaddr = val;
         }
     }
     if (!hash_bytes.empty()) {
-        dynsym_count = count_dynsym_sysv(hash_bytes);
+        dynsym_count = count_dynsym_sysv(hash_bytes, endian_);
     }
     // The max r_sym referenced by any relocation is an exact lower bound
     // on dynsym size. DT_GNU_HASH alone can't give us the total (imports
@@ -720,7 +769,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         auto scan_rela_for_max = [&](std::span<const std::byte> bytes) {
             const std::size_t count = bytes.size() / kRela64Size;
             for (std::size_t k = 0; k < count; ++k) {
-                const u64 r_info = read_le_at<u64>(bytes.data() + k * kRela64Size + 8);
+                const u64 r_info = read_at<u64>(endian_, bytes.data() + k * kRela64Size + 8);
                 const u32 r_sym  = static_cast<u32>(r_info >> 32);
                 if (r_sym > max_rsym) max_rsym = r_sym;
             }
@@ -749,7 +798,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         }
     }
     if (dynsym_count == 0 && !gnu_hash_bytes.empty()) {
-        dynsym_count = count_dynsym_gnu(gnu_hash_bytes);
+        dynsym_count = count_dynsym_gnu(gnu_hash_bytes, endian_);
     }
 
     std::vector<std::string> dynsym_names;
@@ -762,11 +811,11 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         for (std::size_t k = 0; k < dynsym_count; ++k) {
             if ((k + 1) * syment > dynsym_bytes.size()) break;
             const std::byte* const p = dynsym_bytes.data() + k * syment;
-            const u32 st_name  = read_le_at<u32>(p + 0);
-            const u8  st_info  = read_le_at<u8>(p + 4);
-            const u16 st_shndx = read_le_at<u16>(p + 6);
-            const u64 st_value = read_le_at<u64>(p + 8);
-            const u64 st_size  = read_le_at<u64>(p + 16);
+            const u32 st_name  = read_at<u32>(endian_, p + 0);
+            const u8  st_info  = read_at<u8>(endian_, p + 4);
+            const u16 st_shndx = read_at<u16>(endian_, p + 6);
+            const u64 st_value = read_at<u64>(endian_, p + 8);
+            const u64 st_size  = read_at<u64>(endian_, p + 16);
 
             std::string name;
             if (auto nm = str_r.read_cstr(st_name); nm) name = std::string(*nm);
@@ -783,6 +832,8 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
             symbols_.push_back(std::move(sym));
         }
     }
+
+    normalize_ppc64_descriptors();
 
     // Synthesize .dynsym / .dynstr / .eh_frame_hdr so passes that look for
     // them by name (the eh_frame analyser scans for `.eh_frame` and the
@@ -821,7 +872,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
                                              false, false));
             const u8 eh_frame_ptr_enc = static_cast<u8>(eh_hdr[1]);
             if (eh_frame_ptr_enc == 0x1B) {  // pcrel | sdata4 — the common case
-                const i32 raw = read_le_at<i32>(eh_hdr.data() + 4);
+                const i32 raw = read_at<i32>(endian_, eh_hdr.data() + 4);
                 // The pointer is read_at = eh_hdr_vaddr + 4 (offset of the
                 // sdata4 field within .eh_frame_hdr).
                 eh_frame_vaddr = static_cast<addr_t>(
@@ -895,8 +946,8 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         const std::size_t count = bytes.size() / kRela64Size;
         for (std::size_t k = 0; k < count; ++k) {
             const std::byte* const p = bytes.data() + k * kRela64Size;
-            const u64 r_offset = read_le_at<u64>(p + 0);
-            const u64 r_info   = read_le_at<u64>(p + 8);
+            const u64 r_offset = read_at<u64>(endian_, p + 0);
+            const u64 r_info   = read_at<u64>(endian_, p + 8);
             const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
             const u32 r_sym    = static_cast<u32>(r_info >> 32);
             if (r_type != rx64::JUMP_SLOT && r_type != rx64::GLOB_DAT) continue;
@@ -924,6 +975,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         scan_plt_stubs(got_to_name);
     }
 
+    normalize_ppc64_descriptors();
     sort_and_dedupe_symbols();
     return {};
 }
@@ -958,6 +1010,7 @@ Result<void> ElfBinary::parse() {
         scan_plt_stubs(got_to_name);
     }
 
+    normalize_ppc64_descriptors();
     sort_and_dedupe_symbols();
     return {};
 }

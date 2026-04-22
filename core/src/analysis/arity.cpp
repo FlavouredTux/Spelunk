@@ -47,6 +47,7 @@ enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 }  // namespace
 
 u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
+    if (b.arch() != Arch::X86_64) return 0;
     const auto args = int_arg_regs(abi);
     const u8 max_arity = static_cast<u8>(args.size());
 
@@ -71,7 +72,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     auto entry_bytes = b.bytes_at(target);
     if (entry_bytes.empty()) return max_arity;
 
-    std::array<bool, 6> written{};
+    std::array<bool, kMaxAbiIntArgs> written{};
     int max_live_in = -1;
 
     X64Decoder dec;
@@ -123,7 +124,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
 }
 
 u8 infer_arity(const Binary& b, addr_t target) noexcept {
-    return infer_arity(b, target, abi_for(b.format(), b.arch()));
+    return infer_arity(b, target, abi_for(b.format(), b.arch(), b.endian()));
 }
 
 }  // namespace ember

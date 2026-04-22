@@ -16,6 +16,12 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Xchg:     return "xchg";
         case Mnemonic::Push:     return "push";
         case Mnemonic::Pop:      return "pop";
+        case Mnemonic::Addi:     return "addi";
+        case Mnemonic::Addis:    return "addis";
+        case Mnemonic::Ld:       return "ld";
+        case Mnemonic::Std:      return "std";
+        case Mnemonic::Lwz:      return "lwz";
+        case Mnemonic::Stw:      return "stw";
         case Mnemonic::Add:      return "add";
         case Mnemonic::Sub:      return "sub";
         case Mnemonic::Adc:      return "adc";
@@ -60,6 +66,14 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Jge:      return "jge";
         case Mnemonic::Jle:      return "jle";
         case Mnemonic::Jg:       return "jg";
+        case Mnemonic::Beq:      return "beq";
+        case Mnemonic::Bne:      return "bne";
+        case Mnemonic::Blt:      return "blt";
+        case Mnemonic::Bge:      return "bge";
+        case Mnemonic::Bgt:      return "bgt";
+        case Mnemonic::Ble:      return "ble";
+        case Mnemonic::Bdnz:     return "bdnz";
+        case Mnemonic::Bdz:      return "bdz";
         case Mnemonic::Nop:      return "nop";
         case Mnemonic::Hlt:      return "hlt";
         case Mnemonic::Int:      return "int";

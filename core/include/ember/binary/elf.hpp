@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -33,6 +34,7 @@ public:
 
     [[nodiscard]] Format format() const noexcept override { return Format::Elf; }
     [[nodiscard]] Arch   arch() const noexcept   override { return arch_;  }
+    [[nodiscard]] Endian endian() const noexcept override { return endian_; }
     [[nodiscard]] addr_t entry_point() const noexcept override { return entry_; }
 
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
@@ -105,9 +107,14 @@ private:
     // the entry point. Runs instead of parse_sections/parse_symbols/etc.
     [[nodiscard]] Result<void>
     parse_from_phdr(const ParsedEhdr& h);
+    [[nodiscard]] bool is_executable_addr(addr_t vaddr) const noexcept;
+    [[nodiscard]] std::optional<addr_t>
+    resolve_ppc64_descriptor_target(addr_t vaddr) const noexcept;
+    void normalize_ppc64_descriptors() noexcept;
 
     std::vector<std::byte>    buffer_;
     Arch                      arch_  = Arch::Unknown;
+    Endian                    endian_ = Endian::Unknown;
     addr_t                    entry_ = 0;
     std::vector<Section>      sections_;
     std::vector<Symbol>       symbols_;

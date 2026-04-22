@@ -18,6 +18,7 @@ public:
 
     [[nodiscard]] Format format() const noexcept override { return Format::MachO; }
     [[nodiscard]] Arch   arch() const noexcept   override { return arch_;  }
+    [[nodiscard]] Endian endian() const noexcept override { return endian_; }
     [[nodiscard]] addr_t entry_point() const noexcept override { return entry_; }
 
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
@@ -62,6 +63,7 @@ private:
 
     std::vector<std::byte>    buffer_;
     Arch                      arch_  = Arch::Unknown;
+    Endian                    endian_ = Endian::Unknown;
     addr_t                    entry_ = 0;
     std::vector<Section>         sections_;
     std::vector<Symbol>          symbols_;

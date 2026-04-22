@@ -7,7 +7,7 @@ namespace ember {
 
 namespace {
 
-constexpr std::array<std::string_view, 92> kRegNames = {
+constexpr std::array<std::string_view, 126> kRegNames = {
     "",
     "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh",
     "spl", "bpl", "sil", "dil",
@@ -22,6 +22,11 @@ constexpr std::array<std::string_view, 92> kRegNames = {
     "rip",
     "xmm0",  "xmm1",  "xmm2",  "xmm3",  "xmm4",  "xmm5",  "xmm6",  "xmm7",
     "xmm8",  "xmm9",  "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+    "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",
+    "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15",
+    "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
+    "r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
+    "lr", "ctr",
 };
 
 }  // namespace

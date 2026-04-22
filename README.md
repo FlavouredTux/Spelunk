@@ -5,8 +5,8 @@
 # Ember
 
 A from-scratch reverse-engineering toolkit: ELF + Mach-O loader, x86-64
-disassembler, IR lifter, SSA, cleanup passes, control-flow structuring,
-pseudo-C emitter, a QuickJS scripting surface, and an Electron UI.
+decompiler pipeline, PPC64 disassembler/CFG support, a QuickJS scripting
+surface, and an Electron UI.
 
 No Capstone. No Zydis. No Ghidra decompiler. Stdlib only (QuickJS-NG is
 vendored for scripting).
@@ -72,7 +72,8 @@ ELF   →  decoder  →  CFG       →  IR lift   →  SSA      →
 cleanup passes  →  structurer (if/while/switch)  →  pseudo-C
 ```
 
-x86-64 only. ELF and Mach-O.
+x86-64 has the full IR/SSA/pseudo-C pipeline. PPC64 currently supports
+loading, metadata, disassembly, and CFG-oriented browsing on ELF.
 
 ## Scripting
 
@@ -99,7 +100,7 @@ core/           C++23 library (everything except the CLI shim)
   include/ember/   public headers
   src/
     binary/     ELF + Mach-O loaders
-    disasm/     x86-64 instruction decoder
+    disasm/     x86-64 + PPC64 instruction decoders
     analysis/   CFG builder, SysV arity inference, strings scanner
     ir/         IR + x64 lifter + SSA builder + cleanup passes
     structure/  region builder (if / while / switch)

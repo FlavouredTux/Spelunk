@@ -29,11 +29,11 @@
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/disasm/instruction.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <ember/disasm/decoder.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
-#include <ember/ir/x64_lifter.hpp>
+#include <ember/ir/lifter.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/script/runtime.hpp>
 #include <ember/structure/region.hpp>
@@ -235,6 +235,7 @@ void print_info(const ember::Binary& b, std::string_view path) {
     std::println("file    {}", path);
     std::println("format  {}", ember::format_name(b.format()));
     std::println("arch    {}", ember::arch_name(b.arch()));
+    std::println("endian  {}", ember::endian_name(b.endian()));
     std::println("entry   {:#018x}", b.entry_point());
 
     const auto secs = b.sections();
@@ -325,8 +326,13 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
 
-    const ember::X64Decoder  dec;
-    const ember::CfgBuilder  builder(b, dec);
+    auto dec_r = ember::make_decoder(b);
+    if (!dec_r) {
+        std::println(stderr, "ember: {}: {}",
+                     dec_r.error().kind_name(), dec_r.error().message);
+        return EXIT_FAILURE;
+    }
+    const ember::CfgBuilder  builder(b, **dec_r);
     auto fn_r = builder.build(win->start, win->label);
     if (!fn_r) {
         std::println(stderr, "ember: {}: {}",
@@ -334,8 +340,13 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         return EXIT_FAILURE;
     }
 
-    const ember::X64Lifter lifter;
-    auto ir_r = lifter.lift(*fn_r);
+    auto lifter_r = ember::make_lifter(b);
+    if (!lifter_r) {
+        std::println(stderr, "ember: {}: {}",
+                     lifter_r.error().kind_name(), lifter_r.error().message);
+        return EXIT_FAILURE;
+    }
+    auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) {
         std::println(stderr, "ember: {}: {}",
                      ir_r.error().kind_name(), ir_r.error().message);

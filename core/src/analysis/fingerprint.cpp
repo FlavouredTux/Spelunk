@@ -11,13 +11,13 @@
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/cfg_util.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/disasm/decoder.hpp>
 #include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
+#include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
-#include <ember/ir/x64_lifter.hpp>
 
 namespace ember {
 
@@ -229,13 +229,15 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
 
     // Run the same front half of the decompile pipeline but stop before
     // structuring. Fingerprinting cares about IR content, not structure.
-    const X64Decoder  dec;
-    const CfgBuilder  cfg(b, dec);
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return out;
+    const CfgBuilder  cfg(b, **dec_r);
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
-    const X64Lifter lifter{abi_for(b.format(), b.arch())};
-    auto ir_r = lifter.lift(*fn_r);
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return out;
+    auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
 
     const SsaBuilder ssa;

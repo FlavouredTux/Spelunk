@@ -16,6 +16,8 @@ enum class Mnemonic : u16 {
 
     Mov, Movzx, Movsx, Movsxd, Lea, Xchg,
     Push, Pop,
+    Addi, Addis,
+    Ld, Std, Lwz, Stw,
 
     Add, Sub, Adc, Sbb, Inc, Dec, Neg,
     Mul, Imul, Div, Idiv,
@@ -29,6 +31,7 @@ enum class Mnemonic : u16 {
 
     Jo, Jno, Jb, Jae, Je, Jne, Jbe, Ja,
     Js, Jns, Jp, Jnp, Jl, Jge, Jle, Jg,
+    Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz,
 
     Nop, Hlt, Int, Int3, Syscall, Ud2,
     Cdq, Cqo, Cwde, Cdqe,
@@ -185,6 +188,8 @@ struct Instruction {
         case Mnemonic::Je:  case Mnemonic::Jne: case Mnemonic::Jbe: case Mnemonic::Ja:
         case Mnemonic::Js:  case Mnemonic::Jns: case Mnemonic::Jp:  case Mnemonic::Jnp:
         case Mnemonic::Jl:  case Mnemonic::Jge: case Mnemonic::Jle: case Mnemonic::Jg:
+        case Mnemonic::Beq: case Mnemonic::Bne: case Mnemonic::Blt: case Mnemonic::Bge:
+        case Mnemonic::Bgt: case Mnemonic::Ble: case Mnemonic::Bdnz: case Mnemonic::Bdz:
             return true;
         default: return false;
     }

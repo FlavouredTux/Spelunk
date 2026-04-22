@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <format>
+#include <memory>
 #include <span>
 #include <string>
 
@@ -12,13 +13,13 @@
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/decompile/emitter.hpp>
+#include <ember/disasm/decoder.hpp>
 #include <ember/disasm/instruction.hpp>
-#include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
+#include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
-#include <ember/ir/x64_lifter.hpp>
 #include <ember/structure/region.hpp>
 #include <ember/structure/structurer.hpp>
 
@@ -257,7 +258,9 @@ format_disasm(const Binary& b, const FuncWindow& w) {
         "; disassembly of {} at {:#018x} ({} bytes)\n",
         w.label, w.start, bytes.size());
 
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const Decoder& dec = **dec_r;
     addr_t ip = w.start;
     std::size_t off = 0;
     const bool size_known = bytes.size() < 1024 && w.size != 0;
@@ -298,7 +301,9 @@ format_disasm_range(const Binary& b, addr_t start, addr_t end) {
     auto bytes = clamp_bytes(avail, end - start);
 
     std::string out;
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const Decoder& dec = **dec_r;
     addr_t ip = start;
     std::size_t off = 0;
     while (off < bytes.size()) {
@@ -324,7 +329,9 @@ format_disasm_range(const Binary& b, addr_t start, addr_t end) {
 
 Result<std::string>
 format_cfg(const Binary& b, const FuncWindow& w) {
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
     auto fn_r = builder.build(w.start, w.label);
     if (!fn_r) return std::unexpected(fn_r.error());
@@ -336,13 +343,16 @@ format_cfg(const Binary& b, const FuncWindow& w) {
 Result<std::string>
 format_cfg_pseudo(const Binary& b, const FuncWindow& w,
                   const Annotations* ann, EmitOptions options) {
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
     auto fn_r = builder.build(w.start, w.label);
     if (!fn_r) return std::unexpected(fn_r.error());
 
-    const X64Lifter lifter{abi_for(b.format(), b.arch())};
-    auto ir_r = lifter.lift(*fn_r);
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return std::unexpected(lifter_r.error());
+    auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return std::unexpected(ir_r.error());
 
     const SsaBuilder ssa;
@@ -370,13 +380,16 @@ Result<std::string>
 format_struct(const Binary& b, const FuncWindow& w,
               bool pseudo, const Annotations* ann,
               EmitOptions options) {
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
     auto fn_r = builder.build(w.start, w.label);
     if (!fn_r) return std::unexpected(fn_r.error());
 
-    const X64Lifter lifter{abi_for(b.format(), b.arch())};
-    auto ir_r = lifter.lift(*fn_r);
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return std::unexpected(lifter_r.error());
+    auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return std::unexpected(ir_r.error());
 
     const SsaBuilder ssa;
@@ -399,7 +412,9 @@ format_struct(const Binary& b, const FuncWindow& w,
 
 std::vector<CallEdge> compute_call_graph(const Binary& b) {
     std::vector<CallEdge> out;
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return out;
+    const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
 
     std::size_t candidates = 0;
@@ -431,7 +446,9 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
 }
 
 std::vector<addr_t> compute_callees(const Binary& b, addr_t fn) {
-    const X64Decoder dec;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return {};
+    const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
     std::string name;
     for (const auto& s : b.symbols()) {

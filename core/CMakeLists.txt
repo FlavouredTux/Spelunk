@@ -3,9 +3,11 @@ add_library(ember_core STATIC
     src/binary/macho.cpp
     src/binary/pe.cpp
     src/binary/loader.cpp
+    src/disasm/decoder.cpp
     src/disasm/register.cpp
     src/disasm/instruction.cpp
     src/disasm/x64/decoder.cpp
+    src/disasm/ppc/decoder.cpp
     src/analysis/cfg_builder.cpp
     src/analysis/cfg_util.cpp
     src/analysis/arity.cpp
@@ -26,6 +28,8 @@ add_library(ember_core STATIC
     src/common/cache.cpp
     src/ir/abi.cpp
     src/ir/ir.cpp
+    src/ir/lifter.cpp
+    src/ir/ppc_lifter.cpp
     src/ir/x64_lifter.cpp
     src/ir/ssa.cpp
     src/ir/passes.cpp

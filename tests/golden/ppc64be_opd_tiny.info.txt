@@ -1,0 +1,7 @@
+format   elf
+arch     ppc64
+endian   big
+entry    0x1000b0
+sections 2
+defined  1
+imports  0

@@ -45,11 +45,20 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::Xmm4,  Reg::Xmm5,  Reg::Xmm6,  Reg::Xmm7,
     Reg::Xmm8,  Reg::Xmm9,  Reg::Xmm10, Reg::Xmm11,
     Reg::Xmm12, Reg::Xmm13, Reg::Xmm14, Reg::Xmm15,
+    Reg::PpcR0,  Reg::PpcR1,  Reg::PpcR2,  Reg::PpcR3,
+    Reg::PpcR4,  Reg::PpcR5,  Reg::PpcR6,  Reg::PpcR7,
+    Reg::PpcR8,  Reg::PpcR9,  Reg::PpcR10, Reg::PpcR11,
+    Reg::PpcR12, Reg::PpcR13, Reg::PpcR14, Reg::PpcR15,
+    Reg::PpcR16, Reg::PpcR17, Reg::PpcR18, Reg::PpcR19,
+    Reg::PpcR20, Reg::PpcR21, Reg::PpcR22, Reg::PpcR23,
+    Reg::PpcR24, Reg::PpcR25, Reg::PpcR26, Reg::PpcR27,
+    Reg::PpcR28, Reg::PpcR29, Reg::PpcR30, Reg::PpcR31,
+    Reg::PpcLr, Reg::PpcCtr,
 };
 
 // Canonical form of the last entry must still map to itself; this catches
 // out-of-order sentinel moves where Xmm15 drifts off the end of the table.
-static_assert(kCanonical.back() == Reg::Xmm15,
+static_assert(kCanonical.back() == Reg::PpcCtr,
               "kCanonical must be updated to match Reg enum");
 
 struct VarKey {

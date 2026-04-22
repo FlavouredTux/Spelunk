@@ -29,6 +29,7 @@ public:
 
     [[nodiscard]] virtual Format format() const noexcept      = 0;
     [[nodiscard]] virtual Arch   arch() const noexcept        = 0;
+    [[nodiscard]] virtual Endian endian() const noexcept      = 0;
     [[nodiscard]] virtual addr_t entry_point() const noexcept = 0;
 
     [[nodiscard]] virtual std::span<const Section> sections() const noexcept = 0;

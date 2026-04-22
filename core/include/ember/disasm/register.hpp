@@ -31,6 +31,12 @@ enum class Reg : u8 {
     Xmm0,  Xmm1,  Xmm2,  Xmm3,  Xmm4,  Xmm5,  Xmm6,  Xmm7,
     Xmm8,  Xmm9,  Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15,
 
+    PpcR0,  PpcR1,  PpcR2,  PpcR3,  PpcR4,  PpcR5,  PpcR6,  PpcR7,
+    PpcR8,  PpcR9,  PpcR10, PpcR11, PpcR12, PpcR13, PpcR14, PpcR15,
+    PpcR16, PpcR17, PpcR18, PpcR19, PpcR20, PpcR21, PpcR22, PpcR23,
+    PpcR24, PpcR25, PpcR26, PpcR27, PpcR28, PpcR29, PpcR30, PpcR31,
+    PpcLr, PpcCtr,
+
     // Sentinel. Always last. Size tables (kCanonical in ir/ssa.cpp,
     // reg_name in disasm/register.cpp) static_assert against this so adding
     // a register without updating them is a compile error.
@@ -48,6 +54,10 @@ enum class Reg : u8 {
     if (v == static_cast<unsigned>(Reg::Rip))   return 8;
     if (v >= static_cast<unsigned>(Reg::Xmm0) &&
         v <= static_cast<unsigned>(Reg::Xmm15)) return 16;
+    if (v >= static_cast<unsigned>(Reg::PpcR0) &&
+        v <= static_cast<unsigned>(Reg::PpcR31)) return 8;
+    if (v == static_cast<unsigned>(Reg::PpcLr) ||
+        v == static_cast<unsigned>(Reg::PpcCtr)) return 8;
     return 0;
 }
 

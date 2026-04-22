@@ -5,13 +5,14 @@
 
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
+#include <ember/ir/abi.hpp>
 
 namespace ember {
 
 // Per-function inferred-signature hints. Currently just "which SysV int-arg
 // slots are char*"; grows as we teach the inferencer more patterns.
 struct InferredSig {
-    std::array<bool, 6> charp = {};
+    std::array<bool, kMaxAbiIntArgs> charp = {};
 };
 
 // Compute char*-arg hints for every function reachable in the binary, with

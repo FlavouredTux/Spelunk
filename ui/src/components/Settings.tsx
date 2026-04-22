@@ -189,7 +189,7 @@ export function SettingsPanel(props: {
               fontFamily: serif, fontSize: 11, color: C.textFaint, fontStyle: "italic",
             }}
           >
-            <span>Ember — from-scratch x86-64 decompiler</span>
+            <span>Ember — from-scratch binary decompiler</span>
             <span style={{ fontFamily: mono, fontStyle: "normal" }}>
               github.com/FlavouredTux/Ember
             </span>

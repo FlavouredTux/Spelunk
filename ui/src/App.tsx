@@ -605,7 +605,7 @@ export default function App() {
             <span style={{ color: C.textFaint }}>⌃P</span>
           </button>
           <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint, letterSpacing: 1, marginLeft: 4 }}>
-            {info.arch.toUpperCase()} · {info.format.toUpperCase()}
+            {info.arch.toUpperCase()} · {info.endian.toUpperCase()} · {info.format.toUpperCase()}
           </span>
           <button
             onClick={() => setAiOpen(true)}
@@ -857,6 +857,10 @@ export default function App() {
           vaddr={patching.vaddr}
           origBytes={patching.origBytes}
           disasm={patching.disasm}
+          asmEnabled={info.arch === "x86_64"}
+          asmDisabledReason={info.arch === "x86_64"
+            ? undefined
+            : `Assembly patching is x86-64 only right now; ${info.arch} is limited to raw hex edits.`}
           onSave={(addrHex, bytesHex) => {
             // Stash the original bytes only on the first patch at this
             // address so revert returns to truth, not to a previous

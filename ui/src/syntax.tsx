@@ -32,6 +32,13 @@ const X86_REGS = new Set([
   "r8b","r9b","r10b","r11b","r12b","r13b","r14b","r15b",
   "fs","gs","cs","ds","es","ss",
 ]);
+const PPC_REGS = new Set([
+  "r0","r1","r2","r3","r4","r5","r6","r7",
+  "r8","r9","r10","r11","r12","r13","r14","r15",
+  "r16","r17","r18","r19","r20","r21","r22","r23",
+  "r24","r25","r26","r27","r28","r29","r30","r31",
+  "lr","ctr",
+]);
 const FLAGS = new Set(["zf", "sf", "cf", "of", "pf", "af"]);
 
 const X86_TERMS = new Set([
@@ -44,6 +51,12 @@ const X86_TERMS = new Set([
   "cmp", "test",
   "je", "jne", "jz", "jnz", "jl", "jge", "jle", "jg",
   "jb", "jae", "jbe", "ja", "jo", "jno", "js", "jns", "jp", "jnp",
+]);
+const PPC_TERMS = new Set([
+  "addi","addis","add","sub","cmp","and","or","xor",
+  "ld","std","lwz","stw","li","lis","mr",
+  "b","bl","blr","bctr","bctrl",
+  "beq","bne","blt","bge","bgt","ble","bdnz","bdz",
 ]);
 
 export function highlightLine(
@@ -166,13 +179,13 @@ export function highlightLine(
         else if (C_TYPES.has(word)) {
           pushStr(word, { color: SH.type });
         }
-        else if (X86_REGS.has(lower)) {
+        else if (X86_REGS.has(lower) || PPC_REGS.has(lower)) {
           pushStr(word, { color: SH.reg });
         }
         else if (FLAGS.has(lower)) {
           pushStr(word, { color: SH.flag });
         }
-        else if (X86_TERMS.has(lower)) {
+        else if (X86_TERMS.has(lower) || PPC_TERMS.has(lower)) {
           pushStr(word, { color: SH.keyword, bold: true });
         }
         else {

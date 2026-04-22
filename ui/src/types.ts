@@ -11,6 +11,7 @@ export type BinaryInfo = {
   path: string;
   format: string;
   arch: string;
+  endian: string;
   entry: string;
   sections: { name: string; vaddr: string; size: string; flags: string }[];
   functions: FunctionInfo[];

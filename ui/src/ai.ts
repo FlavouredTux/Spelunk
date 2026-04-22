@@ -11,8 +11,8 @@ import type { AiMessage, AiChatRequest } from "./types";
 //
 // Versioning: bump SYSTEM_PROMPT_VERSION when the prompt changes
 // substantively so any downstream cache key invalidates.
-export const SYSTEM_PROMPT_VERSION = 3;
-export const SYSTEM_PROMPT = `You are Ember's reverse-engineering assistant. The user is analyzing a compiled x86-64 binary in a static decompiler. They paste Ember's pseudo-C (or disasm / IR / CFG dumps) and ask you about it.
+export const SYSTEM_PROMPT_VERSION = 4;
+export const SYSTEM_PROMPT = `You are Ember's reverse-engineering assistant. The user is analyzing a compiled binary in a static decompiler. They paste Ember's pseudo-C (or disasm / IR / CFG dumps) and ask you about it.
 
 ## Tools — use them, don't guess
 

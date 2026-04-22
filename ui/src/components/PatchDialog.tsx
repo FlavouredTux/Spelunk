@@ -15,14 +15,17 @@ export function PatchDialog(props: {
   vaddr:    number;
   origBytes: string;
   disasm:   string;
+  asmEnabled?: boolean;
+  asmDisabledReason?: string;
   onSave:   (vaddrHex: string, bytesHex: string) => void;
   onRevert?: () => void;
   onClose:  () => void;
 }) {
   const stripped = props.origBytes.replace(/\s+/g, "").toUpperCase();
   const origLen  = stripped.length / 2;
+  const asmEnabled = props.asmEnabled ?? true;
 
-  const [mode,    setMode]    = useState<Mode>("asm");
+  const [mode,    setMode]    = useState<Mode>(asmEnabled ? "asm" : "hex");
   const [hexDraft, setHexDraft] = useState(stripped);
   const [asmDraft, setAsmDraft] = useState("");
   const inputHexRef = useRef<HTMLInputElement>(null);
@@ -32,6 +35,10 @@ export function PatchDialog(props: {
     if (mode === "hex") { inputHexRef.current?.focus(); inputHexRef.current?.select(); }
     else                 { inputAsmRef.current?.focus(); }
   }, [mode]);
+
+  useEffect(() => {
+    if (!asmEnabled && mode === "asm") setMode("hex");
+  }, [asmEnabled, mode]);
 
   // Resolve the current draft into a canonical hex string + status.
   const resolved = useMemo(() => {
@@ -124,10 +131,23 @@ export function PatchDialog(props: {
             {props.disasm}
           </span>
           <span style={{ flex: 1 }} />
-          <ModeToggle mode={mode} onChange={setMode} />
+          <ModeToggle mode={mode} onChange={setMode} asmEnabled={asmEnabled} />
         </div>
 
         <div style={{ padding: 20 }}>
+          {!asmEnabled && props.asmDisabledReason && (
+            <div style={{
+              marginBottom: 10,
+              padding: "8px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+            }}>
+              {props.asmDisabledReason}
+            </div>
+          )}
           <div style={{
             fontFamily: mono, fontSize: 10, color: C.textMuted,
             marginBottom: 6,
@@ -284,7 +304,7 @@ export function PatchDialog(props: {
   );
 }
 
-function ModeToggle(props: { mode: Mode; onChange: (m: Mode) => void }) {
+function ModeToggle(props: { mode: Mode; onChange: (m: Mode) => void; asmEnabled: boolean }) {
   return (
     <div style={{
       display: "flex",
@@ -299,6 +319,7 @@ function ModeToggle(props: { mode: Mode; onChange: (m: Mode) => void }) {
           <button
             key={m}
             type="button"
+            disabled={m === "asm" && !props.asmEnabled}
             onClick={() => props.onChange(m)}
             style={{
               padding: "3px 10px",
@@ -308,7 +329,8 @@ function ModeToggle(props: { mode: Mode; onChange: (m: Mode) => void }) {
               borderLeft: i > 0 ? `1px solid ${C.border}` : "none",
               fontFamily: mono, fontSize: 10,
               fontWeight: active ? 600 : 400,
-              cursor: "pointer",
+              cursor: (m === "asm" && !props.asmEnabled) ? "not-allowed" : "pointer",
+              opacity: (m === "asm" && !props.asmEnabled) ? 0.5 : 1,
             }}
           >{m}</button>
         );

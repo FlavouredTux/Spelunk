@@ -275,6 +275,7 @@ function parseSummary(raw: string, path: string): BinaryInfo {
     path,
     format: "",
     arch: "",
+    endian: "",
     entry: "",
     sections: [],
     functions: [],
@@ -282,10 +283,11 @@ function parseSummary(raw: string, path: string): BinaryInfo {
   };
 
   for (const l of lines) {
-    const m = /^(file|format|arch|entry)\s+(.+)$/.exec(l.trim());
+    const m = /^(file|format|arch|endian|entry)\s+(.+)$/.exec(l.trim());
     if (m) {
       if (m[1] === "format") info.format = m[2];
       else if (m[1] === "arch") info.arch = m[2];
+      else if (m[1] === "endian") info.endian = m[2];
       else if (m[1] === "entry") info.entry = m[2];
     }
   }
@@ -296,7 +298,7 @@ function parseSummary(raw: string, path: string): BinaryInfo {
     if (/^sections\s+\(\d+\)/.test(line)) { mode = "sections"; continue; }
     if (/^defined symbols\s+\(\d+\)/.test(line)) { mode = "defined"; continue; }
     if (/^imports\s+\(\d+\)/.test(line)) { mode = "imports"; continue; }
-    if (/^(file|format|arch|entry)/.test(line.trim())) { mode = "none"; continue; }
+    if (/^(file|format|arch|endian|entry)/.test(line.trim())) { mode = "none"; continue; }
     if (!line.trim()) continue;
 
     if (mode === "sections") {

@@ -164,6 +164,7 @@ export function Sidebar(props: {
         <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10, fontFamily: mono, color: C.textFaint }}>
           <span><span style={{ color: C.textMuted }}>fmt</span> {info.format}</span>
           <span><span style={{ color: C.textMuted }}>arch</span> {info.arch}</span>
+          <span><span style={{ color: C.textMuted }}>endian</span> {info.endian || "?"}</span>
           <span><span style={{ color: C.textMuted }}>entry</span> {info.entry.replace(/^0x0+/, "0x")}</span>
         </div>
         {(onExport || onImport) && (

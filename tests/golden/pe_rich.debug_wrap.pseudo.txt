@@ -1,0 +1,5 @@
+// sub_180001180
+void sub_180001180(char* a1) {
+  OutputDebugStringA(a1);
+  return;
+}

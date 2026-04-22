@@ -646,6 +646,30 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  pe_rich.open_file.pseudo.txt
     )
     ember_golden_test(
+        NAME    pe_rich_wrap_add7_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|sub_180001100"
+        GOLDEN  pe_rich.wrap_add7.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_switch_cfg
+        FIXTURE pe_rich
+        ARGS    "--cfg|-s|sub_180001140"
+        GOLDEN  pe_rich.switch.cfg.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_switch_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|sub_180001140"
+        GOLDEN  pe_rich.switch.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_debug_wrap_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|sub_180001180"
+        GOLDEN  pe_rich.debug_wrap.pseudo.txt
+    )
+    ember_golden_test(
         NAME    pe_rich_script
         FIXTURE pe_rich
         ARGS    "--script|${_fixture_dir}/pe_rich_scan.js"

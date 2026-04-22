@@ -218,6 +218,21 @@ constexpr VariadicImport kVariadicImports[] = {
     return std::nullopt;
 }
 
+[[nodiscard]] bool import_returns_void(std::string_view n) noexcept {
+    static const std::string_view kTable[] = {
+        "Sleep",
+        "ExitProcess",
+        "OutputDebugStringA", "OutputDebugStringW",
+        "DeleteFileA", "DeleteFileW",
+        "free", "abort",
+        "__stack_chk_fail",
+    };
+    for (auto name : kTable) {
+        if (name == n) return true;
+    }
+    return false;
+}
+
 // C operator precedence, scaled so "tighter binds" = higher value. Used to
 // decide whether a sub-expression needs wrapping in parens. Only the handful
 // of levels the emitter actually produces are enumerated; add more as new
@@ -344,6 +359,7 @@ struct Emitter {
     std::set<std::pair<std::size_t, std::size_t>>    fold_call_positions;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> fold_call_ssa_key;
     mutable std::map<SsaKey, std::string>            fold_return_expr;
+    mutable std::map<SsaKey, std::string>            fold_void_call_stmt;
     // rax/xmm0 SSA key → bound local name for Call returns whose result is
     // read downstream. Makes `fopen(...); if (rax == 0)` render as
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
@@ -887,24 +903,34 @@ struct Emitter {
                         args.push_back(inst.srcs[i]);
                     continue;
                 }
-                if (inst.op == IrOp::Call) {
+                if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
                     // Callee-side char*-slot bitset: for a libc import, look
                     // up the direct-sink table; for an internal function,
                     // consult the pre-computed IPA map when one was passed.
                     std::array<bool, kMaxAbiIntArgs> callee_charp{};
                     bool have_info = false;
-                    if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
-                        const std::string callee = clean_import_name(s->name);
-                        for (u8 i = 0; i < callee_charp.size(); ++i) {
-                            callee_charp[i] = libc_arg_is_charp(
-                                callee, static_cast<u8>(i + 1));
-                            if (callee_charp[i]) have_info = true;
+                    if (inst.op == IrOp::Call) {
+                        if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
+                            const std::string callee = clean_import_name(s->name);
+                            for (u8 i = 0; i < callee_charp.size(); ++i) {
+                                callee_charp[i] = libc_arg_is_charp(
+                                    callee, static_cast<u8>(i + 1));
+                                if (callee_charp[i]) have_info = true;
+                            }
+                        } else if (options.signatures) {
+                            auto it = options.signatures->find(inst.target1);
+                            if (it != options.signatures->end()) {
+                                callee_charp = it->second.charp;
+                                for (bool v : callee_charp) if (v) { have_info = true; break; }
+                            }
                         }
-                    } else if (options.signatures) {
-                        auto it = options.signatures->find(inst.target1);
-                        if (it != options.signatures->end()) {
-                            callee_charp = it->second.charp;
-                            for (bool v : callee_charp) if (v) { have_info = true; break; }
+                    } else if (inst.src_count >= 1) {
+                        if (auto callee = import_name_for_indirect_call(inst.srcs[0])) {
+                            for (u8 i = 0; i < callee_charp.size(); ++i) {
+                                callee_charp[i] = libc_arg_is_charp(
+                                    *callee, static_cast<u8>(i + 1));
+                                if (callee_charp[i]) have_info = true;
+                            }
                         }
                     }
                     if (!have_info) { args.clear(); continue; }
@@ -963,6 +989,84 @@ struct Emitter {
             }
         }
         self_arity = need;
+    }
+
+    void bump_arity_from_call_sites() {
+        u8 need = self_arity;
+        for (const auto& bb : fn->blocks) {
+            std::vector<IrValue> args;
+            args.reserve(kMaxAbiIntArgs);
+            for (const auto& inst : bb.insts) {
+                if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
+                    args.clear();
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                        args.push_back(inst.srcs[i]);
+                    continue;
+                }
+                if (inst.op == IrOp::Intrinsic &&
+                    (inst.name == "call.args.2" || inst.name == "call.args.3")) {
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
+                        args.push_back(inst.srcs[i]);
+                    continue;
+                }
+
+                std::optional<u8> arity;
+                if (inst.op == IrOp::Call) {
+                    if (auto import_name = import_name_for_direct_call(inst.target1)) {
+                        arity = import_arity(inst.target1, *import_name);
+                    } else {
+                        arity = cached_arity(inst.target1);
+                    }
+                } else if (inst.op == IrOp::CallIndirect && inst.src_count >= 1) {
+                    if (auto import_name = import_name_for_indirect_call(inst.srcs[0])) {
+                        arity = libc_arity_by_name(*import_name);
+                    }
+                } else {
+                    continue;
+                }
+                if (!arity) {
+                    args.clear();
+                    continue;
+                }
+
+                const std::size_t limit = std::min<std::size_t>(*arity, args.size());
+                for (std::size_t i = 0; i < limit; ++i) {
+                    auto slot = trace_to_self_arg_slot(args[i]);
+                    if (slot && *slot + 1 > need) need = static_cast<u8>(*slot + 1);
+                }
+                args.clear();
+            }
+        }
+        self_arity = need;
+    }
+
+    [[nodiscard]] bool is_void_call_result(const IrValue& v) const {
+        if (v.kind != IrValueKind::Reg) return false;
+        if (canonical_reg(v.reg) != int_return_reg(abi)) return false;
+        const IrInst* def = def_of(v);
+        if (!def || def->op != IrOp::Clobber) return false;
+        auto k = ssa_key(v);
+        if (!k) return false;
+        auto pos_it = def_pos.find(*k);
+        if (pos_it == def_pos.end()) return false;
+        auto [bi, ii] = pos_it->second;
+        const auto& bb = fn->blocks[bi];
+        while (ii > 0) {
+            --ii;
+            const IrInst& prev = bb.insts[ii];
+            if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
+            if (prev.op == IrOp::Call) {
+                if (auto name = import_name_for_direct_call(prev.target1)) {
+                    return import_returns_void(*name);
+                }
+            } else if (prev.op == IrOp::CallIndirect && prev.src_count >= 1) {
+                if (auto name = import_name_for_indirect_call(prev.srcs[0])) {
+                    return import_returns_void(*name);
+                }
+            }
+            return false;
+        }
+        return false;
     }
 
     // Find Return regions whose value is the ABI integer return register
@@ -2417,7 +2521,10 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             const auto pos = std::pair{it->second, ii};
             if (fold_call_positions.contains(pos)) {
                 auto k = fold_call_ssa_key.find(pos);
-                if (k != fold_call_ssa_key.end()) fold_return_expr[k->second] = call_expr;
+                if (k != fold_call_ssa_key.end()) {
+                    if (import_returns_void(callee)) fold_void_call_stmt[k->second] = call_expr;
+                    else fold_return_expr[k->second] = call_expr;
+                }
             } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
                 out += std::format("{}u64 {} = {};\n", ind,
                                    call_return_names.at(bk->second), call_expr);
@@ -2466,7 +2573,14 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             const auto pos = std::pair{it->second, ii};
             if (fold_call_positions.contains(pos)) {
                 auto k = fold_call_ssa_key.find(pos);
-                if (k != fold_call_ssa_key.end()) fold_return_expr[k->second] = call_expr;
+                if (k != fold_call_ssa_key.end()) {
+                    if (auto name = import_name_for_indirect_call(inst.srcs[0]);
+                        name && import_returns_void(*name)) {
+                        fold_void_call_stmt[k->second] = call_expr;
+                    } else {
+                        fold_return_expr[k->second] = call_expr;
+                    }
+                }
             } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
                 out += std::format("{}u64 {} = {};\n", ind,
                                    call_return_names.at(bk->second), call_expr);
@@ -2504,6 +2618,18 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
     switch (bb.kind) {
         case BlockKind::Return: {
             if (term && term->op == IrOp::Return && term->src_count > 0) {
+                if (auto k = ssa_key(term->srcs[0]); k) {
+                    auto s = fold_void_call_stmt.find(*k);
+                    if (s != fold_void_call_stmt.end()) {
+                        out += std::format("{}{};\n", ind, s->second);
+                        out += std::format("{}return;\n", ind);
+                        break;
+                    }
+                }
+                if (is_void_call_result(term->srcs[0])) {
+                    out += std::format("{}return;\n", ind);
+                    break;
+                }
                 // Reuse the return-fold table populated during region
                 // analysis — when a call directly feeds the return,
                 // `fold_return_expr` carries the rendered call expr.
@@ -2660,6 +2786,18 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
 
         case RegionKind::Return: {
             if (r.condition.kind != IrValueKind::None) {
+                if (auto k = ssa_key(r.condition); k) {
+                    auto s = fold_void_call_stmt.find(*k);
+                    if (s != fold_void_call_stmt.end()) {
+                        out += std::format("{}{};\n", ind, s->second);
+                        out += std::format("{}return;\n", ind);
+                        return;
+                    }
+                }
+                if (is_void_call_result(r.condition)) {
+                    out += std::format("{}return;\n", ind);
+                    return;
+                }
                 if (auto k = ssa_key(r.condition); k) {
                     auto f = fold_return_expr.find(*k);
                     if (f != fold_return_expr.end()) {
@@ -2841,6 +2979,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         e.analyze_return_folds(*sf.body);
         e.collect_for_updates(*sf.body);
     }
+    if (!has_user_sig) e.bump_arity_from_call_sites();
     if (!has_user_sig) e.bump_arity_from_body_reads();
     if (!has_user_sig) e.infer_charp_args();
     e.bind_call_returns();
@@ -2858,6 +2997,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         std::function<void(const Region&)> walk = [&](const Region& r) {
             if (r.kind == RegionKind::Return &&
                 r.condition.kind != IrValueKind::None) {
+                if (e.is_void_call_result(r.condition)) return;
                 if (!t) t = r.condition.type;
             }
             for (const auto& c : r.children) if (c) walk(*c);

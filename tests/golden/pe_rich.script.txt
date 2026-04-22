@@ -10,4 +10,7 @@ symbols:
   local  0x180001040 tls_callback_0
   export 0x180001080 add7
   local  0x1800010c0 sub_1800010c0
+  local  0x180001100 sub_180001100
+  local  0x180001140 sub_180001140
+  local  0x180001180 sub_180001180
 entry bytes: 48 83 ec 28 ff 15 3e 10

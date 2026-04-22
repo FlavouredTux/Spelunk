@@ -8,6 +8,8 @@ Coverage:
   - export directory
   - .pdata function discovery for entry, export, and TLS callback
   - Win64 call with stack-passed arguments beyond rcx/rdx/r8/r9
+  - trivial call/ret Win64 wrapper for arity/signature recovery
+  - bounded x64 jump-table switch for CFG recovery
 
 Usage:
   make_pe_rich.py <output-path>
@@ -52,6 +54,9 @@ def main() -> int:
     tls_callback_rva = rva_text + 0x040
     add7_rva = rva_text + 0x080
     open_file_rva = rva_text + 0x0C0
+    wrap_add7_rva = rva_text + 0x100
+    switch_rva = rva_text + 0x140
+    debug_wrap_rva = rva_text + 0x180
 
     layout = {
         "iat_gettick": None,
@@ -60,9 +65,10 @@ def main() -> int:
         "delay_iat_sleep": None,
         "msg_tls": None,
         "file_name": None,
+        "switch_table": None,
     }
 
-    text = bytearray(b"\x90" * 0x100)
+    text = bytearray(b"\x90" * 0x200)
 
     def patch(off: int, data: bytes) -> None:
         text[off:off + len(data)] = data
@@ -167,6 +173,7 @@ def main() -> int:
 
     layout["msg_tls"] = add_bytes(b"tls callback fired\x00")
     layout["file_name"] = add_bytes(b"ashtrace.txt\x00")
+    layout["switch_table"] = add_bytes(b"\x00" * 12)
     align_rdata(8)
 
     # ---- exports --------------------------------------------------------
@@ -231,6 +238,51 @@ def main() -> int:
     open_file += b"\xc3"
     patch(open_file_rva - rva_text, open_file)
 
+    wrap_add7 = bytearray()
+    wrap_add7 += b"\x48\x83\xec\x28"                      # sub rsp, 0x28
+    wrap_add7 += b"\xe8" + rel32(wrap_add7_rva + len(wrap_add7) + 5, add7_rva)
+    wrap_add7 += b"\x48\x83\xc4\x28"                      # add rsp, 0x28
+    wrap_add7 += b"\xc3"
+    patch(wrap_add7_rva - rva_text, wrap_add7)
+
+    switch_fn = bytearray()
+    switch_fn += b"\x83\xf9\x02"                          # cmp ecx, 2
+    switch_fn += b"\x77\x00"                              # ja default (patched below)
+    lea_off = len(switch_fn)
+    switch_fn += b"\x48\x8d\x15\x00\x00\x00\x00"      # lea rdx, [rip + table]
+    switch_fn += b"\x48\x63\x04\x8a"                    # movsxd rax, dword [rdx + rcx*4]
+    switch_fn += b"\x48\x01\xd0"                        # add rax, rdx
+    switch_fn += b"\xff\xe0"                            # jmp rax
+    case0_off = len(switch_fn)
+    switch_fn += b"\xb8\x0a\x00\x00\x00\xc3"          # mov eax, 10; ret
+    case1_off = len(switch_fn)
+    switch_fn += b"\xb8\x14\x00\x00\x00\xc3"          # mov eax, 20; ret
+    case2_off = len(switch_fn)
+    switch_fn += b"\xb8\x1e\x00\x00\x00\xc3"          # mov eax, 30; ret
+    default_off = len(switch_fn)
+    switch_fn += b"\xb8\xff\xff\xff\xff\xc3"          # mov eax, -1; ret
+
+    switch_fn[4] = default_off - 5
+    lea_disp = layout["switch_table"] - (switch_rva + lea_off + 7)
+    switch_fn[lea_off + 3:lea_off + 7] = struct.pack("<i", lea_disp)
+    patch(switch_rva - rva_text, switch_fn)
+
+    def switch_entry(case_off: int) -> int:
+        return (switch_rva + case_off) - layout["switch_table"]
+
+    struct.pack_into("<iii", rdata, layout["switch_table"] - rva_rdata,
+                     switch_entry(case0_off),
+                     switch_entry(case1_off),
+                     switch_entry(case2_off))
+
+    debug_wrap = bytearray()
+    debug_wrap += b"\x48\x83\xec\x28"                      # sub rsp, 0x28
+    debug_wrap += b"\xff\x15" + rel32(debug_wrap_rva + len(debug_wrap) + 6,
+                                      layout["iat_outputdebug"])
+    debug_wrap += b"\x48\x83\xc4\x28"                      # add rsp, 0x28
+    debug_wrap += b"\xc3"
+    patch(debug_wrap_rva - rva_text, debug_wrap)
+
     # ---- pdata ----------------------------------------------------------
     pdata = bytearray()
     unwind_rva = rva_pdata + 0x40
@@ -238,6 +290,9 @@ def main() -> int:
     pdata += struct.pack("<III", tls_callback_rva, tls_callback_rva + len(tls), unwind_rva)
     pdata += struct.pack("<III", add7_rva, add7_rva + len(add7), unwind_rva)
     pdata += struct.pack("<III", open_file_rva, open_file_rva + len(open_file), unwind_rva)
+    pdata += struct.pack("<III", wrap_add7_rva, wrap_add7_rva + len(wrap_add7), unwind_rva)
+    pdata += struct.pack("<III", switch_rva, switch_rva + len(switch_fn), unwind_rva)
+    pdata += struct.pack("<III", debug_wrap_rva, debug_wrap_rva + len(debug_wrap), unwind_rva)
     while len(pdata) < 0x40:
         pdata.append(0)
     pdata += b"\x01\x00\x00\x00"  # tiny non-zero unwind blob

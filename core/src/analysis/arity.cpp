@@ -13,6 +13,74 @@ namespace ember {
 
 namespace {
 
+[[nodiscard]] bool is_rsp_adjust(const Instruction& insn, Mnemonic mn) noexcept {
+    if (insn.mnemonic != mn || insn.num_operands != 2) return false;
+    if (insn.operands[0].kind != Operand::Kind::Register ||
+        canonical_reg(insn.operands[0].reg) != Reg::Rsp) {
+        return false;
+    }
+    return insn.operands[1].kind == Operand::Kind::Immediate;
+}
+
+[[nodiscard]] std::optional<addr_t>
+follow_trivial_wrapper(const Binary& b, addr_t target) noexcept {
+    X64Decoder dec;
+
+    auto decode_at = [&](addr_t ip) -> std::optional<Instruction> {
+        auto span = b.bytes_at(ip);
+        if (span.empty()) return std::nullopt;
+        auto decoded = dec.decode(span, ip);
+        if (!decoded) return std::nullopt;
+        return *decoded;
+    };
+
+    auto first = decode_at(target);
+    if (!first) return std::nullopt;
+
+    addr_t ip = target;
+    if (first->mnemonic == Mnemonic::Endbr64) {
+        ip += first->length;
+        first = decode_at(ip);
+        if (!first) return std::nullopt;
+    }
+
+    bool saw_shadow = false;
+    if (is_rsp_adjust(*first, Mnemonic::Sub)) {
+        saw_shadow = true;
+        ip += first->length;
+        first = decode_at(ip);
+        if (!first) return std::nullopt;
+    }
+
+    if (first->mnemonic == Mnemonic::Jmp &&
+        first->num_operands == 1 &&
+        first->operands[0].kind == Operand::Kind::Relative) {
+        return first->operands[0].rel.target;
+    }
+
+    if (first->mnemonic != Mnemonic::Call ||
+        first->num_operands != 1 ||
+        first->operands[0].kind != Operand::Kind::Relative) {
+        return std::nullopt;
+    }
+
+    addr_t callee = first->operands[0].rel.target;
+    ip += first->length;
+
+    auto second = decode_at(ip);
+    if (!second) return std::nullopt;
+    if (saw_shadow) {
+        if (!is_rsp_adjust(*second, Mnemonic::Add)) return std::nullopt;
+        ip += second->length;
+        second = decode_at(ip);
+        if (!second) return std::nullopt;
+    }
+
+    if (second->mnemonic != Mnemonic::Ret) return std::nullopt;
+    if (callee == target) return std::nullopt;
+    return callee;
+}
+
 [[nodiscard]] int arg_reg_index(std::span<const Reg> args, Reg r) noexcept {
     const Reg c = canonical_reg(r);
     for (std::size_t i = 0; i < args.size(); ++i) {
@@ -51,22 +119,13 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     const auto args = int_arg_regs(abi);
     const u8 max_arity = static_cast<u8>(args.size());
 
-    // Transparently follow a single leading unconditional `jmp <rel>` so
-    // wrappers report the underlying callee's arity. Depth-limited to avoid
-    // pathological chains.
-    for (int hops = 0; hops < 4; ++hops) {
-        auto span = b.bytes_at(target);
-        if (span.empty()) break;
-        X64Decoder dec0;
-        auto decoded = dec0.decode(span, target);
-        if (!decoded) break;
-        const Instruction& insn = *decoded;
-        if (insn.mnemonic != Mnemonic::Jmp) break;
-        if (insn.num_operands != 1) break;
-        if (insn.operands[0].kind != Operand::Kind::Relative) break;
-        const addr_t hop_target = insn.operands[0].rel.target;
-        if (hop_target == target) break;  // self-loop
-        target = hop_target;
+    // Transparently follow trivial wrappers (`jmp target`, `call target; ret`,
+    // and the Win64 shadow-space variant) so forwarding stubs inherit the
+    // underlying callee's arity instead of appearing variadic or arg-less.
+    for (int hops = 0; hops < 6; ++hops) {
+        auto hop_target = follow_trivial_wrapper(b, target);
+        if (!hop_target) break;
+        target = *hop_target;
     }
 
     auto entry_bytes = b.bytes_at(target);

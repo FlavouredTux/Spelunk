@@ -3,9 +3,9 @@ u64 main(u64 a1, u64 a2) {
   u32 t2 = (u32)a1;
   one_arg();
   if ((i64)t2 > 1) {
-    __fprintf_chk(stderr, 2, "a=%s b=%s\n", a2[0], a2[1]);
+    fprintf(stderr, "a=%s b=%s\n", a2[0], a2[1]);
   }
   no_args();
-  __printf_chk(2, "%*d\n", (u32)a1, (u64)g_count);
+  printf("%*d\n", (u32)a1, (u64)g_count);
   return g_count;
 }

@@ -1,4 +1,4 @@
 // double_wrap
-u64 double_wrap(void) {
-  return inner(rdi, rsi);
+u64 double_wrap(u64 a1, u64 a2) {
+  return inner(a1, a2);
 }

@@ -1,5 +1,5 @@
 // uses_buffer
-u64 uses_buffer(u64 a1) {
-  u64 r___stpcpy_chk = __stpcpy_chk(&local_58, 0x40);
-  return (u32)r___stpcpy_chk - (u32)&local_58;
+u64 uses_buffer(char* a1) {
+  u64 r_stpcpy = stpcpy(&local_58, a1);
+  return (u32)r_stpcpy - (u32)&local_58;
 }

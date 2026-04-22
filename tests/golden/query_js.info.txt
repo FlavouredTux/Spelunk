@@ -1,5 +1,6 @@
 format   mach-o
 arch     x86_64
+endian   little
 entry    0x100001000
 sections 1
 defined  2

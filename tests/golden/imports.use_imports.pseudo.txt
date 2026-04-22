@@ -1,12 +1,14 @@
 // use_imports
-u64 use_imports(char* a1, char* a2) {
+u64 use_imports(char* a1, u64 a2) {
   if (a1) {
+    local_10 = a2;
+    local_18 = a1;
     u64 r_strlen = strlen(a1);
     g_count += r_strlen;
-    puts(a1);
+    puts(local_18);
   }
-  if (a2) {
-    fputs(a2, stdout);
+  if (rdx_5) {
+    fputs(rdx_5, stdout);
   }
   u64 r_getenv = getenv("HOME");
   if (r_getenv) {

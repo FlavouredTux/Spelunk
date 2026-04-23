@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <format>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <optional>
@@ -192,6 +193,14 @@ void apply_stage_implications(Args& a) {
             break;
         }
 
+        // `--functions=PATTERN` — unambiguous way to specify the filter
+        // without positional-order gotchas (main vs binary path).
+        if (s.starts_with("--functions=")) {
+            a.functions = true;
+            a.functions_pattern = std::string(s.substr(12));
+            continue;
+        }
+
         bool hit = false;
         for (const auto& f : kBoolFlags) {
             if (matches(s, f)) { a.*f.field = true; hit = true; break; }
@@ -223,6 +232,21 @@ void apply_stage_implications(Args& a) {
                 std::format("unexpected positional argument: {}", s)));
         }
     }
+    // Rescue the common `ember --functions PATTERN BINARY` mis-order:
+    // positionals are taken left-to-right, so a user who types the
+    // filter first has PATTERN interpreted as the binary path. If the
+    // binary slot names a non-existent path but the pattern slot names
+    // an existing file, swap them.
+    if (a.functions && !a.binary.empty() && !a.functions_pattern.empty()) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const bool bin_is_file = fs::is_regular_file(a.binary, ec);
+        const bool pat_is_file = fs::is_regular_file(a.functions_pattern, ec);
+        if (!bin_is_file && pat_is_file) {
+            std::swap(a.binary, a.functions_pattern);
+        }
+    }
+
     // A positional binary is not required when the user is diffing two
     // already-computed fingerprint TSVs — no bytes to parse.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
@@ -1154,7 +1178,9 @@ void print_help() {
     std::println("      --strings        dump printable strings (addr|text|xrefs)");
     std::println("      --arities        dump inferred arity per function (addr N)");
     std::println("      --functions [P]  list every discovered function (symbols ∪ sub_*) as TSV;");
-    std::println("                       optional substring P filters by name (case-insensitive)");
+    std::println("                       optional substring P filters by name (case-insensitive).");
+    std::println("                       Prefer --functions=P to avoid positional-order ambiguity");
+    std::println("                       with the binary path.");
     std::println("      --fingerprints   dump address-independent content hash per function");
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
     std::println("      --diff-format    'tsv' (default) or 'json' for --diff output");

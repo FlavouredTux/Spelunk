@@ -5,14 +5,15 @@ is not "users can run scripts", but "Ember can host reusable domain packs,
 analysis modules, UI extensions, and workflows for real reverse-engineering
 targets such as game engines and live-service clients."
 
-## What's actually live (as of Phase 1)
+## What's actually live
 
 The full spec below is aspirational. Everything in that spec is optional
 until a plugin asks for it. Shipped today:
 
 - **Manifest**: `id`, `name`, `version`, `description`, `entry`,
-  `apiVersion`, `permissions[]`, `matchers[]`. Other fields (categories,
-  targets, publisher, license, contributes) are not read yet.
+  `apiVersion`, `permissions[]`, `matchers[]`, `contributes.panels[]`.
+  Other fields (categories, targets, publisher, license, and other
+  `contributes.*` entries) are not read yet.
 - **Matchers** (`kind`): `format`, `arch`, `symbol-present`,
   `string-present`, `section-present`. Literal-value only — no regex,
   no fingerprint matcher yet. Aggregation is strict AND (all must hit
@@ -28,15 +29,23 @@ until a plugin asks for it. Shipped today:
   `currentBinaryPath`, `proposalBuilders.{rename, note}`.
 - **Proposal kinds**: `rename`, `note`. Staged into the project
   annotations file via the same flow as manual edits.
-- **UI**: plugin cards in Settings show a match badge + tooltip; a
+- **UI contributions — panels**: a plugin's command can return
+  `panel: { kind: "list", rows: [{ addr?, label, detail?, tags? }] }`
+  alongside its proposals. Host sanitizes the payload and the renderer
+  shows it in the dedicated Plugins modal (Ctrl+U or title-bar
+  "plugins" button); rows with `addr` are clickable and jump to that
+  function's pseudo-C. Plugins provide structured data only — no
+  React / HTML.
+- **Settings UI**: plugin cards show a match badge + tooltip; a
   plugin's commands run normally when matched, and require a
   run-anyway confirm when the current binary mismatched.
 - **Discovery roots**: `<repo>/plugins/` in dev, `<resources>/plugins/`
   when packaged, plus `<userData>/plugins/` for user-installed.
 
 Not yet implemented (see the full spec below for aspirational shapes):
-workflows, UI contributions (plugin-supplied panels/views), findings
-store, events, plugin-local storage, task system, capability tiers,
+workflows, other UI contribution points (context menus, inspectors,
+graph overlays, status widgets, review views), findings store, events,
+plugin-local storage, task system, capability tiers,
 signing/marketplace, fingerprint/RTTI matchers.
 
 

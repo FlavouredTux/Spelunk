@@ -3,7 +3,11 @@
 #include <cstdio>
 #include <cstdlib>
 
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 namespace ember {
 
@@ -14,7 +18,11 @@ namespace ember {
     if (const char* q = std::getenv("EMBER_QUIET"); q && q[0] == '1') {
         return false;
     }
+#ifdef _WIN32
+    return ::_isatty(::_fileno(stderr)) != 0;
+#else
     return ::isatty(fileno(stderr)) != 0;
+#endif
 }
 
 }  // namespace ember

@@ -12,6 +12,7 @@ add_library(ember_core STATIC
     src/analysis/cfg_util.cpp
     src/analysis/arity.cpp
     src/analysis/strings.cpp
+    src/analysis/data_xrefs.cpp
     src/analysis/pipeline.cpp
     src/analysis/fingerprint.cpp
     src/analysis/demangle.cpp

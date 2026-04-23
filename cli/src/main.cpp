@@ -17,6 +17,7 @@
 
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/function.hpp>
@@ -108,6 +109,7 @@ struct Args {
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
     std::string functions_pattern;  // optional substring filter for --functions (second positional)
     bool quiet  = false;            // suppress progress output regardless of TTY
+    bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
     bool help   = false;
 };
 
@@ -133,6 +135,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--struct",    &Args::strct},
     {"-p", "--pseudo",    &Args::pseudo},
     {"-X", "--xrefs",     &Args::xrefs},
+    {"",   "--data-xrefs", &Args::data_xrefs},
     {"",   "--strings",   &Args::strings},
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
@@ -553,6 +556,42 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         emit(p, p.optional_instance, '-', '?');
         emit(p, p.optional_class,    '+', '?');
     }
+    return out;
+}
+
+// Rip-relative + absolute memory-operand references to data sections.
+// One TSV row per (target, site, kind) tuple, grouped by target:
+//   <target-hex>\t<site-hex>\t<kind>
+// kind ∈ {read, write, lea}. --json emits [{target, refs: [{site, kind}]}].
+[[nodiscard]] std::string build_data_xrefs_output(const ember::Binary& b, bool json) {
+    const auto xrefs = ember::compute_data_xrefs(b);
+    std::string out;
+    if (!json) {
+        for (const auto& [target, refs] : xrefs) {
+            for (const auto& r : refs) {
+                out += std::format("{:x}\t{:x}\t{}\n",
+                                   target, r.from_pc,
+                                   ember::data_xref_kind_name(r.kind));
+            }
+        }
+        return out;
+    }
+    out = "[";
+    bool first_t = true;
+    for (const auto& [target, refs] : xrefs) {
+        if (!first_t) out += ',';
+        first_t = false;
+        out += std::format("{{\"target\":\"{:#x}\",\"refs\":[", target);
+        bool first_r = true;
+        for (const auto& r : refs) {
+            if (!first_r) out += ',';
+            first_r = false;
+            out += std::format("{{\"site\":\"{:#x}\",\"kind\":\"{}\"}}",
+                               r.from_pc, ember::data_xref_kind_name(r.kind));
+        }
+        out += "]}";
+    }
+    out += "]\n";
     return out;
 }
 
@@ -1188,6 +1227,8 @@ void print_help() {
     std::println("      --fingerprint-old P  skip OLD-side fingerprint compute in --diff; read TSV from P");
     std::println("      --fingerprint-new P  skip NEW-side fingerprint compute in --diff; read TSV from P");
     std::println("      --refs-to VA     list callers of VA (one-shot reverse xref)");
+    std::println("      --data-xrefs     TSV: <target>\\t<site>\\t<kind> for every rip-rel/abs");
+    std::println("                       data-section reference (kind=read/write/lea)");
     std::println("      --callees VA     list direct/tail/indirect_const callees of the function at VA");
     std::println("      --callees-class NAME  JSON: {{slot_N: [callees]}} for every vfn of an RTTI class");
     std::println("      --json           machine-readable output for --callees / --callees-class");
@@ -1463,6 +1504,15 @@ int main(int argc, char** argv) {
     }
     if (args.xrefs) {
         return run_cached(args, "xrefs",   [&] { return build_xrefs_output(b);   });
+    }
+    if (args.data_xrefs) {
+        // TSV and JSON share the compute step but differ in output format,
+        // so they cache under distinct tags — otherwise the first form
+        // served would silently satisfy the second.
+        const char* tag = args.json ? "data-xrefs-json-v1" : "data-xrefs-v1";
+        return run_cached(args, tag, [&] {
+            return build_data_xrefs_output(b, args.json);
+        });
     }
     // --refs-to VA: callers of a specific address. Reuses the xrefs cache
     // to avoid recomputing the full call graph on every invocation; if no

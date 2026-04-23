@@ -232,6 +232,16 @@ ember_golden_test(
     GOLDEN  imports.functions.txt
 )
 
+# --data-xrefs: rip-relative / absolute memory references that resolve to a
+# loaded non-executable section. Catches breakage in the operand-shape walk
+# and the read/write/lea classification.
+ember_golden_test(
+    NAME    imports_data_xrefs
+    FIXTURE imports
+    ARGS    "--no-cache|--data-xrefs"
+    GOLDEN  imports.data_xrefs.txt
+)
+
 # Same flag with a substring filter. Locks case-insensitive name-column
 # matching. `__BINARY__` is needed so the pattern lands *after* the binary
 # positional — parse_args only treats the second positional as the

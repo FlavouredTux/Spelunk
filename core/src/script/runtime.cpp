@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <map>
 #include <unordered_map>
 #include <utility>
 
@@ -18,6 +19,7 @@
 #include <ember/analysis/libcxx_string.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/vm_detect.hpp>
+#include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/strings.hpp>
@@ -63,6 +65,10 @@ struct ScriptCtx {
     std::vector<std::string>        argv{};
     std::unique_ptr<CallGraphCache> call_graph{};        // lazy
     std::vector<addr_t>             function_starts{};   // lazy, sorted
+    // Cached rip-rel/abs data-xref map keyed by target VA. Built once
+    // on first xrefs.data / xrefs.to call and reused for the rest of
+    // the script run.
+    std::unique_ptr<std::map<addr_t, std::vector<DataXref>>> data_xrefs{};
 };
 
 const CallGraphCache& ensure_call_graph(ScriptCtx& hc) {
@@ -79,6 +85,13 @@ const CallGraphCache& ensure_call_graph(ScriptCtx& hc) {
     for (auto& [_, v] : hc.call_graph->callers_by_callee) dedup(v);
     for (auto& [_, v] : hc.call_graph->callees_by_caller) dedup(v);
     return *hc.call_graph;
+}
+
+const std::map<addr_t, std::vector<DataXref>>& ensure_data_xrefs(ScriptCtx& hc) {
+    if (hc.data_xrefs) return *hc.data_xrefs;
+    hc.data_xrefs = std::make_unique<std::map<addr_t, std::vector<DataXref>>>(
+        compute_data_xrefs(*hc.binary));
+    return *hc.data_xrefs;
 }
 
 ScriptCtx* ctx_of(JSContext* ctx) noexcept {
@@ -699,9 +712,62 @@ JSValue js_xrefs_callers(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     return arr;
 }
 
-// Aliased to callers for now; data xrefs live on strings.*.
-JSValue js_xrefs_to(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return js_xrefs_callers(ctx, this_val, argc, argv);
+// Data references to `addr`: every rip-rel/abs memory operand in any
+// defined function that resolves to `addr`. Each entry is
+// {site: bigint, kind: "read"|"write"|"lea"}.
+JSValue js_xrefs_data(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewArray(ctx);
+    u64 addr = 0;
+    if (!to_u64(ctx, argv[0], &addr)) return JS_NewArray(ctx);
+    auto& hc = *ctx_of(ctx);
+    const auto& m = ensure_data_xrefs(hc);
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+    if (auto it = m.find(static_cast<addr_t>(addr)); it != m.end()) {
+        for (const auto& r : it->second) {
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "site", JS_NewBigUint64(ctx, r.from_pc));
+            JS_SetPropertyStr(ctx, o, "kind",
+                make_str(ctx, std::string(data_xref_kind_name(r.kind))));
+            JS_SetPropertyUint32(ctx, arr, i++, o);
+        }
+    }
+    return arr;
+}
+
+// Union of code callers and data references to `addr`. Each entry has
+// a `kind` discriminator: "caller" for code edges (with addr+name of
+// the calling function), or "read"/"write"/"lea" for data edges (with
+// the operand's site VA).
+JSValue js_xrefs_to(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewArray(ctx);
+    u64 addr = 0;
+    if (!to_u64(ctx, argv[0], &addr)) return JS_NewArray(ctx);
+    auto& hc = *ctx_of(ctx);
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+
+    const auto& g = ensure_call_graph(hc);
+    if (auto it = g.callers_by_callee.find(static_cast<addr_t>(addr));
+        it != g.callers_by_callee.end()) {
+        for (addr_t c : it->second) {
+            JSValue o = addr_name_obj(ctx, *hc.binary, c);
+            JS_SetPropertyStr(ctx, o, "kind", make_str(ctx, "caller"));
+            JS_SetPropertyUint32(ctx, arr, i++, o);
+        }
+    }
+
+    const auto& m = ensure_data_xrefs(hc);
+    if (auto it = m.find(static_cast<addr_t>(addr)); it != m.end()) {
+        for (const auto& r : it->second) {
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "site", JS_NewBigUint64(ctx, r.from_pc));
+            JS_SetPropertyStr(ctx, o, "kind",
+                make_str(ctx, std::string(data_xref_kind_name(r.kind))));
+            JS_SetPropertyUint32(ctx, arr, i++, o);
+        }
+    }
+    return arr;
 }
 
 void install_xrefs_global(JSContext* ctx) {
@@ -710,6 +776,7 @@ void install_xrefs_global(JSContext* ctx) {
     JS_SetPropertyStr(ctx, obj, "to",      JS_NewCFunction(ctx, js_xrefs_to,      "to",      1));
     JS_SetPropertyStr(ctx, obj, "callers", JS_NewCFunction(ctx, js_xrefs_callers, "callers", 1));
     JS_SetPropertyStr(ctx, obj, "callees", JS_NewCFunction(ctx, js_xrefs_callees, "callees", 1));
+    JS_SetPropertyStr(ctx, obj, "data",    JS_NewCFunction(ctx, js_xrefs_data,    "data",    1));
     JS_SetPropertyStr(ctx, global, "xrefs", obj);
     JS_FreeValue(ctx, global);
 }

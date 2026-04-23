@@ -76,11 +76,14 @@ struct Args {
     std::string fp_old_in;          // --fingerprint-old PATH: read OLD side fingerprints from PATH
     std::string fp_new_in;          // --fingerprint-new PATH: read NEW side fingerprints from PATH
     std::string refs_to;            // --refs-to VA: print callers of VA
+    std::string callees;            // --callees VA: print direct call targets of the function at VA
+    std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     bool no_cache = false;          // disable the disk cache entirely
+    bool json = false;              // --json: machine-readable output where supported
     bool disasm = false;
     bool cfg    = false;
     bool ir     = false;
@@ -137,6 +140,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--cfg-pseudo", &Args::cfg_pseudo},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
+    {"",   "--json",      &Args::json},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
@@ -152,6 +156,8 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--fingerprint-old", &Args::fp_old_in},
     {"",   "--fingerprint-new", &Args::fp_new_in},
     {"",   "--refs-to",     &Args::refs_to},
+    {"",   "--callees",      &Args::callees},
+    {"",   "--callees-class", &Args::callees_class},
     {"",   "--disasm-at",   &Args::disasm_at},
     {"",   "--count",       &Args::disasm_count},
     {"",   "--apply-patches", &Args::apply_patches},
@@ -1094,6 +1100,9 @@ void print_help() {
     std::println("      --fingerprint-old P  skip OLD-side fingerprint compute in --diff; read TSV from P");
     std::println("      --fingerprint-new P  skip NEW-side fingerprint compute in --diff; read TSV from P");
     std::println("      --refs-to VA     list callers of VA (one-shot reverse xref)");
+    std::println("      --callees VA     list direct/tail/indirect_const callees of the function at VA");
+    std::println("      --callees-class NAME  JSON: {{slot_N: [callees]}} for every vfn of an RTTI class");
+    std::println("      --json           machine-readable output for --callees / --callees-class");
     std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns; --count N to override)");
     std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
@@ -1409,6 +1418,84 @@ int main(int argc, char** argv) {
             out.append(xrefs_tsv, ls, (pos + needle.size()) - ls);
             pos += needle.size();
         }
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+    // --callees VA|NAME: direct (call <imm>), tail (jmp to known entry),
+    // and indirect_const (call [rip+X] resolving to code) outgoing edges
+    // of the function at VA. Accepts either a hex VA or a symbol name —
+    // `resolve_function` handles both so batch scripts can pass either
+    // form without reflowing. Unlike --refs-to this does not need the
+    // full call-graph cache; one function gets built and walked.
+    if (!args.callees.empty()) {
+        auto win = ember::resolve_function(b, args.callees);
+        if (!win) {
+            std::println(stderr, "ember: --callees: could not resolve '{}'",
+                         args.callees);
+            return EXIT_FAILURE;
+        }
+        const auto va = win->start;
+        const auto cs = ember::compute_classified_callees(b, va);
+        if (args.json) {
+            std::string out = std::format("{{\"va\":\"{:#x}\",\"callees\":[", va);
+            for (std::size_t i = 0; i < cs.size(); ++i) {
+                if (i) out += ',';
+                out += std::format("{{\"va\":\"{:#x}\",\"kind\":\"{}\"}}",
+                                   cs[i].target, ember::callee_kind_name(cs[i].kind));
+            }
+            out += "]}\n";
+            std::fwrite(out.data(), 1, out.size(), stdout);
+        } else {
+            std::string out;
+            for (const auto& c : cs) {
+                out += std::format("{:#x}\n", c.target);
+            }
+            std::fwrite(out.data(), 1, out.size(), stdout);
+        }
+        return EXIT_SUCCESS;
+    }
+    // --callees-class NAME: batch mode for C++ class atlases. Looks up
+    // the Itanium RTTI entry by mangled or demangled name, then calls
+    // compute_classified_callees for each vfn slot. Always emits JSON
+    // since the per-slot layout is structured.
+    if (!args.callees_class.empty()) {
+        const auto classes = ember::parse_itanium_rtti(b);
+        const ember::RttiClass* match = nullptr;
+        for (const auto& c : classes) {
+            if (c.mangled_name == args.callees_class ||
+                c.demangled_name == args.callees_class) {
+                match = &c;
+                break;
+            }
+        }
+        if (!match) {
+            std::println(stderr, "ember: --callees-class: no RTTI class matching '{}'",
+                         args.callees_class);
+            return EXIT_FAILURE;
+        }
+        std::string out = std::format(
+            "{{\"class\":\"{}\",\"mangled\":\"{}\",\"vtable\":\"{:#x}\",\"slots\":{{",
+            json_escape(match->demangled_name),
+            json_escape(match->mangled_name),
+            match->vtable);
+        for (std::size_t i = 0; i < match->methods.size(); ++i) {
+            if (i) out += ',';
+            out += std::format("\"{}\":{{\"va\":", i);
+            const auto imp = match->methods[i];
+            if (imp == 0) {
+                out += "null,\"callees\":[]}";
+                continue;
+            }
+            out += std::format("\"{:#x}\",\"callees\":[", imp);
+            const auto cs = ember::compute_classified_callees(b, imp);
+            for (std::size_t j = 0; j < cs.size(); ++j) {
+                if (j) out += ',';
+                out += std::format("{{\"va\":\"{:#x}\",\"kind\":\"{}\"}}",
+                                   cs[j].target, ember::callee_kind_name(cs[j].kind));
+            }
+            out += "]}";
+        }
+        out += "}}\n";
         std::fwrite(out.data(), 1, out.size(), stdout);
         return EXIT_SUCCESS;
     }

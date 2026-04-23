@@ -325,6 +325,30 @@ ember_golden_test(
     GOLDEN  tail_call.double_wrap.pseudo.txt
 )
 
+# --callees: direct (call inner, call strlen@PLT) and tail (jmp strlen@PLT)
+# edges of the tail_call fixture. Addresses here share the same -no-pie
+# baseline (0x401000) that other tail_call goldens bake in, so these are as
+# stable as the existing golden set.
+ember_golden_test(
+    NAME    tail_call_main_callees
+    FIXTURE tail_call
+    ARGS    "--callees|main"
+    GOLDEN  tail_call.main.callees.txt
+)
+ember_golden_test(
+    NAME    tail_call_wrap_strlen_callees_json
+    FIXTURE tail_call
+    ARGS    "--callees|wrap_strlen|--json"
+    GOLDEN  tail_call.wrap_strlen.callees.json.txt
+)
+# Leaf function with no calls — acceptance criterion: empty list, exit 0.
+ember_golden_test(
+    NAME    tail_call_inner_callees_empty
+    FIXTURE tail_call
+    ARGS    "--callees|inner"
+    GOLDEN  tail_call.inner.callees.txt
+)
+
 # ---- dead_store (DSE on global-address stores) ----------------------------
 
 ember_golden_test(

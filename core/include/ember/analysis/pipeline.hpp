@@ -56,4 +56,36 @@ std::vector<CallEdge> compute_call_graph(const Binary& b);
 std::vector<addr_t>   compute_callees(const Binary& b, addr_t fn);
 std::vector<addr_t>   compute_callers(const Binary& b, addr_t fn);
 
+// Per-call edge classification used by `ember --callees`. `Direct` covers
+// `call <imm>`; `Tail` covers an unconditional `jmp` whose target is a
+// known function entry (defined symbol or PLT stub); `IndirectConst`
+// covers `call qword ptr [rip + disp]` where the dereferenced 8 bytes
+// resolve to an executable address (vtable/IAT/RTTI thunk patterns).
+// Genuinely opaque indirect calls are dropped — by design the primitive
+// only emits edges with a concrete callee VA.
+enum class CalleeKind : u8 { Direct, Tail, IndirectConst };
+
+[[nodiscard]] constexpr std::string_view callee_kind_name(CalleeKind k) noexcept {
+    switch (k) {
+        case CalleeKind::Direct:        return "direct";
+        case CalleeKind::Tail:          return "tail";
+        case CalleeKind::IndirectConst: return "indirect_const";
+    }
+    return "?";
+}
+
+struct ClassifiedCallee {
+    addr_t     target = 0;
+    CalleeKind kind   = CalleeKind::Direct;
+    // Source instruction VA (the call/jmp site). Useful when downstream
+    // tooling wants to back-reference the edge to a specific opcode.
+    addr_t     site   = 0;
+};
+
+// Walk the CFG of the function at `fn` and return its outgoing direct
+// call/tail/indirect-const edges. Sorted by target VA, deduped on
+// (target, kind) pairs. Empty when `fn` is not a decodable function.
+[[nodiscard]] std::vector<ClassifiedCallee>
+compute_classified_callees(const Binary& b, addr_t fn);
+
 }  // namespace ember

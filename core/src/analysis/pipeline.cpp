@@ -4,7 +4,9 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <format>
+#include <optional>
 #include <memory>
 #include <span>
 #include <string>
@@ -470,6 +472,108 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+namespace {
+
+// True when `target` is the entry of a defined function or a PLT stub —
+// the same predicate the CFG builder uses to convert a `jmp` into a
+// TailCall block. Duplicated here so the pipeline doesn't need to expose
+// CFG-builder internals.
+[[nodiscard]] bool callee_is_function_entry(const Binary& b, addr_t target) noexcept {
+    if (const Symbol* s = b.defined_object_at(target);
+        s && s->kind == SymbolKind::Function && s->addr == target) {
+        return true;
+    }
+    if (b.import_at_plt(target) != nullptr) return true;
+    return false;
+}
+
+[[nodiscard]] bool addr_in_executable_section(const Binary& b, addr_t a) noexcept {
+    for (const auto& s : b.sections()) {
+        if (!s.flags.executable) continue;
+        if (a >= s.vaddr && a < s.vaddr + s.size) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<u64> read_u64_le(const Binary& b, addr_t a) noexcept {
+    auto span = b.bytes_at(a);
+    if (span.size() < 8) return std::nullopt;
+    u64 v = 0;
+    std::memcpy(&v, span.data(), 8);
+    return v;
+}
+
+}  // namespace
+
+std::vector<ClassifiedCallee>
+compute_classified_callees(const Binary& b, addr_t fn) {
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return {};
+    const Decoder& dec = **dec_r;
+    const CfgBuilder builder(b, dec);
+
+    std::string name;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.addr == fn && !s.name.empty()) { name = s.name; break; }
+    }
+    auto fn_r = builder.build(fn, name);
+    if (!fn_r) return {};
+
+    std::vector<ClassifiedCallee> out;
+    out.reserve(fn_r->call_targets.size());
+
+    for (const auto& bb : fn_r->blocks) {
+        for (const auto& insn : bb.instructions) {
+            const Mnemonic mn = insn.mnemonic;
+
+            if (is_call(mn)) {
+                if (insn.num_operands == 0) continue;
+                const auto& op = insn.operands[0];
+                if (op.kind == Operand::Kind::Relative) {
+                    out.push_back({op.rel.target, CalleeKind::Direct, insn.address});
+                } else if (op.kind == Operand::Kind::Memory &&
+                           op.mem.base == Reg::Rip &&
+                           op.mem.has_disp &&
+                           op.mem.index == Reg::None) {
+                    // call qword ptr [rip + disp]: dereference the slot
+                    // and emit indirect_const if it points into code.
+                    const addr_t slot = insn.address + insn.length +
+                                        static_cast<addr_t>(op.mem.disp);
+                    if (auto v = read_u64_le(b, slot); v) {
+                        const auto target = static_cast<addr_t>(*v);
+                        if (target != 0 && addr_in_executable_section(b, target)) {
+                            out.push_back({target, CalleeKind::IndirectConst,
+                                           insn.address});
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (is_unconditional_jmp(mn)) {
+                if (auto t = branch_target(insn); t && callee_is_function_entry(b, *t)) {
+                    out.push_back({*t, CalleeKind::Tail, insn.address});
+                }
+            }
+        }
+    }
+
+    std::sort(out.begin(), out.end(),
+              [](const ClassifiedCallee& a, const ClassifiedCallee& bb) {
+                  if (a.target != bb.target) return a.target < bb.target;
+                  if (a.kind != bb.kind)
+                      return static_cast<u8>(a.kind) < static_cast<u8>(bb.kind);
+                  return a.site < bb.site;
+              });
+    out.erase(std::unique(out.begin(), out.end(),
+                          [](const ClassifiedCallee& a, const ClassifiedCallee& bb) {
+                              return a.target == bb.target && a.kind == bb.kind;
+                          }),
+              out.end());
     return out;
 }
 

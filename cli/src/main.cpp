@@ -1403,7 +1403,13 @@ int main(int argc, char** argv) {
     }
     const auto& args = *args_r;
 
-    if (args.quiet) ::setenv("EMBER_QUIET", "1", 1);
+    if (args.quiet) {
+#ifdef _WIN32
+        ::_putenv_s("EMBER_QUIET", "1");
+#else
+        ::setenv("EMBER_QUIET", "1", 1);
+#endif
+    }
 
     if (args.help) {
         print_help();

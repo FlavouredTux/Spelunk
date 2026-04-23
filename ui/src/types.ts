@@ -117,12 +117,20 @@ export type PluginRenameProposal = {
   reason: string;
 };
 
+export type PluginNoteProposal = {
+  kind: "note";
+  addr: string;
+  text: string;
+  confidence: number;
+  reason: string;
+};
+
 export type PluginRunResult = {
   pluginId: string;
   commandId: string;
   summary: string;
   notes: string;
-  proposals: PluginRenameProposal[];
+  proposals: Array<PluginRenameProposal | PluginNoteProposal>;
   applied: boolean;
   appliedCount: number;
   annotations?: Annotations;

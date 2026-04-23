@@ -6,6 +6,7 @@ const KNOWN_PERMISSIONS = new Set([
   "read.strings",
   "read.annotations",
   "project.rename",
+  "project.note",
 ]);
 
 function parseSummary(raw, binaryPath) {
@@ -329,6 +330,15 @@ function makePluginHost(opts) {
             reason: typeof extra.reason === "string" ? extra.reason : "",
           };
         },
+        note(addr, text, extra = {}) {
+          return {
+            kind: "note",
+            addr: typeof addr === "number" ? `0x${addr.toString(16)}` : String(addr),
+            text,
+            confidence: typeof extra.confidence === "number" ? extra.confidence : 0.5,
+            reason: typeof extra.reason === "string" ? extra.reason : "",
+          };
+        },
       },
     };
   }
@@ -390,7 +400,9 @@ function makePluginHost(opts) {
 
     const result = await command.run(hostContextFor(plugin), opts.args || {});
     const proposals = Array.isArray(result?.proposals)
-      ? result.proposals.filter((p) => p && p.kind === "rename" && p.addr && p.name)
+      ? result.proposals.filter((p) =>
+        p && p.addr &&
+        ((p.kind === "rename" && p.name) || (p.kind === "note" && p.text)))
       : [];
     const summary = typeof result?.summary === "string" ? result.summary : "";
     const notes = typeof result?.notes === "string" ? result.notes : "";
@@ -412,9 +424,17 @@ function makePluginHost(opts) {
     const ann = cloneAnnotations(await readAnnotations(bp));
     let appliedCount = 0;
     for (const proposal of proposals) {
-      if (ann.renames[proposal.addr] === proposal.name) continue;
-      ann.renames[proposal.addr] = proposal.name;
-      ++appliedCount;
+      if (proposal.kind === "rename") {
+        assertPermissions(plugin, ["project.rename"]);
+        if (ann.renames[proposal.addr] === proposal.name) continue;
+        ann.renames[proposal.addr] = proposal.name;
+        ++appliedCount;
+      } else if (proposal.kind === "note") {
+        assertPermissions(plugin, ["project.note"]);
+        if (ann.notes[proposal.addr] === proposal.text) continue;
+        ann.notes[proposal.addr] = proposal.text;
+        ++appliedCount;
+      }
     }
     await saveAnnotations(bp, ann);
     return {

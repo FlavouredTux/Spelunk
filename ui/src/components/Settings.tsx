@@ -407,24 +407,41 @@ function PluginSection(props: {
               </div>
             )}
             {preview.proposals.map((p) => (
-              <div key={`${p.addr}:${p.name}`} style={{
+              <div key={`${p.kind}:${p.addr}:${p.kind === "rename" ? p.name : p.text}`} style={{
                 padding: "7px 8px",
                 borderRadius: 4,
                 border: `1px solid ${C.border}`,
                 background: C.bgAlt,
               }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>{p.addr}</span>
-                  <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>{p.name}</span>
-                  <span style={{ fontFamily: mono, fontSize: 9, color: C.accent }}>
-                    {Math.round(p.confidence * 100)}%
-                  </span>
-                </div>
+                {p.kind === "rename" ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>{p.addr}</span>
+                    <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>{p.name}</span>
+                    <span style={{ fontFamily: mono, fontSize: 9, color: C.accent }}>
+                      {Math.round(p.confidence * 100)}%
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>{p.addr}</span>
+                    <span style={{ fontFamily: mono, fontSize: 10, color: C.accent }}>note</span>
+                    <span style={{ fontFamily: mono, fontSize: 9, color: C.accent }}>
+                      {Math.round(p.confidence * 100)}%
+                    </span>
+                  </div>
+                )}
                 <div style={{
                   marginTop: 3, fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint,
                 }}>
-                  {p.reason}
+                  {p.kind === "rename" ? p.reason : p.text}
                 </div>
+                {p.kind === "note" && (
+                  <div style={{
+                    marginTop: 4, fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textMuted,
+                  }}>
+                    {p.reason}
+                  </div>
+                )}
               </div>
             ))}
           </div>

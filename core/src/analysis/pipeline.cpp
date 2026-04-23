@@ -15,6 +15,7 @@
 #include <ember/analysis/objc.hpp>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/common/progress.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/instruction.hpp>
@@ -429,7 +430,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
     }
     const auto tick = std::max<std::size_t>(1, candidates / 20);
     std::size_t done = 0;
-    const bool show = candidates >= 500;  // skip chatter on tiny fixtures
+    const bool show = candidates >= 500 && progress_enabled();
 
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;

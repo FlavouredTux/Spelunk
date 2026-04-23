@@ -28,6 +28,7 @@
 #include <ember/binary/binary.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
+#include <ember/common/progress.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/ir/ir.hpp>
@@ -105,6 +106,7 @@ struct Args {
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
     std::string functions_pattern;  // optional substring filter for --functions (second positional)
+    bool quiet  = false;            // suppress progress output regardless of TTY
     bool help   = false;
 };
 
@@ -144,6 +146,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
     {"",   "--json",      &Args::json},
+    {"-q", "--quiet",     &Args::quiet},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
@@ -591,10 +594,13 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 // Sorted by address. Address-independent — same algorithm across two PIE
 // builds of the same code produces the same fingerprint column.
 [[nodiscard]] std::string build_fingerprints_output(const ember::Binary& b) {
+    const bool show = ember::progress_enabled();
     // Build a one-shot addr -> name map; previously this was an O(n²) linear
     // rescan per function which took minutes on large stripped binaries.
-    std::println(stderr, "ember: collecting named functions...");
-    std::fflush(stderr);
+    if (show) {
+        std::println(stderr, "ember: collecting named functions...");
+        std::fflush(stderr);
+    }
     std::unordered_map<ember::addr_t, std::string> name_by_addr;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
@@ -603,13 +609,17 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         name_by_addr.try_emplace(s.addr, s.name);
     }
 
-    std::println(stderr, "ember: {} named functions; walking call graph "
-                         "(this is the slow first step on big binaries)...",
-                         name_by_addr.size());
-    std::fflush(stderr);
+    if (show) {
+        std::println(stderr, "ember: {} named functions; walking call graph "
+                             "(this is the slow first step on big binaries)...",
+                             name_by_addr.size());
+        std::fflush(stderr);
+    }
     const auto edges = ember::compute_call_graph(b);
-    std::println(stderr, "ember: {} call edges discovered", edges.size());
-    std::fflush(stderr);
+    if (show) {
+        std::println(stderr, "ember: {} call edges discovered", edges.size());
+        std::fflush(stderr);
+    }
 
     std::set<ember::addr_t> fns;
     for (const auto& [a, _] : name_by_addr) fns.insert(a);
@@ -631,13 +641,15 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
     const auto total = fns.size();
     std::size_t done = 0;
     const auto tick = std::max<std::size_t>(1, total / 40);
-    std::println(stderr, "ember: fingerprinting {} functions...", total);
-    std::fflush(stderr);
+    if (show) {
+        std::println(stderr, "ember: fingerprinting {} functions...", total);
+        std::fflush(stderr);
+    }
 
     for (ember::addr_t a : fns) {
         const auto fp = ember::compute_fingerprint(b, a);
         ++done;
-        if (done % tick == 0 || done == total) {
+        if (show && (done % tick == 0 || done == total)) {
             std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
             std::fflush(stderr);
         }
@@ -651,7 +663,7 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         rows.push_back(Row{a, fp.hash, fp.blocks, fp.insts, fp.calls,
                            std::move(name)});
     }
-    std::fputc('\n', stderr);
+    if (show) std::fputc('\n', stderr);
 
     std::unordered_map<ember::u64, ember::u32> hash_count;
     hash_count.reserve(rows.size());
@@ -1171,6 +1183,7 @@ void print_help() {
     std::println("      --no-cache       bypass the disk cache (--xrefs/strings/arities)");
     std::println("      --apply-patches FILE  apply byte patches (vaddr_hex bytes_hex per line)");
     std::println("  -o, --output PATH    output path (required with --apply-patches)");
+    std::println("  -q, --quiet          suppress stderr progress output");
     std::println("  -h, --help           show this help");
 }
 
@@ -1322,6 +1335,8 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     const auto& args = *args_r;
+
+    if (args.quiet) ::setenv("EMBER_QUIET", "1", 1);
 
     if (args.help) {
         print_help();

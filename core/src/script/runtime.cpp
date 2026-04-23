@@ -19,6 +19,7 @@
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/vm_detect.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/rtti.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
@@ -584,6 +585,31 @@ JSValue js_bin_fingerprint(JSContext* ctx, JSValueConst, int argc, JSValueConst*
 
 JSValue js_bin_functions(JSContext* ctx, JSValueConst, int, JSValueConst*);
 
+// Itanium C++ RTTI: recovered classes, vtables, and virtual-method IMPs.
+// Matches `ember --rtti`. Each entry is
+// {mangled, demangled, typeinfo, vtable, methods: [u64,...]}.
+JSValue js_bin_rtti(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const Binary* b = ctx_of(ctx)->binary;
+    const auto classes = parse_itanium_rtti(*b);
+    JSValue arr = JS_NewArray(ctx);
+    u32 i = 0;
+    for (const auto& c : classes) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "mangled",   make_str(ctx, c.mangled_name));
+        JS_SetPropertyStr(ctx, o, "demangled", make_str(ctx, c.demangled_name));
+        JS_SetPropertyStr(ctx, o, "typeinfo",  JS_NewBigUint64(ctx, c.typeinfo));
+        JS_SetPropertyStr(ctx, o, "vtable",    JS_NewBigUint64(ctx, c.vtable));
+        JSValue methods = JS_NewArray(ctx);
+        u32 mi = 0;
+        for (addr_t m : c.methods) {
+            JS_SetPropertyUint32(ctx, methods, mi++, JS_NewBigUint64(ctx, m));
+        }
+        JS_SetPropertyStr(ctx, o, "methods", methods);
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
 JSValue addr_name_obj(JSContext* ctx, const Binary& b, addr_t a) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "addr", JS_NewBigUint64(ctx, a));
@@ -640,14 +666,18 @@ JSValue js_xrefs_callees(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     u64 addr = 0;
     if (!to_u64(ctx, argv[0], &addr)) return JS_NewArray(ctx);
     auto& hc = *ctx_of(ctx);
-    const auto& g = ensure_call_graph(hc);
+    // Matches `ember --callees --json`: each edge carries direct/tail/
+    // indirect_const classification plus the call/jmp site VA.
+    const auto edges = compute_classified_callees(*hc.binary,
+                                                  static_cast<addr_t>(addr));
     JSValue arr = JS_NewArray(ctx);
     u32 i = 0;
-    auto it = g.callees_by_caller.find(static_cast<addr_t>(addr));
-    if (it != g.callees_by_caller.end()) {
-        for (addr_t t : it->second) {
-            JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *hc.binary, t));
-        }
+    for (const auto& e : edges) {
+        JSValue o = addr_name_obj(ctx, *hc.binary, e.target);
+        JS_SetPropertyStr(ctx, o, "kind",
+            make_str(ctx, std::string(callee_kind_name(e.kind))));
+        JS_SetPropertyStr(ctx, o, "site", JS_NewBigUint64(ctx, e.site));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
     }
     return arr;
 }
@@ -1067,6 +1097,8 @@ void install_binary_global(JSContext* ctx) {
         JS_NewCFunction(ctx, js_bin_objc_protocols, "objcProtocols", 0));
     JS_SetPropertyStr(ctx, bin, "vmDispatchers",
         JS_NewCFunction(ctx, js_bin_vm_dispatchers, "vmDispatchers", 0));
+    JS_SetPropertyStr(ctx, bin, "rtti",
+        JS_NewCFunction(ctx, js_bin_rtti, "rtti", 0));
     JS_SetPropertyStr(ctx, bin, "recordIndirectEdge",
         JS_NewCFunction(ctx, js_bin_record_indirect_edge,
                         "recordIndirectEdge", 2));

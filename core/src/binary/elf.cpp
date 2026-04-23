@@ -298,6 +298,8 @@ Result<void> ElfBinary::parse_sections(const ParsedEhdr& h) {
         if (sh.type != sht::NOBITS && sh.size > 0) {
             if (auto data = r.slice(sh.offset, sh.size); data) {
                 s.data = *data;
+            } else {
+                continue;
             }
         }
         sections_.push_back(std::move(s));
@@ -582,7 +584,7 @@ vaddr_slice(std::span<const LoadSegment> segs, addr_t vaddr, u64 want) {
         if (off >= seg.filesz) continue;
         const u64 avail = seg.filesz - off;
         const u64 n = want == 0 ? avail : std::min(want, avail);
-        if (seg.data.size() < static_cast<std::size_t>(off + n)) continue;
+        if (off + n < off || seg.data.size() < static_cast<std::size_t>(off + n)) continue;
         return seg.data.subspan(static_cast<std::size_t>(off),
                                 static_cast<std::size_t>(n));
     }
@@ -628,7 +630,12 @@ count_dynsym_gnu(std::span<const std::byte> gh, Endian endian) {
 [[nodiscard]] static std::size_t
 count_dynsym_sysv(std::span<const std::byte> h, Endian endian) {
     if (h.size() < 8) return 0;
-    return read_at<u32>(endian, h.data() + 4);
+    const u32 nbucket = read_at<u32>(endian, h.data() + 0);
+    const u32 nchain  = read_at<u32>(endian, h.data() + 4);
+    const std::size_t need = 8ULL + static_cast<std::size_t>(nbucket) * 4
+                               + static_cast<std::size_t>(nchain)  * 4;
+    if (need > h.size()) return 0;
+    return nchain;
 }
 
 // Build a synthetic Section record from a file-backed region, tagged
@@ -805,7 +812,11 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     if (dynsym_count > 0 && dynsym_vaddr != 0 && !dynstr_bytes.empty()
         && syment == kSym64Size) {
         const u64 dynsym_bytes_sz = dynsym_count * syment;
-        dynsym_bytes = vaddr_slice(segments_, dynsym_vaddr, dynsym_bytes_sz);
+        if (dynsym_bytes_sz / syment != dynsym_count) {
+            dynsym_count = 0; // overflow — abandon dynsym parsing
+        } else {
+            dynsym_bytes = vaddr_slice(segments_, dynsym_vaddr, dynsym_bytes_sz);
+        }
         const ByteReader str_r(dynstr_bytes);
         dynsym_names.resize(dynsym_count);
         for (std::size_t k = 0; k < dynsym_count; ++k) {
@@ -989,7 +1000,10 @@ Result<void> ElfBinary::parse() {
 
     if (auto rv = parse_segments(*hdr);  !rv) return std::unexpected(rv.error());
     if (hdr->e_shnum == 0) return parse_from_phdr(*hdr);
-    if (auto rv = parse_sections(*hdr);  !rv) return std::unexpected(rv.error());
+    if (auto rv = parse_sections(*hdr);  !rv) {
+        sections_.clear();
+        return parse_from_phdr(*hdr);
+    }
 
     std::vector<std::string> dynsym_names;
     u16 dynsym_section = 0;

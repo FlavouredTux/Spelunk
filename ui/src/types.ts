@@ -113,6 +113,27 @@ export type PluginMatchResult = {
   failed:   Array<PluginMatcher & { detail: string }>;
 };
 
+export type PluginPanelContribution = {
+  id: string;
+  title: string;
+  description: string;
+  command: string;     // id of the command that produces this panel's data
+};
+
+export type PluginContributes = {
+  panels: PluginPanelContribution[];
+};
+
+export type PluginPanelRow = {
+  label: string;
+  addr?: string;       // hex-formatted; when present the row is jump-navigable
+  detail?: string;
+  tags?: string[];
+};
+
+export type PluginPanelData =
+  | { kind: "list"; rows: PluginPanelRow[] };
+
 export type PluginInfo = {
   id: string;
   name: string;
@@ -120,6 +141,7 @@ export type PluginInfo = {
   description: string;
   permissions: string[];
   matchers: PluginMatcher[];
+  contributes: PluginContributes;
   commands: PluginCommand[];
   invalid?: boolean;
 };
@@ -146,6 +168,7 @@ export type PluginRunResult = {
   summary: string;
   notes: string;
   proposals: Array<PluginRenameProposal | PluginNoteProposal>;
+  panel: PluginPanelData | null;
   applied: boolean;
   appliedCount: number;
   annotations?: Annotations;

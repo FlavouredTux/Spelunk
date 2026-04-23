@@ -191,11 +191,41 @@ function cloneAnnotations(raw) {
   };
 }
 
+function normalizePanelContribution(raw, idx) {
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`contributes.panels[${idx}] must be an object`);
+  }
+  if (typeof raw.id !== "string" || !raw.id) {
+    throw new Error(`contributes.panels[${idx}].id must be a non-empty string`);
+  }
+  if (typeof raw.title !== "string" || !raw.title) {
+    throw new Error(`contributes.panels[${idx}].title must be a non-empty string`);
+  }
+  if (typeof raw.command !== "string" || !raw.command) {
+    throw new Error(`contributes.panels[${idx}].command must reference a command id`);
+  }
+  return {
+    id:          raw.id,
+    title:       raw.title,
+    command:     raw.command,
+    description: typeof raw.description === "string" ? raw.description : "",
+  };
+}
+
+function normalizeContributes(raw) {
+  if (raw === undefined || raw === null) return { panels: [] };
+  if (typeof raw !== "object") throw new Error("manifest.contributes must be an object");
+  const panels = Array.isArray(raw.panels) ? raw.panels : [];
+  return {
+    panels: panels.map((p, i) => normalizePanelContribution(p, i)),
+  };
+}
+
 function normalizeManifest(raw, dir) {
   if (!raw || typeof raw !== "object") throw new Error("manifest must be an object");
   const {
     id, name, version, entry, description = "", permissions = [], apiVersion = 1,
-    matchers = [],
+    matchers = [], contributes = {},
   } = raw;
   if (!id || typeof id !== "string") throw new Error("manifest.id must be a string");
   if (!name || typeof name !== "string") throw new Error("manifest.name must be a string");
@@ -209,6 +239,7 @@ function normalizeManifest(raw, dir) {
   }
   if (!Array.isArray(matchers)) throw new Error("manifest.matchers must be an array");
   const normalizedMatchers = matchers.map((m, i) => normalizeMatcher(m, i));
+  const normalizedContributes = normalizeContributes(contributes);
   return {
     id,
     name,
@@ -218,6 +249,7 @@ function normalizeManifest(raw, dir) {
     apiVersion,
     permissions,
     matchers: normalizedMatchers,
+    contributes: normalizedContributes,
     dir,
   };
 }
@@ -246,6 +278,32 @@ function assertPermissions(plugin, requested) {
 
 function commandRef(pluginId, commandId) {
   return `${pluginId}:${commandId}`;
+}
+
+// Validate and strip a panel payload returned from a plugin command.
+// Phase 2 supports one kind: "list" with rows of { addr?, label, detail?, tags[]? }.
+// Invalid shapes are dropped (null) rather than rejected so a misbehaving
+// plugin doesn't take down the whole run — the rename/note path still works.
+function sanitizePanelData(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.kind !== "list") return null;
+  if (!Array.isArray(raw.rows)) return null;
+  const rows = [];
+  for (const r of raw.rows) {
+    if (!r || typeof r !== "object") continue;
+    if (typeof r.label !== "string" || !r.label) continue;
+    const row = { label: r.label };
+    if (typeof r.addr === "string" && r.addr) row.addr = r.addr;
+    else if (typeof r.addr === "number" && Number.isFinite(r.addr)) {
+      row.addr = `0x${r.addr.toString(16)}`;
+    }
+    if (typeof r.detail === "string") row.detail = r.detail;
+    if (Array.isArray(r.tags)) {
+      row.tags = r.tags.filter((t) => typeof t === "string" && t.length > 0);
+    }
+    rows.push(row);
+  }
+  return { kind: "list", rows };
 }
 
 function makePluginHost(opts) {
@@ -544,6 +602,7 @@ function makePluginHost(opts) {
           description: manifest.description,
           permissions: [],
           matchers: [],
+          contributes: { panels: [] },
           commands: [],
           invalid: true,
         });
@@ -558,6 +617,7 @@ function makePluginHost(opts) {
           description: manifest.description,
           permissions: manifest.permissions,
           matchers: manifest.matchers,
+          contributes: manifest.contributes,
           commands: plugin.commands.map((cmd) => ({
             id: cmd.id,
             ref: commandRef(manifest.id, cmd.id),
@@ -574,6 +634,7 @@ function makePluginHost(opts) {
           description: `Failed to load: ${e.message}`,
           permissions: manifest.permissions,
           matchers: manifest.matchers || [],
+          contributes: manifest.contributes || { panels: [] },
           commands: [],
           invalid: true,
         });
@@ -598,6 +659,7 @@ function makePluginHost(opts) {
       : [];
     const summary = typeof result?.summary === "string" ? result.summary : "";
     const notes = typeof result?.notes === "string" ? result.notes : "";
+    const panel = sanitizePanelData(result?.panel);
 
     if (!opts.apply) {
       return {
@@ -606,6 +668,7 @@ function makePluginHost(opts) {
         summary,
         notes,
         proposals,
+        panel,
         applied: false,
         appliedCount: 0,
       };
@@ -634,6 +697,7 @@ function makePluginHost(opts) {
       summary,
       notes,
       proposals,
+      panel,
       applied: true,
       appliedCount,
       annotations: ann,

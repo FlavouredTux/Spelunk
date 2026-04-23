@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import type { AppSettings } from "../settings";
 import { DEFAULT_SETTINGS } from "../settings";
-import { clearRendererCaches, listPlugins, runPluginCommand } from "../api";
+import { clearRendererCaches, listPlugins, matchPlugin, runPluginCommand } from "../api";
 import type {
-  AiConfig, AiCliStatus, AiProvider, Annotations, PluginInfo, PluginRunResult,
+  AiConfig, AiCliStatus, AiProvider, Annotations, PluginInfo,
+  PluginMatchResult, PluginRunResult,
 } from "../types";
 
 // Settings gear. Stroked-outline style (matches the rest of the
@@ -223,6 +224,21 @@ export function SettingsPanel(props: {
   );
 }
 
+// Human-readable summary of a match result, used in the badge tooltip
+// and the run-anyway confirm. Lists evidence for hits and the failure
+// reason for misses so the user can see *why* a plugin did or didn't
+// match without opening the manifest.
+function describeMatch(m: PluginMatchResult): string {
+  const parts: string[] = [`score ${m.score}/100`];
+  if (m.evidence.length) {
+    parts.push(`hit: ${m.evidence.map((e) => e.detail).join("; ")}`);
+  }
+  if (m.failed.length) {
+    parts.push(`miss: ${m.failed.map((f) => f.detail).join("; ")}`);
+  }
+  return parts.join(" · ");
+}
+
 function PluginSection(props: {
   binaryPath: string | null;
   onAnnotationsApplied?: (a: Annotations) => void;
@@ -231,6 +247,7 @@ function PluginSection(props: {
   const [busyRef, setBusyRef] = useState<string | null>(null);
   const [preview, setPreview] = useState<PluginRunResult | null>(null);
   const [status, setStatus] = useState<string>("");
+  const [matches, setMatches] = useState<Record<string, PluginMatchResult>>({});
 
   useEffect(() => {
     let cancel = false;
@@ -239,6 +256,25 @@ function PluginSection(props: {
     });
     return () => { cancel = true; };
   }, []);
+
+  // Evaluate matchers once per (binary × plugin-set). Plugins without
+  // matchers short-circuit to matched=true in the host, so this is
+  // still cheap for game-strings-shape plugins; the CLI work only kicks
+  // in when a plugin actually declares matchers.
+  useEffect(() => {
+    if (!plugins || !props.binaryPath) { setMatches({}); return; }
+    let cancel = false;
+    (async () => {
+      const results: Record<string, PluginMatchResult> = {};
+      await Promise.all(plugins.map(async (p) => {
+        if (p.invalid) return;
+        try { results[p.id] = await matchPlugin(p.id); }
+        catch { /* leave unset; UI treats as unknown */ }
+      }));
+      if (!cancel) setMatches(results);
+    })();
+    return () => { cancel = true; };
+  }, [plugins, props.binaryPath]);
 
   if (!props.binaryPath) {
     return <div style={{ color: C.textFaint, fontFamily: serif, fontStyle: "italic" }}>
@@ -287,7 +323,22 @@ function PluginSection(props: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {plugins.map((plugin) => (
+      {plugins.map((plugin) => {
+        const match = matches[plugin.id];
+        const hasMatchers = plugin.matchers && plugin.matchers.length > 0;
+        // No matchers = plugin opts into every binary (game-strings shape).
+        // With matchers = show a badge reflecting the score.
+        const badge = !hasMatchers
+          ? null
+          : match
+            ? match.matched
+              ? { color: C.accent, label: "matches", tooltip: describeMatch(match) }
+              : match.score > 0
+                ? { color: "#d4a017", label: `partial ${match.score}%`, tooltip: describeMatch(match) }
+                : { color: C.textFaint, label: "no match", tooltip: describeMatch(match) }
+            : { color: C.textFaint, label: "…", tooltip: "evaluating" };
+        const mismatched = hasMatchers && !!match && !match.matched;
+        return (
         <div
           key={plugin.id}
           style={{
@@ -295,6 +346,7 @@ function PluginSection(props: {
             borderRadius: 6,
             padding: "10px 12px",
             background: C.bg,
+            opacity: mismatched ? 0.75 : 1,
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -304,6 +356,17 @@ function PluginSection(props: {
             <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
               {plugin.version}
             </span>
+            {badge && (
+              <span
+                title={badge.tooltip}
+                style={{
+                  fontFamily: mono, fontSize: 9, color: badge.color,
+                  padding: "2px 6px", borderRadius: 999,
+                  border: `1px solid ${badge.color}`,
+                  letterSpacing: 0.2,
+                }}
+              >{badge.label}</span>
+            )}
           </div>
           <div style={{
             marginTop: 3,
@@ -332,20 +395,33 @@ function PluginSection(props: {
               {plugin.commands.map((cmd) => {
                 const ref = `${plugin.id}:${cmd.id}`;
                 const active = busyRef === ref;
+                const onClick = () => {
+                  if (mismatched) {
+                    const proceed = window.confirm(
+                      `${plugin.name} did not match this binary (${describeMatch(match!)}). ` +
+                      `Run "${cmd.title}" anyway?`,
+                    );
+                    if (!proceed) return;
+                  }
+                  previewCommand(plugin.id, cmd.id);
+                };
                 return (
                   <button
                     key={cmd.ref}
-                    title={cmd.description}
+                    title={mismatched
+                      ? `${cmd.description}\n\nthis plugin did not match this binary; click to run anyway`
+                      : cmd.description}
                     disabled={!!busyRef}
-                    onClick={() => previewCommand(plugin.id, cmd.id)}
+                    onClick={onClick}
                     style={{
                       padding: "5px 10px",
-                      background: C.bgMuted,
-                      color: C.text,
-                      border: `1px solid ${C.border}`,
+                      background: mismatched ? "transparent" : C.bgMuted,
+                      color: mismatched ? C.textMuted : C.text,
+                      border: `1px solid ${mismatched ? C.border : C.border}`,
                       borderRadius: 4,
                       fontFamily: mono,
                       fontSize: 10,
+                      fontStyle: mismatched ? "italic" : "normal",
                       cursor: busyRef ? "not-allowed" : "pointer",
                     }}
                   >{active ? "previewing…" : cmd.title}</button>
@@ -354,7 +430,8 @@ function PluginSection(props: {
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
 
       {status && (
         <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textFaint }}>

@@ -5,6 +5,41 @@ is not "users can run scripts", but "Ember can host reusable domain packs,
 analysis modules, UI extensions, and workflows for real reverse-engineering
 targets such as game engines and live-service clients."
 
+## What's actually live (as of Phase 1)
+
+The full spec below is aspirational. Everything in that spec is optional
+until a plugin asks for it. Shipped today:
+
+- **Manifest**: `id`, `name`, `version`, `description`, `entry`,
+  `apiVersion`, `permissions[]`, `matchers[]`. Other fields (categories,
+  targets, publisher, license, contributes) are not read yet.
+- **Matchers** (`kind`): `format`, `arch`, `symbol-present`,
+  `string-present`, `section-present`. Literal-value only — no regex,
+  no fingerprint matcher yet. Aggregation is strict AND (all must hit
+  for score 100 / `matched: true`). Plugins without matchers implicitly
+  match every binary.
+- **Permissions** (strict enum, unknown names reject the manifest):
+  `read.binary-summary`, `read.strings`, `read.annotations`,
+  `read.functions`, `read.xrefs`, `read.arities`, `read.decompile`,
+  `project.rename`, `project.note`.
+- **Host context** (everything permission-gated):
+  `loadSummary`, `loadStrings`, `loadFunctions`, `loadXrefs`,
+  `loadArities`, `decompile(sym, { view })`, `loadAnnotations`,
+  `currentBinaryPath`, `proposalBuilders.{rename, note}`.
+- **Proposal kinds**: `rename`, `note`. Staged into the project
+  annotations file via the same flow as manual edits.
+- **UI**: plugin cards in Settings show a match badge + tooltip; a
+  plugin's commands run normally when matched, and require a
+  run-anyway confirm when the current binary mismatched.
+- **Discovery roots**: `<repo>/plugins/` in dev, `<resources>/plugins/`
+  when packaged, plus `<userData>/plugins/` for user-installed.
+
+Not yet implemented (see the full spec below for aspirational shapes):
+workflows, UI contributions (plugin-supplied panels/views), findings
+store, events, plugin-local storage, task system, capability tiers,
+signing/marketplace, fingerprint/RTTI matchers.
+
+
 The design keeps Ember core generic:
 
 - binary loading, decoding, CFG, IR, SSA, structuring, pseudo-C

@@ -99,12 +99,27 @@ export type PluginCommand = {
   description: string;
 };
 
+export type PluginMatcher =
+  | { kind: "format";          value: string }
+  | { kind: "arch";            value: string }
+  | { kind: "symbol-present";  name:  string }
+  | { kind: "string-present";  text:  string }
+  | { kind: "section-present"; name:  string };
+
+export type PluginMatchResult = {
+  score: number;                                 // 0..100
+  matched: boolean;                              // score === 100
+  evidence: Array<{ kind: string; detail: string }>;
+  failed:   Array<PluginMatcher & { detail: string }>;
+};
+
 export type PluginInfo = {
   id: string;
   name: string;
   version: string;
   description: string;
   permissions: string[];
+  matchers: PluginMatcher[];
   commands: PluginCommand[];
   invalid?: boolean;
 };
@@ -176,11 +191,12 @@ declare global {
         }>;
       };
       plugins: {
-        list: () => Promise<PluginInfo[]>;
-        run: (pluginId: string, commandId: string, opts?: {
+        list:  () => Promise<PluginInfo[]>;
+        run:   (pluginId: string, commandId: string, opts?: {
           apply?: boolean;
           args?: Record<string, unknown>;
         }) => Promise<PluginRunResult>;
+        match: (pluginId: string) => Promise<PluginMatchResult>;
       };
 
       ai: {

@@ -487,6 +487,10 @@ ipcMain.handle("ember:plugins:run", async (_e, pluginId, commandId, opts) => {
   return await pluginHost.runCommand(pluginId, commandId, opts || {});
 });
 
+ipcMain.handle("ember:plugins:match", async (_e, pluginId) => {
+  return await pluginHost.matchPlugin(pluginId);
+});
+
 // ----- Annotations sidecar -----
 
 // Save patches applied to a user-chosen output path. Prompts a save

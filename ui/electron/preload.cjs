@@ -22,9 +22,10 @@ contextBridge.exposeInMainWorld("ember", {
     downloadAndInstall: () => ipcRenderer.invoke("ember:update:downloadAndInstall"),
   },
   plugins: {
-    list: () => ipcRenderer.invoke("ember:plugins:list"),
-    run:  (pluginId, commandId, opts) =>
+    list:  () => ipcRenderer.invoke("ember:plugins:list"),
+    run:   (pluginId, commandId, opts) =>
       ipcRenderer.invoke("ember:plugins:run", pluginId, commandId, opts),
+    match: (pluginId) => ipcRenderer.invoke("ember:plugins:match", pluginId),
   },
 
   // AI / OpenRouter proxy. The API key is held in the main process and

@@ -1,6 +1,6 @@
 import type {
   BinaryInfo, FunctionInfo, ViewKind, Xrefs, Annotations, StringEntry, Arities,
-  PluginInfo, PluginRunResult, ReleaseUpdateStatus,
+  PluginInfo, PluginMatchResult, PluginRunResult, ReleaseUpdateStatus,
 } from "./types";
 
 // ---------- Renderer-side result cache ------------------------------------
@@ -111,6 +111,10 @@ export async function runPluginCommand(
   opts?: { apply?: boolean; args?: Record<string, unknown> },
 ): Promise<PluginRunResult> {
   return await window.ember.plugins.run(pluginId, commandId, opts);
+}
+
+export async function matchPlugin(pluginId: string): Promise<PluginMatchResult> {
+  return await window.ember.plugins.match(pluginId);
 }
 
 export async function loadSummary(): Promise<BinaryInfo> {

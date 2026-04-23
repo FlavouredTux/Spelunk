@@ -5,9 +5,50 @@ const KNOWN_PERMISSIONS = new Set([
   "read.binary-summary",
   "read.strings",
   "read.annotations",
+  "read.functions",
+  "read.xrefs",
+  "read.arities",
+  "read.decompile",
   "project.rename",
   "project.note",
 ]);
+
+// Manifest matcher kinds supported in Phase 1. Adding a new kind means
+// extending `normalizeMatcher` AND `evaluateMatchers` below.
+const MATCHER_KINDS = new Set([
+  "format",           // value:  "elf" | "mach-o" | "pe" (matches summary.format)
+  "arch",             // value:  e.g. "x86_64", "aarch64" (matches summary.arch)
+  "symbol-present",   // name:   literal defined-symbol name
+  "string-present",   // text:   literal substring of any printable string
+  "section-present",  // name:   literal section name
+]);
+
+function normalizeMatcher(raw, idx) {
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`matcher[${idx}] must be an object`);
+  }
+  if (typeof raw.kind !== "string" || !MATCHER_KINDS.has(raw.kind)) {
+    throw new Error(`matcher[${idx}] has unknown kind: ${raw.kind}`);
+  }
+  const out = { kind: raw.kind };
+  if (raw.kind === "format" || raw.kind === "arch") {
+    if (typeof raw.value !== "string" || !raw.value) {
+      throw new Error(`matcher[${idx}] (${raw.kind}) requires a non-empty 'value'`);
+    }
+    out.value = raw.value;
+  } else if (raw.kind === "symbol-present" || raw.kind === "section-present") {
+    if (typeof raw.name !== "string" || !raw.name) {
+      throw new Error(`matcher[${idx}] (${raw.kind}) requires a non-empty 'name'`);
+    }
+    out.name = raw.name;
+  } else if (raw.kind === "string-present") {
+    if (typeof raw.text !== "string" || !raw.text) {
+      throw new Error(`matcher[${idx}] (string-present) requires a non-empty 'text'`);
+    }
+    out.text = raw.text;
+  }
+  return out;
+}
 
 function parseSummary(raw, binaryPath) {
   const lines = raw.split("\n");
@@ -154,6 +195,7 @@ function normalizeManifest(raw, dir) {
   if (!raw || typeof raw !== "object") throw new Error("manifest must be an object");
   const {
     id, name, version, entry, description = "", permissions = [], apiVersion = 1,
+    matchers = [],
   } = raw;
   if (!id || typeof id !== "string") throw new Error("manifest.id must be a string");
   if (!name || typeof name !== "string") throw new Error("manifest.name must be a string");
@@ -165,6 +207,8 @@ function normalizeManifest(raw, dir) {
       throw new Error(`unknown permission: ${perm}`);
     }
   }
+  if (!Array.isArray(matchers)) throw new Error("manifest.matchers must be an array");
+  const normalizedMatchers = matchers.map((m, i) => normalizeMatcher(m, i));
   return {
     id,
     name,
@@ -173,6 +217,7 @@ function normalizeManifest(raw, dir) {
     entry,
     apiVersion,
     permissions,
+    matchers: normalizedMatchers,
     dir,
   };
 }
@@ -303,6 +348,133 @@ function makePluginHost(opts) {
     return parseStrings(raw);
   }
 
+  async function loadFunctions(binaryPath) {
+    // Uses the --functions TSV (addr\tsize\tkind\tname). Mirrors the
+    // renderer-side parser in ui/src/api.ts so plugin and Sidebar see
+    // the same discovered-function set.
+    const raw = await runEmber(["--functions", binaryPath]);
+    const out = [];
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      const parts = line.split("\t");
+      if (parts.length < 4) continue;
+      const addr = parts[0];
+      const addrNum = parseInt(addr, 16);
+      if (!Number.isFinite(addrNum)) continue;
+      out.push({
+        addr,
+        addrNum,
+        size: parseInt(parts[1], 16) || 0,
+        kind: "function",
+        name: parts.slice(3).join("\t").trim(),
+      });
+    }
+    return out;
+  }
+
+  async function loadXrefs(binaryPath) {
+    const raw = await runEmber(["--xrefs", binaryPath]);
+    const callers = {};
+    const callees = {};
+    for (const line of raw.split("\n")) {
+      const m = /^(0x[0-9a-f]+)\s*->\s*(0x[0-9a-f]+)/.exec(line);
+      if (!m) continue;
+      const a = parseInt(m[1], 16);
+      const b = parseInt(m[2], 16);
+      (callees[a] ??= []).push(b);
+      (callers[b] ??= []).push(a);
+    }
+    for (const k in callers) callers[k] = Array.from(new Set(callers[k]));
+    for (const k in callees) callees[k] = Array.from(new Set(callees[k]));
+    return { callers, callees };
+  }
+
+  async function loadArities(binaryPath) {
+    const raw = await runEmber(["--arities", binaryPath]);
+    const out = {};
+    for (const line of raw.split("\n")) {
+      const m = /^(0x[0-9a-f]+)\s+(\d+)$/.exec(line.trim());
+      if (!m) continue;
+      out[parseInt(m[1], 16)] = parseInt(m[2], 10);
+    }
+    return out;
+  }
+
+  const VIEW_ARGS = {
+    pseudo:    ["-p", "-s"],
+    asm:       ["-d", "-s"],
+    cfg:       ["-c", "-s"],
+    cfgPseudo: ["--cfg-pseudo", "-s"],
+    ir:        ["-i", "-s"],
+    ssa:       ["-i", "--ssa", "-s"],
+  };
+
+  async function decompileAt(binaryPath, sym, view) {
+    const pre = VIEW_ARGS[view] || VIEW_ARGS.pseudo;
+    return await runEmber([...pre, String(sym), binaryPath]);
+  }
+
+  // Evaluate every matcher in the manifest against the current binary.
+  // All matchers must hit for a plugin to be considered "matched"; partial
+  // hits are still reported so the UI can show why a plugin didn't match.
+  async function evaluateMatchers(manifest, binaryPath) {
+    if (!manifest.matchers || manifest.matchers.length === 0) {
+      return { score: 100, matched: true, evidence: [], failed: [] };
+    }
+
+    // Each source is fetched at most once per evaluation — matchers of the
+    // same kind share the same underlying CLI call.
+    let summary = null;
+    let strings = null;
+    const getSummary = async () => summary ??= await loadSummary(binaryPath);
+    const getStrings = async () => strings ??= await loadStrings(binaryPath);
+
+    const evidence = [];
+    const failed = [];
+    let matched = 0;
+
+    for (const m of manifest.matchers) {
+      let hit = false;
+      let detail = "";
+
+      if (m.kind === "format") {
+        const s = await getSummary();
+        if (s.format === m.value) { hit = true; detail = `format=${s.format}`; }
+        else detail = `format=${s.format || "?"} (expected ${m.value})`;
+      } else if (m.kind === "arch") {
+        const s = await getSummary();
+        if (s.arch === m.value) { hit = true; detail = `arch=${s.arch}`; }
+        else detail = `arch=${s.arch || "?"} (expected ${m.value})`;
+      } else if (m.kind === "symbol-present") {
+        const s = await getSummary();
+        const found = s.functions.find((f) => f.name === m.name);
+        if (found) { hit = true; detail = `symbol ${m.name} @ ${found.addr}`; }
+        else detail = `symbol ${m.name} not found`;
+      } else if (m.kind === "section-present") {
+        const s = await getSummary();
+        const found = s.sections.find((sec) => sec.name === m.name);
+        if (found) { hit = true; detail = `section ${m.name} @ ${found.vaddr}`; }
+        else detail = `section ${m.name} not found`;
+      } else if (m.kind === "string-present") {
+        const all = await getStrings();
+        const found = all.find((s) => s.text.includes(m.text));
+        if (found) { hit = true; detail = `"${m.text}" @ ${found.addr}`; }
+        else detail = `"${m.text}" not found in any string`;
+      }
+
+      if (hit) {
+        ++matched;
+        evidence.push({ kind: m.kind, detail });
+      } else {
+        failed.push({ ...m, detail });
+      }
+    }
+
+    const total = manifest.matchers.length;
+    const score = Math.round((matched / total) * 100);
+    return { score, matched: score === 100, evidence, failed };
+  }
+
   function hostContextFor(plugin) {
     return {
       async loadSummary() {
@@ -312,6 +484,23 @@ function makePluginHost(opts) {
       async loadStrings() {
         assertPermissions(plugin, ["read.strings"]);
         return await loadStrings(await currentBinary());
+      },
+      async loadFunctions() {
+        assertPermissions(plugin, ["read.functions"]);
+        return await loadFunctions(await currentBinary());
+      },
+      async loadXrefs() {
+        assertPermissions(plugin, ["read.xrefs"]);
+        return await loadXrefs(await currentBinary());
+      },
+      async loadArities() {
+        assertPermissions(plugin, ["read.arities"]);
+        return await loadArities(await currentBinary());
+      },
+      async decompile(sym, opts = {}) {
+        assertPermissions(plugin, ["read.decompile"]);
+        const view = typeof opts.view === "string" ? opts.view : "pseudo";
+        return await decompileAt(await currentBinary(), sym, view);
       },
       async loadAnnotations() {
         assertPermissions(plugin, ["read.annotations"]);
@@ -354,6 +543,7 @@ function makePluginHost(opts) {
           version: manifest.version,
           description: manifest.description,
           permissions: [],
+          matchers: [],
           commands: [],
           invalid: true,
         });
@@ -367,6 +557,7 @@ function makePluginHost(opts) {
           version: manifest.version,
           description: manifest.description,
           permissions: manifest.permissions,
+          matchers: manifest.matchers,
           commands: plugin.commands.map((cmd) => ({
             id: cmd.id,
             ref: commandRef(manifest.id, cmd.id),
@@ -382,6 +573,7 @@ function makePluginHost(opts) {
           version: manifest.version,
           description: `Failed to load: ${e.message}`,
           permissions: manifest.permissions,
+          matchers: manifest.matchers || [],
           commands: [],
           invalid: true,
         });
@@ -419,7 +611,6 @@ function makePluginHost(opts) {
       };
     }
 
-    assertPermissions(plugin, ["project.rename"]);
     const bp = await currentBinary();
     const ann = cloneAnnotations(await readAnnotations(bp));
     let appliedCount = 0;
@@ -449,7 +640,18 @@ function makePluginHost(opts) {
     };
   }
 
-  return { listPlugins, runCommand };
+  async function matchPlugin(pluginId, binaryPathOverride) {
+    const manifests = await discoverManifests();
+    const manifest = manifests.find((m) => m.id === pluginId);
+    if (!manifest) throw new Error(`unknown plugin ${pluginId}`);
+    if (manifest.invalid) {
+      return { score: 0, matched: false, evidence: [], failed: [] };
+    }
+    const bp = binaryPathOverride || (await currentBinary());
+    return await evaluateMatchers(manifest, bp);
+  }
+
+  return { listPlugins, runCommand, matchPlugin };
 }
 
 module.exports = { makePluginHost };

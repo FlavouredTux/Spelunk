@@ -584,7 +584,10 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 }
 
 // Per-function content hash. One TSV row per entry:
-//   <addr-hex>\t<fingerprint-hex>\t<blocks>\t<insts>\t<calls>\t<symbol-or-sub>
+//   <addr-hex>\t<fp-hex>\t<blocks>\t<insts>\t<calls>\t<collisions>\t<name>
+// `collisions` is the number of functions sharing `fp` in this output
+// (1 = unique; N > 1 = N-way collision, common for short stubs whose
+// body carries too little entropy for a 64-bit content hash).
 // Sorted by address. Address-independent — same algorithm across two PIE
 // builds of the same code produces the same fingerprint column.
 [[nodiscard]] std::string build_fingerprints_output(const ember::Binary& b) {
@@ -614,7 +617,17 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         if (!b.import_at_plt(e.callee)) fns.insert(e.callee);
     }
 
-    std::string out;
+    struct Row {
+        ember::addr_t addr;
+        ember::u64 hash;
+        ember::u32 blocks;
+        ember::u32 insts;
+        ember::u32 calls;
+        std::string name;
+    };
+    std::vector<Row> rows;
+    rows.reserve(fns.size());
+
     const auto total = fns.size();
     std::size_t done = 0;
     const auto tick = std::max<std::size_t>(1, total / 40);
@@ -635,10 +648,21 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         } else {
             name = std::format("sub_{:x}", a);
         }
-        out += std::format("{:x}\t{:016x}\t{}\t{}\t{}\t{}\n",
-                           a, fp.hash, fp.blocks, fp.insts, fp.calls, name);
+        rows.push_back(Row{a, fp.hash, fp.blocks, fp.insts, fp.calls,
+                           std::move(name)});
     }
     std::fputc('\n', stderr);
+
+    std::unordered_map<ember::u64, ember::u32> hash_count;
+    hash_count.reserve(rows.size());
+    for (const auto& r : rows) ++hash_count[r.hash];
+
+    std::string out;
+    for (const auto& r : rows) {
+        out += std::format("{:x}\t{:016x}\t{}\t{}\t{}\t{}\t{}\n",
+                           r.addr, r.hash, r.blocks, r.insts, r.calls,
+                           hash_count[r.hash], r.name);
+    }
     return out;
 }
 
@@ -647,8 +671,11 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
 // by run_diff() to pull TSVs for both binaries into memory for comparison.
 // Cache tag for fingerprint TSVs includes the fingerprint schema version
 // so schema bumps orphan old entries without nuking unrelated caches.
+// Tag = fingerprints-<hash_schema>-<output_format_version>. Bumping either
+// invalidates stale TSVs on disk: hash_schema when the hash bytes change,
+// the output token when the column layout changes.
 [[nodiscard]] std::string fingerprints_cache_tag() {
-    return std::format("fingerprints-{}", ember::kFingerprintSchema);
+    return std::format("fingerprints-{}-o2", ember::kFingerprintSchema);
 }
 
 [[nodiscard]] std::string
@@ -733,7 +760,7 @@ struct ParsedFps {
 };
 
 // Parse the TSV that build_fingerprints_output produces:
-//   <addr>\t<fp>\t<blocks>\t<insts>\t<calls>\t<name>
+//   <addr>\t<fp>\t<blocks>\t<insts>\t<calls>\t<collisions>\t<name>
 [[nodiscard]] ParsedFps parse_fingerprints_tsv(const std::string& tsv) {
     ParsedFps out;
     std::size_t pos = 0;
@@ -743,7 +770,7 @@ struct ParsedFps {
         const std::string_view line(tsv.data() + pos, end - pos);
         pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
         if (line.empty() || line.front() == '#') continue;
-        std::array<std::string_view, 6> f{};
+        std::array<std::string_view, 7> f{};
         std::size_t s = 0, fi = 0;
         for (std::size_t i = 0; i <= line.size() && fi < f.size(); ++i) {
             if (i == line.size() || line[i] == '\t') {
@@ -751,7 +778,7 @@ struct ParsedFps {
                 s = i + 1;
             }
         }
-        if (fi < 6) continue;
+        if (fi < 7) continue;
         ember::addr_t addr = 0;
         const auto r = std::from_chars(f[0].data(),
                                        f[0].data() + f[0].size(), addr, 16);
@@ -764,7 +791,7 @@ struct ParsedFps {
         out.by_fp[std::string{f[1]}].push_back(FpEntry{
             addr,
             std::string{f[1]},
-            std::string{f[5]},
+            std::string{f[6]},
             parse_u32(f[2]),
             parse_u32(f[3]),
             parse_u32(f[4]),

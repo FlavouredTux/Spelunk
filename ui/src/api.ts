@@ -117,12 +117,47 @@ export async function loadSummary(): Promise<BinaryInfo> {
   return memoOnce<BinaryInfo>(
     async () => {
       const path = (await window.ember.binary()) ?? "";
-      const raw = await window.ember.run([]);
-      return parseSummary(raw, path);
+      // Summary = header + sections + imports; --functions = the full
+      // union (symbols ∪ CFG-discovered sub_*). Running both in parallel
+      // keeps the UI Sidebar authoritative on stripped binaries where
+      // defined_symbols alone is nearly empty.
+      const [rawSummary, rawFns] = await Promise.all([
+        window.ember.run([]),
+        window.ember.run(["--functions"]),
+      ]);
+      const info = parseSummary(rawSummary, path);
+      info.functions = parseFunctionsTsv(rawFns);
+      return info;
     },
     (p) => { SUMMARY_PROMISE = p; },
     SUMMARY_PROMISE,
   );
+}
+
+function parseFunctionsTsv(raw: string): FunctionInfo[] {
+  const out: FunctionInfo[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    // Columns: addr\tsize\tkind\tname — all four required.
+    const parts = line.split("\t");
+    if (parts.length < 4) continue;
+    const addr = parts[0];
+    const addrNum = parseInt(addr, 16);
+    if (!Number.isFinite(addrNum)) continue;
+    // Collapse the enumeration kinds ("symbol" / "sub") onto "function"
+    // so the existing Sidebar/CommandPalette filter (`kind === "function"`)
+    // includes both. The distinction is preserved upstream (CLI TSV,
+    // scripts) where it matters; in the UI the user just wants to see
+    // every function they can jump to.
+    out.push({
+      addr,
+      addrNum,
+      size: parseInt(parts[1], 16) || 0,
+      kind: "function",
+      name: parts.slice(3).join("\t").trim(),
+    });
+  }
+  return out;
 }
 
 export type LoadFunctionOptions = {

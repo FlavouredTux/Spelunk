@@ -221,6 +221,28 @@ ember_golden_test(
     GOLDEN  imports.fingerprints.txt
 )
 
+# --functions: flat TSV of every discovered function (defined symbols ∪
+# CFG-walked call targets). Guards the shape of the list surface the UI
+# Sidebar consumes, so a change here rippling into the Sidebar is
+# immediately visible.
+ember_golden_test(
+    NAME    imports_functions
+    FIXTURE imports
+    ARGS    "--no-cache|--functions"
+    GOLDEN  imports.functions.txt
+)
+
+# Same flag with a substring filter. Locks case-insensitive name-column
+# matching. `__BINARY__` is needed so the pattern lands *after* the binary
+# positional — parse_args only treats the second positional as the
+# filter pattern.
+ember_golden_test(
+    NAME    imports_functions_filtered
+    FIXTURE imports
+    ARGS    "--no-cache|--functions|__BINARY__|main"
+    GOLDEN  imports.functions.main.txt
+)
+
 # ---- decoder_misc (coverage of formerly-unhandled opcodes) -----------------
 #
 # Every function here hits a decoder path that previously produced

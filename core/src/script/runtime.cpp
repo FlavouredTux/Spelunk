@@ -8,7 +8,6 @@
 #include <fstream>
 #include <memory>
 #include <regex>
-#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -605,22 +604,10 @@ JSValue addr_name_obj(JSContext* ctx, const Binary& b, addr_t a) {
 // iterate the binary without re-discovering entry points themselves.
 JSValue js_bin_functions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const Binary* b = ctx_of(ctx)->binary;
-    std::set<addr_t> fns;
-    for (const auto& s : b->symbols()) {
-        if (s.is_import) continue;
-        if (s.kind != SymbolKind::Function) continue;
-        if (s.addr == 0 || s.name.empty()) continue;
-        fns.insert(s.addr);
-    }
-    for (const auto& e : compute_call_graph(*b)) {
-        // Call targets that aren't import stubs land here — the `sub_*`
-        // functions the user actually wants to name.
-        if (!b->import_at_plt(e.callee)) fns.insert(e.callee);
-    }
     JSValue arr = JS_NewArray(ctx);
     u32 i = 0;
-    for (addr_t a : fns) {
-        JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *b, a));
+    for (const auto& fn : enumerate_functions(*b)) {
+        JS_SetPropertyUint32(ctx, arr, i++, addr_name_obj(ctx, *b, fn.addr));
     }
     return arr;
 }
@@ -635,17 +622,9 @@ JSValue js_bin_function_at(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     if (!to_u64(ctx, argv[0], &addr)) return JS_NULL;
     auto& hc = *ctx_of(ctx);
     if (hc.function_starts.empty()) {
-        std::set<addr_t> fns;
-        for (const auto& s : hc.binary->symbols()) {
-            if (s.is_import) continue;
-            if (s.kind != SymbolKind::Function) continue;
-            if (s.addr == 0 || s.name.empty()) continue;
-            fns.insert(s.addr);
+        for (const auto& fn : enumerate_functions(*hc.binary)) {
+            hc.function_starts.push_back(fn.addr);
         }
-        for (const auto& e : compute_call_graph(*hc.binary)) {
-            if (!hc.binary->import_at_plt(e.callee)) fns.insert(e.callee);
-        }
-        hc.function_starts.assign(fns.begin(), fns.end());
     }
     // upper_bound - 1 gives the largest start <= addr.
     auto it = std::upper_bound(hc.function_starts.begin(),

@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 
 #include <ember/analysis/objc.hpp>
 
@@ -472,6 +473,38 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+std::vector<DiscoveredFunction> enumerate_functions(const Binary& b) {
+    std::vector<DiscoveredFunction> out;
+
+    // Pass 1: defined function symbols. These carry real sizes, so prefer
+    // them when a later CFG-discovered entry lands on the same address.
+    std::unordered_map<addr_t, std::size_t> index;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.addr == 0 || s.name.empty()) continue;
+        if (index.count(s.addr)) continue;
+        index.emplace(s.addr, out.size());
+        out.push_back({s.addr, s.size, s.name,
+                       DiscoveredFunction::Kind::Symbol});
+    }
+
+    // Pass 2: CFG-walked call targets. Skip PLT stubs (import thunks).
+    // Unknown size for these — stripped binaries don't tell us where they
+    // end without a CFG build we don't want to run on every enumerate.
+    for (const auto& e : compute_call_graph(b)) {
+        if (b.import_at_plt(e.callee) != nullptr) continue;
+        if (index.count(e.callee)) continue;
+        index.emplace(e.callee, out.size());
+        out.push_back({e.callee, 0, std::format("sub_{:x}", e.callee),
+                       DiscoveredFunction::Kind::Sub});
+    }
+
+    std::sort(out.begin(), out.end(),
+              [](const auto& x, const auto& y) { return x.addr < y.addr; });
     return out;
 }
 

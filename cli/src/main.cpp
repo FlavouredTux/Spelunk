@@ -103,6 +103,8 @@ struct Args {
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool vm_detect = false;         // scan for interpreter-style VM dispatchers
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
+    bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
+    std::string functions_pattern;  // optional substring filter for --functions (second positional)
     bool help   = false;
 };
 
@@ -138,6 +140,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--rtti",     &Args::rtti},
     {"",   "--vm-detect", &Args::vm_detect},
     {"",   "--cfg-pseudo", &Args::cfg_pseudo},
+    {"",   "--functions", &Args::functions},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
     {"",   "--json",      &Args::json},
@@ -210,6 +213,8 @@ void apply_stage_implications(Args& a) {
                 std::format("unknown flag: {}", s)));
         } else if (a.binary.empty()) {
             a.binary = s;
+        } else if (a.functions && a.functions_pattern.empty()) {
+            a.functions_pattern = s;
         } else {
             return std::unexpected(ember::Error::invalid_format(
                 std::format("unexpected positional argument: {}", s)));
@@ -437,6 +442,22 @@ int run_ir(const ember::Binary& b, std::string_view symbol,
         out += std::format("{:x}\t{:x}\t{:x}\t{}\t{}\n",
                            d.function_addr, d.dispatch_addr,
                            d.table_addr, d.handlers.size(), handlers);
+    }
+    return out;
+}
+
+// TSV: one row per discovered function entry. Format:
+//   <addr_hex>\t<size_hex>\t<kind>\t<name>
+// `kind` is "symbol" for a defined function symbol or "sub" for an entry
+// that only appeared as a call target during CFG walking. Size is 0 for
+// `sub` rows — see `enumerate_functions` for why.
+[[nodiscard]] std::string build_functions_output(const ember::Binary& b) {
+    std::string out;
+    for (const auto& fn : ember::enumerate_functions(b)) {
+        out += std::format("{:#018x}\t{:#x}\t{}\t{}\n",
+                           fn.addr, fn.size,
+                           ember::discovered_kind_name(fn.kind),
+                           fn.name);
     }
     return out;
 }
@@ -1093,6 +1114,8 @@ void print_help() {
     std::println("  -X, --xrefs          emit full call graph (all fn -> call targets)");
     std::println("      --strings        dump printable strings (addr|text|xrefs)");
     std::println("      --arities        dump inferred arity per function (addr N)");
+    std::println("      --functions [P]  list every discovered function (symbols ∪ sub_*) as TSV;");
+    std::println("                       optional substring P filters by name (case-insensitive)");
     std::println("      --fingerprints   dump address-independent content hash per function");
     std::println("      --diff OLD       diff OLD binary vs the positional binary by fingerprint");
     std::println("      --diff-format    'tsv' (default) or 'json' for --diff output");
@@ -1588,6 +1611,64 @@ int main(int argc, char** argv) {
     }
     if (args.arities) {
         return run_cached(args, "arities", [&] { return build_arities_output(b); });
+    }
+    if (args.functions) {
+        // Full TSV is cacheable independent of the pattern — build once,
+        // filter at print time so the cache works across grep sessions.
+        std::string tsv;
+        const auto dir = args.cache_dir.empty()
+            ? ember::cache::default_dir()
+            : std::filesystem::path(args.cache_dir);
+        std::string key;
+        bool cacheable = !args.no_cache;
+        if (cacheable) {
+            auto k = ember::cache::key_for(args.binary);
+            if (k) key = std::move(*k);
+            else {
+                std::println(stderr, "ember: warning: {}: {} (caching disabled)",
+                             k.error().kind_name(), k.error().message);
+                cacheable = false;
+            }
+        }
+        if (cacheable) {
+            if (auto hit = ember::cache::read(dir, key, "functions"); hit) {
+                tsv.assign(hit->data(), hit->size());
+            }
+        }
+        if (tsv.empty()) {
+            tsv = build_functions_output(b);
+            if (cacheable) {
+                if (auto rv = ember::cache::write(dir, key, "functions", tsv); !rv) {
+                    std::println(stderr, "ember: warning: {}: {}",
+                                 rv.error().kind_name(), rv.error().message);
+                }
+            }
+        }
+        if (args.functions_pattern.empty()) {
+            std::fwrite(tsv.data(), 1, tsv.size(), stdout);
+            return EXIT_SUCCESS;
+        }
+        std::string needle = args.functions_pattern;
+        for (auto& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        std::size_t pos = 0;
+        while (pos < tsv.size()) {
+            const auto nl = tsv.find('\n', pos);
+            const std::size_t end = (nl == std::string::npos) ? tsv.size() : nl;
+            std::string_view line(tsv.data() + pos, end - pos);
+            // Columns: addr\tsize\tkind\tname — skip to the fourth.
+            std::size_t tabs = 0, name_start = 0;
+            for (std::size_t i = 0; i < line.size() && tabs < 3; ++i) {
+                if (line[i] == '\t' && ++tabs == 3) name_start = i + 1;
+            }
+            std::string name_lc(line.substr(name_start));
+            for (auto& c : name_lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (name_lc.find(needle) != std::string::npos) {
+                std::fwrite(line.data(), 1, line.size(), stdout);
+                std::fputc('\n', stdout);
+            }
+            pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
+        }
+        return EXIT_SUCCESS;
     }
     // Load user edits (renames, declared signatures) if the UI passed us a
     // project file. Missing/empty is non-fatal — we just fall back to the

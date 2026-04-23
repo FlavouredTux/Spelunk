@@ -56,6 +56,37 @@ std::vector<CallEdge> compute_call_graph(const Binary& b);
 std::vector<addr_t>   compute_callees(const Binary& b, addr_t fn);
 std::vector<addr_t>   compute_callers(const Binary& b, addr_t fn);
 
+// A function entry the decompiler can walk from: either a defined
+// function symbol, or a call target the CFG builder discovered at
+// another function's call site (classic stripped-binary `sub_*`).
+// `size` comes from the symbol table when kind == Symbol; for Sub
+// entries it's left 0 because determining the extent requires building
+// the CFG, which `enumerate_functions` intentionally doesn't do.
+struct DiscoveredFunction {
+    enum class Kind : u8 { Symbol, Sub };
+    addr_t      addr = 0;
+    u64         size = 0;
+    std::string name;
+    Kind        kind = Kind::Sub;
+};
+
+[[nodiscard]] constexpr std::string_view
+discovered_kind_name(DiscoveredFunction::Kind k) noexcept {
+    switch (k) {
+        case DiscoveredFunction::Kind::Symbol: return "symbol";
+        case DiscoveredFunction::Kind::Sub:    return "sub";
+    }
+    return "?";
+}
+
+// Union of defined function symbols and CFG-discovered call targets,
+// deduplicated and sorted by address. PLT stubs are excluded — they're
+// import thunks, not definitions. Shared by the scripting binding
+// (`binary.functions()`) and the `--functions` CLI output so both stay
+// in sync.
+[[nodiscard]] std::vector<DiscoveredFunction>
+enumerate_functions(const Binary& b);
+
 // Per-call edge classification used by `ember --callees`. `Direct` covers
 // `call <imm>`; `Tail` covers an unconditional `jmp` whose target is a
 // known function entry (defined symbol or PLT stub); `IndirectConst`

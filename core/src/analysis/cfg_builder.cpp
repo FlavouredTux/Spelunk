@@ -1,5 +1,7 @@
 #include <ember/analysis/cfg_builder.hpp>
 
+#include <ember/analysis/eh_frame.hpp>
+#include <ember/analysis/pe_unwind.hpp>
 #include <ember/ir/ssa.hpp>  // canonical_reg
 
 #include <algorithm>
@@ -531,6 +533,23 @@ void compute_predecessors(Function& fn) {
 
 }  // namespace
 
+void CfgBuilder::ensure_unwind_ranges_() const {
+    if (unwind_ranges_init_) return;
+    unwind_ranges_init_ = true;
+
+    auto note = [&](addr_t begin, u64 len) {
+        if (len == 0) return;
+        auto [it, inserted] = unwind_ranges_.try_emplace(begin, len);
+        if (!inserted && len > it->second) it->second = len;
+    };
+    for (const auto& e : enumerate_fde_extents(binary_)) {
+        note(e.pc_begin, e.pc_range);
+    }
+    for (const auto& e : parse_pe_pdata(binary_)) {
+        if (e.end > e.begin) note(e.begin, e.end - e.begin);
+    }
+}
+
 Result<Function>
 CfgBuilder::build(addr_t entry, std::string name) const {
     if (binary_.bytes_at(entry).empty()) {
@@ -586,6 +605,16 @@ CfgBuilder::build(addr_t entry, std::string name) const {
 
     partition(binary_, ws, fn);
     compute_predecessors(fn);
+
+    // CFG-walk can't reach cleanup/landing-pad tails that the compiler
+    // emitted past a noreturn call — there's no branch leading into them
+    // from entry. The exception tables know the true function length,
+    // so use them to extend fn.end when they report more than we walked.
+    ensure_unwind_ranges_();
+    if (auto it = unwind_ranges_.find(entry); it != unwind_ranges_.end()) {
+        const addr_t fde_end = entry + it->second;
+        if (fde_end > fn.end) fn.end = fde_end;
+    }
 
     return fn;
 }

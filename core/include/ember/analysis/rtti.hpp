@@ -17,8 +17,8 @@ namespace ember {
 // per-slot IMPs in order; entries outside `__TEXT` become zero (for pure
 // virtual / deleted slots).
 struct RttiClass {
-    std::string          mangled_name;   // e.g. "N3RBX6LoggerE"
-    std::string          demangled_name; // e.g. "RBX::Logger"
+    std::string          mangled_name;   // e.g. "N3foo6LoggerE"
+    std::string          demangled_name; // e.g. "foo::Logger"
     addr_t               typeinfo = 0;
     addr_t               vtable   = 0;   // 0 when we only found the typeinfo
     std::vector<addr_t>  methods;        // vtable slots pointing into __TEXT

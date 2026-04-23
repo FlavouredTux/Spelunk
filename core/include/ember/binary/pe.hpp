@@ -69,8 +69,8 @@ private:
     // Walks IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT. Same INT/IAT shape as
     // IMPORT but the descriptor is the larger ImgDelayDescr struct and
     // entries are deferred until first call (grAttrs bit 0 = "RVAs, not
-    // VAs"; the v1 implementation requires that bit). Roblox-class
-    // binaries route the bulk of their `d3d11`/`dxgi`/`xinput` calls
+    // VAs"; the v1 implementation requires that bit). Game clients
+    // typically route the bulk of their `d3d11`/`dxgi`/`xinput` calls
     // through here, so without this they all degrade to indirect calls.
     [[nodiscard]] Result<void>
     parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_name);

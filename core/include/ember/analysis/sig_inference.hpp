@@ -24,11 +24,11 @@ struct InferredSig {
 //      the caller's corresponding own arg slots if the data flows there.
 //   3. Repeat until no new tags appear.
 //
-// Runs the CFG+IR+SSA+cleanup pipeline per function once. For a 380k-function
-// RobloxPlayer this is expensive the first time — up to a few minutes — but
-// deterministic and cacheable. Callers that don't need IPA for a one-shot
-// emission should skip this and rely on the intra-procedural char* inference
-// the emitter already does.
+// Runs the CFG+IR+SSA+cleanup pipeline per function once. For a binary with
+// hundreds of thousands of functions this is expensive the first time — up
+// to a few minutes — but deterministic and cacheable. Callers that don't
+// need IPA for a one-shot emission should skip this and rely on the
+// intra-procedural char* inference the emitter already does.
 [[nodiscard]] std::map<addr_t, InferredSig>
 infer_signatures(const Binary& b);
 

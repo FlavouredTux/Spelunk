@@ -31,7 +31,7 @@ node_modules/
 dist/
 dist-electron/
 .vite/
-
+third_party_downloads/
 Testing/
 nohup.out
 *.log

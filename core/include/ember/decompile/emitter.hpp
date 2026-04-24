@@ -37,6 +37,12 @@ struct EmitOptions {
     // Consulted by function_display_name after the Obj-C IMP check and
     // before the generic symbol-table lookup.
     const std::map<addr_t, std::string>* rtti_methods = nullptr;
+    // Per-call-site resolution: call/jmp instruction VA → resolved
+    // target function. Populated by compute_call_resolutions; when
+    // set, the CallIndirect printer consults it so
+    // `mov rax, [rip+vtable]; call [rax+0x38]` renders as a named
+    // method rather than the opaque `(*fn)(args)` fallback.
+    const std::map<addr_t, addr_t>* call_resolutions = nullptr;
 };
 
 class PseudoCEmitter {

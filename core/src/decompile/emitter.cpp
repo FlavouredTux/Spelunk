@@ -2553,7 +2553,28 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     ? format_call_args_with_arity(pending_args, *arity)
                     : format_call_args_fallback(pending_args);
                 call_expr = std::format("{}({})", *name, args);
-            } else {
+            } else if (options.call_resolutions && inst.source_addr != 0) {
+                // Vtable back-trace hit: the classifier decoded the
+                // preceding `mov reg, [rip+vtable]` and resolved the
+                // slot. Render as a named call so `IClient::vfn_3(this)`
+                // replaces `(*(u64*)(this + 0x18))(this)`.
+                if (auto res_it = options.call_resolutions->find(inst.source_addr);
+                    res_it != options.call_resolutions->end()) {
+                    const addr_t target = res_it->second;
+                    const std::string fname = function_display_name(target);
+                    std::optional<u8> arity;
+                    if (annotations) {
+                        if (const FunctionSig* sig = annotations->signature_for(target); sig) {
+                            arity = static_cast<u8>(sig->params.size());
+                        }
+                    }
+                    const std::string args = arity
+                        ? format_call_args_with_arity(pending_args, *arity)
+                        : format_call_args_fallback(pending_args);
+                    call_expr = std::format("{}({})", fname, args);
+                }
+            }
+            if (call_expr.empty()) {
                 const std::string args = format_call_args_fallback(pending_args);
                 // Virtual-call form: when the callee expression is a
                 // member-access / identifier, emit it directly — `fn(args)`

@@ -30,16 +30,23 @@ if(ARGS)
     string(REPLACE "|" ";" _args "${ARGS}")
 endif()
 
+# Per-test cache dir isolates the run from the developer's ~/.cache/ember
+# state (otherwise a stray sidecar / cached annotations file from a prior
+# session could bleed into goldens). Created under the build tree so it
+# dies with `cmake --build --target clean`.
+set(_test_cache "${CMAKE_CURRENT_BINARY_DIR}/.ember_test_cache")
+file(MAKE_DIRECTORY "${_test_cache}")
+
 if(_has_binary_placeholder)
     execute_process(
-        COMMAND "${EMBER}" ${_args}
+        COMMAND "${EMBER}" --cache-dir "${_test_cache}" ${_args}
         OUTPUT_VARIABLE _out
         ERROR_VARIABLE  _err
         RESULT_VARIABLE _rc
     )
 else()
     execute_process(
-        COMMAND "${EMBER}" ${_args} "${BINARY}"
+        COMMAND "${EMBER}" --cache-dir "${_test_cache}" ${_args} "${BINARY}"
         OUTPUT_VARIABLE _out
         ERROR_VARIABLE  _err
         RESULT_VARIABLE _rc

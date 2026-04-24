@@ -652,26 +652,16 @@ JSValue js_bin_functions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 // Return the entry address of the function whose extent contains `addr`,
-// or null when no containing function is known. Uses the discovered set
-// from binary.functions() — O(log n) per query after a one-shot sort
-// cached on the ScriptCtx.
+// or null when no containing function is known. Thin wrapper over
+// containing_function() so the JS and CLI surfaces stay in sync.
 JSValue js_bin_function_at(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
     u64 addr = 0;
     if (!to_u64(ctx, argv[0], &addr)) return JS_NULL;
     auto& hc = *ctx_of(ctx);
-    if (hc.function_starts.empty()) {
-        for (const auto& fn : enumerate_functions(*hc.binary)) {
-            hc.function_starts.push_back(fn.addr);
-        }
-    }
-    // upper_bound - 1 gives the largest start <= addr.
-    auto it = std::upper_bound(hc.function_starts.begin(),
-                               hc.function_starts.end(),
-                               static_cast<addr_t>(addr));
-    if (it == hc.function_starts.begin()) return JS_NULL;
-    --it;
-    return addr_name_obj(ctx, *hc.binary, *it);
+    auto cf = containing_function(*hc.binary, static_cast<addr_t>(addr));
+    if (!cf) return JS_NULL;
+    return addr_name_obj(ctx, *hc.binary, cf->entry);
 }
 
 JSValue js_xrefs_callees(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {

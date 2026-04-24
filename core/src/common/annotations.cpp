@@ -6,6 +6,9 @@
 #include <fstream>
 #include <sstream>
 #include <string_view>
+#include <system_error>
+
+#include <ember/common/hash.hpp>
 
 namespace ember {
 
@@ -188,6 +191,56 @@ Annotations::save(const std::filesystem::path& path) const {
             "annotations: short write to '{}'", path.string())));
     }
     return {};
+}
+
+std::filesystem::path
+sidecar_annotation_path(const std::filesystem::path& binary) {
+    namespace fs = std::filesystem;
+    if (binary.empty()) return {};
+    fs::path p = binary;
+    p += ".ember-annotations";
+    return p;
+}
+
+std::filesystem::path
+cache_annotation_path(const std::filesystem::path& binary,
+                      const std::filesystem::path& cache_dir) {
+    namespace fs = std::filesystem;
+    if (binary.empty() || cache_dir.empty()) return {};
+    // Path-keyed, not content-keyed: the whole point of persistent
+    // annotations is surviving binary version swaps at the same path.
+    // Using a content hash would throw away every rename as soon as the
+    // user drops in v N+1 of the target. FNV of the absolute parent dir
+    // plus the basename is stable under content changes and distinct
+    // across "same name in a different directory".
+    std::error_code ec;
+    fs::path abs = fs::weakly_canonical(binary, ec);
+    if (ec || abs.empty()) abs = fs::absolute(binary, ec);
+    if (ec) abs = binary;
+    const fs::path parent = abs.has_parent_path() ? abs.parent_path() : fs::path{"."};
+    const std::string parent_s = parent.string();
+    const std::string key = std::format("{}@{:016x}",
+        abs.filename().string(),
+        fnv1a_64(parent_s));
+    return cache_dir / "annotations" / key / "annotations.db";
+}
+
+AnnotationLocation
+resolve_annotation_location(const std::filesystem::path& binary,
+                            const std::filesystem::path& explicit_path,
+                            const std::filesystem::path& cache_dir) {
+    namespace fs = std::filesystem;
+    if (!explicit_path.empty()) {
+        return {explicit_path, AnnotationSource::Explicit};
+    }
+    if (binary.empty()) return {};
+
+    const auto sidecar = sidecar_annotation_path(binary);
+    std::error_code ec;
+    if (!sidecar.empty() && fs::exists(sidecar, ec) && !ec) {
+        return {sidecar, AnnotationSource::Sidecar};
+    }
+    return {cache_annotation_path(binary, cache_dir), AnnotationSource::Cache};
 }
 
 }  // namespace ember

@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include <ember/analysis/objc.hpp>
+#include <ember/analysis/rtti.hpp>
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/common/progress.hpp>
@@ -24,6 +25,7 @@
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/structure/region.hpp>
 #include <ember/structure/structurer.hpp>
 
@@ -557,15 +559,159 @@ compute_classified_callees(const Binary& b, addr_t fn) {
     auto fn_r = builder.build(fn, name);
     if (!fn_r) return {};
 
+    // Vtable index for the back-trace. Itanium ABI covers both Mach-O
+    // and ELF C++ binaries; `parse_itanium_rtti` already walks
+    // `__const`, `.data.rel.ro`, and `.rodata`. PE is MSVC-RTTI shaped
+    // differently — handled elsewhere, not yet wired here.
+    //
+    // Key subtlety: `RttiClass::vtable` is the *typeinfo slot* (offset
+    // 8 inside the vtable struct). The ABI-defined vptr — the value
+    // stored in every object's head and the value the compiler loads
+    // when emitting `lea reg, [rip + K]` — points at `methods[0]`,
+    // which sits at `vtable + 8`. We index by the vptr value the code
+    // actually sees, so `call [reg + slot*8]` resolves directly with
+    // no adjustment at the call site.
+    std::map<addr_t, const RttiClass*> vtable_index;
+    std::vector<RttiClass> rtti;
+    if (b.format() == Format::MachO || b.format() == Format::Elf) {
+        rtti = parse_itanium_rtti(b);
+        for (const auto& c : rtti) {
+            if (c.vtable != 0 && !c.methods.empty()) {
+                vtable_index.emplace(c.vtable + 8, &c);
+            }
+        }
+    }
+
     std::vector<ClassifiedCallee> out;
     out.reserve(fn_r->call_targets.size());
 
+    // Resolve a `mov dst, [base_reg + disp]` vtable slot load. If
+    // `base_reg` currently holds a known vptr, the loaded value is
+    // the IMP at that slot.
+    auto resolve_vptr_slot =
+        [&](addr_t vptr, i64 disp) -> std::optional<addr_t> {
+        auto it = vtable_index.find(vptr);
+        if (it == vtable_index.end()) return std::nullopt;
+        if (disp < 0 || (disp & 7) != 0) return std::nullopt;
+        const std::size_t slot = static_cast<std::size_t>(disp) / 8;
+        if (slot >= it->second->methods.size()) return std::nullopt;
+        const addr_t imp = it->second->methods[slot];
+        if (imp == 0 || !addr_in_executable_section(b, imp)) return std::nullopt;
+        return imp;
+    };
+
     for (const auto& bb : fn_r->blocks) {
+        // Per-block register state for the vtable back-trace. Two
+        // strata:
+        //   vptr: register holds a vptr value (points to methods[0]
+        //         of a known vtable). Reached by `lea r, [rip+K]`,
+        //         `mov r, [rip+K]` where *K is a vptr, or reg-copy.
+        //   imp:  register holds the resolved IMP of some slot, e.g.
+        //         after `mov r, [vptr_reg + slot*8]`.
+        // Keyed by canonical 64-bit reg so sub-register writes to the
+        // same family correctly invalidate.
+        std::map<Reg, addr_t> reg_vptr;
+        std::map<Reg, addr_t> reg_imp;
+        auto disarm = [&](Reg canon) {
+            reg_vptr.erase(canon);
+            reg_imp.erase(canon);
+        };
+
         for (const auto& insn : bb.instructions) {
             const Mnemonic mn = insn.mnemonic;
 
+            // `lea dst, [rip + K]` — arm dst as carrying a vptr when
+            // K is exactly a known vptr address.
+            if (mn == Mnemonic::Lea && insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register) {
+                const Reg dst   = insn.operands[0].reg;
+                const Reg dst_c = canonical_reg(dst);
+                const auto& src = insn.operands[1];
+                bool armed = false;
+                if (reg_size(dst) == 8 &&
+                    src.kind == Operand::Kind::Memory &&
+                    src.mem.base == Reg::Rip &&
+                    src.mem.index == Reg::None &&
+                    src.mem.has_disp) {
+                    const addr_t k = insn.address + insn.length +
+                                     static_cast<addr_t>(src.mem.disp);
+                    if (vtable_index.count(k)) {
+                        disarm(dst_c);
+                        reg_vptr[dst_c] = k;
+                        armed = true;
+                    }
+                }
+                if (!armed) disarm(dst_c);
+                continue;
+            }
+
+            // `mov dst, <src>` — multiple cases. See disarm() fallback
+            // at the bottom.
+            if (mn == Mnemonic::Mov && insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register) {
+                const Reg dst   = insn.operands[0].reg;
+                const Reg dst_c = canonical_reg(dst);
+                const auto& src = insn.operands[1];
+                bool armed = false;
+                if (reg_size(dst) == 8) {
+                    // mov dst, [rip + K] — *K might be a stored vptr.
+                    if (src.kind == Operand::Kind::Memory &&
+                        src.mem.base == Reg::Rip &&
+                        src.mem.index == Reg::None &&
+                        src.mem.has_disp) {
+                        const addr_t k = insn.address + insn.length +
+                                         static_cast<addr_t>(src.mem.disp);
+                        if (auto v = read_u64_le(b, k); v) {
+                            const auto stored = static_cast<addr_t>(*v);
+                            if (vtable_index.count(stored)) {
+                                disarm(dst_c);
+                                reg_vptr[dst_c] = stored;
+                                armed = true;
+                            }
+                        }
+                    }
+                    // mov dst, [reg + disp] — slot load from an armed
+                    // vptr-carrying register. Resolves to an IMP.
+                    else if (src.kind == Operand::Kind::Memory &&
+                             src.mem.base != Reg::None &&
+                             src.mem.base != Reg::Rip &&
+                             src.mem.index == Reg::None &&
+                             src.mem.has_disp) {
+                        const Reg base_c = canonical_reg(src.mem.base);
+                        if (auto it = reg_vptr.find(base_c);
+                            it != reg_vptr.end()) {
+                            if (auto imp = resolve_vptr_slot(it->second, src.mem.disp)) {
+                                disarm(dst_c);
+                                reg_imp[dst_c] = *imp;
+                                armed = true;
+                            }
+                        }
+                    }
+                    // mov dst, src_reg — one-hop reg→reg copy of any
+                    // currently-armed state.
+                    else if (src.kind == Operand::Kind::Register) {
+                        const Reg src_c = canonical_reg(src.reg);
+                        if (auto it = reg_vptr.find(src_c); it != reg_vptr.end()) {
+                            disarm(dst_c);
+                            reg_vptr[dst_c] = it->second;
+                            armed = true;
+                        } else if (auto it2 = reg_imp.find(src_c); it2 != reg_imp.end()) {
+                            disarm(dst_c);
+                            reg_imp[dst_c] = it2->second;
+                            armed = true;
+                        }
+                    }
+                }
+                if (!armed) disarm(dst_c);
+                continue;
+            }
+
             if (is_call(mn)) {
-                if (insn.num_operands == 0) continue;
+                if (insn.num_operands == 0) {
+                    reg_vptr.clear();
+                    reg_imp.clear();
+                    continue;
+                }
                 const auto& op = insn.operands[0];
                 if (op.kind == Operand::Kind::Relative) {
                     out.push_back({op.rel.target, CalleeKind::Direct, insn.address});
@@ -584,14 +730,79 @@ compute_classified_callees(const Binary& b, addr_t fn) {
                                            insn.address});
                         }
                     }
+                } else if (op.kind == Operand::Kind::Memory &&
+                           op.mem.base != Reg::None &&
+                           op.mem.base != Reg::Rip &&
+                           op.mem.index == Reg::None &&
+                           op.mem.has_disp) {
+                    // call [reg + disp]: resolve through the most
+                    // recent vtable-pointer load into the same canon
+                    // register.
+                    const Reg base_c = canonical_reg(op.mem.base);
+                    if (auto it = reg_vptr.find(base_c); it != reg_vptr.end()) {
+                        if (auto imp = resolve_vptr_slot(it->second, op.mem.disp)) {
+                            out.push_back({*imp, CalleeKind::IndirectConst,
+                                           insn.address});
+                        }
+                    }
+                } else if (op.kind == Operand::Kind::Register) {
+                    // call reg: if the register already carries a
+                    // resolved IMP (from a prior `mov rax, [vptr+slot]`),
+                    // emit the edge directly.
+                    const Reg r_c = canonical_reg(op.reg);
+                    if (auto it = reg_imp.find(r_c); it != reg_imp.end()) {
+                        out.push_back({it->second, CalleeKind::IndirectConst,
+                                       insn.address});
+                    }
                 }
+                // Any call clobbers the SysV caller-save set. Clearing
+                // everything is cheaper than enumerating that set and
+                // costs nothing in precision.
+                reg_vptr.clear();
+                reg_imp.clear();
                 continue;
             }
 
             if (is_unconditional_jmp(mn)) {
                 if (auto t = branch_target(insn); t && callee_is_function_entry(b, *t)) {
                     out.push_back({*t, CalleeKind::Tail, insn.address});
+                    continue;
                 }
+                // Tail-call through a resolved IMP: `jmp *rax` where
+                // rax carries a known slot IMP. Same edge kind as a
+                // tail-call to a known symbol entry.
+                if (insn.num_operands == 1) {
+                    const auto& jop = insn.operands[0];
+                    if (jop.kind == Operand::Kind::Register) {
+                        const Reg r_c = canonical_reg(jop.reg);
+                        if (auto it = reg_imp.find(r_c); it != reg_imp.end()) {
+                            out.push_back({it->second, CalleeKind::Tail,
+                                           insn.address});
+                        }
+                    } else if (jop.kind == Operand::Kind::Memory &&
+                               jop.mem.base != Reg::None &&
+                               jop.mem.base != Reg::Rip &&
+                               jop.mem.index == Reg::None &&
+                               jop.mem.has_disp) {
+                        const Reg base_c = canonical_reg(jop.mem.base);
+                        if (auto it = reg_vptr.find(base_c); it != reg_vptr.end()) {
+                            if (auto imp = resolve_vptr_slot(it->second, jop.mem.disp)) {
+                                out.push_back({*imp, CalleeKind::Tail,
+                                               insn.address});
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Any other instruction that writes a register first-
+            // operand invalidates our tracked state for that canon reg.
+            // Conservative: arithmetic, lea-without-vtable, pop, etc.
+            // Memory-dst instructions leave register state untouched.
+            if (insn.num_operands >= 1 &&
+                insn.operands[0].kind == Operand::Kind::Register) {
+                disarm(canonical_reg(insn.operands[0].reg));
             }
         }
     }
@@ -608,6 +819,49 @@ compute_classified_callees(const Binary& b, addr_t fn) {
                               return a.target == bb.target && a.kind == bb.kind;
                           }),
               out.end());
+    return out;
+}
+
+std::optional<ContainingFn>
+containing_function(const Binary& b, addr_t addr) {
+    // Build a sorted (start → DiscoveredFunction) index once per call.
+    // enumerate_functions already dedupes and sorts; copy into a pair
+    // vector so we can binary-search by start.
+    const auto fns = enumerate_functions(b);
+    if (fns.empty()) return std::nullopt;
+
+    // `fns` is already sorted by addr ascending. upper_bound finds the
+    // first entry strictly greater than `addr`; the one before it is
+    // the candidate.
+    auto it = std::upper_bound(fns.begin(), fns.end(), addr,
+        [](addr_t a, const DiscoveredFunction& d) { return a < d.addr; });
+    if (it == fns.begin()) return std::nullopt;
+    --it;
+
+    // Respect the known extent when the symbol gives us one. A symbol
+    // with size=0 (stripped `sub_*` entries) is treated as open-ended:
+    // we still return it because the decompiler will walk it via the
+    // terminator. Caller sees offset_within = addr - entry regardless.
+    if (it->size != 0 && addr >= it->addr + it->size) return std::nullopt;
+    if (b.bytes_at(it->addr).empty()) return std::nullopt;
+
+    ContainingFn out;
+    out.entry         = it->addr;
+    out.size          = it->size;
+    out.name          = it->name;
+    out.offset_within = addr - it->addr;
+    return out;
+}
+
+std::map<addr_t, addr_t>
+compute_call_resolutions(const Binary& b, addr_t fn) {
+    std::map<addr_t, addr_t> out;
+    for (const auto& e : compute_classified_callees(b, fn)) {
+        // First writer wins when two edges share a site — the
+        // classifier already sorts by (target, kind, site), but a given
+        // `call` instruction is only classified once in practice.
+        out.emplace(e.site, e.target);
+    }
     return out;
 }
 

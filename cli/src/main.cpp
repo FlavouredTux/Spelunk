@@ -68,6 +68,7 @@ struct Args {
     std::string binary;
     std::string symbol;
     std::string annotations_path;   // optional project-file for user edits (read-only load)
+    std::string export_annotations; // --export-annotations PATH: promote resolved source to PATH and exit
     std::string trace_path;         // optional indirect-edge trace TSV (from\tto per line)
     std::string project_path;       // optional project-file authorising script mutations
     std::string script_path;        // optional JS script to run against the binary
@@ -80,6 +81,7 @@ struct Args {
     std::string fp_new_in;          // --fingerprint-new PATH: read NEW side fingerprints from PATH
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string callees;            // --callees VA: print direct call targets of the function at VA
+    std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at
@@ -156,6 +158,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"-s", "--symbol",      &Args::symbol},
     {"",   "--annotations", &Args::annotations_path},
+    {"",   "--export-annotations", &Args::export_annotations},
     {"",   "--trace",       &Args::trace_path},
     {"",   "--cache-dir",   &Args::cache_dir},
     {"",   "--project",     &Args::project_path},
@@ -167,6 +170,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--fingerprint-new", &Args::fp_new_in},
     {"",   "--refs-to",     &Args::refs_to},
     {"",   "--callees",      &Args::callees},
+    {"",   "--containing-fn", &Args::containing_fn},
     {"",   "--callees-class", &Args::callees_class},
     {"",   "--disasm-at",   &Args::disasm_at},
     {"",   "--count",       &Args::disasm_count},
@@ -1192,6 +1196,14 @@ int run_struct(const ember::Binary& b, std::string_view symbol, bool pseudo,
     if (!win) {
         return EXIT_FAILURE;  // resolve_function already printed a diagnostic
     }
+    // Vtable back-trace: resolve indirect call sites in this function
+    // once, up-front. The map is per-function so we only pay the RTTI
+    // parse + CFG build for the one function the user is viewing.
+    std::map<ember::addr_t, ember::addr_t> call_res;
+    if (pseudo && !opts.call_resolutions) {
+        call_res = ember::compute_call_resolutions(b, win->start);
+        if (!call_res.empty()) opts.call_resolutions = &call_res;
+    }
     auto out = ember::format_struct(b, *win, pseudo, annotations, opts);
     if (!out) {
         std::println(stderr, "ember: {}: {}",
@@ -1230,6 +1242,7 @@ void print_help() {
     std::println("      --data-xrefs     TSV: <target>\\t<site>\\t<kind> for every rip-rel/abs");
     std::println("                       data-section reference (kind=read/write/lea)");
     std::println("      --callees VA     list direct/tail/indirect_const callees of the function at VA");
+    std::println("      --containing-fn VA  entry/size/name/offset of the function covering VA (TSV/JSON)");
     std::println("      --callees-class NAME  JSON: {{slot_N: [callees]}} for every vfn of an RTTI class");
     std::println("      --json           machine-readable output for --callees / --callees-class");
     std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns; --count N to override)");
@@ -1240,7 +1253,9 @@ void print_help() {
     std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
     std::println("      --vm-detect      scan for interpreter-style VM dispatchers (TSV)");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
-    std::println("      --annotations P  path to a project file with renames/signatures");
+    std::println("      --annotations P  explicit project file with renames/signatures (overrides");
+    std::println("                       the sidecar/cache auto-load)");
+    std::println("      --export-annotations P  copy the currently-resolved annotations file to P");
     std::println("      --trace PATH     load indirect-edge trace (TSV: from\\tto per line)");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --project PATH   project file scripts may read/write via project.*");
@@ -1482,20 +1497,91 @@ int main(int argc, char** argv) {
                      loaded, args.trace_path);
     }
 
+    // --export-annotations PATH: promote the resolved source (sidecar or
+    // cache — or an explicit --annotations/--project path) to PATH and
+    // exit. One-shot, so it runs before any analysis work.
+    if (!args.export_annotations.empty()) {
+        const std::filesystem::path exp_cache_dir =
+            !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                    : ember::cache::default_dir();
+        std::filesystem::path exp_explicit;
+        if (!args.annotations_path.empty())  exp_explicit = args.annotations_path;
+        else if (!args.project_path.empty()) exp_explicit = args.project_path;
+        const auto src = ember::resolve_annotation_location(
+            args.binary, exp_explicit, exp_cache_dir);
+        ember::Annotations a;
+        std::error_code ec;
+        if (src.source != ember::AnnotationSource::None &&
+            std::filesystem::exists(src.path, ec) && !ec) {
+            auto rv = ember::Annotations::load(src.path);
+            if (!rv) {
+                std::println(stderr, "ember: {}: {}",
+                             rv.error().kind_name(), rv.error().message);
+                return EXIT_FAILURE;
+            }
+            a = std::move(*rv);
+        }
+        auto sv = a.save(args.export_annotations);
+        if (!sv) {
+            std::println(stderr, "ember: {}: {}",
+                         sv.error().kind_name(), sv.error().message);
+            return EXIT_FAILURE;
+        }
+        if (!args.quiet) {
+            const std::size_t n = a.renames.size() + a.signatures.size()
+                                + a.notes.size() + a.named_constants.size();
+            std::println(stderr,
+                "ember: exported {} annotation(s) from {} to '{}'",
+                n,
+                src.source == ember::AnnotationSource::None ? std::string{"<empty>"}
+                                                            : src.path.string(),
+                args.export_annotations);
+        }
+        return EXIT_SUCCESS;
+    }
+
     if (!args.script_path.empty()) {
+        // Scripts inherit the same source-precedence ladder as emission:
+        // --project/--annotations beat the sidecar which beats the cache.
+        // Mutations are still gated (empty path → mutation API raises),
+        // but the gate now opens automatically when a sidecar or cache
+        // entry exists; otherwise a fresh `commit()` writes to the cache
+        // path the resolver returned.
+        const std::filesystem::path script_cache_dir =
+            !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                    : ember::cache::default_dir();
+        auto loc = ember::resolve_annotation_location(
+            args.binary,
+            !args.project_path.empty() ? args.project_path : args.annotations_path,
+            script_cache_dir);
+        if (args.no_cache && loc.source == ember::AnnotationSource::Cache) {
+            loc = {};
+        }
+
         std::optional<ember::ProjectContext> project;
-        if (!args.project_path.empty()) {
+        if (loc.source != ember::AnnotationSource::None) {
             project.emplace();
-            project->path = args.project_path;
+            project->path = loc.path;
             // Missing-file is a clean-start; a malformed file is a real error.
-            if (std::filesystem::exists(args.project_path)) {
-                auto ld = ember::Annotations::load(args.project_path);
+            std::error_code ec;
+            if (std::filesystem::exists(loc.path, ec) && !ec) {
+                auto ld = ember::Annotations::load(loc.path);
                 if (!ld) {
                     std::println(stderr, "ember: {}: {}",
                                  ld.error().kind_name(), ld.error().message);
                     return EXIT_FAILURE;
                 }
                 project->loaded = std::move(*ld);
+                if (!args.quiet) {
+                    const std::size_t n = project->loaded.renames.size()
+                                        + project->loaded.signatures.size()
+                                        + project->loaded.notes.size()
+                                        + project->loaded.named_constants.size();
+                    std::println(stderr,
+                        "ember: annotations: {} ({}, {} entries)",
+                        loc.path.string(),
+                        ember::annotation_source_name(loc.source), n);
+                }
             }
         }
         ember::ScriptRuntime rt(b, project ? &*project : nullptr);
@@ -1572,6 +1658,34 @@ int main(int argc, char** argv) {
     // and indirect_const (call [rip+X] resolving to code) outgoing edges
     // of the function at VA. Accepts either a hex VA or a symbol name —
     // `resolve_function` handles both so batch scripts can pass either
+    // --containing-fn VA: name + extent of the function whose body
+    // covers VA. Tab-separated (entry, size, name, offset_within) or
+    // JSON under --json. Replaces the bisect-into-fingerprints.tsv
+    // idiom shell scripts hand-roll today.
+    if (!args.containing_fn.empty()) {
+        auto va = parse_cli_addr(args.containing_fn);
+        if (!va) {
+            std::println(stderr, "ember: --containing-fn: bad address '{}'",
+                         args.containing_fn);
+            return EXIT_FAILURE;
+        }
+        auto cf = ember::containing_function(b, *va);
+        if (!cf) {
+            std::println(stderr, "ember: --containing-fn: no function covers {:#x}",
+                         *va);
+            return EXIT_FAILURE;
+        }
+        if (args.json) {
+            std::println(
+                "{{\"entry\":\"{:#x}\",\"size\":{},\"name\":\"{}\",\"offset\":{}}}",
+                cf->entry, cf->size, cf->name, cf->offset_within);
+        } else {
+            std::println("{:#x}\t{:#x}\t{}\t{:#x}",
+                         cf->entry, cf->size, cf->name, cf->offset_within);
+        }
+        return EXIT_SUCCESS;
+    }
+
     // form without reflowing. Unlike --refs-to this does not need the
     // full call-graph cache; one function gets built and walked.
     if (!args.callees.empty()) {
@@ -1794,22 +1908,53 @@ int main(int argc, char** argv) {
         }
         return EXIT_SUCCESS;
     }
-    // Load user edits (renames, declared signatures) if the UI passed us a
-    // project file. Missing/empty is non-fatal — we just fall back to the
-    // generated names.
+    // Resolve the annotation source. Precedence is
+    // --annotations/--project → sidecar → cache; the resolver returns a
+    // cache path even when no file exists yet, so a fresh commit lands
+    // in the cache automatically. Missing/empty is non-fatal — we just
+    // fall back to the generated names.
+    std::filesystem::path _explicit_ann;
+    if (!args.annotations_path.empty())    _explicit_ann = args.annotations_path;
+    else if (!args.project_path.empty())   _explicit_ann = args.project_path;
+    const std::filesystem::path _cache_dir =
+        !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                : ember::cache::default_dir();
+    auto ann_loc = ember::resolve_annotation_location(
+        args.binary, _explicit_ann, _cache_dir);
+    // --no-cache bypasses the annotation *cache* path but still honors
+    // the sidecar and any explicit --annotations/--project. The user
+    // asked not to touch the cache; we respect that symmetrically.
+    if (args.no_cache && ann_loc.source == ember::AnnotationSource::Cache) {
+        ann_loc = {};
+    }
+
     ember::Annotations annotations;
-    if (!args.annotations_path.empty()) {
-        auto rv = ember::Annotations::load(args.annotations_path);
-        if (rv) {
-            annotations = std::move(*rv);
-        } else {
-            std::println(stderr,
-                "ember: warning: {}: {}; continuing without user annotations",
-                rv.error().kind_name(), rv.error().message);
+    bool ann_loaded = false;
+    if (ann_loc.source != ember::AnnotationSource::None) {
+        std::error_code ec;
+        if (std::filesystem::exists(ann_loc.path, ec) && !ec) {
+            auto rv = ember::Annotations::load(ann_loc.path);
+            if (rv) {
+                annotations = std::move(*rv);
+                ann_loaded = true;
+                if (!args.quiet) {
+                    const std::size_t n = annotations.renames.size()
+                                        + annotations.signatures.size()
+                                        + annotations.notes.size()
+                                        + annotations.named_constants.size();
+                    std::println(stderr,
+                        "ember: annotations: {} ({}, {} entries)",
+                        ann_loc.path.string(),
+                        ember::annotation_source_name(ann_loc.source), n);
+                }
+            } else {
+                std::println(stderr,
+                    "ember: warning: {}: {}; continuing without user annotations",
+                    rv.error().kind_name(), rv.error().message);
+            }
         }
     }
-    const ember::Annotations* ann_ptr =
-        (!args.annotations_path.empty()) ? &annotations : nullptr;
+    const ember::Annotations* ann_ptr = ann_loaded ? &annotations : nullptr;
 
     ember::EmitOptions emit_opts;
     emit_opts.show_bb_labels = args.labels;

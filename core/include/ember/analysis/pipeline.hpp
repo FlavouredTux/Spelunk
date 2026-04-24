@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -113,10 +114,41 @@ struct ClassifiedCallee {
     addr_t     site   = 0;
 };
 
+// Resolve an address to the function whose extent contains it. Uses
+// the union of defined function symbols + CFG-discovered `sub_*`
+// entries (i.e. `enumerate_functions`), sorted by start, and binary-
+// searches for the largest start ≤ `addr`. Nullopt when nothing covers
+// `addr` or the enclosing function is a PLT stub / has no bytes
+// mapped.
+struct ContainingFn {
+    addr_t      entry         = 0;
+    u64         size          = 0;   // 0 when unknown
+    std::string name;
+    u64         offset_within = 0;   // addr - entry
+};
+
+[[nodiscard]] std::optional<ContainingFn>
+containing_function(const Binary& b, addr_t addr);
+
 // Walk the CFG of the function at `fn` and return its outgoing direct
 // call/tail/indirect-const edges. Sorted by target VA, deduped on
 // (target, kind) pairs. Empty when `fn` is not a decodable function.
+//
+// Vtable back-trace: `call [reg + disp]` is resolved when preceded
+// (within the same basic block) by a `mov reg, [rip + k]` whose target
+// is a known Itanium vtable base. The edge is emitted as IndirectConst
+// with `target` set to the slot's IMP. Cross-block tracking is
+// intentionally out of scope — a register redef on a join path would
+// produce misleading resolutions without flow analysis.
 [[nodiscard]] std::vector<ClassifiedCallee>
 compute_classified_callees(const Binary& b, addr_t fn);
+
+// Per-call-site resolution of the function at `fn`. Returns the subset
+// of classified-callee edges keyed by call-site VA, so a renderer can
+// answer "what does this specific `call [rax+0x38]` actually invoke?"
+// in O(log n). Missing entries mean the edge was genuinely opaque —
+// callers should NOT assume every CallIndirect has a resolution.
+[[nodiscard]] std::map<addr_t /*site*/, addr_t /*target*/>
+compute_call_resolutions(const Binary& b, addr_t fn);
 
 }  // namespace ember

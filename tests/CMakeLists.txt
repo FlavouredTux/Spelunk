@@ -118,6 +118,14 @@ add_executable(ember_demangle_test demangle_test.cpp)
 target_link_libraries(ember_demangle_test PRIVATE ember::core ember::flags)
 add_test(NAME demangle_unit COMMAND ember_demangle_test)
 
+# Unit test for the annotation source resolver: explicit > sidecar > cache
+# precedence, path-based (not content-based) cache keys.
+add_executable(ember_annotations_resolver_test annotations_resolver_test.cpp)
+target_link_libraries(ember_annotations_resolver_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME annotations_resolver_unit
+         COMMAND ember_annotations_resolver_test)
+
 # ---- switch_basic -----------------------------------------------------------
 
 ember_golden_test(
@@ -195,6 +203,36 @@ ember_golden_test(
     NAME    return_value_big_signed_pseudo
     FIXTURE return_value
     ARGS    "-p|-s|big|--annotations|${_fixture_dir}/return_value.ann"
+    GOLDEN  return_value.big.signed.pseudo.txt
+)
+
+# Sidecar auto-load: drop `<binary>.ember-annotations` next to a copy of
+# the fixture and expect `-p -s big` to pick up the same renames as the
+# --annotations-explicit test above, without any flag. We build the
+# sidecar against a separate binary path so this test can't accidentally
+# poison `return_value_big_pseudo` (which expects the unannotated form).
+set(_rv_sidecar "${_build_dir}/return_value_sidecar")
+add_custom_command(
+    OUTPUT  "${_rv_sidecar}"
+            "${_rv_sidecar}.ember-annotations"
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${EMBER_FIXTURE_return_value_PATH}" "${_rv_sidecar}"
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${_fixture_dir}/return_value.ann"
+            "${_rv_sidecar}.ember-annotations"
+    DEPENDS "${EMBER_FIXTURE_return_value_PATH}"
+            "${_fixture_dir}/return_value.ann"
+    COMMENT "Staging sidecar annotations for return_value_sidecar"
+    VERBATIM
+)
+add_custom_target(ember_fixture_return_value_sidecar ALL
+    DEPENDS "${_rv_sidecar}" "${_rv_sidecar}.ember-annotations")
+set(EMBER_FIXTURE_return_value_sidecar_PATH "${_rv_sidecar}")
+
+ember_golden_test(
+    NAME    return_value_big_sidecar_pseudo
+    FIXTURE return_value_sidecar
+    ARGS    "-p|-s|big"
     GOLDEN  return_value.big.signed.pseudo.txt
 )
 
@@ -379,6 +417,23 @@ ember_golden_test(
     FIXTURE tail_call
     ARGS    "--callees|inner"
     GOLDEN  tail_call.inner.callees.txt
+)
+
+# --containing-fn: resolve an address inside the body of `big` to its
+# entry + name + offset-within. The fixture is compiled -no-pie so the
+# VAs are stable; `big` lives at a known offset. Exercises both TSV and
+# JSON output.
+ember_golden_test(
+    NAME    return_value_containing_fn
+    FIXTURE return_value
+    ARGS    "--containing-fn|0x401143"
+    GOLDEN  return_value.containing_fn.txt
+)
+ember_golden_test(
+    NAME    return_value_containing_fn_json
+    FIXTURE return_value
+    ARGS    "--containing-fn|0x401143|--json"
+    GOLDEN  return_value.containing_fn.json.txt
 )
 
 # ---- dead_store (DSE on global-address stores) ----------------------------

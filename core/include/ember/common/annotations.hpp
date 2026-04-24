@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <ember/common/error.hpp>
@@ -19,6 +20,58 @@ struct FunctionSig {
     std::string           return_type;
     std::vector<ParamSig> params;
 };
+
+// Where the current annotation file came from. Drives the writeback
+// destination (a cache hit round-trips back to the cache, a sidecar
+// round-trips back to the sidecar) and the one-line visibility log.
+enum class AnnotationSource : u8 {
+    None,
+    Explicit,   // --annotations PATH or --project PATH
+    Sidecar,    // <binary>.ember-annotations
+    Cache,      // <cache_dir>/annotations/<path-key>/annotations.db
+};
+
+[[nodiscard]] constexpr std::string_view
+annotation_source_name(AnnotationSource s) noexcept {
+    switch (s) {
+        case AnnotationSource::None:     return "none";
+        case AnnotationSource::Explicit: return "explicit";
+        case AnnotationSource::Sidecar:  return "sidecar";
+        case AnnotationSource::Cache:    return "cache";
+    }
+    return "?";
+}
+
+struct AnnotationLocation {
+    std::filesystem::path path;
+    AnnotationSource      source = AnnotationSource::None;
+};
+
+// The sidecar filename ember looks for next to `binary`. Callers that
+// don't care about the full resolver can still use this path directly.
+[[nodiscard]] std::filesystem::path
+sidecar_annotation_path(const std::filesystem::path& binary);
+
+// Cache path for the resolved annotations file. Keyed by
+// `basename + '@' + fnv1a_64(parent_abspath)` — deliberately NOT by
+// content hash, so annotations survive binary version swaps at the same
+// path. `cache_dir` is usually `ember::cache::default_dir()`.
+[[nodiscard]] std::filesystem::path
+cache_annotation_path(const std::filesystem::path& binary,
+                      const std::filesystem::path& cache_dir);
+
+// Resolve which annotation file to read and (symmetrically) write back
+// to. Precedence:
+//   1. explicit_path (--annotations / --project) — always wins.
+//   2. `<binary>.ember-annotations` sidecar — when the file exists.
+//   3. Cache path — returned even when the file doesn't exist yet, so
+//      the first commit has a destination.
+// Returns source=None and an empty path only when both `binary` and
+// `explicit_path` are empty.
+[[nodiscard]] AnnotationLocation
+resolve_annotation_location(const std::filesystem::path& binary,
+                            const std::filesystem::path& explicit_path,
+                            const std::filesystem::path& cache_dir);
 
 // On-disk format, one record per line:
 //

@@ -106,6 +106,19 @@ const Symbol* Binary::find_by_name(std::string_view name) const noexcept {
     return it == c.by_name.end() ? nullptr : it->second;
 }
 
+std::vector<const Symbol*>
+Binary::find_all_by_name(std::string_view name) const {
+    // Linear scan rather than a cached multimap: collision checks are
+    // low-frequency (once per CLI invocation, once per project.rename)
+    // and the single-winner cache still satisfies the hot path.
+    std::vector<const Symbol*> out;
+    for (const auto& s : symbols()) {
+        if (s.is_import) continue;
+        if (s.name == name) out.push_back(&s);
+    }
+    return out;
+}
+
 void Binary::record_indirect_edge(addr_t from, addr_t to) const {
     auto& vec = indirect_edges_[from];
     // Linear-scan dedupe — N is tiny per call site (a handful of

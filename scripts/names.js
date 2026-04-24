@@ -84,11 +84,26 @@ function cmdImport(args) {
     const db = parseDb(io.read(path));
     log.info(`loaded ${db.size} entries from ${path}`);
 
-    let renamed = 0;
-    let collisions = 0;
-    let alreadyNamed = 0;
+    // Build a reverse index: fingerprint -> [addrs in this binary].
+    // A DB entry whose fingerprint matches N>1 binary functions is
+    // ambiguous — blindly renaming all of them to the same name silently
+    // aliases them and the next find_by_name returns the wrong one. Cost
+    // real debugging hours for one user; skip + warn instead.
+    const rows = fingerprintAll();
+    const fpToAddrs = new Map();
+    for (const r of rows) {
+        if (!r.fp) continue;
+        const list = fpToAddrs.get(r.fp.hash);
+        if (list) list.push(r.addr);
+        else fpToAddrs.set(r.fp.hash, [r.addr]);
+    }
 
-    for (const r of fingerprintAll()) {
+    let renamed = 0;
+    let collisions = 0;        // binary function already has a different name
+    let alreadyNamed = 0;
+    let ambiguous = 0;         // fingerprint maps to >1 candidate — skipped
+
+    for (const r of rows) {
         if (!r.fp) continue;
         const entry = db.get(r.fp.hash);
         if (!entry) continue;
@@ -101,6 +116,18 @@ function cmdImport(args) {
             }
             continue;
         }
+        const siblings = fpToAddrs.get(r.fp.hash) ?? [];
+        if (siblings.length > 1) {
+            // Report once, when we hit the first sibling. The rest of
+            // the group advances the counter without re-logging.
+            if (siblings[0] === r.addr) {
+                const addrs = siblings.slice(0, 5).map(hex).join(", ");
+                const suffix = siblings.length > 5 ? `, ... (+${siblings.length - 5})` : "";
+                log.warn(`fingerprint ${r.fp.hash} matches ${siblings.length} candidates (${addrs}${suffix}); skipping '${entry.name}' — use a stricter anchor`);
+            }
+            ++ambiguous;
+            continue;
+        }
         project.rename(r.addr, entry.name);
         if (entry.note) project.note(r.addr, entry.note);
         ++renamed;
@@ -109,9 +136,9 @@ function cmdImport(args) {
     if (renamed > 0) {
         print(project.diff());
         project.commit();
-        log.info(`applied ${renamed}, kept ${alreadyNamed}, ${collisions} collisions`);
+        log.info(`applied ${renamed}, kept ${alreadyNamed}, ${collisions} name-collisions, ${ambiguous} ambiguous`);
     } else {
-        log.info(`nothing to apply; ${alreadyNamed} already-named, ${collisions} collisions`);
+        log.info(`nothing to apply; ${alreadyNamed} already-named, ${collisions} name-collisions, ${ambiguous} ambiguous`);
     }
 }
 

@@ -880,6 +880,14 @@ bool is_dry_run(JSContext* ctx, JSValueConst opts) {
     return dry;
 }
 
+bool is_force(JSContext* ctx, JSValueConst opts) {
+    if (!JS_IsObject(opts)) return false;
+    JSValue v = JS_GetPropertyStr(ctx, opts, "force");
+    const bool forced = JS_ToBool(ctx, v) > 0;
+    JS_FreeValue(ctx, v);
+    return forced;
+}
+
 JSValue make_diff_entry(JSContext* ctx, std::string_view kind,
                                       addr_t a, std::string_view detail) {
     JSValue o = JS_NewObject(ctx);
@@ -908,7 +916,44 @@ JSValue js_project_rename(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     std::string name{n.view()};
 
     auto* hc = ctx_of(ctx);
-    const bool dry = argc >= 3 && is_dry_run(ctx, argv[2]);
+    const bool dry    = argc >= 3 && is_dry_run(ctx, argv[2]);
+    const bool forced = argc >= 3 && is_force(ctx, argv[2]);
+
+    // Refuse to bind one name to two addresses. Fingerprint import over
+    // a binary with many identical tiny stubs will otherwise quietly
+    // alias them — downstream `find_by_name` returns just one, and the
+    // caller reads the wrong function's bytes. `{force: true}` opts out
+    // for callers who know what they're doing (e.g. intentional alias).
+    if (!forced) {
+        auto conflict = [&](const std::map<addr_t, std::string>& m) -> std::optional<addr_t> {
+            for (const auto& [other, nm] : m) {
+                if (other != a && nm == name) return other;
+            }
+            return std::nullopt;
+        };
+        if (auto c = conflict(hc->pending.renames); c) {
+            return throw_err(ctx, std::format(
+                "rename: '{}' is already pending for {:#x} (this call targets {:#x}); pass {{force: true}} to alias",
+                name, *c, a));
+        }
+        if (auto c = conflict(hc->project->loaded.renames); c) {
+            return throw_err(ctx, std::format(
+                "rename: '{}' already names {:#x} (this call targets {:#x}); pass {{force: true}} to alias",
+                name, *c, a));
+        }
+        // Symbol-table collision: a defined symbol with this name that
+        // lives somewhere else. Ignore the match if the symbol *is* the
+        // target addr — that's a legitimate rename-to-same (no-op).
+        const auto syms = hc->binary->find_all_by_name(name);
+        for (const Symbol* s : syms) {
+            if (s->addr != a) {
+                return throw_err(ctx, std::format(
+                    "rename: '{}' is a defined symbol at {:#x} (this call targets {:#x}); pass {{force: true}} to alias",
+                    name, s->addr, a));
+            }
+        }
+    }
+
     JSValue diff = make_diff_entry(ctx, "rename", a, name);
     if (!dry) hc->pending.renames[a] = std::move(name);
     return diff;

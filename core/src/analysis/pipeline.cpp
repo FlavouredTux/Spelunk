@@ -231,11 +231,34 @@ resolve_function(const Binary& b, std::string_view symbol) {
         return resolve_containing_function(b, *va);
     }
 
-    const Symbol* chosen = b.find_by_name(symbol.empty() ? "main" : symbol);
+    const std::string_view lookup = symbol.empty() ? "main" : symbol;
+    const Symbol* chosen = b.find_by_name(lookup);
     if (chosen && chosen->is_import) chosen = nullptr;
     if (!symbol.empty() && chosen && chosen->is_import) chosen = nullptr;
 
     if (chosen) {
+        // Fingerprint import and user renames can silently bind the same
+        // name to multiple addresses. Refuse the lookup rather than
+        // picking the first — a wrong-address answer presents as phantom
+        // bugs downstream.
+        const auto all = b.find_all_by_name(lookup);
+        if (all.size() > 1) {
+            std::fprintf(stderr,
+                "ember: name '%.*s' is ambiguous — matches %zu addresses:",
+                static_cast<int>(lookup.size()), lookup.data(), all.size());
+            const std::size_t shown = std::min<std::size_t>(all.size(), 5);
+            for (std::size_t i = 0; i < shown; ++i) {
+                std::fprintf(stderr, " %#llx",
+                    static_cast<unsigned long long>(all[i]->addr));
+            }
+            if (all.size() > shown) {
+                std::fprintf(stderr, " ... (+%zu more)",
+                    all.size() - shown);
+            }
+            std::fprintf(stderr,
+                "; pass the VA (0x…) to pick one\n");
+            return std::nullopt;
+        }
         if (b.bytes_at(chosen->addr).empty()) return std::nullopt;
         return window_from_addr(chosen->addr, chosen->size, chosen->name);
     }

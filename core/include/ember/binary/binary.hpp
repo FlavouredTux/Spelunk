@@ -82,6 +82,14 @@ public:
     // matching symbol, preferring a defined one if both exist.
     [[nodiscard]] const Symbol* find_by_name(std::string_view name) const noexcept;
 
+    // Return every non-import symbol whose name matches `name`. Linear
+    // scan; fingerprint import and user renames can collide on short
+    // stubs, and this is the escape hatch for "how many addresses does
+    // this name cover?". Empty span when nothing matches or only
+    // imports match.
+    [[nodiscard]] std::vector<const Symbol*>
+    find_all_by_name(std::string_view name) const;
+
     // ---- Indirect-edge oracle ----------------------------------------
     // User-populated map: instruction VA of an indirect call/jmp →
     // concrete target VAs observed at runtime (or otherwise known).

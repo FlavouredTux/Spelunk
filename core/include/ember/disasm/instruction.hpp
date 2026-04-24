@@ -78,6 +78,28 @@ enum class Mnemonic : u16 {
     MovapsStore, // 0x0F 29
     Movhps,      // 0x0F 16
     Movlps,      // 0x0F 12
+    // Packed-single logical / arithmetic (0x0F 5x, no mandatory prefix).
+    // The 0x0F 0x50–0x5F range was entirely absent before, so any
+    // `xorps xmm0, xmm0` stopped linear disassembly dead and the caller
+    // skipped one byte, dragging the ModR/M byte into a bogus next
+    // decode. Keep them as decode-only (length-advance) for now.
+    Andps,       // 0x0F 54
+    Andnps,      // 0x0F 55
+    Orps,        // 0x0F 56
+    Xorps,       // 0x0F 57
+    Addps,       // 0x0F 58
+    Mulps,       // 0x0F 59
+    Subps,       // 0x0F 5C
+    Divps,       // 0x0F 5E
+    // Packed-double counterparts (0x66 0x0F 5x).
+    Andpd,       // 0x66 0x0F 54
+    Andnpd,      // 0x66 0x0F 55
+    Orpd,        // 0x66 0x0F 56
+    Xorpd,       // 0x66 0x0F 57
+    Addpd,       // 0x66 0x0F 58
+    Mulpd,       // 0x66 0x0F 59
+    Subpd,       // 0x66 0x0F 5C
+    Divpd,       // 0x66 0x0F 5E
     Punpcklbw,   // 0x66 0x0F 60
     Punpcklwd,   // 0x66 0x0F 61
     Punpckldq,   // 0x66 0x0F 62

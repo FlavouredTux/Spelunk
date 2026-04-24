@@ -55,6 +55,59 @@ std::string hex_bytes(std::span<const std::byte> b) {
     return s;
 }
 
+// How far to advance after a decode failure. The old behaviour was
+// always 1, which routinely misdecoded the ModR/M byte of a failed
+// 0x0F-escaped opcode as a fresh one-byte instruction (`0f 57 c0`
+// became "decode error + push rdi"). Prefixes and the two-byte escape
+// aren't themselves a valid instruction start — skipping them avoids
+// seeing them twice. VEX/EVEX take a wider swath because their payload
+// bytes are drawn from a very different opcode space; one cautious
+// forward jump is better than a multi-instruction cascade.
+std::size_t decode_failure_advance(std::span<const std::byte> bytes) noexcept {
+    std::size_t i = 0;
+    // Walk legacy prefixes. There are at most ~4 in practice; cap at 15
+    // to match the architecture's maximum instruction length.
+    while (i < bytes.size() && i < 15) {
+        const u8 b = static_cast<u8>(bytes[i]);
+        const bool is_prefix =
+            b == 0x26 || b == 0x2E || b == 0x36 || b == 0x3E ||
+            b == 0x64 || b == 0x65 || b == 0x66 || b == 0x67 ||
+            b == 0xF0 || b == 0xF2 || b == 0xF3;
+        if (!is_prefix) break;
+        ++i;
+    }
+    if (i >= bytes.size()) return std::max<std::size_t>(i, 1);
+    u8 lead = static_cast<u8>(bytes[i]);
+    // REX byte (0x40–0x4F). Transparent to opcode dispatch.
+    if ((lead & 0xF0) == 0x40) {
+        ++i;
+        if (i >= bytes.size()) return std::max<std::size_t>(i, 1);
+        lead = static_cast<u8>(bytes[i]);
+    }
+    // 0x0F two-byte escape: skip escape + next opcode byte.
+    if (lead == 0x0F) {
+        i += std::min<std::size_t>(2, bytes.size() - i);
+        return std::max<std::size_t>(i, 1);
+    }
+    // VEX (0xC5: 2-byte, 0xC4: 3-byte) and EVEX (0x62: 4-byte). In
+    // 64-bit code these always carry a full opcode payload after the
+    // prefix. Advance past the whole prefix body + one opcode byte.
+    if (lead == 0xC5) {
+        i += std::min<std::size_t>(3, bytes.size() - i);  // C5 + payload + opcode
+        return std::max<std::size_t>(i, 1);
+    }
+    if (lead == 0xC4) {
+        i += std::min<std::size_t>(4, bytes.size() - i);  // C4 + 2 payload + opcode
+        return std::max<std::size_t>(i, 1);
+    }
+    if (lead == 0x62) {
+        i += std::min<std::size_t>(5, bytes.size() - i);  // 62 + 3 payload + opcode
+        return std::max<std::size_t>(i, 1);
+    }
+    // Plain one-byte opcode: skip it.
+    return std::max<std::size_t>(i + 1, 1);
+}
+
 void append_function_text(std::string& out, const Function& fn) {
     out += std::format("function {}\n", fn.name.empty() ? "<unknown>" : fn.name);
     out += std::format("  entry    {:#018x}\n", fn.start);
@@ -298,11 +351,12 @@ format_disasm(const Binary& b, const FuncWindow& w) {
         const auto remaining = bytes.subspan(off);
         auto decoded = dec.decode(remaining, ip);
         if (!decoded) {
+            const std::size_t skip = decode_failure_advance(remaining);
             out += std::format("{:#018x}  {:<30}  ; decode error: {}\n",
-                               ip, hex_bytes(remaining.first(1)),
+                               ip, hex_bytes(remaining.first(std::min(skip, remaining.size()))),
                                decoded.error().message);
-            ip  += 1;
-            off += 1;
+            ip  += skip;
+            off += skip;
             continue;
         }
         const auto& insn = *decoded;
@@ -339,11 +393,12 @@ format_disasm_range(const Binary& b, addr_t start, addr_t end) {
         const auto remaining = bytes.subspan(off);
         auto decoded = dec.decode(remaining, ip);
         if (!decoded) {
+            const std::size_t skip = decode_failure_advance(remaining);
             out += std::format("{:#018x}  {:<30}  ; decode error: {}\n",
-                               ip, hex_bytes(remaining.first(1)),
+                               ip, hex_bytes(remaining.first(std::min(skip, remaining.size()))),
                                decoded.error().message);
-            ip  += 1;
-            off += 1;
+            ip  += skip;
+            off += skip;
             continue;
         }
         const auto& insn = *decoded;

@@ -209,6 +209,19 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x29] = op(Mnemonic::MovapsStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
     t[0x2E] = op(Mnemonic::Ucomiss,     OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
 
+    // Packed-single logical + arithmetic. The whole 0x50–0x5F range was
+    // missing before, so `xorps xmm0, xmm0` (0x0F 0x57 0xC0) aborted
+    // linear disassembly and the caller's 1-byte-advance dragged the
+    // ModR/M byte 0xC0 into a garbage next decode.
+    t[0x54] = op(Mnemonic::Andps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x55] = op(Mnemonic::Andnps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x56] = op(Mnemonic::Orps,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x57] = op(Mnemonic::Xorps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x58] = op(Mnemonic::Addps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x59] = op(Mnemonic::Mulps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5C] = op(Mnemonic::Subps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5E] = op(Mnemonic::Divps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+
     // CMovCC: 0x0F 4x — Gv, Ev. Indexed in condition order (o/no/b/ae/…).
     constexpr Mnemonic cmovs[16] = {
         Mnemonic::Cmovo,  Mnemonic::Cmovno, Mnemonic::Cmovb,  Mnemonic::Cmovae,
@@ -291,6 +304,17 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
 constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     std::array<OpcodeEntry, 256> t{};
     t[0x2E] = op(Mnemonic::Ucomisd,     OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    // Packed-double logical + arithmetic, mirroring the packed-single
+    // block in build_secondary(). Same motivation: avoid cascading
+    // decode failures on everyday SSE2 code.
+    t[0x54] = op(Mnemonic::Andpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x55] = op(Mnemonic::Andnpd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x56] = op(Mnemonic::Orpd,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x57] = op(Mnemonic::Xorpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x58] = op(Mnemonic::Addpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x59] = op(Mnemonic::Mulpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5C] = op(Mnemonic::Subpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5E] = op(Mnemonic::Divpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x60] = op(Mnemonic::Punpcklbw,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x61] = op(Mnemonic::Punpcklwd,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x62] = op(Mnemonic::Punpckldq,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);

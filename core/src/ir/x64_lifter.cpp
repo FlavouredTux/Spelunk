@@ -1,6 +1,7 @@
 #include <ember/ir/x64_lifter.hpp>
 
 #include <cstddef>
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -982,7 +983,13 @@ void lift_instruction(LiftCtx& ctx) {
             if (is_conditional_branch(insn.mnemonic)) {
                 lift_jcc(ctx, insn.mnemonic);
             } else {
-                lift_intrinsic(ctx, mnemonic_name(insn.mnemonic));
+                // Unmodeled mnemonic. Tag with `x64.` so the emitter can
+                // render the intrinsic as a `/* ... */` comment rather
+                // than `xorps(xmm0, xmm0);` which reads like a real C
+                // call. Intrinsics the lifter handles on purpose
+                // (sqrtss, ucomiss, …) keep their bare names.
+                lift_intrinsic(ctx, std::format("x64.{}",
+                                                mnemonic_name(insn.mnemonic)));
             }
             break;
     }

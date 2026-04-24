@@ -2344,6 +2344,15 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 if (i > 0) args += ", ";
                 args += expr(inst.srcs[i], 0, 0);
             }
+            // `x64.*` tags a raw x86 mnemonic the lifter couldn't model
+            // in the IR (SIMD, FPU, system ops). Render it as a block
+            // comment so the reader sees the elision rather than an
+            // imaginary C call. The rest — explicit intrinsics like
+            // `sqrtss(x)` that the lifter emits deliberately — stay as
+            // calls because they carry real dataflow.
+            if (inst.name.starts_with("x64.")) {
+                return std::format("/* {}({}) */", inst.name, args);
+            }
             return std::format("{}({});", inst.name, args);
         }
 

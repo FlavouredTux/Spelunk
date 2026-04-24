@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,6 @@ struct MsvcRttiClass {
 // for the emitter, matching the signature of `rtti_method_names` so the
 // consumer at `emitter.cpp:2669` is format-agnostic.
 [[nodiscard]] std::map<addr_t, std::string>
-rtti_method_names(const std::vector<MsvcRttiClass>& classes);
+rtti_method_names(std::span<const MsvcRttiClass> classes);
 
 }  // namespace ember

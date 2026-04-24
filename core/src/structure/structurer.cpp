@@ -7,8 +7,10 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -30,16 +32,19 @@ constexpr addr_t kNoAddr = static_cast<addr_t>(-1);
 
 struct CfgInfo {
     std::vector<addr_t>                     rpo;
-    std::map<addr_t, std::size_t>           rpo_index;
-    std::map<addr_t, addr_t>                idom;
+    std::unordered_map<addr_t, std::size_t> rpo_index;
+    std::unordered_map<addr_t, addr_t>      idom;
     // Immediate post-dominators. `ipdom[b]` is the first node that every
     // non-terminating path from `b` passes through. `kNoAddr` (the virtual
     // exit) means every path from `b` terminates with no finite merge.
     // Used by the structurer to pick if/switch convergence points — proper
     // post-dominance, not a BFS-depth heuristic.
-    std::map<addr_t, addr_t>                ipdom;
+    std::unordered_map<addr_t, addr_t>      ipdom;
+    // loop_headers stays std::map because find_loops iterates it to populate
+    // loop_exit; keeping sorted order makes structurer output deterministic
+    // under hash-function tweaks.
     std::map<addr_t, std::set<addr_t>>      loop_headers;  // header -> back-edge sources
-    std::map<addr_t, addr_t>                loop_exit;     // header -> exit successor
+    std::unordered_map<addr_t, addr_t>      loop_exit;     // header -> exit successor
 };
 
 // compute_rpo + compute_idoms live in <ember/analysis/cfg_util.hpp>.
@@ -47,7 +52,7 @@ struct CfgInfo {
 // Cooper-Harvey-Kennedy on the reverse CFG: compute immediate post-dominators.
 // The virtual exit (kNoAddr) is the root; forward-terminating blocks are its
 // reverse-CFG predecessors.
-[[nodiscard]] std::map<addr_t, addr_t>
+[[nodiscard]] std::unordered_map<addr_t, addr_t>
 compute_ipdoms(const IrFunction& fn) {
     std::vector<addr_t> post;   // post-order on reverse CFG from virtual exit
     std::set<addr_t>    seen;
@@ -73,10 +78,12 @@ compute_ipdoms(const IrFunction& fn) {
 
     // RPO of reverse CFG = reverse of post-order.
     std::vector<addr_t> rpo(post.rbegin(), post.rend());
-    std::map<addr_t, std::size_t> rpo_idx;
-    for (std::size_t i = 0; i < rpo.size(); ++i) rpo_idx[rpo[i]] = i;
+    std::unordered_map<addr_t, std::size_t> rpo_idx;
+    rpo_idx.reserve(rpo.size());
+    for (const auto [i, addr] : std::views::enumerate(rpo))
+        rpo_idx[addr] = static_cast<std::size_t>(i);
 
-    std::map<addr_t, addr_t> ipdom;
+    std::unordered_map<addr_t, addr_t> ipdom;
     ipdom[kNoAddr] = kNoAddr;
 
     auto intersect = [&](addr_t b1, addr_t b2) noexcept -> addr_t {
@@ -139,7 +146,7 @@ compute_ipdoms(const IrFunction& fn) {
     return ipdom;
 }
 
-[[nodiscard]] bool dominates(const std::map<addr_t, addr_t>& idom,
+[[nodiscard]] bool dominates(const std::unordered_map<addr_t, addr_t>& idom,
                              addr_t dominator, addr_t node) noexcept {
     while (true) {
         if (node == dominator) return true;
@@ -195,7 +202,9 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
 [[nodiscard]] CfgInfo analyze_cfg(const IrFunction& fn) {
     CfgInfo info;
     info.rpo = compute_rpo(fn);
-    for (std::size_t i = 0; i < info.rpo.size(); ++i) info.rpo_index[info.rpo[i]] = i;
+    info.rpo_index.reserve(info.rpo.size());
+    for (const auto [i, addr] : std::views::enumerate(info.rpo))
+        info.rpo_index[addr] = static_cast<std::size_t>(i);
     info.idom  = compute_idoms(fn, info.rpo, info.rpo_index);
     info.ipdom = compute_ipdoms(fn);
     find_loops(fn, info);

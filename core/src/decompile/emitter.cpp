@@ -256,7 +256,7 @@ enum class Prec : int {
 
 [[nodiscard]] inline std::string
 wrap_if_lt(std::string s, Prec own, int min_prec) {
-    if (static_cast<int>(own) < min_prec) return "(" + std::move(s) + ")";
+    if (std::to_underlying(own) < min_prec) return "(" + std::move(s) + ")";
     return s;
 }
 
@@ -1766,7 +1766,7 @@ struct Emitter {
                 const IrValue& base = bo->first;
                 const i64 off = bo->second;
                 const std::string base_expr =
-                    expr(base, depth + 1, static_cast<int>(Prec::Unary));
+                    expr(base, depth + 1, std::to_underlying(Prec::Unary));
                 // Negative offsets (pointer adjusted above its struct base,
                 // e.g. vtable slots at base-8) don't have clean C syntax;
                 // fall back to the explicit cast form so we don't emit
@@ -1978,19 +1978,19 @@ struct Emitter {
                     return expr(*nonzero, depth + 1, min_prec);
                 }
                 std::string rendered = expr(*nonzero, depth + 1,
-                                            static_cast<int>(Prec::Unary));
+                                            std::to_underlying(Prec::Unary));
                 return wrap_if_lt("!" + rendered, Prec::Unary, min_prec);
             }
         }
         const Prec own = (op == "==" || op == "!=") ? Prec::Eq : Prec::Rel;
-        const int p = static_cast<int>(own);
+        const int p = std::to_underlying(own);
         const std::string_view c = "i64";
         const bool cast_l = signed_cmp && a.kind != IrValueKind::Imm;
         const bool cast_r = signed_cmp && b.kind != IrValueKind::Imm;
         // If we're going to wrap in `(i64)`, the inner must bind at Unary;
         // otherwise the compare's own precedence is enough.
-        const int lp = cast_l ? static_cast<int>(Prec::Unary) : p;
-        const int rp = cast_r ? static_cast<int>(Prec::Unary) : p + 1;
+        const int lp = cast_l ? std::to_underlying(Prec::Unary) : p;
+        const int rp = cast_r ? std::to_underlying(Prec::Unary) : p + 1;
         std::string left  = expr(a, depth + 1, lp);
         std::string right = expr(b, depth + 1, rp);
         if (cast_l) left  = std::format("({}){}", c, left);
@@ -2064,7 +2064,7 @@ struct Emitter {
         // Condition is rendered into `if (...)`, so no outer wrapping needed.
         if (auto s = try_simplify_flag(v, 0, invert, /*in_bool_ctx=*/true, 0); s) return *s;
         if (invert) {
-            std::string base = expr(v, 0, static_cast<int>(Prec::Unary));
+            std::string base = expr(v, 0, std::to_underlying(Prec::Unary));
             return std::format("!{}", base);
         }
         return expr(v, 0, 0);
@@ -2141,12 +2141,12 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         case IrOp::Ashr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
 
         case IrOp::Neg: {
-            std::string inner = expr(d.srcs[0], depth, static_cast<int>(Prec::Unary));
+            std::string inner = expr(d.srcs[0], depth, std::to_underlying(Prec::Unary));
             return wrap_if_lt("-" + inner, Prec::Unary, min_prec);
         }
         case IrOp::Not: {
             const char* op = (d.dst.type == IrType::I1) ? "!" : "~";
-            std::string inner = expr(d.srcs[0], depth, static_cast<int>(Prec::Unary));
+            std::string inner = expr(d.srcs[0], depth, std::to_underlying(Prec::Unary));
             return wrap_if_lt(std::string(op) + inner, Prec::Unary, min_prec);
         }
 
@@ -2179,14 +2179,14 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                     std::string casted = std::format(
                         "({}){}",
                         c_type_name(inner->dst.type),
-                        expr(inner->srcs[0], depth, static_cast<int>(Prec::Unary)));
+                        expr(inner->srcs[0], depth, std::to_underlying(Prec::Unary)));
                     return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
                 }
             }
             std::string casted = std::format(
                 "({}){}",
                 c_type_name(d.dst.type),
-                expr(src, depth, static_cast<int>(Prec::Unary)));
+                expr(src, depth, std::to_underlying(Prec::Unary)));
             return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
         }
 
@@ -2591,7 +2591,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 // syntax gets the outer-paren wrapping treatment, and only
                 // when strictly necessary.
                 const std::string tgt =
-                    expr(inst.srcs[0], 0, static_cast<int>(Prec::Postfix));
+                    expr(inst.srcs[0], 0, std::to_underlying(Prec::Postfix));
                 if (!tgt.empty() && tgt.front() == '*') {
                     call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
                 } else {

@@ -262,7 +262,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
 }
 
 std::map<addr_t, std::string>
-rtti_method_names(const std::vector<RttiClass>& classes) {
+rtti_method_names(std::span<const RttiClass> classes) {
     // Count how many vtable slots each IMP appears in. Addresses that show
     // up across many classes are almost always shared thunks — most
     // commonly `__cxa_pure_virtual`, but also deleting-destructor stubs

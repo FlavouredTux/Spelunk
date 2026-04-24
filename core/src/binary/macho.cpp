@@ -217,6 +217,60 @@ void parse_bind_stream(
 // pointers directly into the binary, linked via `__chainfixups` metadata
 // in __LINKEDIT.
 //
+// Walk a single DYLD_CHAINED_PTR_64 chain starting at `start_vaddr` inside
+// `seg`. Binds are appended to `out`; rebases are resolved in place into
+// `image` so downstream consumers see plain pointers. The 1M-step cap
+// guards against malformed chains that self-reference.
+void walk_chain_64(std::span<std::byte>     image,
+                   const SegInfo&           seg,
+                   u64                      image_base,
+                   u64                      start_vaddr,
+                   auto&&                   import_name,
+                   std::vector<BindRec>&    out)
+{
+    u64 chain_vaddr = start_vaddr;
+    for (u32 steps = 0; steps < 1'000'000; ++steps) {
+        if (chain_vaddr < seg.vmaddr ||
+            chain_vaddr >= seg.vmaddr + seg.vmsize) return;
+        const u64 fo = seg.fileoff + (chain_vaddr - seg.vmaddr);
+        if (fo + 8 > image.size()) return;
+
+        u64 raw = 0;
+        std::memcpy(&raw, image.data() + fo, 8);
+        const bool is_bind = (raw >> 63) & 1;
+        const u64  next    = (raw >> 51) & 0xFFFu;
+
+        if (is_bind) {
+            const u32 ordinal = static_cast<u32>(raw & 0xFFFFFFu);
+            std::string name = import_name(ordinal);
+            if (!name.empty()) {
+                out.push_back({static_cast<addr_t>(chain_vaddr),
+                               std::move(name)});
+            }
+        } else {
+            // Rebase. Resolve to a real VA and write it back to the in-memory
+            // buffer so later consumers (RTTI walker, ObjC scanner, generic
+            // section reads) see a plain pointer rather than the chain
+            // descriptor. Without this, every pointer in __DATA_CONST that
+            // lives on a fixup chain reads as a packed bitfield.
+            //
+            // dyld_chained_ptr_64_rebase bit layout:
+            //   target  [ 0:35]  vmaddr offset from image base
+            //   high8   [36:43]  ObjC tagged-pointer / type bits,
+            //                    dyld OR's these into the top byte
+            //   reserved[44:50]  zero
+            //   next    [51:62]  4-byte stride to next chain entry
+            //   bind    [   63]  == 0 here (we're in the rebase arm)
+            const u64 target = raw & ((u64{1} << 36) - 1);
+            const u64 high8  = (raw >> 36) & 0xFFu;
+            const u64 real   = (image_base + target) | (high8 << 56);
+            std::memcpy(image.data() + fo, &real, 8);
+        }
+        if (next == 0) return;
+        chain_vaddr += next * 4u;  // stride is 4 on format 6
+    }
+}
+
 // Layout we produce the same as parse_bind_stream: (slot_vaddr, name).
 // Scope: handles the x86_64 / arm64 macOS pointer formats (DYLD_CHAINED_
 // PTR_64 = 6 and PTR_ARM64E = 2 with bind bit set). Unknown pointer
@@ -319,58 +373,16 @@ void parse_chained_fixups(
         if (si >= segs.size()) continue;
         const u64 seg_vaddr = segs[si].vmaddr;
 
+        const SegInfo& seg = segs[si];
         for (u16 pi = 0; pi < *page_count; ++pi) {
             auto page_start = rd16(sig + 20 + pi * 2);
             if (!page_start) break;
             if (*page_start == 0xFFFF) continue;   // DYLD_CHAINED_PTR_START_NONE
 
-            u64 chain_vaddr = seg_vaddr + *seg_offset +
-                              static_cast<u64>(pi) * *page_size + *page_start;
-            // Walk the chain via image bytes. `image` spans the whole file,
-            // but chained pointers live in mapped segments where fileoff
-            // offset = vaddr - seg_vaddr + seg.fileoff.
-            u32 steps = 0;
-            while (steps++ < 1'000'000) {
-                // Map vaddr back to file offset.
-                const auto& sref = segs[si];
-                if (chain_vaddr < sref.vmaddr ||
-                    chain_vaddr >= sref.vmaddr + sref.vmsize) break;
-                const u64 fo = sref.fileoff + (chain_vaddr - sref.vmaddr);
-                if (fo + 8 > image.size()) break;
-                u64 raw = 0;
-                std::memcpy(&raw, image.data() + fo, 8);
-                const bool is_bind = (raw >> 63) & 1;
-                const u64  next    = (raw >> 51) & 0xFFFu;
-                if (is_bind) {
-                    const u32 ordinal = static_cast<u32>(raw & 0xFFFFFFu);
-                    std::string name = import_name(ordinal);
-                    if (!name.empty()) {
-                        out.push_back({static_cast<addr_t>(chain_vaddr),
-                                       std::move(name)});
-                    }
-                } else {
-                    // Rebase. Resolve to a real VA and write it back to
-                    // the in-memory buffer so later consumers (RTTI
-                    // walker, ObjC scanner, generic section reads) see
-                    // a plain pointer rather than the chain descriptor.
-                    // Without this, every pointer in __DATA_CONST that
-                    // lives on a fixup chain reads as a packed bitfield.
-                    //
-                    // dyld_chained_ptr_64_rebase bit layout:
-                    //   target  [ 0:35]  vmaddr offset from image base
-                    //   high8   [36:43]  ObjC tagged-pointer / type bits,
-                    //                    dyld OR's these into the top byte
-                    //   reserved[44:50]  zero
-                    //   next    [51:62]  4-byte stride to next chain entry
-                    //   bind    [   63]  == 0 here (we're in the rebase arm)
-                    const u64 target = raw & ((u64{1} << 36) - 1);
-                    const u64 high8  = (raw >> 36) & 0xFFu;
-                    const u64 real   = (image_base + target) | (high8 << 56);
-                    std::memcpy(image.data() + fo, &real, 8);
-                }
-                if (next == 0) break;
-                chain_vaddr += next * 4u;  // stride is 4 on format 6
-            }
+            const u64 chain_vaddr = seg_vaddr + *seg_offset +
+                                    static_cast<u64>(pi) * *page_size +
+                                    *page_start;
+            walk_chain_64(image, seg, image_base, chain_vaddr, import_name, out);
         }
     }
 }

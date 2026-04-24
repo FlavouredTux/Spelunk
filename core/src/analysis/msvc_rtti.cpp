@@ -227,7 +227,7 @@ std::vector<MsvcRttiClass> parse_msvc_rtti(const Binary& b) {
 }
 
 std::map<addr_t, std::string>
-rtti_method_names(const std::vector<MsvcRttiClass>& classes) {
+rtti_method_names(std::span<const MsvcRttiClass> classes) {
     // Count how often each IMP shows up across vtables. Shared thunks
     // (pure-virtual, deleting-destructor) appear in many slots and should
     // not get per-class labels — mirrors the Itanium helper.

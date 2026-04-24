@@ -7,7 +7,9 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <ranges>
 #include <regex>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -323,21 +325,50 @@ JSValue js_find_bytes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv
     const Binary* b = ctx_of(ctx)->binary;
     JSValue arr = JS_NewArray(ctx);
     u32 n_out = 0;
+    const bool has_wildcards =
+        std::ranges::any_of(mask, [](u8 m) { return m != 0xff; });
+
     for (const auto& s : b->sections()) {
         // Executable sections only; data matches are usually coincidental.
         if (!s.flags.executable) continue;
         if (s.data.empty() || s.data.size() < needle.size()) continue;
-        const auto* raw = reinterpret_cast<const u8*>(s.data.data());
-        const std::size_t end = s.data.size() - needle.size() + 1;
-        for (std::size_t i = 0; i < end; ++i) {
-            bool hit = true;
-            for (std::size_t j = 0; j < needle.size(); ++j) {
-                if ((raw[i + j] & mask[j]) != (needle[j] & mask[j])) { hit = false; break; }
-            }
-            if (!hit) continue;
+
+        const auto haystack = std::span<const u8>(
+            reinterpret_cast<const u8*>(s.data.data()), s.data.size());
+
+        auto emit = [&](const u8* hit) -> bool {
+            const auto off = static_cast<std::size_t>(hit - haystack.data());
             JS_SetPropertyUint32(ctx, arr, n_out++,
-                JS_NewBigUint64(ctx, s.vaddr + static_cast<addr_t>(i)));
-            if (n_out >= cap) return arr;
+                JS_NewBigUint64(ctx, s.vaddr + static_cast<addr_t>(off)));
+            return n_out >= cap;
+        };
+
+        auto it = haystack.begin();
+        if (!has_wildcards) {
+            // Exact-byte search. std::ranges::search lets libstdc++ specialize
+            // the pointer-comparison path (memmem-like) for contiguous u8.
+            while (true) {
+                auto found = std::ranges::search(
+                    std::ranges::subrange(it, haystack.end()), needle);
+                if (found.empty()) break;
+                if (emit(&*found.begin())) return arr;
+                it = found.begin() + 1;
+            }
+        } else {
+            // Masked search: zip needle+mask so the same ranges::search can
+            // carry the mask alongside each needle byte via a binary predicate.
+            const auto masked_needle = std::views::zip(needle, mask);
+            while (true) {
+                auto found = std::ranges::search(
+                    std::ranges::subrange(it, haystack.end()), masked_needle,
+                    [](u8 h, const auto& nm) noexcept {
+                        const auto [n, m] = nm;
+                        return (h & m) == (n & m);
+                    });
+                if (found.empty()) break;
+                if (emit(&*found.begin())) return arr;
+                it = found.begin() + 1;
+            }
         }
     }
     return arr;

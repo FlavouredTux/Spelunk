@@ -45,12 +45,13 @@ std::vector<addr_t> compute_rpo(const IrFunction& fn) {
     return post;
 }
 
-std::map<addr_t, addr_t>
+std::unordered_map<addr_t, addr_t>
 compute_idoms(const IrFunction& fn,
-              const std::vector<addr_t>& rpo,
-              const std::map<addr_t, std::size_t>& rpo_index) {
-    std::map<addr_t, addr_t> idom;
+              std::span<const addr_t> rpo,
+              const std::unordered_map<addr_t, std::size_t>& rpo_index) {
+    std::unordered_map<addr_t, addr_t> idom;
     if (rpo.empty()) return idom;
+    idom.reserve(rpo.size());
     idom[fn.start] = fn.start;
 
     auto intersect = [&](addr_t b1, addr_t b2) noexcept -> addr_t {

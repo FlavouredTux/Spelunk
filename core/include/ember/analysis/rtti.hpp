@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,6 @@ struct RttiClass {
 // Convenience: flatten `parse_itanium_rtti` into a (imp_addr → label) map
 // for the emitter. Each virtual-method IMP is tagged `<Class>::vfn_<N>`.
 [[nodiscard]] std::map<addr_t, std::string>
-rtti_method_names(const std::vector<RttiClass>& classes);
+rtti_method_names(std::span<const RttiClass> classes);
 
 }  // namespace ember

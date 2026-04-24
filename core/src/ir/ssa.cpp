@@ -7,7 +7,9 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -120,7 +122,7 @@ namespace {
 // compute_rpo + compute_idoms live in <ember/analysis/cfg_util.hpp>.
 
 [[nodiscard]] std::map<addr_t, std::set<addr_t>>
-compute_df(const IrFunction& fn, const std::map<addr_t, addr_t>& idom) {
+compute_df(const IrFunction& fn, const std::unordered_map<addr_t, addr_t>& idom) {
     std::map<addr_t, std::set<addr_t>> df;
 
     for (const auto& bb : fn.blocks) {
@@ -202,14 +204,19 @@ void insert_phis(IrFunction& fn,
 // ===== Renaming =====
 
 void rename_variables(IrFunction& fn,
-                      const std::map<addr_t, addr_t>& idom) {
+                      const std::unordered_map<addr_t, addr_t>& idom) {
     std::map<VarKey, std::vector<u32>> stacks;
     std::map<VarKey, u32>              counters;
 
+    // Canonicalise sibling order: idom is unordered, but sibling traversal
+    // order drives global counters[*dv] and therefore visible SSA versions.
+    // Sorting each child list by address makes the renumbering deterministic
+    // independent of the hash function.
     std::map<addr_t, std::vector<addr_t>> children;
     for (const auto& [node, parent] : idom) {
         if (node != parent) children[parent].push_back(node);
     }
+    for (auto& [_, siblings] : children) std::ranges::sort(siblings);
 
     auto current_version = [&](VarKey v) -> u32 {
         auto it = stacks.find(v);
@@ -290,8 +297,10 @@ Result<void> SsaBuilder::convert(IrFunction& fn) const {
     const auto rpo = compute_rpo(fn);
     if (rpo.empty()) return {};
 
-    std::map<addr_t, std::size_t> rpo_index;
-    for (std::size_t i = 0; i < rpo.size(); ++i) rpo_index[rpo[i]] = i;
+    std::unordered_map<addr_t, std::size_t> rpo_index;
+    rpo_index.reserve(rpo.size());
+    for (const auto [i, addr] : std::views::enumerate(rpo))
+        rpo_index[addr] = static_cast<std::size_t>(i);
 
     const auto idoms = compute_idoms(fn, rpo, rpo_index);
     const auto df    = compute_df(fn, idoms);

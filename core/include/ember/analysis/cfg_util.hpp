@@ -1,6 +1,7 @@
 #pragma once
 
-#include <map>
+#include <span>
+#include <unordered_map>
 #include <vector>
 
 #include <ember/common/types.hpp>
@@ -14,10 +15,11 @@ namespace ember {
 [[nodiscard]] std::vector<addr_t> compute_rpo(const IrFunction& fn);
 
 // Cooper-Harvey-Kennedy immediate dominators. `rpo_index[b]` must map every
-// reachable block's address to its index in `rpo`.
-[[nodiscard]] std::map<addr_t, addr_t>
+// reachable block's address to its index in `rpo`. Unordered: the algorithm
+// only reads via find(), so lookup-heavy hashing beats the red-black tree.
+[[nodiscard]] std::unordered_map<addr_t, addr_t>
 compute_idoms(const IrFunction& fn,
-              const std::vector<addr_t>& rpo,
-              const std::map<addr_t, std::size_t>& rpo_index);
+              std::span<const addr_t> rpo,
+              const std::unordered_map<addr_t, std::size_t>& rpo_index);
 
 }  // namespace ember

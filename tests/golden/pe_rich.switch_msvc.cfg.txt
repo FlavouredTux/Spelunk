@@ -1,0 +1,46 @@
+function sub_1800011c0
+  entry    0x00000001800011c0
+  extent   0x00000001800011c0 - 0x00000001800011f2  (50 bytes)
+  blocks   6
+  edges    9
+  calls    0
+
+bb_1800011c0  (entry):
+  0x00000001800011c0  83 f9 05                        cmp ecx, 0x5
+  0x00000001800011c3  77 27                           ja 0x1800011ec
+  -> bb_1800011ec  (taken)
+  -> bb_1800011c5  (fallthrough)
+
+bb_1800011c5  <- bb_1800011c0:
+  0x00000001800011c5  48 8d 15 ac 0f 00 00            lea rdx, [0x180002178]
+  0x00000001800011cc  0f b6 04 0a                     movzx eax, byte ptr [rdx + rcx]
+  0x00000001800011d0  48 8d 15 a9 0f 00 00            lea rdx, [0x180002180]
+  0x00000001800011d7  ff 24 c2                        jmp qword ptr [rdx + rax*8]
+  -> bb_1800011da  (case 0)
+  -> bb_1800011da  (case 1)
+  -> bb_1800011da  (case 2)
+  -> bb_1800011e0  (case 3)
+  -> bb_1800011e0  (case 4)
+  -> bb_1800011e6  (case 5)
+  -> bb_1800011ec  (default)
+
+bb_1800011da  <- bb_1800011c5:
+  0x00000001800011da  b8 64 00 00 00                  mov eax, 0x64
+  0x00000001800011df  c3                              ret
+  -> <return>
+
+bb_1800011e0  <- bb_1800011c5:
+  0x00000001800011e0  b8 c8 00 00 00                  mov eax, 0xc8
+  0x00000001800011e5  c3                              ret
+  -> <return>
+
+bb_1800011e6  <- bb_1800011c5:
+  0x00000001800011e6  b8 2c 01 00 00                  mov eax, 0x12c
+  0x00000001800011eb  c3                              ret
+  -> <return>
+
+bb_1800011ec  <- bb_1800011c0 bb_1800011c5:
+  0x00000001800011ec  b8 ff ff ff ff                  mov eax, 0xffffffff
+  0x00000001800011f1  c3                              ret
+  -> <return>
+

@@ -80,20 +80,42 @@ find_exec_section_for(const Binary& b, addr_t a) noexcept {
     return nullptr;
 }
 
-[[nodiscard]] bool read_i32_at(const Binary& b, addr_t a, i32& out) noexcept {
-    auto span = b.bytes_at(a);
-    if (span.size() < 4) return false;
-    u32 raw;
-    std::memcpy(&raw, span.data(), 4);
-    out = static_cast<i32>(raw);
-    return true;
-}
-
 [[nodiscard]] bool read_u64_at(const Binary& b, addr_t a, u64& out) noexcept {
     auto span = b.bytes_at(a);
     if (span.size() < 8) return false;
     std::memcpy(&out, span.data(), 8);
     return true;
+}
+
+// Read one `entry_bytes`-sized slot starting at `a`, returning the value
+// sign- or zero-extended to i64 per `is_signed`. Supports {1,2,4}-byte
+// entries (8-byte slots go through read_u64_at directly).
+[[nodiscard]] bool read_table_entry(const Binary& b, addr_t a,
+                                    u8 entry_bytes, bool is_signed,
+                                    i64& out) noexcept {
+    auto span = b.bytes_at(a);
+    if (span.size() < entry_bytes) return false;
+    if (entry_bytes == 1) {
+        u8 raw = static_cast<u8>(span[0]);
+        out = is_signed ? static_cast<i64>(static_cast<i8>(raw))
+                        : static_cast<i64>(raw);
+        return true;
+    }
+    if (entry_bytes == 2) {
+        u16 raw;
+        std::memcpy(&raw, span.data(), 2);
+        out = is_signed ? static_cast<i64>(static_cast<i16>(raw))
+                        : static_cast<i64>(raw);
+        return true;
+    }
+    if (entry_bytes == 4) {
+        u32 raw;
+        std::memcpy(&raw, span.data(), 4);
+        out = is_signed ? static_cast<i64>(static_cast<i32>(raw))
+                        : static_cast<i64>(raw);
+        return true;
+    }
+    return false;
 }
 
 // Resolve a `lea rT, [rip + disp]` anywhere in insns_view whose destination
@@ -174,6 +196,75 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
     return std::nullopt;
 }
 
+// MSVC two-table indexed switches:
+//
+//   movzx/movsx  rIDX, byte/dword ptr [rip + .index_table + rOUTER*S1]
+//   jmp qword ptr [rip + .jump_table + rIDX*8]
+//
+// The outer index table holds dense slot numbers into the (compressed) jump
+// table — many outer values can map to the same target. Returns true and
+// populates `index_table_va`/`entry_bytes`/`outer_reg` if a load-from-rip
+// for `rIDX` is found in the recent instruction window.
+struct OuterTable {
+    addr_t va          = 0;
+    u8     entry_bytes = 0;
+    bool   is_signed   = false;
+    Reg    outer_reg   = Reg::None;
+};
+
+[[nodiscard]] std::optional<OuterTable>
+find_outer_index_table(const std::vector<const Instruction*>& recent, Reg idx_reg) noexcept {
+    const Reg want = canonical_reg(idx_reg);
+    for (const Instruction* in : recent) {
+        const Mnemonic mn = in->mnemonic;
+        if (mn != Mnemonic::Movzx && mn != Mnemonic::Movsx &&
+            mn != Mnemonic::Movsxd && mn != Mnemonic::Mov) continue;
+        if (in->num_operands != 2) continue;
+        const auto& d = in->operands[0];
+        const auto& s = in->operands[1];
+        if (d.kind != Operand::Kind::Register) continue;
+        if (canonical_reg(d.reg) != want) continue;
+        if (s.kind != Operand::Kind::Memory) continue;
+        if (s.mem.index == Reg::None) continue;
+        // The memory access size names the table-entry width.
+        const u8 sz = s.mem.size;
+        if (sz != 1 && sz != 2 && sz != 4) continue;
+        if (s.mem.scale != sz) continue;
+
+        addr_t base_va = 0;
+        if (s.mem.base == Reg::Rip) {
+            // Direct rip-rel form: [rip + disp + idx*sz]. Note: x86-64 doesn't
+            // actually allow rip-rel addressing with a SIB index, so this
+            // path is mostly defensive — the lea-then-load form below is
+            // what real compilers emit.
+            if (!s.mem.has_disp) continue;
+            base_va = static_cast<addr_t>(in->address + in->length) +
+                      static_cast<addr_t>(s.mem.disp);
+        } else {
+            // [rTAB + rIDX*sz (+ disp)] where rTAB came from a prior
+            // `lea rTAB, [rip + .table]` strictly preceding this load.
+            // (Two distinct switch tables can both use rdx, so we must
+            // not pick up a later `lea rdx, ...` for a different table.)
+            std::vector<const Instruction*> before;
+            for (const Instruction* p : recent) {
+                if (p->address < in->address) before.push_back(p);
+            }
+            std::vector<const Instruction*> forward(before.rbegin(), before.rend());
+            auto t = find_lea_rip_for(forward, s.mem.base);
+            if (!t) continue;
+            base_va = *t;
+            if (s.mem.has_disp) base_va += static_cast<addr_t>(s.mem.disp);
+        }
+        OuterTable t;
+        t.va          = base_va;
+        t.entry_bytes = sz;
+        t.is_signed   = (mn == Mnemonic::Movsx || mn == Mnemonic::Movsxd);
+        t.outer_reg   = s.mem.index;
+        return t;
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<JumpTable>
 detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     auto it = ws.insns.find(jmp_addr);
@@ -183,15 +274,84 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
 
     const Operand& jop = jmp.operands[0];
 
-    // -------- Pattern (B): jmp qword ptr [rip + table + idx*8] --------
+    // Collect a window of recent instructions for back-pattern matching.
+    std::vector<const Instruction*> recent;  // reverse-chronological
+    {
+        auto cur = it;
+        for (int i = 0; i < 12 && cur != ws.insns.begin(); ++i) {
+            --cur;
+            recent.push_back(&cur->second);
+        }
+    }
+
+    // -------- Pattern (B): absolute / lea-then-indexed 8-byte table --------
+    // Accepted forms (x86-64 doesn't actually allow rip+SIB-index, so the
+    // RIP-relative variant only exists defensively):
+    //   jmp qword ptr [disp32 + idx*8]                ; absolute (mod=00 base=5)
+    //   jmp qword ptr [rTAB   + idx*8 (+disp)]        ; rTAB ← lea [rip+.]
+    //   jmp qword ptr [rip + disp + idx*8]            ; theoretical
     if (jop.kind == Operand::Kind::Memory &&
-        jop.mem.base == Reg::Rip &&
         jop.mem.index != Reg::None &&
-        jop.mem.scale == 8 &&
-        jop.mem.has_disp) {
-        const addr_t table = jmp.address + jmp.length +
-                             static_cast<addr_t>(jop.mem.disp);
+        jop.mem.scale == 8) {
+        std::optional<addr_t> table_opt;
+        if (jop.mem.base == Reg::Rip && jop.mem.has_disp) {
+            table_opt = jmp.address + jmp.length +
+                        static_cast<addr_t>(jop.mem.disp);
+        } else if (jop.mem.base == Reg::None && jop.mem.has_disp) {
+            table_opt = static_cast<addr_t>(jop.mem.disp);
+        } else if (jop.mem.base != Reg::None && jop.mem.base != Reg::Rip) {
+            std::vector<const Instruction*> forward(recent.rbegin(), recent.rend());
+            if (auto t = find_lea_rip_for(forward, jop.mem.base); t) {
+                table_opt = *t + (jop.mem.has_disp
+                                  ? static_cast<addr_t>(jop.mem.disp) : 0);
+            }
+        }
+        if (table_opt) {
+        const addr_t table = *table_opt;
         const Reg idx_reg = jop.mem.index;
+
+        // ---- Pattern (D): MSVC two-table indexed switch --------------
+        // If `idx_reg` was just loaded from a small index table indexed by
+        // some outer register, expand to per-outer-value cases. This is
+        // MSVC's bread-and-butter for dense switches with non-contiguous
+        // case values (see find_outer_index_table above).
+        if (auto outer = find_outer_index_table(recent, idx_reg); outer) {
+            auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, outer->outer_reg);
+            constexpr u32 kJumpTableMax = 4096;
+            const u32 max_count =
+                std::min(bound ? bound->count : 256u, kJumpTableMax);
+
+            JumpTable jt;
+            jt.index_reg = bound ? canonical_reg(bound->index_reg)
+                                 : canonical_reg(outer->outer_reg);
+            if (bound) jt.default_tgt = bound->default_tgt;
+            for (u32 k = 0; k < max_count; ++k) {
+                i64 slot = 0;
+                if (!read_table_entry(b, outer->va + k * outer->entry_bytes,
+                                      outer->entry_bytes, outer->is_signed,
+                                      slot)) {
+                    break;
+                }
+                if (slot < 0) {
+                    if (!bound) break;
+                    continue;
+                }
+                u64 entry = 0;
+                if (!read_u64_at(b, table + static_cast<u64>(slot) * 8u,
+                                 entry)) {
+                    break;
+                }
+                const addr_t tgt = static_cast<addr_t>(entry);
+                if (!find_exec_section_for(b, tgt)) {
+                    if (!bound) break;
+                    continue;
+                }
+                jt.targets.push_back(tgt);
+                jt.values.push_back(static_cast<i64>(k));
+            }
+            if (!jt.targets.empty()) return jt;
+        }
+
         auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
         // Hard cap regardless of the decoded `cmp; ja` bound — a corrupt
         // immediate in that guard could otherwise drive a billions-wide loop.
@@ -217,19 +377,12 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         }
         if (jt.targets.empty()) return std::nullopt;
         return jt;
+        }  // table_opt
     }
 
     // -------- Pattern (A): PIC / rip-relative offset table --------
     if (jop.kind != Operand::Kind::Register) return std::nullopt;
     const Reg jmp_reg = canonical_reg(jop.reg);
-
-    // Collect up to ~8 predecessor instructions (in address order) for pattern matching.
-    std::vector<const Instruction*> recent;  // reverse-chronological
-    auto cur = it;
-    for (int i = 0; i < 12 && cur != ws.insns.begin(); ++i) {
-        --cur;
-        recent.push_back(&cur->second);
-    }
 
     // -------- Pattern (C): mov rJmp, [rip + table + idx*8]; jmp rJmp ----
     for (const Instruction* in : recent) {
@@ -303,34 +456,48 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         { jmp_reg,  add_other },     // Clang: add rTAB, rOFF → rTAB=add.dst
     };
 
-    addr_t table  = 0;
-    Reg    idx_reg = Reg::None;
-    bool   matched = false;
+    addr_t table       = 0;
+    Reg    idx_reg     = Reg::None;
+    bool   matched     = false;
+    u8     entry_bytes = 4;
+    bool   entry_signed = true;
 
     for (const auto& c : cands) {
-        // Need a movsxd/mov whose dst is rOFF and whose mem base is rTAB.
-        const Instruction* movsxd_insn = nullptr;
+        // Need a movsxd/movzx/movsx/mov whose dst is rOFF and whose mem
+        // base is rTAB. Accepts {1,2,4}-byte entries — Pattern (A) uses
+        // 4-byte signed offsets (movsxd); Pattern (E) uses 2-byte or
+        // 1-byte entries (movzx/movsx) for dense small-offset switches.
+        const Instruction* off_insn = nullptr;
         for (std::size_t i = 0; i < recent.size(); ++i) {
             const Instruction* in = recent[i];
-            if (in->mnemonic != Mnemonic::Movsxd && in->mnemonic != Mnemonic::Mov) continue;
+            const Mnemonic mn = in->mnemonic;
+            if (mn != Mnemonic::Movsxd && mn != Mnemonic::Mov &&
+                mn != Mnemonic::Movzx  && mn != Mnemonic::Movsx) continue;
             if (in->num_operands != 2) continue;
             const auto& d = in->operands[0];
             const auto& s = in->operands[1];
             if (d.kind != Operand::Kind::Register) continue;
             if (canonical_reg(d.reg) != c.off) continue;
             if (s.kind != Operand::Kind::Memory) continue;
-            if (s.mem.index == Reg::None || s.mem.scale != 4) continue;
+            if (s.mem.index == Reg::None) continue;
+            const u8 sz = s.mem.size;
+            if (sz != 1 && sz != 2 && sz != 4) continue;
+            if (s.mem.scale != sz) continue;
             if (canonical_reg(s.mem.base) != c.tab) continue;
-            movsxd_insn = in;
+            off_insn     = in;
+            entry_bytes  = sz;
+            entry_signed = (mn == Mnemonic::Movsxd ||
+                            mn == Mnemonic::Movsx  ||
+                            (mn == Mnemonic::Mov && sz == 4));
             break;
         }
-        if (!movsxd_insn) continue;
+        if (!off_insn) continue;
 
         auto t = find_lea_rip_for(forward, c.tab);
         if (!t) continue;
 
         table   = *t;
-        idx_reg = movsxd_insn->operands[1].mem.index;
+        idx_reg = off_insn->operands[1].mem.index;
         matched = true;
         break;
     }
@@ -346,9 +513,12 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     if (bound) jt.default_tgt = bound->default_tgt;
 
     for (u32 k = 0; k < max_count; ++k) {
-        i32 entry = 0;
-        if (!read_i32_at(b, table + k * 4u, entry)) break;
-        const addr_t tgt = table + static_cast<addr_t>(static_cast<i64>(entry));
+        i64 entry = 0;
+        if (!read_table_entry(b, table + k * entry_bytes,
+                              entry_bytes, entry_signed, entry)) {
+            break;
+        }
+        const addr_t tgt = table + static_cast<addr_t>(entry);
         if (!find_exec_section_for(b, tgt)) {
             if (!bound) break;
             continue;

@@ -1,0 +1,21 @@
+// sub_1800011c0
+u64 sub_1800011c0(u64 a1) {
+  u32 t0 = (u32)a1;
+  if (t0 > 5) {
+    return 0xffffffff;
+  } else {
+    switch (rcx) {
+      case 0:
+      case 1:
+      case 2:
+        return 0x64;
+      case 3:
+      case 4:
+        return 0xc8;
+      case 5:
+        return 0x12c;
+      default:
+        return 0xffffffff;
+    }
+  }
+}

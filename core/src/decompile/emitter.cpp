@@ -1252,6 +1252,33 @@ struct Emitter {
     // Detect prologue/epilogue noise: saves/restores of callee-saved regs, rsp/rbp
     // frame manipulation, plus any temps whose uses are entirely within hidden insts.
     void analyze_abi_noise() {
+        // Pass 0: PE UNWIND_INFO-driven prologue suppression. The byte range
+        // [entry, prologue_end) from .xdata is authoritative — every inst
+        // whose source_addr falls there is prologue. The matching epilogue
+        // is the trailing run of insts in the function whose source_addr
+        // lies in [end - prologue_size, end); Win64 ABI requires epilogues
+        // mirror the prologue ops in reverse and never exceed its length.
+        if (options.prologue_ranges) {
+            auto it = options.prologue_ranges->find(fn->start);
+            if (it != options.prologue_ranges->end()) {
+                const addr_t prologue_end = it->second;
+                const addr_t prologue_len = prologue_end - fn->start;
+                const addr_t epilogue_lo  = fn->end > prologue_len
+                    ? fn->end - prologue_len : fn->start;
+                for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+                    const auto& bb = fn->blocks[bi];
+                    for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                        const addr_t sa = bb.insts[ii].source_addr;
+                        if (sa == 0) continue;
+                        if (sa >= fn->start && sa < prologue_end) {
+                            hidden.insert({bi, ii});
+                        } else if (sa >= epilogue_lo && sa < fn->end) {
+                            hidden.insert({bi, ii});
+                        }
+                    }
+                }
+            }
+        }
         // Pass 1: direct pattern matches.
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
             const auto& bb = fn->blocks[bi];

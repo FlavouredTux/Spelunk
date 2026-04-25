@@ -23,6 +23,7 @@
 #include <ember/analysis/indirect_calls.hpp>
 #include <ember/analysis/function.hpp>
 #include <ember/analysis/objc.hpp>
+#include <ember/analysis/pe_unwind.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/vm_detect.hpp>
@@ -2258,6 +2259,15 @@ int main(int argc, char** argv) {
         std::println(stderr, "ember: EH data: {} landing-pad ranges parsed",
                      lp_map.size());
         emit_opts.landing_pads = &lp_map;
+    }
+    // PE x64 prologue/epilogue suppression: parse UNWIND_INFO unconditionally
+    // and feed the byte ranges to the emitter. Win64 frames are unreadable
+    // without this — every function leads with `push rbx; sub rsp, K;
+    // mov [rsp+K], xmm6; ...` cruft that the unwinder already describes.
+    std::map<ember::addr_t, ember::addr_t> prologue_ranges;
+    if ((args.pseudo || args.strct) && b.format() == ember::Format::Pe) {
+        prologue_ranges = ember::build_prologue_ranges(b);
+        if (!prologue_ranges.empty()) emit_opts.prologue_ranges = &prologue_ranges;
     }
     // __objc_selrefs is cheap to walk — do it unconditionally on Mach-O
     // so `objc_msgSend(*(u64*)(0x10...))` renders as `@selector(foo:)`

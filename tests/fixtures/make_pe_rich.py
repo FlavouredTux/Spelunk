@@ -57,6 +57,7 @@ def main() -> int:
     wrap_add7_rva = rva_text + 0x100
     switch_rva = rva_text + 0x140
     debug_wrap_rva = rva_text + 0x180
+    switch_msvc_rva = rva_text + 0x1c0
 
     layout = {
         "iat_gettick": None,
@@ -66,6 +67,8 @@ def main() -> int:
         "msg_tls": None,
         "file_name": None,
         "switch_table": None,
+        "msvc_index_table": None,
+        "msvc_jump_table": None,
     }
 
     text = bytearray(b"\x90" * 0x200)
@@ -175,6 +178,12 @@ def main() -> int:
     layout["file_name"] = add_bytes(b"ashtrace.txt\x00")
     layout["switch_table"] = add_bytes(b"\x00" * 12)
     align_rdata(8)
+    # Two-table MSVC switch: 1-byte index table -> 8-byte jump table.
+    # 6 outer values 0..5 (idx_table), 3 unique target slots (jump_table).
+    layout["msvc_index_table"] = add_bytes(b"\x00" * 8)
+    align_rdata(8)
+    layout["msvc_jump_table"] = add_bytes(b"\x00" * 24)
+    align_rdata(8)
 
     # ---- exports --------------------------------------------------------
     export_dir_rva = here()
@@ -275,6 +284,52 @@ def main() -> int:
                      switch_entry(case1_off),
                      switch_entry(case2_off))
 
+    # MSVC-style two-table switch:
+    #   cmp  ecx, 5
+    #   ja   default
+    #   lea  rdx, [rip + index_table]
+    #   movzx eax, byte ptr [rdx + rcx*1]   ; idx_table[outer] -> slot
+    #   lea  rdx, [rip + jump_table]
+    #   jmp  qword ptr [rdx + rax*8]        ; absolute target per slot
+    switch_msvc = bytearray()
+    switch_msvc += b"\x83\xf9\x05"                                # cmp ecx, 5
+    switch_msvc += b"\x77\x00"                                    # ja default (patch)
+    ja_off = len(switch_msvc) - 1
+    lea_idx_off = len(switch_msvc)
+    switch_msvc += b"\x48\x8d\x15\x00\x00\x00\x00"                # lea rdx, [rip+idx_tab]
+    switch_msvc += b"\x0f\xb6\x04\x0a"                            # movzx eax, byte [rdx+rcx*1]
+    lea_jt_off = len(switch_msvc)
+    switch_msvc += b"\x48\x8d\x15\x00\x00\x00\x00"                # lea rdx, [rip+jump_tab]
+    switch_msvc += b"\xff\x24\xc2"                                # jmp qword [rdx+rax*8]
+    case0_msvc_off = len(switch_msvc)
+    switch_msvc += b"\xb8\x64\x00\x00\x00\xc3"                    # mov eax, 100; ret
+    case1_msvc_off = len(switch_msvc)
+    switch_msvc += b"\xb8\xc8\x00\x00\x00\xc3"                    # mov eax, 200; ret
+    case2_msvc_off = len(switch_msvc)
+    switch_msvc += b"\xb8\x2c\x01\x00\x00\xc3"                    # mov eax, 300; ret
+    default_msvc_off = len(switch_msvc)
+    switch_msvc += b"\xb8\xff\xff\xff\xff\xc3"                    # mov eax, -1; ret
+
+    switch_msvc[ja_off] = default_msvc_off - (ja_off + 1)
+    idx_disp = layout["msvc_index_table"] - (switch_msvc_rva + lea_idx_off + 7)
+    switch_msvc[lea_idx_off + 3:lea_idx_off + 7] = struct.pack("<i", idx_disp)
+    jt_disp = layout["msvc_jump_table"] - (switch_msvc_rva + lea_jt_off + 7)
+    switch_msvc[lea_jt_off + 3:lea_jt_off + 7] = struct.pack("<i", jt_disp)
+    patch(switch_msvc_rva - rva_text, switch_msvc)
+
+    # Index table: outer 0..5 -> slot {0,0,0,1,1,2} (dense compression
+    # of a switch where multiple adjacent cases share a body — exactly
+    # what MSVC's two-table form is meant to compact).
+    struct.pack_into("<BBBBBB", rdata,
+                     layout["msvc_index_table"] - rva_rdata,
+                     0, 0, 0, 1, 1, 2)
+    # Jump table: 3 absolute (IMAGE_BASE + RVA) targets.
+    struct.pack_into("<QQQ", rdata,
+                     layout["msvc_jump_table"] - rva_rdata,
+                     IMAGE_BASE + switch_msvc_rva + case0_msvc_off,
+                     IMAGE_BASE + switch_msvc_rva + case1_msvc_off,
+                     IMAGE_BASE + switch_msvc_rva + case2_msvc_off)
+
     debug_wrap = bytearray()
     debug_wrap += b"\x48\x83\xec\x28"                      # sub rsp, 0x28
     debug_wrap += b"\xff\x15" + rel32(debug_wrap_rva + len(debug_wrap) + 6,
@@ -293,6 +348,7 @@ def main() -> int:
     pdata += struct.pack("<III", wrap_add7_rva, wrap_add7_rva + len(wrap_add7), unwind_rva)
     pdata += struct.pack("<III", switch_rva, switch_rva + len(switch_fn), unwind_rva)
     pdata += struct.pack("<III", debug_wrap_rva, debug_wrap_rva + len(debug_wrap), unwind_rva)
+    pdata += struct.pack("<III", switch_msvc_rva, switch_msvc_rva + len(switch_msvc), unwind_rva)
     while len(pdata) < 0x40:
         pdata.append(0)
     pdata += b"\x01\x00\x00\x00"  # tiny non-zero unwind blob

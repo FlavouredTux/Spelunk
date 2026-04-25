@@ -811,6 +811,21 @@ if(Python3_Interpreter_FOUND)
         ARGS    "-p|-s|sub_180001180"
         GOLDEN  pe_rich.debug_wrap.pseudo.txt
     )
+    # MSVC two-table indexed switch (Pattern D): a small byte-wide index
+    # table feeds into an absolute 8-byte jump table. Locks in the new
+    # detector path in cfg_builder.cpp.
+    ember_golden_test(
+        NAME    pe_rich_switch_msvc_cfg
+        FIXTURE pe_rich
+        ARGS    "--cfg|-s|sub_1800011c0"
+        GOLDEN  pe_rich.switch_msvc.cfg.txt
+    )
+    ember_golden_test(
+        NAME    pe_rich_switch_msvc_pseudo
+        FIXTURE pe_rich
+        ARGS    "-p|-s|sub_1800011c0"
+        GOLDEN  pe_rich.switch_msvc.pseudo.txt
+    )
     ember_golden_test(
         NAME    pe_rich_script
         FIXTURE pe_rich

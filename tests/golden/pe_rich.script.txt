@@ -13,4 +13,5 @@ symbols:
   local  0x180001100 sub_180001100
   local  0x180001140 sub_180001140
   local  0x180001180 sub_180001180
+  local  0x1800011c0 sub_1800011c0
 entry bytes: 48 83 ec 28 ff 15 3e 10

@@ -48,6 +48,13 @@ struct EmitOptions {
     // `mov rax, [rip+vtable]; call [rax+0x38]` renders as a named
     // method rather than the opaque `(*fn)(args)` fallback.
     const std::map<addr_t, addr_t>* call_resolutions = nullptr;
+    // Function entry VA → prologue end VA (from PE UNWIND_INFO via
+    // build_prologue_ranges). When set, the emitter suppresses every IR
+    // instruction whose source_addr lies in [entry, prologue_end), and
+    // also strips the matching trailing-block epilogue (heuristically
+    // bounded by prologue length, since Win64 epilogues mirror the
+    // prologue and never exceed its byte count in practice).
+    const std::map<addr_t, addr_t>* prologue_ranges = nullptr;
 };
 
 class PseudoCEmitter {

@@ -1,4 +1,5 @@
 #include <ember/binary/pe.hpp>
+#include <ember/binary/pe_view.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -328,29 +329,45 @@ Result<void> PeBinary::parse_tls_callbacks() {
 }
 
 std::span<const std::byte> PeBinary::bytes_at_rva(u32 rva) const noexcept {
-    return Binary::bytes_at(image_base_ + static_cast<addr_t>(rva));
+    return pe::bytes_at_rva(*this, image_base_, rva);
 }
 
 bool PeBinary::rva_is_mapped(u32 rva, std::size_t min_size) const noexcept {
-    return bytes_at_rva(rva).size() >= min_size;
+    return pe::rva_is_mapped(*this, image_base_, rva, min_size);
 }
 
 std::string_view PeBinary::cstr_at_rva(u32 rva) const noexcept {
-    const auto span = bytes_at_rva(rva);
-    if (span.empty()) return {};
-    const char* const start = reinterpret_cast<const char*>(span.data());
-    std::size_t len = 0;
-    while (len < span.size() && start[len] != '\0') ++len;
-    if (len == span.size()) return {};  // unterminated → treat as missing
-    return std::string_view(start, len);
+    return pe::cstr_at_rva(*this, image_base_, rva);
 }
 
 Result<void>
 PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
-    if (data_dirs_.size() <= kDdImport) return {};
-    const auto& dd = data_dirs_[kDdImport];
+    return pe::collect_imports(*this, image_base_, data_dirs_, symbols_, &got_to_name);
+}
+
+Result<void>
+PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
+    return pe::collect_delay_imports(*this, image_base_, data_dirs_, symbols_, &got_to_name);
+}
+
+Result<void> PeBinary::parse_exports() {
+    return pe::collect_exports(*this, image_base_, data_dirs_, symbols_);
+}
+
+}  // namespace ember
+
+namespace ember::pe {
+
+Result<void>
+collect_imports(const Binary& bin,
+                addr_t image_base,
+                std::span<const DataDirectory> dirs,
+                std::vector<Symbol>& out,
+                std::unordered_map<addr_t, std::string>* got_to_name) {
+    if (dirs.size() <= kDdImport) return {};
+    const auto& dd = dirs[kDdImport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
-    if (!rva_is_mapped(dd.virtual_address, kImportDescSize)) return {};
+    if (!rva_is_mapped(bin, image_base, dd.virtual_address, kImportDescSize)) return {};
 
     // Array of IMAGE_IMPORT_DESCRIPTOR terminated by an all-zero record.
     // Cap the loop at dd.size / kImportDescSize so a malicious missing
@@ -359,14 +376,14 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
     u32 cur = dd.virtual_address;
 
     for (std::size_t i = 0; i < max_descs; ++i, cur += kImportDescSize) {
-        const auto desc = bytes_at_rva(cur);
+        const auto desc = bytes_at_rva(bin, image_base, cur);
         if (desc.size() < kImportDescSize) break;
 
         const u32 oft_rva     = read_le_at<u32>(desc.data() + 0x00);
         const u32 name_rva    = read_le_at<u32>(desc.data() + 0x0C);
         const u32 iat_rva     = read_le_at<u32>(desc.data() + 0x10);
         if ((oft_rva | name_rva | iat_rva) == 0) break;   // terminator
-        if (!rva_is_mapped(name_rva)) continue;
+        if (!rva_is_mapped(bin, image_base, name_rva)) continue;
 
         // Walk INT and IAT in lockstep. INT gives us the hint/name; IAT
         // is the slot the loader overwrites with the resolved pointer.
@@ -377,8 +394,8 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
         const u32 int_rva = (oft_rva != 0) ? oft_rva : iat_rva;
 
         for (u32 k = 0;; ++k) {
-            const auto int_bytes = bytes_at_rva(int_rva + k * 8);
-            const auto iat_bytes = bytes_at_rva(iat_rva + k * 8);
+            const auto int_bytes = bytes_at_rva(bin, image_base, int_rva + k * 8);
+            const auto iat_bytes = bytes_at_rva(bin, image_base, iat_rva + k * 8);
             if (int_bytes.size() < 8 || iat_bytes.size() < 8) break;
             const u64 thunk = read_le_at<u64>(int_bytes.data());
             if (thunk == 0) break;
@@ -386,7 +403,7 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
             Symbol sym;
             sym.kind      = SymbolKind::Function;
             sym.is_import = true;
-            sym.got_addr  = image_base_ + static_cast<addr_t>(iat_rva) + k * 8;
+            sym.got_addr  = image_base + static_cast<addr_t>(iat_rva) + k * 8;
 
             if ((thunk & kOrdinalFlagBit) != 0) {
                 const u16 ordinal = static_cast<u16>(thunk & 0xFFFFu);
@@ -394,13 +411,13 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
             } else {
                 // IMAGE_IMPORT_BY_NAME: u16 hint, then C-string.
                 const u32 hintname_rva = static_cast<u32>(thunk & 0xFFFF'FFFFULL);
-                const auto nm = cstr_at_rva(hintname_rva + 2);
+                const auto nm = cstr_at_rva(bin, image_base, hintname_rva + 2);
                 if (nm.empty()) continue;  // corrupt: no name, skip slot
                 sym.name = std::string(nm);
             }
 
-            got_to_name.emplace(sym.got_addr, sym.name);
-            symbols_.push_back(std::move(sym));
+            if (got_to_name) got_to_name->emplace(sym.got_addr, sym.name);
+            out.push_back(std::move(sym));
         }
     }
     return {};
@@ -415,22 +432,26 @@ PeBinary::parse_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
 //   u32 rvaBoundIAT;    // pre-bound IAT (if linker bound at build time)
 //   u32 rvaUnloadIAT;   // for FUnloadDelayLoadedDLL — we ignore
 //   u32 dwTimeStamp;
-// Walks identically to parse_imports once we've extracted INT/IAT RVAs.
+// Walks identically to collect_imports once we've extracted INT/IAT RVAs.
 // Older (non-x64) images had grAttrs == 0 with absolute VAs in every
 // field — we reject those rather than try to guess the image base from
 // addresses that may have been written under a different load address.
 Result<void>
-PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_name) {
-    if (data_dirs_.size() <= kDdDelayImport) return {};
-    const auto& dd = data_dirs_[kDdDelayImport];
+collect_delay_imports(const Binary& bin,
+                      addr_t image_base,
+                      std::span<const DataDirectory> dirs,
+                      std::vector<Symbol>& out,
+                      std::unordered_map<addr_t, std::string>* got_to_name) {
+    if (dirs.size() <= kDdDelayImport) return {};
+    const auto& dd = dirs[kDdDelayImport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
-    if (!rva_is_mapped(dd.virtual_address, kDelayImportDescSize)) return {};
+    if (!rva_is_mapped(bin, image_base, dd.virtual_address, kDelayImportDescSize)) return {};
 
     const std::size_t max_descs = dd.size / kDelayImportDescSize;
     u32 cur = dd.virtual_address;
 
     for (std::size_t i = 0; i < max_descs; ++i, cur += kDelayImportDescSize) {
-        const auto desc = bytes_at_rva(cur);
+        const auto desc = bytes_at_rva(bin, image_base, cur);
         if (desc.size() < kDelayImportDescSize) break;
 
         const u32 attrs    = read_le_at<u32>(desc.data() + 0x00);
@@ -438,7 +459,7 @@ PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_na
         const u32 iat_rva  = read_le_at<u32>(desc.data() + 0x0C);
         const u32 int_rva  = read_le_at<u32>(desc.data() + 0x10);
         if ((attrs | name_rva | iat_rva | int_rva) == 0) break;  // terminator
-        if (!rva_is_mapped(name_rva)) continue;
+        if (!rva_is_mapped(bin, image_base, name_rva)) continue;
         // Pre-x64 layout: ignore the slice rather than misread VAs as RVAs.
         if ((attrs & kDelayAttrRvaBased) == 0) continue;
         // Some linkers ship descriptors with no INT (rvaINT == 0); for the
@@ -447,8 +468,8 @@ PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_na
         if (int_rva == 0 || iat_rva == 0) continue;
 
         for (u32 k = 0;; ++k) {
-            const auto int_bytes = bytes_at_rva(int_rva + k * 8);
-            const auto iat_bytes = bytes_at_rva(iat_rva + k * 8);
+            const auto int_bytes = bytes_at_rva(bin, image_base, int_rva + k * 8);
+            const auto iat_bytes = bytes_at_rva(bin, image_base, iat_rva + k * 8);
             if (int_bytes.size() < 8 || iat_bytes.size() < 8) break;
             const u64 thunk = read_le_at<u64>(int_bytes.data());
             if (thunk == 0) break;
@@ -456,32 +477,36 @@ PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_na
             Symbol sym;
             sym.kind      = SymbolKind::Function;
             sym.is_import = true;
-            sym.got_addr  = image_base_ + static_cast<addr_t>(iat_rva) + k * 8;
+            sym.got_addr  = image_base + static_cast<addr_t>(iat_rva) + k * 8;
 
             if ((thunk & kOrdinalFlagBit) != 0) {
                 const u16 ordinal = static_cast<u16>(thunk & 0xFFFFu);
                 sym.name = std::format("Ordinal#{}", ordinal);
             } else {
                 const u32 hintname_rva = static_cast<u32>(thunk & 0xFFFF'FFFFULL);
-                const auto nm = cstr_at_rva(hintname_rva + 2);
+                const auto nm = cstr_at_rva(bin, image_base, hintname_rva + 2);
                 if (nm.empty()) continue;
                 sym.name = std::string(nm);
             }
 
-            got_to_name.emplace(sym.got_addr, sym.name);
-            symbols_.push_back(std::move(sym));
+            if (got_to_name) got_to_name->emplace(sym.got_addr, sym.name);
+            out.push_back(std::move(sym));
         }
     }
     return {};
 }
 
-Result<void> PeBinary::parse_exports() {
-    if (data_dirs_.size() <= kDdExport) return {};
-    const auto& dd = data_dirs_[kDdExport];
+Result<void>
+collect_exports(const Binary& bin,
+                addr_t image_base,
+                std::span<const DataDirectory> dirs,
+                std::vector<Symbol>& out) {
+    if (dirs.size() <= kDdExport) return {};
+    const auto& dd = dirs[kDdExport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
-    if (!rva_is_mapped(dd.virtual_address, kExportDirSize)) return {};
+    if (!rva_is_mapped(bin, image_base, dd.virtual_address, kExportDirSize)) return {};
 
-    const auto edir = bytes_at_rva(dd.virtual_address);
+    const auto edir = bytes_at_rva(bin, image_base, dd.virtual_address);
     if (edir.size() < kExportDirSize) return {};
 
     const u32 ordinal_base = read_le_at<u32>(edir.data() + 0x10);
@@ -503,27 +528,27 @@ Result<void> PeBinary::parse_exports() {
     // Named exports: walk ENT + EOT in parallel. EOT[i] is an index
     // into EAT (0-based, not ordinal-based).
     for (u32 i = 0; i < num_names; ++i) {
-        const auto name_rva_bytes = bytes_at_rva(ent_rva + i * 4);
-        const auto ord_bytes      = bytes_at_rva(eot_rva + i * 2);
+        const auto name_rva_bytes = bytes_at_rva(bin, image_base, ent_rva + i * 4);
+        const auto ord_bytes      = bytes_at_rva(bin, image_base, eot_rva + i * 2);
         if (name_rva_bytes.size() < 4 || ord_bytes.size() < 2) break;
         const u32 name_rva = read_le_at<u32>(name_rva_bytes.data());
         const u16 eat_idx  = read_le_at<u16>(ord_bytes.data());
         if (eat_idx >= num_funcs) continue;
 
-        const auto eat_bytes = bytes_at_rva(eat_rva + eat_idx * 4);
+        const auto eat_bytes = bytes_at_rva(bin, image_base, eat_rva + eat_idx * 4);
         if (eat_bytes.size() < 4) continue;
         const u32 func_rva = read_le_at<u32>(eat_bytes.data());
         if (func_rva == 0 || is_forwarder(func_rva)) continue;
 
-        const auto name = cstr_at_rva(name_rva);
+        const auto name = cstr_at_rva(bin, image_base, name_rva);
         if (name.empty()) continue;
 
         Symbol sym;
         sym.name      = std::string(name);
-        sym.addr      = image_base_ + static_cast<addr_t>(func_rva);
+        sym.addr      = image_base + static_cast<addr_t>(func_rva);
         sym.kind      = SymbolKind::Function;
         sym.is_export = true;
-        symbols_.push_back(std::move(sym));
+        out.push_back(std::move(sym));
     }
 
     // Unnamed (ordinal-only) exports: any EAT slot not reached by EOT.
@@ -531,27 +556,31 @@ Result<void> PeBinary::parse_exports() {
     // for the gaps. Keeps addresses resolvable even without a name.
     std::vector<bool> named(num_funcs, false);
     for (u32 i = 0; i < num_names; ++i) {
-        const auto ord_bytes = bytes_at_rva(eot_rva + i * 2);
+        const auto ord_bytes = bytes_at_rva(bin, image_base, eot_rva + i * 2);
         if (ord_bytes.size() < 2) break;
         const u16 eat_idx = read_le_at<u16>(ord_bytes.data());
         if (eat_idx < num_funcs) named[eat_idx] = true;
     }
     for (u32 i = 0; i < num_funcs; ++i) {
         if (named[i]) continue;
-        const auto eat_bytes = bytes_at_rva(eat_rva + i * 4);
+        const auto eat_bytes = bytes_at_rva(bin, image_base, eat_rva + i * 4);
         if (eat_bytes.size() < 4) break;
         const u32 func_rva = read_le_at<u32>(eat_bytes.data());
         if (func_rva == 0 || is_forwarder(func_rva)) continue;
 
         Symbol sym;
         sym.name      = std::format("Ordinal#{}", ordinal_base + i);
-        sym.addr      = image_base_ + static_cast<addr_t>(func_rva);
+        sym.addr      = image_base + static_cast<addr_t>(func_rva);
         sym.kind      = SymbolKind::Function;
         sym.is_export = true;
-        symbols_.push_back(std::move(sym));
+        out.push_back(std::move(sym));
     }
     return {};
 }
+
+}  // namespace ember::pe
+
+namespace ember {
 
 // Mirror of ElfBinary::scan_plt_stubs. Every `jmp qword ptr [rip + disp]`
 // in an executable section whose RIP-relative target lands on a known IAT

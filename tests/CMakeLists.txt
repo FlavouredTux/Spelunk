@@ -872,6 +872,33 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  minidump_tiny.disasm.txt
     )
 
+    # ---- minidump_pe (minidump wrapping the pe_tiny PE image as one
+    #                   in-memory module) ---------------------------------
+    #
+    # Drives the A2 per-module export/import recovery: MinidumpBinary
+    # walks the in-memory PE headers of the wrapped module and lifts
+    # `add42` (export) and `GetTickCount` (IAT import) out of them.
+    set(_minidump_pe "${_build_dir}/minidump_pe.dmp")
+    add_custom_command(
+        OUTPUT "${_minidump_pe}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_minidump_pe.py"
+                "${_pe_tiny}"
+                "${_minidump_pe}"
+        DEPENDS "${_fixture_dir}/make_minidump_pe.py" "${_pe_tiny}"
+        COMMENT "Generating minidump fixture minidump_pe"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_minidump_pe ALL DEPENDS "${_minidump_pe}")
+    set(EMBER_FIXTURE_minidump_pe_PATH "${_minidump_pe}")
+
+    ember_golden_test(
+        NAME    minidump_pe_functions
+        FIXTURE minidump_pe
+        ARGS    "--functions"
+        GOLDEN  minidump_pe.functions.txt
+    )
+
     # ---- raw_regions_tiny (manifest + a single 4-byte code blob) -------
     #
     # No magic bytes — loaded via `--regions <manifest>`. Stage the

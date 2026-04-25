@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <ember/binary/binary.hpp>
+#include <ember/binary/pe_view.hpp>
 #include <ember/common/error.hpp>
 
 namespace ember {
@@ -38,7 +39,7 @@ public:
     // add image_base() to get absolute VAs. Index with the standard
     // IMAGE_DIRECTORY_ENTRY_* constants (EXPORT=0, IMPORT=1, EXCEPTION=3,
     // etc.). Size zero → directory absent.
-    struct DataDirectory { u32 virtual_address; u32 size; };
+    using DataDirectory = pe::DataDirectory;
     [[nodiscard]] std::span<const DataDirectory>
     data_directories() const noexcept { return data_dirs_; }
 

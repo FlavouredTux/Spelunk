@@ -1,9 +1,12 @@
 #include <ember/binary/minidump.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <format>
+#include <unordered_set>
 #include <utility>
 
+#include <ember/binary/pe_view.hpp>
 #include <ember/common/bytes.hpp>
 
 namespace ember {
@@ -72,6 +75,66 @@ enum : u32 {
 constexpr SectionFlags kDefaultFlags = {
     .readable = true, .writable = false, .executable = true, .allocated = true,
 };
+
+// PE32+ header offsets we walk in the in-memory image. Mirrors the
+// constants in pe.cpp; duplicated here to keep this TU self-contained.
+constexpr std::size_t kPeDosLfanewOff   = 0x3C;
+constexpr std::size_t kPeNtSigSize      = 4;
+constexpr std::size_t kPeCoffHdrSize    = 20;
+constexpr std::size_t kPeOptMagicOff    = 0x00;
+constexpr std::size_t kPeOptNumRvaOff   = 0x6C;
+constexpr std::size_t kPeOptDataDirOff  = 0x70;
+constexpr std::size_t kPeDataDirEntry   = 8;
+constexpr u16         kPeOptMagicPlus   = 0x020b;
+
+// Strip directory components and a trailing ".dll" / ".DLL" / ".exe" /
+// etc. extension to derive the prefix used for collision-disambiguated
+// imports. `kernel32.dll` → `kernel32`, `KERNEL32.DLL` → `KERNEL32`,
+// `foo` (no dot) → `foo`.
+[[nodiscard]] std::string module_prefix(std::string_view basename) {
+    const auto dot = basename.find_last_of('.');
+    if (dot == std::string_view::npos) return std::string(basename);
+    return std::string(basename.substr(0, dot));
+}
+
+// Try to read DOS+NT+OptionalHeader64 directly from the in-memory copy
+// at `module_base`. Returns the data-directory array; empty vector means
+// "module headers not in the dump, or malformed — skip silently".
+[[nodiscard]] std::vector<pe::DataDirectory>
+read_module_data_dirs(const Binary& bin, addr_t module_base) {
+    const auto dos = bin.bytes_at(module_base);
+    if (dos.size() < kPeDosLfanewOff + 4) return {};
+    if (dos[0] != std::byte{'M'} || dos[1] != std::byte{'Z'}) return {};
+
+    const u32 e_lfanew = read_le_at<u32>(dos.data() + kPeDosLfanewOff);
+    const auto nt = bin.bytes_at(module_base + e_lfanew);
+    if (nt.size() < kPeNtSigSize + kPeCoffHdrSize) return {};
+    if (nt[0] != std::byte{'P'} || nt[1] != std::byte{'E'} ||
+        nt[2] != std::byte{0}   || nt[3] != std::byte{0}) return {};
+
+    const std::byte* coff = nt.data() + kPeNtSigSize;
+    const u16 opt_size = read_le_at<u16>(coff + 0x10);
+    if (opt_size < kPeOptDataDirOff) return {};
+
+    const auto opt = bin.bytes_at(module_base + e_lfanew +
+                                   kPeNtSigSize + kPeCoffHdrSize);
+    if (opt.size() < opt_size) return {};
+
+    const u16 magic = read_le_at<u16>(opt.data() + kPeOptMagicOff);
+    if (magic != kPeOptMagicPlus) return {};   // PE32 (32-bit) not supported
+
+    const u32 num_rva = read_le_at<u32>(opt.data() + kPeOptNumRvaOff);
+    const std::size_t cap = (opt_size - kPeOptDataDirOff) / kPeDataDirEntry;
+    const std::size_t count = std::min<std::size_t>(num_rva, cap);
+
+    std::vector<pe::DataDirectory> out;
+    out.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::byte* p = opt.data() + kPeOptDataDirOff + i * kPeDataDirEntry;
+        out.push_back({read_le_at<u32>(p), read_le_at<u32>(p + 4)});
+    }
+    return out;
+}
 
 }  // namespace
 
@@ -260,9 +323,9 @@ Result<void> MinidumpBinary::parse() {
 
     // ModuleListStream: synthesize one Symbol per loaded module so the
     // user can `-s <module-basename>` to decompile from the module's
-    // entry. Per-module export/import parsing (the in-memory PE walk
-    // that recovers real names from a packed binary's IAT) lands in a
-    // follow-on phase; here we just expose the module list.
+    // entry, then walk each module's in-memory PE headers to recover
+    // its named exports + IAT imports. Modules whose headers were not
+    // captured by the dumper are silently skipped (no PE walk done).
     //
     // MINIDUMP_MODULE layout (108 bytes):
     //   0x00  u64 BaseOfImage
@@ -319,7 +382,48 @@ Result<void> MinidumpBinary::parse() {
             s.size = msize;
             s.kind = SymbolKind::Section;   // module spans aren't
                                             // functions; closest match
+            const std::string mod_basename = s.name;
             symbols_.push_back(std::move(s));
+
+            // Per-module PE walk. Wrap defensively — a malformed module
+            // (corrupted in-memory headers, partial capture) must not
+            // poison the load. read_module_data_dirs returns an empty
+            // vector on any structural problem; we just skip those.
+            const auto dirs = read_module_data_dirs(*this, mbase);
+            if (dirs.empty()) continue;
+
+            std::vector<Symbol> mod_syms;
+            if (auto rv = pe::collect_exports(*this, mbase, dirs, mod_syms); !rv) {
+                std::fprintf(stderr,
+                    "minidump: module %s exports parse failed: %s\n",
+                    mod_basename.c_str(), rv.error().message.c_str());
+                continue;
+            }
+            if (auto rv = pe::collect_imports(*this, mbase, dirs, mod_syms); !rv) {
+                std::fprintf(stderr,
+                    "minidump: module %s imports parse failed: %s\n",
+                    mod_basename.c_str(), rv.error().message.c_str());
+                continue;
+            }
+
+            // Collision-prefix pass. The first occurrence of a name
+            // across the whole symbol table keeps the bare form; later
+            // duplicates (same name from another module) get
+            // "<modulename>!" prepended so callers can still address
+            // each one unambiguously.
+            const std::string prefix = module_prefix(mod_basename);
+            std::unordered_set<std::string> existing;
+            existing.reserve(symbols_.size());
+            for (const auto& sym : symbols_) existing.insert(sym.name);
+
+            symbols_.reserve(symbols_.size() + mod_syms.size());
+            for (auto& sym : mod_syms) {
+                if (existing.contains(sym.name)) {
+                    sym.name = std::format("{}!{}", prefix, sym.name);
+                }
+                existing.insert(sym.name);
+                symbols_.push_back(std::move(sym));
+            }
         }
     }
 

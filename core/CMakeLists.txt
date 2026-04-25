@@ -20,6 +20,7 @@ add_library(ember_core STATIC
     src/analysis/demangle.cpp
     src/analysis/msvc_demangle.cpp
     src/analysis/sig_inference.cpp
+    src/analysis/indirect_calls.cpp
     src/analysis/type_infer_local.cpp
     src/analysis/eh_frame.cpp
     src/analysis/objc.cpp

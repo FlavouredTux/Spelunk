@@ -20,6 +20,7 @@
 #include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/fingerprint.hpp>
+#include <ember/analysis/indirect_calls.hpp>
 #include <ember/analysis/function.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/pipeline.hpp>
@@ -106,6 +107,7 @@ struct Args {
     bool fingerprints = false;      // dump address-independent content hash per function
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
+    bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
@@ -148,6 +150,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
     {"",   "--ipa",       &Args::ipa},
+    {"",   "--resolve-calls", &Args::resolve_calls},
     {"",   "--eh",        &Args::eh},
     {"",   "--objc-names", &Args::objc_names},
     {"",   "--objc-protocols", &Args::objc_protos},
@@ -2239,6 +2242,15 @@ int main(int argc, char** argv) {
         std::println(stderr, "ember: IPA done: {} functions analyzed", ipa.sigs.size());
         emit_opts.signatures = &ipa.sigs;
         emit_opts.type_arena = &ipa.arena;
+    }
+    std::map<ember::addr_t, ember::addr_t> resolutions;
+    if (args.resolve_calls && (args.pseudo || args.strct)) {
+        std::println(stderr, "ember: resolving indirect calls (vtable + import back-trace)...");
+        std::fflush(stderr);
+        resolutions = ember::resolve_indirect_calls(b);
+        std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
+                     resolutions.size());
+        emit_opts.call_resolutions = &resolutions;
     }
     ember::LpMap lp_map;
     if (args.eh && (args.pseudo || args.strct)) {

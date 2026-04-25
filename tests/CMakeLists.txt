@@ -836,4 +836,71 @@ if(Python3_Interpreter_FOUND)
         FIXTURE    pe32_bad
         ERR_SUBSTR "PE32 (32-bit) not supported"
     )
+
+    # ---- minidump_tiny (hand-built MS minidump: header, SystemInfo,
+    #                    Memory64List with one r-x range carrying tiny
+    #                    x86_64 code, ModuleList with one fake module) ----
+    #
+    # Same Python-generator approach as macho_tiny / pe_tiny — runs on
+    # Linux CI without a Windows toolchain. Exercises MinidumpBinary's
+    # header + stream-directory parse, SystemInfo→arch mapping, and the
+    # bytes_at(va) override. The decompile golden also locks in the
+    # Format::Minidump → Win64 ABI mapping (a1 == rcx, not rdi).
+    set(_minidump_tiny "${_build_dir}/minidump_tiny.dmp")
+    add_custom_command(
+        OUTPUT "${_minidump_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_minidump_tiny.py"
+                "${_minidump_tiny}"
+        DEPENDS "${_fixture_dir}/make_minidump_tiny.py"
+        COMMENT "Generating minidump fixture minidump_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_minidump_tiny ALL DEPENDS "${_minidump_tiny}")
+    set(EMBER_FIXTURE_minidump_tiny_PATH "${_minidump_tiny}")
+
+    ember_golden_test(
+        NAME    minidump_tiny_add42_pseudo
+        FIXTURE minidump_tiny
+        ARGS    "-p|-s|sub_7ff600001000"
+        GOLDEN  minidump_tiny.add42.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    minidump_tiny_disasm
+        FIXTURE minidump_tiny
+        ARGS    "-d|--disasm-at|0x7ff600001000|--count|4"
+        GOLDEN  minidump_tiny.disasm.txt
+    )
+
+    # ---- raw_regions_tiny (manifest + a single 4-byte code blob) -------
+    #
+    # No magic bytes — loaded via `--regions <manifest>`. Stage the
+    # source-tree fixture into the build dir so the manifest can use a
+    # relative `code.bin` path that resolves at test-run time.
+    set(_rr_src "${_fixture_dir}/raw_regions_tiny")
+    set(_rr_dir "${_build_dir}/raw_regions_tiny")
+    add_custom_command(
+        OUTPUT "${_rr_dir}/regions.txt" "${_rr_dir}/code.bin"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_rr_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${_rr_src}/regions.txt" "${_rr_dir}/regions.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${_rr_src}/code.bin"    "${_rr_dir}/code.bin"
+        DEPENDS "${_rr_src}/regions.txt" "${_rr_src}/code.bin"
+        COMMENT "Staging raw-regions fixture raw_regions_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_raw_regions_tiny ALL
+        DEPENDS "${_rr_dir}/regions.txt" "${_rr_dir}/code.bin")
+    set(EMBER_FIXTURE_raw_regions_tiny_PATH "${_rr_dir}/regions.txt")
+
+    # The "binary" passed to ember is the manifest path; --regions
+    # consumes it via __BINARY__ substitution so no positional binary
+    # gets appended by the test harness.
+    ember_golden_test(
+        NAME    raw_regions_tiny_pseudo
+        FIXTURE raw_regions_tiny
+        ARGS    "--regions|__BINARY__|-p|-s|sub_140001000"
+        GOLDEN  raw_regions_tiny.add42.pseudo.txt
+    )
 endif()

@@ -11,6 +11,7 @@
 
 #include <ember/binary/elf.hpp>
 #include <ember/binary/macho.hpp>
+#include <ember/binary/minidump.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/bytes.hpp>
 
@@ -192,6 +193,17 @@ read_file(const std::filesystem::path& path) {
         && b[3] == std::byte{0xFE};
 }
 
+// MS minidump signature: ASCII "MDMP" at offset 0. The header version
+// follow-up is checked by MinidumpBinary::parse(); the magic alone is
+// distinctive enough to dispatch on.
+[[nodiscard]] bool looks_like_minidump(std::span<const std::byte> b) noexcept {
+    return b.size() >= 4
+        && b[0] == std::byte{'M'}
+        && b[1] == std::byte{'D'}
+        && b[2] == std::byte{'M'}
+        && b[3] == std::byte{'P'};
+}
+
 // PE starts with an MZ DOS stub whose `e_lfanew` field at offset 0x3C
 // points at the real NT header ("PE\0\0"). Checking both hops avoids
 // mis-firing on non-PE files that happen to start with the "MZ" magic
@@ -316,6 +328,11 @@ load_binary(const std::filesystem::path& path) {
         auto m = MachOBinary::load_from_buffer(std::move(*buffer));
         if (!m) return std::unexpected(std::move(m).error());
         return std::unique_ptr<Binary>(std::move(*m));
+    }
+    if (looks_like_minidump(*buffer)) {
+        auto md = MinidumpBinary::load_from_buffer(std::move(*buffer));
+        if (!md) return std::unexpected(std::move(md).error());
+        return std::unique_ptr<Binary>(std::move(*md));
     }
     if (looks_like_pe(*buffer)) {
         auto pe = PeBinary::load_from_buffer(std::move(*buffer));

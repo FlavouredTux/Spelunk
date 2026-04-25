@@ -2,6 +2,8 @@ add_library(ember_core STATIC
     src/binary/elf.cpp
     src/binary/macho.cpp
     src/binary/pe.cpp
+    src/binary/minidump.cpp
+    src/binary/raw_regions.cpp
     src/binary/loader.cpp
     src/disasm/decoder.cpp
     src/disasm/register.cpp

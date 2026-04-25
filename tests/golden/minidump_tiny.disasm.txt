@@ -1,0 +1,4 @@
+0x00007ff600001000  8d 41 2a                        lea eax, [rcx + 0x2a]
+0x00007ff600001003  c3                              ret
+0x00007ff600001004  00 00                           add byte ptr [rax], al
+0x00007ff600001006  00 00                           add byte ptr [rax], al

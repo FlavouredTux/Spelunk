@@ -24,7 +24,12 @@ enum class Abi : u8 {
 
 [[nodiscard]] constexpr Abi abi_for(Format f, Arch a, Endian e = Endian::Unknown) noexcept {
     if (a == Arch::X86_64) {
-        return (f == Format::Pe) ? Abi::Win64 : Abi::SysVAmd64;
+        // Minidump and the raw-regions loader come from Windows processes,
+        // so they share Win64. Everything else x86_64 (ELF, Mach-O, the
+        // generic case) is SysV.
+        const bool windows =
+            f == Format::Pe || f == Format::Minidump || f == Format::RawRegions;
+        return windows ? Abi::Win64 : Abi::SysVAmd64;
     }
     if (f == Format::Elf && a == Arch::Ppc64) {
         return (e == Endian::Big) ? Abi::Ppc64ElfV1Be : Abi::Ppc64ElfV2Le;

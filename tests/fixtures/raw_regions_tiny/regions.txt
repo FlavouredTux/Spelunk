@@ -1,0 +1,4 @@
+# Tiny raw-regions fixture mirroring make_pe_tiny.py's add42:
+#   lea eax, [rcx + 0x2a]   ; 8d 41 2a
+#   ret                     ; c3
+0x140001000  0x4  r-x  code.bin

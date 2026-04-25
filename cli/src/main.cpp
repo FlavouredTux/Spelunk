@@ -28,6 +28,7 @@
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/raw_regions.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/common/progress.hpp>
@@ -89,6 +90,7 @@ struct Args {
     std::string disasm_count;       // --count N: instructions for --disasm-at
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
+    std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
     bool no_cache = false;          // disable the disk cache entirely
     bool json = false;              // --json: machine-readable output where supported
     bool disasm = false;
@@ -183,6 +185,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--count",       &Args::disasm_count},
     {"",   "--apply-patches", &Args::apply_patches},
     {"-o", "--output",      &Args::output_path},
+    {"",   "--regions",     &Args::regions_manifest},
 });
 
 template <class F>
@@ -263,9 +266,11 @@ void apply_stage_implications(Args& a) {
 
     // A positional binary is not required when the user is diffing two
     // already-computed fingerprint TSVs — no bytes to parse. Likewise
-    // --dump-types is a self-test that doesn't read any binary.
+    // --dump-types is a self-test that doesn't read any binary, and
+    // --regions points at a manifest instead of a binary positional.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
-    if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types) {
+    if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types
+        && a.regions_manifest.empty()) {
         return std::unexpected(ember::Error::invalid_format("no binary specified"));
     }
     apply_stage_implications(a);
@@ -1566,7 +1571,18 @@ int main(int argc, char** argv) {
         return run_apply_patches(args);
     }
 
-    auto bin = ember::load_binary(args.binary);
+    // --regions: skip magic-byte dispatch; load via the manifest path.
+    // The manifest's first region's vaddr becomes the natural entry for
+    // analysis (the user can override with -s <addr>).
+    ember::Result<std::unique_ptr<ember::Binary>> bin =
+        std::unexpected(ember::Error::invalid_format("uninitialized"));
+    if (!args.regions_manifest.empty()) {
+        auto rr = ember::RawRegionsBinary::load_from_manifest(args.regions_manifest);
+        if (!rr) bin = std::unexpected(std::move(rr).error());
+        else     bin = std::unique_ptr<ember::Binary>(std::move(*rr));
+    } else {
+        bin = ember::load_binary(args.binary);
+    }
     if (!bin) {
         std::println(stderr, "ember: {}: {}",
                      bin.error().kind_name(), bin.error().message);

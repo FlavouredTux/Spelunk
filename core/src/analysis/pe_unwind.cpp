@@ -80,6 +80,11 @@ parse_unwind_info(const Binary& b, addr_t unwind_info_va) {
     const u8 ver_flags = read_le_at<u8>(span.data() + 0);
     info.version       = static_cast<u8>(ver_flags & 0x07);
     info.flags         = static_cast<u8>((ver_flags >> 3) & 0x1F);
+    // MS only ever defined versions 1 and 2 for UNWIND_INFO. Anything
+    // else means the entry's UnwindInfo RVA is bogus (stub fixtures,
+    // packed images, garbage) — refusing to parse here keeps a wild
+    // size_of_prolog from accidentally hiding the entire function body.
+    if (info.version != 1 && info.version != 2) return std::nullopt;
     info.size_of_prolog = read_le_at<u8>(span.data() + 1);
     const u8 count_of_codes = read_le_at<u8>(span.data() + 2);
     const u8 frame_byte = read_le_at<u8>(span.data() + 3);

@@ -9,18 +9,19 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-24.04
+    # Container pins the compiler + glibc so goldens match the local
+    # dev toolchain (gcc 15.x). Without this, CI sat on Ubuntu 24.04's
+    # gcc-14 and every commit's tests failed on layout/sig drift.
+    container: gcc:15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Install build deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc-14 g++-14 python3
+          apt-get update
+          apt-get install -y cmake ninja-build python3
 
       - name: Configure
-        env:
-          CC:  gcc-14
-          CXX: g++-14
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build

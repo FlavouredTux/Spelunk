@@ -2,6 +2,7 @@
 
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -175,8 +176,25 @@ verdict_name(NameValidation::Verdict v) noexcept {
     return "?";
 }
 
+// One row of an externally-supplied fingerprint table. Threading this
+// through validate_name / collect_collisions lets the CLI (or any other
+// caller) skip the per-fn lift+SSA pipeline by reading from the cached
+// `--fingerprints` TSV — the killer perf path on 100MB+ binaries with
+// 500K+ functions where re-fingerprinting every callsite costs minutes.
+struct FingerprintRow {
+    addr_t              addr = 0;
+    FunctionFingerprint fp;
+    std::string         name;   // symbol name or `sub_<hex>` fallback
+};
+
+// `precomputed`: optional snapshot of every function's fingerprint. When
+// non-empty, used as the authoritative shape index — no compute_fingerprint
+// or enumerate_functions calls happen in the hot path. When empty (the
+// default), the function falls back to walking enumerate_functions and
+// fingerprinting each entry, matching the original v1 behaviour.
 [[nodiscard]] NameValidation
-validate_name(const Binary& b, std::string_view name);
+validate_name(const Binary& b, std::string_view name,
+              std::span<const FingerprintRow> precomputed = {});
 
 // Sweep the binary for ambiguity that would silently mis-resolve a name
 // or fingerprint lookup downstream. Two flavours:
@@ -207,7 +225,8 @@ struct Collisions {
 };
 
 [[nodiscard]] Collisions
-collect_collisions(const Binary& b);
+collect_collisions(const Binary& b,
+                   std::span<const FingerprintRow> precomputed = {});
 
 // Walk the CFG of the function at `fn` and return its outgoing direct
 // call/tail/indirect-const edges. Sorted by target VA, deduped on

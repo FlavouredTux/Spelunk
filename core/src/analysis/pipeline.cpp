@@ -970,7 +970,8 @@ compute_call_resolutions(const Binary& b, addr_t fn) {
 }
 
 NameValidation
-validate_name(const Binary& b, std::string_view name) {
+validate_name(const Binary& b, std::string_view name,
+              std::span<const FingerprintRow> precomputed) {
     NameValidation out;
     if (name.empty()) return out;
 
@@ -979,16 +980,11 @@ validate_name(const Binary& b, std::string_view name) {
     out.fps.reserve(matches.size());
     out.offsets.reserve(matches.size());
 
-    // Build the function index once — used both for fingerprinting the
-    // bound addresses (a name pinned to mid-function still gets a hash,
-    // resolved via the enclosing entry) and for the near-match scan.
+    // The bound-address path always needs an "enclosing function entry"
+    // lookup — a wrong rename can pin a name mid-function, and the
+    // fingerprint we report has to be the enclosing fn's, not 0. That
+    // table comes from enumerate_functions regardless of caching.
     const auto fns = enumerate_functions(b);
-    std::unordered_map<addr_t, std::size_t> fn_index;
-    fn_index.reserve(fns.size());
-    for (std::size_t i = 0; i < fns.size(); ++i) {
-        fn_index.emplace(fns[i].addr, i);
-    }
-
     auto enclosing_entry = [&](addr_t addr) -> std::optional<addr_t> {
         auto it = std::upper_bound(fns.begin(), fns.end(), addr,
             [](addr_t a, const DiscoveredFunction& d) { return a < d.addr; });
@@ -998,10 +994,24 @@ validate_name(const Binary& b, std::string_view name) {
         return it->addr;
     };
 
-    // Fingerprint each bound address. If the address isn't itself a
-    // function entry (a wrong rename pinned the name mid-function),
-    // fingerprint the enclosing entry so the shape tuple is meaningful;
-    // record the offset so callers can flag the discrepancy.
+    // Index the precomputed table by addr for O(1) fingerprint lookup.
+    // When empty, `fingerprint_at` falls through to the slow path so the
+    // function still works on a fresh binary with no cache.
+    std::unordered_map<addr_t, std::size_t> fp_by_addr;
+    if (!precomputed.empty()) {
+        fp_by_addr.reserve(precomputed.size());
+        for (std::size_t i = 0; i < precomputed.size(); ++i) {
+            fp_by_addr.emplace(precomputed[i].addr, i);
+        }
+    }
+    auto fingerprint_at = [&](addr_t a) -> FunctionFingerprint {
+        if (auto it = fp_by_addr.find(a); it != fp_by_addr.end()) {
+            return precomputed[it->second].fp;
+        }
+        if (!precomputed.empty()) return {};
+        return compute_fingerprint(b, a);
+    };
+
     FunctionFingerprint anchor{};
     bool anchor_set = false;
     for (const Symbol* s : matches) {
@@ -1010,7 +1020,7 @@ validate_name(const Binary& b, std::string_view name) {
         FunctionFingerprint fp{};
         if (auto entry = enclosing_entry(s->addr); entry) {
             off = s->addr - *entry;
-            fp = compute_fingerprint(b, *entry);
+            fp = fingerprint_at(*entry);
         }
         out.fps.push_back(fp);
         out.offsets.push_back(off);
@@ -1020,35 +1030,39 @@ validate_name(const Binary& b, std::string_view name) {
         }
     }
 
-    // Near-match scan: every other discovered function whose
-    // (blocks, insts, calls) tuple equals the anchor's but whose hash
-    // differs. The anchor is the first non-zero fingerprint among
-    // bound addresses; if no bound address fingerprints, we have no
-    // shape to compare against and skip the scan.
+    // Near-match scan: every other function whose (blocks, insts, calls)
+    // tuple matches the anchor. Hash equality is *kept* (same content,
+    // different addr is the strongest name-DB confusion signal); callers
+    // grep for hash=<anchor> when they want to single out exact twins.
     if (anchor_set) {
-        // De-dupe near-matches by entry: a name bound to multiple
-        // addresses inside the same function would otherwise list its
-        // own enclosing entry as a "near-match" of itself.
         std::unordered_set<addr_t> bound_entries;
         for (addr_t a : out.bound) {
             if (auto e = enclosing_entry(a); e) bound_entries.insert(*e);
         }
-        for (const auto& d : fns) {
-            if (bound_entries.contains(d.addr)) continue;
-            const auto fp = compute_fingerprint(b, d.addr);
-            if (fp.hash == 0) continue;
-            if (fp.blocks != anchor.blocks) continue;
-            if (fp.insts  != anchor.insts)  continue;
-            if (fp.calls  != anchor.calls)  continue;
-            // Hash equality is the strongest signal of name-DB confusion
-            // (same content, different address) so it's kept in
-            // `near_matches` rather than dropped — callers grep for
-            // hash=<anchor> to single it out.
+
+        auto consider = [&](addr_t addr, const FunctionFingerprint& fp,
+                            std::string_view fname) {
+            if (bound_entries.contains(addr)) return;
+            if (fp.hash == 0) return;
+            if (fp.blocks != anchor.blocks) return;
+            if (fp.insts  != anchor.insts)  return;
+            if (fp.calls  != anchor.calls)  return;
             NameValidation::NearMatch nm;
-            nm.addr = d.addr;
+            nm.addr = addr;
             nm.fp   = fp;
-            nm.name = d.name;
+            nm.name = std::string{fname};
             out.near_matches.push_back(std::move(nm));
+        };
+
+        if (!precomputed.empty()) {
+            for (const auto& row : precomputed) {
+                consider(row.addr, row.fp, row.name);
+            }
+        } else {
+            for (const auto& d : fns) {
+                const auto fp = compute_fingerprint(b, d.addr);
+                consider(d.addr, fp, d.name);
+            }
         }
         std::sort(out.near_matches.begin(), out.near_matches.end(),
             [](const auto& a, const auto& bb) { return a.addr < bb.addr; });
@@ -1062,7 +1076,8 @@ validate_name(const Binary& b, std::string_view name) {
 }
 
 Collisions
-collect_collisions(const Binary& b) {
+collect_collisions(const Binary& b,
+                   std::span<const FingerprintRow> precomputed) {
     Collisions out;
 
     // Name collisions come straight from the symbol table — find_all_by_name
@@ -1092,15 +1107,23 @@ collect_collisions(const Binary& b) {
             });
     }
 
-    // Fingerprint collisions: walk the unified function set, hash each,
-    // group by hash. Skip 0-hash (un-fingerprintable) entries — they're
-    // not collisions, they're failures.
+    // Fingerprint collisions: bucket every function's hash, emit groups
+    // with size > 1. The fingerprint source is `precomputed` when
+    // supplied (the cache-fed fast path) or compute-on-the-fly otherwise.
     {
         std::unordered_map<u64, std::vector<addr_t>> by_fp;
-        for (const auto& d : enumerate_functions(b)) {
-            const auto fp = compute_fingerprint(b, d.addr);
-            if (fp.hash == 0) continue;
-            by_fp[fp.hash].push_back(d.addr);
+        if (!precomputed.empty()) {
+            by_fp.reserve(precomputed.size());
+            for (const auto& row : precomputed) {
+                if (row.fp.hash == 0) continue;
+                by_fp[row.fp.hash].push_back(row.addr);
+            }
+        } else {
+            for (const auto& d : enumerate_functions(b)) {
+                const auto fp = compute_fingerprint(b, d.addr);
+                if (fp.hash == 0) continue;
+                by_fp[fp.hash].push_back(d.addr);
+            }
         }
         out.by_fingerprint.reserve(by_fp.size());
         for (auto& [hash, addrs] : by_fp) {

@@ -884,6 +884,88 @@ struct ParsedFps {
     return out;
 }
 
+// Reuse the existing fingerprints disk cache for an already-loaded
+// binary. Mirrors fingerprints_cached_or_compute() (which re-loads the
+// binary from disk for run_diff()) but takes the Binary by reference so
+// callers that already paid the load cost don't pay it twice. Cache hits
+// turn --validate / --collisions on a 100MB+ binary from "minutes" into
+// "milliseconds" — every fingerprint comes from the cached TSV instead
+// of running the lift+SSA pipeline per fn.
+[[nodiscard]] std::string
+fingerprints_tsv_for(const Args& args, const ember::Binary& b) {
+    const auto dir = args.cache_dir.empty()
+        ? ember::cache::default_dir()
+        : std::filesystem::path(args.cache_dir);
+    const std::string tag = fingerprints_cache_tag();
+    if (!args.no_cache) {
+        if (auto k = ember::cache::key_for(args.binary); k) {
+            if (auto hit = ember::cache::read(dir, *k, tag); hit) {
+                return std::move(*hit);
+            }
+        }
+    }
+    std::string out = build_fingerprints_output(b);
+    if (!args.no_cache) {
+        if (auto k = ember::cache::key_for(args.binary); k) {
+            if (auto rv = ember::cache::write(dir, *k, tag, out); !rv) {
+                std::println(stderr, "ember: warning: {}: {}",
+                             rv.error().kind_name(), rv.error().message);
+            }
+        }
+    }
+    return out;
+}
+
+// Parse the build_fingerprints_output TSV into the flat row form
+// pipeline.cpp's validate_name / collect_collisions consume. The TSV
+// columns are: addr, hash, blocks, insts, calls, dup-count, name.
+// We drop dup-count — the pipeline functions recompute it locally
+// from the row set when reporting collisions.
+[[nodiscard]] std::vector<ember::FingerprintRow>
+fingerprint_rows_from_tsv(std::string_view tsv) {
+    std::vector<ember::FingerprintRow> out;
+    std::size_t pos = 0;
+    while (pos < tsv.size()) {
+        const auto nl = tsv.find('\n', pos);
+        const std::size_t end = (nl == std::string_view::npos) ? tsv.size() : nl;
+        const std::string_view line = tsv.substr(pos, end - pos);
+        pos = (nl == std::string_view::npos) ? tsv.size() : nl + 1;
+        if (line.empty() || line.front() == '#') continue;
+
+        std::array<std::string_view, 7> f{};
+        std::size_t s = 0, fi = 0;
+        for (std::size_t i = 0; i <= line.size() && fi < f.size(); ++i) {
+            if (i == line.size() || line[i] == '\t') {
+                f[fi++] = line.substr(s, i - s);
+                s = i + 1;
+            }
+        }
+        if (fi < 7) continue;
+        ember::addr_t addr = 0;
+        if (auto r = std::from_chars(f[0].data(),
+                                     f[0].data() + f[0].size(), addr, 16);
+            r.ec != std::errc{}) continue;
+        ember::u64 hash = 0;
+        if (auto r = std::from_chars(f[1].data(),
+                                     f[1].data() + f[1].size(), hash, 16);
+            r.ec != std::errc{}) continue;
+        auto parse_u32 = [](std::string_view sv) -> ember::u32 {
+            ember::u32 v = 0;
+            std::from_chars(sv.data(), sv.data() + sv.size(), v, 10);
+            return v;
+        };
+        ember::FingerprintRow row;
+        row.addr      = addr;
+        row.fp.hash   = hash;
+        row.fp.blocks = parse_u32(f[2]);
+        row.fp.insts  = parse_u32(f[3]);
+        row.fp.calls  = parse_u32(f[4]);
+        row.name      = std::string{f[6]};
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
 // Fuzzy-pair unmatched "removed" and "added" entries. Two heuristics,
 // applied in order:
 //   1. Exact-name match across versions — obvious case of "same named
@@ -1698,7 +1780,13 @@ int main(int argc, char** argv) {
     // pointing at an OpenTelemetry function — would have shown up here as
     // a WEAK verdict with a flagged near-match.
     if (!args.validate_name.empty()) {
-        const auto v = ember::validate_name(b, args.validate_name);
+        // Read the cached --fingerprints TSV (or build it once if cold).
+        // On a 102MB / 500K-fn binary this takes the per-call cost from
+        // ~3 minutes (full lift+SSA per fn) to milliseconds when the
+        // cache is warm.
+        const auto fp_tsv = fingerprints_tsv_for(args, b);
+        const auto rows   = fingerprint_rows_from_tsv(fp_tsv);
+        const auto v = ember::validate_name(b, args.validate_name, rows);
         const std::string_view verdict = ember::verdict_name(v.verdict);
         if (args.json) {
             std::string out = std::format(
@@ -1766,7 +1854,9 @@ int main(int argc, char** argv) {
     // → multi-addr group. Subsumes the per-import warning loop in
     // scripts/names.js so it runs without a --project.
     if (args.collisions) {
-        const auto c = ember::collect_collisions(b);
+        const auto fp_tsv = fingerprints_tsv_for(args, b);
+        const auto rows   = fingerprint_rows_from_tsv(fp_tsv);
+        const auto c = ember::collect_collisions(b, rows);
         if (args.json) {
             std::string out = "{\"by_name\":[";
             for (std::size_t i = 0; i < c.by_name.size(); ++i) {

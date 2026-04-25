@@ -717,6 +717,62 @@ struct Emitter {
                c == Reg::R14 || c == Reg::R15;
     }
 
+    // Render an IPA-arena TypeRef as a C type name. Returns empty if the
+    // ref is Top or no arena is supplied — caller should fall back.
+    [[nodiscard]] std::string ipa_type_name(TypeRef r) const {
+        if (!options.type_arena) return {};
+        if (r.is_top() || r.is_bottom()) return {};
+        const auto& n = options.type_arena->node(r);
+        switch (n.kind) {
+            case TypeKind::Void: return "void";
+            case TypeKind::Int:
+                if (n.i.sign_known && n.i.is_signed) {
+                    return std::format("s{}", n.i.bits);
+                }
+                return std::format("u{}", n.i.bits);
+            case TypeKind::Float:
+                return n.f.bits == 32 ? "float" : "double";
+            case TypeKind::Ptr: {
+                const auto& pn = options.type_arena->node(n.p.pointee);
+                if (pn.kind == TypeKind::Int && pn.i.bits == 8) {
+                    return "char*";  // canonical char* rendering
+                }
+                if (pn.kind == TypeKind::Int) {
+                    return std::format("u{}*", pn.i.bits);
+                }
+                return "void*";
+            }
+            default: return {};
+        }
+    }
+
+    // Render the C type for an SSA value, consulting Phase 2 inference
+    // results in `fn->value_types`. Falls back to the bit-width-only
+    // `c_type_name(IrType)` when no refined type exists, which keeps
+    // every untyped value rendering exactly as before.
+    [[nodiscard]] std::string c_type_name_for(const IrValue& v) const {
+        if (!fn) return std::string(c_type_name(v.type));
+        const TypeRef t = fn->type_of(v);
+        if (t.is_top()) return std::string(c_type_name(v.type));
+        const auto& node = fn->types.node(t);
+        switch (node.kind) {
+            case TypeKind::Ptr: {
+                const auto& pn = fn->types.node(node.p.pointee);
+                if (pn.kind == TypeKind::Int) {
+                    return std::format("u{}*", pn.i.bits);
+                }
+                return "void*";
+            }
+            case TypeKind::Int:
+                if (node.i.sign_known && node.i.is_signed) {
+                    return std::format("s{}", node.i.bits);
+                }
+                return std::string(c_type_name(v.type));
+            default:
+                return std::string(c_type_name(v.type));
+        }
+    }
+
     void analyze(const IrFunction& f) {
         fn = &f;
         for (std::size_t bi = 0; bi < f.blocks.size(); ++bi) {
@@ -2318,7 +2374,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (inst.dst.kind == IrValueKind::Temp) {
                 if (use_count(inst.dst) <= 1) return "";
                 return std::format("{} t{} = {};",
-                                   c_type_name(inst.dst.type),
+                                   c_type_name_for(inst.dst),
                                    inst.dst.temp,
                                    expr(inst.srcs[0]));
             }
@@ -2329,7 +2385,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (use_count(inst.dst) == 0) return "";
             if (use_count(inst.dst) == 1) return "";  // will be inlined
             return std::format("{} t{} = {};",
-                               c_type_name(inst.dst.type),
+                               c_type_name_for(inst.dst),
                                inst.dst.temp,
                                format_mem(inst.srcs[0], inst.dst.type, inst.segment));
         }
@@ -2361,7 +2417,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 if (visible_use_count(inst.dst) <= 1) return "";
                 if (stack_offset(inst.dst).has_value()) return "";
                 return std::format("{} t{} = {};",
-                                   c_type_name(inst.dst.type),
+                                   c_type_name_for(inst.dst),
                                    inst.dst.temp,
                                    expand(inst, 0));
             }
@@ -3022,6 +3078,17 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // condition means the function yields a value. We use the condition's
     // IrType to pick an appropriate C type rather than always saying `u64`.
     auto inferred_return_type = [&](const Emitter&, const StructuredFunction& s) -> std::string {
+        // IPA wins outright when it has concrete evidence — the typed
+        // return came from harvesting Return-operand types after Phase 2
+        // local inference, which sees more than this lambda's
+        // bit-width-only fallback.
+        if (e.options.signatures && e.options.type_arena && s.ir) {
+            auto it = e.options.signatures->find(s.ir->start);
+            if (it != e.options.signatures->end()) {
+                std::string n = e.ipa_type_name(it->second.return_type);
+                if (!n.empty()) return n;
+            }
+        }
         if (!s.body) return "void";
         std::optional<IrType> t;
         std::function<void(const Region&)> walk = [&](const Region& r) {
@@ -3143,11 +3210,22 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         if (arity == 0) {
             params = "void";
         } else {
+            // IPA's typed params override the legacy charp_arg view.
+            const InferredSig* ipa_sig = nullptr;
+            if (e.options.signatures && e.options.type_arena) {
+                auto it = e.options.signatures->find(sf.ir->start);
+                if (it != e.options.signatures->end()) ipa_sig = &it->second;
+            }
             for (u8 i = 0; i < arity; ++i) {
                 if (i > 0) params += ", ";
-                const std::string_view t = (i < e.charp_arg.size() && e.charp_arg[i])
-                    ? std::string_view{"char*"}
-                    : std::string_view{"u64"};
+                std::string t;
+                if (ipa_sig && i < ipa_sig->params.size()) {
+                    t = e.ipa_type_name(ipa_sig->params[i]);
+                }
+                if (t.empty()) {
+                    t = (i < e.charp_arg.size() && e.charp_arg[i])
+                        ? std::string{"char*"} : std::string{"u64"};
+                }
                 params += std::format("{} a{}", t, i + 1);
             }
         }

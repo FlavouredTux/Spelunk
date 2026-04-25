@@ -1,0 +1,10 @@
+type-lattice self-test
+  arena size after seed: 10
+  i32 interned twice -> same id: yes
+  ptr(i32) interned twice -> same id: yes
+  meet(top, i32)            = i32
+  meet(i32, i32)            = i32
+  meet(i32, i64)            = bottom
+  meet(i32, s32)            = s32
+  meet(ptr(i32), ptr(top))  = ptr(i32)
+  meet(ptr(i32), i32)       = bottom

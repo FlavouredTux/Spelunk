@@ -37,6 +37,7 @@
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
 #include <ember/ir/lifter.hpp>
+#include <ember/ir/types.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/script/runtime.hpp>
 #include <ember/structure/region.hpp>
@@ -114,6 +115,7 @@ struct Args {
     std::string functions_pattern;  // optional substring filter for --functions (second positional)
     bool quiet  = false;            // suppress progress output regardless of TTY
     bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
+    bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
     bool help   = false;
 };
 
@@ -153,6 +155,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--functions", &Args::functions},
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
+    {"",   "--dump-types", &Args::dump_types},
     {"",   "--labels",    &Args::labels},
     {"",   "--json",      &Args::json},
     {"-q", "--quiet",     &Args::quiet},
@@ -259,9 +262,10 @@ void apply_stage_implications(Args& a) {
     }
 
     // A positional binary is not required when the user is diffing two
-    // already-computed fingerprint TSVs — no bytes to parse.
+    // already-computed fingerprint TSVs — no bytes to parse. Likewise
+    // --dump-types is a self-test that doesn't read any binary.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
-    if (!a.help && a.binary.empty() && !diffs_from_tsvs) {
+    if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types) {
         return std::unexpected(ember::Error::invalid_format("no binary specified"));
     }
     apply_stage_implications(a);
@@ -1519,6 +1523,36 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
+    if (args.dump_types) {
+        ember::TypeArena arena;
+        std::println("type-lattice self-test");
+        std::println("  arena size after seed: {}", arena.size());
+        const auto i32a = arena.int_t(32);
+        const auto i32b = arena.int_t(32);
+        std::println("  i32 interned twice -> same id: {}",
+                     i32a == i32b ? "yes" : "no");
+        const auto i64t = arena.int_t(64);
+        const auto pi32 = arena.ptr_t(i32a);
+        const auto pi32b = arena.ptr_t(i32a);
+        std::println("  ptr(i32) interned twice -> same id: {}",
+                     pi32 == pi32b ? "yes" : "no");
+        std::println("  meet(top, i32)            = {}",
+                     arena.format(arena.meet(arena.top(), i32a)));
+        std::println("  meet(i32, i32)            = {}",
+                     arena.format(arena.meet(i32a, i32a)));
+        std::println("  meet(i32, i64)            = {}",
+                     arena.format(arena.meet(i32a, i64t)));
+        const auto si32 = arena.int_t(32, true, true);
+        std::println("  meet(i32, s32)            = {}",
+                     arena.format(arena.meet(i32a, si32)));
+        const auto ptop = arena.ptr_t(arena.top());
+        std::println("  meet(ptr(i32), ptr(top))  = {}",
+                     arena.format(arena.meet(pi32, ptop)));
+        std::println("  meet(ptr(i32), i32)       = {}",
+                     arena.format(arena.meet(pi32, i32a)));
+        return EXIT_SUCCESS;
+    }
+
     if (!args.diff_path.empty() ||
         !args.fp_old_in.empty() ||
         !args.fp_new_in.empty()) {
@@ -2181,13 +2215,14 @@ int main(int argc, char** argv) {
     // IPA: one-shot fixed-point over the call graph before emission so
     // char*-arg propagation can cross function boundaries. Expensive on
     // large binaries — opt-in via --ipa.
-    std::map<ember::addr_t, ember::InferredSig> sigs;
+    ember::InferenceResult ipa;
     if (args.ipa && (args.pseudo || args.strct)) {
         std::println(stderr, "ember: running IPA (this pass lifts every function once)...");
         std::fflush(stderr);
-        sigs = ember::infer_signatures(b);
-        std::println(stderr, "ember: IPA done: {} functions analyzed", sigs.size());
-        emit_opts.signatures = &sigs;
+        ipa = ember::infer_signatures(b);
+        std::println(stderr, "ember: IPA done: {} functions analyzed", ipa.sigs.size());
+        emit_opts.signatures = &ipa.sigs;
+        emit_opts.type_arena = &ipa.arena;
     }
     ember::LpMap lp_map;
     if (args.eh && (args.pseudo || args.strct)) {

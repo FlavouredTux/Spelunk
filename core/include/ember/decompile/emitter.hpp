@@ -23,6 +23,11 @@ struct EmitOptions {
     // for char*-arg propagation across function boundaries instead of
     // being limited to the direct libc-sink pass.
     const std::map<addr_t, InferredSig>* signatures = nullptr;
+    // Binary-wide type arena owning every TypeRef inside `signatures`.
+    // Set alongside `signatures` by the IPA driver. Required for the
+    // emitter to resolve typed param/return TypeRefs from sigs into
+    // printable C type names.
+    const TypeArena* type_arena = nullptr;
     // Pre-parsed landing-pad map from parse_landing_pads(). When set, the
     // emitter annotates blocks that begin a catch range with real LSDA
     // info instead of falling back to __cxa_* pattern matching.

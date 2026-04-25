@@ -112,6 +112,15 @@ function(ember_expect_fail_test)
     )
 endfunction()
 
+# --dump-types: type-lattice self-test. Doesn't read the binary, but the
+# golden harness wants a fixture path slot, so we pass any existing one.
+ember_golden_test(
+    NAME    types_basic_dump
+    FIXTURE switch_basic
+    ARGS    "--dump-types|__BINARY__"
+    GOLDEN  types_basic.dump.txt
+)
+
 # Unit tests for the Itanium demangler: not a golden, just a self-checking
 # binary. Wired as a CTest so it runs with the rest of the suite.
 add_executable(ember_demangle_test demangle_test.cpp)

@@ -9,6 +9,7 @@
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/type_infer_local.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/register.hpp>
@@ -241,10 +242,55 @@ std::set<addr_t> collect_entries(const Binary& b) {
     return out;
 }
 
+// Translate a TypeRef from `src` arena into `dst`. Recurses on Ptr
+// pointees; struct/array translation is left as future work — Phase 3 v0
+// only flows scalar + pointer types.
+[[nodiscard]] TypeRef translate(const TypeArena& src, TypeArena& dst, TypeRef r) {
+    if (r.is_top())    return dst.top();
+    if (r.is_bottom()) return dst.bottom();
+    const TypeNode& n = src.node(r);
+    switch (n.kind) {
+        case TypeKind::Void:  return dst.void_t();
+        case TypeKind::Int:   return dst.int_t(n.i.bits, n.i.sign_known, n.i.is_signed);
+        case TypeKind::Float: return dst.float_t(n.f.bits);
+        case TypeKind::Ptr:   return dst.ptr_t(translate(src, dst, n.p.pointee), n.p.addr_space);
+        default:              return dst.top();   // structs/arrays/funcs not yet
+    }
+}
+
+// For one function, harvest typed return + per-arg-slot types from the
+// IR's value_types side table (populated by infer_local_types). Meets
+// the harvested types into `sig` via the shared `arena`.
+void harvest_typed_sig(const IrFunction& fn, Abi abi,
+                       TypeArena& arena, InferredSig& sig) {
+    // Return type: meet of every Return-instruction's operand type.
+    for (const auto& bb : fn.blocks) {
+        for (const auto& inst : bb.insts) {
+            if (inst.op != IrOp::Return || inst.src_count == 0) continue;
+            const TypeRef src_t = fn.type_of(inst.srcs[0]);
+            if (src_t.is_top()) continue;
+            const TypeRef dst_t = translate(fn.types, arena, src_t);
+            sig.return_type = arena.meet(sig.return_type, dst_t);
+        }
+    }
+    // Param types: walk SSA defs once; the version-0 read of each int-arg
+    // register IS the parameter, so its inferred type is the param type.
+    const auto args = int_arg_regs(abi);
+    for (u8 i = 0; i < args.size() && i < sig.params.size(); ++i) {
+        IrValue probe = IrValue::make_reg(args[i], IrType::I64);
+        probe.version = 0;
+        const TypeRef src_t = fn.type_of(probe);
+        if (src_t.is_top()) continue;
+        const TypeRef dst_t = translate(fn.types, arena, src_t);
+        sig.params[i] = arena.meet(sig.params[i], dst_t);
+    }
+}
+
 }  // namespace
 
-std::map<addr_t, InferredSig> infer_signatures(const Binary& b) {
-    std::map<addr_t, InferredSig> sigs;
+InferenceResult infer_signatures(const Binary& b) {
+    InferenceResult out;
+    auto& sigs = out.sigs;
     IrCache ir_cache;
     const auto entries = collect_entries(b);
     const Abi abi = abi_for(b.format(), b.arch(), b.endian());
@@ -265,7 +311,27 @@ std::map<addr_t, InferredSig> infer_signatures(const Binary& b) {
             if (sig.charp != before) changed = true;
         }
     }
-    return sigs;
+
+    // Phase 3 v0: harvest typed return + params after charp converges.
+    // Each function's IR was lifted+SSA+cleaned by get_ir(); now run the
+    // local type-inference pass and pull the results into the shared arena.
+    const TypeRef char_ptr = out.arena.ptr_t(out.arena.int_t(8));
+    for (addr_t fn : entries) {
+        IrFunction* ir = get_ir(ir_cache, b, fn);
+        if (!ir) continue;
+        infer_local_types(*ir);
+        InferredSig& sig = sigs[fn];
+        harvest_typed_sig(*ir, abi, out.arena, sig);
+        // Bridge legacy charp bits → typed params so the emitter's typed
+        // renderer fires uniformly. Doesn't override evidence harvested
+        // from local inference (meet preserves the more refined type).
+        for (u8 i = 0; i < sig.params.size(); ++i) {
+            if (sig.charp[i]) {
+                sig.params[i] = out.arena.meet(sig.params[i], char_ptr);
+            }
+        }
+    }
+    return out;
 }
 
 }  // namespace ember

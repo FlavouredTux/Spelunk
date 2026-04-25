@@ -5,11 +5,13 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <ember/analysis/function.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/register.hpp>
+#include <ember/ir/types.hpp>
 
 namespace ember {
 
@@ -178,6 +180,27 @@ struct IrBlock {
     Reg                  switch_index = Reg::None;
 };
 
+// Pack an SSA value's identity into a single key for the value_types
+// side table. Distinct from ssa.hpp's `ssa_key` (which returns a tuple
+// for SSA-conversion bookkeeping) — this one is just a hash key.
+[[nodiscard]] inline u64 value_type_key(const IrValue& v) noexcept {
+    auto pack = [](IrValueKind kind, u32 id, u32 version) -> u64 {
+        return (static_cast<u64>(static_cast<u8>(kind)) << 56)
+             | (static_cast<u64>(id) << 32)
+             |  static_cast<u64>(version);
+    };
+    switch (v.kind) {
+        case IrValueKind::Reg:
+            return pack(v.kind, static_cast<u32>(v.reg), v.version);
+        case IrValueKind::Temp:
+            return pack(v.kind, v.temp, v.version);
+        case IrValueKind::Flag:
+            return pack(v.kind, static_cast<u32>(v.flag), v.version);
+        default:
+            return 0;
+    }
+}
+
 struct IrFunction {
     addr_t                            start = 0;
     addr_t                            end   = 0;
@@ -185,6 +208,20 @@ struct IrFunction {
     std::vector<IrBlock>              blocks;
     std::map<addr_t, std::size_t>     block_at;
     u32                               next_temp_id = 0;
+
+    // Phase 1 type lattice: every SSA value defaults to Top (unknown).
+    // value_types is sparse — a missing entry means Top, so the lifter
+    // doesn't have to populate anything for the no-inference baseline.
+    // Phase 2 inference will start writing entries here.
+    TypeArena                         types;
+    std::unordered_map<u64, TypeRef>  value_types;
+
+    [[nodiscard]] TypeRef type_of(const IrValue& v) const noexcept {
+        const u64 k = value_type_key(v);
+        if (k == 0) return TypeRef{};  // Imm / None — typed by IrValue.type
+        auto it = value_types.find(k);
+        return it == value_types.end() ? TypeRef{} : it->second;
+    }
 };
 
 [[nodiscard]] std::string format_ir_value(const IrValue& v);

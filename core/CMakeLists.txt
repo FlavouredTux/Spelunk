@@ -18,6 +18,7 @@ add_library(ember_core STATIC
     src/analysis/demangle.cpp
     src/analysis/msvc_demangle.cpp
     src/analysis/sig_inference.cpp
+    src/analysis/type_infer_local.cpp
     src/analysis/eh_frame.cpp
     src/analysis/objc.cpp
     src/analysis/pe_unwind.cpp
@@ -29,6 +30,7 @@ add_library(ember_core STATIC
     src/common/cache.cpp
     src/ir/abi.cpp
     src/ir/ir.cpp
+    src/ir/types.cpp
     src/ir/lifter.cpp
     src/ir/ppc_lifter.cpp
     src/ir/x64_lifter.cpp

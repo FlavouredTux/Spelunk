@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/function.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/annotations.hpp>
@@ -129,6 +130,84 @@ struct ContainingFn {
 
 [[nodiscard]] std::optional<ContainingFn>
 containing_function(const Binary& b, addr_t addr);
+
+// Disambiguate a name lookup. Tonight's "wrong VA" hours all came from
+// `find_by_name` returning one address while a near-identical function
+// elsewhere matched the user's mental model. `validate_name` reports
+// every address that carries `name` plus the byte-similar candidates the
+// caller should sanity-check before trusting any one of them.
+//
+// "Byte-similar" is tuple equality on (blocks, insts, calls). FNV-1a is
+// binary equality only — no useful Hamming distance — so the shape
+// counters from FunctionFingerprint are the disambiguator. Cheap (one
+// pass over the function set) and surfaces exactly the lookalikes that
+// caused the recurring confusion (cxa_guard getters, shared_ptr
+// release stubs, OTLP method bodies).
+struct NameValidation {
+    enum class Verdict : u8 {
+        Strong,    // single bound, no near-matches → safe to use
+        Weak,      // single bound but N functions share the same shape
+        Ambiguous, // name resolves to multiple addresses
+        Unknown,   // name has no defined symbol
+    };
+
+    struct NearMatch {
+        addr_t              addr = 0;
+        FunctionFingerprint fp;
+        std::string         name;   // symbol name or `sub_<hex>` fallback
+    };
+
+    std::vector<addr_t>              bound;        // every non-import addr carrying `name`
+    std::vector<FunctionFingerprint> fps;          // 1:1 with `bound`; 0-hash if addr is not a fn entry
+    std::vector<u64>                 offsets;      // 1:1 with `bound`; offset within enclosing fn (0 if entry)
+    std::vector<NearMatch>           near_matches; // shape-tuple twins with a different hash
+    Verdict                          verdict = Verdict::Unknown;
+};
+
+[[nodiscard]] constexpr std::string_view
+verdict_name(NameValidation::Verdict v) noexcept {
+    switch (v) {
+        case NameValidation::Verdict::Strong:    return "STRONG";
+        case NameValidation::Verdict::Weak:      return "WEAK";
+        case NameValidation::Verdict::Ambiguous: return "AMBIGUOUS";
+        case NameValidation::Verdict::Unknown:   return "UNKNOWN";
+    }
+    return "?";
+}
+
+[[nodiscard]] NameValidation
+validate_name(const Binary& b, std::string_view name);
+
+// Sweep the binary for ambiguity that would silently mis-resolve a name
+// or fingerprint lookup downstream. Two flavours:
+//
+//   by_name        — symbol-table names bound to >1 non-import address
+//                    (typically a fingerprint-import that hit twice, or
+//                    a hand rename that aliased a stub).
+//   by_fingerprint — distinct functions whose content hash collides.
+//                    These are the false-positive risks for a name DB:
+//                    importing a name keyed on this fingerprint will
+//                    apply to the wrong twin half the time.
+//
+// Both vectors are sorted: `by_name` lexicographically, `by_fingerprint`
+// by address of the first member. Each group's `addrs` is sorted ascending.
+struct NameCollision {
+    std::string         name;
+    std::vector<addr_t> addrs;
+};
+
+struct FingerprintCollision {
+    u64                 hash = 0;
+    std::vector<addr_t> addrs;
+};
+
+struct Collisions {
+    std::vector<NameCollision>        by_name;
+    std::vector<FingerprintCollision> by_fingerprint;
+};
+
+[[nodiscard]] Collisions
+collect_collisions(const Binary& b);
 
 // Walk the CFG of the function at `fn` and return its outgoing direct
 // call/tail/indirect-const edges. Sorted by target VA, deduped on

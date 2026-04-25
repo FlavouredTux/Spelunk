@@ -82,6 +82,7 @@ struct Args {
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string callees;            // --callees VA: print direct call targets of the function at VA
     std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
+    std::string validate_name;      // --validate NAME: report all addrs bound to NAME + byte-similar lookalikes
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at
@@ -109,6 +110,7 @@ struct Args {
     bool vm_detect = false;         // scan for interpreter-style VM dispatchers
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
+    bool collisions = false;        // --collisions: dump every name/fingerprint group bound to >1 address
     std::string functions_pattern;  // optional substring filter for --functions (second positional)
     bool quiet  = false;            // suppress progress output regardless of TTY
     bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
@@ -149,6 +151,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--vm-detect", &Args::vm_detect},
     {"",   "--cfg-pseudo", &Args::cfg_pseudo},
     {"",   "--functions", &Args::functions},
+    {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--labels",    &Args::labels},
     {"",   "--json",      &Args::json},
@@ -171,6 +174,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--refs-to",     &Args::refs_to},
     {"",   "--callees",      &Args::callees},
     {"",   "--containing-fn", &Args::containing_fn},
+    {"",   "--validate",    &Args::validate_name},
     {"",   "--callees-class", &Args::callees_class},
     {"",   "--disasm-at",   &Args::disasm_at},
     {"",   "--count",       &Args::disasm_count},
@@ -1243,6 +1247,8 @@ void print_help() {
     std::println("                       data-section reference (kind=read/write/lea)");
     std::println("      --callees VA     list direct/tail/indirect_const callees of the function at VA");
     std::println("      --containing-fn VA  entry/size/name/offset of the function covering VA (TSV/JSON)");
+    std::println("      --validate NAME  list every addr bound to NAME + byte-similar lookalikes (TSV/JSON)");
+    std::println("      --collisions     dump every name and fingerprint bound to >1 address (TSV/JSON)");
     std::println("      --callees-class NAME  JSON: {{slot_N: [callees]}} for every vfn of an RTTI class");
     std::println("      --json           machine-readable output for --callees / --callees-class");
     std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns; --count N to override)");
@@ -1682,6 +1688,130 @@ int main(int argc, char** argv) {
         } else {
             std::println("{:#x}\t{:#x}\t{}\t{:#x}",
                          cf->entry, cf->size, cf->name, cf->offset_within);
+        }
+        return EXIT_SUCCESS;
+    }
+
+    // --validate NAME: report every address that carries NAME and every
+    // function whose shape (blocks/insts/calls) twins the bound entry's
+    // fingerprint. Tonight's bug — `find_by_name("NetworkClient::ctor")`
+    // pointing at an OpenTelemetry function — would have shown up here as
+    // a WEAK verdict with a flagged near-match.
+    if (!args.validate_name.empty()) {
+        const auto v = ember::validate_name(b, args.validate_name);
+        const std::string_view verdict = ember::verdict_name(v.verdict);
+        if (args.json) {
+            std::string out = std::format(
+                "{{\"name\":\"{}\",\"verdict\":\"{}\",\"bound\":[",
+                json_escape(args.validate_name), verdict);
+            for (std::size_t i = 0; i < v.bound.size(); ++i) {
+                if (i) out += ',';
+                const auto& fp = v.fps[i];
+                out += std::format(
+                    "{{\"addr\":\"{:#x}\",\"hash\":\"{:#x}\","
+                    "\"blocks\":{},\"insts\":{},\"calls\":{},\"offset\":{}}}",
+                    v.bound[i], fp.hash, fp.blocks, fp.insts, fp.calls,
+                    v.offsets[i]);
+            }
+            out += "],\"near_matches\":[";
+            for (std::size_t i = 0; i < v.near_matches.size(); ++i) {
+                if (i) out += ',';
+                const auto& nm = v.near_matches[i];
+                out += std::format(
+                    "{{\"addr\":\"{:#x}\",\"hash\":\"{:#x}\","
+                    "\"blocks\":{},\"insts\":{},\"calls\":{},\"name\":\"{}\"}}",
+                    nm.addr, nm.fp.hash, nm.fp.blocks, nm.fp.insts, nm.fp.calls,
+                    json_escape(nm.name));
+            }
+            out += "]}\n";
+            std::fwrite(out.data(), 1, out.size(), stdout);
+        } else {
+            std::string out = std::format("verdict\t{}\n", verdict);
+            for (std::size_t i = 0; i < v.bound.size(); ++i) {
+                const auto& fp = v.fps[i];
+                out += std::format(
+                    "bound\t{:#x}\thash={:#x}\tblocks={}\tinsts={}\tcalls={}"
+                    "\tname={}\toffset_in_fn={:#x}\n",
+                    v.bound[i], fp.hash, fp.blocks, fp.insts, fp.calls,
+                    args.validate_name, v.offsets[i]);
+            }
+            // Cap near-match output at 8 lines: a name with hundreds of
+            // shape twins is uninformative, and the verdict label is what
+            // the caller actually checks.
+            constexpr std::size_t kNearCap = 8;
+            const std::size_t shown =
+                std::min(v.near_matches.size(), kNearCap);
+            for (std::size_t i = 0; i < shown; ++i) {
+                const auto& nm = v.near_matches[i];
+                out += std::format(
+                    "near\t{:#x}\thash={:#x}\tblocks={}\tinsts={}\tcalls={}"
+                    "\tname={}\n",
+                    nm.addr, nm.fp.hash, nm.fp.blocks, nm.fp.insts, nm.fp.calls,
+                    nm.name);
+            }
+            if (v.near_matches.size() > shown) {
+                out += std::format("near_truncated\t{}\n",
+                                   v.near_matches.size() - shown);
+            }
+            std::fwrite(out.data(), 1, out.size(), stdout);
+        }
+        // Exit code conveys verdict to shell pipelines: 0 STRONG, 1 anything
+        // ambiguous/weak/unknown — matches the grep-style "did you find what
+        // you wanted" contract callers already use for --refs-to et al.
+        return v.verdict == ember::NameValidation::Verdict::Strong
+            ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    // --collisions: every name → multi-addr group and every fingerprint
+    // → multi-addr group. Subsumes the per-import warning loop in
+    // scripts/names.js so it runs without a --project.
+    if (args.collisions) {
+        const auto c = ember::collect_collisions(b);
+        if (args.json) {
+            std::string out = "{\"by_name\":[";
+            for (std::size_t i = 0; i < c.by_name.size(); ++i) {
+                if (i) out += ',';
+                const auto& g = c.by_name[i];
+                out += std::format("{{\"name\":\"{}\",\"addrs\":[",
+                                   json_escape(g.name));
+                for (std::size_t j = 0; j < g.addrs.size(); ++j) {
+                    if (j) out += ',';
+                    out += std::format("\"{:#x}\"", g.addrs[j]);
+                }
+                out += "]}";
+            }
+            out += "],\"by_fingerprint\":[";
+            for (std::size_t i = 0; i < c.by_fingerprint.size(); ++i) {
+                if (i) out += ',';
+                const auto& g = c.by_fingerprint[i];
+                out += std::format("{{\"hash\":\"{:#x}\",\"addrs\":[", g.hash);
+                for (std::size_t j = 0; j < g.addrs.size(); ++j) {
+                    if (j) out += ',';
+                    out += std::format("\"{:#x}\"", g.addrs[j]);
+                }
+                out += "]}";
+            }
+            out += "]}\n";
+            std::fwrite(out.data(), 1, out.size(), stdout);
+        } else {
+            std::string out;
+            for (const auto& g : c.by_name) {
+                out += std::format("name\t{}\t", g.name);
+                for (std::size_t j = 0; j < g.addrs.size(); ++j) {
+                    if (j) out += ',';
+                    out += std::format("{:#x}", g.addrs[j]);
+                }
+                out += std::format("\t{}\n", g.addrs.size());
+            }
+            for (const auto& g : c.by_fingerprint) {
+                out += std::format("fingerprint\t{:#x}\t", g.hash);
+                for (std::size_t j = 0; j < g.addrs.size(); ++j) {
+                    if (j) out += ',';
+                    out += std::format("{:#x}", g.addrs[j]);
+                }
+                out += std::format("\t{}\n", g.addrs.size());
+            }
+            std::fwrite(out.data(), 1, out.size(), stdout);
         }
         return EXIT_SUCCESS;
     }

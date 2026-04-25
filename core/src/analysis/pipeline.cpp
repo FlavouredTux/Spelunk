@@ -11,11 +11,13 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/rtti.hpp>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/fingerprint.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/decoder.hpp>
@@ -236,6 +238,23 @@ try_parse_objc_bracket(const Binary& b, std::string_view s) {
     return std::nullopt;
 }
 
+// True when EMBER_QUIET=1 — the CLI sets this for --quiet, and we honour
+// it for one-shot diagnostics too so a `--quiet` invocation produces no
+// stderr noise even when -s lands mid-function.
+[[nodiscard]] bool diagnostics_silenced() noexcept {
+    const char* q = std::getenv("EMBER_QUIET");
+    return q && q[0] == '1';
+}
+
+void note_mid_function(addr_t addr, std::string_view name, u64 off) {
+    if (diagnostics_silenced()) return;
+    std::fprintf(stderr,
+        "ember: note: %#llx is inside %.*s at +%#llx\n",
+        static_cast<unsigned long long>(addr),
+        static_cast<int>(name.size()), name.data(),
+        static_cast<unsigned long long>(off));
+}
+
 // Resolve `addr` to the nearest containing function entry. Uses the
 // defined-objects cache for an O(log n) lookup. Returns a FuncWindow
 // whose `start` is the function entry (NOT `addr` itself) when `addr`
@@ -252,16 +271,23 @@ resolve_containing_function(const Binary& b, addr_t addr) {
         }
         const u64 off = addr - c->addr;
         if (c->size == 0 || off < c->size) {
-            std::fprintf(stderr,
-                "ember: note: %#llx is inside %s at +%#llx\n",
-                static_cast<unsigned long long>(addr),
-                c->name.c_str(),
-                static_cast<unsigned long long>(off));
+            note_mid_function(addr, c->name, off);
             return window_from_addr(c->addr, c->size,
                                     std::format("{}+{:#x}", c->name, off));
         }
     }
     if (b.bytes_at(addr).empty()) return std::nullopt;
+    // Fall back to the broader function index (CFG-discovered `sub_*`
+    // entries that aren't in the symbol table). When the literal VA
+    // lands mid-`sub_*` we still want the same offset note + entry-
+    // anchored window the named branch produces — otherwise `-s 0xVA`
+    // on a hex literal in the middle of a discovered function silently
+    // disasms from the wrong instruction boundary.
+    if (auto cf = containing_function(b, addr); cf && cf->entry != addr) {
+        note_mid_function(addr, cf->name, cf->offset_within);
+        return window_from_addr(cf->entry, cf->size,
+            std::format("{}+{:#x}", cf->name, cf->offset_within));
+    }
     return window_from_addr(addr, 0, std::format("sub_{:x}", addr));
 }
 
@@ -940,6 +966,157 @@ compute_call_resolutions(const Binary& b, addr_t fn) {
         // `call` instruction is only classified once in practice.
         out.emplace(e.site, e.target);
     }
+    return out;
+}
+
+NameValidation
+validate_name(const Binary& b, std::string_view name) {
+    NameValidation out;
+    if (name.empty()) return out;
+
+    const auto matches = b.find_all_by_name(name);
+    out.bound.reserve(matches.size());
+    out.fps.reserve(matches.size());
+    out.offsets.reserve(matches.size());
+
+    // Build the function index once — used both for fingerprinting the
+    // bound addresses (a name pinned to mid-function still gets a hash,
+    // resolved via the enclosing entry) and for the near-match scan.
+    const auto fns = enumerate_functions(b);
+    std::unordered_map<addr_t, std::size_t> fn_index;
+    fn_index.reserve(fns.size());
+    for (std::size_t i = 0; i < fns.size(); ++i) {
+        fn_index.emplace(fns[i].addr, i);
+    }
+
+    auto enclosing_entry = [&](addr_t addr) -> std::optional<addr_t> {
+        auto it = std::upper_bound(fns.begin(), fns.end(), addr,
+            [](addr_t a, const DiscoveredFunction& d) { return a < d.addr; });
+        if (it == fns.begin()) return std::nullopt;
+        --it;
+        if (it->size != 0 && addr >= it->addr + it->size) return std::nullopt;
+        return it->addr;
+    };
+
+    // Fingerprint each bound address. If the address isn't itself a
+    // function entry (a wrong rename pinned the name mid-function),
+    // fingerprint the enclosing entry so the shape tuple is meaningful;
+    // record the offset so callers can flag the discrepancy.
+    FunctionFingerprint anchor{};
+    bool anchor_set = false;
+    for (const Symbol* s : matches) {
+        out.bound.push_back(s->addr);
+        u64 off = 0;
+        FunctionFingerprint fp{};
+        if (auto entry = enclosing_entry(s->addr); entry) {
+            off = s->addr - *entry;
+            fp = compute_fingerprint(b, *entry);
+        }
+        out.fps.push_back(fp);
+        out.offsets.push_back(off);
+        if (!anchor_set && fp.hash != 0) {
+            anchor = fp;
+            anchor_set = true;
+        }
+    }
+
+    // Near-match scan: every other discovered function whose
+    // (blocks, insts, calls) tuple equals the anchor's but whose hash
+    // differs. The anchor is the first non-zero fingerprint among
+    // bound addresses; if no bound address fingerprints, we have no
+    // shape to compare against and skip the scan.
+    if (anchor_set) {
+        // De-dupe near-matches by entry: a name bound to multiple
+        // addresses inside the same function would otherwise list its
+        // own enclosing entry as a "near-match" of itself.
+        std::unordered_set<addr_t> bound_entries;
+        for (addr_t a : out.bound) {
+            if (auto e = enclosing_entry(a); e) bound_entries.insert(*e);
+        }
+        for (const auto& d : fns) {
+            if (bound_entries.contains(d.addr)) continue;
+            const auto fp = compute_fingerprint(b, d.addr);
+            if (fp.hash == 0) continue;
+            if (fp.blocks != anchor.blocks) continue;
+            if (fp.insts  != anchor.insts)  continue;
+            if (fp.calls  != anchor.calls)  continue;
+            // Hash equality is the strongest signal of name-DB confusion
+            // (same content, different address) so it's kept in
+            // `near_matches` rather than dropped — callers grep for
+            // hash=<anchor> to single it out.
+            NameValidation::NearMatch nm;
+            nm.addr = d.addr;
+            nm.fp   = fp;
+            nm.name = d.name;
+            out.near_matches.push_back(std::move(nm));
+        }
+        std::sort(out.near_matches.begin(), out.near_matches.end(),
+            [](const auto& a, const auto& bb) { return a.addr < bb.addr; });
+    }
+
+    if (out.bound.empty())          out.verdict = NameValidation::Verdict::Unknown;
+    else if (out.bound.size() > 1)  out.verdict = NameValidation::Verdict::Ambiguous;
+    else if (out.near_matches.empty()) out.verdict = NameValidation::Verdict::Strong;
+    else                            out.verdict = NameValidation::Verdict::Weak;
+    return out;
+}
+
+Collisions
+collect_collisions(const Binary& b) {
+    Collisions out;
+
+    // Name collisions come straight from the symbol table — find_all_by_name
+    // already does the per-name filter, but here we want every duplicate
+    // in one pass. Skip imports (PLT stubs share names with their defined
+    // counterparts and that's not a collision worth flagging).
+    {
+        std::unordered_map<std::string_view, std::vector<addr_t>> by_name;
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.name.empty()) continue;
+            by_name[s.name].push_back(s.addr);
+        }
+        for (auto& [name, addrs] : by_name) {
+            if (addrs.size() < 2) continue;
+            std::sort(addrs.begin(), addrs.end());
+            addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
+            if (addrs.size() < 2) continue;
+            NameCollision nc;
+            nc.name  = std::string{name};
+            nc.addrs = std::move(addrs);
+            out.by_name.push_back(std::move(nc));
+        }
+        std::sort(out.by_name.begin(), out.by_name.end(),
+            [](const NameCollision& a, const NameCollision& bb) {
+                return a.name < bb.name;
+            });
+    }
+
+    // Fingerprint collisions: walk the unified function set, hash each,
+    // group by hash. Skip 0-hash (un-fingerprintable) entries — they're
+    // not collisions, they're failures.
+    {
+        std::unordered_map<u64, std::vector<addr_t>> by_fp;
+        for (const auto& d : enumerate_functions(b)) {
+            const auto fp = compute_fingerprint(b, d.addr);
+            if (fp.hash == 0) continue;
+            by_fp[fp.hash].push_back(d.addr);
+        }
+        out.by_fingerprint.reserve(by_fp.size());
+        for (auto& [hash, addrs] : by_fp) {
+            if (addrs.size() < 2) continue;
+            std::sort(addrs.begin(), addrs.end());
+            FingerprintCollision fc;
+            fc.hash  = hash;
+            fc.addrs = std::move(addrs);
+            out.by_fingerprint.push_back(std::move(fc));
+        }
+        std::sort(out.by_fingerprint.begin(), out.by_fingerprint.end(),
+            [](const FingerprintCollision& a, const FingerprintCollision& bb) {
+                return a.addrs.front() < bb.addrs.front();
+            });
+    }
+
     return out;
 }
 

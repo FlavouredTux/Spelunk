@@ -291,6 +291,28 @@ ember_golden_test(
     GOLDEN  imports.functions.main.txt
 )
 
+# --collisions: every name and every fingerprint bound to >1 address.
+# The imports fixture has two real fingerprint collisions (the
+# tm_clones twins and the _dl_relocate_static_pie / _fini stubs) so a
+# regression in collect_collisions either drops them or invents new
+# ones — both shapes the golden catches immediately.
+ember_golden_test(
+    NAME    imports_collisions
+    FIXTURE imports
+    ARGS    "--no-cache|--collisions"
+    GOLDEN  imports.collisions.txt
+)
+
+# --validate NAME on a uniquely-shaped function: locks the STRONG
+# verdict path (single bound, no near-matches) and the bound-row TSV
+# format that downstream tooling parses.
+ember_golden_test(
+    NAME    imports_validate_main
+    FIXTURE imports
+    ARGS    "--no-cache|--validate|main"
+    GOLDEN  imports.validate.main.txt
+)
+
 # ---- decoder_misc (coverage of formerly-unhandled opcodes) -----------------
 #
 # Every function here hits a decoder path that previously produced

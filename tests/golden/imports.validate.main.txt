@@ -1,0 +1,2 @@
+verdict	STRONG
+bound	0x401070	hash=0xb8d49a483e773f63	blocks=3	insts=18	calls=1	name=main	offset_in_fn=0x0

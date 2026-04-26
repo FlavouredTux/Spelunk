@@ -299,8 +299,8 @@ Result<void> SsaBuilder::convert(IrFunction& fn) const {
 
     std::unordered_map<addr_t, std::size_t> rpo_index;
     rpo_index.reserve(rpo.size());
-    for (const auto [i, addr] : std::views::enumerate(rpo))
-        rpo_index[addr] = static_cast<std::size_t>(i);
+    for (std::size_t i = 0; i < rpo.size(); ++i)
+        rpo_index[rpo[i]] = i;
 
     const auto idoms = compute_idoms(fn, rpo, rpo_index);
     const auto df    = compute_df(fn, idoms);

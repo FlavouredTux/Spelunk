@@ -80,8 +80,8 @@ compute_ipdoms(const IrFunction& fn) {
     std::vector<addr_t> rpo(post.rbegin(), post.rend());
     std::unordered_map<addr_t, std::size_t> rpo_idx;
     rpo_idx.reserve(rpo.size());
-    for (const auto [i, addr] : std::views::enumerate(rpo))
-        rpo_idx[addr] = static_cast<std::size_t>(i);
+    for (std::size_t i = 0; i < rpo.size(); ++i)
+        rpo_idx[rpo[i]] = i;
 
     std::unordered_map<addr_t, addr_t> ipdom;
     ipdom[kNoAddr] = kNoAddr;
@@ -203,8 +203,8 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
     CfgInfo info;
     info.rpo = compute_rpo(fn);
     info.rpo_index.reserve(info.rpo.size());
-    for (const auto [i, addr] : std::views::enumerate(info.rpo))
-        info.rpo_index[addr] = static_cast<std::size_t>(i);
+    for (std::size_t i = 0; i < info.rpo.size(); ++i)
+        info.rpo_index[info.rpo[i]] = i;
     info.idom  = compute_idoms(fn, info.rpo, info.rpo_index);
     info.ipdom = compute_ipdoms(fn);
     find_loops(fn, info);

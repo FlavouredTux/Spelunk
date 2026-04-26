@@ -1,8 +1,7 @@
 #include <ember/disasm/instruction.hpp>
 
+#include <cstddef>
 #include <format>
-#include <ranges>
-#include <span>
 #include <string>
 
 namespace ember {
@@ -321,11 +320,9 @@ std::string format_instruction(const Instruction& insn) {
     s += mnemonic_name(insn.mnemonic);
     if (insn.num_operands > 0) {
         s += ' ';
-        const auto active =
-            std::span(insn.operands).first(insn.num_operands);
-        for (const auto [i, op] : std::views::enumerate(active)) {
+        for (std::size_t i = 0; i < insn.num_operands; ++i) {
             if (i > 0) s += ", ";
-            s += format_operand(insn, op);
+            s += format_operand(insn, insn.operands[i]);
         }
     }
     return s;

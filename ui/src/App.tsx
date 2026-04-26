@@ -112,6 +112,12 @@ export default function App() {
   // binary the user opens; once dismissed for a given path, it stays
   // hidden until that path is opened again in a fresh session.
   const [packedDismissedFor, setPackedDismissedFor] = useState<string | null>(null);
+  // Set of binary paths the user has explicitly opted into full
+  // analysis for. The CLI defaults to a fast loader-only mode on packed
+  // binaries; when this set contains the current path, we re-spawn the
+  // function-list query with --full-analysis so the polluted call-graph
+  // pass runs anyway.
+  const [forceFullAnalysisFor, setForceFullAnalysisFor] = useState<Set<string>>(() => new Set());
   const packedWarning = useMemo(
     () => (info ? detectPackedBinary(info) : null),
     [info],
@@ -395,7 +401,9 @@ export default function App() {
       }
       // New binary → previous binary's cached results are stale.
       clearRendererCaches();
-      const summary = await loadSummary();
+      const summary = await loadSummary({
+        fullAnalysis: forceFullAnalysisFor.has(binaryPath),
+      });
       setInfo(summary);
       // Strings are lazy; see stringsLoading below.
       setStrings(EMPTY_STRINGS);
@@ -415,7 +423,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [forceFullAnalysisFor]);
 
   const handleOpen      = useCallback(() => openBinaryAt(null), [openBinaryAt]);
   const handleOpenRecent = useCallback(async (bp: string) => {
@@ -949,6 +957,28 @@ export default function App() {
               <span style={{ flex: 1, lineHeight: 1.4 }}>
                 {packedWarning}
               </span>
+              {!forceFullAnalysisFor.has(info.path) && (
+                <button
+                  onClick={() => {
+                    const path = info.path;
+                    setForceFullAnalysisFor((prev) => {
+                      const next = new Set(prev);
+                      next.add(path);
+                      return next;
+                    });
+                    // Re-spawn the load with --full-analysis. Banner stays
+                    // up so the user can still dismiss after the (slow)
+                    // run finishes.
+                    openBinaryAt(path);
+                  }}
+                  title="Re-run with full call-graph walk (slow on packed binaries)"
+                  style={{
+                    fontFamily: mono, fontSize: 10, color: C.yellow,
+                    padding: "2px 8px", borderRadius: 3,
+                    border: `1px solid rgba(184,154,58,0.4)`,
+                  }}
+                >run full analysis</button>
+              )}
               <button
                 onClick={() => setPackedDismissedFor(info.path)}
                 title="Dismiss for this session"

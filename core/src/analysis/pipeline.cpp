@@ -14,6 +14,7 @@
 #include <unordered_set>
 
 #include <ember/analysis/objc.hpp>
+#include <ember/analysis/packed.hpp>
 #include <ember/analysis/rtti.hpp>
 
 #include <ember/analysis/cfg_builder.hpp>
@@ -607,7 +608,8 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
     return out;
 }
 
-std::vector<DiscoveredFunction> enumerate_functions(const Binary& b) {
+std::vector<DiscoveredFunction>
+enumerate_functions(const Binary& b, EnumerateMode mode) {
     std::vector<DiscoveredFunction> out;
 
     // Pass 1: defined function symbols. These carry real sizes, so prefer
@@ -623,27 +625,43 @@ std::vector<DiscoveredFunction> enumerate_functions(const Binary& b) {
                        DiscoveredFunction::Kind::Symbol});
     }
 
+    // Loader-only mode: on a packed binary the call-graph walker chases
+    // garbage targets through encrypted stub code, blocks the UI for
+    // ~30s, and pollutes the function list with `sub_…` entries that
+    // never decompile. Skip it — the user can pass --full-analysis if
+    // they want it anyway.
+    if (mode == EnumerateMode::Auto && binary_looks_packed(b)) {
+        std::sort(out.begin(), out.end(),
+                  [](const auto& x, const auto& y) { return x.addr < y.addr; });
+        return out;
+    }
+
     // Pass 2: CFG-walked call targets. Skip PLT stubs (import thunks).
     // Unknown size for these — stripped binaries don't tell us where they
     // end without a CFG build we don't want to run on every enumerate.
     //
-    // Skip targets that don't land in any executable section. On
-    // obfuscated binaries (Byfron, VMProtect, Themida, …) the call-graph
-    // walker chases indirect jmps whose computed targets are random
-    // imm32 / register garbage. Letting those flow into the function
-    // list pollutes the sidebar and produces silent decompile failures
-    // when a user clicks one.
-    auto addr_executable = [&](addr_t a) {
-        for (const auto& s : b.sections()) {
+    // Two address-level gates filter the noise:
+    //   1. Target must land in some executable section.
+    //   2. That section must not be encrypted (high entropy).
+    //
+    // Even on a binary that doesn't trip `binary_looks_packed`, a
+    // single high-entropy executable section will usually produce
+    // garbage CFG targets. Section-level filtering catches that case
+    // without needing the binary-level heuristic to fire.
+    const auto& sections = b.sections();
+    auto section_for = [&](addr_t a) -> const Section* {
+        for (const auto& s : sections) {
             if (!s.flags.executable) continue;
-            if (a >= s.vaddr && a < s.vaddr + s.size) return true;
+            if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
         }
-        return false;
+        return nullptr;
     };
     for (const auto& e : compute_call_graph(b)) {
         if (b.import_at_plt(e.callee) != nullptr) continue;
         if (index.count(e.callee)) continue;
-        if (!addr_executable(e.callee)) continue;
+        const Section* sec = section_for(e.callee);
+        if (!sec) continue;
+        if (mode == EnumerateMode::Auto && section_looks_encrypted(*sec)) continue;
         index.emplace(e.callee, out.size());
         out.push_back({e.callee, 0, std::format("sub_{:x}", e.callee),
                        DiscoveredFunction::Kind::Sub});

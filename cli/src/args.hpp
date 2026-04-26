@@ -31,6 +31,10 @@ struct Args {
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
     bool no_cache = false;          // disable the disk cache entirely
+    bool full_analysis = false;     // force pass-2 CFG walk on packed binaries
+                                    // (default: skip it — it just produces
+                                    // garbage chasing indirect-jmp imm32s
+                                    // through encrypted stub code)
     bool json = false;              // --json: machine-readable output where supported
     bool disasm = false;
     bool cfg    = false;

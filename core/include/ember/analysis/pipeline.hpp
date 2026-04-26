@@ -82,13 +82,22 @@ discovered_kind_name(DiscoveredFunction::Kind k) noexcept {
     return "?";
 }
 
+// `Auto` (default): on a packed binary, skip the CFG-walked pass 2
+// entirely — it just produces garbage `sub_…` entries chasing
+// indirect-jmp imm32s through encrypted stubs. Even on unpacked
+// binaries, individual call targets that land in high-entropy sections
+// are dropped. `Full`: bypass both gates and walk everything (the
+// indirect-call resolver wants this since it's already opted in to
+// expensive analysis).
+enum class EnumerateMode { Auto, Full };
+
 // Union of defined function symbols and CFG-discovered call targets,
 // deduplicated and sorted by address. PLT stubs are excluded — they're
 // import thunks, not definitions. Shared by the scripting binding
 // (`binary.functions()`) and the `--functions` CLI output so both stay
 // in sync.
 [[nodiscard]] std::vector<DiscoveredFunction>
-enumerate_functions(const Binary& b);
+enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto);
 
 // Per-call edge classification used by `ember --callees`. `Direct` covers
 // `call <imm>`; `Tail` covers an unconditional `jmp` whose target is a

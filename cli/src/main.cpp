@@ -112,6 +112,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--functions", &Args::functions},
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
+    {"",   "--full-analysis", &Args::full_analysis},
     {"",   "--dump-types", &Args::dump_types},
     {"",   "--labels",    &Args::labels},
     {"",   "--json",      &Args::json},
@@ -368,9 +369,12 @@ void print_info(const ember::Binary& b, std::string_view path) {
 // `kind` is "symbol" for a defined function symbol or "sub" for an entry
 // that only appeared as a call target during CFG walking. Size is 0 for
 // `sub` rows — see `enumerate_functions` for why.
-[[nodiscard]] std::string build_functions_output(const ember::Binary& b) {
+[[nodiscard]] std::string build_functions_output(const ember::Binary& b,
+                                                  bool full_analysis) {
     std::string out;
-    for (const auto& fn : ember::enumerate_functions(b)) {
+    const auto mode = full_analysis ? ember::EnumerateMode::Full
+                                    : ember::EnumerateMode::Auto;
+    for (const auto& fn : ember::enumerate_functions(b, mode)) {
         out += std::format("{:#018x}\t{:#x}\t{}\t{}\n",
                            fn.addr, fn.size,
                            ember::discovered_kind_name(fn.kind),
@@ -1374,15 +1378,21 @@ int main(int argc, char** argv) {
                 cacheable = false;
             }
         }
+        // Different cache tag per mode: --full-analysis returns a strict
+        // superset (and on packed binaries, a polluted one). Sharing one
+        // tag would let a fast --functions run poison the cache for a
+        // later --full-analysis user.
+        const std::string_view fns_tag = args.full_analysis
+            ? "functions_full" : "functions";
         if (cacheable) {
-            if (auto hit = ember::cache::read(dir, key, "functions"); hit) {
+            if (auto hit = ember::cache::read(dir, key, fns_tag); hit) {
                 tsv.assign(hit->data(), hit->size());
             }
         }
         if (tsv.empty()) {
-            tsv = build_functions_output(b);
+            tsv = build_functions_output(b, args.full_analysis);
             if (cacheable) {
-                if (auto rv = ember::cache::write(dir, key, "functions", tsv); !rv) {
+                if (auto rv = ember::cache::write(dir, key, fns_tag, tsv); !rv) {
                     std::println(stderr, "ember: warning: {}: {}",
                                  rv.error().kind_name(), rv.error().message);
                 }

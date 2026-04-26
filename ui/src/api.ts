@@ -117,7 +117,7 @@ export async function matchPlugin(pluginId: string): Promise<PluginMatchResult> 
   return await window.ember.plugins.match(pluginId);
 }
 
-export async function loadSummary(): Promise<BinaryInfo> {
+export async function loadSummary(opts: { fullAnalysis?: boolean } = {}): Promise<BinaryInfo> {
   return memoOnce<BinaryInfo>(
     async () => {
       const path = (await window.ember.binary()) ?? "";
@@ -125,9 +125,16 @@ export async function loadSummary(): Promise<BinaryInfo> {
       // union (symbols ∪ CFG-discovered sub_*). Running both in parallel
       // keeps the UI Sidebar authoritative on stripped binaries where
       // defined_symbols alone is nearly empty.
+      //
+      // --full-analysis bypasses the packed-binary gate in
+      // enumerate_functions; only set it when the user explicitly
+      // clicked "Run full analysis" on the heads-up banner.
+      const fnsArgs = opts.fullAnalysis
+        ? ["--functions", "--full-analysis"]
+        : ["--functions"];
       const [rawSummary, rawFns] = await Promise.all([
         window.ember.run([]),
-        window.ember.run(["--functions"]),
+        window.ember.run(fnsArgs),
       ]);
       const info = parseSummary(rawSummary, path);
       info.functions = parseFunctionsTsv(rawFns);

@@ -316,7 +316,10 @@ resolve_indirect_calls(const Binary& b) {
     // Also include every defined function entry — a function with no
     // resolvable callees still might have an indirect call we can crack.
     // Cheap: enumerate_functions is already deduped + sorted.
-    for (const auto& d : enumerate_functions(b)) {
+    // Full mode: by the time we're cracking indirect calls the user
+    // has opted into deep analysis, so don't let the packed-binary gate
+    // shortcut the enumerate.
+    for (const auto& d : enumerate_functions(b, EnumerateMode::Full)) {
         if (b.import_at_plt(d.addr) != nullptr) continue;
         fns_with_indirect.insert(d.addr);
     }

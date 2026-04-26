@@ -1,4 +1,8 @@
-add_executable(ember_cli src/main.cpp)
+add_executable(ember_cli
+    src/main.cpp
+    src/fingerprint.cpp
+    src/subcommands.cpp
+)
 
 set_target_properties(ember_cli PROPERTIES
     OUTPUT_NAME ember

@@ -27,6 +27,7 @@ add_library(ember_core STATIC
     src/analysis/pe_unwind.cpp
     src/analysis/vm_detect.cpp
     src/analysis/packed.cpp
+    src/analysis/discovery.cpp
     src/analysis/libcxx_string.cpp
     src/analysis/rtti.cpp
     src/analysis/msvc_rtti.cpp

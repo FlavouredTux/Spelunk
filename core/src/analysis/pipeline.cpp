@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <ember/analysis/discovery.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/packed.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -625,11 +626,56 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
                        DiscoveredFunction::Kind::Symbol});
     }
 
+    // Two address-level gates filter the noise from later passes:
+    //   1. Target must land in some executable section.
+    //   2. That section must not be encrypted (high entropy).
+    //
+    // Even on a binary that doesn't trip `binary_looks_packed`, a
+    // single high-entropy executable section will usually produce
+    // garbage targets. Section-level filtering catches that case
+    // without needing the binary-level heuristic to fire.
+    const auto& sections = b.sections();
+    auto section_for = [&](addr_t a) -> const Section* {
+        for (const auto& s : sections) {
+            // "Code-shaped" — either flagged exec or named .text /
+            // __text / CODE. Byfron / VMProtect strip the exec bit
+            // on disk and flip it at runtime; pretending those
+            // bytes aren't code drops every discovered function on
+            // the floor.
+            const bool is_code = s.flags.executable
+                || s.name == ".text" || s.name == "__text" || s.name == "CODE";
+            if (!is_code) continue;
+            if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
+        }
+        return nullptr;
+    };
+    auto add_candidate = [&](addr_t a, std::string_view label) {
+        if (b.import_at_plt(a) != nullptr) return;
+        if (index.count(a)) return;
+        const Section* sec = section_for(a);
+        if (!sec) return;
+        if (mode == EnumerateMode::Auto && section_looks_encrypted(*sec)) return;
+        index.emplace(a, out.size());
+        out.push_back({a, 0, std::format("{}_{:x}", label, a),
+                       DiscoveredFunction::Kind::Sub});
+    };
+
+    // Pass 1.5: cheap structural discovery. Vtables come from RTTI
+    // (already parsed for naming) — every slot is a guaranteed
+    // function pointer. Prologue sweep linear-scans executable
+    // bytes for x64 prologue patterns and validates each candidate
+    // by decoding two instructions. Both run on packed binaries
+    // too — RTTI lives in unencrypted .rdata, and the prologue
+    // sweep itself skips encrypted sections.
+    for (addr_t a : discover_from_vtables(b))   add_candidate(a, "vt");
+    for (addr_t a : discover_from_prologues(b)) add_candidate(a, "sub");
+
     // Loader-only mode: on a packed binary the call-graph walker chases
     // garbage targets through encrypted stub code, blocks the UI for
     // ~30s, and pollutes the function list with `sub_…` entries that
-    // never decompile. Skip it — the user can pass --full-analysis if
-    // they want it anyway.
+    // never decompile. Skip pass 2 — the user can pass --full-analysis
+    // if they want it anyway. Pass 1.5 above already gave us anything
+    // recoverable from the unencrypted parts of the image.
     if (mode == EnumerateMode::Auto && binary_looks_packed(b)) {
         std::sort(out.begin(), out.end(),
                   [](const auto& x, const auto& y) { return x.addr < y.addr; });
@@ -639,32 +685,8 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
     // Pass 2: CFG-walked call targets. Skip PLT stubs (import thunks).
     // Unknown size for these — stripped binaries don't tell us where they
     // end without a CFG build we don't want to run on every enumerate.
-    //
-    // Two address-level gates filter the noise:
-    //   1. Target must land in some executable section.
-    //   2. That section must not be encrypted (high entropy).
-    //
-    // Even on a binary that doesn't trip `binary_looks_packed`, a
-    // single high-entropy executable section will usually produce
-    // garbage CFG targets. Section-level filtering catches that case
-    // without needing the binary-level heuristic to fire.
-    const auto& sections = b.sections();
-    auto section_for = [&](addr_t a) -> const Section* {
-        for (const auto& s : sections) {
-            if (!s.flags.executable) continue;
-            if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
-        }
-        return nullptr;
-    };
     for (const auto& e : compute_call_graph(b)) {
-        if (b.import_at_plt(e.callee) != nullptr) continue;
-        if (index.count(e.callee)) continue;
-        const Section* sec = section_for(e.callee);
-        if (!sec) continue;
-        if (mode == EnumerateMode::Auto && section_looks_encrypted(*sec)) continue;
-        index.emplace(e.callee, out.size());
-        out.push_back({e.callee, 0, std::format("sub_{:x}", e.callee),
-                       DiscoveredFunction::Kind::Sub});
+        add_candidate(e.callee, "sub");
     }
 
     std::sort(out.begin(), out.end(),

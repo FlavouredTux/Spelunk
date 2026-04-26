@@ -9,10 +9,11 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 3
-// when Win64 arity inference landed: --arities now caps at 4 on PE64
-// binaries (vs 6 on SysV), so v2 entries are stale.
-inline constexpr int kVersion = 3;
+// Bump when any cached payload's on-disk format changes. Bumped to 4
+// when vtable + prologue-sweep discovery passes landed: --functions
+// output grows substantially on stripped PE binaries, so v3 entries
+// are stale.
+inline constexpr int kVersion = 4;
 
 std::filesystem::path default_dir();
 

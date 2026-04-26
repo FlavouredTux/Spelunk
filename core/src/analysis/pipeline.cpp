@@ -308,7 +308,17 @@ resolve_function(const Binary& b, std::string_view symbol) {
     // mid-function address gets resolved to its container rather than
     // silently failing.
     if (auto va = try_parse_va(symbol); va) {
-        return resolve_containing_function(b, *va);
+        auto win = resolve_containing_function(b, *va);
+        if (!win) {
+            // Common when --functions / call-graph discovery surfaces a
+            // garbage indirect-jmp target on obfuscated binaries; the
+            // address isn't in any mapped section so nothing decodes.
+            std::fprintf(stderr,
+                "ember: address %#llx is not in any mapped section "
+                "(or the bytes there don't decode as code)\n",
+                static_cast<unsigned long long>(*va));
+        }
+        return win;
     }
 
     const std::string_view lookup = symbol.empty() ? "main" : symbol;
@@ -339,10 +349,21 @@ resolve_function(const Binary& b, std::string_view symbol) {
                 "; pass the VA (0x…) to pick one\n");
             return std::nullopt;
         }
-        if (b.bytes_at(chosen->addr).empty()) return std::nullopt;
+        if (b.bytes_at(chosen->addr).empty()) {
+            std::fprintf(stderr,
+                "ember: symbol '%.*s' at %#llx has no mapped bytes\n",
+                static_cast<int>(lookup.size()), lookup.data(),
+                static_cast<unsigned long long>(chosen->addr));
+            return std::nullopt;
+        }
         return window_from_addr(chosen->addr, chosen->size, chosen->name);
     }
-    if (!symbol.empty()) return std::nullopt;
+    if (!symbol.empty()) {
+        std::fprintf(stderr,
+            "ember: no symbol named '%.*s'\n",
+            static_cast<int>(lookup.size()), lookup.data());
+        return std::nullopt;
+    }
 
     const addr_t entry = b.entry_point();
     if (b.bytes_at(entry).empty()) return std::nullopt;
@@ -605,9 +626,24 @@ std::vector<DiscoveredFunction> enumerate_functions(const Binary& b) {
     // Pass 2: CFG-walked call targets. Skip PLT stubs (import thunks).
     // Unknown size for these — stripped binaries don't tell us where they
     // end without a CFG build we don't want to run on every enumerate.
+    //
+    // Skip targets that don't land in any executable section. On
+    // obfuscated binaries (Byfron, VMProtect, Themida, …) the call-graph
+    // walker chases indirect jmps whose computed targets are random
+    // imm32 / register garbage. Letting those flow into the function
+    // list pollutes the sidebar and produces silent decompile failures
+    // when a user clicks one.
+    auto addr_executable = [&](addr_t a) {
+        for (const auto& s : b.sections()) {
+            if (!s.flags.executable) continue;
+            if (a >= s.vaddr && a < s.vaddr + s.size) return true;
+        }
+        return false;
+    };
     for (const auto& e : compute_call_graph(b)) {
         if (b.import_at_plt(e.callee) != nullptr) continue;
         if (index.count(e.callee)) continue;
+        if (!addr_executable(e.callee)) continue;
         index.emplace(e.callee, out.size());
         out.push_back({e.callee, 0, std::format("sub_{:x}", e.callee),
                        DiscoveredFunction::Kind::Sub});

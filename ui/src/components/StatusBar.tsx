@@ -38,7 +38,9 @@ export function StatusBar(props: {
       />
       {current ? (
         <>
-          <span style={{ color: C.accent }}>{current.addr}</span>
+          <span style={{ color: C.accent }} title={current.addr}>
+            {current.addr.replace(/^0x0+(?=.)/, "0x")}
+          </span>
           <span style={{ color: C.text, fontFamily: sans, fontWeight: 500 }}>
             {demangle(current.name)}
           </span>

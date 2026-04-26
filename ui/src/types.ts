@@ -174,6 +174,24 @@ export type PluginRunResult = {
   annotations?: Annotations;
 };
 
+// Shape pushed to Discord Rich Presence by the renderer. The main
+// process does the field-length / button-URL sanitisation and owns
+// the actual RPC connection — see electron/main.cjs.
+export type DiscordActivityPayload = {
+  details?: string;        // line 1 (e.g. binary file name)
+  state?: string;          // line 2 (e.g. function + view)
+  startTimestamp?: number; // ms since epoch; renders as "elapsed"
+  largeImageKey?: string;  // asset name uploaded in Discord Dev Portal
+  largeImageText?: string;
+  smallImageKey?: string;
+  smallImageText?: string;
+  buttons?: Array<{ label: string; url: string }>;
+  // Which field drives the inline mini-status under the user's name.
+  // 0 = NAME ("ember"), 1 = STATE (the function · view line),
+  // 2 = DETAILS (the binary line). Only renders for type=Playing.
+  statusDisplayType?: 0 | 1 | 2;
+};
+
 export type ReleaseUpdateStatus = {
   ok: boolean;
   currentVersion?: string;
@@ -212,6 +230,9 @@ declare global {
           message?: string;
           error?: string;
         }>;
+      };
+      discord: {
+        setActivity: (payload: DiscordActivityPayload | null) => Promise<boolean>;
       };
       plugins: {
         list:  () => Promise<PluginInfo[]>;

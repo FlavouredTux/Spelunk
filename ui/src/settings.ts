@@ -27,6 +27,19 @@ export type AppSettings = {
   releaseUpdatePopup: boolean;
   // Latest dismissed / handled release tag.
   seenReleaseTag: string;
+  // First-run tour. Set when the user finishes (or dismisses) the
+  // coach-marks tour that fires the first time a binary is opened.
+  // Replay button in Settings → Help clears this back to false.
+  seenTutorial: boolean;
+  // Discord Rich Presence. On by default in privacy mode (binary +
+  // function names suppressed) — broadcasts only that the user is
+  // running Ember. Toggle off entirely in settings, or flip
+  // discordHideBinaryName off to opt in to sharing what's open.
+  discordRichPresence: boolean;
+  // Suppress the binary file name and function name when broadcasting;
+  // on by default to make Rich Presence safe-by-default. When off, the
+  // binary file name and current function are visible to friends.
+  discordHideBinaryName: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -35,6 +48,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   codeFontSize:   12,
   releaseUpdatePopup: true,
   seenReleaseTag: "",
+  seenTutorial:   false,
+  discordRichPresence:   true,
+  discordHideBinaryName: true,
 };
 
 export function loadSettings(): AppSettings {

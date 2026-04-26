@@ -12,6 +12,7 @@ const VIEWS: { id: ViewKind; label: string; hint: string }[] = [
 export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void }) {
   return (
     <div
+      data-tutorial="tabs"
       style={{
         display: "flex",
         alignItems: "stretch",

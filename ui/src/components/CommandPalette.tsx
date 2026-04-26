@@ -167,7 +167,8 @@ export function CommandPalette(props: {
                   fontFamily: mono, fontSize: 10,
                   color: active ? C.text : C.textFaint,
                   width: 76, flexShrink: 0,
-                }}>{f.addr}</span>
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }} title={f.addr}>{f.addr.replace(/^0x0+(?=.)/, "0x")}</span>
                 <span style={{
                   flex: 1, minWidth: 0,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",

@@ -201,6 +201,7 @@ export function Sidebar(props: {
       {/* Search */}
       <div style={{ padding: "12px 14px 6px" }}>
         <div
+          data-tutorial="sidebar-search"
           style={{
             display: "flex", alignItems: "center", gap: 8,
             padding: "8px 12px",
@@ -406,8 +407,9 @@ function VirtualList(props: {
                   fontFamily: mono, fontSize: 10,
                   color: active ? C.text : C.textFaint,
                   width: 72, flexShrink: 0,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                   fontWeight: active ? 600 : 400,
-                }}>{f.addr}</span>
+                }} title={f.addr}>{f.addr.replace(/^0x0+(?=.)/, "0x")}</span>
                 <span
                   style={{
                     flex: 1, overflow: "hidden", textOverflow: "ellipsis",

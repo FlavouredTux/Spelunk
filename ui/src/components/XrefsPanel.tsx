@@ -23,6 +23,7 @@ export function XrefsPanel(props: {
   if (!open) {
     return (
       <button
+        data-tutorial="xrefs"
         onClick={onToggle}
         title="Show references"
         style={{
@@ -88,7 +89,8 @@ export function XrefsPanel(props: {
                 <span style={{
                   fontFamily: mono, fontSize: 10, color: C.textFaint,
                   width: 70, flexShrink: 0,
-                }}>{f.addr}</span>
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }} title={f.addr}>{f.addr.replace(/^0x0+(?=.)/, "0x")}</span>
                 <span style={{
                   fontFamily: sans, fontSize: 11, color: C.textWarm,
                   flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
@@ -110,6 +112,7 @@ export function XrefsPanel(props: {
 
   return (
     <div
+      data-tutorial="xrefs"
       style={{
         width: 260,
         background: C.bgAlt,

@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld("ember", {
     match: (pluginId) => ipcRenderer.invoke("ember:plugins:match", pluginId),
   },
 
+  // Discord Rich Presence. payload === null clears.
+  discord: {
+    setActivity: (payload) => ipcRenderer.invoke("ember:discord:setActivity", payload),
+  },
+
   // AI / OpenRouter proxy. The API key is held in the main process and
   // never crosses the IPC boundary to the renderer — only the resulting
   // tokens do, streamed via `ai:chunk` events keyed on a request id.

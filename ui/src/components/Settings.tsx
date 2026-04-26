@@ -42,6 +42,7 @@ export function SettingsPanel(props: {
   onChange: (s: AppSettings) => void;
   binaryPath?: string | null;
   onAnnotationsApplied?: (a: Annotations) => void;
+  onReplayTutorial?: () => void;
   onClose: () => void;
 }) {
   const [cleared, setCleared] = useState(false);
@@ -155,6 +156,29 @@ export function SettingsPanel(props: {
             </Row>
           </Section>
 
+          <Section title="Discord">
+            <Row
+              label="Rich Presence"
+              hint="Broadcast Ember activity on your Discord profile. On by default in privacy mode — only the current view is shown, never the binary or function names."
+            >
+              <Toggle
+                value={props.settings.discordRichPresence}
+                onChange={(v) => set("discordRichPresence", v)}
+              />
+            </Row>
+            {props.settings.discordRichPresence && (
+              <Row
+                label="Privacy mode"
+                hint="On (default): only the view is broadcast. Off: binary file name and current function are visible to your Discord friends."
+              >
+                <Toggle
+                  value={props.settings.discordHideBinaryName}
+                  onChange={(v) => set("discordHideBinaryName", v)}
+                />
+              </Row>
+            )}
+          </Section>
+
           <Section title="Cache">
             <Row
               label="Cleared cached results"
@@ -189,6 +213,22 @@ export function SettingsPanel(props: {
           </Section>
 
           <Section title="Defaults">
+            {props.onReplayTutorial && (
+              <Row label="Replay tutorial" hint="Walk through the first-run coach-marks again.">
+                <button
+                  onClick={props.onReplayTutorial}
+                  style={{
+                    padding: "6px 12px",
+                    background: "transparent",
+                    color: C.textMuted,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 4,
+                    fontFamily: mono, fontSize: 11,
+                    cursor: "pointer",
+                  }}
+                >show tutorial</button>
+              </Row>
+            )}
             <Row label="Reset all settings" hint="Restores every option above to its factory value.">
               <button
                 onClick={() => props.onChange({ ...DEFAULT_SETTINGS })}

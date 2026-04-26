@@ -19,6 +19,9 @@ import { PatchesView } from "./components/PatchesView";
 import { XrefsPanel } from "./components/XrefsPanel";
 import { EditDialog } from "./components/EditDialog";
 import { PatchDialog } from "./components/PatchDialog";
+import { Tutorial } from "./components/Tutorial";
+import { ErrorView } from "./components/ErrorView";
+import { Shortcuts } from "./components/Shortcuts";
 import {
   loadSummary, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
@@ -51,6 +54,46 @@ function applyLocalRenames(text: string, pairs: Record<string, string>): string 
   return text.replace(re, (m) => pairs[m] ?? m);
 }
 
+// Heuristic: spot binaries that have been packed / obfuscated /
+// protected (Themida, VMProtect, Byfron, …). Static analysis is
+// effectively useless on these — the real code only exists in
+// memory at runtime — so we surface a one-line banner before the
+// user spends ten clicks discovering nothing decodes.
+//
+// Returns a human-readable reason or null when the binary looks
+// honest. Cheap; runs once at load time off the section table.
+function detectPackedBinary(info: BinaryInfo): string | null {
+  const entryNum = parseInt(info.entry, 16);
+  if (!Number.isFinite(entryNum)) return null;
+
+  const sectionAt = (addr: number) => info.sections.find((s) => {
+    const v  = parseInt(s.vaddr, 16);
+    const sz = parseInt(s.size,  16);
+    return Number.isFinite(v) && Number.isFinite(sz) && addr >= v && addr < v + sz;
+  });
+
+  const entrySec = sectionAt(entryNum);
+  if (entrySec && !entrySec.flags.includes("x")) {
+    const where = entrySec.name || "(unnamed section)";
+    return `entry point lives in '${where}' which isn't marked executable — likely packed or protected (Byfron, VMProtect, Themida, …); decompilation will mostly fail`;
+  }
+
+  // Secondary: a "code-shaped" section (named .text / __text / CODE)
+  // that's large enough to hold real code but lacks the exec flag.
+  // Catches binaries where the entry point WAS rerouted to a tiny
+  // stub section with x — Roblox/Byfron does exactly this.
+  const CODE_NAMES = new Set([".text", "__text", "CODE"]);
+  for (const s of info.sections) {
+    const sz = parseInt(s.size, 16);
+    if (!Number.isFinite(sz) || sz < 0x40000) continue;
+    if (!CODE_NAMES.has(s.name)) continue;
+    if (!s.flags.includes("x")) {
+      return `'${s.name}' is ${(sz >>> 20).toString()} MB but not marked executable — this binary may be packed or protected`;
+    }
+  }
+  return null;
+}
+
 export default function App() {
   const [info, setInfo] = useState<BinaryInfo | null>(null);
   const [current, setCurrent] = useState<FunctionInfo | null>(null);
@@ -61,6 +104,18 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  // First-run coach-marks. Mounts once after a binary loads; the
+  // Tutorial component itself flips `seenTutorial` on close.
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Per-session "packed binary" banner. We re-show it for each new
+  // binary the user opens; once dismissed for a given path, it stays
+  // hidden until that path is opened again in a fresh session.
+  const [packedDismissedFor, setPackedDismissedFor] = useState<string | null>(null);
+  const packedWarning = useMemo(
+    () => (info ? detectPackedBinary(info) : null),
+    [info],
+  );
   const updateSettings = useCallback((s: AppSettings) => {
     setSettings(s);
     saveSettings(s);
@@ -158,6 +213,15 @@ export default function App() {
     return m;
   }, [info]);
 
+  // Palette searches the union of defined + imports so the user can
+  // jump straight to printf / malloc / etc. by name. Imports with
+  // addr=0 are linker-only stubs and aren't navigable.
+  const paletteFunctions = useMemo(() => {
+    if (!info) return [];
+    const imports = info.imports.filter((f) => f.addrNum !== 0);
+    return [...info.functions, ...imports];
+  }, [info]);
+
   const fnAddrByName = useMemo(() => {
     const m = new Map<string, number>();
     if (!info) return m;
@@ -194,6 +258,87 @@ export default function App() {
     // Initial recents load (for welcome screen)
     getRecents().then(setRecents).catch(() => {});
   }, []);
+
+  // Discord Rich Presence: push the current activity whenever it
+  // changes; clear when toggled off or on unmount. Elapsed-time
+  // anchor (`startTimestamp`) is per-binary so flipping between
+  // functions doesn't reset it; opening a new binary does.
+  const discordSessionStart = useRef<{ path: string; ts: number } | null>(null);
+  useEffect(() => {
+    if (!settings.discordRichPresence) {
+      window.ember.discord.setActivity(null).catch(() => {});
+      discordSessionStart.current = null;
+      return;
+    }
+    if (!info) {
+      window.ember.discord.setActivity(null).catch(() => {});
+      return;
+    }
+    if (!discordSessionStart.current ||
+        discordSessionStart.current.path !== info.path) {
+      discordSessionStart.current = { path: info.path, ts: Date.now() };
+    }
+    const fileName = info.path.split(/[\\/]/).pop() || info.path;
+    const fnName   = current ? displayName(current, annotations) : null;
+    // Per-view unicode glyph + label. Each glyph is loosely meaningful:
+    //   ❯  pseudo-C  — chevron, like a code prompt
+    //   ▸  asm       — small play triangle, evokes execution
+    //   ◆  cfg       — diamond, the canonical CFG-node shape
+    //   λ  ir        — lambda, the IR / functional-form convention
+    //   φ  ssa       — phi-node, the defining feature of SSA
+    const viewBadge: Record<typeof view, { glyph: string; label: string; key: string }> = {
+      pseudo:    { glyph: "❯", label: "pseudo-C",     key: "view_pseudo" },
+      asm:       { glyph: "▸", label: "asm",          key: "view_asm"    },
+      cfg:       { glyph: "◆", label: "control-flow", key: "view_cfg"    },
+      cfgPseudo: { glyph: "◆", label: "control-flow", key: "view_cfg"    },
+      ir:        { glyph: "λ", label: "lifted IR",    key: "view_ir"     },
+      ssa:       { glyph: "φ", label: "SSA",          key: "view_ssa"    },
+    };
+    const badge = viewBadge[view];
+    // Two privacy modes:
+    //  - default: details = binary, state = function <glyph> view
+    //  - hide-binary: details = "reverse engineering", state = function <glyph> view
+    // Privacy mode: hide binary path and function name entirely so
+    // the broadcast only reveals "user is running Ember in <view>".
+    const details = settings.discordHideBinaryName
+      ? "reverse engineering"
+      : fileName;
+    const state = settings.discordHideBinaryName
+      ? `${badge.glyph}  ${badge.label}`
+      : (fnName
+          ? `${fnName}  ${badge.glyph}  ${badge.label}`
+          : `${badge.glyph}  ${badge.label}`);
+    window.ember.discord.setActivity({
+      details,
+      state,
+      startTimestamp: discordSessionStart.current.ts,
+      largeImageKey:  "ember_logo",
+      largeImageText: "Ember · from-scratch x86-64 decompiler",
+      // Small overlay corner-icon on the large image — Discord just
+      // hides this slot when the asset isn't uploaded, so always
+      // sending it means the moment you upload view_pseudo / view_asm
+      // / view_cfg / view_ir / view_ssa, the badge appears with no
+      // code change.
+      smallImageKey:  badge.key,
+      smallImageText: badge.label,
+      // 1 = STATE → the inline mini-status under your username shows
+      // the function + view glyph (e.g. "sub_1021bb368  ❯  pseudo-C")
+      // instead of just the app name "ember". Best signal-to-pixel
+      // ratio of the three options.
+      statusDisplayType: 1,
+      buttons: [
+        { label: "Get Ember",     url: "https://github.com/FlavouredTux/Ember" },
+        { label: "GitHub Profile", url: "https://github.com/FlavouredTux"        },
+      ],
+    }).catch(() => {});
+  }, [info, current, view, annotations,
+      settings.discordRichPresence, settings.discordHideBinaryName]);
+
+  // Fire the first-run tour the first time a binary finishes loading.
+  // Gated behind seenTutorial so reload-after-close is silent.
+  useEffect(() => {
+    if (info && !settings.seenTutorial) setTutorialOpen(true);
+  }, [info, settings.seenTutorial]);
 
   useEffect(() => {
     if (!settings.releaseUpdatePopup) {
@@ -296,22 +441,22 @@ export default function App() {
   const navBack = useCallback(() => {
     if (histIdx <= 0 || !info) return;
     const addr = history[histIdx - 1];
-    const fn = info.functions.find((f) => f.addrNum === addr);
+    const fn = fnByAddr.get(addr);
     if (!fn) return;
     navigatingRef.current = true;
     setHistIdx((i) => i - 1);
     setCurrent(fn);
-  }, [histIdx, history, info]);
+  }, [histIdx, history, info, fnByAddr]);
 
   const navForward = useCallback(() => {
     if (histIdx >= history.length - 1 || !info) return;
     const addr = history[histIdx + 1];
-    const fn = info.functions.find((f) => f.addrNum === addr);
+    const fn = fnByAddr.get(addr);
     if (!fn) return;
     navigatingRef.current = true;
     setHistIdx((i) => i + 1);
     setCurrent(fn);
-  }, [histIdx, history, info]);
+  }, [histIdx, history, info, fnByAddr]);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -330,6 +475,7 @@ export default function App() {
         if (callGraphOpen)  { setCallGraphOpen(false); return; }
         if (pluginsPanelOpen) { setPluginsPanelOpen(false); return; }
         if (paletteOpen)    { setPaletteOpen(false);   return; }
+        if (shortcutsOpen)  { setShortcutsOpen(false); return; }
         if (searchOpen)     { setSearchOpen(false);    return; }
       }
 
@@ -372,6 +518,15 @@ export default function App() {
       if (mod && (e.key === "[" || e.key === "{")) { e.preventDefault(); navBack(); return; }
       if (mod && (e.key === "]" || e.key === "}")) { e.preventDefault(); navForward(); return; }
 
+      // Cheat-sheet. `?` is Shift+/ on US layouts; gate on !inInput so
+      // it doesn't fire mid-typing. The Shortcuts modal handles its own
+      // close on `?` / Esc.
+      if (!inInput && !mod && e.key === "?") {
+        e.preventDefault();
+        setShortcutsOpen((o) => !o);
+        return;
+      }
+
       // Rename shortcut
       if (!inInput && !mod && !e.altKey && !e.shiftKey && (e.key === "n" || e.key === "N") && current) {
         e.preventDefault();
@@ -396,7 +551,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, navBack, navForward, current]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, shortcutsOpen, navBack, navForward, current]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
   // Pseudo-C views also get local-rename substitution applied on top
@@ -409,7 +564,11 @@ export default function App() {
     setLoading(true);
     setError(null);
     setCode("");
-    loadFunction(current.name, fetchView, { showBbLabels: settings.showBbLabels })
+    // Pass the VA, not the symbol name. Mangled C++ names can be
+    // bound to several addresses (e.g. `.constprop.0.cold` clones
+    // share the parent's symbol), and the CLI's --symbol then refuses
+    // to guess. Address is always unique.
+    loadFunction(current.addr, fetchView, { showBbLabels: settings.showBbLabels })
       .then((text) => {
         if (cancel) return;
         const locals = annotations.localRenames?.[current.addr];
@@ -423,9 +582,12 @@ export default function App() {
 
   const onXref = useCallback((addr: number) => {
     if (!info) return;
-    const match = info.functions.find((f) => f.addrNum === addr);
+    // fnByAddr unions defined + imports — `info.functions` alone misses
+    // calls to library symbols like `printf` that the user still wants
+    // to jump to (the import row in the sidebar shows its PLT/GOT info).
+    const match = fnByAddr.get(addr);
     if (match) navigateTo(match);
-  }, [info, navigateTo]);
+  }, [info, fnByAddr, navigateTo]);
 
   // Annotation mutations
   const writeAnnotations = useCallback(async (a: Annotations) => {
@@ -673,6 +835,7 @@ export default function App() {
             <span style={{ color: C.textFaint }}>⌃U</span>
           </button>
           <button
+            data-tutorial="jump"
             onClick={() => setPaletteOpen(true)}
             style={{
               padding: "4px 10px",
@@ -768,21 +931,38 @@ export default function App() {
           onImport={handleImport}
         />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {packedWarning && packedDismissedFor !== info.path && (
+            <div
+              style={{
+                padding: "8px 16px",
+                background: "rgba(184,154,58,0.08)",
+                borderBottom: `1px solid rgba(184,154,58,0.25)`,
+                display: "flex", alignItems: "center", gap: 12,
+                fontFamily: sans, fontSize: 11.5,
+                color: C.textWarm,
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ color: C.yellow, fontFamily: mono, fontSize: 10, letterSpacing: 1 }}>
+                HEADS UP
+              </span>
+              <span style={{ flex: 1, lineHeight: 1.4 }}>
+                {packedWarning}
+              </span>
+              <button
+                onClick={() => setPackedDismissedFor(info.path)}
+                title="Dismiss for this session"
+                style={{
+                  fontFamily: mono, fontSize: 10, color: C.textFaint,
+                  padding: "2px 8px", borderRadius: 3,
+                }}
+              >dismiss</button>
+            </div>
+          )}
           <FunctionHeader current={current} annotations={annotations} arities={arities} />
           <Tabs view={view} setView={setView} />
           {error ? (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 32 }}>
-              <div
-                style={{
-                  maxWidth: 520, padding: 20,
-                  background: "rgba(199,93,58,0.06)",
-                  border: "1px solid rgba(199,93,58,0.25)",
-                  borderRadius: 4,
-                  fontFamily: mono, fontSize: 12, color: C.red,
-                  whiteSpace: "pre-wrap",
-                }}
-              >{error}</div>
-            </div>
+            <ErrorView message={error} currentView={view} onSwitchView={setView} />
           ) : view === "cfg" ? (
             <CfgGraph
               text={code}
@@ -827,7 +1007,7 @@ export default function App() {
 
       {paletteOpen && (
         <CommandPalette
-          functions={info.functions}
+          functions={paletteFunctions}
           annotations={annotations}
           onSelect={(f) => navigateTo(f)}
           onClose={() => setPaletteOpen(false)}
@@ -842,8 +1022,23 @@ export default function App() {
             clearRendererCaches();
             setAnnotations(a);
           }}
+          onReplayTutorial={() => {
+            setSettingsOpen(false);
+            setTutorialOpen(true);
+          }}
           onClose={() => setSettingsOpen(false)}
         />
+      )}
+      {tutorialOpen && (
+        <Tutorial
+          onClose={() => {
+            setTutorialOpen(false);
+            patchSettings({ seenTutorial: true });
+          }}
+        />
+      )}
+      {shortcutsOpen && (
+        <Shortcuts onClose={() => setShortcutsOpen(false)} />
       )}
       {aiOpen && (
         <AIPanel
@@ -1190,8 +1385,11 @@ function FunctionHeader(props: {
         flexShrink: 0,
       }}
     >
-      <span style={{ fontFamily: mono, fontSize: 11, color: C.accent, letterSpacing: .5 }}>
-        {c.addr}
+      <span
+        title={c.addr}
+        style={{ fontFamily: mono, fontSize: 11, color: C.accent, letterSpacing: .5 }}
+      >
+        {c.addr.replace(/^0x0+(?=.)/, "0x")}
       </span>
       <span
         style={{

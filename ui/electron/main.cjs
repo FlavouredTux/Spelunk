@@ -1,4 +1,13 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require("electron");
+
+// Suppress the default File / Edit / View / Window / Help bar on
+// Linux + Windows. Ember has its own title bar (NavArrows, jump,
+// settings, …) and the platform menu duplicates nothing useful.
+// macOS keeps its application-level menu by convention; setting it
+// to null there strips Cmd+Q / Cmd+W and friends, which we don't want.
+if (process.platform !== "darwin") {
+  Menu.setApplicationMenu(null);
+}
 const { spawn } = require("node:child_process");
 const https = require("node:https");
 const http  = require("node:http");
@@ -1435,6 +1444,163 @@ ipcMain.handle("ember:openRecent", async (_e, bp) => {
   await addRecent(bp);
   return bp;
 });
+
+// ----- Discord Rich Presence ---------------------------------------------
+//
+// Pushes the user's current activity (binary + function + view) to a
+// running Discord client. Off by default — privacy-first: opening a
+// reverse-engineering tool against a binary leaks the binary's name to
+// every Discord friend, which most users don't want by default.
+//
+// The renderer is the source of truth for what to display. It calls
+// `ember.discord.setActivity(payload | null)`; this main-process side
+// owns the RPC connection. Discord-not-running, no-client-id, and
+// disconnect are all silent — we never surface a "couldn't push to
+// Discord" error to the user. Failing to update presence is benign.
+//
+// To enable for distribution: register an Ember application on the
+// Discord Developer Portal, paste the Client ID into DISCORD_CLIENT_ID
+// below, and upload these asset names under Rich Presence → Art Assets:
+//   ember_logo, view_pseudo, view_asm, view_cfg, view_ir, view_ssa
+const DISCORD_CLIENT_ID = process.env.EMBER_DISCORD_CLIENT_ID || "1497960478855528458";
+
+let discordClient = null;       // current Client instance, null when disconnected
+let discordReady   = false;     // true once login() resolves
+let discordLoginP  = null;      // in-flight login promise (deduped)
+let discordLastActivity = null; // last successful payload, replayed on reconnect
+
+function discordIsConfigured() {
+  return DISCORD_CLIENT_ID && DISCORD_CLIENT_ID.length > 0;
+}
+
+async function discordEnsureConnected() {
+  if (!discordIsConfigured()) return null;
+  if (discordReady && discordClient) return discordClient;
+  if (discordLoginP) return discordLoginP;
+
+  discordLoginP = (async () => {
+    try {
+      const { Client } = require("@xhayper/discord-rpc");
+      const c = new Client({ clientId: DISCORD_CLIENT_ID, transport: { type: "ipc" } });
+      c.on("disconnected", () => {
+        console.log("[discord] disconnected");
+        discordReady = false;
+      });
+      console.log(`[discord] connecting (clientId=${DISCORD_CLIENT_ID})`);
+      await c.login();
+      console.log(`[discord] connected as ${c.user?.username || "?"}`);
+      discordClient = c;
+      discordReady  = true;
+      if (discordLastActivity) {
+        try {
+          await c.user?.setActivity(discordLastActivity);
+          console.log("[discord] replayed queued activity");
+        } catch (e) {
+          console.log(`[discord] replay failed: ${e?.message || e}`);
+        }
+      }
+      return c;
+    } catch (e) {
+      console.log(`[discord] login failed: ${e?.message || e}`);
+      discordReady = false;
+      discordClient = null;
+      return null;
+    } finally {
+      discordLoginP = null;
+    }
+  })();
+  return discordLoginP;
+}
+
+// Discord enforces 2..128 char range on details/state and silently
+// drops the activity if a string is too short or too long. Pad short
+// values with a space so a single-char function name still works.
+function discordClampString(s) {
+  if (typeof s !== "string") return undefined;
+  let t = s.trim();
+  if (t.length === 0) return undefined;
+  if (t.length === 1) t += " ";
+  if (t.length > 128)  t = t.slice(0, 125) + "…";
+  return t;
+}
+
+function discordSanitizeButtons(buttons) {
+  if (!Array.isArray(buttons)) return undefined;
+  const out = [];
+  for (const b of buttons) {
+    if (!b || typeof b.label !== "string" || typeof b.url !== "string") continue;
+    if (!/^https?:\/\//i.test(b.url)) continue;
+    let label = b.label.trim();
+    if (label.length === 0) continue;
+    if (label.length > 32) label = label.slice(0, 31) + "…";
+    let url = b.url.trim();
+    if (url.length > 512) continue;
+    out.push({ label, url });
+    if (out.length === 2) break;
+  }
+  return out.length ? out : undefined;
+}
+
+ipcMain.handle("ember:discord:setActivity", async (_e, payload) => {
+  if (!discordIsConfigured()) {
+    console.log("[discord] setActivity called but no client id configured");
+    return false;
+  }
+  if (!payload) {
+    console.log("[discord] clearing activity");
+    discordLastActivity = null;
+    if (discordReady && discordClient?.user) {
+      try { await discordClient.user.clearActivity(); } catch (e) {
+        console.log(`[discord] clear failed: ${e?.message || e}`);
+      }
+    }
+    return true;
+  }
+  const activity = {
+    // Default activity type (0 = "Playing"). We tried type 3 ("Watching")
+    // for nicer wording, but Discord silently strips buttons and hides
+    // the activity from the lower-left status strip for non-Playing
+    // types. "Playing ember" is mildly off but the only type that gets
+    // the full feature set.
+    details:           discordClampString(payload.details),
+    state:             discordClampString(payload.state),
+    startTimestamp:    typeof payload.startTimestamp === "number" ? payload.startTimestamp : undefined,
+    largeImageKey:     payload.largeImageKey,
+    largeImageText:    discordClampString(payload.largeImageText),
+    smallImageKey:     payload.smallImageKey,
+    smallImageText:    discordClampString(payload.smallImageText),
+    buttons:           discordSanitizeButtons(payload.buttons),
+    // 0=NAME / 1=STATE / 2=DETAILS — picks which field drives the
+    // inline mini-status under the user's name. xhayper maps this
+    // straight to Discord's `status_display_type`.
+    statusDisplayType: typeof payload.statusDisplayType === "number" ? payload.statusDisplayType : undefined,
+    instance:          false,
+  };
+  discordLastActivity = activity;
+  const c = await discordEnsureConnected();
+  if (!c || !c.user) {
+    console.log("[discord] setActivity: not connected, payload queued");
+    return false;
+  }
+  try {
+    await c.user.setActivity(activity);
+    console.log(`[discord] activity pushed: ${activity.details} | ${activity.state}`);
+    return true;
+  } catch (e) {
+    console.log(`[discord] setActivity failed: ${e?.message || e}`);
+    discordReady = false;
+    return false;
+  }
+});
+
+app.on("before-quit", async () => {
+  // Best-effort clear so the user's profile doesn't show "viewing X"
+  // after the app has quit. We don't await — Electron is mid-shutdown.
+  try { discordClient?.user?.clearActivity?.(); } catch {}
+  try { discordClient?.destroy?.(); } catch {}
+});
+
+// -------------------------------------------------------------------------
 
 app.whenReady().then(() => {
   createWindow();

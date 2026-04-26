@@ -23,7 +23,7 @@ import { Tutorial } from "./components/Tutorial";
 import { ErrorView } from "./components/ErrorView";
 import { Shortcuts } from "./components/Shortcuts";
 import {
-  loadSummary, loadFunction, pickBinary, openRecent,
+  loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
   exportAnnotations, importAnnotations,
   checkForReleaseUpdate, downloadAndInstallReleaseUpdate,
@@ -188,6 +188,10 @@ export default function App() {
   // Strings are consumed only by StringsView and can be hundreds of MB.
   // Fetch on first open of the view, cache in state.
   const [stringsLoading, setStringsLoading] = useState(false);
+  // True while the background --functions query is running. Sidebar
+  // shows a "discovering functions…" spinner; CommandPalette filters
+  // gracefully on an empty list.
+  const [functionsLoading, setFunctionsLoading] = useState(false);
   useEffect(() => {
     if (!stringsOpen) return;
     if (strings.length > 0 || stringsLoading) return;
@@ -399,25 +403,47 @@ export default function App() {
         if (!p) { setLoading(false); return; }
         binaryPath = p;
       }
-      // New binary → previous binary's cached results are stale.
+      // New binary → previous binary's cached results are stale, and
+      // any selection from the prior binary is meaningless against
+      // this one's address space.
       clearRendererCaches();
-      const summary = await loadSummary({
-        fullAnalysis: forceFullAnalysisFor.has(binaryPath),
-      });
-      setInfo(summary);
-      // Strings are lazy; see stringsLoading below.
+      setCurrent(null);
+      setHistory([]);
+      setHistIdx(-1);
+      // Two-stage load: render the UI shell as soon as the header
+      // returns (format, sections, imports — usually <100ms), then
+      // populate the function list in the background. On packed
+      // binaries the function-list query can take seconds; the user
+      // shouldn't see a frozen window for that.
+      const header = await loadHeader();
+      setInfo(header);
       setStrings(EMPTY_STRINGS);
-      track("annotations", loadAnnotations(summary.path).then(setAnnotations).catch(() => {}));
+      setFunctionsLoading(true);
+      track("annotations", loadAnnotations(header.path).then(setAnnotations).catch(() => {}));
       track("xrefs",       loadXrefs().then(setXrefs).catch(() => {}));
       track("arities",     loadArities().then(setArities).catch(() => {}));
       getRecents().then(setRecents).catch(() => {});
-      const main = summary.functions.find((f) => f.name === "main");
-      const start = main ?? summary.functions[0] ?? null;
-      if (start) {
-        setCurrent(start);
-        setHistory([start.addrNum]);
-        setHistIdx(0);
-      }
+      track("functions", loadFunctions({
+        fullAnalysis: forceFullAnalysisFor.has(binaryPath),
+      }).then((fns) => {
+        // Merge into whatever info shape we currently have. If the
+        // user already opened a different binary by the time we
+        // resolve, drop the result on the floor.
+        setInfo((prev) => (prev && prev.path === header.path
+          ? { ...prev, functions: fns } : prev));
+        // Default selection: prefer `main`, else the first function.
+        // Guard against the user navigating somewhere already.
+        setCurrent((cur) => {
+          if (cur) return cur;
+          const main = fns.find((f) => f.name === "main");
+          const start = main ?? fns[0] ?? null;
+          if (start) {
+            setHistory([start.addrNum]);
+            setHistIdx(0);
+          }
+          return start;
+        });
+      }).catch(() => {}).finally(() => setFunctionsLoading(false)));
     } catch (e: any) {
       setError(e?.message ?? String(e));
     } finally {
@@ -928,6 +954,7 @@ export default function App() {
         <Sidebar
           info={info}
           annotations={annotations}
+          functionsLoading={functionsLoading}
           currentAddr={current?.addrNum ?? null}
           onSelect={(f) => navigateTo(f)}
           onOpen={(f, v) => { navigateTo(f); setView(v); }}

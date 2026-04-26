@@ -8,6 +8,10 @@ export function Sidebar(props: {
   info: BinaryInfo;
   currentAddr: number | null;
   annotations: Annotations;
+  // True while the background --functions query is still running. The
+  // sidebar can already render imports + the "defined" tab shell while
+  // we wait, so a spinner in the count badge is enough.
+  functionsLoading?: boolean;
   onSelect: (fn: FunctionInfo) => void;
   onOpen: (fn: FunctionInfo, view: ViewKind) => void;
   onReopen: () => void;
@@ -17,7 +21,7 @@ export function Sidebar(props: {
   onExport?: () => void;
   onImport?: () => void;
 }) {
-  const { info, currentAddr, annotations, onSelect, onOpen, onReopen,
+  const { info, currentAddr, annotations, functionsLoading, onSelect, onOpen, onReopen,
           onRename, onAddNote, onEditSignature, onExport, onImport } = props;
   const [q, setQ] = useState("");
   const [showImports, setShowImports] = useState(false);
@@ -251,7 +255,9 @@ export function Sidebar(props: {
               }}
             >
               <span>{t.label}</span>
-              <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>{t.count}</span>
+              <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
+                {functionsLoading && t.k === false ? "…" : t.count}
+              </span>
             </button>
           );
         })}
@@ -288,6 +294,14 @@ export function Sidebar(props: {
         </div>
       )}
 
+      {functionsLoading && !showImports && info.functions.length === 0 && (
+        <div style={{
+          padding: "8px 14px",
+          fontFamily: mono, fontSize: 10.5, color: C.textFaint,
+        }}>
+          discovering functions…
+        </div>
+      )}
       {/* Virtualized; 50k-symbol binaries would otherwise OOM the renderer. */}
       <VirtualList
         list={list}

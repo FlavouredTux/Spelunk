@@ -117,32 +117,37 @@ export async function matchPlugin(pluginId: string): Promise<PluginMatchResult> 
   return await window.ember.plugins.match(pluginId);
 }
 
-export async function loadSummary(opts: { fullAnalysis?: boolean } = {}): Promise<BinaryInfo> {
+// Header-only summary: format, arch, entry, sections, imports. No
+// function list — that's the slow query, fetched separately so the UI
+// shell can render before it returns. `loadHeader` and `loadFunctions`
+// each spawn the CLI once and are independent; they used to be a single
+// Promise.all inside the old `loadSummary` and the slow leg blocked the
+// fast one.
+export async function loadHeader(): Promise<BinaryInfo> {
   return memoOnce<BinaryInfo>(
     async () => {
       const path = (await window.ember.binary()) ?? "";
-      // Summary = header + sections + imports; --functions = the full
-      // union (symbols ∪ CFG-discovered sub_*). Running both in parallel
-      // keeps the UI Sidebar authoritative on stripped binaries where
-      // defined_symbols alone is nearly empty.
-      //
-      // --full-analysis bypasses the packed-binary gate in
-      // enumerate_functions; only set it when the user explicitly
-      // clicked "Run full analysis" on the heads-up banner.
-      const fnsArgs = opts.fullAnalysis
-        ? ["--functions", "--full-analysis"]
-        : ["--functions"];
-      const [rawSummary, rawFns] = await Promise.all([
-        window.ember.run([]),
-        window.ember.run(fnsArgs),
-      ]);
+      const rawSummary = await window.ember.run([]);
       const info = parseSummary(rawSummary, path);
-      info.functions = parseFunctionsTsv(rawFns);
+      info.functions = [];
       return info;
     },
     (p) => { SUMMARY_PROMISE = p; },
     SUMMARY_PROMISE,
   );
+}
+
+// `--full-analysis` bypasses the packed-binary gate in
+// enumerate_functions; only set it when the user explicitly clicked
+// "Run full analysis" on the heads-up banner.
+export async function loadFunctions(
+  opts: { fullAnalysis?: boolean } = {},
+): Promise<FunctionInfo[]> {
+  const args = opts.fullAnalysis
+    ? ["--functions", "--full-analysis"]
+    : ["--functions"];
+  const raw = await window.ember.run(args);
+  return parseFunctionsTsv(raw);
 }
 
 function parseFunctionsTsv(raw: string): FunctionInfo[] {

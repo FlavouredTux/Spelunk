@@ -13,7 +13,7 @@
 #include <ember/common/annotations.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
-#include <ember/decompile/emitter.hpp>
+#include <ember/decompile/emit_options.hpp>
 
 namespace ember {
 

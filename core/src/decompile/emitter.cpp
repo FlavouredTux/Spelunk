@@ -1990,7 +1990,27 @@ struct Emitter {
                                                  const IrValue& val) const;
 
     void emit_region(const Region& r, int depth, std::string& out) const;
+    void emit_region_if_then  (const Region& r, int depth, std::string& out) const;
+    void emit_region_if_else  (const Region& r, int depth, std::string& out) const;
+    void emit_region_while    (const Region& r, int depth, std::string& out) const;
+    void emit_region_do_while (const Region& r, int depth, std::string& out) const;
+    void emit_region_for      (const Region& r, int depth, std::string& out) const;
+    void emit_region_return   (const Region& r, int depth, std::string& out) const;
+    void emit_region_switch   (const Region& r, int depth, std::string& out) const;
+
     void emit_block(addr_t block_addr, int depth, std::string& out) const;
+    // Render the binding tail for a call statement. Three modes,
+    // selected by what other passes recorded against this call's
+    // (block, inst) position:
+    //   fold-fixed: result is consumed by exactly one downstream use;
+    //               cache `call_expr` for inline substitution there.
+    //   bound:      result is referenced multiple times; emit a
+    //               `T r_NAME = call_expr;` declaration.
+    //   bare:       result is unused; emit `call_expr;` as a statement.
+    void emit_call_binding(std::string& out, std::string_view ind,
+                           std::pair<std::size_t, std::size_t> pos,
+                           const std::string& call_expr,
+                           bool result_is_void) const;
     // Renders the trailing summary line for a block when its kind
     // implies one — the conditional / switch test, the return value,
     // or an explicit `goto *...` for indirect jumps. Plain
@@ -2598,6 +2618,30 @@ eh_pattern_hint(const IrBlock& bb, const Binary* binary) {
     return std::nullopt;
 }
 
+void Emitter::emit_call_binding(std::string& out, std::string_view ind,
+                                std::pair<std::size_t, std::size_t> pos,
+                                const std::string& call_expr,
+                                bool result_is_void) const {
+    if (fold_call_positions.contains(pos)) {
+        auto k = fold_call_ssa_key.find(pos);
+        if (k != fold_call_ssa_key.end()) {
+            if (result_is_void) fold_void_call_stmt[k->second] = call_expr;
+            else                fold_return_expr[k->second]    = call_expr;
+        }
+        return;
+    }
+    if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
+        std::string type_name = "u64";
+        if (auto df = defs.find(bk->second); df != defs.end()) {
+            type_name = c_type_name_for(df->second->dst);
+        }
+        out += std::format("{}{} {} = {};\n", ind, type_name,
+                           call_return_names.at(bk->second), call_expr);
+        return;
+    }
+    out += std::format("{}{};\n", ind, call_expr);
+}
+
 void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     auto it = fn->block_at.find(block_addr);
     if (it == fn->block_at.end()) return;
@@ -2732,23 +2776,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 ? *import_name
                 : function_display_name(inst.target1);
             const std::string call_expr = std::format("{}({})", callee, args);
-            const auto pos = std::pair{it->second, ii};
-            if (fold_call_positions.contains(pos)) {
-                auto k = fold_call_ssa_key.find(pos);
-                if (k != fold_call_ssa_key.end()) {
-                    if (import_returns_void(callee)) fold_void_call_stmt[k->second] = call_expr;
-                    else fold_return_expr[k->second] = call_expr;
-                }
-            } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
-                std::string type_name = "u64";
-                if (auto df = defs.find(bk->second); df != defs.end()) {
-                    type_name = c_type_name_for(df->second->dst);
-                }
-                out += std::format("{}{} {} = {};\n", ind, type_name,
-                                   call_return_names.at(bk->second), call_expr);
-            } else {
-                out += std::format("{}{};\n", ind, call_expr);
-            }
+            emit_call_binding(out, ind, std::pair{it->second, ii}, call_expr,
+                              import_returns_void(callee));
             continue;
         }
         if (inst.op == IrOp::CallIndirect) {
@@ -2809,27 +2838,10 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             }
             pending_args.clear();
             have_pending = false;
-            const auto pos = std::pair{it->second, ii};
-            if (fold_call_positions.contains(pos)) {
-                auto k = fold_call_ssa_key.find(pos);
-                if (k != fold_call_ssa_key.end()) {
-                    if (auto name = import_name_for_indirect_call(inst.srcs[0]);
-                        name && import_returns_void(*name)) {
-                        fold_void_call_stmt[k->second] = call_expr;
-                    } else {
-                        fold_return_expr[k->second] = call_expr;
-                    }
-                }
-            } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
-                std::string type_name = "u64";
-                if (auto df = defs.find(bk->second); df != defs.end()) {
-                    type_name = c_type_name_for(df->second->dst);
-                }
-                out += std::format("{}{} {} = {};\n", ind, type_name,
-                                   call_return_names.at(bk->second), call_expr);
-            } else {
-                out += std::format("{}{};\n", ind, call_expr);
-            }
+            const auto resolved_name = import_name_for_indirect_call(inst.srcs[0]);
+            const bool is_void = resolved_name && import_returns_void(*resolved_name);
+            emit_call_binding(out, ind, std::pair{it->second, ii}, call_expr,
+                              is_void);
             continue;
         }
 
@@ -2929,209 +2941,197 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
 
     switch (r.kind) {
-        case RegionKind::Empty:
-            return;
-
-        case RegionKind::Block:
-            emit_block(r.block_start, depth, out);
-            return;
-
+        case RegionKind::Empty:                                              return;
+        case RegionKind::Block:        emit_block(r.block_start, depth, out); return;
         case RegionKind::Seq:
             for (const auto& c : r.children) emit_region(*c, depth, out);
             return;
-
-        case RegionKind::IfThen: {
-            const std::string cond = render_condition(r.condition, r.invert);
-            out += std::format("{}if ({}) {{\n", ind, cond);
-            if (!r.children.empty()) emit_region(*r.children[0], depth + 1, out);
-            out += std::format("{}}}\n", ind);
-            return;
-        }
-
-        case RegionKind::IfElse: {
-            std::string then_buf;
-            if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, then_buf);
-            std::string else_buf;
-            if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, else_buf);
-            // If only the else arm has content, invert the condition and
-            // drop the dead then. Reads much cleaner than `if (!x) {} else {…}`.
-            const bool then_empty = then_buf.empty();
-            const bool else_empty = else_buf.empty();
-            bool invert_effective = r.invert;
-            if (then_empty && !else_empty) {
-                invert_effective = !invert_effective;
-                std::swap(then_buf, else_buf);
-            }
-            const std::string cond = render_condition(r.condition, invert_effective);
-            out += std::format("{}if ({}) {{\n", ind, cond);
-            out += then_buf;
-            if (!else_buf.empty()) {
-                out += std::format("{}}} else {{\n", ind);
-                out += else_buf;
-            }
-            out += std::format("{}}}\n", ind);
-            return;
-        }
-
-        case RegionKind::While: {
-            // Render as for-loop so header-defined temps are in scope for the condition.
-            //   for (;;) { header; if (!cond) break; body; }
-            // invert^true flips the "keep looping" condition into the "break" condition.
-            const std::string break_cond = render_condition(r.condition, !r.invert);
-            const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
-            out += std::format("{}for (;;) {{\n", ind);
-            if (!r.children.empty()) {
-                emit_region(*r.children[0], depth + 1, out);
-            }
-            out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
-            for (std::size_t i = 1; i < r.children.size(); ++i) {
-                emit_region(*r.children[i], depth + 1, out);
-            }
-            out += std::format("{}}}\n", ind);
-            return;
-        }
-
+        case RegionKind::IfThen:       emit_region_if_then  (r, depth, out); return;
+        case RegionKind::IfElse:       emit_region_if_else  (r, depth, out); return;
+        case RegionKind::While:        emit_region_while    (r, depth, out); return;
         case RegionKind::Loop:
             out += std::format("{}for (;;) {{\n", ind);
             for (const auto& c : r.children) emit_region(*c, depth + 1, out);
             out += std::format("{}}}\n", ind);
             return;
+        case RegionKind::DoWhile:      emit_region_do_while (r, depth, out); return;
+        case RegionKind::For:          emit_region_for      (r, depth, out); return;
+        case RegionKind::Return:       emit_region_return   (r, depth, out); return;
+        case RegionKind::Unreachable:  out += std::format("{}__unreachable();\n",   ind); return;
+        case RegionKind::Break:        out += std::format("{}break;\n",             ind); return;
+        case RegionKind::Continue:     out += std::format("{}continue;\n",          ind); return;
+        case RegionKind::Goto:         out += std::format("{}goto bb_{:x};\n", ind, r.target); return;
+        case RegionKind::Switch:       emit_region_switch   (r, depth, out); return;
+    }
+}
 
-        case RegionKind::DoWhile: {
-            // Body runs at least once, condition tested at the tail.
-            // r.invert is set when the decoded back-edge is a "loop-on-false"
-            // test — mirror it here so the rendered `while (...)` expresses
-            // the actual loop-continue condition.
-            out += std::format("{}do {{\n", ind);
-            for (const auto& c : r.children) emit_region(*c, depth + 1, out);
-            const std::string cond = render_condition(r.condition, r.invert);
-            out += std::format("{}}} while ({});\n", ind, cond);
-            return;
-        }
+void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) const {
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    const std::string cond = render_condition(r.condition, r.invert);
+    out += std::format("{}if ({}) {{\n", ind, cond);
+    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, out);
+    out += std::format("{}}}\n", ind);
+}
 
-        case RegionKind::For: {
-            // The update slot renders the increment inst. If rendering fails
-            // (pattern didn't reduce), degrade gracefully to a plain while —
-            // the body will include the update statement at its natural spot.
-            std::string update = r.has_update
-                ? render_update_inst(r.update_block, r.update_inst)
-                : std::string{};
-            const std::string cond = render_condition(r.condition, r.invert);
-            if (update.empty()) {
-                out += std::format("{}while ({}) {{\n", ind, cond);
-            } else {
-                out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
-            }
-            for (const auto& c : r.children) emit_region(*c, depth + 1, out);
-            out += std::format("{}}}\n", ind);
-            return;
-        }
+void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) const {
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    std::string then_buf;
+    if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, then_buf);
+    std::string else_buf;
+    if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, else_buf);
+    // If only the else arm has content, invert the condition and drop the
+    // dead then. Reads much cleaner than `if (!x) {} else {…}`.
+    bool invert_effective = r.invert;
+    if (then_buf.empty() && !else_buf.empty()) {
+        invert_effective = !invert_effective;
+        std::swap(then_buf, else_buf);
+    }
+    const std::string cond = render_condition(r.condition, invert_effective);
+    out += std::format("{}if ({}) {{\n", ind, cond);
+    out += then_buf;
+    if (!else_buf.empty()) {
+        out += std::format("{}}} else {{\n", ind);
+        out += else_buf;
+    }
+    out += std::format("{}}}\n", ind);
+}
 
-        case RegionKind::Return: {
-            if (r.condition.kind != IrValueKind::None) {
-                if (auto k = ssa_key(r.condition); k) {
-                    auto s = fold_void_call_stmt.find(*k);
-                    if (s != fold_void_call_stmt.end()) {
-                        out += std::format("{}{};\n", ind, s->second);
-                        out += std::format("{}return;\n", ind);
-                        return;
-                    }
-                }
-                if (is_void_call_result(r.condition)) {
-                    out += std::format("{}return;\n", ind);
-                    return;
-                }
-                if (auto k = ssa_key(r.condition); k) {
-                    auto f = fold_return_expr.find(*k);
-                    if (f != fold_return_expr.end()) {
-                        out += std::format("{}return {};\n", ind, f->second);
-                        return;
-                    }
-                }
-                // Strip a redundant outer widen: in a return context the
-                // caller's declared type already coerces, so `return (u64)x;`
-                // where `x` has the return type reads as noise.
-                IrValue v = r.condition;
-                while (true) {
-                    const IrInst* d = def_of(v);
-                    if (!d || d->src_count < 1) break;
-                    if (d->op != IrOp::ZExt && d->op != IrOp::SExt) break;
-                    const auto& src = d->srcs[0];
-                    if (type_bits(src.type) > type_bits(d->dst.type)) break;
-                    v = src;
-                    break;  // one hop only — deeper casts are semantically real
-                }
-                out += std::format("{}return {};\n", ind, expr(v));
-            } else {
-                out += std::format("{}return;\n", ind);
-            }
-            return;
-        }
-        case RegionKind::Unreachable:
-            out += std::format("{}__unreachable();\n", ind);
-            return;
-        case RegionKind::Break:
-            out += std::format("{}break;\n", ind);
-            return;
-        case RegionKind::Continue:
-            out += std::format("{}continue;\n", ind);
-            return;
-        case RegionKind::Goto:
-            out += std::format("{}goto bb_{:x};\n", ind, r.target);
-            return;
+void Emitter::emit_region_while(const Region& r, int depth, std::string& out) const {
+    // Render as for-loop so header-defined temps are in scope for the
+    // condition: `for (;;) { header; if (!cond) break; body; }`.
+    // invert^true flips the "keep looping" condition into the "break" condition.
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
+    const std::string break_cond = render_condition(r.condition, !r.invert);
+    out += std::format("{}for (;;) {{\n", ind);
+    if (!r.children.empty()) {
+        emit_region(*r.children[0], depth + 1, out);
+    }
+    out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
+    for (std::size_t i = 1; i < r.children.size(); ++i) {
+        emit_region(*r.children[i], depth + 1, out);
+    }
+    out += std::format("{}}}\n", ind);
+}
 
-        case RegionKind::Switch: {
-            const std::string_view rn = reg_name(r.switch_index);
-            out += std::format("{}switch ({}) {{\n", ind,
-                               rn.empty() ? std::string("<idx>") : std::string(rn));
-            const std::string cind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
-            const std::size_t n_cases = r.case_values.size();
+void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out) const {
+    // Body runs at least once, condition tested at the tail. r.invert is
+    // set when the decoded back-edge is a "loop-on-false" test — mirror it
+    // here so the rendered `while (...)` expresses the actual continue
+    // condition.
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    out += std::format("{}do {{\n", ind);
+    for (const auto& c : r.children) emit_region(*c, depth + 1, out);
+    const std::string cond = render_condition(r.condition, r.invert);
+    out += std::format("{}}} while ({});\n", ind, cond);
+}
 
-            auto ends_in_terminator = [](const Region& body) -> bool {
-                const Region* cur = &body;
-                while (cur && cur->kind == RegionKind::Seq && !cur->children.empty()) {
-                    cur = cur->children.back().get();
-                }
-                if (!cur) return false;
-                switch (cur->kind) {
-                    case RegionKind::Return:
-                    case RegionKind::Break:
-                    case RegionKind::Continue:
-                    case RegionKind::Unreachable:
-                        return true;
-                    default:
-                        return false;
-                }
-            };
+void Emitter::emit_region_for(const Region& r, int depth, std::string& out) const {
+    // The update slot renders the increment inst. If rendering fails
+    // (pattern didn't reduce), degrade gracefully to a plain while — the
+    // body will include the update statement at its natural spot.
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    const std::string update = r.has_update
+        ? render_update_inst(r.update_block, r.update_inst)
+        : std::string{};
+    const std::string cond = render_condition(r.condition, r.invert);
+    if (update.empty()) {
+        out += std::format("{}while ({}) {{\n", ind, cond);
+    } else {
+        out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
+    }
+    for (const auto& c : r.children) emit_region(*c, depth + 1, out);
+    out += std::format("{}}}\n", ind);
+}
 
-            for (std::size_t i = 0; i < n_cases; ++i) {
-                out += std::format("{}case {}:", cind, r.case_values[i]);
-                const Region* child = i < r.children.size() ? r.children[i].get() : nullptr;
-                const bool is_empty_child =
-                    !child || child->kind == RegionKind::Empty ||
-                    (child->kind == RegionKind::Seq && child->children.empty());
-                if (is_empty_child) {
-                    out += "\n";
-                    continue;
-                }
-                out += "\n";
-                emit_region(*child, depth + 2, out);
-                if (!ends_in_terminator(*child)) {
-                    out += std::format("{}  break;\n", cind);
-                }
-            }
-            if (r.has_default && r.children.size() > n_cases) {
-                out += std::format("{}default:\n", cind);
-                const Region& dflt = *r.children.back();
-                emit_region(dflt, depth + 2, out);
-                if (!ends_in_terminator(dflt)) {
-                    out += std::format("{}  break;\n", cind);
-                }
-            }
-            out += std::format("{}}}\n", ind);
+void Emitter::emit_region_return(const Region& r, int depth, std::string& out) const {
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    if (r.condition.kind == IrValueKind::None) {
+        out += std::format("{}return;\n", ind);
+        return;
+    }
+    if (auto k = ssa_key(r.condition); k) {
+        auto s = fold_void_call_stmt.find(*k);
+        if (s != fold_void_call_stmt.end()) {
+            out += std::format("{}{};\n", ind, s->second);
+            out += std::format("{}return;\n", ind);
             return;
         }
     }
+    if (is_void_call_result(r.condition)) {
+        out += std::format("{}return;\n", ind);
+        return;
+    }
+    if (auto k = ssa_key(r.condition); k) {
+        auto f = fold_return_expr.find(*k);
+        if (f != fold_return_expr.end()) {
+            out += std::format("{}return {};\n", ind, f->second);
+            return;
+        }
+    }
+    // Strip a redundant outer widen: in a return context the caller's
+    // declared type already coerces, so `return (u64)x;` where `x` has the
+    // return type reads as noise. One hop only — deeper casts are
+    // semantically real.
+    IrValue v = r.condition;
+    if (const IrInst* d = def_of(v); d && d->src_count >= 1
+            && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
+            && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
+        v = d->srcs[0];
+    }
+    out += std::format("{}return {};\n", ind, expr(v));
+}
+
+void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) const {
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    const std::string_view rn = reg_name(r.switch_index);
+    out += std::format("{}switch ({}) {{\n", ind,
+                       rn.empty() ? std::string("<idx>") : std::string(rn));
+    const std::string cind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
+    const std::size_t n_cases = r.case_values.size();
+
+    auto ends_in_terminator = [](const Region& body) {
+        const Region* cur = &body;
+        while (cur && cur->kind == RegionKind::Seq && !cur->children.empty()) {
+            cur = cur->children.back().get();
+        }
+        if (!cur) return false;
+        switch (cur->kind) {
+            case RegionKind::Return:
+            case RegionKind::Break:
+            case RegionKind::Continue:
+            case RegionKind::Unreachable:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    for (std::size_t i = 0; i < n_cases; ++i) {
+        out += std::format("{}case {}:", cind, r.case_values[i]);
+        const Region* child = i < r.children.size() ? r.children[i].get() : nullptr;
+        const bool is_empty_child =
+            !child || child->kind == RegionKind::Empty ||
+            (child->kind == RegionKind::Seq && child->children.empty());
+        if (is_empty_child) {
+            out += "\n";
+            continue;
+        }
+        out += "\n";
+        emit_region(*child, depth + 2, out);
+        if (!ends_in_terminator(*child)) {
+            out += std::format("{}  break;\n", cind);
+        }
+    }
+    if (r.has_default && r.children.size() > n_cases) {
+        out += std::format("{}default:\n", cind);
+        const Region& dflt = *r.children.back();
+        emit_region(dflt, depth + 2, out);
+        if (!ends_in_terminator(dflt)) {
+            out += std::format("{}  break;\n", cind);
+        }
+    }
+    out += std::format("{}}}\n", ind);
 }
 
 }  // anonymous namespace

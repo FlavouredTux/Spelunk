@@ -1,0 +1,5 @@
+// hypot2
+double hypot2(double a, double b) {
+  double t3 = sqrt(a * a + b * b);
+  return t3;
+}

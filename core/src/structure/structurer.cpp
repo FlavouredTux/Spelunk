@@ -342,14 +342,39 @@ public:
                     auto is_live_in_reg = [](const IrValue& v) {
                         return v.kind == IrValueKind::Reg && v.version == 0;
                     };
+                    // The lift_ret seed for the FP candidate is exactly
+                    // `Reg::Xmm0, F64, version 0` — both for FP-returning
+                    // and non-FP-returning functions. Only prefer the FP
+                    // carrier when it's been actually touched (xmm0 written
+                    // in this function → version > 0, or post-cleanup
+                    // propagation has replaced the reg with something other
+                    // than xmm0).
+                    auto is_meaningful_fp_carrier = [](const IrValue& v) {
+                        if (!is_float_type(v.type)) return false;
+                        if (v.kind != IrValueKind::Reg) return true;
+                        if (v.reg == Reg::Xmm0 && v.version == 0) return false;
+                        return true;
+                    };
                     for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
                         if (it->op != IrOp::Return || it->src_count == 0) continue;
                         const IrValue* best = nullptr;
                         for (u8 k = 0; k < it->src_count && k < it->srcs.size(); ++k) {
                             const IrValue& s = it->srcs[k];
                             if (s.kind == IrValueKind::None) continue;
-                            if (!best) best = &s;
+                            if (!best) { best = &s; continue; }
+                            // A non-live-in source always beats a live-in one
+                            // — it's been touched by the function.
                             if (!is_live_in_reg(s)) { best = &s; break; }
+                            // Tiebreak among live-in sources: prefer an FP
+                            // carrier (xmm typed) over rax. Functions that
+                            // return the FP receiver unchanged (`return x;`
+                            // for `float x` arg) leave rax uninitialised and
+                            // pass the value through the parameter xmm0.
+                            if (is_live_in_reg(*best) &&
+                                !is_meaningful_fp_carrier(*best) &&
+                                is_meaningful_fp_carrier(s)) {
+                                best = &s;
+                            }
                         }
                         if (best) ret_region->condition = *best;
                         break;
@@ -633,14 +658,24 @@ public:
         auto is_live_in_reg = [](const IrValue& v) {
             return v.kind == IrValueKind::Reg && v.version == 0;
         };
+        auto is_meaningful_fp_carrier = [](const IrValue& v) {
+            if (!is_float_type(v.type)) return false;
+            if (v.kind != IrValueKind::Reg) return true;
+            if (v.reg == Reg::Xmm0 && v.version == 0) return false;
+            return true;
+        };
         for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
             if (it->op != IrOp::Return || it->src_count == 0) continue;
             const IrValue* best = nullptr;
             for (u8 k = 0; k < it->src_count && k < it->srcs.size(); ++k) {
                 const IrValue& s = it->srcs[k];
                 if (s.kind == IrValueKind::None) continue;
-                if (!best) best = &s;
+                if (!best) { best = &s; continue; }
                 if (!is_live_in_reg(s)) { best = &s; break; }
+                if (is_live_in_reg(*best) && !is_meaningful_fp_carrier(*best) &&
+                    is_meaningful_fp_carrier(s)) {
+                    best = &s;
+                }
             }
             if (best) r->condition = *best;
             break;

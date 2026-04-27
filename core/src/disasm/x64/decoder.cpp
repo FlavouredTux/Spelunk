@@ -208,6 +208,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x28] = op(Mnemonic::Movaps,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x29] = op(Mnemonic::MovapsStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
     t[0x2E] = op(Mnemonic::Ucomiss,     OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x2F] = op(Mnemonic::Comiss,      OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
 
     // Packed-single logical + arithmetic. The whole 0x50–0x5F range was
     // missing before, so `xorps xmm0, xmm0` (0x0F 0x57 0xC0) aborted
@@ -220,7 +221,9 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x58] = op(Mnemonic::Addps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x59] = op(Mnemonic::Mulps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x5C] = op(Mnemonic::Subps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5D] = op(Mnemonic::Minps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5F] = op(Mnemonic::Maxps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
 
     // CMovCC: 0x0F 4x — Gv, Ev. Indexed in condition order (o/no/b/ae/…).
     constexpr Mnemonic cmovs[16] = {
@@ -304,6 +307,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
 constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     std::array<OpcodeEntry, 256> t{};
     t[0x2E] = op(Mnemonic::Ucomisd,     OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x2F] = op(Mnemonic::Comisd,      OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
     // Packed-double logical + arithmetic, mirroring the packed-single
     // block in build_secondary(). Same motivation: avoid cascading
     // decode failures on everyday SSE2 code.
@@ -314,7 +318,9 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0x58] = op(Mnemonic::Addpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x59] = op(Mnemonic::Mulpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x5C] = op(Mnemonic::Subpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5D] = op(Mnemonic::Minpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5F] = op(Mnemonic::Maxpd,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x60] = op(Mnemonic::Punpcklbw,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x61] = op(Mnemonic::Punpcklwd,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x62] = op(Mnemonic::Punpckldq,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
@@ -352,7 +358,9 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     t[0x59] = op(Mnemonic::Mulss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x5A] = op(Mnemonic::Cvtss2sd,    OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x5C] = op(Mnemonic::Subss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x5D] = op(Mnemonic::Minss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x5F] = op(Mnemonic::Maxss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     // Existing packed-integer SSE2 entries.
     t[0x6F] = op(Mnemonic::Movdqu,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x7E] = op(Mnemonic::MovqXmm,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
@@ -372,7 +380,9 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f2() noexcept {
     t[0x59] = op(Mnemonic::Mulsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x5A] = op(Mnemonic::Cvtsd2ss,      OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x5C] = op(Mnemonic::Subsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
+    t[0x5D] = op(Mnemonic::Minsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
+    t[0x5F] = op(Mnemonic::Maxsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     return t;
 }
 

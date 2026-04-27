@@ -204,10 +204,13 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Mulss:         return "mulss";
         case Mnemonic::Divss:         return "divss";
         case Mnemonic::Sqrtss:        return "sqrtss";
+        case Mnemonic::Minss:         return "minss";
+        case Mnemonic::Maxss:         return "maxss";
         case Mnemonic::Cvtsi2ss:      return "cvtsi2ss";
         case Mnemonic::Cvttss2si:     return "cvttss2si";
         case Mnemonic::Cvtss2sd:      return "cvtss2sd";
         case Mnemonic::Ucomiss:       return "ucomiss";
+        case Mnemonic::Comiss:        return "comiss";
 
         case Mnemonic::MovsdXmm:      return "movsd";
         case Mnemonic::MovsdXmmStore: return "movsd";
@@ -216,10 +219,18 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Mulsd:         return "mulsd";
         case Mnemonic::Divsd:         return "divsd";
         case Mnemonic::Sqrtsd:        return "sqrtsd";
+        case Mnemonic::Minsd:         return "minsd";
+        case Mnemonic::Maxsd:         return "maxsd";
         case Mnemonic::Cvtsi2sd:      return "cvtsi2sd";
         case Mnemonic::Cvttsd2si:     return "cvttsd2si";
         case Mnemonic::Cvtsd2ss:      return "cvtsd2ss";
         case Mnemonic::Ucomisd:       return "ucomisd";
+        case Mnemonic::Comisd:        return "comisd";
+
+        case Mnemonic::Minps:         return "minps";
+        case Mnemonic::Maxps:         return "maxps";
+        case Mnemonic::Minpd:         return "minpd";
+        case Mnemonic::Maxpd:         return "maxpd";
     }
     return "???";
 }

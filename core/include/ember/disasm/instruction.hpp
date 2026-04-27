@@ -121,18 +121,25 @@ enum class Mnemonic : u16 {
     MovssLoad,        // movss xmm, xmm/m32
     MovssStore,       // movss xmm/m32, xmm
     Addss, Subss, Mulss, Divss, Sqrtss,
+    Minss, Maxss,
     Cvtsi2ss,         // xmm <- r/m32|64
     Cvttss2si,        // r32|64 <- xmm/m32 (truncation)
     Cvtss2sd,         // f64 <- f32
     Ucomiss,          // compare, sets ZF/PF/CF
+    Comiss,           // ordered compare (signaling-NaN), same flags as ucomiss
     // Double-precision (F2 0F ..):
     MovsdXmm,         // movsd xmm, xmm/m64   (distinct from the string op)
     MovsdXmmStore,    // movsd xmm/m64, xmm
     Addsd, Subsd, Mulsd, Divsd, Sqrtsd,
+    Minsd, Maxsd,
     Cvtsi2sd,
     Cvttsd2si,
     Cvtsd2ss,
     Ucomisd,          // 66 0F 2E
+    Comisd,           // 66 0F 2F — ordered compare
+    // Packed min/max (no mandatory prefix and 0x66-prefix forms).
+    Minps, Maxps,
+    Minpd, Maxpd,
 };
 
 [[nodiscard]] std::string_view mnemonic_name(Mnemonic m) noexcept;

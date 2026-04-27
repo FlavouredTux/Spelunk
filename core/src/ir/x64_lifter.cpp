@@ -1275,6 +1275,173 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
     store_fp_lvalue(dst, v, ctx, t);
 }
 
+// ----- Packed SIMD intrinsics --------------------------------------------
+//
+// We don't have a 128-bit IR type, so packed-SSE values flow through the IR
+// at F64 width — same trick the existing Movaps/Movups lifter uses. The
+// upper 64 bits of an xmm register are silently lossy in the IR, but since
+// no analysis pass reads them and the emitter renders the named intrinsic
+// verbatim, the dataflow + reader experience is what matters: `xorps xmm0,
+// xmm0` becomes `xmm0 = _mm_xor_ps(xmm0, xmm0);` instead of an opaque
+// `/* x64.xorps(...) */` block comment.
+[[nodiscard]] IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t) {
+    if (op.kind == Operand::Kind::Register) {
+        return IrValue::make_reg(op.reg, t);
+    }
+    if (op.kind == Operand::Kind::Memory) {
+        IrValue ea = compute_ea(op.mem, ctx);
+        return ctx.emit_load(ea, t, op.mem.segment);
+    }
+    return IrValue{};
+}
+
+void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
+    if (op.kind == Operand::Kind::Register) {
+        ctx.emit_assign(IrValue::make_reg(op.reg, t), v);
+        return;
+    }
+    if (op.kind == Operand::Kind::Memory) {
+        IrValue ea = compute_ea(op.mem, ctx);
+        ctx.emit_store(ea, v, op.mem.segment);
+    }
+}
+
+// Two-operand packed intrinsic: `op xmm_dst, xmm/m`. Reads both as `t`,
+// emits a named Intrinsic, writes the result back to operand 0. Used for
+// every commutative-or-not SSE binary op that lacks a clean infix form
+// (xor/and/or/andnot, packed integer arithmetic, packed compares,
+// unpacks, shuffles).
+void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands < 2) return;
+    IrValue a = read_xmm(ctx, insn.operands[0], t);
+    IrValue b = read_xmm(ctx, insn.operands[1], t);
+    if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
+
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(t);
+    i.srcs[0]   = a;
+    i.srcs[1]   = b;
+    i.src_count = 2;
+    // Three-operand forms (Pshufd's immediate selector) tag the imm onto
+    // src[2] so the intrinsic shows the shuffle pattern in its argument list.
+    if (insn.num_operands == 3 &&
+        insn.operands[2].kind == Operand::Kind::Immediate) {
+        const Imm& im = insn.operands[2].imm;
+        i.srcs[2]   = ctx.imm(im.value, type_for_bits(im.size * 8));
+        i.src_count = 3;
+    }
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, t);
+}
+
+// `movdqa xmm, xmm/m128` (and unaligned `movdqu`). Treated as a typed
+// load+store at the chosen SIMD width — the IR carries the dataflow, the
+// emitter prints `xmm0 = *(__m128i*)(rsi);` style.
+void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    (void)storing;  // operand order already encodes it
+    IrValue v = read_xmm(ctx, insn.operands[1], t);
+    if (v.kind == IrValueKind::None) return;
+    write_xmm(ctx, insn.operands[0], v, t);
+}
+
+// `ucomiss xmm0, xmm1` / `ucomisd xmm0, xmm1`: scalar FP compare that sets
+// ZF/CF/PF. With NaN handling skipped we get:
+//   ZF = (a == b)
+//   CF = (a <  b)
+//   PF = 0
+// That makes downstream `ja` / `jb` / `je` read out as `if (a > b)` etc.,
+// which is the actual C source. Compare on FP-typed operands; the emitter
+// renders f32/f64 ==/< correctly.
+void lift_ucomi(LiftCtx& ctx, IrType t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue a = materialize_fp_rvalue(insn.operands[0], ctx, t);
+    IrValue b = materialize_fp_rvalue(insn.operands[1], ctx, t);
+    if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq,  a, b));
+    ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpUlt, a, b));
+    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+}
+
+// Scalar-FP unary with no clean infix: sqrtss/sqrtsd. Models as a named
+// intrinsic so the reader sees `sqrtf(x)` / `sqrt(x)` (the libm names),
+// plus the usual two-operand x86 `dst, src` form where dst==operand[0].
+void lift_fp_unop(LiftCtx& ctx, std::string_view name, IrType t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, t);
+    if (src.kind == IrValueKind::None) return;
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    store_fp_lvalue(insn.operands[0], result, ctx, t);
+}
+
+// Conversions: gpr/m -> xmm (cvtsi2ss/sd), xmm/m -> gpr (cvtt*2si),
+// xmm -> xmm width change (cvtss2sd / cvtsd2ss). Kept as named intrinsics
+// rather than introducing a dedicated IrOp::FpConv — the cast itself is
+// the dataflow, and the emitter prints `xmm0 = cvtsi2ss(rax);` cleanly.
+void lift_int_to_fp(LiftCtx& ctx, std::string_view name, IrType dst_t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    if (src.kind == IrValueKind::None) return;
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(dst_t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    store_fp_lvalue(insn.operands[0], result, ctx, dst_t);
+}
+
+void lift_fp_to_int(LiftCtx& ctx, std::string_view name, IrType src_t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, src_t);
+    if (src.kind == IrValueKind::None) return;
+    const IrType dst_t = operand_type(insn.operands[0]);
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(dst_t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
+void lift_fp_to_fp(LiftCtx& ctx, std::string_view name, IrType src_t,
+                   IrType dst_t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, src_t);
+    if (src.kind == IrValueKind::None) return;
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(dst_t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    store_fp_lvalue(insn.operands[0], result, ctx, dst_t);
+}
+
 // SetCC: write 0 or 1 to a byte destination based on the flag predicate.
 // Reuses jcc_predicate() so the flag logic is shared with conditional
 // branches — i.e. `sete` and `je` compute the same i1.
@@ -1458,15 +1625,123 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::MovapsStore:  lift_fp_mov(ctx, IrType::F64, true);  break;
         case Mnemonic::Movups:       lift_fp_mov(ctx, IrType::F64, false); break;
         case Mnemonic::MovupsStore:  lift_fp_mov(ctx, IrType::F64, true);  break;
-        // Conversions and compares stay as intrinsics for now — named, so
-        // the reader sees "cvtsi2sd(...)" / "ucomisd(...)" clearly.
-        case Mnemonic::Sqrtss: case Mnemonic::Sqrtsd:
-        case Mnemonic::Cvtsi2ss: case Mnemonic::Cvtsi2sd:
-        case Mnemonic::Cvttss2si: case Mnemonic::Cvttsd2si:
-        case Mnemonic::Cvtss2sd: case Mnemonic::Cvtsd2ss:
-        case Mnemonic::Ucomiss: case Mnemonic::Ucomisd:
-            lift_intrinsic(ctx, mnemonic_name(insn.mnemonic));
+        // Scalar-FP unary (intrinsic, libm-style names).
+        case Mnemonic::Sqrtss: lift_fp_unop(ctx, "sqrtf", IrType::F32); break;
+        case Mnemonic::Sqrtsd: lift_fp_unop(ctx, "sqrt",  IrType::F64); break;
+
+        // Scalar min/max — modeled as named intrinsics (`_mm_min_ss`,
+        // `_mm_max_sd`, …). The compiler emits these for `(a < b) ? a : b`
+        // patterns; recovering the ternary requires lifting them as
+        // IrOp::Select with a proper FP compare, which we don't have a
+        // clean way to express yet.
+        case Mnemonic::Minss: lift_simd_binop(ctx, "_mm_min_ss", IrType::F32); break;
+        case Mnemonic::Maxss: lift_simd_binop(ctx, "_mm_max_ss", IrType::F32); break;
+        case Mnemonic::Minsd: lift_simd_binop(ctx, "_mm_min_sd", IrType::F64); break;
+        case Mnemonic::Maxsd: lift_simd_binop(ctx, "_mm_max_sd", IrType::F64); break;
+        case Mnemonic::Minps: lift_simd_binop(ctx, "_mm_min_ps", IrType::F32); break;
+        case Mnemonic::Maxps: lift_simd_binop(ctx, "_mm_max_ps", IrType::F32); break;
+        case Mnemonic::Minpd: lift_simd_binop(ctx, "_mm_min_pd", IrType::F64); break;
+        case Mnemonic::Maxpd: lift_simd_binop(ctx, "_mm_max_pd", IrType::F64); break;
+
+        // gpr -> xmm conversions (size of the gpr operand drives src width).
+        case Mnemonic::Cvtsi2ss: lift_int_to_fp(ctx, "cvtsi2ss", IrType::F32); break;
+        case Mnemonic::Cvtsi2sd: lift_int_to_fp(ctx, "cvtsi2sd", IrType::F64); break;
+
+        // xmm -> gpr (truncating). Operand 0 is gpr, operand 1 is xmm/m.
+        case Mnemonic::Cvttss2si: lift_fp_to_int(ctx, "cvttss2si", IrType::F32); break;
+        case Mnemonic::Cvttsd2si: lift_fp_to_int(ctx, "cvttsd2si", IrType::F64); break;
+
+        // xmm width changes.
+        case Mnemonic::Cvtss2sd:
+            lift_fp_to_fp(ctx, "cvtss2sd", IrType::F32, IrType::F64); break;
+        case Mnemonic::Cvtsd2ss:
+            lift_fp_to_fp(ctx, "cvtsd2ss", IrType::F64, IrType::F32); break;
+
+        // Scalar FP compare → ZF/CF/PF. Lets downstream `ja`/`jb`/`je` read
+        // out as `if (a > b)` etc. instead of an opaque `ucomiss(...)` plus
+        // a stale-flag jcc.
+        case Mnemonic::Ucomiss: lift_ucomi(ctx, IrType::F32); break;
+        case Mnemonic::Ucomisd: lift_ucomi(ctx, IrType::F64); break;
+        // comiss/comisd: same flag effect as ucomiss/ucomisd; the only
+        // difference is the QNaN-vs-SNaN exception behaviour, which the
+        // emitted code reads identically.
+        case Mnemonic::Comiss:  lift_ucomi(ctx, IrType::F32); break;
+        case Mnemonic::Comisd:  lift_ucomi(ctx, IrType::F64); break;
+
+        // ---- Packed SSE: arithmetic / logical / unpack / shuffle / compare.
+        // Lifted as named intrinsics carrying both source xmm operands.
+        // F32 vs F64 chosen to match the scalar element type the mnemonic
+        // implies; for packed-integer ops we still flow through F64 (the
+        // dataflow is what matters, the named intrinsic carries the lane
+        // semantics).
+        case Mnemonic::Andps:  lift_simd_binop(ctx, "_mm_and_ps",    IrType::F32); break;
+        case Mnemonic::Andnps: lift_simd_binop(ctx, "_mm_andnot_ps", IrType::F32); break;
+        case Mnemonic::Orps:   lift_simd_binop(ctx, "_mm_or_ps",     IrType::F32); break;
+        case Mnemonic::Xorps:  lift_simd_binop(ctx, "_mm_xor_ps",    IrType::F32); break;
+        case Mnemonic::Addps:  lift_simd_binop(ctx, "_mm_add_ps",    IrType::F32); break;
+        case Mnemonic::Mulps:  lift_simd_binop(ctx, "_mm_mul_ps",    IrType::F32); break;
+        case Mnemonic::Subps:  lift_simd_binop(ctx, "_mm_sub_ps",    IrType::F32); break;
+        case Mnemonic::Divps:  lift_simd_binop(ctx, "_mm_div_ps",    IrType::F32); break;
+        case Mnemonic::Andpd:  lift_simd_binop(ctx, "_mm_and_pd",    IrType::F64); break;
+        case Mnemonic::Andnpd: lift_simd_binop(ctx, "_mm_andnot_pd", IrType::F64); break;
+        case Mnemonic::Orpd:   lift_simd_binop(ctx, "_mm_or_pd",     IrType::F64); break;
+        case Mnemonic::Xorpd:  lift_simd_binop(ctx, "_mm_xor_pd",    IrType::F64); break;
+        case Mnemonic::Addpd:  lift_simd_binop(ctx, "_mm_add_pd",    IrType::F64); break;
+        case Mnemonic::Mulpd:  lift_simd_binop(ctx, "_mm_mul_pd",    IrType::F64); break;
+        case Mnemonic::Subpd:  lift_simd_binop(ctx, "_mm_sub_pd",    IrType::F64); break;
+        case Mnemonic::Divpd:  lift_simd_binop(ctx, "_mm_div_pd",    IrType::F64); break;
+
+        case Mnemonic::Pxor:    lift_simd_binop(ctx, "_mm_xor_si128",    IrType::F64); break;
+        case Mnemonic::Pand:    lift_simd_binop(ctx, "_mm_and_si128",    IrType::F64); break;
+        case Mnemonic::Pandn:   lift_simd_binop(ctx, "_mm_andnot_si128", IrType::F64); break;
+        case Mnemonic::Por:     lift_simd_binop(ctx, "_mm_or_si128",     IrType::F64); break;
+        case Mnemonic::Paddq:   lift_simd_binop(ctx, "_mm_add_epi64",    IrType::F64); break;
+        case Mnemonic::Pcmpeqb: lift_simd_binop(ctx, "_mm_cmpeq_epi8",   IrType::F64); break;
+        case Mnemonic::Pcmpeqw: lift_simd_binop(ctx, "_mm_cmpeq_epi16",  IrType::F64); break;
+        case Mnemonic::Pcmpeqd: lift_simd_binop(ctx, "_mm_cmpeq_epi32",  IrType::F64); break;
+        case Mnemonic::Pminub:  lift_simd_binop(ctx, "_mm_min_epu8",     IrType::F64); break;
+
+        case Mnemonic::Punpcklbw:  lift_simd_binop(ctx, "_mm_unpacklo_epi8",  IrType::F64); break;
+        case Mnemonic::Punpcklwd:  lift_simd_binop(ctx, "_mm_unpacklo_epi16", IrType::F64); break;
+        case Mnemonic::Punpckldq:  lift_simd_binop(ctx, "_mm_unpacklo_epi32", IrType::F64); break;
+        case Mnemonic::Punpcklqdq: lift_simd_binop(ctx, "_mm_unpacklo_epi64", IrType::F64); break;
+        case Mnemonic::Punpckhqdq: lift_simd_binop(ctx, "_mm_unpackhi_epi64", IrType::F64); break;
+        case Mnemonic::Pshufd:     lift_simd_binop(ctx, "_mm_shuffle_epi32",  IrType::F64); break;
+
+        // 128-bit aligned + unaligned moves. Operand 0 may be memory for the
+        // *Store variants — lift_simd_mov handles either direction.
+        case Mnemonic::Movdqa:      lift_simd_mov(ctx, IrType::F64, false); break;
+        case Mnemonic::MovdqaStore: lift_simd_mov(ctx, IrType::F64, true);  break;
+        case Mnemonic::Movdqu:      lift_simd_mov(ctx, IrType::F64, false); break;
+        case Mnemonic::MovdquStore: lift_simd_mov(ctx, IrType::F64, true);  break;
+        case Mnemonic::Movhps:      lift_simd_mov(ctx, IrType::F64, false); break;
+        case Mnemonic::Movlps:      lift_simd_mov(ctx, IrType::F64, false); break;
+
+        // movd / movq: 32 / 64-bit transfer between xmm and gpr-or-mem. Model
+        // as a copy at the matching scalar width — the destination type
+        // tracks naturally.
+        case Mnemonic::Movd:        lift_simd_mov(ctx, IrType::I32, false); break;
+        case Mnemonic::MovdStore:   lift_simd_mov(ctx, IrType::I32, true);  break;
+        case Mnemonic::MovqXmm:     lift_simd_mov(ctx, IrType::I64, false); break;
+        case Mnemonic::MovqStore:   lift_simd_mov(ctx, IrType::I64, true);  break;
+
+        // pmovmskb dst, xmm: extract per-byte sign bits to a 16-bit gpr mask.
+        // Single-source intrinsic to a gpr destination.
+        case Mnemonic::Pmovmskb: {
+            if (insn.num_operands == 2) {
+                IrValue src = read_xmm(ctx, insn.operands[1], IrType::F64);
+                IrInst i;
+                i.op   = IrOp::Intrinsic;
+                i.name = "_mm_movemask_epi8";
+                i.dst  = ctx.temp(IrType::I32);
+                i.srcs[0]   = src;
+                i.src_count = 1;
+                IrValue r = i.dst;
+                ctx.emit(std::move(i));
+                store_lvalue(insn.operands[0], r, ctx);
+            }
             break;
+        }
 
         // String ops: intrinsic with explicit rdi/rsi/rcx effect.
         case Mnemonic::Movsb: lift_string_op(ctx, "rep.movsb", true,  false); break;

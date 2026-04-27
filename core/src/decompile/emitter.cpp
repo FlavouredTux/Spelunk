@@ -2411,7 +2411,7 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                 if (i > 0) args += ", ";
                 args += expr(d.srcs[i], depth, 0);
             }
-            return std::format("__{}({})", d.name, args);
+            return std::format("{}({})", d.name, args);
         }
 
         case IrOp::Select: {
@@ -2873,7 +2873,25 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
     switch (bb.kind) {
         case BlockKind::Return: {
             if (term && term->op == IrOp::Return && term->src_count > 0) {
-                if (auto k = ssa_key(term->srcs[0]); k) {
+                // Pick which return source to render. lift_ret packs rax
+                // first and xmm0 second, but on an FP-returning early-exit
+                // path rax is uninitialized live-in while xmm0 carries the
+                // actual value. Prefer the source whose SSA value has a
+                // local definition over one that doesn't.
+                std::size_t pick = 0;
+                if (term->src_count >= 2) {
+                    auto has_local_def = [&](const IrValue& v) {
+                        auto k = ssa_key(v);
+                        return k && defs.find(*k) != defs.end();
+                    };
+                    if (!has_local_def(term->srcs[0]) &&
+                        has_local_def(term->srcs[1])) {
+                        pick = 1;
+                    }
+                }
+                const IrValue& rv = term->srcs[pick];
+
+                if (auto k = ssa_key(rv); k) {
                     auto s = fold_void_call_stmt.find(*k);
                     if (s != fold_void_call_stmt.end()) {
                         out += std::format("{}{};\n", ind, s->second);
@@ -2881,21 +2899,21 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                         break;
                     }
                 }
-                if (is_void_call_result(term->srcs[0])) {
+                if (is_void_call_result(rv)) {
                     out += std::format("{}return;\n", ind);
                     break;
                 }
                 // Reuse the return-fold table populated during region
                 // analysis — when a call directly feeds the return,
                 // `fold_return_expr` carries the rendered call expr.
-                if (auto k = ssa_key(term->srcs[0]); k) {
+                if (auto k = ssa_key(rv); k) {
                     auto f = fold_return_expr.find(*k);
                     if (f != fold_return_expr.end()) {
                         out += std::format("{}return {};\n", ind, f->second);
                         break;
                     }
                 }
-                out += std::format("{}return {};\n", ind, expr(term->srcs[0]));
+                out += std::format("{}return {};\n", ind, expr(rv));
             } else {
                 out += std::format("{}return;\n", ind);
             }

@@ -1,0 +1,5 @@
+// max_d
+double max_d(double a, double b) {
+  double t0 = _mm_max_sd(a, b);
+  return t0;
+}

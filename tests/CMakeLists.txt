@@ -575,6 +575,28 @@ ember_golden_test(
     GOLDEN  fp_scalar.single_sum.pseudo.txt
 )
 
+# Comparison-driven branches: ucomisd / comiss → ZF/CF/PF → jcc readouts as
+# `if (a > b)` etc. instead of an opaque `ucomi(...)` plus stale-flag jcc.
+ember_golden_test(
+    NAME    fp_scalar_max_d_pseudo
+    FIXTURE fp_scalar
+    ARGS    "-p|-s|max_d|--annotations|${_fixture_dir}/fp_scalar.ann"
+    GOLDEN  fp_scalar.max_d.pseudo.txt
+)
+ember_golden_test(
+    NAME    fp_scalar_clamp_f_pseudo
+    FIXTURE fp_scalar
+    ARGS    "-p|-s|clamp_f|--annotations|${_fixture_dir}/fp_scalar.ann"
+    GOLDEN  fp_scalar.clamp_f.pseudo.txt
+)
+# sqrt → libm-style intrinsic name, expression inlined into return.
+ember_golden_test(
+    NAME    fp_scalar_hypot2_pseudo
+    FIXTURE fp_scalar
+    ARGS    "-p|-s|hypot2|--annotations|${_fixture_dir}/fp_scalar.ann"
+    GOLDEN  fp_scalar.hypot2.pseudo.txt
+)
+
 # ---- mem_forward (stack-slot load forwarding) ------------------------------
 #
 # Compiled at -O0 so every local round-trips the stack. The golden captures

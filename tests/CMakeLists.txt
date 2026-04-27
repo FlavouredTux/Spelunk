@@ -750,6 +750,44 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  ppc64be_opd_tiny.pseudo.txt
     )
 
+    # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------
+    #
+    # Locks the AArch64 decoder + lifter + structurer + emitter pipeline
+    # against regressions on Linux without needing an ARM cross compiler.
+    # The function is `add x0, x0, #42; ret` — minimal but exercises ALU
+    # immediate, the AAPCS64 return register, and ret-via-x30.
+    set(_arm64_tiny "${_build_dir}/arm64_tiny")
+    add_custom_command(
+        OUTPUT "${_arm64_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_arm64_tiny.py"
+                "${_arm64_tiny}"
+        DEPENDS "${_fixture_dir}/make_arm64_tiny.py"
+        COMMENT "Generating ELF AArch64 fixture arm64_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_arm64_tiny ALL DEPENDS "${_arm64_tiny}")
+    set(EMBER_FIXTURE_arm64_tiny_PATH "${_arm64_tiny}")
+
+    ember_golden_test(
+        NAME    arm64_tiny_disasm
+        FIXTURE arm64_tiny
+        ARGS    "-d"
+        GOLDEN  arm64_tiny.disasm.txt
+    )
+    ember_golden_test(
+        NAME    arm64_tiny_ssa
+        FIXTURE arm64_tiny
+        ARGS    "-i|--ssa"
+        GOLDEN  arm64_tiny.ssa.txt
+    )
+    ember_golden_test(
+        NAME    arm64_tiny_pseudo
+        FIXTURE arm64_tiny
+        ARGS    "-p"
+        GOLDEN  arm64_tiny.pseudo.txt
+    )
+
     # ---- pe_tiny (hand-built PE32+: DOS + NT + COFF + optional header +
     #               .text/.rdata/.pdata, one IAT import, one export,
     #               Win64 prologue, RUNTIME_FUNCTION table) ------------------
@@ -940,6 +978,37 @@ if(Python3_Interpreter_FOUND)
         FIXTURE minidump_pe
         ARGS    "--functions"
         GOLDEN  minidump_pe.functions.txt
+    )
+
+    # ---- pe_pdb (minimal PE with a sidecar PDB v7) --------------------
+    #
+    # Locks the PE → CodeView (RSDS) → MSF → S_PUB32 → symbol-table flow
+    # against regressions. The .exe and .pdb are emitted by a single
+    # generator so their CodeView reference + (segment, offset) → VA
+    # resolution stays in sync. ember discovers the PDB via the loader's
+    # sidecar lookup (basename of the embedded RSDS path → next to the
+    # binary) and merges the publics into the PE's symbol table.
+    set(_pe_pdb_exe "${_build_dir}/pe_pdb")
+    set(_pe_pdb_pdb "${_build_dir}/pe_pdb.pdb")
+    add_custom_command(
+        OUTPUT "${_pe_pdb_exe}" "${_pe_pdb_pdb}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_pe_pdb.py"
+                "${_pe_pdb_exe}"
+                "${_pe_pdb_pdb}"
+        DEPENDS "${_fixture_dir}/make_pe_pdb.py"
+        COMMENT "Generating PE+PDB fixture pe_pdb"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_pe_pdb ALL
+        DEPENDS "${_pe_pdb_exe}" "${_pe_pdb_pdb}")
+    set(EMBER_FIXTURE_pe_pdb_PATH "${_pe_pdb_exe}")
+
+    ember_golden_test(
+        NAME    pe_pdb_functions
+        FIXTURE pe_pdb
+        ARGS    "--functions"
+        GOLDEN  pe_pdb.functions.txt
     )
 
     # ---- raw_regions_tiny (manifest + a single 4-byte code blob) -------

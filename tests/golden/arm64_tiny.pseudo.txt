@@ -1,0 +1,4 @@
+// <entry>
+u64 _start(u64 a1) {
+  return a1 + 0x2a;
+}

@@ -118,8 +118,10 @@ void print_help() {
     std::println("      --cache-dir DIR  override ~/.cache/ember for disk cache");
     std::println("      --no-cache       bypass the disk cache (--xrefs/strings/arities)");
     std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");
-    std::println("                       pattern-renames, log-format-driven renames) to the");
-    std::println("                       resolved annotation file");
+    std::println("                       pattern-renames, log-format-driven renames, deletes) to");
+    std::println("                       the resolved annotation file");
+    std::println("      --dry-run        with --apply: don't write the result; dump the would-be");
+    std::println("                       annotation TSV to stdout instead");
     std::println("      --apply-patches FILE  apply byte patches (vaddr_hex bytes_hex per line)");
     std::println("  -o, --output PATH    output path (required with --apply-patches)");
     std::println("  -q, --quiet          suppress stderr progress output");

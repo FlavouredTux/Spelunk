@@ -251,6 +251,12 @@ log_*  -> Logger_*
 [from-strings]
 "[HttpClient] %s" -> HttpClient_$1   # %s/%d/%x/%* capture into $1, $2, …
 "NetworkClient::%s" -> NetworkClient_$1
+
+[delete]
+0x401234   = rename                  # drop one entry kind
+0x401234   = note
+0x401234   = signature
+log_handler = all                    # drop rename + note + signature
 ```
 
 ### Sections
@@ -262,20 +268,37 @@ log_*  -> Logger_*
 | `[signature]` | `=` | same as rename | C-style decl: `<ret> <name>(<params>)` |
 | `[pattern-rename]` | `->` | glob over discovered function names (`*`) | template using `*` |
 | `[from-strings]` | `->` | `printf`-style pattern (`%s`/`%d`/`%x`/`%*`) | template using `$1..$9` |
+| `[delete]` | `=` | same as rename | one of `rename`, `note`, `signature`, `all` |
 
 Section names are case-insensitive. Sections may repeat; directives are
-applied in source order.
+applied in source order *within their pass* (see below).
 
 ### Apply order
 
-1. `[rename]`, `[note]`, `[signature]` — direct sections, applied first.
-2. `[pattern-rename]` — walks `enumerate_functions()` and matches the
+1. `[delete]` — runs first, so a `[delete]` followed by a `[rename]` in
+   the same file clears the old slot before the new value lands. Source
+   order between the two does not matter; semantics are pass-based.
+2. `[rename]`, `[note]`, `[signature]` — direct user-intent sections.
+3. `[pattern-rename]` — walks `enumerate_functions()` and matches the
    current name (existing rename if any, else the discovered name).
    Skips any address with an existing rename.
-3. `[from-strings]` — walks `scan_strings()`, captures from each match,
+4. `[from-strings]` — walks `scan_strings()`, captures from each match,
    resolves the containing function for every xref instruction, applies
    the templated rename to each. Skips any address with an existing
    rename.
+
+### Dry run
+
+`--dry-run` parses + applies the file in memory but doesn't write the
+result. The would-be annotation TSV is dumped to stdout (so you can
+`diff` against the current file or pipe to a reviewer); the apply stats
++ proposed destination still go to stderr.
+
+```sh
+ember --apply project.ember --dry-run --project current.proj <binary>
+ember --apply project.ember --dry-run --project current.proj <binary> \
+    | diff -u current.proj -
+```
 
 ### Quoting and escapes
 

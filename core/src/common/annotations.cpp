@@ -151,6 +151,30 @@ std::string escape_note(std::string_view s) {
 
 }  // namespace
 
+std::string Annotations::to_text() const {
+    std::string out = "# ember annotations\n";
+    for (const auto& [addr, name] : renames) {
+        out += std::format("rename {:x} {}\n", addr, name);
+    }
+    for (const auto& [addr, sig] : signatures) {
+        out += std::format("sig {:x} {}", addr, sig.return_type);
+        for (const auto& p : sig.params) {
+            out += '|';
+            out += p.type;
+            out += '|';
+            out += p.name;
+        }
+        out += '\n';
+    }
+    for (const auto& [addr, text] : notes) {
+        out += std::format("note {:x} {}\n", addr, escape_note(text));
+    }
+    for (const auto& [value, name] : named_constants) {
+        out += std::format("const {:x} {}\n", value, name);
+    }
+    return out;
+}
+
 Result<void>
 Annotations::save(const std::filesystem::path& path) const {
     std::error_code ec;
@@ -169,23 +193,8 @@ Annotations::save(const std::filesystem::path& path) const {
             "annotations: cannot write '{}'", path.string())));
     }
 
-    f << "# ember annotations\n";
-    for (const auto& [addr, name] : renames) {
-        f << std::format("rename {:x} {}\n", addr, name);
-    }
-    for (const auto& [addr, sig] : signatures) {
-        f << std::format("sig {:x} {}", addr, sig.return_type);
-        for (const auto& p : sig.params) {
-            f << '|' << p.type << '|' << p.name;
-        }
-        f << '\n';
-    }
-    for (const auto& [addr, text] : notes) {
-        f << std::format("note {:x} {}\n", addr, escape_note(text));
-    }
-    for (const auto& [value, name] : named_constants) {
-        f << std::format("const {:x} {}\n", value, name);
-    }
+    const std::string text = to_text();
+    f.write(text.data(), static_cast<std::streamsize>(text.size()));
     if (!f) {
         return std::unexpected(Error::io(std::format(
             "annotations: short write to '{}'", path.string())));

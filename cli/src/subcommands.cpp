@@ -138,22 +138,35 @@ int run_apply_ember(const Args& args, const Binary& b) {
     auto rv = script::apply_file(args.apply_ember, b, ann);
     if (!rv) return report(rv.error());
 
-    if (loc.source == AnnotationSource::None || loc.path.empty()) {
-        std::println(stderr, "ember: --apply: nowhere to write annotations "
-                             "(no --annotations / --project / sidecar / cache)");
-        return EXIT_FAILURE;
+    if (args.dry_run) {
+        // Print the would-be file contents to stdout so the result is
+        // diffable without touching disk. Stats + the proposed
+        // destination still go to stderr for human review.
+        const std::string text = ann.to_text();
+        std::fwrite(text.data(), 1, text.size(), stdout);
+    } else {
+        if (loc.source == AnnotationSource::None || loc.path.empty()) {
+            std::println(stderr, "ember: --apply: nowhere to write annotations "
+                                 "(no --annotations / --project / sidecar / cache)");
+            return EXIT_FAILURE;
+        }
+        if (auto sv = ann.save(loc.path); !sv) return report(sv.error());
     }
-    if (auto sv = ann.save(loc.path); !sv) return report(sv.error());
 
     if (!args.quiet) {
+        const char* tag = args.dry_run ? "--apply --dry-run" : "--apply";
         std::println(stderr,
-            "ember: --apply: {} renames, {} notes, {} sigs, "
-            "{} pattern-matches, {} from-strings -> {} ({})",
+            "ember: {}: +{} renames, +{} notes, +{} sigs, "
+            "{} pattern-matches, {} from-strings, "
+            "-{} renames / -{} notes / -{} sigs -> {} ({})",
+            tag,
             rv->renames_added, rv->notes_added, rv->signatures_added,
             rv->pattern_renames_applied, rv->string_renames_applied,
-            loc.path.string(), annotation_source_name(loc.source));
+            rv->renames_removed, rv->notes_removed, rv->signatures_removed,
+            loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
+            annotation_source_name(loc.source));
         for (const auto& w : rv->warnings) {
-            std::println(stderr, "ember: --apply: warning: {}", w);
+            std::println(stderr, "ember: {}: warning: {}", tag, w);
         }
     }
     return EXIT_SUCCESS;

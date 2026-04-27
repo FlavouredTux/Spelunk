@@ -310,6 +310,104 @@ int main() {
         }
     }
 
+    // ---- Apply: [delete] removes existing entries -------------------------
+    {
+        ember::Annotations ann;
+        ann.renames[0x401000]    = "old_rename";
+        ann.notes[0x401000]      = "old_note";
+        ember::FunctionSig sig;
+        sig.return_type = "int";
+        ann.signatures[0x401000] = sig;
+        const std::vector<Directive> ds = {
+            {Directive::Kind::Delete, "0x401000", "rename",    1},
+            {Directive::Kind::Delete, "0x401000", "note",      2},
+            {Directive::Kind::Delete, "0x401000", "signature", 3},
+        };
+        auto st = ember::script::apply(ds, mb, ann);
+        check_eq_sz(st.renames_removed,    1, "delete: rename removed");
+        check_eq_sz(st.notes_removed,      1, "delete: note removed");
+        check_eq_sz(st.signatures_removed, 1, "delete: signature removed");
+        check(!ann.renames.contains(0x401000),    "delete: rename gone");
+        check(!ann.notes.contains(0x401000),      "delete: note gone");
+        check(!ann.signatures.contains(0x401000), "delete: signature gone");
+    }
+
+    // ---- Apply: [delete]=all clears all three at once ---------------------
+    {
+        ember::Annotations ann;
+        ann.renames[0x401000]    = "x";
+        ann.notes[0x401000]      = "y";
+        ember::FunctionSig sig;
+        sig.return_type = "void";
+        ann.signatures[0x401000] = sig;
+        const std::vector<Directive> ds = {
+            {Directive::Kind::Delete, "log_handler", "all", 1},
+        };
+        auto st = ember::script::apply(ds, mb, ann);
+        check_eq_sz(st.renames_removed,    1, "delete=all: rename removed");
+        check_eq_sz(st.notes_removed,      1, "delete=all: note removed");
+        check_eq_sz(st.signatures_removed, 1, "delete=all: sig removed");
+    }
+
+    // ---- Apply: [delete] runs before [rename] (pass 0) --------------------
+    // Mixing delete + rename in one file should land on the new rename
+    // value, never the old one. The pre-loaded "old" gets cleared in
+    // pass 0, then "new_handler" lands in pass 1.
+    {
+        ember::Annotations ann;
+        ann.renames[0x401000] = "old";
+        const std::vector<Directive> ds = {
+            {Directive::Kind::Rename, "0x401000", "new_handler", 1},
+            {Directive::Kind::Delete, "0x401000", "rename",      2},
+        };
+        auto st = ember::script::apply(ds, mb, ann);
+        check_eq_sz(st.renames_removed, 1, "delete+rename: removed old");
+        check_eq_sz(st.renames_added,   1, "delete+rename: added new");
+        if (auto* n = ann.name_for(0x401000)) {
+            check_eq_str(*n, "new_handler", "delete+rename: new value wins");
+        }
+    }
+
+    // ---- Apply: [delete] unknown kind warns -------------------------------
+    {
+        ember::Annotations ann;
+        const std::vector<Directive> ds = {
+            {Directive::Kind::Delete, "0x401000", "bogus", 1},
+        };
+        auto st = ember::script::apply(ds, mb, ann);
+        check(!st.warnings.empty(), "delete: unknown kind warns");
+    }
+
+    // ---- Annotations::to_text round-trips through load --------------------
+    {
+        ember::Annotations original;
+        original.renames[0x401000] = "round_trip";
+        original.notes[0x401000]   = "with #hash and \\n newline";
+        ember::FunctionSig sig;
+        sig.return_type = "int";
+        sig.params.push_back({"char*", "msg"});
+        sig.params.push_back({"int",   "level"});
+        original.signatures[0x401000] = sig;
+
+        const auto root = scratch_root();
+        const auto p = root / "round.proj";
+        std::ofstream o(p);
+        const std::string text = original.to_text();
+        o.write(text.data(), static_cast<std::streamsize>(text.size()));
+        o.close();
+
+        auto reloaded = ember::Annotations::load(p);
+        check(reloaded.has_value(), "to_text: file reloads");
+        if (reloaded) {
+            check_eq_sz(reloaded->renames.size(),    1, "to_text: 1 rename round-trips");
+            check_eq_sz(reloaded->notes.size(),      1, "to_text: 1 note round-trips");
+            check_eq_sz(reloaded->signatures.size(), 1, "to_text: 1 sig round-trips");
+            if (auto* n = reloaded->name_for(0x401000)) {
+                check_eq_str(*n, "round_trip", "to_text: rename round-trip value");
+            }
+        }
+    }
+
     // ---- apply_file end-to-end --------------------------------------------
     {
         const auto root = scratch_root();

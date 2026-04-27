@@ -100,6 +100,11 @@ struct Annotations {
     Result<void>
     save(const std::filesystem::path& path) const;
 
+    // Canonical on-disk text (the same content `save` writes). Exposed
+    // so dry-run callers can emit the would-be file to stdout without
+    // touching disk.
+    [[nodiscard]] std::string to_text() const;
+
     const std::string* name_for(addr_t a) const noexcept {
         auto it = renames.find(a);
         return it == renames.end() ? nullptr : &it->second;

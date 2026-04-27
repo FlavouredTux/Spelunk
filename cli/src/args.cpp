@@ -52,6 +52,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--labels",    &Args::labels},
     {"",   "--json",      &Args::json},
     {"-q", "--quiet",     &Args::quiet},
+    {"",   "--dry-run",   &Args::dry_run},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({

@@ -46,7 +46,13 @@ namespace script {
 //     "[HttpClient] %s" -> HttpClient_$1     # captured %s/%d/%* → $1, $2, …
 //     "NetworkClient::%s" -> NetworkClient_$1
 //
-// Comments start with `#` (full-line). Quoted forms `"..."` allow
+//   [delete]
+//     0x401234   = rename                    # drop one entry kind
+//     log_handler = all                      # drop rename + note + signature
+//
+// Comments start with `#`. Mid-line ` # …` (whitespace before `#`,
+// outside `"..."`) is also treated as a trailing comment, so values
+// like `note = see ticket #42` keep `#42`. Quoted forms `"..."` allow
 // values with spaces or special characters; standard escapes
 // (`\\`, `\"`, `\n`, `\t`).
 
@@ -57,10 +63,11 @@ struct Directive {
         Signature,
         PatternRename,
         FromStrings,
+        Delete,
     };
     Kind        kind = Kind::Rename;
     std::string lhs;        // VA, identifier, glob, or string-pattern
-    std::string rhs;        // new name, note, signature decl, or template
+    std::string rhs;        // new name, note, signature decl, template, or delete-kind
     std::size_t line = 0;   // 1-based source line, for error/warning context
 };
 
@@ -76,6 +83,9 @@ struct ApplyStats {
     std::size_t signatures_added         = 0;
     std::size_t pattern_renames_applied  = 0;
     std::size_t string_renames_applied   = 0;
+    std::size_t renames_removed          = 0;
+    std::size_t notes_removed            = 0;
+    std::size_t signatures_removed       = 0;
     // Non-fatal issues encountered while applying directives:
     // unresolvable names, malformed signature bodies, glob templates
     // that produced empty names, etc. Each entry is prefixed with the

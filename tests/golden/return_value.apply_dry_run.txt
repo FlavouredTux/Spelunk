@@ -1,0 +1,7 @@
+# ember annotations
+rename 401120 checked_add32
+rename 401130 compound_evaluator
+sig 401120 int|int|a|int|b
+sig 401140 unsigned long|unsigned long|a|unsigned long|b|unsigned long|c
+note 401120 adds two 32-bit ints; widens via signed return
+note 401140 combines three u64s via xor + shift

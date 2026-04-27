@@ -473,6 +473,30 @@ void apply_pattern_rename(const Directive& d, const Binary& b,
     }
 }
 
+void apply_delete(const Directive& d, const Binary& b,
+                  Annotations& ann, ApplyStats& st) {
+    auto a = resolve_to_addr(b, ann, d.lhs);
+    if (!a) {
+        st.warnings.push_back(std::format(
+            "line {}: [delete] cannot resolve `{}` to an address", d.line, d.lhs));
+        return;
+    }
+    const std::string& kind = d.rhs;
+    const bool any   = (kind == "all");
+    const bool ren   = any || (kind == "rename");
+    const bool note  = any || (kind == "note");
+    const bool sig   = any || (kind == "signature") || (kind == "sig");
+    if (!ren && !note && !sig) {
+        st.warnings.push_back(std::format(
+            "line {}: [delete] unknown kind `{}` (want rename/note/signature/all)",
+            d.line, kind));
+        return;
+    }
+    if (ren  && ann.renames.erase   (*a) > 0) ++st.renames_removed;
+    if (note && ann.notes.erase     (*a) > 0) ++st.notes_removed;
+    if (sig  && ann.signatures.erase(*a) > 0) ++st.signatures_removed;
+}
+
 void apply_from_strings(const Directive& d, const Binary& b,
                         Annotations& ann, ApplyStats& st) {
     const auto strings = scan_strings(b);
@@ -547,6 +571,7 @@ Result<std::vector<Directive>> parse(std::string_view text) {
         else if (iequals(section, "signature"))      d.kind = Directive::Kind::Signature;
         else if (iequals(section, "pattern-rename")) d.kind = Directive::Kind::PatternRename;
         else if (iequals(section, "from-strings"))   d.kind = Directive::Kind::FromStrings;
+        else if (iequals(section, "delete"))         d.kind = Directive::Kind::Delete;
         else {
             return std::unexpected(Error::invalid_format(std::format(
                 "ember: line {}: unknown section `[{}]`", lineno, section)));
@@ -585,7 +610,12 @@ parse_file(const std::filesystem::path& path) {
 ApplyStats apply(std::span<const Directive> directives,
                  const Binary& b, Annotations& ann) {
     ApplyStats st;
-    // First pass: direct sections (Rename, Note, Signature). User intent
+    // Pass 0: deletes. Run first so a `[delete]` followed by a `[rename]`
+    // in the same file clears the old slot before the new value lands.
+    for (const auto& d : directives) {
+        if (d.kind == Directive::Kind::Delete) apply_delete(d, b, ann, st);
+    }
+    // Pass 1: direct sections (Rename, Note, Signature). User intent
     // beats anything inferred.
     for (const auto& d : directives) {
         switch (d.kind) {
@@ -595,8 +625,8 @@ ApplyStats apply(std::span<const Directive> directives,
             default: break;
         }
     }
-    // Second pass: pattern + from-strings. Only fill addresses without
-    // an existing user rename.
+    // Pass 2: pattern + from-strings. Only fill addresses without an
+    // existing user rename.
     for (const auto& d : directives) {
         switch (d.kind) {
             case Directive::Kind::PatternRename: apply_pattern_rename(d, b, ann, st); break;

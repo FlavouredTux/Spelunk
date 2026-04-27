@@ -500,6 +500,21 @@ ember_golden_test(
     GOLDEN  tail_call.inner.callees.txt
 )
 
+# --apply --dry-run on a hand-written .ember fixture exercising
+# [rename] / [note] / [signature] (deterministic sections; the
+# pattern-rename / from-strings paths are unit-tested separately
+# because their output set depends on the gcc-emitted sub_* layout
+# which drifts across patch versions). Locks the parser, the resolver
+# fallback (LHS by name resolves through the symbol table), the
+# signature parser, and the to_text serializer all the way through
+# the CLI's run_apply_ember pipeline.
+ember_golden_test(
+    NAME    return_value_apply_dry_run
+    FIXTURE return_value
+    ARGS    "--apply|${_fixture_dir}/return_value.ember|--dry-run|--no-cache|--quiet"
+    GOLDEN  return_value.apply_dry_run.txt
+)
+
 # --containing-fn: resolve an address inside the body of `big` to its
 # entry + name + offset-within. The fixture is compiled -no-pie so the
 # VAs are stable; `big` lives at a known offset. Exercises both TSV and

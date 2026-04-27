@@ -1,0 +1,21 @@
+# Declarative .ember fixture against the stable return_value binary
+# (-no-pie, gcc -O2 -g). Exercises [rename] / [note] / [signature]
+# end-to-end via `ember --apply ... --dry-run` so the resulting
+# annotations TSV gets diffed against a checked-in golden.
+#
+# [pattern-rename] and [from-strings] are deliberately skipped here:
+# they walk the discovered-function set and can pick up gcc-emitted
+# `sub_*` entries whose addresses drift across gcc patch versions. The
+# unit test `declarative_unit` covers their semantics in-process.
+
+[rename]
+0x401120 = checked_add32              # by VA
+compound = compound_evaluator         # by symbol — resolves to 0x401130
+
+[note]
+0x401120 = adds two 32-bit ints; widens via signed return
+big      = combines three u64s via xor + shift
+
+[signature]
+0x401120 = int checked_add32(int a, int b)
+big      = unsigned long big(unsigned long a, unsigned long b, unsigned long c)

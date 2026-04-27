@@ -1,6 +1,7 @@
 #include <ember/ir/passes.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <deque>
 #include <map>

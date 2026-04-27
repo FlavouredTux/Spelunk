@@ -28,6 +28,7 @@
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/vm_detect.hpp>
 #include <ember/analysis/sig_inference.hpp>
+#include <ember/analysis/sigs.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/raw_regions.hpp>
@@ -171,6 +172,21 @@ void apply_stage_implications(Args& a) {
         if (s.starts_with("--functions=")) {
             a.functions = true;
             a.functions_pattern = std::string(s.substr(12));
+            continue;
+        }
+
+        // `--pat PATH` — repeatable. Collect into a vector since the
+        // bool/value-flag tables only handle single-shot scalars.
+        if (s == "--pat") {
+            if (++i >= argc) {
+                return std::unexpected(ember::Error::invalid_format(
+                    "--pat requires a path"));
+            }
+            a.pat_paths.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--pat=")) {
+            a.pat_paths.emplace_back(s.substr(6));
             continue;
         }
 
@@ -1470,6 +1486,40 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    // FLIRT-style sig matching. Load each --pat file, run apply_signatures
+    // against the candidate function set, and merge resolved names into
+    // the annotations map. User renames win on conflict — sig matches
+    // never override operator intent — so we collect the set of pre-
+    // existing rename addresses up front and pass it to the matcher.
+    if (!args.pat_paths.empty()) {
+        std::vector<std::filesystem::path> paths;
+        paths.reserve(args.pat_paths.size());
+        for (const auto& p : args.pat_paths) paths.emplace_back(p);
+        auto db = ember::sigs::load_pats(paths);
+        if (!db) {
+            std::println(stderr, "ember: --pat: {}: {}",
+                         db.error().kind_name(), db.error().message);
+            return EXIT_FAILURE;
+        }
+        const auto fns = ember::enumerate_functions(b);
+        std::vector<ember::addr_t> existing;
+        existing.reserve(annotations.renames.size());
+        for (const auto& [a, _] : annotations.renames) existing.push_back(a);
+        const auto matches = ember::sigs::apply_signatures(
+            b, *db, fns, existing);
+        for (const auto& m : matches) {
+            annotations.renames.try_emplace(m.addr, m.name);
+        }
+        if (matches.empty()) ann_loaded |= !annotations.renames.empty();
+        else                 ann_loaded = true;
+        if (!args.quiet) {
+            std::println(stderr,
+                "ember: sigs: loaded {} sig(s) from {} file(s), {} match(es)",
+                db->size(), args.pat_paths.size(), matches.size());
+        }
+    }
+
     const ember::Annotations* ann_ptr = ann_loaded ? &annotations : nullptr;
 
     ember::EmitOptions emit_opts;

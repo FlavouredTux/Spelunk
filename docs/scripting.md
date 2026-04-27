@@ -200,3 +200,96 @@ for (const cls of binary.rtti()) {
     }
 }
 ```
+
+---
+
+# Ember Declarative Scripts (`*.ember`)
+
+A flat, section-keyed config file consumed by `ember --apply PATH`. No
+expressions, no control flow — every directive is a single
+`key = value` (or `pattern -> template`) pair. Designed for the
+high-volume but low-complexity workflows the QuickJS surface above is
+overkill for: bulk renames, signature batches, log-format-driven
+recovery, glob renames over the discovered function set.
+
+## Running
+
+```sh
+ember --apply project.ember --project out.proj <binary>
+```
+
+The applier resolves the destination annotation file the same way emit
+does (`--annotations` / `--project` → `<binary>.ember-annotations`
+sidecar → `~/.cache/ember/annotations/<key>`), loads the existing
+contents (if any), applies the directives, writes back. User intent
+beats inference: any address that already carries a rename in the
+loaded annotations survives a `[pattern-rename]` or `[from-strings]`
+match unchanged.
+
+## Format
+
+```ember
+# Lines starting with `#` are comments. ` # …` after whitespace mid-line
+# is a trailing comment too (but `note = see ticket #42` keeps `#42`).
+
+[rename]
+0x401234   = do_thing
+sub_4051a0 = main_loop
+log_handler = handle_log_line     # by symbol or existing rename
+
+[note]
+0x401234 = entry point; see ticket #42
+
+[signature]
+0x401234   = int do_thing(char* name, int x)
+log_handler = void log_handler(void)
+
+[pattern-rename]
+sub_4* -> roblox_sub_*            # `*` in template = matched part
+log_*  -> Logger_*
+
+[from-strings]
+"[HttpClient] %s" -> HttpClient_$1   # %s/%d/%x/%* capture into $1, $2, …
+"NetworkClient::%s" -> NetworkClient_$1
+```
+
+### Sections
+
+| Section | Separator | LHS | RHS |
+|---------|-----------|-----|-----|
+| `[rename]` | `=` | hex VA, `sub_<hex>`, symbol, or existing rename | new name |
+| `[note]` | `=` | same as rename | free-form text |
+| `[signature]` | `=` | same as rename | C-style decl: `<ret> <name>(<params>)` |
+| `[pattern-rename]` | `->` | glob over discovered function names (`*`) | template using `*` |
+| `[from-strings]` | `->` | `printf`-style pattern (`%s`/`%d`/`%x`/`%*`) | template using `$1..$9` |
+
+Section names are case-insensitive. Sections may repeat; directives are
+applied in source order.
+
+### Apply order
+
+1. `[rename]`, `[note]`, `[signature]` — direct sections, applied first.
+2. `[pattern-rename]` — walks `enumerate_functions()` and matches the
+   current name (existing rename if any, else the discovered name).
+   Skips any address with an existing rename.
+3. `[from-strings]` — walks `scan_strings()`, captures from each match,
+   resolves the containing function for every xref instruction, applies
+   the templated rename to each. Skips any address with an existing
+   rename.
+
+### Quoting and escapes
+
+Values containing spaces, `=`, `->`, `#`, or `%` should be quoted with
+`"..."`. Standard escapes: `\\`, `\"`, `\n`, `\r`, `\t`. Unquoted values
+are taken verbatim from the trimmed line.
+
+### When to choose this over `--script`
+
+- Choose `.ember` when the task is "apply this list of declarations" —
+  it parses fast, has zero runtime, can be diffed cleanly, and reads
+  like a config file. Good for log-format-driven rename tables, pattern
+  bulk-renames over a stripped binary, and check-in-friendly
+  per-project annotations.
+- Choose `--script` when the task needs decisions or composition: walk
+  this fn's callees, look at their strings, decide. Anything dynamic
+  belongs there.

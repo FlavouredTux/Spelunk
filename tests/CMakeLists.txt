@@ -33,6 +33,14 @@ add_executable(ember_sigs_test sigs_test.cpp)
 target_link_libraries(ember_sigs_test PRIVATE ember::core ember::flags)
 add_test(NAME sigs_unit COMMAND ember_sigs_test)
 
+# Unit tests for the .ember declarative scripting format. Self-contained:
+# a synthetic MockBinary with one defined function and a rodata string
+# the function references, so the [from-strings] path has a real
+# string→xref→containing-fn pipeline to walk.
+add_executable(ember_declarative_test declarative_test.cpp)
+target_link_libraries(ember_declarative_test PRIVATE ember::core ember::flags)
+add_test(NAME declarative_unit COMMAND ember_declarative_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

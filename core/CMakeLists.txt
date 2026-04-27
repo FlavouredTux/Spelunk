@@ -45,6 +45,7 @@ add_library(ember_core STATIC
     src/ir/passes.cpp
     src/structure/structurer.cpp
     src/decompile/emitter.cpp
+    src/script/declarative.cpp
     src/script/runtime.cpp
 )
 add_library(ember::core ALIAS ember_core)

@@ -75,6 +75,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--disasm-at",   &Args::disasm_at},
     {"",   "--count",       &Args::disasm_count},
     {"",   "--apply-patches", &Args::apply_patches},
+    {"",   "--apply",       &Args::apply_ember},
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
 });

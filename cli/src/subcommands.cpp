@@ -35,6 +35,7 @@
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
 #include <ember/ir/types.hpp>
+#include <ember/script/declarative.hpp>
 #include <ember/script/runtime.hpp>
 
 #include "builders.hpp"
@@ -106,6 +107,54 @@ int run_export_annotations(const Args& args) {
             src.source == AnnotationSource::None ? std::string{"<empty>"}
                                                  : src.path.string(),
             args.export_annotations);
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_apply_ember(const Args& args, const Binary& b) {
+    // Resolver for the destination file. Same precedence as emit: explicit
+    // --annotations / --project beats sidecar beats cache. The resolver
+    // returns a cache path even when the file doesn't exist yet, so a
+    // first-time apply still lands somewhere durable.
+    std::filesystem::path explicit_ann;
+    if (!args.annotations_path.empty())   explicit_ann = args.annotations_path;
+    else if (!args.project_path.empty())  explicit_ann = args.project_path;
+    const std::filesystem::path cache_dir =
+        !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                : cache::default_dir();
+    auto loc = resolve_annotation_location(args.binary, explicit_ann, cache_dir);
+    if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
+
+    Annotations ann;
+    if (loc.source != AnnotationSource::None) {
+        std::error_code ec;
+        if (std::filesystem::exists(loc.path, ec) && !ec) {
+            auto rv = Annotations::load(loc.path);
+            if (!rv) return report(rv.error());
+            ann = std::move(*rv);
+        }
+    }
+
+    auto rv = script::apply_file(args.apply_ember, b, ann);
+    if (!rv) return report(rv.error());
+
+    if (loc.source == AnnotationSource::None || loc.path.empty()) {
+        std::println(stderr, "ember: --apply: nowhere to write annotations "
+                             "(no --annotations / --project / sidecar / cache)");
+        return EXIT_FAILURE;
+    }
+    if (auto sv = ann.save(loc.path); !sv) return report(sv.error());
+
+    if (!args.quiet) {
+        std::println(stderr,
+            "ember: --apply: {} renames, {} notes, {} sigs, "
+            "{} pattern-matches, {} from-strings -> {} ({})",
+            rv->renames_added, rv->notes_added, rv->signatures_added,
+            rv->pattern_renames_applied, rv->string_renames_applied,
+            loc.path.string(), annotation_source_name(loc.source));
+        for (const auto& w : rv->warnings) {
+            std::println(stderr, "ember: --apply: warning: {}", w);
+        }
     }
     return EXIT_SUCCESS;
 }

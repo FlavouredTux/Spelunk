@@ -33,6 +33,7 @@ struct Args {
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
+    std::string apply_ember;        // --apply PATH: declarative .ember script applied to annotations
     bool no_cache = false;          // disable the disk cache entirely
     bool full_analysis = false;     // force pass-2 CFG walk on packed binaries
                                     // (default: skip it — it just produces

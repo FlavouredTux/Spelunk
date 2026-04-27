@@ -25,6 +25,7 @@
 #include <ember/common/progress.hpp>
 
 #include "args.hpp"
+#include "util.hpp"
 
 namespace ember::cli {
 
@@ -382,27 +383,6 @@ format_diff(const ParsedFps& old_p, const ParsedFps& new_p,
         b.added_left.size(), b.removed_left.size());
     out += "# columns: tag\tfp\told_addr\tnew_addr\told_name\tnew_name\n";
     out += body;
-    return out;
-}
-
-[[nodiscard]] std::string json_escape(std::string_view s) {
-    std::string out;
-    out.reserve(s.size() + 2);
-    for (char c : s) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    out += std::format("\\u{:04x}", static_cast<unsigned>(c));
-                } else {
-                    out += c;
-                }
-        }
-    }
     return out;
 }
 

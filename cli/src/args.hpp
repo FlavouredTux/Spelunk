@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include <ember/common/error.hpp>
+
 namespace ember::cli {
 
 struct Args {
@@ -65,5 +67,17 @@ struct Args {
     bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
     bool help   = false;
 };
+
+// Parse argv into Args. Recognises the canonical short/long flags from
+// the bool/value tables, the repeatable `--pat PATH`, the trailing
+// `-- ARG…` script-args sentinel, and the `--functions=PATTERN` form
+// that avoids the binary-vs-pattern positional swap. Returns an error
+// on unknown flags or missing values.
+[[nodiscard]] Result<Args> parse_args(int argc, char** argv);
+
+// Stage implications: picking a later stage implies all the earlier
+// ones (so `-p` runs `--struct` runs `-O` runs `--ssa` runs `-i`). Run
+// once after parsing.
+void apply_stage_implications(Args& a);
 
 }  // namespace ember::cli

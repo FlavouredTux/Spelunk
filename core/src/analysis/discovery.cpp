@@ -23,7 +23,7 @@ namespace {
 // and flip it at runtime; we still want to discover functions in
 // those bytes.
 [[nodiscard]] bool name_is_code_section(std::string_view n) noexcept {
-    return n == ".text" || n == "__text" || n == "CODE";
+    return n == ".text" || n == "__text" || n == "CODE" || n == ".byfron";
 }
 
 [[nodiscard]] bool section_is_code(const Section& s) noexcept {

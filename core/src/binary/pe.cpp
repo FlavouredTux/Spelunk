@@ -83,9 +83,20 @@ constexpr std::size_t kExportDirSize        = 40;
 // longer than 8 chars use a "/N" convention pointing into the COFF string
 // table — COFF-object-only and rare in EXE/DLL images; we accept the
 // short form and pass the "/N" literal through unmodified for v1.
+//
+// Some packers (Byfron is the one in the wild that prompted this) leave
+// non-NUL garbage in the slot after the visible name, so a section that
+// reads ".text" on disk comes back as ".text\xAA\xBB\xCC" and breaks
+// every exact-match lookup downstream. Strip trailing non-printable
+// bytes after the NUL stop so the canonical names round-trip.
 [[nodiscard]] std::string read_section_name(const std::byte* p) noexcept {
     std::size_t len = 0;
     while (len < 8 && static_cast<char>(p[len]) != '\0') ++len;
+    while (len > 0) {
+        const auto c = static_cast<unsigned char>(p[len - 1]);
+        if (c < 0x20 || c > 0x7E) --len;
+        else break;
+    }
     return std::string(reinterpret_cast<const char*>(p), len);
 }
 

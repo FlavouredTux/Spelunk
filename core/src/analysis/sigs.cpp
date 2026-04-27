@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <format>
 #include <fstream>
 #include <string>
 #include <string_view>

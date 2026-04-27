@@ -30,7 +30,8 @@ constexpr double kEncryptedEntropy = 7.5;
 // the classic packer giveaway (the real code lives somewhere else,
 // usually filled in at runtime).
 [[nodiscard]] bool name_is_code_shaped(std::string_view name) noexcept {
-    return name == ".text" || name == "__text" || name == "CODE";
+    return name == ".text" || name == "__text" || name == "CODE"
+        || name == ".byfron";
 }
 
 // 64 KiB — small enough to catch toy obfuscated samples, large enough

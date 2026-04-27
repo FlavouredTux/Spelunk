@@ -646,7 +646,8 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
             // bytes aren't code drops every discovered function on
             // the floor.
             const bool is_code = s.flags.executable
-                || s.name == ".text" || s.name == "__text" || s.name == "CODE";
+                || s.name == ".text" || s.name == "__text" || s.name == "CODE"
+                || s.name == ".byfron";
             if (!is_code) continue;
             if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
         }

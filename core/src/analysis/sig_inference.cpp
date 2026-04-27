@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/type_infer_local.hpp>
 #include <ember/binary/symbol.hpp>
@@ -162,14 +163,62 @@ trace_to_arg_slot(const IrFunction& fn,
     return std::nullopt;
 }
 
-// For one IR function, seed charp slots from direct libc calls AND from
-// propagation via `caller_tags` (the current best-known sig for already-seen
-// callees). Returns the new charp bitset for this function.
+// Resolve a call's target to (charp_bitset, typed_params) — combines the
+// import-sigs table for known imports and the IPA's running `known` map
+// for our own functions. Returns true if we got any usable callee info.
+struct CalleeInfo {
+    std::array<bool, kMaxAbiIntArgs>    charp{};
+    std::array<TypeRef, kMaxAbiIntArgs> param_types{};
+    bool                                any = false;
+};
+
+[[nodiscard]] CalleeInfo resolve_callee(
+    const Binary& b,
+    addr_t target,
+    const std::map<addr_t, InferredSig>& known,
+    TypeArena& arena)
+{
+    CalleeInfo out;
+    if (const Symbol* s = b.import_at_plt(target); s) {
+        const std::string name = clean_import_name(s->name);
+        if (auto spec = lookup_import_sig(name, arena); spec) {
+            for (std::size_t i = 0; i < spec->params.size() &&
+                                     i < out.param_types.size(); ++i) {
+                out.param_types[i] = spec->params[i];
+                if (!spec->params[i].is_top()) out.any = true;
+            }
+        }
+        // Bridge the legacy charp table — covers any name not yet in
+        // import_sigs (Win32, etc.) so we don't regress char* slots.
+        for (u8 k = 0; k < out.charp.size(); ++k) {
+            out.charp[k] = libc_arg_is_charp(name, static_cast<u8>(k + 1));
+            if (out.charp[k]) out.any = true;
+        }
+        return out;
+    }
+    if (auto it = known.find(target); it != known.end()) {
+        out.charp = it->second.charp;
+        for (bool v : out.charp) if (v) { out.any = true; break; }
+        for (std::size_t i = 0; i < it->second.params.size() &&
+                                 i < out.param_types.size(); ++i) {
+            out.param_types[i] = it->second.params[i];
+            if (!out.param_types[i].is_top()) out.any = true;
+        }
+    }
+    return out;
+}
+
+// For one IR function, propagate callee-arg evidence backward into our own
+// param slots: each call site contributes both a charp bit (legacy fast-
+// path for "this slot is char*") and a refined TypeRef per arg. Both are
+// merged via meet so the most refined evidence wins across iterations.
 void scan_function(const Binary& b,
                    Abi abi,
                    const IrFunction& fn,
                    const std::map<addr_t, InferredSig>& known,
-                   std::array<bool, kMaxAbiIntArgs>& charp) {
+                   TypeArena& arena,
+                   std::array<bool, kMaxAbiIntArgs>& charp,
+                   std::array<TypeRef, kMaxAbiIntArgs>& params) {
     // Index defs once per scan.
     std::map<SsaKey, const IrInst*> defs;
     for (const auto& bb : fn.blocks) {
@@ -198,33 +247,24 @@ void scan_function(const Binary& b,
             }
             if (inst.op != IrOp::Call) continue;
 
-            // What does the target tell us?
-            std::array<bool, kMaxAbiIntArgs> callee_charp{};
-            bool have_callee_info = false;
-            if (const Symbol* s = b.import_at_plt(inst.target1); s) {
-                const std::string name = clean_import_name(s->name);
-                for (u8 k = 0; k < callee_charp.size(); ++k) {
-                    callee_charp[k] = libc_arg_is_charp(name,
-                                                        static_cast<u8>(k + 1));
-                    if (callee_charp[k]) have_callee_info = true;
-                }
-            } else if (auto it = known.find(inst.target1); it != known.end()) {
-                callee_charp = it->second.charp;
-                for (bool v : callee_charp) if (v) { have_callee_info = true; break; }
-            }
-            if (!have_callee_info) { args.clear(); continue; }
+            const CalleeInfo info = resolve_callee(b, inst.target1, known, arena);
+            if (!info.any) { args.clear(); continue; }
 
-            for (std::size_t i = 0; i < args.size() && i < callee_charp.size(); ++i) {
-                if (!callee_charp[i]) continue;
-                if (auto slot = trace_to_arg_slot(fn, defs, abi, args[i]);
-                    slot && *slot < charp.size()) {
-                    charp[*slot] = true;
+            for (std::size_t i = 0; i < args.size() && i < info.charp.size(); ++i) {
+                auto slot = trace_to_arg_slot(fn, defs, abi, args[i]);
+                if (!slot || *slot >= charp.size()) continue;
+                if (info.charp[i]) charp[*slot] = true;
+                if (i < info.param_types.size() && !info.param_types[i].is_top()) {
+                    params[*slot] = arena.meet(params[*slot], info.param_types[i]);
                 }
             }
             args.clear();
         }
     }
 }
+
+// `seed_call_return_types` lives in import_sigs.cpp now so the emitter's
+// per-function path can call it too without depending on the IPA module.
 
 // Every function the CFG+call-graph can reach; called once at the top so
 // the fixed-point loop can walk a stable set of entries.
@@ -295,9 +335,9 @@ InferenceResult infer_signatures(const Binary& b) {
     const auto entries = collect_entries(b);
     const Abi abi = abi_for(b.format(), b.arch(), b.endian());
 
-    // Fixed-point: rescan every function until nobody's charp bitset grows.
-    // Worst case is the diameter of the call graph; practical cases converge
-    // in 3-5 iterations.
+    // Fixed-point: rescan every function until both the charp bitset and
+    // the typed-param array stabilize. Practical cases converge in 3-5
+    // iterations (call-graph diameter); the guard caps pathological cases.
     bool changed = true;
     int guard = 0;
     while (changed && guard++ < 32) {
@@ -306,19 +346,25 @@ InferenceResult infer_signatures(const Binary& b) {
             IrFunction* ir = get_ir(ir_cache, b, fn);
             if (!ir) continue;
             auto& sig = sigs[fn];
-            std::array<bool, kMaxAbiIntArgs> before = sig.charp;
-            scan_function(b, abi, *ir, sigs, sig.charp);
-            if (sig.charp != before) changed = true;
+            const auto before_charp  = sig.charp;
+            const auto before_params = sig.params;
+            scan_function(b, abi, *ir, sigs, out.arena, sig.charp, sig.params);
+            if (sig.charp != before_charp || sig.params != before_params) {
+                changed = true;
+            }
         }
     }
 
-    // Phase 3 v0: harvest typed return + params after charp converges.
-    // Each function's IR was lifted+SSA+cleaned by get_ir(); now run the
-    // local type-inference pass and pull the results into the shared arena.
+    // Phase 3 v0: harvest typed return + params after IPA converges.
+    // For each function, first seed the post-Call return value type for
+    // every call to a known import; then run local inference (which now
+    // propagates the seeded types forward), then harvest the typed
+    // signature into the shared arena.
     const TypeRef char_ptr = out.arena.ptr_t(out.arena.int_t(8));
     for (addr_t fn : entries) {
         IrFunction* ir = get_ir(ir_cache, b, fn);
         if (!ir) continue;
+        seed_call_return_types(b, *ir);
         infer_local_types(*ir);
         InferredSig& sig = sigs[fn];
         harvest_typed_sig(*ir, abi, out.arena, sig);

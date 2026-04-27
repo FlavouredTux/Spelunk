@@ -1,7 +1,7 @@
 // cleanup_on_fail
 u64 cleanup_on_fail(u64 a1) {
   local_20 = a1;
-  u64 r_malloc = malloc(0x40);
+  void* r_malloc = malloc(0x40);
   local_10 = r_malloc;
   if (r_malloc) {
     if (!local_20) {

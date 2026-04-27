@@ -20,6 +20,7 @@
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/fingerprint.hpp>
+#include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/type_infer_local.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/decompile/emitter.hpp>
@@ -492,6 +493,7 @@ format_cfg_pseudo(const Binary& b, const FuncWindow& w,
     const SsaBuilder ssa;
     if (auto rv = ssa.convert(*ir_r); !rv) return std::unexpected(rv.error());
     if (auto rv = run_cleanup(*ir_r); !rv) return std::unexpected(rv.error());
+    seed_call_return_types(b, *ir_r);
     infer_local_types(*ir_r);
 
     // Bypass the structurer entirely. Per-block emission needs the SSA-
@@ -531,6 +533,7 @@ format_struct(const Binary& b, const FuncWindow& w,
     if (auto rv = ssa.convert(*ir_r); !rv) return std::unexpected(rv.error());
 
     if (auto rv = run_cleanup(*ir_r); !rv) return std::unexpected(rv.error());
+    seed_call_return_types(b, *ir_r);
     infer_local_types(*ir_r);
 
     const Structurer structurer;

@@ -10,7 +10,7 @@ u64 use_imports(char* a1, u64 a2) {
   if (rdx_5) {
     fputs(rdx_5, stdout);
   }
-  u64 r_getenv = getenv("HOME");
+  char* r_getenv = getenv("HOME");
   if (r_getenv) {
     g_count++;
   }

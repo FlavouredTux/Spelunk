@@ -769,6 +769,7 @@ struct Emitter {
             case TypeKind::Ptr: {
                 const auto& pn = fn->types.node(node.p.pointee);
                 if (pn.kind == TypeKind::Int) {
+                    if (pn.i.bits == 8) return "char*";
                     return std::format("u{}*", pn.i.bits);
                 }
                 return "void*";
@@ -2739,7 +2740,11 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     else fold_return_expr[k->second] = call_expr;
                 }
             } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
-                out += std::format("{}u64 {} = {};\n", ind,
+                std::string type_name = "u64";
+                if (auto df = defs.find(bk->second); df != defs.end()) {
+                    type_name = c_type_name_for(df->second->dst);
+                }
+                out += std::format("{}{} {} = {};\n", ind, type_name,
                                    call_return_names.at(bk->second), call_expr);
             } else {
                 out += std::format("{}{};\n", ind, call_expr);
@@ -2816,7 +2821,11 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                 }
             } else if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
-                out += std::format("{}u64 {} = {};\n", ind,
+                std::string type_name = "u64";
+                if (auto df = defs.find(bk->second); df != defs.end()) {
+                    type_name = c_type_name_for(df->second->dst);
+                }
+                out += std::format("{}{} {} = {};\n", ind, type_name,
                                    call_return_names.at(bk->second), call_expr);
             } else {
                 out += std::format("{}{};\n", ind, call_expr);
@@ -3364,11 +3373,22 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 auto it = e.options.signatures->find(sf.ir->start);
                 if (it != e.options.signatures->end()) ipa_sig = &it->second;
             }
+            const auto int_args = int_arg_regs(e.abi);
             for (u8 i = 0; i < arity; ++i) {
                 if (i > 0) params += ", ";
                 std::string t;
                 if (ipa_sig && i < ipa_sig->params.size()) {
                     t = e.ipa_type_name(ipa_sig->params[i]);
+                }
+                // No IPA: consult the per-function value_types side table
+                // (populated by seed_call_return_types + infer_local_types
+                // ahead of emit). This is what surfaces import-derived
+                // arg types in non-IPA mode — `char*`, `void*`, etc.
+                if (t.empty() && i < int_args.size()) {
+                    IrValue probe = IrValue::make_reg(int_args[i], IrType::I64);
+                    probe.version = 0;
+                    const auto local = e.c_type_name_for(probe);
+                    if (local != "u64") t = local;
                 }
                 if (t.empty()) {
                     t = (i < e.charp_arg.size() && e.charp_arg[i])

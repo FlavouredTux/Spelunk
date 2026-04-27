@@ -28,20 +28,20 @@ only.
 
 ## What's in the box
 
-| Area | x86-64 ELF | x86-64 Mach-O | x86-64 PE / minidump | PPC64 ELF |
-|---|---|---|---|---|
-| Loader            | ✅          | ✅          | ✅ + dumps  | ✅ |
-| Decoder + IR lift | ✅          | ✅          | ✅          | partial |
-| SSA + cleanup     | ✅          | ✅          | ✅          | — |
-| Pseudo-C output   | ✅          | ✅          | ✅          | — |
-| ABI modeling      | SysV        | SysV        | Win64       | ELFv1/v2 |
-| Imports/exports   | PLT/GOT     | LC dyld     | IAT + delay | — |
-| Symbols recovery  | dynsym      | LC_SYMTAB   | export dir + PDATA | dynsym |
-| Unwind info       | eh_frame    | LSDA pads   | UNWIND_INFO | — |
-| RTTI              | Itanium     | Itanium     | MSVC        | — |
-| Demangle          | Itanium     | Itanium     | MSVC partial | — |
-| Indirect calls    | IAT + vtable* | IAT + vtable* | IAT + vtable* | — |
-| Switch idioms     | 5 patterns  | 5 patterns  | 5 patterns (incl. MSVC two-table) | — |
+| Area | x86-64 ELF | x86-64 Mach-O | x86-64 PE / minidump | AArch64 ELF / Mach-O | PPC64 ELF |
+|---|---|---|---|---|---|
+| Loader            | ✅          | ✅          | ✅ + dumps  | ✅          | ✅ |
+| Decoder + IR lift | ✅          | ✅          | ✅          | partial     | partial |
+| SSA + cleanup     | ✅          | ✅          | ✅          | partial     | — |
+| Pseudo-C output   | ✅          | ✅          | ✅          | partial     | — |
+| ABI modeling      | SysV        | SysV        | Win64       | AAPCS64     | ELFv1/v2 |
+| Imports/exports   | PLT/GOT     | LC dyld     | IAT + delay | PLT/LC dyld | — |
+| Symbols recovery  | dynsym      | LC_SYMTAB   | export dir + PDATA + PDB | dynsym / LC_SYMTAB | dynsym |
+| Unwind info       | eh_frame    | LSDA pads   | UNWIND_INFO | eh_frame    | — |
+| RTTI              | Itanium     | Itanium     | MSVC        | Itanium     | — |
+| Demangle          | Itanium     | Itanium     | MSVC partial | Itanium    | — |
+| Indirect calls    | IAT + vtable* | IAT + vtable* | IAT + vtable* | vtable*  | — |
+| Switch idioms     | 5 patterns  | 5 patterns  | 5 patterns (incl. MSVC two-table) | inherits the analyzer | — |
 
 <sub>* `--resolve-calls` is opt-in; fires on constant vtables today.
 Receiver-typed dispatch is gated on the IPA work in progress.</sub>
@@ -121,8 +121,12 @@ binary  →  loader (ELF / Mach-O / PE / minidump / regions)
         →  pseudo-C emitter
 ```
 
-x86-64 has the full pipeline. PPC64 currently supports loading,
-metadata, disassembly, and CFG-oriented browsing.
+x86-64 has the full pipeline. AArch64 (ARMv8-A) covers a large slice of
+the integer/branch/load-store instruction set — enough to load, decode,
+build CFGs, and lift basic ALU/memory bodies into pseudo-C; the
+floating-point + Advanced SIMD families are decoded shape-only and lift
+as named intrinsics. PPC64 currently supports loading, metadata,
+disassembly, and CFG-oriented browsing.
 
 ## Windows runtime images
 
@@ -188,8 +192,8 @@ format drives. Design in [docs/plugin-platform.md](docs/plugin-platform.md).
 core/             C++23 library — everything except the CLI shim
   include/ember/  public headers
   src/
-    binary/       ELF + Mach-O + PE + minidump + raw-regions loaders
-    disasm/       x86-64 + PPC64 instruction decoders
+    binary/       ELF + Mach-O + PE + minidump + raw-regions + PDB v7
+    disasm/       x86-64 + AArch64 + PPC64 instruction decoders
     analysis/     CFG, arity, strings, xrefs, sig inference (IPA),
                   type inference, indirect-call resolver, MSVC + Itanium
                   RTTI, eh_frame, PE UNWIND_INFO, ObjC, fingerprints
@@ -236,8 +240,8 @@ visibly with `--ipa --resolve-calls --eh` on. Known rough edges
 - Sub-register arithmetic corners can look clunky.
 - Switch cases whose default falls outside the bounds check can
   misattribute.
-- PDB ingestion is not implemented yet — Microsoft binaries with
-  symbols still render with synthesised names.
+- AArch64 floating-point and Advanced SIMD are decoded shape-only and
+  lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
 
 ## License
 

@@ -56,11 +56,28 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::PpcR24, Reg::PpcR25, Reg::PpcR26, Reg::PpcR27,
     Reg::PpcR28, Reg::PpcR29, Reg::PpcR30, Reg::PpcR31,
     Reg::PpcLr, Reg::PpcCtr,
+    // AArch64 X*: self-canonical.
+    Reg::X0,  Reg::X1,  Reg::X2,  Reg::X3,  Reg::X4,  Reg::X5,  Reg::X6,  Reg::X7,
+    Reg::X8,  Reg::X9,  Reg::X10, Reg::X11, Reg::X12, Reg::X13, Reg::X14, Reg::X15,
+    Reg::X16, Reg::X17, Reg::X18, Reg::X19, Reg::X20, Reg::X21, Reg::X22, Reg::X23,
+    Reg::X24, Reg::X25, Reg::X26, Reg::X27, Reg::X28, Reg::X29, Reg::X30,
+    Reg::Xsp, Reg::Xzr,
+    // W* canonicalise to the matching X*.
+    Reg::X0,  Reg::X1,  Reg::X2,  Reg::X3,  Reg::X4,  Reg::X5,  Reg::X6,  Reg::X7,
+    Reg::X8,  Reg::X9,  Reg::X10, Reg::X11, Reg::X12, Reg::X13, Reg::X14, Reg::X15,
+    Reg::X16, Reg::X17, Reg::X18, Reg::X19, Reg::X20, Reg::X21, Reg::X22, Reg::X23,
+    Reg::X24, Reg::X25, Reg::X26, Reg::X27, Reg::X28, Reg::X29, Reg::X30,
+    Reg::Xsp, Reg::Xzr,
+    // V* are self-canonical (no sub-register S*/D* views modeled yet).
+    Reg::V0,  Reg::V1,  Reg::V2,  Reg::V3,  Reg::V4,  Reg::V5,  Reg::V6,  Reg::V7,
+    Reg::V8,  Reg::V9,  Reg::V10, Reg::V11, Reg::V12, Reg::V13, Reg::V14, Reg::V15,
+    Reg::V16, Reg::V17, Reg::V18, Reg::V19, Reg::V20, Reg::V21, Reg::V22, Reg::V23,
+    Reg::V24, Reg::V25, Reg::V26, Reg::V27, Reg::V28, Reg::V29, Reg::V30, Reg::V31,
 };
 
 // Canonical form of the last entry must still map to itself; this catches
-// out-of-order sentinel moves where Xmm15 drifts off the end of the table.
-static_assert(kCanonical.back() == Reg::PpcCtr,
+// out-of-order sentinel moves where the table drifts off the end.
+static_assert(kCanonical.back() == Reg::V31,
               "kCanonical must be updated to match Reg enum");
 
 struct VarKey {

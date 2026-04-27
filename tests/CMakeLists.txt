@@ -48,6 +48,15 @@ add_executable(ember_pdb_test pdb_test.cpp)
 target_link_libraries(ember_pdb_test PRIVATE ember::core ember::flags)
 add_test(NAME pdb_unit COMMAND ember_pdb_test)
 
+# Unit test for the AArch64 decoder. Hand-encoded 4-byte instructions
+# cover ALU immediate / shifted-register, move-wide, branches (B/BL/Bcc/
+# CBZ/RET), loads/stores (immediate offset + LDP), and aliases (MOV/MUL/
+# CMP). No fixture binary required — the encodings are derived directly
+# from ARM ARM Table C4-x.
+add_executable(ember_arm64_decoder_test arm64_decoder_test.cpp)
+target_link_libraries(ember_arm64_decoder_test PRIVATE ember::core ember::flags)
+add_test(NAME arm64_decoder_unit COMMAND ember_arm64_decoder_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

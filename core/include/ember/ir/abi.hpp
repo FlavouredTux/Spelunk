@@ -20,6 +20,7 @@ enum class Abi : u8 {
     Win64,
     Ppc64ElfV2Le,
     Ppc64ElfV1Be,
+    Aapcs64,
 };
 
 [[nodiscard]] constexpr Abi abi_for(Format f, Arch a, Endian e = Endian::Unknown) noexcept {
@@ -30,6 +31,13 @@ enum class Abi : u8 {
         const bool windows =
             f == Format::Pe || f == Format::Minidump || f == Format::RawRegions;
         return windows ? Abi::Win64 : Abi::SysVAmd64;
+    }
+    if (a == Arch::Arm64) {
+        // AAPCS64 is the universal AArch64 ABI for Linux + macOS + Windows
+        // user-mode, modulo small platform-specific tweaks (Apple uses
+        // 64-bit longs and stack-passes parameters tightly; we don't
+        // distinguish those at this level).
+        return Abi::Aapcs64;
     }
     if (f == Format::Elf && a == Arch::Ppc64) {
         return (e == Endian::Big) ? Abi::Ppc64ElfV1Be : Abi::Ppc64ElfV2Le;

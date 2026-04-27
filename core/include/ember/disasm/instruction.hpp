@@ -25,7 +25,7 @@ enum class Mnemonic : u16 {
     And, Or, Xor, Not,
     Shl, Shr, Sar, Rol, Ror, Rcl, Rcr,
 
-    Cmp, Test,
+    Cmp, Cmn, Test,
 
     Jmp, Call, Ret, Leave,
 
@@ -140,6 +140,56 @@ enum class Mnemonic : u16 {
     // Packed min/max (no mandatory prefix and 0x66-prefix forms).
     Minps, Maxps,
     Minpd, Maxpd,
+
+    // ---- AArch64 -----------------------------------------------------------
+    // Naming convention: prefix `A64` so the namespace doesn't collide with
+    // x86 short names (Add, Sub, Mov, Cmp, …). 4-byte fixed-length encoding;
+    // every A64 mnemonic carries operands in a uniform way:
+    //   - register operands as Reg::X*/W*/V*
+    //   - immediates as `Operand::make_imm` typed by the encoded width
+    //   - branch targets as Rel
+    //   - loads/stores as Mem with `base + disp` (extension/shift via index)
+    //
+    // Aliases (CMP, CMN, TST, MOV-from-imm, NEG, MVN, LSL/LSR/ASR-imm…) decode
+    // straight to their canonical mnemonic so the lifter sees one shape.
+    A64Add, A64Sub, A64Adds, A64Subs,
+    A64And, A64Orr, A64Eor, A64Bic, A64Orn, A64Eon,
+    A64Ands, A64Bics,
+    A64Mul, A64Madd, A64Msub,
+    A64Smaddl, A64Umaddl, A64Smsubl, A64Umsubl,
+    A64Smulh, A64Umulh,
+    A64Sdiv, A64Udiv,
+    A64Lsl, A64Lsr, A64Asr, A64Ror,
+    A64Lslv, A64Lsrv, A64Asrv, A64Rorv,
+    A64Mov, A64Movz, A64Movn, A64Movk,
+    A64Mvn, A64Neg, A64Negs,
+    A64Adr, A64Adrp,
+    A64Sbfm, A64Ubfm, A64Bfm,
+    A64Sxtb, A64Sxth, A64Sxtw, A64Uxtb, A64Uxth, A64Uxtw,
+    A64Clz, A64Cls, A64Rbit, A64Rev, A64Rev16, A64Rev32,
+    A64Csel, A64Csinc, A64Csinv, A64Csneg,
+    A64Cset, A64Csetm, A64Cinc, A64Cinv, A64Cneg,
+    A64Ccmp, A64Ccmn,
+    // Loads / stores. Suffix encodes element width + signedness:
+    //   B = byte, H = halfword, no suffix = word (X) or doubleword (W),
+    //   S = sign-extended into 32-bit (LDRSB), W = ditto into 64-bit
+    //   (LDRSW). LDR/STR cover 32/64-bit by Rt size.
+    A64Ldr, A64Str, A64Ldrb, A64Strb, A64Ldrh, A64Strh,
+    A64Ldrsb, A64Ldrsh, A64Ldrsw,
+    A64Ldur, A64Stur, A64Ldurb, A64Sturb, A64Ldurh, A64Sturh,
+    A64Ldursb, A64Ldursh, A64Ldursw,
+    A64Ldp, A64Stp, A64Ldpsw,
+    // Branches. The condition for B.cc and Cset/Csel-family lives in the
+    // first immediate operand (encoded 0..15 as the AArch64 condition
+    // field). Conditional branches share `A64Bcc`; predicate decoding
+    // happens in the lifter via aarch64_cond_to_jcc().
+    A64B, A64Bl, A64Br, A64Blr, A64Ret, A64Bcc,
+    A64Cbz, A64Cbnz, A64Tbz, A64Tbnz,
+    // System / misc.
+    A64Nop, A64Brk, A64Svc, A64Hint, A64Hvc, A64Smc, A64Udf,
+    A64Eret, A64Drps,
+    A64Mrs, A64Msr,
+    A64Dmb, A64Dsb, A64Isb, A64Sev, A64Wfe, A64Wfi, A64Yield,
 };
 
 [[nodiscard]] std::string_view mnemonic_name(Mnemonic m) noexcept;
@@ -219,21 +269,26 @@ struct Instruction {
         case Mnemonic::Jl:  case Mnemonic::Jge: case Mnemonic::Jle: case Mnemonic::Jg:
         case Mnemonic::Beq: case Mnemonic::Bne: case Mnemonic::Blt: case Mnemonic::Bge:
         case Mnemonic::Bgt: case Mnemonic::Ble: case Mnemonic::Bdnz: case Mnemonic::Bdz:
+        case Mnemonic::A64Bcc:
+        case Mnemonic::A64Cbz: case Mnemonic::A64Cbnz:
+        case Mnemonic::A64Tbz: case Mnemonic::A64Tbnz:
             return true;
         default: return false;
     }
 }
 
 [[nodiscard]] constexpr bool is_unconditional_jmp(Mnemonic m) noexcept {
-    return m == Mnemonic::Jmp;
+    return m == Mnemonic::Jmp || m == Mnemonic::A64B || m == Mnemonic::A64Br;
 }
 
 [[nodiscard]] constexpr bool is_call(Mnemonic m) noexcept {
-    return m == Mnemonic::Call;
+    return m == Mnemonic::Call || m == Mnemonic::A64Bl || m == Mnemonic::A64Blr;
 }
 
 [[nodiscard]] constexpr bool is_return_like(Mnemonic m) noexcept {
-    return m == Mnemonic::Ret || m == Mnemonic::Ud2 || m == Mnemonic::Hlt;
+    return m == Mnemonic::Ret || m == Mnemonic::Ud2 || m == Mnemonic::Hlt ||
+           m == Mnemonic::A64Ret || m == Mnemonic::A64Brk ||
+           m == Mnemonic::A64Udf || m == Mnemonic::A64Eret;
 }
 
 [[nodiscard]] constexpr bool ends_basic_block(Mnemonic m) noexcept {

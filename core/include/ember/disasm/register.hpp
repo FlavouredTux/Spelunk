@@ -37,6 +37,35 @@ enum class Reg : u8 {
     PpcR24, PpcR25, PpcR26, PpcR27, PpcR28, PpcR29, PpcR30, PpcR31,
     PpcLr, PpcCtr,
 
+    // AArch64 GPRs. X0..X28 are general-purpose, X29 is the frame pointer
+    // (FP), X30 is the link register (LR). Xsp is the stack pointer (a
+    // separate physical register, not a special encoding of x31). Xzr is
+    // the zero-encoding sink — reads return zero, writes are discarded;
+    // we keep it around so the lifter can recognise the alias.
+    X0,  X1,  X2,  X3,  X4,  X5,  X6,  X7,
+    X8,  X9,  X10, X11, X12, X13, X14, X15,
+    X16, X17, X18, X19, X20, X21, X22, X23,
+    X24, X25, X26, X27, X28, X29, X30,
+    Xsp, Xzr,
+
+    // 32-bit views of the GPRs (W*, Wsp, Wzr). Sub-register reads/writes
+    // mirror x86-64's eax/rax semantics: a W-write zero-extends into the
+    // 64-bit X. Canonicalised to the matching X register.
+    W0,  W1,  W2,  W3,  W4,  W5,  W6,  W7,
+    W8,  W9,  W10, W11, W12, W13, W14, W15,
+    W16, W17, W18, W19, W20, W21, W22, W23,
+    W24, W25, W26, W27, W28, W29, W30,
+    Wsp, Wzr,
+
+    // 128-bit SIMD/FP registers. AArch64 also exposes 32/64-bit views
+    // (S0..S31, D0..D31) but the decoder mostly hands these out as Vn
+    // typed by the instruction; the size-specific aliases stay implicit
+    // for now.
+    V0,  V1,  V2,  V3,  V4,  V5,  V6,  V7,
+    V8,  V9,  V10, V11, V12, V13, V14, V15,
+    V16, V17, V18, V19, V20, V21, V22, V23,
+    V24, V25, V26, V27, V28, V29, V30, V31,
+
     // Sentinel. Always last. Size tables (kCanonical in ir/ssa.cpp,
     // reg_name in disasm/register.cpp) static_assert against this so adding
     // a register without updating them is a compile error.
@@ -58,6 +87,12 @@ enum class Reg : u8 {
         v <= static_cast<unsigned>(Reg::PpcR31)) return 8;
     if (v == static_cast<unsigned>(Reg::PpcLr) ||
         v == static_cast<unsigned>(Reg::PpcCtr)) return 8;
+    if (v >= static_cast<unsigned>(Reg::X0) &&
+        v <= static_cast<unsigned>(Reg::Xzr)) return 8;
+    if (v >= static_cast<unsigned>(Reg::W0) &&
+        v <= static_cast<unsigned>(Reg::Wzr)) return 4;
+    if (v >= static_cast<unsigned>(Reg::V0) &&
+        v <= static_cast<unsigned>(Reg::V31)) return 16;
     return 0;
 }
 
@@ -65,6 +100,20 @@ enum class Reg : u8 {
     const auto v = static_cast<unsigned>(r);
     return v >= static_cast<unsigned>(Reg::Xmm0) &&
            v <= static_cast<unsigned>(Reg::Xmm15);
+}
+
+[[nodiscard]] constexpr bool is_aarch64_gpr(Reg r) noexcept {
+    const auto v = static_cast<unsigned>(r);
+    return (v >= static_cast<unsigned>(Reg::X0) &&
+            v <= static_cast<unsigned>(Reg::Xzr)) ||
+           (v >= static_cast<unsigned>(Reg::W0) &&
+            v <= static_cast<unsigned>(Reg::Wzr));
+}
+
+[[nodiscard]] constexpr bool is_aarch64_vector(Reg r) noexcept {
+    const auto v = static_cast<unsigned>(r);
+    return v >= static_cast<unsigned>(Reg::V0) &&
+           v <= static_cast<unsigned>(Reg::V31);
 }
 
 [[nodiscard]] std::string_view reg_name(Reg r) noexcept;

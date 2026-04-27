@@ -495,38 +495,42 @@ public:
         }
 
         // Do-while detection: header has no usable top-of-loop condition,
-        // but the single back-edge source is conditional and one of its
+        // but at least one back-edge source is conditional and one of its
         // successors is the loop's exit. The tail test drives the loop,
         // body runs at least once.
+        //
+        // We accept loops with multiple back-edge tails as long as exactly
+        // one is the conditional test-and-exit shape: the other tails are
+        // unconditional back-jumps from inside the body (e.g. an early
+        // `continue` arm of an if/else inside the loop). Picking the
+        // qualifying tail and treating it as the do-while predicate is
+        // sound because every other back-edge already proceeds straight
+        // to the same header.
         bool do_while = false;
         addr_t dw_tail = kNoAddr;
         if (!have_cond) {
             auto lh = info_.loop_headers.find(header);
-            if (lh != info_.loop_headers.end() && lh->second.size() == 1) {
-                const addr_t tail = *lh->second.begin();
-                auto tit = fn_.block_at.find(tail);
-                if (tit != fn_.block_at.end()) {
+            if (lh != info_.loop_headers.end() && !lh->second.empty()) {
+                for (const addr_t tail : lh->second) {
+                    auto tit = fn_.block_at.find(tail);
+                    if (tit == fn_.block_at.end()) continue;
                     const auto& tbb = fn_.blocks[tit->second];
-                    if (tbb.kind == BlockKind::Conditional && tbb.successors.size() == 2) {
-                        const addr_t t1 = tbb.successors[0];
-                        const addr_t t2 = tbb.successors[1];
-                        // One successor is header (back-edge), the other is
-                        // the exit.
-                        addr_t ex = kNoAddr;
-                        bool back_first = false;
-                        if (t1 == header) { ex = t2; back_first = true; }
-                        else if (t2 == header) { ex = t1; }
-                        if (ex != kNoAddr) {
-                            do_while = true;
-                            dw_tail  = tail;
-                            exit     = ex;
-                            cond     = extract_condition(tbb);
-                            // If back-edge is the "true" side, the raw
-                            // condition already expresses "keep looping"; if
-                            // "false" side is back-edge, invert.
-                            invert   = !back_first;
-                        }
-                    }
+                    if (tbb.kind != BlockKind::Conditional ||
+                        tbb.successors.size() != 2) continue;
+                    const addr_t t1 = tbb.successors[0];
+                    const addr_t t2 = tbb.successors[1];
+                    addr_t ex = kNoAddr;
+                    bool back_first = false;
+                    if (t1 == header) { ex = t2; back_first = true; }
+                    else if (t2 == header) { ex = t1; }
+                    if (ex == kNoAddr) continue;
+
+                    do_while = true;
+                    dw_tail  = tail;
+                    exit     = ex;
+                    cond     = extract_condition(tbb);
+                    invert   = !back_first;
+                    break;
                 }
             }
         }

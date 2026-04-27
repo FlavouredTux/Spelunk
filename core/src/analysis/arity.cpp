@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <unordered_set>
+#include <vector>
 
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/register.hpp>
@@ -131,54 +133,133 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     auto entry_bytes = b.bytes_at(target);
     if (entry_bytes.empty()) return max_arity;
 
-    std::array<bool, kMaxAbiIntArgs> written{};
-    int max_live_in = -1;
+    // BFS over reachable instruction addresses from `target`, accumulating
+    // per-path "first read before any write" information for each int-arg
+    // register. We track `written` as a path-state via a parallel mask, but
+    // because we want a may-read-before-write across all paths (any path can
+    // demonstrate the arg is consumed), we propagate the most-pessimistic
+    // written state — i.e. once an arg is reported live-in on any path, it
+    // stays live-in regardless of later writes on a different path.
+    //
+    // Concretely: a register is live-in if some path reads it before writing
+    // it. We model that by walking forward, and on a branch enqueue both
+    // successors with a copy of the per-path written mask. Visit count is
+    // capped at kMaxVisits; addresses already visited with a strictly weaker
+    // (subset) written mask are skipped to keep the worklist bounded.
+    //
+    // Calls don't mark args as written — caller-saved clobbering happens
+    // *after* the call site's argument setup, and we want to count whatever
+    // setup landed before the call.
+    constexpr std::size_t kMaxVisits = 1024;
+
+    std::array<bool, kMaxAbiIntArgs> live_in{};
+    std::unordered_set<addr_t> visited;
+    visited.reserve(64);
+
+    using Mask = u8;  // up to 8 arg regs, fits in a byte
+    static_assert(kMaxAbiIntArgs <= 8);
+    auto mask_of = [](const std::array<bool, kMaxAbiIntArgs>& m) -> Mask {
+        Mask r = 0;
+        for (std::size_t i = 0; i < m.size(); ++i) {
+            if (m[i]) r |= static_cast<Mask>(1u << i);
+        }
+        return r;
+    };
+
+    struct WorkItem { addr_t ip; Mask written; };
+    std::vector<WorkItem> work;
+    work.push_back({target, 0});
 
     X64Decoder dec;
-    addr_t ip = target;
-    for (int step = 0; step < 128; ++step) {
-        auto span = b.bytes_at(ip);
-        if (span.empty()) break;
-        auto decoded = dec.decode(span, ip);
-        if (!decoded) break;
-        const Instruction& insn = *decoded;
+    std::size_t visits = 0;
 
-        const DstRole role = dst_role(insn.mnemonic);
-        const bool dst_writes = (role == DstRole::WriteOnly || role == DstRole::ReadWrite);
-        const bool dst_reads  = (role == DstRole::ReadOnly  || role == DstRole::ReadWrite);
+    while (!work.empty() && visits < kMaxVisits) {
+        const auto wi = work.back();
+        work.pop_back();
 
-        auto touch = [&](Reg r, bool read, bool write) {
-            const int idx = arg_reg_index(args, r);
-            if (idx < 0) return;
-            const auto u = static_cast<std::size_t>(idx);
-            if (read && !written[u]) {
-                if (idx > max_live_in) max_live_in = idx;
-            }
-            if (write) written[u] = true;
-        };
-
-        for (u8 j = 0; j < insn.num_operands; ++j) {
-            const Operand& op = insn.operands[j];
-            const bool is_dst = (j == 0);
-            const bool read  = is_dst ? dst_reads  : true;
-            const bool write = is_dst ? dst_writes : false;
-
-            if (op.kind == Operand::Kind::Register) {
-                touch(op.reg, read, write);
-            } else if (op.kind == Operand::Kind::Memory) {
-                if (op.mem.base  != Reg::None) touch(op.mem.base,  true, false);
-                if (op.mem.index != Reg::None) touch(op.mem.index, true, false);
-            }
+        addr_t ip = wi.ip;
+        std::array<bool, kMaxAbiIntArgs> written{};
+        for (std::size_t i = 0; i < written.size(); ++i) {
+            written[i] = (wi.written >> i) & 1u;
         }
 
-        if (insn.mnemonic == Mnemonic::Ret  ||
-            insn.mnemonic == Mnemonic::Jmp  ||
-            insn.mnemonic == Mnemonic::Ud2  ||
-            insn.mnemonic == Mnemonic::Hlt) break;
+        // Per-path linear walk; on branches we enqueue successors and stop.
+        // Cap the per-path step count separately so a tight self-loop without
+        // a back-edge break can't spin forever.
+        for (int step = 0; step < 256 && visits < kMaxVisits; ++step) {
+            ++visits;
+            // Visit guard: skip if we've seen this addr with a written mask
+            // at least as restrictive (subset). We approximate "subset" with
+            // exact equality keyed on (ip), to keep the table small — picks
+            // up the common cases (loops, shared prologues) without growing
+            // the visited set unboundedly.
+            const auto [it, inserted] = visited.insert(ip);
+            (void)it;
+            if (!inserted) break;
 
-        ip += insn.length;
+            auto span = b.bytes_at(ip);
+            if (span.empty()) break;
+            auto decoded = dec.decode(span, ip);
+            if (!decoded) break;
+            const Instruction& insn = *decoded;
+
+            const DstRole role = dst_role(insn.mnemonic);
+            const bool dst_writes = (role == DstRole::WriteOnly || role == DstRole::ReadWrite);
+            const bool dst_reads  = (role == DstRole::ReadOnly  || role == DstRole::ReadWrite);
+
+            auto touch = [&](Reg r, bool read, bool write) {
+                const int idx = arg_reg_index(args, r);
+                if (idx < 0) return;
+                const auto u = static_cast<std::size_t>(idx);
+                if (read && !written[u]) live_in[u] = true;
+                if (write) written[u] = true;
+            };
+
+            for (u8 j = 0; j < insn.num_operands; ++j) {
+                const Operand& op = insn.operands[j];
+                const bool is_dst = (j == 0);
+                const bool read  = is_dst ? dst_reads  : true;
+                const bool write = is_dst ? dst_writes : false;
+
+                if (op.kind == Operand::Kind::Register) {
+                    touch(op.reg, read, write);
+                } else if (op.kind == Operand::Kind::Memory) {
+                    if (op.mem.base  != Reg::None) touch(op.mem.base,  true, false);
+                    if (op.mem.index != Reg::None) touch(op.mem.index, true, false);
+                }
+            }
+
+            if (insn.mnemonic == Mnemonic::Ret ||
+                insn.mnemonic == Mnemonic::Ud2 ||
+                insn.mnemonic == Mnemonic::Hlt) break;
+
+            // Unconditional jmp: follow the target if it's a known relative,
+            // otherwise stop this path.
+            if (insn.mnemonic == Mnemonic::Jmp) {
+                if (insn.num_operands == 1 &&
+                    insn.operands[0].kind == Operand::Kind::Relative) {
+                    ip = insn.operands[0].rel.target;
+                    continue;
+                }
+                break;
+            }
+
+            // Conditional branch: enqueue the target, fall through to the
+            // next instruction.
+            if (is_conditional_branch(insn.mnemonic) &&
+                insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Relative) {
+                work.push_back({insn.operands[0].rel.target, mask_of(written)});
+            }
+
+            ip += insn.length;
+        }
     }
 
+    int max_live_in = -1;
+    for (std::size_t i = 0; i < live_in.size(); ++i) {
+        if (live_in[i]) max_live_in = static_cast<int>(i);
+    }
     return static_cast<u8>(max_live_in + 1);
 }
 

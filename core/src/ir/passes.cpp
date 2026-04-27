@@ -158,6 +158,14 @@ try_fold(const IrInst& inst) noexcept {
                 if (ai && a.imm == 1) return b;
                 if (bi && b.imm == 1) return a;
                 break;
+            case IrOp::Div:
+                if (bi && b.imm == 1) return a;
+                if (same_ssa_value(a, b)) return IrValue::make_imm(1, dt);
+                break;
+            case IrOp::Mod:
+                if (bi && b.imm == 1) return IrValue::make_imm(0, dt);
+                if (same_ssa_value(a, b)) return IrValue::make_imm(0, dt);
+                break;
             case IrOp::And:
                 if (ai && a.imm == 0) return IrValue::make_imm(0, dt);
                 if (bi && b.imm == 0) return IrValue::make_imm(0, dt);
@@ -189,6 +197,12 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::Add: return IrValue::make_imm(mask_signed(a.imm + b.imm, dt), dt);
             case IrOp::Sub: return IrValue::make_imm(mask_signed(a.imm - b.imm, dt), dt);
             case IrOp::Mul: return IrValue::make_imm(mask_signed(a.imm * b.imm, dt), dt);
+            case IrOp::Div:
+                if (b.imm == 0) return std::nullopt;  // don't fold UB
+                return IrValue::make_imm(mask_signed(a.imm / b.imm, dt), dt);
+            case IrOp::Mod:
+                if (b.imm == 0) return std::nullopt;
+                return IrValue::make_imm(mask_signed(a.imm % b.imm, dt), dt);
             case IrOp::And: return IrValue::make_imm(mask_signed(a.imm & b.imm, dt), dt);
             case IrOp::Or:  return IrValue::make_imm(mask_signed(a.imm | b.imm, dt), dt);
             case IrOp::Xor: return IrValue::make_imm(mask_signed(a.imm ^ b.imm, dt), dt);
@@ -222,6 +236,17 @@ try_fold(const IrInst& inst) noexcept {
                 return IrValue::make_imm(static_cast<u64>(a.imm) >= static_cast<u64>(b.imm) ? 1 : 0, IrType::I1);
             default: return std::nullopt;
         }
+    }
+
+    // Ternary
+    if (inst.src_count == 3 && inst.op == IrOp::Select) {
+        const auto& c = inst.srcs[0];
+        const auto& t = inst.srcs[1];
+        const auto& f = inst.srcs[2];
+        if (c.kind == IrValueKind::Imm) {
+            return c.imm ? t : f;
+        }
+        if (same_ssa_value(t, f)) return t;
     }
 
     return std::nullopt;

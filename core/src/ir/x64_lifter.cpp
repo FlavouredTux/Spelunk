@@ -25,6 +25,13 @@ struct LiftCtx {
     const Instruction* insn = nullptr;
     Abi                abi  = Abi::SysVAmd64;
 
+    // Last flag-setting computation in this block, if any. Used by Jp/Jnp/
+    // Setp/Cmovp to compute PF from the actual result rather than emitting
+    // an opaque `parity()` intrinsic. Reset per block via the constructor's
+    // default (kind=None). Stays within-block: cross-block PF use falls back
+    // to the intrinsic (the Flag enum has no Pf).
+    IrValue last_flag_src = {};
+
     [[nodiscard]] u32 new_temp_id() noexcept { return fn->next_temp_id++; }
 
     [[nodiscard]] IrValue temp(IrType t) noexcept {
@@ -138,6 +145,7 @@ struct LiftCtx {
         IrType t = result.type;
         emit_set_flag(Flag::Zf, emit_cmp(IrOp::CmpEq, result, imm(0, t)));
         emit_set_flag(Flag::Sf, emit_cmp(IrOp::CmpSlt, result, imm(0, t)));
+        last_flag_src = result;
     }
 
     void clear_cf_of() {
@@ -340,6 +348,12 @@ void store_lvalue(const Operand& op, IrValue value, LiftCtx& ctx) {
 
 // ========== Individual lifters ==========
 
+// Forward decl: cmov_predicate (defined alongside lift_cmov earlier in the
+// dispatch order) reuses jcc_predicate's flag-combining logic, but
+// jcc_predicate is naturally placed next to the jcc/setcc family further
+// down. Decl up here lets us keep both groupings.
+[[nodiscard]] IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx);
+
 void lift_mov(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
@@ -469,13 +483,61 @@ void lift_not(LiftCtx& ctx) {
     store_lvalue(insn.operands[0], r, ctx);
 }
 
+// CF/OF for shift instructions. CF holds the last bit shifted out:
+//   shl: bit (W - count) of the original value
+//   shr/sar: bit (count - 1) of the original value
+// OF is only well-defined for 1-bit shifts; we compute it unconditionally
+// because the common case is `shl/shr ..., 1` where the value is meaningful,
+// and at higher counts OF is documented as undefined anyway.
+//   shl OF = MSB(result) ^ CF
+//   shr OF = MSB(original)
+//   sar OF = 0
+//
+// We deliberately don't gate on count==0 (which per Intel leaves flags
+// unchanged): that case is exceedingly rare in compiled code and adding a
+// Select on every shift would clutter every byte-extraction sequence.
 void lift_shift(LiftCtx& ctx, IrOp op) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
     IrValue a = materialize_rvalue(insn.operands[0], ctx);
     IrValue cnt = materialize_rvalue(insn.operands[1], ctx);
     cnt = ctx.match_size(cnt, a.type, /*sign_ext=*/false);
+
+    const unsigned width = type_bits(a.type);
+    IrValue width_imm = ctx.imm(static_cast<i64>(width), a.type);
+    IrValue one_t     = ctx.imm(1, a.type);
+    IrValue zero_t    = ctx.imm(0, a.type);
+
+    IrValue cf_bit;
+    if (op == IrOp::Shl) {
+        IrValue shift = ctx.emit_binop(IrOp::Sub, width_imm, cnt);
+        IrValue out_bit = ctx.emit_binop(IrOp::Lshr, a, shift);
+        cf_bit = ctx.emit_binop(IrOp::And, out_bit, one_t);
+    } else {
+        IrValue shift = ctx.emit_binop(IrOp::Sub, cnt, one_t);
+        IrValue out_bit = ctx.emit_binop(IrOp::Lshr, a, shift);
+        cf_bit = ctx.emit_binop(IrOp::And, out_bit, one_t);
+    }
+    ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t));
+
     IrValue r = ctx.emit_binop(op, a, cnt);
+
+    if (op == IrOp::Shl) {
+        IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+        IrValue msb = ctx.emit_binop(IrOp::Lshr, r, msb_shift);
+        IrValue msb_bit = ctx.emit_binop(IrOp::And, msb, one_t);
+        IrValue msb_i1  = ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t);
+        ctx.emit_set_flag(Flag::Of,
+            ctx.emit_binop_i1(IrOp::Xor, msb_i1, ctx.flag_val(Flag::Cf)));
+    } else if (op == IrOp::Lshr) {
+        IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+        IrValue msb = ctx.emit_binop(IrOp::Lshr, a, msb_shift);
+        IrValue msb_bit = ctx.emit_binop(IrOp::And, msb, one_t);
+        ctx.emit_set_flag(Flag::Of, ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t));
+    } else {
+        ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+    }
+
     ctx.set_zf_sf(r);
     store_lvalue(insn.operands[0], r, ctx);
 }
@@ -483,6 +545,102 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
 void lift_shl(LiftCtx& ctx) { lift_shift(ctx, IrOp::Shl);  }
 void lift_shr(LiftCtx& ctx) { lift_shift(ctx, IrOp::Lshr); }
 void lift_sar(LiftCtx& ctx) { lift_shift(ctx, IrOp::Ashr); }
+
+// SHLD dst, src, count: dst = (dst << count) | (src >> (W - count))
+// SHRD dst, src, count: dst = (dst >> count) | (src << (W - count))
+// Lift as the equivalent shift+or expression so the reader sees the actual
+// bit-stitch rather than an opaque intrinsic. Flag handling is approximate:
+// we set ZF/SF on the result and leave CF/OF as their pre-shift values
+// (true Intel semantics: undefined for count >= W, otherwise CF = last bit
+// shifted out — which adds another four ops per shift; the dataflow is the
+// part that matters for decompiled output).
+void lift_double_shift(LiftCtx& ctx, bool right) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    IrValue dst = materialize_rvalue(insn.operands[0], ctx);
+    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    IrValue cnt = materialize_rvalue(insn.operands[2], ctx);
+    src = ctx.match_size(src, dst.type, /*sign_ext=*/false);
+    cnt = ctx.match_size(cnt, dst.type, /*sign_ext=*/false);
+
+    const unsigned width = type_bits(dst.type);
+    IrValue width_imm = ctx.imm(static_cast<i64>(width), dst.type);
+    IrValue cnt_compl = ctx.emit_binop(IrOp::Sub, width_imm, cnt);
+
+    IrValue lo, hi;
+    if (right) {
+        lo = ctx.emit_binop(IrOp::Lshr, dst, cnt);
+        hi = ctx.emit_binop(IrOp::Shl,  src, cnt_compl);
+    } else {
+        lo = ctx.emit_binop(IrOp::Shl,  dst, cnt);
+        hi = ctx.emit_binop(IrOp::Lshr, src, cnt_compl);
+    }
+    IrValue r = ctx.emit_binop(IrOp::Or, lo, hi);
+    ctx.set_zf_sf(r);
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
+// 1-op MUL/IMUL: rax = rax * src, with the high half going into rdx (or
+// AH for byte form). We model this by widening both operands to 2W and
+// computing the full product, then assigning the low half back to rax/eax/...
+// and the high half to rdx/edx/... For 64-bit we don't have I128, so the
+// high half degrades to a named `mulh.{s,u}` intrinsic that still carries
+// both source operands so the reader can see what's being multiplied.
+//
+// `signed_mul` selects IMUL (SExt) vs MUL (ZExt).
+void lift_mul_one_op(LiftCtx& ctx, bool signed_mul) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 1) return;
+    IrValue b = materialize_rvalue(insn.operands[0], ctx);
+    const IrType t = b.type;
+    const unsigned bits = type_bits(t);
+
+    Reg lo_a, lo_dst, hi_dst;
+    switch (bits) {
+        case 8:  lo_a = Reg::Al;  lo_dst = Reg::Ax;  hi_dst = Reg::None; break;
+        case 16: lo_a = Reg::Ax;  lo_dst = Reg::Ax;  hi_dst = Reg::Dx;   break;
+        case 32: lo_a = Reg::Eax; lo_dst = Reg::Eax; hi_dst = Reg::Edx;  break;
+        default: lo_a = Reg::Rax; lo_dst = Reg::Rax; hi_dst = Reg::Rdx;  break;
+    }
+    IrValue a = ctx.read_reg(lo_a);
+
+    if (bits <= 32) {
+        const IrType wide = type_for_bits(bits * 2);
+        IrOp ext = signed_mul ? IrOp::SExt : IrOp::ZExt;
+        IrValue aw = ctx.emit_convert(ext, a, wide);
+        IrValue bw = ctx.emit_convert(ext, b, wide);
+        IrValue prod = ctx.emit_binop(IrOp::Mul, aw, bw);
+        if (bits == 8) {
+            // mul al, r/m8 → ax = al * r/m. Whole AX is the product.
+            ctx.write_reg(lo_dst, prod);
+        } else {
+            IrValue lo = ctx.emit_convert(IrOp::Trunc, prod, t);
+            IrValue shift = ctx.emit_binop(IrOp::Lshr, prod,
+                                            ctx.imm(static_cast<i64>(bits), wide));
+            IrValue hi = ctx.emit_convert(IrOp::Trunc, shift, t);
+            ctx.write_reg(lo_dst, lo);
+            ctx.write_reg(hi_dst, hi);
+        }
+    } else {
+        // 64-bit: low half is just rax * src; high half degrades to a named
+        // intrinsic so the reader sees both operands. RAX is also clobbered
+        // first by the low product before RDX takes the high — that ordering
+        // matches Intel's atomicity (both updated together).
+        IrValue lo = ctx.emit_binop(IrOp::Mul, a, b);
+        ctx.write_reg(lo_dst, lo);
+
+        IrInst high;
+        high.op   = IrOp::Intrinsic;
+        high.name = signed_mul ? "mulh.s.64" : "mulh.u.64";
+        high.dst  = ctx.temp(t);
+        high.srcs[0] = a;
+        high.srcs[1] = b;
+        high.src_count = 2;
+        IrValue hi_v = high.dst;
+        ctx.emit(std::move(high));
+        ctx.write_reg(hi_dst, hi_v);
+    }
+}
 
 void lift_imul(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
@@ -499,11 +657,303 @@ void lift_imul(LiftCtx& ctx) {
         IrValue r = ctx.emit_binop(IrOp::Mul, a, b);
         store_lvalue(insn.operands[0], r, ctx);
     } else {
-        IrInst i;
-        i.op   = IrOp::Intrinsic;
-        i.name = "imul.1op";
-        ctx.emit(std::move(i));
+        lift_mul_one_op(ctx, /*signed_mul=*/true);
     }
+}
+
+void lift_mul(LiftCtx& ctx) {
+    lift_mul_one_op(ctx, /*signed_mul=*/false);
+}
+
+// DIV / IDIV r/m: divides (rdx:rax) by r/m, writes quotient to rax/al and
+// remainder to rdx/ah. Dividend is built by combining the implicit register
+// pair widened to 2W; for 64-bit we don't have I128 so we degrade to using
+// rax alone as the dividend (which is what the common `xor edx, edx; div`
+// idiom produces anyway, and what `cdq; idiv` looks like once cdq is folded).
+void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 1) return;
+    IrValue divisor = materialize_rvalue(insn.operands[0], ctx);
+    const IrType t = divisor.type;
+    const unsigned bits = type_bits(t);
+
+    Reg lo_a, hi_a, lo_dst, hi_dst;
+    switch (bits) {
+        case 8:  lo_a = Reg::Al;  hi_a = Reg::None; lo_dst = Reg::Al;  hi_dst = Reg::Ah;  break;
+        case 16: lo_a = Reg::Ax;  hi_a = Reg::Dx;   lo_dst = Reg::Ax;  hi_dst = Reg::Dx;  break;
+        case 32: lo_a = Reg::Eax; hi_a = Reg::Edx;  lo_dst = Reg::Eax; hi_dst = Reg::Edx; break;
+        default: lo_a = Reg::Rax; hi_a = Reg::Rdx;  lo_dst = Reg::Rax; hi_dst = Reg::Rdx; break;
+    }
+
+    if (bits == 8) {
+        // 8-bit divide: AX / r/m8 → AL=quot, AH=rem. AX is already a wider
+        // version of the dividend register pair.
+        IrValue ax = ctx.read_reg(Reg::Ax);
+        IrOp ext = signed_div ? IrOp::SExt : IrOp::ZExt;
+        IrValue dw = ctx.emit_convert(ext, divisor, IrType::I16);
+        IrValue q  = ctx.emit_binop(IrOp::Div, ax, dw);
+        IrValue r  = ctx.emit_binop(IrOp::Mod, ax, dw);
+        IrValue ql = ctx.emit_convert(IrOp::Trunc, q, IrType::I8);
+        IrValue rl = ctx.emit_convert(IrOp::Trunc, r, IrType::I8);
+        ctx.write_reg(lo_dst, ql);
+        ctx.write_reg(hi_dst, rl);
+        return;
+    }
+
+    if (bits <= 32) {
+        const IrType wide = type_for_bits(bits * 2);
+        IrOp ext = signed_div ? IrOp::SExt : IrOp::ZExt;
+        IrValue lo = ctx.read_reg(lo_a);
+        IrValue hi = ctx.read_reg(hi_a);
+        IrValue lo_w = ctx.emit_convert(IrOp::ZExt, lo, wide);
+        IrValue hi_w = ctx.emit_convert(ext,        hi, wide);
+        IrValue hi_shift = ctx.emit_binop(IrOp::Shl, hi_w,
+                                           ctx.imm(static_cast<i64>(bits), wide));
+        IrValue dividend = ctx.emit_binop(IrOp::Or, hi_shift, lo_w);
+        IrValue dw = ctx.emit_convert(ext, divisor, wide);
+        IrValue q  = ctx.emit_binop(IrOp::Div, dividend, dw);
+        IrValue r  = ctx.emit_binop(IrOp::Mod, dividend, dw);
+        IrValue ql = ctx.emit_convert(IrOp::Trunc, q, t);
+        IrValue rl = ctx.emit_convert(IrOp::Trunc, r, t);
+        ctx.write_reg(lo_dst, ql);
+        ctx.write_reg(hi_dst, rl);
+        return;
+    }
+
+    // 64-bit: lossy. Use RAX as the dividend (true for compiler-emitted
+    // `xor edx, edx; div r64` and for sign-extended `cdq; idiv r64`).
+    IrValue rax = ctx.read_reg(Reg::Rax);
+    IrValue q = ctx.emit_binop(IrOp::Div, rax, divisor);
+    IrValue r = ctx.emit_binop(IrOp::Mod, rax, divisor);
+    ctx.write_reg(lo_dst, q);
+    ctx.write_reg(hi_dst, r);
+}
+
+// ADC dst, src: dst = dst + src + CF. Update CF/OF/ZF/SF.
+// SBB dst, src: dst = dst - src - CF.
+// We model carry by widening to I1 and adding into the result; CF/OF for the
+// combined operation are computed against (a OP b) — the second-step carry
+// from adding the cf bit is folded in via OR with the first-step carry.
+// That's an approximation: in cases where (a+b) doesn't overflow but
+// (a+b+1) does, OF will miss the second step. The dataflow side (the actual
+// sum/difference) is exact.
+void lift_adc_sbb(LiftCtx& ctx, bool subtract) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue a = materialize_rvalue(insn.operands[0], ctx);
+    IrValue b = materialize_rvalue(insn.operands[1], ctx);
+    b = ctx.match_size(b, a.type, /*sign_ext=*/true);
+    IrValue cf  = ctx.flag_val(Flag::Cf);
+    IrValue cf_w = ctx.emit_convert(IrOp::ZExt, cf, a.type);
+
+    IrOp op_main   = subtract ? IrOp::Sub        : IrOp::Add;
+    IrOp op_carry  = subtract ? IrOp::SubBorrow  : IrOp::AddCarry;
+    IrOp op_over   = subtract ? IrOp::SubOverflow: IrOp::AddOverflow;
+
+    IrValue mid = ctx.emit_binop(op_main, a, b);
+    IrValue r   = ctx.emit_binop(op_main, mid, cf_w);
+
+    IrValue cf1 = ctx.emit_binop_i1(op_carry, a, b);
+    IrValue cf2 = ctx.emit_binop_i1(op_carry, mid, cf_w);
+    ctx.emit_set_flag(Flag::Cf, ctx.emit_binop_i1(IrOp::Or, cf1, cf2));
+    IrValue of1 = ctx.emit_binop_i1(op_over, a, b);
+    IrValue of2 = ctx.emit_binop_i1(op_over, mid, cf_w);
+    ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Or, of1, of2));
+    ctx.set_zf_sf(r);
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
+// Build the same i1 condition that jcc would produce, given the CMOVcc
+// mnemonic. Reuses jcc_predicate by mapping cmov→jcc.
+[[nodiscard]] IrValue cmov_predicate(Mnemonic mn, LiftCtx& ctx) {
+    Mnemonic jcc = Mnemonic::Invalid;
+    switch (mn) {
+        case Mnemonic::Cmovo:  jcc = Mnemonic::Jo;  break;
+        case Mnemonic::Cmovno: jcc = Mnemonic::Jno; break;
+        case Mnemonic::Cmovb:  jcc = Mnemonic::Jb;  break;
+        case Mnemonic::Cmovae: jcc = Mnemonic::Jae; break;
+        case Mnemonic::Cmove:  jcc = Mnemonic::Je;  break;
+        case Mnemonic::Cmovne: jcc = Mnemonic::Jne; break;
+        case Mnemonic::Cmovbe: jcc = Mnemonic::Jbe; break;
+        case Mnemonic::Cmova:  jcc = Mnemonic::Ja;  break;
+        case Mnemonic::Cmovs:  jcc = Mnemonic::Js;  break;
+        case Mnemonic::Cmovns: jcc = Mnemonic::Jns; break;
+        case Mnemonic::Cmovp:  jcc = Mnemonic::Jp;  break;
+        case Mnemonic::Cmovnp: jcc = Mnemonic::Jnp; break;
+        case Mnemonic::Cmovl:  jcc = Mnemonic::Jl;  break;
+        case Mnemonic::Cmovge: jcc = Mnemonic::Jge; break;
+        case Mnemonic::Cmovle: jcc = Mnemonic::Jle; break;
+        case Mnemonic::Cmovg:  jcc = Mnemonic::Jg;  break;
+        default: return ctx.imm(0, IrType::I1);
+    }
+    return jcc_predicate(jcc, ctx);
+}
+
+// CMOVcc dst, src: dst = cond ? src : dst. Lift as IrOp::Select so the
+// emitter renders it as `dst = (cond ? src : dst);` — matches the source
+// idiom `dst = cond ? src : dst;` rather than an opaque branch or intrinsic.
+void lift_cmov(LiftCtx& ctx, Mnemonic mn) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue dst = materialize_rvalue(insn.operands[0], ctx);
+    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    src = ctx.match_size(src, dst.type, /*sign_ext=*/false);
+    IrValue cond = cmov_predicate(mn, ctx);
+
+    IrInst i;
+    i.op        = IrOp::Select;
+    i.dst       = ctx.temp(dst.type);
+    i.srcs[0]   = cond;
+    i.srcs[1]   = src;
+    i.srcs[2]   = dst;
+    i.src_count = 3;
+    IrValue r = i.dst;
+    ctx.emit(std::move(i));
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
+// XCHG dst, src: swap. We materialize src first so the read isn't shadowed
+// by the dst write. For memory operands this is still atomic at the SSA
+// level (two assigns), which is enough for the decompiled-output reader.
+void lift_xchg(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue dst_v = materialize_rvalue(insn.operands[0], ctx);
+    IrValue src_v = materialize_rvalue(insn.operands[1], ctx);
+    src_v = ctx.match_size(src_v, dst_v.type, /*sign_ext=*/false);
+    store_lvalue(insn.operands[0], src_v, ctx);
+    store_lvalue(insn.operands[1], dst_v, ctx);
+}
+
+// XADD dst, src: tmp = dst + src; src = dst; dst = tmp. Atomic in hardware;
+// we model the dataflow without trying to express atomicity. Sets the
+// add-style flags so subsequent jcc readouts are sensible.
+void lift_xadd(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue dst_v = materialize_rvalue(insn.operands[0], ctx);
+    IrValue src_v = materialize_rvalue(insn.operands[1], ctx);
+    src_v = ctx.match_size(src_v, dst_v.type, /*sign_ext=*/false);
+    ctx.emit_set_flag(Flag::Cf, ctx.emit_binop_i1(IrOp::AddCarry, dst_v, src_v));
+    ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::AddOverflow, dst_v, src_v));
+    IrValue sum = ctx.emit_binop(IrOp::Add, dst_v, src_v);
+    ctx.set_zf_sf(sum);
+    store_lvalue(insn.operands[1], dst_v, ctx);
+    store_lvalue(insn.operands[0], sum, ctx);
+}
+
+// CMPXCHG dst, src: if (rax == dst) { ZF=1; dst = src; } else { ZF=0; rax = dst; }
+// We model the full conditional via two Selects so the dataflow stays explicit
+// (no opaque intrinsic).
+void lift_cmpxchg(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue dst_v = materialize_rvalue(insn.operands[0], ctx);
+    IrValue src_v = materialize_rvalue(insn.operands[1], ctx);
+    src_v = ctx.match_size(src_v, dst_v.type, /*sign_ext=*/false);
+
+    Reg accum;
+    switch (type_bits(dst_v.type)) {
+        case 8:  accum = Reg::Al;  break;
+        case 16: accum = Reg::Ax;  break;
+        case 32: accum = Reg::Eax; break;
+        default: accum = Reg::Rax; break;
+    }
+    IrValue acc = ctx.read_reg(accum);
+    IrValue eq  = ctx.emit_cmp(IrOp::CmpEq, acc, dst_v);
+    ctx.emit_set_flag(Flag::Zf, eq);
+
+    // dst = eq ? src : dst (no-op, but lets later optimization see the cond)
+    IrInst d;
+    d.op = IrOp::Select;
+    d.dst = ctx.temp(dst_v.type);
+    d.srcs[0] = eq; d.srcs[1] = src_v; d.srcs[2] = dst_v;
+    d.src_count = 3;
+    IrValue d_new = d.dst;
+    ctx.emit(std::move(d));
+    store_lvalue(insn.operands[0], d_new, ctx);
+
+    // rax = eq ? rax : dst
+    IrInst r;
+    r.op = IrOp::Select;
+    r.dst = ctx.temp(dst_v.type);
+    r.srcs[0] = eq; r.srcs[1] = acc; r.srcs[2] = dst_v;
+    r.src_count = 3;
+    IrValue r_new = r.dst;
+    ctx.emit(std::move(r));
+    ctx.write_reg(accum, r_new);
+}
+
+// BSF dst, src: dst = trailing-zero-count(src); ZF = (src == 0). The dst is
+// undefined when src is 0 (Intel), but compiler-emitted code always guards on
+// ZF first, so leaving the intrinsic value in dst is fine.
+// BSR dst, src: dst = position of MSB.
+void lift_bit_scan(LiftCtx& ctx, std::string_view name) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    const IrType t = operand_type(insn.operands[0]);
+    src = ctx.match_size(src, t, /*sign_ext=*/false);
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, src, ctx.imm(0, t)));
+
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue r = i.dst;
+    ctx.emit(std::move(i));
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
+// BT base, off: CF = (base >> (off mod W)) & 1. We don't model the mod
+// because compilers emit immediate-form `bt base, imm` where the count is
+// already in range; the symbolic shift is enough for the reader.
+// BTS/BTR/BTC additionally write back base with bit `off` set/cleared/flipped.
+void lift_bit_test(LiftCtx& ctx, char op) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue base = materialize_rvalue(insn.operands[0], ctx);
+    IrValue off  = materialize_rvalue(insn.operands[1], ctx);
+    off = ctx.match_size(off, base.type, /*sign_ext=*/false);
+
+    IrValue shifted = ctx.emit_binop(IrOp::Lshr, base, off);
+    IrValue one_t   = ctx.imm(1, base.type);
+    IrValue bit     = ctx.emit_binop(IrOp::And, shifted, one_t);
+    ctx.emit_set_flag(Flag::Cf,
+                      ctx.emit_cmp(IrOp::CmpNe, bit, ctx.imm(0, base.type)));
+
+    if (op == 't') return;  // BT — read-only
+
+    IrValue mask = ctx.emit_binop(IrOp::Shl, one_t, off);
+    IrValue r;
+    if (op == 's') {
+        r = ctx.emit_binop(IrOp::Or, base, mask);
+    } else if (op == 'r') {
+        IrValue inv_mask = ctx.emit_unop(IrOp::Not, mask);
+        r = ctx.emit_binop(IrOp::And, base, inv_mask);
+    } else {  // 'c' — complement
+        r = ctx.emit_binop(IrOp::Xor, base, mask);
+    }
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
+// BSWAP r64: byte-reverse. There's no clean infix expression for this; emit a
+// named intrinsic so the reader sees `dst = __bswap(src);`.
+void lift_bswap(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 1) return;
+    IrValue src = materialize_rvalue(insn.operands[0], ctx);
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = "bswap";
+    i.dst  = ctx.temp(src.type);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue r = i.dst;
+    ctx.emit(std::move(i));
+    store_lvalue(insn.operands[0], r, ctx);
 }
 
 void lift_push(LiftCtx& ctx) {
@@ -652,7 +1102,7 @@ void lift_jmp(LiftCtx& ctx) {
     ctx.emit(std::move(i));
 }
 
-[[nodiscard]] IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx) {
+IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx) {
     const IrValue zf = ctx.flag_val(Flag::Zf);
     const IrValue sf = ctx.flag_val(Flag::Sf);
     const IrValue cf = ctx.flag_val(Flag::Cf);
@@ -690,13 +1140,40 @@ void lift_jmp(LiftCtx& ctx) {
         }
         case Mnemonic::Jp:
         case Mnemonic::Jnp: {
-            IrValue t = ctx.temp(IrType::I1);
-            IrInst inst;
-            inst.op   = IrOp::Intrinsic;
-            inst.dst  = t;
-            inst.name = (mn == Mnemonic::Jp) ? "parity" : "not_parity";
-            ctx.emit(std::move(inst));
-            return t;
+            // PF = even parity of the low 8 bits of the most recent flag-
+            // setting computation. We model that with the standard XOR-fold:
+            //   v8 = trunc8(src);
+            //   x  = v8 ^ (v8 >> 4);
+            //   x  = x  ^ (x  >> 2);
+            //   x  = x  ^ (x  >> 1);
+            //   pf = (x & 1) == 0
+            // When no in-block flag source is available, fall back to the
+            // opaque intrinsic so cross-block / first-instruction Jp still
+            // lifts (rare, but legal).
+            if (ctx.last_flag_src.kind == IrValueKind::None) {
+                IrValue t = ctx.temp(IrType::I1);
+                IrInst inst;
+                inst.op   = IrOp::Intrinsic;
+                inst.dst  = t;
+                inst.name = (mn == Mnemonic::Jp) ? "parity" : "not_parity";
+                ctx.emit(std::move(inst));
+                return t;
+            }
+            IrValue v = ctx.last_flag_src;
+            IrValue v8 = (v.type == IrType::I8)
+                ? v
+                : ctx.emit_convert(IrOp::Trunc, v, IrType::I8);
+            IrValue x1 = ctx.emit_binop(IrOp::Xor, v8,
+                            ctx.emit_binop(IrOp::Lshr, v8, ctx.imm(4, IrType::I8)));
+            IrValue x2 = ctx.emit_binop(IrOp::Xor, x1,
+                            ctx.emit_binop(IrOp::Lshr, x1, ctx.imm(2, IrType::I8)));
+            IrValue x3 = ctx.emit_binop(IrOp::Xor, x2,
+                            ctx.emit_binop(IrOp::Lshr, x2, ctx.imm(1, IrType::I8)));
+            IrValue lo = ctx.emit_binop(IrOp::And, x3, ctx.imm(1, IrType::I8));
+            IrValue is_even = ctx.emit_cmp(IrOp::CmpEq, lo, ctx.imm(0, IrType::I8));
+            return (mn == Mnemonic::Jp)
+                ? is_even
+                : ctx.emit_unop(IrOp::Not, is_even);
         }
         default:
             return ctx.imm(0, IrType::I1);
@@ -878,6 +1355,35 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Shr:     lift_shr(ctx);     break;
         case Mnemonic::Sar:     lift_sar(ctx);     break;
         case Mnemonic::Imul:    lift_imul(ctx);    break;
+        case Mnemonic::Mul:     lift_mul(ctx);     break;
+        case Mnemonic::Div:     lift_div_one_op(ctx, /*signed_div=*/false); break;
+        case Mnemonic::Idiv:    lift_div_one_op(ctx, /*signed_div=*/true);  break;
+        case Mnemonic::Adc:     lift_adc_sbb(ctx, /*subtract=*/false); break;
+        case Mnemonic::Sbb:     lift_adc_sbb(ctx, /*subtract=*/true);  break;
+        case Mnemonic::Xchg:    lift_xchg(ctx);    break;
+        case Mnemonic::Xadd:    lift_xadd(ctx);    break;
+        case Mnemonic::Cmpxchg: lift_cmpxchg(ctx); break;
+        case Mnemonic::Bsf:     lift_bit_scan(ctx, "bsf"); break;
+        case Mnemonic::Bsr:     lift_bit_scan(ctx, "bsr"); break;
+        case Mnemonic::Bt:      lift_bit_test(ctx, 't'); break;
+        case Mnemonic::Bts:     lift_bit_test(ctx, 's'); break;
+        case Mnemonic::Btr:     lift_bit_test(ctx, 'r'); break;
+        case Mnemonic::Btc:     lift_bit_test(ctx, 'c'); break;
+        case Mnemonic::Shld:    lift_double_shift(ctx, /*right=*/false); break;
+        case Mnemonic::Shrd:    lift_double_shift(ctx, /*right=*/true);  break;
+        case Mnemonic::Bswap:   lift_bswap(ctx);   break;
+
+        case Mnemonic::Cmovo: case Mnemonic::Cmovno:
+        case Mnemonic::Cmovb: case Mnemonic::Cmovae:
+        case Mnemonic::Cmove: case Mnemonic::Cmovne:
+        case Mnemonic::Cmovbe: case Mnemonic::Cmova:
+        case Mnemonic::Cmovs: case Mnemonic::Cmovns:
+        case Mnemonic::Cmovp: case Mnemonic::Cmovnp:
+        case Mnemonic::Cmovl: case Mnemonic::Cmovge:
+        case Mnemonic::Cmovle: case Mnemonic::Cmovg:
+            lift_cmov(ctx, insn.mnemonic);
+            break;
+
         case Mnemonic::Push:    lift_push(ctx);    break;
         case Mnemonic::Pop:     lift_pop(ctx);     break;
         case Mnemonic::Leave:   lift_leave(ctx);   break;

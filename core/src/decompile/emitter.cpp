@@ -239,6 +239,7 @@ constexpr VariadicImport kVariadicImports[] = {
 // operator kinds start rendering.
 enum class Prec : int {
     Stmt    = 0,
+    Cond    = 2,    // ?: ternary
     LogOr   = 3,
     LogAnd  = 4,
     BitOr   = 5,
@@ -380,27 +381,36 @@ struct Emitter {
             std::string s;
             s.reserve(64);
             bool terminated = false;
+            std::size_t printable_count = 0;
+            std::size_t escaped_count   = 0;
             const std::size_t limit = std::min(span.size(), max_len);
             for (std::size_t i = 0; i < limit; ++i) {
                 const auto c = static_cast<unsigned char>(span[i]);
                 if (c == 0) { terminated = true; break; }
-                // Accept printable ASCII + common whitespace escapes.
-                if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
-                    s.clear();
-                    break;
+                // Common whitespace escapes — these are legitimate string
+                // content, count toward the printable-threshold heuristic.
+                if (c == '\t')      { s += "\\t";  ++printable_count; continue; }
+                if (c == '\n')      { s += "\\n";  ++printable_count; continue; }
+                if (c == '\r')      { s += "\\r";  ++printable_count; continue; }
+                if (c == '\\')      { s += "\\\\"; ++printable_count; continue; }
+                if (c == '"')       { s += "\\\""; ++printable_count; continue; }
+                if (c >= 0x20 && c <= 0x7e) {
+                    s.push_back(static_cast<char>(c));
+                    ++printable_count;
+                    continue;
                 }
-                if (c > 0x7e) {
-                    s.clear();
-                    break;
-                }
-                s.push_back(static_cast<char>(c));
+                // High-bit / control bytes: hex-escape so a single rogue
+                // byte doesn't nuke the entire literal back to a bare
+                // address. UTF-8 round-trips byte-for-byte here.
+                s += std::format("\\x{:02x}", c);
+                ++escaped_count;
             }
-            // Single-char "strings" (e.g. 0x20 0x00 in a ObjC ivar-size
-            // byte) are usually false positives — the byte happens to be
-            // printable-then-null. Real string constants are longer;
-            // require 4+ chars so `*(u64*)(" ")` doesn't hide a legit
-            // hex address.
-            if (terminated && s.size() >= 4) {
+            // Heuristic for "this is actually a string": at least 4
+            // printable characters (excluding hex-escapes), and printable
+            // bytes outnumber escaped ones. Keeps `*(u64*)(" ")`-style
+            // false positives out while accepting "Hello\xc2\xa0World".
+            if (terminated && printable_count >= 4 &&
+                printable_count > escaped_count) {
                 result = std::move(s);
             }
         }
@@ -1529,9 +1539,11 @@ struct Emitter {
             case IrOp::Load:
             case IrOp::Assign:
             case IrOp::Add: case IrOp::Sub: case IrOp::Mul:
+            case IrOp::Div: case IrOp::Mod:
             case IrOp::And: case IrOp::Or:  case IrOp::Xor:
             case IrOp::Neg: case IrOp::Not:
             case IrOp::Shl: case IrOp::Lshr: case IrOp::Ashr:
+            case IrOp::Select:
             case IrOp::CmpEq: case IrOp::CmpNe:
             case IrOp::CmpSlt: case IrOp::CmpSle:
             case IrOp::CmpSgt: case IrOp::CmpSge:
@@ -1546,12 +1558,84 @@ struct Emitter {
         }
     }
 
+    // Every visible use of `v` is the source of an Assign-to-Flag.
+    // Used to detect the trailing layer of a flag-set fan-out: the cmp result
+    // (cmp.eq, cmp.slt, etc.) typically feeds straight into `assign zf, …`
+    // and `assign sf, …`, never into general dataflow.
+    [[nodiscard]] bool every_use_is_flag_assign(const IrValue& v) const {
+        if (v.kind != IrValueKind::Temp) return false;
+        auto k = ssa_key(v);
+        if (!k) return false;
+        bool found = false;
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                if (hidden.contains({bi, ii})) continue;
+                const auto& inst = bb.insts[ii];
+                if (is_call_arg_barrier(inst)) continue;
+                if (inst.op == IrOp::Phi) continue;
+                bool uses_v = false;
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == *k) {
+                        uses_v = true; break;
+                    }
+                }
+                if (!uses_v) continue;
+                if (inst.op != IrOp::Assign ||
+                    inst.dst.kind != IrValueKind::Flag) {
+                    return false;
+                }
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    // The cmp result (`a - b` from a `cmp` lifted as Sub) typically has
+    // multiple uses — one per flag-set computation (zf and sf each take it
+    // as srcs[0] of cmp.eq / cmp.slt). Each of *those* temps then flows into
+    // exactly one Assign-to-Flag. The reader doesn't want to see the explicit
+    // `s64 t8 = a - b;` declaration when it's only there to feed flag math
+    // that itself dissolves into an inline jcc/setcc/cmov predicate.
+    [[nodiscard]] bool is_flag_feeder_temp(const IrValue& v) const {
+        if (v.kind != IrValueKind::Temp) return false;
+        auto k = ssa_key(v);
+        if (!k) return false;
+        bool found = false;
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                if (hidden.contains({bi, ii})) continue;
+                const auto& inst = bb.insts[ii];
+                if (is_call_arg_barrier(inst)) continue;
+                if (inst.op == IrOp::Phi) continue;
+                bool uses_v = false;
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == *k) {
+                        uses_v = true; break;
+                    }
+                }
+                if (!uses_v) continue;
+                if (inst.dst.kind != IrValueKind::Temp) return false;
+                if (!every_use_is_flag_assign(inst.dst)) return false;
+                found = true;
+            }
+        }
+        return found;
+    }
+
     [[nodiscard]] bool should_inline(const IrValue& v) const {
         if (v.kind != IrValueKind::Temp) return false;
         const auto* d = def_of(v);
         if (!d) return false;
         if (!inlinable_op(d->op)) return false;
-        if (visible_use_count(v) > 1) return false;
+        if (visible_use_count(v) > 1) {
+            // Flag-feeder temps are an exception: their multiple uses are
+            // all flag-set computations that themselves render inline.
+            // Duplicating the underlying expression at each flag-set site
+            // is a small textual cost for a much cleaner output.
+            return is_flag_feeder_temp(v);
+        }
         return true;
     }
 
@@ -1772,35 +1856,44 @@ struct Emitter {
         }
     }
 
-    // Pointer-indexing fold: `*(u64*)(base)` and `*(u64*)(base + 8*N)` render
-    // as `base[N]` when base isn't stack- or global-relative. Restricted to
-    // u64 loads — that's the common argv/table-of-pointers pattern and the
-    // width the reader expects. Smaller loads keep their `*(T*)(addr)` form
-    // so struct-field accesses stay semantically honest.
+    // Pointer-indexing fold: `*(T*)(base + stride*N)` renders as `base[N]`
+    // when base isn't stack- or global-relative. The stride must equal the
+    // load width (so `*(u32*)(p + 4*N)` → `p[N]`); other strides keep their
+    // explicit `*(T*)(addr)` form so the reader sees the actual byte arithmetic.
+    // Negative offsets are accepted — backward array walks are common in
+    // string scanners and trailing-byte readers, and `p[-1]` reads better
+    // than `*(T*)(p - 8)`.
     [[nodiscard]] std::optional<std::string>
     try_render_array_index(const IrValue& addr, IrType t, int depth = 0) const {
-        if (t != IrType::I64) return std::nullopt;
+        if (is_float_type(t)) return std::nullopt;
+        const i64 stride = static_cast<i64>(type_bits(t) / 8);
+        if (stride == 0) return std::nullopt;
+
         IrValue base = addr;
         i64     off  = 0;
         if (const IrInst* d = def_stripped(addr);
-            d && d->op == IrOp::Add && d->src_count >= 2) {
+            d && (d->op == IrOp::Add || d->op == IrOp::Sub) && d->src_count >= 2) {
+            const bool sub = (d->op == IrOp::Sub);
             if (auto r = resolve_imm(d->srcs[1])) {
                 base = d->srcs[0];
-                off  = *r;
-            } else if (auto l = resolve_imm(d->srcs[0])) {
-                base = d->srcs[1];
-                off  = *l;
+                off  = sub ? -*r : *r;
+            } else if (!sub) {
+                if (auto l = resolve_imm(d->srcs[0])) {
+                    base = d->srcs[1];
+                    off  = *l;
+                } else {
+                    return std::nullopt;
+                }
             } else {
                 return std::nullopt;
             }
         }
-        if (off < 0) return std::nullopt;
-        if ((off & 0x7) != 0) return std::nullopt;
+        if (off % stride != 0) return std::nullopt;
         if (stack_offset(base).has_value()) return std::nullopt;
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;
         }
-        return std::format("{}[{}]", expr(base, depth + 1), off >> 3);
+        return std::format("{}[{}]", expr(base, depth + 1), off / stride);
     }
 
     [[nodiscard]] std::string format_mem(const IrValue& addr, IrType t, Reg seg,
@@ -2216,6 +2309,8 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             return format_binop(d, "-", depth, min_prec, Prec::Add, /*commutative=*/false);
         }
         case IrOp::Mul:  return format_binop(d, "*", depth, min_prec, Prec::Mul,   true);
+        case IrOp::Div:  return format_binop(d, "/", depth, min_prec, Prec::Mul,   false);
+        case IrOp::Mod:  return format_binop(d, "%", depth, min_prec, Prec::Mul,   false);
         case IrOp::And:  return format_binop(d, "&", depth, min_prec, Prec::BitAnd, true);
         case IrOp::Or:   return format_binop(d, "|", depth, min_prec, Prec::BitOr,  true);
         case IrOp::Xor:  return format_binop(d, "^", depth, min_prec, Prec::BitXor, true);
@@ -2296,6 +2391,18 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                 args += expr(d.srcs[i], depth, 0);
             }
             return std::format("__{}({})", d.name, args);
+        }
+
+        case IrOp::Select: {
+            if (d.src_count < 3) return std::format("t{}", d.dst.temp);
+            // C's `?:` precedence sits above assignment but below most other
+            // operators; wrap in parens whenever the surrounding context isn't
+            // already paren-bounded so the reader doesn't have to think.
+            std::string c = expr(d.srcs[0], depth, std::to_underlying(Prec::LogOr));
+            std::string a = expr(d.srcs[1], depth, std::to_underlying(Prec::Cond));
+            std::string b = expr(d.srcs[2], depth, std::to_underlying(Prec::Cond));
+            return wrap_if_lt(std::format("{} ? {} : {}", c, a, b),
+                              Prec::Cond, min_prec);
         }
 
         default:
@@ -2436,6 +2543,16 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (inst.name.starts_with("x64.")) {
                 return std::format("/* {}({}) */", inst.name, args);
             }
+            // If the intrinsic produces a value that survives downstream,
+            // bind it to a named temp so subsequent reads have something
+            // to refer to. Otherwise emit as a void statement.
+            if (inst.dst.kind == IrValueKind::Temp &&
+                visible_use_count(inst.dst) > 0) {
+                return std::format("{} t{} = {}({});",
+                                   c_type_name_for(inst.dst),
+                                   inst.dst.temp,
+                                   inst.name, args);
+            }
             return std::format("{}({});", inst.name, args);
         }
 
@@ -2443,6 +2560,10 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (inlinable_op(inst.op) && inst.dst.kind == IrValueKind::Temp) {
                 if (visible_use_count(inst.dst) <= 1) return "";
                 if (stack_offset(inst.dst).has_value()) return "";
+                // Suppress the declaration when this temp's only consumers
+                // are flag-set instructions — those will inline the
+                // expression when they themselves render.
+                if (is_flag_feeder_temp(inst.dst)) return "";
                 return std::format("{} t{} = {};",
                                    c_type_name_for(inst.dst),
                                    inst.dst.temp,

@@ -110,10 +110,16 @@ enum class IrOp : u16 {
     Load,
     Store,
 
-    Add, Sub, Mul, Div,
+    Add, Sub, Mul, Div, Mod,
     And, Or, Xor,
     Neg, Not,
     Shl, Lshr, Ashr,
+
+    // Ternary select: srcs[0] is an i1 condition, srcs[1] is the value when
+    // true, srcs[2] is the value when false. Used to lift CMOVcc as a clean
+    // dataflow node so the emitter can render `(cond ? a : b)` instead of
+    // an opaque intrinsic.
+    Select,
 
     CmpEq, CmpNe,
     CmpUlt, CmpUle, CmpUgt, CmpUge,

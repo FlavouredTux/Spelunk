@@ -15,6 +15,8 @@ std::string_view op_name(IrOp op) noexcept {
         case IrOp::Sub:            return "sub";
         case IrOp::Mul:            return "mul";
         case IrOp::Div:            return "div";
+        case IrOp::Mod:            return "mod";
+        case IrOp::Select:         return "select";
         case IrOp::And:            return "and";
         case IrOp::Or:             return "or";
         case IrOp::Xor:            return "xor";
@@ -206,6 +208,14 @@ std::string format_ir_inst(const IrInst& inst) {
         case IrOp::Clobber:
             return std::format("{} = clobber  ; call-clobbered",
                                format_ir_value(inst.dst));
+
+        case IrOp::Select:
+            return std::format("{} = select {} {}, {}, {}",
+                               format_ir_value(inst.dst),
+                               type_name(inst.dst.type),
+                               format_ir_value(inst.srcs[0]),
+                               format_ir_value(inst.srcs[1]),
+                               format_ir_value(inst.srcs[2]));
 
         default:
             // Binary ops and comparisons

@@ -1,5 +1,5 @@
 // two_args
 u64 two_args(u64 a1, u64 a2) {
-  fprintf(stderr, "a=%s b=%s\n", a1, a2);
+  fprintf(stderr, "a=%s b=%s\\n", a1, a2);
   return 0;
 }

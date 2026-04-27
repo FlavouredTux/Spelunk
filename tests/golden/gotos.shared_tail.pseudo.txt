@@ -3,7 +3,7 @@ u64 shared_tail(u64 a1) {
   local_20 = a1;
   local_c = 0;
   if (a1) {
-    if (*(u8*)(local_20)) {
+    if (local_20[0]) {
       u64 r_strlen = strlen(local_20);
       local_c = (u32)r_strlen;
     }

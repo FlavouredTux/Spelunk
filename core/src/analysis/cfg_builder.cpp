@@ -325,6 +325,11 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
             jt.index_reg = bound ? canonical_reg(bound->index_reg)
                                  : canonical_reg(outer->outer_reg);
             if (bound) jt.default_tgt = bound->default_tgt;
+            // In probe mode (no decoded bound) we tolerate one consecutive
+            // bad entry before giving up — handles rare compiler-emitted
+            // unreachable-default slots without becoming a junk-data probe.
+            constexpr unsigned kMaxConsecBadProbes = 1;
+            unsigned consec_bad = 0;
             for (u32 k = 0; k < max_count; ++k) {
                 i64 slot = 0;
                 if (!read_table_entry(b, outer->va + k * outer->entry_bytes,
@@ -343,9 +348,13 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
                 }
                 const addr_t tgt = static_cast<addr_t>(entry);
                 if (!find_exec_section_for(b, tgt)) {
-                    if (!bound) break;
+                    if (!bound) {
+                        if (++consec_bad > kMaxConsecBadProbes) break;
+                        continue;
+                    }
                     continue;
                 }
+                consec_bad = 0;
                 jt.targets.push_back(tgt);
                 jt.values.push_back(static_cast<i64>(k));
             }
@@ -363,15 +372,23 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         JumpTable jt;
         jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
         if (bound) jt.default_tgt = bound->default_tgt;
+        // Tolerate one consecutive bad entry in probe mode; see the outer-
+        // table loop above for rationale.
+        constexpr unsigned kMaxConsecBadProbes = 1;
+        unsigned consec_bad = 0;
         for (u32 k = 0; k < max_count; ++k) {
             u64 entry = 0;
             if (!read_u64_at(b, table + k * 8u, entry)) break;
             const addr_t tgt = static_cast<addr_t>(entry);
             if (!find_exec_section_for(b, tgt)) {
-                if (!bound) break;   // probe-mode: stop on first invalid
+                if (!bound) {
+                    if (++consec_bad > kMaxConsecBadProbes) break;
+                    continue;
+                }
                 // With a known bound, trust it even if a single entry looks odd.
                 continue;
             }
+            consec_bad = 0;
             jt.targets.push_back(tgt);
             jt.values.push_back(static_cast<i64>(k));
         }
@@ -408,14 +425,20 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         JumpTable jt;
         jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
         if (bound) jt.default_tgt = bound->default_tgt;
+        constexpr unsigned kMaxConsecBadProbes = 1;
+        unsigned consec_bad = 0;
         for (u32 k = 0; k < max_count; ++k) {
             u64 entry = 0;
             if (!read_u64_at(b, table + k * 8u, entry)) break;
             const addr_t tgt = static_cast<addr_t>(entry);
             if (!find_exec_section_for(b, tgt)) {
-                if (!bound) break;
+                if (!bound) {
+                    if (++consec_bad > kMaxConsecBadProbes) break;
+                    continue;
+                }
                 continue;
             }
+            consec_bad = 0;
             jt.targets.push_back(tgt);
             jt.values.push_back(static_cast<i64>(k));
         }
@@ -512,6 +535,8 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     jt.index_reg = bound ? canonical_reg(bound->index_reg) : canonical_reg(idx_reg);
     if (bound) jt.default_tgt = bound->default_tgt;
 
+    constexpr unsigned kMaxConsecBadProbes = 1;
+    unsigned consec_bad = 0;
     for (u32 k = 0; k < max_count; ++k) {
         i64 entry = 0;
         if (!read_table_entry(b, table + k * entry_bytes,
@@ -520,9 +545,13 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         }
         const addr_t tgt = table + static_cast<addr_t>(entry);
         if (!find_exec_section_for(b, tgt)) {
-            if (!bound) break;
+            if (!bound) {
+                if (++consec_bad > kMaxConsecBadProbes) break;
+                continue;
+            }
             continue;
         }
+        consec_bad = 0;
         jt.targets.push_back(tgt);
         jt.values.push_back(static_cast<i64>(k));
     }

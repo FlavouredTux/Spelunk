@@ -30,6 +30,42 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  # clang + libc++ on Linux. The point is catching libc++-specific
+  # header drift (transitive include leaks, missing <format>/<print>
+  # explicit pulls) without waiting on the macos-14 runner, which is
+  # both slower to schedule and only covers Apple Clang. CLI is out of
+  # scope for the same libc++ <print> reason as build-macos.
+  build-clang-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 \
+                                  clang-18 libc++-18-dev libc++abi-18-dev
+
+      - name: Configure
+        env:
+          CC: clang-18
+          CXX: clang++-18
+          CXXFLAGS: -stdlib=libc++
+          LDFLAGS: -stdlib=libc++
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DEMBER_BUILD_CLI=OFF
+
+      - name: Build core + unit-test executables
+        run: |
+          cmake --build build --target ember_core \
+                                       ember_demangle_test \
+                                       ember_annotations_resolver_test \
+                                       ember_sigs_test
+
+      - name: Run toolchain-independent unit tests
+        run: |
+          ctest --test-dir build --output-on-failure \
+            -R '^(demangle_unit|annotations_resolver_unit|sigs_unit)$'
+
   # Apple Clang build of `ember_core` + the toolchain-independent unit
   # tests. The point is catching C++23 idiom drift early
   # (`std::views::enumerate` has bitten the project as a post-release
@@ -88,3 +124,19 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure \
             -R '^(demangle_unit|annotations_resolver_unit|sigs_unit)$'
+
+  # Windows MSVC build-only gate. release.yml already builds Windows on
+  # tag pushes, but per-PR we want to catch MSVC-only issues
+  # (/permissive- enforcement, header order sensitivity, _CRT_SECURE_*
+  # interactions) before they land on main and break a release. Goldens
+  # don't run here — addresses + sig hashes are gcc-pinned by design.
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release

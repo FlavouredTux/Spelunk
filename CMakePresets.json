@@ -1,0 +1,77 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "inherits": "base",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        },
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+        },
+        {
+            "name": "relwithdebinfo",
+            "displayName": "Release with debug info",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+        },
+        {
+            "name": "asan",
+            "displayName": "Release + AddressSanitizer/UBSan",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "EMBER_SANITIZE": "ON"
+            }
+        },
+        {
+            "name": "no-cli",
+            "displayName": "Core library only (no CLI)",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "EMBER_BUILD_CLI": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "release",         "configurePreset": "release" },
+        { "name": "debug",           "configurePreset": "debug" },
+        { "name": "relwithdebinfo",  "configurePreset": "relwithdebinfo" },
+        { "name": "asan",            "configurePreset": "asan" },
+        { "name": "no-cli",          "configurePreset": "no-cli" }
+    ],
+    "testPresets": [
+        {
+            "name": "release",
+            "configurePreset": "release",
+            "output": { "outputOnFailure": true },
+            "execution": { "stopOnFailure": false }
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "asan",
+            "configurePreset": "asan",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

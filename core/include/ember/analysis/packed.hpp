@@ -5,7 +5,7 @@
 
 namespace ember {
 
-struct Binary;
+class Binary;
 struct Section;
 
 // Shannon entropy over the byte distribution. Range [0.0, 8.0]. Uniform

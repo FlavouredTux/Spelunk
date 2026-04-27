@@ -62,6 +62,9 @@ add_subdirectory(core)
 if(EMBER_BUILD_CLI)
     add_subdirectory(cli)
 endif()
-if(BUILD_TESTING AND EMBER_BUILD_CLI)
+if(BUILD_TESTING)
+    # Toolchain-independent unit tests don't need the CLI. Fixture-based
+    # golden tests inside tests/CMakeLists.txt gate themselves on the
+    # ember_cli target so they no-op when EMBER_BUILD_CLI=OFF.
     add_subdirectory(tests)
 endif()

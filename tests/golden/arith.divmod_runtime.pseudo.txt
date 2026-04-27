@@ -1,0 +1,8 @@
+// divmod_runtime
+u64 divmod_runtime(u64 a1, u64 a2) {
+  u32 t1 = (u32)a1;
+  local_c = t1;
+  u32 t3 = (u32)a2;
+  local_10 = t3;
+  return (u32)((u32)a1 % (u32)a2);
+}

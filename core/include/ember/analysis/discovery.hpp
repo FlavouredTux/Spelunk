@@ -6,7 +6,7 @@
 
 namespace ember {
 
-struct Binary;
+class Binary;
 
 // Vtable slot harvest. Walks Itanium and MSVC RTTI (whichever applies
 // to the binary's format), returns each method-slot address that

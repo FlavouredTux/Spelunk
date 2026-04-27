@@ -13,8 +13,36 @@
 # Tests are only wired when building on Linux with gcc/clang available
 # (ASM output would drift across compilers).
 
+# Toolchain-independent unit tests run anywhere. Compiled-fixture golden
+# tests are pinned to the gcc:15 toolchain (see ci.yml) so they only
+# wire up on Linux.
+add_executable(ember_demangle_test demangle_test.cpp)
+target_link_libraries(ember_demangle_test PRIVATE ember::core ember::flags)
+add_test(NAME demangle_unit COMMAND ember_demangle_test)
+
+add_executable(ember_annotations_resolver_test annotations_resolver_test.cpp)
+target_link_libraries(ember_annotations_resolver_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME annotations_resolver_unit
+         COMMAND ember_annotations_resolver_test)
+
+# Unit test for FLIRT-style signature matching (`--pat`). Self-contained:
+# uses an in-process MockBinary so the test doesn't depend on which
+# version of gcc compiled the C fixtures.
+add_executable(ember_sigs_test sigs_test.cpp)
+target_link_libraries(ember_sigs_test PRIVATE ember::core ember::flags)
+add_test(NAME sigs_unit COMMAND ember_sigs_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(STATUS "ember tests: skipping (Linux only for now)")
+    message(STATUS "ember tests: fixture goldens skipped (Linux only)")
+    return()
+endif()
+
+# Fixture-based golden tests shell out to the CLI; skip them entirely
+# when the CLI is opted out of (e.g. the macOS Apple Clang job, where
+# the CLI's `<print>` usage isn't yet portable).
+if(NOT TARGET ember_cli)
+    message(STATUS "ember tests: fixture goldens skipped (ember_cli not built)")
     return()
 endif()
 
@@ -68,6 +96,9 @@ ember_build_fixture(printf_noise)
 ember_build_fixture(canary PROTECTOR "-fstack-protector-strong")
 # -O0 so the explicit gotos survive for the tail-duplication test.
 ember_build_fixture(gotos OPT "-O0")
+# -O0 so the `%` operator survives as a real IDIV (and the IR Mod op),
+# and the do-while body keeps its conditional structure intact.
+ember_build_fixture(arith OPT "-O0")
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by
 # the driver script), because CTest's own quoting gets ugly with ";" in
@@ -120,20 +151,6 @@ ember_golden_test(
     ARGS    "--dump-types|__BINARY__"
     GOLDEN  types_basic.dump.txt
 )
-
-# Unit tests for the Itanium demangler: not a golden, just a self-checking
-# binary. Wired as a CTest so it runs with the rest of the suite.
-add_executable(ember_demangle_test demangle_test.cpp)
-target_link_libraries(ember_demangle_test PRIVATE ember::core ember::flags)
-add_test(NAME demangle_unit COMMAND ember_demangle_test)
-
-# Unit test for the annotation source resolver: explicit > sidecar > cache
-# precedence, path-based (not content-based) cache keys.
-add_executable(ember_annotations_resolver_test annotations_resolver_test.cpp)
-target_link_libraries(ember_annotations_resolver_test
-    PRIVATE ember::core ember::flags)
-add_test(NAME annotations_resolver_unit
-         COMMAND ember_annotations_resolver_test)
 
 # ---- switch_basic -----------------------------------------------------------
 
@@ -417,6 +434,31 @@ ember_golden_test(
     FIXTURE gotos
     ARGS    "-p|-s|shared_tail"
     GOLDEN  gotos.shared_tail.pseudo.txt
+)
+
+# ---- arith (IR Mod op + do-while structurer) -------------------------------
+#
+# Two regressions land here. First: `IrOp::Mod` was added in adffa81 and
+# until now had no direct golden — divmod_runtime exercises a runtime
+# `% b` (gcc emits `IDIV r/m32`, the lifter raises it to a Mod alongside
+# the Div). Second: the structurer's do-while detection now accepts
+# loops with multiple back-edge predecessors (one cond-and-exit tail
+# plus inner unconditional jumps from skip arms) — dowhile_with_skip
+# is the smallest such shape and locks the rendered output so a future
+# regression that falls back to goto soup shows up as a clean diff.
+
+ember_golden_test(
+    NAME    arith_divmod_runtime_pseudo
+    FIXTURE arith
+    ARGS    "-p|-s|divmod_runtime"
+    GOLDEN  arith.divmod_runtime.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    arith_dowhile_with_skip_pseudo
+    FIXTURE arith
+    ARGS    "-p|-s|dowhile_with_skip"
+    GOLDEN  arith.dowhile_with_skip.pseudo.txt
 )
 
 ember_golden_test(

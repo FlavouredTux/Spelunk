@@ -41,6 +41,13 @@ add_executable(ember_declarative_test declarative_test.cpp)
 target_link_libraries(ember_declarative_test PRIVATE ember::core ember::flags)
 add_test(NAME declarative_unit COMMAND ember_declarative_test)
 
+# Unit test for PDB ingestion. Builds a synthetic v7 MSF in-memory
+# (superblock, directory, DBI header, S_PUB32 records) so the parser
+# round-trip is exercised without depending on a real Microsoft toolchain.
+add_executable(ember_pdb_test pdb_test.cpp)
+target_link_libraries(ember_pdb_test PRIVATE ember::core ember::flags)
+add_test(NAME pdb_unit COMMAND ember_pdb_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

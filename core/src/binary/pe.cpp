@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <ember/analysis/pe_unwind.hpp>
+#include <ember/binary/pdb.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -59,6 +60,7 @@ constexpr u32 kScnMemWrite   = 0x80000000;
 // these by convention; we only read the ones we use.
 constexpr std::size_t kDdExport      = 0;
 constexpr std::size_t kDdImport      = 1;
+constexpr std::size_t kDdDebug       = 6;
 constexpr std::size_t kDdTls         = 9;
 constexpr std::size_t kDdDelayImport = 13;
 
@@ -288,6 +290,7 @@ Result<void> PeBinary::parse() {
     scan_iat_thunks(got_to_name);
     if (auto rv = parse_tls_callbacks();            !rv) return std::unexpected(rv.error());
     absorb_pdata_function_starts();
+    parse_codeview_pdb_filename();
     sort_and_dedupe_symbols();
     return {};
 }
@@ -681,6 +684,59 @@ void PeBinary::absorb_pdata_function_starts() {
     }
 }
 
+// Walk IMAGE_DIRECTORY_ENTRY_DEBUG. Each 28-byte entry has:
+//   +0  Characteristics       u32 (must be 0)
+//   +4  TimeDateStamp         u32
+//   +8  MajorVersion/Minor    u16×2
+//  +12  Type                  u32 (CODEVIEW = 2)
+//  +16  SizeOfData            u32
+//  +20  AddressOfRawData      u32 (RVA into the loaded image)
+//  +24  PointerToRawData      u32 (file offset of the CV record)
+// The CodeView "RSDS" record format inside the raw data:
+//   +0  signature             "RSDS" (4 bytes)
+//   +4  GUID                  16 bytes
+//  +20  Age                   u32
+//  +24  PdbFilename           null-terminated UTF-8
+void PeBinary::parse_codeview_pdb_filename() {
+    if (data_dirs_.size() <= kDdDebug) return;
+    const auto& dd = data_dirs_[kDdDebug];
+    if (dd.size == 0 || dd.virtual_address == 0) return;
+    if (!rva_is_mapped(dd.virtual_address, dd.size)) return;
+
+    const auto entries = bytes_at_rva(dd.virtual_address);
+    if (entries.size() < dd.size) return;
+
+    constexpr u32 kImageDebugTypeCodeview = 2;
+    constexpr std::size_t kEntrySize = 28;
+    for (std::size_t i = 0; i + kEntrySize <= dd.size; i += kEntrySize) {
+        const std::byte* e = entries.data() + i;
+        const u32 type    = read_le_at<u32>(e + 12);
+        if (type != kImageDebugTypeCodeview) continue;
+        const u32 raw_sz  = read_le_at<u32>(e + 16);
+        const u32 raw_rva = read_le_at<u32>(e + 20);
+        if (raw_sz < 24 + 1) continue;            // need at least an empty name
+        if (!rva_is_mapped(raw_rva, raw_sz)) continue;
+        const auto cv = bytes_at_rva(raw_rva);
+        if (cv.size() < raw_sz) continue;
+
+        // Match RSDS first (PDB v7); legacy NB10 (PDB v2) we ignore — the
+        // current parser doesn't grok the older container format anyway.
+        if (cv.size() < 4) continue;
+        if (cv[0] != std::byte{'R'} || cv[1] != std::byte{'S'} ||
+            cv[2] != std::byte{'D'} || cv[3] != std::byte{'S'}) continue;
+
+        const std::size_t name_off = 24;          // signature + GUID + age
+        if (raw_sz <= name_off) continue;
+        const char* name_p = reinterpret_cast<const char*>(cv.data() + name_off);
+        const std::size_t name_max = raw_sz - name_off;
+        std::size_t name_len = 0;
+        while (name_len < name_max && name_p[name_len] != '\0') ++name_len;
+        if (name_len == 0) continue;
+        pdb_filename_.assign(name_p, name_len);
+        return;
+    }
+}
+
 void PeBinary::sort_and_dedupe_symbols() {
     std::ranges::sort(symbols_, [](const Symbol& a, const Symbol& b) noexcept {
         if (a.is_import != b.is_import) return a.is_import < b.is_import;
@@ -696,6 +752,52 @@ void PeBinary::sort_and_dedupe_symbols() {
                 && a.name == b.name;
         });
     symbols_.erase(dups.begin(), dups.end());
+}
+
+Result<std::size_t>
+PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
+    auto pubs = pdb::load_publics(path);
+    if (!pubs) return std::unexpected(std::move(pubs).error());
+
+    // Resolve every (segment, offset) pair to an absolute VA. Keep
+    // existing names — imports, exports, TLS callbacks all win on a
+    // collision because they carry richer metadata (got_addr, is_import,
+    // size). The PDB walk only contributes a name + address, which is
+    // best-effort fallback information.
+    std::unordered_map<addr_t, std::size_t> by_addr;
+    by_addr.reserve(symbols_.size());
+    for (std::size_t i = 0; i < symbols_.size(); ++i) {
+        if (symbols_[i].addr != 0) by_addr.emplace(symbols_[i].addr, i);
+    }
+
+    std::size_t added = 0;
+    for (const auto& p : *pubs) {
+        if (p.segment == 0 || p.segment > sections_.size()) continue;
+        const Section& sec = sections_[p.segment - 1];
+        const addr_t va = sec.vaddr + p.section_offset;
+        if (va < image_base_) continue;
+
+        if (auto it = by_addr.find(va); it != by_addr.end()) {
+            // Already named — only fill in a name on a synthesized
+            // `sub_<hex>` entry so the PDB upgrade is visible.
+            Symbol& existing = symbols_[it->second];
+            if (existing.name.starts_with("sub_")) {
+                existing.name = p.name;
+                ++added;
+            }
+            continue;
+        }
+        Symbol s;
+        s.name = p.name;
+        s.addr = va;
+        s.kind = p.is_function ? SymbolKind::Function : SymbolKind::Object;
+        symbols_.push_back(std::move(s));
+        by_addr.emplace(va, symbols_.size() - 1);
+        ++added;
+    }
+    sort_and_dedupe_symbols();
+    invalidate_caches();
+    return added;
 }
 
 }  // namespace ember

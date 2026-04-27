@@ -43,6 +43,21 @@ public:
     [[nodiscard]] std::span<const DataDirectory>
     data_directories() const noexcept { return data_dirs_; }
 
+    // The on-disk PDB filename embedded in the binary's CodeView debug
+    // entry (RSDS record), or empty if the binary doesn't reference a
+    // PDB. Filenames in MSVC-built binaries are absolute paths from the
+    // build host (`C:\…\foo.pdb`); the loader basenames them when
+    // searching alongside the .exe.
+    [[nodiscard]] std::string_view pdb_filename() const noexcept { return pdb_filename_; }
+
+    // Merge S_PUB32 / S_GPROC32 names from a PDB at `path` into this
+    // PE's symbol table. Returns the number of symbols added (zero on
+    // success when the PDB has no resolvable publics, an error on
+    // parse / I/O failure). Resolves (segment, offset) pairs to
+    // absolute VAs using image_base() + sections_[seg-1].vaddr + offset.
+    [[nodiscard]] Result<std::size_t>
+    attach_pdb_from_path(const std::filesystem::path& path);
+
 private:
     explicit PeBinary(std::vector<std::byte> buffer) noexcept
         : buffer_(std::move(buffer)) {}
@@ -109,6 +124,12 @@ private:
     // the remaining bytes of the containing section.
     [[nodiscard]] std::string_view cstr_at_rva(u32 rva) const noexcept;
 
+    // Walk IMAGE_DIRECTORY_ENTRY_DEBUG (data dir 6) for a CodeView
+    // RSDS record and stash its embedded PDB filename in pdb_filename_.
+    // Empty when the binary has no debug directory or the entries are
+    // not the v7 RSDS form.
+    void parse_codeview_pdb_filename();
+
     std::vector<std::byte>     buffer_;
     Arch                       arch_       = Arch::Unknown;
     addr_t                     entry_      = 0;
@@ -116,6 +137,7 @@ private:
     std::vector<Section>       sections_;
     std::vector<Symbol>        symbols_;
     std::vector<DataDirectory> data_dirs_;
+    std::string                pdb_filename_;
 };
 
 }  // namespace ember

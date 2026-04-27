@@ -337,6 +337,40 @@ load_binary(const std::filesystem::path& path) {
     if (looks_like_pe(*buffer)) {
         auto pe = PeBinary::load_from_buffer(std::move(*buffer));
         if (!pe) return std::unexpected(std::move(pe).error());
+
+        // Sidecar PDB ingestion — opt-in by file presence. Try the
+        // basename of the embedded CodeView PDB filename first
+        // (`<binary_dir>/<basename>`), then `<binary>.pdb` and
+        // `<binary stem>.pdb`. MSVC bakes an absolute build-host path
+        // into the .exe; the basename match is what end-user setups
+        // ship. Failures are silent: if no PDB is found, the binary
+        // loads with whatever names the PE itself carried (exports,
+        // imports, PDATA-derived sub_<hex>).
+        const std::string_view embedded = (*pe)->pdb_filename();
+        std::error_code ec;
+        std::filesystem::path dir = path.parent_path();
+        auto try_load = [&](const std::filesystem::path& p) -> bool {
+            if (p.empty()) return false;
+            if (!std::filesystem::exists(p, ec)) return false;
+            auto added = (*pe)->attach_pdb_from_path(p);
+            return added.has_value();
+        };
+        if (!embedded.empty()) {
+            std::filesystem::path emb(embedded);
+            if (try_load(dir / emb.filename())) {
+                /* loaded */
+            } else {
+                try_load(dir / std::filesystem::path(std::string(embedded)));
+            }
+        }
+        if ((*pe)->pdb_filename().empty()) {
+            // Even without an embedded reference, try the conventional
+            // name — split debug builds drop `<basename>.pdb` next to
+            // the binary.
+            try_load(path.string() + ".pdb");
+            try_load(path.parent_path() / (path.stem().string() + ".pdb"));
+        }
+
         return std::unique_ptr<Binary>(std::move(*pe));
     }
 

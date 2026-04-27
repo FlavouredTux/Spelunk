@@ -90,6 +90,11 @@ public:
     [[nodiscard]] std::vector<const Symbol*>
     find_all_by_name(std::string_view name) const;
 
+    // Invalidate the lookup caches. Loaders call this when symbols_
+    // changes after the initial parse() — e.g. when the PDB sidecar
+    // ingestion pass adds names that the on-disk PE didn't carry.
+    void invalidate_caches() const noexcept { caches_.reset(); }
+
     // ---- Indirect-edge oracle ----------------------------------------
     // User-populated map: instruction VA of an indirect call/jmp →
     // concrete target VAs observed at runtime (or otherwise known).

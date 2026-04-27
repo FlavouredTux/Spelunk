@@ -112,9 +112,6 @@ void print_help() {
     std::println("      --export-annotations P  copy the currently-resolved annotations file to P");
     std::println("      --trace PATH     load indirect-edge trace (TSV: from\\tto per line)");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
-    std::println("      --project PATH   project file scripts may read/write via project.*");
-    std::println("      --script PATH    run a JavaScript file against the loaded binary");
-    std::println("      -- ARG...        pass remaining args to the script as argv");
     std::println("      --cache-dir DIR  override ~/.cache/ember for disk cache");
     std::println("      --no-cache       bypass the disk cache (--xrefs/strings/arities)");
     std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");

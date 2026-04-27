@@ -15,11 +15,11 @@
 
 A from-scratch reverse-engineering toolkit. ELF + Mach-O + PE loaders,
 Microsoft minidump + raw-region memory image loaders, an x86-64
-decoder/lifter/SSA pipeline, structurer, pseudo-C emitter, a QuickJS
-scripting surface, and an Electron UI.
+decoder/lifter/SSA pipeline, structurer, pseudo-C emitter, a
+declarative annotation/scripting format, and an Electron UI.
 
-**No Capstone. No Zydis. No Ghidra. No LLVM.** Stdlib only — QuickJS-NG
-(MIT) is the one vendored dep, for scripting.
+**No Capstone. No Zydis. No Ghidra. No LLVM. No vendored deps.** Stdlib
+only.
 
 ![welcome screen](docs/welcome.png)
 ![decompiler view](docs/main.png)
@@ -91,9 +91,10 @@ ember [options] <binary>
 
   -s, --symbol NAME      target a specific symbol (default: main)
       --annotations P    user renames / signatures sidecar file
-      --project PATH     project file scripts may read/write via project.*
-      --script PATH      run a JS file against the loaded binary
-      -- ARG...          pass remaining args to the script as argv
+      --apply PATH       apply a .ember declarative script (renames, sigs,
+                         notes, pattern-renames, log-format-driven renames,
+                         deletes) to the resolved annotation file
+      --dry-run          with --apply: don't write; dump the would-be TSV
 
       --regions PATH     load via raw-region manifest (Scylla-style scrape)
       --apply-patches F  apply (vaddr_hex, bytes_hex) patches to the binary
@@ -144,33 +145,42 @@ on-disk image was junk. Module-name collisions get prefixed:
 
 ## Scripting
 
-`--script PATH` runs a JS file with the loaded binary exposed through
-`binary`, `xrefs`, `strings`, and (with `--project`) `project`.
+Ember's scripting surface is a declarative `.ember` format consumed by
+`--apply`. Section-keyed, no expressions or control flow — every line
+is a single `key = value` (or `pattern -> template`) pair. Drives bulk
+renames, signature batches, log-format-string-to-rename inference, and
+pattern globs over the discovered function set, all into the same
+`Annotations` file emit reads back at decompile time.
 
 ```sh
-ember --script scripts/query.js <binary> -- find-bytes "b8 ?? ?? ?? c3"
-ember --script scripts/query.js <binary> -- pseudo-c main
-ember --script scripts/query.js <binary> -- xrefs-to 0x401050
+ember --apply project.ember <binary>            # writes through to annotations
+ember --apply project.ember --dry-run <binary>  # preview as TSV on stdout
 ```
 
-`scripts/query.js` is a generic dispatcher covering `info`, `imports`,
-`sections`, `bytes`, `disasm`, `func`, `pseudo-c`, `xrefs-to`,
-`callers`, `callees`, `strings`, `string-xrefs`, `find-func`,
-`find-bytes`, and more.
+A small example:
 
-Mutations (`project.rename`, `setSignature`, `note`, `defineStruct`,
-`refineType`) stage into a pending buffer; `project.commit()` writes
-them back. Every mutator accepts `{dryRun: true}` for previews.
+```ember
+[rename]
+0x401234 = do_thing
+log_handler = handle_log_line
+
+[signature]
+0x401234 = int do_thing(char* name, int x)
+
+[from-strings]
+"[HttpClient] %s" -> HttpClient_$1
+```
 
 Full surface in [docs/scripting.md](docs/scripting.md).
 
 ## Plugin platform
 
-The scripting surface is the foundation for a plugin ecosystem aimed at
-target-specific reversing — games, engines, protocols, build-to-build
-knowledge carryover. Plugins are `.cjs` bundles
-(`plugin.json` + `main.cjs`) loaded by the Electron UI through the same
-script API. Design in [docs/plugin-platform.md](docs/plugin-platform.md).
+A plugin ecosystem aimed at target-specific reversing — games, engines,
+protocols, build-to-build knowledge carryover — is layered onto the
+Electron UI side, not the C++ core. Plugins are `.cjs` bundles
+(`plugin.json` + `main.cjs`) loaded by the renderer's Node runtime; the
+core surface they consume is the same `Annotations` API the `.ember`
+format drives. Design in [docs/plugin-platform.md](docs/plugin-platform.md).
 
 ## Layout
 
@@ -186,14 +196,12 @@ core/             C++23 library — everything except the CLI shim
     ir/           IR + lifters + SSA + cleanup passes + type lattice
     structure/    region builder (if/while/for/switch/goto)
     decompile/    pseudo-C emitter
-    script/       QuickJS runtime + bindings
+    script/       declarative .ember parser + applier
     common/       annotations, on-disk cache
 cli/              command-line driver
-scripts/          JS scripts consumed by --script (query.js, names.js, …)
 ui/               Electron + React + TypeScript frontend
 tests/            golden-output CTest suite
 docs/             scripting, plugin platform, mascot, screenshots
-third_party/      vendored deps (QuickJS-NG)
 ```
 
 ## Tests
@@ -233,5 +241,4 @@ visibly with `--ipa --resolve-calls --eh` on. Known rough edges
 
 ## License
 
-MIT. See [LICENSE](LICENSE). QuickJS-NG (vendored under
-`third_party/quickjs/`) is also MIT.
+MIT. See [LICENSE](LICENSE).

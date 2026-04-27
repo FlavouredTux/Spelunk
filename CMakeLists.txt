@@ -57,7 +57,6 @@ elseif(MSVC)
 endif()
 
 include(CTest)
-add_subdirectory(third_party/quickjs)
 add_subdirectory(core)
 if(EMBER_BUILD_CLI)
     add_subdirectory(cli)

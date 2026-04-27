@@ -72,7 +72,6 @@ int main(int argc, char** argv) {
 
     if (!args.trace_path.empty())          load_trace_edges(args, b);
     if (!args.export_annotations.empty())  return run_export_annotations(args);
-    if (!args.script_path.empty())         return run_script(args, b);
     if (!args.apply_ember.empty())         return run_apply_ember(args, b);
 
     if (args.xrefs)              return run_xrefs(args, b);

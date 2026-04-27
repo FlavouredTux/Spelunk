@@ -18,11 +18,11 @@ namespace script {
 
 // Declarative project script (`*.ember`). A flat, section-keyed config
 // file consumed by `apply()` to populate / mutate an `Annotations`
-// struct. Unlike the QuickJS surface this format has no expressions or
-// control flow — every directive is a single key=value (or
-// pattern->template) pair. Designed for the high-volume but
-// low-complexity workflows: bulk renames, signature batches, log-format
-// driven recovery, glob renames over the discovered function set.
+// struct. No expressions or control flow — every directive is a single
+// key=value (or pattern->template) pair. Designed for the high-volume
+// but low-complexity workflows: bulk renames, signature batches,
+// log-format driven recovery, glob renames over the discovered
+// function set.
 //
 // Sections (case-insensitive):
 //

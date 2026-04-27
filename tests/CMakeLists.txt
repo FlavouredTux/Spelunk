@@ -283,9 +283,9 @@ ember_golden_test(
 )
 
 # Fingerprint stability: the address-independent content hash per function.
-# If this drifts, scripts/names.js (cross-version name carryover) stops
-# matching old databases — bump the "v1" schema token in fingerprint.cpp
-# when that's intentional, and regenerate goldens.
+# If this drifts, the rename TSV stops matching old databases — bump
+# the "v1" schema token in fingerprint.cpp when that's intentional, and
+# regenerate goldens.
 ember_golden_test(
     NAME    imports_fingerprints
     FIXTURE imports
@@ -622,51 +622,6 @@ if(Python3_Interpreter_FOUND)
         ARGS    "-p|-s|add42"
         GOLDEN  macho_tiny.add42.pseudo.txt
     )
-    ember_golden_test(
-        NAME    macho_tiny_script
-        FIXTURE macho_tiny
-        ARGS    "--script|${_fixture_dir}/macho_tiny_scan.js"
-        GOLDEN  macho_tiny.script.txt
-    )
-
-    # Phase-2 scripting surface (analysis, xrefs, strings, project). The
-    # project file is written into the build tree so re-runs overwrite it.
-    set(_phase2_proj "${_build_dir}/macho_tiny_phase2.proj")
-    ember_golden_test(
-        NAME    macho_tiny_script_phase2
-        FIXTURE macho_tiny
-        ARGS    "--project|${_phase2_proj}|--script|${_fixture_dir}/macho_tiny_phase2.js"
-        GOLDEN  macho_tiny.script.phase2.txt
-    )
-
-    # scripts/query.js — the omnibus RE query dispatcher. Each golden covers
-    # one subcommand invoked through the dispatcher, which together pin the
-    # argv→command plumbing end-to-end.
-    set(_query_js "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/query.js")
-    ember_golden_test(
-        NAME    query_js_info
-        FIXTURE macho_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|info"
-        GOLDEN  query_js.info.txt
-    )
-    ember_golden_test(
-        NAME    query_js_find_func
-        FIXTURE macho_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|find-func|main"
-        GOLDEN  query_js.find_func.txt
-    )
-    ember_golden_test(
-        NAME    query_js_bytes
-        FIXTURE macho_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|bytes|0x100001000|6"
-        GOLDEN  query_js.bytes.txt
-    )
-    ember_golden_test(
-        NAME    query_js_find_bytes
-        FIXTURE macho_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|find-bytes|b8 2a ?? ?? ?? c3"
-        GOLDEN  query_js.find_bytes.txt
-    )
 
     # ---- ppc64_tiny (hand-built ELF64, both endian modes) -----------------
     #
@@ -715,22 +670,10 @@ if(Python3_Interpreter_FOUND)
     set(EMBER_FIXTURE_ppc64be_opd_tiny_PATH "${_ppc64be_opd_tiny}")
 
     ember_golden_test(
-        NAME    ppc64le_tiny_info
-        FIXTURE ppc64le_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|info"
-        GOLDEN  ppc64le_tiny.info.txt
-    )
-    ember_golden_test(
         NAME    ppc64le_tiny_disasm
         FIXTURE ppc64le_tiny
         ARGS    "-d"
         GOLDEN  ppc64le_tiny.disasm.txt
-    )
-    ember_golden_test(
-        NAME    ppc64be_tiny_info
-        FIXTURE ppc64be_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|info"
-        GOLDEN  ppc64be_tiny.info.txt
     )
     ember_golden_test(
         NAME    ppc64be_tiny_disasm
@@ -761,12 +704,6 @@ if(Python3_Interpreter_FOUND)
         FIXTURE ppc64be_tiny
         ARGS    "-p"
         GOLDEN  ppc64be_tiny.pseudo.txt
-    )
-    ember_golden_test(
-        NAME    ppc64be_opd_tiny_info
-        FIXTURE ppc64be_opd_tiny
-        ARGS    "--script|${_query_js}|__BINARY__|--|info"
-        GOLDEN  ppc64be_opd_tiny.info.txt
     )
     ember_golden_test(
         NAME    ppc64be_opd_tiny_pseudo
@@ -807,12 +744,6 @@ if(Python3_Interpreter_FOUND)
         FIXTURE pe_tiny
         ARGS    "-p|-s|add42"
         GOLDEN  pe_tiny.add42.pseudo.txt
-    )
-    ember_golden_test(
-        NAME    pe_tiny_script
-        FIXTURE pe_tiny
-        ARGS    "--script|${_fixture_dir}/pe_tiny_scan.js"
-        GOLDEN  pe_tiny.script.txt
     )
 
     set(_pe_rich "${_build_dir}/pe_rich")
@@ -890,12 +821,6 @@ if(Python3_Interpreter_FOUND)
         FIXTURE pe_rich
         ARGS    "-p|-s|sub_1800011c0"
         GOLDEN  pe_rich.switch_msvc.pseudo.txt
-    )
-    ember_golden_test(
-        NAME    pe_rich_script
-        FIXTURE pe_rich
-        ARGS    "--script|${_fixture_dir}/pe_rich_scan.js"
-        GOLDEN  pe_rich.script.txt
     )
 
     set(_pe32_bad "${_build_dir}/pe32_bad")

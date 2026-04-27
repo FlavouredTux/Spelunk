@@ -10,12 +10,9 @@ namespace ember::cli {
 struct Args {
     std::string binary;
     std::string symbol;
-    std::string annotations_path;   // optional project-file for user edits (read-only load)
+    std::string annotations_path;   // --annotations PATH: explicit project file with renames/sigs/notes
     std::string export_annotations; // --export-annotations PATH: promote resolved source to PATH and exit
     std::string trace_path;         // optional indirect-edge trace TSV (from\tto per line)
-    std::string project_path;       // optional project-file authorising script mutations
-    std::string script_path;        // optional JS script to run against the binary
-    std::vector<std::string> script_argv; // args passed to the script after `--`
     std::string cache_dir;          // override for the disk cache location
     std::string diff_path;          // --diff OLD: compare this older binary against args.binary
     std::string diff_format;        // --diff-format: "tsv" (default) or "json"

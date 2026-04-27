@@ -1,7 +1,0 @@
-format   elf
-arch     ppc64
-endian   big
-entry    0x100078
-sections 1
-defined  1
-imports  0

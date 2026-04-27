@@ -61,8 +61,6 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--export-annotations", &Args::export_annotations},
     {"",   "--trace",       &Args::trace_path},
     {"",   "--cache-dir",   &Args::cache_dir},
-    {"",   "--project",     &Args::project_path},
-    {"",   "--script",      &Args::script_path},
     {"",   "--diff",        &Args::diff_path},
     {"",   "--diff-format", &Args::diff_format},
     {"",   "--fingerprint-out", &Args::fp_out},
@@ -99,10 +97,6 @@ Result<Args> parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
         const std::string_view s = argv[i];
-        if (s == "--") {
-            for (int j = i + 1; j < argc; ++j) a.script_argv.emplace_back(argv[j]);
-            break;
-        }
 
         // `--functions=PATTERN` — unambiguous way to specify the filter
         // without positional-order gotchas (main vs binary path).

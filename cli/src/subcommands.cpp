@@ -36,7 +36,6 @@
 #include <ember/ir/ssa.hpp>
 #include <ember/ir/types.hpp>
 #include <ember/script/declarative.hpp>
-#include <ember/script/runtime.hpp>
 
 #include "builders.hpp"
 #include "cli_error.hpp"
@@ -84,10 +83,8 @@ int run_export_annotations(const Args& args) {
     const std::filesystem::path exp_cache_dir =
         !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
                                 : cache::default_dir();
-    std::filesystem::path exp_explicit;
-    if (!args.annotations_path.empty())  exp_explicit = args.annotations_path;
-    else if (!args.project_path.empty()) exp_explicit = args.project_path;
-    const auto src = resolve_annotation_location(args.binary, exp_explicit, exp_cache_dir);
+    const auto src = resolve_annotation_location(
+        args.binary, args.annotations_path, exp_cache_dir);
     Annotations a;
     std::error_code ec;
     if (src.source != AnnotationSource::None &&
@@ -112,17 +109,14 @@ int run_export_annotations(const Args& args) {
 }
 
 int run_apply_ember(const Args& args, const Binary& b) {
-    // Resolver for the destination file. Same precedence as emit: explicit
-    // --annotations / --project beats sidecar beats cache. The resolver
+    // Resolver for the destination file. Same precedence as emit:
+    // explicit --annotations beats sidecar beats cache. The resolver
     // returns a cache path even when the file doesn't exist yet, so a
     // first-time apply still lands somewhere durable.
-    std::filesystem::path explicit_ann;
-    if (!args.annotations_path.empty())   explicit_ann = args.annotations_path;
-    else if (!args.project_path.empty())  explicit_ann = args.project_path;
     const std::filesystem::path cache_dir =
         !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
                                 : cache::default_dir();
-    auto loc = resolve_annotation_location(args.binary, explicit_ann, cache_dir);
+    auto loc = resolve_annotation_location(args.binary, args.annotations_path, cache_dir);
     if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
 
     Annotations ann;
@@ -147,7 +141,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
     } else {
         if (loc.source == AnnotationSource::None || loc.path.empty()) {
             std::println(stderr, "ember: --apply: nowhere to write annotations "
-                                 "(no --annotations / --project / sidecar / cache)");
+                                 "(no --annotations / sidecar / cache)");
             return EXIT_FAILURE;
         }
         if (auto sv = ann.save(loc.path); !sv) return report(sv.error());
@@ -169,50 +163,6 @@ int run_apply_ember(const Args& args, const Binary& b) {
             std::println(stderr, "ember: {}: warning: {}", tag, w);
         }
     }
-    return EXIT_SUCCESS;
-}
-
-int run_script(const Args& args, const Binary& b) {
-    // Scripts inherit the same source-precedence ladder as emission:
-    // --project/--annotations beat the sidecar which beats the cache.
-    // Mutations are still gated (empty path → mutation API raises), but
-    // the gate now opens automatically when a sidecar or cache entry
-    // exists; otherwise a fresh `commit()` writes to the cache path the
-    // resolver returned.
-    const std::filesystem::path script_cache_dir =
-        !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
-                                : cache::default_dir();
-    auto loc = resolve_annotation_location(
-        args.binary,
-        !args.project_path.empty() ? args.project_path : args.annotations_path,
-        script_cache_dir);
-    if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
-
-    std::optional<ProjectContext> project;
-    if (loc.source != AnnotationSource::None) {
-        project.emplace();
-        project->path = loc.path;
-        // Missing-file is a clean-start; a malformed file is a real error.
-        std::error_code ec;
-        if (std::filesystem::exists(loc.path, ec) && !ec) {
-            auto ld = Annotations::load(loc.path);
-            if (!ld) return report(ld.error());
-            project->loaded = std::move(*ld);
-            if (!args.quiet) {
-                const std::size_t n = project->loaded.renames.size()
-                                    + project->loaded.signatures.size()
-                                    + project->loaded.notes.size()
-                                    + project->loaded.named_constants.size();
-                std::println(stderr,
-                    "ember: annotations: {} ({}, {} entries)",
-                    loc.path.string(), annotation_source_name(loc.source), n);
-            }
-        }
-    }
-    ScriptRuntime rt(b, project ? &*project : nullptr);
-    rt.set_argv(args.script_argv);
-    auto rv = rt.run_file(args.script_path);
-    if (!rv) return report(rv.error());
     return EXIT_SUCCESS;
 }
 
@@ -785,15 +735,12 @@ namespace {
 // Resolve + load the annotation source. Sets `loaded` true when a file
 // was successfully read; returns the populated Annotations either way.
 [[nodiscard]] Annotations load_annotations_for(const Args& args, bool& loaded) {
-    std::filesystem::path explicit_ann;
-    if (!args.annotations_path.empty())   explicit_ann = args.annotations_path;
-    else if (!args.project_path.empty())  explicit_ann = args.project_path;
     const std::filesystem::path cache_dir =
         !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
                                 : cache::default_dir();
-    auto loc = resolve_annotation_location(args.binary, explicit_ann, cache_dir);
+    auto loc = resolve_annotation_location(args.binary, args.annotations_path, cache_dir);
     // --no-cache bypasses the annotation *cache* path but still honors
-    // sidecar / explicit --annotations / --project.
+    // sidecar / explicit --annotations.
     if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
 
     Annotations annotations;

@@ -1,10 +1,4 @@
-401000	773e3263832d4ea2	3	10	1	1	_init
-401070	b8d49a483e773f63	3	18	1	1	main
-4010a0	a6f07820428ffc3a	1	12	1	1	_start
-4010d0	ccce29627a3b155f	1	1	0	2	_dl_relocate_static_pie
-4010e0	407a5f68570e77a1	4	5	0	1	deregister_tm_clones
-401110	6b4126d14fd4e384	4	4	0	1	register_tm_clones
-401150	5daacbc43119a056	3	14	1	1	__do_global_dtors_aux
-401180	1e39dd60fd87622b	5	6	0	1	frame_dummy
-401190	f56c581409ec4bde	7	61	4	1	use_imports
-401204	ccce29627a3b155f	1	1	0	2	_fini
+401050	f2cb876ca3ed5433	3	46	3	1	main
+401090	f56c581409ec4bde	7	61	4	1	use_imports
+401110	63eeed39dc3992f4	1	2	0	2	twin_a
+401120	63eeed39dc3992f4	1	2	0	2	twin_b

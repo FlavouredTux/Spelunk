@@ -78,7 +78,7 @@ set(_build_dir   "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 file(MAKE_DIRECTORY "${_build_dir}")
 
 function(ember_build_fixture name)
-    cmake_parse_arguments(F "" "OPT;PROTECTOR" "" ${ARGN})
+    cmake_parse_arguments(F "" "OPT;PROTECTOR" "EXTRA_LDFLAGS" ${ARGN})
     if(NOT F_OPT)
         set(F_OPT "-O2")
     endif()
@@ -90,7 +90,7 @@ function(ember_build_fixture name)
     add_custom_command(
         OUTPUT "${_out}"
         COMMAND ${CMAKE_C_COMPILER} ${F_OPT} -g ${F_PROTECTOR}
-                -no-pie -o "${_out}" "${_src}"
+                -no-pie ${F_EXTRA_LDFLAGS} -o "${_out}" "${_src}"
         DEPENDS "${_src}"
         COMMENT "Compiling fixture ${name} (${F_OPT} ${F_PROTECTOR})"
         VERBATIM
@@ -108,7 +108,11 @@ ember_build_fixture(return_value)
 # Compile at -O0 so the compiler spills every local; this is the shape
 # where memory-forwarding has maximum leverage.
 ember_build_fixture(mem_forward OPT "-O0")
-ember_build_fixture(imports)
+# `-nostartfiles -Wl,-e,main` strips glibc's CRT (_init/_start/_dl_*/
+# *_tm_clones/frame_dummy/_fini) so the fingerprint + functions +
+# data-xrefs + collisions goldens don't drift across gcc point
+# releases. The binary's unrunnable but ember only parses it.
+ember_build_fixture(imports EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
 ember_build_fixture(decoder_misc)
 ember_build_fixture(tail_call)
 # -O0 so the compiler literally emits every redundant store; at -O2 the
@@ -342,8 +346,7 @@ ember_golden_test(
 )
 
 # --collisions: every name and every fingerprint bound to >1 address.
-# The imports fixture has two real fingerprint collisions (the
-# tm_clones twins and the _dl_relocate_static_pie / _fini stubs) so a
+# The imports fixture has the deliberate `twin_a` / `twin_b` pair so a
 # regression in collect_collisions either drops them or invents new
 # ones — both shapes the golden catches immediately.
 ember_golden_test(

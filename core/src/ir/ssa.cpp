@@ -105,18 +105,20 @@ struct VarKey {
 // ===== SSA identity helpers (shared across passes + emitter) =====
 
 std::optional<SsaKey> ssa_key(const IrValue& v) noexcept {
+    // First field is u8; brace-init the integer literal as `u8{N}` so MSVC
+    // doesn't fire C4244 on the int→u8 narrowing conversion.
     switch (v.kind) {
         case IrValueKind::Reg:
-            return SsaKey{0, static_cast<u32>(canonical_reg(v.reg)), v.version};
+            return SsaKey{u8{0}, static_cast<u32>(canonical_reg(v.reg)), v.version};
         case IrValueKind::Flag:
-            return SsaKey{1, static_cast<u32>(v.flag), v.version};
+            return SsaKey{u8{1}, static_cast<u32>(v.flag), v.version};
         case IrValueKind::Temp:
-            return SsaKey{2, v.temp, 0};
+            return SsaKey{u8{2}, v.temp, 0u};
         case IrValueKind::Imm: {
             // Synthesize a stable key so memory passes can treat
             // `store [0x404018], v` as a write to a known address.
             const u64 uv = static_cast<u64>(v.imm);
-            return SsaKey{3,
+            return SsaKey{u8{3},
                           static_cast<u32>(uv & 0xFFFFFFFFu),
                           static_cast<u32>(uv >> 32)};
         }

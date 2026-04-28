@@ -9,10 +9,22 @@ vm #1
     sub_140001080 → dispatch 0x14000109d (load 0x14000108e)
     sub_140001100 → dispatch 0x140001134 (load 0x14000110e)
   handlers (16 shown):
-    0x140001018 0x14000101c 0x140001020 0x140001024
-    0x140001028 0x14000102c 0x140001030 0x140001034
-    0x140001038 0x14000103c 0x140001040 0x140001044
-    0x140001048 0x14000104c 0x140001050 0x140001054
+    [0x00] 0x140001018 → arith (insns=2)
+    [0x01] 0x14000101c → load (insns=2)
+    [0x02] 0x140001020 → store (insns=2)
+    [0x03] 0x140001024 → return (insns=1)
+    [0x04] 0x140001028 → return (insns=1)
+    [0x05] 0x14000102c → return (insns=1)
+    [0x06] 0x140001030 → return (insns=1)
+    [0x07] 0x140001034 → return (insns=1)
+    [0x08] 0x140001038 → return (insns=1)
+    [0x09] 0x14000103c → return (insns=1)
+    [0x0a] 0x140001040 → return (insns=1)
+    [0x0b] 0x140001044 → return (insns=1)
+    [0x0c] 0x140001048 → return (insns=1)
+    [0x0d] 0x14000104c → return (insns=1)
+    [0x0e] 0x140001050 → return (insns=1)
+    [0x0f] 0x140001054 → return (insns=1)
 
 vm #2
   handler table:   0x140002100  (8 entries, 8 unique)
@@ -30,5 +42,11 @@ vm #2
     sub_140001260 → dispatch 0x14000126d (load 0x140001267)
     sub_140001270 → dispatch 0x14000127d (load 0x140001277)
   handlers (8 shown):
-    0x140001200 0x140001210 0x140001220 0x140001230
-    0x140001240 0x140001250 0x140001260 0x140001270
+    [0x00] 0x140001200 → null (insns=1)
+    [0x01] 0x140001210 → null (insns=1)
+    [0x02] 0x140001220 → null (insns=1)
+    [0x03] 0x140001230 → null (insns=1)
+    [0x04] 0x140001240 → null (insns=1)
+    [0x05] 0x140001250 → null (insns=1)
+    [0x06] 0x140001260 → null (insns=1)
+    [0x07] 0x140001270 → null (insns=1)

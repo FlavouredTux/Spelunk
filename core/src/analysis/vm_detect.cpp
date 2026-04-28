@@ -193,6 +193,206 @@ struct RegLoad {
 
 }  // namespace
 
+std::string_view handler_kind_name(HandlerKind k) noexcept {
+    switch (k) {
+        case HandlerKind::Unknown: return "unknown";
+        case HandlerKind::Null:    return "null";
+        case HandlerKind::Arith:   return "arith";
+        case HandlerKind::Load:    return "load";
+        case HandlerKind::Store:   return "store";
+        case HandlerKind::Branch:  return "branch";
+        case HandlerKind::Call:    return "call";
+        case HandlerKind::Return:  return "return";
+    }
+    return "?";
+}
+
+namespace {
+
+[[nodiscard]] bool is_arith_family(Mnemonic m) noexcept {
+    switch (m) {
+        case Mnemonic::Add: case Mnemonic::Sub:
+        case Mnemonic::And: case Mnemonic::Or: case Mnemonic::Xor:
+        case Mnemonic::Shl: case Mnemonic::Shr: case Mnemonic::Sar:
+        case Mnemonic::Neg: case Mnemonic::Not:
+        case Mnemonic::Inc: case Mnemonic::Dec:
+        case Mnemonic::Mul: case Mnemonic::Div:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] bool is_cmov(Mnemonic m) noexcept {
+    switch (m) {
+        case Mnemonic::Cmovo: case Mnemonic::Cmovno:
+        case Mnemonic::Cmovb: case Mnemonic::Cmovae:
+        case Mnemonic::Cmove: case Mnemonic::Cmovne:
+        case Mnemonic::Cmovbe: case Mnemonic::Cmova:
+        case Mnemonic::Cmovs: case Mnemonic::Cmovns:
+        case Mnemonic::Cmovp: case Mnemonic::Cmovnp:
+        case Mnemonic::Cmovl: case Mnemonic::Cmovge:
+        case Mnemonic::Cmovle: case Mnemonic::Cmovg:
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
+HandlerClassification
+classify_vm_handler(const Binary& b, addr_t handler_entry,
+                    addr_t dispatch_addr) {
+    HandlerClassification out;
+    out.entry    = handler_entry;
+    out.body_end = handler_entry;
+
+    const X64Decoder dec;
+
+    bool has_ret = false, has_call = false, has_branch = false;
+    bool has_store = false, has_load = false, has_arith = false;
+    std::size_t body_insns = 0;
+
+    constexpr std::size_t kMaxBodyInsns = 64;
+    addr_t ip = handler_entry;
+    for (std::size_t step = 0; step < kMaxBodyInsns; ++step) {
+        if (dispatch_addr != 0 && ip >= dispatch_addr) break;
+        auto bytes = b.bytes_at(ip);
+        if (bytes.empty()) break;
+        auto decoded = dec.decode(bytes, ip);
+        if (!decoded) break;
+        const Instruction& insn = *decoded;
+
+        // Skip the same junk-pads the dispatcher walker skips so a
+        // handler whose only body is `nop / xchg rax, rax` reads as
+        // Null instead of Arith.
+        if (is_semantic_nop(insn)) {
+            ip += insn.length;
+            continue;
+        }
+
+        // Trailing-dispatch peek: a byte/word-load (movzx) followed
+        // within 3 insns by an indirect jmp is the start of a
+        // dispatcher's tail (movzx → inc pc → jmp [t+i*8]). Don't
+        // count the load + advance + jmp toward the body; classify
+        // the actual handler work that ran before them.
+        if (insn.mnemonic == Mnemonic::Movzx &&
+            insn.num_operands == 2 &&
+            insn.operands[0].kind == Operand::Kind::Register &&
+            insn.operands[1].kind == Operand::Kind::Memory &&
+            (insn.operands[1].mem.size == 1 ||
+             insn.operands[1].mem.size == 2)) {
+            addr_t scan_ip = ip + insn.length;
+            bool   tail    = false;
+            for (int k = 0; k < 3; ++k) {
+                auto bs = b.bytes_at(scan_ip);
+                if (bs.empty()) break;
+                auto d = dec.decode(bs, scan_ip);
+                if (!d) break;
+                if (d->mnemonic == Mnemonic::Jmp &&
+                    d->num_operands == 1 &&
+                    d->operands[0].kind == Operand::Kind::Memory) {
+                    tail = true;
+                    break;
+                }
+                scan_ip += d->length;
+            }
+            if (tail) {
+                out.body_end = ip;
+                break;
+            }
+        }
+
+        if (is_return_like(insn.mnemonic)) {
+            has_ret = true;
+            out.body_end = ip + insn.length;
+            ++body_insns;
+            break;
+        }
+
+        // Indirect jmp = trailing dispatch (or escape); stop without
+        // counting it as part of the body. If the caller passed a
+        // dispatch_addr we wouldn't reach this — the ip>= guard above
+        // takes us out cleanly.
+        if (insn.mnemonic == Mnemonic::Jmp &&
+            insn.num_operands == 1 &&
+            insn.operands[0].kind == Operand::Kind::Memory) {
+            out.body_end = ip;
+            break;
+        }
+
+        // Direct call imm — classify and stop (caller-save regs are
+        // gone past this point so the rest of the body wouldn't be
+        // representative anyway).
+        if (insn.mnemonic == Mnemonic::Call) {
+            has_call = true;
+            out.body_end = ip + insn.length;
+            ++body_insns;
+            break;
+        }
+
+        // Direct unconditional jmp imm: follow to target if in bounds.
+        if (insn.mnemonic == Mnemonic::Jmp &&
+            insn.num_operands == 1 &&
+            insn.operands[0].kind == Operand::Kind::Relative) {
+            const addr_t tgt = insn.operands[0].rel.target;
+            // Treat "jmp out of the body" as the body's end.
+            if (dispatch_addr != 0 && tgt >= dispatch_addr) {
+                out.body_end = ip + insn.length;
+                break;
+            }
+            ip = tgt;
+            continue;
+        }
+
+        if (is_conditional_branch(insn.mnemonic) || is_cmov(insn.mnemonic)) {
+            has_branch = true;
+        } else if (insn.mnemonic == Mnemonic::Mov &&
+                   insn.num_operands == 2) {
+            const auto& dst = insn.operands[0];
+            const auto& src = insn.operands[1];
+            if (dst.kind == Operand::Kind::Memory) {
+                has_store = true;
+            } else if (dst.kind == Operand::Kind::Register &&
+                       src.kind == Operand::Kind::Memory) {
+                has_load = true;
+            }
+        } else if (insn.mnemonic == Mnemonic::Movzx ||
+                   insn.mnemonic == Mnemonic::Movsx ||
+                   insn.mnemonic == Mnemonic::Movsxd) {
+            // The byte-load that feeds a dispatch counts as Load if
+            // we don't have a dispatch_addr to filter it out — for
+            // central VMs (no trailing dispatch), this is correct.
+            if (insn.num_operands == 2 &&
+                insn.operands[1].kind == Operand::Kind::Memory) {
+                has_load = true;
+            }
+        } else if (is_arith_family(insn.mnemonic)) {
+            has_arith = true;
+        }
+
+        ++body_insns;
+        out.body_end = ip + insn.length;
+        ip += insn.length;
+    }
+
+    out.insn_count = body_insns;
+    // Precedence: a handler that ends with ret is conventionally "the
+    // vm_ret opcode" — but only when nothing else identifies it. Body
+    // work classifications win over Return so that `add rax, rcx; ret`
+    // reads as Arith (the meaningful op) rather than Return (the
+    // function termination).
+    if      (has_branch) out.kind = HandlerKind::Branch;
+    else if (has_call)   out.kind = HandlerKind::Call;
+    else if (has_store)  out.kind = HandlerKind::Store;
+    else if (has_load)   out.kind = HandlerKind::Load;
+    else if (has_arith)  out.kind = HandlerKind::Arith;
+    else if (has_ret)    out.kind = HandlerKind::Return;
+    else                 out.kind = HandlerKind::Null;
+    return out;
+}
+
 std::vector<VmInstance>
 group_vm_dispatchers(const std::vector<VmDispatcher>& dispatchers) {
     // Cluster by handler-table base — every dispatcher feeding the
@@ -227,6 +427,31 @@ group_vm_dispatchers(const std::vector<VmDispatcher>& dispatchers) {
     out.reserve(by_table.size());
     for (auto& [_, vm] : by_table) out.push_back(std::move(vm));
     return out;
+}
+
+std::vector<VmInstance> analyze_vms(const Binary& b) {
+    auto dispatchers = detect_vm_dispatchers(b);
+    auto vms = group_vm_dispatchers(dispatchers);
+
+    // Map handler_addr → trailing dispatch_addr for threaded handlers.
+    std::map<addr_t, addr_t> threaded_dispatch_at;
+    for (const auto& d : dispatchers) {
+        threaded_dispatch_at.emplace(d.function_addr, d.dispatch_addr);
+    }
+
+    for (auto& vm : vms) {
+        vm.handler_classes.reserve(vm.handlers.size());
+        for (addr_t h : vm.handlers) {
+            addr_t dispatch_at = 0;
+            if (auto it = threaded_dispatch_at.find(h);
+                it != threaded_dispatch_at.end()) {
+                dispatch_at = it->second;
+            }
+            vm.handler_classes.push_back(
+                classify_vm_handler(b, h, dispatch_at));
+        }
+    }
+    return vms;
 }
 
 std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
@@ -276,6 +501,30 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
             if (is_semantic_nop(insn)) {
                 ip += insn.length;
                 continue;
+            }
+            // Two-insn semantic-nop: `push reg; pop reg` saves and
+            // restores `reg` (modulo flags / rsp side effects). Single-
+            // insn is_semantic_nop can't catch this; lookahead one
+            // instruction and skip the pair.
+            if (insn.mnemonic == Mnemonic::Push &&
+                insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Register) {
+                auto next_bytes = b.bytes_at(ip + insn.length);
+                if (!next_bytes.empty()) {
+                    auto next_decoded = dec.decode(next_bytes,
+                                                    ip + insn.length);
+                    if (next_decoded &&
+                        next_decoded->mnemonic == Mnemonic::Pop &&
+                        next_decoded->num_operands == 1 &&
+                        next_decoded->operands[0].kind ==
+                            Operand::Kind::Register &&
+                        canonical_reg(next_decoded->operands[0].reg) ==
+                            canonical_reg(insn.operands[0].reg)) {
+                        ip += insn.length +
+                              static_cast<addr_t>(next_decoded->length);
+                        continue;
+                    }
+                }
             }
             ++age_counter;
 

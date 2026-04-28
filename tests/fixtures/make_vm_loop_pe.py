@@ -110,9 +110,17 @@ def main() -> int:
     text += b"\x90"
     assert len(text) == 0x18, len(text)
 
-    # ---- 16 handlers ---- (xor eax, eax; ret; nop)
-    for _ in range(16):
-        text += b"\x31\xC0\xC3\x90"
+    # ---- 16 handlers ---- (each 4 bytes; classifier exercise)
+    # Slot mix is deliberate so the per-handler classifier emits more
+    # than one HandlerKind on this VM. Slots 0..2 cover body-work
+    # classifications (arith / load / store), slots 3..15 stay as bare
+    # `ret`s so they classify as Return — which is what real-world
+    # `vm_ret`-style trivial opcodes look like.
+    text += b"\x48\x01\xC8\xC3"          # add rax, rcx; ret           — Arith
+    text += b"\x8A\x01\xC3\x90"          # mov al, [rcx]; ret; nop     — Load
+    text += b"\x88\x01\xC3\x90"          # mov [rcx], al; ret; nop     — Store
+    for _ in range(13):
+        text += b"\xC3\x90\x90\x90"      # ret; nop; nop; nop          — Return
     assert len(text) == 0x18 + 16 * 4
 
     # ---- pad to vm_loop_obf_rva (0x80) ----

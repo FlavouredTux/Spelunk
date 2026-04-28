@@ -55,6 +55,41 @@ struct VmDispatcher {
 [[nodiscard]] std::vector<VmDispatcher>
 detect_vm_dispatchers(const Binary& b);
 
+// Phase 1b coarse classification of one VM handler. The body — insns
+// from the handler's entry up to its trailing dispatch (threaded) or
+// terminator (central) — is walked and tallied across insn families;
+// the dominant family wins via the precedence
+//   Return > Call > Branch > Store > Load > Arith > Null.
+// Phase 1c will refine these to specific opcodes (vm_add, vm_jmp_if_
+// zero, vm_call_native, …) once we've grown a per-VM dictionary.
+enum class HandlerKind : u8 {
+    Unknown,
+    Null,        // body has no recognised work — pure passthrough
+    Arith,       // add / sub / and / or / xor / shl / shr / mul / etc.
+    Load,        // mov / movzx / movsx of (mem → reg)
+    Store,       // mov of (reg/imm → mem)
+    Branch,      // conditional jump or cmov
+    Call,        // direct `call imm` (calls into a native helper)
+    Return,      // ret (handler exits the VM run loop)
+};
+
+[[nodiscard]] std::string_view handler_kind_name(HandlerKind k) noexcept;
+
+struct HandlerClassification {
+    addr_t      entry      = 0;     // handler entry
+    addr_t      body_end   = 0;     // first byte past the classified body
+    HandlerKind kind       = HandlerKind::Unknown;
+    std::size_t insn_count = 0;     // body insns (excludes trailing dispatch)
+};
+
+// Classify a single handler. When `dispatch_addr` is non-zero, the
+// walk stops at that address — used for threaded handlers, where
+// the trailing dispatch shape (lea/movzx/inc/jmp) shouldn't be
+// counted as part of the body.
+[[nodiscard]] HandlerClassification
+classify_vm_handler(const Binary& b, addr_t handler_entry,
+                    addr_t dispatch_addr = 0);
+
 // One VM, after dispatcher-level results are clustered by handler-
 // table address. Multiple dispatchers sharing a table are *the same
 // VM*: a tail-dispatch at the end of every handler (threaded VM)
@@ -88,11 +123,21 @@ struct VmInstance {
 
     std::vector<VmDispatcher> entry_sites;
     std::vector<VmDispatcher> threaded_sites;
+
+    // Parallel to `handlers` — per-slot classification. Empty until
+    // analyze_vms() (or an explicit classify call) populates it.
+    std::vector<HandlerClassification> handler_classes;
 };
 
 // Cluster dispatchers by handler-table address and classify each as
-// an entry site or a threaded slot.
+// an entry site or a threaded slot. Does NOT classify handler bodies;
+// callers wanting that should use `analyze_vms` or call
+// `classify_vm_handler` directly.
 [[nodiscard]] std::vector<VmInstance>
 group_vm_dispatchers(const std::vector<VmDispatcher>& dispatchers);
+
+// Top-level convenience: detect → group → per-handler classify, with
+// VmInstance.handler_classes populated.
+[[nodiscard]] std::vector<VmInstance> analyze_vms(const Binary& b);
 
 }  // namespace ember

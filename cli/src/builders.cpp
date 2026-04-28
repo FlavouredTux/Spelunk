@@ -206,12 +206,11 @@ std::string build_vm_detect_output(const Binary& b) {
         return std::format("sub_{:x}", va);
     };
 
-    constexpr std::size_t kHandlersPerLine = 4;
     constexpr std::size_t kHandlersShown   = 16;
 
     std::string out;
     std::size_t idx = 0;
-    for (const auto& vm : group_vm_dispatchers(detect_vm_dispatchers(b))) {
+    for (const auto& vm : analyze_vms(b)) {
         if (idx > 0) out += "\n";
         out += std::format("vm #{}\n", idx + 1);
         out += std::format("  handler table:   {:#x}  ({} entries, {} unique)\n",
@@ -257,10 +256,20 @@ std::string build_vm_detect_output(const Binary& b) {
 
         const std::size_t shown = std::min(vm.handlers.size(), kHandlersShown);
         out += std::format("  handlers ({} shown):\n", shown);
+        // Each row: "[idx] addr → kind (insns=N)" — the kind is from
+        // the body classifier, ignoring trailing-dispatch insns.
         for (std::size_t i = 0; i < shown; ++i) {
-            if (i % kHandlersPerLine == 0) out += "   ";
-            out += std::format(" {:#x}", vm.handlers[i]);
-            if (i + 1 == shown || (i + 1) % kHandlersPerLine == 0) out += "\n";
+            const HandlerClassification* hc = nullptr;
+            if (i < vm.handler_classes.size()) hc = &vm.handler_classes[i];
+            const std::string_view kind_name = hc
+                ? handler_kind_name(hc->kind)
+                : std::string_view{"?"};
+            out += std::format("    [{:#04x}] {:#x} → {}",
+                               i, vm.handlers[i], kind_name);
+            if (hc && hc->insn_count > 0) {
+                out += std::format(" (insns={})", hc->insn_count);
+            }
+            out += "\n";
         }
         if (vm.handlers.size() > shown) {
             out += std::format("    ... +{} more\n", vm.handlers.size() - shown);

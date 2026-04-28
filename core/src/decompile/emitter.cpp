@@ -130,8 +130,12 @@ constexpr VariadicImport kVariadicImports[] = {
 // Fixed-arity libc/POSIX imports we recognize by name so that
 // `puts(local_18, rsi, rdx, ...)` trims to `puts(local_18)`.
 // Variadic entries live in `kVariadicImports` above.
+// Element type uses `unsigned` (not u8) so the brace-init list `{"strlen", 1}`
+// doesn't trip MSVC's C4244 narrowing warning under -Werror. The arity itself
+// is small (always ≤ 6) but the storage type doesn't matter — every caller
+// reads it back into a u8 / int via `*x.value`.
 [[nodiscard]] std::optional<u8> libc_arity_by_name(std::string_view n) noexcept {
-    static const std::pair<std::string_view, u8> kTable[] = {
+    static const std::pair<std::string_view, unsigned> kTable[] = {
         {"strlen", 1}, {"strnlen", 2}, {"strdup", 1}, {"strndup", 2},
         {"strchr", 2}, {"strrchr", 2}, {"strstr", 2}, {"strcasestr", 2},
         {"strcmp", 2}, {"strncmp", 3}, {"strcasecmp", 2}, {"strncasecmp", 3},
@@ -213,7 +217,7 @@ constexpr VariadicImport kVariadicImports[] = {
         {"iscntrl", 1}, {"isxdigit", 1}, {"tolower", 1}, {"toupper", 1},
     };
     for (const auto& [k, v] : kTable) {
-        if (k == n) return v;
+        if (k == n) return static_cast<u8>(v);
     }
     return std::nullopt;
 }
@@ -579,7 +583,7 @@ struct Emitter {
         Reg cur_reg = r;
         u32 cur_ver = version;
         for (int hop = 0; hop < 8; ++hop) {
-            SsaKey k{0, static_cast<u32>(canonical_reg(cur_reg)), cur_ver};
+            SsaKey k{u8{0}, static_cast<u32>(canonical_reg(cur_reg)), cur_ver};
             if (auto it = call_return_names.find(k); it != call_return_names.end()) {
                 return it->second;
             }

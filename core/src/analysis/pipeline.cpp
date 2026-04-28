@@ -271,6 +271,18 @@ void note_mid_function(addr_t addr, std::string_view name, u64 off) {
 // `addr` and `addr` itself has no bytes mapped.
 [[nodiscard]] std::optional<FuncWindow>
 resolve_containing_function(const Binary& b, addr_t addr) {
+    // Exact-addr Function symbol wins outright before the containing-
+    // function logic kicks in. Covers two cases that defined_object_at
+    // misses because it filters size==0 entries:
+    //   - synthesized sub_<hex> stubs (no size known)
+    //   - --force-fn-start overrides (user says "this VA is a function
+    //     entry" so don't rebind to the closest-below symbol)
+    for (const auto& s : b.symbols()) {
+        if (s.addr == addr && s.kind == SymbolKind::Function && !s.is_import) {
+            if (b.bytes_at(addr).empty()) return std::nullopt;
+            return window_from_addr(addr, s.size, s.name);
+        }
+    }
     const Symbol* c = b.defined_object_at(addr);
     if (c && c->kind == SymbolKind::Function && c->addr != 0) {
         if (b.bytes_at(c->addr).empty()) return std::nullopt;

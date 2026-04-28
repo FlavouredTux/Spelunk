@@ -32,6 +32,7 @@ struct Args {
     std::string raw_bytes_path;     // --raw-bytes PATH: load PATH as a single rwx region (no PE container)
     std::string raw_base_va;        // --base-va 0xVA: base virtual address for --raw-bytes
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
+    std::vector<std::string> force_fn_starts; // --force-fn-start VA (repeatable): synthetic Function symbols at these VAs
     std::string apply_ember;        // --apply PATH: declarative .ember script applied to annotations
     std::string pdb_path;           // --pdb PATH: explicit PDB file (skips auto-discovery)
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely

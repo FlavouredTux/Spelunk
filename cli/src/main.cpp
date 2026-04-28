@@ -98,6 +98,34 @@ int main(int argc, char** argv) {
 
     auto bin = load_binary_from_args(args);
     if (!bin) return report(bin.error());
+
+    // --force-fn-start: synthesize Function symbols at each user-
+    // specified VA so resolve_containing_function returns a window AT
+    // the VA instead of rebinding to the closest-below symbol. Common
+    // when obfuscators merge functions or stash a real entry mid-body.
+    for (const auto& tok : args.force_fn_starts) {
+        std::string_view va_tok = tok;
+        if (va_tok.starts_with("0x") || va_tok.starts_with("0X")) {
+            va_tok.remove_prefix(2);
+        } else if (va_tok.starts_with("sub_")) {
+            va_tok.remove_prefix(4);
+        }
+        ember::addr_t va = 0;
+        bool ok = !va_tok.empty();
+        for (char c : va_tok) {
+            const int d = (c >= '0' && c <= '9') ? c - '0'
+                : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                : -1;
+            if (d < 0) { ok = false; break; }
+            va = (va << 4) | static_cast<ember::addr_t>(d);
+        }
+        if (!ok) {
+            std::println(stderr, "ember: --force-fn-start: bad hex VA '{}'", tok);
+            return EXIT_FAILURE;
+        }
+        (*bin)->add_synthetic_function_start(va);
+    }
     const ember::Binary& b = **bin;
 
     if (!args.trace_path.empty())          load_trace_edges(args, b);

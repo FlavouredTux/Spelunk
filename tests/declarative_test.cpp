@@ -127,6 +127,10 @@ public:
     [[nodiscard]] ember::addr_t entry_point() const noexcept override { return kFnAddr; }
     [[nodiscard]] std::span<const ember::Section> sections() const noexcept override { return secs_; }
     [[nodiscard]] std::span<const ember::Symbol>  symbols()  const noexcept override { return syms_; }
+
+protected:
+    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override { return syms_; }
+public:
     [[nodiscard]] std::span<const std::byte>      image()    const noexcept override { return text_.data; }
 
 private:

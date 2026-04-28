@@ -123,6 +123,9 @@ void print_help() {
     std::println("      --raw-bytes PATH load PATH as a single rwx region at --base-va; no PE");
     std::println("                       container, useful for runtime memory captures");
     std::println("      --base-va 0xVA   required with --raw-bytes; base virtual address");
+    std::println("      --force-fn-start 0xVA  treat VA as a function entry; repeatable. Use when");
+    std::println("                       obfuscator-merged or mid-body real entries cause ember");
+    std::println("                       to silently rebind to a closest-below symbol");
     std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");
     std::println("                       pattern-renames, log-format-driven renames, deletes) to");
     std::println("                       the resolved annotation file");

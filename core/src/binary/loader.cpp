@@ -107,6 +107,22 @@ const Symbol* Binary::find_by_name(std::string_view name) const noexcept {
     return it == c.by_name.end() ? nullptr : it->second;
 }
 
+void Binary::add_synthetic_function_start(addr_t va) {
+    if (va == 0) return;
+    auto& syms = mutable_symbols();
+    for (const auto& s : syms) {
+        if (s.addr == va && s.kind == SymbolKind::Function && !s.is_import) {
+            return;     // already a Function symbol at this VA
+        }
+    }
+    Symbol s;
+    s.name = std::format("sub_{:x}", va);
+    s.addr = va;
+    s.kind = SymbolKind::Function;
+    syms.push_back(std::move(s));
+    invalidate_caches();
+}
+
 std::vector<const Symbol*>
 Binary::find_all_by_name(std::string_view name) const {
     // Linear scan rather than a cached multimap: collision checks are

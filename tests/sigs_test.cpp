@@ -129,6 +129,11 @@ public:
         return sec_.data;
     }
 
+protected:
+    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+        return syms_;
+    }
+
 private:
     ImageBytes              image_{};
     ember::Section          sec_{};

@@ -124,6 +124,23 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
+        // `--force-fn-start VA` — repeatable. Each VA becomes a
+        // synthetic Function symbol so resolve_containing_function
+        // returns a window AT the VA instead of rebinding to the
+        // closest-below symbol.
+        if (s == "--force-fn-start") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--force-fn-start requires a hex VA"));
+            }
+            a.force_fn_starts.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--force-fn-start=")) {
+            a.force_fn_starts.emplace_back(s.substr(17));
+            continue;
+        }
+
         bool hit = false;
         for (const auto& f : kBoolFlags) {
             if (matches(s, f)) { a.*f.field = true; hit = true; break; }

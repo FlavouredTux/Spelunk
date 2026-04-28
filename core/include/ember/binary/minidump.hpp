@@ -38,6 +38,10 @@ public:
     [[nodiscard]] std::span<const Symbol>  symbols() const noexcept  override { return symbols_; }
     [[nodiscard]] std::span<const std::byte> image() const noexcept  override { return buffer_; }
 
+protected:
+    [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
+public:
+
     // Override the default sections() walk: minidumps can contain
     // hundreds of memory ranges and we have a sorted index for O(log N)
     // lookup. Empty span when `vaddr` is outside every dumped range.

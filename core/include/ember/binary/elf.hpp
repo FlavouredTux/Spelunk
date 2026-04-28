@@ -43,6 +43,10 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
+protected:
+    [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
+public:
+
     // Prefer PT_LOAD segments when resolving virtual addresses to bytes.
     // Falls back to section-table lookup if the file has no program header
     // table. This means a sectionless (stripped-headers) binary still maps

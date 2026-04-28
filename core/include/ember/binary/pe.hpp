@@ -29,6 +29,9 @@ public:
 
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
     [[nodiscard]] std::span<const Symbol>  symbols() const noexcept  override { return symbols_;  }
+protected:
+    [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
+public:
     [[nodiscard]] std::span<const std::byte> image() const noexcept  override { return buffer_;   }
 
     // Preferred load address from the optional header. Section vaddrs are

@@ -95,6 +95,24 @@ public:
     // ingestion pass adds names that the on-disk PE didn't carry.
     void invalidate_caches() const noexcept { caches_.reset(); }
 
+    // Add a synthetic Function symbol at `va`. Used by the
+    // `--force-fn-start <VA>` CLI override to correct mis-attributed
+    // function entries in obfuscated code where ember would otherwise
+    // rebind to the closest-below symbol. No-op when a Function
+    // symbol already exists at exactly `va`. The added symbol uses
+    // the standard `sub_<hex>` synthetic name; users can rename via
+    // `--annotations` afterwards. Requires the derived class to
+    // expose its mutable symbol table via `mutable_symbols()`.
+    void add_synthetic_function_start(addr_t va);
+
+protected:
+    // Mutable view of the derived class's symbol storage. Used only
+    // by the small number of base-class methods that need to push
+    // synthetic entries — the public `symbols()` accessor stays
+    // const-only.
+    [[nodiscard]] virtual std::vector<Symbol>& mutable_symbols() noexcept = 0;
+public:
+
     // ---- Indirect-edge oracle ----------------------------------------
     // User-populated map: instruction VA of an indirect call/jmp →
     // concrete target VAs observed at runtime (or otherwise known).

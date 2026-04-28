@@ -27,6 +27,10 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
+protected:
+    [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
+public:
+
     // Address ranges marked as non-code data inside __TEXT (jump tables,
     // ARM switch constants, etc.), extracted from LC_DATA_IN_CODE.
     // The CFG walker stops at the start of any such range so the decoder

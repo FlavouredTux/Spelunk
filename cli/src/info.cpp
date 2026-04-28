@@ -105,7 +105,8 @@ void print_help() {
     std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");
     std::println("      --objc-protocols dump Obj-C protocol method signatures");
     std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
-    std::println("      --vm-detect      scan for interpreter-style VM dispatchers (TSV)");
+    std::println("      --vm-detect      scan for interpreter-style VM dispatchers; reports per-site");
+    std::println("                       anatomy (handler table, opcode + pc registers, advance)");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --annotations P  explicit project file with renames/signatures (overrides");
     std::println("                       the sidecar/cache auto-load)");

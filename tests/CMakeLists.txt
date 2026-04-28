@@ -825,6 +825,32 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  pe_tiny.add42.pseudo.txt
     )
 
+    # ---- vm_loop_pe (synthetic interpreter dispatcher) -----------------
+    #
+    # `vm_loop` is a hand-encoded function: lea + movzx + inc + jmp
+    # qword ptr [table + idx*8] with a 16-entry handler table in .rdata.
+    # Locks the --vm-detect anatomy reporter (handler table, opcode +
+    # pc registers, pc advance, handler list).
+    set(_vm_loop_pe "${_build_dir}/vm_loop_pe")
+    add_custom_command(
+        OUTPUT "${_vm_loop_pe}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_vm_loop_pe.py"
+                "${_vm_loop_pe}"
+        DEPENDS "${_fixture_dir}/make_vm_loop_pe.py"
+        COMMENT "Generating PE fixture vm_loop_pe"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_vm_loop_pe ALL DEPENDS "${_vm_loop_pe}")
+    set(EMBER_FIXTURE_vm_loop_pe_PATH "${_vm_loop_pe}")
+
+    ember_golden_test(
+        NAME    vm_loop_pe_detect
+        FIXTURE vm_loop_pe
+        ARGS    "--vm-detect"
+        GOLDEN  vm_loop_pe.vm_detect.txt
+    )
+
     set(_pe_rich "${_build_dir}/pe_rich")
     add_custom_command(
         OUTPUT "${_pe_rich}"

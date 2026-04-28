@@ -19,9 +19,12 @@ namespace {
 constexpr std::size_t kMaxFunctionInsns = 512;
 constexpr std::size_t kMaxTableEntries  = 1024;
 constexpr std::size_t kMinHandlerCount  = 8;
-// A reg-load → reg-use window. The dispatch is usually 1-3 insns after
-// the movzx. Anything wider risks matching unrelated table jumps.
-constexpr unsigned    kReuseWindow      = 6;
+// A reg-load → reg-use window for the index, measured in *real* insns
+// (junk-pads are skipped without bumping the counter). The dispatch
+// is usually 1-3 insns after the movzx; obfuscators sprinkle non-nop
+// noise to push that gap. 16 covers a comfortable amount without
+// risking matches against unrelated table jumps elsewhere in a function.
+constexpr unsigned    kReuseWindow      = 16;
 
 struct CodeRanges {
     std::vector<std::pair<addr_t, addr_t>> spans;
@@ -51,16 +54,113 @@ read_u64_at(const Binary& b, addr_t va) {
     return read_le_at<u64>(span.data());
 }
 
-// Track the most-recent base-register loads that the dispatch site might
-// use. We only care about `lea reg, [rip + disp]` (table-base materialize)
-// and `movzx reg, byte ptr [...]` (opcode load) — these together cover
-// virtually every Hyperion / VMProtect-class dispatch shape.
+// Most-recent base-register load. ByteFromMem captures the full source
+// memory operand so the dispatcher can later report which register
+// holds the bytecode pointer (the opcode-load's base register) plus
+// any displacement; LeaRipRel captures rip-relative `lea` for table
+// base resolution. The ByteFromMem record absorbs the current state
+// of its own base register at byte-load time so a far-back constant
+// `lea pc, [rip+disp]` survives the trip to dispatch.
 struct RegLoad {
     enum class Kind { None, ByteFromMem, LeaRipRel } kind = Kind::None;
-    addr_t   at_addr  = 0;     // address of the loading instruction
-    unsigned at_age   = 0;     // how many instructions ago, 1-based
-    addr_t   lea_target = 0;   // for LeaRipRel: rip + lea_len + disp
+    addr_t   at_addr        = 0;       // address of the loading instruction
+    unsigned at_age         = 0;       // 1-based instruction count, junk-pads excluded
+    addr_t   lea_target     = 0;       // for LeaRipRel: rip + lea_len + disp
+
+    // ByteFromMem extras: source-memory operand + observed pc-advance.
+    Reg      bm_dst_orig    = Reg::None;   // un-canonicalised destination (e.g. Eax for movzx eax)
+    Reg      bm_base_reg    = Reg::None;   // stored canonical
+    i32      bm_base_disp   = 0;
+    u8       bm_op_bytes    = 1;       // 1 (byte ptr) or 2 (word ptr)
+    addr_t   bm_pc_lea      = 0;       // bytecode VA when pc was set via lea rip-rel
+    i32      bm_pc_advance  = 0;       // captured from a later add/inc of bm_base_reg
 };
+
+// Real obfuscators (Hyperion, Byfron, VMProtect) sprinkle junk insns
+// between the opcode-load and the indirect dispatch to break naïve
+// linear-window matchers. Recognise the most common shapes so the
+// detector's rolling state survives them: a junk-padded sequence
+// neither bumps `age_counter` nor touches the per-register records.
+[[nodiscard]] bool is_semantic_nop(const Instruction& insn) noexcept {
+    if (insn.mnemonic == Mnemonic::Nop) return true;
+
+    // xchg reg, reg where both operands canonicalise to the same
+    // register. Covers the `87 c0` (xchg eax, eax) and friends.
+    if (insn.mnemonic == Mnemonic::Xchg && insn.num_operands == 2 &&
+        insn.operands[0].kind == Operand::Kind::Register &&
+        insn.operands[1].kind == Operand::Kind::Register &&
+        canonical_reg(insn.operands[0].reg) ==
+            canonical_reg(insn.operands[1].reg)) {
+        return true;
+    }
+
+    // mov reg, reg with the same canonical register on both sides.
+    // The full 64/32/16/8-bit width is irrelevant — the value is
+    // unchanged either way (or zero-extended from itself, which
+    // happens to be the identity).
+    if (insn.mnemonic == Mnemonic::Mov && insn.num_operands == 2 &&
+        insn.operands[0].kind == Operand::Kind::Register &&
+        insn.operands[1].kind == Operand::Kind::Register &&
+        canonical_reg(insn.operands[0].reg) ==
+            canonical_reg(insn.operands[1].reg)) {
+        return true;
+    }
+
+    // jmp imm where the relative target lands on the next instruction.
+    // Pure jump-pad — common in Hyperion/Byfron control-flow flatteners.
+    if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1 &&
+        insn.operands[0].kind == Operand::Kind::Relative &&
+        insn.operands[0].rel.target == insn.address + insn.length) {
+        return true;
+    }
+
+    // lea reg, [reg] / [reg+0] — the no-op lea idiom, sometimes used as
+    // a 7-byte "stretchable" nop.
+    if (insn.mnemonic == Mnemonic::Lea && insn.num_operands == 2 &&
+        insn.operands[0].kind == Operand::Kind::Register &&
+        insn.operands[1].kind == Operand::Kind::Memory) {
+        const Mem& m = insn.operands[1].mem;
+        const bool zero_disp = !m.has_disp || m.disp == 0;
+        if (m.base != Reg::None && m.index == Reg::None && zero_disp &&
+            canonical_reg(m.base) ==
+                canonical_reg(insn.operands[0].reg)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// True if this instruction increments / decrements a single register
+// by a constant amount, with no memory operand. Sets `out_reg` and
+// `out_delta` on match.
+[[nodiscard]] bool decode_const_reg_delta(const Instruction& insn,
+                                           Reg& out_reg, i32& out_delta) noexcept {
+    if (insn.mnemonic == Mnemonic::Inc &&
+        insn.num_operands == 1 &&
+        insn.operands[0].kind == Operand::Kind::Register) {
+        out_reg   = canonical_reg(insn.operands[0].reg);
+        out_delta = 1;
+        return true;
+    }
+    if (insn.mnemonic == Mnemonic::Dec &&
+        insn.num_operands == 1 &&
+        insn.operands[0].kind == Operand::Kind::Register) {
+        out_reg   = canonical_reg(insn.operands[0].reg);
+        out_delta = -1;
+        return true;
+    }
+    if ((insn.mnemonic == Mnemonic::Add || insn.mnemonic == Mnemonic::Sub) &&
+        insn.num_operands == 2 &&
+        insn.operands[0].kind == Operand::Kind::Register &&
+        insn.operands[1].kind == Operand::Kind::Immediate) {
+        out_reg   = canonical_reg(insn.operands[0].reg);
+        out_delta = static_cast<i32>(insn.operands[1].imm.value);
+        if (insn.mnemonic == Mnemonic::Sub) out_delta = -out_delta;
+        return true;
+    }
+    return false;
+}
 
 }  // namespace
 
@@ -94,6 +194,15 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
             auto decoded = dec.decode(bytes, ip);
             if (!decoded) break;
             const Instruction& insn = *decoded;
+            // Junk-pad: skip without touching rolling state or the age
+            // counter. The byte-load → dispatch window is measured in
+            // *real* insns, so an obfuscator stuffing nops/xchg/jmp+1
+            // between the load and the jmp doesn't blow the kReuseWindow
+            // check.
+            if (is_semantic_nop(insn)) {
+                ip += insn.length;
+                continue;
+            }
             ++age_counter;
 
             // Indirect jmp/call → potential dispatch site.
@@ -103,7 +212,20 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                 && insn.operands[0].kind == Operand::Kind::Memory;
             if (is_dispatch && !seen_dispatch.contains(insn.address)) {
                 const Mem& m = insn.operands[0].mem;
-                if (m.scale == 8 && m.index != Reg::None && m.has_disp) {
+                // Two shapes:
+                //   [rip + disp + idx*8]  — `disp` is the table VA delta
+                //                           (always present for rip-relative)
+                //   [reg + idx*8]         — `reg` was set by an earlier
+                //                           rip-relative `lea`; `disp` is
+                //                           commonly zero so we don't gate
+                //                           on its presence
+                const bool rip_form =
+                    m.base == Reg::Rip && m.has_disp &&
+                    m.scale == 8 && m.index != Reg::None;
+                const bool reg_form =
+                    m.base != Reg::None && m.base != Reg::Rip &&
+                    m.scale == 8 && m.index != Reg::None;
+                if (rip_form || reg_form) {
                     const Reg idx_canon = canonical_reg(m.index);
                     const auto& idx_load =
                         reg_loads[static_cast<std::size_t>(idx_canon)];
@@ -111,40 +233,74 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                         idx_load.kind == RegLoad::Kind::ByteFromMem &&
                         (age_counter - idx_load.at_age) <= kReuseWindow;
                     if (idx_recent_byte_load) {
-                        // Resolve table base. Two shapes accepted:
-                        //   [rip + disp + idx*8]  → table = ip + len + disp
-                        //   [reg + disp + idx*8]  → table = lea_target(reg) + disp
-                        // (a non-zero disp on the latter is rare but legal)
                         std::optional<addr_t> table_va;
-                        if (m.base == Reg::Rip) {
+                        if (rip_form) {
                             table_va = ip + insn.length +
                                        static_cast<addr_t>(m.disp);
-                        } else if (m.base != Reg::None) {
+                        } else {
                             const auto& base_load =
                                 reg_loads[static_cast<std::size_t>(canonical_reg(m.base))];
                             if (base_load.kind == RegLoad::Kind::LeaRipRel &&
                                 (age_counter - base_load.at_age) <= kReuseWindow) {
                                 table_va = base_load.lea_target +
-                                           static_cast<addr_t>(m.disp);
+                                           (m.has_disp ? static_cast<addr_t>(m.disp) : 0);
                             }
                         }
 
                         if (table_va) {
                             std::vector<addr_t> handlers;
                             std::unordered_set<addr_t> seen_h;
+                            std::size_t walked = 0;
                             for (std::size_t i = 0; i < kMaxTableEntries; ++i) {
                                 auto v = read_u64_at(b, *table_va + i * 8);
                                 if (!v) break;
                                 if (!code.contains(static_cast<addr_t>(*v))) break;
+                                ++walked;
                                 if (seen_h.insert(static_cast<addr_t>(*v)).second) {
                                     handlers.push_back(static_cast<addr_t>(*v));
                                 }
                             }
                             if (handlers.size() >= kMinHandlerCount) {
-                                out.push_back({sym.addr, insn.address,
-                                               *table_va, std::move(handlers)});
+                                VmDispatcher dsp;
+                                dsp.function_addr     = sym.addr;
+                                dsp.dispatch_addr     = insn.address;
+                                dsp.opcode_load_addr  = idx_load.at_addr;
+                                dsp.table_addr        = *table_va;
+                                dsp.table_entries     = walked;
+                                dsp.handlers          = std::move(handlers);
+                                // Use the un-canonicalised destination
+                                // so the report shows the encoded width
+                                // (e.g. `eax` for `movzx eax, byte ptr`)
+                                // rather than the canonical 64-bit form.
+                                dsp.opcode_index_reg  = idx_load.bm_dst_orig;
+                                dsp.opcode_size_bytes = idx_load.bm_op_bytes;
+                                dsp.pc_register       = idx_load.bm_base_reg;
+                                dsp.pc_disp           = idx_load.bm_base_disp;
+                                dsp.pc_advance        = idx_load.bm_pc_advance;
+                                dsp.bytecode_addr     = idx_load.bm_pc_lea;
+                                out.push_back(std::move(dsp));
                                 seen_dispatch.insert(insn.address);
                             }
+                        }
+                    }
+                }
+            }
+
+            // Capture pc-advance: an inc/add/sub of any register that
+            // matches a still-active byte-load's base register. Must
+            // run BEFORE the rolling-state update below — that step
+            // clears the destination register's record, but crucially
+            // leaves the byte-load's index-register record alone; we
+            // update bm_pc_advance there in place.
+            {
+                Reg delta_reg = Reg::None;
+                i32 delta     = 0;
+                if (decode_const_reg_delta(insn, delta_reg, delta)) {
+                    for (auto& rl : reg_loads) {
+                        if (rl.kind == RegLoad::Kind::ByteFromMem &&
+                            rl.bm_base_reg == delta_reg &&
+                            rl.bm_pc_advance == 0) {
+                            rl.bm_pc_advance = delta;
                         }
                     }
                 }
@@ -160,13 +316,33 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                 RegLoad& rec = reg_loads[static_cast<std::size_t>(dst_canon)];
                 rec = {};   // clear by default — any write invalidates
 
-                if (insn.mnemonic == Mnemonic::Movzx &&
+                const bool is_byte_word_load =
+                    insn.mnemonic == Mnemonic::Movzx &&
                     insn.num_operands == 2 &&
                     insn.operands[1].kind == Operand::Kind::Memory &&
-                    insn.operands[1].mem.size == 1) {
-                    rec.kind    = RegLoad::Kind::ByteFromMem;
-                    rec.at_addr = insn.address;
-                    rec.at_age  = age_counter;
+                    (insn.operands[1].mem.size == 1 ||
+                     insn.operands[1].mem.size == 2);
+                if (is_byte_word_load) {
+                    const Mem& sm = insn.operands[1].mem;
+                    rec.kind         = RegLoad::Kind::ByteFromMem;
+                    rec.at_addr      = insn.address;
+                    rec.at_age       = age_counter;
+                    rec.bm_dst_orig  = insn.operands[0].reg;
+                    rec.bm_base_reg  = canonical_reg(sm.base);
+                    rec.bm_base_disp = sm.has_disp ? static_cast<i32>(sm.disp) : 0;
+                    rec.bm_op_bytes  = static_cast<u8>(sm.size);
+                    // Snapshot the current state of the base register —
+                    // if the PC was set by a constant `lea pc, [rip+disp]`
+                    // ahead of the loop, that's the bytecode VA. The
+                    // record persists until the base reg is rewritten,
+                    // so an arbitrarily early lea is still recoverable.
+                    if (sm.base != Reg::None) {
+                        const auto& base_rec = reg_loads[
+                            static_cast<std::size_t>(canonical_reg(sm.base))];
+                        if (base_rec.kind == RegLoad::Kind::LeaRipRel) {
+                            rec.bm_pc_lea = base_rec.lea_target;
+                        }
+                    }
                 } else if (insn.mnemonic == Mnemonic::Lea &&
                            insn.num_operands == 2 &&
                            insn.operands[1].kind == Operand::Kind::Memory &&

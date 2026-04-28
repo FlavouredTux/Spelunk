@@ -15,6 +15,8 @@
 #include <ember/analysis/strings.hpp>
 #include <ember/analysis/vm_detect.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/symbol.hpp>
+#include <ember/disasm/register.hpp>
 
 #include "util.hpp"
 
@@ -189,19 +191,69 @@ std::string build_rtti_output(const Binary& b) {
     return out;
 }
 
-// One row per detected VM dispatcher:
-//   <function-addr>\t<dispatch-addr>\t<table-addr>\t<handler-count>\t<comma-sep handler addrs>
+// Multi-line block per dispatcher — readable enough to skim a VM's
+// anatomy at a glance, structured enough that phase 1b's classifier
+// (per-handler shape recognition) can consume the same data.
 std::string build_vm_detect_output(const Binary& b) {
-    std::string out;
-    for (const auto& d : detect_vm_dispatchers(b)) {
-        std::string handlers;
-        for (std::size_t i = 0; i < d.handlers.size(); ++i) {
-            if (i) handlers += ',';
-            handlers += std::format("{:x}", d.handlers[i]);
+    auto fn_label = [&](addr_t va) -> std::string {
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.addr == va && !s.name.empty()) return s.name;
         }
-        out += std::format("{:x}\t{:x}\t{:x}\t{}\t{}\n",
-                           d.function_addr, d.dispatch_addr,
-                           d.table_addr, d.handlers.size(), handlers);
+        return std::format("sub_{:x}", va);
+    };
+
+    constexpr std::size_t kHandlersPerLine = 4;
+    constexpr std::size_t kHandlersShown   = 16;
+
+    std::string out;
+    std::size_t idx = 0;
+    for (const auto& d : detect_vm_dispatchers(b)) {
+        if (idx > 0) out += "\n";
+        out += std::format("dispatcher #{}\n", idx + 1);
+        out += std::format("  function:        {} ({:#x})\n",
+                           fn_label(d.function_addr), d.function_addr);
+        out += std::format("  dispatch site:   {:#x}\n", d.dispatch_addr);
+        out += std::format("  opcode load:     {:#x}\n", d.opcode_load_addr);
+        out += std::format("  handler table:   {:#x}  ({} entries, {} unique)\n",
+                           d.table_addr, d.table_entries, d.handlers.size());
+        out += std::format("  opcode register: {}  ({}-byte opcode)\n",
+                           reg_name(d.opcode_index_reg),
+                           static_cast<unsigned>(d.opcode_size_bytes));
+        out += std::format("  pc register:     {}\n",
+                           d.pc_register == Reg::None
+                               ? std::string_view{"unknown"}
+                               : reg_name(d.pc_register));
+        if (d.pc_disp != 0) {
+            out += std::format("  pc disp:         {:#x}\n",
+                               static_cast<u64>(static_cast<i64>(d.pc_disp)));
+        }
+        if (d.pc_advance != 0) {
+            const char sign = d.pc_advance > 0 ? '+' : '-';
+            out += std::format("  pc advance:      {}{}\n",
+                               sign,
+                               d.pc_advance > 0 ? d.pc_advance : -d.pc_advance);
+        } else {
+            out += "  pc advance:      (unobserved — may live inside handlers)\n";
+        }
+        if (d.bytecode_addr != 0) {
+            out += std::format("  bytecode:        {:#x}  (constant via lea rip+disp)\n",
+                               d.bytecode_addr);
+        } else {
+            out += "  bytecode:        (runtime / caller-supplied)\n";
+        }
+        const std::size_t shown = std::min(d.handlers.size(), kHandlersShown);
+        out += std::format("  handlers ({} shown):\n", shown);
+        for (std::size_t i = 0; i < shown; ++i) {
+            if (i % kHandlersPerLine == 0) out += "   ";
+            out += std::format(" {:#x}", d.handlers[i]);
+            if (i + 1 == shown || (i + 1) % kHandlersPerLine == 0) out += "\n";
+        }
+        if (d.handlers.size() > shown) {
+            out += std::format("    ... +{} more\n", d.handlers.size() - shown);
+        }
+        ++idx;
     }
     return out;
 }

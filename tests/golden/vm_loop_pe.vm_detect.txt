@@ -1,0 +1,29 @@
+dispatcher #1
+  function:        sub_140001000 (0x140001000)
+  dispatch site:   0x140001014
+  opcode load:     0x14000100e
+  handler table:   0x140002000  (16 entries, 16 unique)
+  opcode register: eax  (1-byte opcode)
+  pc register:     rdi
+  pc advance:      +1
+  bytecode:        0x140002080  (constant via lea rip+disp)
+  handlers (16 shown):
+    0x140001018 0x14000101c 0x140001020 0x140001024
+    0x140001028 0x14000102c 0x140001030 0x140001034
+    0x140001038 0x14000103c 0x140001040 0x140001044
+    0x140001048 0x14000104c 0x140001050 0x140001054
+
+dispatcher #2
+  function:        sub_140001080 (0x140001080)
+  dispatch site:   0x14000109d
+  opcode load:     0x14000108e
+  handler table:   0x140002000  (16 entries, 16 unique)
+  opcode register: eax  (1-byte opcode)
+  pc register:     rdi
+  pc advance:      +1
+  bytecode:        0x140002080  (constant via lea rip+disp)
+  handlers (16 shown):
+    0x140001018 0x14000101c 0x140001020 0x140001024
+    0x140001028 0x14000102c 0x140001030 0x140001034
+    0x140001038 0x14000103c 0x140001040 0x140001044
+    0x140001048 0x14000104c 0x140001050 0x140001054

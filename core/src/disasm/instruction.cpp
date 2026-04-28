@@ -195,8 +195,18 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Pcmpeqd:      return "pcmpeqd";
         case Mnemonic::Pcmpeqw:      return "pcmpeqw";
         case Mnemonic::Paddb:        return "paddb";
+        case Mnemonic::Paddw:        return "paddw";
         case Mnemonic::Paddd:        return "paddd";
         case Mnemonic::Paddq:        return "paddq";
+        case Mnemonic::Psubb:        return "psubb";
+        case Mnemonic::Psubw:        return "psubw";
+        case Mnemonic::Psubd:        return "psubd";
+        case Mnemonic::Psubq:        return "psubq";
+        case Mnemonic::Pmullw:       return "pmullw";
+        case Mnemonic::Pmulhw:       return "pmulhw";
+        case Mnemonic::Pmulhuw:      return "pmulhuw";
+        case Mnemonic::Pmuludq:      return "pmuludq";
+        case Mnemonic::Pmaddwd:      return "pmaddwd";
         case Mnemonic::Psllw:        return "psllw";
         case Mnemonic::Pslld:        return "pslld";
         case Mnemonic::Psllq:        return "psllq";

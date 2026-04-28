@@ -112,8 +112,20 @@ enum class Mnemonic : u16 {
     Pcmpeqd,     // 0x66 0x0F 76
     Pcmpeqw,     // 0x66 0x0F 75
     Paddb,       // 0x66 0x0F FC
+    Paddw,       // 0x66 0x0F FD
     Paddd,       // 0x66 0x0F FE
     Paddq,       // 0x66 0x0F D4
+    // Packed integer subtract — symmetric to padd family.
+    Psubb,       // 0x66 0x0F F8
+    Psubw,       // 0x66 0x0F F9
+    Psubd,       // 0x66 0x0F FA
+    Psubq,       // 0x66 0x0F FB
+    // Packed integer multiply — Hyperion uses these in cipher mixers.
+    Pmullw,      // 0x66 0x0F D5  — multiply low signed words
+    Pmulhw,      // 0x66 0x0F E5  — multiply high signed words
+    Pmulhuw,     // 0x66 0x0F E4  — multiply high unsigned words
+    Pmuludq,     // 0x66 0x0F F4  — multiply unsigned 32→64 bits
+    Pmaddwd,     // 0x66 0x0F F5  — multiply-and-add 16→32 bits
     // SSE2 immediate-shift family (0x66 0x0F 71/72/73 with /N opcode
     // extension). Hyperion uses these constantly in cookie/cipher
     // computation; missing them aborted whole functions to a 4-line

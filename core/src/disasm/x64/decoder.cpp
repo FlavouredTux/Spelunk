@@ -344,9 +344,19 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0xDA] = op(Mnemonic::Pminub,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xDB] = op(Mnemonic::Pand,        OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xDF] = op(Mnemonic::Pandn,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xD5] = op(Mnemonic::Pmullw,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE4] = op(Mnemonic::Pmulhuw,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE5] = op(Mnemonic::Pmulhw,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xEB] = op(Mnemonic::Por,         OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xEF] = op(Mnemonic::Pxor,        OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF4] = op(Mnemonic::Pmuludq,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF5] = op(Mnemonic::Pmaddwd,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF8] = op(Mnemonic::Psubb,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF9] = op(Mnemonic::Psubw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xFA] = op(Mnemonic::Psubd,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xFB] = op(Mnemonic::Psubq,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xFC] = op(Mnemonic::Paddb,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xFD] = op(Mnemonic::Paddw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xFE] = op(Mnemonic::Paddd,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xC4] = op(Mnemonic::Pinsrw,      OpSpec::Vx, OpSpec::Ev, OpSpec::Ib,   true);
     // 0x71/72/73 are opcode-extension groups — the ModR/M reg field

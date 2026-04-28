@@ -1738,7 +1738,17 @@ void lift_instruction(LiftCtx& ctx) {
 
         // Packed integer arithmetic — same xmm-binop shape as Pxor/Pand.
         case Mnemonic::Paddb:   lift_simd_binop(ctx, "_mm_add_epi8",   IrType::F64); break;
+        case Mnemonic::Paddw:   lift_simd_binop(ctx, "_mm_add_epi16",  IrType::F64); break;
         case Mnemonic::Paddd:   lift_simd_binop(ctx, "_mm_add_epi32",  IrType::F64); break;
+        case Mnemonic::Psubb:   lift_simd_binop(ctx, "_mm_sub_epi8",   IrType::F64); break;
+        case Mnemonic::Psubw:   lift_simd_binop(ctx, "_mm_sub_epi16",  IrType::F64); break;
+        case Mnemonic::Psubd:   lift_simd_binop(ctx, "_mm_sub_epi32",  IrType::F64); break;
+        case Mnemonic::Psubq:   lift_simd_binop(ctx, "_mm_sub_epi64",  IrType::F64); break;
+        case Mnemonic::Pmullw:  lift_simd_binop(ctx, "_mm_mullo_epi16", IrType::F64); break;
+        case Mnemonic::Pmulhw:  lift_simd_binop(ctx, "_mm_mulhi_epi16", IrType::F64); break;
+        case Mnemonic::Pmulhuw: lift_simd_binop(ctx, "_mm_mulhi_epu16", IrType::F64); break;
+        case Mnemonic::Pmuludq: lift_simd_binop(ctx, "_mm_mul_epu32",   IrType::F64); break;
+        case Mnemonic::Pmaddwd: lift_simd_binop(ctx, "_mm_madd_epi16",  IrType::F64); break;
         case Mnemonic::Pinsrw:  lift_simd_binop(ctx, "_mm_insert_epi16", IrType::F64); break;
 
         // SSE2 immediate-shift family. The (xmm, imm8) shape needs a

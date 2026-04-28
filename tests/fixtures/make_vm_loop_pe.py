@@ -94,6 +94,11 @@ def main() -> int:
 
     vm_loop_rip_rva   = rva_text + 0x380     # VMProtect-style RIP-capture VM
 
+    vm_loop_stack_rva = rva_text + 0x400     # vm_stack_<arith> recogniser VM
+    stack_handler_rva = vm_loop_stack_rva + 0x20
+    NUM_STACK         = 8
+    STACK_SIZE        = 0x08
+
     table_rva           = rva_rdata + 0x00
     bytecode_rva        = rva_rdata + 0x80
     threaded_table_rva  = rva_rdata + 0x100
@@ -102,6 +107,8 @@ def main() -> int:
     rich_table_rva      = rva_rdata + 0x180
     # Same gap rationale between rich_table and rip_table.
     rip_table_rva       = rva_rdata + 0x200
+    # Same gap rationale before stack_table.
+    stack_table_rva     = rva_rdata + 0x280
 
     text = bytearray()
 
@@ -269,6 +276,41 @@ def main() -> int:
     text += b"\xFF\xA4\xC6" + struct.pack("<i", disp32)
     vm_loop_rip_size = len(text) - rip_disp_start
 
+    # ---- pad to vm_loop_stack_rva (0x400) ----
+    while len(text) < (vm_loop_stack_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- vm_loop_stack (stack-arith handler-pattern recogniser) ----
+    # Same canonical dispatcher shape as vm_loop_rich, dispatching into
+    # 8 slots whose first two are vm_stack_<arith> handlers
+    # (pop r1; pop r2; <arith> r1, r2; push r1; ret) and the remaining
+    # six are bare `ret`s. Phase 1c's classify_vm_handler should label
+    # slots 0..1 as `stack-arith` and 2..7 as `return`.
+    stack_disp_start = len(text)
+    rip_after_lea_pc_stack = vm_loop_stack_rva + 7
+    text += b"\x48\x8D\x3D" + struct.pack("<i", bytecode_rva - rip_after_lea_pc_stack)
+    rip_after_lea_table_stack = vm_loop_stack_rva + 14
+    text += b"\x48\x8D\x35" + struct.pack("<i", stack_table_rva - rip_after_lea_table_stack)
+    text += b"\x0F\xB6\x07"
+    text += b"\x48\xFF\xC7"
+    text += b"\xFF\x24\xC6"
+    vm_loop_stack_size = len(text) - stack_disp_start
+    while len(text) < (stack_handler_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- 8 stack handlers (8 bytes each) ----
+    #   [0] stack-arith add — pop rax; pop rcx; add rax, rcx; push rax; ret; nop
+    #   [1] stack-arith xor — pop rax; pop rcx; xor rax, rcx; push rax; ret; nop
+    #   [2..7] return — ret; nops
+    text += b"\x58\x59\x48\x01\xC8\x50\xC3\x90"   # [0] stack-arith add
+    text += b"\x58\x59\x48\x31\xC8\x50\xC3\x90"   # [1] stack-arith xor
+    for _ in range(6):
+        text += b"\xC3\x90\x90\x90\x90\x90\x90\x90"
+    stack_handlers_size = NUM_STACK * STACK_SIZE
+    assert len(text) == (stack_handler_rva - rva_text) + stack_handlers_size
+
+    stack_handler_rvas = [stack_handler_rva + i * STACK_SIZE for i in range(NUM_STACK)]
+
     text_virt_size = len(text)
     vm_loop_size       = 0x18 + 16 * 4   # PDATA range covers handlers too
     vm_loop_obf_size   = obf_size
@@ -305,6 +347,12 @@ def main() -> int:
     # different dispatchers.
     for i in range(NUM_RICH):
         rdata += struct.pack("<Q", IMAGE_BASE + rich_handler_rvas[i])
+    # Pad to stack_table_rva (0x280).
+    while len(rdata) < (stack_table_rva - rva_rdata):
+        rdata.append(0)
+    # 8-entry stack-arith handler table.
+    for i in range(NUM_STACK):
+        rdata += struct.pack("<Q", IMAGE_BASE + stack_handler_rvas[i])
     rdata_virt_size = len(rdata)
 
     # ---- .pdata content ----------------------------------------------------
@@ -339,6 +387,11 @@ def main() -> int:
     pdata += struct.pack("<III",
                          vm_loop_rip_rva,
                          vm_loop_rip_rva + vm_loop_rip_size,
+                         rva_pdata)
+    # And the stack-arith central dispatcher.
+    pdata += struct.pack("<III",
+                         vm_loop_stack_rva,
+                         vm_loop_stack_rva + vm_loop_stack_size,
                          rva_pdata)
     pdata_virt_size = len(pdata)
 

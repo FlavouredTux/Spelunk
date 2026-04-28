@@ -220,14 +220,15 @@ struct RegLoad {
 
 std::string_view handler_kind_name(HandlerKind k) noexcept {
     switch (k) {
-        case HandlerKind::Unknown: return "unknown";
-        case HandlerKind::Null:    return "null";
-        case HandlerKind::Arith:   return "arith";
-        case HandlerKind::Load:    return "load";
-        case HandlerKind::Store:   return "store";
-        case HandlerKind::Branch:  return "branch";
-        case HandlerKind::Call:    return "call";
-        case HandlerKind::Return:  return "return";
+        case HandlerKind::Unknown:    return "unknown";
+        case HandlerKind::Null:       return "null";
+        case HandlerKind::Arith:      return "arith";
+        case HandlerKind::Load:       return "load";
+        case HandlerKind::Store:      return "store";
+        case HandlerKind::Branch:     return "branch";
+        case HandlerKind::Call:       return "call";
+        case HandlerKind::Return:     return "return";
+        case HandlerKind::StackArith: return "stack-arith";
     }
     return "?";
 }
@@ -342,6 +343,56 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
         if (is_semantic_nop(insn)) {
             ip += insn.length;
             continue;
+        }
+
+        // Stack-arith handler: `pop r1; pop r2; <arith> r1, r2; push r1`.
+        // The classic vm_stack_<arith> shape — operands materialised on
+        // the host stack, computed in place, result re-pushed. Match
+        // only on the first body insn so a real arith handler with a
+        // stray pop in the middle doesn't misclassify.
+        if (body_insns == 0 &&
+            insn.mnemonic == Mnemonic::Pop &&
+            insn.num_operands == 1 &&
+            insn.operands[0].kind == Operand::Kind::Register) {
+            auto decode_at = [&](addr_t a) -> std::optional<Instruction> {
+                auto bs = b.bytes_at(a);
+                if (bs.empty()) return std::nullopt;
+                auto d = dec.decode(bs, a);
+                if (!d) return std::nullopt;
+                return *d;
+            };
+            const Reg r1 = canonical_reg(insn.operands[0].reg);
+            addr_t scan_ip = ip + insn.length;
+            auto pop2 = decode_at(scan_ip);
+            if (pop2) scan_ip += pop2->length;
+            auto arith = pop2 ? decode_at(scan_ip) : std::nullopt;
+            if (arith) scan_ip += arith->length;
+            auto push1 = arith ? decode_at(scan_ip) : std::nullopt;
+            const bool shape_ok =
+                pop2 && arith && push1 &&
+                pop2->mnemonic == Mnemonic::Pop &&
+                pop2->num_operands == 1 &&
+                pop2->operands[0].kind == Operand::Kind::Register &&
+                is_arith_family(arith->mnemonic) &&
+                arith->num_operands == 2 &&
+                arith->operands[0].kind == Operand::Kind::Register &&
+                arith->operands[1].kind == Operand::Kind::Register &&
+                push1->mnemonic == Mnemonic::Push &&
+                push1->num_operands == 1 &&
+                push1->operands[0].kind == Operand::Kind::Register;
+            if (shape_ok) {
+                const Reg r2 = canonical_reg(pop2->operands[0].reg);
+                const Reg ad = canonical_reg(arith->operands[0].reg);
+                const Reg as = canonical_reg(arith->operands[1].reg);
+                const Reg pr = canonical_reg(push1->operands[0].reg);
+                if (r1 != r2 && ad == r1 && as == r2 && pr == r1) {
+                    out.kind     = HandlerKind::StackArith;
+                    out.summary  = std::string(mnemonic_name(arith->mnemonic));
+                    out.body_end = push1->address + push1->length;
+                    out.insn_count = 4;
+                    return out;
+                }
+            }
         }
 
         // Trailing-dispatch peek: a byte/word-load (movzx) followed

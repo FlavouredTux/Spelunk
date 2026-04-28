@@ -9,11 +9,10 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 10
-// when arith summaries grew operand info (`add rcx` / `add 0x10` /
-// `clear`) and load/store summaries learned to render bytecode-pc
-// reads as `operand+disp`. v9 entries would mis-render.
-inline constexpr int kVersion = 10;
+// Bump when any cached payload's on-disk format changes. Bumped to 11
+// for the new `stack-arith` HandlerKind — v10 entries would render
+// stack-arith handlers as plain `return`/`null`.
+inline constexpr int kVersion = 11;
 
 std::filesystem::path default_dir();
 

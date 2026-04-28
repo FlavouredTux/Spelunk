@@ -71,6 +71,7 @@ enum class HandlerKind : u8 {
     Branch,      // conditional jump or cmov
     Call,        // direct `call imm` (calls into a native helper)
     Return,      // ret (handler exits the VM run loop)
+    StackArith,  // pop r1; pop r2; <arith> r1, r2; push r1 (vm_stack_<arith>)
 };
 
 [[nodiscard]] std::string_view handler_kind_name(HandlerKind k) noexcept;
@@ -81,12 +82,13 @@ struct HandlerClassification {
     HandlerKind kind       = HandlerKind::Unknown;
     std::size_t insn_count = 0;     // body insns (excludes trailing dispatch)
     // Kind-specific short detail. Populated for Arith / Load / Store /
-    // Branch / Call:
-    //   Arith  → mnemonic name ("add", "sub", "xor", …)
-    //   Load   → memory operand summary ("[rip+0x40]", "[rcx]")
-    //   Store  → memory operand summary
-    //   Branch → conditional mnemonic ("je", "jne", …)
-    //   Call   → target VA when the call is direct, empty otherwise
+    // Branch / Call / StackArith:
+    //   Arith      → mnemonic name ("add", "sub", "xor", …)
+    //   Load       → memory operand summary ("[rip+0x40]", "[rcx]")
+    //   Store      → memory operand summary
+    //   Branch     → conditional mnemonic ("je", "jne", …)
+    //   Call       → target VA when the call is direct, empty otherwise
+    //   StackArith → arith mnemonic of the inner op ("add", "xor", …)
     // Empty for Return / Null / Unknown.
     std::string summary;
 };

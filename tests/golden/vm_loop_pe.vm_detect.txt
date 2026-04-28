@@ -86,3 +86,21 @@ vm #4
     [0x05] 0x140001348 → return (insns=1)
     [0x06] 0x140001350 → return (insns=1)
     [0x07] 0x140001358 → return (insns=1)
+
+vm #5
+  handler table:   0x140002280  (8 entries, 8 unique)
+  opcode register: eax  (1-byte opcode)
+  pc register:     rdi
+  pc advance:      +1
+  bytecode:        0x140002080  (constant via lea rip+disp)
+  entry sites (1):
+    sub_140001400 → dispatch 0x140001414 (load 0x14000140e)
+  handlers (8 shown):
+    [0x00] 0x140001420 → stack-arith add (insns=4)
+    [0x01] 0x140001428 → stack-arith xor (insns=4)
+    [0x02] 0x140001430 → return (insns=1)
+    [0x03] 0x140001438 → return (insns=1)
+    [0x04] 0x140001440 → return (insns=1)
+    [0x05] 0x140001448 → return (insns=1)
+    [0x06] 0x140001450 → return (insns=1)
+    [0x07] 0x140001458 → return (insns=1)

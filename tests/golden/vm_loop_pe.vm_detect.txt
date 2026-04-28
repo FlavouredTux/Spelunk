@@ -50,3 +50,39 @@ vm #2
     [0x05] 0x140001250 → null (insns=1)
     [0x06] 0x140001260 → null (insns=1)
     [0x07] 0x140001270 → null (insns=1)
+
+vm #3
+  handler table:   0x140002180  (8 entries, 8 unique)
+  opcode register: eax  (1-byte opcode)
+  pc register:     rdi
+  pc advance:      +1
+  bytecode:        0x140002080  (constant via lea rip+disp)
+  entry sites (1):
+    sub_140001300 → dispatch 0x140001314 (load 0x14000130e)
+  handlers (8 shown):
+    [0x00] 0x140001320 → branch jne (insns=3)
+    [0x01] 0x140001328 → call 0x14000132d (insns=1)
+    [0x02] 0x140001330 → arith add (insns=2)
+    [0x03] 0x140001338 → load [rcx] (insns=2)
+    [0x04] 0x140001340 → store [rcx] (insns=2)
+    [0x05] 0x140001348 → return (insns=1)
+    [0x06] 0x140001350 → return (insns=1)
+    [0x07] 0x140001358 → return (insns=1)
+
+vm #4
+  handler table:   0x140002200  (8 entries, 8 unique)
+  opcode register: eax  (1-byte opcode)
+  pc register:     rdi
+  pc advance:      +1
+  bytecode:        (runtime / caller-supplied)
+  entry sites (1):
+    sub_140001380 → dispatch 0x14000138c (load 0x140001386)
+  handlers (8 shown):
+    [0x00] 0x140001320 → branch jne (insns=3)
+    [0x01] 0x140001328 → call 0x14000132d (insns=1)
+    [0x02] 0x140001330 → arith add (insns=2)
+    [0x03] 0x140001338 → load [rcx] (insns=2)
+    [0x04] 0x140001340 → store [rcx] (insns=2)
+    [0x05] 0x140001348 → return (insns=1)
+    [0x06] 0x140001350 → return (insns=1)
+    [0x07] 0x140001358 → return (insns=1)

@@ -645,6 +645,46 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                     }
                 }
             }
+            // VMProtect-style RIP capture: `call $+5; pop reg`.
+            // The call pushes the address of the pop (= rip after the
+            // call); the pop materialises it into reg. Equivalent to
+            // `lea reg, [rip+0]` but without using lea, designed to
+            // defeat naive lea-only walkers. Skip the pair and prime
+            // a LeaRipRel record on the destination register so the
+            // table-base resolution path can still find the dispatch.
+            if (insn.mnemonic == Mnemonic::Call &&
+                insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Relative &&
+                insn.operands[0].rel.target ==
+                    insn.address + insn.length) {
+                auto next_bytes = b.bytes_at(ip + insn.length);
+                if (!next_bytes.empty()) {
+                    auto next_decoded = dec.decode(next_bytes,
+                                                    ip + insn.length);
+                    if (next_decoded &&
+                        next_decoded->mnemonic == Mnemonic::Pop &&
+                        next_decoded->num_operands == 1 &&
+                        next_decoded->operands[0].kind ==
+                            Operand::Kind::Register) {
+                        const Reg dst = canonical_reg(
+                            next_decoded->operands[0].reg);
+                        RegLoad& rec = reg_loads[
+                            static_cast<std::size_t>(dst)];
+                        rec = {};
+                        rec.kind       = RegLoad::Kind::LeaRipRel;
+                        rec.at_addr    = insn.address;
+                        rec.at_age     = age_counter + 1;
+                        // The popped value is the return address the
+                        // call pushed = ip + call.length = address of
+                        // the pop instruction itself.
+                        rec.lea_target = ip + insn.length;
+                        ip += insn.length +
+                              static_cast<addr_t>(next_decoded->length);
+                        ++age_counter;
+                        continue;
+                    }
+                }
+            }
             ++age_counter;
 
             // Indirect jmp/call → potential dispatch site.

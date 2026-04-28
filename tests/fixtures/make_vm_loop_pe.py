@@ -87,9 +87,21 @@ def main() -> int:
     NUM_THREADED      = 8
     THREADED_SIZE     = 0x10        # 16 bytes per ht_N
 
+    vm_loop_rich_rva  = rva_text + 0x300
+    rich_handler_rva  = rva_text + 0x320
+    NUM_RICH          = 8
+    RICH_SIZE         = 0x08        # 8 bytes per rich handler
+
+    vm_loop_rip_rva   = rva_text + 0x380     # VMProtect-style RIP-capture VM
+
     table_rva           = rva_rdata + 0x00
     bytecode_rva        = rva_rdata + 0x80
     threaded_table_rva  = rva_rdata + 0x100
+    # 64-byte gap of zeros after threaded_table so the table walker
+    # stops at the boundary instead of running into rich_table.
+    rich_table_rva      = rva_rdata + 0x180
+    # Same gap rationale between rich_table and rip_table.
+    rip_table_rva       = rva_rdata + 0x200
 
     text = bytearray()
 
@@ -192,6 +204,71 @@ def main() -> int:
         text += b"\xFF\x24\xC6"
         assert len(text) == (hrva - rva_text) + THREADED_SIZE
 
+    # ---- pad to vm_loop_rich_rva (0x300) ----
+    while len(text) < (vm_loop_rich_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- vm_loop_rich (central dispatcher with full classification mix) ----
+    # Same canonical shape as vm_loop, just pointing at a different
+    # table so the cluster comes out as a separate VM #3.
+    rich_disp_start = len(text)
+    rip_after_lea_pc_rich = vm_loop_rich_rva + 7
+    text += b"\x48\x8D\x3D" + struct.pack("<i", bytecode_rva - rip_after_lea_pc_rich)
+    rip_after_lea_table_rich = vm_loop_rich_rva + 14
+    text += b"\x48\x8D\x35" + struct.pack("<i", rich_table_rva - rip_after_lea_table_rich)
+    text += b"\x0F\xB6\x07"
+    text += b"\x48\xFF\xC7"
+    text += b"\xFF\x24\xC6"
+    vm_loop_rich_size = len(text) - rich_disp_start
+    # Pad to rich_handler_rva (0x320).
+    while len(text) < (rich_handler_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- 8 rich handlers (8 bytes each) — exercise every classifier kind ----
+    # Slot table:
+    #   [0] branch  — cmp rax, 0; jne $+1; ret; ret
+    #   [1] call    — call $+5; ret; nop; nop      (calls into the ret at +5)
+    #   [2] arith   — add rax, rcx; ret; nops
+    #   [3] load    — mov rax, [rcx]; ret; nops
+    #   [4] store   — mov [rcx], rax; ret; nops
+    #   [5..7] return — ret; nops      (trivial vm_ret-style opcodes)
+    text += b"\x48\x83\xF8\x00\x75\x01\xC3\xC3"   # [0] branch
+    text += b"\xE8\x00\x00\x00\x00\xC3\x90\x90"   # [1] call
+    text += b"\x48\x01\xC8\xC3\x90\x90\x90\x90"   # [2] arith
+    text += b"\x48\x8B\x01\xC3\x90\x90\x90\x90"   # [3] load
+    text += b"\x48\x89\x01\xC3\x90\x90\x90\x90"   # [4] store
+    text += b"\xC3\x90\x90\x90\x90\x90\x90\x90"   # [5] return
+    text += b"\xC3\x90\x90\x90\x90\x90\x90\x90"   # [6] return
+    text += b"\xC3\x90\x90\x90\x90\x90\x90\x90"   # [7] return
+    rich_handlers_size = NUM_RICH * RICH_SIZE
+    assert len(text) == (rich_handler_rva - rva_text) + rich_handlers_size
+
+    rich_handler_rvas = [rich_handler_rva + i * RICH_SIZE for i in range(NUM_RICH)]
+
+    # ---- pad to vm_loop_rip_rva (0x380) ----
+    while len(text) < (vm_loop_rip_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- vm_loop_rip (RIP-capture via call+pop) ----
+    # `call $+5; pop rsi` is the VMProtect-class trick for materialising
+    # the current RIP into a register without using lea — equivalent to
+    # `lea rsi, [rip+0]` placed at the pop's address. The detector's
+    # call+pop lookahead must recognise this and prime a synthetic
+    # LeaRipRel record on rsi so the dispatch's table-base resolution
+    # path still works.
+    rip_disp_start = len(text)
+    text += b"\xE8\x00\x00\x00\x00"           # call $+5
+    text += b"\x5E"                            # pop rsi
+    text += b"\x0F\xB6\x07"                    # movzx eax, byte ptr [rdi]
+    text += b"\x48\xFF\xC7"                    # inc rdi
+    # jmp [rsi + rax*8 + disp32] — table at rip_table_rva, with disp
+    # measured from the pop instruction's VA (= what rsi holds).
+    pop_rsi_va = IMAGE_BASE + vm_loop_rip_rva + 5
+    table_va   = IMAGE_BASE + rip_table_rva
+    disp32     = table_va - pop_rsi_va
+    text += b"\xFF\xA4\xC6" + struct.pack("<i", disp32)
+    vm_loop_rip_size = len(text) - rip_disp_start
+
     text_virt_size = len(text)
     vm_loop_size       = 0x18 + 16 * 4   # PDATA range covers handlers too
     vm_loop_obf_size   = obf_size
@@ -214,6 +291,20 @@ def main() -> int:
     # IS in this table.
     for i in range(NUM_THREADED):
         rdata += struct.pack("<Q", IMAGE_BASE + threaded_handler_rvas[i])
+    # Pad to rich_table_rva (0x140).
+    while len(rdata) < (rich_table_rva - rva_rdata):
+        rdata.append(0)
+    # 8-entry rich-handler table — central VM #3.
+    for i in range(NUM_RICH):
+        rdata += struct.pack("<Q", IMAGE_BASE + rich_handler_rvas[i])
+    # Pad to rip_table_rva (0x200).
+    while len(rdata) < (rip_table_rva - rva_rdata):
+        rdata.append(0)
+    # 8-entry rip-capture-VM table — same handlers, just routed via
+    # call+pop instead of lea. Lets the same handler bodies serve two
+    # different dispatchers.
+    for i in range(NUM_RICH):
+        rdata += struct.pack("<Q", IMAGE_BASE + rich_handler_rvas[i])
     rdata_virt_size = len(rdata)
 
     # ---- .pdata content ----------------------------------------------------
@@ -237,6 +328,18 @@ def main() -> int:
     # symbol vm_detect can scan from.
     for hrva in threaded_handler_rvas:
         pdata += struct.pack("<III", hrva, hrva + THREADED_SIZE, rva_pdata)
+    # PDATA covering the rich central dispatcher only (its handlers
+    # live in the table and are reached via the dispatch, not as
+    # standalone functions).
+    pdata += struct.pack("<III",
+                         vm_loop_rich_rva,
+                         vm_loop_rich_rva + vm_loop_rich_size,
+                         rva_pdata)
+    # And the RIP-capture central dispatcher.
+    pdata += struct.pack("<III",
+                         vm_loop_rip_rva,
+                         vm_loop_rip_rva + vm_loop_rip_size,
+                         rva_pdata)
     pdata_virt_size = len(pdata)
 
     # ---- Sizes / file layout ----------------------------------------------

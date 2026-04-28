@@ -9,11 +9,11 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 8
-// when --vm-detect handler-classification rows grew a kind-specific
-// summary detail (arith mnemonic / load+store mem operand / branch
-// mnemonic / call target). v7 entries would mis-render.
-inline constexpr int kVersion = 8;
+// Bump when any cached payload's on-disk format changes. Bumped to 9
+// when the vm-detect fixture grew two more VMs (rich central + RIP-
+// capture) — the cached output now has more dispatcher blocks per
+// binary and v8 entries would silently miss them.
+inline constexpr int kVersion = 9;
 
 std::filesystem::path default_dir();
 

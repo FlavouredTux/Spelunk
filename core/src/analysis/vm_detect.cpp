@@ -703,6 +703,15 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
         std::array<RegLoad, static_cast<std::size_t>(Reg::Count)> reg_loads{};
         unsigned age_counter = 0;
 
+        // Shadow stack: a (base_reg, disp) → RegLoad map that survives
+        // a `mov [base+disp], reg; ... ; mov reg, [base+disp]`
+        // save/restore obfuscation. The save copies the source
+        // register's RegLoad into the slot; the restore copies it back.
+        // Lets the dispatcher's byte-load record outlive intervening
+        // clobbering writes (xor reg, reg / movzx with a different
+        // value / etc.) that would otherwise invalidate it.
+        std::map<std::pair<Reg, i32>, RegLoad> shadow_slots;
+
         // CFG-shaped walk: follow direct `jmp imm` to in-code targets so
         // dispatchers split across blocks (movzx in block A, jmp [t+i*8]
         // in block B reached via an unconditional jmp) still match.
@@ -892,6 +901,18 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                             rl.bm_pc_advance = delta;
                         }
                     }
+                    // Also propagate the pc-advance into any saved
+                    // shadow records — without this, a `mov [rsp], rax;
+                    // <clobber rax>; inc rdi; mov rax, [rsp]` sequence
+                    // would lose the pc_advance because rax's live
+                    // record was cleared by the clobber.
+                    for (auto& [_, rl] : shadow_slots) {
+                        if (rl.kind == RegLoad::Kind::ByteFromMem &&
+                            rl.bm_base_reg == delta_reg &&
+                            rl.bm_pc_advance == 0) {
+                            rl.bm_pc_advance = delta;
+                        }
+                    }
                 }
             }
 
@@ -942,6 +963,49 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                     rec.at_age     = age_counter;
                     rec.lea_target = insn.address + insn.length +
                                      static_cast<addr_t>(insn.operands[1].mem.disp);
+                } else if (insn.mnemonic == Mnemonic::Mov &&
+                           insn.num_operands == 2 &&
+                           insn.operands[1].kind == Operand::Kind::Memory) {
+                    // Shadow restore: a `mov dst_reg, [base+disp]` whose
+                    // (base, disp) matches a previously-saved slot lifts
+                    // the saved RegLoad onto dst_reg. Without this the
+                    // default `rec = {}` clear above would lose the
+                    // byte-load record across save/restore obfuscation.
+                    const Mem& sm = insn.operands[1].mem;
+                    if (sm.base != Reg::None && sm.base != Reg::Rip &&
+                        sm.index == Reg::None) {
+                        const std::pair<Reg, i32> key{
+                            canonical_reg(sm.base),
+                            sm.has_disp ? static_cast<i32>(sm.disp) : 0};
+                        if (auto it = shadow_slots.find(key);
+                            it != shadow_slots.end()) {
+                            rec = it->second;
+                        }
+                    }
+                }
+            }
+
+            // Shadow save / invalidate: a `mov [base+disp], reg`
+            // captures the source register's RegLoad into the
+            // (base, disp) slot. A `mov [base+disp], imm` (or any
+            // non-register store to a tracked slot) erases the slot
+            // so a later restore doesn't replay stale shadow.
+            if (insn.mnemonic == Mnemonic::Mov &&
+                insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Memory) {
+                const Mem& sm = insn.operands[0].mem;
+                if (sm.base != Reg::None && sm.base != Reg::Rip &&
+                    sm.index == Reg::None) {
+                    const std::pair<Reg, i32> key{
+                        canonical_reg(sm.base),
+                        sm.has_disp ? static_cast<i32>(sm.disp) : 0};
+                    if (insn.operands[1].kind == Operand::Kind::Register) {
+                        const Reg src = canonical_reg(insn.operands[1].reg);
+                        shadow_slots[key] =
+                            reg_loads[static_cast<std::size_t>(src)];
+                    } else {
+                        shadow_slots.erase(key);
+                    }
                 }
             }
 

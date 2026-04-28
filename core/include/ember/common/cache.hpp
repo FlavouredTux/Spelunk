@@ -9,10 +9,11 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 11
-// for the new `stack-arith` HandlerKind — v10 entries would render
-// stack-arith handlers as plain `return`/`null`.
-inline constexpr int kVersion = 11;
+// Bump when any cached payload's on-disk format changes. Bumped to 12
+// when the vm-detect dispatcher walker grew stack-slot shadow tracking
+// (mov [base+disp], reg save / mov reg, [base+disp] restore) — the
+// new fixture's VM #6 only shows up under v12.
+inline constexpr int kVersion = 12;
 
 std::filesystem::path default_dir();
 

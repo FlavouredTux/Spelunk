@@ -99,6 +99,13 @@ def main() -> int:
     NUM_STACK         = 8
     STACK_SIZE        = 0x08
 
+    # vm_loop_shadow: dispatcher whose byte-load → dispatch sequence
+    # has a `mov [rsp+0x10], rax; xor rax, rax; mov rax, [rsp+0x10]`
+    # save/restore inserted between them. Without shadow tracking the
+    # `xor rax, rax` clears the byte-load record and the dispatch
+    # would never match.
+    vm_loop_shadow_rva = rva_text + 0x500
+
     table_rva           = rva_rdata + 0x00
     bytecode_rva        = rva_rdata + 0x80
     threaded_table_rva  = rva_rdata + 0x100
@@ -109,6 +116,8 @@ def main() -> int:
     rip_table_rva       = rva_rdata + 0x200
     # Same gap rationale before stack_table.
     stack_table_rva     = rva_rdata + 0x280
+    # And before shadow_table.
+    shadow_table_rva    = rva_rdata + 0x300
 
     text = bytearray()
 
@@ -311,6 +320,33 @@ def main() -> int:
 
     stack_handler_rvas = [stack_handler_rva + i * STACK_SIZE for i in range(NUM_STACK)]
 
+    # ---- pad to vm_loop_shadow_rva (0x500) ----
+    while len(text) < (vm_loop_shadow_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- vm_loop_shadow (save/restore obfuscation) ----
+    # Body shape:
+    #   0x00: lea rdi, [rip + bytecode]                  7 bytes
+    #   0x07: lea rsi, [rip + shadow_table]              7 bytes
+    #   0x0E: movzx eax, byte ptr [rdi]                  3 bytes  (byte-load)
+    #   0x11: mov [rsp+0x10], rax                        5 bytes  (shadow save)
+    #   0x16: xor rax, rax                               3 bytes  (clobber rax)
+    #   0x19: inc rdi                                    3 bytes  (pc advance)
+    #   0x1C: mov rax, [rsp+0x10]                        5 bytes  (shadow restore)
+    #   0x21: jmp qword ptr [rsi + rax*8]                3 bytes
+    shadow_disp_start = len(text)
+    rip_after_lea_pc_shadow = vm_loop_shadow_rva + 7
+    text += b"\x48\x8D\x3D" + struct.pack("<i", bytecode_rva - rip_after_lea_pc_shadow)
+    rip_after_lea_table_shadow = vm_loop_shadow_rva + 14
+    text += b"\x48\x8D\x35" + struct.pack("<i", shadow_table_rva - rip_after_lea_table_shadow)
+    text += b"\x0F\xB6\x07"                  # movzx eax, byte ptr [rdi]
+    text += b"\x48\x89\x44\x24\x10"           # mov [rsp+0x10], rax
+    text += b"\x48\x31\xC0"                  # xor rax, rax  (writes to rax)
+    text += b"\x48\xFF\xC7"                  # inc rdi
+    text += b"\x48\x8B\x44\x24\x10"           # mov rax, [rsp+0x10]
+    text += b"\xFF\x24\xC6"                  # jmp [rsi + rax*8]
+    vm_loop_shadow_size = len(text) - shadow_disp_start
+
     text_virt_size = len(text)
     vm_loop_size       = 0x18 + 16 * 4   # PDATA range covers handlers too
     vm_loop_obf_size   = obf_size
@@ -350,9 +386,19 @@ def main() -> int:
     # Pad to stack_table_rva (0x280).
     while len(rdata) < (stack_table_rva - rva_rdata):
         rdata.append(0)
+    # (Stack table itself is emitted below, in the existing block.)
     # 8-entry stack-arith handler table.
     for i in range(NUM_STACK):
         rdata += struct.pack("<Q", IMAGE_BASE + stack_handler_rvas[i])
+    # Pad to shadow_table_rva (0x300).
+    while len(rdata) < (shadow_table_rva - rva_rdata):
+        rdata.append(0)
+    # 8-entry shadow-VM handler table — reuses the rich handler bodies
+    # (same 8 absolute VAs as rich_table) so the cluster comes out as
+    # its own VM (different table_addr) but with the same per-handler
+    # classifications.
+    for i in range(NUM_RICH):
+        rdata += struct.pack("<Q", IMAGE_BASE + rich_handler_rvas[i])
     rdata_virt_size = len(rdata)
 
     # ---- .pdata content ----------------------------------------------------
@@ -392,6 +438,11 @@ def main() -> int:
     pdata += struct.pack("<III",
                          vm_loop_stack_rva,
                          vm_loop_stack_rva + vm_loop_stack_size,
+                         rva_pdata)
+    # And the shadow-stack central dispatcher.
+    pdata += struct.pack("<III",
+                         vm_loop_shadow_rva,
+                         vm_loop_shadow_rva + vm_loop_shadow_size,
                          rva_pdata)
     pdata_virt_size = len(pdata)
 

@@ -104,3 +104,21 @@ vm #5
     [0x05] 0x140001448 → return (insns=1)
     [0x06] 0x140001450 → return (insns=1)
     [0x07] 0x140001458 → return (insns=1)
+
+vm #6
+  handler table:   0x140002300  (8 entries, 8 unique)
+  opcode register: eax  (1-byte opcode)
+  pc register:     rdi
+  pc advance:      +1
+  bytecode:        0x140002080  (constant via lea rip+disp)
+  entry sites (1):
+    sub_140001500 → dispatch 0x140001521 (load 0x14000150e)
+  handlers (8 shown):
+    [0x00] 0x140001320 → branch jne (insns=3)
+    [0x01] 0x140001328 → call 0x14000132d (insns=1)
+    [0x02] 0x140001330 → arith add rcx (insns=2)
+    [0x03] 0x140001338 → load operand (insns=2)
+    [0x04] 0x140001340 → store [rcx] (insns=2)
+    [0x05] 0x140001348 → return (insns=1)
+    [0x06] 0x140001350 → return (insns=1)
+    [0x07] 0x140001358 → return (insns=1)

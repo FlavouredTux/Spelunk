@@ -1,6 +1,8 @@
 #include <ember/analysis/vm_detect.hpp>
 
+#include <algorithm>
 #include <array>
+#include <map>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -190,6 +192,42 @@ struct RegLoad {
 }
 
 }  // namespace
+
+std::vector<VmInstance>
+group_vm_dispatchers(const std::vector<VmDispatcher>& dispatchers) {
+    // Cluster by handler-table base — every dispatcher feeding the
+    // same table is the same VM (modulo the central-vs-threaded
+    // distinction we apply per-site below).
+    std::map<addr_t, VmInstance> by_table;
+    for (const auto& d : dispatchers) {
+        auto [it, inserted] = by_table.try_emplace(d.table_addr);
+        VmInstance& vm = it->second;
+        if (inserted) {
+            vm.table_addr        = d.table_addr;
+            vm.table_entries     = d.table_entries;
+            vm.handlers          = d.handlers;
+            vm.opcode_index_reg  = d.opcode_index_reg;
+            vm.opcode_size_bytes = d.opcode_size_bytes;
+            vm.pc_register       = d.pc_register;
+            vm.pc_disp           = d.pc_disp;
+            vm.pc_advance        = d.pc_advance;
+            vm.bytecode_addr     = d.bytecode_addr;
+        }
+        const bool is_handler =
+            std::find(vm.handlers.begin(), vm.handlers.end(),
+                      d.function_addr) != vm.handlers.end();
+        if (is_handler) {
+            vm.threaded_sites.push_back(d);
+        } else {
+            vm.entry_sites.push_back(d);
+        }
+    }
+
+    std::vector<VmInstance> out;
+    out.reserve(by_table.size());
+    for (auto& [_, vm] : by_table) out.push_back(std::move(vm));
+    return out;
+}
 
 std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
     std::vector<VmDispatcher> out;

@@ -9,11 +9,11 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 5
-// when --vm-detect switched from one-line TSV to a multi-line per-
-// dispatcher block carrying full anatomy (opcode/pc registers, pc
-// advance, bytecode VA) — old v4 cache entries are stale.
-inline constexpr int kVersion = 5;
+// Bump when any cached payload's on-disk format changes. Bumped to 6
+// when --vm-detect switched again — per-dispatcher blocks collapsed
+// into per-VM (handler-table-clustered) blocks listing entry sites
+// and threaded slots separately. v5 entries would mis-render.
+inline constexpr int kVersion = 6;
 
 std::filesystem::path default_dir();
 

@@ -55,4 +55,44 @@ struct VmDispatcher {
 [[nodiscard]] std::vector<VmDispatcher>
 detect_vm_dispatchers(const Binary& b);
 
+// One VM, after dispatcher-level results are clustered by handler-
+// table address. Multiple dispatchers sharing a table are *the same
+// VM*: a tail-dispatch at the end of every handler (threaded VM)
+// produces one VmDispatcher per handler, all pointing at the same
+// table; clustering exposes that they're the same machine.
+//
+// `entry_sites` are dispatchers whose function_addr is NOT in
+// `handlers` — i.e. the central dispatch loop's outer function(s).
+// `threaded_sites` are dispatchers whose function_addr IS in
+// `handlers` — the handler itself ends with a fresh opcode-fetch +
+// dispatch instead of returning to a central loop.
+//
+// A pure central VM has 1 entry site and 0 threaded sites; a pure
+// threaded VM has 0 entry sites and N threaded sites; mixed VMs
+// (some handlers fall through to a central re-dispatch, others
+// tail-dispatch directly) have both.
+struct VmInstance {
+    addr_t              table_addr           = 0;
+    std::size_t         table_entries        = 0;
+    std::vector<addr_t> handlers;
+
+    // Anatomy taken from the first dispatcher in the cluster — VMs
+    // with multiple sites running through different opcode/pc shapes
+    // are pathological and don't show up in real binaries.
+    Reg                 opcode_index_reg     = Reg::None;
+    u8                  opcode_size_bytes    = 1;
+    Reg                 pc_register          = Reg::None;
+    i32                 pc_disp              = 0;
+    i32                 pc_advance           = 0;
+    addr_t              bytecode_addr        = 0;
+
+    std::vector<VmDispatcher> entry_sites;
+    std::vector<VmDispatcher> threaded_sites;
+};
+
+// Cluster dispatchers by handler-table address and classify each as
+// an entry site or a threaded slot.
+[[nodiscard]] std::vector<VmInstance>
+group_vm_dispatchers(const std::vector<VmDispatcher>& dispatchers);
+
 }  // namespace ember

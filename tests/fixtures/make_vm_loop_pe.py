@@ -59,30 +59,37 @@ def main() -> int:
 
     foff_headers = 0
     foff_text    = FILE_ALIGN
-    foff_rdata   = foff_text + FILE_ALIGN
-    foff_pdata   = foff_rdata + FILE_ALIGN
+    # foff_rdata / foff_pdata are computed after section sizes are
+    # known — see "Sizes / file layout" below. The earlier shortcut
+    # that assumed each section fit in one FILE_ALIGN block silently
+    # truncated .text once the threaded handlers pushed it past 0x200.
 
     # ---- .text content -----------------------------------------------------
-    # Three functions exercise the detector:
+    # Functions exercising the detector:
     #
-    #   vm_loop @ rva_text+0x00 — the canonical clean dispatcher.
-    #   vm_loop_obf @ rva_text+0x80 — same shape but with four
-    #       semantic-nop pads (90 / 48 87 c0 / 48 89 c9 / eb 00)
-    #       inserted between the byte-load and the dispatch. The
-    #       detector's is_semantic_nop predicate must skip them so the
-    #       byte-load → dispatch reuse window doesn't blow.
-    #   vm_loop_split @ rva_text+0x100 — byte-load and dispatch live in
-    #       different basic blocks, joined by an unconditional `jmp imm`
-    #       with 30 bytes of int3 padding in between. The detector's
-    #       jmp-imm-follow path must walk through the jmp to the second
-    #       block to find the dispatch.
+    #   vm_loop @ rva_text+0x00 — canonical clean dispatcher.
+    #   vm_loop_obf @ rva_text+0x80 — same shape with four semantic-nop
+    #       pads (90 / 48 87 c0 / 48 89 c9 / eb 00) inserted between
+    #       byte-load and dispatch. is_semantic_nop must skip them.
+    #   vm_loop_split @ rva_text+0x100 — byte-load and dispatch in
+    #       different basic blocks, joined by `jmp imm` with 30 bytes
+    #       of int3 padding. Jmp-imm-follow must walk through.
+    #   ht_0..ht_7 @ rva_text+0x200..+0x270 — eight tail-dispatch
+    #       "threaded" handlers each running an independent dispatch
+    #       loop and feeding a shared threaded handler-table. Both
+    #       the per-site primitives and the cluster-by-table grouping
+    #       (entry vs threaded) get exercised here.
     vm_loop_rva       = rva_text + 0x00
     handler_base_rva  = vm_loop_rva + 0x18
     vm_loop_obf_rva   = rva_text + 0x80
     vm_loop_split_rva = rva_text + 0x100
+    threaded_base_rva = rva_text + 0x200
+    NUM_THREADED      = 8
+    THREADED_SIZE     = 0x10        # 16 bytes per ht_N
 
-    table_rva    = rva_rdata + 0x00
-    bytecode_rva = rva_rdata + 0x80
+    table_rva           = rva_rdata + 0x00
+    bytecode_rva        = rva_rdata + 0x80
+    threaded_table_rva  = rva_rdata + 0x100
 
     text = bytearray()
 
@@ -156,20 +163,49 @@ def main() -> int:
     text += b"\xFF\x24\xC6"           # jmp qword ptr [rsi + rax*8]
     split_size = len(text) - split_start
 
+    # ---- pad to threaded_base_rva (0x200) ----
+    while len(text) < (threaded_base_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- ht_0 .. ht_7 (threaded tail-dispatchers) ----
+    # Each handler is exactly 16 bytes:
+    #   48 8D 35 NN NN NN NN     lea rsi, [rip + threaded_table]
+    #   0F B6 07                 movzx eax, byte ptr [rdi]
+    #   48 FF C7                 inc rdi
+    #   FF 24 C6                 jmp qword ptr [rsi + rax*8]
+    threaded_handler_rvas = []
+    for i in range(NUM_THREADED):
+        hrva = threaded_base_rva + i * THREADED_SIZE
+        threaded_handler_rvas.append(hrva)
+        rip_after_lea = hrva + 7
+        text += b"\x48\x8D\x35" + struct.pack("<i", threaded_table_rva - rip_after_lea)
+        text += b"\x0F\xB6\x07"
+        text += b"\x48\xFF\xC7"
+        text += b"\xFF\x24\xC6"
+        assert len(text) == (hrva - rva_text) + THREADED_SIZE
+
     text_virt_size = len(text)
     vm_loop_size       = 0x18 + 16 * 4   # PDATA range covers handlers too
     vm_loop_obf_size   = obf_size
     vm_loop_split_size = split_size
 
     # ---- .rdata content ----------------------------------------------------
-    # 16-entry handler table — each absolute VA pointing at handler_i.
+    # 16-entry main handler table at rva_rdata+0x00, each absolute VA
+    # pointing at handler_i (4 bytes each in .text).
     rdata = bytearray()
     for i in range(16):
         h_va = IMAGE_BASE + handler_base_rva + i * 4
         rdata += struct.pack("<Q", h_va)
-    # Bytecode bytes (12 zeros — content doesn't matter; the test only
-    # cares that the dispatcher anatomy is recoverable).
+    # Bytecode bytes (12 zeros — content irrelevant).
     rdata += b"\x00" * 12
+    # Pad to threaded_table_rva (0x100).
+    while len(rdata) < (threaded_table_rva - rva_rdata):
+        rdata.append(0)
+    # 8-entry threaded table — points at ht_0..ht_7. The detector
+    # treats each ht_N as a threaded slot because its function_addr
+    # IS in this table.
+    for i in range(NUM_THREADED):
+        rdata += struct.pack("<Q", IMAGE_BASE + threaded_handler_rvas[i])
     rdata_virt_size = len(rdata)
 
     # ---- .pdata content ----------------------------------------------------
@@ -189,13 +225,19 @@ def main() -> int:
                          vm_loop_split_rva,
                          vm_loop_split_rva + vm_loop_split_size,
                          rva_pdata)
+    # One PDATA entry per threaded handler so each becomes a Function
+    # symbol vm_detect can scan from.
+    for hrva in threaded_handler_rvas:
+        pdata += struct.pack("<III", hrva, hrva + THREADED_SIZE, rva_pdata)
     pdata_virt_size = len(pdata)
 
     # ---- Sizes / file layout ----------------------------------------------
     text_raw_size  = align(len(text),  FILE_ALIGN)
     rdata_raw_size = align(len(rdata), FILE_ALIGN)
     pdata_raw_size = align(len(pdata), FILE_ALIGN)
-    file_end       = foff_pdata + pdata_raw_size
+    foff_rdata = foff_text + text_raw_size
+    foff_pdata = foff_rdata + rdata_raw_size
+    file_end   = foff_pdata + pdata_raw_size
 
     size_of_image   = align(rva_pdata + pdata_virt_size, SECTION_ALIGN)
     size_of_headers = FILE_ALIGN

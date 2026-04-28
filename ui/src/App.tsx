@@ -183,6 +183,11 @@ export default function App() {
   // Undo stack — snapshots of the annotations object before each write.
   // Capped to keep memory bounded on long editing sessions.
   const undoStackRef = useRef<Annotations[]>([]);
+  // Lazy xrefs latch — stays false until the first consumer panel is
+  // opened, then true forever (per-binary). Kept as a ref so flipping
+  // it doesn't trigger a re-render — the effect that watches xrefsOpen
+  // / callGraphOpen / aiOpen reads it directly.
+  const xrefsRequestedRef = useRef(false);
   // Keyboard handler needs a stable hook-into for undo, but the actual
   // implementation depends on `annotations` and other state defined later
   // in this component. Bridge with a ref so the keyboard useEffect can
@@ -303,6 +308,17 @@ export default function App() {
     setThemeRev((n) => n + 1);
   }, [settings.theme, settings.codeFontFamily]);
   void themeRev;   // referenced so the linter doesn't strip the bump
+
+  // Lazy xrefs: spawn the --xrefs CLI run only when a consumer panel
+  // becomes visible. Saves a slow ember invocation on initial load
+  // for users who never open xrefs / callgraph / AI in a session.
+  useEffect(() => {
+    if (!info) return;
+    if (xrefsRequestedRef.current) return;
+    if (!(xrefsOpen || callGraphOpen || aiOpen)) return;
+    xrefsRequestedRef.current = true;
+    track("xrefs", loadXrefs().then(setXrefs).catch(() => {}));
+  }, [info, xrefsOpen, callGraphOpen, aiOpen, track]);
 
   // Auto-resume the most recently opened binary on launch. Settings
   // persists `lastBinary`; the main process's setBinary IPC just pins
@@ -462,21 +478,25 @@ export default function App() {
       setCurrent(null);
       setHistory([]);
       setHistIdx(-1);
-      // Two-stage load: render the UI shell as soon as the header
-      // returns (format, sections, imports — usually <100ms), then
-      // populate the function list in the background. On packed
-      // binaries the function-list query can take seconds; the user
-      // shouldn't see a frozen window for that.
+      // Staged load — each ember CLI invocation re-parses the binary
+      // from scratch, so firing four of them in parallel on a 200 MB
+      // PE quadruples the parse cost and thrashes the OS file cache.
+      // Order:
+      //   1. header (synchronous)            — UI shell
+      //   2. annotations + functions parallel — sidecar is tiny;
+      //                                         functions gates the sidebar
+      //   3. arities (after functions)       — fills the FunctionHeader
+      //   4. xrefs (lazy)                    — only spawned when the user
+      //                                         opens xrefs / callgraph /
+      //                                         AI, where it's actually used
       const header = await loadHeader();
       setInfo(header);
       setStrings(EMPTY_STRINGS);
       undoStackRef.current = [];
-      // Persist as last-opened so next launch can resume here.
+      xrefsRequestedRef.current = false;
       patchSettings({ lastBinary: header.path });
       setFunctionsLoading(true);
       track("annotations", loadAnnotations(header.path).then(setAnnotations).catch(() => {}));
-      track("xrefs",       loadXrefs().then(setXrefs).catch(() => {}));
-      track("arities",     loadArities().then(setArities).catch(() => {}));
       getRecents().then(setRecents).catch(() => {});
       track("functions", loadFunctions({
         fullAnalysis: forceFullAnalysisFor.has(binaryPath),
@@ -501,6 +521,10 @@ export default function App() {
           }
           return start;
         });
+        // Now that functions is in, fire arities. Sequencing avoids a
+        // third concurrent ember process competing with the function
+        // loader for binary parse + file-cache pages.
+        track("arities", loadArities().then(setArities).catch(() => {}));
       }).catch(() => {}).finally(() => setFunctionsLoading(false)));
     } catch (e: any) {
       setError(e?.message ?? String(e));
@@ -1299,6 +1323,12 @@ export default function App() {
           <Tabs view={view} setView={setView} />
           {error ? (
             <ErrorView message={error} currentView={view} onSwitchView={setView} />
+          ) : !current ? (
+            <LoadingSplash
+              functionsLoading={functionsLoading}
+              pending={pending}
+              functionCount={info.functions.length}
+            />
           ) : view === "cfg" ? (
             <CfgGraph
               text={code}
@@ -1551,6 +1581,55 @@ export default function App() {
           onDismiss={() => dismissReleaseUpdate(releaseUpdate)}
         />
       )}
+    </div>
+  );
+}
+
+// Centered "we're working" indicator for the body while no function is
+// selected yet. Names every concurrent CLI run so the user knows what
+// they're waiting on rather than staring at a blank pane.
+function LoadingSplash(props: {
+  functionsLoading: boolean;
+  pending: Set<string>;
+  functionCount: number;
+}) {
+  const tags: string[] = [];
+  if (props.functionsLoading || props.functionCount === 0) tags.push("functions");
+  for (const t of props.pending) {
+    if (t === "functions") continue;
+    tags.push(t);
+  }
+  return (
+    <div style={{
+      flex: 1, display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      gap: 14, background: C.bg, color: C.textMuted,
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10,
+        fontFamily: sans, fontSize: 13, color: C.text,
+      }}>
+        <span style={{
+          width: 8, height: 8, borderRadius: 4, background: C.accent,
+          animation: "pulse 1.4s ease-in-out infinite",
+        }} />
+        <span>analyzing binary</span>
+      </div>
+      <div style={{
+        fontFamily: serif, fontStyle: "italic", fontSize: 12,
+        color: C.textFaint, maxWidth: 420, textAlign: "center", lineHeight: 1.55,
+      }}>
+        {tags.length === 0
+          ? "almost done — picking a starting function…"
+          : `running ${tags.join(", ")}`}
+      </div>
+      <div style={{
+        fontFamily: mono, fontSize: 10, color: C.textFaint,
+        marginTop: 8, maxWidth: 480, textAlign: "center", lineHeight: 1.55,
+      }}>
+        first open of a binary spawns a fresh ember CLI run for each
+        analysis stage; subsequent opens hit the on-disk cache.
+      </div>
     </div>
   );
 }

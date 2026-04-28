@@ -26,13 +26,20 @@ constexpr std::size_t kSuperblockSize = 56;
 // ---------------------------------------------------------------------------
 // Symbol record kinds. Only the ones we look at.
 // ---------------------------------------------------------------------------
+constexpr u16 kSEnd       = 0x0006;
+constexpr u16 kSBlock32   = 0x1103;
+constexpr u16 kSBPRel32   = 0x110B;
 constexpr u16 kSLData32   = 0x110C;
 constexpr u16 kSGData32   = 0x110D;
 constexpr u16 kSPub32     = 0x110E;
 constexpr u16 kSLProc32   = 0x110F;
 constexpr u16 kSGProc32   = 0x1110;
+constexpr u16 kSRegRel32  = 0x1111;
 constexpr u16 kSLProc32Id = 0x1146;
 constexpr u16 kSGProc32Id = 0x1147;
+constexpr u16 kSInlineSite    = 0x114D;
+constexpr u16 kSInlineSiteEnd = 0x114E;
+constexpr u16 kSProcEnd       = 0x114F;
 
 // ---------------------------------------------------------------------------
 // CodeView leaf (type record) kinds.
@@ -464,6 +471,21 @@ struct SymbolBuckets {
 };
 
 void walk_symbol_records(std::span<const std::byte> stream, SymbolBuckets b) {
+    // CodeView symbol streams are flat sequences with implicit nesting:
+    // a procedure (S_GPROC32 / S_LPROC32) opens a scope that closes at
+    // the matching S_END / S_PROC_END. Inner S_BLOCK32 / S_INLINESITE
+    // records add layers we don't otherwise care about, but we count
+    // them so the procedure's S_END is correctly identified. Locals
+    // (S_BPREL32 / S_REGREL32) seen at any depth inside a proc scope
+    // are attached to the enclosing proc.
+    std::optional<std::size_t> current_proc_idx;
+    int                        scope_depth = 0;
+    auto pop_scope = [&]() {
+        if (scope_depth > 0) {
+            --scope_depth;
+            if (scope_depth == 0) current_proc_idx.reset();
+        }
+    };
     for_each_record(stream, [&](u16 kind, std::span<const std::byte> body) {
         const std::size_t body_len = body.size();
         switch (kind) {
@@ -498,6 +520,47 @@ void walk_symbol_records(std::span<const std::byte> stream, SymbolBuckets b) {
                 s.name = read_cstr_advance(body, pos);
                 if (!s.name.empty() && s.segment != 0) {
                     b.procs->push_back(std::move(s));
+                    current_proc_idx = b.procs->size() - 1;
+                    scope_depth = 1;
+                }
+                break;
+            }
+            case kSBlock32:
+            case kSInlineSite:
+                if (current_proc_idx) ++scope_depth;
+                break;
+            case kSEnd:
+            case kSProcEnd:
+            case kSInlineSiteEnd:
+                pop_scope();
+                break;
+            case kSBPRel32: {
+                // body: i32 Offset, u32 TypeIndex, cstr Name.
+                if (b.procs == nullptr || !current_proc_idx) break;
+                if (body_len < 9) break;
+                LocalVarSymbol l;
+                l.frame_offset = static_cast<i32>(read_le_at<u32>(body.data() + 0));
+                l.type_index   = read_le_at<u32>(body.data() + 4);
+                l.reg          = 0;     // implicit BP
+                std::size_t pos = 8;
+                l.name = read_cstr_advance(body, pos);
+                if (!l.name.empty()) {
+                    (*b.procs)[*current_proc_idx].locals.push_back(std::move(l));
+                }
+                break;
+            }
+            case kSRegRel32: {
+                // body: u32 Offset, u32 TypeIndex, u16 Register, cstr Name.
+                if (b.procs == nullptr || !current_proc_idx) break;
+                if (body_len < 11) break;
+                LocalVarSymbol l;
+                l.frame_offset = static_cast<i32>(read_le_at<u32>(body.data() + 0));
+                l.type_index   = read_le_at<u32>(body.data() + 4);
+                l.reg          = read_le_at<u16>(body.data() + 8);
+                std::size_t pos = 10;
+                l.name = read_cstr_advance(body, pos);
+                if (!l.name.empty()) {
+                    (*b.procs)[*current_proc_idx].locals.push_back(std::move(l));
                 }
                 break;
             }

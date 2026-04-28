@@ -1014,6 +1014,17 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  pe_pdb.functions.txt
     )
 
+    # extracted_main has a real stack frame and the PDB's S_REGREL32
+    # records name its two int locals "i" and "j" — this golden locks
+    # the full path: TPI / module-stream / S_REGREL32 → PdbLocalHint
+    # → frame layout merge → emitted declarations and body references.
+    ember_golden_test(
+        NAME    pe_pdb_extracted_main_pseudo
+        FIXTURE pe_pdb
+        ARGS    "-p|-s|extracted_main"
+        GOLDEN  pe_pdb.extracted_main.pseudo.txt
+    )
+
     # ---- raw_regions_tiny (manifest + a single 4-byte code blob) -------
     #
     # No magic bytes — loaded via `--regions <manifest>`. Stage the

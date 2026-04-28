@@ -884,29 +884,42 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
     };
 
     pdb_signatures_.clear();
+    pdb_locals_.clear();
     for (const auto& p : rdr->procs) {
         const addr_t va = resolve_va(p.segment, p.section_offset);
         if (va == 0) continue;
         const pdb::TypeRecord* tr = rdr->types.lookup(p.type_index);
-        if (!tr) continue;
-        if (tr->kind != pdb::TypeRecord::Kind::Procedure &&
-            tr->kind != pdb::TypeRecord::Kind::MFunction) {
-            continue;
+        if (tr &&
+            (tr->kind == pdb::TypeRecord::Kind::Procedure ||
+             tr->kind == pdb::TypeRecord::Kind::MFunction)) {
+            FunctionSig sig;
+            sig.return_type = rdr->types.render_type(tr->base_type);
+            sig.params      = resolve_args(tr->arg_list, tr->param_count);
+            // For member functions, prepend a synthetic `this` arg. We
+            // render it as `Class*` (or `Class const*` if the this_type
+            // is a const-qualified pointer in the PDB, but that's rare
+            // enough to skip for v1).
+            if (tr->kind == pdb::TypeRecord::Kind::MFunction && tr->class_type != 0) {
+                ParamSig th;
+                th.type = rdr->types.render_type(tr->class_type) + "*";
+                th.name = "this";
+                sig.params.insert(sig.params.begin(), std::move(th));
+            }
+            pdb_signatures_.emplace(va, std::move(sig));
         }
-        FunctionSig sig;
-        sig.return_type = rdr->types.render_type(tr->base_type);
-        sig.params      = resolve_args(tr->arg_list, tr->param_count);
-        // For member functions, prepend a synthetic `this` arg. We
-        // render it as `Class*` (or `Class const*` if the this_type
-        // is a const-qualified pointer in the PDB, but that's rare
-        // enough to skip for v1).
-        if (tr->kind == pdb::TypeRecord::Kind::MFunction && tr->class_type != 0) {
-            ParamSig th;
-            th.type = rdr->types.render_type(tr->class_type) + "*";
-            th.name = "this";
-            sig.params.insert(sig.params.begin(), std::move(th));
+        if (!p.locals.empty()) {
+            std::vector<PdbLocalHint> hints;
+            hints.reserve(p.locals.size());
+            for (const auto& l : p.locals) {
+                PdbLocalHint h;
+                h.name         = l.name;
+                h.frame_offset = l.frame_offset;
+                h.reg          = l.reg;
+                h.type_str     = rdr->types.render_type(l.type_index);
+                hints.push_back(std::move(h));
+            }
+            pdb_locals_.emplace(va, std::move(hints));
         }
-        pdb_signatures_.emplace(va, std::move(sig));
     }
 
     sort_and_dedupe_symbols();

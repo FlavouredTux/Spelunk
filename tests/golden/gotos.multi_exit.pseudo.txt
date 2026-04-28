@@ -1,5 +1,7 @@
 // multi_exit
 u64 multi_exit(u64 a1, u64 a2) {
+  u64 local_28;
+  u64 local_20;
   local_20 = a1;
   local_28 = a2;
   if (a1) {

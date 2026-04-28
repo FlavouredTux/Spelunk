@@ -1,5 +1,8 @@
 // sub_1800010c0
 u64 sub_1800010c0(u64 a1, u64 a2, u64 a3, u64 a4) {
+  u64 local_18;
+  u64 local_10;
+  u64 local_8;
   local_18 = 3;
   local_10 = 0;
   local_8 = 0;

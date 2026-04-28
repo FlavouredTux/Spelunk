@@ -22,6 +22,11 @@ import sys
 
 # ---- PE constants -----------------------------------------------------
 
+# extracted_main is hand-assembled as a 25-byte function with two
+# stack-resident `int` locals — exercised by the PDB merge below.
+EXTRACTED_MAIN_LEN   = 0x19
+EXTRACTED_HELPER_OFF = 0x20
+
 IMAGE_BASE          = 0x140000000
 SECTION_ALIGN       = 0x1000
 FILE_ALIGN          = 0x200
@@ -56,9 +61,11 @@ assert len(V7_MAGIC) == 32
 BLOCK_SIZE = 1024
 
 
-def build_dbi_header(sym_record_stream_idx: int) -> bytes:
-    """NewDBI (v7). Only SymRecordStream is read by ember, the rest are
-    placeholders that pass our header-size sanity check."""
+def build_dbi_header(sym_record_stream_idx: int,
+                     mod_info_size: int = 0) -> bytes:
+    """NewDBI (v7). SymRecordStream + ModInfoSize are the fields ember
+    actually consumes; the rest are placeholders that pass our header-
+    size sanity check."""
     out = bytearray()
     out += struct.pack("<i", -1)                   # signature (NewDBI)
     out += struct.pack("<I", 19990903)             # version (V70)
@@ -69,12 +76,117 @@ def build_dbi_header(sym_record_stream_idx: int) -> bytes:
     out += struct.pack("<H", 0)                    # PdbDllVersion
     out += struct.pack("<H", sym_record_stream_idx)
     out += struct.pack("<H", 0)                    # PdbDllRbld
-    for _ in range(8):
-        out += struct.pack("<I", 0)                # substream sizes (all empty)
+    out += struct.pack("<I", mod_info_size)        # ModInfoSize
+    for _ in range(7):
+        out += struct.pack("<I", 0)                # remaining substream sizes (empty)
     out += struct.pack("<H", 0)                    # Flags
     out += struct.pack("<H", 0x8664)               # Machine
     out += struct.pack("<I", 0)                    # Padding
     return bytes(out)
+
+
+def build_mod_info(mod_sym_stream: int, sym_byte_size: int) -> bytes:
+    """One ModInfo entry pointing at a per-module symbol stream.
+    Whole record is 4-byte aligned via trailing zero pads."""
+    out = bytearray()
+    out += struct.pack("<I", 0)                    # Unused1
+    out += b"\x00" * 28                            # SectionContribEntry (zeros)
+    out += struct.pack("<H", 0)                    # Flags
+    out += struct.pack("<H", mod_sym_stream)       # ModuleSymStream
+    out += struct.pack("<I", sym_byte_size)        # SymByteSize
+    out += struct.pack("<I", 0)                    # C11ByteSize
+    out += struct.pack("<I", 0)                    # C13ByteSize
+    out += struct.pack("<H", 0)                    # SourceFileCount
+    out += struct.pack("<H", 0)                    # Padding
+    out += struct.pack("<I", 0)                    # Unused2
+    out += struct.pack("<I", 0)                    # SourceFileNameIndex
+    out += struct.pack("<I", 0)                    # PdbFilePathNameIndex
+    out += b"a.obj\x00"                            # ModuleName
+    out += b"a.obj\x00"                            # ObjFileName
+    while len(out) % 4 != 0:
+        out += b"\x00"
+    return bytes(out)
+
+
+def _pad_record(reclen_so_far: int, body: bytearray) -> bytearray:
+    """CodeView record padding: f1/f2/f3 trailers so total record length
+    (length+kind+body) is a multiple of 4."""
+    pad = (-(4 + len(body))) % 4
+    pads = (0xF3, 0xF2, 0xF1)
+    for i in range(pad):
+        body += bytes([pads[(pad - 1 - i)]])
+    return body
+
+
+def build_cv_record(kind: int, body: bytes) -> bytes:
+    body = _pad_record(4 + len(body), bytearray(body))
+    reclen = 2 + len(body)
+    return struct.pack("<H", reclen) + struct.pack("<H", kind) + bytes(body)
+
+
+def build_lf_arglist(types: list[int]) -> bytes:
+    body = struct.pack("<I", len(types))
+    for t in types:
+        body += struct.pack("<I", t)
+    return build_cv_record(0x1201, body)
+
+
+def build_lf_procedure(return_ti: int, param_count: int, arg_list_ti: int) -> bytes:
+    body = struct.pack("<I", return_ti)
+    body += struct.pack("<BB", 0, 0)            # CallConv, FuncAttrs
+    body += struct.pack("<H", param_count)
+    body += struct.pack("<I", arg_list_ti)
+    return build_cv_record(0x1008, body)
+
+
+def build_tpi_stream(records: list[bytes], ti_begin: int) -> bytes:
+    """TPI v8 header (56 bytes) + concatenated records. TypeIndexEnd is
+    ti_begin + len(records) so lookups stay in range."""
+    records_bytes = b"".join(records)
+    header = bytearray()
+    header += struct.pack("<I", 20040203)        # Version (V80)
+    header += struct.pack("<I", 56)              # HeaderSize
+    header += struct.pack("<I", ti_begin)
+    header += struct.pack("<I", ti_begin + len(records))
+    header += struct.pack("<I", len(records_bytes))
+    header += struct.pack("<H", 0xFFFF)          # HashStreamIndex
+    header += struct.pack("<H", 0xFFFF)          # HashAuxStreamIndex
+    header += struct.pack("<I", 0)               # HashKeySize
+    header += struct.pack("<I", 0)               # NumHashBuckets
+    header += struct.pack("<I", 0); header += struct.pack("<I", 0)  # HashValue
+    header += struct.pack("<I", 0); header += struct.pack("<I", 0)  # IndexOffset
+    header += struct.pack("<I", 0); header += struct.pack("<I", 0)  # HashAdj
+    return bytes(header) + records_bytes
+
+
+def build_s_gproc32(name: str, type_index: int, section_offset: int,
+                    segment: int, code_size: int) -> bytes:
+    body = bytearray()
+    body += struct.pack("<I", 0)                 # Parent
+    body += struct.pack("<I", 0)                 # End
+    body += struct.pack("<I", 0)                 # Next
+    body += struct.pack("<I", code_size)         # CodeSize
+    body += struct.pack("<I", 0)                 # DbgStart
+    body += struct.pack("<I", code_size)         # DbgEnd
+    body += struct.pack("<I", type_index)        # TypeIndex
+    body += struct.pack("<I", section_offset)    # Offset
+    body += struct.pack("<H", segment)           # Segment
+    body += struct.pack("<B", 0)                 # Flags
+    body += name.encode() + b"\x00"
+    return build_cv_record(0x1110, bytes(body))
+
+
+def build_s_regrel32(name: str, frame_offset: int, type_index: int,
+                     reg: int) -> bytes:
+    body = struct.pack("<I", frame_offset & 0xFFFFFFFF)
+    body += struct.pack("<I", type_index)
+    body += struct.pack("<H", reg)
+    body += name.encode() + b"\x00"
+    return build_cv_record(0x1111, body)
+
+
+def build_s_end() -> bytes:
+    return build_cv_record(0x0006, b"")
 
 
 def build_s_pub32(name: str, flags: int, section_offset: int,
@@ -163,13 +275,47 @@ def build_msf(streams: list[bytes]) -> bytes:
 
 
 def build_pdb() -> bytes:
-    # Stream 0: old directory (empty).
-    # Stream 1: PDB info (we put 4 bytes; ember doesn't validate it).
-    # Stream 2: TPI (empty).
-    # Stream 3: DBI header (sym records in stream 4).
-    # Stream 4: symbol records: two S_PUB32.
+    # Streams:
+    #   0: old directory (empty)
+    #   1: PDB info (we put 4 bytes; ember doesn't validate it)
+    #   2: TPI — LF_ARGLIST(int,int), LF_PROCEDURE(int <- int,int)
+    #   3: DBI header + 1 ModInfo entry pointing at stream 5
+    #   4: global symbol-record stream — two S_PUB32
+    #   5: module stream — S_GPROC32 for extracted_main, two S_REGREL32
+    #      naming the locals "i" and "j", S_END.
     sym_record_stream = 4
-    dbi = build_dbi_header(sym_record_stream)
+    mod_sym_stream    = 5
+    ti_begin          = 0x1000
+    t_int4            = 0x74
+
+    # TPI: 0x1000 = arglist(int,int); 0x1001 = proc returning int.
+    tpi = build_tpi_stream(
+        [build_lf_arglist([t_int4, t_int4]),
+         build_lf_procedure(t_int4, 2, ti_begin)],
+        ti_begin)
+
+    # Module stream: signature 4 (C13) followed by:
+    #   S_GPROC32 covering extracted_main (RVA 0x1000, length 0x19),
+    #   S_REGREL32 "i" at [rsp+0x20], "j" at [rsp+0x24] — both int,
+    #   S_END to close the proc scope.
+    mod_records = b""
+    mod_records += build_s_gproc32(
+        name="extracted_main",
+        type_index=ti_begin + 1,
+        section_offset=0x000,
+        segment=1,
+        code_size=EXTRACTED_MAIN_LEN,
+    )
+    mod_records += build_s_regrel32("i", 0x20, t_int4, 332)   # CV_AMD64_RSP
+    mod_records += build_s_regrel32("j", 0x24, t_int4, 332)
+    mod_records += build_s_end()
+    mod_stream = struct.pack("<I", 4) + mod_records           # C13 signature
+    mod_sym_byte_size = len(mod_stream)
+
+    mod_info  = build_mod_info(mod_sym_stream, mod_sym_byte_size)
+    dbi       = build_dbi_header(sym_record_stream,
+                                  mod_info_size=len(mod_info)) + mod_info
+
     sym = b""
     sym += build_s_pub32(
         "extracted_main",
@@ -180,15 +326,16 @@ def build_pdb() -> bytes:
     sym += build_s_pub32(
         "extracted_helper",
         flags=0x2,
-        section_offset=0x010,
+        section_offset=EXTRACTED_HELPER_OFF,
         segment=1,
     )
     streams = [
         b"",
         struct.pack("<I", 20140508),
-        b"",
+        tpi,
         dbi,
         sym,
+        mod_stream,
     ]
     return build_msf(streams)
 
@@ -199,14 +346,21 @@ def build_pe(pdb_basename: str) -> bytes:
     rva_text  = 0x1000
     rva_rdata = 0x2000
 
-    # .text: two functions, each `xor eax, eax; ret`.
-    #   sub_140001000:  31 c0 c3
-    #   sub_140001010:  31 c0 c3   (at +0x10)
+    # .text: extracted_main has a real 25-byte stack frame; the body is
+    # `int extracted_main(int a, int b) { int i = a; int j = b; return i + j; }`.
+    # extracted_helper stays a 3-byte stub at RVA 0x20.
     text = bytearray()
-    text += b"\x31\xC0\xC3"          # sub_140001000
-    while len(text) < 0x10:
+    text += b"\x48\x83\xEC\x28"      # sub  rsp, 0x28
+    text += b"\x89\x4C\x24\x20"      # mov  [rsp+0x20], ecx   ; i = a
+    text += b"\x89\x54\x24\x24"      # mov  [rsp+0x24], edx   ; j = b
+    text += b"\x8B\x44\x24\x20"      # mov  eax, [rsp+0x20]
+    text += b"\x03\x44\x24\x24"      # add  eax, [rsp+0x24]
+    text += b"\x48\x83\xC4\x28"      # add  rsp, 0x28
+    text += b"\xC3"                  # ret
+    assert len(text) == EXTRACTED_MAIN_LEN
+    while len(text) < EXTRACTED_HELPER_OFF:
         text += b"\xCC"              # int3 padding
-    text += b"\x31\xC0\xC3"          # sub_140001010
+    text += b"\x31\xC0\xC3"          # extracted_helper: xor eax, eax; ret
 
     # .rdata: IMAGE_DEBUG_DIRECTORY entry + CodeView RSDS record.
     rdata = bytearray()

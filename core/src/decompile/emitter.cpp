@@ -17,6 +17,7 @@
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/cfg_util.hpp>
 #include <ember/analysis/demangle.hpp>
+#include <ember/analysis/frame.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -347,6 +348,11 @@ struct Emitter {
     const Binary*                                    binary = nullptr;
     const Annotations*                               annotations = nullptr;
     EmitOptions                                      options{};
+    // Recovered stack-frame slots, populated once at the start of emit()
+    // by compute_frame_layout(). The body's existing format_mem() path
+    // will name these slots `local_<hex>` / `arg_<hex>` to match the
+    // declarations we emit at function entry.
+    StackFrameLayout                                 frame_layout;
     // Number of int-register args for the function being emitted. Set once
     // at the start of emit() from infer_arity() or the declared sig, and
     // used to name raw rdi/rsi/... reads as a1/a2/... when no annotation
@@ -1905,6 +1911,13 @@ struct Emitter {
                                           int depth = 0) const {
         if (seg == Reg::None) {
             if (auto off = stack_offset(addr); off) {
+                // Prefer the merged frame-layout name when one's been
+                // resolved (PDB-derived); fall back to the synthetic
+                // `local_<hex>` / `arg_<hex>` form otherwise.
+                if (auto it = frame_layout.slots.find(*off);
+                    it != frame_layout.slots.end() && !it->second.name.empty()) {
+                    return it->second.name;
+                }
                 return stack_name(*off);
             }
             // Selref / classref loads: renders `*(u64*)(addr)` as its
@@ -2498,7 +2511,12 @@ std::string Emitter::format_store(const IrInst& inst) const {
     std::string lhs;
     if (inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {
-            lhs = stack_name(*off);
+            if (auto it = frame_layout.slots.find(*off);
+                it != frame_layout.slots.end() && !it->second.name.empty()) {
+                lhs = it->second.name;
+            } else {
+                lhs = stack_name(*off);
+            }
         }
     }
     if (lhs.empty()) {
@@ -3239,6 +3257,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
     }
     e.analyze(*sf.ir);
+    e.frame_layout = compute_frame_layout(*sf.ir, binary);
     if (sf.body) {
         e.suppress_canary_regions(*sf.body);
         e.analyze_return_folds(*sf.body);
@@ -3452,9 +3471,27 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     out += header;
 
+    // Render the body into a buffer first so we can decide which
+    // recovered frame slots actually appear in the output text. Some
+    // Loads / Stores get hidden by the emitter (canary writes, ABI
+    // shuffle stores) and don't surface a `local_<hex>` reference, so
+    // a slot in the layout isn't proof of a live mention. Emitting
+    // declarations only for referenced slots keeps the function head
+    // tidy without leaning on the dead-decl pruner (which only
+    // recognises `TYPE NAME = expr;` form).
+    std::string body_buf;
     if (sf.body) {
-        e.emit_region(*sf.body, 1, out);
+        e.emit_region(*sf.body, 1, body_buf);
     }
+    for (const auto& [_, slot] : e.frame_layout.slots) {
+        if (slot.name.empty()) continue;
+        if (body_buf.find(slot.name) == std::string::npos) continue;
+        const std::string ty = slot.type_override.empty()
+            ? std::string(c_type_name(slot.type))
+            : slot.type_override;
+        out += std::format("  {} {};\n", ty, slot.name);
+    }
+    out += body_buf;
 
     out += "}\n";
 

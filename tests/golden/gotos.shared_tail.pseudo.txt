@@ -1,5 +1,7 @@
 // shared_tail
 u64 shared_tail(u64 a1) {
+  u64 local_20;
+  u32 local_c;
   local_20 = a1;
   local_c = 0;
   if (a1) {

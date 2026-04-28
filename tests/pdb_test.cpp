@@ -356,11 +356,35 @@ void put_s_gproc32(W& w, std::string_view name, std::uint32_t type_index,
     put_record_header(w, 0x1110 /* S_GPROC32 */, start);
 }
 
+void put_s_regrel32(W& w, std::string_view name, std::int32_t frame_offset,
+                    std::uint32_t type_index, std::uint16_t reg) {
+    const std::size_t start = w.buf.size();
+    w.put_u16(0);                  // length placeholder
+    w.put_u16(0);                  // kind placeholder
+    w.put_u32(static_cast<std::uint32_t>(frame_offset));
+    w.put_u32(type_index);
+    w.put_u16(reg);
+    w.put_cstr(name);
+    put_record_header(w, 0x1111 /* S_REGREL32 */, start);
+}
+
+void put_s_end(W& w) {
+    const std::size_t start = w.buf.size();
+    w.put_u16(0);                  // length placeholder
+    w.put_u16(0);                  // kind placeholder
+    put_record_header(w, 0x0006 /* S_END */, start);
+}
+
 std::vector<std::byte> make_module_stream() {
     W w;
     w.put_u32(4);                  // C13 signature
     put_s_gproc32(w, "do_things", /*ti=*/kTiBegin + 1, /*off=*/0x500, /*seg=*/1,
                   /*code_size=*/0x40);
+    // Two locals nested in the proc scope. Reg 332 = CV_AMD64_RSP,
+    // type 0x74 = T_INT4 ("int"), 0x470 = T_PCHAR ("char*").
+    put_s_regrel32(w, "i", /*off=*/0x20, /*ti=*/0x74,  /*reg=*/332);
+    put_s_regrel32(w, "p", /*off=*/0x28, /*ti=*/0x470, /*reg=*/332);
+    put_s_end(w);
     return w.buf;
 }
 
@@ -547,6 +571,17 @@ void test_full_pdb_with_types() {
         check_eq(rdr->procs[0].segment, std::uint16_t{1}, "proc.seg");
         check_eq(rdr->procs[0].type_index, std::uint32_t{0x1001}, "proc.type_index");
         check_eq(rdr->procs[0].length, std::uint32_t{0x40}, "proc.length");
+        // Two S_REGREL32 records inside the proc scope.
+        check_eq_sz(rdr->procs[0].locals.size(), 2u, "proc.locals count");
+        if (rdr->procs[0].locals.size() == 2) {
+            check_eq(rdr->procs[0].locals[0].name, std::string("i"), "local[0].name");
+            check_eq(rdr->procs[0].locals[0].frame_offset, std::int32_t{0x20}, "local[0].off");
+            check_eq(rdr->procs[0].locals[0].reg, std::uint16_t{332}, "local[0].reg");
+            check_eq(rdr->procs[0].locals[0].type_index, std::uint32_t{0x74}, "local[0].ti");
+            check_eq(rdr->procs[0].locals[1].name, std::string("p"), "local[1].name");
+            check_eq(rdr->procs[0].locals[1].frame_offset, std::int32_t{0x28}, "local[1].off");
+            check_eq(rdr->procs[0].locals[1].type_index, std::uint32_t{0x470}, "local[1].ti");
+        }
     }
 
     // TPI lookup should resolve the procedure record.

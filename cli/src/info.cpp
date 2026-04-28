@@ -114,7 +114,8 @@ void print_help() {
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --cache-dir DIR  override ~/.cache/ember for disk cache");
     std::println("      --no-cache       bypass the disk cache (--xrefs/strings/arities)");
-    std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
+    std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only —");
+    std::println("                       pulls function sigs + named stack locals from S_REGREL32)");
     std::println("      --no-pdb         skip PDB sidecar discovery / ingestion entirely");
     std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");
     std::println("                       pattern-renames, log-format-driven renames, deletes) to");

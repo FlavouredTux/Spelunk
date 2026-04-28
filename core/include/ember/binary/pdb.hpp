@@ -24,6 +24,19 @@ struct PublicSymbol {
     bool        is_function    = false;  // S_PUB32.flags bit 1
 };
 
+// One frame-relative local variable (S_BPREL32 / S_REGREL32) nested
+// inside a procedure scope. The offset's frame of reference is named
+// by `reg`: CV register IDs CV_AMD64_RSP (332) / CV_AMD64_RBP (333)
+// are the only ones we currently translate. `reg == 0` is the
+// S_BPREL32 form — implicit RBP on x64 — and is treated like the
+// REGREL32-RBP case downstream.
+struct LocalVarSymbol {
+    std::string name;
+    i32         frame_offset = 0;
+    u32         type_index   = 0;
+    u16         reg          = 0;
+};
+
 // Per-procedure symbol from a module's compile-unit stream
 // (S_GPROC32 / S_LPROC32 / *_ID variants). Carries a TPI/IPI type
 // index on top of the address — the link to the function's signature.
@@ -34,6 +47,7 @@ struct ProcSymbol {
     u32         length         = 0;   // proc length in bytes
     u32         type_index     = 0;   // index into TPI (or IPI, normalized at parse)
     bool        is_id_record   = false;  // *_ID variant points into IPI; we resolve to TPI
+    std::vector<LocalVarSymbol> locals;  // S_BPREL32 / S_REGREL32 inside the proc scope
 };
 
 // Global / local data symbol (S_GDATA32 / S_LDATA32) from either the

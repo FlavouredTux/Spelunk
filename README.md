@@ -117,6 +117,7 @@ binary  →  loader (ELF / Mach-O / PE / minidump / regions)
         →  cleanup (const-fold, copy-prop, GVN, store→load forwarding, DSE)
         →  local type inference   ─┐
         →  IPA (typed signatures) ─┴─ optional, opt-in
+        →  frame layout (typed stack locals; PDB names when a sidecar's attached)
         →  structurer (if / while / for / switch / goto fallback)
         →  pseudo-C emitter
 ```

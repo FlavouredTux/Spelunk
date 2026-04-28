@@ -74,6 +74,26 @@ public:
     [[nodiscard]] const std::map<addr_t, FunctionSig>&
     pdb_signatures() const noexcept { return pdb_signatures_; }
 
+    // Per-procedure stack-local hints harvested from S_BPREL32 /
+    // S_REGREL32 records. The vector entries carry raw PDB
+    // (frame_offset, register) — the consumer (frame analysis) maps
+    // them to entry-rsp-relative offsets using the analysis-derived
+    // frame size. Rendered type strings are pre-resolved against
+    // the PDB's TPI stream so callers don't need access to it.
+    struct PdbLocalHint {
+        std::string name;
+        std::string type_str;
+        i32         frame_offset = 0;
+        u16         reg          = 0;     // CV register ID; 0 = implicit RBP
+    };
+    [[nodiscard]] const std::map<addr_t, std::vector<PdbLocalHint>>&
+    pdb_locals() const noexcept { return pdb_locals_; }
+    [[nodiscard]] const std::vector<PdbLocalHint>*
+    pdb_locals_for(addr_t va) const noexcept {
+        auto it = pdb_locals_.find(va);
+        return it == pdb_locals_.end() ? nullptr : &it->second;
+    }
+
     // GUID + age of the most-recently-attached PDB. The PE binary's
     // CodeView record carries the same fields; mismatch means the PDB
     // belongs to a different build of the binary. Both empty when no
@@ -163,10 +183,11 @@ private:
     std::vector<Symbol>        symbols_;
     std::vector<DataDirectory> data_dirs_;
     std::string                pdb_filename_;
-    std::map<addr_t, FunctionSig>     pdb_signatures_;
-    std::array<u8, 16>                pdb_guid_{};
-    u32                               pdb_age_ = 0;
-    std::filesystem::path             attached_pdb_path_;
+    std::map<addr_t, FunctionSig>                       pdb_signatures_;
+    std::map<addr_t, std::vector<PdbLocalHint>>         pdb_locals_;
+    std::array<u8, 16>                                  pdb_guid_{};
+    u32                                                 pdb_age_ = 0;
+    std::filesystem::path                               attached_pdb_path_;
 };
 
 }  // namespace ember

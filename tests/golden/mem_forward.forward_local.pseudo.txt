@@ -1,5 +1,8 @@
 // forward_local
 u64 forward_local(u64 a1) {
+  u32 local_1c;
+  u32 local_10;
+  u32 local_c;
   u32 t1 = (u32)a1;
   local_1c = t1;
   u32 t9 = t1 + 1;

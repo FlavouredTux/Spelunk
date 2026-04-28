@@ -1,5 +1,7 @@
 // use_imports
 u64 use_imports(char* a1, u64 a2) {
+  u64 local_18;
+  u64 local_10;
   if (a1) {
     local_10 = a2;
     local_18 = a1;

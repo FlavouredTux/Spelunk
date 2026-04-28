@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { C, sans, mono, serif } from "../theme";
 import { highlightLine } from "../syntax";
 
@@ -332,10 +332,18 @@ const Node = memo(function Node(props: {
   block: CfgBlock;
   pos: Position;
   lod: Lod;
+  // emphasized = direct neighbour of the focused/hovered block (pred or succ)
+  // focused    = the block the user clicked or is currently hovering
+  // dimmed     = grayed out because the user has focused something else
+  emphasis: "normal" | "emphasized" | "focused" | "dimmed";
+  searchHit?: boolean;
   fnAddrByName?: Map<string, number>;
   onXref?: (addr: number) => void;
+  onHover?: (id: string | null) => void;
+  onClick?: (id: string) => void;
 }) {
-  const { block: b, pos: p, lod, fnAddrByName, onXref } = props;
+  const { block: b, pos: p, lod, emphasis, searchHit, fnAddrByName, onXref,
+          onHover, onClick } = props;
   const shown = lod !== "tiny" ? b.insts.slice(0, MAX_LINES) : [];
   const extra = lod !== "tiny" ? b.insts.length - shown.length : 0;
   const showHeader = lod !== "tiny";
@@ -354,16 +362,52 @@ const Node = memo(function Node(props: {
   const footer     = showFooter ? footerSummary(b) : [];
 
   const noop = () => {};
+  // Emphasis-driven visuals. Dimmed blocks fade to ~30% opacity so the
+  // focused subgraph stands out; focused/emphasized blocks get a
+  // thicker border + accent halo.
+  const opacity = emphasis === "dimmed" ? 0.28 : 1;
+  const strokeW = b.entry ? 1.6 : 1;
+  const finalStroke =
+    emphasis === "focused"     ? C.accent  :
+    emphasis === "emphasized"  ? style.border :
+    style.border;
+  const finalStrokeW =
+    emphasis === "focused"     ? strokeW + 1.5 :
+    emphasis === "emphasized"  ? strokeW + 0.6 :
+    strokeW;
+  const cardFill = searchHit ? "rgba(217,119,87,0.10)" : C.bgAlt;
   return (
-    <g transform={`translate(${p.x}, ${p.y})`}>
+    <g
+      transform={`translate(${p.x}, ${p.y})`}
+      opacity={opacity}
+      style={{ cursor: onClick ? "pointer" : "default", transition: "opacity 0.12s" }}
+      onMouseEnter={() => onHover?.(b.id)}
+      onMouseLeave={() => onHover?.(null)}
+      onClick={(e) => { e.stopPropagation(); onClick?.(b.id); }}
+    >
+      {/* Halo behind focused / emphasized blocks so they stand out
+          even at low LOD when the body text is hidden. */}
+      {emphasis !== "normal" && emphasis !== "dimmed" && (
+        <rect
+          x={-4}
+          y={-4}
+          width={NODE_W + 8}
+          height={p.height + 8}
+          rx={7}
+          fill="none"
+          stroke={emphasis === "focused" ? C.accent : style.border}
+          strokeWidth={emphasis === "focused" ? 2 : 1}
+          opacity={emphasis === "focused" ? 0.4 : 0.25}
+        />
+      )}
       {/* Outer card */}
       <rect
         width={NODE_W}
         height={p.height}
         rx={5}
-        fill={C.bgAlt}
-        stroke={style.border}
-        strokeWidth={b.entry ? 1.6 : 1}
+        fill={cardFill}
+        stroke={finalStroke}
+        strokeWidth={finalStrokeW}
       />
 
       {/* Left accent strip — same colour as the border, makes the kind
@@ -522,8 +566,13 @@ const Edges = memo(function Edges(props: {
   layout: Layout;
   viewRect: Rect;
   showLabels: boolean;
+  // When set, any edge incident on this block is rendered in full
+  // colour at 1.6× width; every other edge fades. Drives the hover /
+  // focus highlighting that lets the user trace control flow into and
+  // out of one block at a glance.
+  emphasizeBlock?: string | null;
 }) {
-  const { blocks, layout, viewRect, showLabels } = props;
+  const { blocks, layout, viewRect, showLabels, emphasizeBlock } = props;
   const paths: React.ReactElement[] = [];
   const labels: React.ReactElement[] = [];
   for (const b of blocks) {
@@ -561,16 +610,20 @@ const Edges = memo(function Edges(props: {
       const d = isBack
         ? backEdgePath(x1, y1, x2, y2)
         : forwardEdgePath(x1, y1, x2, y2);
+      const incident = !!emphasizeBlock &&
+        (emphasizeBlock === b.id || emphasizeBlock === s.target);
+      const dimmed = !!emphasizeBlock && !incident;
+      const baseOpacity = isFall ? 0.55 : 0.9;
       paths.push(
         <path
           key={b.id + "-" + i}
           d={d}
           stroke={color}
-          strokeWidth={isFall ? 1.1 : 1.4}
+          strokeWidth={(isFall ? 1.1 : 1.4) * (incident ? 1.7 : 1)}
           strokeDasharray={isFall ? "4 3" : undefined}
           fill="none"
           markerEnd={marker}
-          opacity={isFall ? 0.55 : 0.9}
+          opacity={dimmed ? 0.18 : (incident ? 1 : baseOpacity)}
         />
       );
 
@@ -660,6 +713,55 @@ export function CfgGraph(props: {
   // gesture via rAF — used to cull offscreen nodes/edges.
   const [viewRect, setViewRect] = useState({ x: -1e9, y: -1e9, w: 3e9, h: 3e9 });
 
+  // Hover / focus / search — drives node and edge emphasis. `focusedId`
+  // is sticky (set on click); `hoverId` is transient (mouseenter). When
+  // both are set, focus wins so the user's selection isn't drowned out
+  // by mouse motion.
+  const [hoverId, setHoverId]     = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [searchQ, setSearchQ]     = useState("");
+  const [showMinimap, setShowMinimap] = useState(true);
+
+  const emphasizeId = focusedId ?? hoverId;
+
+  // Pre-compute the predecessor/successor sets of the emphasis block so
+  // the per-node emphasis decision is O(1) rather than O(edges).
+  const neighbours = useMemo(() => {
+    if (!emphasizeId) return null;
+    const succs = new Set<string>();
+    const preds = new Set<string>();
+    for (const b of parsed.blocks) {
+      if (b.id === emphasizeId) {
+        for (const s of b.succs) {
+          if (!s.target.startsWith("<")) succs.add(s.target);
+        }
+      }
+      for (const s of b.succs) {
+        if (s.target === emphasizeId) preds.add(b.id);
+      }
+    }
+    return { preds, succs };
+  }, [emphasizeId, parsed.blocks]);
+
+  // Search → set of block ids whose body or id contains the query
+  // string (case-insensitive). Empty query disables filtering.
+  const searchHits = useMemo<Set<string> | null>(() => {
+    const q = searchQ.trim().toLowerCase();
+    if (!q) return null;
+    const hits = new Set<string>();
+    for (const b of parsed.blocks) {
+      if (b.id.includes(q)) { hits.add(b.id); continue; }
+      for (const ins of b.insts) {
+        if (ins.text.toLowerCase().includes(q) ||
+            (ins.addr && ins.addr.includes(q))) {
+          hits.add(b.id);
+          break;
+        }
+      }
+    }
+    return hits;
+  }, [searchQ, parsed.blocks]);
+
   const lod = useMemo(() => lodFor(displayScale), [displayScale]);
 
   // Compute current viewport rect in graph coordinates from viewportRef + svg size.
@@ -695,8 +797,9 @@ export function CfgGraph(props: {
       `translate(${v.x.toFixed(2)}, ${v.y.toFixed(2)}) scale(${v.scale.toFixed(4)})`);
   };
 
-  // Fit to viewport on content change
-  useLayoutEffect(() => {
+  // Fit the world rect into the SVG viewport. Used both on first mount
+  // and as a "fit to screen" toolbar action.
+  const fitToScreen = useCallback(() => {
     const svg = svgRef.current;
     if (!svg || !layout.bounds.w) return;
     const rect = svg.getBoundingClientRect();
@@ -712,7 +815,39 @@ export function CfgGraph(props: {
     setDisplayScale(scale);
     const r = computeViewRect();
     if (r) setViewRect(r);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
+
+  // Centre the camera on a specific block. Keeps the user's current
+  // zoom level so jumping to a block during a deep-zoom inspection
+  // doesn't yank them all the way out. Clamps to layout bounds so the
+  // user can't end up looking at empty space if a tiny block sits at
+  // the edge of a tall function.
+  const zoomToBlock = useCallback((id: string, opts?: { scale?: number }) => {
+    const svg = svgRef.current;
+    const pos = layout.positions.get(id);
+    if (!svg || !pos) return;
+    const rect = svg.getBoundingClientRect();
+    svgSizeRef.current = { w: rect.width, h: rect.height };
+    const targetScale = opts?.scale ?? Math.max(0.45, viewportRef.current.scale);
+    const cx = pos.x + NODE_W / 2;
+    const cy = pos.y + pos.height / 2;
+    viewportRef.current = {
+      x: rect.width  / 2 - cx * targetScale,
+      y: rect.height / 2 - cy * targetScale,
+      scale: targetScale,
+    };
+    applyTransform();
+    setDisplayScale(targetScale);
+    const r = computeViewRect();
+    if (r) setViewRect(r);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
+
+  // Fit to viewport on content change
+  useLayoutEffect(() => {
+    fitToScreen();
+  }, [fitToScreen]);
 
   // Track SVG size for culling.
   useEffect(() => {
@@ -756,12 +891,37 @@ export function CfgGraph(props: {
   };
 
   const onMouseDown: React.MouseEventHandler<SVGSVGElement> = (e) => {
+    // Reserve a small "drag intent" delta — if the user mousedowns and
+    // releases without moving, treat as a click on the background and
+    // clear the current focus. Distinguishes "click to deselect" from
+    // an actual pan gesture so we don't drop the user's selection on
+    // the first frame of every pan.
     dragRef.current = {
       mx: e.clientX, my: e.clientY,
       vx: viewportRef.current.x, vy: viewportRef.current.y,
     };
     setIsDragging(true);
   };
+
+  // Apply a delta zoom centred on the SVG viewport — used by the
+  // toolbar +/- buttons. Wheel zoom keeps its mouse-anchor logic.
+  const zoomBy = useCallback((delta: number) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const v = viewportRef.current;
+    const newScale = Math.max(0.1, Math.min(3, v.scale * (1 + delta)));
+    const ratio = newScale / v.scale;
+    v.x = cx - (cx - v.x) * ratio;
+    v.y = cy - (cy - v.y) * ratio;
+    v.scale = newScale;
+    applyTransform();
+    setDisplayScale(newScale);
+    scheduleViewUpdate();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const onMouseMove: React.MouseEventHandler<SVGSVGElement> = (e) => {
     const d = dragRef.current;
     if (!d) return;
@@ -769,8 +929,17 @@ export function CfgGraph(props: {
     viewportRef.current.y = d.vy + (e.clientY - d.my);
     applyTransform();
   };
-  const endDrag = () => {
-    if (dragRef.current) {
+  // Click-on-background to clear focus. We piggyback on `endDrag` —
+  // if the mouse hasn't moved since mousedown, treat the gesture as
+  // a click rather than a (zero-length) pan and drop the focus.
+  const endDrag = (e?: React.MouseEvent) => {
+    const d = dragRef.current;
+    if (d && e && Math.abs(e.clientX - d.mx) < 3 && Math.abs(e.clientY - d.my) < 3) {
+      // Treat as a background click only when the original target was
+      // the SVG itself (not a node — nodes stop propagation).
+      setFocusedId(null);
+    }
+    if (d) {
       dragRef.current = null;
       setIsDragging(false);
       scheduleViewUpdate();
@@ -785,6 +954,40 @@ export function CfgGraph(props: {
     svg.addEventListener("wheel", handler, { passive: false });
     return () => svg.removeEventListener("wheel", handler);
   }, []);
+
+  // Keyboard shortcuts when the graph has focus — Esc clears selection,
+  // F fits, +/- zoom, E re-centres on the entry block. Gated on `info`
+  // (parser produced something) so empty graphs ignore the bindings.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName ?? "";
+      const inInput = tag === "INPUT" || tag === "TEXTAREA";
+      if (inInput) {
+        // Allow Esc inside the search box to clear it.
+        if (e.key === "Escape" && (e.target as HTMLInputElement).dataset?.cfg === "search") {
+          e.preventDefault();
+          setSearchQ("");
+          (e.target as HTMLInputElement).blur();
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        if (focusedId) { e.preventDefault(); setFocusedId(null); }
+        return;
+      }
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        if (e.key === "f" || e.key === "F") { e.preventDefault(); fitToScreen(); return; }
+        if (e.key === "e" || e.key === "E") {
+          if (parsed.entry) { e.preventDefault(); zoomToBlock(parsed.entry); }
+          return;
+        }
+        if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(0.18); return; }
+        if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(-0.18); return; }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusedId, fitToScreen, zoomToBlock, zoomBy, parsed.entry]);
 
   if (!parsed.entry || parsed.blocks.length === 0) {
     return (
@@ -816,8 +1019,8 @@ export function CfgGraph(props: {
         onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
-        onMouseUp={endDrag}
-        onMouseLeave={endDrag}
+        onMouseUp={(e) => endDrag(e)}
+        onMouseLeave={() => endDrag()}
       >
         <defs>
           <marker id="arrow-taken" viewBox="0 0 10 10" refX="8" refY="5"
@@ -848,25 +1051,143 @@ export function CfgGraph(props: {
             layout={layout}
             viewRect={viewRect}
             showLabels={lod === "full"}
+            emphasizeBlock={emphasizeId}
           />
           {parsed.blocks.map((b) => {
             const p = layout.positions.get(b.id);
             if (!p) return null;
             if (!rectsIntersect(
               { x: p.x, y: p.y, w: NODE_W, h: p.height }, viewRect)) return null;
+            const isEmph = emphasizeId === b.id;
+            const isNeighbour = !!neighbours &&
+              (neighbours.preds.has(b.id) || neighbours.succs.has(b.id));
+            const emphasis: "normal" | "emphasized" | "focused" | "dimmed" =
+              isEmph        ? "focused"
+              : isNeighbour ? "emphasized"
+              : emphasizeId ? "dimmed"
+              : "normal";
+            const isHit = !!searchHits && searchHits.has(b.id);
             return (
               <Node
                 key={b.id}
                 block={b}
                 pos={p}
                 lod={lod}
+                emphasis={emphasis}
+                searchHit={isHit}
                 fnAddrByName={props.fnAddrByName}
                 onXref={props.onXref}
+                onHover={setHoverId}
+                onClick={(id) => {
+                  setFocusedId((cur) => (cur === id ? null : id));
+                  zoomToBlock(id);
+                }}
               />
             );
           })}
         </g>
       </svg>
+
+      {/* Top-left toolbar: pan/zoom controls, search, minimap toggle.
+          The toolbar lives over the SVG (no layout shift) — pointerEvents
+          on the inner buttons keeps drag-to-pan available everywhere
+          else. */}
+      <div style={{
+        position: "absolute", top: 10, left: 12,
+        display: "flex", gap: 6, alignItems: "center",
+        fontFamily: mono, fontSize: 10,
+      }}>
+        <ToolbarGroup>
+          <ToolbarButton title="Fit to screen (F)" aria-label="Fit graph to viewport"
+                         onClick={fitToScreen}>fit</ToolbarButton>
+          <ToolbarButton title="Zoom to entry (E)" aria-label="Recenter on entry block"
+                         onClick={() => parsed.entry && zoomToBlock(parsed.entry)}>entry</ToolbarButton>
+          {focusedId && (
+            <ToolbarButton title="Recenter on focused block"
+                           aria-label="Recenter on focused block"
+                           onClick={() => zoomToBlock(focusedId)}>focus</ToolbarButton>
+          )}
+        </ToolbarGroup>
+        <ToolbarGroup>
+          <ToolbarButton title="Zoom out (-)" aria-label="Zoom out"
+                         onClick={() => zoomBy(-0.18)}>−</ToolbarButton>
+          <ToolbarButton title="Zoom in (+)" aria-label="Zoom in"
+                         onClick={() => zoomBy(0.18)}>+</ToolbarButton>
+        </ToolbarGroup>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "3px 8px",
+          background: C.bgAlt, border: `1px solid ${C.border}`, borderRadius: 4,
+        }}>
+          <span style={{ color: C.textFaint, fontSize: 10 }}>find</span>
+          <input
+            data-cfg="search"
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            placeholder="block / asm…"
+            aria-label="Search blocks"
+            style={{
+              width: 140, fontFamily: mono, fontSize: 11, color: C.text,
+            }}
+          />
+          {searchHits && (
+            <span style={{ color: C.accent, fontSize: 10 }}>{searchHits.size}</span>
+          )}
+          {searchQ && (
+            <button
+              onClick={() => setSearchQ("")}
+              aria-label="Clear search"
+              style={{ color: C.textFaint, fontSize: 11 }}
+            >×</button>
+          )}
+        </div>
+        <ToolbarButton
+          title={showMinimap ? "Hide minimap" : "Show minimap"}
+          aria-label={showMinimap ? "Hide minimap" : "Show minimap"}
+          onClick={() => setShowMinimap((v) => !v)}
+        >{showMinimap ? "minimap•" : "minimap"}</ToolbarButton>
+      </div>
+
+      {focusedId && (
+        <div style={{
+          position: "absolute", top: 50, left: 12,
+          padding: "5px 9px",
+          background: C.bgAlt, border: `1px solid ${C.accent}`, borderRadius: 4,
+          fontFamily: mono, fontSize: 10, color: C.accent,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span>focused</span>
+          <span style={{ color: C.text, fontWeight: 600 }}>{focusedId}</span>
+          <button
+            onClick={() => setFocusedId(null)}
+            aria-label="Clear focus"
+            title="Clear (Esc)"
+            style={{ color: C.textFaint, fontSize: 11 }}
+          >×</button>
+        </div>
+      )}
+
+      {showMinimap && layout.bounds.w > 0 && (
+        <Minimap
+          blocks={parsed.blocks}
+          layout={layout}
+          viewRect={viewRect}
+          emphasizeId={emphasizeId}
+          searchHits={searchHits}
+          onClickPoint={(wx, wy) => {
+            // wx/wy are in graph-coordinate space — recenter the
+            // viewport on them at the current zoom.
+            const svg = svgRef.current;
+            if (!svg) return;
+            const rect = svg.getBoundingClientRect();
+            const v = viewportRef.current;
+            v.x = rect.width  / 2 - wx * v.scale;
+            v.y = rect.height / 2 - wy * v.scale;
+            applyTransform();
+            scheduleViewUpdate();
+          }}
+        />
+      )}
 
       <div style={{
         position: "absolute", bottom: 10, left: 12,
@@ -928,9 +1249,165 @@ export function CfgGraph(props: {
           background: C.bgAlt, border: `1px solid ${C.border}`, borderRadius: 4,
           color: C.textFaint, pointerEvents: "none",
         }}>
-          {parsed.blocks.length} blocks · {Math.round(displayScale * 100)}%
+          {parsed.blocks.length} blocks · cc {cyclomaticComplexity(parsed.blocks)} · {Math.round(displayScale * 100)}%
         </div>
       </div>
+    </div>
+  );
+}
+
+// Reusable toolbar pieces. Kept as inline components so the styling
+// stays at the call site — the buttons are visually identical so a
+// helper makes the JSX above stay readable.
+function ToolbarGroup(props: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      display: "flex",
+      background: C.bgAlt, border: `1px solid ${C.border}`, borderRadius: 4,
+      overflow: "hidden",
+    }}>
+      {props.children}
+    </div>
+  );
+}
+
+function ToolbarButton(props: {
+  onClick: () => void;
+  children: React.ReactNode;
+  title?: string;
+  ["aria-label"]?: string;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={props.onClick}
+      title={props.title}
+      aria-label={props["aria-label"]}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: "5px 9px",
+        background: hover ? C.bgMuted : "transparent",
+        color: hover ? C.text : C.textMuted,
+        border: "none",
+        borderRight: `1px solid ${C.border}`,
+        fontFamily: mono, fontSize: 10,
+      }}
+    >{props.children}</button>
+  );
+}
+
+// Cyclomatic complexity for the merged-fallthrough graph.
+//   M = E - N + 2P
+// where E = edges (non-pseudo), N = nodes, P = connected components.
+// We assume P=1 here — a function's CFG by construction is one
+// connected component (the entry reaches everything; unreachable
+// subgraphs have already been pruned by the analysis pipeline).
+function cyclomaticComplexity(blocks: CfgBlock[]): number {
+  const ids = new Set(blocks.map((b) => b.id));
+  let edges = 0;
+  for (const b of blocks) {
+    for (const s of b.succs) {
+      if (s.target.startsWith("<")) continue;
+      if (!ids.has(s.target)) continue;
+      edges++;
+    }
+  }
+  const m = edges - blocks.length + 2;
+  return Math.max(1, m);
+}
+
+// Compact overview panel that mirrors the full graph at micro-scale.
+// Drag-anywhere centre the main viewport on the clicked spot. The
+// `viewRect` rectangle inside the minimap shows what's currently on
+// screen so the user knows where they are in a large function.
+function Minimap(props: {
+  blocks: CfgBlock[];
+  layout: Layout;
+  viewRect: Rect;
+  emphasizeId?: string | null;
+  searchHits?: Set<string> | null;
+  onClickPoint: (wx: number, wy: number) => void;
+}) {
+  const { blocks, layout, viewRect, emphasizeId, searchHits, onClickPoint } = props;
+  const PAD_PX  = 6;
+  const MAX_W   = 200;
+  const MAX_H   = 160;
+  const bb      = layout.bounds;
+  const scale   = Math.min(
+    (MAX_W - PAD_PX * 2) / Math.max(1, bb.w),
+    (MAX_H - PAD_PX * 2) / Math.max(1, bb.h),
+  );
+  const widthPx  = Math.min(MAX_W, bb.w * scale + PAD_PX * 2);
+  const heightPx = Math.min(MAX_H, bb.h * scale + PAD_PX * 2);
+
+  const toLocal = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const lx = e.clientX - rect.left - PAD_PX;
+    const ly = e.clientY - rect.top  - PAD_PX;
+    return { wx: lx / scale + bb.x, wy: ly / scale + bb.y };
+  };
+
+  return (
+    <div style={{
+      position: "absolute", top: 10, right: 12,
+      width: widthPx, height: heightPx,
+      background: C.bgAlt, border: `1px solid ${C.border}`, borderRadius: 4,
+      boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
+      cursor: "crosshair",
+      overflow: "hidden",
+    }}>
+      <svg
+        width="100%" height="100%"
+        onMouseDown={(e) => {
+          const { wx, wy } = toLocal(e);
+          onClickPoint(wx, wy);
+        }}
+        onMouseMove={(e) => {
+          if (e.buttons & 1) {
+            const { wx, wy } = toLocal(e);
+            onClickPoint(wx, wy);
+          }
+        }}
+      >
+        {/* Block dots — colour-coded by kind, scaled to layout height
+            so a long block reads as a tall sliver. */}
+        {blocks.map((b) => {
+          const p = layout.positions.get(b.id);
+          if (!p) return null;
+          const x = (p.x - bb.x) * scale + PAD_PX;
+          const y = (p.y - bb.y) * scale + PAD_PX;
+          const w = NODE_W * scale;
+          const h = p.height * scale;
+          const isHit = searchHits?.has(b.id);
+          const isEmph = emphasizeId === b.id;
+          const fill = isHit ? C.accent
+                       : isEmph ? C.accent
+                       : KIND_STYLE[b.kind].border;
+          return (
+            <rect
+              key={b.id}
+              x={x} y={y}
+              width={Math.max(2, w)} height={Math.max(2, h)}
+              fill={fill}
+              opacity={isEmph ? 1 : (isHit ? 0.85 : 0.55)}
+              rx={1}
+            />
+          );
+        })}
+        {/* Current viewport rect, clipped to the minimap bounds. */}
+        <rect
+          x={Math.max(PAD_PX, (viewRect.x - bb.x) * scale + PAD_PX)}
+          y={Math.max(PAD_PX, (viewRect.y - bb.y) * scale + PAD_PX)}
+          width={Math.min(widthPx - PAD_PX * 2, viewRect.w * scale)}
+          height={Math.min(heightPx - PAD_PX * 2, viewRect.h * scale)}
+          fill="none"
+          stroke={C.text}
+          strokeWidth={1.2}
+          opacity={0.85}
+          pointerEvents="none"
+        />
+      </svg>
     </div>
   );
 }

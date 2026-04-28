@@ -8,6 +8,25 @@ import type {
   PluginMatchResult, PluginRunResult,
 } from "../types";
 
+// Monospace font presets surfaced in the Settings panel. Each value
+// is a CSS font-family stack — the first listed family is the
+// preferred face; trailing entries are fallbacks if the user doesn't
+// have the headline font installed locally.
+const FONT_FAMILIES = {
+  jetbrains: "'JetBrains Mono','SF Mono','Fira Code',monospace",
+  sf:        "'SF Mono','JetBrains Mono','Menlo',monospace",
+  fira:      "'Fira Code','JetBrains Mono','SF Mono',monospace",
+  system:    "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+} as const;
+type FontKey = keyof typeof FONT_FAMILIES;
+
+function selectFontKey(stack: string): FontKey {
+  for (const k of Object.keys(FONT_FAMILIES) as FontKey[]) {
+    if (FONT_FAMILIES[k] === stack) return k;
+  }
+  return "jetbrains";
+}
+
 // Settings gear. Stroked-outline style (matches the rest of the
 // title-bar glyphs), 24×24 viewBox so the curved tooth flanks
 // stay smooth at any reasonable display size. `currentColor` for
@@ -108,6 +127,16 @@ export function SettingsPanel(props: {
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 18px" }}>
           <Section title="Display">
             <Row
+              label="Theme"
+              hint="Color palette. Warm = original; dark = cooler near-black; light = parchment."
+            >
+              <Segmented
+                value={props.settings.theme}
+                options={["warm", "dark", "light"] as const}
+                onChange={(v) => set("theme", v)}
+              />
+            </Row>
+            <Row
               label="Code font size"
               hint="Affects pseudo-C, IR, and disasm panes."
             >
@@ -115,6 +144,25 @@ export function SettingsPanel(props: {
                 value={props.settings.codeFontSize}
                 min={9} max={20}
                 onChange={(v) => set("codeFontSize", v)}
+              />
+            </Row>
+            <Row
+              label="Code font family"
+              hint="Monospace stack. Falls back automatically if the chosen family isn't installed."
+            >
+              <Segmented
+                value={selectFontKey(props.settings.codeFontFamily)}
+                options={["jetbrains", "sf", "fira", "system"] as const}
+                onChange={(key) => set("codeFontFamily", FONT_FAMILIES[key])}
+              />
+            </Row>
+            <Row
+              label="Resume on launch"
+              hint="Re-open the most recently used binary at the function you left it on."
+            >
+              <Toggle
+                value={props.settings.resumeOnLaunch}
+                onChange={(v) => set("resumeOnLaunch", v)}
               />
             </Row>
           </Section>

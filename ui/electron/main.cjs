@@ -445,6 +445,142 @@ ipcMain.handle("ember:run", async (_e, args) => {
 
 ipcMain.handle("ember:binary", async () => state.binary);
 
+// Hex view: read a byte slice from the currently-loaded binary. Returns
+// the bytes as a base64 string (Electron IPC serialises Uint8Array as
+// a Buffer, which the renderer sees as an Object — base64 round-trips
+// cleanly through structured clone). `eof` flags a short read so the
+// renderer can stop scrolling.
+ipcMain.handle("ember:readBytes", async (_e, offset, length) => {
+  if (!state.binary) throw new Error("no binary selected");
+  const off = Math.max(0, Math.floor(Number(offset) || 0));
+  const len = Math.max(0, Math.min(0x100000, Math.floor(Number(length) || 0)));
+  if (len === 0) return { base64: "", eof: false, totalSize: 0 };
+  const fh = await fs.open(state.binary, "r");
+  try {
+    const stat = await fh.stat();
+    const buf  = Buffer.alloc(len);
+    const { bytesRead } = await fh.read(buf, 0, len, off);
+    return {
+      base64:    buf.subarray(0, bytesRead).toString("base64"),
+      eof:       off + bytesRead >= stat.size,
+      totalSize: stat.size,
+    };
+  } finally {
+    await fh.close();
+  }
+});
+
+// Translate a virtual address to a file offset by walking the ELF /
+// Mach-O / PE headers directly. Cheap (one read of the first 4 KB) and
+// avoids dragging another flag through the CLI surface.
+const VADDR_MAP_CACHE = new Map();  // key (path|mtime) → [{vaddr, foff, size}, ...]
+
+async function loadVaddrMap(binaryPath) {
+  const mtime = await safeMtime(binaryPath);
+  const key   = `${binaryPath}|${mtime}`;
+  const hit   = VADDR_MAP_CACHE.get(key);
+  if (hit) return hit;
+
+  const out = [];
+  let fh;
+  try {
+    fh = await fs.open(binaryPath, "r");
+    const head = Buffer.alloc(4096);
+    await fh.read(head, 0, head.length, 0);
+    if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) {
+      // ELF — parse the program header table.
+      const is64   = head[4] === 2;
+      const phoff  = is64 ? Number(head.readBigUInt64LE(0x20)) : head.readUInt32LE(0x1c);
+      const phentsize = head.readUInt16LE(is64 ? 0x36 : 0x2a);
+      const phnum     = head.readUInt16LE(is64 ? 0x38 : 0x2c);
+      const phBuf = Buffer.alloc(phentsize * phnum);
+      await fh.read(phBuf, 0, phBuf.length, phoff);
+      for (let i = 0; i < phnum; i++) {
+        const base = i * phentsize;
+        const ptype = phBuf.readUInt32LE(base);
+        if (ptype !== 1) continue;   // PT_LOAD
+        const foff  = is64 ? Number(phBuf.readBigUInt64LE(base + 0x08)) : phBuf.readUInt32LE(base + 0x04);
+        const vaddr = is64 ? Number(phBuf.readBigUInt64LE(base + 0x10)) : phBuf.readUInt32LE(base + 0x08);
+        const fsz   = is64 ? Number(phBuf.readBigUInt64LE(base + 0x20)) : phBuf.readUInt32LE(base + 0x10);
+        if (fsz > 0) out.push({ vaddr, foff, size: fsz });
+      }
+    } else if ((head[0] === 0xfe && head[1] === 0xed && head[2] === 0xfa) ||
+               (head[0] === 0xcf && head[1] === 0xfa && head[2] === 0xed)) {
+      // Mach-O (32 / 64). Walk LC_SEGMENT_64 / LC_SEGMENT load commands.
+      const is64  = head[3] === 0xfe || head[3] === 0xcf || head[0] === 0xcf;
+      const ncmds = head.readUInt32LE(0x10);
+      let p = is64 ? 0x20 : 0x1c;
+      for (let i = 0; i < ncmds && p + 8 <= head.length; i++) {
+        const cmd  = head.readUInt32LE(p);
+        const size = head.readUInt32LE(p + 4);
+        if (cmd === 0x19 /* LC_SEGMENT_64 */) {
+          const vmaddr   = Number(head.readBigUInt64LE(p + 24));
+          const vmsize   = Number(head.readBigUInt64LE(p + 32));
+          const fileoff  = Number(head.readBigUInt64LE(p + 40));
+          if (vmsize > 0) out.push({ vaddr: vmaddr, foff: fileoff, size: vmsize });
+        } else if (cmd === 0x01 /* LC_SEGMENT */) {
+          const vmaddr   = head.readUInt32LE(p + 24);
+          const vmsize   = head.readUInt32LE(p + 28);
+          const fileoff  = head.readUInt32LE(p + 32);
+          if (vmsize > 0) out.push({ vaddr: vmaddr, foff: fileoff, size: vmsize });
+        }
+        p += size;
+        if (size === 0) break;
+      }
+    } else if (head[0] === 0x4d && head[1] === 0x5a) {
+      // PE: header at e_lfanew. PE32+ section table follows the optional
+      // header. We parse just the section table and use VirtualAddress +
+      // PointerToRawData entries.
+      const peOff = head.readUInt32LE(0x3c);
+      if (peOff >= 0 && peOff + 24 < head.length &&
+          head[peOff] === 0x50 && head[peOff + 1] === 0x45) {
+        const numSections = head.readUInt16LE(peOff + 6);
+        const optHdrSize  = head.readUInt16LE(peOff + 20);
+        const imgBase = (() => {
+          const ohOff = peOff + 24;
+          if (head[ohOff] === 0x0b && head[ohOff + 1] === 0x02) {
+            // PE32+ — ImageBase at offset 24 of optional header (8 bytes).
+            return Number(head.readBigUInt64LE(ohOff + 24));
+          }
+          if (head[ohOff] === 0x0b && head[ohOff + 1] === 0x01) {
+            return head.readUInt32LE(ohOff + 28);
+          }
+          return 0;
+        })();
+        const sectOff = peOff + 24 + optHdrSize;
+        for (let i = 0; i < numSections; i++) {
+          const o = sectOff + i * 40;
+          if (o + 40 > head.length) break;
+          const vsize  = head.readUInt32LE(o + 8);
+          const vaddr  = head.readUInt32LE(o + 12) + imgBase;
+          const foff   = head.readUInt32LE(o + 20);
+          if (vsize > 0) out.push({ vaddr, foff, size: vsize });
+        }
+      }
+    }
+  } catch {
+    // Header parse failed — fall through with empty mapping. Hex view
+    // handles the empty case by refusing vaddr translation.
+  } finally {
+    try { await fh?.close(); } catch {}
+  }
+  VADDR_MAP_CACHE.set(key, out);
+  return out;
+}
+
+ipcMain.handle("ember:vaddrToOffset", async (_e, vaddr) => {
+  if (!state.binary) return null;
+  const v = Number(vaddr);
+  if (!Number.isFinite(v) || v < 0) return null;
+  const map = await loadVaddrMap(state.binary);
+  for (const s of map) {
+    if (s.size > 0 && v >= s.vaddr && v < s.vaddr + s.size) {
+      return s.foff + (v - s.vaddr);
+    }
+  }
+  return null;
+});
+
 ipcMain.handle("ember:update:check", async () => {
   try {
     return await fetchLatestReleaseInfo();

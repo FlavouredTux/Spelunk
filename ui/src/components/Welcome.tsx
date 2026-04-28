@@ -119,7 +119,7 @@ export function Welcome(props: {
             color: C.textFaint,
           }}
         >
-          ELF / Mach-O &nbsp;·&nbsp; x64 and PPC64 &nbsp;·&nbsp; click to select a file
+          ELF / Mach-O / PE &nbsp;·&nbsp; x64 / aarch64 / PPC64 &nbsp;·&nbsp; or drop a binary anywhere
         </div>
 
         {props.recents.length > 0 && (

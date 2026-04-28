@@ -309,6 +309,44 @@ function PanelBody(props: {
         )}
       </div>
 
+      {result.logs && result.logs.length > 0 && (
+        <details
+          style={{
+            padding: "8px 18px",
+            borderBottom: `1px solid ${C.border}`,
+            background: C.bg,
+          }}
+        >
+          <summary style={{
+            fontFamily: mono, fontSize: 10, color: C.textMuted,
+            cursor: "pointer", listStyle: "none",
+            textTransform: "uppercase", letterSpacing: 1,
+          }}>
+            console <span style={{ color: C.textFaint }}>({result.logs.length})</span>
+          </summary>
+          <div style={{
+            marginTop: 6,
+            maxHeight: 160, overflowY: "auto",
+            fontFamily: mono, fontSize: 11,
+            display: "flex", flexDirection: "column", gap: 2,
+          }}>
+            {result.logs.map((entry, i) => (
+              <div key={i} style={{
+                color: entry.level === "error" ? C.red
+                       : entry.level === "warn" ? C.yellow
+                       : C.textWarm,
+                whiteSpace: "pre-wrap",
+              }}>
+                <span style={{ color: C.textFaint, marginRight: 8 }}>
+                  {entry.level.padEnd(5)}
+                </span>
+                {entry.text}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
       {result.panel?.kind === "list" && (
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 0" }}>
           {result.panel.rows.length === 0 && (

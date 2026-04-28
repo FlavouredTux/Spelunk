@@ -17,6 +17,14 @@ contextBridge.exposeInMainWorld("ember", {
 
   recents:          () => ipcRenderer.invoke("ember:recents"),
   openRecent:       (bp) => ipcRenderer.invoke("ember:openRecent", bp),
+  // Read raw bytes from the currently-loaded binary at a given file
+  // offset. Used by the hex view. Returns { bytes: Uint8Array, eof: bool }.
+  readBytes:        (offset, length) =>
+                       ipcRenderer.invoke("ember:readBytes", offset, length),
+  // Translate a virtual address to a file offset (or null if it falls
+  // outside any loaded section). Used by the hex view to follow the
+  // current function's bytes.
+  vaddrToOffset:    (vaddr) => ipcRenderer.invoke("ember:vaddrToOffset", vaddr),
   updates: {
     check: () => ipcRenderer.invoke("ember:update:check"),
     downloadAndInstall: () => ipcRenderer.invoke("ember:update:downloadAndInstall"),

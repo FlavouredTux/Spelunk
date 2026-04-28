@@ -35,6 +35,9 @@ const GROUPS: Group[] = [
       { keys: "⌃J",   label: "notes" },
       { keys: "⌃U",   label: "plugins" },
       { keys: "⌃K",   label: "AI assistant" },
+      { keys: "⌃H",   label: "hex view" },
+      { keys: "⌃⇧S",  label: "symbols & sections" },
+      { keys: "⌃B",   label: "bookmarks" },
       { keys: "⌃⇧P",  label: "patches" },
     ],
   },
@@ -43,6 +46,8 @@ const GROUPS: Group[] = [
     rows: [
       { keys: "N",  label: "rename current function" },
       { keys: "⇧S", label: "edit signature" },
+      { keys: "B",  label: "bookmark current function" },
+      { keys: "⌃Z", label: "undo last rename / note / signature" },
     ],
   },
   {

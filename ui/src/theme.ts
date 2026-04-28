@@ -1,5 +1,17 @@
-// Warm palette, assistant-ish. Earth tones, single orange accent.
-export const C = {
+import type { ThemeMode } from "./settings";
+
+// Three palettes. "warm" is the original assistant-ish charcoal +
+// earth tones. "dark" is a cooler near-black for users who want a
+// less brown-tinged look. "light" is parchment for daytime.
+type Palette = {
+  bg: string; bgAlt: string; bgMuted: string; bgInput: string; bgDark: string;
+  text: string; textWarm: string; textMuted: string; textFaint: string;
+  accent: string; accentHover: string; accentDim: string;
+  blue: string; blueDim: string; green: string; red: string; yellow: string; violet: string;
+  border: string; borderStrong: string;
+};
+
+const WARM: Palette = {
   bg:           "#141413",
   bgAlt:        "#1f1e1d",
   bgMuted:      "#262524",
@@ -26,9 +38,97 @@ export const C = {
   borderStrong: "rgba(255,255,245,0.15)",
 };
 
+const DARK: Palette = {
+  bg:           "#0e0f12",
+  bgAlt:        "#16181c",
+  bgMuted:      "#1d2026",
+  bgInput:      "#16181c",
+  bgDark:       "#252830",
+
+  text:         "#e8eaed",
+  textWarm:     "#c8ccd1",
+  textMuted:    "#80858d",
+  textFaint:    "#52565d",
+
+  accent:       "#5fa9c7",
+  accentHover:  "#7cbcd8",
+  accentDim:    "rgba(95,169,199,0.14)",
+
+  blue:         "#7aa6d8",
+  blueDim:      "rgba(122,166,216,0.12)",
+  green:        "#7fb286",
+  red:          "#d36a6a",
+  yellow:       "#cfb04d",
+  violet:       "#9c8bca",
+
+  border:       "rgba(255,255,255,0.08)",
+  borderStrong: "rgba(255,255,255,0.15)",
+};
+
+const LIGHT: Palette = {
+  bg:           "#faf7f1",
+  bgAlt:        "#f1ebde",
+  bgMuted:      "#e8e0cf",
+  bgInput:      "#f6f0e2",
+  bgDark:       "#d8cdb6",
+
+  text:         "#2a261f",
+  textWarm:     "#403a2d",
+  textMuted:    "#76705f",
+  textFaint:    "#9c9784",
+
+  accent:       "#b85c3a",
+  accentHover:  "#a14e2f",
+  accentDim:    "rgba(184,92,58,0.12)",
+
+  blue:         "#3b6a99",
+  blueDim:      "rgba(59,106,153,0.12)",
+  green:        "#5e7842",
+  red:          "#a44a2c",
+  yellow:       "#977a25",
+  violet:       "#6b5a93",
+
+  border:       "rgba(0,0,0,0.10)",
+  borderStrong: "rgba(0,0,0,0.18)",
+};
+
+const PALETTES: Record<ThemeMode, Palette> = {
+  warm:  WARM,
+  dark:  DARK,
+  light: LIGHT,
+};
+
+// Mutable export — App swaps the underlying object's fields when the
+// theme changes so existing imports of `C` continue to read the live
+// values without every component needing to re-subscribe.
+export const C: Palette = { ...WARM };
+
+export function applyTheme(mode: ThemeMode): void {
+  const next = PALETTES[mode] || WARM;
+  for (const k of Object.keys(C) as (keyof Palette)[]) {
+    C[k] = next[k];
+  }
+  // Re-inject the global stylesheet so scrollbar / selection colors
+  // pick up the new palette.
+  const tag = document.getElementById("ember-globals");
+  if (tag) tag.textContent = makeGlobalCSS();
+}
+
 export const sans  = "'DM Sans',system-ui,-apple-system,sans-serif";
 export const serif = "'Lora','Source Serif Pro',Georgia,serif";
-export const mono  = "'JetBrains Mono','SF Mono','Fira Code',monospace";
+// Default mono stack. App overrides at runtime when the user picks a
+// different font family in Settings; we expose a setter so the rest of
+// the codebase can keep importing `mono` as a const expression.
+export let mono = "'JetBrains Mono','SF Mono','Fira Code',monospace";
+export function setMonoFamily(family: string): void {
+  if (typeof family === "string" && family.trim()) mono = family;
+  // Re-inject globalCSS so any rule that hard-references the mono var
+  // picks up the new family on next mount. Components that read `mono`
+  // at render time (most of them) automatically reflect the change on
+  // the next React update.
+  const tag = document.getElementById("ember-globals");
+  if (tag) tag.textContent = makeGlobalCSS();
+}
 
 // Syntax-highlight palette
 export const SH = {
@@ -57,7 +157,8 @@ if (!document.querySelector(`link[href="${fontHref}"]`)) {
   document.head.appendChild(link);
 }
 
-export const globalCSS = `
+function makeGlobalCSS(): string {
+  return `
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body, #root { height:100%; background:${C.bg}; overflow:hidden; }
   body { font-family:${sans}; color:${C.text}; -webkit-font-smoothing:antialiased;
@@ -70,7 +171,11 @@ export const globalCSS = `
   ::-webkit-scrollbar-thumb:hover { background:${C.borderStrong}; }
   button { font-family:${sans}; background:none; border:none; color:inherit; cursor:pointer; }
   input { font-family:${sans}; background:none; border:none; color:inherit; outline:none; }
+  *:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 2px; }
   @keyframes fadeIn  { from {opacity:0; transform:translateY(4px)} to {opacity:1; transform:none} }
   @keyframes slideIn { from {opacity:0; transform:translateX(-6px)} to {opacity:1; transform:none} }
   @keyframes pulse   { 0%,100% {opacity:1} 50% {opacity:.5} }
 `;
+}
+
+export const globalCSS = makeGlobalCSS();

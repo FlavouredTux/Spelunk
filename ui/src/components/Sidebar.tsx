@@ -12,6 +12,7 @@ export function Sidebar(props: {
   // sidebar can already render imports + the "defined" tab shell while
   // we wait, so a spinner in the count badge is enough.
   functionsLoading?: boolean;
+  width?: number;
   onSelect: (fn: FunctionInfo) => void;
   onOpen: (fn: FunctionInfo, view: ViewKind) => void;
   onReopen: () => void;
@@ -21,7 +22,7 @@ export function Sidebar(props: {
   onExport?: () => void;
   onImport?: () => void;
 }) {
-  const { info, currentAddr, annotations, functionsLoading, onSelect, onOpen, onReopen,
+  const { info, currentAddr, annotations, functionsLoading, width, onSelect, onOpen, onReopen,
           onRename, onAddNote, onEditSignature, onExport, onImport } = props;
   const [q, setQ] = useState("");
   const [showImports, setShowImports] = useState(false);
@@ -111,7 +112,7 @@ export function Sidebar(props: {
   return (
     <div
       style={{
-        width: 288,
+        width: width ?? 288,
         height: "100%",
         background: C.bgAlt,
         borderRight: `1px solid ${C.border}`,

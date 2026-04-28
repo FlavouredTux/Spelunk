@@ -84,6 +84,27 @@ export async function openRecent(path: string): Promise<string> {
   return await window.ember.openRecent(path);
 }
 
+// Read raw bytes from the currently-loaded binary at a file offset.
+// Returns a Uint8Array (base64-decoded from the IPC payload).
+export async function readBytes(offset: number, length: number): Promise<{
+  bytes: Uint8Array;
+  eof: boolean;
+  totalSize: number;
+}> {
+  const r = await window.ember.readBytes(offset, length);
+  const bin = atob(r.base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return { bytes, eof: r.eof, totalSize: r.totalSize };
+}
+
+// Translate a virtual address into a file offset using the binary's
+// PT_LOAD / LC_SEGMENT / PE-section map. Returns null when the vaddr
+// falls outside any loaded segment.
+export async function vaddrToOffset(vaddr: number): Promise<number | null> {
+  return await window.ember.vaddrToOffset(vaddr);
+}
+
 export async function getRecents(): Promise<string[]> {
   return await window.ember.recents();
 }

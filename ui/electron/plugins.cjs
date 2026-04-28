@@ -533,8 +533,22 @@ function makePluginHost(opts) {
     return { score, matched: score === 100, evidence, failed };
   }
 
-  function hostContextFor(plugin) {
+  function hostContextFor(plugin, logs) {
+    const log = (level, parts) => {
+      if (!logs) return;
+      const text = parts.map((p) =>
+        typeof p === "string" ? p
+        : (p === null || p === undefined ? String(p)
+           : typeof p === "object" ? safeStringify(p)
+           : String(p)),
+      ).join(" ");
+      logs.push({ level, text, ts: Date.now() });
+      if (logs.length > 500) logs.shift();   // bound memory on chatty plugins
+    };
     return {
+      log:   (...parts) => log("info",  parts),
+      warn:  (...parts) => log("warn",  parts),
+      error: (...parts) => log("error", parts),
       async loadSummary() {
         assertPermissions(plugin, ["read.binary-summary"]);
         return await loadSummary(await currentBinary());
@@ -651,7 +665,14 @@ function makePluginHost(opts) {
     const command = plugin.commands.find((cmd) => cmd.id === commandId);
     if (!command) throw new Error(`unknown command ${commandId}`);
 
-    const result = await command.run(hostContextFor(plugin), opts.args || {});
+    const logs = [];
+    let result;
+    try {
+      result = await command.run(hostContextFor(plugin, logs), opts.args || {});
+    } catch (e) {
+      logs.push({ level: "error", text: `command threw: ${e?.message || String(e)}`, ts: Date.now() });
+      throw Object.assign(e, { logs });
+    }
     const proposals = Array.isArray(result?.proposals)
       ? result.proposals.filter((p) =>
         p && p.addr &&
@@ -669,6 +690,7 @@ function makePluginHost(opts) {
         notes,
         proposals,
         panel,
+        logs,
         applied: false,
         appliedCount: 0,
       };
@@ -698,6 +720,7 @@ function makePluginHost(opts) {
       notes,
       proposals,
       panel,
+      logs,
       applied: true,
       appliedCount,
       annotations: ann,
@@ -716,6 +739,25 @@ function makePluginHost(opts) {
   }
 
   return { listPlugins, runCommand, matchPlugin };
+}
+
+// JSON.stringify but tolerates circular structures, BigInts and
+// undefined values gracefully so a plugin's `host.log({...})` doesn't
+// blow up on weird inputs.
+function safeStringify(obj) {
+  try {
+    const seen = new WeakSet();
+    return JSON.stringify(obj, (_k, v) => {
+      if (typeof v === "bigint") return v.toString() + "n";
+      if (typeof v === "object" && v !== null) {
+        if (seen.has(v)) return "[circular]";
+        seen.add(v);
+      }
+      return v;
+    });
+  } catch {
+    return String(obj);
+  }
 }
 
 module.exports = { makePluginHost };

@@ -162,6 +162,12 @@ export type PluginNoteProposal = {
   reason: string;
 };
 
+export type PluginLogEntry = {
+  level: "info" | "warn" | "error";
+  text:  string;
+  ts:    number;     // ms since epoch
+};
+
 export type PluginRunResult = {
   pluginId: string;
   commandId: string;
@@ -169,6 +175,7 @@ export type PluginRunResult = {
   notes: string;
   proposals: Array<PluginRenameProposal | PluginNoteProposal>;
   panel: PluginPanelData | null;
+  logs?: PluginLogEntry[];
   applied: boolean;
   appliedCount: number;
   annotations?: Annotations;
@@ -222,6 +229,12 @@ declare global {
 
       recents:          () => Promise<string[]>;
       openRecent:       (bp: string) => Promise<string>;
+      readBytes:        (offset: number, length: number) => Promise<{
+        base64: string;
+        eof: boolean;
+        totalSize: number;
+      }>;
+      vaddrToOffset:    (vaddr: number) => Promise<number | null>;
       updates: {
         check: () => Promise<ReleaseUpdateStatus>;
         downloadAndInstall: () => Promise<{

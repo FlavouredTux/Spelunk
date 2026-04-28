@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { C, sans, serif, mono, globalCSS } from "./theme";
+import { C, sans, serif, mono, globalCSS, applyTheme, setMonoFamily } from "./theme";
 import { Sidebar } from "./components/Sidebar";
 import { CodeView } from "./components/CodeView";
 import { Welcome } from "./components/Welcome";
@@ -22,6 +22,12 @@ import { PatchDialog } from "./components/PatchDialog";
 import { Tutorial } from "./components/Tutorial";
 import { ErrorView } from "./components/ErrorView";
 import { Shortcuts } from "./components/Shortcuts";
+import { HexView } from "./components/HexView";
+import { SymbolsView } from "./components/SymbolsView";
+import { BookmarksPanel } from "./components/BookmarksPanel";
+import type { Bookmark } from "./components/BookmarksPanel";
+import { ResizeHandle } from "./components/ResizeHandle";
+import { Breadcrumb } from "./components/Breadcrumb";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
@@ -165,6 +171,23 @@ export default function App() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [pluginsPanelOpen, setPluginsPanelOpen] = useState(false);
   const [patchesOpen, setPatchesOpen] = useState(false);
+  const [hexOpen, setHexOpen] = useState(false);
+  const [symbolsOpen, setSymbolsOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  // Dirty indicator: pulses when annotations are mid-flight to disk so
+  // the user can see saves are happening. "saved" sticks for ~1.5s
+  // after each successful write so single edits also flash.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  // Toast for transient actions (bookmarked, exported, …).
+  const [toast, setToast] = useState<string | null>(null);
+  // Undo stack — snapshots of the annotations object before each write.
+  // Capped to keep memory bounded on long editing sessions.
+  const undoStackRef = useRef<Annotations[]>([]);
+  // Keyboard handler needs a stable hook-into for undo, but the actual
+  // implementation depends on `annotations` and other state defined later
+  // in this component. Bridge with a ref so the keyboard useEffect can
+  // call `undoRef.current()` without a forward-declaration TypeError.
+  const undoRef = useRef<() => void>(() => {});
 
   // Data: cross-refs + user annotations + strings + arities
   const [xrefs, setXrefs] = useState<Xrefs>(EMPTY_XREFS);
@@ -267,6 +290,35 @@ export default function App() {
     }
     // Initial recents load (for welcome screen)
     getRecents().then(setRecents).catch(() => {});
+  }, []);
+
+  // Apply theme + font from settings whenever they change. The exported
+  // C / mono bindings are mutable so existing component imports keep
+  // working without prop-drilling — we just bump a render counter on
+  // App so children re-paint with the new values.
+  const [themeRev, setThemeRev] = useState(0);
+  useEffect(() => {
+    applyTheme(settings.theme);
+    setMonoFamily(settings.codeFontFamily);
+    setThemeRev((n) => n + 1);
+  }, [settings.theme, settings.codeFontFamily]);
+  void themeRev;   // referenced so the linter doesn't strip the bump
+
+  // Auto-resume the most recently opened binary on launch. Settings
+  // persists `lastBinary`; the main process's setBinary IPC just pins
+  // the path without doing analysis, mirroring openRecent. If the file
+  // has moved we silently fall back to the welcome screen.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (resumedRef.current) return;
+    if (!settings.resumeOnLaunch) return;
+    const path = settings.lastBinary;
+    if (!path) return;
+    resumedRef.current = true;
+    openRecent(path)
+      .then(() => openBinaryAt(path))
+      .catch(() => { /* binary moved or missing — leave welcome screen up */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Discord Rich Presence: push the current activity whenever it
@@ -418,6 +470,9 @@ export default function App() {
       const header = await loadHeader();
       setInfo(header);
       setStrings(EMPTY_STRINGS);
+      undoStackRef.current = [];
+      // Persist as last-opened so next launch can resume here.
+      patchSettings({ lastBinary: header.path });
       setFunctionsLoading(true);
       track("annotations", loadAnnotations(header.path).then(setAnnotations).catch(() => {}));
       track("xrefs",       loadXrefs().then(setXrefs).catch(() => {}));
@@ -431,12 +486,15 @@ export default function App() {
         // resolve, drop the result on the floor.
         setInfo((prev) => (prev && prev.path === header.path
           ? { ...prev, functions: fns } : prev));
-        // Default selection: prefer `main`, else the first function.
-        // Guard against the user navigating somewhere already.
+        // Default selection: prefer the per-binary saved last function,
+        // then `main`, then the first function. Guard against the user
+        // navigating somewhere already.
         setCurrent((cur) => {
           if (cur) return cur;
+          const lastAddr = settings.binaryState[header.path]?.lastFunctionAddr;
+          const last = lastAddr ? fns.find((f) => f.addr === lastAddr) : null;
           const main = fns.find((f) => f.name === "main");
-          const start = main ?? fns[0] ?? null;
+          const start = last ?? main ?? fns[0] ?? null;
           if (start) {
             setHistory([start.addrNum]);
             setHistIdx(0);
@@ -460,6 +518,19 @@ export default function App() {
   // Navigate to a function — pushes history (unless we're in back/forward)
   const navigateTo = useCallback((fn: FunctionInfo) => {
     setCurrent(fn);
+    if (info) {
+      // Stash the last-visited function for this binary so the next
+      // session resumes here. Per-binary, keyed on absolute path.
+      patchSettings({
+        binaryState: {
+          ...settings.binaryState,
+          [info.path]: {
+            ...(settings.binaryState[info.path] || {}),
+            lastFunctionAddr: fn.addr,
+          },
+        },
+      });
+    }
     if (navigatingRef.current) {
       navigatingRef.current = false;
       return;
@@ -470,7 +541,40 @@ export default function App() {
       return [...truncated, fn.addrNum];
     });
     setHistIdx((i) => (history[i] === fn.addrNum ? i : i + 1));
-  }, [history, histIdx]);
+  }, [history, histIdx, info, settings.binaryState, patchSettings]);
+
+  // Bookmark the current function — toggles on if not already saved.
+  // Bookmarks live per-binary in settings so they survive across
+  // sessions and don't leak between unrelated targets.
+  const currentBookmarks: Bookmark[] = useMemo(() => {
+    if (!info) return [];
+    return settings.binaryState[info.path]?.bookmarks ?? [];
+  }, [info, settings.binaryState]);
+
+  const updateBookmarks = useCallback((next: Bookmark[]) => {
+    if (!info) return;
+    patchSettings({
+      binaryState: {
+        ...settings.binaryState,
+        [info.path]: {
+          ...(settings.binaryState[info.path] || {}),
+          bookmarks: next,
+        },
+      },
+    });
+  }, [info, settings.binaryState, patchSettings]);
+
+  const toggleBookmark = useCallback((fn: FunctionInfo) => {
+    const list = currentBookmarks;
+    const idx = list.findIndex((b) => b.addr === fn.addr);
+    if (idx >= 0) {
+      updateBookmarks(list.filter((_, i) => i !== idx));
+      setToast("bookmark removed");
+    } else {
+      updateBookmarks([...list, { addr: fn.addr }]);
+      setToast("bookmarked");
+    }
+  }, [currentBookmarks, updateBookmarks]);
 
   const navBack = useCallback(() => {
     if (histIdx <= 0 || !info) return;
@@ -511,6 +615,17 @@ export default function App() {
         if (paletteOpen)    { setPaletteOpen(false);   return; }
         if (shortcutsOpen)  { setShortcutsOpen(false); return; }
         if (searchOpen)     { setSearchOpen(false);    return; }
+        if (hexOpen)        { setHexOpen(false);       return; }
+        if (symbolsOpen)    { setSymbolsOpen(false);   return; }
+        if (bookmarksOpen)  { setBookmarksOpen(false); return; }
+      }
+
+      // Ctrl+Z: undo last annotation mutation. Goes through the ref so
+      // the inner `undoLast` (declared further down) can be the actual
+      // implementation without a forward-declaration error here.
+      if (mod && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+        if (info) { e.preventDefault(); undoRef.current(); }
+        return;
       }
 
       if (e.altKey && e.key === "ArrowLeft")  { e.preventDefault(); navBack();    return; }
@@ -549,6 +664,24 @@ export default function App() {
         if (info) { e.preventDefault(); setPluginsPanelOpen((o) => !o); }
         return;
       }
+      // Ctrl+H — hex view; Ctrl+Shift+S — symbols & sections;
+      // Ctrl+B — bookmarks panel; bare "b" — toggle bookmark on current.
+      if (mod && !e.shiftKey && (e.key === "h" || e.key === "H")) {
+        if (info) { e.preventDefault(); setHexOpen((o) => !o); }
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === "S")) {
+        if (info) { e.preventDefault(); setSymbolsOpen((o) => !o); }
+        return;
+      }
+      if (mod && (e.key === "b" || e.key === "B")) {
+        if (info) { e.preventDefault(); setBookmarksOpen((o) => !o); }
+        return;
+      }
+      if (!inInput && !mod && !e.altKey && !e.shiftKey && (e.key === "b" || e.key === "B")) {
+        if (current) { e.preventDefault(); toggleBookmark(current); }
+        return;
+      }
       if (mod && (e.key === "[" || e.key === "{")) { e.preventDefault(); navBack(); return; }
       if (mod && (e.key === "]" || e.key === "}")) { e.preventDefault(); navForward(); return; }
 
@@ -585,7 +718,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, shortcutsOpen, navBack, navForward, current]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, navBack, navForward, current, toggleBookmark]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
   // Pseudo-C views also get local-rename substitution applied on top
@@ -624,15 +757,57 @@ export default function App() {
   }, [info, fnByAddr, navigateTo]);
 
   // Annotation mutations
-  const writeAnnotations = useCallback(async (a: Annotations) => {
+  const writeAnnotations = useCallback(async (a: Annotations, opts?: { skipUndo?: boolean }) => {
+    // Push current state to the undo stack BEFORE replacing it so
+    // Ctrl+Z restores exactly what was visible. Cap the stack so
+    // long-running sessions don't grow unbounded.
+    if (!opts?.skipUndo) {
+      undoStackRef.current.push(annotations);
+      if (undoStackRef.current.length > 80) undoStackRef.current.shift();
+    }
     setAnnotations(a);
     // Renames and signature changes flow into pseudo-C output via the
     // CLI's --annotations file, so cached function bodies are stale
     // after any mutation. Drop them so the next view reload picks up
     // the fresh names.
     clearRendererCaches();
-    if (info) await saveAnnotations(info.path, a).catch(() => {});
+    if (info) {
+      setSaveState("saving");
+      try {
+        await saveAnnotations(info.path, a);
+        setSaveState("saved");
+        window.setTimeout(() => setSaveState((s) => s === "saved" ? "idle" : s), 1500);
+      } catch {
+        setSaveState("error");
+      }
+    }
+  }, [info, annotations]);
+
+  // Restore the previous annotations snapshot. The current state is
+  // pushed onto a redo stack — but we keep this minimal (undo only)
+  // since rename / note mutations are quick to redo by hand.
+  const undoLast = useCallback(() => {
+    const prev = undoStackRef.current.pop();
+    if (!prev) {
+      setToast("nothing to undo");
+      return;
+    }
+    setAnnotations(prev);
+    clearRendererCaches();
+    if (info) {
+      setSaveState("saving");
+      saveAnnotations(info.path, prev)
+        .then(() => {
+          setSaveState("saved");
+          window.setTimeout(() => setSaveState((s) => s === "saved" ? "idle" : s), 1500);
+        })
+        .catch(() => setSaveState("error"));
+    }
+    setToast("undone");
   }, [info]);
+
+  // Keep the keyboard-handler ref pointed at the latest `undoLast`.
+  useEffect(() => { undoRef.current = undoLast; }, [undoLast]);
 
   const cloneAnn = useCallback((): Annotations => ({
     renames:      { ...annotations.renames    },
@@ -766,9 +941,30 @@ export default function App() {
   const canBack    = histIdx > 0;
   const canForward = histIdx < history.length - 1;
 
+  // Drag-and-drop: accept a binary path drop anywhere on the window.
+  // Electron exposes the absolute path via dataTransfer.files[0].path,
+  // which we route through the same `setBinary + openBinaryAt` chain
+  // as the picker.
+  const dragHandlers = useMemo(() => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes("Files")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }
+    },
+    onDrop: async (e: React.DragEvent) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      const dropped = (file as File & { path?: string })?.path;
+      if (!dropped) return;
+      try { await window.ember.setBinary(dropped); await openBinaryAt(dropped); }
+      catch (err: unknown) { setError((err as Error).message); }
+    },
+  }), [openBinaryAt]);
+
   if (!info) {
     return (
-      <>
+      <div {...dragHandlers} style={{ height: "100%" }}>
         <Welcome
           onOpen={handleOpen}
           loading={loading}
@@ -782,12 +978,12 @@ export default function App() {
             onDismiss={() => dismissReleaseUpdate(releaseUpdate)}
           />
         )}
-      </>
+      </div>
     );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <div {...dragHandlers} style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* Title bar */}
       <div
         style={{
@@ -815,8 +1011,66 @@ export default function App() {
           <span style={{ fontFamily: serif, fontStyle: "italic", color: C.textFaint }}>
             / {info.path.split("/").pop()}
           </span>
+          <SavePip state={saveState} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={() => setHexOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Hex view (Ctrl+H)"
+            aria-label="Open hex view"
+          >
+            <span>hex</span>
+            <span style={{ color: C.textFaint }}>⌃H</span>
+          </button>
+          <button
+            onClick={() => setSymbolsOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Symbols & sections (Ctrl+Shift+S)"
+            aria-label="Open symbols and sections"
+          >
+            <span>symbols</span>
+            <span style={{ color: C.textFaint }}>⇧⌃S</span>
+          </button>
+          <button
+            onClick={() => setBookmarksOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Bookmarks (Ctrl+B)"
+            aria-label="Open bookmarks panel"
+          >
+            <span>bookmarks</span>
+            {currentBookmarks.length > 0 && (
+              <span style={{ color: C.accent }}>{currentBookmarks.length}</span>
+            )}
+            <span style={{ color: C.textFaint }}>⌃B</span>
+          </button>
           <button
             onClick={() => setStringsOpen(true)}
             style={{
@@ -830,6 +1084,7 @@ export default function App() {
               ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
             }}
             title="Strings (Ctrl+T)"
+            aria-label="Open strings"
           >
             <span>strings</span>
             <span style={{ color: C.textFaint }}>⌃T</span>
@@ -956,6 +1211,7 @@ export default function App() {
           annotations={annotations}
           functionsLoading={functionsLoading}
           currentAddr={current?.addrNum ?? null}
+          width={settings.sidebarWidth}
           onSelect={(f) => navigateTo(f)}
           onOpen={(f, v) => { navigateTo(f); setView(v); }}
           onReopen={handleOpen}
@@ -964,6 +1220,15 @@ export default function App() {
           onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
           onExport={handleExport}
           onImport={handleImport}
+        />
+        <ResizeHandle
+          edge="right"
+          width={settings.sidebarWidth}
+          min={220}
+          max={600}
+          ariaLabel="Resize sidebar"
+          onChange={(px) => setSettings((s) => ({ ...s, sidebarWidth: px }))}
+          onCommit={() => saveSettings(settings)}
         />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {packedWarning && packedDismissedFor !== info.path && (
@@ -1016,6 +1281,20 @@ export default function App() {
               >dismiss</button>
             </div>
           )}
+          <Breadcrumb
+            history={history}
+            histIdx={histIdx}
+            fnByAddr={fnByAddr}
+            annotations={annotations}
+            onJumpTo={(idx) => {
+              const addr = history[idx];
+              const fn = fnByAddr.get(addr);
+              if (!fn) return;
+              navigatingRef.current = true;
+              setHistIdx(idx);
+              setCurrent(fn);
+            }}
+          />
           <FunctionHeader current={current} annotations={annotations} arities={arities} />
           <Tabs view={view} setView={setView} />
           {error ? (
@@ -1049,11 +1328,23 @@ export default function App() {
             />
           )}
         </div>
+        {xrefsOpen && (
+          <ResizeHandle
+            edge="left"
+            width={settings.xrefsWidth}
+            min={200}
+            max={520}
+            ariaLabel="Resize references panel"
+            onChange={(px) => setSettings((s) => ({ ...s, xrefsWidth: px }))}
+            onCommit={() => saveSettings(settings)}
+          />
+        )}
         <XrefsPanel
           info={info}
           current={current}
           xrefs={xrefs}
           annotations={annotations}
+          width={settings.xrefsWidth}
           onSelect={(f) => navigateTo(f)}
           onToggle={() => setXrefsOpen((x) => !x)}
           open={xrefsOpen}
@@ -1226,6 +1517,34 @@ export default function App() {
           onClose={() => setPatching(null)}
         />
       )}
+      {hexOpen && (
+        <HexView
+          info={info}
+          current={current}
+          onClose={() => setHexOpen(false)}
+        />
+      )}
+      {symbolsOpen && (
+        <SymbolsView
+          info={info}
+          annotations={annotations}
+          onSelect={(f) => navigateTo(f)}
+          onClose={() => setSymbolsOpen(false)}
+        />
+      )}
+      {bookmarksOpen && (
+        <BookmarksPanel
+          info={info}
+          bookmarks={currentBookmarks}
+          annotations={annotations}
+          onSelect={(f) => { navigateTo(f); setBookmarksOpen(false); }}
+          onRemove={(addr) => updateBookmarks(currentBookmarks.filter((b) => b.addr !== addr))}
+          onRename={(addr, label) => updateBookmarks(currentBookmarks.map(
+            (b) => b.addr === addr ? { ...b, label: label || undefined } : b))}
+          onClose={() => setBookmarksOpen(false)}
+        />
+      )}
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
       {releaseUpdate && (
         <ReleaseUpdatePopup
           status={releaseUpdate}
@@ -1233,6 +1552,59 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+function SavePip(props: { state: "idle" | "saving" | "saved" | "error" }) {
+  if (props.state === "idle") return null;
+  const colour = props.state === "error" ? C.red
+                 : props.state === "saving" ? C.yellow
+                 : C.green;
+  const label  = props.state === "error" ? "save failed"
+                 : props.state === "saving" ? "saving…"
+                 : "saved";
+  return (
+    <span
+      title={label}
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        fontFamily: mono, fontSize: 9, color: colour,
+        animation: props.state === "saving" ? "pulse 1.4s ease-in-out infinite" : undefined,
+      }}
+    >
+      <span style={{
+        width: 6, height: 6, borderRadius: 3, background: colour,
+      }} />
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function Toast(props: { message: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = window.setTimeout(props.onDone, 1700);
+    return () => window.clearTimeout(t);
+  }, [props]);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: "fixed",
+        bottom: 36, left: "50%",
+        transform: "translateX(-50%)",
+        padding: "6px 14px",
+        background: C.bgAlt,
+        border: `1px solid ${C.borderStrong}`,
+        borderRadius: 999,
+        fontFamily: mono, fontSize: 11, color: C.textWarm,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+        zIndex: 2300,
+        animation: "fadeIn .15s ease-out",
+      }}
+    >{props.message}</div>
   );
 }
 

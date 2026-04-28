@@ -10,6 +10,17 @@
 
 const STORAGE_KEY = "ember.settings.v1";
 
+// Per-binary view state: which function was last open, scroll position,
+// view mode, plus user bookmarks. Keyed by absolute binary path so
+// switching back to a previous binary restores where you were.
+export type PerBinaryState = {
+  lastFunctionAddr?: string;
+  lastView?: "pseudo" | "asm" | "cfg" | "ir" | "ssa";
+  bookmarks?: { addr: string; label?: string }[];
+};
+
+export type ThemeMode = "warm" | "dark" | "light";
+
 export type AppSettings = {
   // CFG view's default body mode. The graph itself has a per-tab
   // toggle that overrides this for the current selection.
@@ -22,6 +33,17 @@ export type AppSettings = {
   // affect CFG graph node bodies — those are sized by the layout
   // algorithm and trying to scale them breaks layout reasoning.
   codeFontSize: number;
+  // Monospace font family for code panes. Free-form so users can pin a
+  // locally-installed font; we fall back to the system stack if the
+  // chosen family isn't available.
+  codeFontFamily: string;
+  // Color theme. "warm" = the original (charcoal + earth tones).
+  // "dark" = cooler near-black. "light" = parchment.
+  theme: ThemeMode;
+  // Sidebar width in pixels (drag handle on the right edge persists).
+  sidebarWidth: number;
+  // References panel width in pixels (drag handle on its left edge).
+  xrefsWidth: number;
   // Poll GitHub Releases and surface a small notice when a newer tagged
   // app release exists.
   releaseUpdatePopup: boolean;
@@ -40,17 +62,32 @@ export type AppSettings = {
   // on by default to make Rich Presence safe-by-default. When off, the
   // binary file name and current function are visible to friends.
   discordHideBinaryName: boolean;
+  // Last binary opened — restored automatically on next launch unless
+  // the file has been moved or deleted.
+  lastBinary: string;
+  // Per-binary view state (last function, bookmarks, ...).
+  binaryState: Record<string, PerBinaryState>;
+  // Resume the last binary on launch. Off by default for first-run users
+  // since they may want to choose. Becomes default-on after first open.
+  resumeOnLaunch: boolean;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
   cfgDefaultMode: "pseudo",
   showBbLabels:   false,
   codeFontSize:   12,
+  codeFontFamily: "'JetBrains Mono','SF Mono','Fira Code',monospace",
+  theme:          "warm",
+  sidebarWidth:   288,
+  xrefsWidth:     260,
   releaseUpdatePopup: true,
   seenReleaseTag: "",
   seenTutorial:   false,
   discordRichPresence:   true,
   discordHideBinaryName: true,
+  lastBinary:     "",
+  binaryState:    {},
+  resumeOnLaunch: true,
 };
 
 export function loadSettings(): AppSettings {

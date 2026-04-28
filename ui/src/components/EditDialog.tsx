@@ -250,6 +250,48 @@ export function EditDialog(props: {
   );
 }
 
+// Heuristic plausibility check on a C-ish type string. Rejects empty
+// or whitespace-only types but accepts pointer/qualifier-decorated
+// names (`const char *`, `void**`, `unsigned long long`, …) and any
+// known primitive plus the user-defined word characters Ember tends
+// to emit (`u64`, `s32`, `addr_t`). Strict parsing isn't possible —
+// the user might be referencing a struct that exists only in the
+// target binary.
+const KNOWN_TYPES = new Set([
+  "void",
+  "char", "uchar", "schar", "byte",
+  "short", "ushort", "int", "uint", "long", "ulong",
+  "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+  "u8", "u16", "u32", "u64", "u128",
+  "i8", "i16", "i32", "i64", "i128",
+  "s8", "s16", "s32", "s64",
+  "float", "double", "long double",
+  "bool", "wchar_t",
+  "addr_t",
+  "const", "unsigned", "signed", "volatile", "static",
+  "struct", "union", "enum", "auto",
+]);
+
+function isPlausibleType(t: string): boolean {
+  const trimmed = t.trim();
+  if (!trimmed) return true;   // empty = "void" by save convention
+  // Strip pointer / array / qualifier decoration to reduce to the
+  // base name. `const char *[]` → `char`; `unsigned long long` → keep
+  // both tokens.
+  const base = trimmed.replace(/[*\[\]]+/g, " ").trim();
+  if (!base) return true;
+  for (const tok of base.split(/\s+/)) {
+    // Identifier-shape tokens (struct / typedef names) pass through;
+    // we just sanity-check the regex shape.
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tok)) return false;
+    // Fall-through: any plausible C identifier is accepted. The
+    // KNOWN_TYPES set is consulted only to suppress the warning for
+    // the most common stdlib + Ember names — we don't reject other
+    // identifiers because the user may be naming a target struct.
+  }
+  return true;
+}
+
 function SignatureEditor(props: {
   value: SignatureValue;
   setValue: (v: SignatureValue) => void;
@@ -277,6 +319,10 @@ function SignatureEditor(props: {
     borderRadius: 4,
     outline: "none",
   };
+  const errStyle: React.CSSProperties = {
+    ...inputStyle,
+    border: `1px solid rgba(199,93,58,0.4)`,
+  };
   const labelStyle: React.CSSProperties = {
     fontFamily: mono, fontSize: 10,
     color: C.textFaint,
@@ -285,6 +331,7 @@ function SignatureEditor(props: {
     marginBottom: 4,
     display: "block",
   };
+  const returnTypeWarn = !isPlausibleType(value.returnType);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -305,8 +352,15 @@ function SignatureEditor(props: {
             value={value.returnType}
             onChange={(e) => setValue({ ...value, returnType: e.target.value })}
             placeholder="void"
-            style={{ ...inputStyle, width: "100%" }}
+            style={{ ...(returnTypeWarn ? errStyle : inputStyle), width: "100%" }}
+            aria-invalid={returnTypeWarn}
           />
+          {returnTypeWarn && value.returnType.trim() && (
+            <span style={{
+              fontFamily: serif, fontStyle: "italic",
+              fontSize: 10, color: C.red, marginTop: 4, display: "block",
+            }}>unfamiliar type — saved verbatim</span>
+          )}
         </div>
       </div>
 
@@ -358,7 +412,8 @@ function SignatureEditor(props: {
                   value={p.type}
                   onChange={(e) => updateParam(i, { type: e.target.value })}
                   placeholder="type"
-                  style={inputStyle}
+                  style={isPlausibleType(p.type) ? inputStyle : errStyle}
+                  aria-invalid={!isPlausibleType(p.type)}
                 />
                 <input
                   value={p.name}

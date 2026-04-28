@@ -8,11 +8,12 @@ export function XrefsPanel(props: {
   current: FunctionInfo | null;
   xrefs: Xrefs;
   annotations: Annotations;
+  width?: number;
   onSelect: (fn: FunctionInfo) => void;
   onToggle: () => void;
   open: boolean;
 }) {
-  const { info, current, xrefs, annotations, onSelect, onToggle, open } = props;
+  const { info, current, xrefs, annotations, width, onSelect, onToggle, open } = props;
 
   const byAddr = useMemo(() => {
     const m = new Map<number, FunctionInfo>();
@@ -26,6 +27,7 @@ export function XrefsPanel(props: {
         data-tutorial="xrefs"
         onClick={onToggle}
         title="Show references"
+        aria-label="Show references panel"
         style={{
           width: 28,
           background: C.bgAlt,
@@ -114,7 +116,7 @@ export function XrefsPanel(props: {
     <div
       data-tutorial="xrefs"
       style={{
-        width: 260,
+        width: width ?? 260,
         background: C.bgAlt,
         borderLeft: `1px solid ${C.border}`,
         display: "flex",
@@ -147,6 +149,7 @@ export function XrefsPanel(props: {
         <button
           onClick={onToggle}
           title="Hide"
+          aria-label="Hide references panel"
           style={{ color: C.textFaint, fontSize: 14 }}
         >×</button>
       </div>

@@ -663,6 +663,19 @@ export function CallGraphView(props: {
           </div>
 
           <div style={{ flex: 1 }} />
+          <button
+            onClick={() => exportSvgAsPng(svgRef.current,
+              info.path.split("/").pop()?.replace(/\.[^.]+$/, "") || "callgraph")}
+            title="Export as PNG"
+            aria-label="Export call graph as PNG"
+            style={{
+              padding: "3px 10px",
+              fontFamily: mono, fontSize: 10, color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+            }}
+          >png</button>
           <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
             drag to pan · wheel to zoom · esc closes
           </span>
@@ -795,6 +808,56 @@ function HopButton(props: { onClick: () => void; label: string }) {
 
 function hexAddr(n: number): string {
   return "0x" + n.toString(16);
+}
+
+// Export the call graph SVG as a PNG. Uses an `<img>` + canvas roundtrip
+// so the rendered SVG is rasterised by the browser — no headless layout
+// pass required. Triggered by the "png" button in the panel header.
+async function exportSvgAsPng(svg: SVGSVGElement | null, baseName: string): Promise<void> {
+  if (!svg) return;
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  // Pull width/height from the rendered element's bounding box so the
+  // PNG matches what the user sees (SVG element might be styled with %).
+  const rect = svg.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width));
+  const h = Math.max(1, Math.round(rect.height));
+  clone.setAttribute("width",  String(w));
+  clone.setAttribute("height", String(h));
+  // Inline a background so transparent regions don't render black on
+  // image-viewers that paint a default backdrop.
+  const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  bg.setAttribute("x", "0");
+  bg.setAttribute("y", "0");
+  bg.setAttribute("width",  String(w));
+  bg.setAttribute("height", String(h));
+  bg.setAttribute("fill", "#141413");
+  clone.insertBefore(bg, clone.firstChild);
+  const xml  = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise<void>((resolve, reject) => {
+      img.onload  = () => resolve();
+      img.onerror = () => reject(new Error("svg→img load failed"));
+      img.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width  = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `${baseName || "callgraph"}.png`;
+    a.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";

@@ -134,7 +134,25 @@ private:
     mutable std::unordered_map<addr_t, std::vector<addr_t>> indirect_edges_;
 };
 
+// Optional knobs for `load_binary`. Today only PE binaries care:
+//
+//   pdb_path : when non-empty, the loader skips its sidecar
+//              auto-discovery (which scans the embedded CodeView name
+//              and the conventional `<binary>.pdb` paths) and uses
+//              this PDB instead. Useful for binaries built on a
+//              different host where the embedded path is wrong.
+//   no_pdb   : suppress PDB ingestion entirely. The binary still
+//              loads with whatever names the PE / ELF carried; PDB
+//              type information will not be available.
+struct LoadOptions {
+    std::filesystem::path pdb_path;
+    bool                  no_pdb = false;
+};
+
 [[nodiscard]] Result<std::unique_ptr<Binary>>
 load_binary(const std::filesystem::path& path);
+
+[[nodiscard]] Result<std::unique_ptr<Binary>>
+load_binary(const std::filesystem::path& path, const LoadOptions& opts);
 
 }  // namespace ember

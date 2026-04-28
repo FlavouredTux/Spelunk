@@ -35,7 +35,10 @@ load_binary_from_args(const ember::cli::Args& args) {
         if (!rr) return std::unexpected(std::move(rr).error());
         return std::unique_ptr<ember::Binary>(std::move(*rr));
     }
-    return ember::load_binary(args.binary);
+    ember::LoadOptions opts;
+    if (!args.pdb_path.empty()) opts.pdb_path = args.pdb_path;
+    opts.no_pdb = args.no_pdb;
+    return ember::load_binary(args.binary, opts);
 }
 
 }  // namespace

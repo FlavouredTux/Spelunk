@@ -52,16 +52,18 @@ export function CodeView(props: {
   }, [props.onRenameLocal]);
 
   const handleFnContext = useMemo(() => {
-    if (!props.fnByAddr || !(props.onRename || props.onAddNote || props.onEditSignature)) {
-      return undefined;
-    }
+    // Always available now that the menu's first item ("Go to function")
+    // is unconditional. Without this, right-click on a call target
+    // showed the browser's default menu when no rename/note callbacks
+    // happened to be wired up.
+    if (!props.fnByAddr) return undefined;
     return (addr: number, ev: React.MouseEvent) => {
       const fn = props.fnByAddr!.get(addr);
       if (!fn) return;
       ev.preventDefault();
       setFnCtx({ x: ev.clientX, y: ev.clientY, fn });
     };
-  }, [props.fnByAddr, props.onRename, props.onAddNote, props.onEditSignature]);
+  }, [props.fnByAddr]);
 
   const buildFnMenu = (fn: FunctionInfo): MenuItem[] => {
     const ann = props.annotations;
@@ -72,7 +74,10 @@ export function CodeView(props: {
       { kind: "header",
         label: ann ? displayName(fn, ann) : demangle(fn.name),
         meta:  `${fn.addr}  ·  ${formatSize(fn.size)}` },
+      { kind: "item", label: "Go to function", hint: "↵",
+        onClick: () => props.onXref(fn.addrNum) },
     ];
+    items.push({ kind: "sep" });
     if (props.onRename) items.push({
       kind: "item", label: hasRename ? "Rename…" : "Rename…",
       onClick: () => props.onRename!(fn),

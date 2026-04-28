@@ -25,6 +25,7 @@ import { Shortcuts } from "./components/Shortcuts";
 import { HexView } from "./components/HexView";
 import { SymbolsView } from "./components/SymbolsView";
 import { BookmarksPanel } from "./components/BookmarksPanel";
+import { BulkRenameDialog } from "./components/BulkRenameDialog";
 import type { Bookmark } from "./components/BookmarksPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { Breadcrumb } from "./components/Breadcrumb";
@@ -173,8 +174,13 @@ export default function App() {
   const [pluginsPanelOpen, setPluginsPanelOpen] = useState(false);
   const [patchesOpen, setPatchesOpen] = useState(false);
   const [hexOpen, setHexOpen] = useState(false);
+  // Optional starting vaddr for the next HexView open. Set when the
+  // palette falls through with an address that doesn't map to a
+  // function — HexView's auto-jump logic picks it up on mount.
+  const [hexInitialVaddr, setHexInitialVaddr] = useState<number | null>(null);
   const [symbolsOpen, setSymbolsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [bulkRenameOpen, setBulkRenameOpen] = useState(false);
   // Dirty indicator: pulses when annotations are mid-flight to disk so
   // the user can see saves are happening. "saved" sticks for ~1.5s
   // after each successful write so single edits also flash.
@@ -643,6 +649,7 @@ export default function App() {
         if (hexOpen)        { setHexOpen(false);       return; }
         if (symbolsOpen)    { setSymbolsOpen(false);   return; }
         if (bookmarksOpen)  { setBookmarksOpen(false); return; }
+        if (bulkRenameOpen) { setBulkRenameOpen(false); return; }
       }
 
       // Ctrl+Z: undo last annotation mutation. Goes through the ref so
@@ -732,6 +739,48 @@ export default function App() {
         return;
       }
 
+      // Ctrl+Shift+R: open bulk-rename modal. Mirrors the .ember
+      // pattern-rename surface so users don't have to hand-edit a
+      // script file for "rename every sub_*" style sweeps.
+      if (mod && e.shiftKey && (e.key === "r" || e.key === "R")) {
+        if (info) { e.preventDefault(); setBulkRenameOpen(true); }
+        return;
+      }
+
+      // Ctrl+Shift+C: copy current code body to clipboard. Cheaper than
+      // mouse-selecting a 2000-line pseudo-C dump and avoids the
+      // line-number column polluting the result.
+      if (mod && e.shiftKey && (e.key === "c" || e.key === "C")) {
+        if (info && code) {
+          e.preventDefault();
+          navigator.clipboard.writeText(code).then(
+            () => setToast(`copied ${view} as text`),
+            () => setToast("clipboard unavailable"),
+          );
+        }
+        return;
+      }
+
+      // Code-pane font zoom. Ctrl+= and Ctrl+- act on settings.codeFontSize
+      // so the change persists; Ctrl+0 resets to the default. Both `=`
+      // and `+` map to zoom-in because the unmodified key on US layouts
+      // is `=`; Shift+= is `+` and many users still hit it that way.
+      if (mod && !e.altKey && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        patchSettings({ codeFontSize: Math.min(24, settings.codeFontSize + 1) });
+        return;
+      }
+      if (mod && !e.altKey && e.key === "-") {
+        e.preventDefault();
+        patchSettings({ codeFontSize: Math.max(9, settings.codeFontSize - 1) });
+        return;
+      }
+      if (mod && !e.altKey && e.key === "0") {
+        e.preventDefault();
+        patchSettings({ codeFontSize: 12 });
+        return;
+      }
+
       // View switches
       if (!inInput && !mod && !e.altKey && !e.shiftKey) {
         if (e.key === "p") { setView("pseudo"); return; }
@@ -743,7 +792,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, navBack, navForward, current, toggleBookmark]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
   // Pseudo-C views also get local-rename substitution applied on top
@@ -1032,6 +1081,21 @@ export default function App() {
         >
           <NavArrow dir="back"    enabled={canBack}    onClick={navBack}    />
           <NavArrow dir="forward" enabled={canForward} onClick={navForward} />
+          {history.length > 1 && (
+            <NavHistoryDropdown
+              history={history}
+              histIdx={histIdx}
+              fnByAddr={fnByAddr}
+              annotations={annotations}
+              onPick={(addr) => {
+                const fn = fnByAddr.get(addr);
+                if (!fn) return;
+                navigatingRef.current = true;
+                setHistIdx(history.indexOf(addr));
+                setCurrent(fn);
+              }}
+            />
+          )}
           <span style={{ color: C.text, fontWeight: 600 }}>Ember</span>
           <span style={{ fontFamily: serif, fontStyle: "italic", color: C.textFaint }}>
             / {info.path.split("/").pop()}
@@ -1095,6 +1159,24 @@ export default function App() {
               <span style={{ color: C.accent }}>{currentBookmarks.length}</span>
             )}
             <span style={{ color: C.textFaint }}>⌃B</span>
+          </button>
+          <button
+            onClick={() => setBulkRenameOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Bulk rename (Ctrl+Shift+R)"
+            aria-label="Open bulk rename dialog"
+          >
+            <span>rename</span>
+            <span style={{ color: C.textFaint }}>⇧⌃R</span>
           </button>
           <button
             onClick={() => setStringsOpen(true)}
@@ -1321,7 +1403,14 @@ export default function App() {
             }}
           />
           {current
-            ? <FunctionHeader current={current} annotations={annotations} arities={arities} />
+            ? <FunctionHeader
+                current={current}
+                annotations={annotations}
+                arities={arities}
+                code={code}
+                view={view}
+                onToast={setToast}
+              />
             : <SkelFunctionHeader />
           }
           <Tabs view={view} setView={setView} />
@@ -1391,6 +1480,13 @@ export default function App() {
           functions={paletteFunctions}
           annotations={annotations}
           onSelect={(f) => navigateTo(f)}
+          onJumpAddress={(v) => {
+            // Palette accepts hex addresses that don't match a function
+            // start — open the hex view at the typed vaddr instead of
+            // silently doing nothing.
+            setHexInitialVaddr(v);
+            setHexOpen(true);
+          }}
           onClose={() => setPaletteOpen(false)}
         />
       )}
@@ -1554,7 +1650,8 @@ export default function App() {
         <HexView
           info={info}
           current={current}
-          onClose={() => setHexOpen(false)}
+          initialVaddr={hexInitialVaddr}
+          onClose={() => { setHexOpen(false); setHexInitialVaddr(null); }}
         />
       )}
       {symbolsOpen && (
@@ -1575,6 +1672,18 @@ export default function App() {
           onRename={(addr, label) => updateBookmarks(currentBookmarks.map(
             (b) => b.addr === addr ? { ...b, label: label || undefined } : b))}
           onClose={() => setBookmarksOpen(false)}
+        />
+      )}
+      {bulkRenameOpen && (
+        <BulkRenameDialog
+          info={info}
+          annotations={annotations}
+          onApply={(next, count) => {
+            writeAnnotations(next);
+            setBulkRenameOpen(false);
+            setToast(`renamed ${count} function${count === 1 ? "" : "s"}`);
+          }}
+          onClose={() => setBulkRenameOpen(false)}
         />
       )}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
@@ -1785,6 +1894,122 @@ function ReleaseUpdatePopup(props: {
   );
 }
 
+// Popover that lists the navigation history with the current entry
+// marked. Lets the user jump arbitrarily far in either direction
+// without spamming Alt+arrow. Closes on outside click / Esc.
+function NavHistoryDropdown(props: {
+  history: number[];
+  histIdx: number;
+  fnByAddr: Map<number, FunctionInfo>;
+  annotations: Annotations;
+  onPick: (addr: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("mousedown", onMouseDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Navigation history"
+        aria-label="Open navigation history"
+        style={{
+          width: 18, height: 22,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: open ? C.text : C.textMuted,
+          background: open ? C.bgMuted : "transparent",
+          borderRadius: 3,
+          fontSize: 9,
+          cursor: "pointer",
+          ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+        }}
+      >▾</button>
+      {open && (
+        <div style={{
+          position: "absolute",
+          top: 26, left: 0,
+          minWidth: 280, maxWidth: 460,
+          maxHeight: 320, overflowY: "auto",
+          background: C.bgAlt,
+          border: `1px solid ${C.borderStrong}`,
+          borderRadius: 6,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+          zIndex: 1500,
+          padding: 4,
+        }}>
+          <div style={{
+            padding: "6px 10px",
+            fontFamily: sans, fontSize: 10, fontWeight: 600,
+            color: C.textMuted,
+            textTransform: "uppercase", letterSpacing: 0.8,
+            borderBottom: `1px solid ${C.border}`,
+            marginBottom: 4,
+          }}>navigation history</div>
+          {props.history.slice().reverse().map((addr, ri) => {
+            const i = props.history.length - 1 - ri;
+            const isCurrent = i === props.histIdx;
+            const fn = props.fnByAddr.get(addr);
+            const name = fn ? displayName(fn, props.annotations) : `0x${addr.toString(16)}`;
+            return (
+              <button
+                key={`${addr}-${i}`}
+                onClick={() => { props.onPick(addr); setOpen(false); }}
+                disabled={!fn}
+                style={{
+                  width: "100%",
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  background: isCurrent ? C.bgDark : "transparent",
+                  border: `1px solid ${isCurrent ? C.borderStrong : "transparent"}`,
+                  textAlign: "left",
+                  cursor: fn ? "pointer" : "default",
+                  opacity: fn ? 1 : 0.5,
+                }}
+                onMouseEnter={(e) => {
+                  if (!isCurrent && fn) (e.currentTarget as HTMLElement).style.background = C.bgMuted;
+                }}
+                onMouseLeave={(e) => {
+                  if (!isCurrent) (e.currentTarget as HTMLElement).style.background = "transparent";
+                }}
+              >
+                <span style={{
+                  width: 10, color: isCurrent ? C.accent : C.textFaint,
+                  fontFamily: mono, fontSize: 10,
+                }}>{isCurrent ? "›" : ""}</span>
+                <span style={{
+                  fontFamily: mono, fontSize: 10,
+                  color: isCurrent ? C.accent : C.textFaint,
+                  width: 84, flexShrink: 0,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>0x{addr.toString(16)}</span>
+                <span style={{
+                  flex: 1, minWidth: 0,
+                  fontFamily: sans, fontSize: 12,
+                  color: isCurrent ? C.text : C.textWarm,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>{name}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NavArrow(props: { dir: "back" | "forward"; enabled: boolean; onClick: () => void }) {
   const [hover, setHover] = useState(false);
   return (
@@ -1816,8 +2041,12 @@ function FunctionHeader(props: {
   current: FunctionInfo | null;
   annotations: Annotations;
   arities: Arities;
+  code: string;
+  onToast: (msg: string) => void;
+  view: ViewKind;
 }) {
   const c = props.current;
+  const [copied, setCopied] = useState(false);
   if (!c) return null;
   const dn = displayName(c, props.annotations);
   const isRenamed = !!props.annotations.renames[c.addr];
@@ -1921,6 +2150,32 @@ function FunctionHeader(props: {
       >
         {demangle(c.name)}
       </span>
+      <div style={{ flex: 1 }} />
+      <button
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(props.code);
+            setCopied(true);
+            props.onToast(`copied ${props.view} as text`);
+            setTimeout(() => setCopied(false), 1200);
+          } catch {
+            props.onToast("clipboard unavailable");
+          }
+        }}
+        disabled={!props.code}
+        title="Copy current view as text (Ctrl+Shift+C)"
+        aria-label="Copy current view as text"
+        style={{
+          padding: "3px 9px",
+          fontFamily: mono, fontSize: 10,
+          color: copied ? C.accent : C.textMuted,
+          background: C.bgMuted,
+          border: `1px solid ${C.border}`,
+          borderRadius: 4,
+          cursor: props.code ? "pointer" : "default",
+          opacity: props.code ? 1 : 0.4,
+        }}
+      >{copied ? "copied" : "copy"}</button>
     </div>
   );
 }

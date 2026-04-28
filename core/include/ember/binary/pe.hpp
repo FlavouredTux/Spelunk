@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <span>
 #include <string>
@@ -10,6 +12,7 @@
 
 #include <ember/binary/binary.hpp>
 #include <ember/binary/pe_view.hpp>
+#include <ember/common/annotations.hpp>
 #include <ember/common/error.hpp>
 
 namespace ember {
@@ -55,8 +58,30 @@ public:
     // success when the PDB has no resolvable publics, an error on
     // parse / I/O failure). Resolves (segment, offset) pairs to
     // absolute VAs using image_base() + sections_[seg-1].vaddr + offset.
+    //
+    // Side effect: also harvests procedure type information from the
+    // PDB's TPI stream and stores per-VA FunctionSigs (queryable via
+    // `pdb_signatures()`). Globals (S_GDATA32 / S_LDATA32) are absorbed
+    // as Object-kind symbols.
     [[nodiscard]] Result<std::size_t>
     attach_pdb_from_path(const std::filesystem::path& path);
+
+    // Per-function signature harvested from the PDB's TPI stream,
+    // keyed by absolute VA. Empty when no PDB has been attached or
+    // the attached PDB had no TPI / procedure type entries. Consumers
+    // (subcommands.cpp) merge these into the user-facing Annotations
+    // map, with explicit user signatures still winning on conflict.
+    [[nodiscard]] const std::map<addr_t, FunctionSig>&
+    pdb_signatures() const noexcept { return pdb_signatures_; }
+
+    // GUID + age of the most-recently-attached PDB. The PE binary's
+    // CodeView record carries the same fields; mismatch means the PDB
+    // belongs to a different build of the binary. Both empty when no
+    // PDB has been attached.
+    [[nodiscard]] std::array<u8, 16> pdb_guid() const noexcept { return pdb_guid_; }
+    [[nodiscard]] u32                pdb_age()  const noexcept { return pdb_age_; }
+    [[nodiscard]] const std::filesystem::path&
+    attached_pdb_path() const noexcept { return attached_pdb_path_; }
 
 private:
     explicit PeBinary(std::vector<std::byte> buffer) noexcept
@@ -138,6 +163,10 @@ private:
     std::vector<Symbol>        symbols_;
     std::vector<DataDirectory> data_dirs_;
     std::string                pdb_filename_;
+    std::map<addr_t, FunctionSig>     pdb_signatures_;
+    std::array<u8, 16>                pdb_guid_{};
+    u32                               pdb_age_ = 0;
+    std::filesystem::path             attached_pdb_path_;
 };
 
 }  // namespace ember

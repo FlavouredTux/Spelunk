@@ -7,6 +7,10 @@ export function CommandPalette(props: {
   functions: FunctionInfo[];
   annotations?: Annotations;
   onSelect: (fn: FunctionInfo) => void;
+  // Optional handler for "fall through" hex addresses that don't match
+  // any function start. App wires this to open the hex view at the
+  // typed address — letting the palette double as a goto-vaddr dialog.
+  onJumpAddress?: (vaddr: number) => void;
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -15,6 +19,18 @@ export function CommandPalette(props: {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => inputRef.current?.focus(), []);
+
+  // Parse the input as a hex address if it looks like one. Used to add
+  // a synthetic "open hex view at 0x…" row when the typed value
+  // doesn't exactly match a function start.
+  const parsedVaddr: number | null = useMemo(() => {
+    const t = q.trim();
+    if (!t) return null;
+    const m = /^(?:0x)?([0-9a-fA-F]+)$/.exec(t);
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [q]);
 
   const results = useMemo(() => {
     const needle = q.toLowerCase().trim();
@@ -44,6 +60,17 @@ export function CommandPalette(props: {
     return scored;
   }, [q, props.functions]);
 
+  // Show the synthetic "jump to address" row when the input parses as
+  // a hex value AND the user has supplied the goto handler. We always
+  // surface it (even if a function happens to start at that addr) so
+  // typing `0x4047b3` with no matching function still gives the user
+  // a way out — opening the hex view at exactly that byte.
+  const showAddressRow =
+    parsedVaddr != null && !!props.onJumpAddress;
+  // Combined index space for keyboard navigation: row 0 is the
+  // synthetic jump-to-addr row when present, then the function list.
+  const totalRows = (showAddressRow ? 1 : 0) + results.length;
+
   useEffect(() => setIdx(0), [q]);
 
   // Scroll selection into view
@@ -57,14 +84,19 @@ export function CommandPalette(props: {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setIdx((i) => Math.min(i + 1, results.length - 1));
+        setIdx((i) => Math.min(i + 1, totalRows - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setIdx((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
-        const r = results[idx];
+        e.preventDefault();
+        if (showAddressRow && idx === 0) {
+          props.onJumpAddress!(parsedVaddr!);
+          props.onClose();
+          return;
+        }
+        const r = results[idx - (showAddressRow ? 1 : 0)];
         if (r) {
-          e.preventDefault();
           props.onSelect(r);
           props.onClose();
         }
@@ -75,7 +107,7 @@ export function CommandPalette(props: {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [results, idx, props]);
+  }, [results, idx, props, showAddressRow, parsedVaddr, totalRows]);
 
   return (
     <div
@@ -132,7 +164,7 @@ export function CommandPalette(props: {
           </span>
         </div>
         <div ref={listRef} style={{ overflowY: "auto", flex: 1, padding: 4 }}>
-          {results.length === 0 && (
+          {totalRows === 0 && (
             <div style={{
               padding: "32px 18px", textAlign: "center",
               fontFamily: serif, fontStyle: "italic", color: C.textFaint, fontSize: 13,
@@ -140,8 +172,48 @@ export function CommandPalette(props: {
               {q ? "no matches" : "type to search"}
             </div>
           )}
+          {showAddressRow && (() => {
+            const active = idx === 0;
+            const v = parsedVaddr!;
+            return (
+              <button
+                key="__jump_addr__"
+                onClick={() => { props.onJumpAddress!(v); props.onClose(); }}
+                onMouseEnter={() => setIdx(0)}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "8px 14px",
+                  borderRadius: 4,
+                  background: active ? C.bgDark : "transparent",
+                  border: `1px solid ${active ? C.borderStrong : "transparent"}`,
+                  textAlign: "left",
+                  marginBottom: 1,
+                }}
+              >
+                <span style={{
+                  fontFamily: mono, fontSize: 10,
+                  color: active ? C.accent : C.textFaint,
+                  width: 76, flexShrink: 0,
+                }}>0x{v.toString(16)}</span>
+                <span style={{
+                  flex: 1,
+                  fontFamily: serif, fontStyle: "italic",
+                  fontSize: 13, color: active ? C.text : C.textWarm,
+                }}>
+                  open hex view at this address
+                </span>
+                <span style={{
+                  fontFamily: mono, fontSize: 9, color: C.textFaint,
+                }}>hex</span>
+              </button>
+            );
+          })()}
           {results.map((f, i) => {
-            const active = i === idx;
+            const rowIdx = i + (showAddressRow ? 1 : 0);
+            const active = rowIdx === idx;
             const dem = demangle(f.name);
             const dn = displayName(f, props.annotations);
             const isRenamed = dn !== dem && dn !== f.name;
@@ -149,7 +221,7 @@ export function CommandPalette(props: {
               <button
                 key={f.addr + "-" + i}
                 onClick={() => { props.onSelect(f); props.onClose(); }}
-                onMouseEnter={() => setIdx(i)}
+                onMouseEnter={() => setIdx(rowIdx)}
                 style={{
                   width: "100%",
                   display: "flex",

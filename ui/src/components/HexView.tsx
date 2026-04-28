@@ -11,9 +11,13 @@ const OVERSCAN_ROWS = 40;
 export function HexView(props: {
   info: BinaryInfo;
   current: FunctionInfo | null;
+  // Optional override for the auto-jump target. When set, the view
+  // jumps here on first open instead of `current`. Used by the
+  // palette's "open hex view at 0x…" fall-through.
+  initialVaddr?: number | null;
   onClose: () => void;
 }) {
-  const { info, current, onClose } = props;
+  const { info, current, initialVaddr, onClose } = props;
 
   const [totalSize, setTotalSize] = useState(0);
   // File-offset of the visible window's first byte. Drives reads and
@@ -30,6 +34,16 @@ export function HexView(props: {
   const [jumpInput, setJumpInput] = useState("");
   const [jumpAsVaddr, setJumpAsVaddr] = useState(true);
   const [jumpError, setJumpError] = useState<string | null>(null);
+
+  // Pattern search state. Pattern is the user-visible string, results
+  // are file offsets sorted ascending. Capped to keep the result list
+  // usable when a pattern is too generic.
+  const [pattern, setPattern] = useState("");
+  const [patternError, setPatternError] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [hits, setHits] = useState<number[]>([]);
+  const [scannedPct, setScannedPct] = useState(0);
+  const searchAbortRef = useRef<{ cancel: boolean }>({ cancel: false });
 
   // Boot: get the file size so we know how far we can scroll.
   useEffect(() => {
@@ -108,6 +122,99 @@ export function HexView(props: {
     return "—";
   }, [info.sections]);
 
+  // Compile a `48 8b ?? c3` style pattern into an array of byte
+  // matchers. `null` slots mean "any byte" — wildcards. Whitespace is
+  // free; hex pairs must be 2 characters. Returns null on parse error.
+  const compilePattern = (raw: string): Array<number | null> | null => {
+    const tokens = raw.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return null;
+    const out: Array<number | null> = [];
+    for (const t of tokens) {
+      if (t === "??" || t === "?" || t === "*") { out.push(null); continue; }
+      if (!/^[0-9a-fA-F]{2}$/.test(t)) return null;
+      out.push(parseInt(t, 16));
+    }
+    return out;
+  };
+
+  const runPatternSearch = useCallback(async (raw: string) => {
+    setPatternError(null);
+    setHits([]);
+    const compiled = compilePattern(raw);
+    if (!compiled) {
+      setPatternError("expected hex pairs separated by spaces (e.g. `48 8b ?? c3`)");
+      return;
+    }
+    if (compiled.length > 256) {
+      setPatternError("pattern too long (max 256 bytes)");
+      return;
+    }
+    if (totalSize === 0) return;
+
+    // Cancel any outstanding search and start a new one. Stream-scan
+    // through the file in CHUNK-sized reads with a (compiled.length-1)
+    // byte overlap so matches across chunk boundaries aren't missed.
+    searchAbortRef.current.cancel = true;
+    const token = { cancel: false };
+    searchAbortRef.current = token;
+    setSearching(true);
+    setScannedPct(0);
+    const CHUNK = 1 << 20;   // 1 MB per IPC round-trip
+    const overlap = compiled.length - 1;
+    const found: number[] = [];
+    const HIT_CAP = 500;
+    try {
+      for (let off = 0; off < totalSize; off += CHUNK - overlap) {
+        if (token.cancel) return;
+        const want = Math.min(CHUNK, totalSize - off);
+        const r = await readBytes(off, want);
+        if (token.cancel) return;
+        const buf = r.bytes;
+        const limit = buf.length - compiled.length + 1;
+        outer: for (let i = 0; i < limit; i++) {
+          for (let j = 0; j < compiled.length; j++) {
+            const want = compiled[j];
+            if (want != null && buf[i + j] !== want) continue outer;
+          }
+          found.push(off + i);
+          if (found.length >= HIT_CAP) break;
+        }
+        setScannedPct(Math.min(100, Math.floor(((off + want) / totalSize) * 100)));
+        setHits(found.slice());
+        if (found.length >= HIT_CAP) {
+          setPatternError(`stopped at ${HIT_CAP} hits — pattern is too generic`);
+          break;
+        }
+        if (r.eof) break;
+      }
+    } finally {
+      if (!token.cancel) setSearching(false);
+    }
+  }, [totalSize]);
+
+  // Map a file offset back to a vaddr by scanning sections — same
+  // simple approximation we use elsewhere in this file. Used to label
+  // pattern-match hits with a vaddr column when possible.
+  const offsetToBestVaddr = useCallback((offset: number): string => {
+    // Walk loaded segments first; falls back to "—" if nothing covers
+    // this offset.
+    for (const s of info.sections) {
+      const v = parseInt(s.vaddr, 16);
+      const sz = parseInt(s.size, 16);
+      if (!Number.isFinite(v) || !Number.isFinite(sz)) continue;
+      if (offset >= v && offset < v + sz) return "0x" + offset.toString(16);
+    }
+    return "—";
+  }, [info.sections]);
+
+  const jumpToFoff = useCallback((foff: number) => {
+    if (foff < 0 || foff >= totalSize) return;
+    if (scrollerRef.current) {
+      const row = Math.floor(foff / ROW_BYTES);
+      scrollerRef.current.scrollTop = row * ROW_PX - viewH / 3;
+    }
+  }, [totalSize, viewH]);
+
   const jump = useCallback(async (raw: string) => {
     setJumpError(null);
     const trimmed = raw.trim();
@@ -128,21 +235,23 @@ export function HexView(props: {
       setJumpError(`offset 0x${(foff ?? 0).toString(16)} out of range`);
       return;
     }
-    if (scrollerRef.current) {
-      const row = Math.floor(foff / ROW_BYTES);
-      scrollerRef.current.scrollTop = row * ROW_PX - viewH / 3;
-    }
-  }, [jumpAsVaddr, totalSize, viewH]);
+    jumpToFoff(foff);
+  }, [jumpAsVaddr, totalSize, jumpToFoff]);
 
-  // Auto-jump to current function on first open.
+  // Auto-jump on first open. Prefer the explicit initialVaddr (set by
+  // the palette's goto-address fall-through) over the currently-selected
+  // function. Either way we land somewhere meaningful; without this the
+  // view defaults to offset 0 which is rarely what you wanted.
   const sentRef = useRef(false);
   useEffect(() => {
     if (sentRef.current) return;
     if (totalSize === 0) return;
-    if (!current) return;
+    const target = initialVaddr ?? (current ? current.addrNum : null);
+    if (target == null) return;
     sentRef.current = true;
-    jump("0x" + current.addrNum.toString(16));
-  }, [totalSize, current, jump]);
+    jump("0x" + target.toString(16));
+    setJumpInput("0x" + target.toString(16));
+  }, [totalSize, current, initialVaddr, jump]);
 
   return (
     <div
@@ -233,6 +342,107 @@ export function HexView(props: {
             }}
           >close</button>
         </div>
+
+        {/* Byte-pattern search bar. Hex pairs separated by spaces with
+            `??` wildcards. Hit list appears below when matches arrive. */}
+        <div style={{
+          padding: "8px 18px",
+          borderBottom: `1px solid ${C.border}`,
+          background: C.bgAlt,
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
+            pattern
+          </span>
+          <input
+            value={pattern}
+            onChange={(e) => { setPattern(e.target.value); setPatternError(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") runPatternSearch(pattern); }}
+            placeholder="48 8b ?? c3"
+            style={{
+              flex: 1,
+              fontFamily: mono, fontSize: 12, color: C.text,
+              padding: "4px 8px",
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`, borderRadius: 4,
+            }}
+          />
+          <button
+            onClick={() => runPatternSearch(pattern)}
+            disabled={searching}
+            style={{
+              padding: "4px 12px",
+              fontFamily: mono, fontSize: 10, color: C.accent,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`, borderRadius: 4,
+              opacity: searching ? 0.6 : 1,
+            }}
+          >{searching ? `${scannedPct}%` : "find"}</button>
+          {searching && (
+            <button
+              onClick={() => { searchAbortRef.current.cancel = true; setSearching(false); }}
+              style={{
+                padding: "4px 10px",
+                fontFamily: mono, fontSize: 10, color: C.textMuted,
+                background: C.bgMuted,
+                border: `1px solid ${C.border}`, borderRadius: 4,
+              }}
+            >stop</button>
+          )}
+          {hits.length > 0 && !searching && (
+            <span style={{
+              fontFamily: mono, fontSize: 10, color: C.textFaint,
+              minWidth: 64, textAlign: "right",
+            }}>{hits.length} hit{hits.length === 1 ? "" : "s"}</span>
+          )}
+        </div>
+
+        {patternError && (
+          <div style={{
+            padding: "6px 18px",
+            background: "rgba(199,93,58,0.06)",
+            borderBottom: "1px solid rgba(199,93,58,0.14)",
+            fontFamily: mono, fontSize: 10, color: C.red,
+          }}>{patternError}</div>
+        )}
+
+        {hits.length > 0 && (
+          <div style={{
+            maxHeight: 144, overflowY: "auto",
+            background: C.bgMuted,
+            borderBottom: `1px solid ${C.border}`,
+          }}>
+            {hits.map((foff, i) => (
+              <button
+                key={`${foff}-${i}`}
+                onClick={() => jumpToFoff(foff)}
+                style={{
+                  width: "100%",
+                  display: "flex", alignItems: "center", gap: 14,
+                  padding: "4px 18px",
+                  background: "transparent",
+                  borderBottom: `1px solid ${C.border}`,
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = C.bgAlt; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+              >
+                <span style={{
+                  fontFamily: mono, fontSize: 10, color: C.textFaint,
+                  width: 44, textAlign: "right",
+                }}>#{i + 1}</span>
+                <span style={{
+                  fontFamily: mono, fontSize: 11, color: C.accent,
+                  width: 132,
+                }}>foff 0x{foff.toString(16)}</span>
+                <span style={{
+                  fontFamily: mono, fontSize: 11, color: C.textWarm,
+                }}>{offsetToBestVaddr(foff)}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {jumpError && (
           <div style={{

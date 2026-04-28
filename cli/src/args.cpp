@@ -47,6 +47,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--functions", &Args::functions},
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
+    {"",   "--no-pdb",    &Args::no_pdb},
     {"",   "--full-analysis", &Args::full_analysis},
     {"",   "--dump-types", &Args::dump_types},
     {"",   "--labels",    &Args::labels},
@@ -75,6 +76,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--count",       &Args::disasm_count},
     {"",   "--apply-patches", &Args::apply_patches},
     {"",   "--apply",       &Args::apply_ember},
+    {"",   "--pdb",         &Args::pdb_path},
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
 });

@@ -1,17 +1,21 @@
 #include <ember/analysis/pipeline.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <mutex>
 #include <optional>
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <ember/analysis/discovery.hpp>
 #include <ember/analysis/objc.hpp>
@@ -550,37 +554,110 @@ format_struct(const Binary& b, const FuncWindow& w,
 }
 
 std::vector<CallEdge> compute_call_graph(const Binary& b) {
-    std::vector<CallEdge> out;
     auto dec_r = make_decoder(b);
-    if (!dec_r) return out;
+    if (!dec_r) return {};
     const Decoder& dec = **dec_r;
-    const CfgBuilder builder(b, dec);
 
-    std::size_t candidates = 0;
+    // Pre-collect work items so worker threads can binary-walk an
+    // index instead of skipping over imports / data symbols.
+    struct WorkItem {
+        addr_t      addr;
+        std::string name;
+    };
+    std::vector<WorkItem> work;
+    work.reserve(b.symbols().size());
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.size == 0 || s.name.empty()) continue;
-        ++candidates;
+        work.push_back({s.addr, s.name});
     }
-    const auto tick = std::max<std::size_t>(1, candidates / 20);
-    std::size_t done = 0;
-    const bool show = candidates >= 500 && progress_enabled();
+    if (work.empty()) return {};
 
-    for (const auto& s : b.symbols()) {
-        if (s.is_import) continue;
-        if (s.kind != SymbolKind::Function) continue;
-        if (s.size == 0 || s.name.empty()) continue;
-        auto fn_r = builder.build(s.addr, s.name);
-        ++done;
-        if (show && (done % tick == 0 || done == candidates)) {
-            std::fprintf(stderr, "\r  call graph: [%zu/%zu]", done, candidates);
-            std::fflush(stderr);
+    // CfgBuilder caches per-function unwind ranges in a mutable map
+    // and isn't thread-safe; give each worker its own. The Binary +
+    // Decoder are read-only and shared.
+    const std::size_t total = work.size();
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    // Cap at 8 — beyond that the binary's I/O cache becomes the
+    // bottleneck and extra threads just bounce cache lines. Also cap
+    // by work size to avoid spawning idle threads for tiny binaries.
+    const std::size_t worker_count =
+        std::min<std::size_t>({static_cast<std::size_t>(hw), 8u, total});
+    if (worker_count <= 1) {
+        // Fall back to the simple serial loop. Avoids the thread-spawn
+        // overhead on small binaries where it dominates.
+        std::vector<CallEdge> out;
+        const CfgBuilder builder(b, dec);
+        const bool show = total >= 500 && progress_enabled();
+        const auto tick = std::max<std::size_t>(1, total / 20);
+        std::size_t done = 0;
+        for (const auto& w : work) {
+            auto fn_r = builder.build(w.addr, w.name);
+            ++done;
+            if (show && (done % tick == 0 || done == total)) {
+                std::fprintf(stderr, "\r  call graph: [%zu/%zu]", done, total);
+                std::fflush(stderr);
+            }
+            if (!fn_r) continue;
+            for (auto t : fn_r->call_targets) out.push_back({w.addr, t});
         }
-        if (!fn_r) continue;
-        for (auto t : fn_r->call_targets) out.push_back({s.addr, t});
+        if (show) std::fputc('\n', stderr);
+        return out;
     }
+
+    // Parallel worker pool — each worker pops indices from a shared
+    // atomic counter and accumulates edges into its own buffer. The
+    // CfgBuilder is per-thread because it lazily caches unwind ranges
+    // in a map that isn't safe to populate concurrently.
+    std::atomic<std::size_t> next{0};
+    std::atomic<std::size_t> done{0};
+    std::vector<std::vector<CallEdge>> per_thread(worker_count);
+
+    const bool show = total >= 500 && progress_enabled();
+    std::mutex log_mu;     // serialize the carriage-return progress line
+    const auto tick = std::max<std::size_t>(1, total / 20);
+
+    auto worker = [&](std::size_t idx) {
+        CfgBuilder builder(b, dec);
+        auto& sink = per_thread[idx];
+        sink.reserve(total / worker_count + 16);
+        while (true) {
+            const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
+            if (i >= total) break;
+            const auto& w = work[i];
+            auto fn_r = builder.build(w.addr, w.name);
+            const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (show && (d % tick == 0 || d == total)) {
+                std::lock_guard lk(log_mu);
+                std::fprintf(stderr, "\r  call graph: [%zu/%zu]", d, total);
+                std::fflush(stderr);
+            }
+            if (!fn_r) continue;
+            for (auto t : fn_r->call_targets) sink.push_back({w.addr, t});
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(worker_count);
+    for (std::size_t i = 0; i < worker_count; ++i) {
+        threads.emplace_back(worker, i);
+    }
+    for (auto& t : threads) t.join();
     if (show) std::fputc('\n', stderr);
+
+    // Merge per-thread buffers into the output. Order isn't observable
+    // by callers — every consumer sorts/dedupes — so a simple
+    // concatenation works.
+    std::size_t total_edges = 0;
+    for (const auto& v : per_thread) total_edges += v.size();
+    std::vector<CallEdge> out;
+    out.reserve(total_edges);
+    for (auto& v : per_thread) {
+        out.insert(out.end(),
+                   std::make_move_iterator(v.begin()),
+                   std::make_move_iterator(v.end()));
+    }
     return out;
 }
 
@@ -637,7 +714,22 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
     // single high-entropy executable section will usually produce
     // garbage targets. Section-level filtering catches that case
     // without needing the binary-level heuristic to fire.
+    //
+    // Cache the encrypted-section verdict by Section pointer — without
+    // this cache, `section_looks_encrypted(*sec)` runs the O(n) entropy
+    // sweep over the whole section once per discovered prologue
+    // (~24 k hits on a 14 MB Roblox-shaped DLL = ~336 GB of byte
+    // processing). Dominates cold open by two orders of magnitude.
     const auto& sections = b.sections();
+    std::unordered_map<const Section*, bool> encrypted_cache;
+    auto is_encrypted_cached = [&](const Section* s) -> bool {
+        if (auto it = encrypted_cache.find(s); it != encrypted_cache.end()) {
+            return it->second;
+        }
+        const bool v = section_looks_encrypted(*s);
+        encrypted_cache.emplace(s, v);
+        return v;
+    };
     auto section_for = [&](addr_t a) -> const Section* {
         for (const auto& s : sections) {
             // "Code-shaped" — either flagged exec or named .text /
@@ -658,7 +750,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
         if (index.count(a)) return;
         const Section* sec = section_for(a);
         if (!sec) return;
-        if (mode == EnumerateMode::Auto && section_looks_encrypted(*sec)) return;
+        if (mode == EnumerateMode::Auto && is_encrypted_cached(sec)) return;
         index.emplace(a, out.size());
         out.push_back({a, 0, std::format("{}_{:x}", label, a),
                        DiscoveredFunction::Kind::Sub});
@@ -680,7 +772,15 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
     // never decompile. Skip pass 2 — the user can pass --full-analysis
     // if they want it anyway. Pass 1.5 above already gave us anything
     // recoverable from the unencrypted parts of the image.
-    if (mode == EnumerateMode::Auto && binary_looks_packed(b)) {
+    //
+    // `Cheap` callers (resolve_containing_function on per-function CLI
+    // invocations) bail here unconditionally — they only need a
+    // best-effort "is this a function entry?" answer, and the call-
+    // graph walk costs minutes on big DLLs. Sidebar-driven UI
+    // workflows always pass exact entries from a prior `--functions`
+    // pass, so the answers we get from Pass 1 + 1.5 are sufficient.
+    if (mode == EnumerateMode::Cheap ||
+        (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
         std::sort(out.begin(), out.end(),
                   [](const auto& x, const auto& y) { return x.addr < y.addr; });
         return out;
@@ -1011,10 +1111,15 @@ compute_classified_callees(const Binary& b, addr_t fn) {
 
 std::optional<ContainingFn>
 containing_function(const Binary& b, addr_t addr) {
-    // Build a sorted (start → DiscoveredFunction) index once per call.
-    // enumerate_functions already dedupes and sorts; copy into a pair
-    // vector so we can binary-search by start.
-    const auto fns = enumerate_functions(b);
+    // Cheap mode: Pass 1 (defined symbols) + Pass 1.5 (vtable + x64
+    // prologue sweep). On a non-packed 16 MB DLL with ~27 k entries
+    // the full call-graph walk is ~2 minutes; the cheap subset takes
+    // milliseconds and covers every entry that ships in PE .pdata
+    // (already absorbed into the symbol table) plus every prologue-
+    // shaped function start. The CLI's `--functions` pass still
+    // populates the UI sidebar with the full call-graph result;
+    // resolving a click back through here doesn't need to redo it.
+    const auto fns = enumerate_functions(b, EnumerateMode::Cheap);
     if (fns.empty()) return std::nullopt;
 
     // `fns` is already sorted by addr ascending. upper_bound finds the

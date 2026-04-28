@@ -1,8 +1,10 @@
 #include <ember/analysis/discovery.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -130,9 +132,40 @@ std::vector<addr_t> discover_from_vtables(const Binary& b) {
     return out;
 }
 
+// Sweep one section's bytes for prologue patterns. Pure function — no
+// shared state — so the parallel driver can have N copies running on
+// disjoint chunks of the same section without coordination.
+[[nodiscard]] static std::vector<addr_t>
+sweep_section_chunk(std::span<const std::byte> data, addr_t base,
+                    std::size_t off_begin, std::size_t off_end,
+                    const X64Decoder& dec) {
+    std::vector<addr_t> hits;
+    if (off_end > data.size()) off_end = data.size();
+    if (off_end < 8) return hits;
+    off_end -= 7;     // need 8 bytes available for a candidate
+    for (std::size_t off = off_begin; off < off_end; ++off) {
+        const auto cand = data.subspan(off);
+        if (!looks_like_prologue(cand)) continue;
+        if (!validates_as_function_start(dec, cand, base + off)) continue;
+        hits.push_back(base + off);
+    }
+    return hits;
+}
+
 std::vector<addr_t> discover_from_prologues(const Binary& b) {
-    std::vector<addr_t> out;
-    X64Decoder dec;
+    // Sweeping one byte at a time across a multi-MB executable section
+    // dominates cold-open time (~136s on a 16 MB DLL). The work is
+    // perfectly parallelizable: each candidate position is independent,
+    // and the X64Decoder is stateless once constructed. Split each
+    // section's bytes into chunks and run them concurrently.
+    //
+    // Chunks DO need to overlap by the maximum prologue-match length
+    // (a few bytes) so a candidate that straddles a chunk boundary
+    // isn't dropped. We use a conservative 16-byte overlap.
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    const std::size_t target_workers = std::min<std::size_t>(hw, 8u);
+
+    std::vector<std::vector<addr_t>> per_section_hits;
 
     for (const auto& s : b.sections()) {
         if (!section_is_code(s)) continue;
@@ -144,20 +177,68 @@ std::vector<addr_t> discover_from_prologues(const Binary& b) {
 
         const auto data = s.data;
         const auto base = s.vaddr;
-        // Sweep at every byte offset. x64 instructions aren't
-        // length-aligned, but function entries usually are 16-byte
-        // aligned by MSVC; we still check every offset because
-        // - tail-merged functions can sit at non-16-aligned offsets
-        // - linkers occasionally pack with /align:1 for size
-        for (std::size_t off = 0; off + 8 <= data.size(); ++off) {
-            const auto cand = data.subspan(off);
-            if (!looks_like_prologue(cand)) continue;
-            if (!validates_as_function_start(dec, cand, base + off)) continue;
-            out.push_back(base + off);
+        // Tiny sections (or low core counts) — just sweep serially.
+        constexpr std::size_t kSerialThreshold = 1 << 20;     // 1 MB
+        if (data.size() < kSerialThreshold || target_workers <= 1) {
+            X64Decoder dec;
+            per_section_hits.push_back(
+                sweep_section_chunk(data, base, 0, data.size(), dec));
+            continue;
         }
+
+        // Partition into target_workers chunks. Each chunk overlaps
+        // the next by `kOverlap` bytes so that a prologue split across
+        // a chunk boundary still gets matched (the second-chunk worker
+        // re-checks the boundary).
+        constexpr std::size_t kOverlap = 16;
+        const std::size_t total = data.size();
+        const std::size_t chunk = (total + target_workers - 1) / target_workers;
+        std::vector<std::vector<addr_t>> chunk_hits(target_workers);
+        std::vector<std::thread> threads;
+        threads.reserve(target_workers);
+        for (std::size_t i = 0; i < target_workers; ++i) {
+            const std::size_t begin = i * chunk;
+            const std::size_t raw_end = std::min(total, (i + 1) * chunk);
+            // Last chunk: don't extend past `total`. Earlier chunks:
+            // extend by overlap so we cover candidates that begin
+            // within `kOverlap` bytes of the boundary.
+            const std::size_t end = (i + 1 == target_workers)
+                ? raw_end
+                : std::min(total, raw_end + kOverlap);
+            threads.emplace_back([&, i, begin, end]() {
+                X64Decoder dec;
+                chunk_hits[i] = sweep_section_chunk(data, base, begin, end, dec);
+            });
+        }
+        for (auto& t : threads) t.join();
+
+        // Merge into one section vector — order doesn't matter,
+        // dedup happens below.
+        std::size_t total_hits = 0;
+        for (const auto& v : chunk_hits) total_hits += v.size();
+        std::vector<addr_t> merged;
+        merged.reserve(total_hits);
+        for (auto& v : chunk_hits) {
+            merged.insert(merged.end(),
+                          std::make_move_iterator(v.begin()),
+                          std::make_move_iterator(v.end()));
+        }
+        per_section_hits.push_back(std::move(merged));
     }
 
-    // Dedup — overlapping prefix patterns can hit the same address.
+    std::vector<addr_t> out;
+    std::size_t total_hits = 0;
+    for (const auto& v : per_section_hits) total_hits += v.size();
+    out.reserve(total_hits);
+    for (auto& v : per_section_hits) {
+        out.insert(out.end(),
+                   std::make_move_iterator(v.begin()),
+                   std::make_move_iterator(v.end()));
+    }
+
+    // Dedup — overlapping prefix patterns can hit the same address,
+    // and adjacent chunks may both have produced the same hit in
+    // their overlap region.
     std::unordered_set<addr_t> seen;
     seen.reserve(out.size());
     auto write = out.begin();

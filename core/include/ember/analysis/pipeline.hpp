@@ -88,8 +88,14 @@ discovered_kind_name(DiscoveredFunction::Kind k) noexcept {
 // binaries, individual call targets that land in high-entropy sections
 // are dropped. `Full`: bypass both gates and walk everything (the
 // indirect-call resolver wants this since it's already opted in to
-// expensive analysis).
-enum class EnumerateMode { Auto, Full };
+// expensive analysis). `Cheap`: skip pass 2 unconditionally — used
+// by `resolve_containing_function` so per-function CLI invocations
+// (`-d -s sub_X`, `-p -s sub_X`) don't pay the full call-graph
+// walk just to map a literal-VA argument back to its enclosing
+// function. Pass 1 + Pass 1.5 (vtables + prologue sweep) cover
+// every entry the user could plausibly have clicked from a sidebar
+// populated by an earlier `--functions` pass.
+enum class EnumerateMode { Auto, Full, Cheap };
 
 // Union of defined function symbols and CFG-discovered call targets,
 // deduplicated and sorted by address. PLT stubs are excluded — they're

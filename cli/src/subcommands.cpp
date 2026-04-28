@@ -27,6 +27,7 @@
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/sigs.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/pe.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/decompile/emitter.hpp>
@@ -769,6 +770,26 @@ namespace {
     return annotations;
 }
 
+// PDB-derived signature injection. PE binaries get a per-VA
+// FunctionSig map populated by attach_pdb_from_path() — pull those
+// records into the user-facing Annotations under a "user explicit
+// wins" precedence so PDB types feed the emitter (and the UI's
+// signature renderer) without ever overwriting hand-edits.
+[[nodiscard]] std::size_t merge_pdb_signatures(const Binary& b,
+                                                Annotations& annotations) {
+    const auto* pe = dynamic_cast<const PeBinary*>(&b);
+    if (pe == nullptr) return 0;
+    const auto& sigs = pe->pdb_signatures();
+    if (sigs.empty()) return 0;
+    std::size_t added = 0;
+    for (const auto& [va, sig] : sigs) {
+        // try_emplace returns (it, true) only on insertion — perfect
+        // semantics here: user explicit signature already there ⇒ skip.
+        if (annotations.signatures.try_emplace(va, sig).second) ++added;
+    }
+    return added;
+}
+
 // FLIRT-style sig matching. Loads each --pat file, runs apply_signatures
 // against the candidate function set, and merges resolved names into the
 // annotations map. User renames win on conflict — sig matches never
@@ -812,6 +833,19 @@ int run_emit(const Args& args, const Binary& b) {
         if (int rc = apply_pat_files(args, b, annotations, ann_loaded);
             rc != EXIT_SUCCESS) {
             return rc;
+        }
+    }
+
+    // Merge PDB-derived signatures (only on PE binaries that had one
+    // attached at load time). User-explicit sigs in the loaded
+    // annotations win on collision.
+    if (const std::size_t pdb_added = merge_pdb_signatures(b, annotations);
+        pdb_added > 0) {
+        ann_loaded = true;
+        if (!args.quiet) {
+            std::println(stderr,
+                "ember: pdb: {} function signature{} from TPI",
+                pdb_added, pdb_added == 1 ? "" : "s");
         }
     }
 

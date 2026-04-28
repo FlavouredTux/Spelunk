@@ -44,10 +44,19 @@ const GROUPS: Group[] = [
   {
     title: "Editing",
     rows: [
-      { keys: "N",  label: "rename current function" },
-      { keys: "⇧S", label: "edit signature" },
-      { keys: "B",  label: "bookmark current function" },
-      { keys: "⌃Z", label: "undo last rename / note / signature" },
+      { keys: "N",   label: "rename current function" },
+      { keys: "⇧S",  label: "edit signature" },
+      { keys: "B",   label: "bookmark current function" },
+      { keys: "⌃Z",  label: "undo last rename / note / signature" },
+      { keys: "⌃⇧R", label: "bulk rename (pattern)" },
+      { keys: "⌃⇧C", label: "copy current view as text" },
+    ],
+  },
+  {
+    title: "Display",
+    rows: [
+      { keys: "⌃= / ⌃-", label: "code zoom in / out" },
+      { keys: "⌃0",      label: "reset zoom" },
     ],
   },
   {

@@ -601,6 +601,13 @@ namespace ember {
 // slot gives us the import stub's VA. MSVC and clang both emit these
 // inline rather than in a dedicated section, so we scan *every* executable
 // section rather than filtering by name.
+//
+// Hot path on cold-open: a naive "decode every offset" linear sweep over
+// a 14 MB section costs ~300 ms. The opcode we're after is a fixed
+// 6-byte sequence `FF 25 disp32`, so byte-pattern-scan for `FF 25`
+// first and only fully decode the rare hits. Random byte distribution
+// puts the candidate density at ~1/65k — three orders of magnitude
+// fewer decode calls than the naive walk.
 void PeBinary::scan_iat_thunks(
     const std::unordered_map<addr_t, std::string>& got_to_name) {
     if (got_to_name.empty() || arch_ != Arch::X86_64) return;
@@ -608,37 +615,49 @@ void PeBinary::scan_iat_thunks(
     std::unordered_map<std::string, addr_t> stub_by_name;
     const X64Decoder dec;
 
+    constexpr std::byte kFF{0xFF};
+    constexpr std::byte k25{0x25};
+
     for (const auto& sec : sections_) {
         if (!sec.flags.executable) continue;
         if (sec.data.empty()) continue;
+        const auto bytes = sec.data;
+        if (bytes.size() < 6) continue;
 
-        addr_t ip = sec.vaddr;
-        std::size_t off = 0;
-        while (off < sec.data.size()) {
-            auto decoded = dec.decode(sec.data.subspan(off), ip);
-            if (!decoded) { ip += 1; off += 1; continue; }
+        // Linear byte-scan for `FF 25`. Each instruction is 6 bytes long
+        // (FF 25 + 4-byte disp32), so when we land on a real one we can
+        // resume scanning past it; when we hit a false positive (the
+        // pattern inside an unrelated instruction's bytes), we just step
+        // forward by 1.
+        const addr_t base = sec.vaddr;
+        const std::size_t end = bytes.size() - 1;
+        for (std::size_t off = 0; off < end; ++off) {
+            if (bytes[off] != kFF) continue;
+            if (bytes[off + 1] != k25) continue;
+            const addr_t ip = base + off;
+            auto decoded = dec.decode(bytes.subspan(off), ip);
+            if (!decoded) continue;
             const Instruction& insn = *decoded;
-
-            if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1) {
-                const Operand& op = insn.operands[0];
-                if (op.kind == Operand::Kind::Memory &&
-                    op.mem.base == Reg::Rip &&
-                    op.mem.index == Reg::None &&
-                    op.mem.has_disp) {
-                    const addr_t got = ip + insn.length +
-                                       static_cast<addr_t>(op.mem.disp);
-                    auto it = got_to_name.find(got);
-                    if (it != got_to_name.end()) {
-                        // First thunk wins for a given name — MSVC can
-                        // emit duplicate __imp_ thunks when a function
-                        // is called from multiple TUs with LTCG off.
-                        stub_by_name.try_emplace(it->second, ip);
-                    }
-                }
+            if (insn.mnemonic != Mnemonic::Jmp || insn.num_operands != 1) {
+                continue;
             }
-
-            ip  += insn.length;
-            off += insn.length;
+            const Operand& op = insn.operands[0];
+            if (op.kind != Operand::Kind::Memory) continue;
+            if (op.mem.base != Reg::Rip) continue;
+            if (op.mem.index != Reg::None) continue;
+            if (!op.mem.has_disp) continue;
+            const addr_t got = ip + insn.length +
+                               static_cast<addr_t>(op.mem.disp);
+            auto it = got_to_name.find(got);
+            if (it == got_to_name.end()) continue;
+            // First thunk wins for a given name — MSVC can emit
+            // duplicate __imp_ thunks when a function is called from
+            // multiple TUs with LTCG off.
+            stub_by_name.try_emplace(it->second, ip);
+            // Step past the consumed thunk. We still resume scanning
+            // immediately after it (real code can place two thunks
+            // back-to-back).
+            off += insn.length - 1;     // -1 because the for-loop adds 1
         }
     }
 
@@ -756,8 +775,17 @@ void PeBinary::sort_and_dedupe_symbols() {
 
 Result<std::size_t>
 PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
-    auto pubs = pdb::load_publics(path);
-    if (!pubs) return std::unexpected(std::move(pubs).error());
+    auto rdr = pdb::load_pdb(path);
+    if (!rdr) return std::unexpected(std::move(rdr).error());
+
+    // Stash identity + path for the consumer-side mismatch check
+    // (subcommands.cpp compares against the CodeView record). We do
+    // NOT refuse the PDB here even on mismatch — the user may have
+    // explicitly pointed --pdb at it, and a hard refusal at the
+    // loader hides the warning we'd otherwise print.
+    pdb_guid_           = rdr->info.guid;
+    pdb_age_            = rdr->info.age;
+    attached_pdb_path_  = path;
 
     // Resolve every (segment, offset) pair to an absolute VA. Keep
     // existing names — imports, exports, TLS callbacks all win on a
@@ -770,31 +798,117 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
         if (symbols_[i].addr != 0) by_addr.emplace(symbols_[i].addr, i);
     }
 
-    std::size_t added = 0;
-    for (const auto& p : *pubs) {
-        if (p.segment == 0 || p.segment > sections_.size()) continue;
-        const Section& sec = sections_[p.segment - 1];
-        const addr_t va = sec.vaddr + p.section_offset;
-        if (va < image_base_) continue;
+    auto resolve_va = [&](u16 segment, u32 offset) -> addr_t {
+        if (segment == 0 || segment > sections_.size()) return 0;
+        const Section& sec = sections_[segment - 1];
+        const addr_t va = sec.vaddr + offset;
+        return va < image_base_ ? 0 : va;
+    };
 
+    auto absorb_symbol = [&](addr_t va, std::string name, SymbolKind kind) {
+        if (va == 0 || name.empty()) return false;
         if (auto it = by_addr.find(va); it != by_addr.end()) {
             // Already named — only fill in a name on a synthesized
             // `sub_<hex>` entry so the PDB upgrade is visible.
             Symbol& existing = symbols_[it->second];
             if (existing.name.starts_with("sub_")) {
-                existing.name = p.name;
-                ++added;
+                existing.name = std::move(name);
+                return true;
             }
-            continue;
+            return false;
         }
         Symbol s;
-        s.name = p.name;
+        s.name = std::move(name);
         s.addr = va;
-        s.kind = p.is_function ? SymbolKind::Function : SymbolKind::Object;
+        s.kind = kind;
         symbols_.push_back(std::move(s));
         by_addr.emplace(va, symbols_.size() - 1);
-        ++added;
+        return true;
+    };
+
+    std::size_t added = 0;
+    for (const auto& p : rdr->publics) {
+        if (absorb_symbol(resolve_va(p.segment, p.section_offset),
+                          p.name,
+                          p.is_function ? SymbolKind::Function : SymbolKind::Object)) {
+            ++added;
+        }
     }
+    // Procs carry the same name+addr as publics for most builds, but
+    // the *_ID variants only show up here. Run them through too.
+    for (const auto& p : rdr->procs) {
+        if (absorb_symbol(resolve_va(p.segment, p.section_offset),
+                          p.name, SymbolKind::Function)) {
+            ++added;
+        }
+    }
+    // Globals: data symbols become Object-kind entries. Useful for
+    // `extern int g_log_level;` style globals showing up in the
+    // sidebar / symbols view with a real name.
+    for (const auto& g : rdr->globals) {
+        if (absorb_symbol(resolve_va(g.segment, g.section_offset),
+                          g.name, SymbolKind::Object)) {
+            ++added;
+        }
+    }
+
+    // ----- Procedure → FunctionSig harvest --------------------------
+    // For every proc symbol whose type_index points at an
+    // LF_PROCEDURE / LF_MFUNCTION record, materialize a FunctionSig
+    // (return type + arg list). Stored separately from the symbol
+    // table; subcommands.cpp merges these into the per-emit
+    // Annotations under user-explicit-still-wins precedence.
+    auto resolve_args = [&](u32 arg_list_ti, u16 expected) -> std::vector<ParamSig> {
+        std::vector<ParamSig> params;
+        const pdb::TypeRecord* al = rdr->types.lookup(arg_list_ti);
+        if (al && al->kind == pdb::TypeRecord::Kind::ArgList) {
+            params.reserve(al->arg_types.size());
+            for (std::size_t i = 0; i < al->arg_types.size(); ++i) {
+                ParamSig p;
+                p.type = rdr->types.render_type(al->arg_types[i]);
+                p.name = std::format("a{}", i + 1);
+                params.push_back(std::move(p));
+            }
+        } else if (expected > 0) {
+            // No arg list (or unparseable) — fall back to N untyped
+            // slots so we at least carry the right arity.
+            params.reserve(expected);
+            for (u16 i = 0; i < expected; ++i) {
+                ParamSig p;
+                p.type = "u64";
+                p.name = std::format("a{}", i + 1);
+                params.push_back(std::move(p));
+            }
+        }
+        return params;
+    };
+
+    pdb_signatures_.clear();
+    for (const auto& p : rdr->procs) {
+        const addr_t va = resolve_va(p.segment, p.section_offset);
+        if (va == 0) continue;
+        const pdb::TypeRecord* tr = rdr->types.lookup(p.type_index);
+        if (!tr) continue;
+        if (tr->kind != pdb::TypeRecord::Kind::Procedure &&
+            tr->kind != pdb::TypeRecord::Kind::MFunction) {
+            continue;
+        }
+        FunctionSig sig;
+        sig.return_type = rdr->types.render_type(tr->base_type);
+        sig.params      = resolve_args(tr->arg_list, tr->param_count);
+        // For member functions, prepend a synthetic `this` arg. We
+        // render it as `Class*` (or `Class const*` if the this_type
+        // is a const-qualified pointer in the PDB, but that's rare
+        // enough to skip for v1).
+        if (tr->kind == pdb::TypeRecord::Kind::MFunction && tr->class_type != 0) {
+            ParamSig th;
+            th.type = rdr->types.render_type(tr->class_type) + "*";
+            th.name = "this";
+            sig.params.insert(sig.params.begin(), std::move(th));
+        }
+        pdb_signatures_.emplace(va, std::move(sig));
+    }
+
     sort_and_dedupe_symbols();
     invalidate_caches();
     return added;

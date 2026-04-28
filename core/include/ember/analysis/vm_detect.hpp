@@ -94,10 +94,15 @@ struct HandlerClassification {
 // Classify a single handler. When `dispatch_addr` is non-zero, the
 // walk stops at that address — used for threaded handlers, where
 // the trailing dispatch shape (lea/movzx/inc/jmp) shouldn't be
-// counted as part of the body.
+// counted as part of the body. When `pc_register` is set, loads /
+// stores through that register surface in the summary as
+// "operand+disp" — semantic signal that the handler reads an
+// inline byte from the bytecode stream rather than just a
+// structural memory reference.
 [[nodiscard]] HandlerClassification
 classify_vm_handler(const Binary& b, addr_t handler_entry,
-                    addr_t dispatch_addr = 0);
+                    addr_t dispatch_addr = 0,
+                    Reg pc_register = Reg::None);
 
 // One VM, after dispatcher-level results are clustered by handler-
 // table address. Multiple dispatchers sharing a table are *the same

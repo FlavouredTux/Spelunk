@@ -298,7 +298,7 @@ namespace {
 
 HandlerClassification
 classify_vm_handler(const Binary& b, addr_t handler_entry,
-                    addr_t dispatch_addr) {
+                    addr_t dispatch_addr, Reg pc_register) {
     HandlerClassification out;
     out.entry    = handler_entry;
     out.body_end = handler_entry;
@@ -313,12 +313,18 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
     // HandlerClassification::summary at the end. We snapshot just
     // the bits we render so the captured data has no lifetime issues.
     Mnemonic    sig_arith_mn  = Mnemonic::Invalid;
+    Operand     sig_arith_op1{};
+    Operand     sig_arith_op2{};
+    u8          sig_arith_argc = 0;
     Mnemonic    sig_branch_mn = Mnemonic::Invalid;
     Mem         sig_load_mem{};
     addr_t      sig_load_rip  = 0;       bool sig_has_load  = false;
     Mem         sig_store_mem{};
     addr_t      sig_store_rip = 0;       bool sig_has_store = false;
     addr_t      sig_call_tgt  = 0;       bool sig_call_imm  = false;
+    const Reg   pc_canon = (pc_register == Reg::None)
+                              ? Reg::None
+                              : canonical_reg(pc_register);
 
     constexpr std::size_t kMaxBodyInsns = 64;
     addr_t ip = handler_entry;
@@ -457,7 +463,12 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
             }
         } else if (is_arith_family(insn.mnemonic)) {
             has_arith = true;
-            if (sig_arith_mn == Mnemonic::Invalid) sig_arith_mn = insn.mnemonic;
+            if (sig_arith_mn == Mnemonic::Invalid) {
+                sig_arith_mn   = insn.mnemonic;
+                sig_arith_argc = insn.num_operands;
+                if (insn.num_operands >= 1) sig_arith_op1 = insn.operands[0];
+                if (insn.num_operands >= 2) sig_arith_op2 = insn.operands[1];
+            }
         }
 
         ++body_insns;
@@ -479,21 +490,66 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
     else if (has_ret)    out.kind = HandlerKind::Return;
     else                 out.kind = HandlerKind::Null;
 
+    // If a Load/Store memory operand's base matches the VM's
+    // pc_register, the access is reading an inline operand from the
+    // bytecode stream — semantic signal stronger than the structural
+    // "[rdi]" the formatter would print.
+    auto is_pc_relative = [&](const Mem& m) {
+        return pc_canon != Reg::None && m.base != Reg::None &&
+               canonical_reg(m.base) == pc_canon &&
+               m.index == Reg::None;
+    };
+    auto pc_operand_summary = [](const Mem& m) {
+        if (!m.has_disp || m.disp == 0) return std::string("operand");
+        if (m.disp > 0) {
+            return std::format("operand+{:#x}", static_cast<u64>(m.disp));
+        }
+        return std::format("operand-{:#x}", static_cast<u64>(-m.disp));
+    };
+
     // Per-kind summary detail — populated only for the kind we picked.
     switch (out.kind) {
-        case HandlerKind::Arith:
-            if (sig_arith_mn != Mnemonic::Invalid) {
-                out.summary = std::string(mnemonic_name(sig_arith_mn));
+        case HandlerKind::Arith: {
+            if (sig_arith_mn == Mnemonic::Invalid) break;
+            std::string mn{mnemonic_name(sig_arith_mn)};
+            // xor reg, reg with both operands canonicalising to the
+            // same register is the "clear/zero" idiom — render it as
+            // such instead of the literal "xor rax".
+            if (sig_arith_mn == Mnemonic::Xor && sig_arith_argc == 2 &&
+                sig_arith_op1.kind == Operand::Kind::Register &&
+                sig_arith_op2.kind == Operand::Kind::Register &&
+                canonical_reg(sig_arith_op1.reg) ==
+                    canonical_reg(sig_arith_op2.reg)) {
+                out.summary = "clear";
+                break;
+            }
+            if (sig_arith_argc == 2) {
+                if (sig_arith_op2.kind == Operand::Kind::Immediate) {
+                    out.summary = std::format("{} {:#x}", mn,
+                        static_cast<u64>(sig_arith_op2.imm.value));
+                } else if (sig_arith_op2.kind == Operand::Kind::Register) {
+                    out.summary = std::format("{} {}", mn,
+                        reg_name(sig_arith_op2.reg));
+                } else {
+                    out.summary = std::move(mn);
+                }
+            } else {
+                out.summary = std::move(mn);
             }
             break;
+        }
         case HandlerKind::Load:
             if (sig_has_load) {
-                out.summary = format_mem_short(sig_load_mem, sig_load_rip);
+                out.summary = is_pc_relative(sig_load_mem)
+                    ? pc_operand_summary(sig_load_mem)
+                    : format_mem_short(sig_load_mem, sig_load_rip);
             }
             break;
         case HandlerKind::Store:
             if (sig_has_store) {
-                out.summary = format_mem_short(sig_store_mem, sig_store_rip);
+                out.summary = is_pc_relative(sig_store_mem)
+                    ? pc_operand_summary(sig_store_mem)
+                    : format_mem_short(sig_store_mem, sig_store_rip);
             }
             break;
         case HandlerKind::Branch:
@@ -567,7 +623,7 @@ std::vector<VmInstance> analyze_vms(const Binary& b) {
                 dispatch_at = it->second;
             }
             vm.handler_classes.push_back(
-                classify_vm_handler(b, h, dispatch_at));
+                classify_vm_handler(b, h, dispatch_at, vm.pc_register));
         }
     }
     return vms;

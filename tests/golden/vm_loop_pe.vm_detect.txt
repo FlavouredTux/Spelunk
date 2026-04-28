@@ -9,7 +9,7 @@ vm #1
     sub_140001080 → dispatch 0x14000109d (load 0x14000108e)
     sub_140001100 → dispatch 0x140001134 (load 0x14000110e)
   handlers (16 shown):
-    [0x00] 0x140001018 → arith add (insns=2)
+    [0x00] 0x140001018 → arith add rcx (insns=2)
     [0x01] 0x14000101c → load [rcx] (insns=2)
     [0x02] 0x140001020 → store [rcx] (insns=2)
     [0x03] 0x140001024 → return (insns=1)
@@ -62,8 +62,8 @@ vm #3
   handlers (8 shown):
     [0x00] 0x140001320 → branch jne (insns=3)
     [0x01] 0x140001328 → call 0x14000132d (insns=1)
-    [0x02] 0x140001330 → arith add (insns=2)
-    [0x03] 0x140001338 → load [rcx] (insns=2)
+    [0x02] 0x140001330 → arith add rcx (insns=2)
+    [0x03] 0x140001338 → load operand (insns=2)
     [0x04] 0x140001340 → store [rcx] (insns=2)
     [0x05] 0x140001348 → return (insns=1)
     [0x06] 0x140001350 → return (insns=1)
@@ -80,8 +80,8 @@ vm #4
   handlers (8 shown):
     [0x00] 0x140001320 → branch jne (insns=3)
     [0x01] 0x140001328 → call 0x14000132d (insns=1)
-    [0x02] 0x140001330 → arith add (insns=2)
-    [0x03] 0x140001338 → load [rcx] (insns=2)
+    [0x02] 0x140001330 → arith add rcx (insns=2)
+    [0x03] 0x140001338 → load operand (insns=2)
     [0x04] 0x140001340 → store [rcx] (insns=2)
     [0x05] 0x140001348 → return (insns=1)
     [0x06] 0x140001350 → return (insns=1)

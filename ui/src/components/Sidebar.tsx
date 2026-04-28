@@ -3,6 +3,7 @@ import { C, sans, serif, mono } from "../theme";
 import { demangle, displayName, formatSize, loadFunction } from "../api";
 import type { BinaryInfo, FunctionInfo, ViewKind, Annotations } from "../types";
 import { ContextMenu, ToastPill, type MenuItem } from "./ContextMenu";
+import { SkelSidebarRow } from "./Skeleton";
 
 export function Sidebar(props: {
   info: BinaryInfo;
@@ -295,15 +296,12 @@ export function Sidebar(props: {
         </div>
       )}
 
-      {functionsLoading && !showImports && info.functions.length === 0 && (
-        <div style={{
-          padding: "8px 14px",
-          fontFamily: mono, fontSize: 10.5, color: C.textFaint,
-        }}>
-          discovering functions…
+      {functionsLoading && !showImports && info.functions.length === 0 ? (
+        <div style={{ padding: "4px 8px 12px", flex: 1 }}>
+          {Array.from({ length: 14 }, (_, i) => <SkelSidebarRow key={i} seed={i} />)}
         </div>
-      )}
-      {/* Virtualized; 50k-symbol binaries would otherwise OOM the renderer. */}
+      ) : (
+      /* Virtualized; 50k-symbol binaries would otherwise OOM the renderer. */
       <VirtualList
         list={list}
         showImports={showImports}
@@ -317,6 +315,7 @@ export function Sidebar(props: {
           setCtx({ x: e.clientX, y: e.clientY, fn });
         }}
       />
+      )}
 
       {ctx && (
         <ContextMenu

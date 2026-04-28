@@ -28,6 +28,7 @@ import { BookmarksPanel } from "./components/BookmarksPanel";
 import type { Bookmark } from "./components/BookmarksPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { Breadcrumb } from "./components/Breadcrumb";
+import { SkelCode, SkelFunctionHeader, SkelXrefs } from "./components/Skeleton";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
@@ -1319,16 +1320,17 @@ export default function App() {
               setCurrent(fn);
             }}
           />
-          <FunctionHeader current={current} annotations={annotations} arities={arities} />
+          {current
+            ? <FunctionHeader current={current} annotations={annotations} arities={arities} />
+            : <SkelFunctionHeader />
+          }
           <Tabs view={view} setView={setView} />
           {error ? (
             <ErrorView message={error} currentView={view} onSwitchView={setView} />
           ) : !current ? (
-            <LoadingSplash
-              functionsLoading={functionsLoading}
-              pending={pending}
-              functionCount={info.functions.length}
-            />
+            <SkelCode lines={28} />
+          ) : loading && !code ? (
+            <SkelCode lines={28} />
           ) : view === "cfg" ? (
             <CfgGraph
               text={code}
@@ -1375,6 +1377,7 @@ export default function App() {
           xrefs={xrefs}
           annotations={annotations}
           width={settings.xrefsWidth}
+          loading={pending.has("xrefs")}
           onSelect={(f) => navigateTo(f)}
           onToggle={() => setXrefsOpen((x) => !x)}
           open={xrefsOpen}
@@ -1581,55 +1584,6 @@ export default function App() {
           onDismiss={() => dismissReleaseUpdate(releaseUpdate)}
         />
       )}
-    </div>
-  );
-}
-
-// Centered "we're working" indicator for the body while no function is
-// selected yet. Names every concurrent CLI run so the user knows what
-// they're waiting on rather than staring at a blank pane.
-function LoadingSplash(props: {
-  functionsLoading: boolean;
-  pending: Set<string>;
-  functionCount: number;
-}) {
-  const tags: string[] = [];
-  if (props.functionsLoading || props.functionCount === 0) tags.push("functions");
-  for (const t of props.pending) {
-    if (t === "functions") continue;
-    tags.push(t);
-  }
-  return (
-    <div style={{
-      flex: 1, display: "flex", flexDirection: "column",
-      alignItems: "center", justifyContent: "center",
-      gap: 14, background: C.bg, color: C.textMuted,
-    }}>
-      <div style={{
-        display: "flex", alignItems: "center", gap: 10,
-        fontFamily: sans, fontSize: 13, color: C.text,
-      }}>
-        <span style={{
-          width: 8, height: 8, borderRadius: 4, background: C.accent,
-          animation: "pulse 1.4s ease-in-out infinite",
-        }} />
-        <span>analyzing binary</span>
-      </div>
-      <div style={{
-        fontFamily: serif, fontStyle: "italic", fontSize: 12,
-        color: C.textFaint, maxWidth: 420, textAlign: "center", lineHeight: 1.55,
-      }}>
-        {tags.length === 0
-          ? "almost done — picking a starting function…"
-          : `running ${tags.join(", ")}`}
-      </div>
-      <div style={{
-        fontFamily: mono, fontSize: 10, color: C.textFaint,
-        marginTop: 8, maxWidth: 480, textAlign: "center", lineHeight: 1.55,
-      }}>
-        first open of a binary spawns a fresh ember CLI run for each
-        analysis stage; subsequent opens hit the on-disk cache.
-      </div>
     </div>
   );
 }

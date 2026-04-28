@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { C, sans, mono, serif } from "../theme";
 import { displayName, formatAddrHex } from "../api";
 import type { BinaryInfo, FunctionInfo, Xrefs, Annotations } from "../types";
+import { SkelXrefs } from "./Skeleton";
 
 export function XrefsPanel(props: {
   info: BinaryInfo;
@@ -9,11 +10,14 @@ export function XrefsPanel(props: {
   xrefs: Xrefs;
   annotations: Annotations;
   width?: number;
+  // True while the lazy --xrefs CLI run is in flight. Drives a
+  // skeleton view so the panel doesn't look empty mid-load.
+  loading?: boolean;
   onSelect: (fn: FunctionInfo) => void;
   onToggle: () => void;
   open: boolean;
 }) {
-  const { info, current, xrefs, annotations, width, onSelect, onToggle, open } = props;
+  const { info, current, xrefs, annotations, width, loading, onSelect, onToggle, open } = props;
 
   const byAddr = useMemo(() => {
     const m = new Map<number, FunctionInfo>();
@@ -155,6 +159,10 @@ export function XrefsPanel(props: {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" }}>
+        {loading ? (
+          <SkelXrefs />
+        ) : (
+        <>
         <SectionHeader
           label="Called by"
           count={callers.length}
@@ -168,6 +176,8 @@ export function XrefsPanel(props: {
           hint={current ? "direct call targets from this function" : ""}
         />
         {renderList(callees, "no outgoing calls", "callee")}
+        </>
+        )}
 
         {current && annotations.notes[current.addr] && (
           <>

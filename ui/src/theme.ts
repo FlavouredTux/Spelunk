@@ -175,6 +175,13 @@ function makeGlobalCSS(): string {
   @keyframes fadeIn  { from {opacity:0; transform:translateY(4px)} to {opacity:1; transform:none} }
   @keyframes slideIn { from {opacity:0; transform:translateX(-6px)} to {opacity:1; transform:none} }
   @keyframes pulse   { 0%,100% {opacity:1} 50% {opacity:.5} }
+  @keyframes shimmer { 0% { background-position: -150% 0 } 100% { background-position: 150% 0 } }
+  .ember-skel {
+    background: linear-gradient(90deg, ${C.bgMuted} 0%, ${C.bgDark} 50%, ${C.bgMuted} 100%);
+    background-size: 220% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    border-radius: 3px;
+  }
 `;
 }
 

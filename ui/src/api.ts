@@ -173,6 +173,9 @@ export async function loadFunctions(
 
 function parseFunctionsTsv(raw: string): FunctionInfo[] {
   const out: FunctionInfo[] = [];
+  // Pass 1: parse every row, collapsing kinds onto "function".
+  type Row = FunctionInfo & { rawKind: string };
+  const rows: Row[] = [];
   for (const line of raw.split("\n")) {
     if (!line) continue;
     // Columns: addr\tsize\tkind\tname — all four required.
@@ -181,18 +184,23 @@ function parseFunctionsTsv(raw: string): FunctionInfo[] {
     const addr = parts[0];
     const addrNum = parseInt(addr, 16);
     if (!Number.isFinite(addrNum)) continue;
-    // Collapse the enumeration kinds ("symbol" / "sub") onto "function"
-    // so the existing Sidebar/CommandPalette filter (`kind === "function"`)
-    // includes both. The distinction is preserved upstream (CLI TSV,
-    // scripts) where it matters; in the UI the user just wants to see
-    // every function they can jump to.
-    out.push({
-      addr,
-      addrNum,
-      size: parseInt(parts[1], 16) || 0,
-      kind: "function",
-      name: parts.slice(3).join("\t").trim(),
-    });
+    const size    = parseInt(parts[1], 16) || 0;
+    const rawKind = parts[2];
+    const name    = parts.slice(3).join("\t").trim();
+    rows.push({ addr, addrNum, size, kind: "function", name, rawKind });
+  }
+  // Pass 2: drop the spurious mid-function `sub` rows the CLI's linear
+  // sweep emits on stripped PE binaries. Every real entry has a non-
+  // zero size or is the only entry at its address; an interior byte
+  // address marked `sub` with `size=0` is just noise. Without this
+  // filter a typical Win64 .exe produces ~17K sidebar rows, ~75% of
+  // which are unnavigable placeholders.
+  const symbolAddrs = new Set<number>();
+  for (const r of rows) if (r.rawKind === "symbol") symbolAddrs.add(r.addrNum);
+  for (const r of rows) {
+    if (r.rawKind === "sub" && r.size === 0) continue;
+    if (r.rawKind === "sub" && symbolAddrs.has(r.addrNum)) continue;
+    out.push({ addr: r.addr, addrNum: r.addrNum, size: r.size, kind: r.kind, name: r.name });
   }
   return out;
 }

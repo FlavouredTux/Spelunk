@@ -16,7 +16,10 @@ namespace ember {
 
 namespace {
 
-constexpr std::size_t kMaxFunctionInsns = 512;
+// Higher than a typical function size — CFG-walking visits each
+// address at most once, but obfuscated VMs may traverse hundreds of
+// addresses across multiple basic blocks before hitting the dispatch.
+constexpr std::size_t kMaxFunctionInsns = 2048;
 constexpr std::size_t kMaxTableEntries  = 1024;
 constexpr std::size_t kMinHandlerCount  = 8;
 // A reg-load → reg-use window for the index, measured in *real* insns
@@ -128,6 +131,30 @@ struct RegLoad {
         }
     }
 
+    // Arithmetic identities: `add/sub/or/xor reg, 0` and `and reg, -1`
+    // leave the destination unchanged (flag side effects don't concern
+    // the dispatcher pattern). VMProtect-style obfuscators sprinkle
+    // these to inflate the linear instruction count between the byte-
+    // load and the dispatch.
+    if (insn.num_operands == 2 &&
+        insn.operands[0].kind == Operand::Kind::Register &&
+        insn.operands[1].kind == Operand::Kind::Immediate) {
+        const i64 v = insn.operands[1].imm.value;
+        switch (insn.mnemonic) {
+            case Mnemonic::Add:
+            case Mnemonic::Sub:
+            case Mnemonic::Or:
+            case Mnemonic::Xor:
+                if (v == 0) return true;
+                break;
+            case Mnemonic::And:
+                if (v == -1 || static_cast<u64>(v) == ~u64{0}) return true;
+                break;
+            default:
+                break;
+        }
+    }
+
     return false;
 }
 
@@ -187,8 +214,17 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
         std::array<RegLoad, static_cast<std::size_t>(Reg::Count)> reg_loads{};
         unsigned age_counter = 0;
 
+        // CFG-shaped walk: follow direct `jmp imm` to in-code targets so
+        // dispatchers split across blocks (movzx in block A, jmp [t+i*8]
+        // in block B reached via an unconditional jmp) still match.
+        // `visited` keeps a back-jump from looping forever; the rolling
+        // register state is carried across the follow without merging,
+        // which is fine since the dispatcher pattern lives in a linear
+        // chain of blocks even when obfuscators split it.
+        std::unordered_set<addr_t> visited;
         addr_t ip = sym.addr;
         for (std::size_t step = 0; step < kMaxFunctionInsns; ++step) {
+            if (!visited.insert(ip).second) break;
             auto bytes = b.bytes_at(ip);
             if (bytes.empty()) break;
             auto decoded = dec.decode(bytes, ip);
@@ -356,15 +392,49 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                 }
             }
 
-            // Stop walking past unconditional terminators — anything after
-            // a `ret` / `jmp <imm>` / `ud2` is in another basic block (or
-            // is data), and the rolling state from this block's prologue
-            // doesn't apply to it.
+            // Hard terminators — nothing past these belongs to the
+            // current execution path. int3 covers both deliberate
+            // breakpoints and the 0xCC inter-function padding MSVC /
+            // gcc / clang emit; without it the linear walk from one
+            // function's last insn would tumble into the next function
+            // and mis-attribute its dispatcher.
             if (insn.mnemonic == Mnemonic::Ret ||
                 insn.mnemonic == Mnemonic::Ud2 ||
-                insn.mnemonic == Mnemonic::Hlt) break;
-            // Don't break on a matched dispatch; some functions chain
-            // multiple dispatchers (e.g. inner+outer interpreters).
+                insn.mnemonic == Mnemonic::Hlt ||
+                insn.mnemonic == Mnemonic::Int3 ||
+                insn.mnemonic == Mnemonic::Int) break;
+
+            // Any call (direct or indirect) invalidates rolling state
+            // via Win64 / SysV caller-save semantics — rax / rcx / rdx
+            // / r8..r11 are all volatile, which is exactly the
+            // dispatcher's working set. Indirect calls were already
+            // checked for dispatch shape above; nothing more to do.
+            if (insn.mnemonic == Mnemonic::Call) break;
+
+            // Indirect jmp = control transfer with no fallthrough.
+            // Already checked for dispatch shape; if the bytes that
+            // follow happen to start a new function, that function's
+            // own scan will pick them up with the correct attribution.
+            if (insn.mnemonic == Mnemonic::Jmp &&
+                insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Memory) break;
+
+            // Direct unconditional `jmp imm`: follow the target if it
+            // resolves into a code section. The previous linear sweep
+            // walked past the jmp into whatever bytes followed (often
+            // padding / data / another function entirely), which broke
+            // detection on any dispatcher whose byte-load and jmp-table
+            // straddled a `jmp imm`. Conditional jmps stay non-followed
+            // — the path divergence isn't worth the rolling-state-merge
+            // complexity for a ~98%-shaped pattern.
+            if (insn.mnemonic == Mnemonic::Jmp &&
+                insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Relative) {
+                const addr_t tgt = insn.operands[0].rel.target;
+                if (!code.contains(tgt)) break;
+                ip = tgt;
+                continue;
+            }
 
             ip += insn.length;
         }

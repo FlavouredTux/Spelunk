@@ -63,7 +63,7 @@ def main() -> int:
     foff_pdata   = foff_rdata + FILE_ALIGN
 
     # ---- .text content -----------------------------------------------------
-    # Two functions exercise the detector:
+    # Three functions exercise the detector:
     #
     #   vm_loop @ rva_text+0x00 — the canonical clean dispatcher.
     #   vm_loop_obf @ rva_text+0x80 — same shape but with four
@@ -71,9 +71,15 @@ def main() -> int:
     #       inserted between the byte-load and the dispatch. The
     #       detector's is_semantic_nop predicate must skip them so the
     #       byte-load → dispatch reuse window doesn't blow.
-    vm_loop_rva     = rva_text + 0x00
-    handler_base_rva = vm_loop_rva + 0x18
-    vm_loop_obf_rva = rva_text + 0x80
+    #   vm_loop_split @ rva_text+0x100 — byte-load and dispatch live in
+    #       different basic blocks, joined by an unconditional `jmp imm`
+    #       with 30 bytes of int3 padding in between. The detector's
+    #       jmp-imm-follow path must walk through the jmp to the second
+    #       block to find the dispatch.
+    vm_loop_rva       = rva_text + 0x00
+    handler_base_rva  = vm_loop_rva + 0x18
+    vm_loop_obf_rva   = rva_text + 0x80
+    vm_loop_split_rva = rva_text + 0x100
 
     table_rva    = rva_rdata + 0x00
     bytecode_rva = rva_rdata + 0x80
@@ -125,9 +131,35 @@ def main() -> int:
     text += b"\xFF\x24\xC6"
     obf_size = len(text) - obf_start
 
+    # ---- pad to vm_loop_split_rva (0x100) ----
+    while len(text) < (vm_loop_split_rva - rva_text):
+        text += b"\xCC"
+
+    # ---- vm_loop_split (cross-block) ----
+    # Layout (offsets relative to vm_loop_split_rva):
+    #   0x00: lea rdi, [rip + bytecode]                7 bytes
+    #   0x07: lea rsi, [rip + handler_table]           7 bytes
+    #   0x0E: movzx eax, byte ptr [rdi]                3 bytes
+    #   0x11: jmp short +30 (eb 1e)                    2 bytes
+    #   0x13..0x30: 30 bytes of int3 padding
+    #   0x31: inc rdi                                  3 bytes
+    #   0x34: jmp qword ptr [rsi + rax*8]              3 bytes
+    split_start = len(text)
+    rip_after_lea_pc_split = vm_loop_split_rva + 7
+    text += b"\x48\x8D\x3D" + struct.pack("<i", bytecode_rva - rip_after_lea_pc_split)
+    rip_after_lea_table_split = vm_loop_split_rva + 14
+    text += b"\x48\x8D\x35" + struct.pack("<i", table_rva - rip_after_lea_table_split)
+    text += b"\x0F\xB6\x07"           # movzx eax, byte ptr [rdi]
+    text += b"\xEB\x1E"               # jmp short +30 — to offset 0x31
+    text += b"\xCC" * 30              # int3 padding (would derail a linear sweep)
+    text += b"\x48\xFF\xC7"           # inc rdi
+    text += b"\xFF\x24\xC6"           # jmp qword ptr [rsi + rax*8]
+    split_size = len(text) - split_start
+
     text_virt_size = len(text)
-    vm_loop_size     = 0x18 + 16 * 4    # PDATA range covers handlers too
-    vm_loop_obf_size = obf_size
+    vm_loop_size       = 0x18 + 16 * 4   # PDATA range covers handlers too
+    vm_loop_obf_size   = obf_size
+    vm_loop_split_size = split_size
 
     # ---- .rdata content ----------------------------------------------------
     # 16-entry handler table — each absolute VA pointing at handler_i.
@@ -152,6 +184,10 @@ def main() -> int:
     pdata += struct.pack("<III",
                          vm_loop_obf_rva,
                          vm_loop_obf_rva + vm_loop_obf_size,
+                         rva_pdata)
+    pdata += struct.pack("<III",
+                         vm_loop_split_rva,
+                         vm_loop_split_rva + vm_loop_split_size,
                          rva_pdata)
     pdata_virt_size = len(pdata)
 

@@ -9,11 +9,11 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 4
-// when vtable + prologue-sweep discovery passes landed: --functions
-// output grows substantially on stripped PE binaries, so v3 entries
-// are stale.
-inline constexpr int kVersion = 4;
+// Bump when any cached payload's on-disk format changes. Bumped to 5
+// when --vm-detect switched from one-line TSV to a multi-line per-
+// dispatcher block carrying full anatomy (opcode/pc registers, pc
+// advance, bytecode VA) — old v4 cache entries are stale.
+inline constexpr int kVersion = 5;
 
 std::filesystem::path default_dir();
 

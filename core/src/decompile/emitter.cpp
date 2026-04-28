@@ -1907,6 +1907,60 @@ struct Emitter {
         return std::format("{}[{}]", expr(base, depth + 1), off / stride);
     }
 
+    // Runtime-indexed array form: `*(T*)(base + idx * stride)` and the
+    // shift-encoded `*(T*)(base + (idx << k))` (compilers emit
+    // `idx << 3` for stride-8 access). Renders as `base[idx]` when
+    // the scale factor matches the access width — the same property
+    // try_render_array_index uses for the constant-index case.
+    // Foundation for STL-container recognition: `*(*v + i*4)` becomes
+    // `(*v)[i]` once the inner deref is rendered cleanly.
+    [[nodiscard]] std::optional<std::string>
+    try_render_runtime_array_index(const IrValue& addr, IrType t,
+                                    int depth = 0) const {
+        if (is_float_type(t)) return std::nullopt;
+        const i64 stride = static_cast<i64>(type_bits(t) / 8);
+        if (stride <= 0) return std::nullopt;
+
+        const IrInst* d = def_stripped(addr);
+        if (!d || d->op != IrOp::Add || d->src_count < 2) return std::nullopt;
+
+        // Try to spot a scaled-by-stride sub-expression on either side
+        // of the Add. Returns (base, idx) on match.
+        auto try_scale = [&](const IrValue& maybe_base,
+                             const IrValue& maybe_scaled)
+            -> std::optional<std::pair<IrValue, IrValue>> {
+            const IrInst* m = def_stripped(maybe_scaled);
+            if (!m) return std::nullopt;
+            if (m->op == IrOp::Mul && m->src_count >= 2) {
+                for (std::size_t i = 0; i < 2; ++i) {
+                    if (auto r = resolve_imm(m->srcs[i]); r && *r == stride) {
+                        return std::pair{maybe_base, m->srcs[1 - i]};
+                    }
+                }
+            } else if (m->op == IrOp::Shl && m->src_count >= 2) {
+                if (auto r = resolve_imm(m->srcs[1]);
+                    r && *r >= 0 && *r < 63 && (i64{1} << *r) == stride) {
+                    return std::pair{maybe_base, m->srcs[0]};
+                }
+            }
+            return std::nullopt;
+        };
+
+        auto pair = try_scale(d->srcs[0], d->srcs[1]);
+        if (!pair) pair = try_scale(d->srcs[1], d->srcs[0]);
+        if (!pair) return std::nullopt;
+
+        const IrValue& base = pair->first;
+        const IrValue& idx  = pair->second;
+        if (stack_offset(base).has_value()) return std::nullopt;
+        if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
+            return std::nullopt;
+        }
+        return std::format("{}[{}]",
+            expr(base, depth + 1, std::to_underlying(Prec::Unary)),
+            expr(idx,  depth + 1));
+    }
+
     [[nodiscard]] std::string format_mem(const IrValue& addr, IrType t, Reg seg,
                                           int depth = 0) const {
         if (seg == Reg::None) {
@@ -1948,6 +2002,9 @@ struct Emitter {
             // "argv-style pointer-to-pointer", which reads more naturally
             // as `a[i]` than `a->field_N`.
             if (auto s = try_render_array_index(addr, t, depth); s) {
+                return *s;
+            }
+            if (auto s = try_render_runtime_array_index(addr, t, depth); s) {
                 return *s;
             }
             // Struct-field form: if this base has been observed at multiple

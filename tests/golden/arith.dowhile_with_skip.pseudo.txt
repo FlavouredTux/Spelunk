@@ -10,7 +10,7 @@ void dowhile_with_skip(u64 a1, u64 a2) {
   local_c = 0;
   local_10 = 0;
   do {
-    u32 t19 = *(u32*)(local_20 + (u64)local_c * 4);
+    u32 t19 = local_20[(u64)local_c];
     local_14 = t19;
     local_c++;
     u32 t51 = local_c;

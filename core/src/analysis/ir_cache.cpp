@@ -16,8 +16,8 @@ IrFunction* lift_cached(IrCache& cache, const Binary& b, addr_t fn) {
 
     auto dec_r = make_decoder(b);
     if (!dec_r) { cache.failed.insert(fn); return nullptr; }
-    const CfgBuilder cfg(b, **dec_r);
-    auto fn_r = cfg.build(fn, {});
+    const CfgBuilder cfgb(b, **dec_r);
+    auto fn_r = cfgb.build(fn, {});
     if (!fn_r) { cache.failed.insert(fn); return nullptr; }
     auto lifter_r = make_lifter(b);
     if (!lifter_r) { cache.failed.insert(fn); return nullptr; }

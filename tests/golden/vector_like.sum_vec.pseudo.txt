@@ -1,0 +1,11 @@
+// sum_vec
+u64 sum_vec(u64* a1, u64 a2) {
+  u64 t0 = a1->begin;
+  u32* t11 = t0 + (u64)(u32)a2 * 4;
+  g_sink = (u32)(a1->capacity - t0 >> 2);
+  if (t11 < a1->end) {
+    return t0[(u64)(u32)a2];
+  } else {
+    return 0;
+  }
+}

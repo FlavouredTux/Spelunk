@@ -127,6 +127,9 @@ ember_build_fixture(gotos OPT "-O0")
 # -O0 so the `%` operator survives as a real IDIV (and the IR Mod op),
 # and the do-while body keeps its conditional structure intact.
 ember_build_fixture(arith OPT "-O0")
+# 24-byte 3-pointer struct shaped like libstdc++ / libc++ / MSVC STL
+# std::vector<T> for the looks_like_vector predicate to fire on.
+ember_build_fixture(vector_like)
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by
 # the driver script), because CTest's own quoting gets ugly with ";" in
@@ -486,6 +489,16 @@ ember_golden_test(
     FIXTURE arith
     ARGS    "-p|-s|dowhile_with_skip"
     GOLDEN  arith.dowhile_with_skip.pseudo.txt
+)
+
+# Locks Phase 4a-2 vector-shape recognition: the 24-byte 3-pointer
+# struct's accesses render as begin / end / capacity, and indexed
+# reads through the begin pointer come out as `b[idx]`.
+ember_golden_test(
+    NAME    vector_like_sum_vec_pseudo
+    FIXTURE vector_like
+    ARGS    "-p|-s|sum_vec"
+    GOLDEN  vector_like.sum_vec.pseudo.txt
 )
 
 ember_golden_test(

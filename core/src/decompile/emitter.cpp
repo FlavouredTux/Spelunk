@@ -1856,6 +1856,23 @@ struct Emitter {
         return it != struct_offsets.end() && it->second.size() >= 2;
     }
 
+    // Three-pointer-at-{0,8,16} pattern matches every flavour of
+    // std::vector<T> on x86_64 — libstdc++ (`_M_start / _M_finish /
+    // _M_end_of_storage`), libc++ (`__begin_ / __end_ / __end_cap_`),
+    // and MSVC STL (`_Myfirst / _Mylast / _Myend`) all lay them out
+    // at the same offsets. Any other 24-byte three-pointer struct
+    // renders the same way, which is fine — these names read better
+    // than `field_0 / field_8 / field_10` for *any* struct shaped
+    // like a contiguous container.
+    [[nodiscard]] bool looks_like_vector(const IrValue& base) const {
+        auto k = ssa_key(base);
+        if (!k) return false;
+        auto it = struct_offsets.find(*k);
+        if (it == struct_offsets.end()) return false;
+        const auto& offs = it->second;
+        return offs.contains(0) && offs.contains(8) && offs.contains(16);
+    }
+
     void record_struct_access(const IrValue& addr) {
         auto bo = try_base_plus_offset(addr);
         if (!bo) return;
@@ -1904,6 +1921,11 @@ struct Emitter {
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;
         }
+        // Vector-shape pointer: defer to the struct-field path so the
+        // 3 canonical offsets render as begin/end/capacity instead of
+        // an array slice. argv-style ptr-to-ptr accesses don't touch
+        // exactly {0, 8, 16} so they continue rendering as `a[i]`.
+        if (looks_like_vector(base)) return std::nullopt;
         return std::format("{}[{}]", expr(base, depth + 1), off / stride);
     }
 
@@ -2018,6 +2040,13 @@ struct Emitter {
                 const i64 off = bo->second;
                 const std::string base_expr =
                     expr(base, depth + 1, std::to_underlying(Prec::Unary));
+                // Vector-shape: i64 loads at the canonical {0, 8, 16}
+                // offsets render as begin / end / capacity.
+                if (t == IrType::I64 && looks_like_vector(base)) {
+                    if (off == 0)  return std::format("{}->begin",    base_expr);
+                    if (off == 8)  return std::format("{}->end",      base_expr);
+                    if (off == 16) return std::format("{}->capacity", base_expr);
+                }
                 // Negative offsets (pointer adjusted above its struct base,
                 // e.g. vtable slots at base-8) don't have clean C syntax;
                 // fall back to the explicit cast form so we don't emit

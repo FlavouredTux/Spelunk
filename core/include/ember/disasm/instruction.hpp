@@ -106,10 +106,22 @@ enum class Mnemonic : u16 {
     Punpcklqdq,  // 0x66 0x0F 6C
     Punpckhqdq,  // 0x66 0x0F 6D
     Pshufd,      // 0x66 0x0F 70 — takes an Ib extra
+    Pshuflw,     // 0xF2 0x0F 70 — takes an Ib extra
+    Pshufhw,     // 0xF3 0x0F 70 — takes an Ib extra
     MovqStore,   // 0x66 0x0F D6 — movq m64, xmm (low 64 bits)
     Pcmpeqd,     // 0x66 0x0F 76
     Pcmpeqw,     // 0x66 0x0F 75
+    Paddb,       // 0x66 0x0F FC
+    Paddd,       // 0x66 0x0F FE
     Paddq,       // 0x66 0x0F D4
+    // SSE2 immediate-shift family (0x66 0x0F 71/72/73 with /N opcode
+    // extension). Hyperion uses these constantly in cookie/cipher
+    // computation; missing them aborted whole functions to a 4-line
+    // _mm_xor_si128 stub.
+    Psllw, Pslld, Psllq, Pslldq,
+    Psrlw, Psrld, Psrlq, Psrldq,
+    Psraw, Psrad,
+    Pinsrw,      // 0x66 0x0F C4 — pinsrw xmm, r32, imm8
     // Bit-scan and double-shift — GPR ops, not SSE.
     Bsf,         // 0x0F BC
     Bsr,         // 0x0F BD

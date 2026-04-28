@@ -1338,6 +1338,32 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
     write_xmm(ctx, insn.operands[0], result, t);
 }
 
+// SSE2 immediate-shift shape: `psllw xmm, imm8` and friends. The
+// regular lift_simd_binop path tries to `read_xmm(operands[1])`,
+// which fails for immediates — so the shift would silently emit
+// nothing. Here we pin operand[0] as the xmm to shift, operand[1]
+// as the imm, and emit a named intrinsic with both. Result writes
+// back to operand[0].
+void lift_simd_shift_imm(LiftCtx& ctx, std::string_view name, IrType t) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands < 2) return;
+    if (insn.operands[1].kind != Operand::Kind::Immediate) return;
+    IrValue a = read_xmm(ctx, insn.operands[0], t);
+    if (a.kind == IrValueKind::None) return;
+    const Imm& im = insn.operands[1].imm;
+
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst  = ctx.temp(t);
+    i.srcs[0]   = a;
+    i.srcs[1]   = ctx.imm(im.value, type_for_bits(im.size * 8));
+    i.src_count = 2;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, t);
+}
+
 // `movdqa xmm, xmm/m128` (and unaligned `movdqu`). Treated as a typed
 // load+store at the chosen SIMD width — the IR carries the dataflow, the
 // emitter prints `xmm0 = *(__m128i*)(rsi);` style.
@@ -1707,6 +1733,27 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Punpcklqdq: lift_simd_binop(ctx, "_mm_unpacklo_epi64", IrType::F64); break;
         case Mnemonic::Punpckhqdq: lift_simd_binop(ctx, "_mm_unpackhi_epi64", IrType::F64); break;
         case Mnemonic::Pshufd:     lift_simd_binop(ctx, "_mm_shuffle_epi32",  IrType::F64); break;
+        case Mnemonic::Pshuflw:    lift_simd_binop(ctx, "_mm_shufflelo_epi16", IrType::F64); break;
+        case Mnemonic::Pshufhw:    lift_simd_binop(ctx, "_mm_shufflehi_epi16", IrType::F64); break;
+
+        // Packed integer arithmetic — same xmm-binop shape as Pxor/Pand.
+        case Mnemonic::Paddb:   lift_simd_binop(ctx, "_mm_add_epi8",   IrType::F64); break;
+        case Mnemonic::Paddd:   lift_simd_binop(ctx, "_mm_add_epi32",  IrType::F64); break;
+        case Mnemonic::Pinsrw:  lift_simd_binop(ctx, "_mm_insert_epi16", IrType::F64); break;
+
+        // SSE2 immediate-shift family. The (xmm, imm8) shape needs a
+        // dedicated lift path — lift_simd_binop's read_xmm fails on
+        // the imm operand and the whole instruction would be dropped.
+        case Mnemonic::Psllw:   lift_simd_shift_imm(ctx, "_mm_slli_epi16", IrType::F64); break;
+        case Mnemonic::Pslld:   lift_simd_shift_imm(ctx, "_mm_slli_epi32", IrType::F64); break;
+        case Mnemonic::Psllq:   lift_simd_shift_imm(ctx, "_mm_slli_epi64", IrType::F64); break;
+        case Mnemonic::Pslldq:  lift_simd_shift_imm(ctx, "_mm_slli_si128", IrType::F64); break;
+        case Mnemonic::Psrlw:   lift_simd_shift_imm(ctx, "_mm_srli_epi16", IrType::F64); break;
+        case Mnemonic::Psrld:   lift_simd_shift_imm(ctx, "_mm_srli_epi32", IrType::F64); break;
+        case Mnemonic::Psrlq:   lift_simd_shift_imm(ctx, "_mm_srli_epi64", IrType::F64); break;
+        case Mnemonic::Psrldq:  lift_simd_shift_imm(ctx, "_mm_srli_si128", IrType::F64); break;
+        case Mnemonic::Psraw:   lift_simd_shift_imm(ctx, "_mm_srai_epi16", IrType::F64); break;
+        case Mnemonic::Psrad:   lift_simd_shift_imm(ctx, "_mm_srai_epi32", IrType::F64); break;
 
         // 128-bit aligned + unaligned moves. Operand 0 may be memory for the
         // *Store variants — lift_simd_mov handles either direction.

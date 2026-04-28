@@ -60,6 +60,10 @@ enum GroupId : u8 {
     Grp_4, Grp_5,
     Grp_11_Eb_Ib, Grp_11_Ev_Iz,
     Grp_8,
+    // SSE2 immediate-shift groups: 0x66 0x0F 71/72/73 with /N opcode
+    // extension select psllw/pslld/psllq/pslldq, psrlw/psrld/psrlq/
+    // psrldq, psraw/psrad over the (xmm-from-r/m, imm8) shape.
+    Grp_71_66, Grp_72_66, Grp_73_66,
     Grp_Count,
 };
 
@@ -342,6 +346,14 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0xDF] = op(Mnemonic::Pandn,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xEB] = op(Mnemonic::Por,         OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xEF] = op(Mnemonic::Pxor,        OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xFC] = op(Mnemonic::Paddb,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xFE] = op(Mnemonic::Paddd,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xC4] = op(Mnemonic::Pinsrw,      OpSpec::Vx, OpSpec::Ev, OpSpec::Ib,   true);
+    // 0x71/72/73 are opcode-extension groups — the ModR/M reg field
+    // selects the actual psllX/psrlX/psraX variant.
+    t[0x71] = grp(Grp_71_66);
+    t[0x72] = grp(Grp_72_66);
+    t[0x73] = grp(Grp_73_66);
     return t;
 }
 
@@ -363,6 +375,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     t[0x5F] = op(Mnemonic::Maxss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     // Existing packed-integer SSE2 entries.
     t[0x6F] = op(Mnemonic::Movdqu,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x70] = op(Mnemonic::Pshufhw,     OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);
     t[0x7E] = op(Mnemonic::MovqXmm,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x7F] = op(Mnemonic::MovdquStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
     return t;
@@ -383,6 +396,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f2() noexcept {
     t[0x5D] = op(Mnemonic::Minsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x5F] = op(Mnemonic::Maxsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
+    t[0x70] = op(Mnemonic::Pshuflw,       OpSpec::Vx,  OpSpec::Wx,  OpSpec::Ib,   true);
     return t;
 }
 
@@ -453,6 +467,23 @@ constexpr std::array<std::array<OpcodeEntry, 8>, Grp_Count> build_groups() noexc
     g[Grp_8][5] = op(Mnemonic::Bts, OpSpec::Ev, OpSpec::Ib);
     g[Grp_8][6] = op(Mnemonic::Btr, OpSpec::Ev, OpSpec::Ib);
     g[Grp_8][7] = op(Mnemonic::Btc, OpSpec::Ev, OpSpec::Ib);
+
+    // SSE2 immediate-shift groups under the 66 prefix. Each row's
+    // /N opcode-extension picks the actual operation; (Wx, Ib) is
+    // the (xmm-from-r/m, imm8) shape. Reserved slots stay Invalid
+    // so the dispatch errors instead of silently mis-decoding.
+    g[Grp_71_66][2] = op(Mnemonic::Psrlw, OpSpec::Wx, OpSpec::Ib);
+    g[Grp_71_66][4] = op(Mnemonic::Psraw, OpSpec::Wx, OpSpec::Ib);
+    g[Grp_71_66][6] = op(Mnemonic::Psllw, OpSpec::Wx, OpSpec::Ib);
+
+    g[Grp_72_66][2] = op(Mnemonic::Psrld, OpSpec::Wx, OpSpec::Ib);
+    g[Grp_72_66][4] = op(Mnemonic::Psrad, OpSpec::Wx, OpSpec::Ib);
+    g[Grp_72_66][6] = op(Mnemonic::Pslld, OpSpec::Wx, OpSpec::Ib);
+
+    g[Grp_73_66][2] = op(Mnemonic::Psrlq,  OpSpec::Wx, OpSpec::Ib);
+    g[Grp_73_66][3] = op(Mnemonic::Psrldq, OpSpec::Wx, OpSpec::Ib);
+    g[Grp_73_66][6] = op(Mnemonic::Psllq,  OpSpec::Wx, OpSpec::Ib);
+    g[Grp_73_66][7] = op(Mnemonic::Pslldq, OpSpec::Wx, OpSpec::Ib);
 
     return g;
 }
@@ -942,14 +973,20 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         // Mandatory-prefix dispatch: 0x66 / 0xF3 / 0xF2 before 0x0F select
         // SSE secondary tables. Consuming the prefix for dispatch means we
         // shouldn't also interpret it as opsize/rep — clear the bit.
+        // Either a real mnemonic OR a group entry (mnemonic=Invalid,
+        // group!=0 — opcode-extension dispatch) counts as "the 66 table
+        // owns this opcode".
+        const auto has_entry = [](const OpcodeEntry& e) {
+            return e.mnemonic != Mnemonic::Invalid || e.group != 0;
+        };
         entry = &kSecondary[opcode];
-        if (ctx.prefix.opsize && kSecondary_66[opcode].mnemonic != Mnemonic::Invalid) {
+        if (ctx.prefix.opsize && has_entry(kSecondary_66[opcode])) {
             entry = &kSecondary_66[opcode];
             ctx.prefix.opsize = false;
-        } else if (ctx.prefix.rep && kSecondary_F3[opcode].mnemonic != Mnemonic::Invalid) {
+        } else if (ctx.prefix.rep && has_entry(kSecondary_F3[opcode])) {
             entry = &kSecondary_F3[opcode];
             ctx.prefix.rep = false;
-        } else if (ctx.prefix.repne && kSecondary_F2[opcode].mnemonic != Mnemonic::Invalid) {
+        } else if (ctx.prefix.repne && has_entry(kSecondary_F2[opcode])) {
             entry = &kSecondary_F2[opcode];
             ctx.prefix.repne = false;
         }

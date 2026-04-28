@@ -79,6 +79,8 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--pdb",         &Args::pdb_path},
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
+    {"",   "--raw-bytes",   &Args::raw_bytes_path},
+    {"",   "--base-va",     &Args::raw_base_va},
 });
 
 template <class F>
@@ -171,11 +173,16 @@ Result<Args> parse_args(int argc, char** argv) {
     // A positional binary is not required when the user is diffing two
     // already-computed fingerprint TSVs — no bytes to parse. Likewise
     // --dump-types is a self-test that doesn't read any binary, and
-    // --regions points at a manifest instead of a binary positional.
+    // --regions / --raw-bytes point at non-PE inputs that bypass the
+    // positional argument.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
     if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types
-        && a.regions_manifest.empty()) {
+        && a.regions_manifest.empty() && a.raw_bytes_path.empty()) {
         return std::unexpected(Error::invalid_format("no binary specified"));
+    }
+    if (!a.raw_bytes_path.empty() && a.raw_base_va.empty()) {
+        return std::unexpected(Error::invalid_format(
+            "--raw-bytes requires --base-va <hex>"));
     }
     apply_stage_implications(a);
     return a;

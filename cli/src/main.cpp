@@ -35,6 +35,33 @@ load_binary_from_args(const ember::cli::Args& args) {
         if (!rr) return std::unexpected(std::move(rr).error());
         return std::unique_ptr<ember::Binary>(std::move(*rr));
     }
+    // --raw-bytes is the one-region shortcut for runtime captures —
+    // splice a memory dump into a single rwx region at --base-va. No
+    // PE container, no manifest. base_va parsed as 0x-prefixed or
+    // bare hex; bases parsed as hex regardless of prefix to match the
+    // rest of the CLI's address-flag style.
+    if (!args.raw_bytes_path.empty()) {
+        std::string_view va_tok = args.raw_base_va;
+        if (va_tok.starts_with("0x") || va_tok.starts_with("0X")) {
+            va_tok.remove_prefix(2);
+        }
+        ember::addr_t va = 0;
+        for (char c : va_tok) {
+            const int d = (c >= '0' && c <= '9') ? c - '0'
+                : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                : -1;
+            if (d < 0) {
+                return std::unexpected(ember::Error::invalid_format(
+                    "raw-bytes: --base-va must be hex"));
+            }
+            va = (va << 4) | static_cast<ember::addr_t>(d);
+        }
+        auto rr = ember::RawRegionsBinary::load_from_raw_bytes(
+            args.raw_bytes_path, va);
+        if (!rr) return std::unexpected(std::move(rr).error());
+        return std::unique_ptr<ember::Binary>(std::move(*rr));
+    }
     ember::LoadOptions opts;
     if (!args.pdb_path.empty()) opts.pdb_path = args.pdb_path;
     opts.no_pdb = args.no_pdb;

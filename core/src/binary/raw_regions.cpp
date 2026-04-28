@@ -130,4 +130,45 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
     return out;
 }
 
+Result<std::unique_ptr<RawRegionsBinary>>
+RawRegionsBinary::load_from_raw_bytes(const std::filesystem::path& file,
+                                       addr_t base_va) {
+    std::ifstream rf(file, std::ios::binary | std::ios::ate);
+    if (!rf) {
+        return std::unexpected(Error::io(std::format(
+            "raw-bytes: cannot open '{}'", file.string())));
+    }
+    const auto sz = static_cast<std::size_t>(rf.tellg());
+    rf.seekg(0);
+
+    auto out = std::unique_ptr<RawRegionsBinary>(new RawRegionsBinary());
+    out->buffer_.resize(sz);
+    if (sz > 0) {
+        rf.read(reinterpret_cast<char*>(out->buffer_.data()),
+                static_cast<std::streamsize>(sz));
+        if (!rf) {
+            return std::unexpected(Error::io(std::format(
+                "raw-bytes: short read on '{}'", file.string())));
+        }
+    }
+
+    SectionFlags flags{};
+    flags.allocated  = true;
+    flags.readable   = true;
+    flags.writable   = true;
+    flags.executable = true;
+
+    out->ranges_.push_back({base_va, sz, 0, flags});
+
+    Section s;
+    s.name        = "raw";
+    s.vaddr       = base_va;
+    s.file_offset = 0;
+    s.size        = sz;
+    s.flags       = flags;
+    s.data        = std::span<const std::byte>(out->buffer_.data(), sz);
+    out->sections_.push_back(std::move(s));
+    return out;
+}
+
 }  // namespace ember

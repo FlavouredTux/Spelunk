@@ -118,6 +118,11 @@ void print_help() {
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only —");
     std::println("                       pulls function sigs + named stack locals from S_REGREL32)");
     std::println("      --no-pdb         skip PDB sidecar discovery / ingestion entirely");
+    std::println("      --regions PATH   load via a raw-region manifest (Scylla-style scrape)");
+    std::println("                       — see docs/raw-input.md for the manifest format");
+    std::println("      --raw-bytes PATH load PATH as a single rwx region at --base-va; no PE");
+    std::println("                       container, useful for runtime memory captures");
+    std::println("      --base-va 0xVA   required with --raw-bytes; base virtual address");
     std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");
     std::println("                       pattern-renames, log-format-driven renames, deletes) to");
     std::println("                       the resolved annotation file");

@@ -29,6 +29,8 @@ struct Args {
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
+    std::string raw_bytes_path;     // --raw-bytes PATH: load PATH as a single rwx region (no PE container)
+    std::string raw_base_va;        // --base-va 0xVA: base virtual address for --raw-bytes
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
     std::string apply_ember;        // --apply PATH: declarative .ember script applied to annotations
     std::string pdb_path;           // --pdb PATH: explicit PDB file (skips auto-discovery)

@@ -1095,4 +1095,18 @@ if(Python3_Interpreter_FOUND)
         ARGS    "--regions|__BINARY__|-p|-s|sub_140001000"
         GOLDEN  raw_regions_tiny.add42.pseudo.txt
     )
+
+    # ---- raw-bytes (no manifest, just one rwx region) -----------------
+    #
+    # Locks the --raw-bytes / --base-va shortcut. Fixture re-uses the
+    # raw_regions_tiny code.bin file directly, so no extra build setup.
+    set(EMBER_FIXTURE_raw_bytes_tiny_PATH "${_rr_dir}/code.bin")
+    add_custom_target(ember_fixture_raw_bytes_tiny ALL
+        DEPENDS "${_rr_dir}/code.bin")
+    ember_golden_test(
+        NAME    raw_bytes_tiny_pseudo
+        FIXTURE raw_bytes_tiny
+        ARGS    "--raw-bytes|__BINARY__|--base-va|0x140001000|-p|-s|sub_140001000"
+        GOLDEN  raw_bytes_tiny.add42.pseudo.txt
+    )
 endif()

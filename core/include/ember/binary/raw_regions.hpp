@@ -36,6 +36,13 @@ public:
     [[nodiscard]] static Result<std::unique_ptr<RawRegionsBinary>>
     load_from_manifest(const std::filesystem::path& manifest);
 
+    // Convenience for the common single-region case: a runtime memory
+    // dump of one contiguous range with no manifest overhead. The
+    // resulting binary has one rwx section starting at `base_va`.
+    // Triggered by `ember --raw-bytes PATH --base-va 0xVA`.
+    [[nodiscard]] static Result<std::unique_ptr<RawRegionsBinary>>
+    load_from_raw_bytes(const std::filesystem::path& file, addr_t base_va);
+
     [[nodiscard]] Format format() const noexcept override { return Format::RawRegions; }
     [[nodiscard]] Arch   arch() const noexcept   override { return Arch::X86_64; }
     [[nodiscard]] Endian endian() const noexcept override { return Endian::Little; }

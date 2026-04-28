@@ -206,7 +206,7 @@ core/             C++23 library — everything except the CLI shim
 cli/              command-line driver
 ui/               Electron + React + TypeScript frontend
 tests/            golden-output CTest suite
-docs/             scripting, plugin platform, mascot, screenshots
+docs/             scripting, vm-detect, plugin platform, mascot, screenshots
 ```
 
 ## Tests

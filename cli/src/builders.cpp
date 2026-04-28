@@ -256,8 +256,10 @@ std::string build_vm_detect_output(const Binary& b) {
 
         const std::size_t shown = std::min(vm.handlers.size(), kHandlersShown);
         out += std::format("  handlers ({} shown):\n", shown);
-        // Each row: "[idx] addr → kind (insns=N)" — the kind is from
-        // the body classifier, ignoring trailing-dispatch insns.
+        // Each row: "[idx] addr → kind detail (insns=N)" — kind from
+        // the body classifier, detail is the kind's short summary
+        // (arith mnemonic, load/store mem operand, branch mnemonic,
+        // call target VA), and insn count is the body length.
         for (std::size_t i = 0; i < shown; ++i) {
             const HandlerClassification* hc = nullptr;
             if (i < vm.handler_classes.size()) hc = &vm.handler_classes[i];
@@ -266,6 +268,9 @@ std::string build_vm_detect_output(const Binary& b) {
                 : std::string_view{"?"};
             out += std::format("    [{:#04x}] {:#x} → {}",
                                i, vm.handlers[i], kind_name);
+            if (hc && !hc->summary.empty()) {
+                out += std::format(" {}", hc->summary);
+            }
             if (hc && hc->insn_count > 0) {
                 out += std::format(" (insns={})", hc->insn_count);
             }

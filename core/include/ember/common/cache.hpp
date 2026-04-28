@@ -9,11 +9,11 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 7
-// when --vm-detect grew per-handler classification rows — each
-// handler now reports Branch/Call/Store/Load/Arith/Return/Null/
-// Unknown plus an insn count. v6 entries would mis-render.
-inline constexpr int kVersion = 7;
+// Bump when any cached payload's on-disk format changes. Bumped to 8
+// when --vm-detect handler-classification rows grew a kind-specific
+// summary detail (arith mnemonic / load+store mem operand / branch
+// mnemonic / call target). v7 entries would mis-render.
+inline constexpr int kVersion = 8;
 
 std::filesystem::path default_dir();
 

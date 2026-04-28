@@ -80,6 +80,15 @@ struct HandlerClassification {
     addr_t      body_end   = 0;     // first byte past the classified body
     HandlerKind kind       = HandlerKind::Unknown;
     std::size_t insn_count = 0;     // body insns (excludes trailing dispatch)
+    // Kind-specific short detail. Populated for Arith / Load / Store /
+    // Branch / Call:
+    //   Arith  → mnemonic name ("add", "sub", "xor", …)
+    //   Load   → memory operand summary ("[rip+0x40]", "[rcx]")
+    //   Store  → memory operand summary
+    //   Branch → conditional mnemonic ("je", "jne", …)
+    //   Call   → target VA when the call is direct, empty otherwise
+    // Empty for Return / Null / Unknown.
+    std::string summary;
 };
 
 // Classify a single handler. When `dispatch_addr` is non-zero, the

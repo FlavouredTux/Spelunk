@@ -157,6 +157,31 @@ struct RegLoad {
         }
     }
 
+    // Conditional branch whose target is the next instruction. The
+    // jump goes nowhere either way — pure structural nop. Common
+    // obfuscator pad (often paired with a preceding `cmp reg, reg` /
+    // `test reg, reg` to fake a "real-looking" conditional).
+    if (is_conditional_branch(insn.mnemonic) &&
+        insn.num_operands == 1 &&
+        insn.operands[0].kind == Operand::Kind::Relative &&
+        insn.operands[0].rel.target == insn.address + insn.length) {
+        return true;
+    }
+
+    // cmp / test of a register against itself — sets fixed flags
+    // (cmp/test reg,reg with reg==reg always yields ZF=1, SF=0,
+    // CF=0, OF=0) but doesn't write any register the dispatcher
+    // walker tracks. The pair `cmp reg, reg; je $+next` is the
+    // canonical "fake conditional" pad.
+    if ((insn.mnemonic == Mnemonic::Cmp || insn.mnemonic == Mnemonic::Test) &&
+        insn.num_operands == 2 &&
+        insn.operands[0].kind == Operand::Kind::Register &&
+        insn.operands[1].kind == Operand::Kind::Register &&
+        canonical_reg(insn.operands[0].reg) ==
+            canonical_reg(insn.operands[1].reg)) {
+        return true;
+    }
+
     return false;
 }
 
@@ -241,6 +266,36 @@ namespace {
 
 }  // namespace
 
+// Compact textual form of a memory operand for handler summaries.
+// Resolves [rip+disp] to its absolute target so the user sees a
+// concrete VA rather than a relative offset they have to add up.
+[[nodiscard]] std::string format_mem_short(const Mem& m, addr_t rip_after) {
+    std::string out;
+    if (m.base == Reg::Rip && m.has_disp) {
+        return std::format("[{:#x}]",
+            rip_after + static_cast<addr_t>(m.disp));
+    }
+    out += '[';
+    if (m.base != Reg::None) {
+        out += reg_name(m.base);
+    }
+    if (m.index != Reg::None) {
+        if (m.base != Reg::None) out += '+';
+        out += reg_name(m.index);
+        if (m.scale > 1) out += std::format("*{}", m.scale);
+    }
+    if (m.has_disp && m.disp != 0) {
+        if (m.disp > 0) {
+            out += std::format("+{:#x}", static_cast<u64>(m.disp));
+        } else {
+            out += std::format("-{:#x}",
+                static_cast<u64>(-m.disp));
+        }
+    }
+    out += ']';
+    return out;
+}
+
 HandlerClassification
 classify_vm_handler(const Binary& b, addr_t handler_entry,
                     addr_t dispatch_addr) {
@@ -253,6 +308,17 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
     bool has_ret = false, has_call = false, has_branch = false;
     bool has_store = false, has_load = false, has_arith = false;
     std::size_t body_insns = 0;
+
+    // First-occurrence captures, by kind. Used to populate
+    // HandlerClassification::summary at the end. We snapshot just
+    // the bits we render so the captured data has no lifetime issues.
+    Mnemonic    sig_arith_mn  = Mnemonic::Invalid;
+    Mnemonic    sig_branch_mn = Mnemonic::Invalid;
+    Mem         sig_load_mem{};
+    addr_t      sig_load_rip  = 0;       bool sig_has_load  = false;
+    Mem         sig_store_mem{};
+    addr_t      sig_store_rip = 0;       bool sig_has_store = false;
+    addr_t      sig_call_tgt  = 0;       bool sig_call_imm  = false;
 
     constexpr std::size_t kMaxBodyInsns = 64;
     addr_t ip = handler_entry;
@@ -327,6 +393,11 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
         // representative anyway).
         if (insn.mnemonic == Mnemonic::Call) {
             has_call = true;
+            if (insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Relative) {
+                sig_call_tgt = insn.operands[0].rel.target;
+                sig_call_imm = true;
+            }
             out.body_end = ip + insn.length;
             ++body_insns;
             break;
@@ -348,15 +419,26 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
 
         if (is_conditional_branch(insn.mnemonic) || is_cmov(insn.mnemonic)) {
             has_branch = true;
+            if (sig_branch_mn == Mnemonic::Invalid) sig_branch_mn = insn.mnemonic;
         } else if (insn.mnemonic == Mnemonic::Mov &&
                    insn.num_operands == 2) {
             const auto& dst = insn.operands[0];
             const auto& src = insn.operands[1];
             if (dst.kind == Operand::Kind::Memory) {
                 has_store = true;
+                if (!sig_has_store) {
+                    sig_store_mem = dst.mem;
+                    sig_store_rip = ip + insn.length;
+                    sig_has_store = true;
+                }
             } else if (dst.kind == Operand::Kind::Register &&
                        src.kind == Operand::Kind::Memory) {
                 has_load = true;
+                if (!sig_has_load) {
+                    sig_load_mem = src.mem;
+                    sig_load_rip = ip + insn.length;
+                    sig_has_load = true;
+                }
             }
         } else if (insn.mnemonic == Mnemonic::Movzx ||
                    insn.mnemonic == Mnemonic::Movsx ||
@@ -367,9 +449,15 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
             if (insn.num_operands == 2 &&
                 insn.operands[1].kind == Operand::Kind::Memory) {
                 has_load = true;
+                if (!sig_has_load) {
+                    sig_load_mem = insn.operands[1].mem;
+                    sig_load_rip = ip + insn.length;
+                    sig_has_load = true;
+                }
             }
         } else if (is_arith_family(insn.mnemonic)) {
             has_arith = true;
+            if (sig_arith_mn == Mnemonic::Invalid) sig_arith_mn = insn.mnemonic;
         }
 
         ++body_insns;
@@ -390,6 +478,37 @@ classify_vm_handler(const Binary& b, addr_t handler_entry,
     else if (has_arith)  out.kind = HandlerKind::Arith;
     else if (has_ret)    out.kind = HandlerKind::Return;
     else                 out.kind = HandlerKind::Null;
+
+    // Per-kind summary detail — populated only for the kind we picked.
+    switch (out.kind) {
+        case HandlerKind::Arith:
+            if (sig_arith_mn != Mnemonic::Invalid) {
+                out.summary = std::string(mnemonic_name(sig_arith_mn));
+            }
+            break;
+        case HandlerKind::Load:
+            if (sig_has_load) {
+                out.summary = format_mem_short(sig_load_mem, sig_load_rip);
+            }
+            break;
+        case HandlerKind::Store:
+            if (sig_has_store) {
+                out.summary = format_mem_short(sig_store_mem, sig_store_rip);
+            }
+            break;
+        case HandlerKind::Branch:
+            if (sig_branch_mn != Mnemonic::Invalid) {
+                out.summary = std::string(mnemonic_name(sig_branch_mn));
+            }
+            break;
+        case HandlerKind::Call:
+            if (sig_call_imm) {
+                out.summary = std::format("{:#x}", sig_call_tgt);
+            }
+            break;
+        default:
+            break;
+    }
     return out;
 }
 

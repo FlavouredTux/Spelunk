@@ -1,5 +1,6 @@
 #include <ember/analysis/indirect_calls.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -23,36 +25,8 @@ namespace ember {
 
 namespace {
 
-// Per-function memoized lifter+SSA+cleanup. Mirrors IrCache from
-// sig_inference.cpp; kept local so neither owns the other's state.
-struct IrCache {
-    std::map<addr_t, std::unique_ptr<IrFunction>> by_addr;
-    std::set<addr_t> failed;
-};
-
-IrFunction* get_ir(IrCache& cache, const Binary& b, addr_t fn) {
-    if (cache.failed.contains(fn)) return nullptr;
-    auto it = cache.by_addr.find(fn);
-    if (it != cache.by_addr.end()) return it->second.get();
-
-    auto dec_r = make_decoder(b);
-    if (!dec_r) { cache.failed.insert(fn); return nullptr; }
-    const CfgBuilder cfg(b, **dec_r);
-    auto fn_r = cfg.build(fn, {});
-    if (!fn_r) { cache.failed.insert(fn); return nullptr; }
-    auto lifter_r = make_lifter(b);
-    if (!lifter_r) { cache.failed.insert(fn); return nullptr; }
-    auto ir_r = (*lifter_r)->lift(*fn_r);
-    if (!ir_r) { cache.failed.insert(fn); return nullptr; }
-    const SsaBuilder ssa;
-    if (auto rv = ssa.convert(*ir_r); !rv) { cache.failed.insert(fn); return nullptr; }
-    if (auto rv = run_cleanup(*ir_r);  !rv) { cache.failed.insert(fn); return nullptr; }
-
-    auto out = std::make_unique<IrFunction>(std::move(*ir_r));
-    IrFunction* raw = out.get();
-    cache.by_addr.emplace(fn, std::move(out));
-    return raw;
-}
+// IrCache + lift_cached now live in <ember/analysis/ir_cache.hpp> so this
+// pass and the IPA pass can share one cache and amortise the lift cost.
 
 [[nodiscard]] bool addr_in_executable_section(const Binary& b, addr_t a) noexcept {
     for (const auto& s : b.sections()) {
@@ -272,7 +246,7 @@ resolve_target(const Binary& b,
 }  // namespace
 
 std::map<addr_t, addr_t>
-resolve_indirect_calls(const Binary& b) {
+resolve_indirect_calls(const Binary& b, IrCache* shared_cache) {
     std::map<addr_t, addr_t> out;
 
     // Build the vtable index from both Itanium and MSVC parsers. The
@@ -303,30 +277,90 @@ resolve_indirect_calls(const Binary& b) {
         }
     }
 
-    // Collect candidate functions: anything with at least one indirect
-    // call edge in the call graph means there's something to look at.
-    // Cheaper than re-lifting every function in the binary.
-    std::set<addr_t> fns_with_indirect;
-    for (const auto& cc : compute_call_graph(b)) {
-        // compute_call_graph emits one edge per (caller, callee) regardless
-        // of kind; we don't get the kind here, so just enumerate callers.
-        // The IR walk below filters out direct calls naturally.
-        fns_with_indirect.insert(cc.caller);
-    }
-    // Also include every defined function entry — a function with no
-    // resolvable callees still might have an indirect call we can crack.
-    // Cheap: enumerate_functions is already deduped + sorted.
-    // Full mode: by the time we're cracking indirect calls the user
-    // has opted into deep analysis, so don't let the packed-binary gate
-    // shortcut the enumerate.
-    for (const auto& d : enumerate_functions(b, EnumerateMode::Full)) {
-        if (b.import_at_plt(d.addr) != nullptr) continue;
-        fns_with_indirect.insert(d.addr);
+    // Byte-level pre-filter. AArch64 does its indirect calls through
+    // BLR/BR (a fixed encoding) but we focus on x86-64 here since the
+    // only consumer is the x64 emitter today. The relevant patterns are
+    // `FF /2` (call r/m) and `FF /4` (jmp r/m), where the ModR/M reg
+    // field selects between 8 sub-opcodes:
+    //   call r/m  → reg = 010 → ModR/M byte has middle 3 bits = 010
+    //               valid bytes: 0x10..17, 0x50..57, 0x90..97, 0xD0..D7
+    //   jmp  r/m  → reg = 100 → middle 3 bits = 100
+    //               valid bytes: 0x20..27, 0x60..67, 0xA0..A7, 0xE0..E7
+    // A scan that flags any `FF <one of those bytes>` byte position is
+    // a superset of indirect calls (false positives in immediate /
+    // displacement bytes don't matter — they just cost a lift). For
+    // ember itself this collapses 7606 candidate functions down to ~50.
+    auto looks_like_indirect_modrm = [](u8 byte) noexcept {
+        const u8 mid = (byte >> 3) & 0b111;
+        return mid == 0b010 || mid == 0b100;
+    };
+
+    std::vector<addr_t> hit_addrs;
+    if (b.arch() == Arch::X86_64) {
+        for (const auto& sec : b.sections()) {
+            if (!sec.flags.executable || sec.data.empty()) continue;
+            const auto* p = sec.data.data();
+            const std::size_t n = sec.data.size();
+            for (std::size_t i = 0; i + 1 < n; ++i) {
+                if (p[i] != std::byte{0xFF}) continue;
+                if (looks_like_indirect_modrm(static_cast<u8>(p[i + 1]))) {
+                    hit_addrs.push_back(sec.vaddr + i);
+                }
+            }
+        }
+        std::sort(hit_addrs.begin(), hit_addrs.end());
     }
 
-    IrCache cache;
+    std::set<addr_t> fns_with_indirect;
+    if (b.arch() == Arch::X86_64 && !hit_addrs.empty()) {
+        // Build a sorted [start, end) index over every function entry,
+        // then for each hit do an O(log N) lookup of the containing
+        // function. Functions with size=0 (sub_<hex> entries) get an end
+        // computed as the next function's start (or +4096 for the last
+        // entry) so we still catch indirect calls inside them.
+        struct Range { addr_t lo, hi, key; };
+        std::vector<Range> ranges;
+        ranges.reserve(2048);
+        for (const auto& d : enumerate_functions(b, EnumerateMode::Full)) {
+            if (b.import_at_plt(d.addr) != nullptr) continue;
+            ranges.push_back({d.addr, d.addr + d.size, d.addr});
+        }
+        std::sort(ranges.begin(), ranges.end(),
+                  [](const Range& a, const Range& bb) noexcept { return a.lo < bb.lo; });
+        for (std::size_t i = 0; i < ranges.size(); ++i) {
+            if (ranges[i].hi > ranges[i].lo) continue;
+            const addr_t next = (i + 1 < ranges.size())
+                ? ranges[i + 1].lo
+                : ranges[i].lo + 0x1000;
+            ranges[i].hi = next;
+        }
+
+        for (addr_t hit : hit_addrs) {
+            auto it = std::upper_bound(
+                ranges.begin(), ranges.end(), hit,
+                [](addr_t a, const Range& r) noexcept { return a < r.lo; });
+            if (it == ranges.begin()) continue;
+            --it;
+            if (hit < it->hi) {
+                fns_with_indirect.insert(it->key);
+            }
+        }
+    } else {
+        // Architectures we don't have a byte-level filter for fall back
+        // to the original full sweep — call-graph callers plus every
+        // defined entry — so AArch64 BR/BLR cracking still works.
+        for (const auto& cc : compute_call_graph(b)) {
+            fns_with_indirect.insert(cc.caller);
+        }
+        for (const auto& d : enumerate_functions(b, EnumerateMode::Full)) {
+            if (b.import_at_plt(d.addr) != nullptr) continue;
+            fns_with_indirect.insert(d.addr);
+        }
+    }
+    IrCache local_cache;
+    IrCache& cache = shared_cache ? *shared_cache : local_cache;
     for (const addr_t fn : fns_with_indirect) {
-        IrFunction* ir = get_ir(cache, b, fn);
+        IrFunction* ir = lift_cached(cache, b, fn);
         if (!ir) continue;
 
         // Index every def in the function for SSA def-walking.
@@ -347,7 +381,6 @@ resolve_indirect_calls(const Binary& b) {
             }
         }
     }
-
     return out;
 }
 

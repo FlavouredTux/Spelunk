@@ -19,6 +19,7 @@
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/indirect_calls.hpp>
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/pe_unwind.hpp>
 #include <ember/analysis/pipeline.hpp>
@@ -822,11 +823,16 @@ int run_emit(const Args& args, const Binary& b) {
     // IPA: one-shot fixed-point over the call graph before emission so
     // char*-arg propagation can cross function boundaries. Expensive on
     // large binaries — opt-in via --ipa.
+    // One IrCache shared across IPA + the indirect-call resolver. Each
+    // function pays its lift+SSA+cleanup cost once — the resolver, which
+    // walks roughly the same set of functions IPA does, becomes nearly
+    // free on top of the IPA pass.
+    IrCache shared_ir_cache;
     InferenceResult ipa;
     if (args.ipa && (args.pseudo || args.strct)) {
         std::println(stderr, "ember: running IPA (this pass lifts every function once)...");
         std::fflush(stderr);
-        ipa = infer_signatures(b);
+        ipa = infer_signatures(b, &shared_ir_cache);
         std::println(stderr, "ember: IPA done: {} functions analyzed", ipa.sigs.size());
         emit_opts.signatures = &ipa.sigs;
         emit_opts.type_arena = &ipa.arena;
@@ -835,7 +841,7 @@ int run_emit(const Args& args, const Binary& b) {
     if (args.resolve_calls && (args.pseudo || args.strct)) {
         std::println(stderr, "ember: resolving indirect calls (vtable + import back-trace)...");
         std::fflush(stderr);
-        resolutions = resolve_indirect_calls(b);
+        resolutions = resolve_indirect_calls(b, &shared_ir_cache);
         std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
                      resolutions.size());
         emit_opts.call_resolutions = &resolutions;

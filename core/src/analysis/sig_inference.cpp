@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/type_infer_local.hpp>
@@ -88,36 +89,9 @@ namespace {
     return bare;
 }
 
-// Build the SSA+cleanup IR for one function, memoized. Returns nullptr if
-// the function can't be lifted (decoder failure, bad bytes, etc.).
-struct IrCache {
-    std::map<addr_t, std::unique_ptr<IrFunction>> by_addr;
-    std::set<addr_t> failed;
-};
-
-IrFunction* get_ir(IrCache& cache, const Binary& b, addr_t fn) {
-    if (cache.failed.contains(fn)) return nullptr;
-    auto it = cache.by_addr.find(fn);
-    if (it != cache.by_addr.end()) return it->second.get();
-
-    auto dec_r = make_decoder(b);
-    if (!dec_r) { cache.failed.insert(fn); return nullptr; }
-    const CfgBuilder cfg(b, **dec_r);
-    auto fn_r = cfg.build(fn, {});
-    if (!fn_r) { cache.failed.insert(fn); return nullptr; }
-    auto lifter_r = make_lifter(b);
-    if (!lifter_r) { cache.failed.insert(fn); return nullptr; }
-    auto ir_r = (*lifter_r)->lift(*fn_r);
-    if (!ir_r) { cache.failed.insert(fn); return nullptr; }
-    const SsaBuilder ssa;
-    if (auto rv = ssa.convert(*ir_r); !rv) { cache.failed.insert(fn); return nullptr; }
-    if (auto rv = run_cleanup(*ir_r);  !rv) { cache.failed.insert(fn); return nullptr; }
-
-    auto out = std::make_unique<IrFunction>(std::move(*ir_r));
-    IrFunction* raw = out.get();
-    cache.by_addr.emplace(fn, std::move(out));
-    return raw;
-}
+// IrCache + lift_cached now live in <ember/analysis/ir_cache.hpp> so the
+// IPA fixed-point and the indirect-call resolver can share one cache and
+// only pay each function's lift cost once.
 
 // For an IrValue, trace through Assigns and trivial phis to a version-0
 // int-arg register for the given ABI. Returns the 0-based arg slot or
@@ -328,10 +302,11 @@ void harvest_typed_sig(const IrFunction& fn, Abi abi,
 
 }  // namespace
 
-InferenceResult infer_signatures(const Binary& b) {
+InferenceResult infer_signatures(const Binary& b, IrCache* cache) {
     InferenceResult out;
     auto& sigs = out.sigs;
-    IrCache ir_cache;
+    IrCache local_cache;
+    IrCache& ir_cache = cache ? *cache : local_cache;
     const auto entries = collect_entries(b);
     const Abi abi = abi_for(b.format(), b.arch(), b.endian());
 
@@ -343,7 +318,7 @@ InferenceResult infer_signatures(const Binary& b) {
     while (changed && guard++ < 32) {
         changed = false;
         for (addr_t fn : entries) {
-            IrFunction* ir = get_ir(ir_cache, b, fn);
+            IrFunction* ir = lift_cached(ir_cache, b, fn);
             if (!ir) continue;
             auto& sig = sigs[fn];
             const auto before_charp  = sig.charp;
@@ -362,7 +337,7 @@ InferenceResult infer_signatures(const Binary& b) {
     // signature into the shared arena.
     const TypeRef char_ptr = out.arena.ptr_t(out.arena.int_t(8));
     for (addr_t fn : entries) {
-        IrFunction* ir = get_ir(ir_cache, b, fn);
+        IrFunction* ir = lift_cached(ir_cache, b, fn);
         if (!ir) continue;
         seed_call_return_types(b, *ir);
         infer_local_types(*ir);

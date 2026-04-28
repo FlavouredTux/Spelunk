@@ -3,6 +3,7 @@
 #include <array>
 #include <map>
 
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
 #include <ember/ir/abi.hpp>
@@ -49,6 +50,11 @@ struct InferenceResult {
 // Runs the CFG+IR+SSA+cleanup pipeline per function once. For a binary
 // with hundreds of thousands of functions this is expensive the first
 // time — up to a few minutes — but deterministic and cacheable.
-[[nodiscard]] InferenceResult infer_signatures(const Binary& b);
+// `cache`, when non-null, is reused for every per-function lift the IPA
+// fixed-point performs. Subsequent passes (e.g. resolve_indirect_calls)
+// can be handed the same cache so a function only ever pays its lift +
+// SSA + cleanup cost once across the whole CLI invocation.
+[[nodiscard]] InferenceResult
+infer_signatures(const Binary& b, IrCache* cache = nullptr);
 
 }  // namespace ember

@@ -2,6 +2,7 @@
 
 #include <map>
 
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
 
@@ -25,7 +26,13 @@ namespace ember {
 // Only fires when the receiver/vtable resolves to a CONSTANT — runtime
 // receiver-typed dispatch needs IPA (Phase 3) and is intentionally
 // out of scope here.
+//
+// `cache`, when non-null, is reused for every per-function lift this pass
+// performs. Pass IPA's cache through and the resolver only re-lifts the
+// (small) subset of functions IPA didn't touch — typically reduces this
+// pass's cost from "lift every function again" to ~zero on a binary that
+// just ran through `--ipa`.
 [[nodiscard]] std::map<addr_t, addr_t>
-resolve_indirect_calls(const Binary& b);
+resolve_indirect_calls(const Binary& b, IrCache* cache = nullptr);
 
 }  // namespace ember

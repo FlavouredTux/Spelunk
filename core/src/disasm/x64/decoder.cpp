@@ -228,6 +228,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x5D] = op(Mnemonic::Minps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x5F] = op(Mnemonic::Maxps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xC6] = op(Mnemonic::Shufps, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);
 
     // CMovCC: 0x0F 4x — Gv, Ev. Indexed in condition order (o/no/b/ae/…).
     constexpr Mnemonic cmovs[16] = {
@@ -359,6 +360,43 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0xFD] = op(Mnemonic::Paddw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xFE] = op(Mnemonic::Paddd,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xC4] = op(Mnemonic::Pinsrw,      OpSpec::Vx, OpSpec::Ev, OpSpec::Ib,   true);
+    t[0xC5] = op(Mnemonic::Pextrw,      OpSpec::Gv, OpSpec::Wx, OpSpec::Ib,   true);
+    t[0xC6] = op(Mnemonic::Shufpd,      OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);
+    // Packed compare-greater-than (signed).
+    t[0x64] = op(Mnemonic::Pcmpgtb,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x65] = op(Mnemonic::Pcmpgtw,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x66] = op(Mnemonic::Pcmpgtd,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    // Unpack-high siblings of 0x60/0x61/0x62.
+    t[0x68] = op(Mnemonic::Punpckhbw,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x69] = op(Mnemonic::Punpckhwd,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x6A] = op(Mnemonic::Punpckhdq,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    // Saturating arith / pavg / pmin/max — all (Vx, Wx) shape.
+    t[0xD8] = op(Mnemonic::Psubusb,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xD9] = op(Mnemonic::Psubusw,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xDC] = op(Mnemonic::Paddusb,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xDD] = op(Mnemonic::Paddusw,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xDE] = op(Mnemonic::Pmaxub,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE0] = op(Mnemonic::Pavgb,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE3] = op(Mnemonic::Pavgw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE8] = op(Mnemonic::Psubsb,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE9] = op(Mnemonic::Psubsw,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xEA] = op(Mnemonic::Pminsw,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xEC] = op(Mnemonic::Paddsb,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xED] = op(Mnemonic::Paddsw,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xEE] = op(Mnemonic::Pmaxsw,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    // Reg-form shift counterparts of the imm-form group at 71/72/73.
+    // The shift amount comes from another xmm; the same Mnemonic
+    // doubles for both forms (mnemonic_name renders identically), and
+    // the lifter dispatches by operand[1].kind to pick the matching
+    // _mm_sll_* (xmm count) vs _mm_slli_* (imm) intrinsic.
+    t[0xD1] = op(Mnemonic::Psrlw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xD2] = op(Mnemonic::Psrld,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xD3] = op(Mnemonic::Psrlq,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE1] = op(Mnemonic::Psraw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xE2] = op(Mnemonic::Psrad,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF1] = op(Mnemonic::Psllw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF2] = op(Mnemonic::Pslld,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xF3] = op(Mnemonic::Psllq,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     // 0x71/72/73 are opcode-extension groups — the ModR/M reg field
     // selects the actual psllX/psrlX/psraX variant.
     t[0x71] = grp(Grp_71_66);

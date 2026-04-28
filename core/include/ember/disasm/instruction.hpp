@@ -126,6 +126,34 @@ enum class Mnemonic : u16 {
     Pmulhuw,     // 0x66 0x0F E4  — multiply high unsigned words
     Pmuludq,     // 0x66 0x0F F4  — multiply unsigned 32→64 bits
     Pmaddwd,     // 0x66 0x0F F5  — multiply-and-add 16→32 bits
+    // Saturating add / subtract — packed integer with clamp-on-overflow.
+    Psubusb,     // 0x66 0x0F D8
+    Psubusw,     // 0x66 0x0F D9
+    Paddusb,     // 0x66 0x0F DC
+    Paddusw,     // 0x66 0x0F DD
+    Psubsb,      // 0x66 0x0F E8
+    Psubsw,      // 0x66 0x0F E9
+    Paddsb,      // 0x66 0x0F EC
+    Paddsw,      // 0x66 0x0F ED
+    // Packed min / max / averages.
+    Pmaxub,      // 0x66 0x0F DE
+    Pminsw,      // 0x66 0x0F EA
+    Pmaxsw,      // 0x66 0x0F EE
+    Pavgb,       // 0x66 0x0F E0
+    Pavgw,       // 0x66 0x0F E3
+    // Packed greater-than compares (signed).
+    Pcmpgtb,     // 0x66 0x0F 64
+    Pcmpgtw,     // 0x66 0x0F 65
+    Pcmpgtd,     // 0x66 0x0F 66
+    // Unpack-high siblings of Punpcklbw / Punpcklwd / Punpckldq.
+    Punpckhbw,   // 0x66 0x0F 68
+    Punpckhwd,   // 0x66 0x0F 69
+    Punpckhdq,   // 0x66 0x0F 6A
+    // Float shuffles with imm8 selector.
+    Shufps,      // 0x0F C6
+    Shufpd,      // 0x66 0x0F C6
+    // Word extract — destination is a GPR.
+    Pextrw,      // 0x66 0x0F C5
     // SSE2 immediate-shift family (0x66 0x0F 71/72/73 with /N opcode
     // extension). Hyperion uses these constantly in cookie/cipher
     // computation; missing them aborted whole functions to a 4-line

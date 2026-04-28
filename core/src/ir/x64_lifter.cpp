@@ -1750,20 +1750,85 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Pmuludq: lift_simd_binop(ctx, "_mm_mul_epu32",   IrType::F64); break;
         case Mnemonic::Pmaddwd: lift_simd_binop(ctx, "_mm_madd_epi16",  IrType::F64); break;
         case Mnemonic::Pinsrw:  lift_simd_binop(ctx, "_mm_insert_epi16", IrType::F64); break;
+        case Mnemonic::Pextrw:  lift_simd_binop(ctx, "_mm_extract_epi16", IrType::F64); break;
 
-        // SSE2 immediate-shift family. The (xmm, imm8) shape needs a
-        // dedicated lift path — lift_simd_binop's read_xmm fails on
-        // the imm operand and the whole instruction would be dropped.
-        case Mnemonic::Psllw:   lift_simd_shift_imm(ctx, "_mm_slli_epi16", IrType::F64); break;
-        case Mnemonic::Pslld:   lift_simd_shift_imm(ctx, "_mm_slli_epi32", IrType::F64); break;
-        case Mnemonic::Psllq:   lift_simd_shift_imm(ctx, "_mm_slli_epi64", IrType::F64); break;
-        case Mnemonic::Pslldq:  lift_simd_shift_imm(ctx, "_mm_slli_si128", IrType::F64); break;
-        case Mnemonic::Psrlw:   lift_simd_shift_imm(ctx, "_mm_srli_epi16", IrType::F64); break;
-        case Mnemonic::Psrld:   lift_simd_shift_imm(ctx, "_mm_srli_epi32", IrType::F64); break;
-        case Mnemonic::Psrlq:   lift_simd_shift_imm(ctx, "_mm_srli_epi64", IrType::F64); break;
-        case Mnemonic::Psrldq:  lift_simd_shift_imm(ctx, "_mm_srli_si128", IrType::F64); break;
-        case Mnemonic::Psraw:   lift_simd_shift_imm(ctx, "_mm_srai_epi16", IrType::F64); break;
-        case Mnemonic::Psrad:   lift_simd_shift_imm(ctx, "_mm_srai_epi32", IrType::F64); break;
+        // Saturating arith.
+        case Mnemonic::Psubusb: lift_simd_binop(ctx, "_mm_subs_epu8",  IrType::F64); break;
+        case Mnemonic::Psubusw: lift_simd_binop(ctx, "_mm_subs_epu16", IrType::F64); break;
+        case Mnemonic::Paddusb: lift_simd_binop(ctx, "_mm_adds_epu8",  IrType::F64); break;
+        case Mnemonic::Paddusw: lift_simd_binop(ctx, "_mm_adds_epu16", IrType::F64); break;
+        case Mnemonic::Psubsb:  lift_simd_binop(ctx, "_mm_subs_epi8",  IrType::F64); break;
+        case Mnemonic::Psubsw:  lift_simd_binop(ctx, "_mm_subs_epi16", IrType::F64); break;
+        case Mnemonic::Paddsb:  lift_simd_binop(ctx, "_mm_adds_epi8",  IrType::F64); break;
+        case Mnemonic::Paddsw:  lift_simd_binop(ctx, "_mm_adds_epi16", IrType::F64); break;
+
+        // Min / max / averages.
+        case Mnemonic::Pmaxub:  lift_simd_binop(ctx, "_mm_max_epu8",  IrType::F64); break;
+        case Mnemonic::Pminsw:  lift_simd_binop(ctx, "_mm_min_epi16", IrType::F64); break;
+        case Mnemonic::Pmaxsw:  lift_simd_binop(ctx, "_mm_max_epi16", IrType::F64); break;
+        case Mnemonic::Pavgb:   lift_simd_binop(ctx, "_mm_avg_epu8",  IrType::F64); break;
+        case Mnemonic::Pavgw:   lift_simd_binop(ctx, "_mm_avg_epu16", IrType::F64); break;
+
+        // Greater-than compares.
+        case Mnemonic::Pcmpgtb: lift_simd_binop(ctx, "_mm_cmpgt_epi8",  IrType::F64); break;
+        case Mnemonic::Pcmpgtw: lift_simd_binop(ctx, "_mm_cmpgt_epi16", IrType::F64); break;
+        case Mnemonic::Pcmpgtd: lift_simd_binop(ctx, "_mm_cmpgt_epi32", IrType::F64); break;
+
+        // High-half unpacks.
+        case Mnemonic::Punpckhbw: lift_simd_binop(ctx, "_mm_unpackhi_epi8",  IrType::F64); break;
+        case Mnemonic::Punpckhwd: lift_simd_binop(ctx, "_mm_unpackhi_epi16", IrType::F64); break;
+        case Mnemonic::Punpckhdq: lift_simd_binop(ctx, "_mm_unpackhi_epi32", IrType::F64); break;
+
+        // Float shuffles take an imm8 selector — same 3-operand shape
+        // lift_simd_binop already handles for Pshufd.
+        case Mnemonic::Shufps:  lift_simd_binop(ctx, "_mm_shuffle_ps", IrType::F32); break;
+        case Mnemonic::Shufpd:  lift_simd_binop(ctx, "_mm_shuffle_pd", IrType::F64); break;
+
+        // SSE2 shift family — same mnemonic doubles for the imm8 form
+        // (0x66 0F 71/72/73 /N) and the xmm-count form (0x66 0F D1..F3).
+        // Branch on operand[1].kind to pick the matching intrinsic.
+        case Mnemonic::Psllw:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_slli_epi16", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_sll_epi16", IrType::F64);
+            break;
+        case Mnemonic::Pslld:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_slli_epi32", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_sll_epi32", IrType::F64);
+            break;
+        case Mnemonic::Psllq:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_slli_epi64", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_sll_epi64", IrType::F64);
+            break;
+        case Mnemonic::Pslldq: lift_simd_shift_imm(ctx, "_mm_slli_si128", IrType::F64); break;
+        case Mnemonic::Psrlw:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_srli_epi16", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_srl_epi16", IrType::F64);
+            break;
+        case Mnemonic::Psrld:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_srli_epi32", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_srl_epi32", IrType::F64);
+            break;
+        case Mnemonic::Psrlq:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_srli_epi64", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_srl_epi64", IrType::F64);
+            break;
+        case Mnemonic::Psrldq: lift_simd_shift_imm(ctx, "_mm_srli_si128", IrType::F64); break;
+        case Mnemonic::Psraw:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_srai_epi16", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_sra_epi16", IrType::F64);
+            break;
+        case Mnemonic::Psrad:
+            if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
+                lift_simd_shift_imm(ctx, "_mm_srai_epi32", IrType::F64);
+            else lift_simd_binop(ctx, "_mm_sra_epi32", IrType::F64);
+            break;
 
         // 128-bit aligned + unaligned moves. Operand 0 may be memory for the
         // *Store variants — lift_simd_mov handles either direction.

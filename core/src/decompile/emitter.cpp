@@ -26,6 +26,7 @@
 #include <ember/ir/abi.hpp>
 #include <ember/ir/ssa.hpp>
 
+#include "emitter_helpers.hpp"
 #include "emitter_tables.hpp"
 
 namespace ember {
@@ -42,6 +43,7 @@ using detail::libc_arity_by_name;
 using detail::import_returns_void;
 using detail::libc_arg_is_charp;
 using detail::c_type_name;
+using detail::eh_pattern_hint;
 
 // C operator precedence, scaled so "tighter binds" = higher value. Used to
 // decide whether a sub-expression needs wrapping in parens. Only the handful
@@ -2435,30 +2437,6 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             }
             return "";
     }
-}
-
-// A block is an exception-handler landing pad when its first (non-ABI) call
-// is to a C++/Itanium unwinder helper. We don't have LSDA parsed yet, so the
-// next best signal is pattern-matching these names — they make the reader
-// aware that control arrived here by throw, not by normal flow.
-[[nodiscard]] static std::optional<std::string_view>
-eh_pattern_hint(const IrBlock& bb, const Binary* binary) {
-    if (!binary) return std::nullopt;
-    for (const auto& inst : bb.insts) {
-        if (inst.op != IrOp::Call) continue;
-        const Symbol* s = binary->import_at_plt(inst.target1);
-        if (!s) continue;
-        std::string_view n = s->name;
-        if (auto at = n.find('@'); at != std::string_view::npos) n = n.substr(0, at);
-        if (n == "__cxa_begin_catch")  return std::string_view{"catch (...)"};
-        if (n == "__cxa_throw")        return std::string_view{"throw"};
-        if (n == "__cxa_rethrow")      return std::string_view{"throw  // rethrow"};
-        if (n == "_Unwind_Resume")     return std::string_view{"unwind-resume"};
-        if (n == "__cxa_end_catch")    return std::string_view{"end-catch"};
-        if (n == "__cxa_allocate_exception") return std::string_view{"throw  // allocate"};
-        return std::nullopt;  // first call wasn't an EH helper
-    }
-    return std::nullopt;
 }
 
 void Emitter::emit_call_binding(std::string& out, std::string_view ind,

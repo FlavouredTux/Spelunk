@@ -43,8 +43,9 @@ Instruction must_decode(std::uint32_t raw, addr_t addr = 0x1000) {
     Arm64Decoder d;
     auto r = d.decode(std::span<const std::byte>(bytes.data(), 4), addr);
     if (!r) {
-        std::fprintf(stderr, "FAIL: decode of %#010x at %#lx: %s\n",
-                     raw, addr, r.error().message.c_str());
+        std::fprintf(stderr, "FAIL: decode of %#010x at %#llx: %s\n",
+                     raw, static_cast<unsigned long long>(addr),
+                     r.error().message.c_str());
         ++fails;
         return {};
     }

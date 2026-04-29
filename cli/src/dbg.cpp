@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <iostream>
 #include <print>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -241,6 +242,12 @@ struct ReplState {
     addr_t                         slide       = 0;  // PIE/ASLR slide; 0 for non-PIE
     std::vector<AuxBin>            aux_bins;
     std::vector<std::unique_ptr<Binary>> aux_storage;  // owns runtime-loaded `aux` binaries
+    // Static-address (un-slid) PCs at which a fault-class signal
+    // (SIGSEGV/SIGBUS/SIGFPE/SIGILL) is known to be recovered by the
+    // tracee's own handler. wait_and_print silently forwards the
+    // signal back instead of stopping. Slide-correction happens at
+    // match time using whichever Binary owns the live PC.
+    std::set<addr_t>               ignored_faults;
 };
 
 // Strip directories and the trailing extension from a path; the
@@ -249,6 +256,71 @@ struct ReplState {
     std::filesystem::path p(path);
     auto stem = p.stem().string();
     return stem.empty() ? p.filename().string() : stem;
+}
+
+// Parse a hex string with optional 0x prefix, returning the addr or
+// nullopt on bad input. Empty strings reject too.
+[[nodiscard]] std::optional<addr_t> parse_hex_addr(std::string_view s) {
+    if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+    if (s.empty()) return std::nullopt;
+    addr_t v = 0;
+    for (char c : s) {
+        const int d = (c >= '0' && c <= '9') ? c - '0'
+                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                    : -1;
+        if (d < 0) return std::nullopt;
+        v = (v << 4) | static_cast<addr_t>(d);
+    }
+    return v;
+}
+
+// Load addresses from a file. Format: one hex addr per line, '#'
+// starts a comment, anything after the first whitespace token is
+// ignored (so the user can annotate `0x100394124  # cb_invoke`).
+std::size_t load_ignored_faults_file(const std::string& path,
+                                     std::set<addr_t>& out) {
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) {
+        std::println(stderr, "ember-dbg: ignore-file: {}: {}",
+                     path, std::strerror(errno));
+        return 0;
+    }
+    char line[1024];
+    std::size_t added = 0;
+    while (std::fgets(line, sizeof(line), f)) {
+        std::string_view sv(line);
+        if (auto h = sv.find('#'); h != std::string_view::npos) {
+            sv.remove_suffix(sv.size() - h);
+        }
+        while (!sv.empty() &&
+               (sv.front() == ' ' || sv.front() == '\t')) {
+            sv.remove_prefix(1);
+        }
+        while (!sv.empty() &&
+               (sv.back() == '\n' || sv.back() == '\r' ||
+                sv.back() == ' '  || sv.back() == '\t')) {
+            sv.remove_suffix(1);
+        }
+        if (sv.empty()) continue;
+        // Take just the leading token — comments after whitespace.
+        if (auto sp = sv.find_first_of(" \t"); sp != std::string_view::npos) {
+            sv.remove_suffix(sv.size() - sp);
+        }
+        if (auto h = parse_hex_addr(sv); h) {
+            if (out.insert(*h).second) ++added;
+        } else {
+            std::println(stderr, "ember-dbg: ignore-file: {}: bad hex '{}'",
+                         path, std::string(sv));
+        }
+    }
+    std::fclose(f);
+    return added;
+}
+
+[[nodiscard]] bool is_fault_signal(int signo) {
+    return signo == SIGSEGV || signo == SIGBUS ||
+           signo == SIGFPE  || signo == SIGILL;
 }
 
 // PC → which (Binary, slide) covers it. Tries primary first, then
@@ -726,13 +798,39 @@ int cmd_delete(ReplState& rs, std::string_view tok) {
 }
 
 bool wait_and_print(ReplState& rs) {
-    auto ev = rs.tgt->wait_event();
-    if (!ev) { print_error(ev.error()); return true; }
-    if (print_event(*ev, rs)) {
-        on_target_released(rs);
-        return true;
+    while (true) {
+        auto ev = rs.tgt->wait_event();
+        if (!ev) { print_error(ev.error()); return true; }
+
+        // Fault-class signals at known-recovered PCs: silently forward
+        // and keep waiting. The Linux backend stashed `pending_signal`
+        // when it built the EvSignal; cont() forwards it back through
+        // PTRACE_CONT's data argument, so the tracee's own handler
+        // gets called and simret's past as it normally would.
+        if (auto* sig = std::get_if<debug::EvSignal>(&*ev);
+            sig && is_fault_signal(sig->signo) &&
+            !rs.ignored_faults.empty()) {
+            if (auto regs = rs.tgt->get_regs(sig->tid); regs) {
+                const addr_t pc_runtime = regs->rip;
+                const auto hit = find_bin_for_pc(rs, pc_runtime);
+                const addr_t pc_static =
+                    pc_runtime - (hit ? hit->slide : rs.slide);
+                if (rs.ignored_faults.contains(pc_static)) {
+                    if (auto rv = rs.tgt->cont(); !rv) {
+                        print_error(rv.error());
+                        return true;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        if (print_event(*ev, rs)) {
+            on_target_released(rs);
+            return true;
+        }
+        return false;
     }
-    return false;
 }
 
 int cmd_cont(ReplState& rs) {
@@ -1081,6 +1179,55 @@ int cmd_aux(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
+int cmd_ignore(ReplState& rs, std::string_view tok) {
+    if (tok.empty()) {
+        if (rs.ignored_faults.empty()) {
+            std::println("No ignored-fault PCs.");
+            return 0;
+        }
+        std::println("Ignored fault PCs ({}):", rs.ignored_faults.size());
+        for (addr_t a : rs.ignored_faults) std::println("  {}", fmt_addr(a));
+        return 0;
+    }
+    auto h = parse_hex_addr(tok);
+    if (!h) {
+        std::println(stderr, "ember-dbg: ignore: bad hex '{}'", tok);
+        return 1;
+    }
+    if (rs.ignored_faults.insert(*h).second) {
+        std::println("Ignoring faults at {}", fmt_addr(*h));
+    } else {
+        std::println("Already ignoring {}", fmt_addr(*h));
+    }
+    return 0;
+}
+
+int cmd_unignore(ReplState& rs, std::string_view tok) {
+    auto h = parse_hex_addr(tok);
+    if (!h) {
+        std::println(stderr, "ember-dbg: unignore: bad hex '{}'", tok);
+        return 1;
+    }
+    if (rs.ignored_faults.erase(*h) > 0) {
+        std::println("Removed {} from ignored-fault set", fmt_addr(*h));
+    } else {
+        std::println("{} was not in the set", fmt_addr(*h));
+    }
+    return 0;
+}
+
+int cmd_ignore_file(ReplState& rs, std::string_view tok) {
+    if (tok.empty()) {
+        std::println(stderr, "ember-dbg: ignore-file: usage: ignore-file <path>");
+        return 1;
+    }
+    const std::size_t added = load_ignored_faults_file(
+        std::string(tok), rs.ignored_faults);
+    std::println("Loaded {} new fault PCs from {} (total {})",
+                 added, tok, rs.ignored_faults.size());
+    return 0;
+}
+
 void print_help() {
     std::println(R"(commands:
   run                       launch the binary (uses --debug PATH and -- args)
@@ -1106,6 +1253,11 @@ void print_help() {
                             (or pin it with @hex). Used for non-ELF code in
                             the tracee — e.g. Mach-O blobs mmap'd by an
                             in-process userspace loader.
+  ignored                   list known-recovered fault PCs (silently passed
+                            back to the tracee's own handler)
+  ignore <addr>             add a static (un-slid) PC to the ignored-fault set
+  unignore <addr>           remove a PC from the set
+  ignore-file <path>        load addrs from a file (hex per line, '#' comments)
   threads                   list threads (* marks current)
   thread <tid>              switch current thread
   help                      this message
@@ -1130,6 +1282,25 @@ int run_debug(const Args& args, const Binary* bin,
         slot.manual_base = a.manual_base;
         rs.aux_bins.push_back(std::move(slot));
     }
+    // Seed the ignored-fault set from CLI flags.
+    for (const auto& tok : args.ignore_fault_addrs) {
+        if (auto h = parse_hex_addr(tok); h) {
+            rs.ignored_faults.insert(*h);
+        } else {
+            std::println(stderr,
+                "ember-dbg: --ignore-fault-at: bad hex '{}'", tok);
+        }
+    }
+    for (const auto& path : args.ignore_fault_files) {
+        const std::size_t added =
+            load_ignored_faults_file(path, rs.ignored_faults);
+        std::println("Loaded {} fault PCs from {}", added, path);
+    }
+    if (!rs.ignored_faults.empty()) {
+        std::println("{} ignored-fault PC(s) configured.",
+                     rs.ignored_faults.size());
+    }
+
     // Warn at startup if any short names collide. Lookups still pick
     // the first match; the user can rename with --aux-binary or use
     // `<full-path-stem>:<sym>` if collisions are unavoidable.
@@ -1190,6 +1361,14 @@ int run_debug(const Args& args, const Binary* bin,
         else if (cmd == "code" || cmd == "list" || cmd == "l") cmd_code(rs);
         else if (cmd == "aux")
             cmd_aux(rs, toks.size() > 1 ? std::string_view(toks[1]) : std::string_view{});
+        else if (cmd == "ignored")
+            cmd_ignore(rs, std::string_view{});
+        else if (cmd == "ignore" && toks.size() > 1)
+            cmd_ignore(rs, toks[1]);
+        else if (cmd == "unignore" && toks.size() > 1)
+            cmd_unignore(rs, toks[1]);
+        else if (cmd == "ignore-file" && toks.size() > 1)
+            cmd_ignore_file(rs, toks[1]);
         else if (cmd == "threads")                             cmd_threads(rs);
         else if (cmd == "thread" && toks.size() > 1)           cmd_thread_switch(rs, toks[1]);
         else std::println(stderr, "ember-dbg: unknown command '{}' (try `help`)", cmd);

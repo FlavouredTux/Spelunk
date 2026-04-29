@@ -152,6 +152,34 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
+        // `--ignore-fault-at HEX` and `--ignore-fault-file PATH` —
+        // repeatable. Both feed the same set of known-recovered
+        // fault PCs the debugger silently passes back to the tracee.
+        if (s == "--ignore-fault-at") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--ignore-fault-at requires a hex VA"));
+            }
+            a.ignore_fault_addrs.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--ignore-fault-at=")) {
+            a.ignore_fault_addrs.emplace_back(s.substr(18));
+            continue;
+        }
+        if (s == "--ignore-fault-file") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--ignore-fault-file requires a path"));
+            }
+            a.ignore_fault_files.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--ignore-fault-file=")) {
+            a.ignore_fault_files.emplace_back(s.substr(20));
+            continue;
+        }
+
         // `--force-fn-start VA` — repeatable. Each VA becomes a
         // synthetic Function symbol so resolve_containing_function
         // returns a window AT the VA instead of rebinding to the

@@ -78,6 +78,18 @@ struct Args {
     // mmap'd into anon-rwx memory. Optional `@0xBASE` suffix pins the
     // runtime base when /proc/maps auto-detection isn't unique.
     std::vector<std::string> aux_binary_paths;
+    // --ignore-fault-at HEX (repeatable): static address (un-slid)
+    // where a fault-class signal (SIGSEGV / SIGBUS / SIGFPE / SIGILL)
+    // is known to be recovered by the tracee's own handler. The
+    // debugger silently forwards the signal back instead of stopping,
+    // so a session through code that traps-and-recovers many times
+    // doesn't drown the user in `c`s. Slide-corrected at match time.
+    std::vector<std::string> ignore_fault_addrs;
+    // --ignore-fault-file PATH (repeatable): file of hex addrs (one
+    // per line, '#' comments OK) to seed the same set. Convention:
+    // a runtime that knows its own recovery sites writes this sidecar
+    // at startup, the debugger consumes it, new entries auto-pick-up.
+    std::vector<std::string> ignore_fault_files;
     bool help   = false;
 };
 

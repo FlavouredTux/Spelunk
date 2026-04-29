@@ -27,6 +27,7 @@ add_library(ember_core STATIC
     src/analysis/indirect_calls.cpp
     src/analysis/type_infer_local.cpp
     src/analysis/eh_frame.cpp
+    src/analysis/cfi.cpp
     src/analysis/objc.cpp
     src/analysis/pe_unwind.cpp
     src/analysis/vm_detect.cpp

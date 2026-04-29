@@ -58,14 +58,16 @@ std::string fmt_signal(int sig) {
         case SIGINT:  return "SIGINT";
         case SIGTERM: return "SIGTERM";
         case SIGSEGV: return "SIGSEGV";
-        case SIGBUS:  return "SIGBUS";
         case SIGFPE:  return "SIGFPE";
         case SIGILL:  return "SIGILL";
         case SIGABRT: return "SIGABRT";
+#if !defined(_WIN32)
+        case SIGBUS:  return "SIGBUS";
         case SIGTRAP: return "SIGTRAP";
         case SIGSTOP: return "SIGSTOP";
         case SIGCONT: return "SIGCONT";
         case SIGCHLD: return "SIGCHLD";
+#endif
         default:      return std::string("SIG?(") + std::to_string(sig) + ")";
     }
 }
@@ -319,7 +321,10 @@ std::size_t load_ignored_faults_file(const std::string& path,
 }
 
 [[nodiscard]] bool is_fault_signal(int signo) {
-    return signo == SIGSEGV || signo == SIGBUS ||
+    return signo == SIGSEGV ||
+#if !defined(_WIN32)
+           signo == SIGBUS  ||
+#endif
            signo == SIGFPE  || signo == SIGILL;
 }
 

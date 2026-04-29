@@ -54,6 +54,7 @@ add_library(ember_core STATIC
     src/decompile/emitter_tables.cpp
     src/script/declarative.cpp
     src/debug/target.cpp
+    src/debug/unwind_rbp.cpp
 )
 add_library(ember::core ALIAS ember_core)
 

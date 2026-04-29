@@ -2,12 +2,22 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("ember", {
   pick:             () => ipcRenderer.invoke("ember:pick"),
+  // Generic file picker for callers that need a path other than the
+  // primary binary. `opts.title` and `opts.filters` (Electron dialog
+  // shape) are forwarded; both are optional.
+  pickFile:         (opts) => ipcRenderer.invoke("ember:pickFile", opts ?? null),
   setBinary:        (p) => ipcRenderer.invoke("ember:setBinary", p),
   binary:           () => ipcRenderer.invoke("ember:binary"),
   run:              (args) => ipcRenderer.invoke("ember:run", args),
 
   loadAnnotations:   (bp) => ipcRenderer.invoke("ember:loadAnnotations", bp),
   saveAnnotations:   (bp, data) => ipcRenderer.invoke("ember:saveAnnotations", bp, data),
+  // Apply a declarative .ember script. dryRun=true returns a preview
+  // (stdout of `--apply --dry-run`); dryRun=false applies for real and
+  // returns the merged annotations object. Bypasses the renderer's
+  // run() to keep the post-apply temp .ann readback race-free.
+  applyEmberScript:  (scriptPath, dryRun) =>
+                       ipcRenderer.invoke("ember:applyEmberScript", scriptPath, !!dryRun),
   exportAnnotations: (bp, data) => ipcRenderer.invoke("ember:exportAnnotations", bp, data),
   importAnnotations: () => ipcRenderer.invoke("ember:importAnnotations"),
   // Prompts a save dialog and writes a patched copy of the current

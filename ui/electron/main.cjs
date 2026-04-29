@@ -296,6 +296,22 @@ ipcMain.handle("ember:pick", async () => {
   return state.binary;
 });
 
+// Generic file picker for callers that need a path other than the
+// primary binary — e.g. the diff view's "old binary" selector and the
+// .ember script applier. Doesn't touch state.binary or recents.
+ipcMain.handle("ember:pickFile", async (_e, opts) => {
+  const o = opts && typeof opts === "object" ? opts : {};
+  const r = await dialog.showOpenDialog({
+    title: typeof o.title === "string" ? o.title : "Select file",
+    properties: ["openFile"],
+    filters: Array.isArray(o.filters) ? o.filters : [
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (r.canceled || r.filePaths.length === 0) return null;
+  return r.filePaths[0];
+});
+
 ipcMain.handle("ember:setBinary", async (_e, p) => {
   if (typeof p !== "string" || !p) return null;
   state.binary = p;
@@ -378,6 +394,72 @@ async function materializePatchedBinary(originalPath) {
   }
 }
 
+// Match the C++ side's escape_note: backslash, newline, carriage return.
+// The C++ load() doesn't currently unescape, so multi-line notes will
+// round-trip imperfectly through any apply that touches them — see
+// core/src/common/annotations.cpp. Single-line notes (the common case)
+// round-trip cleanly.
+function escapeNote(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/\r/g, "\\r");
+}
+function unescapeNote(s) {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && i + 1 < s.length) {
+      const c = s[i + 1];
+      if (c === "n")      { out += "\n"; i++; continue; }
+      if (c === "r")      { out += "\r"; i++; continue; }
+      if (c === "\\")     { out += "\\"; i++; continue; }
+    }
+    out += s[i];
+  }
+  return out;
+}
+
+// Parse the .ann TSV format ember reads/writes via Annotations::load /
+// to_text — line-based: `rename <hex> <name>`, `sig <hex> <ret>|<type>|<name>|...`,
+// `note <hex> <escaped>`, `const <hex> <name>`. Returns the JSON shape
+// the renderer expects (subset — patches/localRenames don't live here).
+function parseAnnText(text) {
+  const renames = {};
+  const signatures = {};
+  const notes = {};
+  for (const raw of String(text).split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const sp1 = line.indexOf(" ");
+    if (sp1 < 0) continue;
+    const kind = line.slice(0, sp1);
+    const rest = line.slice(sp1 + 1).trim();
+    if (kind === "rename") {
+      const sp2 = rest.indexOf(" ");
+      if (sp2 < 0) continue;
+      const addr = `0x${rest.slice(0, sp2)}`;
+      renames[addr] = rest.slice(sp2 + 1).trim();
+    } else if (kind === "sig") {
+      const sp2 = rest.indexOf(" ");
+      if (sp2 < 0) continue;
+      const addr = `0x${rest.slice(0, sp2)}`;
+      const parts = rest.slice(sp2 + 1).split("|").map((s) => s.trim());
+      if (parts.length === 0) continue;
+      const params = [];
+      for (let i = 1; i + 1 < parts.length; i += 2) {
+        if (!parts[i]) continue;
+        params.push({ type: parts[i], name: parts[i + 1] || "_" });
+      }
+      signatures[addr] = { returnType: parts[0] || "void", params };
+    } else if (kind === "note") {
+      const sp2 = rest.indexOf(" ");
+      if (sp2 < 0) continue;
+      const addr = `0x${rest.slice(0, sp2)}`;
+      notes[addr] = unescapeNote(rest.slice(sp2 + 1));
+    }
+    // `const` (named_constants) isn't surfaced in the renderer's
+    // annotation shape yet — silently ignored.
+  }
+  return { renames, signatures, notes };
+}
+
 // Convert the on-disk JSON sidecar into the plain-text format the CLI
 // expects. Returns the temp file path, or null if there's nothing to write.
 async function writeCliAnnotations(binaryPath) {
@@ -388,7 +470,10 @@ async function writeCliAnnotations(binaryPath) {
   } catch { return null; }
   const renames = parsed.renames || {};
   const sigs    = parsed.signatures || {};
-  if (Object.keys(renames).length === 0 && Object.keys(sigs).length === 0) {
+  const notes   = parsed.notes || {};
+  if (Object.keys(renames).length === 0 &&
+      Object.keys(sigs).length === 0 &&
+      Object.keys(notes).length === 0) {
     return null;
   }
   const lines = [];
@@ -403,6 +488,10 @@ async function writeCliAnnotations(binaryPath) {
       parts.push(p.type || "u64", p.name || "_");
     }
     lines.push(`sig ${hex} ${parts.join("|")}`);
+  }
+  for (const [addr, text] of Object.entries(notes)) {
+    const hex = String(addr).replace(/^0x/, "");
+    lines.push(`note ${hex} ${escapeNote(text)}`);
   }
   const outPath = path.join(app.getPath("userData"), "projects",
                             sanitize(binaryPath) + ".ann");
@@ -688,6 +777,72 @@ ipcMain.handle("ember:loadAnnotations", async (_e, bp) => {
 ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {
   await saveSidecar(bp, data);
   return true;
+});
+
+// Apply a declarative .ember script. Two modes selected by `dryRun`:
+//
+//   dryRun=true  → spawn `ember --apply <script> --dry-run`. The CLI
+//                  prints the would-be annotations file to stdout. We
+//                  return that text verbatim for the renderer to show
+//                  as a preview. Sidecar is untouched.
+//
+//   dryRun=false → spawn `ember --apply <script>` for real. The CLI
+//                  writes the merged annotations to the temp .ann file
+//                  the run handler stages from the sidecar. We then
+//                  read that file, parse it back, merge into the
+//                  sidecar (preserving patches + localRenames which
+//                  don't live in the .ann), save, and return the
+//                  full updated Annotations to the renderer.
+//
+// Doing the apply inside one IPC call avoids a race where a concurrent
+// `ember:run` would clobber the post-apply temp .ann before we read it.
+ipcMain.handle("ember:applyEmberScript", async (_e, scriptPath, dryRun) => {
+  if (!state.binary) throw new Error("no binary selected");
+  if (typeof scriptPath !== "string" || !scriptPath) {
+    throw new Error("scriptPath required");
+  }
+  const annPath  = await writeCliAnnotations(state.binary);
+  const effective = await materializePatchedBinary(state.binary);
+  const args = ["--apply", scriptPath];
+  if (dryRun) args.push("--dry-run");
+  if (annPath) args.push("--annotations", annPath);
+  args.push(effective);
+
+  const stdout = await runEmber(args);
+
+  if (dryRun) {
+    return { dryRun: true, preview: stdout, annotations: null };
+  }
+
+  // The CLI wrote the merged annotations to annPath (or to its own
+  // resolved destination if annPath was null). If the temp .ann is
+  // missing — script was a no-op against an empty sidecar — fall back
+  // to whatever's already in the sidecar.
+  let merged = null;
+  if (annPath) {
+    try {
+      const text = await fs.readFile(annPath, "utf8");
+      merged = parseAnnText(text);
+    } catch { /* ann file vanished; treat as no-op */ }
+  }
+
+  // Read the sidecar last (after the apply) so any concurrent UI
+  // edits in the meantime aren't silently overwritten.
+  let sidecar = {};
+  try {
+    sidecar = JSON.parse(await fs.readFile(sidecarPath(state.binary), "utf8"));
+  } catch { /* fresh sidecar */ }
+
+  const next = {
+    renames:      merged?.renames    ?? sidecar.renames    ?? {},
+    signatures:   merged?.signatures ?? sidecar.signatures ?? {},
+    notes:        merged?.notes      ?? sidecar.notes      ?? {},
+    // localRenames + patches never live in the .ann — preserve sidecar.
+    localRenames: sidecar.localRenames || {},
+    patches:      sidecar.patches      || {},
+  };
+  await saveSidecar(state.binary, next);
+  return { dryRun: false, preview: null, annotations: next };
 });
 
 // Export the caller's in-memory annotations object to a user-chosen file.

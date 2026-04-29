@@ -16,6 +16,8 @@ import { PluginsPanelView } from "./components/PluginsPanelView";
 import { StringsView } from "./components/StringsView";
 import { NotesView } from "./components/NotesView";
 import { PatchesView } from "./components/PatchesView";
+import { DiffView } from "./components/DiffView";
+import { EmberScriptView } from "./components/EmberScriptView";
 import { XrefsPanel } from "./components/XrefsPanel";
 import { EditDialog } from "./components/EditDialog";
 import { PatchDialog } from "./components/PatchDialog";
@@ -173,6 +175,8 @@ export default function App() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [pluginsPanelOpen, setPluginsPanelOpen] = useState(false);
   const [patchesOpen, setPatchesOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [emberApplyOpen, setEmberApplyOpen] = useState(false);
   const [hexOpen, setHexOpen] = useState(false);
   // Optional starting vaddr for the next HexView open. Set when the
   // palette falls through with an address that doesn't map to a
@@ -642,6 +646,8 @@ export default function App() {
         if (stringsOpen)    { setStringsOpen(false);   return; }
         if (notesOpen)      { setNotesOpen(false);     return; }
         if (callGraphOpen)  { setCallGraphOpen(false); return; }
+        if (diffOpen)       { setDiffOpen(false);      return; }
+        if (emberApplyOpen) { setEmberApplyOpen(false); return; }
         if (pluginsPanelOpen) { setPluginsPanelOpen(false); return; }
         if (paletteOpen)    { setPaletteOpen(false);   return; }
         if (shortcutsOpen)  { setShortcutsOpen(false); return; }
@@ -792,7 +798,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, diffOpen, emberApplyOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
   // Pseudo-C views also get local-rename substitution applied on top
@@ -1231,6 +1237,38 @@ export default function App() {
             <span style={{ color: C.textFaint }}>⌃U</span>
           </button>
           <button
+            onClick={() => setDiffOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Diff against an older binary"
+          >
+            <span>diff</span>
+          </button>
+          <button
+            onClick={() => setEmberApplyOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Apply a .ember script"
+          >
+            <span>apply…</span>
+          </button>
+          <button
             data-tutorial="jump"
             onClick={() => setPaletteOpen(true)}
             style={{
@@ -1582,6 +1620,29 @@ export default function App() {
           info={info}
           onSelect={(f) => navigateTo(f)}
           onClose={() => setPluginsPanelOpen(false)}
+        />
+      )}
+      {diffOpen && info && (
+        <DiffView
+          info={info}
+          fnByAddr={fnByAddr}
+          onSelect={(f) => navigateTo(f)}
+          onClose={() => setDiffOpen(false)}
+        />
+      )}
+      {emberApplyOpen && info && (
+        <EmberScriptView
+          info={info}
+          annotations={annotations}
+          onApplied={(next) => {
+            // The IPC handler already merged + saved to the sidecar;
+            // adopt the returned object directly and bust render caches
+            // so the freshly-applied renames/sigs/notes show up
+            // immediately in the open view.
+            clearRendererCaches();
+            setAnnotations(next);
+          }}
+          onClose={() => setEmberApplyOpen(false)}
         />
       )}
       {editing && (

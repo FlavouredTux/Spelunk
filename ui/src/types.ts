@@ -217,12 +217,21 @@ declare global {
   interface Window {
     ember: {
       pick:             () => Promise<string | null>;
+      pickFile:         (opts?: {
+        title?: string;
+        filters?: { name: string; extensions: string[] }[];
+      } | null) => Promise<string | null>;
       setBinary:        (p: string) => Promise<string | null>;
       binary:           () => Promise<string | null>;
       run:              (args: string[]) => Promise<string>;
 
       loadAnnotations:   (bp: string) => Promise<Annotations>;
       saveAnnotations:   (bp: string, data: Annotations) => Promise<boolean>;
+      applyEmberScript:  (scriptPath: string, dryRun: boolean) => Promise<{
+        dryRun: boolean;
+        preview: string | null;
+        annotations: Annotations | null;
+      }>;
       exportAnnotations: (bp: string, data: Annotations) => Promise<string | null>;
       importAnnotations: () => Promise<(Annotations & { path: string }) | null>;
       savePatchedAs:     () => Promise<string | null>;

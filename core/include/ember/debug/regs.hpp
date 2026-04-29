@@ -17,6 +17,10 @@ namespace ember::debug {
 //
 // SIMD layout: XMM[i] = low 16 bytes of zmm[i]; YMM[i] = low 32
 // bytes; ZMM[i] = full 64 bytes. zmm[16..31] are AVX-512-only.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4324)  // structure padded due to alignas(64) — intentional
+#endif
 struct alignas(64) Registers {
     // ---- General-purpose + RIP + RFLAGS + segments ----
     u64 rax = 0, rbx = 0, rcx = 0, rdx = 0;
@@ -74,5 +78,8 @@ struct alignas(64) Registers {
     static constexpr u32 PresentAvx512  = 1u << 4;  // ZMM0..15 high 256 + ZMM16..31 + K0..7
     static constexpr u32 PresentDr      = 1u << 5;  // DR0..DR7
 };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 }  // namespace ember::debug

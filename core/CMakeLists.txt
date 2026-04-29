@@ -53,8 +53,21 @@ add_library(ember_core STATIC
     src/decompile/emitter_helpers.cpp
     src/decompile/emitter_tables.cpp
     src/script/declarative.cpp
+    src/debug/target.cpp
 )
 add_library(ember::core ALIAS ember_core)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    target_sources(ember_core PRIVATE
+        src/debug/linux/ptrace_target.cpp
+        src/debug/linux/ptrace_proc.cpp
+        src/debug/linux/ptrace_mem.cpp
+        src/debug/linux/ptrace_regs.cpp
+        src/debug/linux/ptrace_break.cpp
+        src/debug/linux/ptrace_event.cpp
+    )
+endif()
 
 target_include_directories(ember_core
     PUBLIC

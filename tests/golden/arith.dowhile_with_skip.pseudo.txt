@@ -1,19 +1,14 @@
 // dowhile_with_skip
 void dowhile_with_skip(u64 a1, u64 a2) {
-  u32 local_24;
-  u64 local_20;
-  u32 local_14;
   u32 local_10;
   u32 local_c;
-  local_20 = a1;
-  local_24 = (u32)a2;
   local_c = 0;
   local_10 = 0;
   do {
-    u32 t19 = local_20[(u64)local_c];
-    local_14 = t19;
+    u32 t19 = a1[(u64)local_c];
     local_c++;
-    u32 t51 = local_c;
-    u32 t55 = local_24;
-  } while ((i64)t51 < (i64)t55);
+    if (t19) {
+      local_10 += t19;
+    }
+  } while ((i64)local_c < (i64)(u32)a2);
 }

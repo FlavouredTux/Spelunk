@@ -7,7 +7,6 @@
 #include <functional>
 #include <map>
 #include <optional>
-#include <ranges>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -15,6 +14,7 @@
 #include <vector>
 
 #include <ember/analysis/cfg_util.hpp>
+#include <ember/ir/ssa.hpp>
 
 namespace ember {
 
@@ -294,13 +294,71 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
 class Builder {
 public:
     Builder(const IrFunction& fn, const CfgInfo& info) noexcept
-        : fn_(fn), info_(info) {}
+        : fn_(fn), info_(info) {
+        for (const auto& bb : fn_.blocks) {
+            for (const auto& inst : bb.insts) {
+                if (auto k = ssa_key(inst.dst); k) defs_[*k] = &inst;
+            }
+        }
+    }
 
-    std::unique_ptr<Region> build_sequence(addr_t entry, addr_t stop) {
+    // A return-only merge: a Return block whose only "real" instructions are
+    // Phi and Return (no loads, stores, or computation). Sinking such a block
+    // into both branches of the preceding if/else lets us resolve the phi
+    // operand per branch and emit `return <const>;` instead of a trailing
+    // unresolved `return rax_N;`. Caller must check bb.kind == Return first.
+    [[nodiscard]] bool is_phi_only_return(const IrBlock& bb) const noexcept {
+        if (bb.kind != BlockKind::Return) return false;
+        for (const auto& inst : bb.insts) {
+            switch (inst.op) {
+                case IrOp::Phi:
+                case IrOp::Return:
+                case IrOp::Nop:
+                    continue;
+                default:
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    // Append the merge's `Block + Return` pair to `branch`, materialising
+    // `branch` as a Seq if it isn't one already. `pred` is the CFG predecessor
+    // along this branch — used by make_return_from_block's phi resolution to
+    // pick the operand that actually flowed in along this path.
+    void sink_return_into_branch(std::unique_ptr<Region>& branch,
+                                 const IrBlock& mbb, addr_t pred) {
+        if (!branch || is_empty_region(branch.get())) {
+            branch = std::make_unique<Region>();
+            branch->kind = RegionKind::Seq;
+        }
+        if (branch->kind != RegionKind::Seq) {
+            auto outer = std::make_unique<Region>();
+            outer->kind = RegionKind::Seq;
+            outer->children.push_back(std::move(branch));
+            branch = std::move(outer);
+        }
+        branch->children.push_back(make_block(mbb.start));
+        branch->children.push_back(make_return_from_block(mbb, pred));
+    }
+
+    std::unique_ptr<Region> build_sequence(addr_t entry, addr_t stop,
+                                           addr_t* out_last_block = nullptr) {
         auto seq = std::make_unique<Region>();
         seq->kind = RegionKind::Seq;
 
+        // Default: branch terminated internally (return / goto / break /
+        // continue). Only natural fall-through exits update this with the
+        // actual exit-pred — see end of function.
+        if (out_last_block) *out_last_block = kNoAddr;
+
         addr_t current = entry;
+        // Last block we just walked through, in order to identify the CFG
+        // predecessor of a Return / inline target. Reset whenever we descend
+        // into a sub-region whose own seq could end on multiple predecessors
+        // (if/else, switch, loop) — those merge points are genuinely multi-pred
+        // and the phi resolution should leave the value as a real merge.
+        addr_t last_block = kNoAddr;
         while (current != kNoAddr && current != stop) {
             if (loop_headers_stack_.contains(current)) {
                 seq->children.push_back(make_simple(RegionKind::Continue));
@@ -314,7 +372,8 @@ public:
                 // Common idiom: `if (err) goto fail; ... fail: cleanup; return -1;`
                 // When the target is a short unconditional chain ending in a
                 // Return, duplicate it here instead of emitting the goto.
-                if (auto inlined = try_inline_trivial_tail(current); inlined) {
+                if (auto inlined = try_inline_trivial_tail(current, last_block);
+                    inlined) {
                     seq->children.push_back(std::move(inlined));
                     return seq;
                 }
@@ -347,54 +406,12 @@ public:
                 case BlockKind::TailCall: {
                     // TailCall was lifted as `call; return rax;` — the block
                     // ends with a Return IR inst, identical in shape to a
-                    // Return block. Treat them uniformly.
+                    // Return block. Treat them uniformly. `last_block` is the
+                    // single CFG predecessor we walked in from (kNoAddr if we
+                    // got here through a merge of multiple structural paths,
+                    // in which case the phi stays as a real merge).
                     seq->children.push_back(make_block(current));
-                    auto ret_region = make_simple(RegionKind::Return);
-                    // Pick the most meaningful return-value source. Return
-                    // carries multiple candidates (rax, xmm0); prefer any
-                    // source that's been touched by the function (non-zero
-                    // SSA version) over a bare live-in.
-                    auto is_live_in_reg = [](const IrValue& v) {
-                        return v.kind == IrValueKind::Reg && v.version == 0;
-                    };
-                    // The lift_ret seed for the FP candidate is exactly
-                    // `Reg::Xmm0, F64, version 0` — both for FP-returning
-                    // and non-FP-returning functions. Only prefer the FP
-                    // carrier when it's been actually touched (xmm0 written
-                    // in this function → version > 0, or post-cleanup
-                    // propagation has replaced the reg with something other
-                    // than xmm0).
-                    auto is_meaningful_fp_carrier = [](const IrValue& v) {
-                        if (!is_float_type(v.type)) return false;
-                        if (v.kind != IrValueKind::Reg) return true;
-                        if (v.reg == Reg::Xmm0 && v.version == 0) return false;
-                        return true;
-                    };
-                    for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
-                        if (it->op != IrOp::Return || it->src_count == 0) continue;
-                        const IrValue* best = nullptr;
-                        for (u8 k = 0; k < it->src_count && k < it->srcs.size(); ++k) {
-                            const IrValue& s = it->srcs[k];
-                            if (s.kind == IrValueKind::None) continue;
-                            if (!best) { best = &s; continue; }
-                            // A non-live-in source always beats a live-in one
-                            // — it's been touched by the function.
-                            if (!is_live_in_reg(s)) { best = &s; break; }
-                            // Tiebreak among live-in sources: prefer an FP
-                            // carrier (xmm typed) over rax. Functions that
-                            // return the FP receiver unchanged (`return x;`
-                            // for `float x` arg) leave rax uninitialised and
-                            // pass the value through the parameter xmm0.
-                            if (is_live_in_reg(*best) &&
-                                !is_meaningful_fp_carrier(*best) &&
-                                is_meaningful_fp_carrier(s)) {
-                                best = &s;
-                            }
-                        }
-                        if (best) ret_region->condition = *best;
-                        break;
-                    }
-                    seq->children.push_back(std::move(ret_region));
+                    seq->children.push_back(make_return_from_block(bb, last_block));
                     return seq;
                 }
                 case BlockKind::IndirectJmp: {
@@ -412,12 +429,14 @@ public:
                     seq->children.push_back(std::move(sw));
                     if (merge == kNoAddr) return seq;
                     current = merge;
+                    last_block = kNoAddr;  // merge has multiple structural preds
                     break;
                 }
                 case BlockKind::Unconditional:
                 case BlockKind::Fallthrough: {
                     seq->children.push_back(make_block(current));
                     if (bb.successors.empty()) return seq;
+                    last_block = current;
                     current = bb.successors[0];
                     break;
                 }
@@ -431,15 +450,61 @@ public:
 
                     std::unique_ptr<Region> then_r, else_r;
                     bool invert = false;
+                    addr_t then_last = kNoAddr;
+                    addr_t else_last = kNoAddr;
 
                     if (merge == s_taken && merge != kNoAddr) {
-                        then_r = build_sequence(s_fall, s_taken);
+                        then_r = build_sequence(s_fall, s_taken, &then_last);
                         invert = true;
                     } else if (merge == s_fall && merge != kNoAddr) {
-                        then_r = build_sequence(s_taken, s_fall);
+                        then_r = build_sequence(s_taken, s_fall, &then_last);
                     } else {
-                        then_r = build_sequence(s_taken, merge);
-                        else_r = build_sequence(s_fall, merge);
+                        then_r = build_sequence(s_taken, merge, &then_last);
+                        else_r = build_sequence(s_fall, merge, &else_last);
+                    }
+
+                    // If the merge is a phi-only return block, sink the
+                    // return into each branch that actually falls through to
+                    // it, with the phi resolved per that branch's exit
+                    // predecessor — turning `return rax_N;` into
+                    // `return 0;` / `return -1;` per arm.
+                    //
+                    // Branches that already terminated internally (via
+                    // inline-trivial-tail or goto) have out_last_block ==
+                    // kNoAddr and are skipped; appending a second return
+                    // there would be dead code. For an IfThen (no else)
+                    // the implicit-else path reaches the merge via the
+                    // conditional block itself; we emit a synthetic
+                    // trailing return after the if for that case.
+                    bool sunk_return = false;
+                    bool needs_trailing_return = false;
+                    addr_t trailing_merge = kNoAddr;
+                    if (merge != kNoAddr && then_r &&
+                        (then_last != kNoAddr ||
+                         (else_r && else_last != kNoAddr) ||
+                         !else_r)) {
+                        auto mit = fn_.block_at.find(merge);
+                        if (mit != fn_.block_at.end() &&
+                            is_phi_only_return(fn_.blocks[mit->second])) {
+                            const auto& mbb = fn_.blocks[mit->second];
+                            if (then_last != kNoAddr) {
+                                sink_return_into_branch(then_r, mbb, then_last);
+                            }
+                            if (else_r && else_last != kNoAddr) {
+                                sink_return_into_branch(else_r, mbb, else_last);
+                            }
+                            // No else region but the merge is phi-only-return
+                            // — the condition-false path falls through and
+                            // also needs a resolved return after the if.
+                            // Predecessor for that operand is the conditional
+                            // block itself (`current`).
+                            if (!else_r) {
+                                needs_trailing_return = true;
+                                trailing_merge = merge;
+                            }
+                            visited_.insert(merge);
+                            sunk_return = true;
+                        }
                     }
 
                     auto ifr = std::make_unique<Region>();
@@ -455,13 +520,37 @@ public:
                     }
                     seq->children.push_back(std::move(ifr));
 
-                    if (merge == kNoAddr) return seq;
+                    if (sunk_return) {
+                        if (needs_trailing_return) {
+                            auto mit = fn_.block_at.find(trailing_merge);
+                            if (mit != fn_.block_at.end()) {
+                                const auto& mbb = fn_.blocks[mit->second];
+                                seq->children.push_back(make_block(trailing_merge));
+                                seq->children.push_back(
+                                    make_return_from_block(mbb, current));
+                            }
+                        }
+                        // Merge consumed (in branches and/or trailing) —
+                        // nothing more to emit at this level.
+                        if (out_last_block) *out_last_block = kNoAddr;
+                        return seq;
+                    }
+                    if (merge == kNoAddr) {
+                        if (out_last_block) *out_last_block = kNoAddr;
+                        return seq;
+                    }
                     current = merge;
+                    last_block = kNoAddr;  // merge has multiple structural preds
                     break;
                 }
             }
         }
 
+        // Natural exit: we walked off the loop because `current == stop` (or
+        // hit kNoAddr). `last_block` holds the predecessor of `stop` along
+        // this branch — the caller (e.g. the if/else handler) needs it to
+        // resolve a phi at the merge.
+        if (out_last_block) *out_last_block = last_block;
         return seq;
     }
 
@@ -492,6 +581,23 @@ public:
                 ? sw_bb.successors.back()
                 : kNoAddr;
 
+        // If the switch's merge is a phi-only return block, every case
+        // body would otherwise render as empty (each arm is just a
+        // br-to-merge after cleanup hoists case-specific assignments
+        // into the merge's phi). Sink the return into each non-empty
+        // case body, with the phi resolved per the case's exit pred —
+        // typically the case's own block when it falls through to merge
+        // directly, which is the common compiler-emitted shape for big
+        // jump-table switches over enums returning a value.
+        bool sink_into_cases = false;
+        if (merge != kNoAddr) {
+            auto mit = fn_.block_at.find(merge);
+            if (mit != fn_.block_at.end() &&
+                is_phi_only_return(fn_.blocks[mit->second])) {
+                sink_into_cases = true;
+            }
+        }
+
         // De-duplicate cases that share the same target — the resulting
         // switch would be structurally identical; instead we group them
         // by target and let the emitter render multiple "case N:" labels
@@ -505,20 +611,35 @@ public:
             if (tgt == dflt_target) continue;
             last_occurrence[tgt] = i;
         }
+
+        auto build_case_with_optional_sink = [&](addr_t tgt) {
+            addr_t case_last = kNoAddr;
+            auto body = build_sequence(tgt, merge, &case_last);
+            if (sink_into_cases && case_last != kNoAddr) {
+                auto mit = fn_.block_at.find(merge);
+                if (mit != fn_.block_at.end()) {
+                    sink_return_into_branch(body, fn_.blocks[mit->second],
+                                            case_last);
+                }
+            }
+            return body;
+        };
+
         for (std::size_t i = 0; i < n_cases; ++i) {
             const addr_t tgt = sw_bb.successors[i];
             if (tgt == dflt_target) continue;
             r->case_values.push_back(sw_bb.case_values[i]);
             if (last_occurrence[tgt] == i) {
-                r->children.push_back(build_sequence(tgt, merge));
+                r->children.push_back(build_case_with_optional_sink(tgt));
             } else {
                 r->children.push_back(make_empty());
             }
         }
         if (sw_bb.has_default && !sw_bb.successors.empty()) {
             const addr_t dflt = sw_bb.successors.back();
-            r->children.push_back(build_sequence(dflt, merge));
+            r->children.push_back(build_case_with_optional_sink(dflt));
         }
+        if (sink_into_cases) visited_.insert(merge);
         return r;
     }
 
@@ -539,7 +660,16 @@ public:
             addr_t s1 = bb.successors[0];
             addr_t s2 = bb.successors[1];
             auto eit = info_.loop_exit.find(header);
-            if (eit != info_.loop_exit.end()) {
+            // Only a top-tested while-loop if one of the header's two
+            // successors actually IS the loop's exit. Otherwise the
+            // header's conditional is an *internal* branch (e.g. a
+            // skip-and-accumulate inside a do-while body), and we must
+            // fall through to do_while detection — picking up the
+            // tail-tested predicate from the back-edge tail. Without
+            // this guard the header's internal cond gets emitted as the
+            // loop test, swallowing one of its arms entirely.
+            if (eit != info_.loop_exit.end() &&
+                (s1 == eit->second || s2 == eit->second)) {
                 exit = eit->second;
                 body_entry = (s1 == exit) ? s2 : s1;
                 invert = (s1 == exit);
@@ -671,8 +801,33 @@ public:
             // Then emit dw_tail's block (non-branch insts) as the loop's last
             // body element so observable effects match the asm.
             if (header != dw_tail && !bb.successors.empty()) {
-                auto body = build_sequence(bb.successors.front(), dw_tail);
-                loop_r->children.push_back(std::move(body));
+                if (bb.kind == BlockKind::Conditional &&
+                    bb.successors.size() == 2) {
+                    // Header has its own *internal* conditional (neither arm
+                    // is the loop exit — that's at dw_tail). Structure the
+                    // two arms as an if/else inside the body so the skip /
+                    // accumulate halves both render. Without this, only
+                    // bb.successors[0]'s path is emitted and the other arm
+                    // disappears silently.
+                    const addr_t s1 = bb.successors[0];
+                    const addr_t s2 = bb.successors[1];
+                    auto then_r = build_sequence(s1, dw_tail);
+                    auto else_r = build_sequence(s2, dw_tail);
+                    auto ifr = std::make_unique<Region>();
+                    ifr->condition = extract_condition(bb);
+                    if (else_r && !is_empty_region(else_r.get())) {
+                        ifr->kind = RegionKind::IfElse;
+                        ifr->children.push_back(std::move(then_r));
+                        ifr->children.push_back(std::move(else_r));
+                    } else {
+                        ifr->kind = RegionKind::IfThen;
+                        ifr->children.push_back(std::move(then_r));
+                    }
+                    loop_r->children.push_back(std::move(ifr));
+                } else {
+                    auto body = build_sequence(bb.successors.front(), dw_tail);
+                    loop_r->children.push_back(std::move(body));
+                }
                 visited_.insert(dw_tail);
                 loop_r->children.push_back(make_block(dw_tail));
             }
@@ -684,9 +839,43 @@ public:
         return loop_r;
     }
 
+    // Walk a Reg/Temp value chain through Assign and predecessor-resolved Phi
+    // nodes. When `from_pred` is set, a Phi whose `phi_preds` contains it is
+    // simplified to the matching operand; this is what lets a return cloned
+    // into a single-predecessor context render `return -1;` instead of the
+    // raw merge name `return rax_8;`. Returns the deepest resolvable form.
+    [[nodiscard]] IrValue resolve_through_phis(IrValue v, addr_t from_pred,
+                                               int depth = 0) const {
+        if (depth > 16) return v;
+        auto k = ssa_key(v);
+        if (!k) return v;
+        auto it = defs_.find(*k);
+        if (it == defs_.end()) return v;
+        const IrInst* d = it->second;
+        if (d->op == IrOp::Assign && d->src_count >= 1) {
+            return resolve_through_phis(d->srcs[0], from_pred, depth + 1);
+        }
+        if (d->op == IrOp::Phi && from_pred != kNoAddr) {
+            const std::size_t n = std::min(d->phi_operands.size(),
+                                           d->phi_preds.size());
+            for (std::size_t i = 0; i < n; ++i) {
+                if (d->phi_preds[i] == from_pred) {
+                    return resolve_through_phis(d->phi_operands[i],
+                                                from_pred, depth + 1);
+                }
+            }
+        }
+        return v;
+    }
+
     // Emit a Return region carrying the best available return-value source
     // from `bb`'s Return instruction (same policy the Conditional switch uses).
-    [[nodiscard]] std::unique_ptr<Region> make_return_from_block(const IrBlock& bb) {
+    // `from_pred`, when known, is the immediate CFG predecessor in the cloned
+    // structural context — used to resolve the value through any Phi whose
+    // operand list mentions it (e.g. a fail/success arm rendered into one of
+    // its predecessors as `return -1;` / `return 0;` instead of `return rax_N;`).
+    [[nodiscard]] std::unique_ptr<Region>
+    make_return_from_block(const IrBlock& bb, addr_t from_pred = kNoAddr) {
         auto r = make_simple(RegionKind::Return);
         auto is_live_in_reg = [](const IrValue& v) {
             return v.kind == IrValueKind::Reg && v.version == 0;
@@ -710,7 +899,9 @@ public:
                     best = &s;
                 }
             }
-            if (best) r->condition = *best;
+            if (best) {
+                r->condition = resolve_through_phis(*best, from_pred);
+            }
             break;
         }
         return r;
@@ -747,15 +938,26 @@ public:
     }
 
     // If `start` heads a trivial tail, produce a Seq that inlines the chain
-    // followed by the appropriate Return region. Null otherwise.
-    [[nodiscard]] std::unique_ptr<Region> try_inline_trivial_tail(addr_t start) {
+    // followed by the appropriate Return region. Null otherwise. `from_pred`
+    // is the structural predecessor at the inline site — used together with
+    // `chain[size-2]` to resolve the return-value phi to the operand that
+    // actually flowed in along this clone's path.
+    [[nodiscard]] std::unique_ptr<Region>
+    try_inline_trivial_tail(addr_t start, addr_t from_pred = kNoAddr) {
         auto chain = collect_trivial_tail(start);
         if (!chain) return nullptr;
         auto seq = std::make_unique<Region>();
         seq->kind = RegionKind::Seq;
         for (addr_t a : *chain) seq->children.push_back(make_block(a));
         auto bit = fn_.block_at.find(chain->back());
-        seq->children.push_back(make_return_from_block(fn_.blocks[bit->second]));
+        // Predecessor of the return block within the cloned chain. For
+        // length>=2 the chain itself supplies it; for length 1 the caller's
+        // last-emitted block (passed in `from_pred`) is the only signal.
+        const addr_t ret_pred = chain->size() >= 2
+            ? (*chain)[chain->size() - 2]
+            : from_pred;
+        seq->children.push_back(
+            make_return_from_block(fn_.blocks[bit->second], ret_pred));
         return seq;
     }
 
@@ -799,12 +1001,13 @@ public:
     }
 
 private:
-    const IrFunction& fn_;
-    const CfgInfo&    info_;
-    std::set<addr_t>  visited_;
-    std::set<addr_t>  loop_headers_stack_;
-    std::set<addr_t>  loop_exits_stack_;
-    bool              inlining_bounded_ = false;
+    const IrFunction&                   fn_;
+    const CfgInfo&                      info_;
+    std::map<SsaKey, const IrInst*>     defs_;
+    std::set<addr_t>                    visited_;
+    std::set<addr_t>                    loop_headers_stack_;
+    std::set<addr_t>                    loop_exits_stack_;
+    bool                                inlining_bounded_ = false;
 };
 
 // ============================================================================

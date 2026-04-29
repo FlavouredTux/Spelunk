@@ -327,6 +327,25 @@ resolve_function(const Binary& b, std::string_view symbol) {
     // mid-function address gets resolved to its container rather than
     // silently failing.
     if (auto va = try_parse_va(symbol); va) {
+        // `sub_<hex>` is the canonical name for a discovered function
+        // entry. When the user types it explicitly, treat the address
+        // as its own entry — even if a separate `sub_*` candidate's
+        // closest-below container also covers it. Without this guard,
+        // call targets that the prologue scan misses (because they
+        // sit inside a larger prologue-detected blob) get rebound to
+        // the container and rendered at offset +N, when the user
+        // clearly meant the call target itself.
+        const bool explicit_entry = symbol.starts_with("sub_");
+        if (explicit_entry) {
+            if (b.bytes_at(*va).empty()) {
+                std::fprintf(stderr,
+                    "ember: address %#llx is not in any mapped section "
+                    "(or the bytes there don't decode as code)\n",
+                    static_cast<unsigned long long>(*va));
+                return std::nullopt;
+            }
+            return window_from_addr(*va, 0, std::format("sub_{:x}", *va));
+        }
         auto win = resolve_containing_function(b, *va);
         if (!win) {
             // Common when --functions / call-graph discovery surfaces a

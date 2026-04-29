@@ -1,23 +1,21 @@
 // cleanup_on_fail
 u64 cleanup_on_fail(u64 a1) {
-  u64 local_20;
   u64 local_10;
-  local_20 = a1;
   void* r_malloc = malloc(0x40);
   local_10 = r_malloc;
   if (r_malloc) {
-    if (!local_20) {
+    if (!a1) {
       free(local_10);
-    } else {
-      u64 r_strlen = strlen(local_20);
-      if (r_strlen > 0x20) {
-        free(local_10);
-        return rax_14;
-      } else {
-        strcpy(local_10, local_20);
-        free(local_10);
-      }
+      return 0xffffffff;
     }
+    u64 r_strlen = strlen(a1);
+    if (r_strlen > 0x20) {
+      free(local_10);
+      return 0xffffffff;
+    }
+    strcpy(local_10, a1);
+    free(local_10);
+    return 0;
   }
-  return rax_14;
+  return 0xffffffff;
 }

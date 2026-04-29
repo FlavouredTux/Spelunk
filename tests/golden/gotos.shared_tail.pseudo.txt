@@ -1,12 +1,10 @@
 // shared_tail
 u64 shared_tail(u64 a1) {
-  u64 local_20;
   u32 local_c;
-  local_20 = a1;
   local_c = 0;
   if (a1) {
-    if (local_20[0]) {
-      u64 r_strlen = strlen(local_20);
+    if (a1[0]) {
+      u64 r_strlen = strlen(a1);
       local_c = (u32)r_strlen;
     }
   }

@@ -1,19 +1,15 @@
 // multi_exit
 u64 multi_exit(u64 a1, u64 a2) {
-  u64 local_28;
-  u64 local_20;
-  local_20 = a1;
-  local_28 = a2;
-  if (a1) {
-    if (!local_28) {
-      return rax_8;
-    } else {
-      u64 r_strlen = strlen(local_20);
-      u64 r_strlen_2 = strlen(local_28);
-      if (r_strlen != r_strlen_2) {
-        return rax_8;
-      }
-    }
+  if (!a1) {
+    return 0xffffffff;
   }
-  return rax_8;
+  if (!a2) {
+    return 0xffffffff;
+  }
+  u64 r_strlen = strlen(a1);
+  u64 r_strlen_2 = strlen(a2);
+  if (r_strlen != r_strlen_2) {
+    return 0xffffffff;
+  }
+  return 0;
 }

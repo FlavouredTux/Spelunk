@@ -142,6 +142,15 @@ constexpr std::array<OpcodeEntry, 256> build_primary() noexcept {
     t[0x8F] = grp(Grp_1A);
 
     t[0x90] = op(Mnemonic::Nop);
+    // 0x91..0x97 = xchg <reg>, rAX. Compilers emit `48 92` (xchg rdx, rax)
+    // routinely as a tail fixup when a small struct is returned in rdx:rax
+    // pair but the assigning code wrote rax:rdx — the xchg flips them so
+    // the SysV ABI sees them in the right order. Without this we lose the
+    // assignments to rdx, the cleanup pipeline DCEs them as dead, and any
+    // string_view-returning function decompiles to empty switch arms.
+    for (std::size_t i = 1; i < 8; ++i) {
+        t[0x90 + i] = op(Mnemonic::Xchg, OpSpec::Zv, OpSpec::RAX);
+    }
     t[0x98] = op(Mnemonic::Cwde);
     t[0x99] = op(Mnemonic::Cdq);
 

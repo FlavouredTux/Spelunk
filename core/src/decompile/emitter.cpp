@@ -99,6 +99,17 @@ struct Emitter {
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
     std::map<SsaKey, u32>                            uses;
     std::set<std::pair<std::size_t, std::size_t>>    hidden;
+    // Stack-slot offsets (per stack_offset()) that have at least one Load
+    // somewhere in the function. A Store to an offset NOT in this set is a
+    // dead spill — common for -O0 spill-arg-to-slot prologues whose slot is
+    // never reloaded — and should be suppressed by format_store.
+    std::set<i64>                                    loaded_stack_slots;
+    // Stack slots written exactly once in the entry block before any
+    // conditional branch, where the stored value is the unmodified live-in
+    // arg-register (rdi/rsi/...). Loads from these slots forward to the
+    // arg name (a1, a2, ...) directly: -O0 spill-arg-then-reload becomes
+    // a single use of the parameter, the way the user wrote it.
+    std::map<i64, IrValue>                           init_only_slot_value;
     mutable std::map<u64, std::optional<std::string>> string_cache;
     // Call sites whose return value flows straight into a Return(rax). The
     // Call statement is suppressed and its rendered expression is stashed in
@@ -152,11 +163,13 @@ struct Emitter {
                 s += std::format("\\x{:02x}", c);
                 ++escaped_count;
             }
-            // Heuristic for "this is actually a string": at least 4
+            // Heuristic for "this is actually a string": at least 3
             // printable characters (excluding hex-escapes), and printable
-            // bytes outnumber escaped ones. Keeps `*(u64*)(" ")`-style
-            // false positives out while accepting "Hello\xc2\xa0World".
-            if (terminated && printable_count >= 4 &&
+            // bytes outnumber escaped ones. Three-char keywords like
+            // "add", "sub", "nop", "%s\n" are real string content in
+            // codegen tables; the printable-vs-escaped tiebreak still
+            // keeps `*(u64*)(" ")`-style noise out.
+            if (terminated && printable_count >= 3 &&
                 printable_count > escaped_count) {
                 result = std::move(s);
             }
@@ -554,6 +567,69 @@ struct Emitter {
             }
         }
         analyze_abi_noise();
+        // Stack slots that are loaded from somewhere in the function. A
+        // store whose address resolves to a slot NOT in this set is a dead
+        // spill — at -O0 the compiler routinely emits `mov [rbp-N], reg`
+        // for an arg even when the slot is never read, and we want those
+        // suppressed in the pseudo-C output. The set is keyed by the slot
+        // offset returned by `stack_offset(addr)` so it lines up with the
+        // emitter's own naming for `local_<hex>` lvalues.
+        for (const auto& bb : f.blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Load || inst.src_count < 1) continue;
+                if (inst.segment != Reg::None) continue;
+                if (auto off = stack_offset(inst.srcs[0]); off) {
+                    loaded_stack_slots.insert(*off);
+                }
+            }
+        }
+        // Init-only slot detection. A slot is "init-only" if it has exactly
+        // one Store across the whole function and the stored value is an
+        // unmodified arg-reg live-in (version 0). All loads of that slot
+        // forward to the live-in name (a1, a2, …) directly, so an -O0
+        // `mov [rbp-N], rdi; ... mov reg, [rbp-N]; use reg` collapses to
+        // a single use of the parameter — the way the user wrote it.
+        //
+        // The store's block doesn't have to be the entry: a spill that
+        // sits inside the only conditional path that ever reads the slot
+        // is just as safe (any path that bypasses the write would be
+        // reading uninitialised storage, which is undefined-behaviour
+        // territory we don't owe the user a friendly rendering for).
+        std::map<i64, int>     slot_write_count;
+        std::map<i64, IrValue> slot_first_write_value;
+        for (const auto& bb : f.blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Store || inst.src_count < 2) continue;
+                if (inst.segment != Reg::None) continue;
+                auto off = stack_offset(inst.srcs[0]);
+                if (!off) continue;
+                if (++slot_write_count[*off] == 1) {
+                    slot_first_write_value[*off] = inst.srcs[1];
+                }
+            }
+        }
+        for (const auto& [off, count] : slot_write_count) {
+            if (count != 1) continue;
+            const IrValue& v = slot_first_write_value[off];
+            // Forward live-in args (rdi/rsi/...) and SSA temps directly:
+            // both have a single dominating def that survives unchanged
+            // from the store to any later load. Skip clobbers (call-
+            // returns) — those represent post-call register state and
+            // re-rendering them at every load would duplicate the call
+            // expression where the user wrote a single named local.
+            const bool is_live_in_arg =
+                v.kind == IrValueKind::Reg && v.version == 0;
+            const bool is_temp = v.kind == IrValueKind::Temp;
+            if (!is_live_in_arg && !is_temp) continue;
+            if (is_temp) {
+                auto k = ssa_key(v);
+                if (!k) continue;
+                auto dit = defs.find(*k);
+                if (dit == defs.end()) continue;
+                if (dit->second->op == IrOp::Clobber) continue;
+            }
+            init_only_slot_value.emplace(off, v);
+        }
         // Second scan: after defs/uses are populated (so def_stripped works),
         // collect offsets for every pointer that participates in loads/stores.
         // A base observed at multiple distinct offsets is treated as a struct
@@ -901,6 +977,13 @@ struct Emitter {
         if (!cond_key) return;
         const IrInst* def = def_of(cond);
         if (!def || def->op != IrOp::Clobber) return;
+        // Folding `return foo(args);` requires that the call's return value
+        // has no other readers — otherwise we'd silently re-emit the call
+        // expression at the return site and unbind the only name the other
+        // readers had to refer to it. Phi resolution at the structurer can
+        // surface a return whose value the surrounding `if` already tested,
+        // creating exactly this hazard.
+        if (count_uses_with_call_args(*cond_key) > 1) return;
         auto pos_it = def_pos.find(*cond_key);
         if (pos_it == def_pos.end()) return;
         auto [bi, ii] = pos_it->second;
@@ -1386,7 +1469,20 @@ struct Emitter {
             // all flag-set computations that themselves render inline.
             // Duplicating the underlying expression at each flag-set site
             // is a small textual cost for a much cleaner output.
-            return is_flag_feeder_temp(v);
+            if (is_flag_feeder_temp(v)) return true;
+            // A Load whose address is a stack slot just renders as the
+            // slot's `local_X` name — duplicating that string at each use
+            // is no worse than the original `tN = local_X; ... use tN ...`
+            // pair, and lets compound flag-set patterns (sub.overflow +
+            // sub feeding the same slt rendering) collapse cleanly without
+            // leaving a dangling `tN = local_X;` line. Skip if the slot
+            // has an unknown segment (fs:[…] etc.) — those carry side
+            // effects we shouldn't replay.
+            if (d->op == IrOp::Load && d->src_count >= 1 &&
+                d->segment == Reg::None && stack_offset(d->srcs[0]).has_value()) {
+                return true;
+            }
+            return false;
         }
         return true;
     }
@@ -1488,6 +1584,26 @@ struct Emitter {
         // information.
         if (v.imm >= 0 && v.imm <= 9) return std::format("{}", v.imm);
         if (v.imm < 0 && v.imm >= -9) return std::format("{}", v.imm);
+        // Sub-i64 values whose bit pattern is "clearly a small negative"
+        // when interpreted in their declared type (e.g. an i32 holding
+        // 0xFFFFFFFF that's actually -1) render as signed decimal. Limit
+        // to small magnitudes so genuine bitmasks and addresses keep their
+        // hex form; -1..-32 covers the common return-error sentinels and
+        // signed-imm constants without false-positiving on masks.
+        if (v.type != IrType::I64 && v.imm > 0) {
+            const unsigned bits = type_bits(v.type);
+            if (bits > 0 && bits < 64) {
+                const u64 mask = (u64(1) << bits) - 1;
+                const u64 sign_bit = u64(1) << (bits - 1);
+                const u64 u = static_cast<u64>(v.imm) & mask;
+                if (u & sign_bit) {
+                    const i64 as_signed = static_cast<i64>(u | ~mask);
+                    if (as_signed >= -32) {
+                        return std::format("{}", as_signed);
+                    }
+                }
+            }
+        }
         if (v.imm < 0) {
             const u64 abs_v = static_cast<u64>(0) - static_cast<u64>(v.imm);
             return std::format("-{:#x}", abs_v);
@@ -1785,6 +1901,25 @@ struct Emitter {
                             return std::format("[{} class]", it->second);
                         }
                     }
+                    // Pointer-to-string table entry: the bytes at this
+                    // address form a u64 that itself points at a
+                    // NUL-terminated printable string in the image (e.g.
+                    // an R_X86_64_RELATIVE-relocated entry in .data.rel.ro
+                    // pointing at .rodata). Surface the string content so
+                    // crackme-style hex-table indirections read as their
+                    // resolved literal.
+                    if (binary) {
+                        auto raw = binary->bytes_at(a);
+                        if (raw.size() >= 8) {
+                            u64 ptr = 0;
+                            std::memcpy(&ptr, raw.data(), 8);
+                            if (ptr >= 0x100) {
+                                if (auto s = try_string_at(ptr); s) {
+                                    return escape_string(*s);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (auto g = render_global_mem(addr, t); g) {
@@ -1891,6 +2026,35 @@ struct Emitter {
     void emit_region(const Region& r, int depth, std::string& out) const;
     void emit_region_if_then  (const Region& r, int depth, std::string& out) const;
     void emit_region_if_else  (const Region& r, int depth, std::string& out) const;
+
+    // True when every code path through `r` ends in an explicit terminator
+    // (Return / Break / Continue / Unreachable / Goto), so anything emitted
+    // *after* `r` at the same scope is unreachable. The IfElse early-return
+    // collapse uses this to drop the `else` wrapper when the then arm
+    // always exits.
+    [[nodiscard]] static bool region_always_exits(const Region& r) noexcept {
+        const Region* cur = &r;
+        while (cur && cur->kind == RegionKind::Seq && !cur->children.empty()) {
+            cur = cur->children.back().get();
+        }
+        if (!cur) return false;
+        switch (cur->kind) {
+            case RegionKind::Return:
+            case RegionKind::Break:
+            case RegionKind::Continue:
+            case RegionKind::Unreachable:
+            case RegionKind::Goto:
+                return true;
+            case RegionKind::IfElse:
+                // Both arms must always exit for the if to always exit.
+                return cur->children.size() >= 2 &&
+                       cur->children[0] && cur->children[1] &&
+                       region_always_exits(*cur->children[0]) &&
+                       region_always_exits(*cur->children[1]);
+            default:
+                return false;
+        }
+    }
     void emit_region_while    (const Region& r, int depth, std::string& out) const;
     void emit_region_do_while (const Region& r, int depth, std::string& out) const;
     void emit_region_for      (const Region& r, int depth, std::string& out) const;
@@ -2299,8 +2463,20 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
         }
 
-        case IrOp::Load:
+        case IrOp::Load: {
+            // Init-only stack slot: forward to the live-in value the entry
+            // prologue stored. Lets `local_28 = a2; ... use local_28 ...`
+            // collapse to the user-level `... use a2 ...` directly.
+            if (d.segment == Reg::None && d.src_count >= 1) {
+                if (auto off = stack_offset(d.srcs[0]); off) {
+                    if (auto it = init_only_slot_value.find(*off);
+                        it != init_only_slot_value.end()) {
+                        return expr(it->second, depth, min_prec);
+                    }
+                }
+            }
             return format_mem(d.srcs[0], d.dst.type, d.segment, depth);
+        }
 
         case IrOp::AddCarry:
             return std::format("carry_add({}, {})",
@@ -2404,6 +2580,24 @@ std::string Emitter::format_store(const IrInst& inst) const {
     std::string lhs;
     if (inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {
+            // Dead-spill suppression: drop the store when the slot has no
+            // observable reader in the rendered output. Two cases collapse
+            // here: (1) no Load anywhere reads the slot (common -O0 spill-
+            // and-forget prologue noise), and (2) every load is an init-
+            // only forward to the original arg-reg, so the slot's name
+            // never appears in the body. Exception: slots whose name came
+            // from an external source (PDB S_REGREL32, sidecar annotation)
+            // carry source-level intent — keep their stores so the user's
+            // named locals don't silently disappear.
+            const bool has_reader = loaded_stack_slots.contains(*off);
+            const bool init_only  = init_only_slot_value.contains(*off);
+            if (!has_reader || init_only) {
+                auto it = frame_layout.slots.find(*off);
+                const bool user_named =
+                    it != frame_layout.slots.end() &&
+                    !it->second.type_override.empty();
+                if (!user_named) return "";
+            }
             if (auto it = frame_layout.slots.find(*off);
                 it != frame_layout.slots.end() && !it->second.name.empty()) {
                 lhs = it->second.name;
@@ -2454,6 +2648,10 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
         case IrOp::Load: {
             if (use_count(inst.dst) == 0) return "";
             if (use_count(inst.dst) == 1) return "";  // will be inlined
+            // A multi-use load that should_inline accepts (stack-slot
+            // reads, init-only forwards) renders inline at every use site
+            // — no need to bind a name for it here.
+            if (should_inline(inst.dst)) return "";
             return std::format("{} t{} = {};",
                                c_type_name_for(inst.dst),
                                inst.dst.temp,
@@ -2893,10 +3091,18 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
 }
 
 void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) const {
+    // Pre-render the body and skip the whole if when nothing survived. The
+    // body can collapse to empty after store/decl suppression (e.g. an
+    // -O0 prologue's xmm spill block that becomes literally `if (rax) {}`)
+    // — emitting the dead conditional is just visual noise, since the
+    // condition itself has no observable effect.
+    std::string body;
+    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, body);
+    if (body.empty()) return;
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string cond = render_condition(r.condition, r.invert);
     out += std::format("{}if ({}) {{\n", ind, cond);
-    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, out);
+    out += body;
     out += std::format("{}}}\n", ind);
 }
 
@@ -2914,6 +3120,25 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         std::swap(then_buf, else_buf);
     }
     const std::string cond = render_condition(r.condition, invert_effective);
+    // Early-return collapse: when the then arm always exits (last statement
+    // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
+    // if, so we can drop the `else` wrapper and let the else body run at
+    // the surrounding indent. Cascaded across nested if/elses this turns
+    // a goto-fail ladder back into an early-return chain — the same shape
+    // the user originally wrote. Re-emit the else at the outer depth so
+    // the indentation matches the new flat layout.
+    if (r.children.size() > 1 && r.children[0] && r.children[1] &&
+        region_always_exits(*r.children[0])) {
+        std::string else_outer;
+        emit_region(*r.children[1], depth, else_outer);
+        if (!else_outer.empty()) {
+            out += std::format("{}if ({}) {{\n", ind, cond);
+            out += then_buf;
+            out += std::format("{}}}\n", ind);
+            out += else_outer;
+            return;
+        }
+    }
     out += std::format("{}if ({}) {{\n", ind, cond);
     out += then_buf;
     if (!else_buf.empty()) {

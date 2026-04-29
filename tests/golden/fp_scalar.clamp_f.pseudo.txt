@@ -2,8 +2,7 @@
 float clamp_f(float x, float lo, float hi) {
   if (lo != x & lo >= x) {
     return lo;
-  } else {
-    float t5 = _mm_min_ss(hi, x);
-    return t5;
   }
+  float t5 = _mm_min_ss(hi, x);
+  return t5;
 }

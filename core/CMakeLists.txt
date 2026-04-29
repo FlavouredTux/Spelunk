@@ -56,6 +56,7 @@ add_library(ember_core STATIC
     src/script/declarative.cpp
     src/debug/target.cpp
     src/debug/unwind_rbp.cpp
+    src/debug/unwind_eh.cpp
 )
 add_library(ember::core ALIAS ember_core)
 

@@ -1,6 +1,7 @@
 add_executable(ember_cli
     src/args.cpp
     src/builders.cpp
+    src/dbg.cpp
     src/fingerprint.cpp
     src/info.cpp
     src/main.cpp

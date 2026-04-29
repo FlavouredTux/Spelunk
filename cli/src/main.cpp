@@ -9,6 +9,7 @@
 
 #include "args.hpp"
 #include "cli_error.hpp"
+#include "dbg.hpp"
 #include "fingerprint.hpp"
 #include "info.hpp"
 #include "patches.hpp"
@@ -96,6 +97,12 @@ int main(int argc, char** argv) {
     // translation, then writes a patched copy. No analysis runs.
     if (!args.apply_patches.empty()) return run_apply_patches(args);
 
+    // --debug --attach-pid PID can run without a binary path; the
+    // REPL auto-attaches and symbol resolution is simply disabled.
+    if (args.debug && args.binary.empty()) {
+        return run_debug(args, nullptr);
+    }
+
     auto bin = load_binary_from_args(args);
     if (!bin) return report(bin.error());
 
@@ -131,6 +138,8 @@ int main(int argc, char** argv) {
     if (!args.trace_path.empty())          load_trace_edges(args, b);
     if (!args.export_annotations.empty())  return run_export_annotations(args);
     if (!args.apply_ember.empty())         return run_apply_ember(args, b);
+
+    if (args.debug)                        return run_debug(args, &b);
 
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);

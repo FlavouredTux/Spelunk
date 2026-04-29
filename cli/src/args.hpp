@@ -69,6 +69,9 @@ struct Args {
     bool quiet  = false;            // suppress progress output regardless of TTY
     bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
     bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
+    bool debug  = false;            // --debug: launch the binary under the built-in REPL debugger
+    std::string attach_pid;         // --attach-pid PID: attach to an existing process instead of launching
+    std::vector<std::string> debug_args;  // tokens after `--`: argv for the launched program
     bool help   = false;
 };
 

@@ -54,6 +54,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--json",      &Args::json},
     {"-q", "--quiet",     &Args::quiet},
     {"",   "--dry-run",   &Args::dry_run},
+    {"",   "--debug",     &Args::debug},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
@@ -81,6 +82,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--regions",     &Args::regions_manifest},
     {"",   "--raw-bytes",   &Args::raw_bytes_path},
     {"",   "--base-va",     &Args::raw_base_va},
+    {"",   "--attach-pid",  &Args::attach_pid},
 });
 
 template <class F>
@@ -101,6 +103,15 @@ Result<Args> parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
         const std::string_view s = argv[i];
+
+        // `--` sentinel: every remaining token is argv for the launched
+        // program under --debug. Stash and stop parsing flags.
+        if (s == "--") {
+            for (int j = i + 1; j < argc; ++j) {
+                a.debug_args.emplace_back(argv[j]);
+            }
+            break;
+        }
 
         // `--functions=PATTERN` — unambiguous way to specify the filter
         // without positional-order gotchas (main vs binary path).
@@ -193,8 +204,10 @@ Result<Args> parse_args(int argc, char** argv) {
     // --regions / --raw-bytes point at non-PE inputs that bypass the
     // positional argument.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
+    const bool attach_only = a.debug && !a.attach_pid.empty();
     if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types
-        && a.regions_manifest.empty() && a.raw_bytes_path.empty()) {
+        && a.regions_manifest.empty() && a.raw_bytes_path.empty()
+        && !attach_only) {
         return std::unexpected(Error::invalid_format("no binary specified"));
     }
     if (!a.raw_bytes_path.empty() && a.raw_base_va.empty()) {

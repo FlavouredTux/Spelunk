@@ -77,6 +77,33 @@ set(_golden_dir  "${CMAKE_CURRENT_SOURCE_DIR}/golden")
 set(_build_dir   "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 file(MAKE_DIRECTORY "${_build_dir}")
 
+# For fixtures whose goldens record absolute addresses or function sizes,
+# any gcc point-release codegen drift breaks the test even though ember's
+# behaviour is unchanged. `ember_use_prebuilt_fixture` copies a pre-built
+# binary checked into `tests/fixtures/<name>.prebuilt` into the same build
+# location `ember_build_fixture` would produce, so downstream test rules
+# don't need to know which path produced it. Use this for tests that
+# depend on exact compiled bytes; everything else stays compiled-on-build.
+function(ember_use_prebuilt_fixture name)
+    set(_src "${_fixture_dir}/${name}.prebuilt")
+    set(_out "${_build_dir}/${name}")
+    if(NOT EXISTS "${_src}")
+        message(FATAL_ERROR
+            "ember_use_prebuilt_fixture: ${_src} is missing. "
+            "Build it once with the canonical toolchain and check it in.")
+    endif()
+    add_custom_command(
+        OUTPUT "${_out}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${_src}" "${_out}"
+        COMMAND chmod +x "${_out}"
+        DEPENDS "${_src}"
+        COMMENT "Staging prebuilt fixture ${name}"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_${name} ALL DEPENDS "${_out}")
+    set(EMBER_FIXTURE_${name}_PATH "${_out}" PARENT_SCOPE)
+endfunction()
+
 function(ember_build_fixture name)
     cmake_parse_arguments(F "PIE" "OPT;PROTECTOR;SRC;FP" "EXTRA_LDFLAGS" ${ARGN})
     if(NOT F_OPT)
@@ -125,11 +152,17 @@ ember_build_fixture(return_value)
 # Compile at -O0 so the compiler spills every local; this is the shape
 # where memory-forwarding has maximum leverage.
 ember_build_fixture(mem_forward OPT "-O0")
-# `-nostartfiles -Wl,-e,main` strips glibc's CRT (_init/_start/_dl_*/
-# *_tm_clones/frame_dummy/_fini) so the fingerprint + functions +
-# data-xrefs + collisions goldens don't drift across gcc point
-# releases. The binary's unrunnable but ember only parses it.
-ember_build_fixture(imports EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
+# Goldens for `imports` record absolute addresses, function sizes, and
+# data-xref offsets — every one of which shifts on a gcc point-release
+# even when imports.c is unchanged. We've burned multiple commits
+# regenerating against successive gcc-15.x versions; pinning a prebuilt
+# binary against the canonical toolchain is the only stable answer.
+# Source still lives at imports.c — kept for traceability and so the
+# binary can be rebuilt with `gcc -O2 -g -fno-stack-protector -no-pie
+# -nostartfiles -Wl,-e,main -o tests/fixtures/imports.prebuilt
+# tests/fixtures/imports.c` when an intentional behaviour change wants
+# new bytes (regen the imports.* goldens in the same commit).
+ember_use_prebuilt_fixture(imports)
 ember_build_fixture(decoder_misc)
 ember_build_fixture(tail_call)
 ember_build_fixture(indirect_tail)

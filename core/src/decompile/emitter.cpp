@@ -622,10 +622,14 @@ struct Emitter {
     std::set<std::pair<std::size_t, std::size_t>> for_update_positions;
 
     // Walk the structured body, populate for_update_positions.
+    // Only suppress the body inst if render_update_inst would actually emit
+    // it in the for-header — otherwise the For→While fallback in
+    // emit_region_for would silently drop the update from the output.
     void collect_for_updates(const Region& r) {
         if (r.kind == RegionKind::For && r.has_update) {
             auto it = fn->block_at.find(r.update_block);
-            if (it != fn->block_at.end()) {
+            if (it != fn->block_at.end() &&
+                !render_update_inst(r.update_block, r.update_inst).empty()) {
                 for_update_positions.emplace(it->second, r.update_inst);
             }
         }

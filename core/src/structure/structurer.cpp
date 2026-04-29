@@ -187,15 +187,30 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
         auto hit = fn.block_at.find(header);
         if (hit == fn.block_at.end()) continue;
         const auto& hbb = fn.blocks[hit->second];
-        if (hbb.kind != BlockKind::Conditional || hbb.successors.size() != 2) {
+        // Top-tested loop (while/for): header itself is the predicate.
+        if (hbb.kind == BlockKind::Conditional && hbb.successors.size() == 2) {
+            addr_t s1 = hbb.successors[0];
+            addr_t s2 = hbb.successors[1];
+            const bool s1_loops = can_reach(s1, backs, /*forbidden=*/header);
+            const bool s2_loops = can_reach(s2, backs, /*forbidden=*/header);
+            if (s1_loops && !s2_loops)      info.loop_exit[header] = s2;
+            else if (s2_loops && !s1_loops) info.loop_exit[header] = s1;
             continue;
         }
-        addr_t s1 = hbb.successors[0];
-        addr_t s2 = hbb.successors[1];
-        const bool s1_loops = can_reach(s1, backs, /*forbidden=*/header);
-        const bool s2_loops = can_reach(s2, backs, /*forbidden=*/header);
-        if (s1_loops && !s2_loops)      info.loop_exit[header] = s2;
-        else if (s2_loops && !s1_loops) info.loop_exit[header] = s1;
+        // Bottom-tested loop (do-while): header isn't conditional, but a
+        // back-edge tail tests-and-exits. Pick the first qualifying tail's
+        // non-back-edge successor as the loop's exit so build_sequence can
+        // continue past the loop.
+        for (const addr_t tail : backs) {
+            auto tit = fn.block_at.find(tail);
+            if (tit == fn.block_at.end()) continue;
+            const auto& tbb = fn.blocks[tit->second];
+            if (tbb.kind != BlockKind::Conditional || tbb.successors.size() != 2) continue;
+            const addr_t t1 = tbb.successors[0];
+            const addr_t t2 = tbb.successors[1];
+            if      (t1 == header) { info.loop_exit[header] = t2; break; }
+            else if (t2 == header) { info.loop_exit[header] = t1; break; }
+        }
     }
 }
 
@@ -636,12 +651,16 @@ public:
             auto body = build_sequence(body_entry, header);
             loop_r->children.push_back(std::move(body));
         } else if (do_while) {
-            // Walk header → tail via the body path. build_sequence handles
-            // most shapes; the tail block's contents still need to emit
-            // (minus its branch), because the tail is the last body block.
+            // Walk header → tail via the body path. Stop *before* dw_tail so
+            // its cond-branch isn't rendered as `if (cond) continue; else break;`
+            // — the trailing `} while (cond);` already carries the predicate.
+            // Then emit dw_tail's block (non-branch insts) as the loop's last
+            // body element so observable effects match the asm.
             if (header != dw_tail && !bb.successors.empty()) {
-                auto body = build_sequence(bb.successors.front(), kNoAddr);
+                auto body = build_sequence(bb.successors.front(), dw_tail);
                 loop_r->children.push_back(std::move(body));
+                visited_.insert(dw_tail);
+                loop_r->children.push_back(make_block(dw_tail));
             }
         }
 

@@ -15,9 +15,5 @@ void dowhile_with_skip(u64 a1, u64 a2) {
     local_c++;
     u32 t51 = local_c;
     u32 t55 = local_24;
-    if ((i64)t51 < (i64)t55) {
-      continue;
-    }
-    break;
   } while ((i64)t51 < (i64)t55);
 }

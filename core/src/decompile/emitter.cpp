@@ -477,7 +477,10 @@ struct Emitter {
     }
 
     // Arity for an import by name — user signature at its PLT address beats
-    // the baked-in libc table.
+    // the baked-in libc table, which beats Itanium-mangled-name parsing.
+    // The mangled-name path lets C++ stdlib calls (`std::istream::get`,
+    // `std::ofstream::write`, …) size correctly without hand-maintaining
+    // a table for every member function.
     [[nodiscard]] std::optional<u8>
     import_arity(addr_t plt_addr, std::string_view name) const {
         if (annotations) {
@@ -485,7 +488,15 @@ struct Emitter {
                 return static_cast<u8>(sig->params.size());
             }
         }
-        return libc_arity_by_name(name);
+        if (auto a = libc_arity_by_name(name); a) return a;
+        if (binary) {
+            if (const Symbol* s = binary->import_at_plt(plt_addr); s) {
+                if (auto a = arity_from_mangled(s->name); a) {
+                    return static_cast<u8>(*a);
+                }
+            }
+        }
+        return std::nullopt;
     }
 
     [[nodiscard]] static bool is_call_arg_barrier(const IrInst& inst) noexcept {
@@ -1626,6 +1637,21 @@ struct Emitter {
                 }
             }
         }
+        // i64 imms in the small-negative-as-i32 range come from `mov eax,
+        // -1; ret`-style returns the lifter widened into rax — the high
+        // 32 bits are zero, the low 32 are the signed value. Render those
+        // as their signed form too. Same -32 threshold as above so genuine
+        // 32-bit bitmasks (0xFFFFFFFE used as ~1, etc.) keep their hex.
+        if (v.type == IrType::I64) {
+            const u64 u = static_cast<u64>(v.imm);
+            if ((u >> 32) == 0 && (u & 0x80000000u)) {
+                const i64 as_signed =
+                    static_cast<i64>(u | 0xFFFFFFFF00000000ull);
+                if (as_signed >= -32) {
+                    return std::format("{}", as_signed);
+                }
+            }
+        }
         if (v.imm < 0) {
             const u64 abs_v = static_cast<u64>(0) - static_cast<u64>(v.imm);
             return std::format("-{:#x}", abs_v);
@@ -2261,12 +2287,51 @@ struct Emitter {
                                          bool in_bool_ctx = false,
                                          int min_prec = 0) const {
         // In boolean context, `x != 0` is spelled `x` and `x == 0` is `!x`.
-        // Applies to either operand being an Imm(0).
+        // Applies to either operand being an Imm(0). Strip casts on the
+        // nonzero operand and recognise `xor(y, 1)` as a boolean negation
+        // of `y`, so the compiler's `xor eax, 1; test al, al; jnz` lowering
+        // of `if (!flag)` collapses from `if (!(u8)((u32)flag ^ 1))` back
+        // to a plain `if (flag)` instead of leaving the bitwise-xor noise
+        // visible at every is_open / is_eof / has_X check.
         if (in_bool_ctx && (op == "!=" || op == "==")) {
             const IrValue* nonzero = nullptr;
             if (a.kind == IrValueKind::Imm && a.imm == 0) nonzero = &b;
             else if (b.kind == IrValueKind::Imm && b.imm == 0) nonzero = &a;
             if (nonzero) {
+                // Strip surrounding cast chain to find a `xor(y, 1)` core.
+                IrValue core = *nonzero;
+                for (int hop = 0; hop < 6; ++hop) {
+                    const IrInst* d = def_stripped(core);
+                    if (!d) break;
+                    if (d->op == IrOp::ZExt || d->op == IrOp::SExt ||
+                        d->op == IrOp::Trunc) {
+                        if (d->src_count < 1) break;
+                        core = d->srcs[0];
+                        continue;
+                    }
+                    break;
+                }
+                if (const IrInst* dx = def_stripped(core);
+                    dx && dx->op == IrOp::Xor && dx->src_count == 2) {
+                    const IrValue& a2 = dx->srcs[0];
+                    const IrValue& b2 = dx->srcs[1];
+                    const IrValue* y = nullptr;
+                    if (a2.kind == IrValueKind::Imm && a2.imm == 1) y = &b2;
+                    else if (b2.kind == IrValueKind::Imm && b2.imm == 1) y = &a2;
+                    if (y) {
+                        // `(xor(y, 1) == 0)` ⇔ `y` (truthy when bit 0 set).
+                        // `(xor(y, 1) != 0)` ⇔ `!y`. The conclusion holds
+                        // exactly when y ∈ {0, 1}; any other value would
+                        // never have led the compiler to emit the
+                        // `xor reg, 1` idiom in the first place.
+                        if (op == "==") {
+                            return expr(*y, depth + 1, min_prec);
+                        }
+                        std::string rendered = expr(*y, depth + 1,
+                                                    std::to_underlying(Prec::Unary));
+                        return wrap_if_lt("!" + rendered, Prec::Unary, min_prec);
+                    }
+                }
                 if (op == "!=") {
                     return expr(*nonzero, depth + 1, min_prec);
                 }
@@ -3182,16 +3247,37 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
 }
 
 void Emitter::emit_region_while(const Region& r, int depth, std::string& out) const {
-    // Render as for-loop so header-defined temps are in scope for the
-    // condition: `for (;;) { header; if (!cond) break; body; }`.
-    // invert^true flips the "keep looping" condition into the "break" condition.
+    // Two render shapes for a top-tested loop:
+    //
+    //   `while (cond) { body }`     — preferred, source-shape.
+    //   `for (;;) { header; if (!cond) break; body }`
+    //          — fallback when the header block has live statements that
+    //            need to stay in the loop's scope (typically a Load or
+    //            Call whose result the condition reads).
+    //
+    // We pre-render the header into a buffer and pick by emptiness. The
+    // common case at -O2 is an empty header — the cond uses live-in args
+    // or pre-loop locals — and the cleaner `while (cond)` reads as the
+    // user originally wrote.
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
+
+    std::string header_buf;
+    if (!r.children.empty()) {
+        emit_region(*r.children[0], depth + 1, header_buf);
+    }
+    if (header_buf.empty()) {
+        const std::string cond = render_condition(r.condition, r.invert);
+        out += std::format("{}while ({}) {{\n", ind, cond);
+        for (std::size_t i = 1; i < r.children.size(); ++i) {
+            emit_region(*r.children[i], depth + 1, out);
+        }
+        out += std::format("{}}}\n", ind);
+        return;
+    }
     const std::string break_cond = render_condition(r.condition, !r.invert);
     out += std::format("{}for (;;) {{\n", ind);
-    if (!r.children.empty()) {
-        emit_region(*r.children[0], depth + 1, out);
-    }
+    out += header_buf;
     out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
     for (std::size_t i = 1; i < r.children.size(); ++i) {
         emit_region(*r.children[i], depth + 1, out);

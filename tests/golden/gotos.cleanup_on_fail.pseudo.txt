@@ -6,16 +6,16 @@ u64 cleanup_on_fail(u64 a1) {
   if (r_malloc) {
     if (!a1) {
       free(local_10);
-      return 0xffffffff;
+      return -1;
     }
     u64 r_strlen = strlen(a1);
     if (r_strlen > 0x20) {
       free(local_10);
-      return 0xffffffff;
+      return -1;
     }
     strcpy(local_10, a1);
     free(local_10);
     return 0;
   }
-  return 0xffffffff;
+  return -1;
 }

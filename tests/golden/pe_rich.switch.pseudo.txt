@@ -2,7 +2,7 @@
 u64 sub_180001140(u64 a1) {
   u32 t0 = (u32)a1;
   if (t0 > 2) {
-    return 0xffffffff;
+    return -1;
   }
   switch (rcx) {
     case 0:
@@ -12,6 +12,6 @@ u64 sub_180001140(u64 a1) {
     case 2:
       return 0x1e;
     default:
-      return 0xffffffff;
+      return -1;
   }
 }

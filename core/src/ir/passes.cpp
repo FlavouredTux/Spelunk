@@ -744,6 +744,37 @@ struct GvnOp {
                     ++changes;
                     continue;
                 }
+                // Trunc-of-ZExt: the zero-extended high bits never survive
+                // the trunc, so this collapses to a direct trunc of the
+                // original value (or no-op when widths match by construction).
+                // ZExt sign-agnosticism extends to the SExt case when the
+                // outer trunc width fits inside the original (sign bits we'd
+                // be testing are below the trunc cut-off).
+                if ((def->op == IrOp::ZExt || def->op == IrOp::SExt) &&
+                    type_bits(dt) <= type_bits(inner.type)) {
+                    inst.srcs[0] = inner;  // Trunc(<ext>(x)) → Trunc(x)
+                    ++changes;
+                    continue;
+                }
+                // Trunc-of-ZExt where the trunc widens past the original:
+                // `Trunc i32 (ZExt i64 (i8 x))` is just `ZExt i32 x`. The
+                // trunc never reaches into the zero-extended bytes, so the
+                // chain reduces to one widening step. SExt mirrors when
+                // signedness of the result matches the input's sign domain.
+                if (def->op == IrOp::ZExt &&
+                    type_bits(dt) > type_bits(inner.type)) {
+                    inst.op      = IrOp::ZExt;
+                    inst.srcs[0] = inner;
+                    ++changes;
+                    continue;
+                }
+                if (def->op == IrOp::SExt &&
+                    type_bits(dt) > type_bits(inner.type)) {
+                    inst.op      = IrOp::SExt;
+                    inst.srcs[0] = inner;
+                    ++changes;
+                    continue;
+                }
                 if (def->op == IrOp::Trunc && type_bits(inner.type) >= type_bits(dt)) {
                     inst.srcs[0] = inner;  // Trunc(Trunc(x)) → Trunc(x)
                     ++changes;

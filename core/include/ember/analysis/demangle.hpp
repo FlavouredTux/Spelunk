@@ -43,4 +43,14 @@ demangle_itanium(std::string_view mangled);
 // header builder will attach its own argument list.
 [[nodiscard]] std::string pretty_symbol_base(std::string_view name);
 
+// Arity inference from a mangled name. Demangles, parses the trailing
+// `(args)`, counts comma-separated entries (depth-aware so template-args
+// nested inside don't get split), and adds 1 for `this` when the name is
+// a non-static member function. Returns nullopt for non-Itanium names,
+// for free functions whose decl can't be parsed, or for any signature the
+// demangler bailed on. Used to size C++-stdlib calls correctly without
+// needing a hand-maintained table for every member function ember sees.
+[[nodiscard]] std::optional<unsigned char>
+arity_from_mangled(std::string_view mangled);
+
 }  // namespace ember

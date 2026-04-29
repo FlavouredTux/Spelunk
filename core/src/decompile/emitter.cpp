@@ -3635,13 +3635,37 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (sf.body) {
         e.emit_region(*sf.body, 1, body_buf);
     }
+    // Slot extent → array recovery: if a slot's footprint (the gap to the
+    // next slot above it in the frame) is bigger than its observed access
+    // width, the user wrote `T arr[N]`, not a single scalar. Render it as
+    // such so a 128-byte `fgets` buffer doesn't read as `u64 local_208;`.
+    // The map iterates in ascending offset order; for stack locals (negative
+    // offsets) that means deepest-first, so each slot's "next" entry sits
+    // closer to entry rsp and gives us the slot's upper edge directly.
+    auto next_slot_offset = [&](i64 off) -> std::optional<i64> {
+        auto it = e.frame_layout.slots.upper_bound(off);
+        if (it == e.frame_layout.slots.end()) return std::nullopt;
+        return it->second.offset;
+    };
     for (const auto& [_, slot] : e.frame_layout.slots) {
         if (slot.name.empty()) continue;
         if (body_buf.find(slot.name) == std::string::npos) continue;
-        const std::string ty = slot.type_override.empty()
+        std::string ty = slot.type_override.empty()
             ? std::string(c_type_name(slot.type))
             : slot.type_override;
-        out += std::format("  {} {};\n", ty, slot.name);
+        std::string suffix;
+        if (slot.type_override.empty() && slot.size_bytes > 0) {
+            if (auto next_off = next_slot_offset(slot.offset)) {
+                const i64 span = *next_off - slot.offset;
+                if (span > 0 &&
+                    static_cast<u32>(span) > slot.size_bytes &&
+                    span % slot.size_bytes == 0) {
+                    const u32 n = static_cast<u32>(span) / slot.size_bytes;
+                    suffix = std::format("[{}]", n);
+                }
+            }
+        }
+        out += std::format("  {} {}{};\n", ty, slot.name, suffix);
     }
     const std::size_t body_offset = out.size();
     out += body_buf;

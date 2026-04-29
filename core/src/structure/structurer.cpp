@@ -476,11 +476,21 @@ public:
     std::unique_ptr<Region> build_switch(const IrBlock& sw_bb) {
         auto r = std::make_unique<Region>();
         r->kind         = RegionKind::Switch;
-        r->case_values  = sw_bb.case_values;
         r->has_default  = sw_bb.has_default;
         r->switch_index = sw_bb.switch_index;
 
         const addr_t merge = compute_switch_merge(sw_bb);
+
+        // For sparse switches the compiler pads the jump table by pointing
+        // missing-case slots at the default block. Without recognising this,
+        // those slots render as `case N:` falling through to the next
+        // listed body — a bald lie about control flow. Treat any case
+        // whose target equals the default's target as "covered by default"
+        // and drop it from the rendered switch entirely.
+        const addr_t dflt_target =
+            (sw_bb.has_default && !sw_bb.successors.empty())
+                ? sw_bb.successors.back()
+                : kNoAddr;
 
         // De-duplicate cases that share the same target — the resulting
         // switch would be structurally identical; instead we group them
@@ -491,10 +501,14 @@ public:
         const std::size_t n_cases = sw_bb.case_values.size();
         std::map<addr_t, std::size_t> last_occurrence;
         for (std::size_t i = 0; i < n_cases; ++i) {
-            last_occurrence[sw_bb.successors[i]] = i;
+            const addr_t tgt = sw_bb.successors[i];
+            if (tgt == dflt_target) continue;
+            last_occurrence[tgt] = i;
         }
         for (std::size_t i = 0; i < n_cases; ++i) {
             const addr_t tgt = sw_bb.successors[i];
+            if (tgt == dflt_target) continue;
+            r->case_values.push_back(sw_bb.case_values[i]);
             if (last_occurrence[tgt] == i) {
                 r->children.push_back(build_sequence(tgt, merge));
             } else {

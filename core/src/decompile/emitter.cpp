@@ -1662,6 +1662,16 @@ struct Emitter {
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;
         }
+        // Reject when the base is itself an arithmetic combination — that's
+        // the runtime-index pattern (`Add(Mul(idx, stride), Imm)` and friends),
+        // not a real pointer base. Without this guard, `Load(Add(idx*8, &tbl))`
+        // would render as the malformed `(idx*8)[&tbl/8]`. Let the runtime-
+        // array path handle scaled indexing instead.
+        if (const IrInst* bd = def_stripped(base);
+            bd && (bd->op == IrOp::Mul || bd->op == IrOp::Shl ||
+                   bd->op == IrOp::Add || bd->op == IrOp::Sub)) {
+            return std::nullopt;
+        }
         // Vector-shape pointer: defer to the struct-field path so the
         // 3 canonical offsets render as begin/end/capacity instead of
         // an array slice. argv-style ptr-to-ptr accesses don't touch
@@ -1715,6 +1725,26 @@ struct Emitter {
 
         const IrValue& base = pair->first;
         const IrValue& idx  = pair->second;
+
+        // Imm base: global pointer-table at a fixed address. Look up the
+        // defining symbol; fall back to a typed hex cast. Without this,
+        // `call qword ptr [idx*8 + 0x404020]` renders as garbage.
+        if (base.kind == IrValueKind::Imm) {
+            const auto a = static_cast<addr_t>(base.imm);
+            if (binary) {
+                if (const Symbol* s = binary->defined_object_at(a);
+                    s && s->kind == SymbolKind::Object &&
+                    !s->name.empty() &&
+                    static_cast<addr_t>(s->addr) == a) {
+                    return std::format("{}[{}]", s->name,
+                                       expr(idx, depth + 1));
+                }
+            }
+            return std::format("(({}*){:#x})[{}]", c_type_name(t),
+                               static_cast<u64>(base.imm),
+                               expr(idx, depth + 1));
+        }
+
         if (stack_offset(base).has_value()) return std::nullopt;
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;

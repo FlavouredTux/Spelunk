@@ -1110,7 +1110,10 @@ struct Emitter {
     }
 
     // A short identifier derived from the callee's display name, sanitized
-    // to valid C identifier chars.
+    // to valid C identifier chars. For C++ qualified names like
+    // `std::istream::get` we keep only the last `::`-segment so the binding
+    // reads as `r_get` instead of `r_stdistreamget` — the qualified prefix
+    // is already visible at the call site.
     [[nodiscard]] std::string callee_display_short(const IrInst& call_inst) const {
         std::string raw;
         if (call_inst.op == IrOp::Call) {
@@ -1121,6 +1124,12 @@ struct Emitter {
             else raw = "ind";
         } else {
             raw = "call";
+        }
+        // Keep only the last `::`-separated segment for qualified names.
+        // Operators (`operator+`, `operator new`) and destructors (`~T`)
+        // are kept whole on the right side — they're already short.
+        if (auto pos = raw.rfind("::"); pos != std::string::npos) {
+            raw.erase(0, pos + 2);
         }
         std::string out;
         out.reserve(raw.size());
@@ -1740,6 +1749,17 @@ struct Emitter {
         auto it = struct_offsets.find(*k);
         if (it == struct_offsets.end()) return false;
         const auto& offs = it->second;
+        // The full vector shape is exactly the three {ptr, end, capacity}
+        // 8-byte slots — nothing else. The previous "contains" check fired
+        // on any pointer whose accesses *included* {0, 8, 16}, so a 4 KB
+        // jump-table initialised with `tbl[0]/[1]/[2]/[3]/...` got named
+        // `tbl->begin/end/capacity/field_18/field_20/...` instead of
+        // `tbl[0]/[1]/[2]/[3]/...`. Tightening to subset-equality blocks
+        // that misfire while still recognising the genuine three-slot shape.
+        if (offs.size() > 3) return false;
+        for (i64 o : offs) {
+            if (o != 0 && o != 8 && o != 16) return false;
+        }
         return offs.contains(0) && offs.contains(8) && offs.contains(16);
     }
 

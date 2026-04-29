@@ -681,8 +681,64 @@ std::optional<std::string> demangle_itanium(std::string_view mangled) {
     return result;
 }
 
+// Collapse the verbose libstdc++ template forms into their canonical
+// typedef names. Hex-Rays does the same — without this, every C++ string
+// or stream operation in a decompile drowns the reader in
+// `std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>`
+// where the source code only ever wrote `std::string`. Operates as a
+// straight find-and-replace over the demangled text; the bracket/paren
+// balance of the originals is preserved so nested templates round-trip.
+std::string simplify_stdlib_templates(std::string s) {
+    struct Sub { std::string_view from, to; };
+    static constexpr Sub subs[] = {
+        // String types.
+        {"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >",     "std::string"},
+        {"std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>",      "std::string"},
+        {"std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t> >", "std::wstring"},
+        {"std::__cxx11::basic_string<wchar_t, std::char_traits<wchar_t>, std::allocator<wchar_t>>",  "std::wstring"},
+        {"std::basic_string<char, std::char_traits<char>, std::allocator<char> >",              "std::string"},
+        {"std::basic_string<char, std::char_traits<char>, std::allocator<char>>",               "std::string"},
+        {"std::basic_string_view<char, std::char_traits<char> >",                                "std::string_view"},
+        {"std::basic_string_view<char, std::char_traits<char>>",                                 "std::string_view"},
+        // I/O streams.
+        {"std::basic_ifstream<char, std::char_traits<char> >", "std::ifstream"},
+        {"std::basic_ifstream<char, std::char_traits<char>>",  "std::ifstream"},
+        {"std::basic_ofstream<char, std::char_traits<char> >", "std::ofstream"},
+        {"std::basic_ofstream<char, std::char_traits<char>>",  "std::ofstream"},
+        {"std::basic_fstream<char, std::char_traits<char> >",  "std::fstream"},
+        {"std::basic_fstream<char, std::char_traits<char>>",   "std::fstream"},
+        {"std::basic_istream<char, std::char_traits<char> >",  "std::istream"},
+        {"std::basic_istream<char, std::char_traits<char>>",   "std::istream"},
+        {"std::basic_ostream<char, std::char_traits<char> >",  "std::ostream"},
+        {"std::basic_ostream<char, std::char_traits<char>>",   "std::ostream"},
+        {"std::basic_iostream<char, std::char_traits<char> >", "std::iostream"},
+        {"std::basic_iostream<char, std::char_traits<char>>",  "std::iostream"},
+        {"std::basic_streambuf<char, std::char_traits<char> >", "std::streambuf"},
+        {"std::basic_streambuf<char, std::char_traits<char>>",  "std::streambuf"},
+        {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >", "std::stringstream"},
+        {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char>>",  "std::stringstream"},
+        // Container default-allocator collapse — `vector<T, allocator<T>>`
+        // → `vector<T>` when the allocator's parameter literally matches.
+        // We do this generically below, but pin a couple of common ones for
+        // shorter chains the generic pass would also handle.
+        {", std::allocator<char> >", ">"},
+        {", std::allocator<char>>", ">"},
+    };
+    for (const auto& [from, to] : subs) {
+        for (std::size_t pos = 0;;) {
+            pos = s.find(from, pos);
+            if (pos == std::string::npos) break;
+            s.replace(pos, from.size(), to);
+            pos += to.size();
+        }
+    }
+    return s;
+}
+
 std::string pretty_symbol(std::string_view name) {
-    if (auto r = demangle_itanium(name); r) return *r;
+    if (auto r = demangle_itanium(name); r) {
+        return simplify_stdlib_templates(std::move(*r));
+    }
     return std::string(name);
 }
 

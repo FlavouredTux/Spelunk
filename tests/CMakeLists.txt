@@ -78,19 +78,36 @@ set(_build_dir   "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 file(MAKE_DIRECTORY "${_build_dir}")
 
 function(ember_build_fixture name)
-    cmake_parse_arguments(F "" "OPT;PROTECTOR" "EXTRA_LDFLAGS" ${ARGN})
+    cmake_parse_arguments(F "PIE" "OPT;PROTECTOR;SRC;FP" "EXTRA_LDFLAGS" ${ARGN})
     if(NOT F_OPT)
         set(F_OPT "-O2")
     endif()
     if(NOT F_PROTECTOR)
         set(F_PROTECTOR "-fno-stack-protector")
     endif()
-    set(_src "${_fixture_dir}/${name}.c")
+    if(F_PIE)
+        set(_pie_flags "-fPIE" "-pie")
+    else()
+        set(_pie_flags "-no-pie")
+    endif()
+    if(F_FP STREQUAL "omit")
+        set(_fp_flag "-fomit-frame-pointer")
+    elseif(F_FP STREQUAL "keep")
+        set(_fp_flag "-fno-omit-frame-pointer")
+    else()
+        set(_fp_flag "")
+    endif()
+    if(F_SRC)
+        set(_src "${_fixture_dir}/${F_SRC}")
+    else()
+        set(_src "${_fixture_dir}/${name}.c")
+    endif()
     set(_out "${_build_dir}/${name}")
     add_custom_command(
         OUTPUT "${_out}"
         COMMAND ${CMAKE_C_COMPILER} ${F_OPT} -g ${F_PROTECTOR}
-                -no-pie ${F_EXTRA_LDFLAGS} -o "${_out}" "${_src}"
+                ${_pie_flags} ${_fp_flag} ${F_EXTRA_LDFLAGS}
+                -o "${_out}" "${_src}"
         DEPENDS "${_src}"
         COMMENT "Compiling fixture ${name} (${F_OPT} ${F_PROTECTOR})"
         VERBATIM
@@ -130,6 +147,44 @@ ember_build_fixture(arith OPT "-O0")
 # 24-byte 3-pointer struct shaped like libstdc++ / libc++ / MSVC STL
 # std::vector<T> for the looks_like_vector predicate to fire on.
 ember_build_fixture(vector_like)
+# -O0 so dbg_marker stays a real function (no inlining, no tail-call
+# fold) and gets a stable symbol address the smoke test can set a
+# software breakpoint at. Built once non-PIE (dbg_target) and once
+# PIE (dbg_target_pie) so the smoke tests cover both load shapes —
+# slide-aware breakpoint resolution flows through the same path for
+# both, with the slide degenerating to 0 in the non-PIE case.
+ember_build_fixture(dbg_target     OPT "-O0")
+ember_build_fixture(dbg_target_pie OPT "-O0" PIE SRC "dbg_target.c")
+# -O2 + -fomit-frame-pointer: RBP-walk fails past frame 0 because the
+# call to dbg_marker doesn't preserve RBP. The .eh_frame unwinder
+# must still produce a multi-frame trace.
+ember_build_fixture(dbg_target_ofp OPT "-O2" FP "omit" SRC "dbg_target.c")
+
+# Debugger smoke test: launches the dbg_target fixture under the
+# Linux ptrace backend, sets a breakpoint at `dbg_marker`, asserts
+# the bp fires and the process exits with code 42. Runs against
+# both fixtures so the slide-correction path is exercised. Linux /
+# x86-64 only — matches the backend's CMake gate. yama ptrace_scope
+# is irrelevant for child tracees so any sysctl works.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    add_executable(ember_dbg_smoke_test dbg_smoke_test.cpp)
+    target_link_libraries(ember_dbg_smoke_test
+        PRIVATE ember::core ember::flags)
+    add_dependencies(ember_dbg_smoke_test
+        ember_fixture_dbg_target ember_fixture_dbg_target_pie)
+    add_test(NAME dbg_smoke
+             COMMAND ember_dbg_smoke_test "${EMBER_FIXTURE_dbg_target_PATH}")
+    add_test(NAME dbg_smoke_pie
+             COMMAND ember_dbg_smoke_test "${EMBER_FIXTURE_dbg_target_pie_PATH}")
+
+    # .eh_frame unwinder vs RBP-walk on -fomit-frame-pointer.
+    add_executable(ember_dbg_eh_unwind_test dbg_eh_unwind_test.cpp)
+    target_link_libraries(ember_dbg_eh_unwind_test
+        PRIVATE ember::core ember::flags)
+    add_dependencies(ember_dbg_eh_unwind_test ember_fixture_dbg_target_ofp)
+    add_test(NAME dbg_eh_unwind
+             COMMAND ember_dbg_eh_unwind_test "${EMBER_FIXTURE_dbg_target_ofp_PATH}")
+endif()
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by
 # the driver script), because CTest's own quoting gets ugly with ";" in

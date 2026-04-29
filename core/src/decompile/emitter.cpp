@@ -1857,6 +1857,31 @@ struct Emitter {
         return wrap_if_lt(std::move(result), self_prec, min_prec);
     }
 
+    // Bitwise &/|/^ rendering with mask-friendly imm handling:
+    // negative power-of-2 boundary values render as `~0xN` (the
+    // C-natural mask form) instead of `-0x{N+1}`, which is opaque
+    // in a bitwise context. Always commutative — both operands
+    // share the binop's precedence.
+    [[nodiscard]] std::string format_bitop(const IrInst& d, std::string_view op,
+                                            int depth, int min_prec,
+                                            Prec self_prec) const {
+        const int p = static_cast<int>(self_prec);
+        auto render = [&](const IrValue& v) -> std::string {
+            if (v.kind == IrValueKind::Imm && v.imm < 0) {
+                const u64 absv =
+                    static_cast<u64>(0) - static_cast<u64>(v.imm);
+                if (absv >= 2 && (absv & (absv - 1)) == 0) {
+                    return std::format("~{:#x}", absv - 1);
+                }
+            }
+            return expr(v, depth, p);
+        };
+        std::string L = render(d.srcs[0]);
+        std::string R = render(d.srcs[1]);
+        return wrap_if_lt(std::format("{} {} {}", L, op, R),
+                          self_prec, min_prec);
+    }
+
     [[nodiscard]] std::string format_stmt(const IrInst& inst) const;
     [[nodiscard]] std::string format_store(const IrInst& inst) const;
     [[nodiscard]] std::string try_compound_store(std::string_view lhs_text,
@@ -2195,6 +2220,17 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
                 return std::format("&{}", stack_name(*off));
             }
+            // `Add(x, negative_imm)` reads cleaner as `Sub(x, |imm|)`:
+            // `a - 7` beats `a + -7`. Skip INT64_MIN (no safe negation).
+            if (d.src_count >= 2 && d.srcs[1].kind == IrValueKind::Imm &&
+                d.srcs[1].imm < 0 &&
+                d.srcs[1].imm > std::numeric_limits<i64>::min()) {
+                IrInst rebuilt = d;
+                rebuilt.op           = IrOp::Sub;
+                rebuilt.srcs[1].imm  = -d.srcs[1].imm;
+                return format_binop(rebuilt, "-", depth, min_prec,
+                                    Prec::Add, /*commutative=*/false);
+            }
             return format_binop(d, "+", depth, min_prec, Prec::Add, /*commutative=*/true);
         }
         case IrOp::Sub: {
@@ -2206,9 +2242,9 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         case IrOp::Mul:  return format_binop(d, "*", depth, min_prec, Prec::Mul,   true);
         case IrOp::Div:  return format_binop(d, "/", depth, min_prec, Prec::Mul,   false);
         case IrOp::Mod:  return format_binop(d, "%", depth, min_prec, Prec::Mul,   false);
-        case IrOp::And:  return format_binop(d, "&", depth, min_prec, Prec::BitAnd, true);
-        case IrOp::Or:   return format_binop(d, "|", depth, min_prec, Prec::BitOr,  true);
-        case IrOp::Xor:  return format_binop(d, "^", depth, min_prec, Prec::BitXor, true);
+        case IrOp::And:  return format_bitop(d, "&", depth, min_prec, Prec::BitAnd);
+        case IrOp::Or:   return format_bitop(d, "|", depth, min_prec, Prec::BitOr);
+        case IrOp::Xor:  return format_bitop(d, "^", depth, min_prec, Prec::BitXor);
         case IrOp::Shl:  return format_binop(d, "<<", depth, min_prec, Prec::Shift, false);
         case IrOp::Lshr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
         case IrOp::Ashr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);

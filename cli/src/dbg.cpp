@@ -218,12 +218,14 @@ std::vector<std::string> tokenize(const std::string& line) {
 // Aux symbol oracle: a Binary whose code is mapped into the tracee
 // outside of any ELF segment we'd see via /proc/<pid>/maps' file
 // path field (typical example: a Mach-O blob mmap'd as anon-rwx by a
-// Linux loader). Slide is either pinned via `--aux-binary PATH@HEX`
-// or auto-detected after attach by size-matching the binary's
-// mapped extent against an anon-rwx region.
+// userspace loader, then mprotect'd to per-segment final prots).
+// Slide is either pinned via `--aux-binary PATH@HEX` or auto-detected
+// after attach by size-matching the binary's mapped extent against an
+// anon region whose first 4 bytes match the binary's format magic.
 struct AuxBin {
     const Binary*         bin = nullptr;
     std::string           path;
+    std::string           short_name;       // basename(path) — e.g. "engine"
     addr_t                slide = 0;
     bool                  slide_resolved = false;
     std::optional<addr_t> manual_base;
@@ -235,10 +237,19 @@ struct ReplState {
     bool                           live        = false;
     const Binary*                  bin         = nullptr;
     std::string                    bin_path;   // for compute_slide path-matching
+    std::string                    bin_short_name; // basename(bin_path) for `<bin>:<sym>` qualifier
     addr_t                         slide       = 0;  // PIE/ASLR slide; 0 for non-PIE
     std::vector<AuxBin>            aux_bins;
     std::vector<std::unique_ptr<Binary>> aux_storage;  // owns runtime-loaded `aux` binaries
 };
+
+// Strip directories and the trailing extension from a path; the
+// resulting "short name" is what the `<bin>:<sym>` syntax matches.
+[[nodiscard]] std::string short_name_for(const std::string& path) {
+    std::filesystem::path p(path);
+    auto stem = p.stem().string();
+    return stem.empty() ? p.filename().string() : stem;
+}
 
 // PC → which (Binary, slide) covers it. Tries primary first, then
 // aux. Coverage is "static_pc lands in [preferred_load_base,
@@ -267,7 +278,10 @@ find_bin_for_pc(const ReplState& rs, addr_t runtime_pc) {
 }
 
 // Symbol name → first (Binary, static addr, slide) match, scanning
-// primary then aux in registration order.
+// primary then aux in registration order. When the same name resolves
+// in more than one bin we still pick the first hit (so the call is
+// O(1) at use sites) but emit a one-line warning to stderr so the
+// user knows to disambiguate via `<bin>:<sym>`.
 struct SymHit {
     const Binary* bin    = nullptr;
     addr_t        addr   = 0;
@@ -275,16 +289,51 @@ struct SymHit {
 };
 [[nodiscard]] std::optional<SymHit>
 find_symbol(const ReplState& rs, std::string_view name) {
-    if (rs.bin) {
-        if (auto* s = rs.bin->find_by_name(name); s && s->addr != 0) {
-            return SymHit{rs.bin, s->addr, rs.slide};
+    std::optional<SymHit> first;
+    std::vector<std::string> also_in;
+    auto try_bin = [&](const Binary* b, addr_t slide, std::string_view tag) {
+        if (!b) return;
+        if (auto* s = b->find_by_name(name); s && s->addr != 0) {
+            if (!first) first = SymHit{b, s->addr, slide};
+            else        also_in.emplace_back(tag);
         }
-    }
+    };
+    try_bin(rs.bin, rs.slide, rs.bin_short_name);
     for (const auto& aux : rs.aux_bins) {
-        if (!aux.bin) continue;
-        if (auto* s = aux.bin->find_by_name(name); s && s->addr != 0) {
-            return SymHit{aux.bin, s->addr, aux.slide};
+        try_bin(aux.bin, aux.slide, aux.short_name);
+    }
+    if (first && !also_in.empty()) {
+        std::string tags = also_in.front();
+        for (std::size_t i = 1; i < also_in.size(); ++i) {
+            tags += ", ";
+            tags += also_in[i];
         }
+        std::println(stderr,
+            "ember-dbg: warning: '{}' resolves in {} bins; using first match — qualify with <bin>:<sym> to pick (also: {})",
+            name, also_in.size() + 1, tags);
+    }
+    return first;
+}
+
+// `<bin>:<sym>` lookup. Returns nullopt when the colon-prefix doesn't
+// name a known bin so the caller can fall back to a plain global
+// symbol search.
+[[nodiscard]] std::optional<SymHit>
+find_symbol_qualified(const ReplState& rs,
+                      std::string_view bin_tok,
+                      std::string_view sym_tok) {
+    auto try_bin = [&](const Binary* b, addr_t slide,
+                       std::string_view tag) -> std::optional<SymHit> {
+        if (!b) return std::nullopt;
+        if (tag != bin_tok) return std::nullopt;
+        if (auto* s = b->find_by_name(sym_tok); s && s->addr != 0) {
+            return SymHit{b, s->addr, slide};
+        }
+        return std::nullopt;
+    };
+    if (auto h = try_bin(rs.bin, rs.slide, rs.bin_short_name); h) return h;
+    for (const auto& aux : rs.aux_bins) {
+        if (auto h = try_bin(aux.bin, aux.slide, aux.short_name); h) return h;
     }
     return std::nullopt;
 }
@@ -318,12 +367,17 @@ parse_addr_spec_multi(std::string_view tok, const ReplState& rs) {
     return sym_at_in_bin(pc, rs.bin, rs.slide);
 }
 
-// Parse `/proc/<pid>/maps`, return every anon-rwx region (no file
-// backing, executable). Used to discover the runtime base for an
-// aux Binary by size-matching against `bin->mapped_size()`.
+// Parse `/proc/<pid>/maps`, return every *anonymous* region (no file
+// backing). We deliberately don't filter on permission bits: a
+// userspace loader typically mmaps a foreign binary as rwx for the
+// rebase/bind pass and then mprotects each segment to its final
+// prots — so by the time we attach, __TEXT is r-x, __DATA is rw-,
+// __LINKEDIT is r--. The base address (where the format's magic
+// lives) is just whichever segment got mapped first; what proves
+// it's our binary is the magic check at offset 0, not the prot bits.
 struct AnonRegion { addr_t base; addr_t size; };
 
-std::vector<AnonRegion> read_anon_executable_regions(debug::ProcessId pid) {
+std::vector<AnonRegion> read_anon_regions(debug::ProcessId pid) {
     std::vector<AnonRegion> out;
     char path[64];
     std::snprintf(path, sizeof path, "/proc/%u/maps", pid);
@@ -359,11 +413,10 @@ std::vector<AnonRegion> read_anon_executable_regions(debug::ProcessId pid) {
         const addr_t start = parse_hex(sv.substr(0, dash));
         const addr_t end   = parse_hex(sv.substr(dash + 1, sp1 - dash - 1));
         if (end <= start) continue;
-        const std::string_view perms = sv.substr(sp1 + 1, 4);
-        if (perms.find('x') == std::string_view::npos) continue;
 
-        // Skip past 4 more whitespace-separated fields (offset, dev,
-        // inode, optional pathname). Anything after that is the path.
+        // Skip the perms field + 4 more whitespace-separated tokens
+        // (offset, dev, inode, optional pathname). What's left is the
+        // path; anon = empty or kernel-bracket like [vdso] / [stack].
         std::size_t pos = sp1 + 5;
         for (int k = 0; k < 4 && pos < sv.size(); ++k) {
             while (pos < sv.size() && sv[pos] == ' ') ++pos;
@@ -371,8 +424,6 @@ std::vector<AnonRegion> read_anon_executable_regions(debug::ProcessId pid) {
         }
         while (pos < sv.size() && sv[pos] == ' ') ++pos;
         const std::string_view path_sv = sv.substr(pos);
-
-        // Anon = no path or kernel-bracket name like [vdso] / [stack].
         if (!path_sv.empty() && path_sv.front() != '[') continue;
 
         out.push_back({start, end - start});
@@ -421,7 +472,7 @@ compute_aux_slide(debug::Target& tgt, const AuxBin& aux) {
     constexpr addr_t kPage = 0x1000;
     const addr_t want = (want_size + kPage - 1) & ~(kPage - 1);
 
-    const auto regions = read_anon_executable_regions(tgt.pid());
+    const auto regions = read_anon_regions(tgt.pid());
     addr_t found_base = 0;
     int    matches    = 0;
     for (const auto& r : regions) {
@@ -605,9 +656,32 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
     return true;
 }
 
+// `<bin>:<sym>` — restrict the symbol lookup to the named binary.
+// The bin name is the basename of the path (no extension); primary
+// uses basename(args.binary). Returns true on a hit (bp set or
+// error reported); false to fall through.
+bool try_break_qualified(ReplState& rs, std::string_view tok) {
+    const auto colon = tok.find(':');
+    if (colon == std::string_view::npos) return false;
+    const std::string_view bin_tok = tok.substr(0, colon);
+    const std::string_view sym_tok = tok.substr(colon + 1);
+    if (bin_tok.empty() || sym_tok.empty()) return false;
+
+    auto h = find_symbol_qualified(rs, bin_tok, sym_tok);
+    if (!h) return false;
+
+    const addr_t va = h->addr + h->slide;
+    auto id = rs.tgt->set_breakpoint(va);
+    if (!id) { print_error(id.error()); return true; }
+    std::println("Breakpoint #{} at {}  ({}:{} → static {})",
+                 *id, fmt_addr(va), bin_tok, sym_tok, fmt_addr(h->addr));
+    return true;
+}
+
 int cmd_break(ReplState& rs, std::string_view tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     if (try_break_at_pseudo_line(rs, tok)) return 0;
+    if (try_break_qualified(rs, tok)) return 0;
     auto spec = parse_addr_spec_multi(tok, rs);
     if (!spec) {
         std::println(stderr, "ember-dbg: b: '{}' is neither hex, a known symbol, nor sym:line", tok);
@@ -950,7 +1024,7 @@ int cmd_aux(ReplState& rs, std::string_view tok) {
             return 0;
         }
         for (const auto& aux : rs.aux_bins) {
-            std::println("  {}  {}{}", aux.path,
+            std::println("  [{}]  {}  {}{}", aux.short_name, aux.path,
                          aux.slide_resolved
                              ? fmt_addr(aux.bin->preferred_load_base() + aux.slide)
                              : std::string("(unresolved)"),
@@ -987,6 +1061,7 @@ int cmd_aux(ReplState& rs, std::string_view tok) {
     rs.aux_storage.push_back(std::move(*loaded));
     AuxBin aux;
     aux.bin         = rs.aux_storage.back().get();
+    aux.short_name  = short_name_for(path);
     aux.path        = std::move(path);
     aux.manual_base = manual;
     if (rs.live) {
@@ -1015,6 +1090,9 @@ void print_help() {
   b <addr|sym|sym:line>     set a software breakpoint
                             sym:line resolves a pseudo-C line for the
                             named function (run `code` to see the lines)
+  b <bin>:<sym>             restrict a symbol lookup to one Binary; <bin>
+                            is the basename(path) of either the primary
+                            or an aux. Useful when both define `main` etc.
   bp                        list breakpoints
   d <id>                    delete a breakpoint
   c                         continue all paused threads
@@ -1042,13 +1120,34 @@ int run_debug(const Args& args, const Binary* bin,
     ReplState rs;
     rs.bin      = bin;
     rs.bin_path = args.binary;
+    if (!args.binary.empty()) rs.bin_short_name = short_name_for(args.binary);
     rs.aux_bins.reserve(aux.size());
     for (const auto& a : aux) {
         AuxBin slot;
         slot.bin         = a.bin;
         slot.path        = a.path;
+        slot.short_name  = short_name_for(a.path);
         slot.manual_base = a.manual_base;
         rs.aux_bins.push_back(std::move(slot));
+    }
+    // Warn at startup if any short names collide. Lookups still pick
+    // the first match; the user can rename with --aux-binary or use
+    // `<full-path-stem>:<sym>` if collisions are unavoidable.
+    {
+        std::vector<std::string> seen;
+        if (!rs.bin_short_name.empty()) seen.push_back(rs.bin_short_name);
+        for (const auto& a : rs.aux_bins) {
+            for (const auto& s : seen) {
+                if (s == a.short_name) {
+                    std::println(stderr,
+                        "ember-dbg: warning: short name '{}' collides between "
+                        "primary and aux — `<bin>:<sym>` will pick the first match",
+                        a.short_name);
+                    break;
+                }
+            }
+            seen.push_back(a.short_name);
+        }
     }
 
     std::signal(SIGINT, sigint_forward);

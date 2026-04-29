@@ -32,6 +32,14 @@ public:
     [[nodiscard]] virtual Endian endian() const noexcept      = 0;
     [[nodiscard]] virtual addr_t entry_point() const noexcept = 0;
 
+    // The virtual address the binary was *linked* to load at. Subtract
+    // this from a symbol address to get the file-offset / RVA, then add
+    // the runtime load base to get the slid runtime address (the
+    // debugger does exactly this dance for `b <symbol>` against PIE/ASLR
+    // binaries). Default 0 — appropriate for raw-region inputs and any
+    // format that treats addresses as already-absolute.
+    [[nodiscard]] virtual addr_t preferred_load_base() const noexcept { return 0; }
+
     [[nodiscard]] virtual std::span<const Section> sections() const noexcept = 0;
     [[nodiscard]] virtual std::span<const Symbol>  symbols() const noexcept  = 0;
 

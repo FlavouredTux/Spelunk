@@ -27,6 +27,17 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
+    // Lowest segment vmaddr — for x86-64 Mach-O this is typically the
+    // __PAGEZERO at 0x100000000 (or 0 for shared caches / dylibs).
+    [[nodiscard]] addr_t preferred_load_base() const noexcept override {
+        addr_t lo = 0;
+        bool   set = false;
+        for (const auto& seg : segments_) {
+            if (!set || seg.vaddr < lo) { lo = seg.vaddr; set = true; }
+        }
+        return set ? lo : 0;
+    }
+
 protected:
     [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
 public:

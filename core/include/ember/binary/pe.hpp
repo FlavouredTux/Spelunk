@@ -41,6 +41,10 @@ public:
     // on-disk structures back to absolute VAs.
     [[nodiscard]] addr_t image_base() const noexcept { return image_base_; }
 
+    [[nodiscard]] addr_t preferred_load_base() const noexcept override {
+        return image_base_;
+    }
+
     // Optional header data directory entries. Fields carry RVAs — callers
     // add image_base() to get absolute VAs. Index with the standard
     // IMAGE_DIRECTORY_ENTRY_* constants (EXPORT=0, IMPORT=1, EXCEPTION=3,

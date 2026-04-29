@@ -43,6 +43,17 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
+    // Lowest PT_LOAD vaddr — 0 for PIE/ET_DYN, the linker's preferred
+    // base (typically 0x400000 on x86-64 sysv) for non-PIE.
+    [[nodiscard]] addr_t preferred_load_base() const noexcept override {
+        addr_t lo = 0;
+        bool   set = false;
+        for (const auto& seg : segments_) {
+            if (!set || seg.vaddr < lo) { lo = seg.vaddr; set = true; }
+        }
+        return set ? lo : 0;
+    }
+
 protected:
     [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
 public:

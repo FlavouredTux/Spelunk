@@ -99,6 +99,21 @@ struct Emitter {
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
     std::map<SsaKey, u32>                            uses;
     std::set<std::pair<std::size_t, std::size_t>>    hidden;
+    // Precomputed counts populated once `hidden` and ABI-noise filters
+    // have been applied. `visible_uses[k]` matches what `visible_use_count`
+    // would return on demand; `flag_assign_uses[k]` counts the subset of
+    // those uses that are Assign-to-Flag (the discriminator
+    // `every_use_is_flag_assign` was scanning the function for). Without
+    // these, those queries each O(N)-walked the IR per leaf-render, which
+    // turned the emitter into O(N²) for any function with thousands of
+    // instructions — the brain crackme's 160KB hand-written `main`
+    // bottomed out at >2 minutes purely on those scans.
+    std::map<SsaKey, u32>                            visible_uses;
+    std::map<SsaKey, u32>                            flag_assign_uses;
+    // (block, inst) positions of every visible use of a given key, so
+    // is_flag_feeder_temp can iterate users in O(uses) instead of
+    // re-walking the whole function each call.
+    std::map<SsaKey, std::vector<std::pair<u32, u32>>> visible_user_positions;
     // Stack-slot offsets (per stack_offset()) that have at least one Load
     // somewhere in the function. A Store to an offset NOT in this set is a
     // dead spill — common for -O0 spill-arg-to-slot prologues whose slot is
@@ -567,6 +582,30 @@ struct Emitter {
             }
         }
         analyze_abi_noise();
+        // Single sweep populating the visible-use caches. Mirrors the
+        // filter the on-demand functions used to apply (skip hidden,
+        // call-arg barriers, Phi operands), so visible_use_count and
+        // every_use_is_flag_assign collapse to map lookups instead of
+        // O(N) scans per query.
+        for (u32 bi = 0; bi < f.blocks.size(); ++bi) {
+            const auto& bb = f.blocks[bi];
+            for (u32 ii = 0; ii < bb.insts.size(); ++ii) {
+                if (hidden.contains({bi, ii})) continue;
+                const auto& inst = bb.insts[ii];
+                if (is_call_arg_barrier(inst)) continue;
+                if (inst.op == IrOp::Phi) continue;
+                const bool is_flag_assign =
+                    inst.op == IrOp::Assign &&
+                    inst.dst.kind == IrValueKind::Flag;
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    auto k = ssa_key(inst.srcs[i]);
+                    if (!k) continue;
+                    visible_uses[*k]++;
+                    if (is_flag_assign) flag_assign_uses[*k]++;
+                    visible_user_positions[*k].emplace_back(bi, ii);
+                }
+            }
+        }
         // Stack slots that are loaded from somewhere in the function. A
         // store whose address resolves to a slot NOT in this set is a dead
         // spill — at -O0 the compiler routinely emits `mov [rbp-N], reg`
@@ -1132,40 +1171,54 @@ struct Emitter {
             }
         }
         // Pass 2: propagate. A pure temp whose every use is in a hidden inst is itself dead.
+        //
+        // We build a one-shot user-list per SsaKey up front so each fixpoint
+        // iteration touches O(uses) instead of re-walking the entire IR.
+        // The previous shape was O(N) outer × O(N) inner × up-to-16 iters,
+        // which on a 50 k-inst function turns into tens of billions of
+        // ssa_key comparisons.
+        std::map<SsaKey, std::vector<std::pair<u32, u32>>> users_of;
+        for (u32 bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (u32 ii = 0; ii < bb.insts.size(); ++ii) {
+                const auto& inst = bb.insts[ii];
+                auto record = [&](const IrValue& v) {
+                    if (auto k = ssa_key(v); k) {
+                        users_of[*k].emplace_back(bi, ii);
+                    }
+                };
+                if (inst.op == IrOp::Phi) {
+                    for (const auto& op : inst.phi_operands) record(op);
+                } else {
+                    for (u8 k = 0; k < inst.src_count && k < inst.srcs.size(); ++k) {
+                        record(inst.srcs[k]);
+                    }
+                }
+            }
+        }
         bool changed = true;
         int guard = 0;
         while (changed && guard++ < 16) {
             changed = false;
-            for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            for (u32 bi = 0; bi < fn->blocks.size(); ++bi) {
                 const auto& bb = fn->blocks[bi];
-                for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                for (u32 ii = 0; ii < bb.insts.size(); ++ii) {
                     if (hidden.contains({bi, ii})) continue;
                     const auto& inst = bb.insts[ii];
                     if (inst.dst.kind != IrValueKind::Temp) continue;
                     if (!inlinable_op(inst.op)) continue;
                     auto target_key = ssa_key(inst.dst);
                     if (!target_key) continue;
-                    bool has_use = false, all_hidden = true;
-                    for (std::size_t bj = 0; bj < fn->blocks.size() && all_hidden; ++bj) {
-                        const auto& bb2 = fn->blocks[bj];
-                        for (std::size_t ij = 0; ij < bb2.insts.size() && all_hidden; ++ij) {
-                            const auto& inst2 = bb2.insts[ij];
-                            auto check = [&](const IrValue& v) {
-                                if (ssa_key(v) == target_key) {
-                                    has_use = true;
-                                    if (!hidden.contains({bj, ij}) && !is_call_arg_barrier(inst2))
-                                        all_hidden = false;
-                                }
-                            };
-                            if (inst2.op == IrOp::Phi) {
-                                for (const auto& op : inst2.phi_operands) check(op);
-                            } else {
-                                for (u8 k = 0; k < inst2.src_count && k < inst2.srcs.size(); ++k)
-                                    check(inst2.srcs[k]);
-                            }
-                        }
+                    auto uit = users_of.find(*target_key);
+                    if (uit == users_of.end() || uit->second.empty()) continue;
+                    bool all_hidden = true;
+                    for (const auto& [bj, ij] : uit->second) {
+                        if (hidden.contains({bj, ij})) continue;
+                        if (is_call_arg_barrier(fn->blocks[bj].insts[ij])) continue;
+                        all_hidden = false;
+                        break;
                     }
-                    if (has_use && all_hidden) {
+                    if (all_hidden) {
                         hidden.insert({bi, ii});
                         changed = true;
                     }
@@ -1354,19 +1407,8 @@ struct Emitter {
     [[nodiscard]] u32 visible_use_count(const IrValue& v) const {
         auto key = ssa_key(v);
         if (!key) return 0u;
-        u32 n = 0;
-        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
-            const auto& bb = fn->blocks[bi];
-            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-                if (hidden.contains({bi, ii})) continue;
-                const auto& inst = bb.insts[ii];
-                if (is_call_arg_barrier(inst)) continue;
-                if (inst.op == IrOp::Phi) continue;
-                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
-                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == *key) ++n;
-            }
-        }
-        return n;
+        auto it = visible_uses.find(*key);
+        return it != visible_uses.end() ? it->second : 0u;
     }
 
     [[nodiscard]] static bool inlinable_op(IrOp op) noexcept {
@@ -1401,29 +1443,11 @@ struct Emitter {
         if (v.kind != IrValueKind::Temp) return false;
         auto k = ssa_key(v);
         if (!k) return false;
-        bool found = false;
-        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
-            const auto& bb = fn->blocks[bi];
-            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-                if (hidden.contains({bi, ii})) continue;
-                const auto& inst = bb.insts[ii];
-                if (is_call_arg_barrier(inst)) continue;
-                if (inst.op == IrOp::Phi) continue;
-                bool uses_v = false;
-                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == *k) {
-                        uses_v = true; break;
-                    }
-                }
-                if (!uses_v) continue;
-                if (inst.op != IrOp::Assign ||
-                    inst.dst.kind != IrValueKind::Flag) {
-                    return false;
-                }
-                found = true;
-            }
-        }
-        return found;
+        auto vit = visible_uses.find(*k);
+        if (vit == visible_uses.end() || vit->second == 0) return false;
+        auto fit = flag_assign_uses.find(*k);
+        const u32 fa = fit == flag_assign_uses.end() ? 0u : fit->second;
+        return fa == vit->second;
     }
 
     // The cmp result (`a - b` from a `cmp` lifted as Sub) typically has
@@ -1436,27 +1460,16 @@ struct Emitter {
         if (v.kind != IrValueKind::Temp) return false;
         auto k = ssa_key(v);
         if (!k) return false;
-        bool found = false;
-        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
-            const auto& bb = fn->blocks[bi];
-            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-                if (hidden.contains({bi, ii})) continue;
-                const auto& inst = bb.insts[ii];
-                if (is_call_arg_barrier(inst)) continue;
-                if (inst.op == IrOp::Phi) continue;
-                bool uses_v = false;
-                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == *k) {
-                        uses_v = true; break;
-                    }
-                }
-                if (!uses_v) continue;
-                if (inst.dst.kind != IrValueKind::Temp) return false;
-                if (!every_use_is_flag_assign(inst.dst)) return false;
-                found = true;
-            }
+        auto pit = visible_user_positions.find(*k);
+        if (pit == visible_user_positions.end() || pit->second.empty()) {
+            return false;
         }
-        return found;
+        for (const auto& [bi, ii] : pit->second) {
+            const auto& inst = fn->blocks[bi].insts[ii];
+            if (inst.dst.kind != IrValueKind::Temp) return false;
+            if (!every_use_is_flag_assign(inst.dst)) return false;
+        }
+        return true;
     }
 
     [[nodiscard]] bool should_inline(const IrValue& v) const {

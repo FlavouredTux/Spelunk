@@ -81,7 +81,7 @@ struct RegLoad {
     i32      bm_pc_advance  = 0;       // captured from a later add/inc of bm_base_reg
 };
 
-// Real obfuscators (Hyperion, Byfron, VMProtect) sprinkle junk insns
+// Real obfuscators (VMProtect, Tigress, commercial packers) sprinkle junk insns
 // between the opcode-load and the indirect dispatch to break naïve
 // linear-window matchers. Recognise the most common shapes so the
 // detector's rolling state survives them: a junk-padded sequence
@@ -112,7 +112,7 @@ struct RegLoad {
     }
 
     // jmp imm where the relative target lands on the next instruction.
-    // Pure jump-pad — common in Hyperion/Byfron control-flow flatteners.
+    // Pure jump-pad — common in obfuscator control-flow flatteners.
     if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1 &&
         insn.operands[0].kind == Operand::Kind::Relative &&
         insn.operands[0].rel.target == insn.address + insn.length) {

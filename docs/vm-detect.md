@@ -74,8 +74,8 @@ table won't false-positive.
 
 ## Resilience
 
-Real protectors (Tigress, VMProtect, Hyperion / Byfron, plus generic
-flatteners) sprinkle nonsense between the byte-load and the dispatch
+Real protectors (Tigress, VMProtect, plus generic flatteners)
+sprinkle nonsense between the byte-load and the dispatch
 to break naive linear matchers. The detector layers four defenses.
 
 ### Junk-pad skip
@@ -90,7 +90,7 @@ inflating the byte-load to dispatch gap doesn't blow `kReuseWindow`.
 | `nop` | `90` | universal |
 | `xchg reg, reg` (same canonical reg) | `87 c0`, `48 87 c0` | VMProtect |
 | `mov reg, reg` (same canonical reg) | `48 89 c9` | VMProtect / Tigress |
-| `jmp $+next` | `eb 00` | Hyperion / Byfron flatteners |
+| `jmp $+next` | `eb 00` | control-flow flatteners |
 | `lea reg, [reg]` / `lea reg, [reg+0]` | `48 8d 00` family | generic |
 | `add/sub/or/xor reg, 0`, `and reg, -1` | `48 83 c0 00` etc. | VMProtect |
 | `jcc $+next` (conditional, target = next insn) | `74 00` etc. | obfuscator pad |

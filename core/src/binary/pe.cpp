@@ -86,7 +86,7 @@ constexpr std::size_t kExportDirSize        = 40;
 // table — COFF-object-only and rare in EXE/DLL images; we accept the
 // short form and pass the "/N" literal through unmodified for v1.
 //
-// Some packers (Byfron is the one in the wild that prompted this) leave
+// Some packers in the wild leave
 // non-NUL garbage in the slot after the visible name, so a section that
 // reads ".text" on disk comes back as ".text\xAA\xBB\xCC" and breaks
 // every exact-match lookup downstream. Strip trailing non-printable

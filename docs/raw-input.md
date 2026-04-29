@@ -13,7 +13,7 @@ manifest. Used for runtime captures of one contiguous range:
 
 ```sh
 # Disassemble bytes pulled from a debugger at 0x180010000.
-ember --raw-bytes byfron.bin --base-va 0x180010000 -p -s 0x180012a40
+ember --raw-bytes dump.bin --base-va 0x180010000 -p -s 0x180012a40
 
 # Dump every discovered function in a runtime region.
 ember --raw-bytes runtime.bin --base-va 0x180010000 --functions
@@ -81,6 +81,6 @@ Raw input bypasses all the container-specific extras:
 - No PDATA-derived function starts — function discovery falls back
   to the prologue-sweep + vtable-harvest pipeline.
 
-For Hyperion / Byfron / VMProtect-style runtime analysis these
+For VMProtect / commercial-packer runtime analysis these
 limits are usually fine: the disk PE was a decoy anyway, and the
 captured bytes are what actually run.

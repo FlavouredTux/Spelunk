@@ -120,7 +120,7 @@ enum class Mnemonic : u16 {
     Psubw,       // 0x66 0x0F F9
     Psubd,       // 0x66 0x0F FA
     Psubq,       // 0x66 0x0F FB
-    // Packed integer multiply — Hyperion uses these in cipher mixers.
+    // Packed integer multiply.
     Pmullw,      // 0x66 0x0F D5  — multiply low signed words
     Pmulhw,      // 0x66 0x0F E5  — multiply high signed words
     Pmulhuw,     // 0x66 0x0F E4  — multiply high unsigned words
@@ -155,9 +155,7 @@ enum class Mnemonic : u16 {
     // Word extract — destination is a GPR.
     Pextrw,      // 0x66 0x0F C5
     // SSE2 immediate-shift family (0x66 0x0F 71/72/73 with /N opcode
-    // extension). Hyperion uses these constantly in cookie/cipher
-    // computation; missing them aborted whole functions to a 4-line
-    // _mm_xor_si128 stub.
+    // extension).
     Psllw, Pslld, Psllq, Pslldq,
     Psrlw, Psrld, Psrlq, Psrldq,
     Psraw, Psrad,

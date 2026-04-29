@@ -63,7 +63,7 @@ function applyLocalRenames(text: string, pairs: Record<string, string>): string 
 }
 
 // Heuristic: spot binaries that have been packed / obfuscated /
-// protected (Themida, VMProtect, Byfron, …). Static analysis is
+// protected (Themida, VMProtect, …). Static analysis is
 // effectively useless on these — the real code only exists in
 // memory at runtime — so we surface a one-line banner before the
 // user spends ten clicks discovering nothing decodes.
@@ -83,13 +83,13 @@ function detectPackedBinary(info: BinaryInfo): string | null {
   const entrySec = sectionAt(entryNum);
   if (entrySec && !entrySec.flags.includes("x")) {
     const where = entrySec.name || "(unnamed section)";
-    return `entry point lives in '${where}' which isn't marked executable — likely packed or protected (Byfron, VMProtect, Themida, …); decompilation will mostly fail`;
+    return `entry point lives in '${where}' which isn't marked executable — likely packed or protected (VMProtect, Themida, …); decompilation will mostly fail`;
   }
 
   // Secondary: a "code-shaped" section (named .text / __text / CODE)
   // that's large enough to hold real code but lacks the exec flag.
   // Catches binaries where the entry point WAS rerouted to a tiny
-  // stub section with x — Roblox/Byfron does exactly this.
+  // stub section with x — some packers do exactly this.
   const CODE_NAMES = new Set([".text", "__text", "CODE"]);
   for (const s of info.sections) {
     const sz = parseInt(s.size, 16);

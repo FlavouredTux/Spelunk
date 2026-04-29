@@ -1,0 +1,21 @@
+{
+  "id": "ember.example",
+  "name": "Example Plugin",
+  "version": "0.1.0",
+  "description": "Minimal stub: one read-only panel proving the plugin host is live. No matchers (opts into every binary), no proposals.",
+  "apiVersion": 1,
+  "entry": "main.cjs",
+  "permissions": [
+    "read.binary-summary"
+  ],
+  "contributes": {
+    "panels": [
+      {
+        "id": "example-overview",
+        "title": "Binary overview",
+        "description": "Function count and binary path.",
+        "command": "show-overview"
+      }
+    ]
+  }
+}

@@ -347,7 +347,7 @@ function PluginSection(props: {
 
   // Evaluate matchers once per (binary × plugin-set). Plugins without
   // matchers short-circuit to matched=true in the host, so this is
-  // still cheap for game-strings-shape plugins; the CLI work only kicks
+  // still cheap for example-shape plugins; the CLI work only kicks
   // in when a plugin actually declares matchers.
   useEffect(() => {
     if (!plugins || !props.binaryPath) { setMatches({}); return; }
@@ -414,7 +414,7 @@ function PluginSection(props: {
       {plugins.map((plugin) => {
         const match = matches[plugin.id];
         const hasMatchers = plugin.matchers && plugin.matchers.length > 0;
-        // No matchers = plugin opts into every binary (game-strings shape).
+        // No matchers = plugin opts into every binary (example-plugin shape).
         // With matchers = show a badge reflecting the score.
         const badge = !hasMatchers
           ? null

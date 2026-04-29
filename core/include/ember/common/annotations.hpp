@@ -83,7 +83,7 @@ resolve_annotation_location(const std::filesystem::path& binary,
 // Addresses are hex without a 0x prefix. The `const` record names a
 // numeric immediate (width-agnostic) — its primary use is mapping a
 // runtime-resolver hash like `0xDEADBEEF` to the API it resolves to,
-// e.g. `kernel32!CreateFileW`. Per-version Hyperion-style hash tables
+// e.g. `kernel32!CreateFileW`. Per-version resolver hash tables
 // are dropped in via this record.
 //
 // Blank lines and lines starting with `#` are ignored. Unknown record

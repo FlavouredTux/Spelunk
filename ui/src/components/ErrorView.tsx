@@ -23,7 +23,7 @@ const PATTERNS: Pattern[] = [
     title: "No decodable code at this address",
     body:
       "The bytes here aren't valid x86-64 instructions. " +
-      "This usually means the binary is packed or protected (Themida, VMProtect, Byfron, …) " +
+      "This usually means the binary is packed or protected (Themida, VMProtect, …) " +
       "and the real code only exists in memory at runtime. " +
       "It can also mean the symbol points at data — some toolchains leave function records " +
       "for stripped or merged helpers.",

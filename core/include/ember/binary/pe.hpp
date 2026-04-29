@@ -45,6 +45,18 @@ public:
         return image_base_;
     }
 
+    // VA span — derived from the highest section's RVA + size. PE
+    // optional header carries SizeOfImage but it's not surfaced here;
+    // walking sections gives the same number in practice.
+    [[nodiscard]] addr_t mapped_size() const noexcept override {
+        addr_t hi = image_base_;
+        for (const auto& s : sections_) {
+            const addr_t end = s.vaddr + static_cast<addr_t>(s.data.size());
+            if (end > hi) hi = end;
+        }
+        return hi - image_base_;
+    }
+
     // Optional header data directory entries. Fields carry RVAs — callers
     // add image_base() to get absolute VAs. Index with the standard
     // IMAGE_DIRECTORY_ENTRY_* constants (EXPORT=0, IMPORT=1, EXCEPTION=3,

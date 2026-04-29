@@ -54,6 +54,21 @@ public:
         return set ? lo : 0;
     }
 
+    // VA span of the binary's PT_LOAD segments. Used as a runtime
+    // anon-region size hint by the debugger's aux-binary path.
+    [[nodiscard]] addr_t mapped_size() const noexcept override {
+        addr_t lo = 0, hi = 0;
+        bool set = false;
+        for (const auto& seg : segments_) {
+            if (!set) { lo = seg.vaddr; hi = seg.vaddr + seg.memsz; set = true; }
+            else {
+                if (seg.vaddr < lo) lo = seg.vaddr;
+                if (seg.vaddr + seg.memsz > hi) hi = seg.vaddr + seg.memsz;
+            }
+        }
+        return set ? hi - lo : 0;
+    }
+
 protected:
     [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
 public:

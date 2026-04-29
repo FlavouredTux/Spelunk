@@ -5,6 +5,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <print>
@@ -68,10 +69,9 @@ std::string fmt_signal(int sig) {
     }
 }
 
-// Returns " <symname>" if `runtime_pc` lands on a symbol in `bin`,
-// after un-sliding by the cached PIE/ASLR offset. Empty string when
-// no binary is loaded or no symbol matches.
-std::string sym_at_runtime(addr_t runtime_pc, const Binary* bin, addr_t slide) {
+// Try a single (bin, slide) pair: un-slide `runtime_pc` and look for
+// a symbol at that exact static address. Returns " <name>" or "".
+std::string sym_at_in_bin(addr_t runtime_pc, const Binary* bin, addr_t slide) {
     if (!bin) return {};
     const addr_t static_pc = runtime_pc - slide;
     for (const auto& s : bin->symbols()) {
@@ -80,10 +80,13 @@ std::string sym_at_runtime(addr_t runtime_pc, const Binary* bin, addr_t slide) {
     return {};
 }
 
+struct ReplState;
+[[nodiscard]] std::string sym_at_runtime(addr_t pc, const ReplState& rs);
+
 // Returns true when the event ends the session (process exited or
 // terminated). Caller should leave the REPL.
-bool print_event(const debug::Event& ev, const Binary* bin, addr_t slide) {
-    auto sym_at = [&](addr_t a) { return sym_at_runtime(a, bin, slide); };
+bool print_event(const debug::Event& ev, const ReplState& rs) {
+    auto sym_at = [&](addr_t a) { return sym_at_runtime(a, rs); };
 
     return std::visit([&](const auto& e) -> bool {
         using T = std::decay_t<decltype(e)>;
@@ -122,16 +125,24 @@ void print_error(const Error& e) {
 }
 
 // Two flavours of address: a hex literal (already a runtime VA — no
-// slide) versus a symbol resolved from the loaded Binary (a static /
-// linker VA — needs the runtime slide added before use against PIE
-// or ASLR-loaded images).
+// slide) versus a symbol resolved from one of the loaded Binaries
+// (a static / linker VA — needs that bin's slide added). When the
+// match is a symbol, `bin` and `slide` carry the source so the
+// caller can apply the right slide without re-searching.
 struct AddrSpec {
-    addr_t addr       = 0;
-    bool   was_symbol = false;
+    addr_t        addr       = 0;
+    bool          was_symbol = false;
+    const Binary* bin        = nullptr;
+    addr_t        slide      = 0;
 };
 
+// Parse hex literal first; if not hex, look up `tok` as a symbol in
+// the given Binary and return its static address. Caller decides how
+// to slide-correct. Used for cases where only one Binary is in scope
+// (e.g. parsing inside try_break_at_pseudo_line for the function's
+// own binary).
 std::optional<AddrSpec>
-parse_addr_spec(std::string_view tok, const Binary* bin) {
+parse_addr_spec_in_bin(std::string_view tok, const Binary* bin) {
     if (tok.empty()) return std::nullopt;
 
     std::string_view t = tok;
@@ -151,12 +162,12 @@ parse_addr_spec(std::string_view tok, const Binary* bin) {
                         : c - 'A' + 10;
             v = (v << 4) | static_cast<addr_t>(d);
         }
-        return AddrSpec{v, false};
+        return AddrSpec{v, false, nullptr, 0};
     }
 
     if (bin) {
         if (auto* s = bin->find_by_name(tok); s && s->addr != 0) {
-            return AddrSpec{s->addr, true};
+            return AddrSpec{s->addr, true, bin, 0};
         }
     }
     return std::nullopt;
@@ -187,12 +198,6 @@ addr_t compute_slide(debug::Target& tgt, const Binary& bin,
     return images.front().base - pref;
 }
 
-addr_t resolve_runtime(const AddrSpec& spec, debug::Target& tgt,
-                       const Binary* bin, const std::string& bin_path) {
-    if (!spec.was_symbol || !bin) return spec.addr;
-    return spec.addr + compute_slide(tgt, *bin, bin_path);
-}
-
 std::optional<int> parse_int(std::string_view s) {
     int v = 0;
     auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
@@ -210,6 +215,20 @@ std::vector<std::string> tokenize(const std::string& line) {
 
 // ---- command implementations --------------------------------------
 
+// Aux symbol oracle: a Binary whose code is mapped into the tracee
+// outside of any ELF segment we'd see via /proc/<pid>/maps' file
+// path field (typical example: a Mach-O blob mmap'd as anon-rwx by a
+// Linux loader). Slide is either pinned via `--aux-binary PATH@HEX`
+// or auto-detected after attach by size-matching the binary's
+// mapped extent against an anon-rwx region.
+struct AuxBin {
+    const Binary*         bin = nullptr;
+    std::string           path;
+    addr_t                slide = 0;
+    bool                  slide_resolved = false;
+    std::optional<addr_t> manual_base;
+};
+
 struct ReplState {
     std::unique_ptr<debug::Target> tgt;
     debug::ThreadId                current_tid = 0;
@@ -217,7 +236,203 @@ struct ReplState {
     const Binary*                  bin         = nullptr;
     std::string                    bin_path;   // for compute_slide path-matching
     addr_t                         slide       = 0;  // PIE/ASLR slide; 0 for non-PIE
+    std::vector<AuxBin>            aux_bins;
+    std::vector<std::unique_ptr<Binary>> aux_storage;  // owns runtime-loaded `aux` binaries
 };
+
+// PC → which (Binary, slide) covers it. Tries primary first, then
+// aux. Coverage is "static_pc lands in [preferred_load_base,
+// preferred_load_base + mapped_size)".
+struct BinHit {
+    const Binary* bin   = nullptr;
+    addr_t        slide = 0;
+};
+
+[[nodiscard]] std::optional<BinHit>
+find_bin_for_pc(const ReplState& rs, addr_t runtime_pc) {
+    auto in_bin = [&](const Binary* b, addr_t slide) -> bool {
+        if (!b) return false;
+        const addr_t base = b->preferred_load_base();
+        const addr_t size = b->mapped_size();
+        const addr_t spc  = runtime_pc - slide;
+        return size > 0 && spc >= base && spc < base + size;
+    };
+    if (in_bin(rs.bin, rs.slide)) return BinHit{rs.bin, rs.slide};
+    for (const auto& aux : rs.aux_bins) {
+        if (aux.slide_resolved && in_bin(aux.bin, aux.slide)) {
+            return BinHit{aux.bin, aux.slide};
+        }
+    }
+    return std::nullopt;
+}
+
+// Symbol name → first (Binary, static addr, slide) match, scanning
+// primary then aux in registration order.
+struct SymHit {
+    const Binary* bin    = nullptr;
+    addr_t        addr   = 0;
+    addr_t        slide  = 0;
+};
+[[nodiscard]] std::optional<SymHit>
+find_symbol(const ReplState& rs, std::string_view name) {
+    if (rs.bin) {
+        if (auto* s = rs.bin->find_by_name(name); s && s->addr != 0) {
+            return SymHit{rs.bin, s->addr, rs.slide};
+        }
+    }
+    for (const auto& aux : rs.aux_bins) {
+        if (!aux.bin) continue;
+        if (auto* s = aux.bin->find_by_name(name); s && s->addr != 0) {
+            return SymHit{aux.bin, s->addr, aux.slide};
+        }
+    }
+    return std::nullopt;
+}
+
+// Multi-binary version of parse_addr_spec: hex literal first, then
+// symbol search across primary + aux. Carries the matched binary's
+// slide so resolve_runtime_multi doesn't need to re-search.
+std::optional<AddrSpec>
+parse_addr_spec_multi(std::string_view tok, const ReplState& rs) {
+    if (auto spec = parse_addr_spec_in_bin(tok, nullptr); spec) return spec;
+    if (auto sh = find_symbol(rs, tok); sh) {
+        return AddrSpec{sh->addr, true, sh->bin, sh->slide};
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] addr_t resolve_runtime_multi(const AddrSpec& spec) {
+    if (!spec.was_symbol) return spec.addr;
+    return spec.addr + spec.slide;
+}
+
+// Walk the union of (primary, aux) and pick the one whose `containing_function`
+// reports a hit for the given static PC interpretation. Returns the
+// (bin, slide) that owns this PC, or nullopt.
+[[nodiscard]] std::string sym_at_runtime(addr_t pc, const ReplState& rs) {
+    if (auto h = find_bin_for_pc(rs, pc); h) {
+        return sym_at_in_bin(pc, h->bin, h->slide);
+    }
+    // Last-resort: try primary's symbol table even if PC isn't in its
+    // declared range (handles PIE binaries with sparse section data).
+    return sym_at_in_bin(pc, rs.bin, rs.slide);
+}
+
+// Parse `/proc/<pid>/maps`, return every anon-rwx region (no file
+// backing, executable). Used to discover the runtime base for an
+// aux Binary by size-matching against `bin->mapped_size()`.
+struct AnonRegion { addr_t base; addr_t size; };
+
+std::vector<AnonRegion> read_anon_executable_regions(debug::ProcessId pid) {
+    std::vector<AnonRegion> out;
+    char path[64];
+    std::snprintf(path, sizeof path, "/proc/%u/maps", pid);
+    FILE* f = std::fopen(path, "r");
+    if (!f) return out;
+
+    char line[4096];
+    while (std::fgets(line, sizeof line, f)) {
+        std::string_view sv(line);
+        while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r' ||
+                               sv.back() == ' '  || sv.back() == '\t')) {
+            sv.remove_suffix(1);
+        }
+        const auto dash = sv.find('-');
+        if (dash == std::string_view::npos) continue;
+        const auto sp1 = sv.find(' ', dash);
+        if (sp1 == std::string_view::npos) continue;
+        if (sp1 + 5 > sv.size()) continue;
+
+        auto parse_hex = [](std::string_view s) -> addr_t {
+            addr_t v = 0;
+            for (char c : s) {
+                const int d = (c >= '0' && c <= '9') ? c - '0'
+                            : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                            : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                            : -1;
+                if (d < 0) break;
+                v = (v << 4) | static_cast<addr_t>(d);
+            }
+            return v;
+        };
+
+        const addr_t start = parse_hex(sv.substr(0, dash));
+        const addr_t end   = parse_hex(sv.substr(dash + 1, sp1 - dash - 1));
+        if (end <= start) continue;
+        const std::string_view perms = sv.substr(sp1 + 1, 4);
+        if (perms.find('x') == std::string_view::npos) continue;
+
+        // Skip past 4 more whitespace-separated fields (offset, dev,
+        // inode, optional pathname). Anything after that is the path.
+        std::size_t pos = sp1 + 5;
+        for (int k = 0; k < 4 && pos < sv.size(); ++k) {
+            while (pos < sv.size() && sv[pos] == ' ') ++pos;
+            while (pos < sv.size() && sv[pos] != ' ') ++pos;
+        }
+        while (pos < sv.size() && sv[pos] == ' ') ++pos;
+        const std::string_view path_sv = sv.substr(pos);
+
+        // Anon = no path or kernel-bracket name like [vdso] / [stack].
+        if (!path_sv.empty() && path_sv.front() != '[') continue;
+
+        out.push_back({start, end - start});
+    }
+    std::fclose(f);
+    return out;
+}
+
+// Magic-bytes check: read the first 4 bytes of the candidate region
+// and verify they match the binary's format. Catches the 4KB-Mach-O
+// false-positive case where a libc anon-rwx page happens to match
+// the size but has nothing to do with our binary.
+[[nodiscard]] bool magic_matches_at(
+    debug::Target& tgt, addr_t base, const Binary& bin) {
+    std::byte hdr[4] = {};
+    auto rv = tgt.read_mem(base, hdr);
+    if (!rv || *rv != 4) return false;
+    u32 magic = 0;
+    std::memcpy(&magic, hdr, 4);
+    switch (bin.format()) {
+        case Format::Elf:
+            return magic == 0x464C457Fu;            // 0x7F 'E' 'L' 'F'
+        case Format::MachO:
+            return magic == 0xfeedfacfu || magic == 0xfeedfaceu ||
+                   magic == 0xcffaedfeu || magic == 0xcefaedfeu;
+        case Format::Pe:
+            return (magic & 0xFFFFu) == 0x5A4Du;    // 'MZ'
+        default:
+            return true;                            // unknown; accept
+    }
+}
+
+// Resolve the slide for an aux binary. Manual @hex wins. Otherwise
+// scan for anon-rwx regions whose size matches the binary's mapped
+// extent AND whose first 4 bytes carry the binary's format magic.
+// Both checks together kill the small-fixture false-positive case
+// where a random anon page coincidentally matches the size.
+std::optional<addr_t>
+compute_aux_slide(debug::Target& tgt, const AuxBin& aux) {
+    if (!aux.bin) return std::nullopt;
+    const addr_t pref = aux.bin->preferred_load_base();
+    if (aux.manual_base) return *aux.manual_base - pref;
+
+    const addr_t want_size = aux.bin->mapped_size();
+    if (want_size == 0) return std::nullopt;
+    constexpr addr_t kPage = 0x1000;
+    const addr_t want = (want_size + kPage - 1) & ~(kPage - 1);
+
+    const auto regions = read_anon_executable_regions(tgt.pid());
+    addr_t found_base = 0;
+    int    matches    = 0;
+    for (const auto& r : regions) {
+        if (r.size != want) continue;
+        if (!magic_matches_at(tgt, r.base, *aux.bin)) continue;
+        found_base = r.base;
+        ++matches;
+    }
+    if (matches == 1) return found_base - pref;
+    return std::nullopt;
+}
 
 void on_target_acquired(ReplState& rs) {
     g_active_target.store(rs.tgt.get(), std::memory_order_release);
@@ -228,10 +443,36 @@ void on_target_acquired(ReplState& rs) {
     rs.slide = (rs.bin && !rs.bin_path.empty())
         ? compute_slide(*rs.tgt, *rs.bin, rs.bin_path) : 0;
 
+    // Resolve aux-binary slides. Manual @hex always works; auto-
+    // detection requires a unique size match in /proc/<pid>/maps and
+    // can fail benignly (the binary just stays unmapped at attach
+    // time, gets resolved later if the user re-runs `aux`).
+    for (auto& aux : rs.aux_bins) {
+        if (auto s = compute_aux_slide(*rs.tgt, aux); s) {
+            aux.slide = *s;
+            aux.slide_resolved = true;
+        } else {
+            aux.slide_resolved = false;
+        }
+    }
+
     std::println("Process {} attached, {} thread(s){}.",
                  rs.tgt->pid(), rs.tgt->threads().size(),
                  rs.slide ? std::format(" — slide {}", fmt_addr(rs.slide))
                           : std::string{});
+    for (const auto& aux : rs.aux_bins) {
+        if (aux.slide_resolved) {
+            std::println("  aux: {} loaded at {}{}",
+                         aux.path,
+                         fmt_addr(aux.bin->preferred_load_base() + aux.slide),
+                         aux.manual_base ? " (manual)" : " (auto)");
+        } else {
+            std::println(stderr,
+                "  aux: {} — slide unresolved (no unique anon-rwx region of size {} bytes); "
+                "specify '--aux-binary {}@<hex>' or use the `aux` REPL command",
+                aux.path, aux.bin->mapped_size(), aux.path);
+        }
+    }
     if (auto regs = rs.tgt->get_regs(rs.current_tid); regs) {
         std::println("Thread {} paused at {}.", rs.current_tid, fmt_addr(regs->rip));
     }
@@ -243,6 +484,10 @@ void on_target_released(ReplState& rs) {
     rs.live = false;
     rs.current_tid = 0;
     rs.slide = 0;
+    for (auto& aux : rs.aux_bins) {
+        aux.slide = 0;
+        aux.slide_resolved = false;
+    }
 }
 
 int cmd_run(ReplState& rs, const Args& args) {
@@ -304,7 +549,7 @@ int cmd_kill(ReplState& rs) {
 bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
     const auto colon = tok.find(':');
     if (colon == std::string_view::npos) return false;
-    if (!rs.bin) return false;
+    if (!rs.bin && rs.aux_bins.empty()) return false;
 
     const std::string_view sym_tok  = tok.substr(0, colon);
     const std::string_view line_tok = tok.substr(colon + 1);
@@ -313,12 +558,12 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
     auto pl = parse_int(line_tok);
     if (!pl) return false;  // not a line number; caller falls through
 
-    const auto* sym = rs.bin->find_by_name(sym_tok);
-    if (!sym || sym->addr == 0) {
+    auto sh = find_symbol(rs, sym_tok);
+    if (!sh) {
         std::println(stderr, "ember-dbg: b: symbol '{}' not found", sym_tok);
         return true;
     }
-    auto win = ember::resolve_function_at(*rs.bin, sym->addr);
+    auto win = ember::resolve_function_at(*sh->bin, sh->addr);
     if (!win) {
         std::println(stderr, "ember-dbg: b: cannot resolve {}", sym_tok);
         return true;
@@ -327,7 +572,7 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
     LineMap line_map;
     EmitOptions opts;
     opts.line_map = &line_map;
-    auto pseudo = ember::format_struct(*rs.bin, *win, /*pseudo*/true,
+    auto pseudo = ember::format_struct(*sh->bin, *win, /*pseudo*/true,
                                        /*ann*/nullptr, std::move(opts));
     if (!pseudo) { print_error(pseudo.error()); return true; }
     const std::string& text = *pseudo;
@@ -352,7 +597,7 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
         return true;
     }
 
-    const addr_t va = best + rs.slide;
+    const addr_t va = best + sh->slide;
     auto id = rs.tgt->set_breakpoint(va);
     if (!id) { print_error(id.error()); return true; }
     std::println("Breakpoint #{} at {}  ({}:{} → static {})",
@@ -363,12 +608,12 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
 int cmd_break(ReplState& rs, std::string_view tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     if (try_break_at_pseudo_line(rs, tok)) return 0;
-    auto spec = parse_addr_spec(tok, rs.bin);
+    auto spec = parse_addr_spec_multi(tok, rs);
     if (!spec) {
         std::println(stderr, "ember-dbg: b: '{}' is neither hex, a known symbol, nor sym:line", tok);
         return 1;
     }
-    const addr_t va = resolve_runtime(*spec, *rs.tgt, rs.bin, rs.bin_path);
+    const addr_t va = resolve_runtime_multi(*spec);
     auto id = rs.tgt->set_breakpoint(va);
     if (!id) { print_error(id.error()); return 1; }
     if (spec->was_symbol && va != spec->addr) {
@@ -409,7 +654,7 @@ int cmd_delete(ReplState& rs, std::string_view tok) {
 bool wait_and_print(ReplState& rs) {
     auto ev = rs.tgt->wait_event();
     if (!ev) { print_error(ev.error()); return true; }
-    if (print_event(*ev, rs.bin, rs.slide)) {
+    if (print_event(*ev, rs)) {
         on_target_released(rs);
         return true;
     }
@@ -512,12 +757,12 @@ int cmd_regs(ReplState& rs, bool full) {
 
 int cmd_xmem(ReplState& rs, std::string_view addr_tok, std::string_view count_tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
-    auto spec = parse_addr_spec(addr_tok, rs.bin);
+    auto spec = parse_addr_spec_multi(addr_tok, rs);
     if (!spec) {
         std::println(stderr, "ember-dbg: x: bad address '{}'", addr_tok);
         return 1;
     }
-    const addr_t va_runtime = resolve_runtime(*spec, *rs.tgt, rs.bin, rs.bin_path);
+    const addr_t va_runtime = resolve_runtime_multi(*spec);
     int count = 16;
     if (!count_tok.empty()) {
         if (auto n = parse_int(count_tok)) count = *n;
@@ -575,7 +820,7 @@ int cmd_bt(ReplState& rs) {
     int idx = 0;
     for (const auto& f : frames) {
         std::println("#{:<2} {}{}", idx++, fmt_addr(f.pc),
-                     sym_at_runtime(f.pc, rs.bin, rs.slide));
+                     sym_at_runtime(f.pc, rs));
     }
     if (used_eh) std::println("  (via .eh_frame)");
     return 0;
@@ -583,7 +828,7 @@ int cmd_bt(ReplState& rs) {
 
 int cmd_code(ReplState& rs) {
     if (!rs.live) { std::println("Not attached."); return 0; }
-    if (!rs.bin) {
+    if (!rs.bin && rs.aux_bins.empty()) {
         std::println(stderr, "ember-dbg: code: no binary loaded");
         return 1;
     }
@@ -591,15 +836,26 @@ int cmd_code(ReplState& rs) {
     if (!regs) { print_error(regs.error()); return 1; }
 
     const addr_t pc_runtime = regs->rip;
-    const addr_t pc_static  = pc_runtime - rs.slide;
 
-    auto cf = ember::containing_function(*rs.bin, pc_static);
+    // Pick the binary whose mapped range covers this PC. Falls back
+    // to the primary if none claims it (typical for ld.so / vDSO
+    // frames at attach time).
+    auto hit = find_bin_for_pc(rs, pc_runtime);
+    const Binary* code_bin = hit ? hit->bin   : rs.bin;
+    const addr_t  slide    = hit ? hit->slide : rs.slide;
+    if (!code_bin) {
+        std::println("No binary covers {}.", fmt_addr(pc_runtime));
+        return 0;
+    }
+    const addr_t pc_static = pc_runtime - slide;
+
+    auto cf = ember::containing_function(*code_bin, pc_static);
     if (!cf) {
         std::println("No function covers {} (static {}).",
                      fmt_addr(pc_runtime), fmt_addr(pc_static));
         return 0;
     }
-    auto win = ember::resolve_function_at(*rs.bin, cf->entry);
+    auto win = ember::resolve_function_at(*code_bin, cf->entry);
     if (!win) {
         std::println(stderr, "ember-dbg: code: failed to resolve {}", cf->name);
         return 1;
@@ -608,7 +864,7 @@ int cmd_code(ReplState& rs) {
     LineMap line_map;
     EmitOptions opts;
     opts.line_map = &line_map;
-    auto pseudo = ember::format_struct(*rs.bin, *win, /*pseudo*/true,
+    auto pseudo = ember::format_struct(*code_bin, *win, /*pseudo*/true,
                                        /*ann*/nullptr, std::move(opts));
     if (!pseudo) { print_error(pseudo.error()); return 1; }
     const std::string& text = *pseudo;
@@ -684,6 +940,72 @@ int cmd_thread_switch(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
+// `aux <path>` (or `aux <path>@<hex>`): load a Binary at runtime as
+// an extra symbol oracle. Useful when selene loads a fresh Mach-O
+// blob mid-session and the CLI flag wasn't enough.
+int cmd_aux(ReplState& rs, std::string_view tok) {
+    if (tok.empty()) {
+        if (rs.aux_bins.empty()) {
+            std::println("No aux binaries loaded.");
+            return 0;
+        }
+        for (const auto& aux : rs.aux_bins) {
+            std::println("  {}  {}{}", aux.path,
+                         aux.slide_resolved
+                             ? fmt_addr(aux.bin->preferred_load_base() + aux.slide)
+                             : std::string("(unresolved)"),
+                         aux.manual_base ? " (manual)" : "");
+        }
+        return 0;
+    }
+    std::string path(tok);
+    std::optional<addr_t> manual;
+    if (auto at = path.find('@'); at != std::string::npos) {
+        std::string_view va_tok(path);
+        va_tok.remove_prefix(at + 1);
+        if (va_tok.starts_with("0x") || va_tok.starts_with("0X")) {
+            va_tok.remove_prefix(2);
+        }
+        addr_t v = 0;
+        bool ok = !va_tok.empty();
+        for (char c : va_tok) {
+            const int d = (c >= '0' && c <= '9') ? c - '0'
+                : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+            if (d < 0) { ok = false; break; }
+            v = (v << 4) | static_cast<addr_t>(d);
+        }
+        if (!ok) {
+            std::println(stderr, "ember-dbg: aux: bad hex base in '{}'", tok);
+            return 1;
+        }
+        manual = v;
+        path.resize(at);
+    }
+    auto loaded = ember::load_binary(path);
+    if (!loaded) { print_error(loaded.error()); return 1; }
+    rs.aux_storage.push_back(std::move(*loaded));
+    AuxBin aux;
+    aux.bin         = rs.aux_storage.back().get();
+    aux.path        = std::move(path);
+    aux.manual_base = manual;
+    if (rs.live) {
+        if (auto s = compute_aux_slide(*rs.tgt, aux); s) {
+            aux.slide          = *s;
+            aux.slide_resolved = true;
+            std::println("aux: {} loaded at {}{}", aux.path,
+                         fmt_addr(aux.bin->preferred_load_base() + aux.slide),
+                         aux.manual_base ? " (manual)" : " (auto)");
+        } else {
+            std::println(stderr,
+                "aux: {} loaded but slide unresolved (size {} not unique in /proc/<pid>/maps)",
+                aux.path, aux.bin->mapped_size());
+        }
+    }
+    rs.aux_bins.push_back(std::move(aux));
+    return 0;
+}
+
 void print_help() {
     std::println(R"(commands:
   run                       launch the binary (uses --debug PATH and -- args)
@@ -701,6 +1023,10 @@ void print_help() {
   x <addr> [n]              read n bytes (default 16) and hex-dump
   bt | where                backtrace (.eh_frame; RBP-walk fallback)
   code | list | l           pseudo-C of the function containing the current PC
+  aux                       list loaded aux symbol oracles
+  aux <path>[@hex]          load a Binary as an aux oracle; auto-detect slide
+                            (or pin it with @hex). Used for non-ELF code in
+                            the tracee — e.g. Mach-O blobs mmap'd by selene.
   threads                   list threads (* marks current)
   thread <tid>              switch current thread
   help                      this message
@@ -710,10 +1036,19 @@ void print_help() {
 
 }  // namespace
 
-int run_debug(const Args& args, const Binary* bin) {
+int run_debug(const Args& args, const Binary* bin,
+              std::span<const AuxBinarySpec> aux) {
     ReplState rs;
     rs.bin      = bin;
     rs.bin_path = args.binary;
+    rs.aux_bins.reserve(aux.size());
+    for (const auto& a : aux) {
+        AuxBin slot;
+        slot.bin         = a.bin;
+        slot.path        = a.path;
+        slot.manual_base = a.manual_base;
+        rs.aux_bins.push_back(std::move(slot));
+    }
 
     std::signal(SIGINT, sigint_forward);
 
@@ -753,6 +1088,8 @@ int run_debug(const Args& args, const Binary* bin) {
             cmd_xmem(rs, toks[1], toks.size() > 2 ? toks[2] : std::string_view{});
         else if (cmd == "bt" || cmd == "where")                cmd_bt(rs);
         else if (cmd == "code" || cmd == "list" || cmd == "l") cmd_code(rs);
+        else if (cmd == "aux")
+            cmd_aux(rs, toks.size() > 1 ? std::string_view(toks[1]) : std::string_view{});
         else if (cmd == "threads")                             cmd_threads(rs);
         else if (cmd == "thread" && toks.size() > 1)           cmd_thread_switch(rs, toks[1]);
         else std::println(stderr, "ember-dbg: unknown command '{}' (try `help`)", cmd);

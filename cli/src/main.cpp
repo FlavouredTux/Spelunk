@@ -97,10 +97,57 @@ int main(int argc, char** argv) {
     // translation, then writes a patched copy. No analysis runs.
     if (!args.apply_patches.empty()) return run_apply_patches(args);
 
+    // Aux-binary loading happens once, up front, so both the no-primary
+    // (--attach-pid) and primary-loaded paths share the same setup.
+    // Each `--aux-binary PATH[@HEX]` token is split on '@'; the
+    // optional hex tail pins the runtime base for the slide computation
+    // (the debugger will skip its /proc/maps size-match heuristic).
+    std::vector<std::unique_ptr<ember::Binary>>          aux_storage;
+    std::vector<ember::cli::AuxBinarySpec>               aux_specs;
+    aux_storage.reserve(args.aux_binary_paths.size());
+    aux_specs.reserve(args.aux_binary_paths.size());
+    for (const auto& tok : args.aux_binary_paths) {
+        std::string path = tok;
+        std::optional<ember::addr_t> manual_base;
+        if (auto at = tok.find('@'); at != std::string::npos) {
+            path = tok.substr(0, at);
+            std::string_view va_tok = std::string_view(tok).substr(at + 1);
+            if (va_tok.starts_with("0x") || va_tok.starts_with("0X")) {
+                va_tok.remove_prefix(2);
+            }
+            ember::addr_t v = 0;
+            bool ok = !va_tok.empty();
+            for (char c : va_tok) {
+                const int d = (c >= '0' && c <= '9') ? c - '0'
+                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                    : -1;
+                if (d < 0) { ok = false; break; }
+                v = (v << 4) | static_cast<ember::addr_t>(d);
+            }
+            if (!ok) {
+                std::println(stderr,
+                    "ember: --aux-binary: bad hex base after '@' in '{}'", tok);
+                return EXIT_FAILURE;
+            }
+            manual_base = v;
+        }
+        auto loaded = ember::load_binary(path);
+        if (!loaded) {
+            std::println(stderr, "ember: --aux-binary {}: {}: {}",
+                         path, loaded.error().kind_name(),
+                         loaded.error().message);
+            return EXIT_FAILURE;
+        }
+        aux_storage.push_back(std::move(*loaded));
+        aux_specs.push_back({aux_storage.back().get(), std::move(path), manual_base});
+    }
+
     // --debug --attach-pid PID can run without a binary path; the
-    // REPL auto-attaches and symbol resolution is simply disabled.
+    // REPL auto-attaches and symbol resolution falls back to aux
+    // binaries (or nothing).
     if (args.debug && args.binary.empty()) {
-        return run_debug(args, nullptr);
+        return run_debug(args, nullptr, aux_specs);
     }
 
     auto bin = load_binary_from_args(args);
@@ -139,7 +186,7 @@ int main(int argc, char** argv) {
     if (!args.export_annotations.empty())  return run_export_annotations(args);
     if (!args.apply_ember.empty())         return run_apply_ember(args, b);
 
-    if (args.debug)                        return run_debug(args, &b);
+    if (args.debug)                        return run_debug(args, &b, aux_specs);
 
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);

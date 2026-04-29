@@ -40,6 +40,14 @@ public:
     // format that treats addresses as already-absolute.
     [[nodiscard]] virtual addr_t preferred_load_base() const noexcept { return 0; }
 
+    // Total VA span the loader will consume when mapping the binary's
+    // segments — i.e. max(seg.vaddr + seg.memsz) - preferred_load_base().
+    // Used by the debugger's aux-symbol-oracle path to size-match a
+    // Mach-O loaded by a Linux loader (selene-style) against an
+    // anon-rwx region in /proc/<pid>/maps. Default 0 — formats with
+    // segments override.
+    [[nodiscard]] virtual addr_t mapped_size() const noexcept { return 0; }
+
     [[nodiscard]] virtual std::span<const Section> sections() const noexcept = 0;
     [[nodiscard]] virtual std::span<const Symbol>  symbols() const noexcept  = 0;
 

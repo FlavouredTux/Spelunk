@@ -27,15 +27,37 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
-    // Lowest segment vmaddr — for x86-64 Mach-O this is typically the
-    // __PAGEZERO at 0x100000000 (or 0 for shared caches / dylibs).
+    // Lowest *loaded* segment vmaddr — i.e. the linked address of the
+    // first segment a real loader (dyld / selene-style mapper) would
+    // actually map. __PAGEZERO is excluded: it has vmaddr=0 + no
+    // permissions and is a placeholder reservation, not a region the
+    // loader pulls bytes into. Including it would make slide math
+    // wrong by exactly its base (typically 0x100000000 on x86-64).
     [[nodiscard]] addr_t preferred_load_base() const noexcept override {
         addr_t lo = 0;
         bool   set = false;
         for (const auto& seg : segments_) {
+            if (!seg.readable) continue;   // skip __PAGEZERO
             if (!set || seg.vaddr < lo) { lo = seg.vaddr; set = true; }
         }
         return set ? lo : 0;
+    }
+
+    // VA span of the binary's loaded segments — same __PAGEZERO
+    // exclusion as preferred_load_base so the pair stays consistent.
+    // For a typical Mach-O this is __TEXT-through-__LINKEDIT.
+    [[nodiscard]] addr_t mapped_size() const noexcept override {
+        addr_t lo = 0, hi = 0;
+        bool set = false;
+        for (const auto& seg : segments_) {
+            if (!seg.readable) continue;
+            if (!set) { lo = seg.vaddr; hi = seg.vaddr + seg.memsz; set = true; }
+            else {
+                if (seg.vaddr < lo) lo = seg.vaddr;
+                if (seg.vaddr + seg.memsz > hi) hi = seg.vaddr + seg.memsz;
+            }
+        }
+        return set ? hi - lo : 0;
     }
 
 protected:

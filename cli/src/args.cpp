@@ -135,6 +135,23 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
+        // `--aux-binary PATH[@HEX]` — repeatable. Each entry is a
+        // secondary Binary the debugger loads as an extra symbol
+        // oracle (e.g. a Mach-O blob in a Linux tracee). Optional
+        // `@<hex>` suffix overrides the runtime-base auto-detection.
+        if (s == "--aux-binary") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--aux-binary requires a path"));
+            }
+            a.aux_binary_paths.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--aux-binary=")) {
+            a.aux_binary_paths.emplace_back(s.substr(13));
+            continue;
+        }
+
         // `--force-fn-start VA` — repeatable. Each VA becomes a
         // synthetic Function symbol so resolve_containing_function
         // returns a window AT the VA instead of rebinding to the

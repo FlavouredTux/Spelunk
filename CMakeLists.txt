@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(ember
-    VERSION 0.3.2
+    VERSION 0.6.0
     DESCRIPTION "Ember — reverse engineering toolkit"
     HOMEPAGE_URL "https://example.invalid/ember"
     LANGUAGES C CXX

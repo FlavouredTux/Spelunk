@@ -941,8 +941,8 @@ int cmd_thread_switch(ReplState& rs, std::string_view tok) {
 }
 
 // `aux <path>` (or `aux <path>@<hex>`): load a Binary at runtime as
-// an extra symbol oracle. Useful when selene loads a fresh Mach-O
-// blob mid-session and the CLI flag wasn't enough.
+// an extra symbol oracle. Useful when the tracee mmaps a fresh
+// non-ELF blob mid-session that wasn't known at --debug time.
 int cmd_aux(ReplState& rs, std::string_view tok) {
     if (tok.empty()) {
         if (rs.aux_bins.empty()) {
@@ -1026,7 +1026,8 @@ void print_help() {
   aux                       list loaded aux symbol oracles
   aux <path>[@hex]          load a Binary as an aux oracle; auto-detect slide
                             (or pin it with @hex). Used for non-ELF code in
-                            the tracee — e.g. Mach-O blobs mmap'd by selene.
+                            the tracee — e.g. Mach-O blobs mmap'd by an
+                            in-process userspace loader.
   threads                   list threads (* marks current)
   thread <tid>              switch current thread
   help                      this message

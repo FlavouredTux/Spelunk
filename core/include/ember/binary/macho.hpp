@@ -28,11 +28,12 @@ public:
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
     // Lowest *loaded* segment vmaddr — i.e. the linked address of the
-    // first segment a real loader (dyld / selene-style mapper) would
-    // actually map. __PAGEZERO is excluded: it has vmaddr=0 + no
-    // permissions and is a placeholder reservation, not a region the
-    // loader pulls bytes into. Including it would make slide math
-    // wrong by exactly its base (typically 0x100000000 on x86-64).
+    // first segment a real loader (dyld, or any in-process userspace
+    // mapper) would actually map. __PAGEZERO is excluded: it has
+    // vmaddr=0 + no permissions and is a placeholder reservation, not
+    // a region the loader pulls bytes into. Including it would make
+    // slide math wrong by exactly its base (typically 0x100000000 on
+    // x86-64).
     [[nodiscard]] addr_t preferred_load_base() const noexcept override {
         addr_t lo = 0;
         bool   set = false;

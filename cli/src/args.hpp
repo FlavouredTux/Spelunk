@@ -73,10 +73,10 @@ struct Args {
     std::string attach_pid;         // --attach-pid PID: attach to an existing process instead of launching
     std::vector<std::string> debug_args;  // tokens after `--`: argv for the launched program
     // --aux-binary PATH (repeatable): secondary Binary to load as a
-    // symbol oracle for non-ELF code regions in the tracee (Mach-O
-    // blobs mmap'd by a loader like selene). Optional `@0xBASE` suffix
-    // pins the runtime base when /proc/maps auto-detection isn't
-    // unique.
+    // symbol oracle for non-ELF code regions in the tracee — i.e.
+    // Mach-O / PE / raw blobs that an in-process userspace loader
+    // mmap'd into anon-rwx memory. Optional `@0xBASE` suffix pins the
+    // runtime base when /proc/maps auto-detection isn't unique.
     std::vector<std::string> aux_binary_paths;
     bool help   = false;
 };

@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useRef, useState } from "react";
-import { C, sans, mono } from "../theme";
+import { C, sans, mono, SH } from "../theme";
 import { highlightLine } from "../syntax";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { demangle, displayName, formatSize } from "../api";
@@ -10,6 +10,25 @@ import type { FunctionInfo, Annotations } from "../types";
 // disasm tail. Format example:
 //   "0x0000000000401120  83 ff 05                        cmp edi, 0x5"
 const ASM_INSN_RE = /^\s*(0x[0-9a-fA-F]+)\s+((?:[0-9a-fA-F]{2}\s+)+?)\s{2,}(.+)$/;
+
+// Pseudo-C body lines indent in 2-space steps; the leading whitespace
+// is what we measure to draw nesting guides.
+const INDENT_UNIT = 2;
+
+// `// foo` at column 0 is the function-name header ember emits at the
+// top of a function block. Body comments use `;`, so this prefix is a
+// clean signal that the next line is a function signature.
+const FN_HEADER_RE = /^\/\/\s+\S/;
+// Indent-0 line that ends with `)` or `) {` — heuristic for the
+// function signature line that immediately follows the header. Used
+// only for adding a subtle bottom-border, never for parsing semantics.
+const FN_SIG_RE = /^[A-Za-z_][^\n]*\)\s*\{?\s*$/;
+
+function leadingIndentDepth(line: string): number {
+  let i = 0;
+  while (i < line.length && line[i] === " ") i++;
+  return Math.floor(i / INDENT_UNIT);
+}
 
 export function CodeView(props: {
   text: string;
@@ -201,6 +220,23 @@ export function CodeView(props: {
                   props.onPatchInsn!(vaddr, m[2].trim(), m[3].trim());
                 }
               : undefined;
+            // Function-block decoration: top rule above each `// fn-name`
+            // marker, slight emphasis on the matching signature line.
+            // Detection is heuristic but stable for ember's emitter
+            // output — body comments use `;`, so `// ` at col 0 is
+            // unambiguous.
+            const isFnHeader = FN_HEADER_RE.test(line);
+            const prevLine = i > 0 ? lines[i - 1] : "";
+            const isFnSig =
+              !isFnHeader &&
+              FN_HEADER_RE.test(prevLine) &&
+              FN_SIG_RE.test(line);
+            const lineBg = isActiveLine
+              ? "rgba(217,119,87,0.06)"
+              : "transparent";
+            const lineBorderTop = isFnHeader && i > 0
+              ? `1px solid ${C.border}`
+              : undefined;
             return (
               <div
                 key={i}
@@ -208,10 +244,12 @@ export function CodeView(props: {
                 onContextMenu={onLineContext}
                 style={{
                   display: "flex",
-                  padding: "0 24px",
+                  padding: isFnHeader && i > 0 ? "10px 24px 0" : "0 24px",
+                  marginTop: isFnHeader && i > 0 ? 8 : 0,
+                  borderTop: lineBorderTop,
                   whiteSpace: "pre",
                   alignItems: "baseline",
-                  background: isActiveLine ? "rgba(217,119,87,0.06)" : "transparent",
+                  background: lineBg,
                 }}
               >
                 <span
@@ -230,9 +268,11 @@ export function CodeView(props: {
                   line={line}
                   onXref={props.onXref}
                   fnAddrByName={props.fnAddrByName}
+                  fnByAddr={props.fnByAddr}
                   onFnContext={handleFnContext}
                   onLocalContext={handleLocalContext}
                   matches={lineMatches}
+                  emphasized={isFnHeader || isFnSig}
                   isActiveMatch={(start) =>
                     isActiveLine &&
                     matches[activeMatch] &&
@@ -284,37 +324,91 @@ export function CodeView(props: {
   );
 }
 
+// One indent-guide column: a 2-char-wide span carrying a 1px inset
+// shadow on its left edge. `box-shadow: inset` sidesteps the
+// box-sizing arithmetic that `border-left` would force on us, so the
+// guide stays exactly INDENT_UNIT chars wide and aligns with the
+// monospaced text that follows.
+function IndentGuides({ depth }: { depth: number }) {
+  if (depth <= 0) return null;
+  const cells: JSX.Element[] = [];
+  for (let k = 0; k < depth; k++) {
+    cells.push(
+      <span
+        key={k}
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: `${INDENT_UNIT}ch`,
+          boxShadow: `inset 1px 0 0 ${SH.indent}`,
+        }}
+      >{" ".repeat(INDENT_UNIT)}</span>
+    );
+  }
+  return <>{cells}</>;
+}
+
 function LineContent(props: {
   line: string;
   onXref: (addr: number) => void;
   fnAddrByName?: Map<string, number>;
+  fnByAddr?: Map<number, FunctionInfo>;
   onFnContext?: (addr: number, ev: React.MouseEvent) => void;
   onLocalContext?: (name: string, ev: React.MouseEvent) => void;
   matches: { line: number; start: number; end: number }[];
   isActiveMatch: (start: number) => boolean;
+  // True for `// fn-name` and the matching signature line; bumps the
+  // weight a notch so the eye lands on function boundaries.
+  emphasized?: boolean;
 }) {
-  const { line, onXref, matches, fnAddrByName, onFnContext, onLocalContext } = props;
+  const { line, onXref, matches, fnAddrByName, fnByAddr,
+          onFnContext, onLocalContext, emphasized } = props;
   if (line === "") return <span>&nbsp;</span>;
+
+  // Indent guides span only the leading whitespace; the rest of the
+  // line keeps its raw characters (no trailing whitespace gets eaten).
+  const depth   = leadingIndentDepth(line);
+  const prefix  = depth * INDENT_UNIT;
+  const content = line.slice(prefix);
+  const baseStyle: React.CSSProperties = {
+    color: C.text,
+    fontWeight: emphasized ? 500 : 400,
+  };
 
   // If no matches, fall through to regular syntax highlighting.
   if (matches.length === 0) {
-    return <span style={{ color: C.text }}>{highlightLine(line, onXref, fnAddrByName, onFnContext, onLocalContext)}</span>;
+    return (
+      <span style={baseStyle}>
+        <IndentGuides depth={depth} />
+        {highlightLine(content, onXref, fnAddrByName, onFnContext,
+                       onLocalContext, fnByAddr)}
+      </span>
+    );
   }
 
-  // Render the line as slices: before-match | match | between | match | after
-  // We use the already-computed highlights for non-match regions so we don't
-  // lose syntax coloring outside the highlight band.
+  // Match offsets are computed against the full original line, so
+  // shift them into `content`-relative coordinates. Matches that fall
+  // entirely inside the indent prefix get dropped (rare; would be a
+  // user searching for spaces) — the guide span has no text to land
+  // a highlight on.
   const slices: { text: string; match: boolean; start: number }[] = [];
-  let cursor = 0;
+  let cursor = prefix;
   for (const m of matches) {
-    if (m.start > cursor) slices.push({ text: line.slice(cursor, m.start), match: false, start: cursor });
-    slices.push({ text: line.slice(m.start, m.end), match: true, start: m.start });
+    if (m.end <= prefix) continue;
+    const mStart = Math.max(m.start, prefix);
+    if (mStart > cursor) {
+      slices.push({ text: line.slice(cursor, mStart), match: false, start: cursor });
+    }
+    slices.push({ text: line.slice(mStart, m.end), match: true, start: m.start });
     cursor = m.end;
   }
-  if (cursor < line.length) slices.push({ text: line.slice(cursor), match: false, start: cursor });
+  if (cursor < line.length) {
+    slices.push({ text: line.slice(cursor), match: false, start: cursor });
+  }
 
   return (
-    <span style={{ color: C.text }}>
+    <span style={baseStyle}>
+      <IndentGuides depth={depth} />
       {slices.map((s, k) => {
         if (s.match) {
           const isActive = props.isActiveMatch(s.start);
@@ -331,7 +425,8 @@ function LineContent(props: {
             >{s.text}</span>
           );
         }
-        return <span key={k}>{highlightLine(s.text, onXref, fnAddrByName, onFnContext, onLocalContext)}</span>;
+        return <span key={k}>{highlightLine(s.text, onXref, fnAddrByName,
+                                            onFnContext, onLocalContext, fnByAddr)}</span>;
       })}
     </span>
   );

@@ -140,12 +140,23 @@ export const SH = {
   func:       "#d97757",
   xref:       "#d97757",
   addr:       "#87867f",
-  op:         "#87867f",
+  // Operators (`+ - * / % < > = ! & | ^ ~ ? :`) get a warmer, slightly
+  // more present shade — they carry meaning and were previously
+  // indistinguishable from punctuation. `punct` (`, ; .`) and `bracket`
+  // (`{ } [ ] ( )`) stay gray, with brackets a touch lighter so deep
+  // nesting reads as structure rather than fog.
+  op:         "#a39786",
+  punct:      "#6f6e69",
+  bracket:    "#9c958a",
   reg:        "#c9c2af",
   flag:       "#b0a486",
   label:      "#8b7bb5",
   arg:        "#b5a0d8",   // function params: a1, a2, ...
   bound:      "#c8a87a",   // call-return locals: r_fopen, r_strlen, ...
+  // Faint vertical guides that mark each level of nesting in pseudo-C
+  // bodies — same family as borders so they fade into the background
+  // unless you're actively reading structure.
+  indent:     "rgba(255,255,245,0.06)",
 };
 
 const fontHref =

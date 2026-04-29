@@ -65,6 +65,7 @@ export function highlightLine(
   fnAddrByName?: Map<string, number>,
   onFnContext?: (addr: number, ev: React.MouseEvent) => void,
   onLocalContext?: (name: string, ev: React.MouseEvent) => void,
+  fnByAddr?: Map<number, unknown>,
 ): JSX.Element[] {
   const tokens: Token[] = [];
   const len = line.length;
@@ -98,11 +99,26 @@ export function highlightLine(
       i = Math.min(j + 1, len);
       continue;
     }
-    // hex
+    // hex — clickable xref when the address resolves to a known
+    // function. Devirtualization checks (`if (vtbl_slot != 0x401210)`)
+    // and any literal that happens to be a function entry get the same
+    // jump-on-click treatment as `sub_<hex>` already enjoys.
     if (ch === "0" && (line[i + 1] === "x" || line[i + 1] === "X")) {
       const m = /^0[xX][0-9a-fA-F]+/.exec(line.substring(i));
       if (m) {
-        pushStr(m[0], { color: SH.number });
+        const addr = parseInt(m[0], 16);
+        if (fnByAddr && Number.isFinite(addr) && fnByAddr.has(addr)) {
+          tokens.push({
+            text: m[0],
+            color: SH.xref,
+            bold: true,
+            onClick: () => onXref(addr),
+            onContextMenu: onFnContext ? (ev) => onFnContext(addr, ev) : undefined,
+            className: "addr-link",
+          });
+        } else {
+          pushStr(m[0], { color: SH.number });
+        }
         i += m[0].length;
         continue;
       }
@@ -215,16 +231,29 @@ export function highlightLine(
         continue;
       }
     }
-    // operators / punctuation — render as-is but dimmed
-    if (/[+\-*\/%<>=!&|^~?:,;{}\[\]().]/.test(ch)) {
+    // Operators (`+ - * / % < > = ! & | ^ ~ ? : .`) — collapsed into
+    // a single run so multi-char ops (`==`, `!=`, `<=`, `>>`, `&&`,
+    // `||`, `->`) read as a unit. Slightly more present than punct so
+    // the eye picks out where computation happens vs. where statements
+    // are merely separated.
+    if (/[+\-*\/%<>=!&|^~?:.]/.test(ch)) {
       let j = i;
-      while (j < len && /[+\-*\/%<>=!&|^~?:,;.]/.test(line[j])) j++;
-      if (j > i) {
-        pushStr(line.substring(i, j), { color: SH.op });
-        i = j;
-        continue;
-      }
-      pushStr(ch);
+      while (j < len && /[+\-*\/%<>=!&|^~?:.]/.test(line[j])) j++;
+      pushStr(line.substring(i, j), { color: SH.op });
+      i = j;
+      continue;
+    }
+    // Punctuation (`, ;`) — pure separators, kept dim.
+    if (ch === "," || ch === ";") {
+      pushStr(ch, { color: SH.punct });
+      i++;
+      continue;
+    }
+    // Brackets (`{ } [ ] ( )`) — visible structure markers, a touch
+    // brighter than punct so deep nesting reads as scaffolding.
+    if (ch === "{" || ch === "}" || ch === "(" || ch === ")" ||
+        ch === "[" || ch === "]") {
+      pushStr(ch, { color: SH.bracket });
       i++;
       continue;
     }

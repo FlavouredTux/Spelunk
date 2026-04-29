@@ -1,13 +1,31 @@
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {
+
+// Sidecar provenance produced by the emitter. One Hit per IR
+// instruction whose statement was appended to the output buffer:
+// `byte_offset` is the position in the returned string where the
+// statement's first character lands, `source_addr` is the IR's
+// source_addr (i.e. the machine-instruction VA the IR was lifted
+// from). Translate to line numbers by counting '\n's up to the
+// offset — keeps the emitter hot path O(1) per statement.
+struct LineMap {
+    struct Hit {
+        std::size_t byte_offset = 0;
+        addr_t      source_addr = 0;
+    };
+    std::vector<Hit> hits;
+};
+
 
 struct EmitOptions {
     // Emit `// bb_XXXX` labels before each block. Off by default — labels
@@ -51,6 +69,12 @@ struct EmitOptions {
     // bounded by prologue length, since Win64 epilogues mirror the
     // prologue and never exceed its byte count in practice).
     const std::map<addr_t, addr_t>* prologue_ranges = nullptr;
+    // When non-null, the emitter records (byte_offset, source_addr)
+    // pairs into this map at every per-IR statement emit point. Used
+    // by the debugger's `code` command to mark the line corresponding
+    // to a runtime PC, and by `b <symbol>:<line>` to set bps from
+    // pseudo-C lines back to PC ranges.
+    LineMap* line_map = nullptr;
 };
 
 }  // namespace ember

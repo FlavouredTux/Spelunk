@@ -2451,14 +2451,27 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
         }
         return;
     }
+    // Source addr for the LineMap hit. fn is guaranteed non-null while
+    // emit is in flight; pos came from the active block walk.
+    const auto src = (fn && pos.first < fn->blocks.size() &&
+                      pos.second < fn->blocks[pos.first].insts.size())
+        ? fn->blocks[pos.first].insts[pos.second].source_addr
+        : addr_t{0};
+
     if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
         std::string type_name = "u64";
         if (auto df = defs.find(bk->second); df != defs.end()) {
             type_name = c_type_name_for(df->second->dst);
         }
+        if (options.line_map) {
+            options.line_map->hits.push_back({out.size(), src});
+        }
         out += std::format("{}{} {} = {};\n", ind, type_name,
                            call_return_names.at(bk->second), call_expr);
         return;
+    }
+    if (options.line_map) {
+        options.line_map->hits.push_back({out.size(), src});
     }
     out += std::format("{}{};\n", ind, call_expr);
 }
@@ -2669,6 +2682,11 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         const std::string stmt = format_stmt(inst);
         if (!stmt.empty()) {
             flush_args_as_intrinsics();
+            if (options.line_map) {
+                // Record where the statement starts so `byte_offset`
+                // resolves to the correct line via newline-counting.
+                options.line_map->hits.push_back({out.size(), inst.source_addr});
+            }
             out += std::format("{}{}\n", ind, stmt);
         }
     }
@@ -3278,6 +3296,13 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // declarations only for referenced slots keeps the function head
     // tidy without leaning on the dead-decl pruner (which only
     // recognises `TYPE NAME = expr;` form).
+    // Hits added to options.line_map during emit_region carry offsets
+    // relative to body_buf. We snapshot the index of the first hit
+    // recorded for this body so we can re-shift them once body_buf
+    // gets concatenated into `out` below.
+    const std::size_t lm_first_body_hit =
+        options.line_map ? options.line_map->hits.size() : 0;
+
     std::string body_buf;
     if (sf.body) {
         e.emit_region(*sf.body, 1, body_buf);
@@ -3290,14 +3315,26 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             : slot.type_override;
         out += std::format("  {} {};\n", ty, slot.name);
     }
+    const std::size_t body_offset = out.size();
     out += body_buf;
+    if (options.line_map) {
+        for (std::size_t i = lm_first_body_hit;
+             i < options.line_map->hits.size(); ++i) {
+            options.line_map->hits[i].byte_offset += body_offset;
+        }
+    }
 
     out += "}\n";
 
     // Dead-temp pass: drop `T tN = ...;` lines whose `tN` doesn't appear
     // anywhere else in the output. visible_use_count can over-count when
     // the sole reader folds the value through a register-assign chain.
-    {
+    //
+    // Skipped when a LineMap is being collected: deleting lines would
+    // invalidate the byte_offset values already recorded (the debugger
+    // can live with a slightly noisier function listing in exchange
+    // for accurate PC-to-line mapping).
+    if (!options.line_map) {
         std::vector<std::string> lines;
         {
             std::string buf;

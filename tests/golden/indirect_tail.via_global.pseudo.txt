@@ -1,0 +1,4 @@
+// via_global
+u64 via_global(void) {
+  return g_fp();
+}

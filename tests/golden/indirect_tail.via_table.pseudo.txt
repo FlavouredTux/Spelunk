@@ -1,0 +1,4 @@
+// via_table
+u64 via_table(u64 a1, u64 a2) {
+  return fn_table[(u64)(u32)a1]((u32)a2);
+}

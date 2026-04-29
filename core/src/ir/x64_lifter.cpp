@@ -1090,6 +1090,22 @@ void lift_jmp(LiftCtx& ctx) {
         return;
     }
 
+    // Indirect tail call: `jmp [mem]` / `jmp reg` is the canonical x86-64
+    // form for indirect tail-calls (vtable dispatch, fn-ptr-table dispatch,
+    // PLT thunks). The CFG builder couldn't classify the target as a known
+    // function entry — neither a defined function nor a switch table — so
+    // it left this block as IndirectJmp. Promoting to TailCall here
+    // recovers `return (*ptr)(args);` in the pseudo-C; the previous
+    // shape rendered as a bare `unreachable;` and dropped the call entirely.
+    // Switch dispatch goes through BlockKind::Switch and never reaches here.
+    if (ctx.blk->kind == BlockKind::IndirectJmp &&
+        op.kind != Operand::Kind::Relative) {
+        lift_call(ctx);
+        lift_ret(ctx);
+        ctx.blk->kind = BlockKind::TailCall;
+        return;
+    }
+
     IrInst i;
     if (op.kind == Operand::Kind::Relative) {
         i.op      = IrOp::Branch;

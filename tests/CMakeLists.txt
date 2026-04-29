@@ -132,6 +132,7 @@ ember_build_fixture(mem_forward OPT "-O0")
 ember_build_fixture(imports EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
 ember_build_fixture(decoder_misc)
 ember_build_fixture(tail_call)
+ember_build_fixture(indirect_tail)
 # -O0 so the compiler literally emits every redundant store; at -O2 the
 # compiler would DSE itself and leave nothing for us to test.
 ember_build_fixture(dead_store OPT "-O0")
@@ -458,6 +459,34 @@ ember_golden_test(
     FIXTURE tail_call
     ARGS    "-p|-s|wrap_strlen"
     GOLDEN  tail_call.wrap_strlen.pseudo.txt
+)
+
+# ---- indirect_tail (jmp [reg/mem] as return) ------------------------------
+#
+# Each of these once rendered as `__unreachable();` because the lifter
+# treated indirect jmps as opaque control-flow instead of indirect tail-
+# calls. Locks in the canonical x86-64 indirect-tail-call shapes:
+# fn-pointer table, struct-field fn-pointer, named global fn-pointer.
+
+ember_golden_test(
+    NAME    indirect_tail_table_pseudo
+    FIXTURE indirect_tail
+    ARGS    "-p|-s|via_table"
+    GOLDEN  indirect_tail.via_table.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    indirect_tail_member_pseudo
+    FIXTURE indirect_tail
+    ARGS    "-p|-s|via_member"
+    GOLDEN  indirect_tail.via_member.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    indirect_tail_global_pseudo
+    FIXTURE indirect_tail
+    ARGS    "-p|-s|via_global"
+    GOLDEN  indirect_tail.via_global.pseudo.txt
 )
 
 # printf/fprintf — variadic arg trimming driven by format-string parsing.

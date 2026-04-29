@@ -70,6 +70,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
         src/debug/linux/ptrace_break.cpp
         src/debug/linux/ptrace_event.cpp
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    target_sources(ember_core PRIVATE
+        src/debug/macos/mach_target.cpp
+        src/debug/macos/mach_proc.cpp
+        src/debug/macos/mach_mem.cpp
+        src/debug/macos/mach_regs.cpp
+        src/debug/macos/mach_break.cpp
+        src/debug/macos/mach_event.cpp
+    )
 endif()
 
 target_include_directories(ember_core

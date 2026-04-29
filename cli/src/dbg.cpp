@@ -1,5 +1,6 @@
 #include "dbg.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <charconv>
 #include <csignal>
@@ -892,7 +893,7 @@ int cmd_regs(ReplState& rs, bool full) {
             std::print("st{}=", i);
             for (int b = 9; b >= 0; --b) std::print("{:02x}", r.st[i].bytes[b]);
             std::print("  ");
-            if ((i & 1) == 1) std::println();
+            if ((i & 1) == 1) std::print("\n");
         }
     }
     if (r.present & debug::Registers::PresentSse) {
@@ -900,7 +901,7 @@ int cmd_regs(ReplState& rs, bool full) {
         for (int i = 0; i < 16; ++i) {
             std::print("xmm{:<2}=", i);
             print_zmm(r.zmm[i], 16);
-            std::println();
+            std::print("\n");
         }
     }
     if (r.present & debug::Registers::PresentAvx) {
@@ -908,7 +909,7 @@ int cmd_regs(ReplState& rs, bool full) {
         for (int i = 0; i < 16; ++i) {
             std::print("ymm{:<2}=", i);
             print_zmm(r.zmm[i], 32);
-            std::println();
+            std::print("\n");
         }
     }
     if (r.present & debug::Registers::PresentAvx512) {
@@ -919,7 +920,7 @@ int cmd_regs(ReplState& rs, bool full) {
         for (int i = 0; i < 32; ++i) {
             std::print("zmm{:<2}=", i);
             print_zmm(r.zmm[i], 64);
-            std::println();
+            std::print("\n");
         }
     }
     if (r.present & debug::Registers::PresentDr) {
@@ -963,7 +964,7 @@ int cmd_xmem(ReplState& rs, std::string_view addr_tok, std::string_view count_to
             const auto c = static_cast<unsigned char>(buf[i + j]);
             std::print("{}", (c >= 32 && c < 127) ? static_cast<char>(c) : '.');
         }
-        std::println();
+        std::print("\n");
     }
     if (got < buf.size()) {
         std::println("(read short — {} of {} requested bytes)", got, buf.size());
@@ -1341,7 +1342,7 @@ int run_debug(const Args& args, const Binary* bin,
     while (true) {
         std::print("(ember) ");
         std::fflush(stdout);
-        if (!std::getline(std::cin, line)) { std::println(); break; }
+        if (!std::getline(std::cin, line)) { std::print("\n"); break; }
         const auto toks = tokenize(line);
         if (toks.empty()) continue;
         const auto& cmd = toks[0];

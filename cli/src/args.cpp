@@ -87,6 +87,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--raw-bytes",   &Args::raw_bytes_path},
     {"",   "--base-va",     &Args::raw_base_va},
     {"",   "--attach-pid",  &Args::attach_pid},
+    {"",   "--module",      &Args::module_filter},
 });
 
 template <class F>

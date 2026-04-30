@@ -102,8 +102,14 @@ enum class EnumerateMode { Auto, Full, Cheap };
 // import thunks, not definitions. Shared by the scripting binding
 // (`binary.functions()`) and the `--functions` CLI output so both stay
 // in sync.
+// `lo`/`hi`: when `hi > lo`, restrict every discovery pass to addresses
+// in [lo, hi). Designed for `--module` scoping on minidumps where most
+// of the dumped pages belong to system DLLs the user doesn't care
+// about. The prologue sweep clips its byte range to the intersection
+// per section, so out-of-scope memory isn't even scanned.
 [[nodiscard]] std::vector<DiscoveredFunction>
-enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto);
+enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto,
+                    addr_t lo = 0, addr_t hi = 0);
 
 // Per-call edge classification used by `ember --callees`. `Direct` covers
 // `call <imm>`; `Tail` covers an unconditional `jmp` whose target is a

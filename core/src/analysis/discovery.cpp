@@ -108,12 +108,16 @@ namespace {
 
 }  // namespace
 
-std::vector<addr_t> discover_from_vtables(const Binary& b) {
+std::vector<addr_t> discover_from_vtables(const Binary& b, addr_t lo, addr_t hi) {
+    const bool scoped = hi > lo;
+    auto in_scope = [&](addr_t a) noexcept { return !scoped || (a >= lo && a < hi); };
+
     std::vector<addr_t> out;
     if (b.format() == Format::Pe) {
         for (const auto& cls : parse_msvc_rtti(b)) {
             for (addr_t m : cls.methods) {
                 if (m == 0) continue;
+                if (!in_scope(m)) continue;
                 if (!addr_in_code_section(b, m)) continue;
                 out.push_back(m);
             }
@@ -125,6 +129,7 @@ std::vector<addr_t> discover_from_vtables(const Binary& b) {
         for (const auto& cls : parse_itanium_rtti(b)) {
             for (addr_t m : cls.methods) {
                 if (m == 0) continue;
+                if (!in_scope(m)) continue;
                 if (!addr_in_code_section(b, m)) continue;
                 out.push_back(m);
             }
@@ -153,7 +158,8 @@ sweep_section_chunk(std::span<const std::byte> data, addr_t base,
     return hits;
 }
 
-std::vector<addr_t> discover_from_prologues(const Binary& b) {
+std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t hi) {
+    const bool scoped = hi > lo;
     // Sweeping one byte at a time across a multi-MB executable section
     // dominates cold-open time (~136s on a 16 MB DLL). The work is
     // perfectly parallelizable: each candidate position is independent,
@@ -177,12 +183,28 @@ std::vector<addr_t> discover_from_prologues(const Binary& b) {
 
         const auto data = s.data;
         const auto base = s.vaddr;
+
+        // When scoped, intersect this section's [vaddr, vaddr+size)
+        // with the requested [lo, hi). Sections that miss the scope
+        // entirely are skipped without scanning a byte.
+        std::size_t scope_off_lo = 0;
+        std::size_t scope_off_hi = data.size();
+        if (scoped) {
+            const addr_t s_lo = base;
+            const addr_t s_hi = base + static_cast<addr_t>(data.size());
+            const addr_t cut_lo = std::max(s_lo, lo);
+            const addr_t cut_hi = std::min(s_hi, hi);
+            if (cut_hi <= cut_lo) continue;     // section outside scope
+            scope_off_lo = static_cast<std::size_t>(cut_lo - s_lo);
+            scope_off_hi = static_cast<std::size_t>(cut_hi - s_lo);
+        }
+        const std::size_t scope_size = scope_off_hi - scope_off_lo;
         // Tiny sections (or low core counts) — just sweep serially.
         constexpr std::size_t kSerialThreshold = 1 << 20;     // 1 MB
-        if (data.size() < kSerialThreshold || target_workers <= 1) {
+        if (scope_size < kSerialThreshold || target_workers <= 1) {
             X64Decoder dec;
             per_section_hits.push_back(
-                sweep_section_chunk(data, base, 0, data.size(), dec));
+                sweep_section_chunk(data, base, scope_off_lo, scope_off_hi, dec));
             continue;
         }
 
@@ -191,20 +213,20 @@ std::vector<addr_t> discover_from_prologues(const Binary& b) {
         // a chunk boundary still gets matched (the second-chunk worker
         // re-checks the boundary).
         constexpr std::size_t kOverlap = 16;
-        const std::size_t total = data.size();
+        const std::size_t total = scope_size;
         const std::size_t chunk = (total + target_workers - 1) / target_workers;
         std::vector<std::vector<addr_t>> chunk_hits(target_workers);
         std::vector<std::thread> threads;
         threads.reserve(target_workers);
         for (std::size_t i = 0; i < target_workers; ++i) {
-            const std::size_t begin = i * chunk;
-            const std::size_t raw_end = std::min(total, (i + 1) * chunk);
-            // Last chunk: don't extend past `total`. Earlier chunks:
-            // extend by overlap so we cover candidates that begin
-            // within `kOverlap` bytes of the boundary.
+            const std::size_t begin = scope_off_lo + i * chunk;
+            const std::size_t raw_end = std::min(scope_off_hi, scope_off_lo + (i + 1) * chunk);
+            // Last chunk: don't extend past the scope window. Earlier
+            // chunks: extend by overlap so we cover candidates that
+            // begin within `kOverlap` bytes of the boundary.
             const std::size_t end = (i + 1 == target_workers)
                 ? raw_end
-                : std::min(total, raw_end + kOverlap);
+                : std::min(scope_off_hi, raw_end + kOverlap);
             threads.emplace_back([&, i, begin, end]() {
                 X64Decoder dec;
                 chunk_hits[i] = sweep_section_chunk(data, base, begin, end, dec);

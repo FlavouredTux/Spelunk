@@ -12,7 +12,12 @@ class Binary;
 // to the binary's format), returns each method-slot address that
 // already lands in an executable section. Cheap — RTTI parsing is
 // already required for naming.
-[[nodiscard]] std::vector<addr_t> discover_from_vtables(const Binary& b);
+//
+// `lo`/`hi`: when `hi > lo`, only emit addresses inside [lo, hi). Used
+// by `--module` scoping on minidumps so we don't return method
+// pointers that belong to wine reimpl pages outside the module's image.
+[[nodiscard]] std::vector<addr_t>
+discover_from_vtables(const Binary& b, addr_t lo = 0, addr_t hi = 0);
 
 // Linear-sweep `.text` for x64 function prologue byte patterns. Each
 // candidate is validated by decoding two instructions; the address is
@@ -20,6 +25,12 @@ class Binary;
 // flagged as encrypted (high entropy). Designed to recover stripped
 // commercial binaries where `.pdata` is missing or zeroed and only
 // the entry-point function is in the symbol table.
-[[nodiscard]] std::vector<addr_t> discover_from_prologues(const Binary& b);
+//
+// `lo`/`hi`: when `hi > lo`, the per-section sweep clips its byte
+// range to the intersection of the section and [lo, hi). On a
+// minidump that's mostly wine-DLL pages this turns a 200MB linear
+// sweep into the ~16MB the user actually cares about.
+[[nodiscard]] std::vector<addr_t>
+discover_from_prologues(const Binary& b, addr_t lo = 0, addr_t hi = 0);
 
 }  // namespace ember

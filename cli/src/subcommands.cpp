@@ -261,6 +261,81 @@ int run_strings(const Args& args, const Binary& b) {
 
 namespace {
 
+// Address-range scope filter, populated from --module NAME against a
+// minidump (or any Binary that synthesizes module Symbols of kind=Section
+// with addr=base / size=image-size — currently just MinidumpBinary). When
+// inactive, contains() returns true for every address; the caller-side
+// code paths run unchanged. When active, fn-walking subcommands skip
+// every address outside [lo, hi) before fingerprinting/decompiling — the
+// motivating case is a process minidump where ~95% of discovered fns
+// belong to wine ntdll/kernelbase reimpl pages and would never match
+// the real-Microsoft TEEF corpus.
+struct ModuleScope {
+    addr_t lo = 0;
+    addr_t hi = 0;
+    bool   active = false;
+    std::string matched_name;       // for stderr diagnostics
+
+    [[nodiscard]] bool contains(addr_t a) const noexcept {
+        return !active || (a >= lo && a < hi);
+    }
+};
+
+// Case-insensitive substring match on basenames. The minidump loader
+// already trims paths to basenames before populating Symbol::name, so
+// `loader.exe` finds `loader.exe` — but accept partials too (`loader`
+// finds `loader.exe`, `kernel32` finds `kernel32.dll`). Ambiguous
+// matches: use the first hit and warn — the user can disambiguate by
+// passing the full basename.
+[[nodiscard]] ModuleScope resolve_module_scope(const Binary& b,
+                                               std::string_view name) {
+    ModuleScope ms;
+    if (name.empty()) return ms;
+
+    auto lc = [](std::string_view s) {
+        std::string out(s);
+        for (auto& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return out;
+    };
+    const std::string needle = lc(name);
+
+    std::vector<const Symbol*> candidates;
+    for (const auto& s : b.symbols()) {
+        if (s.kind != SymbolKind::Section) continue;   // module spans only
+        if (s.size == 0) continue;
+        if (lc(s.name).find(needle) != std::string::npos) {
+            candidates.push_back(&s);
+        }
+    }
+
+    if (candidates.empty()) {
+        std::println(stderr, "ember: --module '{}' matched no loaded module", name);
+        std::println(stderr, "ember: available modules:");
+        for (const auto& s : b.symbols()) {
+            if (s.kind != SymbolKind::Section) continue;
+            if (s.size == 0) continue;
+            std::println(stderr, "  {}\t{:#x}\t{:#x}", s.name, s.addr, s.size);
+        }
+        return ms;   // inactive — caller should bail
+    }
+    if (candidates.size() > 1) {
+        std::println(stderr,
+            "ember: --module '{}' is ambiguous ({} matches); using first ({})",
+            name, candidates.size(), candidates.front()->name);
+        for (const auto* c : candidates) {
+            std::println(stderr, "  {}\t{:#x}\t{:#x}", c->name, c->addr, c->size);
+        }
+    }
+    ms.lo = candidates.front()->addr;
+    ms.hi = candidates.front()->addr + candidates.front()->size;
+    ms.matched_name = candidates.front()->name;
+    ms.active = true;
+    std::println(stderr,
+        "ember: --module '{}' resolved to {} [{:#x}, {:#x})",
+        name, ms.matched_name, ms.lo, ms.hi);
+    return ms;
+}
+
 // Parse hex string -> u64. Used by parse_teef_tsv below.
 [[nodiscard]] u64 parse_u64_hex_local(std::string_view s) noexcept {
     u64 v = 0;
@@ -347,7 +422,10 @@ parse_teef_tsv(std::string_view tsv) {
 
 // Extracted from run_teef so --recognize can reuse it on cache miss.
 // Returns the same TSV the user would see from `ember --teef <bin>`.
-[[nodiscard]] std::string build_teef_tsv(const Binary& b) {
+// `scope`, when active, filters every fn-walking step so we don't pay
+// fingerprint cost on out-of-module noise.
+[[nodiscard]] std::string build_teef_tsv(const Binary& b,
+                                         const ModuleScope& scope = {}) {
     const bool show = progress_enabled();
 
         std::unordered_map<addr_t, std::string> name_by_addr;
@@ -355,6 +433,7 @@ parse_teef_tsv(std::string_view tsv) {
             if (s.is_import) continue;
             if (s.kind != SymbolKind::Function) continue;
             if (s.addr == 0 || s.name.empty()) continue;
+            if (!scope.contains(s.addr)) continue;
             name_by_addr.try_emplace(s.addr, s.name);
         }
 
@@ -366,7 +445,7 @@ parse_teef_tsv(std::string_view tsv) {
         {
             std::set<addr_t> uniq;
             for (const auto& [a, _] : name_by_addr) uniq.insert(a);
-            for (const auto& d : enumerate_functions(b)) {
+            for (const auto& d : enumerate_functions(b, EnumerateMode::Auto, scope.lo, scope.hi)) {
                 if (!b.import_at_plt(d.addr)) uniq.insert(d.addr);
             }
             fns.assign(uniq.begin(), uniq.end());
@@ -391,7 +470,7 @@ parse_teef_tsv(std::string_view tsv) {
         // probes inside another fn's body) are skipped; their xref
         // sites get attributed to the containing real fn instead.
         std::vector<std::pair<addr_t, u64>> sized_fns;
-        for (const auto& d : enumerate_functions(b)) {
+        for (const auto& d : enumerate_functions(b, EnumerateMode::Auto, scope.lo, scope.hi)) {
             if (b.import_at_plt(d.addr)) continue;
             if (d.size == 0) continue;
             sized_fns.emplace_back(d.addr, d.size);
@@ -401,6 +480,7 @@ parse_teef_tsv(std::string_view tsv) {
             if (s.is_import) continue;
             if (s.kind != SymbolKind::Function) continue;
             if (s.addr == 0 || s.size == 0) continue;
+            if (!scope.contains(s.addr)) continue;
             sized_fns.emplace_back(s.addr, s.size);
         }
         std::sort(sized_fns.begin(), sized_fns.end());
@@ -646,6 +726,15 @@ int run_recognize(const Args& args, const Binary& b) {
     }
     const TeefCorpus& corpus = *cached_corpus;
 
+    // Resolve --module if any. Inactive scope = no-op everywhere below.
+    // An unresolved scope (user passed a name but it didn't match any
+    // module) bails — running unscoped would silently process the wrong
+    // surface and waste work.
+    const ModuleScope scope = resolve_module_scope(b, args.module_filter);
+    if (!args.module_filter.empty() && !scope.active) {
+        return EXIT_FAILURE;
+    }
+
     // Walk every named-or-discovered function in the binary, fingerprint
     // it, ask the corpus for matches above threshold.
     std::unordered_map<addr_t, std::string> name_by_addr;
@@ -653,6 +742,7 @@ int run_recognize(const Args& args, const Binary& b) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.addr == 0 || s.name.empty()) continue;
+        if (!scope.contains(s.addr)) continue;
         name_by_addr.try_emplace(s.addr, s.name);
     }
     // Stride-1 dedup. enumerate_functions() can emit multiple
@@ -665,7 +755,7 @@ int run_recognize(const Args& args, const Binary& b) {
     // inside a previously-seen fn's [entry, entry+size) window.
     std::map<addr_t, u64> windows;     // entry → known size
     for (const auto& [a, _] : name_by_addr) windows[a]; // size 0 by default
-    for (const auto& d : enumerate_functions(b)) {
+    for (const auto& d : enumerate_functions(b, EnumerateMode::Auto, scope.lo, scope.hi)) {
         if (b.import_at_plt(d.addr)) continue;
         auto& sz = windows[d.addr];
         if (d.size > sz) sz = d.size;  // prefer the larger known extent
@@ -693,9 +783,16 @@ int run_recognize(const Args& args, const Binary& b) {
     // build_teef_tsv that --teef would and writes it back so the next
     // run is fast. parse_teef_tsv then materializes the per-function
     // fingerprints we'll match against the corpus.
+    //
+    // When --module is active, the disk cache is bypassed in both
+    // directions: a scoped run produces a strict subset of the
+    // unscoped TSV, which would either be served (incorrectly) to a
+    // future unscoped query or — worse — poison the cache slot that
+    // the unscoped path expects to find a full table in.
+    const bool cacheable = !args.no_cache && !scope.active;
     std::string target_tsv;
     bool cache_hit = false;
-    if (!args.no_cache) {
+    if (cacheable) {
         const auto dir = args.cache_dir.empty()
             ? cache::default_dir()
             : std::filesystem::path(args.cache_dir);
@@ -708,8 +805,8 @@ int run_recognize(const Args& args, const Binary& b) {
         }
     }
     if (!cache_hit) {
-        target_tsv = build_teef_tsv(b);
-        if (!args.no_cache) {
+        target_tsv = build_teef_tsv(b, scope);
+        if (cacheable) {
             const auto dir = args.cache_dir.empty()
                 ? cache::default_dir()
                 : std::filesystem::path(args.cache_dir);
@@ -891,28 +988,63 @@ int run_functions(const Args& args, const Binary& b) {
             }
         }
     }
-    if (args.functions_pattern.empty()) {
+    // Resolve --module if set. Filtering is applied at output time so
+    // the cache stays a single full-binary blob — different scope
+    // requests reuse the same cached payload.
+    const ModuleScope scope = resolve_module_scope(b, args.module_filter);
+    if (!args.module_filter.empty() && !scope.active) return EXIT_FAILURE;
+
+    if (args.functions_pattern.empty() && !scope.active) {
         std::fwrite(tsv.data(), 1, tsv.size(), stdout);
         return EXIT_SUCCESS;
     }
     std::string needle = args.functions_pattern;
     for (auto& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    auto parse_addr = [](std::string_view s) -> std::optional<addr_t> {
+        if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+        addr_t v = 0;
+        for (char c : s) {
+            const int d = (c >= '0' && c <= '9') ? c - '0'
+                        : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                        : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                        : -1;
+            if (d < 0) return std::nullopt;
+            v = (v << 4) | static_cast<addr_t>(d);
+        }
+        return v;
+    };
+
     std::size_t pos = 0;
     while (pos < tsv.size()) {
         const auto nl = tsv.find('\n', pos);
         const std::size_t end = (nl == std::string::npos) ? tsv.size() : nl;
         std::string_view line(tsv.data() + pos, end - pos);
-        // Columns: addr\tsize\tkind\tname — skip to the fourth.
-        std::size_t tabs = 0, name_start = 0;
+        // Columns: addr\tsize\tkind\tname.
+        std::size_t tabs = 0, name_start = 0, addr_end = 0;
         for (std::size_t i = 0; i < line.size() && tabs < 3; ++i) {
-            if (line[i] == '\t' && ++tabs == 3) name_start = i + 1;
+            if (line[i] == '\t') {
+                if (tabs == 0) addr_end = i;
+                if (++tabs == 3) name_start = i + 1;
+            }
         }
-        std::string name_lc(line.substr(name_start));
-        for (auto& c : name_lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (name_lc.find(needle) != std::string::npos) {
-            std::fwrite(line.data(), 1, line.size(), stdout);
-            std::fputc('\n', stdout);
+        if (scope.active) {
+            auto a = parse_addr(line.substr(0, addr_end));
+            if (!a || !scope.contains(*a)) {
+                pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
+                continue;
+            }
         }
+        if (!needle.empty()) {
+            std::string name_lc(line.substr(name_start));
+            for (auto& c : name_lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (name_lc.find(needle) == std::string::npos) {
+                pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
+                continue;
+            }
+        }
+        std::fwrite(line.data(), 1, line.size(), stdout);
+        std::fputc('\n', stdout);
         pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
     }
     return EXIT_SUCCESS;
@@ -1617,6 +1749,7 @@ Args derive_args(const Args& base) {
     a.annotations_path = base.annotations_path;
     a.corpus_paths     = base.corpus_paths;
     a.recognize_threshold = base.recognize_threshold;
+    a.module_filter    = base.module_filter;
     a.no_cache  = base.no_cache;
     a.no_pdb    = base.no_pdb;
     a.full_analysis = base.full_analysis;
@@ -1817,9 +1950,17 @@ int run_serve(const Args& base, const Binary& b) {
                 // walk; subsequent calls return instantly. Replaces N
                 // round-trips for cascade's eligibility pass.
                 if (!callees_all_cache) {
+                    const ModuleScope scope = resolve_module_scope(b, base.module_filter);
+                    if (!base.module_filter.empty() && !scope.active) {
+                        write_err("--module not resolved");
+                        continue;
+                    }
                     auto edges = compute_call_graph(b);
                     std::map<addr_t, std::vector<addr_t>> by_caller;
-                    for (auto& e : edges) by_caller[e.caller].push_back(e.callee);
+                    for (auto& e : edges) {
+                        if (!scope.contains(e.caller)) continue;
+                        by_caller[e.caller].push_back(e.callee);
+                    }
                     std::string out;
                     out.reserve(edges.size() * 24);
                     for (auto& [caller, callees] : by_caller) {

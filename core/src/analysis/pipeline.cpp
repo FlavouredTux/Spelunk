@@ -723,7 +723,10 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
 }
 
 std::vector<DiscoveredFunction>
-enumerate_functions(const Binary& b, EnumerateMode mode) {
+enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
+    const bool scoped = hi > lo;
+    auto in_scope = [&](addr_t a) noexcept { return !scoped || (a >= lo && a < hi); };
+
     std::vector<DiscoveredFunction> out;
 
     // Pass 1: defined function symbols. These carry real sizes, so prefer
@@ -733,6 +736,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.addr == 0 || s.name.empty()) continue;
+        if (!in_scope(s.addr)) continue;
         if (index.count(s.addr)) continue;
         index.emplace(s.addr, out.size());
         out.push_back({s.addr, s.size, s.name,
@@ -779,6 +783,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
         return nullptr;
     };
     auto add_candidate = [&](addr_t a, std::string_view label) {
+        if (!in_scope(a)) return;
         if (b.import_at_plt(a) != nullptr) return;
         if (index.count(a)) return;
         const Section* sec = section_for(a);
@@ -796,8 +801,8 @@ enumerate_functions(const Binary& b, EnumerateMode mode) {
     // by decoding two instructions. Both run on packed binaries
     // too — RTTI lives in unencrypted .rdata, and the prologue
     // sweep itself skips encrypted sections.
-    for (addr_t a : discover_from_vtables(b))   add_candidate(a, "vt");
-    for (addr_t a : discover_from_prologues(b)) add_candidate(a, "sub");
+    for (addr_t a : discover_from_vtables(b, lo, hi))   add_candidate(a, "vt");
+    for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
 
     // Loader-only mode: on a packed binary the call-graph walker chases
     // garbage targets through encrypted stub code, blocks the UI for

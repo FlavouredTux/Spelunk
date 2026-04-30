@@ -280,61 +280,51 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         process.stderr.write(`cascade: killed ${cleared} orphan ember --serve daemon(s) for ${args.binary}\n`);
     }
 
-    await warmEmberCaches(args.binary, args.emberBin);
-
-    // One-time setup. Spawn a coordinator daemon for cascade-wide
-    // bulk queries (callees_all + future shared analyses). Workers
-    // still spawn their own daemons since concurrent stdin/stdout
-    // multiplexing is more complexity than the win is worth at this
-    // scale.
+    // Pre-round-0 startup, fully parallelized. Three independent cold
+    // workloads used to run serially:
+    //   1. warmEmberCaches: spawns `ember --xrefs` + `ember --strings`
+    //      to populate disk cache for worker daemons.
+    //   2. coord daemon cold-init: own binary load + analysis pipeline.
+    //   3. functions / annotations / callees_all queries against coord.
+    // (1) and (2) are different processes doing redundant cold loads
+    // — they should race, not serialize. (3) just rides on (2)'s ready
+    // signal; firing them all at once lets the daemon pipeline work
+    // across them instead of round-tripping per call. On a 9000-fn
+    // binary this cuts pre-agent wall time roughly in half.
     const coord = (() => {
         try { return new EmberDaemon(args.emberBin, args.binary); }
         catch { return undefined; }
     })();
 
-    // Use daemon-served --functions when the coord is up — the cold
-    // subprocess on a 9000-fn binary was the dominant pre-round-0 cost.
-    const fns = (await (async () => {
-        if (!coord) return listFunctions(args.binary, args.emberBin);
-        try {
-            const body = await coord.call("functions");
-            return parseFunctionsTsv(body);
-        } catch { return listFunctions(args.binary, args.emberBin); }
-    })());
+    const fnsP: Promise<FnInfo[]> = coord
+        ? coord.call("functions").then(parseFunctionsTsv).catch(() => listFunctions(args.binary, args.emberBin))
+        : Promise.resolve(listFunctions(args.binary, args.emberBin));
+    const annotP: Promise<Set<string>> = coord
+        ? loadAnnotations(coord).catch((e) => {
+            process.stderr.write(`annotations seed failed: ${e}\n`);
+            return new Set<string>();
+        })
+        : Promise.resolve(new Set<string>());
+    const calleesP: Promise<Map<string, string[]>> = coord
+        ? loadAllCallees(coord).catch((e) => {
+            process.stderr.write(`callees_all failed, falling back to per-fn: ${e}\n`);
+            return new Map<string, string[]>();
+        })
+        : Promise.resolve(new Map<string, string[]>());
+
+    const [, fns, annotated, calleeMap] = await Promise.all([
+        warmEmberCaches(args.binary, args.emberBin),
+        fnsP,
+        annotP,
+        calleesP,
+    ]);
+
     const subAddrs = new Set<string>();
     for (const f of fns) {
         if (f.kind === "sub") subAddrs.add(f.addr);
     }
-
-    // Seed annotated-name set from the binary's resolved annotation
-    // file. Without this seed, TEEF's `ember --recognize` anchors are
-    // invisible to cascade — round 0 starts with zero anchors, can't
-    // compound, and terminates immediately on big stripped binaries.
-    const annotated = new Set<string>();
-    if (coord) {
-        try {
-            const a = await loadAnnotations(coord);
-            for (const x of a) annotated.add(x);
-        } catch (e) {
-            process.stderr.write(`annotations seed failed: ${e}\n`);
-        }
-    }
     if (annotated.size > 0) {
         process.stderr.write(`cascade: seeded with ${annotated.size} pre-existing annotations (TEEF + symbols)\n`);
-    }
-
-    // Bulk callee map. With daemon: one round-trip pulls the full
-    // call graph (a 7000-fn binary used to take ~30s of N×spawnSync
-    // for the first eligibility pass). Subprocess fallback keeps the
-    // old lazy per-fn behavior.
-    const calleeMap = new Map<string, string[]>();
-    if (coord) {
-        try {
-            const all = await loadAllCallees(coord);
-            for (const [k, v] of all) calleeMap.set(k, v);
-        } catch (e) {
-            process.stderr.write(`callees_all failed, falling back to per-fn: ${e}\n`);
-        }
     }
     const calleesOf = (addr: string): string[] => {
         let v = calleeMap.get(addr);

@@ -2011,9 +2011,30 @@ ipcMain.handle("agent:tailRun", async (_e, runId) => {
 
 // Fanout / promote. Spawn the agent CLI; capture stdout for the JSON
 // reply. Detached fanout returns immediately by design.
+// Locating the agent CLI + a usable Node.
+//
+// process.execPath in a packaged Electron app is Ember.exe — useless
+// for running a node script. We need a real Node 22+. Resolution
+// order: env override → 'node' on PATH → fail with a clear setup
+// hint. Bundling node would add ~50MB to the installer; we prefer
+// the smaller download and require Node as a soft prerequisite for
+// agent features.
+function findNode() {
+  if (process.env.EMBER_AGENT_NODE) return process.env.EMBER_AGENT_NODE;
+  if (!app.isPackaged) return process.execPath;   // dev mode: parent IS node
+  return process.platform === "win32" ? "node.exe" : "node";
+}
+
+function findAgentEntry() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "agent", "dist", "main.js");
+  }
+  return path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+}
+
 ipcMain.handle("agent:fanout", async (_e, opts) => {
-  const node = process.execPath;
-  const agent = path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+  const node = findNode();
+  const agent = findAgentEntry();
   return new Promise((resolve, reject) => {
     const args = [agent, "fanout"];
     if (opts.binary)   args.push(`--binary=${opts.binary}`);
@@ -2032,13 +2053,17 @@ ipcMain.handle("agent:fanout", async (_e, opts) => {
       if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
       try { resolve(JSON.parse(out)); } catch { resolve({ raw: out }); }
     });
-    proc.on("error", reject);
+    proc.on("error", (e) => {
+      if (e && e.code === "ENOENT") {
+        reject(new Error(`Node.js not found. Install Node 22+ and ensure 'node' is on PATH, or set EMBER_AGENT_NODE to its absolute path. (looked up: ${node})`));
+      } else { reject(e); }
+    });
   });
 });
 
 ipcMain.handle("agent:promote", async (_e, opts) => {
-  const node = process.execPath;
-  const agent = path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+  const node = findNode();
+  const agent = findAgentEntry();
   return new Promise((resolve, reject) => {
     const args = [agent, "promote", opts.binary];
     if (opts.threshold) args.push(`--threshold=${opts.threshold}`);
@@ -2052,13 +2077,103 @@ ipcMain.handle("agent:promote", async (_e, opts) => {
       if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
       try { resolve(JSON.parse(out)); } catch { resolve({ raw: out }); }
     });
-    proc.on("error", reject);
+    proc.on("error", (e) => {
+      if (e && e.code === "ENOENT") {
+        reject(new Error(`Node.js not found. Install Node 22+ and ensure 'node' is on PATH, or set EMBER_AGENT_NODE to its absolute path. (looked up: ${node})`));
+      } else { reject(e); }
+    });
   });
 });
 
+// Agent config — read/write of ~/.config/ember/agent.toml plus a
+// runtime defaults JSON sibling (agent.defaults.json) for per-role
+// model + budget choices that aren't sensitive.
+function agentConfigPath() {
+  const home = require("node:os").homedir();
+  return path.join(home, ".config", "ember", "agent.toml");
+}
+function agentDefaultsPath() {
+  const home = require("node:os").homedir();
+  return path.join(home, ".config", "ember", "agent.defaults.json");
+}
+
+function parseAgentToml(raw) {
+  const out = { assistant: "", openai: "", openrouter: "" };
+  let section = "";
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const m = /^\[(\w+)\]$/.exec(t);
+    if (m) { section = m[1]; continue; }
+    const kv = /^(\w+)\s*=\s*"([^"]*)"$/.exec(t);
+    if (!kv) continue;
+    if (kv[1] !== "key") continue;
+    if (section === "assistant")  out.assistant  = kv[2];
+    if (section === "openai")     out.openai     = kv[2];
+    if (section === "openrouter") out.openrouter = kv[2];
+  }
+  return out;
+}
+
+function emitAgentToml(cfg) {
+  const out = [];
+  if (cfg.assistant) out.push(`[assistant]\nkey = "${cfg.assistant}"\n`);
+  if (cfg.openai)    out.push(`[openai]\nkey = "${cfg.openai}"\n`);
+  if (cfg.openrouter) out.push(`[openrouter]\nkey = "${cfg.openrouter}"\n`);
+  return out.join("\n");
+}
+
+ipcMain.handle("agent:getConfig", async () => {
+  let cfg = { assistant: "", openai: "", openrouter: "" };
+  try {
+    const raw = require("node:fs").readFileSync(agentConfigPath(), "utf8");
+    cfg = parseAgentToml(raw);
+  } catch { /* no file yet */ }
+  let defaults = {};
+  try {
+    defaults = JSON.parse(require("node:fs").readFileSync(agentDefaultsPath(), "utf8"));
+  } catch { /* no defaults yet */ }
+  // Mask keys to last 4 chars so the renderer can show "•••• …xyz9"
+  // without ever holding the full secret in memory unless asked.
+  const mask = (s) => s ? s.slice(0, 6) + "…" + s.slice(-4) : "";
+  return {
+    masked: { assistant: mask(cfg.assistant), openai: mask(cfg.openai), openrouter: mask(cfg.openrouter) },
+    has:    { assistant: !!cfg.assistant,     openai: !!cfg.openai,     openrouter: !!cfg.openrouter },
+    defaults,
+    path: agentConfigPath(),
+  };
+});
+
+ipcMain.handle("agent:setConfig", async (_e, patch) => {
+  const fs = require("node:fs");
+  const cfgPath = agentConfigPath();
+  let cur = { assistant: "", openai: "", openrouter: "" };
+  try { cur = parseAgentToml(fs.readFileSync(cfgPath, "utf8")); } catch {}
+  const next = { ...cur };
+  // patch may carry keys (raw) and/or defaults (object). Empty string
+  // for a key means "leave as-is"; null means "clear it."
+  if (patch.keys) {
+    for (const k of ["assistant", "openai", "openrouter"]) {
+      const v = patch.keys[k];
+      if (v == null) next[k] = "";
+      else if (v !== "") next[k] = v;
+    }
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, emitAgentToml(next), { mode: 0o600 });
+  }
+  if (patch.defaults) {
+    const dpath = agentDefaultsPath();
+    let cur2 = {};
+    try { cur2 = JSON.parse(fs.readFileSync(dpath, "utf8")); } catch {}
+    fs.mkdirSync(path.dirname(dpath), { recursive: true });
+    fs.writeFileSync(dpath, JSON.stringify({ ...cur2, ...patch.defaults }, null, 2));
+  }
+  return { ok: true };
+});
+
 ipcMain.handle("agent:cascade", async (_e, opts) => {
-  const node = process.execPath;
-  const agent = path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+  const node = findNode();
+  const agent = findAgentEntry();
   return new Promise((resolve, reject) => {
     const args = [agent, "cascade", `--binary=${opts.binary}`];
     if (opts.role)             args.push(`--role=${opts.role}`);
@@ -2076,7 +2191,11 @@ ipcMain.handle("agent:cascade", async (_e, opts) => {
       if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
       try { resolve(JSON.parse(out)); } catch { resolve({ raw: out, stderr: err }); }
     });
-    proc.on("error", reject);
+    proc.on("error", (e) => {
+      if (e && e.code === "ENOENT") {
+        reject(new Error(`Node.js not found. Install Node 22+ and ensure 'node' is on PATH, or set EMBER_AGENT_NODE to its absolute path. (looked up: ${node})`));
+      } else { reject(e); }
+    });
   });
 });
 

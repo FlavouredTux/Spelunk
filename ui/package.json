@@ -1,7 +1,7 @@
 {
   "name": "ember-ui",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "main": "electron/main.cjs",
   "homepage": "https://github.com/FlavouredTux/Ember",
@@ -35,6 +35,19 @@
       {
         "from": "../plugins",
         "to": "plugins"
+      },
+      {
+        "from": "../agent/dist",
+        "to": "agent/dist"
+      },
+      {
+        "from": "../agent/node_modules",
+        "to": "agent/node_modules",
+        "filter": ["**/*", "!**/{*.md,*.txt,LICENSE*,*.map}", "!**/{test,tests,docs,examples}/**"]
+      },
+      {
+        "from": "../agent/package.json",
+        "to": "agent/package.json"
       }
     ],
     "directories": {

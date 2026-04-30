@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, mono, serif } from "../theme";
+import { NeuralView } from "./NeuralView";
+import { AgentSettings } from "./AgentSettings";
 
 // Agent harness dashboard. Read-only views over agent/src/intel/log.ts
 // JSONL state plus the per-run events.jsonl files. Polls every 2s
@@ -82,6 +84,8 @@ export function AgentPanel(props: {
     const [activeRun, setActiveRun]   = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [toast, setToast] = useState<string | null>(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"dashboard" | "neural">("neural");
 
     // Refresh poller. 2s feels live without thrashing the FS.
     useEffect(() => {
@@ -201,9 +205,14 @@ export function AgentPanel(props: {
                 onPromoteApply={() => onPromote(true)}
                 onPromoteDry={() => onPromote(false)}
                 onCascade={onCascade}
+                onOpenSettings={() => setSettingsOpen(true)}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
                 disabled={!props.binaryPath || busy != null}
                 busyLabel={busy}
             />
+
+            <AgentSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
             {/* Stat cards */}
             <div style={{
@@ -225,23 +234,46 @@ export function AgentPanel(props: {
                 <Stat label="swarm spend" value={fmtUsd(stats.totalUsd)} tint={C.yellow} />
             </div>
 
-            {/* Main content */}
-            <div style={{
-                flex: 1,
-                display: "grid",
-                gridTemplateColumns: "1.1fr 1fr 1.4fr",
-                gap: 0,
-                minHeight: 0,
-            }}>
-                <DisputesColumn disputes={disputed} />
-                <RecentClaimsColumn recent={recent} />
-                <RunsColumn
-                    runs={runs}
-                    activeRun={activeRun}
-                    setActiveRun={setActiveRun}
-                    tailEvents={tailEvents}
-                />
-            </div>
+            {/* Main content — toggleable between dashboard + neural */}
+            {viewMode === "neural" ? (
+                <div style={{
+                    flex: 1, display: "flex", flexDirection: "column",
+                    minHeight: 0,
+                }}>
+                    <NeuralView
+                        runs={runs}
+                        view={intel.view}
+                        claimCount={intel.entries.filter((e) => e.kind === "claim").length}
+                    />
+                    {disputed.length > 0 && (
+                        <div style={{
+                            padding: "8px 20px",
+                            borderTop: `1px solid ${C.border}`,
+                            background: C.bgMuted,
+                            fontFamily: mono, fontSize: 11, color: C.red,
+                        }}>
+                            {disputed.length} disputed — switch to dashboard to inspect
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div style={{
+                    flex: 1,
+                    display: "grid",
+                    gridTemplateColumns: "1.1fr 1fr 1.4fr",
+                    gap: 0,
+                    minHeight: 0,
+                }}>
+                    <DisputesColumn disputes={disputed} />
+                    <RecentClaimsColumn recent={recent} />
+                    <RunsColumn
+                        runs={runs}
+                        activeRun={activeRun}
+                        setActiveRun={setActiveRun}
+                        tailEvents={tailEvents}
+                    />
+                </div>
+            )}
 
             {/* Bottom: agent activity ribbon */}
             <ActivityRibbon claims={intel.entries.filter((e): e is Claim => e.kind === "claim")} />
@@ -270,6 +302,9 @@ function Header(props: {
     onPromoteApply: () => void;
     onPromoteDry: () => void;
     onCascade: () => void;
+    onOpenSettings: () => void;
+    viewMode: "dashboard" | "neural";
+    setViewMode: (m: "dashboard" | "neural") => void;
     disabled: boolean;
     busyLabel: string | null;
 }) {
@@ -300,6 +335,7 @@ function Header(props: {
                 )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <ViewToggle value={props.viewMode} onChange={props.setViewMode} />
                 {props.busyLabel && (
                     <span style={{ fontFamily: mono, fontSize: 11, color: C.textMuted }}>
                         {props.busyLabel}
@@ -314,8 +350,41 @@ function Header(props: {
                 <Btn onClick={props.onPromoteApply} disabled={props.disabled} ghost>
                     promote --apply
                 </Btn>
+                <Btn onClick={props.onOpenSettings} ghost>⚙</Btn>
                 <Btn onClick={props.onClose} ghost>close</Btn>
             </div>
+        </div>
+    );
+}
+
+function ViewToggle(props: { value: "dashboard" | "neural"; onChange: (v: "dashboard" | "neural") => void }) {
+    const item = (id: "dashboard" | "neural", label: string) => {
+        const active = props.value === id;
+        return (
+            <button onClick={() => props.onChange(id)}
+                style={{
+                    fontFamily: mono, fontSize: 10,
+                    padding: "4px 10px",
+                    background: active ? C.bgDark : "transparent",
+                    color: active ? C.text : C.textMuted,
+                    border: "none",
+                    cursor: "pointer",
+                    borderRadius: 3,
+                }}
+            >{label}</button>
+        );
+    };
+    return (
+        <div style={{
+            display: "inline-flex",
+            background: C.bgInput,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            padding: 2,
+            marginRight: 6,
+        }}>
+            {item("neural", "neural")}
+            {item("dashboard", "dashboard")}
         </div>
     );
 }

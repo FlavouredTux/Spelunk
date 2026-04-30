@@ -104,5 +104,7 @@ contextBridge.exposeInMainWorld("ember", {
     fanout:    (opts)    => ipcRenderer.invoke("agent:fanout", opts),
     promote:   (opts)    => ipcRenderer.invoke("agent:promote", opts),
     cascade:   (opts)    => ipcRenderer.invoke("agent:cascade", opts),
+    getConfig: ()        => ipcRenderer.invoke("agent:getConfig"),
+    setConfig: (patch)   => ipcRenderer.invoke("agent:setConfig", patch),
   },
 });

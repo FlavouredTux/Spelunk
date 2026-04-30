@@ -192,6 +192,18 @@ function makeGlobalCSS(): string {
     70%  { box-shadow: 0 0 0 10px transparent; opacity: 0.4; }
     100% { box-shadow: 0 0 0 0   transparent; opacity: 1; }
   }
+  @keyframes neural-halo {
+    0%   { r: 9;  stroke-opacity: 0.7 }
+    100% { r: 18; stroke-opacity: 0   }
+  }
+  .neural-halo { animation: neural-halo 1.6s ease-out infinite; }
+  @keyframes neural-jitter {
+    0%, 100% { transform: translate(0, 0); }
+    25%      { transform: translate(1.2px, -0.8px); }
+    50%      { transform: translate(-0.8px, 1.2px); }
+    75%      { transform: translate(-1.0px, -1.0px); }
+  }
+  .neural-jitter { animation: neural-jitter 0.6s linear infinite; transform-origin: center; transform-box: fill-box; }
   .ember-skel {
     background: linear-gradient(90deg, ${C.bgMuted} 0%, ${C.bgDark} 50%, ${C.bgMuted} 100%);
     background-size: 220% 100%;

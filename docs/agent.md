@@ -33,7 +33,14 @@ node dist/main.js --help
 
 ## Configuration
 
-API keys via env vars or `~/.config/ember/agent.toml`:
+The Electron UI ships an "agentic" tab with a built-in settings
+drawer (gear icon) that edits the same on-disk config. Provider keys
+are written through to `~/.config/ember/agent.toml` (mode 0600);
+per-role default models, budgets, and cascade knobs live alongside
+in `~/.config/ember/agent.defaults.json`.
+
+The CLI reads the same files. API keys via env vars or
+`~/.config/ember/agent.toml`:
 
 ```toml
 [assistant]
@@ -49,6 +56,11 @@ key = "sk-or-..."
 Env vars (`assistant_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
 override the toml. Ember binary is auto-discovered (build/cli/ember,
 build/ember, $PATH); override with `EMBER_BIN`.
+
+The packaged Electron app spawns the agent CLI through the user's
+system `node` — Node 22+ is a soft prerequisite for agent features.
+Override the node binary with `EMBER_AGENT_NODE=/path/to/node` if
+not on PATH.
 
 ## Roles
 

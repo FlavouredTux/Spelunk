@@ -35,7 +35,8 @@ ember::addr_t compute_slide(ember::debug::Target& tgt,
                             const std::string& bin_path) {
     const auto images = tgt.images();
     if (images.empty()) return 0;
-    const ember::addr_t pref = bin.preferred_load_base();
+    constexpr ember::addr_t kPage = 0x1000;
+    const ember::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -44,10 +45,10 @@ ember::addr_t compute_slide(ember::debug::Target& tgt,
 
     for (const auto& img : images) {
         if (img.path == bin_path || img.path == canon) {
-            return img.base - pref;
+            return (img.base & ~(kPage - 1)) - pref;
         }
     }
-    return images.front().base - pref;
+    return (images.front().base & ~(kPage - 1)) - pref;
 }
 
 }  // namespace

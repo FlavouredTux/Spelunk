@@ -202,7 +202,15 @@ addr_t compute_slide(debug::Target& tgt, const Binary& bin,
                      const std::string& bin_path) {
     const auto images = tgt.images();
     if (images.empty()) return 0;
-    const addr_t pref = bin.preferred_load_base();
+    // Page-align both sides before subtracting. PT_LOAD's `vaddr` can
+    // be unaligned (FlipVM's first segment starts at 0x1000a), but the
+    // kernel always mmaps from the page boundary covering it; without
+    // alignment we'd report a 10-byte negative slide for an EXEC
+    // binary that didn't actually slide at all, and every static_pc
+    // we computed for unwinding / scavenge / labelling would be off
+    // by the same amount.
+    constexpr addr_t kPage = 0x1000;
+    const addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -213,10 +221,10 @@ addr_t compute_slide(debug::Target& tgt, const Binary& bin,
     // after exec so the front of the list is a safe fallback.
     for (const auto& img : images) {
         if (img.path == bin_path || img.path == canon) {
-            return img.base - pref;
+            return (img.base & ~(kPage - 1)) - pref;
         }
     }
-    return images.front().base - pref;
+    return (images.front().base & ~(kPage - 1)) - pref;
 }
 
 std::optional<int> parse_int(std::string_view s) {

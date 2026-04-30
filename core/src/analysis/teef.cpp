@@ -437,10 +437,30 @@ struct IrTokenizer {
             out.push_back(fnv1a(reg_name(inst.segment)));
         }
         if (inst.op == IrOp::Call) {
-            out.push_back(resolve_addr_token(inst.target1));
+            // Anchor weighting: a call to a NAMED import/symbol is far
+            // stronger fingerprint signal than the surrounding alpha-
+            // renamed reg arithmetic. A function calling malloc + free
+            // + memcpy has a more discriminating identity than two
+            // unrelated functions sharing some random reg-arith
+            // patterns. Repeat the resolved-name token 3x in the
+            // stream so it dominates both the exact hash and the
+            // bigram-derived MinHash. Unresolved (kClassAddr) calls
+            // get a single token as before — no weighting boost when
+            // we can't tell what's being called.
+            const u64 t = resolve_addr_token(inst.target1);
+            out.push_back(t);
+            if (t != kClassAddr) {
+                out.push_back(t);
+                out.push_back(t);
+            }
         } else if (inst.op == IrOp::Intrinsic && !inst.name.empty()) {
+            // Intrinsic names (cpuid, rdtsc, syscall, x64.lock, etc) are
+            // also strong anchors — same 3x weighting.
+            const u64 nameTok = fnv1a(inst.name);
             out.push_back(kIntrinsicTok);
-            out.push_back(fnv1a(inst.name));
+            out.push_back(nameTok);
+            out.push_back(nameTok);
+            out.push_back(nameTok);
         }
         if (inst.dst.kind != IrValueKind::None) emit_value(inst.dst);
         for (u8 i = 0; i < inst.src_count; ++i) emit_value(inst.srcs[i]);

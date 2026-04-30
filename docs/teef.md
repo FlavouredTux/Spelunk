@@ -149,6 +149,31 @@ only if it's not contained in a previously-kept entry's
 `[entry, entry + size)` window. Reported in stderr as
 `recognize: dropped N shadow entries (stride-1 dedup)`.
 
+## Anchor-weighted canonicalization
+
+A function calling `malloc` + `free` + `memcpy` has a more
+discriminating identity than two unrelated functions sharing some
+random reg-arith patterns. Calls to NAMED imports/symbols and
+named `Intrinsic` ops are far stronger fingerprint signal than the
+surrounding alpha-renamed register arithmetic that dominates the
+canonical token stream by volume.
+
+The canonicalizer now repeats anchor-class tokens 3× in the stream:
+
+- `Call` whose target resolves to a PLT/GOT/defined-object name
+- `Intrinsic` with a non-empty name (`cpuid`, `rdtsc`, `syscall`, …)
+
+The repetition folds into both the exact 64-bit hash (sequential
+FNV over tokens) and the bigram-derived MinHash (more bigrams
+involving the anchor → higher chance of dominating the slot
+minimums). Unresolved calls (`kClassAddr` fallback when no symbol
+lookup hit) get a single token as before — no boost when we can't
+tell what's being called.
+
+Schema bumped v4 → v5 to invalidate stale caches; the corpus
+build script (`scripts/build_corpus_linux_x86.sh`) regenerates
+TSVs with the new fingerprints.
+
 ## String anchors
 
 Two functions with identical TEEF structure but disjoint reachable

@@ -18,7 +18,7 @@ namespace ember {
 //
 // Schema bumped on canonicalization rule changes; folded into the
 // hash so cached TSVs from a different schema can't collide silently.
-inline constexpr std::string_view kTeefSchema = "v4";
+inline constexpr std::string_view kTeefSchema = "v5";
 
 // Per-function signature: an exact hash of the canonicalized pseudo-C
 // (precision: identifies bit-equivalent algorithms across compiler

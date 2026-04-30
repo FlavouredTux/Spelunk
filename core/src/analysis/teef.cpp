@@ -524,10 +524,14 @@ namespace {
     return s;
 }
 
-// Region kinds that are useful to fingerprint as standalone chunks.
-// Plain Block/Seq/Goto/Return/etc. are uninteresting in isolation —
-// they'd match across thousands of unrelated functions. We want
-// control-flow-bearing regions: loops, branches, and switches.
+// Region kinds worth fingerprinting as standalone chunks. The big-fn
+// recovery case (huge bucket on glibc 2.35→2.39) requires more than
+// just nested control-flow regions: long state-machine arms are flat
+// Seq / Block regions, but if they're big enough they're highly
+// identifying. So we accept Seq / Block too, with the size threshold
+// (collect_chunks's min_insts gate) doing the actual filtering. Goto
+// / Return / Continue / Break / Empty stay excluded — they're
+// terminators with no meaningful body.
 [[nodiscard]] bool is_chunkable_kind(RegionKind k) noexcept {
     switch (k) {
         case RegionKind::IfThen:
@@ -537,6 +541,8 @@ namespace {
         case RegionKind::For:
         case RegionKind::Loop:
         case RegionKind::Switch:
+        case RegionKind::Seq:
+        case RegionKind::Block:
             return true;
         default:
             return false;

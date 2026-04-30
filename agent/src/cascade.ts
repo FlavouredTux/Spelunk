@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { runWorker } from "./worker.js";
 import { runassistantCodeWorker } from "./worker_assistant_code.js";
+import { isCodexCliModel, runCodexCliWorker } from "./worker_codex_cli.js";
 import { promote } from "./promote.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { EmberDaemon } from "./tools/daemon.js";
@@ -162,6 +163,10 @@ export interface CascadeArgs {
     eligibilityRatio: number;    // min named-callee fraction for eligibility
     emberBin: string;
     runsRoot: string;
+    module?: string;             // --module NAME scope filter; threads through to
+                                 // the coord daemon + every worker daemon. Critical
+                                 // on minidump targets where the 160K wine-DLL fns
+                                 // would otherwise dominate every fn-walk.
 }
 
 export interface RoundStats {
@@ -293,7 +298,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
     // across them instead of round-tripping per call. On a 9000-fn
     // binary this cuts pre-agent wall time roughly in half.
     const coord = (() => {
-        try { return new EmberDaemon(args.emberBin, args.binary); }
+        try { return new EmberDaemon(args.emberBin, args.binary, undefined, args.module); }
         catch { return undefined; }
     })();
 
@@ -327,7 +332,17 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
     if (annotated.size > 0) {
         process.stderr.write(`cascade: seeded with ${annotated.size} pre-existing annotations (TEEF + symbols)\n`);
     }
+    // Daemon's callees_all only emits caller→callees edges for fns that
+    // actually have outgoing calls; true leaves (returns + intrinsics)
+    // never appear. Earlier this code treated `undefined` as "fall back
+    // to a per-fn `--callees` subprocess" — which on a 12K-fn minidump
+    // fires ~5K cold subprocesses each paying compute_call_graph again,
+    // totalling 30+ minutes of dead serial work. Treat absence as
+    // "no callees" — the daemon is authoritative; missing == leaf.
+    // The CLI fallback path stays for the no-coord case (subprocess
+    // startup failed) where calleeMap is the entirely-empty default.
     const calleesOf = (addr: string): string[] => {
+        if (coord) return calleeMap.get(addr) ?? [];
         let v = calleeMap.get(addr);
         if (v == null) {
             v = listCallees(addr, args.binary, args.emberBin);
@@ -410,14 +425,16 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
                 runDir,
                 emberBin: args.emberBin,
                 agentId: `cascade-${args.role}-${round}-${runId.slice(2)}`,
+                module: args.module,
             };
-            // assistant-code/* models route to the SDK-driven worker which
-            // uses the user's assistant Code auth (Max plan quota) instead
-            // of an HTTP API key. Same events.jsonl shape so the rest
-            // of the cascade pipeline (cost tally, promote, telemetry)
-            // is unchanged.
+            // assistant-code/* and codex-cli/* models route to official
+            // local CLI workers, using the user's existing subscription
+            // auth instead of HTTP API keys. Same events.jsonl shape so
+            // the rest of the cascade pipeline is unchanged.
             return (roundModel ?? "").startsWith("assistant-code")
                 ? runassistantCodeWorker(wargs)
+                : isCodexCliModel(roundModel)
+                    ? runCodexCliWorker(wargs)
                 : runWorker(wargs);
         });
         const settled = await Promise.allSettled(promises);

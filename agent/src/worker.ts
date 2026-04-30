@@ -23,6 +23,8 @@ export interface WorkerArgs {
     runDir: string;           // ~/.cache/ember/agent/runs/<run-id>/
     emberBin: string;
     agentId?: string;         // default: role-<runId>
+    module?: string;          // --module NAME passthrough to the worker's daemon
+                              // (cascade plumbs this on minidump targets)
 }
 
 interface CostTally {
@@ -47,7 +49,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
     // when the worker exits (try/finally below).
     let daemon: EmberDaemon | undefined;
     try {
-        daemon = new EmberDaemon(args.emberBin, args.binary);
+        daemon = new EmberDaemon(args.emberBin, args.binary, undefined, args.module);
     } catch {
         // If daemon fails to spawn, every tool call falls through to
         // subprocess spawnSync. Functionally identical, just slower.

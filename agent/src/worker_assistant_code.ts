@@ -94,7 +94,7 @@ export async function runassistantCodeWorker(args: WorkerArgs): Promise<void> {
     const agentId = args.agentId ?? `${args.role}-${args.runId}`;
 
     let daemon: EmberDaemon | undefined;
-    try { daemon = new EmberDaemon(args.emberBin, args.binary); }
+    try { daemon = new EmberDaemon(args.emberBin, args.binary, undefined, args.module); }
     catch { daemon = undefined; }
 
     const ctx: ToolContext = {

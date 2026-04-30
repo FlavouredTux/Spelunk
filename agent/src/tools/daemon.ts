@@ -30,8 +30,16 @@ export class EmberDaemon {
     private deadErr: Error | null = null;
     private waitingReady: Array<() => void> = [];
 
-    constructor(emberBin: string, binary: string, env: NodeJS.ProcessEnv = process.env) {
-        this.proc = spawn(emberBin, ["--serve", binary], {
+    constructor(emberBin: string, binary: string, env: NodeJS.ProcessEnv = process.env,
+                moduleFilter?: string) {
+        // --module NAME scopes every fn-iteration tool call (functions,
+        // recognize, callees_all, strings_in_range) to one loaded module.
+        // Cascade passes this on minidump targets so worker daemons don't
+        // re-enumerate 160K wine-DLL fns per worker.
+        const args = moduleFilter
+            ? ["--module", moduleFilter, "--serve", binary]
+            : ["--serve", binary];
+        this.proc = spawn(emberBin, args, {
             stdio: ["pipe", "pipe", "pipe"],
             env,
         });

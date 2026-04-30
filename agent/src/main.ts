@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 
 import { runWorker } from "./worker.js";
 import { runassistantCodeWorker } from "./worker_assistant_code.js";
+import { isCodexCliModel, runCodexCliWorker } from "./worker_codex_cli.js";
 import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { promote } from "./promote.js";
@@ -111,7 +112,9 @@ async function cmdWorker(argv: string[]) {
     };
     await ((model ?? "").startsWith("assistant-code")
         ? runassistantCodeWorker(wargs)
-        : runWorker(wargs));
+        : isCodexCliModel(model)
+            ? runCodexCliWorker(wargs)
+            : runWorker(wargs));
     console.log(JSON.stringify({ run_id: runId, run_dir: runDir, status: "complete" }));
 }
 
@@ -358,6 +361,7 @@ async function cmdCascade(argv: string[]) {
         eligibilityRatio: numFlag("eligibility-ratio", cascD.eligibilityRatio ?? 0.3),
         emberBin: findEmberBin(),
         runsRoot: RUNS_ROOT,
+        module: f.get("module") ?? undefined,
     });
 
     // Per-round ASCII summary.

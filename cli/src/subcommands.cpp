@@ -286,6 +286,35 @@ int run_recognize(const Args& args, const Binary& b) {
     const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
     std::vector<addr_t> fns_vec(fns.begin(), fns.end());
 
+    // Pass 1: fingerprint everything in the target binary so we can
+    // build a query-side popularity map. A hash that appears in dozens
+    // of THIS binary's functions is a generic shape (CPU-feature stub,
+    // PLT thunk skeleton, return-zero), and surfacing one corpus
+    // canonical name for every occurrence is a false-positive
+    // catastrophe — the sober_live.elf experiment hit this with 1929
+    // copies of one tiny xgetbv-shaped stub all mapping to the same
+    // corpus name.
+    std::vector<TeefFunction> fps(total);
+    {
+        std::atomic<std::size_t> next0{0};
+        auto fingerprint_worker = [&] {
+            while (true) {
+                const std::size_t i = next0.fetch_add(1, std::memory_order_relaxed);
+                if (i >= total) break;
+                fps[i] = compute_teef_with_chunks(b, fns_vec[i]);
+            }
+        };
+        std::vector<std::thread> pool0;
+        pool0.reserve(threads);
+        for (unsigned k = 0; k < threads; ++k) pool0.emplace_back(fingerprint_worker);
+        for (auto& t : pool0) t.join();
+    }
+    std::unordered_map<u64, std::size_t> query_popularity;
+    for (const auto& tf : fps) {
+        if (tf.whole.exact_hash != 0) ++query_popularity[tf.whole.exact_hash];
+    }
+    constexpr std::size_t kQueryPopularityCap = 8;
+
     std::vector<std::string> rows(total);
     std::atomic<std::size_t> next{0};
     std::atomic<std::size_t> hit_count{0};
@@ -302,8 +331,13 @@ int run_recognize(const Args& args, const Binary& b) {
             const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
             if (i >= total) break;
             const addr_t a = fns_vec[i];
-            const auto tf = compute_teef_with_chunks(b, a);
+            const auto& tf = fps[i];
             if (tf.whole.exact_hash == 0) continue;
+            // Skip query functions whose whole-fn TEEF appears too
+            // many times in this binary — they're trivial-shape stubs
+            // (xgetbv, return-zero) that would ALL collapse onto a
+            // single arbitrary corpus name without this gate.
+            if (query_popularity[tf.whole.exact_hash] > kQueryPopularityCap) continue;
             auto matches = corpus.recognize(tf, /*top_k=*/3);
             if (matches.empty()) continue;
             if (matches[0].confidence < threshold) continue;

@@ -55,11 +55,19 @@ private:
 
     std::vector<WholeEntry>                                whole_by_name_;
     std::unordered_multimap<u64, std::size_t>              whole_exact_;   // exact_hash → idx into whole_by_name_
+    std::unordered_map<u64, std::size_t>                   whole_popularity_;  // exact_hash → total F-row occurrences (includes sub_*)
     std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;   // chunk_exact_hash → corpus chunks
 
     // Chunks that appear in too many distinct functions are
     // boilerplate. The recognizer drops them from voting.
-    static constexpr std::size_t kMaxChunkFns = 6;
+    static constexpr std::size_t kMaxChunkFns    = 6;
+
+    // Whole-function exact-hash buckets with more than this many
+    // entries are "popular trivial stubs" (CPU-feature query, alloc
+    // shim, etc.). Trusting whole-exact on these would surface a
+    // single arbitrary name for hundreds of unrelated query
+    // functions. Skip and fall through to chunk-vote.
+    static constexpr std::size_t kMaxWholeBucket = 8;
 };
 
 }  // namespace ember

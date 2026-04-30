@@ -1,3 +1,5 @@
+import OpenAI from "openai";
+
 import { OpenAILLM } from "./openai.js";
 
 // OpenRouter speaks OpenAI Chat Completions on a different host. The only
@@ -6,19 +8,41 @@ import { OpenAILLM } from "./openai.js";
 // "consult openrouter dashboard" and falls back to the conservative
 // upstream-OpenAI numbers when the model isn't recognized.
 
-const OPENROUTER_PRICING: Record<string, { input: number; output: number }> = {
-    // USD per 1M tokens. Update as needed; this is best-effort floor for
+type Price = { input: number; output: number; cache_read?: number; cache_write?: number };
+
+const OPENROUTER_PRICING: Record<string, Price> = {
+    // USD per 1M tokens. Cache_read is the discounted rate for tokens
+    // matched against an upstream prefix cache. Best-effort floor for
     // budget guardrails, not invoicing.
-    "assistant/assistant-opus-4.7":   { input: 15,  output: 75 },
-    "assistant/assistant-sonnet-4.6": { input: 3,   output: 15 },
-    "openai/gpt-5":                { input: 5,   output: 20 },
+    "assistant/assistant-opus-4.7":   { input: 15,   output: 75, cache_read: 1.5,  cache_write: 18.75 },
+    "assistant/assistant-sonnet-4.6": { input: 3,    output: 15, cache_read: 0.3,  cache_write: 3.75 },
+    "openai/gpt-5":                { input: 5,    output: 20 },
     "google/gemini-2.5-pro":       { input: 1.25, output: 5 },
-    "deepseek/deepseek-r1":        { input: 0.55, output: 2.19 },
+    // DeepSeek auto-caches prompt prefixes; the cache rate is ~10% of
+    // input. OpenRouter passes the cached_tokens counter through
+    // unchanged, so the math holds regardless of which upstream host
+    // serves the request.
+    "deepseek/deepseek-v4-pro":    { input: 0.40, output: 1.20, cache_read: 0.04 },
+    "deepseek/deepseek-v3.2":      { input: 0.27, output: 1.10, cache_read: 0.04 },
+    "deepseek/deepseek-r1":        { input: 0.55, output: 2.19, cache_read: 0.14 },
 };
 
 export class OpenRouterLLM extends OpenAILLM {
     constructor(apiKey: string) {
         super(apiKey, "https://openrouter.ai/api/v1", "openrouter");
+        // Re-construct the underlying OpenAI client with attribution headers.
+        // OpenRouter reads HTTP-Referer + X-Title and surfaces them in the
+        // dashboard's App column. Without these, every call shows as
+        // "Unknown" — which makes per-app rate limits and free-tier quotas
+        // hard to reason about.
+        this.client = new OpenAI({
+            apiKey,
+            baseURL: "https://openrouter.ai/api/v1",
+            defaultHeaders: {
+                "HTTP-Referer": "https://github.com/FlavouredTux/Ember",
+                "X-Title": "Ember Agent",
+            },
+        });
     }
 
     pricing(model: string) {

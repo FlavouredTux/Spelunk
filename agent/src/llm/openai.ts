@@ -81,12 +81,23 @@ export class OpenAILLM implements LLM {
             });
         }
 
+        // OpenAI-compatible providers surface cached prefix tokens in
+        // usage.prompt_tokens_details.cached_tokens. DeepSeek auto-caches
+        // any prefix that re-appears within ~24h; OpenRouter passes the
+        // counter through. We split the reported prompt_tokens into
+        // (cached, fresh) for accurate cost tallying.
+        const promptDetails = (resp.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)
+            ?.prompt_tokens_details;
+        const cached = promptDetails?.cached_tokens ?? 0;
+        const totalPrompt = resp.usage?.prompt_tokens ?? 0;
+
         return {
             content,
             stop_reason: mapStopReason(choice.finish_reason),
             usage: {
-                input_tokens: resp.usage?.prompt_tokens ?? 0,
+                input_tokens: Math.max(0, totalPrompt - cached),
                 output_tokens: resp.usage?.completion_tokens ?? 0,
+                cache_read_input_tokens: cached,
             },
             model: resp.model,
         };

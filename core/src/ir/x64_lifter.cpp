@@ -1610,6 +1610,13 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         case Mnemonic::Endbr64: lift_intrinsic(ctx, "endbr64"); break;
         case Mnemonic::Endbr32: lift_intrinsic(ctx, "endbr32"); break;
+        case Mnemonic::Cpuid:   lift_intrinsic(ctx, "x64.cpuid");  break;
+        case Mnemonic::Rdtsc:   lift_intrinsic(ctx, "x64.rdtsc");  break;
+        case Mnemonic::Rdtscp:  lift_intrinsic(ctx, "x64.rdtscp"); break;
+        case Mnemonic::Rdmsr:   lift_intrinsic(ctx, "x64.rdmsr");  break;
+        case Mnemonic::Wrmsr:   lift_intrinsic(ctx, "x64.wrmsr");  break;
+        case Mnemonic::Rdpmc:   lift_intrinsic(ctx, "x64.rdpmc");  break;
+        case Mnemonic::Pause:   lift_intrinsic(ctx, "x64.pause");  break;
         case Mnemonic::Cdqe: {
             // rax = sext64(eax)
             IrValue eax = ctx.read_reg(Reg::Eax);

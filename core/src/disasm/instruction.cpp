@@ -88,6 +88,13 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Cdqe:     return "cdqe";
         case Mnemonic::Endbr64:  return "endbr64";
         case Mnemonic::Endbr32:  return "endbr32";
+        case Mnemonic::Cpuid:    return "cpuid";
+        case Mnemonic::Rdtsc:    return "rdtsc";
+        case Mnemonic::Rdtscp:   return "rdtscp";
+        case Mnemonic::Rdmsr:    return "rdmsr";
+        case Mnemonic::Wrmsr:    return "wrmsr";
+        case Mnemonic::Rdpmc:    return "rdpmc";
+        case Mnemonic::Pause:    return "pause";
 
         case Mnemonic::Seto:   return "seto";
         case Mnemonic::Setno:  return "setno";

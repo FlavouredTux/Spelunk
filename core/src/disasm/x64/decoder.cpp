@@ -212,6 +212,16 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x05] = op(Mnemonic::Syscall);
     t[0x0B] = op(Mnemonic::Ud2);
     t[0x1F] = op(Mnemonic::Nop, OpSpec::Ev, OpSpec::None, OpSpec::None, true);
+    // System-instruction zero-operand opcodes — anti-debug pipelines lean
+    // on rdtsc / cpuid heavily, and a single missing entry at any of these
+    // aborts linear disassembly mid-function (the next byte is consumed as
+    // a fresh opcode and decode error cascades). All take no explicit
+    // operands; the lifter models them as side-effecting intrinsics.
+    t[0x30] = op(Mnemonic::Wrmsr);
+    t[0x31] = op(Mnemonic::Rdtsc);
+    t[0x32] = op(Mnemonic::Rdmsr);
+    t[0x33] = op(Mnemonic::Rdpmc);
+    t[0xA2] = op(Mnemonic::Cpuid);
 
     // SSE1: packed-float moves (no mandatory prefix).
     t[0x10] = op(Mnemonic::Movups,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);

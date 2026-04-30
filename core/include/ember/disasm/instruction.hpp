@@ -36,6 +36,12 @@ enum class Mnemonic : u16 {
     Nop, Hlt, Int, Int3, Syscall, Ud2,
     Cdq, Cqo, Cwde, Cdqe,
     Endbr64, Endbr32,
+    // System-instruction zero-operand mnemonics. Common in anti-debug:
+    // rdtsc + cpuid for timing / VM detection. wrmsr/rdmsr/rdpmc rarer
+    // but cheap to add. Lifted as side-effecting intrinsics that the
+    // emitter renders as `/* x64.<mnem>() */` so the cleanup pipeline
+    // doesn't try to constant-fold the instruction's effect away.
+    Cpuid, Rdtsc, Rdtscp, Rdmsr, Wrmsr, Rdpmc, Pause,
 
     // ---- SetCC: write 0/1 byte based on a flag predicate ------------------
     Seto, Setno, Setb, Setae, Sete, Setne, Setbe, Seta,

@@ -10,6 +10,7 @@ import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { promote } from "./promote.js";
 import { fanout } from "./fanout.js";
 import { cascade } from "./cascade.js";
+import { tiebreak } from "./tiebreak.js";
 
 // CLI entry. Subcommands:
 //   worker --role=R --binary=B --scope=S [--model=M] [--budget=N] [--detach]
@@ -349,17 +350,42 @@ async function cmdCascade(argv: string[]) {
     console.log(JSON.stringify(r, null, 2));
 }
 
+async function cmdTiebreak(argv: string[]) {
+    const f = parseFlags(argv);
+    const binary = f.get("binary");
+    if (!binary) {
+        console.error("usage: tiebreak --binary=B [--limit=N] [--budget=N] [--max-turns=N] [--model=M]");
+        process.exit(2);
+    }
+    const tieD = AGENT_DEFAULTS.tiebreaker ?? {};
+    const r = await tiebreak({
+        binary: resolve(binary),
+        model:    f.get("model")  ?? tieD.model,
+        budget:   parseFloat(f.get("budget")    ?? String(tieD.budget    ?? 0.05)),
+        maxTurns: parseInt(  f.get("max-turns") ?? String(tieD.maxTurns ?? 10), 10),
+        limit:    parseInt(  f.get("limit")     ?? "20", 10),
+        emberBin: findEmberBin(),
+        runsRoot: RUNS_ROOT,
+    });
+    process.stderr.write(
+        `tiebreak: disputes=${r.disputes_found} spawned=${r.spawned} ok=${r.fulfilled} rej=${r.rejected} ` +
+        `cost=$${r.cost_usd.toFixed(4)} ${(r.elapsed_ms/1000).toFixed(1)}s\n`,
+    );
+    console.log(JSON.stringify(r, null, 2));
+}
+
 async function main() {
     const [, , cmd, ...rest] = process.argv;
     switch (cmd) {
-        case "worker":   await cmdWorker(rest);  return;
-        case "intel":    await cmdIntel(rest);   return;
-        case "runs":     await cmdRuns(rest);    return;
-        case "promote":  await cmdPromote(rest); return;
-        case "fanout":   await cmdFanout(rest);  return;
-        case "cascade":  await cmdCascade(rest); return;
+        case "worker":    await cmdWorker(rest);   return;
+        case "intel":     await cmdIntel(rest);    return;
+        case "runs":      await cmdRuns(rest);     return;
+        case "promote":   await cmdPromote(rest);  return;
+        case "fanout":    await cmdFanout(rest);   return;
+        case "cascade":   await cmdCascade(rest);  return;
+        case "tiebreak":  await cmdTiebreak(rest); return;
         default:
-            console.error("usage: ember-agent <worker|intel|runs|promote|fanout|cascade> ...");
+            console.error("usage: ember-agent <worker|intel|runs|promote|fanout|cascade|tiebreak> ...");
             process.exit(2);
     }
 }

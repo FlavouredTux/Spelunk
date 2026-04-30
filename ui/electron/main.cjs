@@ -2172,6 +2172,31 @@ ipcMain.handle("agent:setConfig", async (_e, patch) => {
   return { ok: true };
 });
 
+ipcMain.handle("agent:tiebreak", async (_e, opts) => {
+  const node = findNode();
+  const agent = findAgentEntry();
+  return new Promise((resolve, reject) => {
+    const args = [agent, "tiebreak", `--binary=${opts.binary}`];
+    if (opts.limit)    args.push(`--limit=${opts.limit}`);
+    if (opts.budget)   args.push(`--budget=${opts.budget}`);
+    if (opts.maxTurns) args.push(`--max-turns=${opts.maxTurns}`);
+    if (opts.model)    args.push(`--model=${opts.model}`);
+    const proc = spawn(node, args, { cwd: path.dirname(agent), env: process.env });
+    let out = "", err = "";
+    proc.stdout.on("data", (b) => { out += b.toString(); });
+    proc.stderr.on("data", (b) => { err += b.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
+      try { resolve(JSON.parse(out)); } catch { resolve({ raw: out, stderr: err }); }
+    });
+    proc.on("error", (e) => {
+      if (e && e.code === "ENOENT") {
+        reject(new Error(`Node.js not found. Install Node 22+ and ensure 'node' is on PATH, or set EMBER_AGENT_NODE to its absolute path. (looked up: ${node})`));
+      } else { reject(e); }
+    });
+  });
+});
+
 ipcMain.handle("agent:cascade", async (_e, opts) => {
   const node = findNode();
   const agent = findAgentEntry();

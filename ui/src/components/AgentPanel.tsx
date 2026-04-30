@@ -200,6 +200,22 @@ export function AgentPanel(props: {
         } finally { setBusy(null); }
     };
 
+    const onTiebreak = async () => {
+        if (!props.binaryPath) return;
+        setBusy("tiebreaking…");
+        try {
+            const r = await window.ember.agent.tiebreak({
+                binary: props.binaryPath,
+                limit: 20,
+            });
+            setToast(`tiebreak: ${r.spawned} of ${r.disputes_found} disputes · ok=${r.fulfilled} rej=${r.rejected} · $${(r.cost_usd ?? 0).toFixed(3)}`);
+            setTimeout(() => setToast(null), 6000);
+        } catch (e: any) {
+            setToast(`tiebreak error: ${e?.message ?? e}`);
+            setTimeout(() => setToast(null), 6000);
+        } finally { setBusy(null); }
+    };
+
     return (
         <div
             style={{
@@ -217,6 +233,7 @@ export function AgentPanel(props: {
                 onPromoteApply={() => onPromote(true)}
                 onPromoteDry={() => onPromote(false)}
                 onCascade={onCascade}
+                onTiebreak={onTiebreak}
                 onOpenSettings={() => setSettingsOpen(true)}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
@@ -314,6 +331,7 @@ function Header(props: {
     onPromoteApply: () => void;
     onPromoteDry: () => void;
     onCascade: () => void;
+    onTiebreak: () => void;
     onOpenSettings: () => void;
     viewMode: "dashboard" | "neural";
     setViewMode: (m: "dashboard" | "neural") => void;
@@ -355,6 +373,9 @@ function Header(props: {
                 )}
                 <Btn onClick={props.onCascade} disabled={props.disabled}>
                     ◈ cascade
+                </Btn>
+                <Btn onClick={props.onTiebreak} disabled={props.disabled || props.disputed === 0}>
+                    ⚖ tiebreak{props.disputed > 0 ? ` (${props.disputed})` : ""}
                 </Btn>
                 <Btn onClick={props.onPromoteDry} disabled={props.disabled} ghost>
                     promote --dry-run

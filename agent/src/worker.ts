@@ -252,6 +252,21 @@ function buildScopeMessage(scope: string, binary: string): string {
     if (scope.startsWith("fn:")) {
         return `Target: ${binary}\nFunction: ${scope.slice(3)}\n\nProceed.`;
     }
+    if (scope.startsWith("dispute:")) {
+        // dispute:<subject>|<predicate>  — points at exactly one
+        // disputed claim. Tiebreaker workers each handle one assigned
+        // dispute in parallel, so we don't race them on intel_disputes.
+        const tail = scope.slice("dispute:".length);
+        const bar = tail.indexOf("|");
+        const subject   = bar >= 0 ? tail.slice(0, bar) : tail;
+        const predicate = bar >= 0 ? tail.slice(bar + 1) : "name";
+        return `Target: ${binary}\nDisputed: subject=${subject} predicate=${predicate}\n\n` +
+            `Read intel_evidence("${subject}") to see all candidates and their evidence. ` +
+            `Independently verify which (if either) is correct using ember_decompile, ` +
+            `ember_xrefs, ember_strings, ember_recognize. Then file ONE intel_claim at ` +
+            `high confidence (≥0.95) with the verified value, and optionally intel_retract ` +
+            `the wrong claim(s) by id. Stop after the resolution.`;
+    }
     if (scope === "disputes") {
         return `Target: ${binary}\n\nList current disputes via intel_disputes, then resolve the first one. After resolving one, stop.`;
     }

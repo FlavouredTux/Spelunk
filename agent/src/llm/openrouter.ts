@@ -63,6 +63,13 @@ export class OpenRouterLLM extends OpenAILLM {
         if (model.startsWith("assistant/")) {
             return { provider: { order: ["assistant"], allow_fallbacks: false } };
         }
+        // OpenAI's open-weight gpt-oss-* family isn't hosted by OpenAI itself
+        // on OpenRouter — Groq (and a few others) carry it. Force Groq for
+        // the speed advantage; otherwise OpenAI provider gets selected and
+        // returns 404.
+        if (model.startsWith("openai/gpt-oss")) {
+            return { provider: { order: ["Groq"], allow_fallbacks: false } };
+        }
         if (model.startsWith("openai/")) {
             return { provider: { order: ["OpenAI"], allow_fallbacks: false } };
         }

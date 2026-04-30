@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 import { runWorker } from "./worker.js";
+import { runassistantCodeWorker } from "./worker_assistant_code.js";
 import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { promote } from "./promote.js";
@@ -95,18 +96,22 @@ async function cmdWorker(argv: string[]) {
         return;
     }
 
-    await runWorker({
+    const model = f.get("model") ?? undefined;
+    const wargs = {
         role: role as keyof typeof ROLES,
         binary: resolve(binary),
         scope,
-        model: f.get("model"),
+        model,
         budget: parseFloat(f.get("budget") ?? "1.00"),
         maxTurns: parseInt(f.get("max-turns") ?? "30", 10),
         runId,
         runDir,
         emberBin: findEmberBin(),
-        agentId: f.get("agent-id"),
-    });
+        agentId: f.get("agent-id") ?? undefined,
+    };
+    await ((model ?? "").startsWith("assistant-code")
+        ? runassistantCodeWorker(wargs)
+        : runWorker(wargs));
     console.log(JSON.stringify({ run_id: runId, run_dir: runDir, status: "complete" }));
 }
 

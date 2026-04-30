@@ -98,6 +98,11 @@ export function keyCount(provider: "assistant" | "openai" | "openrouter"): numbe
 // Pick the right provider for a given model id. assistant models go
 // direct to assistant for first-class caching. Everything else through
 // OpenRouter unless the user has OPENAI_API_KEY set and asked for it.
+//
+// Note: `assistant-code/*` models route to runassistantCodeWorker (see
+// worker_assistant_code.ts) via a dispatch in cascade.ts / tiebreak.ts /
+// main.ts that bypasses this function entirely. The SDK-driven worker
+// owns its own loop and doesn't go through the LLM.chat() interface.
 export function providerForModel(model: string):
     "assistant" | "openai" | "openrouter"
 {

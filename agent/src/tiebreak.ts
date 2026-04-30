@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { runWorker } from "./worker.js";
+import { runassistantCodeWorker } from "./worker_assistant_code.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 
 // Drive the tiebreaker role across the current dispute set. One
@@ -53,8 +54,8 @@ export async function tiebreak(args: TiebreakArgs): Promise<TiebreakResult> {
         const runDir = join(args.runsRoot, runId);
         ourDirs.push(runDir);
         mkdirSync(runDir, { recursive: true });
-        return runWorker({
-            role: "tiebreaker",
+        const wargs = {
+            role: "tiebreaker" as const,
             binary: args.binary,
             scope: `dispute:${subject}|${predicate}`,
             model: args.model,
@@ -64,7 +65,10 @@ export async function tiebreak(args: TiebreakArgs): Promise<TiebreakResult> {
             runDir,
             emberBin: args.emberBin,
             agentId: `tiebreaker-${runId.slice(2)}`,
-        });
+        };
+        return (args.model ?? "").startsWith("assistant-code")
+            ? runassistantCodeWorker(wargs)
+            : runWorker(wargs);
     });
 
     const settled = await Promise.allSettled(promises);

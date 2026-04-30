@@ -1,0 +1,18 @@
+[package]
+name = "rust_corpus_extractor"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "extractor"
+path = "main.rs"
+
+[profile.dev]
+opt-level = 0
+debug = 2
+
+[profile.release]
+opt-level = 3
+debug = 2
+lto = false
+codegen-units = 1

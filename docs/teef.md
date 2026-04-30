@@ -151,6 +151,70 @@ corpus that spans `{compiler} × {version} × {opt level}` for each
 runtime, automatically built in CI. That's operational work rather
 than a research question.
 
+## Recognition
+
+`ember --recognize <binary> --corpus PATH+ [--recognize-threshold T]`
+fingerprints every function in the target binary and matches it against
+one or more pre-built TEEF TSVs (the corpus). For each function with
+confidence ≥ T, emits a TSV row:
+
+```
+<addr>  <current_name>  <suggested_name>  <confidence>  <via>  [alt=conf, alt=conf]
+```
+
+Three matching paths in priority order, all gated by precision:
+
+1. **Whole-function exact hash.** Confidence 1.0. `via=whole-exact`.
+   When multiple corpus functions share the hash (a wrapper family),
+   emits each at confidence `1/N` with `via=whole-exact-tied`.
+2. **Whole-function jaccard ≥ 0.875 AND margin ≥ 0.25 over the
+   second-best.** `via=whole-jaccard`. The margin requirement is
+   the FP guard — without it, tiny stub functions surface false
+   positives by ties at 7/8.
+3. **Chunk-vote.** Each query chunk that hits the corpus by exact
+   hash contributes its `inst_count` as a vote toward the corpus
+   functions that contain that chunk. Chunks appearing in >6
+   distinct corpus functions are dropped (boilerplate). The
+   suggested name is the top-voted; confidence is the margin
+   `top1 / (top1 + top2)`.
+
+The default threshold of 0.85 gives ~83% precision in cross-version
+glibc tests; 0.95 raises it toward 87%, with proportionally lower
+recall.
+
+### Corpus build
+
+`scripts/build_corpus_linux_x86.sh` builds a Linux x86-64 corpus
+covering glibc, libstdc++, libgcc_s, libm, libpthread, libssl,
+libcrypto, libz, libzstd, libbz2, libxxhash, plus Rust std and a
+broad-API extractor binary that surfaces the concrete std-fn
+instantiations Rust binaries actually link in. ~23 K named
+functions, ~1.5 M chunks, ~150 MB of TSVs.
+
+For Rust binaries specifically: the `.so` ships with the rustup
+toolchain at
+`<sysroot>/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-*.so` —
+that gets fingerprinted directly. The rlib `.o` files we'd extract
+on top of that contain mostly generic-only code that's
+demand-instantiated; they don't add much to the corpus.
+
+The "extractor" Rust source at `scripts/rust_corpus_extractor/`
+is a single Rust program that uses Vec, HashMap, BTreeMap,
+HashSet, VecDeque, String formatting, BufReader, BufWriter,
+fs::metadata, env::current_dir, Arc, Mutex, RwLock, atomic,
+mpsc::channel, threads, iter combinators, sort/binary_search,
+Option/Result. Building it with `--release -C debug=2` produces
+a binary with thousands of concrete monomorphized std functions
+named via the standard Rust mangler (`_RNvCs...` and `_ZN3std...`).
+TEEF on that gives us ~2 K Rust-named entries.
+
+Real-world result: a 5 MB `cargo build --release` test binary
+recognized **537 functions** at threshold 0.85 against this corpus,
+with the top hits being whole-exact matches like
+`_RNvCsiGVaDesi5rv_7___rustc17rust_begin_unwind`,
+`_ZN9hashbrown3raw13RawTableInner15rehash_in_place`, and
+`_ZN3std12backtrace_rs9backtrace9libunwind5trace8trace_fn`.
+
 ## CLI
 
 `ember --teef <binary>` emits a TSV with two row types:

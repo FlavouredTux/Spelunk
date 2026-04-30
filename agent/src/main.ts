@@ -326,11 +326,25 @@ async function cmdCascade(argv: string[]) {
         return v == null ? fallback : parseInt(v, 10);
     };
 
+    // Per-round model rotation. CLI flag takes precedence; otherwise
+    // pulled from cascade.models in agent.defaults.json. Format on
+    // either side: comma-separated. Empty / absent = single-model run
+    // using --model or the role default.
+    const modelsRaw = f.get("models")
+        ?? (Array.isArray(cascD.models) ? (cascD.models as string[]).join(",") : "");
+    const models = modelsRaw
+        ? modelsRaw.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined;
+
     process.stderr.write(`cascade starting on ${binary}, role=${role}\n`);
+    if (models && models.length > 0) {
+        process.stderr.write(`cascade: per-round model rotation: ${models.join(" → ")}\n`);
+    }
     const r = await cascade({
         binary: resolve(binary),
         role,
         model:            f.get("model") ?? roleD.model,
+        models,
         perRound:         intFlag("per-round",       cascD.perRound          ?? 20),
         maxRounds:        intFlag("max-rounds",      cascD.maxRounds         ?? 5),
         budget:           numFlag("budget",          roleD.budget            ?? 0.05),
@@ -344,7 +358,7 @@ async function cmdCascade(argv: string[]) {
     // Per-round ASCII summary.
     for (const rd of r.rounds) {
         process.stderr.write(
-            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} ok=${rd.fulfilled} rej=${rd.rejected} new=${rd.new_names} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
+            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} ok=${rd.fulfilled} rej=${rd.rejected} new=${rd.new_names} model=${rd.model} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
         );
     }
     console.log(JSON.stringify(r, null, 2));

@@ -148,7 +148,11 @@ function killOrphanDaemons(binary: string): number {
 export interface CascadeArgs {
     binary: string;
     role: "namer" | "mapper" | "typer" | "tiebreaker";
-    model?: string;
+    model?: string;              // single model (overridden by `models` if set)
+    models?: string[];           // optional per-round model list — round N uses
+                                 // models[N % models.length]. Lets you escalate
+                                 // (e.g. cheap for early rounds, smarter for
+                                 // later) or interleave (cross-validation).
     perRound: number;            // max workers spawned per round
     maxRounds: number;
     budget: number;              // USD per worker
@@ -167,6 +171,7 @@ export interface RoundStats {
     rejected: number;             // workers that threw (provider 5xx, OOM, etc)
     new_names: number;            // names produced *this round*
     cumulative_named: number;     // running total across all rounds
+    model: string;                // model actually used this round
     cost_usd: number;
     elapsed_ms: number;
 }
@@ -384,6 +389,15 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         eligible.sort((a, b) => (b.ratio - a.ratio) || (b.size - a.size));
         const batch = eligible.slice(0, args.perRound);
 
+        // Per-round model selection. If the user supplied a list, rotate
+        // through it (round N uses models[N % len]). Useful for:
+        //   - cheap → smart escalation: --models=owl-alpha,owl-alpha,deepseek-v4-pro
+        //   - cross-validation: --models=owl-alpha,deepseek-v4-pro (alternate)
+        // Single --model still works for a uniform run.
+        const roundModel = (args.models && args.models.length > 0)
+            ? args.models[round % args.models.length]
+            : args.model;
+
         // Spawn workers in parallel. We use runWorker (in-process)
         // rather than spawning N node processes — the workers all share
         // the same intel JSONL via O_APPEND, which is atomic.
@@ -398,7 +412,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
                 role: args.role,
                 binary: args.binary,
                 scope: `fn:${b.addr}`,
-                model: args.model,
+                model: roundModel,
                 budget: args.budget,
                 maxTurns: args.maxTurns,
                 runId,
@@ -474,6 +488,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             rejected,
             new_names: after - before,
             cumulative_named: after,
+            model: roundModel ?? "(role default)",
             cost_usd: roundCost,
             elapsed_ms: Date.now() - t0,
         });

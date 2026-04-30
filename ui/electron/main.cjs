@@ -2241,6 +2241,9 @@ ipcMain.handle("agent:cascade", async (_e, opts) => {
     if (opts.threshold)        args.push(`--threshold=${opts.threshold}`);
     if (opts.eligibilityRatio) args.push(`--eligibility-ratio=${opts.eligibilityRatio}`);
     if (opts.model)            args.push(`--model=${opts.model}`);
+    if (Array.isArray(opts.models) && opts.models.length > 0) {
+      args.push(`--models=${opts.models.join(",")}`);
+    }
     const proc = spawn(node, args, { cwd: path.dirname(agent), env: process.env });
     let out = "", err = "";
     proc.stdout.on("data", (b) => { out += b.toString(); });

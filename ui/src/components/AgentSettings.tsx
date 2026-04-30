@@ -32,7 +32,15 @@ type Defaults = {
     mapper?: RoleDefaults;
     typer?: RoleDefaults;
     tiebreaker?: RoleDefaults;
-    cascade?: { perRound?: number; maxRounds?: number; threshold?: number; eligibilityRatio?: number };
+    cascade?: {
+        perRound?: number;
+        maxRounds?: number;
+        threshold?: number;
+        eligibilityRatio?: number;
+        // Per-round model rotation. Empty/absent = use the role's
+        // single model. Round N uses models[N % len].
+        models?: string[];
+    };
 };
 
 declare global { interface Window { ember: any; } }
@@ -183,6 +191,10 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
                     <NumRow label="max-rounds"         value={defaults.cascade?.maxRounds         ?? 5}    onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, maxRounds: v } })} hint="loop terminates earlier on zero-progress" />
                     <NumRow label="threshold"          value={defaults.cascade?.threshold         ?? 0.85} onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, threshold: v } })} step={0.01} hint="conf ≥ this gets promoted into annotations" />
                     <NumRow label="eligibility ratio"  value={defaults.cascade?.eligibilityRatio  ?? 0.3}  onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, eligibilityRatio: v } })} step={0.05} hint="min named-callee fraction; lower lets round 1 actually run on stripped binaries" />
+                    <ModelsRow
+                        value={defaults.cascade?.models ?? []}
+                        onChange={(arr) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, models: arr } })}
+                    />
                 </Section>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 24, alignItems: "center" }}>
@@ -345,6 +357,46 @@ function RoleRow(props: { name: string; value: RoleDefaults; onChange: (v: RoleD
             }}>{props.hint}</div>
         )}
       </div>
+    );
+}
+
+function ModelsRow(props: { value: string[]; onChange: (v: string[]) => void }) {
+    const [text, setText] = useState(props.value.join(", "));
+    // keep text in sync when defaults reload (initial open)
+    useEffect(() => { setText(props.value.join(", ")); }, [props.value.join(",")]);
+    return (
+        <div style={{
+            display: "grid",
+            gridTemplateColumns: "140px 1fr",
+            gap: 8, alignItems: "start", marginBottom: 6,
+        }}>
+            <span style={{ fontFamily: mono, fontSize: 11, color: C.textMuted, paddingTop: 6 }}>per-round models</span>
+            <div>
+                <input
+                    type="text"
+                    value={text}
+                    onChange={(e) => {
+                        setText(e.target.value);
+                        const arr = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
+                        props.onChange(arr);
+                    }}
+                    placeholder="e.g.  openrouter/owl-alpha, openrouter/owl-alpha, deepseek/deepseek-v4-pro"
+                    style={{
+                        width: "100%",
+                        fontFamily: mono, fontSize: 11,
+                        padding: "4px 6px",
+                        background: C.bgInput,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 3,
+                        color: C.text,
+                    }}
+                />
+                <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 10, color: C.textFaint, marginTop: 2 }}>
+                    Round N uses models[N % count]. Comma-separated. Empty = use the role's single model.
+                    Common patterns: <b>cheap → smart</b> (cheap, cheap, smart) or <b>cross-validation</b> (cheap, smart).
+                </div>
+            </div>
+        </div>
     );
 }
 

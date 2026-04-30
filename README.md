@@ -256,6 +256,48 @@ log_handler = handle_log_line
 
 Full surface in [docs/scripting.md](docs/scripting.md).
 
+## Agent harness
+
+`agent/` is a TypeScript multi-agent harness that drives LLMs against
+the ember CLI to do reverse-engineering work in parallel. Workers run a
+single role (namer / mapper / typer / tiebreaker) as an LLM tool-use
+loop, write claims into a shared per-binary intel database (append-only
+JSONL with retraction + dispute detection), and the orchestrator —
+typically you talking through assistant Code or any other agent runtime —
+fans them out, resolves disputes, and promotes high-confidence claims
+into the same `.ember` annotation file that drives pseudo-C emit.
+
+```sh
+# Spawn 20 namer workers backgrounded against a stripped binary:
+ember-agent fanout --binary=./target.elf --pick=unnamed --limit=20 \
+  --budget=0.04 --model=deepseek/deepseek-v4-flash
+
+# Read what the swarm decided:
+ember-agent intel ./target.elf disputes
+ember-agent intel ./target.elf query --subject=0x4012a0 --predicate=name
+
+# Fold ≥0.85-confidence claims into a .ember script and apply it:
+ember-agent promote ./target.elf --apply
+# Now `ember -p` shows the agent-supplied names.
+```
+
+Provider-neutral over assistant SDK / OpenAI / OpenRouter, with
+prompt-cache pricing surfaced for both assistant-direct
+(`cache_control: ephemeral`) and DeepSeek-via-OpenRouter (auto-prefix
+caching reported in `usage.prompt_tokens_details.cached_tokens`).
+Pinned upstream provider routing on OpenRouter for response
+determinism. Per-worker USD budget cap. Disputes — top-2 claims within
+0.10 confidence from different agents with different values — surface
+for unbiased tiebreaker resolution.
+
+End-to-end demo on a stripped fixture: 6 deepseek-v4-pro workers in
+parallel produced `u32_mod` (conf 0.98), `call_gmon_start` (conf 0.90),
+`u32_array_sum_nonzero` (conf 0.88), correctly declined to name
+byte-identical twin functions, hit 89% prompt-cache, total spend $0.04.
+Loop closes: those names now appear in `ember -p` output.
+
+Full surface in [docs/agent.md](docs/agent.md).
+
 ## Plugin platform
 
 A plugin ecosystem aimed at target-specific reversing — games, engines,
@@ -286,8 +328,12 @@ core/             C++23 library — everything except the CLI shim
     common/       annotations, on-disk cache
 cli/              command-line driver
 ui/               Electron + React + TypeScript frontend
+agent/            TypeScript multi-agent LLM harness — fanout, intel db,
+                  promote into .ember, provider-neutral over assistant /
+                  OpenAI / OpenRouter (DeepSeek default)
 tests/            golden-output CTest suite
-docs/             scripting, debugger, vm-detect, raw-input, plugin platform
+docs/             scripting, debugger, vm-detect, raw-input, plugin
+                  platform, agent harness
 ```
 
 ## Tests

@@ -170,10 +170,25 @@ std::string parse_ctor_dtor(Dem& d, std::string_view enclosing) {
 }
 
 // Last component of a nested-name — pulls the "this" class for ctor/dtor.
+// The naive `rfind("::")` lands on a `::` inside the template args (think
+// `…basic_string<char, std::char_traits<char>, std::allocator<char>>` —
+// the last `::` is inside `std::char_traits<…>`). We track angle-bracket
+// depth so the split happens between the qualifier and the class name,
+// not in the middle of a template argument list.
 std::string last_component(std::string_view nested) {
-    const auto p = nested.rfind("::");
-    if (p == std::string_view::npos) return std::string(nested);
-    return std::string(nested.substr(p + 2));
+    int depth = 0;
+    std::size_t last = std::string_view::npos;
+    for (std::size_t i = 0; i + 1 < nested.size(); ++i) {
+        const char c = nested[i];
+        if (c == '<') ++depth;
+        else if (c == '>') --depth;
+        else if (c == ':' && nested[i + 1] == ':' && depth == 0) {
+            last = i;
+            ++i;  // skip the second ':'
+        }
+    }
+    if (last == std::string_view::npos) return std::string(nested);
+    return std::string(nested.substr(last + 2));
 }
 
 // <builtin-type> — one letter (or 'D' + one letter for a few cases).
@@ -730,6 +745,33 @@ std::string simplify_stdlib_templates(std::string s) {
         {"std::basic_streambuf<char, std::char_traits<char>>",  "std::streambuf"},
         {"std::basic_ios<char, std::char_traits<char> >", "std::ios"},
         {"std::basic_ios<char, std::char_traits<char>>",  "std::ios"},
+        // Destructor / leaf-class-name variants (no `std::` prefix) —
+        // the demangler renders ctor / dtor names as `~basic_X<…>` with
+        // template args of the parent class, and those don't pass the
+        // `std::`-prefixed alias above. Matching the bare leaf form
+        // collapses `…::~basic_string<char, std::char_traits<char>>`
+        // to `…::~string` for clean RAII tail rendering.
+        {"basic_string<char, std::char_traits<char>, std::allocator<char> >", "string"},
+        {"basic_string<char, std::char_traits<char>, std::allocator<char>>",  "string"},
+        {"basic_ifstream<char, std::char_traits<char> >",  "ifstream"},
+        {"basic_ifstream<char, std::char_traits<char>>",   "ifstream"},
+        {"basic_ofstream<char, std::char_traits<char> >",  "ofstream"},
+        {"basic_ofstream<char, std::char_traits<char>>",   "ofstream"},
+        {"basic_istream<char, std::char_traits<char> >",   "istream"},
+        {"basic_istream<char, std::char_traits<char>>",    "istream"},
+        {"basic_ostream<char, std::char_traits<char> >",   "ostream"},
+        {"basic_ostream<char, std::char_traits<char>>",    "ostream"},
+        {"basic_iostream<char, std::char_traits<char> >",  "iostream"},
+        {"basic_iostream<char, std::char_traits<char>>",   "iostream"},
+        {"basic_ios<char, std::char_traits<char> >",       "ios"},
+        {"basic_ios<char, std::char_traits<char>>",        "ios"},
+        // libstdc++-internal allocator wrapper that the spec exposes
+        // as a raw template argument (`std::__new_allocator<char>`).
+        // Almost every C++ stdlib decompile drops uses of this; the
+        // class itself is plumbing the user never wrote, so collapse
+        // it to its visible cousin `std::allocator<char>`.
+        {"std::__new_allocator<char>", "std::allocator<char>"},
+        {"__new_allocator<char>",      "allocator<char>"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >", "std::stringstream"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char>>",  "std::stringstream"},
         // Container default-allocator collapse — `vector<T, allocator<T>>`

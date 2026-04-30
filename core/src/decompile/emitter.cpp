@@ -2724,7 +2724,21 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // With rvalue forwarding in render_reg_leaf, a single reader
                 // inlines the source expression directly. The `reg = expr;`
                 // line becomes redundant in that case.
-                if (visible_use_count(inst.dst) <= 1) return "";
+                //
+                // Exception: a Reg assign whose only readers are Phi
+                // operands is the per-iteration update of a loop induction
+                // variable — visible_use_count excludes phi reads, so the
+                // count looks like 0 even though the value drives the loop.
+                // Without surfacing the assign, accumulator loops decompile
+                // to `do { } while (cond)` with the body work invisible.
+                // Detect by comparing visible_uses (excludes phi) to the
+                // broader uses-table count (includes phi).
+                if (visible_use_count(inst.dst) <= 1) {
+                    auto k = ssa_key(inst.dst);
+                    const u32 vis = visible_use_count(inst.dst);
+                    const u32 all = k ? use_count_by_key(*k) : 0u;
+                    if (all <= vis) return "";
+                }
                 return std::format("{} = {};",
                                    reg_name(inst.dst.reg), expr(inst.srcs[0]));
             }

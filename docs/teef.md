@@ -149,6 +149,35 @@ only if it's not contained in a previously-kept entry's
 `[entry, entry + size)` window. Reported in stderr as
 `recognize: dropped N shadow entries (stride-1 dedup)`.
 
+## String anchors
+
+Two functions with identical TEEF structure but disjoint reachable
+strings are almost certainly not the same function — different error
+messages, different format strings, different path constants. The
+recognizer now uses string overlap as a precision filter against
+structural false positives.
+
+`ember --teef` collects per-fn reachable strings during the build:
+walks `scan_strings(b)`, attributes each xref site to the function
+whose `[entry, entry+size)` window covers it (size-0 shadow entries
+from the prologue sweep are skipped — their xrefs route to the
+containing real fn). Up to 8 strings per fn, length-biased toward
+unique ones; each hashed to u64 via `fnv1a_64`.
+
+Stored in the corpus TSV as a new row:
+
+```
+S<TAB>addr<TAB>hash1,hash2,...
+```
+
+Schema bumped to `v4` so old caches don't silently miss the S rows.
+Loader attaches the hashes to `WholeEntry.string_hashes`. At
+recognize time, when both query and candidate have ≥2 string hashes
+and share zero of them, the candidate is filtered. Conservative: any
+side with <2 strings (small fns, EH cleanup, anonymous helpers)
+bypasses the filter and structural match remains the sole signal,
+preserving recall on cases where strings can't help.
+
 ## Cross-language ABI tags
 
 A pure-Rust binary should never hit confidence-1.0 against a libstdc++

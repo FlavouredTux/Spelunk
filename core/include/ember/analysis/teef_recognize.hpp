@@ -88,6 +88,7 @@ private:
         u64                 exact_hash;
         std::array<u64, 8>  minhash;
         std::string         runtime;     // empty == unknown / wildcard
+        std::vector<u64>    string_hashes;  // fnv1a64 of identifying strings (≤8)
     };
     struct ChunkRef {
         std::string name;

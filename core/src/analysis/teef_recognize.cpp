@@ -78,6 +78,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
 
     std::size_t rows = 0;
     std::string active_runtime;     // set by `T runtime <tag>` rows
+    std::unordered_map<u64, std::size_t> idx_by_addr; // F-row addr → whole_by_name_ index
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty()) continue;
@@ -111,10 +112,36 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             for (std::size_t k = 0; k < 8; ++k) {
                 e.minhash[k] = parse_u64_hex(fields[3 + k]);
             }
+            const u64 addr = parse_u64_hex(fields[1]);
             const std::size_t idx = whole_by_name_.size();
             whole_by_name_.push_back(std::move(e));
             if (whole_by_name_[idx].exact_hash != 0) {
                 whole_exact_.emplace(whole_by_name_[idx].exact_hash, idx);
+            }
+            if (addr != 0) idx_by_addr.emplace(addr, idx);
+            ++rows;
+        } else if (fields[0] == "S") {
+            // S<TAB>addr<TAB>hash1,hash2,...   (TEEF schema v4)
+            // Attaches per-fn identifying-string hashes to the WholeEntry
+            // whose F row landed at the same addr. The recognizer uses
+            // the overlap as a precision filter against structural
+            // false positives. Skipped silently if the F row was
+            // discarded (sub_*-named) — string anchors only matter for
+            // named library functions.
+            if (fields.size() < 3) continue;
+            const u64 addr = parse_u64_hex(fields[1]);
+            auto it = idx_by_addr.find(addr);
+            if (it == idx_by_addr.end()) continue;
+            std::string_view csv = fields[2];
+            std::size_t cp = 0;
+            while (cp < csv.size()) {
+                std::size_t comma = csv.find(',', cp);
+                if (comma == std::string_view::npos) comma = csv.size();
+                std::string_view tok = csv.substr(cp, comma - cp);
+                if (!tok.empty()) {
+                    whole_by_name_[it->second].string_hashes.push_back(parse_u64_hex(tok));
+                }
+                cp = comma + 1;
             }
             ++rows;
         } else if (fields[0] == "C") {
@@ -138,6 +165,23 @@ std::vector<TeefMatch>
 TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                       std::string_view query_runtime) const {
     if (query.whole.exact_hash == 0) return {};
+
+    // String-anchor disqualifier. If the query AND the candidate both
+    // have ≥2 identifying strings and they share zero hashes, the
+    // structural similarity is overwhelmingly likely to be coincidence
+    // (different error messages, different format strings, different
+    // path constants). Returns true ⇒ "this candidate is plausible";
+    // false ⇒ "ditch it." Conservative — when either side has < 2
+    // strings (small fns, EH cleanup, anonymous helpers), the filter
+    // is bypassed and structural match is the sole signal as before.
+    const auto& qs = query.string_hashes;
+    auto strings_compatible = [&](const std::vector<u64>& cs) -> bool {
+        if (qs.size() < 2 || cs.size() < 2) return true;
+        for (u64 q : qs) {
+            for (u64 c : cs) if (q == c) return true;
+        }
+        return false;
+    };
 
     // Corpus-side gate: a hash shared by many corpus F rows (named
     // OR sub_*) is a "common trivial shape" and a single canonical
@@ -170,6 +214,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             for (auto it = it_lo; it != it_hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
                 if (!runtime_compatible(query_runtime, we.runtime)) continue;
+                if (!strings_compatible(we.string_hashes)) continue;
                 if (distinct.insert(we.name).second) ordered.push_back(we.name);
             }
             if (ordered.size() == 1) {
@@ -202,6 +247,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         for (const auto& e : whole_by_name_) {
             if (e.exact_hash == 0) continue;
             if (!runtime_compatible(query_runtime, e.runtime)) continue;
+            if (!strings_compatible(e.string_hashes)) continue;
             const float j = jaccard_minhash(query.whole.minhash, e.minhash);
             if (j > best_j) {
                 second_j = best_j; second_name = std::move(best_name);

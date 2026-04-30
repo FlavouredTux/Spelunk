@@ -38,6 +38,8 @@
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/sigs.hpp>
+#include <ember/analysis/strings.hpp>
+#include <ember/common/hash.hpp>
 #include <ember/analysis/syscalls.hpp>
 #include <ember/analysis/teef.hpp>
 #include <ember/analysis/teef_recognize.hpp>
@@ -306,6 +308,22 @@ parse_teef_tsv(std::string_view tsv) {
             }
             idx_by_addr[a] = out.size();
             out.emplace_back(a, std::move(tf));
+        } else if (f[0] == "S" && f.size() >= 3) {
+            // S<TAB>addr<TAB>hash1,hash2,...
+            const addr_t a = static_cast<addr_t>(parse_u64_hex_local(f[1]));
+            auto it = idx_by_addr.find(a);
+            if (it == idx_by_addr.end()) continue;
+            std::string_view csv = f[2];
+            std::size_t cp = 0;
+            while (cp < csv.size()) {
+                std::size_t comma = csv.find(',', cp);
+                if (comma == std::string_view::npos) comma = csv.size();
+                std::string_view tok = csv.substr(cp, comma - cp);
+                if (!tok.empty()) {
+                    out[it->second].second.string_hashes.push_back(parse_u64_hex_local(tok));
+                }
+                cp = comma + 1;
+            }
         } else if (f[0] == "C" && f.size() >= 14) {
             const addr_t a = static_cast<addr_t>(parse_u64_hex_local(f[1]));
             auto it = idx_by_addr.find(a);
@@ -353,6 +371,82 @@ parse_teef_tsv(std::string_view tsv) {
             fns.assign(uniq.begin(), uniq.end());
         }
 
+        // ---- Per-fn reachable strings (TEEF schema v4) ----
+        // For every string in the binary's strings table, record which
+        // functions reach it via xref site. We bucket xref sites into
+        // their containing fn by binary-searching `fns` for the largest
+        // entry ≤ site, then storing the string text under that fn. The
+        // alternative — scan_strings + per-fn linear filter — is N×M
+        // and unbearable on big binaries.
+        //
+        // Strings act as a precision anchor at recognize time: two
+        // functions with identical TEEF structure but disjoint string
+        // sets are almost certainly not the same function (different
+        // error message constants, different format strings, different
+        // path constants), and the recognizer can use that to suppress
+        // structural false positives.
+        // Build (entry, size) pairs from enumerate_functions for fns
+        // with KNOWN extent — size-0 shadow entries (linear-sweep
+        // probes inside another fn's body) are skipped; their xref
+        // sites get attributed to the containing real fn instead.
+        std::vector<std::pair<addr_t, u64>> sized_fns;
+        for (const auto& d : enumerate_functions(b)) {
+            if (b.import_at_plt(d.addr)) continue;
+            if (d.size == 0) continue;
+            sized_fns.emplace_back(d.addr, d.size);
+        }
+        // Also include named symbols whose size we can derive.
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.addr == 0 || s.size == 0) continue;
+            sized_fns.emplace_back(s.addr, s.size);
+        }
+        std::sort(sized_fns.begin(), sized_fns.end());
+        sized_fns.erase(std::unique(sized_fns.begin(), sized_fns.end(),
+            [](const auto& x, const auto& y) { return x.first == y.first; }),
+            sized_fns.end());
+
+        std::unordered_map<addr_t, std::vector<std::string>> strings_by_fn;
+        if (show) {
+            std::println(stderr, "ember: TEEF: scanning strings for per-fn anchors...");
+            std::fflush(stderr);
+        }
+        for (const auto& s : scan_strings(b)) {
+            // Filter pure-noise strings — too short to identify. The
+            // scanner already enforces ≥4-char strings; we tighten here
+            // to 4 (== scanner floor; everything below is library-name-
+            // length-or-less and contributes more noise than signal).
+            if (s.text.size() < 4) continue;
+            for (addr_t site : s.xrefs) {
+                // Find the sized fn whose [entry, entry+size) actually
+                // contains the site. upper_bound + walk back, then
+                // verify containment. Sites that fall in gaps (no fn
+                // covers them) are skipped — they can't be reliably
+                // attributed.
+                auto it = std::upper_bound(sized_fns.begin(), sized_fns.end(),
+                    std::pair<addr_t, u64>{site, ~u64{0}});
+                if (it == sized_fns.begin()) continue;
+                --it;
+                if (site >= it->first + it->second) continue;
+                strings_by_fn[it->first].push_back(s.text);
+            }
+        }
+        // Dedup + cap to top-8 by length per fn. Length-biased because
+        // long unique strings ("X509_CHECK_FLAG_NO_WILDCARDS") are far
+        // more identifying than short common ones ("ok", "%s").
+        for (auto& [_, list] : strings_by_fn) {
+            std::sort(list.begin(), list.end());
+            list.erase(std::unique(list.begin(), list.end()), list.end());
+            if (list.size() > 8) {
+                std::partial_sort(list.begin(), list.begin() + 8, list.end(),
+                    [](const std::string& x, const std::string& y) {
+                        return x.size() > y.size();
+                    });
+                list.resize(8);
+            }
+        }
+
         const std::size_t total = fns.size();
         const unsigned hw = std::thread::hardware_concurrency();
         const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
@@ -396,6 +490,22 @@ parse_teef_tsv(std::string_view tsv) {
                 buf += '\t';
                 buf += name;
                 buf += '\n';
+
+                // String-anchor row: S<TAB>addr<TAB>hash1,hash2,...
+                // Up to 8 fnv1a64 hashes of the function's identifying
+                // strings. Loader stores them on WholeEntry; recognizer
+                // uses overlap as a precision filter against
+                // structural false positives.
+                if (auto sit = strings_by_fn.find(a); sit != strings_by_fn.end() && !sit->second.empty()) {
+                    buf += std::format("S\t{:x}", a);
+                    bool first = true;
+                    for (const auto& str : sit->second) {
+                        buf += first ? '\t' : ',';
+                        first = false;
+                        buf += std::format("{:016x}", fnv1a_64(str));
+                    }
+                    buf += '\n';
+                }
                 // Chunk rows: C<TAB>addr<TAB>kind<TAB>insts<TAB>exact<TAB>mh0..7<TAB>name
                 for (const auto& ch : tf.chunks) {
                     if (ch.sig.exact_hash == 0) continue;

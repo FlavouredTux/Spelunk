@@ -18,7 +18,7 @@ namespace ember {
 //
 // Schema bumped on canonicalization rule changes; folded into the
 // hash so cached TSVs from a different schema can't collide silently.
-inline constexpr std::string_view kTeefSchema = "v3";
+inline constexpr std::string_view kTeefSchema = "v4";
 
 // Per-function signature: an exact hash of the canonicalized pseudo-C
 // (precision: identifies bit-equivalent algorithms across compiler
@@ -57,6 +57,11 @@ struct TeefChunk {
 struct TeefFunction {
     TeefSig                 whole;
     std::vector<TeefChunk>  chunks;        // sorted by inst_count desc
+    // Identifying strings reachable from this function — fnv1a64 of
+    // up to 8 distinct strings, length-biased toward unique ones. Set
+    // only by build_teef_tsv / parse_teef_tsv (TSV-level concept);
+    // compute_teef_with_chunks leaves it empty.
+    std::vector<u64>        string_hashes;
 };
 
 // Compute the function-level TEEF and per-chunk fingerprints for any

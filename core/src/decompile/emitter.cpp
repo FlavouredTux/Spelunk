@@ -3072,6 +3072,47 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     }
 
     flush_args_as_intrinsics();
+
+    // Loop-back-edge phi update visualisation. For each *back-edge*
+    // successor (one whose start address is at-or-before this block),
+    // surface the phi's per-iteration update as a synthetic
+    // `<reg> = <expr>;` so accumulator loops don't decompile to
+    // `do { } while (cond)` with the body invisible.
+    //
+    // Restricted to back-edges to avoid leaking forward-merge phis the
+    // structurer has already consumed via sink-return. Forward phis
+    // typically end up resolved at the Return / IfElse the structurer
+    // restructured, and their dst's only "use" is in that consumed
+    // Return — emitting an extra `rax = 0;` ahead of `return 0;` is
+    // redundant noise.
+    for (addr_t succ : bb.successors) {
+        if (succ > bb.start) continue;  // forward edge — skip
+        auto sit = fn->block_at.find(succ);
+        if (sit == fn->block_at.end()) continue;
+        const auto& sbb = fn->blocks[sit->second];
+        for (const auto& phi : sbb.insts) {
+            if (phi.op != IrOp::Phi) continue;
+            if (phi.dst.kind != IrValueKind::Reg) continue;
+            auto dst_key = ssa_key(phi.dst);
+            if (!dst_key) continue;
+            if (use_count_by_key(*dst_key) == 0) continue;
+            const std::size_t n = std::min(phi.phi_operands.size(),
+                                           phi.phi_preds.size());
+            for (std::size_t i = 0; i < n; ++i) {
+                if (phi.phi_preds[i] != bb.start) continue;
+                const IrValue& op = phi.phi_operands[i];
+                auto opk = ssa_key(op);
+                if (opk && opk == dst_key) continue;  // self-ref
+                // Use the canonical reg name without version subscript so
+                // back-edge updates read as `r14 = r14 + …;` rather
+                // than `r14_3 = r14_2 + …;`.
+                const std::string lhs(reg_name(phi.dst.reg));
+                const std::string rhs = expr(op, 0, 0);
+                if (rhs == lhs) continue;
+                out += std::format("{}{} = {};\n", ind, lhs, rhs);
+            }
+        }
+    }
 }
 
 void Emitter::emit_block_terminator(const IrBlock& bb, int depth,

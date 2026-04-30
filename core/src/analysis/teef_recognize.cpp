@@ -52,16 +52,47 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
 
 }  // namespace
 
+// Whether two runtime tags can plausibly match. Conservative — only
+// the obvious cross-language false-positive lanes are blocked. A Rust
+// binary linking libc / libcrypto / libgcc_s is normal; a Rust binary
+// matching libstdc++ template instantiations is the noise class we're
+// trying to suppress.
+bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
+    if (q.empty() || c.empty()) return true;       // unknown matches all
+    if (q == c) return true;
+    // Rust ABI: never plausible matches against C++/libstdc++.
+    if (q == teef_runtime::kRust) {
+        return c != teef_runtime::kLibstdcxx
+            && c != teef_runtime::kCxx;
+    }
+    // Symmetrically: a libstdc++ binary should not match Rust corpus.
+    if (q == teef_runtime::kLibstdcxx || q == teef_runtime::kCxx) {
+        return c != teef_runtime::kRust;
+    }
+    return true;
+}
+
 std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     std::ifstream f(path);
     if (!f) return 0;
 
     std::size_t rows = 0;
+    std::string active_runtime;     // set by `T runtime <tag>` rows
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty()) continue;
         auto fields = split_tabs(line);
         if (fields.empty()) continue;
+
+        if (fields[0] == "T") {
+            // T<TAB>runtime<TAB><tag>  — applies to all subsequent
+            // F/C rows in this TSV. Multiple T rows in one file mean
+            // mixed-runtime corpora (rare but supported).
+            if (fields.size() >= 3 && fields[1] == "runtime") {
+                active_runtime.assign(fields[2]);
+            }
+            continue;
+        }
 
         if (fields[0] == "F") {
             // F<TAB>addr<TAB>exact<TAB>mh0..7<TAB>name
@@ -76,6 +107,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             WholeEntry e;
             e.name = name;
             e.exact_hash = hash;
+            e.runtime = active_runtime;
             for (std::size_t k = 0; k < 8; ++k) {
                 e.minhash[k] = parse_u64_hex(fields[3 + k]);
             }
@@ -95,7 +127,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             u32 sz = 0;
             std::from_chars(fields[3].data(),
                             fields[3].data() + fields[3].size(), sz);
-            chunk_index_[chunk_hash].push_back(ChunkRef{name, sz});
+            chunk_index_[chunk_hash].push_back(ChunkRef{name, sz, active_runtime});
             ++rows;
         }
     }
@@ -103,7 +135,8 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
 }
 
 std::vector<TeefMatch>
-TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k) const {
+TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
+                      std::string_view query_runtime) const {
     if (query.whole.exact_hash == 0) return {};
 
     // Corpus-side gate: a hash shared by many corpus F rows (named
@@ -135,8 +168,9 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k) const {
             std::unordered_set<std::string> distinct;
             std::vector<std::string> ordered;
             for (auto it = it_lo; it != it_hi; ++it) {
-                const auto& nm = whole_by_name_[it->second].name;
-                if (distinct.insert(nm).second) ordered.push_back(nm);
+                const auto& we = whole_by_name_[it->second];
+                if (!runtime_compatible(query_runtime, we.runtime)) continue;
+                if (distinct.insert(we.name).second) ordered.push_back(we.name);
             }
             if (ordered.size() == 1) {
                 return { TeefMatch{ordered[0], 1.0f, "whole-exact", 0} };
@@ -167,6 +201,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k) const {
         std::string second_name; float second_j = 0.0f;
         for (const auto& e : whole_by_name_) {
             if (e.exact_hash == 0) continue;
+            if (!runtime_compatible(query_runtime, e.runtime)) continue;
             const float j = jaccard_minhash(query.whole.minhash, e.minhash);
             if (j > best_j) {
                 second_j = best_j; second_name = std::move(best_name);
@@ -191,6 +226,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k) const {
         if (it == chunk_index_.end()) continue;
         if (it->second.size() > kMaxChunkFns) continue;
         for (const auto& ref : it->second) {
+            if (!runtime_compatible(query_runtime, ref.runtime)) continue;
             votes[ref.name] += ch.inst_count;
         }
     }

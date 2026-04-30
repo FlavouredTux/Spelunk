@@ -444,6 +444,37 @@ load_corpus_from_args(const Args& args) {
     return corpus;
 }
 
+// Heuristic: classify the query binary's runtime/ABI for the TEEF
+// recognizer's cross-language plausibility filter. Only the obvious
+// cases get a tag; "" means unknown / wildcard. Conservative — false
+// positives here (saying a Rust binary is C) just disable filtering;
+// false negatives (saying a C binary is Rust) would block legitimate
+// libstdc++ matches on a C++ binary.
+[[nodiscard]] static std::string_view detect_query_runtime(const Binary& b) {
+    std::size_t rust_hits = 0;
+    std::size_t cxx_std_hits = 0;
+    std::size_t cxx_hits = 0;
+    for (const auto& s : b.symbols()) {
+        if (s.name.empty()) continue;
+        // Rust: _R-mangled names or the runtime alloc/panic shims.
+        if (s.name.starts_with("_R") || s.name.starts_with("__rust_")) {
+            ++rust_hits;
+            continue;
+        }
+        // libstdc++ template instantiations are dominantly _ZSt / _ZNSt.
+        if (s.name.starts_with("_ZSt") || s.name.starts_with("_ZNSt")) {
+            ++cxx_std_hits;
+            continue;
+        }
+        // Generic Itanium-mangled C++.
+        if (s.name.starts_with("_Z")) ++cxx_hits;
+    }
+    if (rust_hits >= 4)     return teef_runtime::kRust;
+    if (cxx_std_hits >= 4)  return teef_runtime::kLibstdcxx;
+    if (cxx_hits >= 8)      return teef_runtime::kCxx;
+    return "";
+}
+
 int run_recognize(const Args& args, const Binary& b) {
     if (args.corpus_paths.empty()) {
         std::println(stderr,
@@ -560,6 +591,14 @@ int run_recognize(const Args& args, const Binary& b) {
     }
     constexpr std::size_t kQueryPopularityCap = 8;
 
+    // Detect the query binary's runtime once. The recognizer uses it
+    // to skip cross-language matches (e.g. Rust binary against
+    // libstdc++ template instantiations).
+    const std::string_view query_runtime = detect_query_runtime(b);
+    if (!query_runtime.empty()) {
+        std::println(stderr, "ember: recognize: query runtime detected as '{}'", query_runtime);
+    }
+
     std::vector<std::string> rows(total);
     std::atomic<std::size_t> next{0};
     std::atomic<std::size_t> hit_count{0};
@@ -583,7 +622,7 @@ int run_recognize(const Args& args, const Binary& b) {
             // (xgetbv, return-zero) that would ALL collapse onto a
             // single arbitrary corpus name without this gate.
             if (query_popularity[tf.whole.exact_hash] > kQueryPopularityCap) continue;
-            auto matches = corpus.recognize(tf, /*top_k=*/3);
+            auto matches = corpus.recognize(tf, /*top_k=*/3, query_runtime);
             if (matches.empty()) continue;
             if (matches[0].confidence < threshold) continue;
             ++hit_count;

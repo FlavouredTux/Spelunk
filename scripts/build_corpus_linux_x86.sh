@@ -46,6 +46,33 @@ SYSTEM_LIBS=(
     /usr/lib/x86_64-linux-gnu/libstdc++.so.6
     /usr/lib/x86_64-linux-gnu/libssl.so.3
 )
+# Map basename → runtime tag for the cross-language plausibility filter.
+# Tag goes in a leading `T<TAB>runtime<TAB><tag>` row that the recognizer
+# applies to every F/C row in the file. Empty tag → no row, behaves as
+# "match any runtime" (back-compat).
+runtime_tag_for() {
+    case "$(basename "$1")" in
+        libstdc++.so*)               echo libstdcxx ;;
+        libssl.so*|libcrypto.so*)    echo openssl ;;
+        libc.so*|libpthread.so*|ld-linux*) echo libc ;;
+        libstd-*.so)                 echo rust ;;
+        *.so*|*.elf|*) echo c ;;
+    esac
+}
+
+emit_runtime_header() {
+    local tsv="$1"; local tag="$2"
+    [ -z "$tag" ] && return 0
+    [ ! -s "$tsv" ] && return 0
+    # Prepend `T<TAB>runtime<TAB><tag>\n` once. Skip if already present.
+    if ! head -1 "$tsv" | grep -q "^T	runtime	"; then
+        local tmp="$tsv.tmp.$$"
+        printf "T\truntime\t%s\n" "$tag" > "$tmp"
+        cat "$tsv" >> "$tmp"
+        mv "$tmp" "$tsv"
+    fi
+}
+
 for L in "${SYSTEM_LIBS[@]}"; do
     [ -e "$L" ] || continue
     REAL=$(readlink -f "$L")
@@ -53,7 +80,8 @@ for L in "${SYSTEM_LIBS[@]}"; do
     [ -s "$out" ] && continue
     echo "==> $L (real: $REAL)" >&2
     "$EMBER" --teef "$REAL" > "$out" 2>>"$DEST/build.log"
-    echo "    F=$(grep -c '^F' "$out") C=$(grep -c '^C' "$out")" >&2
+    emit_runtime_header "$out" "$(runtime_tag_for "$L")"
+    echo "    F=$(grep -c '^F' "$out") C=$(grep -c '^C' "$out") runtime=$(runtime_tag_for "$L")" >&2
 done
 
 # ---- Rust std + ecosystem ----
@@ -68,7 +96,8 @@ if command -v rustc >/dev/null 2>&1; then
     if [ -n "$RUST_STD_SO" ] && [ ! -s "$DEST/rust_std.teef.tsv" ]; then
         echo "==> rust std .so: $RUST_STD_SO" >&2
         "$EMBER" --teef "$RUST_STD_SO" > "$DEST/rust_std.teef.tsv" 2>>"$DEST/build.log"
-        echo "    F=$(grep -c '^F' "$DEST/rust_std.teef.tsv") C=$(grep -c '^C' "$DEST/rust_std.teef.tsv")" >&2
+        emit_runtime_header "$DEST/rust_std.teef.tsv" rust
+        echo "    F=$(grep -c '^F' "$DEST/rust_std.teef.tsv") C=$(grep -c '^C' "$DEST/rust_std.teef.tsv") runtime=rust" >&2
     fi
 
     if command -v cargo >/dev/null 2>&1 && [ ! -s "$DEST/rust_extractor.teef.tsv" ]; then
@@ -83,7 +112,8 @@ if command -v rustc >/dev/null 2>&1; then
             EXTRACTOR=$(find "$WORK/target/release" -maxdepth 1 -type f -executable | head -1)
             if [ -n "$EXTRACTOR" ]; then
                 "$EMBER" --teef "$EXTRACTOR" > "$DEST/rust_extractor.teef.tsv" 2>>"$DEST/build.log"
-                echo "    F=$(grep -c '^F' "$DEST/rust_extractor.teef.tsv") C=$(grep -c '^C' "$DEST/rust_extractor.teef.tsv")" >&2
+                emit_runtime_header "$DEST/rust_extractor.teef.tsv" rust
+                echo "    F=$(grep -c '^F' "$DEST/rust_extractor.teef.tsv") C=$(grep -c '^C' "$DEST/rust_extractor.teef.tsv") runtime=rust" >&2
             fi
             rm -rf "$WORK"
         fi

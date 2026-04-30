@@ -149,6 +149,43 @@ only if it's not contained in a previously-kept entry's
 `[entry, entry + size)` window. Reported in stderr as
 `recognize: dropped N shadow entries (stride-1 dedup)`.
 
+## Cross-language ABI tags
+
+A pure-Rust binary should never hit confidence-1.0 against a libstdc++
+template instantiation — the structural similarity that scores high
+is just shared compiler-generated EH/cleanup boilerplate, not real
+identity. The recognizer now carries an optional runtime/ABI tag per
+corpus entry so cross-language matches get filtered.
+
+Corpus TSV format gained one row type:
+
+```
+T<TAB>runtime<TAB><tag>
+```
+
+Applies to all subsequent F/C rows in the file. Multiple T rows mean
+mixed-runtime corpora (rare but supported). Tags in current use:
+
+- `rust` — Rust std (`_R`-mangled, `__rust_alloc`, `__rust_panic`, …)
+- `libstdcxx` — GNU libstdc++ (`_ZSt…`, `_ZNSt…`)
+- `cxx` — Itanium C++ generally (any `_Z`-mangled but not std::)
+- `libc` — glibc / musl
+- `openssl` — libssl / libcrypto
+- `c` — plain C library (libgcc_s, libm, libz, …)
+
+`scripts/build_corpus_linux_x86.sh` emits the right tag per library
+automatically. Old corpus TSVs without any T row remain valid — empty
+tag is treated as wildcard (matches every query), preserving the
+1.0 release's behavior on existing corpora.
+
+Recognize-side: the query binary's runtime is detected via symbol/
+import shape (≥4 `_R` or `__rust_*` → rust; ≥4 `_ZSt` → libstdcxx;
+≥8 `_Z` → cxx; otherwise unknown). Mismatched lanes are filtered
+across all three match paths (whole-exact, whole-jaccard, chunk-vote).
+The Rust↔libstdcxx exclusion is conservative and bidirectional;
+Rust↔libc/openssl is allowed because Rust binaries do legitimately
+link those.
+
 ## Daemon corpus cache
 
 `ember --recognize --corpus PATH+` parses the corpus on every

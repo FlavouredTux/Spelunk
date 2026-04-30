@@ -187,6 +187,7 @@ int main(int argc, char** argv) {
     if (!args.apply_ember.empty())         return run_apply_ember(args, b);
 
     if (args.debug)                        return run_debug(args, &b, aux_specs);
+    if (args.serve)                        return run_serve(args, b);
 
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);

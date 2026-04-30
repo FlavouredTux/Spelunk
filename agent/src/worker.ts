@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 
 import { makeLLM, providerForModel, type LLM, type ChatRequest, type Message, type ContentBlock, type Usage } from "./llm/index.js";
 import { ALL_TOOLS, TOOLS_BY_NAME, type ToolContext } from "./tools/ember.js";
+import { EmberDaemon } from "./tools/daemon.js";
 import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor } from "./intel/log.js";
 
@@ -39,11 +40,26 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
     const llm = makeLLM(providerForModel(model));
     const intel = new IntelLog(intelPathFor(args.binary));
     const agentId = args.agentId ?? `${args.role}-${args.runId}`;
+
+    // One ember --serve daemon per worker. Loads the binary once,
+    // answers tool calls in-process — wins back the wait4 dominance
+    // the strace traces of cascade runs were showing. Daemon dies
+    // when the worker exits (try/finally below).
+    let daemon: EmberDaemon | undefined;
+    try {
+        daemon = new EmberDaemon(args.emberBin, args.binary);
+    } catch {
+        // If daemon fails to spawn, every tool call falls through to
+        // subprocess spawnSync. Functionally identical, just slower.
+        daemon = undefined;
+    }
+
     const ctx: ToolContext = {
         binary: args.binary,
         intel,
         agentId,
         emberBin: args.emberBin,
+        daemon,
     };
 
     mkdirSync(args.runDir, { recursive: true });
@@ -53,6 +69,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
             JSON.stringify({ ts: new Date().toISOString(), ...e }) + "\n");
     };
 
+    try {
     const tally: CostTally = {
         usd: 0, input_tokens: 0, output_tokens: 0,
         cache_read_tokens: 0, cache_write_tokens: 0,
@@ -179,6 +196,9 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
     }
 
     emit({ kind: "max_turns", tally, claims_filed: claimsFiled });
+    } finally {
+        try { daemon?.close(); } catch { /* daemon may already be dead */ }
+    }
 }
 
 function buildScopeMessage(scope: string, binary: string): string {

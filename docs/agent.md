@@ -227,11 +227,35 @@ namer workers on the boundaries of the most interesting clusters.
 A worker exits cleanly when `usd >= budget`. There is no global cap
 across workers — that's the orchestrator's responsibility.
 
-## What's left
+## Daemon mode
 
-- Daemon mode: long-lived `ember --serve` answering tool calls over a
-  socket. Current subprocess-per-call is ~50ms cold + the cache hits
-  on subsequent calls. Painful at thousands of calls; fine at hundreds.
+Each worker spawns one `ember --serve` long-lived child. The binary
+loads once at daemon startup; tool calls write a tab-delimited
+request line to the daemon's stdin and read a length-framed response
+from stdout. Replaces 30+ `ember` subprocess spawns per worker with
+a single child that holds the parsed binary in memory across every
+tool call.
+
+Protocol (stable):
+
+```
+# request  (one line, tab-delimited)
+<method>\t<key>=<val>[\t<key>=<val>]*
+
+# response — header line + body bytes
+ok <body-bytes>\n<body>\n
+err <message>\n
+```
+
+Methods: `ping`, `decompile`, `callees`, `refs_to`, `containing_fn`,
+`functions`, `strings`, `recognize`. The agent's tool wrappers route
+through the daemon when present and fall back to subprocess spawn
+when the daemon failed to start (binary path bad, ember not on PATH,
+etc.) — same answers either way.
+
+Daemon dies when the worker exits (try/finally in worker.ts).
+
+## What's left
 - UI panel that surfaces disputes + lets the user resolve them
   manually as a `human` agent-id.
 - assistant-direct path verification: `cache_control` is wired but

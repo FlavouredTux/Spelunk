@@ -9,7 +9,10 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iostream>
 #include <map>
+#include <optional>
+#include <unistd.h>
 #include <atomic>
 #include <print>
 #include <set>
@@ -1283,6 +1286,185 @@ int run_emit(const Args& args, const Binary& b) {
         return run_disasm(b, args.symbol);
     }
     print_info(b, args.binary);
+    return EXIT_SUCCESS;
+}
+
+// ---------------------------------------------------------------- serve
+
+namespace {
+
+// Capture stdout produced by `fn()` and return it as a string. Uses
+// dup2(tmpfile()) so any printf/println/std::cout/fwrite path is
+// caught — the existing subcommands write to the C stdout FILE*
+// directly. tmpfile() handles overflow past pipe-buffer size; the
+// fn is allowed to emit megabytes (whole-binary --functions runs do).
+[[nodiscard]] std::string capture_stdout(auto&& fn) {
+    std::fflush(stdout);
+    int saved = ::dup(::fileno(stdout));
+    std::FILE* tmp = std::tmpfile();
+    if (!tmp || saved < 0) {
+        // Fallback: just run fn without capture. Worst case the
+        // request "succeeds" but the body lands on the parent's stdout
+        // — agent client treats that as a malformed frame.
+        fn();
+        return {};
+    }
+    ::dup2(::fileno(tmp), ::fileno(stdout));
+    fn();
+    std::fflush(stdout);
+    ::dup2(saved, ::fileno(stdout));
+    ::close(saved);
+    std::rewind(tmp);
+    std::string out;
+    char buf[8192];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, tmp)) > 0) {
+        out.append(buf, n);
+    }
+    std::fclose(tmp);
+    return out;
+}
+
+// Parse one request line of the form
+//   <method>\t<key>=<val>\t<key>=<val>...
+// into method + a small kv map.
+struct Request {
+    std::string method;
+    std::unordered_map<std::string, std::string> params;
+};
+
+[[nodiscard]] std::optional<Request> parse_request(std::string_view line) {
+    Request r;
+    std::size_t i = 0;
+    while (i < line.size() && line[i] != '\t' && line[i] != '\n') ++i;
+    r.method.assign(line, 0, i);
+    if (r.method.empty()) return std::nullopt;
+    while (i < line.size()) {
+        if (line[i] == '\t') ++i;
+        std::size_t s = i;
+        while (i < line.size() && line[i] != '=' && line[i] != '\t' && line[i] != '\n') ++i;
+        if (i >= line.size() || line[i] != '=') break;
+        std::string key(line.substr(s, i - s));
+        ++i;
+        std::size_t v = i;
+        while (i < line.size() && line[i] != '\t' && line[i] != '\n') ++i;
+        std::string val(line.substr(v, i - v));
+        r.params.emplace(std::move(key), std::move(val));
+    }
+    return r;
+}
+
+void write_ok(std::string_view body) {
+    // Frame: "ok <bytes>\n<body>\n". Trailing \n is for client convenience —
+    // not counted in <bytes>.
+    std::printf("ok %zu\n", body.size());
+    std::fwrite(body.data(), 1, body.size(), stdout);
+    std::fputc('\n', stdout);
+    std::fflush(stdout);
+}
+
+void write_err(std::string_view msg) {
+    std::printf("err %.*s\n", static_cast<int>(msg.size()), msg.data());
+    std::fflush(stdout);
+}
+
+// Build a per-request Args copy seeded from the daemon's startup args
+// (preserves --corpus, --cache-dir, --annotations, etc) plus the
+// requested method/params populated.
+Args derive_args(const Args& base) {
+    Args a;
+    // Carry only the read-side flags that affect tool answers.
+    a.binary           = base.binary;
+    a.cache_dir        = base.cache_dir;
+    a.annotations_path = base.annotations_path;
+    a.corpus_paths     = base.corpus_paths;
+    a.recognize_threshold = base.recognize_threshold;
+    a.no_cache  = base.no_cache;
+    a.no_pdb    = base.no_pdb;
+    a.full_analysis = base.full_analysis;
+    a.ipa       = base.ipa;
+    a.eh        = base.eh;
+    a.resolve_calls = base.resolve_calls;
+    a.quiet     = true;       // suppress per-request stderr noise
+    return a;
+}
+
+}  // namespace
+
+int run_serve(const Args& base, const Binary& b) {
+    // Tell the client we're alive. Helps agents detect a stale handle
+    // (a previous --serve exited and a new one was spawned).
+    std::printf("ready ember-serve v1\n");
+    std::fflush(stdout);
+
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        if (line.empty()) continue;
+        auto req = parse_request(line);
+        if (!req) { write_err("malformed request"); continue; }
+
+        try {
+            if (req->method == "ping") {
+                write_ok("pong");
+                continue;
+            }
+            if (req->method == "decompile") {
+                Args a = derive_args(base);
+                a.symbol = req->params["fn"];
+                a.pseudo = true;
+                std::string body = capture_stdout([&]{ run_emit(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "callees") {
+                Args a = derive_args(base);
+                a.callees = req->params["fn"];
+                std::string body = capture_stdout([&]{ run_callees(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "refs_to") {
+                Args a = derive_args(base);
+                a.refs_to = req->params["addr"];
+                std::string body = capture_stdout([&]{ run_refs_to(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "containing_fn") {
+                Args a = derive_args(base);
+                a.containing_fn = req->params["addr"];
+                std::string body = capture_stdout([&]{ run_containing_fn(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "functions") {
+                Args a = derive_args(base);
+                a.functions = true;
+                std::string body = capture_stdout([&]{ run_functions(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "strings") {
+                Args a = derive_args(base);
+                a.strings = true;
+                std::string body = capture_stdout([&]{ run_strings(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "recognize") {
+                Args a = derive_args(base);
+                a.recognize = true;
+                std::string body = capture_stdout([&]{ run_recognize(a, b); });
+                write_ok(body);
+                continue;
+            }
+            write_err(std::format("unknown method: {}", req->method));
+        } catch (const std::exception& e) {
+            write_err(std::format("exception: {}", e.what()));
+        } catch (...) {
+            write_err("unknown exception");
+        }
+    }
     return EXIT_SUCCESS;
 }
 

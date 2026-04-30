@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 import type { ToolDef } from "../llm/types.js";
 import { IntelLog, newId, type Claim, type Retract } from "../intel/log.js";
+import type { EmberDaemon } from "./daemon.js";
 
 // One tool == one capability the LLM can invoke. The executor runs the
 // real work and returns a string the model reads back as tool_result
@@ -13,6 +14,7 @@ export interface ToolContext {
     intel: IntelLog;
     agentId: string;
     emberBin: string;          // path to the `ember` CLI
+    daemon?: EmberDaemon;      // long-lived ember --serve client; if present, hot tools route here
 }
 
 export interface Tool {
@@ -57,6 +59,7 @@ const xrefs: Tool = {
     },
     async execute(input, ctx) {
         const { addr } = input as { addr: string };
+        if (ctx.daemon) return clip(await ctx.daemon.call("refs_to", { addr }));
         const out = runEmber(ctx.emberBin, ["--refs-to", addr, ctx.binary]);
         return clip(out);
     },
@@ -78,13 +81,17 @@ const strings: Tool = {
         const { fn } = input as { fn: string };
         const start = parseInt(fn, 16);
         // Get the function's extent so we can filter strings by xref site.
-        const cfRaw = runEmber(ctx.emberBin, ["--containing-fn", fn, ctx.binary]);
+        const cfRaw = ctx.daemon
+            ? await ctx.daemon.call("containing_fn", { addr: fn })
+            : runEmber(ctx.emberBin, ["--containing-fn", fn, ctx.binary]);
         // Output: <entry>\t<size>\t<name>\t<offset>
         const cf = cfRaw.trim().split("\t");
         const size = cf.length >= 2 ? parseInt(cf[1], 16) : 0;
         const end = start + (size || 0x1000);
 
-        const all = runEmber(ctx.emberBin, ["--strings", ctx.binary]);
+        const all = ctx.daemon
+            ? await ctx.daemon.call("strings")
+            : runEmber(ctx.emberBin, ["--strings", ctx.binary]);
         const lines = all.split("\n");
         const hits: string[] = [];
         for (const ln of lines) {
@@ -115,6 +122,7 @@ const decompile: Tool = {
     },
     async execute(input, ctx) {
         const { fn } = input as { fn: string };
+        if (ctx.daemon) return clip(await ctx.daemon.call("decompile", { fn }), 400);
         const out = runEmber(ctx.emberBin, ["-p", "-s", fn, ctx.binary]);
         return clip(out, 400);
     },
@@ -127,6 +135,7 @@ const recognize: Tool = {
         input_schema: { type: "object", properties: {} },
     },
     async execute(_input, ctx) {
+        if (ctx.daemon) return clip(await ctx.daemon.call("recognize"));
         const out = runEmber(ctx.emberBin, ["--recognize", ctx.binary]);
         return clip(out);
     },
@@ -146,6 +155,7 @@ const callees: Tool = {
     },
     async execute(input, ctx) {
         const { fn } = input as { fn: string };
+        if (ctx.daemon) return clip(await ctx.daemon.call("callees", { fn }));
         const out = runEmber(ctx.emberBin, ["--callees", fn, ctx.binary]);
         return clip(out);
     },

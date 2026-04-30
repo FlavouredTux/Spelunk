@@ -86,6 +86,66 @@ int main(int argc, char** argv) {
     CHECK(hit->id == bp_id,       "bp id mismatch");
     CHECK(hit->pc == bp_va,       "bp pc mismatch");
 
+    // Register read/write round-trip — exercises the same get_regs /
+    // set_regs path that backs the REPL's `set` command. Read, mutate
+    // a callee-saved-but-unused register, write back, read again to
+    // verify it stuck. Restore before continuing so the tracee's
+    // state isn't disturbed.
+    {
+        const auto tids = t->threads();
+        CHECK(!tids.empty(), "threads empty at bp");
+        const auto tid = tids.front();
+        auto regs1 = t->get_regs(tid);
+        CHECK(regs1.has_value(), "get_regs at bp");
+        const auto saved_r12 = regs1->r12;
+        constexpr ember::u64 kTestPattern = 0xfeedface'cafebabeULL;
+        auto regs_w = *regs1;
+        regs_w.r12 = kTestPattern;
+        CHECK(t->set_regs(tid, regs_w).has_value(), "set_regs round-trip");
+        auto regs2 = t->get_regs(tid);
+        CHECK(regs2.has_value(), "get_regs after set");
+        CHECK(regs2->r12 == kTestPattern, "r12 readback after set");
+        regs_w.r12 = saved_r12;
+        CHECK(t->set_regs(tid, regs_w).has_value(), "set_regs restore");
+    }
+
+    // Memory read/write round-trip — exercises the same write_mem /
+    // read_mem path the REPL's `poke` / `x` commands use. The bp
+    // overwrote the first byte at bp_va with a 0xCC trap; round-trip
+    // a single byte through a stack-resident scratch slot instead so
+    // we don't fight the breakpoint's own bookkeeping.
+    {
+        const auto tids = t->threads();
+        const auto tid = tids.front();
+        auto regs = t->get_regs(tid);
+        CHECK(regs.has_value(), "get_regs for stack");
+        // Pick a slot a few bytes below RSP — within the red zone the
+        // SysV ABI guarantees the kernel won't trample. Read it,
+        // verify, then write a fresh pattern, verify, then restore.
+        const ember::addr_t scratch = regs->rsp - 16;
+        std::byte original[8] = {};
+        auto rrv = t->read_mem(scratch, std::span<std::byte>{original});
+        CHECK(rrv.has_value() && *rrv == sizeof(original),
+              "read_mem scratch (initial)");
+        constexpr ember::u8 kPattern[8] = {
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+        std::byte payload[8];
+        for (std::size_t i = 0; i < sizeof(payload); ++i) {
+            payload[i] = std::byte{kPattern[i]};
+        }
+        auto wrv = t->write_mem(scratch, std::span<const std::byte>{payload});
+        CHECK(wrv.has_value() && *wrv == sizeof(payload), "write_mem scratch");
+        std::byte readback[8] = {};
+        rrv = t->read_mem(scratch, std::span<std::byte>{readback});
+        CHECK(rrv.has_value() && *rrv == sizeof(readback),
+              "read_mem scratch (verify)");
+        for (std::size_t i = 0; i < sizeof(readback); ++i) {
+            CHECK(readback[i] == payload[i], "scratch readback mismatch");
+        }
+        CHECK(t->write_mem(scratch, std::span<const std::byte>{original}).has_value(),
+              "write_mem restore");
+    }
+
     CHECK(t->cont().has_value(), "cont 2");
 
     ev_r = t->wait_event();

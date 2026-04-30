@@ -933,6 +933,124 @@ int cmd_regs(ReplState& rs, bool full) {
     return 0;
 }
 
+// Map a register name (lowercase, dollar-prefix optional) to a writable
+// pointer inside Registers. Only the GPRs + RIP + RFLAGS + segment regs
+// are exposed — those are the ones a debugger typically wants to nudge
+// to skip past faults or redirect control flow. SIMD / x87 / DR are
+// reachable via `regs all` for inspection; if someone needs to write
+// them, that's a future extension.
+[[nodiscard]] u64* gpr_field(debug::Registers& r, std::string_view name) {
+    if (!name.empty() && name.front() == '$') name.remove_prefix(1);
+    struct M { std::string_view n; u64 debug::Registers::* p; };
+    static const M kMap[] = {
+        {"rax", &debug::Registers::rax}, {"rbx", &debug::Registers::rbx},
+        {"rcx", &debug::Registers::rcx}, {"rdx", &debug::Registers::rdx},
+        {"rsi", &debug::Registers::rsi}, {"rdi", &debug::Registers::rdi},
+        {"rbp", &debug::Registers::rbp}, {"rsp", &debug::Registers::rsp},
+        {"r8",  &debug::Registers::r8},  {"r9",  &debug::Registers::r9},
+        {"r10", &debug::Registers::r10}, {"r11", &debug::Registers::r11},
+        {"r12", &debug::Registers::r12}, {"r13", &debug::Registers::r13},
+        {"r14", &debug::Registers::r14}, {"r15", &debug::Registers::r15},
+        {"rip", &debug::Registers::rip}, {"rflags", &debug::Registers::rflags},
+        {"cs",  &debug::Registers::cs},  {"ds", &debug::Registers::ds},
+        {"es",  &debug::Registers::es},  {"fs", &debug::Registers::fs},
+        {"gs",  &debug::Registers::gs},  {"ss", &debug::Registers::ss},
+        {"fs_base", &debug::Registers::fs_base},
+        {"gs_base", &debug::Registers::gs_base},
+    };
+    for (const auto& m : kMap) if (m.n == name) return &(r.*m.p);
+    return nullptr;
+}
+
+int cmd_set_reg(ReplState& rs, std::string_view reg_tok,
+                std::string_view value_tok) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    auto regs = rs.tgt->get_regs(rs.current_tid);
+    if (!regs) { print_error(regs.error()); return 1; }
+    u64* slot = gpr_field(*regs, reg_tok);
+    if (!slot) {
+        std::println(stderr,
+            "ember-dbg: set: unknown register '{}' (try rax/rbx/.../rip/rflags/cs/...)",
+            reg_tok);
+        return 1;
+    }
+    // Accept hex (with or without `0x`), decimal, or address-spec
+    // (sym, sym+ofs, bin:sym) — same syntax as `b` and `x` so a user
+    // can `set rip <symbol>` to force a jump back into known code.
+    std::optional<u64> value;
+    if (auto h = parse_hex_addr(value_tok); h) {
+        value = static_cast<u64>(*h);
+    } else if (auto i = parse_int(value_tok); i && *i >= 0) {
+        value = static_cast<u64>(*i);
+    } else if (auto spec = parse_addr_spec_multi(value_tok, rs); spec) {
+        value = static_cast<u64>(resolve_runtime_multi(*spec));
+    }
+    if (!value) {
+        std::println(stderr, "ember-dbg: set: bad value '{}'", value_tok);
+        return 1;
+    }
+    *slot = *value;
+    auto wv = rs.tgt->set_regs(rs.current_tid, *regs);
+    if (!wv) { print_error(wv.error()); return 1; }
+    std::println("{} = {}", reg_tok, fmt_addr(*value));
+    return 0;
+}
+
+// Parse a sequence of hex-byte tokens (e.g. `c3`, `90`, `0xff`) into a
+// flat byte buffer. Used by `poke`. Returns nullopt on the first token
+// that doesn't look like a 1- or 2-digit hex byte.
+[[nodiscard]] std::optional<std::vector<std::byte>>
+parse_hex_bytes(std::span<const std::string> toks) {
+    std::vector<std::byte> out;
+    out.reserve(toks.size());
+    for (auto sv : toks) {
+        std::string_view tok = sv;
+        if (tok.starts_with("0x") || tok.starts_with("0X")) tok.remove_prefix(2);
+        if (tok.empty() || tok.size() > 2) return std::nullopt;
+        unsigned v = 0;
+        for (char c : tok) {
+            const int d = (c >= '0' && c <= '9') ? c - '0'
+                        : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                        : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                        : -1;
+            if (d < 0) return std::nullopt;
+            v = (v << 4) | static_cast<unsigned>(d);
+        }
+        out.push_back(static_cast<std::byte>(v & 0xff));
+    }
+    return out;
+}
+
+int cmd_poke(ReplState& rs, std::string_view addr_tok,
+             std::span<const std::string> byte_toks) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    if (byte_toks.empty()) {
+        std::println(stderr,
+            "ember-dbg: poke: usage `poke <addr> <hex-byte> [<hex-byte>...]`");
+        return 1;
+    }
+    auto spec = parse_addr_spec_multi(addr_tok, rs);
+    if (!spec) {
+        std::println(stderr, "ember-dbg: poke: bad address '{}'", addr_tok);
+        return 1;
+    }
+    auto bytes = parse_hex_bytes(byte_toks);
+    if (!bytes) {
+        std::println(stderr,
+            "ember-dbg: poke: bad hex byte (expected pairs like c3 90 0xff)");
+        return 1;
+    }
+    const addr_t va_runtime = resolve_runtime_multi(*spec);
+    auto rv = rs.tgt->write_mem(va_runtime, *bytes);
+    if (!rv) { print_error(rv.error()); return 1; }
+    const std::size_t got = *rv;
+    std::println("wrote {} byte(s) at {}", got, fmt_addr(va_runtime));
+    if (got < bytes->size()) {
+        std::println("(write short — {} of {} requested bytes)", got, bytes->size());
+    }
+    return 0;
+}
+
 int cmd_xmem(ReplState& rs, std::string_view addr_tok, std::string_view count_tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     auto spec = parse_addr_spec_multi(addr_tok, rs);
@@ -1251,7 +1369,20 @@ void print_help() {
   c                         continue all paused threads
   s                         single-step the current thread
   regs [all]                show registers ('all' for x87/SSE/AVX/AVX-512/DR)
+  set <reg> <value>         write a GPR / RIP / RFLAGS / segment register.
+                            <reg> is rax/rbx/.../r15/rip/rflags/cs/ds/...
+                            <value> accepts hex (0xVA), decimal, or any
+                            address-spec the `b` command accepts (sym,
+                            sym+ofs, bin:sym). Use to skip past a faulting
+                            instruction (`set rip <next>`), zero a return
+                            register (`set rax 0`), etc.
   x <addr> [n]              read n bytes (default 16) and hex-dump
+  poke <addr> <hex>...      write hex bytes to memory. Each byte is one
+                            or two hex digits; multiple bytes are space-
+                            separated (`poke 0x401234 c3` to write a RET,
+                            `poke <a> 90 90 90` to nop-out 3 bytes).
+                            Pairs naturally with `set rip` for skip-past-
+                            trap workflows that previously needed gdb.
   bt | where                backtrace (.eh_frame; RBP-walk fallback)
   code | list | l           pseudo-C of the function containing the current PC
   aux                       list loaded aux symbol oracles
@@ -1361,8 +1492,13 @@ int run_debug(const Args& args, const Binary* bin,
         else if (cmd == "s"  || cmd == "step")                 cmd_step(rs);
         else if (cmd == "regs")
             cmd_regs(rs, toks.size() > 1 && toks[1] == "all");
+        else if (cmd == "set" && toks.size() > 2)
+            cmd_set_reg(rs, toks[1], toks[2]);
         else if (cmd == "x"  && toks.size() > 1)
             cmd_xmem(rs, toks[1], toks.size() > 2 ? toks[2] : std::string_view{});
+        else if (cmd == "poke" && toks.size() > 2)
+            cmd_poke(rs, toks[1],
+                     std::span<const std::string>{toks.data() + 2, toks.size() - 2});
         else if (cmd == "bt" || cmd == "where")                cmd_bt(rs);
         else if (cmd == "code" || cmd == "list" || cmd == "l") cmd_code(rs);
         else if (cmd == "aux")

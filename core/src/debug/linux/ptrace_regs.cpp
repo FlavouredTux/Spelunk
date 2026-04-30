@@ -335,7 +335,14 @@ Result<void> LinuxTarget::set_regs(ThreadId tid, const Registers& r) {
     if (r.present & Registers::PresentDr) {
         constexpr std::size_t kDrBase = offsetof(struct user, u_debugreg[0]);
         constexpr std::size_t kDrStride = sizeof(reinterpret_cast<struct user*>(0)->u_debugreg[0]);
-        for (int i = 0; i < 8; ++i) {
+        // DR4 and DR5 are reserved by the architecture (the CPU
+        // aliases them to DR6/DR7 when CR4.DE=0). The kernel rejects
+        // POKEUSER writes to them with EIO, which would fail an
+        // otherwise valid set_regs round-trip — even one that didn't
+        // touch DR state at all, since the present bit covers the
+        // whole array. Skip the reserved indices and only write the
+        // four address slots, the status, and the control word.
+        for (int i : {0, 1, 2, 3, 6, 7}) {
             const std::size_t off = kDrBase + static_cast<std::size_t>(i) * kDrStride;
             if (::ptrace(PTRACE_POKEUSER, kt,
                          reinterpret_cast<void*>(off),

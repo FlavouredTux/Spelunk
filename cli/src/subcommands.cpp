@@ -1397,6 +1397,25 @@ int run_serve(const Args& base, const Binary& b) {
     std::printf("ready ember-serve v1\n");
     std::fflush(stdout);
 
+    // Per-daemon caches. The daemon's lifetime spans one worker, and
+    // annotations are loaded fresh each `decompile` request from the
+    // resolver chain — so caching the rendered output is only safe
+    // when annotations didn't move under us. They don't (worker can't
+    // promote mid-run; promote is a between-rounds orchestrator op),
+    // so simple-keyed-by-symbol works.
+    std::unordered_map<std::string, std::string> decompile_cache;
+    decompile_cache.reserve(64);
+
+    // Strings cache: full --strings output is built once and cached;
+    // strings_in_range filters the cached body in-place per request.
+    // The strings table on a 50MB binary can be ~10MB of text — building
+    // it per request was hot in profiling.
+    std::optional<std::string> strings_cache;
+
+    // Call-graph cache: the compute_call_graph pass walks every fn's
+    // CFG, then we group into a per-caller TSV. Once-per-daemon.
+    std::optional<std::string> callees_all_cache;
+
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;
@@ -1409,10 +1428,20 @@ int run_serve(const Args& base, const Binary& b) {
                 continue;
             }
             if (req->method == "decompile") {
+                const std::string& sym = req->params["fn"];
+                if (auto it = decompile_cache.find(sym); it != decompile_cache.end()) {
+                    write_ok(it->second);
+                    continue;
+                }
                 Args a = derive_args(base);
-                a.symbol = req->params["fn"];
+                a.symbol = sym;
                 a.pseudo = true;
                 std::string body = capture_stdout([&]{ run_emit(a, b); });
+                // Soft cap to avoid runaway memory on huge cascades. 1024
+                // entries × typical 2KB pseudo-C ≈ 2MB; outliers (5000-line
+                // fns) push that up but the worker dies before it matters.
+                if (decompile_cache.size() > 1024) decompile_cache.clear();
+                decompile_cache.emplace(sym, body);
                 write_ok(body);
                 continue;
             }
@@ -1445,10 +1474,96 @@ int run_serve(const Args& base, const Binary& b) {
                 continue;
             }
             if (req->method == "strings") {
-                Args a = derive_args(base);
-                a.strings = true;
-                std::string body = capture_stdout([&]{ run_strings(a, b); });
-                write_ok(body);
+                if (!strings_cache) {
+                    Args a = derive_args(base);
+                    a.strings = true;
+                    strings_cache = capture_stdout([&]{ run_strings(a, b); });
+                }
+                write_ok(*strings_cache);
+                continue;
+            }
+            if (req->method == "strings_in_range") {
+                // Server-side filter for `addr|text|xrefs` rows whose
+                // any-xref-site lands in [start, end). Saves the agent
+                // shipping the full strings table over the pipe each
+                // call. Cached once like `strings`.
+                if (!strings_cache) {
+                    Args a = derive_args(base);
+                    a.strings = true;
+                    strings_cache = capture_stdout([&]{ run_strings(a, b); });
+                }
+                auto parse_hex = [](std::string_view s) -> std::optional<addr_t> {
+                    if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+                    addr_t v = 0;
+                    for (char c : s) {
+                        const int d = (c >= '0' && c <= '9') ? c - '0'
+                                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                                    : -1;
+                        if (d < 0) return std::nullopt;
+                        v = (v << 4) | static_cast<addr_t>(d);
+                    }
+                    return v;
+                };
+                auto sopt = parse_hex(req->params["start"]);
+                auto eopt = parse_hex(req->params["end"]);
+                if (!sopt || !eopt) { write_err("strings_in_range: bad start/end"); continue; }
+                const addr_t lo = *sopt, hi = *eopt;
+                std::string out;
+                out.reserve(strings_cache->size() / 16);
+                std::size_t pos = 0;
+                while (pos < strings_cache->size()) {
+                    std::size_t nl = strings_cache->find('\n', pos);
+                    if (nl == std::string::npos) nl = strings_cache->size();
+                    std::string_view ln(strings_cache->data() + pos, nl - pos);
+                    pos = nl + 1;
+                    // Format: <addr>|<text>|<xref1>,<xref2>,...
+                    auto bar1 = ln.find('|');
+                    if (bar1 == std::string_view::npos) continue;
+                    auto bar2 = ln.find('|', bar1 + 1);
+                    if (bar2 == std::string_view::npos) continue;
+                    std::string_view xrefs = ln.substr(bar2 + 1);
+                    bool match = false;
+                    std::size_t xp = 0;
+                    while (xp < xrefs.size()) {
+                        std::size_t comma = xrefs.find(',', xp);
+                        std::string_view tok = xrefs.substr(xp, (comma == std::string_view::npos ? xrefs.size() : comma) - xp);
+                        if (auto va = parse_hex(tok); va && *va >= lo && *va < hi) {
+                            match = true; break;
+                        }
+                        if (comma == std::string_view::npos) break;
+                        xp = comma + 1;
+                    }
+                    if (match) { out.append(ln); out.push_back('\n'); }
+                }
+                write_ok(out);
+                continue;
+            }
+            if (req->method == "callees_all") {
+                // One-shot: emit the full call graph as
+                // `<caller-hex>\t<callee-hex>,<callee-hex>,...\n`.
+                // Caches the grouping after the first compute_call_graph
+                // walk; subsequent calls return instantly. Replaces N
+                // round-trips for cascade's eligibility pass.
+                if (!callees_all_cache) {
+                    auto edges = compute_call_graph(b);
+                    std::map<addr_t, std::vector<addr_t>> by_caller;
+                    for (auto& e : edges) by_caller[e.caller].push_back(e.callee);
+                    std::string out;
+                    out.reserve(edges.size() * 24);
+                    for (auto& [caller, callees] : by_caller) {
+                        std::format_to(std::back_inserter(out), "{:#x}\t", caller);
+                        bool first = true;
+                        for (auto c : callees) {
+                            if (!first) out.push_back(',');
+                            std::format_to(std::back_inserter(out), "{:#x}", c);
+                            first = false;
+                        }
+                        out.push_back('\n');
+                    }
+                    callees_all_cache = std::move(out);
+                }
+                write_ok(*callees_all_cache);
                 continue;
             }
             if (req->method == "recognize") {

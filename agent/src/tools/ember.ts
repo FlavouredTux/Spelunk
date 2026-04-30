@@ -89,9 +89,17 @@ const strings: Tool = {
         const size = cf.length >= 2 ? parseInt(cf[1], 16) : 0;
         const end = start + (size || 0x1000);
 
-        const all = ctx.daemon
-            ? await ctx.daemon.call("strings")
-            : runEmber(ctx.emberBin, ["--strings", ctx.binary]);
+        // Daemon path: server-side range filter avoids shipping the
+        // whole strings table over the pipe per call. Subprocess
+        // fallback still pulls + filters client-side.
+        if (ctx.daemon) {
+            const body = await ctx.daemon.call("strings_in_range", {
+                start: "0x" + start.toString(16),
+                end:   "0x" + end.toString(16),
+            });
+            return body.trim() ? clip(body) : "(no strings reachable from this fn)";
+        }
+        const all = runEmber(ctx.emberBin, ["--strings", ctx.binary]);
         const lines = all.split("\n");
         const hits: string[] = [];
         for (const ln of lines) {

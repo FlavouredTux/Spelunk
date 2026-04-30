@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runWorker } from "./worker.js";
 import { promote } from "./promote.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
+import { EmberDaemon } from "./tools/daemon.js";
 import type { Claim } from "./intel/log.js";
 
 // Anchor Cascade — iterative bottom-up agent naming.
@@ -95,6 +96,22 @@ function listCallees(addr: string, binary: string, emberBin: string): string[] {
     return out;
 }
 
+// One-shot bulk callee map via daemon. Replaces N round-trips for
+// cascade's eligibility pass. Returns Map<caller, callees[]>.
+async function loadAllCallees(daemon: EmberDaemon): Promise<Map<string, string[]>> {
+    const body = await daemon.call("callees_all");
+    const out = new Map<string, string[]>();
+    for (const line of body.split("\n")) {
+        if (!line) continue;
+        const tab = line.indexOf("\t");
+        if (tab < 0) continue;
+        const caller = line.slice(0, tab);
+        const callees = line.slice(tab + 1).split(",").filter(Boolean);
+        out.set(caller, callees);
+    }
+    return out;
+}
+
 function highConfNames(intel: IntelLog, threshold: number): Set<string> {
     const out = new Set<string>();
     for (const [, d] of intel.fold()) {
@@ -111,17 +128,35 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
     const rounds: RoundStats[] = [];
     let totalCost = 0;
 
-    // One-time: enumerate all functions + callees so we don't hit the
-    // ember CLI per fn per round. This is the dominant cold cost; on a
-    // 7000-fn binary it's about 30s walltime, then cached.
+    // One-time setup. Spawn a coordinator daemon for cascade-wide
+    // bulk queries (callees_all + future shared analyses). Workers
+    // still spawn their own daemons since concurrent stdin/stdout
+    // multiplexing is more complexity than the win is worth at this
+    // scale.
+    const coord = (() => {
+        try { return new EmberDaemon(args.emberBin, args.binary); }
+        catch { return undefined; }
+    })();
+
     const fns = listFunctions(args.binary, args.emberBin);
-    const calleeMap = new Map<string, string[]>();
     const subAddrs = new Set<string>();
     for (const f of fns) {
         if (f.kind === "sub") subAddrs.add(f.addr);
     }
-    // Computing callees for every fn upfront is expensive on huge
-    // binaries — defer until first eligibility pass and cache.
+
+    // Bulk callee map. With daemon: one round-trip pulls the full
+    // call graph (a 7000-fn binary used to take ~30s of N×spawnSync
+    // for the first eligibility pass). Subprocess fallback keeps the
+    // old lazy per-fn behavior.
+    const calleeMap = new Map<string, string[]>();
+    if (coord) {
+        try {
+            const all = await loadAllCallees(coord);
+            for (const [k, v] of all) calleeMap.set(k, v);
+        } catch (e) {
+            process.stderr.write(`callees_all failed, falling back to per-fn: ${e}\n`);
+        }
+    }
     const calleesOf = (addr: string): string[] => {
         let v = calleeMap.get(addr);
         if (v == null) {
@@ -284,6 +319,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         if (after - before === 0) break;
     }
 
+    coord?.close();
     return {
         rounds,
         total_named: highConfNames(intel, args.threshold).size,

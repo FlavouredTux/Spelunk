@@ -52,12 +52,12 @@ build/ember, $PATH); override with `EMBER_BIN`.
 
 ## Roles
 
-| Role        | Default model       | Job |
-|-------------|---------------------|-----|
-| namer       | assistant-sonnet-4-6   | Propose function names from TEEF + strings + xrefs |
-| mapper      | assistant-sonnet-4-6   | Tag call-graph clusters by theme |
-| typer       | assistant-sonnet-4-6   | Infer struct field layouts from access patterns |
-| tiebreaker  | assistant-opus-4-7     | Resolve disputed claims, no agent-bias |
+| Role        | Default model              | Job |
+|-------------|----------------------------|-----|
+| namer       | deepseek/deepseek-v4-flash | Propose function names from TEEF + strings + xrefs |
+| mapper      | deepseek/deepseek-v4-flash | Tag call-graph clusters by theme |
+| typer       | deepseek/deepseek-v4-flash | Infer struct field layouts from access patterns |
+| tiebreaker  | deepseek/deepseek-v4-flash | Resolve disputed claims, no agent-bias |
 
 Override with `--model=...`. assistant models route to the assistant
 SDK directly (for prompt caching); `vendor/model` style routes through
@@ -113,6 +113,44 @@ ember-agent runs status r-7f3a
 ember-agent runs tail   r-7f3a
 ```
 
+### Fanout
+
+Spawn N detached workers in one shot:
+
+```sh
+ember-agent fanout --binary=./target.elf --pick=unnamed \
+  --limit=20 --min-size=16 --budget=0.05 --max-turns=12
+
+# --pick=all       every fn ember reports
+# --pick=unnamed   only sub_* (skip already-named symbols)
+# --pick=list:0x401000,0x401200,...  explicit list
+# Returns JSON with run-ids; each worker writes its own events.jsonl.
+```
+
+### Promote
+
+Fold the intel view into a `.ember` script and (optionally) apply it
+back to the binary's annotation file so the next `ember -p` shows the
+agent-supplied names:
+
+```sh
+# Generate the script only (default at <binary>.intel.ember):
+ember-agent promote ./target.elf --threshold=0.85
+
+# Generate + apply (writes annotations.db):
+ember-agent promote ./target.elf --apply
+
+# Generate + dry-run (shows TSV diff without writing):
+ember-agent promote ./target.elf --dry-run
+```
+
+Filter rules:
+- skip disputed (orchestrator should resolve via tiebreaker first)
+- skip below `--threshold` (default 0.85)
+- only `name` → `[rename]` and `note` → `[note]` are promotable today.
+  `type`/`tag`/`xref` stay agent-internal until ember grows the
+  matching script surface.
+
 ## Orchestration patterns
 
 **Bulk naming.** Take the output of `ember --recognize` at threshold
@@ -140,11 +178,23 @@ across workers — that's the orchestrator's responsibility.
 
 ## What's left
 
-- N-API binding for in-process ember calls (current subprocess
-  overhead is ~50ms per tool call; fine for a few dozen, painful for
-  thousands).
+- Daemon mode: long-lived `ember --serve` answering tool calls over a
+  socket. Current subprocess-per-call is ~50ms cold + the cache hits
+  on subsequent calls. Painful at thousands of calls; fine at hundreds.
 - UI panel that surfaces disputes + lets the user resolve them
   manually as a `human` agent-id.
-- Annotations bridge: a `--promote` mode that folds the current
-  intel view into `.ember` script form so it can be applied to the
-  binary's annotation file.
+- assistant-direct path verification: `cache_control` is wired but
+  hasn't been exercised end-to-end (Max plan ≠ API access). Once a
+  user runs the harness with an assistant API key, validate that
+  `cache_creation_input_tokens` / `cache_read_input_tokens` show up
+  in the tally as expected.
+- Retry/backoff on transient 429/5xx from any provider — currently a
+  flaky upstream kills the worker.
+
+## Tests
+
+`npm test` runs the suite. Currently covers:
+- `intel/log.test.ts` — fold semantics, retraction, dispute detection,
+  same-agent self-supersede, value-equal non-dispute, id uniqueness.
+- `promote.test.ts` — high-conf rename emission, disputed-skip,
+  rename/note section split, value sanitization (`#` and newline).

@@ -7,6 +7,8 @@ import { spawn } from "node:child_process";
 import { runWorker } from "./worker.js";
 import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
+import { promote } from "./promote.js";
+import { fanout } from "./fanout.js";
 
 // CLI entry. Subcommands:
 //   worker --role=R --binary=B --scope=S [--model=M] [--budget=N] [--detach]
@@ -213,14 +215,67 @@ async function cmdRuns(argv: string[]) {
     }
 }
 
+async function cmdPromote(argv: string[]) {
+    const [binary, ...rest] = argv;
+    if (!binary) {
+        console.error("usage: promote <binary> [--out PATH] [--threshold N] [--apply | --dry-run]");
+        process.exit(2);
+    }
+    const f = parseFlags(rest);
+    const out = f.get("out") ?? `${resolve(binary)}.intel.ember`;
+    const r = promote({
+        binary: resolve(binary),
+        out,
+        threshold: parseFloat(f.get("threshold") ?? "0.85"),
+        apply:  f.get("apply") === "true",
+        dryRun: f.get("dry-run") === "true",
+        emberBin: findEmberBin(),
+    });
+    console.log(JSON.stringify({
+        out_script: out,
+        promoted: r.promoted,
+        skipped: {
+            disputed: r.skipped_disputed,
+            low_conf: r.skipped_low_conf,
+            other: r.skipped_other,
+        },
+    }, null, 2));
+}
+
+async function cmdFanout(argv: string[]) {
+    const f = parseFlags(argv);
+    const binary = f.get("binary");
+    if (!binary) {
+        console.error("usage: fanout --binary=B [--role=namer] [--pick=unnamed|all|list:0x..,..] [--limit=N] [--min-size=N] [--budget=N] [--model=M]");
+        process.exit(2);
+    }
+    const role = (f.get("role") ?? "namer") as keyof typeof ROLES;
+    if (!ROLES[role]) { console.error(`unknown role: ${role}`); process.exit(2); }
+    const r = fanout({
+        binary: resolve(binary),
+        role,
+        model: f.get("model"),
+        pick: f.get("pick") ?? "unnamed",
+        limit: parseInt(f.get("limit") ?? "8", 10),
+        minSize: parseInt(f.get("min-size") ?? "8", 10),
+        budget: parseFloat(f.get("budget") ?? "0.10"),
+        maxTurns: parseInt(f.get("max-turns") ?? "12", 10),
+        emberBin: findEmberBin(),
+        runsRoot: RUNS_ROOT,
+    });
+    console.log(JSON.stringify(r, null, 2));
+}
+
 async function main() {
     const [, , cmd, ...rest] = process.argv;
     switch (cmd) {
-        case "worker":   await cmdWorker(rest); return;
-        case "intel":    await cmdIntel(rest);  return;
-        case "runs":     await cmdRuns(rest);   return;
+        case "worker":   await cmdWorker(rest);  return;
+        case "intel":    await cmdIntel(rest);   return;
+        case "runs":     await cmdRuns(rest);    return;
+        case "promote":  await cmdPromote(rest); return;
+        case "fanout":   await cmdFanout(rest);  return;
         default:
-            console.error("usage: ember-agent <worker|intel|runs> ...");
+            console.error("usage: ember-agent <worker|intel|runs|promote|fanout> ...");
             process.exit(2);
     }
 }

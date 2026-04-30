@@ -23,6 +23,7 @@ const OPENROUTER_PRICING: Record<string, Price> = {
     // unchanged, so the math holds regardless of which upstream host
     // serves the request.
     "deepseek/deepseek-v4-pro":    { input: 0.40, output: 1.20, cache_read: 0.04 },
+    "deepseek/deepseek-v4-flash":  { input: 0.14, output: 0.28, cache_read: 0.0028 },
     "deepseek/deepseek-v3.2":      { input: 0.27, output: 1.10, cache_read: 0.04 },
     "deepseek/deepseek-r1":        { input: 0.55, output: 2.19, cache_read: 0.14 },
 };

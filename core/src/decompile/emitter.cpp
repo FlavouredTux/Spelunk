@@ -700,6 +700,11 @@ struct Emitter {
     // Self-arg slots (a1..aN) known to flow into a libc char* parameter.
     // Populated by infer_charp_args(); consumed by the header builder.
     std::array<bool, kMaxAbiIntArgs> charp_arg = {};
+    // Stack-slot offsets (per stack_offset()) whose address has been
+    // observed flowing into a libc char* parameter. The local-decl
+    // emitter renders these as `char <name>[N]` instead of the default
+    // `u64 <name>[N/8]` recovered from access widths alone.
+    std::set<i64> charp_local_slots;
 
     // Mach-O Obj-C method table, keyed by IMP address. Populated lazily in
     // PseudoCEmitter::emit when the binary carries __objc_classlist; used
@@ -880,8 +885,21 @@ struct Emitter {
                     if (!have_info) { args.clear(); continue; }
                     for (std::size_t i = 0; i < args.size() && i < callee_charp.size(); ++i) {
                         if (!callee_charp[i]) continue;
-                        auto slot = trace_to_self_arg_slot(args[i]);
-                        if (slot && *slot < charp_arg.size()) charp_arg[*slot] = true;
+                        if (auto slot = trace_to_self_arg_slot(args[i]);
+                            slot && *slot < charp_arg.size()) {
+                            charp_arg[*slot] = true;
+                        }
+                        // Stack-local char* propagation: a `&local_X`
+                        // value passed into a char*-taking parameter
+                        // tells us that local_X is the underlying buffer.
+                        // Override its frame-layout type so the local
+                        // declaration emits as `char local_X[N]` instead
+                        // of `u64 local_X[N/8]`. Catches fgets/strcpy/
+                        // strcmp buffers that ember would otherwise leave
+                        // as opaque u64 arrays.
+                        if (auto off = stack_offset(args[i]); off) {
+                            charp_local_slots.insert(*off);
+                        }
                     }
                     args.clear();
                     continue;
@@ -3809,17 +3827,28 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     for (const auto& [_, slot] : e.frame_layout.slots) {
         if (slot.name.empty()) continue;
         if (body_buf.find(slot.name) == std::string::npos) continue;
-        std::string ty = slot.type_override.empty()
-            ? std::string(c_type_name(slot.type))
-            : slot.type_override;
+        // char* type propagation overrides the access-width-derived type
+        // when an inferred libc-char* call observed `&local_X` flowing in.
+        const bool charp = slot.type_override.empty() &&
+                           e.charp_local_slots.contains(slot.offset);
+        std::string ty;
+        u32 elem_size = slot.size_bytes;
+        if (!slot.type_override.empty()) {
+            ty = slot.type_override;
+        } else if (charp) {
+            ty = "char";
+            elem_size = 1;
+        } else {
+            ty = std::string(c_type_name(slot.type));
+        }
         std::string suffix;
-        if (slot.type_override.empty() && slot.size_bytes > 0) {
+        if (slot.type_override.empty() && elem_size > 0) {
             if (auto next_off = next_slot_offset(slot.offset)) {
                 const i64 span = *next_off - slot.offset;
                 if (span > 0 &&
-                    static_cast<u32>(span) > slot.size_bytes &&
-                    span % slot.size_bytes == 0) {
-                    const u32 n = static_cast<u32>(span) / slot.size_bytes;
+                    static_cast<u32>(span) > elem_size &&
+                    span % elem_size == 0) {
+                    const u32 n = static_cast<u32>(span) / elem_size;
                     suffix = std::format("[{}]", n);
                 }
             }

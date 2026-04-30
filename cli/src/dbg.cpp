@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <print>
 #include <set>
 #include <sstream>
@@ -129,6 +130,12 @@ bool print_event(const debug::Event& ev, const ReplState& rs) {
             std::println("Thread {} exited (code={})", e.tid, e.code);
         } else if constexpr (std::is_same_v<T, debug::EvImageLoaded>) {
             std::println("Image loaded at {}", fmt_addr(e.base));
+        } else if constexpr (std::is_same_v<T, debug::EvExec>) {
+            // wait_and_print intercepts EvExec for the re-arm path;
+            // this branch only fires if some other caller routes the
+            // event through print_event directly.
+            std::println("execve at PC {}{} in thread {}",
+                         fmt_addr(e.pc), sym_at(e.pc), e.tid);
         } else if constexpr (std::is_same_v<T, debug::EvExited>) {
             std::println("Process exited (code={})", e.code);
             return true;
@@ -260,6 +267,16 @@ struct AuxBin {
     std::optional<addr_t> manual_base;
 };
 
+// Persisted across exec(2): the original spec text the user typed
+// for each active breakpoint / watchpoint, so we can re-resolve the
+// (possibly new) runtime address in the post-exec image and re-arm
+// without manual book-keeping. `spec` is whatever string went into
+// `b` / `watch` — symbol, hex literal, `bin:sym`, `sym:line`. The
+// re-arm path runs it back through parse_addr_spec_multi exactly as
+// the original command did.
+struct BpSpec  { std::string spec; };
+struct WpSpec  { std::string spec; u8 size; debug::WatchMode mode; };
+
 struct ReplState {
     std::unique_ptr<debug::Target> tgt;
     debug::ThreadId                current_tid = 0;
@@ -270,6 +287,8 @@ struct ReplState {
     addr_t                         slide       = 0;  // PIE/ASLR slide; 0 for non-PIE
     std::vector<AuxBin>            aux_bins;
     std::vector<std::unique_ptr<Binary>> aux_storage;  // owns runtime-loaded `aux` binaries
+    std::map<debug::BreakpointId, BpSpec> bp_specs;    // for re-arm across exec
+    std::map<debug::WatchpointId, WpSpec> wp_specs;    // for re-arm across exec
     // Static-address (un-slid) PCs at which a fault-class signal
     // (SIGSEGV/SIGBUS/SIGFPE/SIGILL) is known to be recovered by the
     // tracee's own handler. wait_and_print silently forwards the
@@ -642,6 +661,11 @@ void on_target_released(ReplState& rs) {
         aux.slide = 0;
         aux.slide_resolved = false;
     }
+    // Persisted bp/wp specs are scoped to a target's lifetime —
+    // re-arm-across-exec is for the same process that called execve,
+    // not for a fresh `run` after the previous tracee exited.
+    rs.bp_specs.clear();
+    rs.wp_specs.clear();
 }
 
 int cmd_run(ReplState& rs, const Args& args) {
@@ -783,8 +807,19 @@ bool try_break_qualified(ReplState& rs, std::string_view tok) {
 
 int cmd_break(ReplState& rs, std::string_view tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
-    if (try_break_at_pseudo_line(rs, tok)) return 0;
-    if (try_break_qualified(rs, tok)) return 0;
+    if (try_break_at_pseudo_line(rs, tok)) {
+        // try_break_at_pseudo_line owns its own messaging and ID
+        // assignment; persist via the bp table after the fact so
+        // sym:line breakpoints survive exec just like the rest.
+        const auto bps = rs.tgt->breakpoints();
+        if (!bps.empty()) rs.bp_specs[bps.back().id] = BpSpec{std::string{tok}};
+        return 0;
+    }
+    if (try_break_qualified(rs, tok)) {
+        const auto bps = rs.tgt->breakpoints();
+        if (!bps.empty()) rs.bp_specs[bps.back().id] = BpSpec{std::string{tok}};
+        return 0;
+    }
     auto spec = parse_addr_spec_multi(tok, rs);
     if (!spec) {
         std::println(stderr, "ember-dbg: b: '{}' is neither hex, a known symbol, nor sym:line", tok);
@@ -793,6 +828,7 @@ int cmd_break(ReplState& rs, std::string_view tok) {
     const addr_t va = resolve_runtime_multi(*spec);
     auto id = rs.tgt->set_breakpoint(va);
     if (!id) { print_error(id.error()); return 1; }
+    rs.bp_specs[*id] = BpSpec{std::string{tok}};
     if (spec->was_symbol && va != spec->addr) {
         std::println("Breakpoint #{} at {}  ({} +slide {})",
                      *id, fmt_addr(va), fmt_addr(spec->addr),
@@ -821,10 +857,12 @@ int cmd_delete(ReplState& rs, std::string_view tok) {
         std::println(stderr, "ember-dbg: d: bad bp id '{}'", tok);
         return 1;
     }
-    if (auto rv = rs.tgt->clear_breakpoint(static_cast<debug::BreakpointId>(*id)); !rv) {
+    const auto bp_id = static_cast<debug::BreakpointId>(*id);
+    if (auto rv = rs.tgt->clear_breakpoint(bp_id); !rv) {
         print_error(rv.error());
         return 1;
     }
+    rs.bp_specs.erase(bp_id);
     return 0;
 }
 
@@ -932,6 +970,7 @@ int cmd_watch(ReplState& rs, std::span<const std::string> toks) {
     const addr_t va = resolve_runtime_multi(*spec);
     auto id = rs.tgt->set_watchpoint(va, size, mode);
     if (!id) { print_error(id.error()); return 1; }
+    rs.wp_specs[*id] = WpSpec{std::string{toks[0]}, size, mode};
     std::println("Watchpoint #{} at {} (size {}, {})",
                  *id, fmt_addr(va), size,
                  mode == debug::WatchMode::Write ? "write" : "read+write");
@@ -961,11 +1000,130 @@ int cmd_dwp(ReplState& rs, std::string_view tok) {
         std::println(stderr, "ember-dbg: dwp: bad watchpoint id '{}'", tok);
         return 1;
     }
-    if (auto rv = rs.tgt->clear_watchpoint(static_cast<debug::WatchpointId>(*id)); !rv) {
+    const auto wp_id = static_cast<debug::WatchpointId>(*id);
+    if (auto rv = rs.tgt->clear_watchpoint(wp_id); !rv) {
         print_error(rv.error());
         return 1;
     }
+    rs.wp_specs.erase(wp_id);
     return 0;
+}
+
+// Persist breakpoints / watchpoints across exec(2). The kernel
+// cleared every int3 byte and every DR slot when it replaced the
+// address space; we rebuild the equivalent set against the new
+// image by re-running each saved spec through the same parser the
+// original `b` / `watch` command used. Specs that no longer
+// resolve (the bin they referenced isn't in the new image) drop
+// silently with a stderr note — better than silently leaving them
+// armed against a dead address space.
+//
+// Owning storage for a freshly-loaded post-exec primary binary.
+// `rs.bin` is a non-owning pointer; for the launch path the owner
+// lives in main(), but after exec we own a replacement here so the
+// pointer remains valid for the rest of the session. Keeping it
+// file-scope (rather than in ReplState) avoids threading through
+// every callsite that already has rs.bin captured by ref.
+std::unique_ptr<Binary> g_post_exec_bin;
+
+void rearm_after_exec(ReplState& rs) {
+    rs.tgt->clear_all_after_exec();
+
+    // Did the kernel exec into a different binary? Read /proc/pid/exe
+    // (kernel updates this on every exec) and reload if the path
+    // changed. Symbol-keyed bp/wp specs need the new binary's symbol
+    // table or they'd resolve against the dead parent's addresses.
+    char proc_exe[64];
+    std::snprintf(proc_exe, sizeof proc_exe, "/proc/%u/exe", rs.tgt->pid());
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (auto target_path = fs::read_symlink(proc_exe, ec); !ec) {
+        const std::string new_path = target_path.string();
+        const std::string old_canon = [&] {
+            std::error_code e;
+            auto p = fs::canonical(rs.bin_path, e);
+            return e ? rs.bin_path : p.string();
+        }();
+        if (new_path != old_canon) {
+            if (auto reloaded = ember::load_binary(new_path); reloaded) {
+                g_post_exec_bin = std::move(*reloaded);
+                rs.bin            = g_post_exec_bin.get();
+                rs.bin_path       = new_path;
+                rs.bin_short_name = short_name_for(new_path);
+                std::println("exec into new binary: {} (primary reloaded)", new_path);
+            } else {
+                std::println(stderr,
+                    "ember-dbg: re-arm: failed to reload new primary {}: {}",
+                    new_path, reloaded.error().message);
+            }
+        }
+    }
+
+    // Recompute slides for the new mapping. Primary first; aux next
+    // (each bin's runtime base may have moved or vanished entirely).
+    rs.slide = (rs.bin && !rs.bin_path.empty())
+        ? compute_slide(*rs.tgt, *rs.bin, rs.bin_path) : 0;
+    for (auto& aux : rs.aux_bins) {
+        if (auto s = compute_aux_slide(*rs.tgt, aux); s) {
+            aux.slide = *s;
+            aux.slide_resolved = true;
+        } else {
+            aux.slide = 0;
+            aux.slide_resolved = false;
+        }
+    }
+
+    auto saved_bps = std::move(rs.bp_specs);
+    auto saved_wps = std::move(rs.wp_specs);
+    rs.bp_specs.clear();
+    rs.wp_specs.clear();
+
+    std::size_t bp_kept = 0, bp_lost = 0;
+    for (const auto& [_, desc] : saved_bps) {
+        auto spec = parse_addr_spec_multi(desc.spec, rs);
+        if (!spec) {
+            std::println(stderr,
+                "ember-dbg: re-arm: bp '{}' no longer resolves; dropped", desc.spec);
+            ++bp_lost;
+            continue;
+        }
+        const addr_t va = resolve_runtime_multi(*spec);
+        auto id = rs.tgt->set_breakpoint(va);
+        if (!id) {
+            std::println(stderr,
+                "ember-dbg: re-arm: bp '{}' at {}: {}", desc.spec,
+                fmt_addr(va), id.error().message);
+            ++bp_lost;
+            continue;
+        }
+        rs.bp_specs[*id] = desc;
+        ++bp_kept;
+    }
+    std::size_t wp_kept = 0, wp_lost = 0;
+    for (const auto& [_, desc] : saved_wps) {
+        auto spec = parse_addr_spec_multi(desc.spec, rs);
+        if (!spec) {
+            std::println(stderr,
+                "ember-dbg: re-arm: wp '{}' no longer resolves; dropped", desc.spec);
+            ++wp_lost;
+            continue;
+        }
+        const addr_t va = resolve_runtime_multi(*spec);
+        auto id = rs.tgt->set_watchpoint(va, desc.size, desc.mode);
+        if (!id) {
+            std::println(stderr,
+                "ember-dbg: re-arm: wp '{}' at {}: {}", desc.spec,
+                fmt_addr(va), id.error().message);
+            ++wp_lost;
+            continue;
+        }
+        rs.wp_specs[*id] = desc;
+        ++wp_kept;
+    }
+    if (bp_kept || wp_kept || bp_lost || wp_lost) {
+        std::println("Re-armed across exec: {} bp ({} dropped), {} wp ({} dropped).",
+                     bp_kept, bp_lost, wp_kept, wp_lost);
+    }
 }
 
 bool wait_and_print(ReplState& rs) {
@@ -994,6 +1152,18 @@ bool wait_and_print(ReplState& rs) {
                     continue;
                 }
             }
+        }
+
+        // exec(2) wiped the address space. Re-arm every persisted
+        // bp/wp against the new image before handing control back
+        // to the user, and surface a single line of context so the
+        // user sees the transition. The thread is paused at the new
+        // entry; the user can `c` to actually run it.
+        if (auto* ex = std::get_if<debug::EvExec>(&*ev); ex) {
+            rearm_after_exec(rs);
+            std::println("execve completed; tracee paused at new entry {}{} in thread {}",
+                         fmt_addr(ex->pc), sym_at_runtime(ex->pc, rs), ex->tid);
+            return false;
         }
 
         if (print_event(*ev, rs)) {

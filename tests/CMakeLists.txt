@@ -193,6 +193,11 @@ ember_build_fixture(dbg_target_pie OPT "-O0" PIE SRC "dbg_target.c")
 # call to dbg_marker doesn't preserve RBP. The .eh_frame unwinder
 # must still produce a multi-frame trace.
 ember_build_fixture(dbg_target_ofp OPT "-O2" FP "omit" SRC "dbg_target.c")
+# Parent/child pair for the exec-persistence smoke test. -O0 keeps
+# preexec_marker / child_writer as real symbols so the test can
+# anchor breakpoints by name.
+ember_build_fixture(dbg_exec_parent OPT "-O0")
+ember_build_fixture(dbg_exec_child  OPT "-O0")
 
 # Debugger smoke test: launches the dbg_target fixture under the
 # Linux ptrace backend, sets a breakpoint at `dbg_marker`, asserts
@@ -218,6 +223,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_dependencies(ember_dbg_eh_unwind_test ember_fixture_dbg_target_ofp)
     add_test(NAME dbg_eh_unwind
              COMMAND ember_dbg_eh_unwind_test "${EMBER_FIXTURE_dbg_target_ofp_PATH}")
+
+    # Persisted breakpoints/watchpoints across exec(2). Parent arms a
+    # write-watch on `marker`, execve's into the child, expects the
+    # watch to fire on the child's child_writer store.
+    add_executable(ember_dbg_exec_persist_test dbg_exec_persist_test.cpp)
+    target_link_libraries(ember_dbg_exec_persist_test
+        PRIVATE ember::core ember::flags)
+    add_dependencies(ember_dbg_exec_persist_test
+        ember_fixture_dbg_exec_parent ember_fixture_dbg_exec_child)
+    add_test(NAME dbg_exec_persist
+             COMMAND ember_dbg_exec_persist_test
+                     "${EMBER_FIXTURE_dbg_exec_parent_PATH}"
+                     "${EMBER_FIXTURE_dbg_exec_child_PATH}")
 endif()
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by

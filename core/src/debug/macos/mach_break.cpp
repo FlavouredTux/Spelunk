@@ -105,4 +105,8 @@ Result<void> MachOTarget::set_syscall_catch(bool /*all*/, std::span<const u32> /
 
 Result<void> MachOTarget::clear_syscall_catch() { return {}; }
 
+void MachOTarget::clear_all_after_exec() {
+    bps_.clear();
+}
+
 }  // namespace ember::debug::mach_

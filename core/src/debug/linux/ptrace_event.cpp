@@ -199,10 +199,13 @@ Result<Event> LinuxTarget::wait_event() {
                 continue;
             }
             if (eventcode == PTRACE_EVENT_EXEC) {
-                if (::ptrace(PTRACE_CONT, kt, nullptr, nullptr) == 0) {
-                    ts.paused = false;
-                }
-                return Event{EvImageLoaded{0}};
+                // Tracee called execve. Old address space is gone; the
+                // kernel cleared DR0..DR7 and our int3 patches went
+                // with the previous mapping. Leave the thread paused
+                // so the caller can drop its bp/wp table via
+                // clear_all_after_exec(), recompute slides on the new
+                // mapping, and re-arm whatever it wants persisted.
+                return Event{EvExec{tid, read_rip(kt)}};
             }
             if (eventcode == PTRACE_EVENT_EXIT) {
                 // Thread is on its way out; resume so it can finish and

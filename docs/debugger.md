@@ -275,6 +275,38 @@ watchpoints. With a non-empty filter, sites whose `orig_rax` doesn't
 match the user's set are silently re-issued as `PTRACE_SYSCALL` —
 the user only sees the syscalls they asked for.
 
+## Persistence across exec(2)
+
+Breakpoints and watchpoints survive `execve`. The kernel cleared
+every int3 byte and every DR slot when it replaced the address
+space; ember replays each one against the new image, re-resolving
+the original spec text the user typed (`sub_b7410`,
+`libloader:0x4de8`, `marker`, etc.) so a watch by symbol picks up
+the new VA automatically:
+
+```
+(ember) watch marker w 8
+Watchpoint #1 at 0x0000000000404038 (size 8, write)
+(ember) c
+parent: marker=aaaaaaaaaaaaaaaa, about to execve child
+exec into new binary: /path/to/child (primary reloaded)
+Re-armed across exec: 0 bp (1 dropped), 1 wp (0 dropped).
+execve completed; tracee paused at new entry … in thread …
+(ember) c
+Watchpoint #2 (DR0) hit: data 0x0000000000404018 touched at PC
+                         0x0000000000401143 <child_writer+0x15> in thread …
+```
+
+Specs that no longer resolve (the symbol they referenced isn't in
+the new image) drop with a one-line stderr note rather than re-arming
+against stale memory. If `execve` switched to a different binary
+than the one the debugger was launched against, the new primary is
+loaded automatically (read from `/proc/<pid>/exe`) so subsequent
+symbol lookups go through the right symbol table.
+
+The thread is paused at the new entry on `EvExec` so the user can
+inspect or set additional breakpoints before the new program runs.
+
 ## Limits
 
 - macOS backend works for process control, memory, registers,

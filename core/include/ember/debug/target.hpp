@@ -58,6 +58,14 @@ public:
     [[nodiscard]] virtual Result<void>           clear_breakpoint(BreakpointId id)       = 0;
     [[nodiscard]] virtual std::vector<Breakpoint> breakpoints() const                    = 0;
 
+    // Drop all kernel-side breakpoint / watchpoint state without
+    // attempting to restore the original instruction byte. Used after
+    // PTRACE_EVENT_EXEC where the previous address space is gone and
+    // the int3 patches went with it; touching the recorded VAs would
+    // either fail or, worse, corrupt unrelated bytes in the new image
+    // that happened to land at the same address.
+    virtual void clear_all_after_exec() = 0;
+
     // Hardware data watchpoints (DR0..DR3 on x86; up to 4 active).
     // size must be 1, 2, 4, or 8; addr must be aligned to size.
     [[nodiscard]] virtual Result<WatchpointId>    set_watchpoint  (addr_t va, u8 size, WatchMode mode) = 0;

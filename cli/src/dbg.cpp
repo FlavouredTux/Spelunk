@@ -74,13 +74,19 @@ std::string fmt_signal(int sig) {
     }
 }
 
-// Try a single (bin, slide) pair: un-slide `runtime_pc` and look for
-// a symbol at that exact static address. Returns " <name>" or "".
+// Try a single (bin, slide) pair: un-slide `runtime_pc` and label it.
+// Exact symbol match → " <name>". Otherwise consult containing_function
+// so non-entry PCs (return addresses, mid-body breakpoints, scavenged
+// frames) still render as " <name+0xOFFSET>" instead of naked hex.
+// Returns "" only when no Binary covers the PC.
 std::string sym_at_in_bin(addr_t runtime_pc, const Binary* bin, addr_t slide) {
     if (!bin) return {};
     const addr_t static_pc = runtime_pc - slide;
     for (const auto& s : bin->symbols()) {
         if (s.addr == static_pc) return " <" + s.name + ">";
+    }
+    if (auto cf = ember::containing_function(*bin, static_pc); cf) {
+        return std::format(" <{}+{:#x}>", cf->name, cf->offset_within);
     }
     return {};
 }
@@ -1264,12 +1270,43 @@ int cmd_bt(ReplState& rs) {
         if (rbp->size() > frames.size()) frames = std::move(*rbp);
     }
 
+    // Scavenged frames: when the structured unwind dies after one or
+    // two frames (Rust panic chains, CFF, hand-rolled asm without
+    // .eh_frame), scan the stack for qwords whose predecessor byte
+    // is a `call` instruction inside a known function. Order is not
+    // guaranteed; the user gets the names anyway. Skip when the
+    // structured unwind already reaches deep enough that scavenged
+    // hits would just be noise.
+    constexpr std::size_t kScavengeThreshold = 3;
+    if (frames.size() < kScavengeThreshold) {
+        std::vector<debug::BinarySlide> bins;
+        bins.reserve(1 + rs.aux_bins.size());
+        if (rs.bin) bins.push_back({rs.bin, rs.slide});
+        for (const auto& aux : rs.aux_bins) {
+            if (aux.slide_resolved) bins.push_back({aux.bin, aux.slide});
+        }
+        if (!bins.empty()) {
+            if (auto sc = debug::unwind_scavenge(*rs.tgt, rs.current_tid,
+                                                 std::span<const debug::BinarySlide>(bins));
+                sc && !sc->empty()) {
+                std::set<addr_t> already;
+                for (const auto& f : frames) already.insert(f.pc);
+                for (auto& f : *sc) {
+                    if (already.contains(f.pc)) continue;
+                    frames.push_back(f);
+                    already.insert(f.pc);
+                }
+            }
+        }
+    }
+
     int idx = 0;
     for (const auto& f : frames) {
-        std::println("#{:<2} {}{}", idx++, fmt_addr(f.pc),
-                     sym_at_runtime(f.pc, rs));
+        std::println("#{:<2} {}{}{}", idx++, fmt_addr(f.pc),
+                     sym_at_runtime(f.pc, rs),
+                     f.scavenged ? "  *scavenged*" : "");
     }
-    if (used_eh) std::println("  (via .eh_frame)");
+    if (used_eh) std::println("  (via .eh_frame; *scavenged* frames are best-effort)");
     return 0;
 }
 

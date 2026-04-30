@@ -58,6 +58,7 @@ add_library(ember_core STATIC
     src/debug/target.cpp
     src/debug/unwind_rbp.cpp
     src/debug/unwind_eh.cpp
+    src/debug/unwind_scavenge.cpp
 )
 add_library(ember::core ALIAS ember_core)
 

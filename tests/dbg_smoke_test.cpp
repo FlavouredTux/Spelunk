@@ -10,10 +10,12 @@
 #include <utility>
 #include <variant>
 
+#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/debug/event.hpp>
 #include <ember/debug/target.hpp>
+#include <ember/debug/unwind.hpp>
 
 #define CHECK(cond, msg)                                                   \
     do {                                                                   \
@@ -144,6 +146,37 @@ int main(int argc, char** argv) {
         }
         CHECK(t->write_mem(scratch, std::span<const std::byte>{original}).has_value(),
               "write_mem restore");
+    }
+
+    // Scavenge unwinder: read raw stack qwords and identify the ones
+    // whose predecessor byte is a `call` inside a known function. We
+    // are parked inside dbg_marker; main's return-from-call address
+    // (0x401122 in the non-PIE fixture) MUST be on the stack and
+    // MUST satisfy both filters. Use the `main` symbol's extent
+    // directly to check rather than going through containing_function
+    // — CFG-discovered sub_* synthesised on a non-entry block boundary
+    // can otherwise out-rank the real symbol in the binary search.
+    {
+        const auto* main_sym = (*bin)->find_by_name("main");
+        CHECK(main_sym != nullptr && main_sym->size > 0,
+              "main symbol with size");
+        const ember::addr_t main_lo = main_sym->addr;
+        const ember::addr_t main_hi = main_sym->addr + main_sym->size;
+
+        const ember::debug::BinarySlide bs{(*bin).get(), slide};
+        std::span<const ember::debug::BinarySlide> bins{&bs, 1};
+        auto sc = ember::debug::unwind_scavenge(*t, t->threads().front(), bins);
+        CHECK(sc.has_value(),                       "unwind_scavenge");
+        bool found = false;
+        for (const auto& f : *sc) {
+            if (!f.scavenged) continue;
+            const ember::addr_t static_pc = f.pc - slide;
+            if (static_pc >= main_lo && static_pc < main_hi) {
+                found = true;
+                break;
+            }
+        }
+        CHECK(found,                                "scavenge surfaces a frame inside main()");
     }
 
     // Hardware watchpoint round-trip — exercises the DR0..DR3 path.

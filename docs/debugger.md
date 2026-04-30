@@ -169,6 +169,37 @@ stripped). Without CFI ember falls back to RBP walking, which is
 correct for `-fno-omit-frame-pointer` code and degrades gracefully on
 the rest. The choice is automatic per-call.
 
+When CFI + RBP-walk together produce fewer than three frames (Rust
+abort-shim chains, control-flow-flattened code, hand-rolled assembler
+that doesn't carry CFI), `bt` falls through to a **scavenged unwinder**:
+it reads up to 256 qwords from RSP and surfaces every value that
+satisfies *both* checks —
+
+1. The address falls inside a known function in one of the loaded
+   Binaries (primary or aux).
+2. The byte immediately before that address decodes as a `call`
+   instruction.
+
+Together those filters kill the bulk of false positives a naïve scan
+would surface; what's left is the names you couldn't see otherwise.
+The scavenged frames render with a `*scavenged*` suffix so it's
+obvious they're best-effort, and the order isn't necessarily
+caller→callee:
+
+```
+(ember) bt
+#0  0x000055...  <fn_a+0x40>
+#1  0x000055...  <__rust_start_panic+0x18>
+#2  0x000055...  <fn_b+0x80>            *scavenged*
+#3  0x000055...  <abort_internal+0x12>  *scavenged*
+  (via .eh_frame; *scavenged* frames are best-effort)
+```
+
+All `bt` frames now render as `func+0xOFFSET` rather than naked hex
+when the PC is inside a known function but not at the entry — true
+for return addresses, mid-body breakpoints, and every scavenged
+candidate. Pure unknown PCs stay bare so the user can see them.
+
 ## Threads
 
 Multi-threaded targets get one event per thread on stops. `threads`

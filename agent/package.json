@@ -1,0 +1,24 @@
+{
+  "name": "ember-agent",
+  "version": "0.1.0",
+  "description": "Multi-agent reverse-engineering harness for ember",
+  "type": "module",
+  "bin": {
+    "ember-agent": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@assistant-ai/sdk": "^0.40.0",
+    "openai": "^4.80.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

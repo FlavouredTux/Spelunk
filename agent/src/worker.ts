@@ -123,14 +123,41 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
             max_tokens: 4096,
         };
 
-        let resp;
-        try {
-            resp = await llm.chat(req);
-        } catch (e) {
-            const err = e instanceof Error ? e.message : String(e);
-            emit({ kind: "error", phase: "chat", err });
-            throw e;
+        // Transient-error retry. Providers (OpenRouter especially)
+        // intermittently return 429s, 5xx wrapped as 200, or empty-
+        // choices bodies under load — losing one whole worker to a
+        // 1.5s blip is bad value. Two retries with exponential
+        // backoff catch ~95% of the transient class without making
+        // permanent failures slow.
+        let resp: Awaited<ReturnType<typeof llm.chat>> | null = null;
+        let lastErr: unknown = null;
+        for (let attempt = 0; attempt < 3; ++attempt) {
+            try {
+                resp = await llm.chat(req);
+                break;
+            } catch (e) {
+                lastErr = e;
+                const msg = e instanceof Error ? e.message : String(e);
+                const transient =
+                    msg.includes("no choices") ||
+                    msg.includes("rate limit") ||
+                    msg.includes("rate_limit") ||
+                    msg.includes("429") ||
+                    msg.includes("500") || msg.includes("502") ||
+                    msg.includes("503") || msg.includes("504") ||
+                    msg.includes("529") ||
+                    msg.includes("ETIMEDOUT") ||
+                    msg.includes("ECONNRESET");
+                if (!transient || attempt === 2) {
+                    emit({ kind: "error", phase: "chat", err: msg });
+                    throw e;
+                }
+                const delay = attempt === 0 ? 2000 : 8000;
+                emit({ kind: "retry", phase: "chat", attempt: attempt + 1, delay_ms: delay, err: msg });
+                await new Promise((r) => setTimeout(r, delay));
+            }
         }
+        if (!resp) throw lastErr ?? new Error("chat: no response after retries");
         addUsage(resp.usage);
         emit({
             kind: "turn",

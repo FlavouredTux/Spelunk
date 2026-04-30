@@ -66,6 +66,21 @@ export class OpenAILLM implements LLM {
             ...this.extraBody(req.model),
         } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
 
+        // OpenRouter sometimes returns an error object as a 200-OK
+        // body — `{error: {code, message}}` — instead of a normal
+        // completion shape. Without a guard, resp.choices is
+        // undefined and the next line crashes with the opaque
+        // "Cannot read properties of undefined (reading '0')".
+        // Surface the actual provider message so cascade's worker
+        // rejection log and the agent panel can show *why*.
+        if (!resp.choices || resp.choices.length === 0) {
+            const err = (resp as unknown as { error?: { message?: string; code?: string } }).error;
+            throw new Error(
+                `provider returned no choices (model=${req.model}` +
+                (err ? `, error=${err.code ?? "?"}: ${err.message ?? ""}` : ", body unrecognized") +
+                `)`
+            );
+        }
         const choice = resp.choices[0];
         const content: ContentBlock[] = [];
         if (choice.message.content) {

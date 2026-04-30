@@ -343,7 +343,7 @@ async function cmdCascade(argv: string[]) {
     // Per-round ASCII summary.
     for (const rd of r.rounds) {
         process.stderr.write(
-            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} new=${rd.new_names} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
+            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} ok=${rd.fulfilled} rej=${rd.rejected} new=${rd.new_names} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
         );
     }
     console.log(JSON.stringify(r, null, 2));

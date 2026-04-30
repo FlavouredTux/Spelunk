@@ -85,6 +85,8 @@ export interface RoundStats {
     round: number;
     eligible: number;
     spawned: number;
+    fulfilled: number;            // workers that returned cleanly
+    rejected: number;             // workers that threw (provider 5xx, OOM, etc)
     new_names: number;            // names produced *this round*
     cumulative_named: number;     // running total across all rounds
     cost_usd: number;
@@ -324,9 +326,15 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             });
         });
         const settled = await Promise.allSettled(promises);
+        let fulfilled = 0;
+        let rejected = 0;
         for (const s of settled) {
-            if (s.status === "rejected") {
-                process.stderr.write(`worker rejected: ${s.reason}\n`);
+            if (s.status === "fulfilled") {
+                ++fulfilled;
+            } else {
+                ++rejected;
+                const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
+                process.stderr.write(`cascade: worker rejected: ${reason}\n`);
             }
         }
 
@@ -402,6 +410,8 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             round,
             eligible: eligible.length,
             spawned: batch.length,
+            fulfilled,
+            rejected,
             new_names: after - before,
             cumulative_named: after,
             cost_usd: roundCost,

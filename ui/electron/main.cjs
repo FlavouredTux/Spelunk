@@ -1980,7 +1980,7 @@ ipcMain.handle("agent:listRuns", async () => {
     if (!d.startsWith("r-")) continue;
     const ev = path.join(root, d, "events.jsonl");
     let mtime = 0, turns = 0, kind = "?", role = "?", model = "?", scope = "?", usd = 0;
-    let claimsFiled = 0, forced = false;
+    let claimsFiled = 0, forced = false, binary = "";
     try {
       mtime = require("node:fs").statSync(ev).mtimeMs;
       const events = readJsonl(ev);
@@ -1989,6 +1989,7 @@ ipcMain.handle("agent:listRuns", async () => {
           role = e.role ?? role;
           model = e.model ?? model;
           scope = e.scope ?? scope;
+          if (e.binary) binary = e.binary;   // attached to runs ≥1.0.2
         }
         if (e.kind === "turn") ++turns;
         if (e.tally?.usd != null) usd = e.tally.usd;
@@ -1997,7 +1998,7 @@ ipcMain.handle("agent:listRuns", async () => {
         kind = e.kind;
       }
     } catch { continue; }
-    out.push({ id: d, last: kind, turns, role, model, scope, usd, mtime, claimsFiled, forced });
+    out.push({ id: d, last: kind, turns, role, model, scope, usd, mtime, claimsFiled, forced, binary });
   }
   out.sort((a, b) => b.mtime - a.mtime);
   return out;

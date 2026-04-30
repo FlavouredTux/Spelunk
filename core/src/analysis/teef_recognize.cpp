@@ -119,6 +119,12 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
                 whole_exact_.emplace(whole_by_name_[idx].exact_hash, idx);
             }
             if (addr != 0) idx_by_addr.emplace(addr, idx);
+            // Track first-seen WholeEntry per name. Chunk-vote uses
+            // this to fetch string_hashes for a candidate name without
+            // a name → idx scan. First-seen is fine: across-version
+            // entries for the same name share strings to within a few
+            // edits, so filter compat is preserved.
+            idx_by_name_.try_emplace(whole_by_name_[idx].name, idx);
             ++rows;
         } else if (fields[0] == "S") {
             // S<TAB>addr<TAB>hash1,hash2,...   (TEEF schema v4)
@@ -277,6 +283,41 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         }
     }
     if (votes.empty()) return {};
+
+    // String-anchor filter on chunk-vote candidates. The whole-exact
+    // and whole-jaccard paths already filter via strings_compatible
+    // on each WholeEntry. Chunk-vote operates on names, so we look
+    // up each candidate's parent fn via idx_by_name_ and apply the
+    // same filter. Skips when the parent has no string_hashes (the
+    // filter falls through automatically — strings_compatible
+    // returns true on empty corpus side).
+    // Two-tier filter:
+    //  - strings_compatible (lenient): empty corpus side passes;
+    //    same as whole-exact/whole-jaccard.
+    //  - structural-coincidence guard (strict, chunk-vote only):
+    //    if the query function has substantive strings (≥3) and the
+    //    candidate's parent fn has zero, the chunk-vote match is
+    //    structural coincidence (e.g. Wayland main hitting a
+    //    libstdc++ wide-char template). Drop. Cuts the
+    //    high-volume FP class without touching the recall lane —
+    //    most library fns with shared structure also share at
+    //    least some characteristic strings.
+    if (!qs.empty()) {
+        for (auto it = votes.begin(); it != votes.end(); ) {
+            auto nit = idx_by_name_.find(it->first);
+            if (nit == idx_by_name_.end()) { ++it; continue; }
+            const auto& we = whole_by_name_[nit->second];
+            const bool drop =
+                !strings_compatible(we.string_hashes) ||
+                (qs.size() >= 3 && we.string_hashes.empty());
+            if (drop) {
+                it = votes.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (votes.empty()) return {};
+    }
 
     std::vector<std::pair<std::string, u64>> ranked(votes.begin(), votes.end());
     std::sort(ranked.begin(), ranked.end(),

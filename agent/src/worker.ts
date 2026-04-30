@@ -91,7 +91,8 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
         }
     };
 
-    emit({ kind: "start", role: args.role, model, scope: args.scope, agentId, budget: args.budget });
+    emit({ kind: "start", role: args.role, model, scope: args.scope, agentId,
+           budget: args.budget, binary: args.binary });
 
     const messages: Message[] = [{
         role: "user",
@@ -152,7 +153,26 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
                     emit({ kind: "error", phase: "chat", err: msg });
                     throw e;
                 }
-                const delay = attempt === 0 ? 2000 : 8000;
+                // Honor provider Retry-After header when present.
+                // Both assistant and OpenAI SDKs surface the response
+                // headers as `e.headers`. Header value is either
+                // delta-seconds or an HTTP-date; we only handle
+                // delta-seconds since that's what every provider we
+                // route through actually emits. Bound to [1s, 60s] so
+                // a hostile/malformed value can't stall us forever.
+                let delay = attempt === 0 ? 2000 : 8000;
+                const headers = (e as { headers?: Record<string, string> | Headers })?.headers;
+                if (headers) {
+                    const raw = headers instanceof Headers
+                        ? headers.get("retry-after")
+                        : (headers["retry-after"] ?? headers["Retry-After"]);
+                    if (raw) {
+                        const seconds = parseFloat(String(raw));
+                        if (Number.isFinite(seconds) && seconds > 0) {
+                            delay = Math.max(1000, Math.min(60_000, Math.floor(seconds * 1000)));
+                        }
+                    }
+                }
                 emit({ kind: "retry", phase: "chat", attempt: attempt + 1, delay_ms: delay, err: msg });
                 await new Promise((r) => setTimeout(r, delay));
             }

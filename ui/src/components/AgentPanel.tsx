@@ -40,6 +40,7 @@ type RunSummary = {
     usd: number; mtime: number;
     claimsFiled?: number;       // 0 = wasted run (context-only)
     forced?: boolean;            // worker had to be nudged with a force_claim message
+    binary?: string;             // populated for workers ≥1.0.2; empty for older runs
 };
 
 const ROLE_COLOR: Record<string, string> = {
@@ -79,7 +80,7 @@ export function AgentPanel(props: {
     onClose: () => void;
 }) {
     const [intel, setIntel]   = useState<IntelView>({ entries: [], view: [] });
-    const [runs, setRuns]     = useState<RunSummary[]>([]);
+    const [rawRuns, setRuns]  = useState<RunSummary[]>([]);
     const [tailEvents, setTailEvents] = useState<Array<Record<string, any>>>([]);
     const [activeRun, setActiveRun]   = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
@@ -112,6 +113,17 @@ export function AgentPanel(props: {
         const h = setInterval(refresh, 2000);
         return () => { alive = false; clearInterval(h); };
     }, [props.binaryPath, activeRun]);
+
+    // Filter runs by current binary. Runs ≥1.0.2 emit `binary` in
+    // their start event so we can filter cleanly. Older runs (no
+    // `binary` field) are kept visible to avoid losing history during
+    // the upgrade window — they'll naturally age out as new runs
+    // accumulate. Empty binaryPath shows everything (panel opened
+    // without a binary loaded).
+    const runs = useMemo(() => {
+        if (!props.binaryPath) return rawRuns;
+        return rawRuns.filter((r) => !r.binary || r.binary === props.binaryPath);
+    }, [rawRuns, props.binaryPath]);
 
     const stats = useMemo(() => {
         const claims = intel.entries.filter((e): e is Claim => e.kind === "claim");

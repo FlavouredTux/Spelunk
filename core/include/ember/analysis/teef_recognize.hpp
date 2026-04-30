@@ -100,6 +100,10 @@ private:
     std::unordered_multimap<u64, std::size_t>              whole_exact_;   // exact_hash → idx into whole_by_name_
     std::unordered_map<u64, std::size_t>                   whole_popularity_;  // exact_hash → total F-row occurrences (includes sub_*)
     std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;   // chunk_exact_hash → corpus chunks
+    // First WholeEntry index per name. Used by chunk-vote to look up
+    // string_hashes for a candidate's parent fn — chunk-vote operates
+    // on names, but the strings live on the parent WholeEntry.
+    std::unordered_map<std::string, std::size_t>           idx_by_name_;
 
     // Chunks that appear in too many distinct functions are
     // boilerplate. The recognizer drops them from voting.

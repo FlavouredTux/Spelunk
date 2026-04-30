@@ -52,6 +52,7 @@ int run_collisions   (const Args& args, const Binary& b);
 int run_callees      (const Args& args, const Binary& b);
 int run_callees_class(const Args& args, const Binary& b);
 int run_disasm_at    (const Args& args, const Binary& b);
+int run_list_syscalls(const Args& args, const Binary& b);
 
 // The pseudo / struct / ir / cfg / cfg-pseudo / disasm pipeline. Loads
 // annotations, applies any --pat sigs, runs IPA / EH / indirect-call

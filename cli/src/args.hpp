@@ -26,6 +26,7 @@ struct Args {
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at
+    std::string list_syscalls;      // --list-syscalls VA: walk fn @ VA, report each syscall site (file_offset + nr if known)
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic

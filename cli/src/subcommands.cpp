@@ -26,6 +26,7 @@
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/sigs.hpp>
+#include <ember/analysis/syscalls.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/annotations.hpp>
@@ -641,6 +642,34 @@ int run_disasm_at(const Args& args, const Binary& b) {
         }
     }
     std::print("{}", out);
+    return EXIT_SUCCESS;
+}
+
+int run_list_syscalls(const Args& args, const Binary& b) {
+    // Resolve target — accept symbol-by-name (`-s NAME`-style strings),
+    // hex VA, or `sub_<hex>`. The address is the function entry the
+    // syscall walker starts decoding from; mid-function VAs get
+    // rebound to the containing function's start, same as `-p`.
+    auto win = resolve_function(b, args.list_syscalls);
+    if (!win) return EXIT_FAILURE;  // resolve_function already printed
+
+    auto sites = analyze_syscalls(b, win->start);
+    // Format: TSV `<file_offset>\t<va>\t<nr>\t<name>` per site, with
+    // `?` for unresolved nr / name. file_offset is what you `dd
+    // skip=…` to the binary to land on the syscall byte; va is the
+    // runtime address; nr is the resolved syscall number; name is
+    // the Linux x86-64 syscall name when nr matched the table.
+    for (const auto& s : sites) {
+        std::print("{:#x}\t{:#x}\t",
+                   static_cast<unsigned long long>(s.file_offset),
+                   static_cast<unsigned long long>(s.va));
+        if (s.syscall_nr) {
+            std::print("{}\t", *s.syscall_nr);
+        } else {
+            std::print("?\t");
+        }
+        std::print("{}\n", s.name.empty() ? std::string{"?"} : s.name);
+    }
     return EXIT_SUCCESS;
 }
 

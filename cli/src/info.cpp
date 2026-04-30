@@ -100,6 +100,10 @@ void print_help() {
     std::println("      --callees-class NAME  JSON: {{slot_N: [callees]}} for every vfn of an RTTI class");
     std::println("      --json           machine-readable output for --callees / --callees-class");
     std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns; --count N to override)");
+    std::println("      --list-syscalls VA  walk the function at VA, report each `syscall` site as");
+    std::println("                       TSV (file_offset, va, nr, name). Traces a recent constant");
+    std::println("                       write to rax/eax to resolve the number; unresolved sites");
+    std::println("                       still surface, with `?` for nr/name. Linux x86-64 names.");
     std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
     std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");

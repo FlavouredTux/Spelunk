@@ -197,6 +197,7 @@ int main(int argc, char** argv) {
     if (!args.callees.empty())   return run_callees(args, b);
     if (!args.callees_class.empty()) return run_callees_class(args, b);
     if (!args.disasm_at.empty()) return run_disasm_at(args, b);
+    if (!args.list_syscalls.empty()) return run_list_syscalls(args, b);
     if (args.strings)            return run_strings(args, b);
     if (args.fingerprints)       return run_fingerprints(args, b);
     if (args.objc_names)         return run_objc_names(args, b);

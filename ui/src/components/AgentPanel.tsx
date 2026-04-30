@@ -36,6 +36,8 @@ type RunSummary = {
     id: string; last: string; turns: number;
     role: string; model: string; scope: string;
     usd: number; mtime: number;
+    claimsFiled?: number;       // 0 = wasted run (context-only)
+    forced?: boolean;            // worker had to be nudged with a force_claim message
 };
 
 const ROLE_COLOR: Record<string, string> = {
@@ -119,6 +121,13 @@ export function AgentPanel(props: {
             r.last !== "abort" && r.last !== "error" &&
             r.last !== "budget_exhausted" &&
             Date.now() - r.mtime < 5 * 60_000).length;
+        // Workers that completed (any terminal state) without filing a
+        // claim — the libloader.so failure mode. Surfacing this lets the
+        // user spot bad-faith targets early.
+        const finishedRuns = runs.filter((r) =>
+            r.last === "done" || r.last === "max_turns" ||
+            r.last === "abort" || r.last === "budget_exhausted");
+        const wastedRuns = finishedRuns.filter((r) => (r.claimsFiled ?? 0) === 0).length;
         return {
             claims:     claims.length,
             retracts:   retracts.length,
@@ -128,6 +137,8 @@ export function AgentPanel(props: {
             subjects,
             totalUsd,
             liveRuns,
+            wastedRuns,
+            finishedRuns: finishedRuns.length,
         };
     }, [intel, runs]);
 
@@ -189,6 +200,7 @@ export function AgentPanel(props: {
                 <Stat label="disputed"    value={stats.disputed}    tint={stats.disputed > 0 ? C.red : C.textMuted} hint="needs tiebreaker" />
                 <Stat label="retracts"    value={stats.retracts}    tint={C.textMuted} />
                 <Stat label="live runs"   value={stats.liveRuns}    tint={stats.liveRuns > 0 ? C.accent : C.textMuted} pulse={stats.liveRuns > 0} />
+                <Stat label="wasted runs" value={stats.wastedRuns}   tint={stats.wastedRuns > 0 ? C.red : C.textMuted} hint={`${stats.wastedRuns}/${stats.finishedRuns} ended without a claim`} />
                 <Stat label="swarm spend" value={fmtUsd(stats.totalUsd)} tint={C.yellow} />
             </div>
 
@@ -520,6 +532,15 @@ function RunsColumn(props: {
                                 <div style={{ color: C.textMuted, fontSize: 10, marginTop: 2 }}>
                                     {r.scope} · {r.turns} turns · {fmtUsd(r.usd)} · {fmtAgo(r.mtime)} ago
                                 </div>
+                                {!live && (r.claimsFiled === 0 || r.forced) && (
+                                    <div style={{
+                                        marginTop: 4,
+                                        fontFamily: mono, fontSize: 9.5,
+                                        color: r.claimsFiled === 0 ? C.red : C.yellow,
+                                    }}>
+                                        {r.claimsFiled === 0 ? "✗ no claim filed" : "⚠ forced to claim"}
+                                    </div>
+                                )}
                             </button>
                         );
                     })}

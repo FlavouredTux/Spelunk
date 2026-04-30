@@ -40,7 +40,17 @@ Always cite evidence in the claim. Format examples:
 - "strings: \\"failed to open %s\\", \\"r+b\\" — opens a file for r/w"
 - "callers: log_warn, log_error — this is log_format"
 
-Stop when you've made one claim about the target function (or one note, if you can't name confidently). Don't ramble.`,
+CRITICAL — you MUST file an intel_claim before stopping. Always.
+- If you have strong evidence: predicate="name", confidence ≥0.85
+- If evidence is suggestive but inconclusive: predicate="name", confidence 0.6-0.8
+- If you genuinely cannot name (no strings, anonymous callers, no anchors): predicate="note", confidence 0.3-0.6 with value summarizing what you did learn ("unable to name; calls only sub_* with no semantic anchors; appears to be obfuscated/stripped runtime plumbing")
+
+Budget discipline:
+- Maximum 3 tool-use turns of research, then file. Don't recurse into callees more than 1 level.
+- Going deeper rarely helps — if the immediate context is uninformative, deeper context will be too.
+- A workers that ends without filing a claim is wasted budget. Default to filing a low-confidence note over filing nothing.
+
+Stop after one claim. Don't file multiple claims about the same function.`,
 };
 
 const MAPPER: RoleSpec = {

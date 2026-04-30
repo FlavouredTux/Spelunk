@@ -83,6 +83,15 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
     const tools = ALL_TOOLS.map((t) => t.def);
     const maxTurns = args.maxTurns ?? 30;
 
+    // Track claim filings. Workers that hit max_turns without filing
+    // anything are wasted budget — see the libloader.so finding where
+    // 6 workers spent ~$0.024 collectively on context-gathering and
+    // produced zero claims. After kForceAfter tool-use turns without
+    // a claim, inject a forcing function user message.
+    const kForceAfter = 4;
+    let claimsFiled = 0;
+    let forcedOnce = false;
+
     for (let turn = 0; turn < maxTurns; ++turn) {
         if (tally.usd >= args.budget) {
             emit({ kind: "budget_exhausted", usd: tally.usd, budget: args.budget });
@@ -118,7 +127,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
         messages.push({ role: "assistant", content: resp.content });
 
         if (resp.stop_reason === "end_turn") {
-            emit({ kind: "done", turns: turn + 1, tally });
+            emit({ kind: "done", turns: turn + 1, tally, claims_filed: claimsFiled });
             return;
         }
         if (resp.stop_reason !== "tool_use") {
@@ -136,6 +145,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
                 if (!tool) throw new Error(`unknown tool: ${c.name}`);
                 const out = await tool.execute(c.input, ctx);
                 emit({ kind: "tool_ok", name: c.name, input: c.input, bytes: out.length });
+                if (c.name === "intel_claim") ++claimsFiled;
                 return { type: "tool_result" as const, tool_use_id: c.id, content: out };
             } catch (e) {
                 const err = e instanceof Error ? e.message : String(e);
@@ -149,10 +159,26 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
             }
         }));
 
-        messages.push({ role: "user", content: results });
+        // Forcing function: if we've burned kForceAfter+ tool turns
+        // without filing a claim, append a stern reminder to the user
+        // message. Only fires once per worker — if the model still
+        // refuses, max_turns will cap it.
+        const userBlocks: ContentBlock[] = [...results];
+        if (!forcedOnce && claimsFiled === 0 && turn + 1 >= kForceAfter) {
+            forcedOnce = true;
+            userBlocks.push({
+                type: "text",
+                text: "STOP RESEARCHING. You have used " + (turn + 1) + " tool turns and filed zero claims. " +
+                      "File an intel_claim NOW. If you cannot name confidently, file predicate=\"note\" with " +
+                      "confidence 0.3-0.6 summarizing what you found and why you can't name. Going deeper " +
+                      "will not help — file something on this turn.",
+            });
+            emit({ kind: "force_claim", turn });
+        }
+        messages.push({ role: "user", content: userBlocks });
     }
 
-    emit({ kind: "max_turns", tally });
+    emit({ kind: "max_turns", tally, claims_filed: claimsFiled });
 }
 
 function buildScopeMessage(scope: string, binary: string): string {

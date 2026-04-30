@@ -76,15 +76,18 @@ export async function runassistantCodeWorker(args: WorkerArgs): Promise<void> {
         ? requested.slice("assistant-code/".length) || undefined
         : undefined;
 
-    // Locate the user's assistant Code home. Default to ~/.assistant/, where
-    // the CLI persists OAuth + project state. Override via
-    // EMBER_assistant_HOME so users with multiple installs (e.g. work +
-    // personal) can pick one explicitly.
-    const assistantHome = process.env.EMBER_assistant_HOME ?? join(homedir(), ".assistant");
-    if (!existsSync(join(assistantHome, ".credentials.json"))) {
+    // Locate the user's assistant Code home. The SDK appends ".assistant/" to
+    // $HOME itself, so HOME must be the *parent* of the .assistant directory
+    // (e.g. /home/Gato), not .assistant itself. EMBER_assistant_HOME also points
+    // at the parent — set it when you want the SDK to read creds from a
+    // non-default install (work vs personal).
+    const sdkHome = process.env.EMBER_assistant_HOME ?? homedir();
+    const credsPath = join(sdkHome, ".assistant", ".credentials.json");
+    if (!existsSync(credsPath)) {
         throw new Error(
-            `assistant-code: no credentials at ${assistantHome}/.credentials.json — ` +
-            `run \`assistant\` once to authenticate, or set EMBER_assistant_HOME`);
+            `assistant-code: no credentials at ${credsPath} — ` +
+            `run \`assistant\` once to authenticate, or set EMBER_assistant_HOME ` +
+            `to the directory containing .assistant/`);
     }
 
     const intel = new IntelLog(intelPathFor(args.binary));
@@ -163,7 +166,7 @@ export async function runassistantCodeWorker(args: WorkerArgs): Promise<void> {
                 allowedTools: ALL_TOOLS.map((t) => `mcp__ember__${t.def.name}`),
                 env: {
                     ...process.env,
-                    HOME: assistantHome,                       // SDK reads creds from $HOME/.credentials.json
+                    HOME: sdkHome,                          // SDK reads creds from $HOME/.assistant/.credentials.json
                     assistant_AGENT_SDK_CLIENT_APP: "ember-agent/1.0.1",
                 },
                 // System prompt: append the role's prompt onto the

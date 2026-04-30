@@ -43,11 +43,22 @@ export class EmberDaemon {
         });
     }
 
-    /** Wait for the daemon's "ready" line before sending the first request. */
+    /** Wait for the daemon's "ready" line before sending the first request.
+     *  Times out after 30s — without this the client hangs forever if the
+     *  daemon binary is wedged loading (huge binary + concurrent cache
+     *  contention from a prior orphan, the failure mode that motivated
+     *  PR_SET_PDEATHSIG on the C++ side).
+     */
     private async waitReady(): Promise<void> {
         if (this.ready) return;
         if (this.deadErr) throw this.deadErr;
-        await new Promise<void>((resolve) => this.waitingReady.push(resolve));
+        await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                reject(new Error(`ember --serve handshake timeout (30s) — daemon failed to emit 'ready' line`));
+                this.die(new Error("handshake timeout"));
+            }, 30000);
+            this.waitingReady.push(() => { clearTimeout(timer); resolve(); });
+        });
         if (this.deadErr) throw this.deadErr;
     }
 

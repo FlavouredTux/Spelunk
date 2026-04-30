@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { runWorker } from "./worker.js";
@@ -7,6 +7,39 @@ import { promote } from "./promote.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { EmberDaemon } from "./tools/daemon.js";
 import type { Claim } from "./intel/log.js";
+
+// Belt-and-suspenders alongside PR_SET_PDEATHSIG on the C++ side.
+// SIGKILL'd cascades can leak `ember --serve` orphans (the C++ guard
+// catches normal signals but the kernel can't notify on SIGKILL of
+// the orphan's *grandparent*). Scan procfs for any prior --serve
+// against the same binary, send SIGTERM, give them a moment to
+// flush. If the user explicitly wants to keep an orphan around,
+// they can disable this with EMBER_AGENT_NO_ORPHAN_SCAN=1.
+function killOrphanDaemons(binary: string): number {
+    if (process.env.EMBER_AGENT_NO_ORPHAN_SCAN === "1") return 0;
+    if (process.platform !== "linux") return 0;   // /proc reading is Linux-specific
+    let entries: string[] = [];
+    try { entries = readdirSync("/proc"); } catch { return 0; }
+    let killed = 0;
+    for (const name of entries) {
+        if (!/^\d+$/.test(name)) continue;
+        const pid = parseInt(name, 10);
+        if (pid === process.pid) continue;
+        let cmdline: string;
+        try { cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch { continue; }
+        // cmdline tokens are NUL-separated. Match `ember --serve <binary>`
+        // (or any --serve invocation against this exact binary path).
+        const tokens = cmdline.split("\0").filter(Boolean);
+        const serveIdx = tokens.indexOf("--serve");
+        if (serveIdx < 0) continue;
+        if (tokens[serveIdx + 1] !== binary) continue;
+        try {
+            process.kill(pid, "SIGTERM");
+            ++killed;
+        } catch { /* permission denied or already gone */ }
+    }
+    return killed;
+}
 
 // Anchor Cascade — iterative bottom-up agent naming.
 //
@@ -149,6 +182,18 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
     const intel = new IntelLog(intelPathFor(args.binary));
     const rounds: RoundStats[] = [];
     let totalCost = 0;
+
+    // Sweep orphan daemons before starting our own. A previously
+    // SIGKILL'd cascade can leak an `ember --serve <binary>` that
+    // holds the binary mmap + cache fds and races our fresh daemon's
+    // startup, manifesting as a multi-minute hang at "seeded with N
+    // annotations" with no further progress. The C++ side's
+    // PR_SET_PDEATHSIG covers the parent-died-cleanly case; this
+    // scan catches the orphans that escaped that net.
+    const cleared = killOrphanDaemons(args.binary);
+    if (cleared > 0) {
+        process.stderr.write(`cascade: killed ${cleared} orphan ember --serve daemon(s) for ${args.binary}\n`);
+    }
 
     // One-time setup. Spawn a coordinator daemon for cascade-wide
     // bulk queries (callees_all + future shared analyses). Workers

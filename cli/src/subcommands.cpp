@@ -13,6 +13,11 @@
 #include <map>
 #include <optional>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <sys/prctl.h>
+#include <signal.h>
+#endif
 #include <atomic>
 #include <print>
 #include <set>
@@ -1438,6 +1443,21 @@ Args derive_args(const Args& base) {
 }  // namespace
 
 int run_serve(const Args& base, const Binary& b) {
+    // Bind our lifetime to the parent. If the parent (cascade,
+    // worker, etc.) dies — even SIGKILL — the kernel sends us
+    // SIGTERM, we exit cleanly. Without this the daemon survives
+    // as an orphan and the next cascade attempt either races for
+    // the disk cache with us or — worse — finds itself sharing
+    // mmap/cache state with a defunct sibling. Linux-only; the
+    // BSD/Mach equivalents are kqueue-based and noisier to wire.
+#if defined(__linux__)
+    ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+    // Race: if the parent died between our fork and the prctl,
+    // SIGTERM was missed. Re-check getppid; if it's already 1
+    // (or the subreaper), bail.
+    if (::getppid() == 1) return EXIT_SUCCESS;
+#endif
+
     // Tell the client we're alive. Helps agents detect a stale handle
     // (a previous --serve exited and a new one was spawned).
     std::printf("ready ember-serve v1\n");

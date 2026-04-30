@@ -24,4 +24,25 @@ export class OpenRouterLLM extends OpenAILLM {
     pricing(model: string) {
         return OPENROUTER_PRICING[model] ?? super.pricing(model);
     }
+
+    // OpenRouter routes a single model across many provider hosts. Some hosts
+    // are flaky (silent context truncation, sluggish first-token, occasional
+    // schema-noncompliant tool calls). Pinning the official provider for a
+    // family avoids that — we forfeit a fraction of cost savings for
+    // determinism, which agents need more than humans do.
+    protected extraBody(model: string): Record<string, unknown> {
+        if (model.startsWith("deepseek/")) {
+            return { provider: { order: ["DeepSeek"], allow_fallbacks: false } };
+        }
+        if (model.startsWith("assistant/")) {
+            return { provider: { order: ["assistant"], allow_fallbacks: false } };
+        }
+        if (model.startsWith("openai/")) {
+            return { provider: { order: ["OpenAI"], allow_fallbacks: false } };
+        }
+        if (model.startsWith("google/")) {
+            return { provider: { order: ["Google"], allow_fallbacks: false } };
+        }
+        return {};
+    }
 }

@@ -28,6 +28,10 @@ export class OpenAILLM implements LLM {
 
     name() { return this.providerName; }
 
+    // Hook for subclasses (e.g. OpenRouter) to inject provider-specific
+    // request fields like `provider: { order: [...] }`. Default is none.
+    protected extraBody(_model: string): Record<string, unknown> { return {}; }
+
     pricing(model: string) {
         // USD per 1M tokens. Best-effort defaults for OpenAI-direct models.
         // OpenRouter prices are per-model and would override; for now we
@@ -59,7 +63,8 @@ export class OpenAILLM implements LLM {
             tools: tools.length ? tools : undefined,
             max_tokens: req.max_tokens,
             temperature: req.temperature,
-        });
+            ...this.extraBody(req.model),
+        } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
 
         const choice = resp.choices[0];
         const content: ContentBlock[] = [];

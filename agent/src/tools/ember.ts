@@ -57,7 +57,7 @@ const xrefs: Tool = {
     },
     async execute(input, ctx) {
         const { addr } = input as { addr: string };
-        const out = runEmber(ctx.emberBin, ["--xrefs", "--xref-to", addr, ctx.binary]);
+        const out = runEmber(ctx.emberBin, ["--refs-to", addr, ctx.binary]);
         return clip(out);
     },
 };
@@ -65,7 +65,7 @@ const xrefs: Tool = {
 const strings: Tool = {
     def: {
         name: "ember_strings",
-        description: "List string literals reachable from a function. Use to get semantic hints (error messages, format strings, file paths) about what the function does.",
+        description: "List strings whose xref sites fall within a function's address range. Use to get semantic hints (error messages, format strings, file paths) about what a function does.",
         input_schema: {
             type: "object",
             properties: {
@@ -76,8 +76,28 @@ const strings: Tool = {
     },
     async execute(input, ctx) {
         const { fn } = input as { fn: string };
-        const out = runEmber(ctx.emberBin, ["--strings", "--strings-fn", fn, ctx.binary]);
-        return clip(out);
+        const start = parseInt(fn, 16);
+        // Get the function's extent so we can filter strings by xref site.
+        const cfRaw = runEmber(ctx.emberBin, ["--containing-fn", fn, ctx.binary]);
+        // Output: <entry>\t<size>\t<name>\t<offset>
+        const cf = cfRaw.trim().split("\t");
+        const size = cf.length >= 2 ? parseInt(cf[1], 16) : 0;
+        const end = start + (size || 0x1000);
+
+        const all = runEmber(ctx.emberBin, ["--strings", ctx.binary]);
+        const lines = all.split("\n");
+        const hits: string[] = [];
+        for (const ln of lines) {
+            const parts = ln.split("|");
+            if (parts.length < 3) continue;
+            const xrefs = parts[2].trim();
+            if (!xrefs) continue;
+            for (const x of xrefs.split(",")) {
+                const v = parseInt(x.trim(), 16);
+                if (Number.isFinite(v) && v >= start && v < end) { hits.push(ln); break; }
+            }
+        }
+        return hits.length ? clip(hits.join("\n")) : "(no strings reachable from this fn)";
     },
 };
 
@@ -88,14 +108,14 @@ const decompile: Tool = {
         input_schema: {
             type: "object",
             properties: {
-                fn: { type: "string", description: "Function start address (hex with 0x)" },
+                fn: { type: "string", description: "Function start address (hex with 0x) or symbol name" },
             },
             required: ["fn"],
         },
     },
     async execute(input, ctx) {
         const { fn } = input as { fn: string };
-        const out = runEmber(ctx.emberBin, ["--decompile", "--fn", fn, ctx.binary]);
+        const out = runEmber(ctx.emberBin, ["-p", "-s", fn, ctx.binary]);
         return clip(out, 400);
     },
 };
@@ -103,20 +123,11 @@ const decompile: Tool = {
 const recognize: Tool = {
     def: {
         name: "ember_recognize",
-        description: "Run TEEF library-function recognition on a single function or the whole binary. Returns suggested names with confidence; treat anything ≥0.85 as strong evidence, 0.60-0.85 as a hint.",
-        input_schema: {
-            type: "object",
-            properties: {
-                fn: { type: "string", description: "Optional fn addr; omit for whole-binary sweep" },
-            },
-        },
+        description: "Run TEEF library-function recognition across the whole binary against the configured corpus. Returns suggested names with confidence; treat anything ≥0.85 as strong evidence, 0.60-0.85 as a hint. Output is per-function TSV: addr | current | suggested | confidence | via | [alts]. Filter the output yourself for the function you care about.",
+        input_schema: { type: "object", properties: {} },
     },
-    async execute(input, ctx) {
-        const { fn } = (input as { fn?: string }) ?? {};
-        const args = ["--recognize"];
-        if (fn) args.push("--fn", fn);
-        args.push(ctx.binary);
-        const out = runEmber(ctx.emberBin, args);
+    async execute(_input, ctx) {
+        const out = runEmber(ctx.emberBin, ["--recognize", ctx.binary]);
         return clip(out);
     },
 };
@@ -124,7 +135,7 @@ const recognize: Tool = {
 const callees: Tool = {
     def: {
         name: "ember_callees",
-        description: "List direct callees of a function. Use to understand what a function delegates to before naming it.",
+        description: "List direct/tail/indirect-const callees of a function. Use to understand what a function delegates to before naming it.",
         input_schema: {
             type: "object",
             properties: {
@@ -135,7 +146,7 @@ const callees: Tool = {
     },
     async execute(input, ctx) {
         const { fn } = input as { fn: string };
-        const out = runEmber(ctx.emberBin, ["--call-graph", "--fn", fn, ctx.binary]);
+        const out = runEmber(ctx.emberBin, ["--callees", fn, ctx.binary]);
         return clip(out);
     },
 };

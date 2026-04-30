@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -601,6 +602,29 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
     if (!lifter_r) return out;
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
+
+    // Insn-count gate. VMP / Themida / Enigma protected code expands
+    // every original fn into tens of thousands of junk-injected,
+    // deeply nested regions; TEEF's region-tree walk is roughly
+    // O(insns × region_depth), so a single 50k-insn fn dominates a
+    // parallel matcha sweep for 30+ minutes while the other 11999
+    // matcha fns sit done. Bail before SSA when the lifted IR is
+    // already past the budget — emit an empty `out` so the recognizer
+    // treats the fn as "no fingerprint, fall through to LLM-only
+    // naming". Override via EMBER_TEEF_MAX_INSNS for users who want
+    // to spend the time on a heavily-protected target.
+    static const std::size_t kMaxInsnsPerFn = []() -> std::size_t {
+        if (const char* s = std::getenv("EMBER_TEEF_MAX_INSNS")) {
+            try { return static_cast<std::size_t>(std::stoull(s)); }
+            catch (...) { /* malformed → fall through to default */ }
+        }
+        return 4096;     // a normal fn is ~50–500 insns; 4k handles aggressive inlining
+    }();
+    {
+        std::size_t total = 0;
+        for (const auto& bb : ir_r->blocks) total += bb.insts.size();
+        if (total > kMaxInsnsPerFn) return out;
+    }
 
     const SsaBuilder ssa;
     if (auto rv = ssa.convert(*ir_r); !rv) return out;

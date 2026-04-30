@@ -84,6 +84,10 @@ public:
     [[nodiscard]] Result<void>           clear_breakpoint(BreakpointId id) override;
     [[nodiscard]] std::vector<Breakpoint> breakpoints() const override;
 
+    [[nodiscard]] Result<WatchpointId>    set_watchpoint  (addr_t va, u8 size, WatchMode mode) override;
+    [[nodiscard]] Result<void>            clear_watchpoint(WatchpointId id) override;
+    [[nodiscard]] std::vector<Watchpoint> watchpoints() const override;
+
     [[nodiscard]] Result<void>  step      (ThreadId tid) override;
     [[nodiscard]] Result<void>  cont      ()             override;
     [[nodiscard]] Result<void>  interrupt ()             override;

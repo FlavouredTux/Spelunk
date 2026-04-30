@@ -97,6 +97,10 @@ bool print_event(const debug::Event& ev, const ReplState& rs) {
         if constexpr (std::is_same_v<T, debug::EvBreakpointHit>) {
             std::println("Breakpoint #{} hit at {}{} in thread {}",
                          e.id, fmt_addr(e.pc), sym_at(e.pc), e.tid);
+        } else if constexpr (std::is_same_v<T, debug::EvWatchpointHit>) {
+            std::println("Watchpoint #{} (DR{}) hit: data {} touched at PC {}{} in thread {}",
+                         e.id, e.slot, fmt_addr(e.addr),
+                         fmt_addr(e.pc), sym_at(e.pc), e.tid);
         } else if constexpr (std::is_same_v<T, debug::EvSingleStep>) {
             std::println("Stepped to {}{} in thread {}",
                          fmt_addr(e.pc), sym_at(e.pc), e.tid);
@@ -803,6 +807,77 @@ int cmd_delete(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
+// `watch <addr> [r|w|rw] [size]`. Default mode = rw, default size = 8.
+// Mode `r` is accepted but realised as ReadWrite at the architectural
+// level — x86 has no read-only watchpoint mode. Emit a one-line note
+// so the user knows their `r` request also fires on writes.
+int cmd_watch(ReplState& rs, std::span<const std::string> toks) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    if (toks.empty()) {
+        std::println(stderr,
+            "ember-dbg: watch: usage: watch <addr> [r|w|rw] [size]");
+        return 1;
+    }
+    auto spec = parse_addr_spec_multi(toks[0], rs);
+    if (!spec) {
+        std::println(stderr, "ember-dbg: watch: bad address '{}'", toks[0]);
+        return 1;
+    }
+    debug::WatchMode mode = debug::WatchMode::ReadWrite;
+    bool requested_read_only = false;
+    u8 size = 8;
+    for (std::size_t i = 1; i < toks.size(); ++i) {
+        const auto& t = toks[i];
+        if (t == "r")       { mode = debug::WatchMode::ReadWrite; requested_read_only = true; }
+        else if (t == "w")  { mode = debug::WatchMode::Write; }
+        else if (t == "rw") { mode = debug::WatchMode::ReadWrite; }
+        else if (auto n = parse_int(t); n && (*n == 1 || *n == 2 || *n == 4 || *n == 8)) {
+            size = static_cast<u8>(*n);
+        } else {
+            std::println(stderr,
+                "ember-dbg: watch: unknown mode/size '{}' (expected r|w|rw or 1/2/4/8)", t);
+            return 1;
+        }
+    }
+    const addr_t va = resolve_runtime_multi(*spec);
+    auto id = rs.tgt->set_watchpoint(va, size, mode);
+    if (!id) { print_error(id.error()); return 1; }
+    std::println("Watchpoint #{} at {} (size {}, {})",
+                 *id, fmt_addr(va), size,
+                 mode == debug::WatchMode::Write ? "write" : "read+write");
+    if (requested_read_only) {
+        std::println("note: x86 has no read-only watch mode — armed as read+write "
+                     "(it'll fire on reads as you wanted; it'll also fire on writes).");
+    }
+    return 0;
+}
+
+int cmd_wp_list(ReplState& rs) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    const auto wps = rs.tgt->watchpoints();
+    if (wps.empty()) { std::println("No watchpoints."); return 0; }
+    for (const auto& w : wps) {
+        std::println("  #{:<3} {}  size={}  {}",
+                     w.id, fmt_addr(w.addr), w.size,
+                     w.mode == debug::WatchMode::Write ? "write" : "read+write");
+    }
+    return 0;
+}
+
+int cmd_dwp(ReplState& rs, std::string_view tok) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    auto id = parse_int(tok);
+    if (!id) {
+        std::println(stderr, "ember-dbg: dwp: bad watchpoint id '{}'", tok);
+        return 1;
+    }
+    if (auto rv = rs.tgt->clear_watchpoint(static_cast<debug::WatchpointId>(*id)); !rv) {
+        print_error(rv.error());
+        return 1;
+    }
+    return 0;
+}
+
 bool wait_and_print(ReplState& rs) {
     while (true) {
         auto ev = rs.tgt->wait_event();
@@ -1366,6 +1441,13 @@ void print_help() {
                             or an aux. Useful when both define `main` etc.
   bp                        list breakpoints
   d <id>                    delete a breakpoint
+  watch <addr> [r|w|rw] [N] hardware data watchpoint at <addr>; N=1/2/4/8 byte
+                            window (default 8); default mode rw. `r` is
+                            accepted but armed as rw — x86 has no read-only
+                            mode at the architectural level. Up to 4 watches
+                            active at once (DR0..DR3).
+  wp                        list watchpoints
+  dwp <id>                  delete a watchpoint
   c                         continue all paused threads
   s                         single-step the current thread
   regs [all]                show registers ('all' for x87/SSE/AVX/AVX-512/DR)
@@ -1488,6 +1570,10 @@ int run_debug(const Args& args, const Binary* bin,
                                                                cmd_break(rs, toks[1]);
         else if (cmd == "bp" || cmd == "info-break")           cmd_bp_list(rs);
         else if (cmd == "d"  && toks.size() > 1)               cmd_delete(rs, toks[1]);
+        else if ((cmd == "watch" || cmd == "wp") && toks.size() > 1)
+            cmd_watch(rs, std::span<const std::string>{toks.data() + 1, toks.size() - 1});
+        else if (cmd == "watch" || cmd == "wp")                cmd_wp_list(rs);
+        else if (cmd == "dwp" && toks.size() > 1)              cmd_dwp(rs, toks[1]);
         else if (cmd == "c"  || cmd == "cont")                 cmd_cont(rs);
         else if (cmd == "s"  || cmd == "step")                 cmd_step(rs);
         else if (cmd == "regs")

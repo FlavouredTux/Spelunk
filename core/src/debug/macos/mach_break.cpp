@@ -83,4 +83,19 @@ Result<void> enable_bp(MachOTarget& t, addr_t va) {
     return write_byte(t, va, kInt3);
 }
 
+Result<WatchpointId>
+MachOTarget::set_watchpoint(addr_t /*va*/, u8 /*size*/, WatchMode /*mode*/) {
+    return std::unexpected(Error::not_implemented(
+        "debugger: hardware watchpoints not yet implemented on macOS"));
+}
+
+Result<void> MachOTarget::clear_watchpoint(WatchpointId /*id*/) {
+    return std::unexpected(Error::not_implemented(
+        "debugger: hardware watchpoints not yet implemented on macOS"));
+}
+
+std::vector<Watchpoint> MachOTarget::watchpoints() const {
+    return {};
+}
+
 }  // namespace ember::debug::mach_

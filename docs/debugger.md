@@ -39,6 +39,16 @@ b <addr|sym|sym:line>   set a software breakpoint
 bp                      list breakpoints
 d <id>                  delete a breakpoint
 
+watch <addr> [r|w|rw] [N]
+                        hardware data watchpoint at <addr>; N = 1, 2, 4,
+                        or 8 (default 8) sets the byte window; default
+                        mode is read+write. `r` is accepted but armed
+                        as rw — x86 has no read-only mode at the
+                        architectural level. Up to 4 active watches
+                        (DR0..DR3); cloned threads inherit the set.
+wp                      list watchpoints
+dwp <id>                delete a watchpoint
+
 c                       continue all paused threads
 s                       single-step the current thread
 regs [all]              print registers ('all' for x87/SSE/AVX/AVX-512/DR)
@@ -166,11 +176,45 @@ Internally ember installs a `SIGINT` handler that calls
 `PTRACE_O_EXITKILL` linkage we install for safety would take the
 tracee down on the first Ctrl+C.
 
+## Hardware watchpoints
+
+`watch <addr> [r|w|rw] [N]` arms a CPU debug-register slot to trap on
+data access. The trap fires after a write completes, so the PC at stop
+is the *next* instruction; the watched VA comes from the slot itself
+(reported in the `Watchpoint #N (DR0) hit: data 0x... touched at PC ...`
+event). Use this for the cases breakpoints can't reach:
+
+```
+(ember) watch 0x600820 w 8        # DT_INIT_ARRAY[0]: who zeroes it?
+(ember) c
+Watchpoint #1 (DR0) hit: data 0x0000000000600820 touched at PC ...
+                        in thread ...
+(ember) bt
+#0  0x...   sub_b7410+0x44   <-- the zero-er
+#1  ...
+```
+
+Same trick for the GOT slot of `environ` (catches the env-check),
+the `getenv` PLT thunk (catches first call), or the syscall-instruction
+byte once `rax` reaches the value you care about (`watch <syscall_va>`
+on the literal `0F 05` byte after a `mov rax, 0x3b`).
+
+Limits worth knowing:
+
+- Only **4 active** watches (DR0..DR3).
+- **No read-only mode** on x86 — the CPU's "data read/write" type
+  fires on both reads and writes. `watch <a> r` is accepted; it's
+  armed as rw and prints a one-line note.
+- Sizes are 1, 2, 4, or 8 bytes; the address must be aligned to the
+  size. To cover a wider field, set multiple slots.
+- New threads spawned via `clone(2)` after the watch is armed get
+  the same DR set re-applied — no per-thread re-arming needed.
+
 ## Limits
 
 - macOS backend works for process control, memory, registers,
-  breakpoints, and events; aux-binary slide detection is Linux-only
-  for now (no `/proc/<pid>/maps` equivalent we lean on).
-- Hardware watchpoints (DR-backed) aren't exposed at the REPL — DR
-  state is readable via `regs all` but `wp` is not yet a verb.
+  breakpoints, and events; aux-binary slide detection and hardware
+  watchpoints are Linux-only for now (no `/proc/<pid>/maps` equivalent
+  we lean on; macOS watchpoints would go through `thread_set_state`
+  with `x86_DEBUG_STATE64` and aren't implemented yet).
 - No remote target mode; everything is in-process ptrace / Mach.

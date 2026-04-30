@@ -68,6 +68,10 @@ public:
     [[nodiscard]] Result<void>           clear_breakpoint(BreakpointId id) override;
     [[nodiscard]] std::vector<Breakpoint> breakpoints() const override;
 
+    [[nodiscard]] Result<WatchpointId>    set_watchpoint  (addr_t va, u8 size, WatchMode mode) override;
+    [[nodiscard]] Result<void>            clear_watchpoint(WatchpointId id) override;
+    [[nodiscard]] std::vector<Watchpoint> watchpoints() const override;
+
     [[nodiscard]] Result<void>  step      (ThreadId tid) override;
     [[nodiscard]] Result<void>  cont      ()             override;
     [[nodiscard]] Result<void>  interrupt ()             override;
@@ -86,6 +90,16 @@ public:
     [[nodiscard]] const std::unordered_map<BreakpointId, SoftwareBreakpoint>&
         bp_table() const { return bps_; }
 
+    // Hardware-watchpoint slot table. Index 0..3 maps directly to DR0..DR3;
+    // an empty slot has id == 0. ptrace_event.cpp consults this on each
+    // SIGTRAP to decode DR6 hits into EvWatchpointHit.
+    struct WpSlot {
+        WatchpointId id   = 0;
+        Watchpoint   info{};
+    };
+    [[nodiscard]] WpSlot* wp_slot(int idx) { return idx >= 0 && idx < 4 ? &wp_[idx] : nullptr; }
+    [[nodiscard]] const WpSlot* wp_slot(int idx) const { return idx >= 0 && idx < 4 ? &wp_[idx] : nullptr; }
+
     // Thread state — exposed for ptrace_event.cpp's loop to consult
     // and update without duplicating the bookkeeping.
     [[nodiscard]] ThreadState&       thread_state(ThreadId tid);
@@ -98,6 +112,8 @@ private:
     std::map<ThreadId, ThreadState> thread_state_;
     std::unordered_map<BreakpointId, SoftwareBreakpoint> bps_;
     BreakpointId             next_bp_id_ = 1;
+    WpSlot                   wp_[4]{};
+    WatchpointId             next_wp_id_ = 1;
     bool                     attached_   = false;
     // Lazily opened by ptrace_mem.cpp. Closed by the destructor and
     // by detach()/kill(). -1 means "not yet opened".
@@ -121,5 +137,12 @@ public:
 // byte, enable_bp re-arms with 0xCC.
 [[nodiscard]] Result<void> disable_bp(LinuxTarget& t, addr_t va, u8 orig_byte);
 [[nodiscard]] Result<void> enable_bp (LinuxTarget& t, addr_t va);
+
+// Hardware-watchpoint helpers exposed to ptrace_event.cpp / ptrace_proc.cpp.
+// dr6_consume_hit returns 0..3 if a DR-watch fired (clearing DR6),
+// or -1 otherwise. rearm_watchpoints_on_new_thread re-applies the
+// active DR slots to a freshly-cloned thread (best-effort).
+int  dr6_consume_hit(ThreadId tid);
+void rearm_watchpoints_on_new_thread(LinuxTarget& t, ThreadId tid);
 
 }  // namespace ember::debug::linux_

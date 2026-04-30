@@ -57,6 +57,12 @@ public:
     [[nodiscard]] virtual Result<void>           clear_breakpoint(BreakpointId id)       = 0;
     [[nodiscard]] virtual std::vector<Breakpoint> breakpoints() const                    = 0;
 
+    // Hardware data watchpoints (DR0..DR3 on x86; up to 4 active).
+    // size must be 1, 2, 4, or 8; addr must be aligned to size.
+    [[nodiscard]] virtual Result<WatchpointId>    set_watchpoint  (addr_t va, u8 size, WatchMode mode) = 0;
+    [[nodiscard]] virtual Result<void>            clear_watchpoint(WatchpointId id) = 0;
+    [[nodiscard]] virtual std::vector<Watchpoint> watchpoints() const = 0;
+
     [[nodiscard]] virtual Result<void>  step      (ThreadId tid) = 0;
     [[nodiscard]] virtual Result<void>  cont      ()             = 0;
     [[nodiscard]] virtual Result<void>  interrupt ()             = 0;

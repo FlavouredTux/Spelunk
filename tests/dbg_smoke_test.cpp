@@ -146,10 +146,37 @@ int main(int argc, char** argv) {
               "write_mem restore");
     }
 
-    CHECK(t->cont().has_value(), "cont 2");
+    // Hardware watchpoint round-trip — exercises the DR0..DR3 path.
+    // Arm a write-watch on `watch_slot`, drop the bp at dbg_marker so
+    // we don't re-hit it, continue, expect the store in main() to
+    // trip the watchpoint, then continue to exit.
+    {
+        const auto* slot_sym = (*bin)->find_by_name("watch_slot");
+        CHECK(slot_sym != nullptr,    "find watch_slot");
+        CHECK(slot_sym->addr != 0,    "watch_slot addr");
+        const ember::addr_t slot_va = slot_sym->addr + slide;
+        auto wp = t->set_watchpoint(slot_va, 8, ember::debug::WatchMode::Write);
+        CHECK(wp.has_value(),         "set_watchpoint");
+        const auto wp_id = *wp;
+
+        CHECK(t->clear_breakpoint(bp_id).has_value(), "clear bp before resume");
+
+        CHECK(t->cont().has_value(), "cont 2 (to wp)");
+        ev_r = t->wait_event();
+        CHECK(ev_r.has_value(),                     "wait_event after wp arm");
+        const auto* whit = std::get_if<ember::debug::EvWatchpointHit>(&*ev_r);
+        CHECK(whit != nullptr,                      "expected EvWatchpointHit");
+        CHECK(whit->id == wp_id,                    "wp id mismatch");
+        CHECK(whit->addr == slot_va,                "wp addr mismatch");
+        CHECK(whit->slot < 4,                       "wp slot in range");
+
+        CHECK(t->clear_watchpoint(wp_id).has_value(), "clear watchpoint");
+    }
+
+    CHECK(t->cont().has_value(), "cont 3");
 
     ev_r = t->wait_event();
-    CHECK(ev_r.has_value(), "wait_event 2");
+    CHECK(ev_r.has_value(), "wait_event final");
     const auto* exited = std::get_if<ember::debug::EvExited>(&*ev_r);
     CHECK(exited != nullptr,  "expected EvExited");
     CHECK(exited->code == 42, "exit code");

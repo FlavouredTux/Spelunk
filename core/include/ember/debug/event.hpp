@@ -12,6 +12,18 @@ namespace ember::debug {
 // the breakpoint instruction (ptrace stops one byte past the int3).
 struct EvBreakpointHit { ThreadId tid; BreakpointId id; addr_t pc; };
 
+// A hardware data watchpoint fired. PC is the *next* instruction
+// (data watches trap after the access completes), `addr` is the
+// watched VA from the DR slot that fired, `slot` is 0..3 — useful
+// when the user wants to know which DR caught the hit.
+struct EvWatchpointHit {
+    ThreadId     tid;
+    WatchpointId id;
+    addr_t       pc;
+    addr_t       addr;
+    u8           slot;
+};
+
 // Single-step finished — used by step() and the breakpoint step-over.
 struct EvSingleStep    { ThreadId tid; addr_t pc; };
 
@@ -38,6 +50,7 @@ struct EvTerminated    { int signo; };
 
 using Event = std::variant<
     EvBreakpointHit,
+    EvWatchpointHit,
     EvSingleStep,
     EvSignal,
     EvStopped,

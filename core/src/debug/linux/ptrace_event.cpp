@@ -175,8 +175,13 @@ Result<Event> LinuxTarget::wait_event() {
                     // The new thread is part of our process. The kernel
                     // already attached it via PTRACE_O_TRACECLONE; we'll
                     // see its initial stop next time around the loop.
-                    add_thread(static_cast<ThreadId>(new_id));
-                    return Event{EvThreadCreated{static_cast<ThreadId>(new_id)}};
+                    const auto new_tid = static_cast<ThreadId>(new_id);
+                    add_thread(new_tid);
+                    // Cloned thread starts with empty DR state; mirror
+                    // the parent's active watchpoints so cross-thread
+                    // coverage matches the user's expectation.
+                    rearm_watchpoints_on_new_thread(*this, new_tid);
+                    return Event{EvThreadCreated{new_tid}};
                 }
                 // FORK/VFORK spawn separate processes that we don't track.
                 continue;
@@ -238,6 +243,21 @@ Result<Event> LinuxTarget::wait_event() {
                 }
                 case StepState::None:
                     break;
+            }
+
+            // Hardware-watchpoint hit? DR6's B0..B3 stick when a DR
+            // slot fires. Check before falling through to the int3
+            // path, since a watch hit's PC isn't `rip-1` and never
+            // matches a software bp address.
+            if (const int slot = dr6_consume_hit(tid); slot >= 0) {
+                if (const auto* w = wp_slot(slot); w && w->id != 0) {
+                    user_regs_struct ur{};
+                    addr_t pc = 0;
+                    if (::ptrace(PTRACE_GETREGS, kt, nullptr, &ur) == 0) pc = ur.rip;
+                    return Event{EvWatchpointHit{
+                        tid, w->id, pc, w->info.addr,
+                        static_cast<u8>(slot)}};
+                }
             }
 
             // No step in flight — must be a fresh int3 hit.

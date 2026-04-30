@@ -98,7 +98,14 @@ Always write the struct in C syntax in the value, not prose.`,
 
 const TIEBREAKER: RoleSpec = {
     name: "tiebreaker",
-    defaultModel: "openrouter/owl-alpha",
+    // Tiebreaker is the high-stakes role — fired only on disputes,
+    // produces the final-call name, gets ~1 invocation per dispute
+    // vs cascade's hundreds-per-binary. Worth spending on a stronger
+    // model than the cheap workhorse the namer/mapper/typer use.
+    // deepseek-v4-pro is cheap enough ($0.40/M in) but markedly
+    // smarter than owl-alpha. User can override via agent.toml or
+    // --model on the tiebreak subcommand.
+    defaultModel: "deepseek/deepseek-v4-pro",
     system: `You are an unbiased tiebreaker for disputed intel claims.
 
 You'll be handed one disputed (subject, predicate) at a time. Both candidate values are shown with their evidence and the agents that made them.

@@ -60,6 +60,7 @@ export function NeuralView(props: {
     runs: Array<{ id: string; role: string; scope: string; turns: number; claimsFiled?: number; mtime: number; last: string }>;
     view: Array<{ key: string; winner: { agent: string; subject: string; predicate: string; confidence: number; ts: string }; disputed: boolean }>;
     claimCount: number;
+    disputedCount: number;     // full count from caller (doesn't depend on viz slice)
 }) {
     const [pulses, setPulses] = useState<Pulse[]>([]);
     const lastClaimCount = useRef(props.claimCount);
@@ -285,7 +286,7 @@ export function NeuralView(props: {
                 position: "absolute", bottom: 8, left: 12,
                 fontFamily: mono, fontSize: 10, color: C.textFaint,
             }}>
-                {workers.filter((w) => w.live).length} live · {workers.length} total · {subjects.filter((s) => s.disputed).length} disputed
+                {workers.filter((w) => w.live).length} live · {workers.length} total · {props.disputedCount} disputed
             </div>
             <Legend />
         </div>

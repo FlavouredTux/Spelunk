@@ -7,6 +7,12 @@ import { C, sans, mono, serif } from "../theme";
 // paste — agent:getConfig returns a masked tail like "••••sk-…xyz9".
 
 const ROLES = ["namer", "mapper", "typer", "tiebreaker"] as const;
+const ROLE_HINTS: Record<string, string> = {
+    namer:      "bulk worker — owl-alpha or deepseek-v4-flash (free / cheap)",
+    mapper:     "bulk worker — same tier as namer",
+    typer:      "type-shape inference — flash class is fine",
+    tiebreaker: "dispute resolver — use a stronger model (v4-pro / opus)",
+};
 const MODEL_PRESETS = [
     "openrouter/owl-alpha",        // free, 1M ctx — current default
     "deepseek/deepseek-v4-flash",
@@ -152,11 +158,22 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
                 </Section>
 
                 <Section title="Per-role defaults">
+                    <div style={{
+                        fontFamily: serif, fontStyle: "italic",
+                        fontSize: 11, color: C.textMuted, marginBottom: 10,
+                        lineHeight: 1.4,
+                    }}>
+                        Cascade spawns <b>namer</b> workers (volume — pick a cheap or
+                        free model). <b>Tiebreaker</b> is the high-stakes role that
+                        resolves disputes — pick a stronger model since each call has
+                        much higher leverage.
+                    </div>
                     {ROLES.map((r) => (
                         <RoleRow key={r}
                             name={r}
                             value={defaults[r] ?? {}}
                             onChange={(rd) => setDefaults({ ...defaults, [r]: rd })}
+                            hint={ROLE_HINTS[r]}
                         />
                     ))}
                 </Section>
@@ -267,14 +284,14 @@ function KeyRow(props: {
     );
 }
 
-function RoleRow(props: { name: string; value: RoleDefaults; onChange: (v: RoleDefaults) => void }) {
+function RoleRow(props: { name: string; value: RoleDefaults; onChange: (v: RoleDefaults) => void; hint?: string }) {
     return (
+      <div style={{ marginBottom: 8 }}>
         <div style={{
             display: "grid",
             gridTemplateColumns: "70px 1fr 70px 70px",
             gap: 6,
             alignItems: "center",
-            marginBottom: 6,
         }}>
             <span style={{ fontFamily: mono, fontSize: 11, color: C.textMuted }}>{props.name}</span>
             <select
@@ -321,6 +338,13 @@ function RoleRow(props: { name: string; value: RoleDefaults; onChange: (v: RoleD
                 }}
             />
         </div>
+        {props.hint && (
+            <div style={{
+                fontFamily: serif, fontStyle: "italic", fontSize: 9.5,
+                color: C.textFaint, paddingLeft: 76, marginTop: 1,
+            }}>{props.hint}</div>
+        )}
+      </div>
     );
 }
 

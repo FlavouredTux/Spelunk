@@ -327,6 +327,7 @@ function AgentPanelInner(props: {
                         runs={runs}
                         view={intel.view}
                         claimCount={intel.entries.filter((e) => e.kind === "claim").length}
+                        disputedCount={stats.disputed}
                     />
                     {disputed.length > 0 && (
                         <div style={{

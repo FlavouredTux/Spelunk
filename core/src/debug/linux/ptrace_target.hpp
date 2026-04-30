@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <set>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -44,6 +45,7 @@ struct ThreadState {
     StepState    step_state     = StepState::None;
     addr_t       step_over_addr = 0;     // bp addr being stepped over
     int          pending_signal = 0;     // forwarded on next cont/step (0 = none)
+    bool         in_syscall     = false; // toggles per syscall-stop: false→entry, true→exit
 };
 
 class LinuxTarget final : public Target {
@@ -71,6 +73,16 @@ public:
     [[nodiscard]] Result<WatchpointId>    set_watchpoint  (addr_t va, u8 size, WatchMode mode) override;
     [[nodiscard]] Result<void>            clear_watchpoint(WatchpointId id) override;
     [[nodiscard]] std::vector<Watchpoint> watchpoints() const override;
+
+    [[nodiscard]] Result<void>
+        set_syscall_catch(bool catch_all, std::span<const u32> nrs) override;
+    [[nodiscard]] Result<void> clear_syscall_catch() override;
+    [[nodiscard]] bool         is_syscall_catching() const override
+        { return syscall_catching_; }
+    [[nodiscard]] std::set<u32> syscall_catch_filter() const override
+        { return syscall_nrs_; }
+    [[nodiscard]] bool         syscall_catch_all() const override
+        { return syscall_catch_all_; }
 
     [[nodiscard]] Result<void>  step      (ThreadId tid) override;
     [[nodiscard]] Result<void>  cont      ()             override;
@@ -114,6 +126,9 @@ private:
     BreakpointId             next_bp_id_ = 1;
     WpSlot                   wp_[4]{};
     WatchpointId             next_wp_id_ = 1;
+    bool                     syscall_catching_  = false;
+    bool                     syscall_catch_all_ = false;
+    std::set<u32>            syscall_nrs_;
     bool                     attached_   = false;
     // Lazily opened by ptrace_mem.cpp. Closed by the destructor and
     // by detach()/kill(). -1 means "not yet opened".

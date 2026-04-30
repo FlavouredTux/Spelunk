@@ -98,4 +98,11 @@ std::vector<Watchpoint> MachOTarget::watchpoints() const {
     return {};
 }
 
+Result<void> MachOTarget::set_syscall_catch(bool /*all*/, std::span<const u32> /*nrs*/) {
+    return std::unexpected(Error::not_implemented(
+        "debugger: syscall catchpoints not yet implemented on macOS"));
+}
+
+Result<void> MachOTarget::clear_syscall_catch() { return {}; }
+
 }  // namespace ember::debug::mach_

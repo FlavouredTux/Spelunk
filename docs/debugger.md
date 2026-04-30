@@ -49,6 +49,14 @@ watch <addr> [r|w|rw] [N]
 wp                      list watchpoints
 dwp <id>                delete a watchpoint
 
+catch syscall [<nr|name>...]
+                        stop on every `syscall` instruction (entry+exit).
+                        With no args, catches every syscall; otherwise only
+                        the listed numbers / Linux x86-64 names. Pairs with
+                        `--list-syscalls` (static analysis) — this catch
+                        covers CFF-buried sites the walker can't resolve.
+dcatch                  clear the syscall catchpoint
+
 c                       continue all paused threads
 s                       single-step the current thread
 regs [all]              print registers ('all' for x87/SSE/AVX/AVX-512/DR)
@@ -210,11 +218,39 @@ Limits worth knowing:
 - New threads spawned via `clone(2)` after the watch is armed get
   the same DR set re-applied — no per-thread re-arming needed.
 
+## Syscall catchpoints
+
+`catch syscall [<nr|name>...]` is the dynamic complement to
+`--list-syscalls`. The static walker maps every `mov rax, N; syscall`
+shape it can resolve; the catchpoint covers the rest — CFF-buried
+sites, indirect rax aliases, JIT-emitted code that the walker never
+sees in the static binary.
+
+```
+(ember) catch syscall execve exit_group
+Catching syscalls: execve(59) exit_group(231)
+(ember) c
+Syscall ENTRY execve(59) at PC 0x... in thread ...
+(ember) bt          # the actual call site, regardless of how
+                    # rax got loaded
+(ember) c
+Syscall EXIT  execve(59) at PC 0x... in thread ...
+(ember) dcatch      # clear when done
+```
+
+Behind the scenes ember sets `PTRACE_O_TRACESYSGOOD` so syscall-stops
+arrive as `SIGTRAP | 0x80` and never collide with int3 hits or DR
+watchpoints. With a non-empty filter, sites whose `orig_rax` doesn't
+match the user's set are silently re-issued as `PTRACE_SYSCALL` —
+the user only sees the syscalls they asked for.
+
 ## Limits
 
 - macOS backend works for process control, memory, registers,
-  breakpoints, and events; aux-binary slide detection and hardware
-  watchpoints are Linux-only for now (no `/proc/<pid>/maps` equivalent
-  we lean on; macOS watchpoints would go through `thread_set_state`
-  with `x86_DEBUG_STATE64` and aren't implemented yet).
+  breakpoints, and events; aux-binary slide detection, hardware
+  watchpoints, and syscall catchpoints are Linux-only for now (no
+  `/proc/<pid>/maps` equivalent we lean on; macOS would route
+  watchpoints through `thread_set_state` with `x86_DEBUG_STATE64`,
+  and Mach has no clean syscall-trap analogue without per-syscall
+  exception ports).
 - No remote target mode; everything is in-process ptrace / Mach.

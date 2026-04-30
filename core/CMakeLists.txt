@@ -70,6 +70,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
         src/debug/linux/ptrace_regs.cpp
         src/debug/linux/ptrace_break.cpp
         src/debug/linux/ptrace_watch.cpp
+        src/debug/linux/ptrace_catch.cpp
         src/debug/linux/ptrace_event.cpp
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND

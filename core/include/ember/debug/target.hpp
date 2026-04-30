@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -62,6 +63,19 @@ public:
     [[nodiscard]] virtual Result<WatchpointId>    set_watchpoint  (addr_t va, u8 size, WatchMode mode) = 0;
     [[nodiscard]] virtual Result<void>            clear_watchpoint(WatchpointId id) = 0;
     [[nodiscard]] virtual std::vector<Watchpoint> watchpoints() const = 0;
+
+    // Syscall catchpoint. When active, every `syscall` instruction
+    // generates an EvSyscallStop on both entry and exit. `catch_all`
+    // = true catches everything; if false, only the numbers in `nrs`
+    // surface (others are silently single-stepped past). Calling
+    // again replaces the current filter; clear_syscall_catch turns
+    // it off completely.
+    [[nodiscard]] virtual Result<void>
+    set_syscall_catch(bool catch_all, std::span<const u32> nrs) = 0;
+    [[nodiscard]] virtual Result<void> clear_syscall_catch()    = 0;
+    [[nodiscard]] virtual bool         is_syscall_catching() const = 0;
+    [[nodiscard]] virtual std::set<u32> syscall_catch_filter() const = 0;
+    [[nodiscard]] virtual bool         syscall_catch_all() const = 0;
 
     [[nodiscard]] virtual Result<void>  step      (ThreadId tid) = 0;
     [[nodiscard]] virtual Result<void>  cont      ()             = 0;

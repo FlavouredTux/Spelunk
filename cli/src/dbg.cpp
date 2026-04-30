@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/syscalls.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/error.hpp>
@@ -101,6 +102,12 @@ bool print_event(const debug::Event& ev, const ReplState& rs) {
             std::println("Watchpoint #{} (DR{}) hit: data {} touched at PC {}{} in thread {}",
                          e.id, e.slot, fmt_addr(e.addr),
                          fmt_addr(e.pc), sym_at(e.pc), e.tid);
+        } else if constexpr (std::is_same_v<T, debug::EvSyscallStop>) {
+            const auto nm = linux_x64_syscall_name(e.nr);
+            std::println("Syscall {} {}({}) at PC {}{} in thread {}",
+                         e.entry ? "ENTRY" : "EXIT ",
+                         nm.empty() ? "?" : std::string(nm),
+                         e.nr, fmt_addr(e.pc), sym_at(e.pc), e.tid);
         } else if constexpr (std::is_same_v<T, debug::EvSingleStep>) {
             std::println("Stepped to {}{} in thread {}",
                          fmt_addr(e.pc), sym_at(e.pc), e.tid);
@@ -807,6 +814,75 @@ int cmd_delete(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
+// Reverse-lookup a Linux x86-64 syscall name → nr. Linear over the
+// kernel's table; ~400 entries, called once per `catch syscall` token.
+[[nodiscard]] std::optional<u32> syscall_nr_from_name(std::string_view name) {
+    for (u32 i = 0; i < 512; ++i) {
+        const auto n = linux_x64_syscall_name(i);
+        if (!n.empty() && n == name) return i;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::string syscall_label(u32 nr) {
+    const auto n = linux_x64_syscall_name(nr);
+    return n.empty() ? std::string{"?"} : std::string{n};
+}
+
+int cmd_catch(ReplState& rs, std::span<const std::string> toks) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    if (toks.empty()) {
+        std::println(stderr,
+            "ember-dbg: catch: usage: catch syscall [<nr|name> ...]");
+        return 1;
+    }
+    if (toks[0] != "syscall") {
+        std::println(stderr,
+            "ember-dbg: catch: only `catch syscall [args]` is supported");
+        return 1;
+    }
+    if (toks.size() == 1) {
+        // `catch syscall` with no args = catch every syscall.
+        if (auto rv = rs.tgt->set_syscall_catch(true, std::span<const u32>{}); !rv) {
+            print_error(rv.error()); return 1;
+        }
+        std::println("Catching every syscall.");
+        return 0;
+    }
+    std::vector<u32> nrs;
+    nrs.reserve(toks.size() - 1);
+    for (std::size_t i = 1; i < toks.size(); ++i) {
+        const auto& t = toks[i];
+        if (auto n = parse_int(t); n && *n >= 0) {
+            nrs.push_back(static_cast<u32>(*n));
+            continue;
+        }
+        if (auto n = syscall_nr_from_name(t); n) {
+            nrs.push_back(*n);
+            continue;
+        }
+        std::println(stderr,
+            "ember-dbg: catch: unknown syscall '{}' (use a decimal nr or Linux x64 name)", t);
+        return 1;
+    }
+    if (auto rv = rs.tgt->set_syscall_catch(false, std::span<const u32>{nrs}); !rv) {
+        print_error(rv.error()); return 1;
+    }
+    std::print("Catching syscalls:");
+    for (auto n : nrs) std::print(" {}({})", syscall_label(n), n);
+    std::println("");
+    return 0;
+}
+
+int cmd_dcatch(ReplState& rs) {
+    if (!rs.live) { std::println("Not attached."); return 0; }
+    if (auto rv = rs.tgt->clear_syscall_catch(); !rv) {
+        print_error(rv.error()); return 1;
+    }
+    std::println("Syscall catchpoint cleared.");
+    return 0;
+}
+
 // `watch <addr> [r|w|rw] [size]`. Default mode = rw, default size = 8.
 // Mode `r` is accepted but realised as ReadWrite at the architectural
 // level — x86 has no read-only watchpoint mode. Emit a one-line note
@@ -1448,6 +1524,15 @@ void print_help() {
                             active at once (DR0..DR3).
   wp                        list watchpoints
   dwp <id>                  delete a watchpoint
+  catch syscall [<nr|name>...]
+                            stop on every `syscall` instruction (entry+exit).
+                            With no args, catches every syscall; otherwise
+                            catches only the listed ones (decimal nr or
+                            Linux x86-64 name, e.g. `catch syscall execve
+                            exit_group`). Pairs with --list-syscalls (which
+                            maps the static known sites): the catch covers
+                            CFF-buried sites that walker can't resolve.
+  dcatch                    clear the syscall catchpoint
   c                         continue all paused threads
   s                         single-step the current thread
   regs [all]                show registers ('all' for x87/SSE/AVX/AVX-512/DR)
@@ -1574,6 +1659,9 @@ int run_debug(const Args& args, const Binary* bin,
             cmd_watch(rs, std::span<const std::string>{toks.data() + 1, toks.size() - 1});
         else if (cmd == "watch" || cmd == "wp")                cmd_wp_list(rs);
         else if (cmd == "dwp" && toks.size() > 1)              cmd_dwp(rs, toks[1]);
+        else if (cmd == "catch" && toks.size() > 1)
+            cmd_catch(rs, std::span<const std::string>{toks.data() + 1, toks.size() - 1});
+        else if (cmd == "dcatch")                              cmd_dcatch(rs);
         else if (cmd == "c"  || cmd == "cont")                 cmd_cont(rs);
         else if (cmd == "s"  || cmd == "step")                 cmd_step(rs);
         else if (cmd == "regs")

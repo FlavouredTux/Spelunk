@@ -173,7 +173,30 @@ int main(int argc, char** argv) {
         CHECK(t->clear_watchpoint(wp_id).has_value(), "clear watchpoint");
     }
 
-    CHECK(t->cont().has_value(), "cont 3");
+    // Syscall catchpoint round-trip — the C runtime issues exit_group
+    // (nr 231) on `return 42`. Filter on that nr, continue, and expect
+    // an EvSyscallStop entry stop before the process actually exits.
+    {
+        constexpr ember::u32 kExitGroup = 231;
+        constexpr ember::u32 kFilter[1] = { kExitGroup };
+        CHECK(t->set_syscall_catch(false,
+                  std::span<const ember::u32>{kFilter}).has_value(),
+              "set_syscall_catch(exit_group)");
+        CHECK(t->is_syscall_catching(),                "catching on");
+
+        CHECK(t->cont().has_value(), "cont 3 (to syscall)");
+        ev_r = t->wait_event();
+        CHECK(ev_r.has_value(),                              "wait_event after catch");
+        const auto* sc = std::get_if<ember::debug::EvSyscallStop>(&*ev_r);
+        CHECK(sc != nullptr,                                 "expected EvSyscallStop");
+        CHECK(sc->nr == kExitGroup,                          "syscall nr is exit_group");
+        CHECK(sc->entry == true,                             "syscall entry stop");
+
+        // Don't bother clearing — just resume; exit_group never returns,
+        // so the next event should be the process actually exiting.
+    }
+
+    CHECK(t->cont().has_value(), "cont 4");
 
     ev_r = t->wait_event();
     CHECK(ev_r.has_value(), "wait_event final");

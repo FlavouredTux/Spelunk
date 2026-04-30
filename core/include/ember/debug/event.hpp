@@ -24,6 +24,17 @@ struct EvWatchpointHit {
     u8           slot;
 };
 
+// Tracee is paused at a `syscall` instruction (entry or exit) by the
+// catchpoint mechanism. `nr` is the original syscall number from
+// orig_rax (preserved across both stops). PC points at the syscall
+// instruction on entry, at the instruction after it on exit.
+struct EvSyscallStop {
+    ThreadId tid;
+    u32      nr;
+    addr_t   pc;
+    bool     entry;  // true = about to execute syscall; false = it just returned
+};
+
 // Single-step finished — used by step() and the breakpoint step-over.
 struct EvSingleStep    { ThreadId tid; addr_t pc; };
 
@@ -51,6 +62,7 @@ struct EvTerminated    { int signo; };
 using Event = std::variant<
     EvBreakpointHit,
     EvWatchpointHit,
+    EvSyscallStop,
     EvSingleStep,
     EvSignal,
     EvStopped,

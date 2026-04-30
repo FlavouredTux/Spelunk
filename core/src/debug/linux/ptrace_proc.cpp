@@ -38,11 +38,12 @@ namespace {
 // instead of being orphaned in a stopped state. TRACECLONE fans new
 // threads into our event stream automatically.
 constexpr long kPtraceOptions =
-    static_cast<long>(PTRACE_O_TRACECLONE) |
-    static_cast<long>(PTRACE_O_TRACEEXEC)  |
-    static_cast<long>(PTRACE_O_TRACEEXIT)  |
-    static_cast<long>(PTRACE_O_TRACEFORK)  |
-    static_cast<long>(PTRACE_O_TRACEVFORK) |
+    static_cast<long>(PTRACE_O_TRACECLONE)    |
+    static_cast<long>(PTRACE_O_TRACEEXEC)     |
+    static_cast<long>(PTRACE_O_TRACEEXIT)     |
+    static_cast<long>(PTRACE_O_TRACEFORK)     |
+    static_cast<long>(PTRACE_O_TRACEVFORK)    |
+    static_cast<long>(PTRACE_O_TRACESYSGOOD)  |   // syscall-stops marked as SIGTRAP|0x80
     static_cast<long>(PTRACE_O_EXITKILL);
 
 [[nodiscard]] Error errno_io(const char* op) {

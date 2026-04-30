@@ -88,6 +88,13 @@ public:
     [[nodiscard]] Result<void>            clear_watchpoint(WatchpointId id) override;
     [[nodiscard]] std::vector<Watchpoint> watchpoints() const override;
 
+    [[nodiscard]] Result<void>
+        set_syscall_catch(bool catch_all, std::span<const u32> nrs) override;
+    [[nodiscard]] Result<void> clear_syscall_catch() override;
+    [[nodiscard]] bool         is_syscall_catching() const override { return false; }
+    [[nodiscard]] std::set<u32> syscall_catch_filter() const override { return {}; }
+    [[nodiscard]] bool         syscall_catch_all() const override { return false; }
+
     [[nodiscard]] Result<void>  step      (ThreadId tid) override;
     [[nodiscard]] Result<void>  cont      ()             override;
     [[nodiscard]] Result<void>  interrupt ()             override;

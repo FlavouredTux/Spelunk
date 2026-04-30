@@ -37,6 +37,16 @@ namespace {
     return ur.rip;
 }
 
+[[nodiscard]] bool read_regs_for_syscall(pid_t kt, addr_t& pc, u32& nr) {
+    user_regs_struct ur{};
+    if (::ptrace(PTRACE_GETREGS, kt, nullptr, &ur) < 0) return false;
+    pc = ur.rip;
+    // orig_rax preserves the syscall number across both entry and
+    // exit stops; rax gets clobbered with the return value on exit.
+    nr = static_cast<u32>(ur.orig_rax);
+    return true;
+}
+
 }  // namespace
 
 Result<void> LinuxTarget::step(ThreadId tid) {
@@ -101,7 +111,9 @@ Result<void> LinuxTarget::cont() {
 
         const int sig = ts.pending_signal;
         ts.pending_signal = 0;
-        if (::ptrace(PTRACE_CONT, kt, nullptr, sig_data(sig)) < 0) {
+        const auto cont_req = is_syscall_catching()
+            ? PTRACE_SYSCALL : PTRACE_CONT;
+        if (::ptrace(cont_req, kt, nullptr, sig_data(sig)) < 0) {
             return std::unexpected(errno_io("cont"));
         }
         ts.paused = false;
@@ -208,6 +220,36 @@ Result<Event> LinuxTarget::wait_event() {
             return Event{EvSignal{tid, stopsig}};
         }
 
+        // ---- syscall-stop (PTRACE_O_TRACESYSGOOD marks them) ----
+        // Only fires when syscall catching is active. The stop sig
+        // is SIGTRAP | 0x80 so it never collides with a real int3
+        // hit. We toggle in_syscall per stop to label entry vs
+        // exit, then either surface EvSyscallStop or silently
+        // re-issue PTRACE_SYSCALL when the nr isn't in the filter.
+        if (stopsig == (SIGTRAP | 0x80)) {
+            ts.in_syscall = !ts.in_syscall;
+            const bool entry = ts.in_syscall;
+            addr_t pc = 0;
+            u32    nr = 0;
+            (void)read_regs_for_syscall(kt, pc, nr);
+
+            const bool match =
+                syscall_catch_all() ||
+                (syscall_catch_filter().contains(nr));
+            if (match) {
+                return Event{EvSyscallStop{tid, nr, pc, entry}};
+            }
+            // Filtered out — keep going. Re-issue PTRACE_SYSCALL so
+            // we still see the matching exit (or the next entry).
+            const int sig = ts.pending_signal;
+            ts.pending_signal = 0;
+            if (::ptrace(PTRACE_SYSCALL, kt, nullptr, sig_data(sig)) < 0) {
+                return std::unexpected(errno_io("syscall (skip filtered)"));
+            }
+            ts.paused = false;
+            continue;
+        }
+
         // ---- regular SIGTRAP: int3 hit OR step completion ----
         if (stopsig == SIGTRAP) {
             switch (ts.step_state) {
@@ -220,7 +262,9 @@ Result<Event> LinuxTarget::wait_event() {
                     ts.parked_at_bp   = 0;
                     ts.step_over_addr = 0;
                     ts.step_state     = StepState::None;
-                    if (::ptrace(PTRACE_CONT, kt, nullptr, nullptr) < 0) {
+                    const auto cont_req = is_syscall_catching()
+                        ? PTRACE_SYSCALL : PTRACE_CONT;
+                    if (::ptrace(cont_req, kt, nullptr, nullptr) < 0) {
                         return std::unexpected(errno_io("cont (post step-over)"));
                     }
                     ts.paused = false;

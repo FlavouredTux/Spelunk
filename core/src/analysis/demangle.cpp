@@ -24,6 +24,12 @@ struct Dem {
     // T_ references this; persists for the duration of a function signature
     // if the symbol is a template instance.
     std::vector<std::string> tmpl_args;
+    // Set when the encoding's name is a ctor / dtor. Itanium 5.1.5 encodes
+    // the return type of templated functions at the start of the bare-
+    // function-type, but ctors and dtors have no return type even when
+    // templated — without this flag, parse_encoding silently drops the
+    // first real argument as if it were the return.
+    bool is_ctor_dtor = false;
     bool failed = false;
 
     [[nodiscard]] bool eof() const { return pos >= in.size(); }
@@ -163,8 +169,35 @@ std::string parse_ctor_dtor(Dem& d, std::string_view enclosing) {
     const char a = d.in[d.pos];
     const char b = d.in[d.pos + 1];
     d.pos += 2;
-    if (a == 'C' && (b == '1' || b == '2' || b == '3')) return std::string(enclosing);
-    if (a == 'D' && (b == '0' || b == '1' || b == '2')) return "~" + std::string(enclosing);
+    // The ctor/dtor name is the bare class identifier — without the
+    // class's own template args, which show up only in the qualifier.
+    // For `basic_string<char, …>::basic_string<Alloc>(…)` the ctor's
+    // mangled `Cn` resolves to "basic_string", with the ctor's *own*
+    // template args (`<Alloc>`) tacked on by the surrounding nested-name
+    // parser via the `I…E` that follows. Without stripping the class
+    // template args here the ctor ends up named
+    // `basic_string<char, …><Alloc>` — two template arg lists glued
+    // together — and the reader has no way to distinguish which
+    // belongs to the class vs the ctor.
+    auto strip_template = [](std::string_view s) -> std::string_view {
+        if (s.empty() || s.back() != '>') return s;
+        int depth = 0;
+        for (std::size_t i = s.size(); i-- > 0;) {
+            const char c = s[i];
+            if (c == '>') ++depth;
+            else if (c == '<') { --depth; if (depth == 0) return s.substr(0, i); }
+        }
+        return s;
+    };
+    const std::string_view bare = strip_template(enclosing);
+    if (a == 'C' && (b == '1' || b == '2' || b == '3')) {
+        d.is_ctor_dtor = true;
+        return std::string(bare);
+    }
+    if (a == 'D' && (b == '0' || b == '1' || b == '2')) {
+        d.is_ctor_dtor = true;
+        return "~" + std::string(bare);
+    }
     d.fail();
     return {};
 }
@@ -430,17 +463,26 @@ void parse_nested(Dem& d, std::string& out, std::string* cv_suffix) {
         }
         parse_unqualified_into(d, assembled, enclosing);
         if (d.failed) return;
+        // Itanium 5.1.6: the bare prefix is itself a substitution candidate,
+        // and so is the prefix + template-args combined form. Pushing only
+        // the templated form (the previous behaviour) skipped the bare
+        // entry, which silently shifted every S<n>_ index beyond it by one.
+        // For
+        //   _ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEC1IS3_EEPKcRKS3_
+        // S3_ is supposed to resolve to std::allocator<char> (the ctor's
+        // template arg) but resolved to the templated basic_string — which
+        // produced the garbled `std::string::allocator<char>><std::string>`
+        // we shipped in earlier C++ stdlib renderings.
+        d.subs.push_back(assembled);
         // Template args attach to the just-added component.
         if (d.peek() == 'I') {
             std::string args;
             parse_template_args(d, args);
             if (d.failed) return;
-            // Grab the component we just appended + its args and stash as a
-            // substitution for future S_ references.
             assembled += args;
             capture_tmpl_args(d, args);
+            d.subs.push_back(assembled);
         }
-        d.subs.push_back(assembled);
     }
     if (!d.match('E')) { d.fail(); return; }
     out += assembled;
@@ -680,7 +722,9 @@ std::string parse_encoding(Dem& d) {
         types.push_back(std::move(t));
     }
     std::size_t first_arg = 0;
-    if (template_instance && !types.empty()) first_arg = 1;  // drop return type
+    if (template_instance && !types.empty() && !d.is_ctor_dtor) {
+        first_arg = 1;  // drop return type for templated free / member fns
+    }
 
     std::string args;
     for (std::size_t i = first_arg; i < types.size(); ++i) {
@@ -772,6 +816,10 @@ std::string simplify_stdlib_templates(std::string s) {
         // it to its visible cousin `std::allocator<char>`.
         {"std::__new_allocator<char>", "std::allocator<char>"},
         {"__new_allocator<char>",      "allocator<char>"},
+        // Bare-class form for ctor/dtor names — `~__new_allocator` /
+        // `__new_allocator()` shows up after our strip-template-args
+        // step on dtors of templated allocator classes.
+        {"__new_allocator", "allocator"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >", "std::stringstream"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char>>",  "std::stringstream"},
         // Container default-allocator collapse — `vector<T, allocator<T>>`

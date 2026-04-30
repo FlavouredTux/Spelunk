@@ -1,0 +1,176 @@
+# Debugger
+
+`ember --debug PATH` (Linux ptrace, macOS Mach) launches a REPL-driven
+debugger with the same view you decompile against — pseudo-C lines as
+the source view, ember's symbol resolution for breakpoints, and the
+same `Annotations` pulled in for naming. The point is not to replace
+gdb; it's to debug the binary you've been reading without leaving
+ember's namespace.
+
+## Launch / attach
+
+```sh
+ember --debug ./target -- arg1 arg2     # launch under the debugger
+ember --debug --attach-pid 1234         # attach to a running process
+```
+
+`--attach-pid` doesn't need a binary path; the REPL resolves symbols
+through whichever `--aux-binary` oracles you load (or none, falling
+back to raw addresses).
+
+`--ignore-fault-at <hex>` (repeatable) and `--ignore-fault-file <path>`
+seed the [ignored-fault filter](#ignored-faults) so a binary that
+catches and recovers from `SIGSEGV` / `SIGILL` internally doesn't stop
+the debugger on every recoverable hit.
+
+## REPL surface
+
+```
+run                     launch the binary (uses --debug PATH and -- args)
+attach <pid>            attach to a running process
+detach                  detach from the tracee (it keeps running)
+kill                    SIGKILL the tracee
+
+b <addr|sym|sym:line>   set a software breakpoint
+                        - sym:line resolves a pseudo-C line for the
+                          named function (see `code` for numbered lines)
+                        - <bin>:<sym> picks one Binary when primary
+                          and aux both define the symbol
+bp                      list breakpoints
+d <id>                  delete a breakpoint
+
+c                       continue all paused threads
+s                       single-step the current thread
+regs [all]              print registers ('all' for x87/SSE/AVX/AVX-512/DR)
+set <reg> <value>       write rax/.../rip/rflags/cs/.../gs_base.
+                        <value> = hex (0x…), decimal, or any address-spec
+                        `b` accepts (sym, sym+ofs, bin:sym).
+
+x <addr> [n]            read n bytes (default 16) and hex-dump
+poke <addr> <hex>...    write hex bytes — `poke 0x401234 c3` writes a
+                        RET, `poke <a> 90 90 90` nops out three bytes
+
+bt | where              backtrace (.eh_frame; RBP-walk fallback)
+code | list | l         pseudo-C of the function containing the current PC
+
+aux                     list loaded aux symbol oracles
+aux <path>[@hex]        load a Binary as an aux oracle; auto-detect slide
+                        (or pin it with @hex). Used for non-ELF code in
+                        the tracee — Mach-O / PE blobs an in-process
+                        loader mmap'd into anon-rwx memory.
+
+ignored                 list known-recovered fault PCs
+ignore <addr>           add a static (un-slid) PC to the ignored set
+unignore <addr>         remove a PC
+ignore-file <path>      load addrs from a file (hex per line, '#' comments)
+
+threads                 list threads (* marks current)
+thread <tid>            switch current thread
+help                    this message
+q | quit | exit         leave the REPL
+```
+
+## Skip-past-trap workflow
+
+The reason `set` and `poke` exist: a breakpoint or fault lands you at
+`syscall` or `int3` you want to skip — without detaching to gdb just
+to nudge state.
+
+```
+(ember) bt
+#0  0x401234 sub_401234+0x0
+#1  ...
+(ember) regs
+rax=0x000000000000003c  rbx=0x...  rcx=0x...  rdx=0x...
+rip=0x0000000000401234  rflags=0x0000000000000346
+(ember) set rip 0x401236      # skip the 2-byte instruction
+(ember) c
+
+# Or NOP-out a check before continuing:
+(ember) poke 0x401234 90 90 90 90 90
+wrote 5 byte(s) at 0x0000000000401234
+(ember) c
+```
+
+`set rip <value>` accepts any address spec `b` does, so
+`set rip target_function+0x40` works.
+
+## Pseudo-C-line breakpoints
+
+```
+(ember) code
+... (ember prints the pseudo-C with line numbers)
+(ember) b sub_4000b0:42        # break at the asm address that maps to line 42
+(ember) c
+```
+
+The mapping comes from the same `LineMap` the emitter records when it
+generates the function's pseudo-C. There's no DWARF requirement —
+ember derives line numbers from its own decompile output, not from
+the binary's debug info.
+
+## Aux symbol oracles
+
+Binaries that mmap a foreign-format payload into anon memory at runtime
+won't show up in `/proc/<pid>/maps` with a useful path. Load them as
+aux oracles:
+
+```
+(ember) aux /path/to/payload.dylib
+(ember) bp
+# breakpoints set against `payload:foo` resolve via the aux oracle's symbol
+```
+
+Slide is auto-detected by size-matching the binary's mapped extent
+against an anon RWX region whose first 4 bytes match the expected
+format magic. If detection misfires, pin it: `aux /path@0x7fff80000000`.
+
+## Ignored faults
+
+Some binaries — anti-tamper, JITs, exception-handling tests — catch
+and recover from `SIGSEGV` / `SIGILL` / `SIGBUS` / `SIGFPE` internally.
+Without help, the debugger stops on every recoverable hit and ruins
+the trace. The `ignored` set names PCs whose fault should be silently
+forwarded to the tracee's own handler:
+
+```
+(ember) ignore 0x401234
+(ember) ignored
+0x0000000000401234
+(ember) c        # SEGV at 0x401234 now passes through; no stop
+```
+
+Static (un-slid) addresses; ember slide-corrects at match time using
+whichever Binary owns the live PC.
+
+## Stack unwinder
+
+`bt` uses `.eh_frame` / `.debug_frame` CFI when the primary binary has
+it (which is essentially always on Linux, even with debug symbols
+stripped). Without CFI ember falls back to RBP walking, which is
+correct for `-fno-omit-frame-pointer` code and degrades gracefully on
+the rest. The choice is automatic per-call.
+
+## Threads
+
+Multi-threaded targets get one event per thread on stops. `threads`
+lists them, `thread <tid>` switches the current focus (which `regs`,
+`s`, `code`, `bt` operate on). `c` resumes all of them; ember tracks
+each thread's signal state independently.
+
+## Ctrl+C
+
+Interrupts the tracee back to the prompt instead of killing the REPL.
+Internally ember installs a `SIGINT` handler that calls
+`Target::interrupt()` on the active session — without it, the
+`PTRACE_O_EXITKILL` linkage we install for safety would take the
+tracee down on the first Ctrl+C.
+
+## Limits
+
+- macOS backend works for process control, memory, registers,
+  breakpoints, and events; aux-binary slide detection is Linux-only
+  for now (no `/proc/<pid>/maps` equivalent we lean on).
+- Hardware watchpoints (DR-backed) aren't exposed at the REPL — DR
+  state is readable via `regs all` but `wp` is not yet a verb.
+- No remote target mode; everything is in-process ptrace / Mach.

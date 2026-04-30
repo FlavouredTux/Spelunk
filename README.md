@@ -15,7 +15,8 @@
 
 A from-scratch reverse-engineering toolkit. ELF + Mach-O + PE loaders,
 Microsoft minidump + raw-region memory image loaders, an x86-64
-decoder/lifter/SSA pipeline, structurer, pseudo-C emitter, a
+decoder/lifter/SSA pipeline, structurer, pseudo-C emitter, a built-in
+ptrace/Mach debugger that breakpoints against the pseudo-C view, a
 declarative annotation/scripting format, and an Electron UI.
 
 **No Capstone. No Zydis. No Ghidra. No LLVM. No vendored deps.** Stdlib
@@ -88,6 +89,11 @@ ember [options] <binary>
       --ipa              run IPA before pseudo-C (typed sigs across calls)
       --resolve-calls    resolve indirect calls (IAT + constant vtables)
       --eh               parse unwind tables, mark landing pads
+      --vm-detect        scan for interpreter-style VM dispatchers
+      --list-syscalls VA report each `syscall` site in the function at VA,
+                         resolved to its Linux name where rax was set
+                         constant (TSV: file_offset, va, nr, name).
+      --debug            launch / attach a debugger; see docs/debugger.md
 
   -s, --symbol NAME      target a specific symbol (default: main)
       --annotations P    user renames / signatures sidecar file
@@ -105,6 +111,40 @@ ember [options] <binary>
 Heavyweight passes (`--xrefs`, `--strings`, `--arities`, `--fingerprints`)
 cache to `~/.cache/ember/`, keyed on `path | size | mtime | version`.
 First run is slow, subsequent runs are instant.
+
+## Debugger
+
+`ember --debug PATH` launches a REPL-driven debugger backed by Linux
+ptrace (or Mach on macOS) that uses ember's own pseudo-C as the source
+view. Breakpoints take symbols, addresses, or `<symbol>:<line>` against
+the decompiled output, so you can `b sub_4000b0:42` to break at the
+asm address that maps to line 42 of the pseudo-C function — no DWARF
+required.
+
+```sh
+ember --debug ./target -- arg1 arg2     # launch
+ember --debug --attach-pid 1234         # attach
+```
+
+REPL surface (excerpt):
+
+```
+b <addr|sym|sym:line>   software breakpoint (also bin:sym to disambiguate)
+c, s                    continue, single-step
+regs [all]              GPRs (or full x87/SSE/AVX/AVX-512/DR)
+set <reg> <value>       write rax/.../rip/rflags/cs/...; <value> takes hex,
+                        decimal, or any address-spec `b` accepts
+x <addr> [n]            read + hex-dump
+poke <addr> <hex>...    write hex bytes (`poke <a> 90 90 90` to nop out)
+bt                      .eh_frame backtrace; RBP-walk fallback
+code                    pseudo-C of the function around the current PC
+aux <path>[@hex]        load a Binary as a symbol oracle for runtime-mmap'd
+                        Mach-O / PE blobs the in-process loader pulled in
+ignore <addr>           silently forward known-recovered fault PCs
+threads, thread <tid>   multi-thread targets
+```
+
+Full surface in [docs/debugger.md](docs/debugger.md).
 
 ## Pipeline
 
@@ -197,16 +237,19 @@ core/             C++23 library — everything except the CLI shim
     disasm/       x86-64 + AArch64 + PPC64 instruction decoders
     analysis/     CFG, arity, strings, xrefs, sig inference (IPA),
                   type inference, indirect-call resolver, MSVC + Itanium
-                  RTTI, eh_frame, PE UNWIND_INFO, ObjC, fingerprints
+                  RTTI, eh_frame, PE UNWIND_INFO, ObjC, fingerprints,
+                  syscall site walker
     ir/           IR + lifters + SSA + cleanup passes + type lattice
     structure/    region builder (if/while/for/switch/goto)
     decompile/    pseudo-C emitter
+    debug/        ptrace (Linux) / Mach (macOS) backends, .eh_frame
+                  + RBP-walk unwinders, REPL state machine
     script/       declarative .ember parser + applier
     common/       annotations, on-disk cache
 cli/              command-line driver
 ui/               Electron + React + TypeScript frontend
 tests/            golden-output CTest suite
-docs/             scripting, vm-detect, raw-input, plugin platform, mascot, screenshots
+docs/             scripting, debugger, vm-detect, raw-input, plugin platform
 ```
 
 ## Tests

@@ -60,15 +60,53 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
 bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
     if (q.empty() || c.empty()) return true;       // unknown matches all
     if (q == c) return true;
-    // Rust ABI: never plausible matches against C++/libstdc++.
+
+    // ---- Helper buckets (each tag belongs to one or more of these) ----
+    // Plain C — both POSIX libc-ish and Windows CRT count as "C-shaped"
+    // runtimes for matching purposes. A Win32 binary calling memcpy
+    // can validly match a libc/musl memcpy fingerprint.
+    auto is_c_family = [](std::string_view t) {
+        return t == teef_runtime::kC
+            || t == teef_runtime::kLibc
+            || t == teef_runtime::kMsvcrt
+            || t == teef_runtime::kUcrt
+            || t == teef_runtime::kVcruntime;
+    };
+    auto is_winapi = [](std::string_view t) {
+        return t == teef_runtime::kWinapi;
+    };
+    auto is_itanium_cxx = [](std::string_view t) {
+        return t == teef_runtime::kLibstdcxx
+            || t == teef_runtime::kCxx;
+    };
+    auto is_msvc_cxx = [](std::string_view t) {
+        return t == teef_runtime::kCxxMsvc;
+    };
+
+    // Rust never matches C++ stdlib (Itanium OR MSVC). Rust↔C/winapi/
+    // openssl is fine — Rust binaries link those for real.
     if (q == teef_runtime::kRust) {
-        return c != teef_runtime::kLibstdcxx
-            && c != teef_runtime::kCxx;
+        return !is_itanium_cxx(c) && !is_msvc_cxx(c);
     }
-    // Symmetrically: a libstdc++ binary should not match Rust corpus.
-    if (q == teef_runtime::kLibstdcxx || q == teef_runtime::kCxx) {
-        return c != teef_runtime::kRust;
+    // Symmetrically a libstdc++/cxx/cxxmsvc query shouldn't match Rust.
+    if (is_itanium_cxx(q) || is_msvc_cxx(q)) {
+        if (c == teef_runtime::kRust) return false;
     }
+    // Itanium C++ vs MSVC C++ stdlib — different ABIs, different name
+    // mangling, different vtable layout. Block.
+    if (is_itanium_cxx(q) && is_msvc_cxx(c)) return false;
+    if (is_msvc_cxx(q) && is_itanium_cxx(c)) return false;
+
+    // C-family ↔ C-family (libc/msvcrt/ucrt/vcruntime/c): all compatible.
+    // Lots of std C functions (memcpy, strlen, qsort) appear in both
+    // POSIX and Windows runtimes with matching structure.
+    if (is_c_family(q) && is_c_family(c)) return true;
+
+    // winapi against POSIX libc — usually different (kernel32 has no
+    // POSIX equivalent), but also low-volume. Allow; structural match
+    // alone is the gate.
+    if (is_winapi(q) || is_winapi(c)) return true;
+
     return true;
 }
 

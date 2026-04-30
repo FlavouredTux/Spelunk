@@ -561,14 +561,23 @@ load_corpus_from_args(const Args& args) {
 // false negatives (saying a C binary is Rust) would block legitimate
 // libstdc++ matches on a C++ binary.
 [[nodiscard]] static std::string_view detect_query_runtime(const Binary& b) {
-    std::size_t rust_hits = 0;
-    std::size_t cxx_std_hits = 0;
-    std::size_t cxx_hits = 0;
+    std::size_t rust_hits     = 0;
+    std::size_t cxx_std_hits  = 0;
+    std::size_t cxx_hits      = 0;
+    std::size_t msvc_cxx_hits = 0;
+    std::size_t msvcrt_hits   = 0;
+    std::size_t winapi_hits   = 0;
     for (const auto& s : b.symbols()) {
         if (s.name.empty()) continue;
         // Rust: _R-mangled names or the runtime alloc/panic shims.
         if (s.name.starts_with("_R") || s.name.starts_with("__rust_")) {
             ++rust_hits;
+            continue;
+        }
+        // MSVC C++ ABI: ?... mangled names. msvcrt.dll exports look like
+        // ??0... (constructor), ??1... (destructor), ?... (mangled fn).
+        if (s.name.starts_with("?") || s.name.starts_with("??")) {
+            ++msvc_cxx_hits;
             continue;
         }
         // libstdc++ template instantiations are dominantly _ZSt / _ZNSt.
@@ -577,11 +586,40 @@ load_corpus_from_args(const Args& args) {
             continue;
         }
         // Generic Itanium-mangled C++.
-        if (s.name.starts_with("_Z")) ++cxx_hits;
+        if (s.name.starts_with("_Z")) {
+            ++cxx_hits;
+            continue;
+        }
+        // Windows imports — kernel32/ntdll/user32 etc export plain
+        // names, so we recognize via known-API surface. is_import
+        // filters to the bound IAT entries.
+        if (s.is_import) {
+            const std::string_view n = s.name;
+            // Kernel/Win32 surface tells us this is a Windows binary
+            if (n == "GetProcAddress" || n == "LoadLibraryA" || n == "LoadLibraryW" ||
+                n == "VirtualAlloc" || n == "VirtualProtect" ||
+                n == "CreateFileW"  || n == "CreateFileA" ||
+                n == "ReadFile"     || n == "WriteFile" ||
+                n == "GetModuleHandleA" || n == "GetModuleHandleW" ||
+                n == "ExitProcess"  || n == "GetCommandLineW" ||
+                n == "RtlAllocateHeap" || n == "RtlFreeHeap" ||
+                n == "NtCreateFile" || n.starts_with("Nt")) {
+                ++winapi_hits;
+                continue;
+            }
+            // CRT entry points
+            if (n == "_initterm" || n == "_set_app_type" || n == "exit" ||
+                n.starts_with("_CRT_") || n.starts_with("__chkstk")) {
+                ++msvcrt_hits;
+            }
+        }
     }
-    if (rust_hits >= 4)     return teef_runtime::kRust;
-    if (cxx_std_hits >= 4)  return teef_runtime::kLibstdcxx;
-    if (cxx_hits >= 8)      return teef_runtime::kCxx;
+    if (rust_hits >= 4)        return teef_runtime::kRust;
+    if (msvc_cxx_hits >= 4)    return teef_runtime::kCxxMsvc;
+    if (cxx_std_hits >= 4)     return teef_runtime::kLibstdcxx;
+    if (cxx_hits >= 8)         return teef_runtime::kCxx;
+    if (winapi_hits >= 3)      return teef_runtime::kWinapi;
+    if (msvcrt_hits >= 2)      return teef_runtime::kMsvcrt;
     return "";
 }
 

@@ -39,12 +39,22 @@ struct TeefMatch {
 //   "openssl"   — libssl / libcrypto
 //   "c"         — plain C application code (libgcc_s, libm, libz, …)
 namespace teef_runtime {
-    inline constexpr std::string_view kRust      = "rust";
-    inline constexpr std::string_view kLibstdcxx = "libstdcxx";
-    inline constexpr std::string_view kCxx       = "cxx";
-    inline constexpr std::string_view kLibc      = "libc";
-    inline constexpr std::string_view kOpenSSL   = "openssl";
-    inline constexpr std::string_view kC         = "c";
+    inline constexpr std::string_view kRust       = "rust";
+    inline constexpr std::string_view kLibstdcxx  = "libstdcxx";
+    inline constexpr std::string_view kCxx        = "cxx";
+    inline constexpr std::string_view kLibc       = "libc";
+    inline constexpr std::string_view kOpenSSL    = "openssl";
+    inline constexpr std::string_view kC          = "c";
+    // Windows runtimes. msvcrt.dll/msvcr*.dll = legacy CRT;
+    // ucrtbase.dll = Win10+ universal CRT; vcruntime140 family =
+    // modern MSVC support; cxxmsvc = MSVC's C++ stdlib (std::*
+    // shipped via msvcp140 etc — different ABI from libstdc++);
+    // winapi covers kernel32/ntdll/user32/gdi32/advapi32/shell32.
+    inline constexpr std::string_view kMsvcrt     = "msvcrt";
+    inline constexpr std::string_view kUcrt       = "ucrt";
+    inline constexpr std::string_view kVcruntime  = "vcruntime";
+    inline constexpr std::string_view kCxxMsvc    = "cxxmsvc";
+    inline constexpr std::string_view kWinapi     = "winapi";
 }
 
 // Whether a query binary's detected runtime is allowed to match a

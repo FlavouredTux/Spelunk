@@ -299,6 +299,38 @@ The default threshold of 0.85 gives ~83% precision in cross-version
 glibc tests; 0.95 raises it toward 87%, with proportionally lower
 recall.
 
+### Windows corpus
+
+`scripts/build_corpus_windows.sh` is the equivalent for analyzing
+PE32+ Windows binaries (RAT samples, MSVC-compiled malware, retail
+Windows apps). It walks a directory of **real Microsoft** Windows
+DLLs and tags each with its runtime: `msvcrt`, `ucrt`, `vcruntime`
+(modern MSVC support), `cxxmsvc` (msvcp140's std:: surface),
+`winapi` (kernel32/ntdll/user32/gdi32/advapi32/shell32/etc), or
+plain `c` for everything else.
+
+```sh
+# From a Windows install (preferred):
+WIN_LIBS=/path/to/Windows/System32 bash scripts/build_corpus_windows.sh
+
+# Or from a Microsoft Symbol Server downloader's output dir.
+```
+
+**Do not use Wine's `system32` for the corpus.** Wine's DLLs are
+reimplementations of the Win32 API; their internal structure
+differs from Microsoft's, so a Wine-built corpus produces
+false negatives against real Windows malware. The script
+detects Wine prefixes and refuses by default (override with
+`FORCE_WINE=1` for script self-testing).
+
+The recognizer's `detect_query_runtime` heuristic already handles
+the Windows side: MSVC `?...`-mangled names → `cxxmsvc`,
+Win32 imports (`GetProcAddress`/`VirtualAlloc`/`Nt*` etc) → `winapi`,
+CRT entry points (`_initterm`/`__chkstk`/etc) → `msvcrt`. Cross-
+language exclusion blocks `cxxmsvc` ↔ `libstdcxx` (different ABIs)
+and `cxxmsvc` ↔ `rust`. C-family (libc / msvcrt / ucrt / vcruntime /
+plain c) match each other freely — `memcpy` is `memcpy`.
+
 ### Corpus build
 
 `scripts/build_corpus_linux_x86.sh` builds a Linux x86-64 corpus

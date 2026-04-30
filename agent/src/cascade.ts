@@ -197,6 +197,27 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         process.stderr.write(`cascade: killed ${cleared} orphan ember --serve daemon(s) for ${args.binary}\n`);
     }
 
+    // Pre-warm ember's disk cache for the binary. xrefs and strings
+    // are the expensive computations every worker daemon would
+    // otherwise rebuild on first access. Building them once here
+    // (cold spawn, ~10-30s on a big binary) means the 500 worker
+    // daemons that spawn over the cascade rounds each pick up the
+    // cached payload instead of re-walking the CFG / scanning
+    // strings table from scratch. ~5x speedup on cascade wall time
+    // on big stripped binaries (libloader-class).
+    const t_warm = Date.now();
+    process.stderr.write(`cascade: warming ember caches for ${args.binary}…\n`);
+    for (const flag of ["--xrefs", "--strings"]) {
+        const r = spawnSync(args.emberBin, [flag, args.binary], {
+            stdio: ["ignore", "ignore", "pipe"],
+            maxBuffer: 64 * 1024 * 1024,
+        });
+        if (r.status !== 0) {
+            process.stderr.write(`  ${flag} warmup failed (continuing): ${r.stderr?.toString().slice(0, 200)}\n`);
+        }
+    }
+    process.stderr.write(`cascade: caches warm (${((Date.now() - t_warm) / 1000).toFixed(1)}s)\n`);
+
     // One-time setup. Spawn a coordinator daemon for cascade-wide
     // bulk queries (callees_all + future shared analyses). Workers
     // still spawn their own daemons since concurrent stdin/stdout

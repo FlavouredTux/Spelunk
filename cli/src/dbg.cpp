@@ -484,66 +484,62 @@ parse_addr_spec_multi(std::string_view tok, const ReplState& rs) {
     return sym_at_in_bin(pc, rs.bin, rs.slide);
 }
 
-// Parse `/proc/<pid>/maps`, return every *anonymous* region (no file
-// backing). We deliberately don't filter on permission bits: a
-// userspace loader typically mmaps a foreign binary as rwx for the
-// rebase/bind pass and then mprotects each segment to its final
-// prots — so by the time we attach, __TEXT is r-x, __DATA is rw-,
-// __LINKEDIT is r--. The base address (where the format's magic
-// lives) is just whichever segment got mapped first; what proves
-// it's our binary is the magic check at offset 0, not the prot bits.
-struct AnonRegion { addr_t base; addr_t size; };
+// One row of /proc/<pid>/maps. `path` is the file path for file-backed
+// mappings, empty for anon, and bracketed (e.g. "[vdso]") for kernel
+// regions.
+struct MappedRegion { addr_t base; addr_t size; std::string path; };
 
-std::vector<AnonRegion> read_anon_regions(debug::ProcessId pid) {
-    std::vector<AnonRegion> out;
+std::vector<MappedRegion> read_mappings(debug::ProcessId pid) {
+    std::vector<MappedRegion> out;
     char path[64];
     std::snprintf(path, sizeof path, "/proc/%u/maps", pid);
     FILE* f = std::fopen(path, "r");
     if (!f) return out;
 
+    auto parse_hex = [](std::string_view s) -> addr_t {
+        addr_t v = 0;
+        for (char c : s) {
+            const int d = (c >= '0' && c <= '9') ? c - '0'
+                        : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                        : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                        : -1;
+            if (d < 0) break;
+            v = (v << 4) | static_cast<addr_t>(d);
+        }
+        return v;
+    };
+
     char line[4096];
     while (std::fgets(line, sizeof line, f)) {
         std::string_view sv(line);
-        while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r' ||
-                               sv.back() == ' '  || sv.back() == '\t')) {
+        while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r')) {
             sv.remove_suffix(1);
         }
-        const auto dash = sv.find('-');
+        // Format: <start>-<end> <perms> <offset> <dev> <inode> [<path>]
+        // Skip past 5 whitespace-separated fields, anything after is path.
+        std::size_t pos = 0;
+        std::size_t field_starts[5] = {};
+        for (int k = 0; k < 5; ++k) {
+            while (pos < sv.size() && sv[pos] == ' ') ++pos;
+            field_starts[k] = pos;
+            while (pos < sv.size() && sv[pos] != ' ') ++pos;
+            if (pos == field_starts[k]) break;  // ran out of fields
+        }
+        if (pos == field_starts[4]) continue;  // malformed
+
+        const auto addr_field = sv.substr(field_starts[0], field_starts[1] - field_starts[0] - 1);
+        const auto dash = addr_field.find('-');
         if (dash == std::string_view::npos) continue;
-        const auto sp1 = sv.find(' ', dash);
-        if (sp1 == std::string_view::npos) continue;
-        if (sp1 + 5 > sv.size()) continue;
-
-        auto parse_hex = [](std::string_view s) -> addr_t {
-            addr_t v = 0;
-            for (char c : s) {
-                const int d = (c >= '0' && c <= '9') ? c - '0'
-                            : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                            : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                            : -1;
-                if (d < 0) break;
-                v = (v << 4) | static_cast<addr_t>(d);
-            }
-            return v;
-        };
-
-        const addr_t start = parse_hex(sv.substr(0, dash));
-        const addr_t end   = parse_hex(sv.substr(dash + 1, sp1 - dash - 1));
+        const addr_t start = parse_hex(addr_field.substr(0, dash));
+        const addr_t end   = parse_hex(addr_field.substr(dash + 1));
         if (end <= start) continue;
 
-        // Skip the perms field + 4 more whitespace-separated tokens
-        // (offset, dev, inode, optional pathname). What's left is the
-        // path; anon = empty or kernel-bracket like [vdso] / [stack].
-        std::size_t pos = sp1 + 5;
-        for (int k = 0; k < 4 && pos < sv.size(); ++k) {
-            while (pos < sv.size() && sv[pos] == ' ') ++pos;
-            while (pos < sv.size() && sv[pos] != ' ') ++pos;
-        }
         while (pos < sv.size() && sv[pos] == ' ') ++pos;
-        const std::string_view path_sv = sv.substr(pos);
-        if (!path_sv.empty() && path_sv.front() != '[') continue;
-
-        out.push_back({start, end - start});
+        std::string_view path_sv = sv.substr(pos);
+        while (!path_sv.empty() && (path_sv.back() == ' ' || path_sv.back() == '\t')) {
+            path_sv.remove_suffix(1);
+        }
+        out.push_back({start, end - start, std::string(path_sv)});
     }
     std::fclose(f);
     return out;
@@ -573,33 +569,75 @@ std::vector<AnonRegion> read_anon_regions(debug::ProcessId pid) {
     }
 }
 
-// Resolve the slide for an aux binary. Manual @hex wins. Otherwise
-// scan for anon-rwx regions whose size matches the binary's mapped
-// extent AND whose first 4 bytes carry the binary's format magic.
-// Both checks together kill the small-fixture false-positive case
-// where a random anon page coincidentally matches the size.
+// Slide for an aux binary. Manual @hex wins; otherwise:
+//   1. File-backed match: same path or basename in /proc/pid/maps →
+//      runtime base = lowest mapping for that file. Covers stock
+//      shared libraries (libc, libstdc++, ...) loaded normally.
+//   2. Anon-rwx match: size + format-magic check at the candidate
+//      region's first 4 bytes. Covers Mach-O blobs / scrubbed
+//      shared objects that an in-process userspace loader mmap'd.
 std::optional<addr_t>
 compute_aux_slide(debug::Target& tgt, const AuxBin& aux) {
     if (!aux.bin) return std::nullopt;
     const addr_t pref = aux.bin->preferred_load_base();
     if (aux.manual_base) return *aux.manual_base - pref;
 
+    const auto regions = read_mappings(tgt.pid());
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::string aux_canon = aux.path;
+    if (auto p = fs::canonical(aux.path, ec); !ec) aux_canon = p.string();
+    const std::string aux_base = fs::path(aux.path).filename().string();
+
+    addr_t file_base = 0;
+    bool   file_hit  = false;
+    for (const auto& r : regions) {
+        if (r.path.empty() || r.path.front() == '[') continue;
+        const bool path_eq = (r.path == aux.path || r.path == aux_canon);
+        const bool base_eq = !aux_base.empty() &&
+                             fs::path(r.path).filename().string() == aux_base;
+        if (!path_eq && !base_eq) continue;
+        if (!file_hit || r.base < file_base) {
+            file_base = r.base;
+            file_hit  = true;
+        }
+    }
+    if (file_hit) return file_base - pref;
+
     const addr_t want_size = aux.bin->mapped_size();
     if (want_size == 0) return std::nullopt;
     constexpr addr_t kPage = 0x1000;
     const addr_t want = (want_size + kPage - 1) & ~(kPage - 1);
 
-    const auto regions = read_anon_regions(tgt.pid());
-    addr_t found_base = 0;
-    int    matches    = 0;
+    addr_t anon_base = 0;
+    int    matches   = 0;
     for (const auto& r : regions) {
+        if (!r.path.empty() && r.path.front() != '[') continue;
         if (r.size != want) continue;
         if (!magic_matches_at(tgt, r.base, *aux.bin)) continue;
-        found_base = r.base;
+        anon_base = r.base;
         ++matches;
     }
-    if (matches == 1) return found_base - pref;
+    if (matches == 1) return anon_base - pref;
     return std::nullopt;
+}
+
+// Try to resolve every aux whose slide isn't yet known. Cheap on a
+// stable address space (one /proc/maps read), so callable from the
+// stop-event path without measurable overhead.
+void refresh_unresolved_aux_slides(ReplState& rs) {
+    if (!rs.live) return;
+    for (auto& aux : rs.aux_bins) {
+        if (aux.slide_resolved) continue;
+        if (auto s = compute_aux_slide(*rs.tgt, aux); s) {
+            aux.slide = *s;
+            aux.slide_resolved = true;
+            std::println("  aux: {} loaded at {} (auto, lazy)",
+                         aux.path,
+                         fmt_addr(aux.bin->preferred_load_base() + aux.slide));
+        }
+    }
 }
 
 void on_target_acquired(ReplState& rs) {
@@ -1109,6 +1147,9 @@ bool wait_and_print(ReplState& rs) {
     while (true) {
         auto ev = rs.tgt->wait_event();
         if (!ev) { print_error(ev.error()); return true; }
+        // Dynamic linker may have mapped libc / libstdc++ since
+        // attach. Refresh any aux that wasn't yet resolved.
+        refresh_unresolved_aux_slides(rs);
 
         // Fault-class signals at known-recovered PCs: silently forward
         // and keep waiting. The Linux backend stashed `pending_signal`

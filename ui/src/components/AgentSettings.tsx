@@ -8,6 +8,7 @@ import { C, sans, mono, serif } from "../theme";
 
 const ROLES = ["namer", "mapper", "typer", "tiebreaker"] as const;
 const MODEL_PRESETS = [
+    "openrouter/owl-alpha",        // free, 1M ctx — current default
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-r1",

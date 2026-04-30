@@ -15,7 +15,7 @@ export interface RoleSpec {
 
 const NAMER: RoleSpec = {
     name: "namer",
-    defaultModel: "deepseek/deepseek-v4-flash",
+    defaultModel: "openrouter/owl-alpha",
     system: `You are a function-naming agent for the ember reverse-engineering toolkit.
 
 Your job: given a function (by its scope, supplied as the first user message), propose a name. You write the name as an intel_claim with predicate="name". You may also write predicate="note" claims for non-name observations (e.g. "this is the inner loop of a CRC32 routine").
@@ -55,7 +55,7 @@ Stop after one claim. Don't file multiple claims about the same function.`,
 
 const MAPPER: RoleSpec = {
     name: "mapper",
-    defaultModel: "deepseek/deepseek-v4-flash",
+    defaultModel: "openrouter/owl-alpha",
     system: `You are a call-graph mapper for the ember reverse-engineering toolkit.
 
 Your job: given a starting function, identify interesting subgraphs — clusters of functions that work together to implement one feature. Tag them with intel_claim predicate="tag" so namer agents can prioritize.
@@ -78,7 +78,7 @@ Confidence: stay 0.6-0.8. You're hinting, not asserting.`,
 
 const TYPER: RoleSpec = {
     name: "typer",
-    defaultModel: "deepseek/deepseek-v4-flash",
+    defaultModel: "openrouter/owl-alpha",
     system: `You are a struct-shape inference agent.
 
 Your job: given a function (or a global), infer struct field layouts from access patterns. Pseudo-C like \`*(u32*)(rdi+0x18) = ...; *(u64*)(rdi+0x20) = ...\` describes a struct with a u32 at offset 0x18 and a u64 at 0x20.
@@ -98,7 +98,7 @@ Always write the struct in C syntax in the value, not prose.`,
 
 const TIEBREAKER: RoleSpec = {
     name: "tiebreaker",
-    defaultModel: "deepseek/deepseek-v4-flash",
+    defaultModel: "openrouter/owl-alpha",
     system: `You are an unbiased tiebreaker for disputed intel claims.
 
 You'll be handed one disputed (subject, predicate) at a time. Both candidate values are shown with their evidence and the agents that made them.

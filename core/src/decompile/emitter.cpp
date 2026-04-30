@@ -462,6 +462,13 @@ struct Emitter {
     // call: either it's still the function's live-in (version 0) and no user
     // signature claims it, or its most recent def is a Clobber from a prior
     // call. Both cases look like `strlen(... rsi, rdx, r8, r9)` noise.
+    //
+    // A live-in reg that maps to one of OUR own inferred int-arg slots
+    // (i.e. the function takes that reg as a parameter) is NOT stale —
+    // it's a forwarded argument. Without this guard, a wrapper like
+    // `u64 wrap(u64 a1) { return add7(a1); }` decompiles to `add7()`
+    // because is_stale_arg_reg treats `a1` as uninitialised live-in
+    // when the caller has no annotation file pinning the signature.
     [[nodiscard]] bool is_stale_arg_reg(const IrValue& a) const {
         if (a.kind != IrValueKind::Reg) return false;
         if (a.version == 0) {
@@ -470,9 +477,25 @@ struct Emitter {
                     if (abi_param_for(*sig, a.reg)) return false;
                 }
             }
+            // Fall back to inferred self-arity: if a is within the first
+            // `self_arity` int-arg regs, treat it as a forwarded param.
+            const auto int_args = int_arg_regs(abi);
+            const Reg canon = canonical_reg(a.reg);
+            for (u8 i = 0; i < int_args.size() && i < self_arity; ++i) {
+                if (int_args[i] == canon) return false;
+            }
             return true;
         }
-        if (const IrInst* d = def_of(a); d && d->op == IrOp::Clobber) return true;
+        if (const IrInst* d = def_of(a); d && d->op == IrOp::Clobber) {
+            // Bound call returns (rax → r_strlen, etc.) are real values
+            // even though their def is a Clobber — the binding name
+            // proves a downstream reader picked the value up.
+            if (auto k = ssa_key(a); k &&
+                call_return_names.find(*k) != call_return_names.end()) {
+                return false;
+            }
+            return true;
+        }
         return false;
     }
 
@@ -2954,8 +2977,21 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     };
 
     // When we know the callee's arity, show exactly that many args.
+    // Special case: arity == max_arity (6 on SysV / 4 on Win64) is what
+    // the heuristic infer_arity returns when it couldn't analyse the
+    // callee's body — e.g. an obfuscated stub or an entry whose bytes
+    // didn't decode. In those cases we don't actually know the real
+    // arity; trim the trailing args that look stale (live-in arg regs
+    // the caller never set, or unbound call-clobber pass-throughs)
+    // before printing. A genuinely max-arg function would have caller-
+    // set values in every slot, so no trim happens. Below max_arity we
+    // trust the inference and print exactly that many args.
+    const u8 max_int_arity = static_cast<u8>(int_arg_regs(abi).size());
     auto format_call_args_with_arity = [&](const std::vector<IrValue>& args, u8 arity) {
-        const std::size_t limit = std::min<std::size_t>(arity, args.size());
+        std::size_t limit = std::min<std::size_t>(arity, args.size());
+        if (arity == max_int_arity) {
+            while (limit > 0 && is_stale_arg_reg(args[limit - 1])) --limit;
+        }
         std::string s;
         for (std::size_t i = 0; i < limit; ++i) {
             if (i > 0) s += ", ";

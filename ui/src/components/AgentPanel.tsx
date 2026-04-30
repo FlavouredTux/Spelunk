@@ -1,7 +1,50 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type ErrorInfo } from "react";
 import { C, sans, mono, serif } from "../theme";
 import { NeuralView } from "./NeuralView";
 import { AgentSettings } from "./AgentSettings";
+
+// Tiny boundary so a render exception (typically: malformed claim
+// from an older worker writing out incomplete fields, NeuralView
+// SVG hiccup, etc.) doesn't black-screen the whole panel. Surfaces
+// the error message in-panel and lets the user reload via the
+// onClose path.
+class AgentErrorBoundary extends Component<
+    { children: ReactNode; onReset: () => void },
+    { err: Error | null }
+> {
+    state = { err: null as Error | null };
+    static getDerivedStateFromError(err: Error) { return { err }; }
+    componentDidCatch(err: Error, info: ErrorInfo) {
+        // eslint-disable-next-line no-console
+        console.error("AgentPanel crashed:", err, info.componentStack);
+    }
+    render() {
+        if (!this.state.err) return this.props.children;
+        return (
+            <div style={{
+                position: "fixed", inset: 0,
+                background: C.bg, color: C.text, fontFamily: sans,
+                zIndex: 200, padding: "20% 20px 0", textAlign: "center",
+            }}>
+                <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 22, marginBottom: 12 }}>
+                    Agentic panel hit an error
+                </div>
+                <div style={{ fontFamily: mono, fontSize: 12, color: C.red, maxWidth: 700, margin: "0 auto 16px" }}>
+                    {this.state.err.message}
+                </div>
+                <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 12, color: C.textMuted, marginBottom: 20 }}>
+                    Likely cause: a malformed claim from a pre-1.0.3 worker. Check ~/.cache/ember/&lt;binary-key&gt;/intel.jsonl
+                    for entries missing subject/predicate/value/confidence and remove them.
+                </div>
+                <button onClick={this.props.onReset} style={{
+                    fontFamily: mono, fontSize: 12,
+                    padding: "8px 16px", borderRadius: 4,
+                    background: C.accent, color: "#1a1410", border: "none", cursor: "pointer",
+                }}>close panel</button>
+            </div>
+        );
+    }
+}
 
 // Agent harness dashboard. Read-only views over agent/src/intel/log.ts
 // JSONL state plus the per-run events.jsonl files. Polls every 2s
@@ -76,6 +119,17 @@ function fmtUsd(usd: number): string {
 }
 
 export function AgentPanel(props: {
+    binaryPath: string | null;
+    onClose: () => void;
+}) {
+    return (
+        <AgentErrorBoundary onReset={props.onClose}>
+            <AgentPanelInner {...props} />
+        </AgentErrorBoundary>
+    );
+}
+
+function AgentPanelInner(props: {
     binaryPath: string | null;
     onClose: () => void;
 }) {
@@ -540,7 +594,12 @@ function DisputesColumn(props: { disputes: Decision[] }) {
 
 function ClaimRow(props: { claim: Claim; mark: string }) {
     const c = props.claim;
-    const color = ROLE_COLOR[c.agent.split("-")[0]] ?? C.text;
+    const agent = c.agent ?? "?";
+    const value = c.value ?? "(missing)";
+    const evidence = c.evidence ?? "";
+    const confRaw = (c as { confidence?: number }).confidence;
+    const confStr = typeof confRaw === "number" && Number.isFinite(confRaw) ? confRaw.toFixed(2) : "—";
+    const color = ROLE_COLOR[agent.split("-")[0]] ?? C.text;
     return (
         <div style={{
             display: "grid",
@@ -558,16 +617,16 @@ function ClaimRow(props: { claim: Claim; mark: string }) {
                 <div style={{
                     fontFamily: mono, fontSize: 12, color,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>{c.value}</div>
+                }}>{value}</div>
                 <div style={{
                     fontFamily: serif, fontStyle: "italic", fontSize: 10.5,
                     color: C.textMuted,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>{c.evidence}</div>
+                }}>{evidence}</div>
             </div>
             <div style={{ fontFamily: mono, fontSize: 10, color: C.textMuted, textAlign: "right" }}>
-                <div>{c.confidence.toFixed(2)}</div>
-                <div style={{ color: C.textFaint }}>{c.agent.split("-")[0]}</div>
+                <div>{confStr}</div>
+                <div style={{ color: C.textFaint }}>{agent.split("-")[0]}</div>
             </div>
         </div>
     );
@@ -578,22 +637,34 @@ function RecentClaimsColumn(props: { recent: Claim[] }) {
         <Column title="Recent claims" subtitle="last 30 entries">
             {props.recent.length === 0 && <Empty msg="No claims yet — spawn workers via fanout." />}
             {props.recent.map((c) => {
-                const roleColor = ROLE_COLOR[c.agent.split("-")[0]] ?? C.textMuted;
-                const predColor = PRED_COLOR[c.predicate] ?? C.textMuted;
+                // Defend against malformed claims (missing fields) — a
+                // pre-1.0.3 worker could write claims with no subject /
+                // predicate / value / confidence; those would crash the
+                // .toFixed() / split() calls below and black-screen the
+                // panel. Coerce to safe defaults.
+                const subject  = c.subject   ?? "—";
+                const predicate = c.predicate ?? "—";
+                const value    = c.value     ?? "(missing)";
+                const agent    = c.agent     ?? "?";
+                const confRaw  = (c as { confidence?: number }).confidence;
+                const confStr  = typeof confRaw === "number" && Number.isFinite(confRaw)
+                    ? confRaw.toFixed(2) : "—";
+                const roleColor = ROLE_COLOR[agent.split("-")[0]] ?? C.textMuted;
+                const predColor = PRED_COLOR[predicate] ?? C.textMuted;
                 return (
                     <div key={c.id} style={{
                         padding: "6px 0",
                         borderBottom: `1px solid ${C.border}`,
                     }}>
                         <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontFamily: mono, fontSize: 11 }}>
-                            <span style={{ color: C.textFaint, width: 56 }}>{c.subject}</span>
-                            <span style={{ color: predColor, width: 56 }}>{c.predicate}</span>
+                            <span style={{ color: C.textFaint, width: 56 }}>{subject}</span>
+                            <span style={{ color: predColor, width: 56 }}>{predicate}</span>
                             <span style={{ color: C.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {c.value}
+                                {value}
                             </span>
-                            <span style={{ color: roleColor, fontSize: 10 }}>{c.agent.split("-")[0]}</span>
+                            <span style={{ color: roleColor, fontSize: 10 }}>{agent.split("-")[0]}</span>
                             <span style={{ color: C.textMuted, fontSize: 10, width: 32, textAlign: "right" }}>
-                                {c.confidence.toFixed(2)}
+                                {confStr}
                             </span>
                         </div>
                         {c.evidence && (
@@ -723,7 +794,8 @@ function ActivityRibbon(props: { claims: Claim[] }) {
     const buckets = useMemo(() => {
         const b = [0, 0, 0, 0, 0];   // [<.5, .5-.7, .7-.85, .85-.95, ≥.95]
         for (const c of props.claims) {
-            const v = c.confidence;
+            const v = (c as { confidence?: number }).confidence;
+            if (typeof v !== "number" || !Number.isFinite(v)) continue;  // skip malformed
             if      (v < 0.5)  ++b[0];
             else if (v < 0.7)  ++b[1];
             else if (v < 0.85) ++b[2];

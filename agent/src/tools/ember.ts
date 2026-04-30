@@ -237,17 +237,32 @@ const intelClaim: Tool = {
         },
     },
     async execute(input, ctx) {
-        const i = input as Omit<Claim, "kind" | "id" | "agent" | "ts">;
+        const i = (input ?? {}) as Partial<Omit<Claim, "kind" | "id" | "agent" | "ts">>;
+        // Guard against the model passing tool args with missing fields.
+        // Without this, malformed claims (no subject / predicate /
+        // value / confidence) pollute the intel db and crash the UI's
+        // renderer when it tries to format them. Reject with a useful
+        // diagnostic so the model retries with valid args on the next
+        // turn.
+        const missing: string[] = [];
+        if (typeof i.subject !== "string"   || !i.subject.trim())   missing.push("subject");
+        if (typeof i.predicate !== "string" || !i.predicate.trim()) missing.push("predicate");
+        if (typeof i.value !== "string"     || !i.value.trim())     missing.push("value");
+        if (typeof i.evidence !== "string"  || !i.evidence.trim())  missing.push("evidence");
+        if (typeof i.confidence !== "number" || !Number.isFinite(i.confidence)) missing.push("confidence");
+        if (missing.length) {
+            throw new Error(`intel_claim rejected: missing/invalid fields: ${missing.join(", ")}. Required: subject (e.g. "0x4012a0"), predicate, value, evidence, confidence (0..1).`);
+        }
         const c: Claim = {
             kind: "claim",
             id: newId(),
             agent: ctx.agentId,
             ts: new Date().toISOString(),
-            subject: i.subject,
-            predicate: i.predicate,
-            value: i.value,
-            evidence: i.evidence,
-            confidence: i.confidence,
+            subject: i.subject!,
+            predicate: i.predicate!,
+            value: i.value!,
+            evidence: i.evidence!,
+            confidence: Math.max(0, Math.min(1, i.confidence!)),
             supersedes: i.supersedes,
         };
         ctx.intel.append(c);

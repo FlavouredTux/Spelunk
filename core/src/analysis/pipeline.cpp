@@ -1162,10 +1162,29 @@ containing_function(const Binary& b, addr_t addr) {
     --it;
 
     // Respect the known extent when the symbol gives us one. A symbol
-    // with size=0 (stripped `sub_*` entries) is treated as open-ended:
-    // we still return it because the decompiler will walk it via the
-    // terminator. Caller sees offset_within = addr - entry regardless.
+    // with size=0 (stripped `sub_*` entries) is bounded implicitly by
+    // the next function's start — without that, an addr that lands far
+    // outside any real function would still be claimed by the
+    // largest-start ≤ addr entry, surfacing absurd offsets like
+    // `sub_53290+0x29586126579c` on backtrace frames pointing into
+    // libc that the primary binary has no business labelling.
     if (it->size != 0 && addr >= it->addr + it->size) return std::nullopt;
+    if (it->size == 0) {
+        addr_t implied_end = 0;
+        auto nxt = it; ++nxt;
+        if (nxt != fns.end()) implied_end = nxt->addr;
+        if (implied_end != 0 && addr >= implied_end) return std::nullopt;
+        // Last function in the sorted set with size==0: cap by section
+        // extent so a PC past the .text mapping doesn't get mislabelled.
+        if (implied_end == 0) {
+            for (const auto& s : b.sections()) {
+                if (it->addr >= s.vaddr && it->addr < s.vaddr + s.size) {
+                    if (addr >= s.vaddr + s.size) return std::nullopt;
+                    break;
+                }
+            }
+        }
+    }
     if (b.bytes_at(it->addr).empty()) return std::nullopt;
 
     ContainingFn out;

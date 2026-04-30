@@ -127,6 +127,45 @@ ember-agent fanout --binary=./target.elf --pick=unnamed \
 # Returns JSON with run-ids; each worker writes its own events.jsonl.
 ```
 
+### Anchor Cascade
+
+The TEEF-equivalent for agentic naming. Single-pass swarms treat
+each function as an island; the agent looking at `sub_a` sees calls
+to `sub_b` and `sub_c` rendered as `sub_b()`/`sub_c()` — opaque,
+no anchors to bootstrap from.
+
+Cascade exploits ember's emit-time annotation lookup: re-rendering
+pseudo-C after a `promote` is essentially free, so we run the swarm
+in rounds with `promote --apply` between them. Each round's agents
+see strictly more named neighbors than the prior round's.
+
+```sh
+ember-agent cascade --binary=./target.elf \
+  --per-round=30 --max-rounds=5 \
+  --budget=0.05 --threshold=0.85 \
+  --eligibility-ratio=0.5 \
+  --model=deepseek/deepseek-v4-flash
+```
+
+Eligibility per round: a function is eligible iff
+`known_callees / total_callees >= --eligibility-ratio`. PLT thunks
+and named symbols count as known; intel claims with confidence ≥
+`--threshold` count as known. Leaves (zero callees) are eligible
+from round 0.
+
+The loop terminates when a round produces zero new high-confidence
+names — every remaining unknown is genuinely too obscured for the
+swarm to crack with the current corpus. Round-by-round stats
+(eligible / spawned / new_names / cost / elapsed) print to stderr;
+the JSON result on stdout has the per-round breakdown plus totals.
+
+Expected behavior on a 7000-fn stripped binary: ~5-10% named in
+round 0 (anchored leaves and TEEF-seeded fns), another 15-20% in
+round 1, asymptote 50-70% over a few rounds. Bad-faith targets
+(libloader-style obfuscated runtime plumbing where naming from
+pseudo-C alone is genuinely impossible) terminate after round 0
+with the "wasted runs" stat surfaced in the UI.
+
 ### Promote
 
 Fold the intel view into a `.ember` script and (optionally) apply it

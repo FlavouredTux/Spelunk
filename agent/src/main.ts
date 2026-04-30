@@ -9,6 +9,7 @@ import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { promote } from "./promote.js";
 import { fanout } from "./fanout.js";
+import { cascade } from "./cascade.js";
 
 // CLI entry. Subcommands:
 //   worker --role=R --binary=B --scope=S [--model=M] [--budget=N] [--detach]
@@ -266,6 +267,40 @@ async function cmdFanout(argv: string[]) {
     console.log(JSON.stringify(r, null, 2));
 }
 
+async function cmdCascade(argv: string[]) {
+    const f = parseFlags(argv);
+    const binary = f.get("binary");
+    if (!binary) {
+        console.error("usage: cascade --binary=B [--role=namer] [--per-round=N] [--max-rounds=N] [--budget=N] [--threshold=N] [--eligibility-ratio=N] [--model=M]");
+        process.exit(2);
+    }
+    const role = (f.get("role") ?? "namer") as "namer" | "mapper" | "typer" | "tiebreaker";
+    if (!ROLES[role]) { console.error(`unknown role: ${role}`); process.exit(2); }
+
+    process.stderr.write(`cascade starting on ${binary}, role=${role}\n`);
+    const r = await cascade({
+        binary: resolve(binary),
+        role,
+        model: f.get("model"),
+        perRound:         parseInt(f.get("per-round") ?? "20", 10),
+        maxRounds:        parseInt(f.get("max-rounds") ?? "5", 10),
+        budget:           parseFloat(f.get("budget") ?? "0.05"),
+        maxTurns:         parseInt(f.get("max-turns") ?? "10", 10),
+        threshold:        parseFloat(f.get("threshold") ?? "0.85"),
+        eligibilityRatio: parseFloat(f.get("eligibility-ratio") ?? "0.5"),
+        emberBin: findEmberBin(),
+        runsRoot: RUNS_ROOT,
+    });
+
+    // Per-round ASCII summary.
+    for (const rd of r.rounds) {
+        process.stderr.write(
+            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} new=${rd.new_names} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
+        );
+    }
+    console.log(JSON.stringify(r, null, 2));
+}
+
 async function main() {
     const [, , cmd, ...rest] = process.argv;
     switch (cmd) {
@@ -274,8 +309,9 @@ async function main() {
         case "runs":     await cmdRuns(rest);    return;
         case "promote":  await cmdPromote(rest); return;
         case "fanout":   await cmdFanout(rest);  return;
+        case "cascade":  await cmdCascade(rest); return;
         default:
-            console.error("usage: ember-agent <worker|intel|runs|promote|fanout> ...");
+            console.error("usage: ember-agent <worker|intel|runs|promote|fanout|cascade> ...");
             process.exit(2);
     }
 }

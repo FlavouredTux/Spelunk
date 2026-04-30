@@ -2056,6 +2056,30 @@ ipcMain.handle("agent:promote", async (_e, opts) => {
   });
 });
 
+ipcMain.handle("agent:cascade", async (_e, opts) => {
+  const node = process.execPath;
+  const agent = path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+  return new Promise((resolve, reject) => {
+    const args = [agent, "cascade", `--binary=${opts.binary}`];
+    if (opts.role)             args.push(`--role=${opts.role}`);
+    if (opts.perRound)         args.push(`--per-round=${opts.perRound}`);
+    if (opts.maxRounds)        args.push(`--max-rounds=${opts.maxRounds}`);
+    if (opts.budget)           args.push(`--budget=${opts.budget}`);
+    if (opts.threshold)        args.push(`--threshold=${opts.threshold}`);
+    if (opts.eligibilityRatio) args.push(`--eligibility-ratio=${opts.eligibilityRatio}`);
+    if (opts.model)            args.push(`--model=${opts.model}`);
+    const proc = spawn(node, args, { cwd: path.dirname(agent), env: process.env });
+    let out = "", err = "";
+    proc.stdout.on("data", (b) => { out += b.toString(); });
+    proc.stderr.on("data", (b) => { err += b.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
+      try { resolve(JSON.parse(out)); } catch { resolve({ raw: out, stderr: err }); }
+    });
+    proc.on("error", reject);
+  });
+});
+
 // ---------------------------------------------------------------- end agent
 
 app.on("before-quit", async () => {

@@ -103,5 +103,6 @@ contextBridge.exposeInMainWorld("ember", {
     tailRun:   (runId)   => ipcRenderer.invoke("agent:tailRun", runId),
     fanout:    (opts)    => ipcRenderer.invoke("agent:fanout", opts),
     promote:   (opts)    => ipcRenderer.invoke("agent:promote", opts),
+    cascade:   (opts)    => ipcRenderer.invoke("agent:cascade", opts),
   },
 });

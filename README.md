@@ -272,6 +272,13 @@ into the same `.ember` annotation file that drives pseudo-C emit.
 ember-agent fanout --binary=./target.elf --pick=unnamed --limit=20 \
   --budget=0.04 --model=deepseek/deepseek-v4-flash
 
+# Or run Anchor Cascade — iterative bottom-up naming. Each round
+# names fns whose callees are mostly anchored, promotes ≥0.85 conf
+# claims, and re-renders pseudo-C so the next round sees richer
+# context. Provably better than single-pass: information per prompt
+# strictly increases per round.
+ember-agent cascade --binary=./target.elf --per-round=30 --max-rounds=5
+
 # Read what the swarm decided:
 ember-agent intel ./target.elf disputes
 ember-agent intel ./target.elf query --subject=0x4012a0 --predicate=name

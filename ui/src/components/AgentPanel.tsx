@@ -164,6 +164,26 @@ export function AgentPanel(props: {
         } finally { setBusy(null); }
     };
 
+    const onCascade = async () => {
+        if (!props.binaryPath) return;
+        setBusy("cascading…");
+        try {
+            const r = await window.ember.agent.cascade({
+                binary: props.binaryPath,
+                role: "namer",
+                perRound: 30, maxRounds: 5,
+                budget: 0.05, threshold: 0.85,
+                eligibilityRatio: 0.5,
+            });
+            const namedAcrossRounds = (r.rounds ?? []).reduce((s: number, x: any) => s + (x.new_names ?? 0), 0);
+            setToast(`cascade: ${r.rounds?.length ?? 0} rounds · +${namedAcrossRounds} names · $${(r.total_cost ?? 0).toFixed(3)}`);
+            setTimeout(() => setToast(null), 6000);
+        } catch (e: any) {
+            setToast(`cascade error: ${e?.message ?? e}`);
+            setTimeout(() => setToast(null), 6000);
+        } finally { setBusy(null); }
+    };
+
     return (
         <div
             style={{
@@ -180,6 +200,7 @@ export function AgentPanel(props: {
                 onClose={props.onClose}
                 onPromoteApply={() => onPromote(true)}
                 onPromoteDry={() => onPromote(false)}
+                onCascade={onCascade}
                 disabled={!props.binaryPath || busy != null}
                 busyLabel={busy}
             />
@@ -248,6 +269,7 @@ function Header(props: {
     onClose: () => void;
     onPromoteApply: () => void;
     onPromoteDry: () => void;
+    onCascade: () => void;
     disabled: boolean;
     busyLabel: string | null;
 }) {
@@ -283,10 +305,13 @@ function Header(props: {
                         {props.busyLabel}
                     </span>
                 )}
+                <Btn onClick={props.onCascade} disabled={props.disabled}>
+                    ◈ cascade
+                </Btn>
                 <Btn onClick={props.onPromoteDry} disabled={props.disabled} ghost>
                     promote --dry-run
                 </Btn>
-                <Btn onClick={props.onPromoteApply} disabled={props.disabled}>
+                <Btn onClick={props.onPromoteApply} disabled={props.disabled} ghost>
                     promote --apply
                 </Btn>
                 <Btn onClick={props.onClose} ghost>close</Btn>

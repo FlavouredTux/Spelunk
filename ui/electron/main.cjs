@@ -2099,33 +2099,47 @@ function agentDefaultsPath() {
 }
 
 function parseAgentToml(raw) {
-  const out = { assistant: "", openai: "", openrouter: "" };
+  // Returns arrays per provider — single-key 'key = "X"' form is
+  // accepted as a 1-element list; 'keys = ["A","B"]' as full list.
+  const out = { assistant: [], openai: [], openrouter: [] };
   let section = "";
+  const push = (s, v) => {
+    if (!v) return;
+    if (s === "assistant"  && !out.assistant.includes(v))  out.assistant.push(v);
+    if (s === "openai"     && !out.openai.includes(v))     out.openai.push(v);
+    if (s === "openrouter" && !out.openrouter.includes(v)) out.openrouter.push(v);
+  };
   for (const line of raw.split("\n")) {
     const t = line.trim();
     if (!t || t.startsWith("#")) continue;
     const m = /^\[(\w+)\]$/.exec(t);
     if (m) { section = m[1]; continue; }
+    const arr = /^keys\s*=\s*\[(.+)\]\s*$/.exec(t);
+    if (arr) {
+      const matches = arr[1].matchAll(/"([^"]*)"/g);
+      for (const m2 of matches) push(section, m2[1]);
+      continue;
+    }
     const kv = /^(\w+)\s*=\s*"([^"]*)"$/.exec(t);
-    if (!kv) continue;
-    if (kv[1] !== "key") continue;
-    if (section === "assistant")  out.assistant  = kv[2];
-    if (section === "openai")     out.openai     = kv[2];
-    if (section === "openrouter") out.openrouter = kv[2];
+    if (kv && kv[1] === "key") push(section, kv[2]);
   }
   return out;
 }
 
 function emitAgentToml(cfg) {
-  const out = [];
-  if (cfg.assistant) out.push(`[assistant]\nkey = "${cfg.assistant}"\n`);
-  if (cfg.openai)    out.push(`[openai]\nkey = "${cfg.openai}"\n`);
-  if (cfg.openrouter) out.push(`[openrouter]\nkey = "${cfg.openrouter}"\n`);
-  return out.join("\n");
+  // Single-key uses 'key =' for back-compat; multi-key uses 'keys ='.
+  const sect = (name, arr) => {
+    if (!arr || arr.length === 0) return "";
+    if (arr.length === 1) return `[${name}]\nkey = "${arr[0]}"\n`;
+    const list = arr.map((k) => `"${k}"`).join(", ");
+    return `[${name}]\nkeys = [${list}]\n`;
+  };
+  return [sect("assistant", cfg.assistant), sect("openai", cfg.openai), sect("openrouter", cfg.openrouter)]
+    .filter(Boolean).join("\n");
 }
 
 ipcMain.handle("agent:getConfig", async () => {
-  let cfg = { assistant: "", openai: "", openrouter: "" };
+  let cfg = { assistant: [], openai: [], openrouter: [] };
   try {
     const raw = require("node:fs").readFileSync(agentConfigPath(), "utf8");
     cfg = parseAgentToml(raw);
@@ -2134,12 +2148,20 @@ ipcMain.handle("agent:getConfig", async () => {
   try {
     defaults = JSON.parse(require("node:fs").readFileSync(agentDefaultsPath(), "utf8"));
   } catch { /* no defaults yet */ }
-  // Mask keys to last 4 chars so the renderer can show "•••• …xyz9"
-  // without ever holding the full secret in memory unless asked.
+  // Mask keys to a head/tail snippet so the renderer can show
+  // "sk-or-…xyz9" per key without ever holding the full secret.
   const mask = (s) => s ? s.slice(0, 6) + "…" + s.slice(-4) : "";
   return {
-    masked: { assistant: mask(cfg.assistant), openai: mask(cfg.openai), openrouter: mask(cfg.openrouter) },
-    has:    { assistant: !!cfg.assistant,     openai: !!cfg.openai,     openrouter: !!cfg.openrouter },
+    masked: {
+      assistant:  cfg.assistant.map(mask),
+      openai:     cfg.openai.map(mask),
+      openrouter: cfg.openrouter.map(mask),
+    },
+    counts: {
+      assistant:  cfg.assistant.length,
+      openai:     cfg.openai.length,
+      openrouter: cfg.openrouter.length,
+    },
     defaults,
     path: agentConfigPath(),
   };
@@ -2148,16 +2170,26 @@ ipcMain.handle("agent:getConfig", async () => {
 ipcMain.handle("agent:setConfig", async (_e, patch) => {
   const fs = require("node:fs");
   const cfgPath = agentConfigPath();
-  let cur = { assistant: "", openai: "", openrouter: "" };
+  let cur = { assistant: [], openai: [], openrouter: [] };
   try { cur = parseAgentToml(fs.readFileSync(cfgPath, "utf8")); } catch {}
-  const next = { ...cur };
-  // patch may carry keys (raw) and/or defaults (object). Empty string
-  // for a key means "leave as-is"; null means "clear it."
+  const next = { assistant: [...cur.assistant], openai: [...cur.openai], openrouter: [...cur.openrouter] };
+  // patch.keys per provider: array → replace whole list; null → clear.
+  // (Old shape: string → wrapped to single-element list. Empty string
+  // → leave as-is. Preserves earlier UI flow.)
   if (patch.keys) {
+    const append = patch.keysMode === "append";
     for (const k of ["assistant", "openai", "openrouter"]) {
       const v = patch.keys[k];
-      if (v == null) next[k] = "";
-      else if (v !== "") next[k] = v;
+      if (v === undefined) continue;       // leave as-is
+      if (v === null) { next[k] = []; continue; }   // explicit clear
+      const cleaned = Array.isArray(v)
+        ? v.filter((s) => typeof s === "string" && s.trim().length > 0)
+        : (typeof v === "string" && v !== "" ? [v] : []);
+      if (append) {
+        for (const s of cleaned) if (!next[k].includes(s)) next[k].push(s);
+      } else {
+        next[k] = cleaned;
+      }
     }
     fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
     fs.writeFileSync(cfgPath, emitAgentToml(next), { mode: 0o600 });

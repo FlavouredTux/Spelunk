@@ -50,12 +50,22 @@ key = "sk-ant-..."
 key = "sk-..."
 
 [openrouter]
-key = "sk-or-..."
+# Single-key form (legacy):
+# key = "sk-or-..."
+# Multi-key form — round-robin across keys per worker. Useful for
+# distributing load across multiple accounts on rate-limited free
+# tiers (e.g. owl-alpha at 200 concurrent workers):
+keys = ["sk-or-account-A", "sk-or-account-B"]
 ```
 
 Env vars (`assistant_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
-override the toml. Ember binary is auto-discovered (build/cli/ember,
-build/ember, $PATH); override with `EMBER_BIN`.
+override the toml's first key. Ember binary is auto-discovered
+(build/cli/ember, build/ember, $PATH); override with `EMBER_BIN`.
+
+Each `makeLLM()` call rotates which configured key it uses; concurrent
+workers spread evenly across the available keys for the chosen
+provider. The UI Settings drawer shows the per-provider key count and
+accepts comma-separated keys when adding new ones.
 
 The packaged Electron app spawns the agent CLI through the user's
 system `node` — Node 22+ is a soft prerequisite for agent features.

@@ -32,9 +32,11 @@ type Defaults = {
 declare global { interface Window { ember: any; } }
 
 export function AgentSettings(props: { open: boolean; onClose: () => void }) {
-    const [masked, setMasked] = useState<{ assistant: string; openai: string; openrouter: string }>({ assistant: "", openai: "", openrouter: "" });
-    const [has, setHas] = useState<{ assistant: boolean; openai: boolean; openrouter: boolean }>({ assistant: false, openai: false, openrouter: false });
-    const [keys, setKeys] = useState<{ assistant: string; openai: string; openrouter: string }>({ assistant: "", openai: "", openrouter: "" });
+    const [masked, setMasked] = useState<{ assistant: string[]; openai: string[]; openrouter: string[] }>({ assistant: [], openai: [], openrouter: [] });
+    const [counts, setCounts] = useState<{ assistant: number; openai: number; openrouter: number }>({ assistant: 0, openai: 0, openrouter: 0 });
+    // New keys to ADD (comma-separated input). Empty = no change.
+    const [newKeys, setNewKeys] = useState<{ assistant: string; openai: string; openrouter: string }>({ assistant: "", openai: "", openrouter: "" });
+    const [clearMask, setClearMask] = useState<{ assistant: boolean; openai: boolean; openrouter: boolean }>({ assistant: false, openai: false, openrouter: false });
     const [defaults, setDefaults] = useState<Defaults>({});
     const [cfgPath, setCfgPath] = useState<string>("");
     const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -42,26 +44,44 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
     useEffect(() => {
         if (!props.open) return;
         window.ember.agent.getConfig().then((r: any) => {
-            setMasked(r.masked); setHas(r.has);
+            setMasked(r.masked ?? { assistant: [], openai: [], openrouter: [] });
+            setCounts(r.counts ?? { assistant: 0, openai: 0, openrouter: 0 });
             setDefaults(r.defaults ?? {});
             setCfgPath(r.path);
         });
     }, [props.open]);
 
     const save = async () => {
+        // For each provider, build the FULL replacement list:
+        //   - if user clicked "clear", send [] so the toml is wiped
+        //   - else, append parsed new keys (comma-separated) to the existing list
+        const merge = (prov: "assistant" | "openai" | "openrouter"): string[] | null | undefined => {
+            if (clearMask[prov]) return null;
+            const fresh = newKeys[prov]
+                .split(/[,\n]/)
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0);
+            if (fresh.length === 0) return undefined;       // leave existing untouched
+            // We don't have raw existing keys here (only masked). For
+            // append, ask main to merge: send fresh list explicitly,
+            // main appends to its parsed-from-disk current list.
+            return fresh;
+        };
         await window.ember.agent.setConfig({
             keys: {
-                assistant:  keys.assistant  || undefined,
-                openai:     keys.openai     || undefined,
-                openrouter: keys.openrouter || undefined,
+                assistant:  merge("assistant"),
+                openai:     merge("openai"),
+                openrouter: merge("openrouter"),
             },
+            keysMode: "append",   // hint to main to append rather than replace
             defaults,
         });
         setSavedAt(Date.now());
-        // Refresh masked state so the user sees the new tail
         const r = await window.ember.agent.getConfig();
-        setMasked(r.masked); setHas(r.has);
-        setKeys({ assistant: "", openai: "", openrouter: "" });
+        setMasked(r.masked ?? masked);
+        setCounts(r.counts ?? counts);
+        setNewKeys({ assistant: "", openai: "", openrouter: "" });
+        setClearMask({ assistant: false, openai: false, openrouter: false });
         setTimeout(() => setSavedAt(null), 2000);
     };
 
@@ -102,25 +122,31 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
                     <KeyRow
                         label="OpenRouter"
                         masked={masked.openrouter}
-                        has={has.openrouter}
-                        value={keys.openrouter}
-                        onChange={(v) => setKeys({ ...keys, openrouter: v })}
-                        hint="sk-or-…  cheapest path; supports DeepSeek, assistant, OpenAI, Google"
+                        count={counts.openrouter}
+                        newValue={newKeys.openrouter}
+                        onNewChange={(v) => setNewKeys({ ...newKeys, openrouter: v })}
+                        cleared={clearMask.openrouter}
+                        onClearToggle={() => setClearMask({ ...clearMask, openrouter: !clearMask.openrouter })}
+                        hint="sk-or-…  multi-key supported (comma-separated): round-robin across accounts to escape free-tier rate limits"
                     />
                     <KeyRow
                         label="assistant"
                         masked={masked.assistant}
-                        has={has.assistant}
-                        value={keys.assistant}
-                        onChange={(v) => setKeys({ ...keys, assistant: v })}
+                        count={counts.assistant}
+                        newValue={newKeys.assistant}
+                        onNewChange={(v) => setNewKeys({ ...newKeys, assistant: v })}
+                        cleared={clearMask.assistant}
+                        onClearToggle={() => setClearMask({ ...clearMask, assistant: !clearMask.assistant })}
                         hint="sk-ant-…  for cache_control prompt caching at 10× discount"
                     />
                     <KeyRow
                         label="OpenAI"
                         masked={masked.openai}
-                        has={has.openai}
-                        value={keys.openai}
-                        onChange={(v) => setKeys({ ...keys, openai: v })}
+                        count={counts.openai}
+                        newValue={newKeys.openai}
+                        onNewChange={(v) => setNewKeys({ ...newKeys, openai: v })}
+                        cleared={clearMask.openai}
+                        onClearToggle={() => setClearMask({ ...clearMask, openai: !clearMask.openai })}
                         hint="sk-…  optional; OpenRouter routes the same models"
                     />
                 </Section>
@@ -174,25 +200,56 @@ function Section(props: { title: string; children: React.ReactNode }) {
 }
 
 function KeyRow(props: {
-    label: string; masked: string; has: boolean;
-    value: string; onChange: (v: string) => void;
+    label: string;
+    masked: string[];
+    count: number;
+    newValue: string;
+    onNewChange: (v: string) => void;
+    cleared: boolean;
+    onClearToggle: () => void;
     hint: string;
 }) {
     return (
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
-                <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>{props.label}</span>
-                {props.has && (
-                    <span style={{ fontFamily: mono, fontSize: 10, color: C.green }}>
-                        ✓ {props.masked}
-                    </span>
+                <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>
+                    {props.label}
+                    {props.count > 0 && (
+                        <span style={{ color: C.textFaint, marginLeft: 6 }}>
+                            ({props.count} key{props.count !== 1 ? "s" : ""})
+                        </span>
+                    )}
+                </span>
+                {props.count > 0 && (
+                    <button onClick={props.onClearToggle} style={{
+                        fontFamily: mono, fontSize: 10,
+                        color: props.cleared ? C.red : C.textMuted,
+                        background: "transparent",
+                        border: `1px solid ${props.cleared ? C.red : C.border}`,
+                        borderRadius: 3,
+                        padding: "1px 6px",
+                        cursor: "pointer",
+                    }}>
+                        {props.cleared ? "× WILL CLEAR ON SAVE" : "clear all"}
+                    </button>
                 )}
             </div>
+            {props.count > 0 && !props.cleared && (
+                <div style={{ marginBottom: 4 }}>
+                    {props.masked.map((m, i) => (
+                        <div key={i} style={{ fontFamily: mono, fontSize: 10, color: C.green, lineHeight: "16px" }}>
+                            ✓ {m}
+                        </div>
+                    ))}
+                </div>
+            )}
             <input
-                type="password"
-                value={props.value}
-                onChange={(e) => props.onChange(e.target.value)}
-                placeholder={props.has ? "(replace existing)" : "paste key…"}
+                type="text"
+                value={props.newValue}
+                onChange={(e) => props.onNewChange(e.target.value)}
+                placeholder={
+                    props.count > 0 ? "add another (comma-separated for multiple)…" : "paste key (comma-separated for multiple)…"
+                }
                 style={{
                     width: "100%",
                     fontFamily: mono, fontSize: 11,

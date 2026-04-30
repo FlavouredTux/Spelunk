@@ -566,9 +566,16 @@ function RecentClaimsColumn(props: { recent: Claim[] }) {
                         {c.evidence && (
                             <div style={{
                                 fontFamily: serif, fontStyle: "italic", fontSize: 10.5,
-                                color: C.textMuted, marginTop: 2, paddingLeft: 64,
-                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                            }}>{c.evidence}</div>
+                                color: C.textMuted, marginTop: 2, paddingLeft: 64, paddingRight: 8,
+                                // Wrap to ~2 lines max — long agent evidence
+                                // strings would otherwise blow out the column
+                                // width on the dashboard view.
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                                wordBreak: "break-word",
+                            } as React.CSSProperties}>{c.evidence}</div>
                         )}
                     </div>
                 );
@@ -740,6 +747,8 @@ function Column(props: { title: string; subtitle?: string; children: React.React
             display: "flex", flexDirection: "column",
             borderRight: `1px solid ${C.border}`,
             minHeight: 0,
+            minWidth: 0,        // grid children default to min-content; force shrink + scroll
+            overflow: "hidden",
         }}>
             <div style={{
                 padding: "10px 16px",

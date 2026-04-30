@@ -93,4 +93,15 @@ contextBridge.exposeInMainWorld("ember", {
       return () => ipcRenderer.removeListener("ember:ai:toolDone", h);
     },
   },
+
+  // Agent harness — read-only intel + run telemetry plus driver
+  // verbs (fanout, promote). Workers themselves run as detached
+  // processes; the UI just reads their JSONL state.
+  agent: {
+    intelView: (binary)  => ipcRenderer.invoke("agent:intelView", binary),
+    listRuns:  ()        => ipcRenderer.invoke("agent:listRuns"),
+    tailRun:   (runId)   => ipcRenderer.invoke("agent:tailRun", runId),
+    fanout:    (opts)    => ipcRenderer.invoke("agent:fanout", opts),
+    promote:   (opts)    => ipcRenderer.invoke("agent:promote", opts),
+  },
 });

@@ -1884,6 +1884,177 @@ ipcMain.handle("ember:discord:setActivity", async (_e, payload) => {
   }
 });
 
+// ---------------------------------------------------------------- agent
+//
+// Read-side IPC surface for the ember-agent harness. The harness is a
+// sibling process (`agent/dist/main.js`); we never link against it.
+// The renderer reads:
+//   intel.jsonl  per-binary, append-only — the materialized fold view
+//   events.jsonl per-run — turn-by-turn worker activity
+// Locations match the layout that agent/src/intel/log.ts and
+// agent/src/worker.ts write to: ~/.cache/ember/<binary-key>/intel.jsonl
+// and ~/.cache/ember/agent/runs/r-XXXXXX/events.jsonl.
+
+const crypto = require("node:crypto");
+
+function intelPathFor(binaryPath) {
+  // Mirrors agent/src/intel/log.ts intelPathFor: SHA-256 over
+  // "<abspath>|<size>|<floor(mtimeMs)>|v1", first 16 hex chars.
+  const stat = require("node:fs").statSync(binaryPath);
+  const key = crypto.createHash("sha256")
+    .update(binaryPath)
+    .update("|")
+    .update(String(stat.size))
+    .update("|")
+    .update(String(Math.floor(stat.mtimeMs)))
+    .update("|v1")
+    .digest("hex")
+    .slice(0, 16);
+  const root = process.env.XDG_CACHE_HOME
+    ? path.join(process.env.XDG_CACHE_HOME, "ember")
+    : path.join(require("node:os").homedir(), ".cache", "ember");
+  return path.join(root, key, "intel.jsonl");
+}
+
+function runsRoot() {
+  const cache = process.env.XDG_CACHE_HOME ?? path.join(require("node:os").homedir(), ".cache");
+  return path.join(cache, "ember", "agent", "runs");
+}
+
+function readJsonl(p) {
+  let raw = "";
+  try { raw = require("node:fs").readFileSync(p, "utf8"); } catch { return []; }
+  const out = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* skip corrupt */ }
+  }
+  return out;
+}
+
+// Fold the intel log. Mirrors agent/src/intel/log.ts but kept here so
+// the renderer doesn't need to spawn ember-agent for every refresh.
+function foldIntel(entries) {
+  const retracted = new Set();
+  for (const e of entries) if (e.kind === "retract") retracted.add(e.target_id);
+  const buckets = new Map();
+  for (const e of entries) {
+    if (e.kind !== "claim") continue;
+    if (retracted.has(e.id)) continue;
+    const k = `${e.subject}|${e.predicate}`;
+    const arr = buckets.get(k);
+    if (arr) arr.push(e); else buckets.set(k, [e]);
+  }
+  const view = [];
+  for (const [k, arr] of buckets) {
+    arr.sort((a, b) => {
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      return String(b.ts).localeCompare(String(a.ts));
+    });
+    const [winner, ...runners_up] = arr;
+    const second = runners_up[0];
+    const disputed = !!second
+      && winner.confidence - second.confidence < 0.10
+      && winner.agent !== second.agent
+      && winner.value !== second.value;
+    view.push({ key: k, winner, runners_up, disputed });
+  }
+  return view;
+}
+
+ipcMain.handle("agent:intelView", async (_e, binaryPath) => {
+  if (!binaryPath) return { entries: [], view: [] };
+  const p = intelPathFor(binaryPath);
+  const entries = readJsonl(p);
+  const view = foldIntel(entries);
+  return { path: p, entries, view };
+});
+
+ipcMain.handle("agent:listRuns", async () => {
+  const root = runsRoot();
+  let dirs = [];
+  try { dirs = require("node:fs").readdirSync(root); } catch { return []; }
+  const out = [];
+  for (const d of dirs) {
+    if (!d.startsWith("r-")) continue;
+    const ev = path.join(root, d, "events.jsonl");
+    let mtime = 0, turns = 0, kind = "?", role = "?", model = "?", scope = "?", usd = 0;
+    try {
+      mtime = require("node:fs").statSync(ev).mtimeMs;
+      const events = readJsonl(ev);
+      for (const e of events) {
+        if (e.kind === "start") {
+          role = e.role ?? role;
+          model = e.model ?? model;
+          scope = e.scope ?? scope;
+        }
+        if (e.kind === "turn") ++turns;
+        if (e.tally?.usd != null) usd = e.tally.usd;
+        kind = e.kind;
+      }
+    } catch { continue; }
+    out.push({ id: d, last: kind, turns, role, model, scope, usd, mtime });
+  }
+  out.sort((a, b) => b.mtime - a.mtime);
+  return out;
+});
+
+ipcMain.handle("agent:tailRun", async (_e, runId) => {
+  if (!runId || !/^r-[\w-]+$/.test(runId)) return [];
+  const ev = path.join(runsRoot(), runId, "events.jsonl");
+  return readJsonl(ev);
+});
+
+// Fanout / promote. Spawn the agent CLI; capture stdout for the JSON
+// reply. Detached fanout returns immediately by design.
+ipcMain.handle("agent:fanout", async (_e, opts) => {
+  const node = process.execPath;
+  const agent = path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+  return new Promise((resolve, reject) => {
+    const args = [agent, "fanout"];
+    if (opts.binary)   args.push(`--binary=${opts.binary}`);
+    if (opts.role)     args.push(`--role=${opts.role}`);
+    if (opts.pick)     args.push(`--pick=${opts.pick}`);
+    if (opts.limit)    args.push(`--limit=${opts.limit}`);
+    if (opts.minSize)  args.push(`--min-size=${opts.minSize}`);
+    if (opts.budget)   args.push(`--budget=${opts.budget}`);
+    if (opts.maxTurns) args.push(`--max-turns=${opts.maxTurns}`);
+    if (opts.model)    args.push(`--model=${opts.model}`);
+    const proc = spawn(node, args, { cwd: path.dirname(agent), env: process.env });
+    let out = "", err = "";
+    proc.stdout.on("data", (b) => { out += b.toString(); });
+    proc.stderr.on("data", (b) => { err += b.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
+      try { resolve(JSON.parse(out)); } catch { resolve({ raw: out }); }
+    });
+    proc.on("error", reject);
+  });
+});
+
+ipcMain.handle("agent:promote", async (_e, opts) => {
+  const node = process.execPath;
+  const agent = path.join(__dirname, "..", "..", "agent", "dist", "main.js");
+  return new Promise((resolve, reject) => {
+    const args = [agent, "promote", opts.binary];
+    if (opts.threshold) args.push(`--threshold=${opts.threshold}`);
+    if (opts.apply)     args.push("--apply");
+    if (opts.dryRun)    args.push("--dry-run");
+    const proc = spawn(node, args, { cwd: path.dirname(agent), env: process.env });
+    let out = "", err = "";
+    proc.stdout.on("data", (b) => { out += b.toString(); });
+    proc.stderr.on("data", (b) => { err += b.toString(); });
+    proc.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.trim() || `exit ${code}`));
+      try { resolve(JSON.parse(out)); } catch { resolve({ raw: out }); }
+    });
+    proc.on("error", reject);
+  });
+});
+
+// ---------------------------------------------------------------- end agent
+
 app.on("before-quit", async () => {
   // Best-effort clear so the user's profile doesn't show "viewing X"
   // after the app has quit. We don't await — Electron is mid-shutdown.

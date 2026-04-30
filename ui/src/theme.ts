@@ -187,6 +187,11 @@ function makeGlobalCSS(): string {
   @keyframes slideIn { from {opacity:0; transform:translateX(-6px)} to {opacity:1; transform:none} }
   @keyframes pulse   { 0%,100% {opacity:1} 50% {opacity:.5} }
   @keyframes shimmer { 0% { background-position: -150% 0 } 100% { background-position: 150% 0 } }
+  @keyframes agent-pulse {
+    0%   { box-shadow: 0 0 0 0   currentColor; opacity: 1; }
+    70%  { box-shadow: 0 0 0 10px transparent; opacity: 0.4; }
+    100% { box-shadow: 0 0 0 0   transparent; opacity: 1; }
+  }
   .ember-skel {
     background: linear-gradient(90deg, ${C.bgMuted} 0%, ${C.bgDark} 50%, ${C.bgMuted} 100%);
     background-size: 220% 100%;

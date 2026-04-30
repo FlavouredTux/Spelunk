@@ -13,6 +13,7 @@ import { loadSettings, saveSettings } from "./settings";
 import type { AppSettings } from "./settings";
 import { CallGraphView } from "./components/CallGraphView";
 import { PluginsPanelView } from "./components/PluginsPanelView";
+import { AgentPanel } from "./components/AgentPanel";
 import { StringsView } from "./components/StringsView";
 import { NotesView } from "./components/NotesView";
 import { PatchesView } from "./components/PatchesView";
@@ -174,6 +175,7 @@ export default function App() {
   const [stringsOpen, setStringsOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [pluginsPanelOpen, setPluginsPanelOpen] = useState(false);
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [patchesOpen, setPatchesOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [emberApplyOpen, setEmberApplyOpen] = useState(false);
@@ -1237,6 +1239,23 @@ export default function App() {
             <span style={{ color: C.textFaint }}>⌃U</span>
           </button>
           <button
+            onClick={() => setAgentPanelOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.text,
+              background: "transparent",
+              border: `1px solid ${C.accent}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Agent harness — swarm intel, disputes, promote"
+          >
+            <span style={{ color: C.accent }}>◈</span>
+            <span>agentic</span>
+          </button>
+          <button
             onClick={() => setDiffOpen(true)}
             style={{
               padding: "4px 10px",
@@ -1620,6 +1639,12 @@ export default function App() {
           info={info}
           onSelect={(f) => navigateTo(f)}
           onClose={() => setPluginsPanelOpen(false)}
+        />
+      )}
+      {agentPanelOpen && (
+        <AgentPanel
+          binaryPath={info?.path ?? null}
+          onClose={() => setAgentPanelOpen(false)}
         />
       )}
       {diffOpen && info && (

@@ -308,9 +308,11 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         // rather than spawning N node processes — the workers all share
         // the same intel JSONL via O_APPEND, which is atomic.
         const before = namedFromIntel.size;
+        const ourDirs: string[] = [];
         const promises = batch.map((b) => {
             const runId = `r-cas${round}-${newId().slice(0, 4)}`;
             const runDir = join(args.runsRoot, runId);
+            ourDirs.push(runDir);
             mkdirSync(runDir, { recursive: true });
             return runWorker({
                 role: args.role,
@@ -338,51 +340,29 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             }
         }
 
-        // Tally cost from this round's run dirs. We don't have a
-        // built-in callback for usage on runWorker so we re-read the
-        // events.jsonl files we just wrote.
+        // Tally cost from THIS round's worker dirs only. Earlier
+        // versions of this code matched all `r-cas{round}-*` dirs in
+        // runsRoot, which collided with prior cascade runs that happened
+        // to land at the same round number — a stripped-ember cascade
+        // running today would inflate its $0 owl-alpha cost with stale
+        // tallies from yesterday's deepseek runs. Now we tally over
+        // only the directories THIS cascade just created.
+        const fsm = await import("node:fs");
         let roundCost = 0;
-        for (let i = 0; i < batch.length; ++i) {
-            // recover the runId we used. promises is parallel to batch
-            // but we don't track it back; compute from settled metadata.
-            // Simpler: scan runsRoot for r-cas{round}-* files newer than t0.
-        }
-        // Re-read runsRoot for our round prefix.
-        try {
-            const fs = await import("node:fs");
-            for (const d of fs.readdirSync(args.runsRoot)) {
-                if (!d.startsWith(`r-cas${round}-`)) continue;
-                const events = fs.readFileSync(join(args.runsRoot, d, "events.jsonl"), "utf8");
-                for (const line of events.split("\n")) {
-                    const t = line.trim(); if (!t) continue;
-                    try {
-                        const e = JSON.parse(t);
-                        if (e.tally?.usd != null) {
-                            // Last-tally-wins; per-event tallies are running totals.
-                            roundCost = Math.max(roundCost, e.tally.usd);
-                        }
-                    } catch { /* skip */ }
-                }
-            }
-        } catch { /* runsRoot might not exist on first run */ }
-        // Above gives us max single-run cost, not sum. Fix: sum per-run final tallies.
-        roundCost = 0;
-        try {
-            const fs = await import("node:fs");
-            for (const d of fs.readdirSync(args.runsRoot)) {
-                if (!d.startsWith(`r-cas${round}-`)) continue;
-                const events = fs.readFileSync(join(args.runsRoot, d, "events.jsonl"), "utf8");
-                let lastUsd = 0;
+        for (const dir of ourDirs) {
+            let lastUsd = 0;
+            try {
+                const events = fsm.readFileSync(join(dir, "events.jsonl"), "utf8");
                 for (const line of events.split("\n")) {
                     const t = line.trim(); if (!t) continue;
                     try {
                         const e = JSON.parse(t);
                         if (e.tally?.usd != null) lastUsd = e.tally.usd;
-                    } catch { /* skip */ }
+                    } catch { /* skip malformed line */ }
                 }
-                roundCost += lastUsd;
-            }
-        } catch { /* */ }
+            } catch { /* worker may have failed before writing events */ }
+            roundCost += lastUsd;
+        }
         totalCost += roundCost;
 
         // Promote this round's claims into the annotations file. The

@@ -248,135 +248,80 @@ int run_strings(const Args& args, const Binary& b) {
     return run_cached(args, "strings-v2", [&] { return build_strings_output(b); });
 }
 
-int run_recognize(const Args& args, const Binary& b) {
-    if (args.corpus_paths.empty()) {
-        std::println(stderr,
-            "ember: --recognize requires at least one --corpus PATH");
-        return EXIT_FAILURE;
-    }
-    TeefCorpus corpus;
-    std::size_t total_rows = 0;
-    for (const auto& p : args.corpus_paths) {
-        const std::size_t n = corpus.load_tsv(p);
-        total_rows += n;
-        std::println(stderr, "ember: corpus {}: {} rows", p, n);
-    }
-    std::println(stderr,
-        "ember: corpus loaded: {} fns / {} chunks across {} TSVs ({} rows)",
-        corpus.function_count(), corpus.chunk_count(),
-        args.corpus_paths.size(), total_rows);
+namespace {
 
-    // Walk every named-or-discovered function in the binary, fingerprint
-    // it, ask the corpus for matches above threshold.
-    std::unordered_map<addr_t, std::string> name_by_addr;
-    for (const auto& s : b.symbols()) {
-        if (s.is_import) continue;
-        if (s.kind != SymbolKind::Function) continue;
-        if (s.addr == 0 || s.name.empty()) continue;
-        name_by_addr.try_emplace(s.addr, s.name);
+// Parse hex string -> u64. Used by parse_teef_tsv below.
+[[nodiscard]] u64 parse_u64_hex_local(std::string_view s) noexcept {
+    u64 v = 0;
+    for (char c : s) {
+        u64 d = (c >= '0' && c <= '9') ? static_cast<u64>(c - '0')
+              : (c >= 'a' && c <= 'f') ? static_cast<u64>(c - 'a' + 10)
+              : (c >= 'A' && c <= 'F') ? static_cast<u64>(c - 'A' + 10)
+              : 0u;
+        v = (v << 4) | d;
     }
-    std::set<addr_t> fns;
-    for (const auto& [a, _] : name_by_addr) fns.insert(a);
-    for (const auto& d : enumerate_functions(b)) {
-        if (!b.import_at_plt(d.addr)) fns.insert(d.addr);
-    }
-
-    const std::size_t total = fns.size();
-    const unsigned hw = std::thread::hardware_concurrency();
-    const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
-    std::vector<addr_t> fns_vec(fns.begin(), fns.end());
-
-    // Pass 1: fingerprint everything in the target binary so we can
-    // build a query-side popularity map. A hash that appears in dozens
-    // of THIS binary's functions is a generic shape (CPU-feature stub,
-    // PLT thunk skeleton, return-zero), and surfacing one corpus
-    // canonical name for every occurrence is a false-positive
-    // catastrophe — the sober_live.elf experiment hit this with 1929
-    // copies of one tiny xgetbv-shaped stub all mapping to the same
-    // corpus name.
-    std::vector<TeefFunction> fps(total);
-    {
-        std::atomic<std::size_t> next0{0};
-        auto fingerprint_worker = [&] {
-            while (true) {
-                const std::size_t i = next0.fetch_add(1, std::memory_order_relaxed);
-                if (i >= total) break;
-                fps[i] = compute_teef_with_chunks(b, fns_vec[i]);
-            }
-        };
-        std::vector<std::thread> pool0;
-        pool0.reserve(threads);
-        for (unsigned k = 0; k < threads; ++k) pool0.emplace_back(fingerprint_worker);
-        for (auto& t : pool0) t.join();
-    }
-    std::unordered_map<u64, std::size_t> query_popularity;
-    for (const auto& tf : fps) {
-        if (tf.whole.exact_hash != 0) ++query_popularity[tf.whole.exact_hash];
-    }
-    constexpr std::size_t kQueryPopularityCap = 8;
-
-    std::vector<std::string> rows(total);
-    std::atomic<std::size_t> next{0};
-    std::atomic<std::size_t> hit_count{0};
-    const float threshold = args.recognize_threshold;
-    const bool show = progress_enabled();
-    if (show) {
-        std::println(stderr,
-            "ember: recognize {} functions across {} threads (corpus has {} fns)...",
-            total, threads, corpus.function_count());
-        std::fflush(stderr);
-    }
-    auto worker = [&] {
-        while (true) {
-            const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
-            if (i >= total) break;
-            const addr_t a = fns_vec[i];
-            const auto& tf = fps[i];
-            if (tf.whole.exact_hash == 0) continue;
-            // Skip query functions whose whole-fn TEEF appears too
-            // many times in this binary — they're trivial-shape stubs
-            // (xgetbv, return-zero) that would ALL collapse onto a
-            // single arbitrary corpus name without this gate.
-            if (query_popularity[tf.whole.exact_hash] > kQueryPopularityCap) continue;
-            auto matches = corpus.recognize(tf, /*top_k=*/3);
-            if (matches.empty()) continue;
-            if (matches[0].confidence < threshold) continue;
-            ++hit_count;
-            std::string current;
-            if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
-                current = it->second;
-            } else {
-                current = std::format("sub_{:x}", a);
-            }
-            std::string row = std::format("{:x}\t{}\t{}\t{:.3f}\t{}",
-                                          a, current,
-                                          matches[0].name,
-                                          matches[0].confidence,
-                                          matches[0].via);
-            // Append top-2/top-3 alternates if present, for transparency
-            for (std::size_t k = 1; k < matches.size(); ++k) {
-                row += std::format("\t{}={:.3f}", matches[k].name, matches[k].confidence);
-            }
-            row += '\n';
-            rows[i] = std::move(row);
-        }
-    };
-    std::vector<std::thread> pool;
-    pool.reserve(threads);
-    for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
-    for (auto& t : pool) t.join();
-
-    std::string out;
-    for (const auto& r : rows) out += r;
-    std::print("{}", out);
-    std::println(stderr, "ember: recognize: {} suggestions at threshold {:.2f}",
-                 hit_count.load(), threshold);
-    return EXIT_SUCCESS;
+    return v;
 }
 
-int run_teef(const Args& args, const Binary& b) {
-    return run_cached(args, std::format("teef-{}", kTeefSchema), [&] {
-        const bool show = progress_enabled();
+// Parse a TEEF TSV (output of build_teef_tsv / `ember --teef`) back into
+// a per-function structure suitable for the recognizer's query path.
+// Lets `--recognize` reuse the disk cache that `--teef` writes — no need
+// to re-fingerprint a binary that was already analyzed once.
+[[nodiscard]] std::vector<std::pair<addr_t, TeefFunction>>
+parse_teef_tsv(std::string_view tsv) {
+    std::vector<std::pair<addr_t, TeefFunction>> out;
+    std::unordered_map<addr_t, std::size_t> idx_by_addr;
+    auto split_tabs = [](std::string_view line) {
+        std::vector<std::string_view> f;
+        std::size_t s = 0;
+        for (std::size_t i = 0; i < line.size(); ++i) {
+            if (line[i] == '\t') { f.emplace_back(line.substr(s, i - s)); s = i + 1; }
+        }
+        f.emplace_back(line.substr(s));
+        return f;
+    };
+    std::size_t pos = 0;
+    while (pos < tsv.size()) {
+        std::size_t nl = tsv.find('\n', pos);
+        if (nl == std::string_view::npos) nl = tsv.size();
+        auto line = tsv.substr(pos, nl - pos);
+        pos = nl + 1;
+        if (line.empty()) continue;
+        auto f = split_tabs(line);
+        if (f.empty()) continue;
+        if (f[0] == "F" && f.size() >= 12) {
+            const addr_t a = static_cast<addr_t>(parse_u64_hex_local(f[1]));
+            TeefFunction tf;
+            tf.whole.exact_hash = parse_u64_hex_local(f[2]);
+            for (std::size_t k = 0; k < 8; ++k) {
+                tf.whole.minhash[k] = parse_u64_hex_local(f[3 + k]);
+            }
+            idx_by_addr[a] = out.size();
+            out.emplace_back(a, std::move(tf));
+        } else if (f[0] == "C" && f.size() >= 14) {
+            const addr_t a = static_cast<addr_t>(parse_u64_hex_local(f[1]));
+            auto it = idx_by_addr.find(a);
+            if (it == idx_by_addr.end()) continue;
+            TeefChunk ch;
+            // kind + inst_count are emitted as decimal by build_teef_tsv.
+            u32 v = 0; std::from_chars(f[2].data(), f[2].data() + f[2].size(), v);
+            ch.kind = static_cast<u8>(v);
+            v = 0; std::from_chars(f[3].data(), f[3].data() + f[3].size(), v);
+            ch.inst_count = v;
+            ch.sig.exact_hash = parse_u64_hex_local(f[4]);
+            for (std::size_t k = 0; k < 8; ++k) {
+                ch.sig.minhash[k] = parse_u64_hex_local(f[5 + k]);
+            }
+            out[it->second].second.chunks.push_back(ch);
+        }
+    }
+    return out;
+}
+
+// Extracted from run_teef so --recognize can reuse it on cache miss.
+// Returns the same TSV the user would see from `ember --teef <bin>`.
+[[nodiscard]] std::string build_teef_tsv(const Binary& b) {
+    const bool show = progress_enabled();
 
         std::unordered_map<addr_t, std::string> name_by_addr;
         for (const auto& s : b.symbols()) {
@@ -463,13 +408,167 @@ int run_teef(const Args& args, const Binary& b) {
         for (auto& t : pool) t.join();
         if (show) std::fputc('\n', stderr);
 
-        std::string out;
-        std::size_t total_bytes = 0;
-        for (const auto& r : rows) total_bytes += r.size();
-        out.reserve(total_bytes);
-        for (const auto& r : rows) out += r;
-        return out;
-    });
+    std::string out;
+    std::size_t total_bytes = 0;
+    for (const auto& r : rows) total_bytes += r.size();
+    out.reserve(total_bytes);
+    for (const auto& r : rows) out += r;
+    return out;
+}
+}  // namespace
+
+int run_recognize(const Args& args, const Binary& b) {
+    if (args.corpus_paths.empty()) {
+        std::println(stderr,
+            "ember: --recognize requires at least one --corpus PATH");
+        return EXIT_FAILURE;
+    }
+    TeefCorpus corpus;
+    std::size_t total_rows = 0;
+    for (const auto& p : args.corpus_paths) {
+        const std::size_t n = corpus.load_tsv(p);
+        total_rows += n;
+        std::println(stderr, "ember: corpus {}: {} rows", p, n);
+    }
+    std::println(stderr,
+        "ember: corpus loaded: {} fns / {} chunks across {} TSVs ({} rows)",
+        corpus.function_count(), corpus.chunk_count(),
+        args.corpus_paths.size(), total_rows);
+
+    // Walk every named-or-discovered function in the binary, fingerprint
+    // it, ask the corpus for matches above threshold.
+    std::unordered_map<addr_t, std::string> name_by_addr;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.addr == 0 || s.name.empty()) continue;
+        name_by_addr.try_emplace(s.addr, s.name);
+    }
+    std::set<addr_t> fns;
+    for (const auto& [a, _] : name_by_addr) fns.insert(a);
+    for (const auto& d : enumerate_functions(b)) {
+        if (!b.import_at_plt(d.addr)) fns.insert(d.addr);
+    }
+
+    const std::size_t total = fns.size();
+    const unsigned hw = std::thread::hardware_concurrency();
+    const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
+    std::vector<addr_t> fns_vec(fns.begin(), fns.end());
+
+    // Pass 1: get the target's TEEF TSV. This unifies cache-hit and
+    // miss paths: hit reads the cached string, miss runs the same
+    // build_teef_tsv that --teef would and writes it back so the next
+    // run is fast. parse_teef_tsv then materializes the per-function
+    // fingerprints we'll match against the corpus.
+    std::string target_tsv;
+    bool cache_hit = false;
+    if (!args.no_cache) {
+        const auto dir = args.cache_dir.empty()
+            ? cache::default_dir()
+            : std::filesystem::path(args.cache_dir);
+        if (auto k = cache::key_for(args.binary); k) {
+            const std::string tag = std::format("teef-{}", kTeefSchema);
+            if (auto hit = cache::read(dir, *k, tag); hit) {
+                target_tsv = std::move(*hit);
+                cache_hit = true;
+            }
+        }
+    }
+    if (!cache_hit) {
+        target_tsv = build_teef_tsv(b);
+        if (!args.no_cache) {
+            const auto dir = args.cache_dir.empty()
+                ? cache::default_dir()
+                : std::filesystem::path(args.cache_dir);
+            if (auto k = cache::key_for(args.binary); k) {
+                const std::string tag = std::format("teef-{}", kTeefSchema);
+                (void)cache::write(dir, *k, tag, target_tsv);
+            }
+        }
+    } else {
+        std::println(stderr, "ember: reusing cached TEEF for target ({} bytes)",
+                     target_tsv.size());
+    }
+
+    std::vector<TeefFunction> fps(total);
+    {
+        auto parsed = parse_teef_tsv(target_tsv);
+        std::unordered_map<addr_t, std::size_t> idx;
+        for (std::size_t i = 0; i < total; ++i) idx[fns_vec[i]] = i;
+        for (auto& [addr, tf] : parsed) {
+            auto it = idx.find(addr);
+            if (it != idx.end()) fps[it->second] = std::move(tf);
+        }
+    }
+    std::unordered_map<u64, std::size_t> query_popularity;
+    for (const auto& tf : fps) {
+        if (tf.whole.exact_hash != 0) ++query_popularity[tf.whole.exact_hash];
+    }
+    constexpr std::size_t kQueryPopularityCap = 8;
+
+    std::vector<std::string> rows(total);
+    std::atomic<std::size_t> next{0};
+    std::atomic<std::size_t> hit_count{0};
+    const float threshold = args.recognize_threshold;
+    const bool show = progress_enabled();
+    if (show) {
+        std::println(stderr,
+            "ember: recognize {} functions across {} threads (corpus has {} fns)...",
+            total, threads, corpus.function_count());
+        std::fflush(stderr);
+    }
+    auto worker = [&] {
+        while (true) {
+            const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
+            if (i >= total) break;
+            const addr_t a = fns_vec[i];
+            const auto& tf = fps[i];
+            if (tf.whole.exact_hash == 0) continue;
+            // Skip query functions whose whole-fn TEEF appears too
+            // many times in this binary — they're trivial-shape stubs
+            // (xgetbv, return-zero) that would ALL collapse onto a
+            // single arbitrary corpus name without this gate.
+            if (query_popularity[tf.whole.exact_hash] > kQueryPopularityCap) continue;
+            auto matches = corpus.recognize(tf, /*top_k=*/3);
+            if (matches.empty()) continue;
+            if (matches[0].confidence < threshold) continue;
+            ++hit_count;
+            std::string current;
+            if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
+                current = it->second;
+            } else {
+                current = std::format("sub_{:x}", a);
+            }
+            std::string row = std::format("{:x}\t{}\t{}\t{:.3f}\t{}",
+                                          a, current,
+                                          matches[0].name,
+                                          matches[0].confidence,
+                                          matches[0].via);
+            // Append top-2/top-3 alternates if present, for transparency
+            for (std::size_t k = 1; k < matches.size(); ++k) {
+                row += std::format("\t{}={:.3f}", matches[k].name, matches[k].confidence);
+            }
+            row += '\n';
+            rows[i] = std::move(row);
+        }
+    };
+    std::vector<std::thread> pool;
+    pool.reserve(threads);
+    for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
+    for (auto& t : pool) t.join();
+
+    std::string out;
+    for (const auto& r : rows) out += r;
+    std::print("{}", out);
+    std::println(stderr, "ember: recognize: {} suggestions at threshold {:.2f}",
+                 hit_count.load(), threshold);
+    return EXIT_SUCCESS;
+}
+
+
+int run_teef(const Args& args, const Binary& b) {
+    return run_cached(args, std::format("teef-{}", kTeefSchema),
+                      [&] { return build_teef_tsv(b); });
 }
 
 int run_fingerprints(const Args& args, const Binary& b) {

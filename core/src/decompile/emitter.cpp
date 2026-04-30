@@ -261,6 +261,66 @@ struct Emitter {
         return static_cast<u8>(format_index + 1 + count_printf_specifiers(*fmt));
     }
 
+    // Receiver-shape virtual-method dispatch: if the call target traces
+    // as `Load(Add(Load(<recv>), K))` — load vptr from receiver, add
+    // slot offset, load method pointer — render as
+    // `<recv>->vfn_<K/8>`. Doesn't need IPA / receiver type info; just
+    // recognises the canonical Itanium / MSVC vtable shape every C++
+    // `obj->method()` compiles to. K must be a constant divisible by
+    // sizeof(void*); slot 0 (`Load(Load(<recv>))`) renders as `vfn_0`.
+    [[nodiscard]] std::optional<std::string>
+    try_render_vfn_dispatch(const IrValue& target) const {
+        const IrInst* td = def_stripped(target);
+        if (!td || td->op != IrOp::Load || td->src_count < 1) return std::nullopt;
+        const IrValue& slot_addr = td->srcs[0];
+
+        // Walk through Assigns to land on the underlying expression.
+        auto strip_assigns = [&](IrValue v) -> IrValue {
+            for (int hop = 0; hop < 8; ++hop) {
+                const IrInst* d = def_of(v);
+                if (!d || d->op != IrOp::Assign || d->src_count < 1) return v;
+                v = d->srcs[0];
+            }
+            return v;
+        };
+
+        // Two shapes: slot_addr = Add(vptr_load, K), or slot_addr = vptr_load (slot 0).
+        IrValue vptr_expr;
+        i64 slot_off = 0;
+        if (const IrInst* sd = def_stripped(slot_addr);
+            sd && sd->op == IrOp::Add && sd->src_count >= 2) {
+            const IrValue& a = sd->srcs[0];
+            const IrValue& b = sd->srcs[1];
+            const IrValue* base_v = nullptr;
+            if (b.kind == IrValueKind::Imm) { base_v = &a; slot_off = b.imm; }
+            else if (a.kind == IrValueKind::Imm) { base_v = &b; slot_off = a.imm; }
+            if (!base_v) return std::nullopt;
+            vptr_expr = *base_v;
+        } else {
+            vptr_expr = slot_addr;
+        }
+
+        // vptr_expr should be a Load of the receiver — the vtable pointer
+        // sits at offset 0 of every object, so we expect a plain Load(reg).
+        const IrInst* vd = def_stripped(strip_assigns(vptr_expr));
+        if (!vd || vd->op != IrOp::Load || vd->src_count < 1) return std::nullopt;
+        const IrValue& recv = vd->srcs[0];
+
+        // Slot must be pointer-aligned (8 bytes on x64) and non-negative.
+        if (slot_off < 0 || (slot_off & 7) != 0) return std::nullopt;
+        const i64 slot_idx = slot_off / 8;
+
+        // Render the receiver expression. Keep it tight by binding at
+        // Postfix so the resulting `<recv>->vfn_N` doesn't need extra
+        // parens on either side. Skip when the receiver doesn't render
+        // as a simple expression — better to fall back to `(*…)(…)`
+        // than to ship a syntactically iffy `<garbage>->vfn_3(…)`.
+        std::string recv_text =
+            expr(recv, 0, std::to_underlying(Prec::Postfix));
+        if (recv_text.empty()) return std::nullopt;
+        return std::format("{}->vfn_{}", recv_text, slot_idx);
+    }
+
     // For `call.ind <expr>`: if `expr` traces back to a Load of a constant
     // address that matches a known GOT slot, return the import's name.
     [[nodiscard]] std::optional<std::string>
@@ -3109,17 +3169,29 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             }
             if (call_expr.empty()) {
                 const std::string args = format_call_args_fallback(pending_args);
-                // Virtual-call form: when the callee expression is a
-                // member-access / identifier, emit it directly — `fn(args)`
-                // reads more naturally than `(*fn)(args)`. Only dereference
-                // syntax gets the outer-paren wrapping treatment, and only
-                // when strictly necessary.
-                const std::string tgt =
-                    expr(inst.srcs[0], 0, std::to_underlying(Prec::Postfix));
-                if (!tgt.empty() && tgt.front() == '*') {
-                    call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
+                // Virtual-method-dispatch shape recognition: when the
+                // call target traces back as `Load(Add(Load(<recv>), K))`
+                // — i.e., load vptr from receiver, add slot offset,
+                // load method pointer — render as `<recv>->vfn_<K/8>(args)`.
+                // This is what every C++ `obj->method()` compiles to,
+                // and IPA isn't required to recognise the shape; type
+                // info would only refine the slot to a real class
+                // method name. Fixed-base `Load(Add(<rip-rel-vtable>, K))`
+                // is already covered by the call_resolutions path above
+                // (--resolve-calls); this handles the per-instance case.
+                if (auto vt = try_render_vfn_dispatch(inst.srcs[0]); vt) {
+                    call_expr = std::format("{}({})", *vt, args);
                 } else {
-                    call_expr = std::format("{}({})", tgt, args);
+                    // Fall back to the textual `(*expr)(args)` form. When
+                    // expr already starts with `*`, paren-wrap to avoid
+                    // a double-deref read.
+                    const std::string tgt =
+                        expr(inst.srcs[0], 0, std::to_underlying(Prec::Postfix));
+                    if (!tgt.empty() && tgt.front() == '*') {
+                        call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
+                    } else {
+                        call_expr = std::format("{}({})", tgt, args);
+                    }
                 }
             }
             pending_args.clear();

@@ -135,6 +135,32 @@ A 0.70 threshold gives 85% precision on the surfaced names, which
 means the user can mostly trust the auto-renames and easily flag
 the rest as "still sub_\*."
 
+## Stride-1 dedup
+
+`enumerate_functions()` on stripped binaries can emit overlapping
+shadow entries when the prologue-sweep heuristic fires at consecutive
+bytes inside one real function's body. Without a dedup pass,
+`--recognize` re-fingerprints each shadow entry and produces dozens of
+identical-name hits at a stride of 1 byte (e.g. 126× rows for the
+same canonical `_ZSt7getlineIw...` template instantiation).
+
+Fix: walk the discovered set sorted by entry address, keep an entry
+only if it's not contained in a previously-kept entry's
+`[entry, entry + size)` window. Reported in stderr as
+`recognize: dropped N shadow entries (stride-1 dedup)`.
+
+## Daemon corpus cache
+
+`ember --recognize --corpus PATH+` parses the corpus on every
+invocation — typically 50-150 MB of TSV across glibc / libstdc++ /
+Rust std / openssl, ~5-15s to load. With `--serve` mode (the agent
+daemon path), the corpus is now cached across requests in a static
+inside `run_recognize`: identical `--corpus PATH` lists reuse the
+in-memory indices, so the second and subsequent recognize calls in
+one daemon session pay only the matching cost. The agent's
+`ember_recognize` tool benefits directly when cascade is configured
+with a corpus.
+
 ## What's still hard
 
 Functions over 300 IR instructions whose chunks ALSO got refactored

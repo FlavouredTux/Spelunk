@@ -420,23 +420,47 @@ parse_teef_tsv(std::string_view tsv) {
 }
 }  // namespace
 
+// Pulled out so the daemon (run_serve) can cache one TeefCorpus across
+// recognize requests instead of re-parsing 50-150 MB of TSV per call.
+[[nodiscard]] static std::unique_ptr<TeefCorpus>
+load_corpus_from_args(const Args& args) {
+    if (args.corpus_paths.empty()) return nullptr;
+    auto corpus = std::make_unique<TeefCorpus>();
+    std::size_t total_rows = 0;
+    for (const auto& p : args.corpus_paths) {
+        const std::size_t n = corpus->load_tsv(p);
+        total_rows += n;
+        std::println(stderr, "ember: corpus {}: {} rows", p, n);
+    }
+    std::println(stderr,
+        "ember: corpus loaded: {} fns / {} chunks across {} TSVs ({} rows)",
+        corpus->function_count(), corpus->chunk_count(),
+        args.corpus_paths.size(), total_rows);
+    return corpus;
+}
+
 int run_recognize(const Args& args, const Binary& b) {
     if (args.corpus_paths.empty()) {
         std::println(stderr,
             "ember: --recognize requires at least one --corpus PATH");
         return EXIT_FAILURE;
     }
-    TeefCorpus corpus;
-    std::size_t total_rows = 0;
-    for (const auto& p : args.corpus_paths) {
-        const std::size_t n = corpus.load_tsv(p);
-        total_rows += n;
-        std::println(stderr, "ember: corpus {}: {} rows", p, n);
+    // Daemon-friendly corpus cache. Identical --corpus PATH lists
+    // reuse the parsed in-memory indices across calls. One-shot CLI
+    // runs hit this path exactly once per process, so the static is
+    // a no-op for them; --serve sessions repeating recognize against
+    // the same corpus get the load amortized away.
+    static std::vector<std::string> cached_paths;
+    static std::unique_ptr<TeefCorpus> cached_corpus;
+    if (!cached_corpus || cached_paths != args.corpus_paths) {
+        cached_corpus = load_corpus_from_args(args);
+        cached_paths = args.corpus_paths;
+    } else {
+        std::println(stderr,
+            "ember: reusing cached corpus ({} fns / {} chunks)",
+            cached_corpus->function_count(), cached_corpus->chunk_count());
     }
-    std::println(stderr,
-        "ember: corpus loaded: {} fns / {} chunks across {} TSVs ({} rows)",
-        corpus.function_count(), corpus.chunk_count(),
-        args.corpus_paths.size(), total_rows);
+    const TeefCorpus& corpus = *cached_corpus;
 
     // Walk every named-or-discovered function in the binary, fingerprint
     // it, ask the corpus for matches above threshold.
@@ -447,10 +471,32 @@ int run_recognize(const Args& args, const Binary& b) {
         if (s.addr == 0 || s.name.empty()) continue;
         name_by_addr.try_emplace(s.addr, s.name);
     }
-    std::set<addr_t> fns;
-    for (const auto& [a, _] : name_by_addr) fns.insert(a);
+    // Stride-1 dedup. enumerate_functions() can emit multiple
+    // overlapping addresses on stripped binaries when the prologue-
+    // sweep heuristic fires at consecutive bytes inside one real fn's
+    // body. Without this filter, --recognize re-fingerprints each of
+    // those shadow entries, producing dozens of identical-name hits at
+    // a stride of 1 (the user-reported "126x _ZSt7getlineIw..." case
+    // in libloader.so). Fix: walk sorted, drop any addr that lands
+    // inside a previously-seen fn's [entry, entry+size) window.
+    std::map<addr_t, u64> windows;     // entry → known size
+    for (const auto& [a, _] : name_by_addr) windows[a]; // size 0 by default
     for (const auto& d : enumerate_functions(b)) {
-        if (!b.import_at_plt(d.addr)) fns.insert(d.addr);
+        if (b.import_at_plt(d.addr)) continue;
+        auto& sz = windows[d.addr];
+        if (d.size > sz) sz = d.size;  // prefer the larger known extent
+    }
+    std::set<addr_t> fns;
+    addr_t shadow_until = 0;
+    std::size_t shadow_dropped = 0;
+    for (auto [a, sz] : windows) {
+        if (a < shadow_until) { ++shadow_dropped; continue; }
+        fns.insert(a);
+        if (sz > 0) shadow_until = a + sz;
+    }
+    if (shadow_dropped > 0) {
+        std::println(stderr, "ember: recognize: dropped {} shadow entries (stride-1 dedup)",
+                     shadow_dropped);
     }
 
     const std::size_t total = fns.size();

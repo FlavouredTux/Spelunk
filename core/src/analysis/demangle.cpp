@@ -102,6 +102,19 @@ std::string parse_source_name(Dem& d) {
 // the ones that actually appear in real-world C++ code.
 std::string parse_operator_name(Dem& d) {
     if (d.in.size() - d.pos < 2) { d.fail(); return {}; }
+    // Conversion operator: `cv <type>` → `operator <type-name>`. Common in
+    // iostream code (`operator bool()` for stream good-ness, `operator
+    // void*()` historically). Without this, every is-stream-good check
+    // decompiles to a raw mangled symbol like
+    // `_ZNKSt9basic_iosIcSt11char_traitsIcEEcvbEv` and the reader has to
+    // mentally demangle it.
+    if (d.in.substr(d.pos, 2) == "cv") {
+        d.pos += 2;
+        std::string ty;
+        parse_type(d, ty);
+        if (d.failed) return {};
+        return "operator " + ty;
+    }
     const std::string_view op = d.in.substr(d.pos, 2);
     struct E { std::string_view code, pretty; };
     static constexpr E kOps[] = {
@@ -715,6 +728,8 @@ std::string simplify_stdlib_templates(std::string s) {
         {"std::basic_iostream<char, std::char_traits<char>>",  "std::iostream"},
         {"std::basic_streambuf<char, std::char_traits<char> >", "std::streambuf"},
         {"std::basic_streambuf<char, std::char_traits<char>>",  "std::streambuf"},
+        {"std::basic_ios<char, std::char_traits<char> >", "std::ios"},
+        {"std::basic_ios<char, std::char_traits<char>>",  "std::ios"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >", "std::stringstream"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char>>",  "std::stringstream"},
         // Container default-allocator collapse — `vector<T, allocator<T>>`

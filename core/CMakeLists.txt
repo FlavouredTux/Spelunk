@@ -20,6 +20,7 @@ add_library(ember_core STATIC
     src/analysis/data_xrefs.cpp
     src/analysis/pipeline.cpp
     src/analysis/fingerprint.cpp
+    src/analysis/teef.cpp
     src/analysis/demangle.cpp
     src/analysis/msvc_demangle.cpp
     src/analysis/sig_inference.cpp

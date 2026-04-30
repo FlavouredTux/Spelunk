@@ -10,9 +10,13 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <atomic>
 #include <print>
+#include <set>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <unordered_map>
 #include <system_error>
 #include <vector>
 
@@ -27,6 +31,8 @@
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/sigs.hpp>
 #include <ember/analysis/syscalls.hpp>
+#include <ember/analysis/teef.hpp>
+#include <ember/common/progress.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/annotations.hpp>
@@ -239,6 +245,89 @@ int run_strings(const Args& args, const Binary& b) {
     // sections (Mach-O __cstring lives in __TEXT). Old "strings" cache
     // entries from before that change are now orphaned.
     return run_cached(args, "strings-v2", [&] { return build_strings_output(b); });
+}
+
+int run_teef(const Args& args, const Binary& b) {
+    return run_cached(args, std::format("teef-{}", kTeefSchema), [&] {
+        const bool show = progress_enabled();
+
+        std::unordered_map<addr_t, std::string> name_by_addr;
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.addr == 0 || s.name.empty()) continue;
+            name_by_addr.try_emplace(s.addr, s.name);
+        }
+
+        std::vector<addr_t> fns;
+        {
+            std::set<addr_t> uniq;
+            for (const auto& [a, _] : name_by_addr) uniq.insert(a);
+            const auto edges = compute_call_graph(b);
+            for (const auto& e : edges) {
+                if (!b.import_at_plt(e.callee)) uniq.insert(e.callee);
+            }
+            fns.assign(uniq.begin(), uniq.end());
+        }
+
+        const std::size_t total = fns.size();
+        const unsigned hw = std::thread::hardware_concurrency();
+        const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
+        if (show) {
+            std::println(stderr,
+                "ember: TEEF on {} functions across {} threads (full decompile per fn)...",
+                total, threads);
+            std::fflush(stderr);
+        }
+
+        // Per-function results in input order. Workers pull indices off
+        // `next` atomically; ordering is preserved by writing into the
+        // pre-sized result vector at the function's index.
+        std::vector<std::string> rows(total);
+        std::atomic<std::size_t> next{0};
+        std::atomic<std::size_t> done{0};
+        const std::size_t tick = std::max<std::size_t>(1, total / 40);
+
+        auto worker = [&] {
+            while (true) {
+                const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
+                if (i >= total) break;
+                const addr_t a = fns[i];
+                const auto t = compute_teef(b, a);
+                const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (show && (d % tick == 0 || d == total)) {
+                    std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
+                    std::fflush(stderr);
+                }
+                if (t.exact_hash == 0) continue;
+                std::string name;
+                if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
+                    name = it->second;
+                } else {
+                    name = std::format("sub_{:x}", a);
+                }
+                std::string row = std::format("{:x}\t{:016x}", a, t.exact_hash);
+                for (u64 mh : t.minhash) row += std::format("\t{:016x}", mh);
+                row += '\t';
+                row += name;
+                row += '\n';
+                rows[i] = std::move(row);
+            }
+        };
+
+        std::vector<std::thread> pool;
+        pool.reserve(threads);
+        for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
+        for (auto& t : pool) t.join();
+        if (show) std::fputc('\n', stderr);
+
+        std::string out;
+        std::size_t total_bytes = 0;
+        for (const auto& r : rows) total_bytes += r.size();
+        out.reserve(total_bytes);
+        for (const auto& r : rows) out += r;
+        return out;
+    });
 }
 
 int run_fingerprints(const Args& args, const Binary& b) {

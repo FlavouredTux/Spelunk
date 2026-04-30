@@ -36,6 +36,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--strings",   &Args::strings},
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
+    {"",   "--teef",     &Args::teef},
     {"",   "--ipa",       &Args::ipa},
     {"",   "--resolve-calls", &Args::resolve_calls},
     {"",   "--eh",        &Args::eh},

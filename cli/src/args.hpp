@@ -55,6 +55,7 @@ struct Args {
     bool strings = false;
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
+    bool teef = false;              // dump TEEF (Tree-Edit Equivalence Fingerprint) per function
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)

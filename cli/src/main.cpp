@@ -200,6 +200,7 @@ int main(int argc, char** argv) {
     if (!args.list_syscalls.empty()) return run_list_syscalls(args, b);
     if (args.strings)            return run_strings(args, b);
     if (args.fingerprints)       return run_fingerprints(args, b);
+    if (args.teef)               return run_teef(args, b);
     if (args.objc_names)         return run_objc_names(args, b);
     if (args.objc_protos)        return run_objc_protos(args, b);
     if (args.rtti)               return run_rtti(args, b);

@@ -85,18 +85,14 @@ Result<void> enable_bp(LinuxTarget& t, addr_t va) {
 
 namespace ember::debug::linux_ {
 
-// Forward declared in ptrace_target.hpp; private helper that wipes
-// the watchpoint slot table back to zero without re-arming DR
-// registers (the kernel resets DR0..DR7 across exec automatically,
-// so there's nothing to clear thread-side). Lives here rather than
-// in ptrace_watch.cpp because the reset-after-exec path also wants
-// the breakpoint table reset, and these are conceptually paired.
+// Drop kernel-bound state after PTRACE_EVENT_EXEC. Software bp
+// patches are gone with the dead address space and DR slots were
+// auto-cleared by exec. Syscall-catch settings are NOT reset —
+// they're a tracing mode, not address-space-bound, and we want
+// `catch syscall` to follow execve into the new image.
 void LinuxTarget::clear_all_after_exec() {
     bps_.clear();
     for (int i = 0; i < 4; ++i) wp_[i] = WpSlot{};
-    syscall_catching_  = false;
-    syscall_catch_all_ = false;
-    syscall_nrs_.clear();
     for (auto& [_, ts] : thread_state_) {
         ts.parked_at_bp   = 0;
         ts.step_over_addr = 0;

@@ -76,6 +76,14 @@ int main(int argc, char** argv) {
                                   ember::debug::WatchMode::Write);
     CHECK(wp_r.has_value(), "set watchpoint on parent marker");
 
+    // Catch `write` (nr 1). Survives execve — same flag the user
+    // would set via the REPL's `catch syscall write`.
+    constexpr ember::u32 kWrite = 1;
+    const ember::u32 catch_nrs[1] = { kWrite };
+    CHECK(t->set_syscall_catch(false, std::span<const ember::u32>{catch_nrs}).has_value(),
+          "set syscall catch (write)");
+    CHECK(t->is_syscall_catching(), "catching active pre-exec");
+
     CHECK(t->cont().has_value(), "cont 1");
     auto ev = t->wait_event();
     CHECK(ev.has_value(), "wait 1");
@@ -99,6 +107,9 @@ int main(int argc, char** argv) {
     CHECK(exec_pc != 0, "exec_pc reasonable");
 
     t->clear_all_after_exec();
+    CHECK(t->is_syscall_catching(),
+          "syscall catch survived clear_all_after_exec");
+
     auto child_bin = ember::load_binary(child_path);
     CHECK(child_bin.has_value(), "load child binary");
     const auto* marker_c = (*child_bin)->find_by_name("marker");
@@ -113,23 +124,38 @@ int main(int argc, char** argv) {
     CHECK(wp2.has_value(), "re-arm watchpoint in child");
     const auto wp2_id = *wp2;
 
-    CHECK(t->cont().has_value(), "cont after re-arm");
-    ev = t->wait_event();
-    CHECK(ev.has_value(), "wait for watch fire");
-    const auto* whit =
-        std::get_if<ember::debug::EvWatchpointHit>(&*ev);
-    CHECK(whit != nullptr,                  "expected watchpoint hit in child");
-    CHECK(whit->id == wp2_id,               "watchpoint id mismatch");
-    CHECK(whit->addr == marker_c->addr + child_slide,
-                                            "watchpoint addr mismatch");
+    // Run until the wp fires. Along the way the persisted catch
+    // should fire on the child's printf write — if it doesn't,
+    // the catch didn't survive the exec.
+    bool saw_write_in_child = false;
+    ember::addr_t wp_fire_pc = 0;
     const ember::addr_t writer_lo = writer_c->addr + child_slide;
     const ember::addr_t writer_hi = writer_lo + (writer_c->size ? writer_c->size : 0x40);
-    CHECK(whit->pc >= writer_lo && whit->pc < writer_hi,
-          "wp fire PC inside child_writer");
-    // Save the PC before the next wait_event drops the variant.
-    const ember::addr_t wp_fire_pc = whit->pc;
+    while (wp_fire_pc == 0) {
+        CHECK(t->cont().has_value(), "cont after re-arm");
+        ev = t->wait_event();
+        CHECK(ev.has_value(), "wait for watch fire");
+        if (auto* sc = std::get_if<ember::debug::EvSyscallStop>(&*ev); sc) {
+            if (sc->nr == kWrite) saw_write_in_child = true;
+            continue;
+        }
+        if (auto* whit = std::get_if<ember::debug::EvWatchpointHit>(&*ev); whit) {
+            CHECK(whit->id == wp2_id,               "watchpoint id mismatch");
+            CHECK(whit->addr == marker_c->addr + child_slide,
+                                                    "watchpoint addr mismatch");
+            CHECK(whit->pc >= writer_lo && whit->pc < writer_hi,
+                  "wp fire PC inside child_writer");
+            wp_fire_pc = whit->pc;
+            break;
+        }
+        // unexpected event — fail fast rather than spin
+        CHECK(false, "unexpected event waiting for wp");
+    }
+    CHECK(saw_write_in_child,
+          "catch syscall write fired in post-exec child");
 
     CHECK(t->clear_watchpoint(wp2_id).has_value(), "clear wp before exit");
+    CHECK(t->clear_syscall_catch().has_value(),    "clear syscall catch");
     CHECK(t->cont().has_value(), "cont to exit");
     ev = t->wait_event();
     CHECK(ev.has_value(), "wait exit");

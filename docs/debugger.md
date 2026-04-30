@@ -307,6 +307,11 @@ symbol lookups go through the right symbol table.
 The thread is paused at the new entry on `EvExec` so the user can
 inspect or set additional breakpoints before the new program runs.
 
+`catch syscall` survives the boundary as well. The catch is a tracing
+mode (PTRACE_SYSCALL routing + filter), not address-space-bound, so
+it carries through cleanly: a `catch syscall execve` set in the
+parent stays armed in the child without re-typing the verb.
+
 ## Limits
 
 - macOS backend works for process control, memory, registers,

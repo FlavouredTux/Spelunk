@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <unistd.h>
 
 volatile unsigned long marker = 0xbbbbbbbbbbbbbbbbULL;
 
@@ -12,8 +12,10 @@ void child_writer(void) {
 
 int main(void) {
     postexec_marker();
-    printf("child: marker before write = %lx\n", marker);
+    // Explicit write(2) so the persistent-syscall-catch test sees a
+    // deterministic event from the child regardless of stdio buffering.
+    (void)write(STDOUT_FILENO, "before\n", 7);
     child_writer();
-    printf("child: marker after write  = %lx\n", marker);
+    (void)write(STDOUT_FILENO, "after\n", 6);
     return 0;
 }

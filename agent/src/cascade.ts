@@ -1,5 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { runWorker } from "./worker.js";
@@ -7,6 +9,82 @@ import { promote } from "./promote.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { EmberDaemon } from "./tools/daemon.js";
 import type { Claim } from "./intel/log.js";
+
+// Pre-warm ember's xrefs + strings disk caches so worker daemons
+// pick up cached payloads on first access instead of N×workers
+// each rebuilding from scratch. Smoothness:
+//   - skip entirely when both caches already exist on disk
+//   - run the two warmups concurrently (different cache slots,
+//     no contention) so cold-start is half as long
+//   - emit a heartbeat every 5s so the user sees progress
+// Cache layout: $XDG_CACHE_HOME/ember/<key>/<tag>, where <key> is
+// FNV-style hash mirroring ember's cache::key_for. We don't need to
+// match it exactly to *use* ember's cache (ember computes its own
+// key on every call); we just need a heuristic for "is it warm
+// enough that we can skip the fork." statSync the cache dir for
+// the binary's basename pattern; if the relevant tags exist, skip.
+async function warmEmberCaches(binary: string, emberBin: string): Promise<void> {
+    const cacheRoot = process.env.XDG_CACHE_HOME
+        ? join(process.env.XDG_CACHE_HOME, "ember")
+        : join(homedir(), ".cache", "ember");
+
+    // Skip-fast check: ember's cache key is FNV1a-64 of (abspath|size|mtime|vN).
+    // We don't reproduce that exactly; instead we look across all cache subdirs
+    // for files tagged xrefs / strings-v* whose mtime is newer than the binary's.
+    // Cheap heuristic, false-positive-tolerant — if we skip when caches don't
+    // actually cover this binary, ember will rebuild them on first call (correct,
+    // just no smoothness). False negative (we re-warm when we shouldn't have to)
+    // costs at most ~200ms on a warm system.
+    let likelyWarm = false;
+    try {
+        const binStat = statSync(binary);
+        for (const dir of readdirSync(cacheRoot)) {
+            const slot = join(cacheRoot, dir);
+            try {
+                const xref = join(slot, "xrefs");
+                if (!existsSync(xref)) continue;
+                const xs = statSync(xref);
+                if (xs.mtimeMs < binStat.mtimeMs) continue;
+                // strings-v2 is the current tag; older runs may have strings-v1.
+                const ents = readdirSync(slot);
+                if (!ents.some((n) => n.startsWith("strings"))) continue;
+                likelyWarm = true; break;
+            } catch { /* slot races; ignore */ }
+        }
+    } catch { /* no cacheRoot */ }
+    if (likelyWarm) {
+        process.stderr.write(`cascade: ember caches already warm for ${binary} (skip)\n`);
+        return;
+    }
+
+    const t_warm = Date.now();
+    process.stderr.write(`cascade: warming ember caches for ${binary}…\n`);
+
+    // Heartbeat ticker so a multi-minute warmup doesn't look hung.
+    const heartbeat = setInterval(() => {
+        const elapsed = ((Date.now() - t_warm) / 1000).toFixed(0);
+        process.stderr.write(`  …still warming (${elapsed}s)\n`);
+    }, 5000);
+
+    const run = (flag: string) => new Promise<void>((resolve) => {
+        const p = spawn(emberBin, [flag, binary], {
+            stdio: ["ignore", "ignore", "pipe"],
+        });
+        let err = "";
+        p.stderr.on("data", (b: Buffer) => { err += b.toString(); });
+        p.on("close", (code) => {
+            if (code !== 0) {
+                process.stderr.write(`  ${flag} warmup failed (continuing): ${err.slice(0, 200)}\n`);
+            }
+            resolve();
+        });
+        p.on("error", () => resolve());
+    });
+
+    await Promise.all([run("--xrefs"), run("--strings")]);
+    clearInterval(heartbeat);
+    process.stderr.write(`cascade: caches warm (${((Date.now() - t_warm) / 1000).toFixed(1)}s)\n`);
+}
 
 // Belt-and-suspenders alongside PR_SET_PDEATHSIG on the C++ side.
 // SIGKILL'd cascades can leak `ember --serve` orphans (the C++ guard
@@ -197,26 +275,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         process.stderr.write(`cascade: killed ${cleared} orphan ember --serve daemon(s) for ${args.binary}\n`);
     }
 
-    // Pre-warm ember's disk cache for the binary. xrefs and strings
-    // are the expensive computations every worker daemon would
-    // otherwise rebuild on first access. Building them once here
-    // (cold spawn, ~10-30s on a big binary) means the 500 worker
-    // daemons that spawn over the cascade rounds each pick up the
-    // cached payload instead of re-walking the CFG / scanning
-    // strings table from scratch. ~5x speedup on cascade wall time
-    // on big stripped binaries (libloader-class).
-    const t_warm = Date.now();
-    process.stderr.write(`cascade: warming ember caches for ${args.binary}…\n`);
-    for (const flag of ["--xrefs", "--strings"]) {
-        const r = spawnSync(args.emberBin, [flag, args.binary], {
-            stdio: ["ignore", "ignore", "pipe"],
-            maxBuffer: 64 * 1024 * 1024,
-        });
-        if (r.status !== 0) {
-            process.stderr.write(`  ${flag} warmup failed (continuing): ${r.stderr?.toString().slice(0, 200)}\n`);
-        }
-    }
-    process.stderr.write(`cascade: caches warm (${((Date.now() - t_warm) / 1000).toFixed(1)}s)\n`);
+    await warmEmberCaches(args.binary, args.emberBin);
 
     // One-time setup. Spawn a coordinator daemon for cascade-wide
     // bulk queries (callees_all + future shared analyses). Workers

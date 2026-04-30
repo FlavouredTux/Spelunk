@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string_view>
+#include <vector>
 
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
@@ -17,7 +18,7 @@ namespace ember {
 //
 // Schema bumped on canonicalization rule changes; folded into the
 // hash so cached TSVs from a different schema can't collide silently.
-inline constexpr std::string_view kTeefSchema = "v1";
+inline constexpr std::string_view kTeefSchema = "v2";
 
 // Per-function signature: an exact hash of the canonicalized pseudo-C
 // (precision: identifies bit-equivalent algorithms across compiler
@@ -39,6 +40,33 @@ struct TeefSig {
 // significantly more expensive than compute_fingerprint; expect 1-100ms
 // per function depending on size. Cache aggressively.
 [[nodiscard]] TeefSig compute_teef(const Binary& b, addr_t fn_start);
+
+// One sub-function "chunk" — a region of the structured IR substantial
+// enough to be its own identification target. Big functions tend to
+// be unrecognizable as a whole between library versions because of
+// refactors (added fast paths, rearranged error handling) but their
+// inner loops, switch tables, and large branches stay invariant. A
+// chunk is fingerprinted with a fresh canonicalizer, so its hash is
+// independent of where it appears in its parent.
+struct TeefChunk {
+    TeefSig sig;
+    u32     inst_count = 0;     // structured-region size; weight in matchers
+    u8      kind       = 0;     // RegionKind cast to u8 — for analysis grouping
+};
+
+struct TeefFunction {
+    TeefSig                 whole;
+    std::vector<TeefChunk>  chunks;        // sorted by inst_count desc
+};
+
+// Compute the function-level TEEF and per-chunk fingerprints for any
+// region whose subtree contains ≥ `min_chunk_insts` IR instructions.
+// Smaller regions are skipped to avoid corpus pollution by trivial
+// blocks (return/branch-only fragments that match across thousands
+// of unrelated functions). The sweet spot empirically is ~10.
+[[nodiscard]] TeefFunction
+compute_teef_with_chunks(const Binary& b, addr_t fn_start,
+                         u32 min_chunk_insts = 10);
 
 // Hash + MinHash a pseudo-C source string directly. Useful for
 // callers that already have the emitted text (the CLI fingerprint

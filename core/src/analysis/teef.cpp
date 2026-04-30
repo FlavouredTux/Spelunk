@@ -1,5 +1,6 @@
 #include <ember/analysis/teef.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <limits>
@@ -486,8 +487,83 @@ void emit_region_tokens(IrTokenizer& t, const IrFunction& fn, const Region& r) {
 
 }  // namespace
 
-TeefSig compute_teef(const Binary& b, addr_t fn_start) {
-    TeefSig out;
+namespace {
+
+// Sum the IR instructions in a region's subtree (excluding Nops). Used
+// to threshold which chunks are worth fingerprinting; tiny regions are
+// not identifying.
+[[nodiscard]] u32 subtree_insts(const IrFunction& fn, const Region& r) {
+    u32 total = 0;
+    if (r.kind == RegionKind::Block) {
+        if (auto it = fn.block_at.find(r.block_start); it != fn.block_at.end()) {
+            for (const auto& ins : fn.blocks[it->second].insts) {
+                if (ins.op != IrOp::Nop) ++total;
+            }
+        }
+    }
+    for (const auto& c : r.children) {
+        if (c) total += subtree_insts(fn, *c);
+    }
+    return total;
+}
+
+// Compute a fresh TeefSig over just `r`'s subtree. Each call uses its
+// own IrTokenizer, so the alpha-rename map is independent — this is
+// the whole point: a chunk hashes the same regardless of where in
+// its parent it sits.
+[[nodiscard]] TeefSig sig_for_region(const Binary& b, const IrFunction& fn,
+                                     const Region& r) {
+    std::vector<u64> tokens;
+    IrTokenizer t(tokens, b);
+    emit_region_tokens(t, fn, r);
+    TeefSig s;
+    if (!tokens.empty()) {
+        s.exact_hash = exact_token_stream_hash(tokens);
+        s.minhash    = minhash_bigrams(tokens);
+    }
+    return s;
+}
+
+// Region kinds that are useful to fingerprint as standalone chunks.
+// Plain Block/Seq/Goto/Return/etc. are uninteresting in isolation —
+// they'd match across thousands of unrelated functions. We want
+// control-flow-bearing regions: loops, branches, and switches.
+[[nodiscard]] bool is_chunkable_kind(RegionKind k) noexcept {
+    switch (k) {
+        case RegionKind::IfThen:
+        case RegionKind::IfElse:
+        case RegionKind::While:
+        case RegionKind::DoWhile:
+        case RegionKind::For:
+        case RegionKind::Loop:
+        case RegionKind::Switch:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void collect_chunks(const Binary& b, const IrFunction& fn, const Region& r,
+                    u32 min_insts, bool is_root,
+                    std::vector<TeefChunk>& out) {
+    const u32 sz = subtree_insts(fn, r);
+    if (!is_root && is_chunkable_kind(r.kind) && sz >= min_insts) {
+        TeefChunk ch;
+        ch.sig        = sig_for_region(b, fn, r);
+        ch.inst_count = sz;
+        ch.kind       = static_cast<u8>(r.kind);
+        if (ch.sig.exact_hash != 0) out.push_back(ch);
+    }
+    for (const auto& c : r.children) {
+        if (c) collect_chunks(b, fn, *c, min_insts, false, out);
+    }
+}
+
+}  // namespace
+
+TeefFunction
+compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) {
+    TeefFunction out;
 
     auto dec_r = make_decoder(b);
     if (!dec_r) return out;
@@ -506,17 +582,22 @@ TeefSig compute_teef(const Binary& b, addr_t fn_start) {
 
     const Structurer s;
     auto sf = s.structure(*ir_r);
-    if (!sf) return out;
+    if (!sf || !sf->body) return out;
 
-    std::vector<u64> tokens;
-    tokens.reserve(ir_r->blocks.size() * 16);
-    IrTokenizer t(tokens, b);
-    if (sf->body) emit_region_tokens(t, *ir_r, *sf->body);
-    if (tokens.empty()) return out;
+    out.whole = sig_for_region(b, *ir_r, *sf->body);
+    if (out.whole.exact_hash == 0) return out;
 
-    out.exact_hash = exact_token_stream_hash(tokens);
-    out.minhash    = minhash_bigrams(tokens);
+    collect_chunks(b, *ir_r, *sf->body, min_chunk_insts,
+                   /*is_root=*/true, out.chunks);
+    std::sort(out.chunks.begin(), out.chunks.end(),
+              [](const TeefChunk& x, const TeefChunk& y) {
+                  return x.inst_count > y.inst_count;
+              });
     return out;
+}
+
+TeefSig compute_teef(const Binary& b, addr_t fn_start) {
+    return compute_teef_with_chunks(b, fn_start, /*min_chunk_insts=*/10).whole;
 }
 
 }  // namespace ember

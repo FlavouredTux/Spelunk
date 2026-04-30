@@ -293,25 +293,37 @@ int run_teef(const Args& args, const Binary& b) {
                 const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
                 if (i >= total) break;
                 const addr_t a = fns[i];
-                const auto t = compute_teef(b, a);
+                const auto tf = compute_teef_with_chunks(b, a);
                 const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (show && (d % tick == 0 || d == total)) {
                     std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
                     std::fflush(stderr);
                 }
-                if (t.exact_hash == 0) continue;
+                if (tf.whole.exact_hash == 0) continue;
                 std::string name;
                 if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
                     name = it->second;
                 } else {
                     name = std::format("sub_{:x}", a);
                 }
-                std::string row = std::format("{:x}\t{:016x}", a, t.exact_hash);
-                for (u64 mh : t.minhash) row += std::format("\t{:016x}", mh);
-                row += '\t';
-                row += name;
-                row += '\n';
-                rows[i] = std::move(row);
+                // Function row: F<TAB>addr<TAB>exact<TAB>mh0..7<TAB>name
+                std::string buf =
+                    std::format("F\t{:x}\t{:016x}", a, tf.whole.exact_hash);
+                for (u64 mh : tf.whole.minhash) buf += std::format("\t{:016x}", mh);
+                buf += '\t';
+                buf += name;
+                buf += '\n';
+                // Chunk rows: C<TAB>addr<TAB>kind<TAB>insts<TAB>exact<TAB>mh0..7<TAB>name
+                for (const auto& ch : tf.chunks) {
+                    if (ch.sig.exact_hash == 0) continue;
+                    buf += std::format("C\t{:x}\t{}\t{}\t{:016x}",
+                                       a, ch.kind, ch.inst_count, ch.sig.exact_hash);
+                    for (u64 mh : ch.sig.minhash) buf += std::format("\t{:016x}", mh);
+                    buf += '\t';
+                    buf += name;
+                    buf += '\n';
+                }
+                rows[i] = std::move(buf);
             }
         };
 

@@ -72,12 +72,10 @@ public:
     [[nodiscard]] virtual Result<void>            clear_watchpoint(WatchpointId id) = 0;
     [[nodiscard]] virtual std::vector<Watchpoint> watchpoints() const = 0;
 
-    // Syscall catchpoint. When active, every `syscall` instruction
-    // generates an EvSyscallStop on both entry and exit. `catch_all`
-    // = true catches everything; if false, only the numbers in `nrs`
-    // surface (others are silently single-stepped past). Calling
-    // again replaces the current filter; clear_syscall_catch turns
-    // it off completely.
+    // Syscall catchpoint. When active, every `syscall` raises
+    // EvSyscallStop on entry and exit. catch_all=true catches all;
+    // otherwise only the numbers in `nrs` surface (others fall
+    // through to the next PTRACE_SYSCALL silently).
     [[nodiscard]] virtual Result<void>
     set_syscall_catch(bool catch_all, std::span<const u32> nrs) = 0;
     [[nodiscard]] virtual Result<void> clear_syscall_catch()    = 0;

@@ -1,20 +1,6 @@
-// Drives the debugger through an execve(2) boundary to verify that
-// watchpoints set against a symbolic spec re-arm in the new image.
-//
-// Sequence:
-//   1. Launch parent fixture, paused at entry.
-//   2. Resolve `marker` and `preexec_marker` symbols in the parent.
-//   3. Set software bp at preexec_marker, watchpoint on parent's
-//      &marker (8 bytes, write).
-//   4. Continue, expect bp hit at preexec_marker.
-//   5. Continue, expect EvExec (kernel raised PTRACE_EVENT_EXEC).
-//   6. Mirror the CLI's re-arm logic: drop kernel state, reload the
-//      child binary, resolve the child's `marker` symbol, re-set the
-//      watchpoint at the new VA.
-//   7. Continue, expect EvWatchpointHit at the child's
-//      child_writer+offset (the store inside child_writer that
-//      mutates marker).
-//   8. Continue, expect process exit code 0.
+// Watch on parent's `marker`, execve into child, verify the watch
+// fires on the child's child_writer store to *its* `marker` (the
+// runtime VA changes; symbol-keyed re-arm follows).
 
 #include <cstdio>
 #include <filesystem>
@@ -90,17 +76,13 @@ int main(int argc, char** argv) {
                                   ember::debug::WatchMode::Write);
     CHECK(wp_r.has_value(), "set watchpoint on parent marker");
 
-    // 1. Reach preexec_marker.
     CHECK(t->cont().has_value(), "cont 1");
     auto ev = t->wait_event();
     CHECK(ev.has_value(), "wait 1");
     CHECK(std::holds_alternative<ember::debug::EvBreakpointHit>(*ev),
           "expected bp hit at preexec_marker");
 
-    // 2. Continue past the printf+execve. Either the watchpoint
-    //    fires first (printf path could write through marker; -O0
-    //    keeps the load-only printf safe so usually we get straight
-    //    to EvExec) or EvExec fires first. Loop until we see Exec.
+    // Loop until EvExec — printf may fire spurious watch events first.
     bool saw_exec = false;
     ember::addr_t exec_pc = 0;
     while (!saw_exec) {
@@ -112,14 +94,10 @@ int main(int argc, char** argv) {
             exec_pc  = ex->pc;
             break;
         }
-        // Anything else (including a stray watch fire from glibc's
-        // libc-printf optimisations on the marker store) is fine —
-        // just continue.
     }
     CHECK(saw_exec,    "EvExec received");
     CHECK(exec_pc != 0, "exec_pc reasonable");
 
-    // 3. Drop the dead bp/wp state and re-arm against the child.
     t->clear_all_after_exec();
     auto child_bin = ember::load_binary(child_path);
     CHECK(child_bin.has_value(), "load child binary");
@@ -135,7 +113,6 @@ int main(int argc, char** argv) {
     CHECK(wp2.has_value(), "re-arm watchpoint in child");
     const auto wp2_id = *wp2;
 
-    // 4. Continue; expect the watchpoint to fire inside child_writer.
     CHECK(t->cont().has_value(), "cont after re-arm");
     ev = t->wait_event();
     CHECK(ev.has_value(), "wait for watch fire");
@@ -145,14 +122,13 @@ int main(int argc, char** argv) {
     CHECK(whit->id == wp2_id,               "watchpoint id mismatch");
     CHECK(whit->addr == marker_c->addr + child_slide,
                                             "watchpoint addr mismatch");
-    // PC should be inside child_writer (post-store, so child_writer + small offset).
     const ember::addr_t writer_lo = writer_c->addr + child_slide;
     const ember::addr_t writer_hi = writer_lo + (writer_c->size ? writer_c->size : 0x40);
     CHECK(whit->pc >= writer_lo && whit->pc < writer_hi,
           "wp fire PC inside child_writer");
-    const ember::addr_t wp_fire_pc = whit->pc;  // saved before next wait
+    // Save the PC before the next wait_event drops the variant.
+    const ember::addr_t wp_fire_pc = whit->pc;
 
-    // 5. Run to completion.
     CHECK(t->clear_watchpoint(wp2_id).has_value(), "clear wp before exit");
     CHECK(t->cont().has_value(), "cont to exit");
     ev = t->wait_event();

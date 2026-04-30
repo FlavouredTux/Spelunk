@@ -1,24 +1,7 @@
-// Heuristic stack-scan ("scavenged") unwinder. The use case: Rust
-// abort-shim chains, control-flow-flattened code, and hand-rolled
-// assembler that doesn't carry .eh_frame and doesn't preserve RBP.
-// CFI gives one frame; RBP-walk gives garbage. The user just wants
-// the names of the functions whose return addresses are sitting on
-// the stack, even if the order is approximate.
-//
-// What we do: read a window starting at RSP and, for each qword,
-// check two things:
-//   1. A loaded Binary covers the address.
-//   2. The instruction immediately before the address (i.e. the
-//      candidate's predecessor) decodes as a `call`. The decoder
-//      looks back up to 15 bytes (max x86 instruction length) and
-//      accepts the first decode whose end-address equals the
-//      candidate.
-// Both filters together kill the bulk of false positives — a random
-// pointer inside .text rarely lands right after a call boundary.
-//
-// We deliberately don't try to recover frame pointers. The user is
-// here because the framing is broken; the scavenger's contract is
-// "names you couldn't see otherwise", not "a complete unwind".
+// Stack-scan ("scavenged") unwinder — see unwind.hpp.
+// Filter pair: address falls in a known function AND the byte
+// before it decodes as a `call`. Both together kill the bulk of
+// false positives a naïve scan would surface.
 
 #include <ember/debug/unwind.hpp>
 
@@ -35,11 +18,8 @@ namespace ember::debug {
 
 namespace {
 
-// True when `static_pc` is the byte immediately after a `call`
-// instruction in `bin`. We read up to 15 bytes before the candidate
-// (longest x86 encoding) and try decoding from each starting offset;
-// the first decode whose end-address equals static_pc decides. No
-// match → we conservatively reject the candidate.
+// True iff `static_pc` is the byte immediately after a `call`.
+// 15 = max x86 instruction length.
 [[nodiscard]] bool predecessor_is_call(
     const Binary& bin, const Decoder& dec, addr_t static_pc) {
     constexpr std::size_t kMaxInsn = 15;
@@ -47,12 +27,6 @@ namespace {
     const addr_t scan_base = static_pc - kMaxInsn;
     auto window = bin.bytes_at(scan_base);
     if (window.size() < kMaxInsn) return false;
-    // Try decoding from every byte offset; accept the first decode
-    // that consumes exactly the right number of bytes to land at
-    // static_pc and whose mnemonic is Call. If a longer decode at an
-    // earlier offset would also have matched, we still accept the
-    // shorter one — the byte-after-call invariant is what we care
-    // about, not which exact prefix the assembler chose.
     for (std::size_t off = 1; off <= kMaxInsn; ++off) {
         const addr_t insn_addr = scan_base + (kMaxInsn - off);
         auto code = window.subspan(kMaxInsn - off, off);
@@ -64,11 +38,8 @@ namespace {
     return false;
 }
 
-// First (Binary*, slide) pair that covers `runtime_pc` AND can name
-// the function it lands in. Returns nullopt when no bin claims it,
-// or when the pc is at the very entry of a function (offset 0; that
-// can't be a return address — calls never target their own first
-// byte from inside the same function).
+// offset_within == 0 is rejected: calls never target an entry as a
+// return address, so a hit at offset 0 is almost always coincidence.
 struct Hit {
     const Binary* bin       = nullptr;
     addr_t        slide     = 0;
@@ -106,12 +77,8 @@ unwind_scavenge(Target& t, ThreadId tid,
     const std::size_t got = *rv;
     const std::size_t qwords = got / 8;
 
-    // One decoder per (bin, slide) — created lazily so a workload
-    // with three aux bins and zero scavenge candidates pays nothing.
     std::vector<std::unique_ptr<Decoder>> decoders(bins.size());
-
     std::vector<Frame> out;
-    out.reserve(qwords / 8);
 
     for (std::size_t i = 0; i < qwords; ++i) {
         addr_t cand = 0;
@@ -121,7 +88,6 @@ unwind_scavenge(Target& t, ThreadId tid,
         auto hit = identify(cand, bins);
         if (!hit) continue;
 
-        // Index the decoder cache by position in `bins`.
         std::size_t bin_idx = 0;
         for (; bin_idx < bins.size(); ++bin_idx) {
             if (bins[bin_idx].bin == hit->bin) break;

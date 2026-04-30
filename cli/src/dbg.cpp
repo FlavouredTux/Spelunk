@@ -267,13 +267,8 @@ struct AuxBin {
     std::optional<addr_t> manual_base;
 };
 
-// Persisted across exec(2): the original spec text the user typed
-// for each active breakpoint / watchpoint, so we can re-resolve the
-// (possibly new) runtime address in the post-exec image and re-arm
-// without manual book-keeping. `spec` is whatever string went into
-// `b` / `watch` — symbol, hex literal, `bin:sym`, `sym:line`. The
-// re-arm path runs it back through parse_addr_spec_multi exactly as
-// the original command did.
+// Whatever the user typed to `b` / `watch` — replayed through
+// parse_addr_spec_multi after exec to re-arm against the new image.
 struct BpSpec  { std::string spec; };
 struct WpSpec  { std::string spec; u8 size; debug::WatchMode mode; };
 
@@ -1009,30 +1004,16 @@ int cmd_dwp(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
-// Persist breakpoints / watchpoints across exec(2). The kernel
-// cleared every int3 byte and every DR slot when it replaced the
-// address space; we rebuild the equivalent set against the new
-// image by re-running each saved spec through the same parser the
-// original `b` / `watch` command used. Specs that no longer
-// resolve (the bin they referenced isn't in the new image) drop
-// silently with a stderr note — better than silently leaving them
-// armed against a dead address space.
-//
-// Owning storage for a freshly-loaded post-exec primary binary.
-// `rs.bin` is a non-owning pointer; for the launch path the owner
-// lives in main(), but after exec we own a replacement here so the
-// pointer remains valid for the rest of the session. Keeping it
-// file-scope (rather than in ReplState) avoids threading through
-// every callsite that already has rs.bin captured by ref.
+// Re-arm bp/wp specs against the post-exec image. main() owns the
+// initial Binary; after exec we own the replacement here so rs.bin
+// stays valid for the rest of the session.
 std::unique_ptr<Binary> g_post_exec_bin;
 
 void rearm_after_exec(ReplState& rs) {
     rs.tgt->clear_all_after_exec();
 
-    // Did the kernel exec into a different binary? Read /proc/pid/exe
-    // (kernel updates this on every exec) and reload if the path
-    // changed. Symbol-keyed bp/wp specs need the new binary's symbol
-    // table or they'd resolve against the dead parent's addresses.
+    // /proc/pid/exe follows execve to the new binary path; reload if
+    // it changed so symbol lookups hit the new image's table.
     char proc_exe[64];
     std::snprintf(proc_exe, sizeof proc_exe, "/proc/%u/exe", rs.tgt->pid());
     namespace fs = std::filesystem;
@@ -1059,8 +1040,6 @@ void rearm_after_exec(ReplState& rs) {
         }
     }
 
-    // Recompute slides for the new mapping. Primary first; aux next
-    // (each bin's runtime base may have moved or vanished entirely).
     rs.slide = (rs.bin && !rs.bin_path.empty())
         ? compute_slide(*rs.tgt, *rs.bin, rs.bin_path) : 0;
     for (auto& aux : rs.aux_bins) {
@@ -1154,11 +1133,6 @@ bool wait_and_print(ReplState& rs) {
             }
         }
 
-        // exec(2) wiped the address space. Re-arm every persisted
-        // bp/wp against the new image before handing control back
-        // to the user, and surface a single line of context so the
-        // user sees the transition. The thread is paused at the new
-        // entry; the user can `c` to actually run it.
         if (auto* ex = std::get_if<debug::EvExec>(&*ev); ex) {
             rearm_after_exec(rs);
             std::println("execve completed; tracee paused at new entry {}{} in thread {}",

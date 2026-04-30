@@ -1,18 +1,9 @@
-// Hardware data watchpoints for the Linux ptrace backend.
-//
-// x86-64 has four debug-address slots (DR0..DR3) plus a control word
-// (DR7) and a status word (DR6). Each slot holds a linear address;
-// DR7 selects per-slot length (1/2/4/8) and access type (write or
-// read+write — there is no read-only mode at the architectural
-// level). DR6 has B0..B3 set when the corresponding slot fired.
-//
-// Slots are programmed per-thread via PTRACE_POKEUSER so the change
-// applies even to threads that aren't currently stopped on this
-// syscall path. A new thread that the kernel attaches via
-// PTRACE_O_TRACECLONE inherits an empty DR set; ptrace_proc::add_thread
-// re-applies the active slots so cross-thread watchpoint coverage
-// matches the user's expectation rather than only firing on the
-// thread that happened to be paused at `wp` time.
+// Hardware data watchpoints for the Linux ptrace backend (DR0..DR3,
+// programmed per-thread via PTRACE_POKEUSER). DR0..DR3 hold linear
+// addresses, DR7 holds enable/length/type per slot, DR6 reports
+// B0..B3 when the slot fires. PTRACE_EVENT_CLONE delivers fresh
+// threads with empty DR state, so ptrace_event re-arms each one
+// via rearm_watchpoints_on_new_thread before resuming.
 
 #include "ptrace_target.hpp"
 
@@ -68,7 +59,7 @@ peek_dr(ThreadId tid, int idx) {
         case 2: return 0b01;
         case 4: return 0b11;
         case 8: return 0b10;
-        default: return 0xFF;  // invalid
+        default: return 0xFF;
     }
 }
 
@@ -88,13 +79,11 @@ peek_dr(ThreadId tid, int idx) {
         const u8 len  = encode_len(w->info.size);
         const u8 type = encode_type(w->info.mode);
         if (len == 0xFF) continue;
-        // Per-slot enable: Lx bit (2*i)
-        dr7 |= (1ULL << (i * 2));
-        // Per-slot type+len: bits 16+4*i (type) and 18+4*i (len)
-        dr7 |= (static_cast<u64>(type) << (16 + 4 * i));
-        dr7 |= (static_cast<u64>(len)  << (18 + 4 * i));
+        dr7 |= (1ULL << (i * 2));                                 // Lx
+        dr7 |= (static_cast<u64>(type) << (16 + 4 * i));          // type
+        dr7 |= (static_cast<u64>(len)  << (18 + 4 * i));          // len
     }
-    if (dr7 != 0) dr7 |= (1ULL << 8);  // LE — local-exact breakpoint
+    if (dr7 != 0) dr7 |= (1ULL << 8);  // LE
     return dr7;
 }
 
@@ -195,11 +184,8 @@ int dr6_consume_hit(ThreadId tid) {
     return slot;
 }
 
-// Re-arm watchpoints on a freshly attached thread (PTRACE_O_TRACECLONE
-// hands us a thread with cleared DR state). Called from add_thread's
-// caller paths that have a Result<void> return; here it's best-effort
-// because the new thread might not yet be in a state that accepts
-// POKEUSER and we don't want to fail the whole event delivery.
+// Best-effort re-arm on the CLONE-event path; an error here just
+// means the new thread runs without watches, not a debugger fault.
 void rearm_watchpoints_on_new_thread(LinuxTarget& t, ThreadId tid) {
     [[maybe_unused]] auto _ = apply_to_thread(t, tid);
 }

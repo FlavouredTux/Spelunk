@@ -56,14 +56,8 @@ struct EvThreadExited  { ThreadId tid; int code; };
 // for the main executable; dynamic loader instrumentation comes later.
 struct EvImageLoaded   { addr_t base; };
 
-// The tracee called execve(2). The address space has been replaced —
-// every breakpoint and watchpoint set in the previous image now
-// points into stale (or freshly-mapped, semantically unrelated)
-// memory. Caller is expected to drop kernel-side bp/wp state via
-// the target's clear_*_after_exec helpers, recompute slides, and
-// re-arm anything it wants persisted across the exec boundary.
-// The thread is left paused at the new entry point so the caller
-// gets a chance to re-arm before the new program runs.
+// Tracee called execve(2). Old bp/wp state is dead; thread is paused
+// at the new entry so the caller can re-arm before resuming.
 struct EvExec         { ThreadId tid; addr_t pc; };
 
 struct EvExited        { int code; };

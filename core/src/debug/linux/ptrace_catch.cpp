@@ -1,15 +1,6 @@
-// Syscall catchpoints for the Linux ptrace backend.
-//
-// PTRACE_SYSCALL stops the tracee at every syscall entry and exit
-// (with PTRACE_O_TRACESYSGOOD set in ptrace_proc, the stop signal is
-// SIGTRAP | 0x80 so we can distinguish from int3 or DR-watch hits).
-// Catching is a target-wide flag plus an optional number filter:
-// when active, cont() / step() route through PTRACE_SYSCALL instead
-// of PTRACE_CONT, and wait_event() decodes the syscall-stop into
-// EvSyscallStop. With a non-empty filter we silently re-issue
-// PTRACE_SYSCALL on stops whose nr isn't of interest, which keeps
-// the user's view focused without forcing them to re-arm the
-// catch on every uninteresting nr.
+// Syscall catchpoints. PTRACE_O_TRACESYSGOOD marks syscall-stops as
+// SIGTRAP|0x80; when catching is on, cont() / step() route through
+// PTRACE_SYSCALL and wait_event decodes orig_rax into EvSyscallStop.
 
 #include "ptrace_target.hpp"
 
@@ -28,10 +19,8 @@ Result<void> LinuxTarget::clear_syscall_catch() {
     syscall_catching_  = false;
     syscall_catch_all_ = false;
     syscall_nrs_.clear();
-    // Per-thread in_syscall stays as-is; the kernel still tracks
-    // entry/exit alternation, so the next time the user re-arms
-    // catching we'll be in sync. Resetting the flag here would
-    // mis-label the very next stop after a re-arm.
+    // Don't reset per-thread in_syscall — the kernel still tracks
+    // entry/exit alternation across re-arm.
     return {};
 }
 

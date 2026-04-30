@@ -2032,6 +2032,24 @@ struct Emitter {
             return std::format("*({}*)({})", c_type_name(t),
                                expr(addr, depth + 1));
         }
+        // Well-known TIB/PEB constants: gs:[0x60] on x64 is the PEB pointer
+        // and fs:[0x28] is the stack canary. PEB-walking malware,
+        // anti-debug, and exception-handling crackmes lean on these
+        // heavily; surfacing the names lets a reader recognise the
+        // technique on sight instead of mentally re-mapping every load.
+        if (auto imm = try_resolve_imm_addr(addr); imm) {
+            const u64 off = static_cast<u64>(*imm);
+            if (seg == Reg::Gs && t == IrType::I64) {
+                if (off == 0x60) return "NtCurrentTeb()->ProcessEnvironmentBlock";
+                if (off == 0x30) return "NtCurrentTeb()";
+                if (off == 0x40) return "NtCurrentTeb()->ClientId.UniqueProcess";
+                if (off == 0x48) return "NtCurrentTeb()->ClientId.UniqueThread";
+                if (off == 0x18) return "NtCurrentTeb()->StackBase";
+            }
+            if (seg == Reg::Fs && t == IrType::I64 && off == 0x28) {
+                return "__stack_chk_guard";
+            }
+        }
         return std::format("*({}*){}:[{}]",
                            c_type_name(t), reg_name(seg),
                            expr(addr, depth + 1));

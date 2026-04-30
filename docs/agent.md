@@ -114,6 +114,11 @@ ember-agent intel ./target.elf query    --subject=0x4012a0 --predicate=name
 ember-agent intel ./target.elf evidence --subject=0x4012a0
 ember-agent intel ./target.elf disputes
 
+# Batched fold — one subprocess, full materialized view as JSON.
+# Use this when reading N claims; --intel query is one cold start
+# per call.
+ember-agent intel ./target.elf fold --predicate=name --threshold=0.85
+
 # Manual claim (e.g. you, the orchestrator, deciding):
 ember-agent intel ./target.elf claim \
   --subject=0x4012a0 --predicate=name --value=parse_header \
@@ -160,10 +165,17 @@ ember-agent cascade --binary=./target.elf \
 ```
 
 Eligibility per round: a function is eligible iff
-`known_callees / total_callees >= --eligibility-ratio`. PLT thunks
-and named symbols count as known; intel claims with confidence ≥
-`--threshold` count as known. Leaves (zero callees) are eligible
-from round 0.
+`known_callees / total_callees >= --eligibility-ratio` (default 0.3).
+PLT thunks and named symbols count as known; intel claims with
+confidence ≥ `--threshold` count as known; **TEEF anchors and prior-
+promoted cascade names** loaded from the binary's annotation file at
+startup also count. Leaves (zero callees) are eligible from round 0.
+
+Threshold semantics: `claim.confidence >= threshold` (inclusive).
+A claim at exactly 0.85 promotes when the default threshold is 0.85.
+A 0.85+ claim that loses to a dispute is reported under
+`disputed_high_conf` in the promote result so the orchestrator can
+see why it was held back.
 
 The loop terminates when a round produces zero new high-confidence
 names — every remaining unknown is genuinely too obscured for the

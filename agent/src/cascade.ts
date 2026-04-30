@@ -52,7 +52,8 @@ export interface RoundStats {
     round: number;
     eligible: number;
     spawned: number;
-    new_names: number;       // intel claims promoted this round
+    new_names: number;            // names produced *this round*
+    cumulative_named: number;     // running total across all rounds
     cost_usd: number;
     elapsed_ms: number;
 }
@@ -65,11 +66,9 @@ export interface CascadeResult {
 
 interface FnInfo { addr: string; size: number; kind: string; name: string; }
 
-function listFunctions(binary: string, emberBin: string): FnInfo[] {
-    const r = spawnSync(emberBin, ["--functions", binary], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    if (r.status !== 0) throw new Error(`ember --functions failed: ${r.stderr}`);
+function parseFunctionsTsv(stdout: string): FnInfo[] {
     const out: FnInfo[] = [];
-    for (const line of r.stdout.split("\n")) {
+    for (const line of stdout.split("\n")) {
         const t = line.trim(); if (!t) continue;
         const parts = t.split("\t");
         if (parts.length < 4) continue;
@@ -80,6 +79,29 @@ function listFunctions(binary: string, emberBin: string): FnInfo[] {
             kind: parts[2],
             name: parts[3],
         });
+    }
+    return out;
+}
+
+function listFunctions(binary: string, emberBin: string): FnInfo[] {
+    const r = spawnSync(emberBin, ["--functions", binary], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    if (r.status !== 0) throw new Error(`ember --functions failed: ${r.stderr}`);
+    return parseFunctionsTsv(r.stdout);
+}
+
+// Read the binary's currently-resolved rename map via the daemon. TEEF
+// anchors and prior-promoted cascade names land here (kind=sub stays
+// in --functions but the address is annotated). Cascade seeds the
+// known-neighbor set with these so round 0 can actually compound.
+async function loadAnnotations(daemon: EmberDaemon): Promise<Set<string>> {
+    const out = new Set<string>();
+    const body = await daemon.call("annotations");
+    for (const line of body.split("\n")) {
+        if (!line) continue;
+        const tab = line.indexOf("\t");
+        if (tab < 0) continue;
+        const addr = line.slice(0, tab);
+        out.add(addr);
     }
     return out;
 }
@@ -138,10 +160,35 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         catch { return undefined; }
     })();
 
-    const fns = listFunctions(args.binary, args.emberBin);
+    // Use daemon-served --functions when the coord is up — the cold
+    // subprocess on a 9000-fn binary was the dominant pre-round-0 cost.
+    const fns = (await (async () => {
+        if (!coord) return listFunctions(args.binary, args.emberBin);
+        try {
+            const body = await coord.call("functions");
+            return parseFunctionsTsv(body);
+        } catch { return listFunctions(args.binary, args.emberBin); }
+    })());
     const subAddrs = new Set<string>();
     for (const f of fns) {
         if (f.kind === "sub") subAddrs.add(f.addr);
+    }
+
+    // Seed annotated-name set from the binary's resolved annotation
+    // file. Without this seed, TEEF's `ember --recognize` anchors are
+    // invisible to cascade — round 0 starts with zero anchors, can't
+    // compound, and terminates immediately on big stripped binaries.
+    const annotated = new Set<string>();
+    if (coord) {
+        try {
+            const a = await loadAnnotations(coord);
+            for (const x of a) annotated.add(x);
+        } catch (e) {
+            process.stderr.write(`annotations seed failed: ${e}\n`);
+        }
+    }
+    if (annotated.size > 0) {
+        process.stderr.write(`cascade: seeded with ${annotated.size} pre-existing annotations (TEEF + symbols)\n`);
     }
 
     // Bulk callee map. With daemon: one round-trip pulls the full
@@ -175,6 +222,9 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             // their pseudo-C rendering already includes the resolved
             // name (puts, malloc, ...), so treat as anchored.
             if (!subAddrs.has(callee)) return true;
+            // TEEF anchors + prior-promoted cascade names live in the
+            // annotation file, not in --functions kind=symbol.
+            if (annotated.has(callee)) return true;
             return namedFromIntel.has(callee);
         };
 
@@ -308,6 +358,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             eligible: eligible.length,
             spawned: batch.length,
             new_names: after - before,
+            cumulative_named: after,
             cost_usd: roundCost,
             elapsed_ms: Date.now() - t0,
         });

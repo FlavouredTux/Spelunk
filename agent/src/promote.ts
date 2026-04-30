@@ -28,6 +28,7 @@ export function promote(args: PromoteArgs): {
     skipped_disputed: number;
     skipped_low_conf: number;
     skipped_other: number;
+    disputed_high_conf: string[];
 } {
     const intel = new IntelLog(intelPathFor(args.binary));
     const view = intel.fold();
@@ -35,9 +36,19 @@ export function promote(args: PromoteArgs): {
     const renames: Array<{ subject: string; value: string; conf: number; ev: string }> = [];
     const notes:   Array<{ subject: string; value: string; conf: number; ev: string }> = [];
     let disputed = 0, lowConf = 0, other = 0;
+    const disputedSubjects: string[] = [];
 
     for (const [, d] of view) {
-        if (d.disputed)                       { ++disputed; continue; }
+        if (d.disputed) {
+            ++disputed;
+            // Surface disputed subjects that would have promoted on
+            // confidence alone — the user couldn't otherwise tell whether
+            // a 0.85+ claim got skipped due to threshold or dispute.
+            if (d.winner.confidence >= args.threshold) {
+                disputedSubjects.push(`${d.winner.subject}|${d.winner.predicate}`);
+            }
+            continue;
+        }
         if (d.winner.confidence < args.threshold) { ++lowConf; continue; }
         const w = d.winner;
         if (w.predicate === "name") {
@@ -92,6 +103,9 @@ export function promote(args: PromoteArgs): {
         skipped_disputed: disputed,
         skipped_low_conf: lowConf,
         skipped_other: other,
+        // Subjects that would have promoted on confidence (≥ threshold)
+        // but lost to a dispute. Run a tiebreaker, then re-promote.
+        disputed_high_conf: disputedSubjects,
     };
 }
 

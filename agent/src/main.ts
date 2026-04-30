@@ -22,6 +22,17 @@ import { cascade } from "./cascade.js";
 //   runs status <run-id>
 //   runs tail <run-id>
 
+// Defaults from ~/.config/ember/agent.defaults.json — same file the UI
+// Settings drawer writes through. Lets the CLI inherit user-set
+// per-role models and cascade knobs without retyping them every run.
+function loadAgentDefaults(): Record<string, any> {
+    try {
+        const p = join(homedir(), ".config", "ember", "agent.defaults.json");
+        return JSON.parse(readFileSync(p, "utf8"));
+    } catch { return {}; }
+}
+const AGENT_DEFAULTS = loadAgentDefaults();
+
 const RUNS_ROOT = join(
     process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"),
     "ember", "agent", "runs");
@@ -159,6 +170,30 @@ async function cmdIntel(argv: string[]) {
             console.log(JSON.stringify(log.disputes(), null, 2));
             return;
         }
+        case "fold": {
+            // One subprocess, full view in JSON. Avoids the per-query
+            // cold-start dance when the orchestrator wants to read N
+            // names. Optional --predicate filter; --threshold filter
+            // for "give me only the high-conf claims".
+            const view = log.fold();
+            const predFilter = f.get("predicate");
+            const minConf = f.has("threshold") ? parseFloat(f.get("threshold")!) : 0;
+            const out: Array<Record<string, unknown>> = [];
+            for (const [, d] of view) {
+                if (predFilter && d.winner.predicate !== predFilter) continue;
+                if (d.winner.confidence < minConf) continue;
+                out.push({
+                    subject:   d.winner.subject,
+                    predicate: d.winner.predicate,
+                    value:     d.winner.value,
+                    confidence: d.winner.confidence,
+                    agent:     d.winner.agent,
+                    disputed:  d.disputed,
+                });
+            }
+            console.log(JSON.stringify(out, null, 2));
+            return;
+        }
         default:
             console.error(`unknown intel op: ${op}`);
             process.exit(2);
@@ -277,17 +312,30 @@ async function cmdCascade(argv: string[]) {
     const role = (f.get("role") ?? "namer") as "namer" | "mapper" | "typer" | "tiebreaker";
     if (!ROLES[role]) { console.error(`unknown role: ${role}`); process.exit(2); }
 
+    // Resolution order per knob: --flag → role/cascade entry in
+    // agent.defaults.json → built-in fallback.
+    const roleD = AGENT_DEFAULTS[role] ?? {};
+    const cascD = AGENT_DEFAULTS.cascade ?? {};
+    const numFlag = (k: string, fallback: number) => {
+        const v = f.get(k);
+        return v == null ? fallback : parseFloat(v);
+    };
+    const intFlag = (k: string, fallback: number) => {
+        const v = f.get(k);
+        return v == null ? fallback : parseInt(v, 10);
+    };
+
     process.stderr.write(`cascade starting on ${binary}, role=${role}\n`);
     const r = await cascade({
         binary: resolve(binary),
         role,
-        model: f.get("model"),
-        perRound:         parseInt(f.get("per-round") ?? "20", 10),
-        maxRounds:        parseInt(f.get("max-rounds") ?? "5", 10),
-        budget:           parseFloat(f.get("budget") ?? "0.05"),
-        maxTurns:         parseInt(f.get("max-turns") ?? "10", 10),
-        threshold:        parseFloat(f.get("threshold") ?? "0.85"),
-        eligibilityRatio: parseFloat(f.get("eligibility-ratio") ?? "0.5"),
+        model:            f.get("model") ?? roleD.model,
+        perRound:         intFlag("per-round",       cascD.perRound          ?? 20),
+        maxRounds:        intFlag("max-rounds",      cascD.maxRounds         ?? 5),
+        budget:           numFlag("budget",          roleD.budget            ?? 0.05),
+        maxTurns:         intFlag("max-turns",       roleD.maxTurns          ?? 10),
+        threshold:        numFlag("threshold",       cascD.threshold         ?? 0.85),
+        eligibilityRatio: numFlag("eligibility-ratio", cascD.eligibilityRatio ?? 0.3),
         emberBin: findEmberBin(),
         runsRoot: RUNS_ROOT,
     });

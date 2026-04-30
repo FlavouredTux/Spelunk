@@ -138,7 +138,7 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
                     <NumRow label="per-round"          value={defaults.cascade?.perRound          ?? 30}   onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, perRound: v } })} hint="workers spawned each round" />
                     <NumRow label="max-rounds"         value={defaults.cascade?.maxRounds         ?? 5}    onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, maxRounds: v } })} hint="loop terminates earlier on zero-progress" />
                     <NumRow label="threshold"          value={defaults.cascade?.threshold         ?? 0.85} onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, threshold: v } })} step={0.01} hint="conf ≥ this gets promoted into annotations" />
-                    <NumRow label="eligibility ratio"  value={defaults.cascade?.eligibilityRatio  ?? 0.5}  onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, eligibilityRatio: v } })} step={0.05} hint="min named-callee fraction for a fn to be picked" />
+                    <NumRow label="eligibility ratio"  value={defaults.cascade?.eligibilityRatio  ?? 0.3}  onChange={(v) => setDefaults({ ...defaults, cascade: { ...defaults.cascade, eligibilityRatio: v } })} step={0.05} hint="min named-callee fraction; lower lets round 1 actually run on stripped binaries" />
                 </Section>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 24, alignItems: "center" }}>

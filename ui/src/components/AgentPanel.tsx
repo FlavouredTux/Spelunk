@@ -177,7 +177,7 @@ export function AgentPanel(props: {
                 role: "namer",
                 perRound: 30, maxRounds: 5,
                 budget: 0.05, threshold: 0.85,
-                eligibilityRatio: 0.5,
+                eligibilityRatio: 0.3,
             });
             const namedAcrossRounds = (r.rounds ?? []).reduce((s: number, x: any) => s + (x.new_names ?? 0), 0);
             setToast(`cascade: ${r.rounds?.length ?? 0} rounds · +${namedAcrossRounds} names · $${(r.total_cost ?? 0).toFixed(3)}`);

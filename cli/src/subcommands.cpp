@@ -1539,6 +1539,24 @@ int run_serve(const Args& base, const Binary& b) {
                 write_ok(out);
                 continue;
             }
+            if (req->method == "annotations") {
+                // Emit TSV `<addr-hex>\t<name>\n` per loaded rename.
+                // Cascade reads this at startup to seed namedFromAnnotations
+                // — TEEF anchors and prior-promoted cascade names land in
+                // the annotation file but ember --functions still reports
+                // those addresses as `kind=sub`, so the eligibility pass
+                // wouldn't otherwise count them as known neighbors.
+                Args a = derive_args(base);
+                bool ann_loaded = false;
+                Annotations ann = load_annotations_for(a, ann_loaded);
+                std::string out;
+                out.reserve(ann.renames.size() * 32);
+                for (auto& [addr, name] : ann.renames) {
+                    std::format_to(std::back_inserter(out), "{:#x}\t{}\n", addr, name);
+                }
+                write_ok(out);
+                continue;
+            }
             if (req->method == "callees_all") {
                 // One-shot: emit the full call graph as
                 // `<caller-hex>\t<callee-hex>,<callee-hex>,...\n`.

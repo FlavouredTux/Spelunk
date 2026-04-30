@@ -37,6 +37,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
     {"",   "--teef",     &Args::teef},
+    {"",   "--recognize", &Args::recognize},
     {"",   "--ipa",       &Args::ipa},
     {"",   "--resolve-calls", &Args::resolve_calls},
     {"",   "--eh",        &Args::eh},
@@ -134,6 +135,33 @@ Result<Args> parse_args(int argc, char** argv) {
         }
         if (s.starts_with("--pat=")) {
             a.pat_paths.emplace_back(s.substr(6));
+            continue;
+        }
+
+        // `--corpus PATH` — repeatable. Each is a TEEF TSV (output of
+        // `ember --teef <lib>`); the recognizer merges them.
+        if (s == "--corpus") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format("--corpus requires a path"));
+            }
+            a.corpus_paths.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--corpus=")) {
+            a.corpus_paths.emplace_back(s.substr(9));
+            continue;
+        }
+        // `--recognize-threshold T`
+        if (s == "--recognize-threshold") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--recognize-threshold requires a value"));
+            }
+            try { a.recognize_threshold = std::stof(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--recognize-threshold: bad float"));
+            }
             continue;
         }
 

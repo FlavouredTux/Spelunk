@@ -56,6 +56,9 @@ struct Args {
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
     bool teef = false;              // dump TEEF (Tree-Edit Equivalence Fingerprint) per function
+    bool recognize = false;         // run library-function recognition against --corpus
+    std::vector<std::string> corpus_paths;  // --corpus PATH (repeatable): TEEF TSVs to load
+    float recognize_threshold = 0.6f;        // --recognize-threshold T (margin floor; default 0.6)
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)

@@ -32,6 +32,7 @@
 #include <ember/analysis/sigs.hpp>
 #include <ember/analysis/syscalls.hpp>
 #include <ember/analysis/teef.hpp>
+#include <ember/analysis/teef_recognize.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
@@ -247,6 +248,98 @@ int run_strings(const Args& args, const Binary& b) {
     return run_cached(args, "strings-v2", [&] { return build_strings_output(b); });
 }
 
+int run_recognize(const Args& args, const Binary& b) {
+    if (args.corpus_paths.empty()) {
+        std::println(stderr,
+            "ember: --recognize requires at least one --corpus PATH");
+        return EXIT_FAILURE;
+    }
+    TeefCorpus corpus;
+    std::size_t total_rows = 0;
+    for (const auto& p : args.corpus_paths) {
+        const std::size_t n = corpus.load_tsv(p);
+        total_rows += n;
+        std::println(stderr, "ember: corpus {}: {} rows", p, n);
+    }
+    std::println(stderr,
+        "ember: corpus loaded: {} fns / {} chunks across {} TSVs ({} rows)",
+        corpus.function_count(), corpus.chunk_count(),
+        args.corpus_paths.size(), total_rows);
+
+    // Walk every named-or-discovered function in the binary, fingerprint
+    // it, ask the corpus for matches above threshold.
+    std::unordered_map<addr_t, std::string> name_by_addr;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.addr == 0 || s.name.empty()) continue;
+        name_by_addr.try_emplace(s.addr, s.name);
+    }
+    std::set<addr_t> fns;
+    for (const auto& [a, _] : name_by_addr) fns.insert(a);
+    for (const auto& d : enumerate_functions(b)) {
+        if (!b.import_at_plt(d.addr)) fns.insert(d.addr);
+    }
+
+    const std::size_t total = fns.size();
+    const unsigned hw = std::thread::hardware_concurrency();
+    const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
+    std::vector<addr_t> fns_vec(fns.begin(), fns.end());
+
+    std::vector<std::string> rows(total);
+    std::atomic<std::size_t> next{0};
+    std::atomic<std::size_t> hit_count{0};
+    const float threshold = args.recognize_threshold;
+    const bool show = progress_enabled();
+    if (show) {
+        std::println(stderr,
+            "ember: recognize {} functions across {} threads (corpus has {} fns)...",
+            total, threads, corpus.function_count());
+        std::fflush(stderr);
+    }
+    auto worker = [&] {
+        while (true) {
+            const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
+            if (i >= total) break;
+            const addr_t a = fns_vec[i];
+            const auto tf = compute_teef_with_chunks(b, a);
+            if (tf.whole.exact_hash == 0) continue;
+            auto matches = corpus.recognize(tf, /*top_k=*/3);
+            if (matches.empty()) continue;
+            if (matches[0].confidence < threshold) continue;
+            ++hit_count;
+            std::string current;
+            if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
+                current = it->second;
+            } else {
+                current = std::format("sub_{:x}", a);
+            }
+            std::string row = std::format("{:x}\t{}\t{}\t{:.3f}\t{}",
+                                          a, current,
+                                          matches[0].name,
+                                          matches[0].confidence,
+                                          matches[0].via);
+            // Append top-2/top-3 alternates if present, for transparency
+            for (std::size_t k = 1; k < matches.size(); ++k) {
+                row += std::format("\t{}={:.3f}", matches[k].name, matches[k].confidence);
+            }
+            row += '\n';
+            rows[i] = std::move(row);
+        }
+    };
+    std::vector<std::thread> pool;
+    pool.reserve(threads);
+    for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
+    for (auto& t : pool) t.join();
+
+    std::string out;
+    for (const auto& r : rows) out += r;
+    std::print("{}", out);
+    std::println(stderr, "ember: recognize: {} suggestions at threshold {:.2f}",
+                 hit_count.load(), threshold);
+    return EXIT_SUCCESS;
+}
+
 int run_teef(const Args& args, const Binary& b) {
     return run_cached(args, std::format("teef-{}", kTeefSchema), [&] {
         const bool show = progress_enabled();
@@ -259,13 +352,16 @@ int run_teef(const Args& args, const Binary& b) {
             name_by_addr.try_emplace(s.addr, s.name);
         }
 
+        // Use enumerate_functions — same source as --functions — so we
+        // pick up CFG-discovered sub_* on stripped / static-pie targets
+        // (HellGates, Rust release builds, Go binaries). compute_call_graph
+        // alone misses these because it filters on s.size != 0.
         std::vector<addr_t> fns;
         {
             std::set<addr_t> uniq;
             for (const auto& [a, _] : name_by_addr) uniq.insert(a);
-            const auto edges = compute_call_graph(b);
-            for (const auto& e : edges) {
-                if (!b.import_at_plt(e.callee)) uniq.insert(e.callee);
+            for (const auto& d : enumerate_functions(b)) {
+                if (!b.import_at_plt(d.addr)) uniq.insert(d.addr);
             }
             fns.assign(uniq.begin(), uniq.end());
         }

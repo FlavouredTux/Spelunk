@@ -13,6 +13,9 @@
   <a href="https://github.com/FlavouredTux/Ember/actions/workflows/ci.yml">
     <img src="https://github.com/FlavouredTux/Ember/actions/workflows/ci.yml/badge.svg?branch=main" alt="ci">
   </a>
+  <a href="https://github.com/FlavouredTux/Ember/stargazers">
+    <img src="https://img.shields.io/github/stars/FlavouredTux/Ember?style=flat&color=yellow" alt="stars">
+  </a>
   <img src="https://img.shields.io/badge/C%2B%2B-23-blue.svg" alt="C++23">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
   <img src="https://img.shields.io/badge/deps-stdlib--only-success.svg" alt="stdlib only">
@@ -320,6 +323,12 @@ visibly with `--ipa --resolve-calls --eh` on. Known rough edges:
   misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and
   lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
+
+## Star history
+
+<a href="https://star-history.com/#FlavouredTux/Ember&Date">
+  <img src="https://api.star-history.com/svg?repos=FlavouredTux/Ember&type=Date" alt="Star history">
+</a>
 
 ## License
 

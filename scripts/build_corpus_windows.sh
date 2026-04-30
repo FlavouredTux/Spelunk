@@ -130,8 +130,8 @@ for L in "$DEST"/*.teef.tsv; do
     f=$(grep -c '^F' "$L"); c=$(grep -c '^C' "$L")
     printf "  %-40s F=%-6d C=%-7d\n" "$(basename "$L")" "$f" "$c" >&2
 done
-total_f=$(grep -c '^F' "$DEST"/*.teef.tsv 2>/dev/null | awk -F: '{s+=$2} END{print s}')
-total_c=$(grep -c '^C' "$DEST"/*.teef.tsv 2>/dev/null | awk -F: '{s+=$2} END{print s}')
+total_f=$(grep -hc '^F' "$DEST"/*.teef.tsv 2>/dev/null | awk '{s+=$1} END{print s+0}')
+total_c=$(grep -hc '^C' "$DEST"/*.teef.tsv 2>/dev/null | awk '{s+=$1} END{print s+0}')
 echo "  TOTAL: F=$total_f C=$total_c across $(ls "$DEST"/*.teef.tsv 2>/dev/null | wc -l) TSVs" >&2
 echo >&2
 echo "Use with: $EMBER --recognize <binary> $(ls "$DEST"/*.teef.tsv 2>/dev/null | sed 's|^| --corpus |' | tr -d '\n') --recognize-threshold 0.85" >&2

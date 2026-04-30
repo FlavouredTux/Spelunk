@@ -1,4 +1,5 @@
 #include <ember/analysis/pipeline.hpp>
+#include <ember/common/threads.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -609,12 +610,13 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
     // and isn't thread-safe; give each worker its own. The Binary +
     // Decoder are read-only and shared.
     const std::size_t total = work.size();
-    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     // Cap at 8 — beyond that the binary's I/O cache becomes the
     // bottleneck and extra threads just bounce cache lines. Also cap
     // by work size to avoid spawning idle threads for tiny binaries.
+    // EMBER_THREADS env can lower further when many ember processes
+    // are running concurrently.
     const std::size_t worker_count =
-        std::min<std::size_t>({static_cast<std::size_t>(hw), 8u, total});
+        std::min<std::size_t>(static_cast<std::size_t>(thread_pool_size(8)), total);
     if (worker_count <= 1) {
         // Fall back to the simple serial loop. Avoids the thread-spawn
         // overhead on small binaries where it dominates.

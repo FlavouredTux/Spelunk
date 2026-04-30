@@ -1,4 +1,5 @@
 #include <ember/analysis/discovery.hpp>
+#include <ember/common/threads.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -162,8 +163,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b) {
     // Chunks DO need to overlap by the maximum prologue-match length
     // (a few bytes) so a candidate that straddles a chunk boundary
     // isn't dropped. We use a conservative 16-byte overlap.
-    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    const std::size_t target_workers = std::min<std::size_t>(hw, 8u);
+    const std::size_t target_workers = thread_pool_size(8);
 
     std::vector<std::vector<addr_t>> per_section_hits;
 

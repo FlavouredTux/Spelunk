@@ -40,6 +40,7 @@
 #include <ember/analysis/sigs.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/common/hash.hpp>
+#include <ember/common/threads.hpp>
 #include <ember/analysis/syscalls.hpp>
 #include <ember/analysis/teef.hpp>
 #include <ember/analysis/teef_recognize.hpp>
@@ -448,8 +449,7 @@ parse_teef_tsv(std::string_view tsv) {
         }
 
         const std::size_t total = fns.size();
-        const unsigned hw = std::thread::hardware_concurrency();
-        const unsigned threads = std::max(1u, std::min(hw ? hw : 4u, 16u));
+        const unsigned threads = thread_pool_size(16);
         if (show) {
             std::println(stderr,
                 "ember: TEEF on {} functions across {} threads (full decompile per fn)...",

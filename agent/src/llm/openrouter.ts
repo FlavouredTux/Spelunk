@@ -73,6 +73,11 @@ export class OpenRouterLLM extends OpenAILLM {
         if (model.startsWith("openai/")) {
             return { provider: { order: ["OpenAI"], allow_fallbacks: false } };
         }
+        // Free-tier Gemma is hosted by Google AI Studio (not the paid "Google"
+        // Vertex provider), so we must route there for :free SKUs.
+        if (model.startsWith("google/gemma") && model.endsWith(":free")) {
+            return { provider: { order: ["Google AI Studio"], allow_fallbacks: false } };
+        }
         if (model.startsWith("google/")) {
             return { provider: { order: ["Google"], allow_fallbacks: false } };
         }

@@ -366,7 +366,12 @@ async function readEmberCacheAnnotations(binaryPath) {
       const addrHex = t.slice(sp1 + 1, sp2);
       const value   = t.slice(sp2 + 1);
       if (!/^[0-9a-fA-F]+$/.test(addrHex)) continue;
-      const addr = "0x" + addrHex.toLowerCase();
+      // Match the address format ember --functions emits: 18-char
+      // canonical hex (`0x` + 16 lowercase digits, zero-padded). The
+      // sidebar / displayName helper looks up renames keyed off
+      // FunctionInfo.addr which uses that exact form, so a trimmed
+      // `0x2004` key would silently miss every match.
+      const addr = "0x" + addrHex.toLowerCase().padStart(16, "0");
       if      (kind === "rename") out.renames[addr] = value;
       else if (kind === "note")   out.notes[addr]   = value;
       // signatures/types/patches are not in the cache .db format yet —

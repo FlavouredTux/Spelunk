@@ -55,18 +55,23 @@ Use shell commands only for analysis and for writing intel claims.
 ${scope}
 Agent id: ${agentId}
 
-Available shell commands:
+Available shell commands. Copy the exact flag layout — the binary path
+and address positions matter:
 
-  ${args.emberBin} -p ${args.binary} -s <symbol-or-0xVA>
-      Pseudo-C of one function. Read this FIRST. \`-d\` instead of \`-p\`
-      gives raw asm — only use that if pseudo-C isn't enough.
-  ${args.emberBin} --refs-to 0xVA ${args.binary}
-      Callers of an address. \`--xrefs\` (no arg) dumps the whole table —
-      slow on big binaries; prefer --refs-to for per-fn lookups.
-  ${args.emberBin} --strings ${args.binary} | grep -i <pattern>
-      String literals reachable from a function.
-  ${args.emberBin} --callees 0xVA ${args.binary}
-      Direct call targets of the function at the given address.
+  ${args.emberBin} -p ${args.binary} -s 0x${args.scope.startsWith("fn:") ? args.scope.slice(3).replace(/^0x/i, "") : "401120"}
+      Pseudo-C of one function. Address is passed via \`-s\`. Read this
+      FIRST. Use \`-d\` instead of \`-p\` for raw asm only when needed.
+  ${args.emberBin} --refs-to 0x401120 ${args.binary}
+      Callers of an address. The address is the FLAG value, not a
+      positional after the binary. \`--xrefs\` with no arg dumps the
+      entire table (slow on big binaries) — prefer --refs-to.
+  ${args.emberBin} --callees 0x401120 ${args.binary}
+      Direct call targets of the function at the given address (flag
+      value, same shape as --refs-to).
+  ${args.emberBin} --strings ${args.binary} | grep -iE 'pattern1|pattern2'
+      String literals. Note: grep exits non-zero when nothing matches —
+      that's expected, not a tool failure. The "no output" itself is
+      the answer ("no strings of that flavour reachable").
 
 To file an intel claim, append ONE JSON line to ${claimsPath}:
 

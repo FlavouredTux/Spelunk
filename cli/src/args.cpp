@@ -255,6 +255,15 @@ Result<Args> parse_args(int argc, char** argv) {
             a.binary = s;
         } else if (a.functions && a.functions_pattern.empty()) {
             a.functions_pattern = s;
+        } else if (a.symbol.empty() &&
+                   (a.disasm || a.cfg || a.cfg_pseudo || a.ir ||
+                    a.ssa    || a.opt || a.strct      || a.pseudo)) {
+            // The natural shorthand for "decompile / disassemble this
+            // function" is `ember -p BIN 0x4012a0` rather than
+            // `ember -p BIN -s 0x4012a0`. LLM-driven agents reach for
+            // the positional form first — accept it for the view modes
+            // where -s is the only thing a second positional could be.
+            a.symbol = s;
         } else {
             return std::unexpected(Error::invalid_format(
                 std::format("unexpected positional argument: {}", s)));

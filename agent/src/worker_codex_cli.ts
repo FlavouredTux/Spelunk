@@ -1,35 +1,85 @@
-import { appendFileSync, mkdirSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+
+import { Codex, type ThreadEvent } from "@openai/codex-sdk";
 
 import { ROLES } from "./roles/index.js";
 import type { WorkerArgs } from "./worker.js";
 
-// Codex CLI worker. This preserves the same events.jsonl contract as
-// runWorker / runassistantCodeWorker while delegating the agent loop to
-// `codex exec`.
+// Codex SDK-driven worker. Mirrors runassistantCodeWorker but for users on
+// a ChatGPT plan (Plus / Team / Business / Enterprise) who want to spend
+// that quota instead of an OpenAI API key.
 //
-// Model ids use the sentinel prefix:
-//   codex-cli/gpt-5       -> codex exec --model gpt-5
-//   codex-cli/gpt-5.4     -> codex exec --model gpt-5.4
-//   codex-cli             -> Codex config default
+//   model = "codex-cli/gpt-5"  → runCodexCliWorker (this file)
+//   model = "codex-cli"        → runCodexCliWorker, default model from
+//                                ~/.codex/config.toml
+//   model = anything else      → runWorker (HTTP-API LLM adapters)
 //
-// Codex CLI does not expose the same in-process MCP helper API that
-// assistant Agent SDK does here. Instead we give it a constrained prompt
-// that points at Ember's CLI and the intel JSONL protocol. The worker
-// still runs in the user's Codex login context, so ChatGPT
-// subscription auth stays inside the official tool.
-
-const kZeroCost = {
-    usd: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_tokens: 0,
-};
+// History note: an earlier version of this file shelled out to `codex
+// exec --json` directly and parsed JSONL on stdout. The official
+// @openai/codex-sdk now exposes a typed Thread/Codex API that does the
+// same thing more cleanly — typed events, abortable streams, proper
+// usage reporting — so this is now an SDK adapter. Behaviour and model
+// prefix unchanged so existing config/dispatch keeps working.
+//
+// Auth: the Codex CLI persists OAuth tokens at ~/.codex/auth.json. The
+// SDK invokes the CLI as a subprocess, which finds them automatically.
+// EMBER_CODEX_HOME overrides if you want to point at a different install.
+//
+// Tool surface: ember already has a CLI (ember --decompile, --xrefs,
+// --strings, --refs-to, --recognize) and ember-agent has an `intel claim`
+// subcommand. So we let Codex use its built-in shell to drive those —
+// every shell call lands in events.jsonl as a tool_ok / tool_err entry,
+// every claim is filed via `ember-agent intel claim` writing directly
+// to the same intel.jsonl the rest of cascade reads. No MCP bridge
+// required — the CLI surface IS the tool surface.
 
 export function isCodexCliModel(model: string | undefined): boolean {
     return (model ?? "").startsWith("codex-cli");
+}
+
+function buildPrompt(args: WorkerArgs, system: string, claimsPath: string): string {
+    const agentId = args.agentId ?? `${args.role}-${args.runId}`;
+    const scope = args.scope.startsWith("fn:")
+        ? `Target function: ${args.scope.slice(3)} in ${args.binary}`
+        : args.scope.startsWith("dispute:")
+            ? `Disputed claim scope: ${args.scope.slice("dispute:".length)} in ${args.binary}`
+            : `Scope: ${args.scope} in ${args.binary}`;
+    return `${system}
+
+You are running inside Ember's Codex worker. Do not edit repository files.
+Use shell commands only for analysis and for writing intel claims.
+
+${scope}
+Agent id: ${agentId}
+
+Available shell commands:
+
+  ${args.emberBin} -d ${args.binary} -s <function-or-address>
+      Pseudo-C disassembly. Read this first.
+  ${args.emberBin} --xrefs <addr> ${args.binary}
+      Callers of the function at <addr>.
+  ${args.emberBin} --strings ${args.binary} | grep -i <pattern>
+      String literals reachable from a function.
+  ${args.emberBin} --callees <addr> ${args.binary}
+      Direct call targets of the function at <addr>.
+  ${args.emberBin} --recognize ${args.binary}
+      TEEF library-fn matches.
+
+To file an intel claim, append ONE JSON line to ${claimsPath}:
+
+  echo '{"subject":"0x4012a0","predicate":"name","value":"my_func","evidence":"...","confidence":0.85}' >> ${claimsPath}
+
+The orchestrator drains that file at the end of your turn and ingests
+each line through ember-agent's intel db (same validation + id
+assignment as the in-process worker.ts loop).
+
+Investigate the target and file at least ONE claim. If you cannot name
+with high confidence, file predicate="note" with confidence 0.3-0.6
+summarizing what you found and why. Going deeper without filing a
+claim wastes the run.`;
 }
 
 export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
@@ -41,6 +91,13 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
         ? requested.slice("codex-cli/".length) || undefined
         : undefined;
 
+    const codexHome = process.env.EMBER_CODEX_HOME ?? join(homedir(), ".codex");
+    if (!existsSync(join(codexHome, "auth.json"))) {
+        throw new Error(
+            `codex: no auth at ${codexHome}/auth.json — ` +
+            `run \`codex login\` once to authenticate, or set EMBER_CODEX_HOME`);
+    }
+
     mkdirSync(args.runDir, { recursive: true });
     const eventsPath = join(args.runDir, "events.jsonl");
     const emit = (e: Record<string, unknown>) => {
@@ -48,187 +105,149 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
             JSON.stringify({ ts: new Date().toISOString(), ...e }) + "\n");
     };
 
-    const prompt = buildCodexPrompt(args, role.system);
-    emit({
-        kind: "start",
-        role: args.role,
-        model: requested,
-        scope: args.scope,
-        agentId: args.agentId ?? `${args.role}-${args.runId}`,
-        budget: args.budget,
-        binary: args.binary,
+    const claimsPath = join(args.runDir, "claims.jsonl");
+    const agentId = args.agentId ?? `${args.role}-${args.runId}`;
+
+    emit({ kind: "start", role: args.role, model: requested, scope: args.scope, agentId,
+           budget: args.budget, binary: args.binary });
+
+    const codex = new Codex({
+        env: {
+            ...(process.env as Record<string, string>),
+            CODEX_HOME: codexHome,
+        },
     });
 
-    const codexArgs = [
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--ignore-rules",
-        "-c",
-        'approval_policy="never"',
-        "--skip-git-repo-check",
-        "--sandbox",
-        "workspace-write",
-        ...(cliModel ? ["--model", cliModel] : []),
-        "-",
-    ];
+    const thread = codex.startThread({
+        // danger-full-access: the agent runs Ember's CLI which writes to
+        // ~/.cache/ember/* (the intel db, the disk cache for xrefs /
+        // strings / TEEF). workspace-write would deny those writes.
+        // Codex isn't running untrusted code — it's running the same
+        // ember CLIs every other cascade worker runs. The sandbox rules
+        // are out of scope here.
+        sandboxMode: "danger-full-access",
+        approvalPolicy: "never",
+        // No web search — every tool the agent needs is local. Saves
+        // quota on irrelevant lookups.
+        networkAccessEnabled: false,
+        webSearchMode: "disabled",
+        skipGitRepoCheck: true,
+        workingDirectory: args.runDir,
+        ...(cliModel ? { model: cliModel } : {}),
+    });
 
-    await new Promise<void>((resolve, reject) => {
-        const child = spawn("codex", codexArgs, {
-            cwd: process.cwd(),
-            stdio: ["pipe", "pipe", "pipe"],
-            env: {
-                ...process.env,
-                CODEXCLI_APPROVAL_POLICY: "never",
-            },
-        });
+    const tally = { in_tok: 0, cached_in: 0, out_tok: 0, reasoning_out: 0 };
+    let turn = 0;
+    let lastAssistantText = "";
 
-        let stderr = "";
-        let pending = "";
-        let finalMessage = "";
+    try {
+        const prompt = buildPrompt(args, role.system, claimsPath);
+        const stream = await thread.runStreamed(prompt);
 
-        child.stdout.on("data", (chunk) => {
-            pending += chunk.toString();
-            let idx;
-            while ((idx = pending.indexOf("\n")) !== -1) {
-                const line = pending.slice(0, idx);
-                pending = pending.slice(idx + 1);
-                const msg = parseCodexEvent(line);
-                if (!msg) continue;
-                if (msg.kind === "agent_message") {
-                    finalMessage = msg.text;
-                    emit({ kind: "message", bytes: msg.text.length });
-                } else if (msg.kind === "tool") {
-                    emit({ kind: "tool_ok", name: msg.name, input: msg.input, bytes: msg.bytes });
-                } else if (msg.kind === "turn") {
-                    emit({ kind: "turn", turn: msg.turn, stop: msg.stop, usage: msg.usage, tally: kZeroCost });
+        for await (const ev of stream.events as AsyncGenerator<ThreadEvent>) {
+            switch (ev.type) {
+                case "thread.started":
+                    break;
+                case "turn.started":
+                    emit({ kind: "turn", turn });
+                    ++turn;
+                    break;
+                case "turn.completed":
+                    if (ev.usage) {
+                        tally.in_tok        += ev.usage.input_tokens         ?? 0;
+                        tally.cached_in     += ev.usage.cached_input_tokens  ?? 0;
+                        tally.out_tok       += ev.usage.output_tokens        ?? 0;
+                        tally.reasoning_out += ev.usage.reasoning_output_tokens ?? 0;
+                    }
+                    break;
+                case "turn.failed":
+                    emit({ kind: "error", phase: "turn", err: ev.error?.message ?? "turn.failed" });
+                    break;
+                case "item.completed": {
+                    const it = ev.item;
+                    if (it.type === "command_execution") {
+                        const ok = it.exit_code === 0;
+                        emit({
+                            kind: ok ? "tool_ok" : "tool_err",
+                            name: "shell",
+                            input: { command: it.command },
+                            bytes: it.aggregated_output?.length ?? 0,
+                            ...(ok ? {} : { exit_code: it.exit_code }),
+                        });
+                    } else if (it.type === "agent_message") {
+                        lastAssistantText = it.text;
+                    } else if (it.type === "error") {
+                        emit({ kind: "error", phase: "item", err: it.message });
+                    }
+                    // reasoning / file_change / web_search / todo_list /
+                    // mcp_tool_call: SDK telemetry not surfaced. Cascade
+                    // tally only cares about command_execution + the final
+                    // assistant text + claim count.
+                    break;
+                }
+                case "error":
+                    emit({ kind: "error", phase: "stream", err: ev.message });
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // Drain the claims sink. Each line is a complete intel_claim
+        // payload (subject, predicate, value, evidence, confidence). We
+        // ingest via the existing `ember-agent intel claim` CLI to
+        // get the same validation + id assignment as the in-process
+        // intel_claim tool the runWorker loop uses.
+        let claimsFiled = 0;
+        if (existsSync(claimsPath)) {
+            const lines = readFileSync(claimsPath, "utf8").split("\n");
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t) continue;
+                let obj: Record<string, unknown>;
+                try { obj = JSON.parse(t); }
+                catch (e) {
+                    emit({ kind: "claim_parse_err", err: String(e), line: t.slice(0, 200) });
+                    continue;
+                }
+                const cliArgs = [
+                    process.argv[1], "intel", args.binary, "claim",
+                    `--agent-id=${agentId}`,
+                    `--subject=${obj.subject}`,
+                    `--predicate=${obj.predicate}`,
+                    `--value=${obj.value}`,
+                    `--evidence=${obj.evidence}`,
+                    `--confidence=${obj.confidence}`,
+                ];
+                if (obj.supersedes) cliArgs.push(`--supersedes=${obj.supersedes}`);
+                const r = spawnSync(process.execPath, cliArgs, { encoding: "utf8" });
+                if (r.status === 0) {
+                    ++claimsFiled;
+                    emit({ kind: "tool_ok", name: "intel_claim", input: obj, bytes: 0 });
+                } else {
+                    emit({ kind: "tool_err", name: "intel_claim",
+                           err: ((r.stderr ?? "") + (r.stdout ?? "")).slice(0, 500) });
                 }
             }
+        }
+
+        emit({
+            kind: "done",
+            turns: turn,
+            tally: {
+                usd: 0,    // ChatGPT-plan-backed; quota burn, not cash
+                input_tokens: tally.in_tok,
+                output_tokens: tally.out_tok,
+                cache_read_tokens: tally.cached_in,
+                cache_write_tokens: 0,
+                reasoning_tokens: tally.reasoning_out,
+            },
+            claims_filed: claimsFiled,
+            final_text_bytes: lastAssistantText.length,
         });
-        child.stderr.on("data", (d) => { stderr += d.toString(); });
-        child.on("error", (err: NodeJS.ErrnoException) => {
-            const msg = err.code === "ENOENT"
-                ? "codex binary not found on PATH. Install Codex CLI and run `codex login`."
-                : `codex: ${err.message}`;
-            emit({ kind: "error", phase: "spawn", err: msg });
-            reject(new Error(msg));
-        });
-        child.on("close", (code) => {
-            if (pending.trim()) {
-                const msg = parseCodexEvent(pending);
-                if (msg?.kind === "agent_message") finalMessage = msg.text;
-            }
-            if (code === 0) {
-                emit({
-                    kind: "done",
-                    turns: 1,
-                    tally: kZeroCost,
-                    claims_filed: finalMessage.includes("intel_claim") ? 1 : 0,
-                });
-                resolve();
-                return;
-            }
-            const err = friendlyCodexError(code, stderr);
-            emit({ kind: "error", phase: "codex", err });
-            reject(new Error(err));
-        });
-
-        child.stdin.write(prompt);
-        child.stdin.end();
-    });
-}
-
-type ParsedCodexEvent =
-    | { kind: "agent_message"; text: string }
-    | { kind: "tool"; name: string; input?: unknown; bytes: number }
-    | { kind: "turn"; turn: number; stop: string; usage?: unknown };
-
-function parseCodexEvent(line: string): ParsedCodexEvent | null {
-    if (!line.trim().startsWith("{")) return null;
-    let j: any;
-    try { j = JSON.parse(line); } catch { return null; }
-    const msg = j.msg ?? j;
-    if (msg.type === "agent_message" && typeof msg.message === "string") {
-        return { kind: "agent_message", text: msg.message };
+    } catch (e) {
+        const err = e instanceof Error ? e.message : String(e);
+        emit({ kind: "error", phase: "codex", err });
+        throw e;
     }
-    if (msg.type === "exec_command_begin") {
-        return {
-            kind: "tool",
-            name: "shell",
-            input: { command: msg.command },
-            bytes: 0,
-        };
-    }
-    if (msg.type === "exec_command_end") {
-        return {
-            kind: "tool",
-            name: "shell",
-            input: { exit_code: msg.exit_code },
-            bytes: typeof msg.stdout === "string" ? msg.stdout.length : 0,
-        };
-    }
-    if (msg.type === "token_count") {
-        return {
-            kind: "turn",
-            turn: 0,
-            stop: "running",
-            usage: msg.info ?? msg,
-        };
-    }
-    return null;
-}
-
-function friendlyCodexError(code: number | null, stderr: string): string {
-    const diag = stderr.toLowerCase();
-    if (/not logged in|login required|unauthorized|authentication/.test(diag)) {
-        return "Codex CLI is not signed in. Run `codex login` in a terminal, then retry.";
-    }
-    if (/rate.?limit|429/.test(diag)) {
-        return "Codex CLI was rate-limited by OpenAI. Wait a bit and retry, or switch provider.";
-    }
-    const tail = stderr.trim().slice(-600);
-    return `codex exited ${code ?? "unknown"}${tail ? `: ${tail}` : ""}`;
-}
-
-function buildCodexPrompt(args: WorkerArgs, system: string): string {
-    const agentId = args.agentId ?? `${args.role}-${args.runId}`;
-    return `${system}
-
-You are running inside Ember's Codex CLI worker. Do not edit repository files.
-Use shell commands only for analysis and for writing intel claims.
-
-Target binary: ${args.binary}
-Scope: ${args.scope}
-Agent id: ${agentId}
-Ember CLI: ${args.emberBin}
-
-Useful commands:
-- Decompile: \`${args.emberBin} -d ${args.binary} -s <function-or-address>\`
-- Xrefs: \`${args.emberBin} --xrefs ${args.binary}\`
-- Strings: \`${args.emberBin} --strings ${args.binary}\`
-- Recognize: \`${args.emberBin} --recognize ${args.binary}\`
-- Query intel: \`node ${process.argv[1]} intel ${args.binary} query --subject <subject> --predicate <predicate>\`
-- File a claim: \`node ${process.argv[1]} intel ${args.binary} claim --agent-id ${agentId} --subject <subject> --predicate <predicate> --value <value> --evidence <evidence> --confidence <0..1>\`
-
-Finish only after following the role instructions. If the role requires
-an intel_claim, file it with the command above before answering.
-
-Initial task:
-${buildScopeMessage(args.scope, args.binary)}`;
-}
-
-function buildScopeMessage(scope: string, binary: string): string {
-    if (scope.startsWith("fn:")) {
-        return `Target: ${binary}\nFunction: ${scope.slice(3)}\n\nProceed.`;
-    }
-    if (scope.startsWith("dispute:")) {
-        const tail = scope.slice("dispute:".length);
-        const bar = tail.indexOf("|");
-        const subject = bar < 0 ? tail : tail.slice(0, bar);
-        const predicate = bar < 0 ? "name" : tail.slice(bar + 1);
-        return `Target: ${binary}\nDisputed claim: subject=${subject}, predicate=${predicate}\n\n` +
-               `Use intel disputes and Ember CLI evidence to independently verify. File ONE ` +
-               `intel_claim with your verdict.`;
-    }
-    return `Target: ${binary}\nScope: ${scope}\n\nProceed.`;
 }

@@ -441,8 +441,19 @@ parse_teef_tsv(std::string_view tsv) {
 // Returns the same TSV the user would see from `ember --teef <bin>`.
 // `scope`, when active, filters every fn-walking step so we don't pay
 // fingerprint cost on out-of-module noise.
+// `corpus_mode` controls one optimization: when building a TSV intended
+// to be loaded as a CORPUS (via TeefCorpus::load_tsv), unnamed fns
+// (`sub_<addr>`) skip the K=64 behavioural traces and emit zeros for
+// the L4 columns. The recognizer's load_tsv drops sub_* rows entirely
+// after counting their L2 exact_hash for popularity tracking, so the
+// L4 sketch on those rows is never read — computing it is pure waste.
+//
+// Recognize-time fingerprinting (build_teef_tsv called on a query
+// binary that may itself be stripped, so all its fns are sub_*) needs
+// L4 for every fn — leave corpus_mode at its default false.
 [[nodiscard]] std::string build_teef_tsv(const Binary& b,
-                                         const ModuleScope& scope = {}) {
+                                         const ModuleScope& scope = {},
+                                         bool corpus_mode = false) {
     const bool show = progress_enabled();
 
         std::unordered_map<addr_t, std::string> name_by_addr;
@@ -567,13 +578,18 @@ parse_teef_tsv(std::string_view tsv) {
                 const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
                 if (i >= total) break;
                 const addr_t a = fns[i];
-                // compute_teef_max runs the lift→SSA→cleanup pipeline
-                // ONCE and feeds the result into both the L2 (structurer
-                // + region tokenization) and L4 (K=64 abstract traces)
-                // paths. ~2× faster than calling compute_teef_with_chunks
-                // and compute_behav_sig separately, with bit-identical
-                // output.
-                const auto tf = compute_teef_max(b, a);
+                // Corpus-mode fast path: sub_* (unnamed) fns are dropped
+                // by TeefCorpus::load_tsv after their L2 exact_hash is
+                // counted into the popularity guard, so their L4 sketch
+                // is never read — fall back to compute_teef_with_chunks
+                // (L0 + L2 only, no K=64 traces). ~3 ms saved per sub_*.
+                // Recognize-time fingerprinting leaves corpus_mode false
+                // so query-side stripped binaries still get full L4.
+                const bool is_named = name_by_addr.contains(a);
+                const bool full_l4  = !corpus_mode || is_named;
+                const auto tf = full_l4
+                    ? compute_teef_max(b, a)
+                    : compute_teef_with_chunks(b, a);
                 const auto& bs = tf.behav;
                 const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (show && (d % tick == 0 || d == total)) {
@@ -942,7 +958,7 @@ int run_recognize(const Args& args, const Binary& b) {
 
 int run_teef(const Args& args, const Binary& b) {
     return run_cached(args, std::format("teef-{}", kTeefSchema),
-                      [&] { return build_teef_tsv(b); });
+                      [&] { return build_teef_tsv(b, {}, /*corpus_mode=*/true); });
 }
 
 // --orbit-dump: diagnostic that emits a TSV row per fn with all three

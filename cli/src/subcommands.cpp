@@ -656,6 +656,7 @@ build_teef_tsv(const Binary& b,
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                     const std::size_t d = done.load(std::memory_order_relaxed);
                     if (d == 0 || d == total) continue;
+                    const std::size_t ee = early_exit_topo.load(std::memory_order_relaxed);
                     const auto now = std::chrono::steady_clock::now();
                     const double elapsed = std::chrono::duration<double>(
                         now - t_fp_start).count();
@@ -663,10 +664,12 @@ build_teef_tsv(const Binary& b,
                         ? static_cast<double>(d) / elapsed : 0.0;
                     const double eta = rate > 0
                         ? static_cast<double>(total - d) / rate : 0.0;
+                    const double pct_ee = d > 0
+                        ? 100.0 * static_cast<double>(ee) / static_cast<double>(d) : 0.0;
                     std::lock_guard<std::mutex> lock(fp_progress_mu);
                     std::fprintf(stderr,
-                        "\r  fingerprint [%zu/%zu] %.0f fn/s · elapsed %.1fs · eta %.1fs   ",
-                        d, total, rate, elapsed, eta);
+                        "\r  fingerprint [%zu/%zu] %.0f fn/s · skip %.0f%% · elapsed %.1fs · eta %.1fs   ",
+                        d, total, rate, pct_ee, elapsed, eta);
                     std::fflush(stderr);
                 }
             });

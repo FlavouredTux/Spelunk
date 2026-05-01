@@ -23,6 +23,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -675,15 +676,21 @@ load_corpus_from_args(const Args& args) {
     if (args.corpus_paths.empty()) return nullptr;
     auto corpus = std::make_unique<TeefCorpus>();
     std::size_t total_rows = 0;
+    const auto t_start = std::chrono::steady_clock::now();
     for (const auto& p : args.corpus_paths) {
+        // Per-file timings come from TeefCorpus::load_tsv itself —
+        // it logs phase breakdown (mmap / parse / merge / total).
         const std::size_t n = corpus->load_tsv(p);
         total_rows += n;
-        std::println(stderr, "ember: corpus {}: {} rows", p, n);
     }
+    const auto t_end = std::chrono::steady_clock::now();
+    const double total_ms = std::chrono::duration<double, std::milli>(
+        t_end - t_start).count();
     std::println(stderr,
-        "ember: corpus loaded: {} fns / {} chunks across {} TSVs ({} rows)",
+        "ember: corpus loaded: {} fns / {} chunks across {} TSVs "
+        "({} rows) in {:.0f} ms",
         corpus->function_count(), corpus->chunk_count(),
-        args.corpus_paths.size(), total_rows);
+        args.corpus_paths.size(), total_rows, total_ms);
     return corpus;
 }
 
@@ -858,7 +865,14 @@ int run_recognize(const Args& args, const Binary& b) {
         }
     }
     if (!cache_hit) {
+        const auto t_fp_start = std::chrono::steady_clock::now();
         target_tsv = build_teef_tsv(b, scope);
+        const auto t_fp_end = std::chrono::steady_clock::now();
+        const double fp_ms = std::chrono::duration<double, std::milli>(
+            t_fp_end - t_fp_start).count();
+        std::println(stderr,
+            "ember: target fingerprint built in {:.0f} ms ({} bytes, {} fns)",
+            fp_ms, target_tsv.size(), total);
         if (cacheable) {
             const auto dir = args.cache_dir.empty()
                 ? cache::default_dir()
@@ -916,6 +930,7 @@ int run_recognize(const Args& args, const Binary& b) {
     // unlocked.
     std::mutex out_mu;
     const std::size_t progress_tick = std::max<std::size_t>(1, total / 50);
+    const auto t_scan_start = std::chrono::steady_clock::now();
     auto worker = [&] {
         while (true) {
             const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
@@ -925,11 +940,22 @@ int run_recognize(const Args& args, const Binary& b) {
             // Even when we skip the recognize call, count progress —
             // otherwise the progress bar advances only on hits, which
             // looks stalled on stripped binaries with many sub_*-only
-            // queries.
+            // queries. Show elapsed + ETA so multi-minute scans are
+            // legible (rate × remaining = ETA, computed live).
             const std::size_t d = done_count.fetch_add(1, std::memory_order_relaxed) + 1;
             if (show && (d % progress_tick == 0 || d == total)) {
+                const auto now = std::chrono::steady_clock::now();
+                const double elapsed = std::chrono::duration<double>(
+                    now - t_scan_start).count();
+                const double rate = elapsed > 0
+                    ? static_cast<double>(d) / elapsed : 0.0;
+                const double eta  = rate > 0
+                    ? static_cast<double>(total - d) / rate
+                    : 0.0;
                 std::lock_guard<std::mutex> lock(out_mu);
-                std::fprintf(stderr, "\r  recognize [%zu/%zu]", d, total);
+                std::fprintf(stderr,
+                    "\r  recognize [%zu/%zu] %.0f fn/s · elapsed %.1fs · eta %.1fs   ",
+                    d, total, rate, elapsed, eta);
                 std::fflush(stderr);
             }
             if (tf.whole.exact_hash == 0) continue;
@@ -971,8 +997,15 @@ int run_recognize(const Args& args, const Binary& b) {
     for (auto& t : pool) t.join();
 
     if (show) std::fputc('\n', stderr);
-    std::println(stderr, "ember: recognize: {} suggestions at threshold {:.2f}",
-                 hit_count.load(), threshold);
+    const auto t_scan_end = std::chrono::steady_clock::now();
+    const double scan_s = std::chrono::duration<double>(
+        t_scan_end - t_scan_start).count();
+    const double per_fn_us = total > 0
+        ? (scan_s * 1e6) / static_cast<double>(total) : 0.0;
+    std::println(stderr,
+        "ember: recognize: {} suggestions at threshold {:.2f} "
+        "(scan {:.2f}s, {:.0f} µs/fn)",
+        hit_count.load(), threshold, scan_s, per_fn_us);
     return EXIT_SUCCESS;
 }
 

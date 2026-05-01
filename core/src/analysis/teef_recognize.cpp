@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <string_view>
 #include <thread>
@@ -14,6 +16,7 @@
 #include <unistd.h>
 
 #include <ember/analysis/teef.hpp>
+#include <ember/common/progress.hpp>
 
 namespace ember {
 
@@ -266,6 +269,17 @@ void parse_chunk(const char* begin, const char* end,
 }  // namespace
 
 std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
+    using clock_t  = std::chrono::steady_clock;
+    using ms_t     = std::chrono::duration<double, std::milli>;
+    // Per-file load timing. Suppressed when EMBER_QUIET=1; printed
+    // unconditionally otherwise (even when stderr isn't a TTY, since
+    // these lines are diagnostic — users running the recognizer over
+    // multi-100MB corpora want to know what's slow). progress_enabled()
+    // gates the noisy progress bars; this is a one-shot per file.
+    const bool dbg = !(std::getenv("EMBER_QUIET") != nullptr &&
+                       std::getenv("EMBER_QUIET")[0] == '1');
+    const auto t_open = clock_t::now();
+
     // ---- mmap the file -------------------------------------------------
     const int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) return 0;
@@ -280,6 +294,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     if (m == MAP_FAILED) return 0;
     const char* const data = static_cast<const char*>(m);
     const char* const file_end = data + sz;
+    const auto t_mmap = clock_t::now();
 
     // ---- T-row pre-scan ------------------------------------------------
     // T rows are rare (current build_teef_tsv emits none, but the format
@@ -375,6 +390,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         }
         for (auto& th : pool) th.join();
     }
+    const auto t_parsed = clock_t::now();
 
     // ---- Serial merge into corpus indexes ------------------------------
     // Order matters for correctness: F rows establish idx_by_addr that
@@ -451,7 +467,21 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         }
     }
 
+    const auto t_merged = clock_t::now();
     ::munmap(m, sz);
+
+    if (dbg) {
+        const double mb       = static_cast<double>(sz) / (1024.0 * 1024.0);
+        const auto   t_open_ms   = ms_t(t_mmap   - t_open).count();
+        const auto   t_parse_ms  = ms_t(t_parsed - t_mmap).count();
+        const auto   t_merge_ms  = ms_t(t_merged - t_parsed).count();
+        const auto   t_total_ms  = ms_t(t_merged - t_open).count();
+        std::fprintf(stderr,
+            "ember: corpus %s: %.1f MB / %zu rows  "
+            "(mmap+pre %.0fms · parse %.0fms ×%u · merge %.0fms · total %.0fms)\n",
+            path.c_str(), mb, rows,
+            t_open_ms, t_parse_ms, threads, t_merge_ms, t_total_ms);
+    }
     return rows;
 }
 

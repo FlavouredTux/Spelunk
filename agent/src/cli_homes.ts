@@ -52,8 +52,14 @@ function loadCliHomes(): CliHomes {
     try { raw = readFileSync(cfgPath, "utf8"); }
     catch { return out; }
 
+    // Collapse multi-line array values onto a single line so the
+    // line-by-line section walk can match `homes = [...]` whether the
+    // user wrote it inline or on multiple lines (the more idiomatic
+    // TOML style for long path lists).
+    const flat = raw.replace(/=\s*\[[\s\S]*?\]/g, (m) => m.replace(/\s+/g, " "));
+
     let section = "";
-    for (const line of raw.split("\n")) {
+    for (const line of flat.split("\n")) {
         const t = line.trim();
         if (!t || t.startsWith("#")) continue;
         const m = /^\[(\w+)\]$/.exec(t);

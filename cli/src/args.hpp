@@ -76,6 +76,13 @@ struct Args {
                                              // targets (Themida / Lua VM / hellgate) whose hundreds
                                              // of thousands of trivial stubs add no signal but
                                              // dominate corpus build time.
+    bool l0_prefilter = false;               // --l0-prefilter: when fingerprinting a target for
+                                             // --recognize, skip the K=64 L4 traces on fns whose
+                                             // L0 topology hash isn't represented in the loaded
+                                             // corpus. Big throughput win on obfuscator-heavy
+                                             // targets where most fns have unique-shape CFGs;
+                                             // lossy on cross-opt-level matches whose topology
+                                             // shifts. Off by default.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)

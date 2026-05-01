@@ -706,7 +706,8 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
 }
 
 TeefFunction
-compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts) {
+compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
+                 const std::unordered_set<u64>* l4_topo_filter) {
     TeefFunction out;
 
     auto dec_r = make_decoder(b);
@@ -732,8 +733,16 @@ compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts) {
     if (auto rv = ssa.convert(*ir_r); !rv) return out;
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
-    // L4 first — operates on the cleaned flat IR, no structurer needed.
-    out.behav = compute_behav_sig_from_ir(*ir_r, b);
+    // L0 pre-filter: when the caller has a corpus's topo-hash set on
+    // hand, fns whose topology isn't represented in the corpus can't
+    // behav-exact match anything — skip the K=64 trace pass for them.
+    // Lossy on cross-topology behavioural matches but a major win on
+    // obfuscator-spawned targets where most fns have unique-shape CFGs.
+    const bool skip_l4 = l4_topo_filter &&
+                         !l4_topo_filter->contains(out.topo_hash);
+    if (!skip_l4) {
+        out.behav = compute_behav_sig_from_ir(*ir_r, b);
+    }
 
     // L2 — structurer + region tokenization on the same IR.
     auto l2 = compute_l2_from_ir(b, *ir_r, min_chunk_insts);

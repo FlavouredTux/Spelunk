@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <ember/analysis/teef.hpp>
@@ -96,6 +97,14 @@ public:
 
     [[nodiscard]] std::size_t function_count() const noexcept { return whole_by_name_.size(); }
     [[nodiscard]] std::size_t chunk_count()    const noexcept { return chunk_index_.size(); }
+
+    // Set of distinct L0 topology hashes present in the corpus. Used by
+    // `--recognize` to short-circuit L4 computation on target fns whose
+    // CFG topology has no corpus counterpart — those queries can't match
+    // anything anyway, so the K=64 trace pass is wasted. On obfuscator-
+    // spawned targets (hundreds of thousands of unique-shape stubs)
+    // this filter saves the bulk of corpus-build time.
+    [[nodiscard]] std::unordered_set<u64> topo_hashes() const;
 
 private:
     struct WholeEntry {

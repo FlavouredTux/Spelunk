@@ -4,6 +4,8 @@
 #include <string_view>
 #include <vector>
 
+#include <unordered_set>
+
 #include <ember/analysis/teef_behav.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
@@ -110,11 +112,20 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start,
 // compute_teef_with_chunks + compute_behav_sig separately, and produces
 // bit-identical TeefFunction.{whole,chunks,topo_hash,behav} output.
 //
+// `l4_topo_filter`, when non-null, is consulted after the cheap L0
+// topology hash is computed: if `topo_hash ∉ *l4_topo_filter`, the
+// expensive L4 trace pass is skipped (out.behav stays default-zero).
+// Used by `--recognize` to avoid running K=64 traces on target fns
+// whose CFG topology has no counterpart in the loaded corpus —
+// those fns can't behav-exact match anything anyway. nullptr disables
+// the filter (always compute L4).
+//
 // Used by the corpus build path (build_teef_tsv). Recognizers that need
 // a single tier in isolation should keep using the standalone helpers.
 [[nodiscard]] TeefFunction
 compute_teef_max(const Binary& b, addr_t fn_start,
-                 u32 min_chunk_insts = 10);
+                 u32 min_chunk_insts = 10,
+                 const std::unordered_set<u64>* l4_topo_filter = nullptr);
 
 // Hash + MinHash a pseudo-C source string directly. Useful for
 // callers that already have the emitted text (the CLI fingerprint

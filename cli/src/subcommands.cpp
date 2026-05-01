@@ -459,10 +459,18 @@ parse_teef_tsv(std::string_view tsv) {
 // hundreds of thousands of trivial sub-32-byte stubs that can't carry
 // useful semantics; filtering them at the source slashes corpus build
 // time without losing real matches. 0 disables the filter.
-[[nodiscard]] std::string build_teef_tsv(const Binary& b,
-                                         const ModuleScope& scope = {},
-                                         bool corpus_mode = false,
-                                         u64 min_fn_bytes = 0) {
+//
+// `l4_topo_filter`, when non-null, is the corpus's set of L0 topology
+// hashes — passed straight to compute_teef_max so target fns whose
+// topology isn't in the corpus skip the K=64 trace pass. Recognize-
+// time only; corpus build leaves it nullptr (no corpus to filter
+// against).
+[[nodiscard]] std::string
+build_teef_tsv(const Binary& b,
+               const ModuleScope& scope = {},
+               bool corpus_mode = false,
+               u64 min_fn_bytes = 0,
+               const std::unordered_set<u64>* l4_topo_filter = nullptr) {
     const bool show = progress_enabled();
 
         std::unordered_map<addr_t, std::string> name_by_addr;
@@ -629,7 +637,8 @@ parse_teef_tsv(std::string_view tsv) {
                 const bool is_named = name_by_addr.contains(a);
                 const bool full_l4  = !corpus_mode || is_named;
                 const auto tf = full_l4
-                    ? compute_teef_max(b, a)
+                    ? compute_teef_max(b, a, /*min_chunk_insts=*/10,
+                                       l4_topo_filter)
                     : compute_teef_with_chunks(b, a);
                 const auto& bs = tf.behav;
                 const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -918,9 +927,22 @@ int run_recognize(const Args& args, const Binary& b) {
         }
     }
     if (!cache_hit) {
+        // Optional L0 pre-filter: when --l0-prefilter is set, target
+        // fns whose L0 topology hash isn't in the corpus skip L4. Big
+        // throughput win on obfuscator-heavy targets but lossy on
+        // cross-opt-level matches (CFG topology shifts even for the
+        // same source), so off by default.
+        std::unordered_set<u64> corpus_topos;
+        if (args.l0_prefilter) {
+            corpus_topos = corpus.topo_hashes();
+            std::println(stderr,
+                "ember: --l0-prefilter on; {} corpus topologies",
+                corpus_topos.size());
+        }
         const auto t_fp_start = std::chrono::steady_clock::now();
         target_tsv = build_teef_tsv(b, scope, /*corpus_mode=*/false,
-                                    args.min_fn_bytes);
+                                    args.min_fn_bytes,
+                                    args.l0_prefilter ? &corpus_topos : nullptr);
         const auto t_fp_end = std::chrono::steady_clock::now();
         const double fp_ms = std::chrono::duration<double, std::milli>(
             t_fp_end - t_fp_start).count();

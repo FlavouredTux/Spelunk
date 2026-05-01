@@ -268,6 +268,15 @@ void parse_chunk(const char* begin, const char* end,
 
 }  // namespace
 
+std::unordered_set<u64> TeefCorpus::topo_hashes() const {
+    std::unordered_set<u64> out;
+    out.reserve(whole_by_name_.size());
+    for (const auto& e : whole_by_name_) {
+        if (e.topo_hash != 0) out.insert(e.topo_hash);
+    }
+    return out;
+}
+
 std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     using clock_t  = std::chrono::steady_clock;
     using ms_t     = std::chrono::duration<double, std::milli>;

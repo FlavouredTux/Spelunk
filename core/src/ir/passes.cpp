@@ -22,6 +22,10 @@ namespace {
 // Mask i64 result to an IrType width (sign-extending from low bits)
 // ============================================================================
 
+// Helper bound: i64 representation. Widths > 64 (I128) can't fit and don't
+// occur on the constant-fold path — SIMD never folds through these helpers.
+// Guarded with a passthrough so a future code path that DOES hit them won't
+// silently corrupt; the i64 payload is returned unchanged.
 [[nodiscard]] i64 mask_signed(i64 v, IrType t) noexcept {
     const unsigned bits = type_bits(t);
     if (bits == 0 || bits >= 64) return v;

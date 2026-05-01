@@ -32,6 +32,16 @@ struct LiftCtx {
     // to the intrinsic (the Flag enum has no Pf).
     IrValue last_flag_src = {};
 
+    // When the last flag-setting op was a scalar-FP compare (ucomiss /
+    // ucomisd / comiss / comisd), these hold its two operands. After such a
+    // compare PF means "unordered (one operand is NaN)", NOT integer parity
+    // of the result, so a subsequent Jp/Jnp/Setp/Cmovp must lower to an
+    // `unordered_fp_compare(a, b)` intrinsic instead of the XOR-fold formula.
+    // Cleared by `set_zf_sf` (and any other integer flag-setter) so a later
+    // `add; jp` doesn't pick up a stale FP-cmp.
+    IrValue last_fp_cmp_a = {};
+    IrValue last_fp_cmp_b = {};
+
     [[nodiscard]] u32 new_temp_id() noexcept { return fn->next_temp_id++; }
 
     [[nodiscard]] IrValue temp(IrType t) noexcept {
@@ -146,6 +156,10 @@ struct LiftCtx {
         emit_set_flag(Flag::Zf, emit_cmp(IrOp::CmpEq, result, imm(0, t)));
         emit_set_flag(Flag::Sf, emit_cmp(IrOp::CmpSlt, result, imm(0, t)));
         last_flag_src = result;
+        // Integer flag-setter happened — any prior FP-compare context is now
+        // invalid for PF interpretation.
+        last_fp_cmp_a = {};
+        last_fp_cmp_b = {};
     }
 
     void clear_cf_of() {
@@ -893,6 +907,10 @@ void lift_cmpxchg(LiftCtx& ctx) {
     IrValue acc = ctx.read_reg(accum);
     IrValue eq  = ctx.emit_cmp(IrOp::CmpEq, acc, dst_v);
     ctx.emit_set_flag(Flag::Zf, eq);
+    // Integer flag-setter — invalidate any prior FP-compare context so a
+    // later Jp/Jnp doesn't lower against stale ucomi operands.
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
 
     // dst = eq ? src : dst (no-op, but lets later optimization see the cond)
     IrInst d;
@@ -926,6 +944,9 @@ void lift_bit_scan(LiftCtx& ctx, std::string_view name) {
     const IrType t = operand_type(insn.operands[0]);
     src = ctx.match_size(src, t, /*sign_ext=*/false);
     ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, src, ctx.imm(0, t)));
+    // Integer flag-setter — clear any prior FP-compare context.
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -1187,6 +1208,24 @@ IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx) {
         }
         case Mnemonic::Jp:
         case Mnemonic::Jnp: {
+            // After a scalar-FP compare (ucomi*/comi*), PF means "unordered"
+            // — at least one operand is NaN. Lower to a typed intrinsic so
+            // the reader sees `if (unordered_fp_compare(a, b))`, the SSA
+            // pass keeps both operands live, and the cleanup pass doesn't
+            // try to apply the integer parity formula to FP values.
+            if (ctx.last_fp_cmp_a.kind != IrValueKind::None &&
+                ctx.last_fp_cmp_b.kind != IrValueKind::None) {
+                IrInst inst;
+                inst.op   = IrOp::Intrinsic;
+                inst.name = "unordered_fp_compare";
+                inst.dst  = ctx.temp(IrType::I1);
+                inst.srcs[0] = ctx.last_fp_cmp_a;
+                inst.srcs[1] = ctx.last_fp_cmp_b;
+                inst.src_count = 2;
+                IrValue v = inst.dst;
+                ctx.emit(std::move(inst));
+                return (mn == Mnemonic::Jp) ? v : ctx.emit_unop(IrOp::Not, v);
+            }
             // PF = even parity of the low 8 bits of the most recent flag-
             // setting computation. We model that with the standard XOR-fold:
             //   v8 = trunc8(src);
@@ -1324,13 +1363,18 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
 
 // ----- Packed SIMD intrinsics --------------------------------------------
 //
-// We don't have a 128-bit IR type, so packed-SSE values flow through the IR
-// at F64 width — same trick the existing Movaps/Movups lifter uses. The
-// upper 64 bits of an xmm register are silently lossy in the IR, but since
-// no analysis pass reads them and the emitter renders the named intrinsic
-// verbatim, the dataflow + reader experience is what matters: `xorps xmm0,
-// xmm0` becomes `xmm0 = _mm_xor_ps(xmm0, xmm0);` instead of an opaque
-// `/* x64.xorps(...) */` block comment.
+// XMM dataflow at the register-width level uses IrType::I128 — the actual
+// 128-bit width — so the upper 64 bits aren't silently truncated by the
+// loads/stores that used to flow through F64. The reader still gets named
+// intrinsics (`_mm_xor_ps`, `_mm_add_pd`, …) that carry the lane-width
+// interpretation; the IR-level type is just an honest "16-byte
+// register-shaped value".
+//
+// `read_xmm`/`write_xmm` honour the caller's `t` because half-XMM moves
+// like `movhps` / `movlps` deliberately transfer 64 bits into one half of
+// the register and need that narrower type to round-trip. Full-XMM ops
+// (lift_simd_binop, lift_simd_shift_imm, the 128-bit lift_simd_mov path)
+// pin t = I128 at the call site below.
 [[nodiscard]] IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t) {
     if (op.kind == Operand::Kind::Register) {
         return IrValue::make_reg(op.reg, t);
@@ -1358,6 +1402,14 @@ void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
 // every commutative-or-not SSE binary op that lacks a clean infix form
 // (xor/and/or/andnot, packed integer arithmetic, packed compares,
 // unpacks, shuffles).
+// `t` is the IR-level type of the produced value:
+//   - I128 for any full-XMM op (every `_mm_*_ps`, `_mm_*_pd`, `_mm_*_si128`,
+//     `_mm_*_epi*`, shuffle/unpack, etc.). Carries the full 128-bit width so
+//     SSA / cleanup / emit don't truncate the upper 64 bits.
+//   - F32 / F64 for scalar-low-lane ops (`_mm_min_ss`, `_mm_max_sd`, etc.) —
+//     architecturally these only modify the low lane and the compiler treats
+//     the result as scalar. Keeping them at scalar width lets the surrounding
+//     scalar-FP code (Movss/Movsd loads, return values) flow naturally.
 void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 2) return;
@@ -1424,13 +1476,24 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
 }
 
 // `ucomiss xmm0, xmm1` / `ucomisd xmm0, xmm1`: scalar FP compare that sets
-// ZF/CF/PF. With NaN handling skipped we get:
-//   ZF = (a == b)
-//   CF = (a <  b)
-//   PF = 0
-// That makes downstream `ja` / `jb` / `je` read out as `if (a > b)` etc.,
-// which is the actual C source. Compare on FP-typed operands; the emitter
-// renders f32/f64 ==/< correctly.
+// ZF / CF / PF. The architecturally faithful mapping is:
+//   ordered:    ZF = (a == b)   CF = (a < b)   PF = 0
+//   unordered:  ZF = 1          CF = 1         PF = 1     (one of a, b is NaN)
+//
+// We model the ordered case directly with CmpEq / CmpUlt — that's what
+// downstream `ja`/`jb`/`je` need to render as `if (a > b)` etc, and it's
+// correct for any compare where neither operand is NaN (the overwhelming
+// common case).
+//
+// For PF (the "unordered" predicate): we record both operands on the
+// LiftCtx; a subsequent Jp/Jnp/Setp/Cmovp picks them up and lowers to an
+// `unordered_fp_compare(a, b)` intrinsic instead of the integer XOR-fold
+// parity formula that's correct for arith results but meaningless after
+// a scalar-FP compare. NaN-aware codecs (audio decoders, math kernels)
+// rely on `jp` after `ucomi*` to detect unordered — without this they
+// would silently take the ordered branch. `last_flag_src` is intentionally
+// left as-is: it carries integer-arith provenance, the FP pair takes
+// precedence in the parity-lowering path.
 void lift_ucomi(LiftCtx& ctx, IrType t) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
@@ -1440,6 +1503,8 @@ void lift_ucomi(LiftCtx& ctx, IrType t) {
     ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq,  a, b));
     ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpUlt, a, b));
     ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+    ctx.last_fp_cmp_a = a;
+    ctx.last_fp_cmp_b = b;
 }
 
 // Scalar-FP unary with no clean infix: sqrtss/sqrtsd. Models as a named
@@ -1701,10 +1766,13 @@ void lift_instruction(LiftCtx& ctx) {
         // xmm register — we model as scalar F64 copies. This loses the
         // upper 64 bits of SIMD data (which we never reason about anyway)
         // but preserves the scalar dataflow that compiler output relies on.
-        case Mnemonic::Movaps:       lift_fp_mov(ctx, IrType::F64, false); break;
-        case Mnemonic::MovapsStore:  lift_fp_mov(ctx, IrType::F64, true);  break;
-        case Mnemonic::Movups:       lift_fp_mov(ctx, IrType::F64, false); break;
-        case Mnemonic::MovupsStore:  lift_fp_mov(ctx, IrType::F64, true);  break;
+        // movaps/movups transfer all 128 bits of an XMM register; route
+        // through the SIMD-mov path with I128 so the upper 64 bits aren't
+        // truncated by lift_fp_mov's scalar F64 path.
+        case Mnemonic::Movaps:       lift_simd_mov(ctx, IrType::I128, false); break;
+        case Mnemonic::MovapsStore:  lift_simd_mov(ctx, IrType::I128, true);  break;
+        case Mnemonic::Movups:       lift_simd_mov(ctx, IrType::I128, false); break;
+        case Mnemonic::MovupsStore:  lift_simd_mov(ctx, IrType::I128, true);  break;
         // Scalar-FP unary (intrinsic, libm-style names).
         case Mnemonic::Sqrtss: lift_fp_unop(ctx, "sqrtf", IrType::F32); break;
         case Mnemonic::Sqrtsd: lift_fp_unop(ctx, "sqrt",  IrType::F64); break;
@@ -1718,10 +1786,10 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Maxss: lift_simd_binop(ctx, "_mm_max_ss", IrType::F32); break;
         case Mnemonic::Minsd: lift_simd_binop(ctx, "_mm_min_sd", IrType::F64); break;
         case Mnemonic::Maxsd: lift_simd_binop(ctx, "_mm_max_sd", IrType::F64); break;
-        case Mnemonic::Minps: lift_simd_binop(ctx, "_mm_min_ps", IrType::F32); break;
-        case Mnemonic::Maxps: lift_simd_binop(ctx, "_mm_max_ps", IrType::F32); break;
-        case Mnemonic::Minpd: lift_simd_binop(ctx, "_mm_min_pd", IrType::F64); break;
-        case Mnemonic::Maxpd: lift_simd_binop(ctx, "_mm_max_pd", IrType::F64); break;
+        case Mnemonic::Minps: lift_simd_binop(ctx, "_mm_min_ps", IrType::I128); break;
+        case Mnemonic::Maxps: lift_simd_binop(ctx, "_mm_max_ps", IrType::I128); break;
+        case Mnemonic::Minpd: lift_simd_binop(ctx, "_mm_min_pd", IrType::I128); break;
+        case Mnemonic::Maxpd: lift_simd_binop(ctx, "_mm_max_pd", IrType::I128); break;
 
         // gpr -> xmm conversions (size of the gpr operand drives src width).
         case Mnemonic::Cvtsi2ss: lift_int_to_fp(ctx, "cvtsi2ss", IrType::F32); break;
@@ -1754,144 +1822,149 @@ void lift_instruction(LiftCtx& ctx) {
         // implies; for packed-integer ops we still flow through F64 (the
         // dataflow is what matters, the named intrinsic carries the lane
         // semantics).
-        case Mnemonic::Andps:  lift_simd_binop(ctx, "_mm_and_ps",    IrType::F32); break;
-        case Mnemonic::Andnps: lift_simd_binop(ctx, "_mm_andnot_ps", IrType::F32); break;
-        case Mnemonic::Orps:   lift_simd_binop(ctx, "_mm_or_ps",     IrType::F32); break;
-        case Mnemonic::Xorps:  lift_simd_binop(ctx, "_mm_xor_ps",    IrType::F32); break;
-        case Mnemonic::Addps:  lift_simd_binop(ctx, "_mm_add_ps",    IrType::F32); break;
-        case Mnemonic::Mulps:  lift_simd_binop(ctx, "_mm_mul_ps",    IrType::F32); break;
-        case Mnemonic::Subps:  lift_simd_binop(ctx, "_mm_sub_ps",    IrType::F32); break;
-        case Mnemonic::Divps:  lift_simd_binop(ctx, "_mm_div_ps",    IrType::F32); break;
-        case Mnemonic::Andpd:  lift_simd_binop(ctx, "_mm_and_pd",    IrType::F64); break;
-        case Mnemonic::Andnpd: lift_simd_binop(ctx, "_mm_andnot_pd", IrType::F64); break;
-        case Mnemonic::Orpd:   lift_simd_binop(ctx, "_mm_or_pd",     IrType::F64); break;
-        case Mnemonic::Xorpd:  lift_simd_binop(ctx, "_mm_xor_pd",    IrType::F64); break;
-        case Mnemonic::Addpd:  lift_simd_binop(ctx, "_mm_add_pd",    IrType::F64); break;
-        case Mnemonic::Mulpd:  lift_simd_binop(ctx, "_mm_mul_pd",    IrType::F64); break;
-        case Mnemonic::Subpd:  lift_simd_binop(ctx, "_mm_sub_pd",    IrType::F64); break;
-        case Mnemonic::Divpd:  lift_simd_binop(ctx, "_mm_div_pd",    IrType::F64); break;
+        case Mnemonic::Andps:  lift_simd_binop(ctx, "_mm_and_ps",    IrType::I128); break;
+        case Mnemonic::Andnps: lift_simd_binop(ctx, "_mm_andnot_ps", IrType::I128); break;
+        case Mnemonic::Orps:   lift_simd_binop(ctx, "_mm_or_ps",     IrType::I128); break;
+        case Mnemonic::Xorps:  lift_simd_binop(ctx, "_mm_xor_ps",    IrType::I128); break;
+        case Mnemonic::Addps:  lift_simd_binop(ctx, "_mm_add_ps",    IrType::I128); break;
+        case Mnemonic::Mulps:  lift_simd_binop(ctx, "_mm_mul_ps",    IrType::I128); break;
+        case Mnemonic::Subps:  lift_simd_binop(ctx, "_mm_sub_ps",    IrType::I128); break;
+        case Mnemonic::Divps:  lift_simd_binop(ctx, "_mm_div_ps",    IrType::I128); break;
+        case Mnemonic::Andpd:  lift_simd_binop(ctx, "_mm_and_pd",    IrType::I128); break;
+        case Mnemonic::Andnpd: lift_simd_binop(ctx, "_mm_andnot_pd", IrType::I128); break;
+        case Mnemonic::Orpd:   lift_simd_binop(ctx, "_mm_or_pd",     IrType::I128); break;
+        case Mnemonic::Xorpd:  lift_simd_binop(ctx, "_mm_xor_pd",    IrType::I128); break;
+        case Mnemonic::Addpd:  lift_simd_binop(ctx, "_mm_add_pd",    IrType::I128); break;
+        case Mnemonic::Mulpd:  lift_simd_binop(ctx, "_mm_mul_pd",    IrType::I128); break;
+        case Mnemonic::Subpd:  lift_simd_binop(ctx, "_mm_sub_pd",    IrType::I128); break;
+        case Mnemonic::Divpd:  lift_simd_binop(ctx, "_mm_div_pd",    IrType::I128); break;
 
-        case Mnemonic::Pxor:    lift_simd_binop(ctx, "_mm_xor_si128",    IrType::F64); break;
-        case Mnemonic::Pand:    lift_simd_binop(ctx, "_mm_and_si128",    IrType::F64); break;
-        case Mnemonic::Pandn:   lift_simd_binop(ctx, "_mm_andnot_si128", IrType::F64); break;
-        case Mnemonic::Por:     lift_simd_binop(ctx, "_mm_or_si128",     IrType::F64); break;
-        case Mnemonic::Paddq:   lift_simd_binop(ctx, "_mm_add_epi64",    IrType::F64); break;
-        case Mnemonic::Pcmpeqb: lift_simd_binop(ctx, "_mm_cmpeq_epi8",   IrType::F64); break;
-        case Mnemonic::Pcmpeqw: lift_simd_binop(ctx, "_mm_cmpeq_epi16",  IrType::F64); break;
-        case Mnemonic::Pcmpeqd: lift_simd_binop(ctx, "_mm_cmpeq_epi32",  IrType::F64); break;
-        case Mnemonic::Pminub:  lift_simd_binop(ctx, "_mm_min_epu8",     IrType::F64); break;
+        case Mnemonic::Pxor:    lift_simd_binop(ctx, "_mm_xor_si128",    IrType::I128); break;
+        case Mnemonic::Pand:    lift_simd_binop(ctx, "_mm_and_si128",    IrType::I128); break;
+        case Mnemonic::Pandn:   lift_simd_binop(ctx, "_mm_andnot_si128", IrType::I128); break;
+        case Mnemonic::Por:     lift_simd_binop(ctx, "_mm_or_si128",     IrType::I128); break;
+        case Mnemonic::Paddq:   lift_simd_binop(ctx, "_mm_add_epi64",    IrType::I128); break;
+        case Mnemonic::Pcmpeqb: lift_simd_binop(ctx, "_mm_cmpeq_epi8",   IrType::I128); break;
+        case Mnemonic::Pcmpeqw: lift_simd_binop(ctx, "_mm_cmpeq_epi16",  IrType::I128); break;
+        case Mnemonic::Pcmpeqd: lift_simd_binop(ctx, "_mm_cmpeq_epi32",  IrType::I128); break;
+        case Mnemonic::Pminub:  lift_simd_binop(ctx, "_mm_min_epu8",     IrType::I128); break;
 
-        case Mnemonic::Punpcklbw:  lift_simd_binop(ctx, "_mm_unpacklo_epi8",  IrType::F64); break;
-        case Mnemonic::Punpcklwd:  lift_simd_binop(ctx, "_mm_unpacklo_epi16", IrType::F64); break;
-        case Mnemonic::Punpckldq:  lift_simd_binop(ctx, "_mm_unpacklo_epi32", IrType::F64); break;
-        case Mnemonic::Punpcklqdq: lift_simd_binop(ctx, "_mm_unpacklo_epi64", IrType::F64); break;
-        case Mnemonic::Punpckhqdq: lift_simd_binop(ctx, "_mm_unpackhi_epi64", IrType::F64); break;
-        case Mnemonic::Pshufd:     lift_simd_binop(ctx, "_mm_shuffle_epi32",  IrType::F64); break;
-        case Mnemonic::Pshuflw:    lift_simd_binop(ctx, "_mm_shufflelo_epi16", IrType::F64); break;
-        case Mnemonic::Pshufhw:    lift_simd_binop(ctx, "_mm_shufflehi_epi16", IrType::F64); break;
+        case Mnemonic::Punpcklbw:  lift_simd_binop(ctx, "_mm_unpacklo_epi8",  IrType::I128); break;
+        case Mnemonic::Punpcklwd:  lift_simd_binop(ctx, "_mm_unpacklo_epi16", IrType::I128); break;
+        case Mnemonic::Punpckldq:  lift_simd_binop(ctx, "_mm_unpacklo_epi32", IrType::I128); break;
+        case Mnemonic::Punpcklqdq: lift_simd_binop(ctx, "_mm_unpacklo_epi64", IrType::I128); break;
+        case Mnemonic::Punpckhqdq: lift_simd_binop(ctx, "_mm_unpackhi_epi64", IrType::I128); break;
+        case Mnemonic::Pshufd:     lift_simd_binop(ctx, "_mm_shuffle_epi32",  IrType::I128); break;
+        case Mnemonic::Pshuflw:    lift_simd_binop(ctx, "_mm_shufflelo_epi16", IrType::I128); break;
+        case Mnemonic::Pshufhw:    lift_simd_binop(ctx, "_mm_shufflehi_epi16", IrType::I128); break;
 
         // Packed integer arithmetic — same xmm-binop shape as Pxor/Pand.
-        case Mnemonic::Paddb:   lift_simd_binop(ctx, "_mm_add_epi8",   IrType::F64); break;
-        case Mnemonic::Paddw:   lift_simd_binop(ctx, "_mm_add_epi16",  IrType::F64); break;
-        case Mnemonic::Paddd:   lift_simd_binop(ctx, "_mm_add_epi32",  IrType::F64); break;
-        case Mnemonic::Psubb:   lift_simd_binop(ctx, "_mm_sub_epi8",   IrType::F64); break;
-        case Mnemonic::Psubw:   lift_simd_binop(ctx, "_mm_sub_epi16",  IrType::F64); break;
-        case Mnemonic::Psubd:   lift_simd_binop(ctx, "_mm_sub_epi32",  IrType::F64); break;
-        case Mnemonic::Psubq:   lift_simd_binop(ctx, "_mm_sub_epi64",  IrType::F64); break;
-        case Mnemonic::Pmullw:  lift_simd_binop(ctx, "_mm_mullo_epi16", IrType::F64); break;
-        case Mnemonic::Pmulhw:  lift_simd_binop(ctx, "_mm_mulhi_epi16", IrType::F64); break;
-        case Mnemonic::Pmulhuw: lift_simd_binop(ctx, "_mm_mulhi_epu16", IrType::F64); break;
-        case Mnemonic::Pmuludq: lift_simd_binop(ctx, "_mm_mul_epu32",   IrType::F64); break;
-        case Mnemonic::Pmaddwd: lift_simd_binop(ctx, "_mm_madd_epi16",  IrType::F64); break;
-        case Mnemonic::Pinsrw:  lift_simd_binop(ctx, "_mm_insert_epi16", IrType::F64); break;
-        case Mnemonic::Pextrw:  lift_simd_binop(ctx, "_mm_extract_epi16", IrType::F64); break;
+        case Mnemonic::Paddb:   lift_simd_binop(ctx, "_mm_add_epi8",   IrType::I128); break;
+        case Mnemonic::Paddw:   lift_simd_binop(ctx, "_mm_add_epi16",  IrType::I128); break;
+        case Mnemonic::Paddd:   lift_simd_binop(ctx, "_mm_add_epi32",  IrType::I128); break;
+        case Mnemonic::Psubb:   lift_simd_binop(ctx, "_mm_sub_epi8",   IrType::I128); break;
+        case Mnemonic::Psubw:   lift_simd_binop(ctx, "_mm_sub_epi16",  IrType::I128); break;
+        case Mnemonic::Psubd:   lift_simd_binop(ctx, "_mm_sub_epi32",  IrType::I128); break;
+        case Mnemonic::Psubq:   lift_simd_binop(ctx, "_mm_sub_epi64",  IrType::I128); break;
+        case Mnemonic::Pmullw:  lift_simd_binop(ctx, "_mm_mullo_epi16", IrType::I128); break;
+        case Mnemonic::Pmulhw:  lift_simd_binop(ctx, "_mm_mulhi_epi16", IrType::I128); break;
+        case Mnemonic::Pmulhuw: lift_simd_binop(ctx, "_mm_mulhi_epu16", IrType::I128); break;
+        case Mnemonic::Pmuludq: lift_simd_binop(ctx, "_mm_mul_epu32",   IrType::I128); break;
+        case Mnemonic::Pmaddwd: lift_simd_binop(ctx, "_mm_madd_epi16",  IrType::I128); break;
+        case Mnemonic::Pinsrw:  lift_simd_binop(ctx, "_mm_insert_epi16", IrType::I128); break;
+        case Mnemonic::Pextrw:  lift_simd_binop(ctx, "_mm_extract_epi16", IrType::I128); break;
 
         // Saturating arith.
-        case Mnemonic::Psubusb: lift_simd_binop(ctx, "_mm_subs_epu8",  IrType::F64); break;
-        case Mnemonic::Psubusw: lift_simd_binop(ctx, "_mm_subs_epu16", IrType::F64); break;
-        case Mnemonic::Paddusb: lift_simd_binop(ctx, "_mm_adds_epu8",  IrType::F64); break;
-        case Mnemonic::Paddusw: lift_simd_binop(ctx, "_mm_adds_epu16", IrType::F64); break;
-        case Mnemonic::Psubsb:  lift_simd_binop(ctx, "_mm_subs_epi8",  IrType::F64); break;
-        case Mnemonic::Psubsw:  lift_simd_binop(ctx, "_mm_subs_epi16", IrType::F64); break;
-        case Mnemonic::Paddsb:  lift_simd_binop(ctx, "_mm_adds_epi8",  IrType::F64); break;
-        case Mnemonic::Paddsw:  lift_simd_binop(ctx, "_mm_adds_epi16", IrType::F64); break;
+        case Mnemonic::Psubusb: lift_simd_binop(ctx, "_mm_subs_epu8",  IrType::I128); break;
+        case Mnemonic::Psubusw: lift_simd_binop(ctx, "_mm_subs_epu16", IrType::I128); break;
+        case Mnemonic::Paddusb: lift_simd_binop(ctx, "_mm_adds_epu8",  IrType::I128); break;
+        case Mnemonic::Paddusw: lift_simd_binop(ctx, "_mm_adds_epu16", IrType::I128); break;
+        case Mnemonic::Psubsb:  lift_simd_binop(ctx, "_mm_subs_epi8",  IrType::I128); break;
+        case Mnemonic::Psubsw:  lift_simd_binop(ctx, "_mm_subs_epi16", IrType::I128); break;
+        case Mnemonic::Paddsb:  lift_simd_binop(ctx, "_mm_adds_epi8",  IrType::I128); break;
+        case Mnemonic::Paddsw:  lift_simd_binop(ctx, "_mm_adds_epi16", IrType::I128); break;
 
         // Min / max / averages.
-        case Mnemonic::Pmaxub:  lift_simd_binop(ctx, "_mm_max_epu8",  IrType::F64); break;
-        case Mnemonic::Pminsw:  lift_simd_binop(ctx, "_mm_min_epi16", IrType::F64); break;
-        case Mnemonic::Pmaxsw:  lift_simd_binop(ctx, "_mm_max_epi16", IrType::F64); break;
-        case Mnemonic::Pavgb:   lift_simd_binop(ctx, "_mm_avg_epu8",  IrType::F64); break;
-        case Mnemonic::Pavgw:   lift_simd_binop(ctx, "_mm_avg_epu16", IrType::F64); break;
+        case Mnemonic::Pmaxub:  lift_simd_binop(ctx, "_mm_max_epu8",  IrType::I128); break;
+        case Mnemonic::Pminsw:  lift_simd_binop(ctx, "_mm_min_epi16", IrType::I128); break;
+        case Mnemonic::Pmaxsw:  lift_simd_binop(ctx, "_mm_max_epi16", IrType::I128); break;
+        case Mnemonic::Pavgb:   lift_simd_binop(ctx, "_mm_avg_epu8",  IrType::I128); break;
+        case Mnemonic::Pavgw:   lift_simd_binop(ctx, "_mm_avg_epu16", IrType::I128); break;
 
         // Greater-than compares.
-        case Mnemonic::Pcmpgtb: lift_simd_binop(ctx, "_mm_cmpgt_epi8",  IrType::F64); break;
-        case Mnemonic::Pcmpgtw: lift_simd_binop(ctx, "_mm_cmpgt_epi16", IrType::F64); break;
-        case Mnemonic::Pcmpgtd: lift_simd_binop(ctx, "_mm_cmpgt_epi32", IrType::F64); break;
+        case Mnemonic::Pcmpgtb: lift_simd_binop(ctx, "_mm_cmpgt_epi8",  IrType::I128); break;
+        case Mnemonic::Pcmpgtw: lift_simd_binop(ctx, "_mm_cmpgt_epi16", IrType::I128); break;
+        case Mnemonic::Pcmpgtd: lift_simd_binop(ctx, "_mm_cmpgt_epi32", IrType::I128); break;
 
         // High-half unpacks.
-        case Mnemonic::Punpckhbw: lift_simd_binop(ctx, "_mm_unpackhi_epi8",  IrType::F64); break;
-        case Mnemonic::Punpckhwd: lift_simd_binop(ctx, "_mm_unpackhi_epi16", IrType::F64); break;
-        case Mnemonic::Punpckhdq: lift_simd_binop(ctx, "_mm_unpackhi_epi32", IrType::F64); break;
+        case Mnemonic::Punpckhbw: lift_simd_binop(ctx, "_mm_unpackhi_epi8",  IrType::I128); break;
+        case Mnemonic::Punpckhwd: lift_simd_binop(ctx, "_mm_unpackhi_epi16", IrType::I128); break;
+        case Mnemonic::Punpckhdq: lift_simd_binop(ctx, "_mm_unpackhi_epi32", IrType::I128); break;
 
         // Float shuffles take an imm8 selector — same 3-operand shape
         // lift_simd_binop already handles for Pshufd.
-        case Mnemonic::Shufps:  lift_simd_binop(ctx, "_mm_shuffle_ps", IrType::F32); break;
-        case Mnemonic::Shufpd:  lift_simd_binop(ctx, "_mm_shuffle_pd", IrType::F64); break;
+        case Mnemonic::Shufps:  lift_simd_binop(ctx, "_mm_shuffle_ps", IrType::I128); break;
+        case Mnemonic::Shufpd:  lift_simd_binop(ctx, "_mm_shuffle_pd", IrType::I128); break;
 
         // SSE2 shift family — same mnemonic doubles for the imm8 form
         // (0x66 0F 71/72/73 /N) and the xmm-count form (0x66 0F D1..F3).
         // Branch on operand[1].kind to pick the matching intrinsic.
         case Mnemonic::Psllw:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_slli_epi16", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_sll_epi16", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_slli_epi16", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_sll_epi16", IrType::I128);
             break;
         case Mnemonic::Pslld:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_slli_epi32", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_sll_epi32", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_slli_epi32", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_sll_epi32", IrType::I128);
             break;
         case Mnemonic::Psllq:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_slli_epi64", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_sll_epi64", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_slli_epi64", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_sll_epi64", IrType::I128);
             break;
-        case Mnemonic::Pslldq: lift_simd_shift_imm(ctx, "_mm_slli_si128", IrType::F64); break;
+        case Mnemonic::Pslldq: lift_simd_shift_imm(ctx, "_mm_slli_si128", IrType::I128); break;
         case Mnemonic::Psrlw:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_srli_epi16", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_srl_epi16", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_srli_epi16", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_srl_epi16", IrType::I128);
             break;
         case Mnemonic::Psrld:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_srli_epi32", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_srl_epi32", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_srli_epi32", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_srl_epi32", IrType::I128);
             break;
         case Mnemonic::Psrlq:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_srli_epi64", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_srl_epi64", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_srli_epi64", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_srl_epi64", IrType::I128);
             break;
-        case Mnemonic::Psrldq: lift_simd_shift_imm(ctx, "_mm_srli_si128", IrType::F64); break;
+        case Mnemonic::Psrldq: lift_simd_shift_imm(ctx, "_mm_srli_si128", IrType::I128); break;
         case Mnemonic::Psraw:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_srai_epi16", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_sra_epi16", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_srai_epi16", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_sra_epi16", IrType::I128);
             break;
         case Mnemonic::Psrad:
             if (insn.num_operands >= 2 && insn.operands[1].kind == Operand::Kind::Immediate)
-                lift_simd_shift_imm(ctx, "_mm_srai_epi32", IrType::F64);
-            else lift_simd_binop(ctx, "_mm_sra_epi32", IrType::F64);
+                lift_simd_shift_imm(ctx, "_mm_srai_epi32", IrType::I128);
+            else lift_simd_binop(ctx, "_mm_sra_epi32", IrType::I128);
             break;
 
         // 128-bit aligned + unaligned moves. Operand 0 may be memory for the
         // *Store variants — lift_simd_mov handles either direction.
-        case Mnemonic::Movdqa:      lift_simd_mov(ctx, IrType::F64, false); break;
-        case Mnemonic::MovdqaStore: lift_simd_mov(ctx, IrType::F64, true);  break;
-        case Mnemonic::Movdqu:      lift_simd_mov(ctx, IrType::F64, false); break;
-        case Mnemonic::MovdquStore: lift_simd_mov(ctx, IrType::F64, true);  break;
-        case Mnemonic::Movhps:      lift_simd_mov(ctx, IrType::F64, false); break;
-        case Mnemonic::Movlps:      lift_simd_mov(ctx, IrType::F64, false); break;
+        // movdqa/movdqu transfer the entire 128-bit register; pin I128 so the
+        // upper 64 bits aren't dropped by the F64 surrogate. movhps/movlps
+        // genuinely transfer 64 bits to one half of the register and stay at
+        // F64 — the half-merge semantics are still approximate (we don't
+        // model the unmodified half of the XMM destination), separate issue.
+        case Mnemonic::Movdqa:      lift_simd_mov(ctx, IrType::I128, false); break;
+        case Mnemonic::MovdqaStore: lift_simd_mov(ctx, IrType::I128, true);  break;
+        case Mnemonic::Movdqu:      lift_simd_mov(ctx, IrType::I128, false); break;
+        case Mnemonic::MovdquStore: lift_simd_mov(ctx, IrType::I128, true);  break;
+        case Mnemonic::Movhps:      lift_simd_mov(ctx, IrType::F64,  false); break;
+        case Mnemonic::Movlps:      lift_simd_mov(ctx, IrType::F64,  false); break;
 
         // movd / movq: 32 / 64-bit transfer between xmm and gpr-or-mem. Model
         // as a copy at the matching scalar width — the destination type

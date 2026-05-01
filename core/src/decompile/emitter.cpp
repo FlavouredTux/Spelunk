@@ -3730,13 +3730,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         walk(*s.body);
         if (!t) return "void";
         switch (*t) {
-            case IrType::F32: return "float";
-            case IrType::F64: return "double";
-            case IrType::I1:  return "bool";
-            case IrType::I8:  return "u8";
-            case IrType::I16: return "u16";
-            case IrType::I32: return "u32";
-            case IrType::I64: return "u64";
+            case IrType::F32:  return "float";
+            case IrType::F64:  return "double";
+            case IrType::I1:   return "bool";
+            case IrType::I8:   return "u8";
+            case IrType::I16:  return "u16";
+            case IrType::I32:  return "u32";
+            case IrType::I64:  return "u64";
+            case IrType::I128: return "__m128i";
         }
         return "u64";
     };

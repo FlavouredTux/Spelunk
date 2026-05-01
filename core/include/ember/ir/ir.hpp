@@ -21,19 +21,28 @@ enum class IrType : u8 {
     I16,
     I32,
     I64,
+    // 128-bit register-shaped value. Used for XMM/SSE dataflow so the upper
+    // 64 bits of a vector aren't silently truncated through the F64 surrogate
+    // the lifter used to fall back on. Interpretation (packed-int vs packed-fp)
+    // is carried by the named SIMD intrinsic, not the IR type tag — the type
+    // just guarantees the bit-width is preserved across SSA / cleanup / emit.
+    // Constant folding doesn't apply (no I128 immediates); arithmetic at this
+    // width only happens through Intrinsic nodes.
+    I128,
     F32,
     F64,
 };
 
 [[nodiscard]] constexpr unsigned type_bits(IrType t) noexcept {
     switch (t) {
-        case IrType::I1:  return 1;
-        case IrType::I8:  return 8;
-        case IrType::I16: return 16;
-        case IrType::I32: return 32;
-        case IrType::I64: return 64;
-        case IrType::F32: return 32;
-        case IrType::F64: return 64;
+        case IrType::I1:   return 1;
+        case IrType::I8:   return 8;
+        case IrType::I16:  return 16;
+        case IrType::I32:  return 32;
+        case IrType::I64:  return 64;
+        case IrType::I128: return 128;
+        case IrType::F32:  return 32;
+        case IrType::F64:  return 64;
     }
     return 0;
 }
@@ -44,24 +53,26 @@ enum class IrType : u8 {
 
 [[nodiscard]] constexpr IrType type_for_bits(unsigned bits) noexcept {
     switch (bits) {
-        case 1:  return IrType::I1;
-        case 8:  return IrType::I8;
-        case 16: return IrType::I16;
-        case 32: return IrType::I32;
-        case 64: return IrType::I64;
-        default: return IrType::I64;
+        case 1:   return IrType::I1;
+        case 8:   return IrType::I8;
+        case 16:  return IrType::I16;
+        case 32:  return IrType::I32;
+        case 64:  return IrType::I64;
+        case 128: return IrType::I128;
+        default:  return IrType::I64;
     }
 }
 
 [[nodiscard]] constexpr std::string_view type_name(IrType t) noexcept {
     switch (t) {
-        case IrType::I1:  return "i1";
-        case IrType::I8:  return "i8";
-        case IrType::I16: return "i16";
-        case IrType::I32: return "i32";
-        case IrType::I64: return "i64";
-        case IrType::F32: return "f32";
-        case IrType::F64: return "f64";
+        case IrType::I1:   return "i1";
+        case IrType::I8:   return "i8";
+        case IrType::I16:  return "i16";
+        case IrType::I32:  return "i32";
+        case IrType::I64:  return "i64";
+        case IrType::I128: return "i128";
+        case IrType::F32:  return "f32";
+        case IrType::F64:  return "f64";
     }
     return "?";
 }

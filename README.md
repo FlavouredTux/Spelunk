@@ -109,6 +109,8 @@ ember [options] <binary>
       --arities          dump inferred arity per function
       --functions [P]    list every discovered function (TSV)
       --fingerprints     content-hash per function (cross-version matching)
+      --teef             build a TEEF Max corpus TSV (library identifier)
+      --recognize        match query fns against a TEEF corpus (--corpus PATH+)
       --validate NAME    where does NAME live + similar lookalikes
       --collisions       names / fingerprints bound to >1 address
 
@@ -228,6 +230,52 @@ in-memory PE headers, so imports and exports get named even when the
 on-disk image was junk. Module-name collisions get prefixed:
 `kernel32!CreateFileA`.
 
+## Library function recognition (TEEF Max)
+
+`ember --recognize --corpus libcrypto.tsv --corpus libssl.tsv <binary>`
+identifies named library functions in stripped / unknown targets,
+even across compiler-version drift, optimization-level changes, and
+gcc ↔ clang. Three signals stacked, recognizer picks the first that
+crosses confidence threshold:
+
+- **L0 topology hash** — CFG-shape pre-filter. Cheap (~5 µs/fn).
+- **L2 cleanup-canonical** — original TEEF: hash of the post-cleanup
+  IR token stream + 8-slot MinHash for partial overlap.
+- **L4 behavioural** — run K=64 random inputs through an abstract IR
+  interpreter, hash the I/O multiset. Loop-shape invariant by
+  construction. Catches what L2 can't: pointer-vs-index lowering,
+  intrinsic-vs-open-coded (bswap, popcnt, …), induction-variable
+  strength reduction, gcc-vs-clang divergence.
+
+```sh
+ember --teef libcrypto.so.3 > libcrypto.tsv     # build a corpus
+ember --recognize --corpus libcrypto.tsv ./target
+
+# Big libraries: the load is mmap'd and parallel-parsed, the recognize
+# scan uses an L2 MinHash inverted index — multi-100MB corpora load in
+# ~1 s and scan in seconds, not minutes.
+```
+
+Output: TSV rows of `addr  current_name  suggested_name  confidence
+via  [alts]`. `via` distinguishes paths: `behav-exact` (L4 collision,
+highest precision), `whole-exact`, `whole-jaccard+behav`, `chunk-vote+
+behav`, etc.
+
+100% precision, 34.4% recall on the cross-config probe2 matrix
+(6 compiler configs × 30 algorithms, 30 directed pairs). Real
+cross-binary tests (sha256sum corpus → md5sum) recover all named
+gnulib helpers at confidence 1.0; FP rate 0.
+
+Tuning knobs for huge / obfuscated targets:
+
+```sh
+ember --recognize --min-fn-size 32 --corpus ... <binary>   # drop tiny stubs
+ember --recognize --l0-prefilter --corpus ... <binary>     # skip L4 on
+                                                           # off-topology fns
+```
+
+Full surface in [docs/teef.md](docs/teef.md).
+
 ## Scripting
 
 `.ember` is a declarative section-keyed file consumed by `--apply`.
@@ -340,7 +388,7 @@ agent/            TypeScript multi-agent LLM harness — fanout, intel db,
                   OpenAI / OpenRouter (DeepSeek default)
 tests/            golden-output CTest suite
 docs/             scripting, debugger, vm-detect, raw-input, plugin
-                  platform, agent harness
+                  platform, agent harness, TEEF Max
 ```
 
 ## Tests

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember::cli {
 
@@ -70,6 +71,11 @@ struct Args {
     bool recognize = false;         // run library-function recognition against --corpus
     std::vector<std::string> corpus_paths;  // --corpus PATH (repeatable): TEEF TSVs to load
     float recognize_threshold = 0.6f;        // --recognize-threshold T (margin floor; default 0.6)
+    ember::u64 min_fn_bytes = 0;             // --min-fn-size N: drop fns smaller than N bytes
+                                             // before fingerprinting. Useful on obfuscator-spawned
+                                             // targets (Themida / Lua VM / hellgate) whose hundreds
+                                             // of thousands of trivial stubs add no signal but
+                                             // dominate corpus build time.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)

@@ -167,6 +167,21 @@ Result<Args> parse_args(int argc, char** argv) {
             }
             continue;
         }
+        // `--min-fn-size N` — drop fns smaller than N bytes before
+        // building TEEF fingerprints. 0 = disabled. Helps on obfuscator-
+        // spawned targets where most fns are trivial stubs.
+        if (s == "--min-fn-size") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--min-fn-size requires a value"));
+            }
+            try { a.min_fn_bytes = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--min-fn-size: bad integer"));
+            }
+            continue;
+        }
 
         // `--aux-binary PATH[@HEX]` — repeatable. Each entry is a
         // secondary Binary the debugger loads as an extra symbol

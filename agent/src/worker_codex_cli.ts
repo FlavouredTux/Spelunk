@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { Codex, type ThreadEvent } from "@openai/codex-sdk";
+import { Codex, type ModelReasoningEffort, type ThreadEvent } from "@openai/codex-sdk";
 
 import { ROLES } from "./roles/index.js";
 import type { WorkerArgs } from "./worker.js";
@@ -57,16 +57,16 @@ Agent id: ${agentId}
 
 Available shell commands:
 
-  ${args.emberBin} -d ${args.binary} -s <function-or-address>
-      Pseudo-C disassembly. Read this first.
-  ${args.emberBin} --xrefs <addr> ${args.binary}
-      Callers of the function at <addr>.
+  ${args.emberBin} -p ${args.binary} -s <symbol-or-0xVA>
+      Pseudo-C of one function. Read this FIRST. \`-d\` instead of \`-p\`
+      gives raw asm — only use that if pseudo-C isn't enough.
+  ${args.emberBin} --refs-to 0xVA ${args.binary}
+      Callers of an address. \`--xrefs\` (no arg) dumps the whole table —
+      slow on big binaries; prefer --refs-to for per-fn lookups.
   ${args.emberBin} --strings ${args.binary} | grep -i <pattern>
       String literals reachable from a function.
-  ${args.emberBin} --callees <addr> ${args.binary}
-      Direct call targets of the function at <addr>.
-  ${args.emberBin} --recognize ${args.binary}
-      TEEF library-fn matches.
+  ${args.emberBin} --callees 0xVA ${args.binary}
+      Direct call targets of the function at the given address.
 
 To file an intel claim, append ONE JSON line to ${claimsPath}:
 
@@ -86,10 +86,28 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
     const role = ROLES[args.role];
     if (!role) throw new Error(`unknown role: ${args.role}`);
 
+    // Model syntax:
+    //   codex-cli                       → Codex CLI default model (config.toml)
+    //   codex-cli/gpt-5.4-mini          → that model, default reasoning effort
+    //   codex-cli/gpt-5.4-mini:medium   → model + reasoning effort.
+    //                                     Effort: minimal|low|medium|high|xhigh
     const requested = args.model ?? role.defaultModel;
-    const cliModel = requested.startsWith("codex-cli/")
-        ? requested.slice("codex-cli/".length) || undefined
-        : undefined;
+    let cliModel: string | undefined;
+    let cliEffort: ModelReasoningEffort | undefined;
+    if (requested.startsWith("codex-cli/")) {
+        const tail = requested.slice("codex-cli/".length);
+        const colon = tail.indexOf(":");
+        if (colon >= 0) {
+            cliModel = tail.slice(0, colon) || undefined;
+            const e = tail.slice(colon + 1) as ModelReasoningEffort;
+            if (e === "minimal" || e === "low" || e === "medium" ||
+                e === "high"    || e === "xhigh") {
+                cliEffort = e;
+            }
+        } else {
+            cliModel = tail || undefined;
+        }
+    }
 
     // Auth-home resolution order:
     //   1. WorkerArgs.cliHome — cascade plumbs a per-worker pick from
@@ -143,7 +161,8 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
         webSearchMode: "disabled",
         skipGitRepoCheck: true,
         workingDirectory: args.runDir,
-        ...(cliModel ? { model: cliModel } : {}),
+        ...(cliModel  ? { model: cliModel }                     : {}),
+        ...(cliEffort ? { modelReasoningEffort: cliEffort }     : {}),
     });
 
     const tally = { in_tok: 0, cached_in: 0, out_tok: 0, reasoning_out: 0 };

@@ -2271,12 +2271,79 @@ app.on("before-quit", async () => {
 
 // -------------------------------------------------------------------------
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+// ---------------------------------------------------------------------------
+// CLI / second-instance binary forwarding
+//
+// `ember-ui /path/to/binary` (or `npm run dev -- /path/to/binary` in dev)
+// loads that binary on startup. If the UI is already running, the second
+// invocation forwards the path to the existing window via single-instance
+// lock — no second window opens, the live session just switches binaries.
+//
+// Path is taken from the first non-flag positional that exists on disk.
+// Electron-internal argv (--type=, --user-data-dir=, ...) and dev-only
+// flags pass through untouched.
+function pickBinaryFromArgv(argv) {
+  for (const a of argv.slice(1)) {
+    if (!a || a.startsWith("-")) continue;
+    try {
+      // Electron passes its own script path as argv[1] in dev runs (a JS
+      // file, not the binary the user wants to RE). Filter those out by
+      // checking the file extension is not source.
+      if (/\.(js|cjs|mjs|ts|tsx|json)$/i.test(a)) continue;
+      const st = require("fs").statSync(a);
+      if (st.isFile()) return path.resolve(a);
+    } catch { /* not an existing file — skip */ }
+  }
+  return null;
+}
+
+const initialBinary = pickBinaryFromArgv(process.argv);
+
+function pushBinaryToRenderer(target) {
+  // Mirrors what `ember:setBinary` IPC does on the main side; the
+  // renderer listens for `ember:open-binary` and runs its own load
+  // pipeline (info fetch, recents push, panels reset). Exposed via
+  // preload as `electronAPI.onOpenBinary`.
+  state.binary = target;
+  void addRecent(target);
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("ember:open-binary", target);
+  }
+}
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // Another instance already holds the lock; it'll receive our argv via
+  // `second-instance`, switch its window, and we're done here.
+  app.quit();
+} else {
+  app.on("second-instance", (_e, argv) => {
+    const target = pickBinaryFromArgv(argv);
+    const wins = BrowserWindow.getAllWindows();
+    if (wins.length > 0) {
+      const win = wins[0];
+      if (win.isMinimized()) win.restore();
+      win.focus();
+      if (target) pushBinaryToRenderer(target);
+    }
   });
-});
+
+  app.whenReady().then(() => {
+    createWindow();
+    if (initialBinary) {
+      // Wait for the renderer's first paint before pushing — without
+      // this the IPC fires before the listener is wired and gets dropped.
+      const wins = BrowserWindow.getAllWindows();
+      if (wins.length > 0) {
+        wins[0].webContents.once("did-finish-load",
+          () => pushBinaryToRenderer(initialBinary));
+      }
+    }
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

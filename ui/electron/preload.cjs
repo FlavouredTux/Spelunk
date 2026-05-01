@@ -2,6 +2,15 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("ember", {
   pick:             () => ipcRenderer.invoke("ember:pick"),
+  // Subscribe to the main process's "open this binary" event, fired when
+  // the app was launched with a path argument or when a second invocation
+  // forwards one via the single-instance handler. Returns an unsubscribe
+  // fn so React effects can clean up on unmount.
+  onOpenBinary:     (handler) => {
+    const wrapped = (_e, p) => handler(p);
+    ipcRenderer.on("ember:open-binary", wrapped);
+    return () => ipcRenderer.off("ember:open-binary", wrapped);
+  },
   // Generic file picker for callers that need a path other than the
   // primary binary. `opts.title` and `opts.filters` (Electron dialog
   // shape) are forwarded; both are optional.

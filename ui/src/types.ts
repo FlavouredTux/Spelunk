@@ -217,6 +217,8 @@ declare global {
   interface Window {
     ember: {
       pick:             () => Promise<string | null>;
+      // CLI-launch / second-instance binary open. Returns an unsubscribe fn.
+      onOpenBinary?:    (handler: (path: string) => void) => () => void;
       pickFile:         (opts?: {
         title?: string;
         filters?: { name: string; extensions: string[] }[];

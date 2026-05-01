@@ -350,6 +350,21 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // External-trigger open: the main process emits `ember:open-binary`
+  // when the app was launched with a path argument or when a second
+  // invocation forwards one via the single-instance handler. Routes
+  // through the same chain as the recents/drag-drop paths so panel
+  // reset, info fetch, and last-binary persistence are all consistent.
+  useEffect(() => {
+    if (!window.ember.onOpenBinary) return;
+    const off = window.ember.onOpenBinary((bp: string) => {
+      void openRecent(bp).then(() => openBinaryAt(bp)).catch(() => {});
+    });
+    return off;
+    // openBinaryAt is stable via useCallback; subscribing once on mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Discord Rich Presence: push the current activity whenever it
   // changes; clear when toggled off or on unmount. Elapsed-time
   // anchor (`startTimestamp`) is per-binary so flipping between

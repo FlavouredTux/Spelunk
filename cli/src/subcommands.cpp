@@ -567,13 +567,14 @@ parse_teef_tsv(std::string_view tsv) {
                 const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
                 if (i >= total) break;
                 const addr_t a = fns[i];
-                const auto tf = compute_teef_with_chunks(b, a);
-                // L4 behavioural fingerprint — runs the same lift+SSA+
-                // cleanup pipeline as TEEF then samples K=64 random
-                // inputs through an abstract-state IR interpreter.
-                // ~5 ms/fn, and the corpus needs it to support the
-                // CEBin-style recognize path.
-                const auto bs = compute_behav_sig(b, a);
+                // compute_teef_max runs the lift→SSA→cleanup pipeline
+                // ONCE and feeds the result into both the L2 (structurer
+                // + region tokenization) and L4 (K=64 abstract traces)
+                // paths. ~2× faster than calling compute_teef_with_chunks
+                // and compute_behav_sig separately, with bit-identical
+                // output.
+                const auto tf = compute_teef_max(b, a);
+                const auto& bs = tf.behav;
                 const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (show && (d % tick == 0 || d == total)) {
                     std::fprintf(stderr, "\r  [%zu/%zu]", d, total);

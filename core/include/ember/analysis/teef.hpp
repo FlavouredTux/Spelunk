@@ -104,6 +104,18 @@ struct TeefFunction {
 compute_teef_with_chunks(const Binary& b, addr_t fn_start,
                          u32 min_chunk_insts = 10);
 
+// Combined L0 + L2 + L4 fingerprint. Runs the lift→SSA→cleanup pipeline
+// once and feeds the result into both the structurer-driven L2 path and
+// the trace-driven L4 path. Roughly 2× faster than calling
+// compute_teef_with_chunks + compute_behav_sig separately, and produces
+// bit-identical TeefFunction.{whole,chunks,topo_hash,behav} output.
+//
+// Used by the corpus build path (build_teef_tsv). Recognizers that need
+// a single tier in isolation should keep using the standalone helpers.
+[[nodiscard]] TeefFunction
+compute_teef_max(const Binary& b, addr_t fn_start,
+                 u32 min_chunk_insts = 10);
+
 // Hash + MinHash a pseudo-C source string directly. Useful for
 // callers that already have the emitted text (the CLI fingerprint
 // command, the UI's per-function diff). Same canonicalization as

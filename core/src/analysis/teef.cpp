@@ -588,6 +588,90 @@ void collect_chunks(const Binary& b, const IrFunction& fn, const Region& r,
 
 }  // namespace
 
+namespace {
+
+// Per-fn IR insn cap. Bails the L2 path on huge VMP / Themida / Enigma
+// fns whose region-tree walk is O(insns × region_depth) and would
+// dominate a parallel sweep for 30+ minutes per fn. EMBER_TEEF_MAX_INSNS
+// overrides the default of 4096; at that limit a normal 50–500 insn
+// fn isn't affected and aggressive inlining still fits.
+[[nodiscard]] std::size_t teef_max_insns_per_fn() noexcept {
+    static const std::size_t v = []() -> std::size_t {
+        if (const char* s = std::getenv("EMBER_TEEF_MAX_INSNS")) {
+            try { return static_cast<std::size_t>(std::stoull(s)); }
+            catch (...) { /* malformed → fall through to default */ }
+        }
+        return 4096;
+    }();
+    return v;
+}
+
+// L0 topology hash from the freshly-lifted IR. Pre-SSA, pre-cleanup
+// so the shape we hash is the one the recognizer's pre-filter sees
+// for query fns too. Features:
+//   • num_blocks  — coarse size signal
+//   • num_edges   — sum of successors over all blocks
+//   • max_in_degree, max_out_degree — branching density
+//   • num_loop_headers — blocks with > 1 predecessor (proxy for loops
+//     and re-entry points; cleanup-stable)
+//   • num_returns — blocks whose terminator is Return
+// Each is folded with mix64; final u64 is the topo hash. Two
+// structurally-identical CFGs collide → recognizer can pre-filter on
+// it. Compiler diversity that adds/removes a block (e.g. an extra
+// cleanup or split-block from optimization) shifts the hash and the
+// pre-filter misses, but the recognizer falls through to the full
+// scan automatically — so this is lossy for perf, not correctness.
+[[nodiscard]] u64 compute_topo_hash_from_ir(const IrFunction& fn) noexcept {
+    u32 num_blocks       = static_cast<u32>(fn.blocks.size());
+    u32 num_edges        = 0;
+    u32 max_in_degree    = 0;
+    u32 max_out_degree   = 0;
+    u32 num_loop_headers = 0;
+    u32 num_returns      = 0;
+    for (const auto& bb : fn.blocks) {
+        num_edges      += static_cast<u32>(bb.successors.size());
+        max_in_degree   = std::max<u32>(max_in_degree,
+                                        static_cast<u32>(bb.predecessors.size()));
+        max_out_degree  = std::max<u32>(max_out_degree,
+                                        static_cast<u32>(bb.successors.size()));
+        if (bb.predecessors.size() > 1) ++num_loop_headers;
+        if (!bb.insts.empty() && bb.insts.back().op == IrOp::Return) ++num_returns;
+    }
+    u64 h = fnv1a("topo");
+    h = mix64(h, num_blocks);
+    h = mix64(h, num_edges);
+    h = mix64(h, max_in_degree);
+    h = mix64(h, max_out_degree);
+    h = mix64(h, num_loop_headers);
+    h = mix64(h, num_returns);
+    return h;
+}
+
+// Tail half of compute_teef_with_chunks / compute_teef_max — given a
+// post-cleanup IR, run the structurer and produce L2 + chunks. Returns
+// a partially-filled TeefFunction (whole/chunks). Caller is responsible
+// for setting topo_hash and behav.
+[[nodiscard]] TeefFunction
+compute_l2_from_ir(const Binary& b, IrFunction& ir, u32 min_chunk_insts) {
+    TeefFunction out;
+    const Structurer s;
+    auto sf = s.structure(ir);
+    if (!sf || !sf->body) return out;
+
+    out.whole = sig_for_region(b, ir, *sf->body);
+    if (out.whole.exact_hash == 0) return out;
+
+    collect_chunks(b, ir, *sf->body, min_chunk_insts,
+                   /*is_root=*/true, out.chunks);
+    std::sort(out.chunks.begin(), out.chunks.end(),
+              [](const TeefChunk& x, const TeefChunk& y) {
+                  return x.inst_count > y.inst_count;
+              });
+    return out;
+}
+
+}  // namespace
+
 TeefFunction
 compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) {
     TeefFunction out;
@@ -603,88 +687,58 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
 
-    // ---- L0 topology hash ----
-    // Computed from the fresh-lifted IR (pre-SSA, pre-cleanup) so the
-    // shape we hash is the one the recognizer's pre-filter will see
-    // for query fns too. Features:
-    //   • num_blocks  — coarse size signal
-    //   • num_edges   — sum of successors over all blocks
-    //   • max_in_degree, max_out_degree — branching density
-    //   • num_loop_headers — blocks with > 1 predecessor (proxy for loops
-    //     and re-entry points; cleanup-stable)
-    //   • num_returns — blocks whose terminator is Return
-    // Each is folded with mix64; final u64 is the topo hash. Two
-    // structurally-identical CFGs collide → recognizer can pre-filter on
-    // it. Compiler diversity that adds/removes a block (e.g. an extra
-    // cleanup or split-block from optimization) shifts the hash and the
-    // pre-filter misses, but the recognizer falls through to the full
-    // scan automatically — so this is lossy for perf, not correctness.
-    {
-        u32 num_blocks       = static_cast<u32>(ir_r->blocks.size());
-        u32 num_edges        = 0;
-        u32 max_in_degree    = 0;
-        u32 max_out_degree   = 0;
-        u32 num_loop_headers = 0;
-        u32 num_returns      = 0;
-        for (const auto& bb : ir_r->blocks) {
-            num_edges      += static_cast<u32>(bb.successors.size());
-            max_in_degree   = std::max<u32>(max_in_degree,
-                                            static_cast<u32>(bb.predecessors.size()));
-            max_out_degree  = std::max<u32>(max_out_degree,
-                                            static_cast<u32>(bb.successors.size()));
-            if (bb.predecessors.size() > 1) ++num_loop_headers;
-            if (!bb.insts.empty() && bb.insts.back().op == IrOp::Return) ++num_returns;
-        }
-        u64 h = fnv1a("topo");
-        h = mix64(h, num_blocks);
-        h = mix64(h, num_edges);
-        h = mix64(h, max_in_degree);
-        h = mix64(h, max_out_degree);
-        h = mix64(h, num_loop_headers);
-        h = mix64(h, num_returns);
-        out.topo_hash = h;
-    }
+    out.topo_hash = compute_topo_hash_from_ir(*ir_r);
 
-    // Insn-count gate. VMP / Themida / Enigma protected code expands
-    // every original fn into tens of thousands of junk-injected,
-    // deeply nested regions; TEEF's region-tree walk is roughly
-    // O(insns × region_depth), so a single 50k-insn fn dominates a
-    // parallel matcha sweep for 30+ minutes while the other 11999
-    // matcha fns sit done. Bail before SSA when the lifted IR is
-    // already past the budget — emit an empty `out` so the recognizer
-    // treats the fn as "no fingerprint, fall through to LLM-only
-    // naming". Override via EMBER_TEEF_MAX_INSNS for users who want
-    // to spend the time on a heavily-protected target.
-    static const std::size_t kMaxInsnsPerFn = []() -> std::size_t {
-        if (const char* s = std::getenv("EMBER_TEEF_MAX_INSNS")) {
-            try { return static_cast<std::size_t>(std::stoull(s)); }
-            catch (...) { /* malformed → fall through to default */ }
-        }
-        return 4096;     // a normal fn is ~50–500 insns; 4k handles aggressive inlining
-    }();
     {
         std::size_t total = 0;
         for (const auto& bb : ir_r->blocks) total += bb.insts.size();
-        if (total > kMaxInsnsPerFn) return out;
+        if (total > teef_max_insns_per_fn()) return out;
     }
 
     const SsaBuilder ssa;
     if (auto rv = ssa.convert(*ir_r); !rv) return out;
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
-    const Structurer s;
-    auto sf = s.structure(*ir_r);
-    if (!sf || !sf->body) return out;
+    auto l2 = compute_l2_from_ir(b, *ir_r, min_chunk_insts);
+    out.whole  = std::move(l2.whole);
+    out.chunks = std::move(l2.chunks);
+    return out;
+}
 
-    out.whole = sig_for_region(b, *ir_r, *sf->body);
-    if (out.whole.exact_hash == 0) return out;
+TeefFunction
+compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts) {
+    TeefFunction out;
 
-    collect_chunks(b, *ir_r, *sf->body, min_chunk_insts,
-                   /*is_root=*/true, out.chunks);
-    std::sort(out.chunks.begin(), out.chunks.end(),
-              [](const TeefChunk& x, const TeefChunk& y) {
-                  return x.inst_count > y.inst_count;
-              });
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return out;
+    const CfgBuilder cfg(b, **dec_r);
+    auto fn_r = cfg.build(fn_start, {});
+    if (!fn_r) return out;
+
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return out;
+    auto ir_r = (*lifter_r)->lift(*fn_r);
+    if (!ir_r) return out;
+
+    out.topo_hash = compute_topo_hash_from_ir(*ir_r);
+
+    {
+        std::size_t total = 0;
+        for (const auto& bb : ir_r->blocks) total += bb.insts.size();
+        if (total > teef_max_insns_per_fn()) return out;
+    }
+
+    const SsaBuilder ssa;
+    if (auto rv = ssa.convert(*ir_r); !rv) return out;
+    if (auto rv = run_cleanup(*ir_r); !rv) return out;
+
+    // L4 first — operates on the cleaned flat IR, no structurer needed.
+    out.behav = compute_behav_sig_from_ir(*ir_r, b);
+
+    // L2 — structurer + region tokenization on the same IR.
+    auto l2 = compute_l2_from_ir(b, *ir_r, min_chunk_insts);
+    out.whole  = std::move(l2.whole);
+    out.chunks = std::move(l2.chunks);
     return out;
 }
 

@@ -5,6 +5,7 @@
 
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
+#include <ember/ir/ir.hpp>
 
 namespace ember {
 
@@ -56,6 +57,14 @@ struct BehavSig {
 };
 
 [[nodiscard]] BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start);
+
+// Compute the behavioural sig from an already-pipelined IrFunction
+// (post-lift, post-SSA, post-cleanup). compute_teef_max() uses this to
+// avoid re-running the pipeline that compute_teef_with_chunks already
+// runs — both the L2 and L4 paths consume the cleaned flat IR, so
+// sharing the pipeline halves the per-fn work in corpus build.
+[[nodiscard]] BehavSig
+compute_behav_sig_from_ir(const IrFunction& fn, const Binary& bin);
 
 [[nodiscard]] float behav_jaccard(const BehavSig& a, const BehavSig& b) noexcept;
 

@@ -879,21 +879,8 @@ minhash8(const std::vector<u64>& xs) noexcept {
 
 }  // namespace
 
-BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start) {
+BehavSig compute_behav_sig_from_ir(const IrFunction& fn, const Binary& bin) {
     BehavSig out;
-
-    auto dec_r = make_decoder(bin);
-    if (!dec_r) return out;
-    const CfgBuilder cfg(bin, **dec_r);
-    auto fn_r = cfg.build(fn_start, {});
-    if (!fn_r) return out;
-    auto lifter_r = make_lifter(bin);
-    if (!lifter_r) return out;
-    auto ir_r = (*lifter_r)->lift(*fn_r);
-    if (!ir_r) return out;
-    const SsaBuilder ssa;
-    if (auto rv = ssa.convert(*ir_r); !rv) return out;
-    if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
     // Cap the number of blocks visited per trace so loops don't run
     // forever on unfortunate inputs (we still bound by insn count
@@ -908,7 +895,7 @@ BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start) {
     for (std::size_t k = 0; k < kBehavTraces; ++k) {
         const auto argv = mk_inputs(k);
         const u64 seed = mix64(0xDEADBEEFCAFEULL, k);
-        const u64 outcome = run_trace(*ir_r, bin, argv, seed, max_blocks_visited);
+        const u64 outcome = run_trace(fn, bin, argv, seed, max_blocks_visited);
         if (outcome != 0) { outcomes.push_back(outcome); ++done; }
         else               { ++aborted; }
     }
@@ -921,6 +908,22 @@ BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start) {
     out.exact_hash = multiset_hash(outcomes);
     out.minhash    = minhash8(outcomes);
     return out;
+}
+
+BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start) {
+    auto dec_r = make_decoder(bin);
+    if (!dec_r) return {};
+    const CfgBuilder cfg(bin, **dec_r);
+    auto fn_r = cfg.build(fn_start, {});
+    if (!fn_r) return {};
+    auto lifter_r = make_lifter(bin);
+    if (!lifter_r) return {};
+    auto ir_r = (*lifter_r)->lift(*fn_r);
+    if (!ir_r) return {};
+    const SsaBuilder ssa;
+    if (auto rv = ssa.convert(*ir_r); !rv) return {};
+    if (auto rv = run_cleanup(*ir_r); !rv) return {};
+    return compute_behav_sig_from_ir(*ir_r, bin);
 }
 
 float behav_jaccard(const BehavSig& a, const BehavSig& b) noexcept {

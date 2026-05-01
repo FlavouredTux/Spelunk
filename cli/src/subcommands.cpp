@@ -1058,10 +1058,19 @@ int run_recognize(const Args& args, const Binary& b) {
         }
     }
     std::unordered_map<u64, std::size_t> query_popularity;
+    std::unordered_map<u64, std::size_t> query_popularity_l4;
     for (const auto& tf : fps) {
         if (tf.whole.exact_hash != 0) ++query_popularity[tf.whole.exact_hash];
+        if (tf.behav.exact_hash != 0) ++query_popularity_l4[tf.behav.exact_hash];
     }
-    constexpr std::size_t kQueryPopularityCap = 8;
+    constexpr std::size_t kQueryPopularityCap   = 8;
+    // L4 cap mirrors the L2 one. Trivial-behaviour fns (return-zero,
+    // return-arg-byte, simple float predicates like __isinfl) hash to
+    // the same L4 multiset across thousands of unrelated stubs in
+    // obfuscator-heavy targets. Without this guard a single corpus
+    // entry like __isinfl pulls 20+ false-positive behav-exact hits
+    // because the target's stubs all share its trivial behaviour.
+    constexpr std::size_t kQueryPopularityCapL4 = 8;
 
     // Detect the query binary's runtime once. The recognizer uses it
     // to skip cross-language matches (e.g. Rust binary against
@@ -1129,6 +1138,10 @@ int run_recognize(const Args& args, const Binary& b) {
             // (xgetbv, return-zero) that would ALL collapse onto a
             // single arbitrary corpus name without this gate.
             if (query_popularity[tf.whole.exact_hash] > kQueryPopularityCap) continue;
+            // L4-side trivial-behaviour guard. See kQueryPopularityCapL4
+            // comment above.
+            if (tf.behav.exact_hash != 0 &&
+                query_popularity_l4[tf.behav.exact_hash] > kQueryPopularityCapL4) continue;
             auto matches = corpus.recognize(tf, /*top_k=*/3, query_runtime);
             if (matches.empty()) continue;
             if (matches[0].confidence < threshold) continue;

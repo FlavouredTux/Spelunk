@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { runWorker } from "./worker.js";
 import { runassistantCodeWorker } from "./worker_assistant_code.js";
 import { isCodexCliModel, runCodexCliWorker } from "./worker_codex_cli.js";
+import { pickCodexHome, pickassistantHome } from "./cli_homes.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 
 // Drive the tiebreaker role across the current dispute set. One
@@ -55,6 +56,10 @@ export async function tiebreak(args: TiebreakArgs): Promise<TiebreakResult> {
         const runDir = join(args.runsRoot, runId);
         ourDirs.push(runDir);
         mkdirSync(runDir, { recursive: true });
+        const m = args.model ?? "";
+        const cliHome = m.startsWith("assistant-code") ? pickassistantHome()
+                      : isCodexCliModel(m)          ? pickCodexHome()
+                      :                               undefined;
         const wargs = {
             role: "tiebreaker" as const,
             binary: args.binary,
@@ -66,12 +71,11 @@ export async function tiebreak(args: TiebreakArgs): Promise<TiebreakResult> {
             runDir,
             emberBin: args.emberBin,
             agentId: `tiebreaker-${runId.slice(2)}`,
+            cliHome,
         };
-        return (args.model ?? "").startsWith("assistant-code")
-            ? runassistantCodeWorker(wargs)
-            : isCodexCliModel(args.model)
-                ? runCodexCliWorker(wargs)
-            : runWorker(wargs);
+        return m.startsWith("assistant-code") ? runassistantCodeWorker(wargs)
+             : isCodexCliModel(m)          ? runCodexCliWorker(wargs)
+             :                               runWorker(wargs);
     });
 
     const settled = await Promise.allSettled(promises);

@@ -91,11 +91,21 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
         ? requested.slice("codex-cli/".length) || undefined
         : undefined;
 
-    const codexHome = process.env.EMBER_CODEX_HOME ?? join(homedir(), ".codex");
+    // Auth-home resolution order:
+    //   1. WorkerArgs.cliHome — cascade plumbs a per-worker pick from
+    //      pickCodexHome() so a multi-account pool round-robins across
+    //      a single cascade's workers.
+    //   2. EMBER_CODEX_HOME — one-shot env override.
+    //   3. ~/.codex — default for the typical single-account case.
+    const codexHome = args.cliHome
+                   ?? process.env.EMBER_CODEX_HOME
+                   ?? join(homedir(), ".codex");
     if (!existsSync(join(codexHome, "auth.json"))) {
         throw new Error(
             `codex: no auth at ${codexHome}/auth.json — ` +
-            `run \`codex login\` once to authenticate, or set EMBER_CODEX_HOME`);
+            `run \`codex login\` once to authenticate (or with CODEX_HOME set ` +
+            `to the directory above for a non-default account), or set ` +
+            `EMBER_CODEX_HOME / [codex] homes = [...] in agent.toml`);
     }
 
     mkdirSync(args.runDir, { recursive: true });

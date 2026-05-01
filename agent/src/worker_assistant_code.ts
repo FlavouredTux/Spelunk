@@ -78,10 +78,14 @@ export async function runassistantCodeWorker(args: WorkerArgs): Promise<void> {
 
     // Locate the user's assistant Code home. The SDK appends ".assistant/" to
     // $HOME itself, so HOME must be the *parent* of the .assistant directory
-    // (e.g. /home/Gato), not .assistant itself. EMBER_assistant_HOME also points
-    // at the parent — set it when you want the SDK to read creds from a
-    // non-default install (work vs personal).
-    const sdkHome = process.env.EMBER_assistant_HOME ?? homedir();
+    // (e.g. /home/Gato), not .assistant itself.
+    //
+    // Resolution order:
+    //   1. WorkerArgs.cliHome — cascade plumbs a per-worker pick from
+    //      pickassistantHome() for round-robin across a multi-account pool.
+    //   2. EMBER_assistant_HOME — one-shot env override.
+    //   3. ~/ — default for the typical single-account case.
+    const sdkHome = args.cliHome ?? process.env.EMBER_assistant_HOME ?? homedir();
     const credsPath = join(sdkHome, ".assistant", ".credentials.json");
     if (!existsSync(credsPath)) {
         throw new Error(

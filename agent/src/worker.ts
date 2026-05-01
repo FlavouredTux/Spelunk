@@ -25,6 +25,11 @@ export interface WorkerArgs {
     agentId?: string;         // default: role-<runId>
     module?: string;          // --module NAME passthrough to the worker's daemon
                               // (cascade plumbs this on minidump targets)
+    cliHome?: string;         // explicit auth-home dir for SDK-driven workers
+                              // (Codex CLI / assistant Code). When set, overrides
+                              // the worker's EMBER_*_HOME / default lookup —
+                              // cascade uses it to round-robin a multi-account
+                              // pool across workers.
 }
 
 interface CostTally {

@@ -634,6 +634,11 @@ build_teef_tsv(const Binary& b,
         std::vector<std::string> rows(total);
         std::atomic<std::size_t> next{0};
         std::atomic<std::size_t> done{0};
+        // Counters for the post-phase summary so the user can see how
+        // much --l0-prefilter is actually helping vs. how many fns
+        // still go through the full pipeline.
+        std::atomic<std::size_t> early_exit_topo{0};
+        std::atomic<std::size_t> empty_fingerprint{0};
         const auto t_fp_start = std::chrono::steady_clock::now();
         std::mutex fp_progress_mu;
         std::atomic<bool> fp_phase_done{false};
@@ -687,6 +692,18 @@ build_teef_tsv(const Binary& b,
                     : compute_teef_with_chunks(b, a);
                 const auto& bs = tf.behav;
                 done.fetch_add(1, std::memory_order_relaxed);
+                // Telemetry: distinguish "early-exited via topo filter"
+                // from "made it through the full pipeline but came out
+                // empty" (e.g., insn-cap hit). Lets the user see at a
+                // glance whether --l0-prefilter is paying off.
+                if (tf.whole.exact_hash == 0) {
+                    if (l4_topo_filter && tf.topo_hash != 0 &&
+                        !l4_topo_filter->contains(tf.topo_hash)) {
+                        early_exit_topo.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        empty_fingerprint.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
                 if (tf.whole.exact_hash == 0) continue;
                 std::string name;
                 if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
@@ -761,6 +778,13 @@ build_teef_tsv(const Binary& b,
                 "\r  fingerprint [%zu/%zu] %.0f fn/s · elapsed %.1fs · done           \n",
                 total, total, rate, elapsed);
             std::fflush(stderr);
+            const std::size_t ee = early_exit_topo.load(std::memory_order_relaxed);
+            const std::size_t eg = empty_fingerprint.load(std::memory_order_relaxed);
+            const std::size_t full_pipe = (total > ee + eg) ? (total - ee - eg) : 0;
+            std::println(stderr,
+                "ember: TEEF: {} fns full-pipeline, {} early-exit (l0-prefilter), "
+                "{} empty (insn-cap / lift bail)",
+                full_pipe, ee, eg);
         }
 
     std::string out;

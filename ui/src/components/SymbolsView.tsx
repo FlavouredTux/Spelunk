@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import { displayName, demangle, formatSize } from "../api";
 import type { BinaryInfo, FunctionInfo, Annotations } from "../types";
@@ -14,6 +14,7 @@ export function SymbolsView(props: {
   const { info, annotations, onSelect, onClose } = props;
   const [tab, setTab] = useState<Tab>("imports");
   const [q, setQ] = useState("");
+  const deferredQ = useDeferredValue(q);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -32,7 +33,7 @@ export function SymbolsView(props: {
   const imports = useMemo(() => info.imports.filter((f) => f.name), [info.imports]);
 
   const filteredFunctions = (pool: FunctionInfo[]): FunctionInfo[] => {
-    const needle = q.trim().toLowerCase();
+    const needle = deferredQ.trim().toLowerCase();
     if (!needle) return pool;
     return pool.filter((f) => {
       const dn = displayName(f, annotations).toLowerCase();
@@ -43,13 +44,13 @@ export function SymbolsView(props: {
   };
 
   const filteredSections = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = deferredQ.trim().toLowerCase();
     if (!needle) return info.sections;
     return info.sections.filter((s) =>
       s.name.toLowerCase().includes(needle) ||
       s.flags.toLowerCase().includes(needle) ||
       s.vaddr.includes(needle));
-  }, [info.sections, q]);
+  }, [info.sections, deferredQ]);
 
   return (
     <div

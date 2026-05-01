@@ -14,6 +14,7 @@ const ASM_INSN_RE = /^\s*(0x[0-9a-fA-F]+)\s+((?:[0-9a-fA-F]{2}\s+)+?)\s{2,}(.+)$
 // Pseudo-C body lines indent in 2-space steps; the leading whitespace
 // is what we measure to draw nesting guides.
 const INDENT_UNIT = 2;
+const CODE_OVERSCAN = 24;
 
 // `// foo` at column 0 is the function-name header ember emits at the
 // top of a function block. Body comments use `;`, so this prefix is a
@@ -135,15 +136,58 @@ export function CodeView(props: {
   useEffect(() => setActiveMatch(0), [props.search]);
 
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewH, setViewH] = useState(720);
+  const rowH = (props.fontSize ?? 12.5) * 1.65;
+
+  const matchesByLine = useMemo(() => {
+    const byLine = new Map<number, { line: number; start: number; end: number }[]>();
+    for (const m of matches) {
+      const arr = byLine.get(m.line);
+      if (arr) arr.push(m);
+      else byLine.set(m.line, [m]);
+    }
+    return byLine;
+  }, [matches]);
+
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setScrollTop(el.scrollTop);
+      });
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => setViewH(el.clientHeight || 720));
+    ro.observe(el);
+    setViewH(el.clientHeight || 720);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, []);
+
+  const visible = useMemo(() => {
+    const first = Math.max(0, Math.floor(scrollTop / rowH) - CODE_OVERSCAN);
+    const last = Math.min(lines.length, Math.ceil((scrollTop + viewH) / rowH) + CODE_OVERSCAN);
+    return { first, last, padTop: first * rowH, totalH: lines.length * rowH };
+  }, [lines.length, rowH, scrollTop, viewH]);
 
   // Scroll to active match
   useEffect(() => {
     if (!props.searchActive || matches.length === 0) return;
     const m = matches[activeMatch];
     if (!m) return;
-    const el = scrollerRef.current?.querySelector(`[data-line="${m.line}"]`) as HTMLElement | null;
-    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [activeMatch, matches, props.searchActive]);
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const targetTop = Math.max(0, (m.line * rowH) - (scroller.clientHeight / 2));
+    scroller.scrollTo({ top: targetTop, behavior: "smooth" });
+  }, [activeMatch, matches, props.searchActive, rowH]);
 
   // Search keyboard navigation
   useEffect(() => {
@@ -199,10 +243,12 @@ export function CodeView(props: {
           padding: "16px 0",
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", minWidth: "min-content" }}>
-          {lines.map((line, i) => {
+        <div style={{ position: "relative", minWidth: "min-content", height: visible.totalH + 40 }}>
+          <div style={{ transform: `translateY(${visible.padTop}px)` }}>
+          {lines.slice(visible.first, visible.last).map((line, idx) => {
+            const i = visible.first + idx;
             const lineMatches = props.searchActive
-              ? matches.filter((m) => m.line === i)
+              ? (matchesByLine.get(i) ?? [])
               : [];
             const isActiveLine = props.searchActive &&
               matches[activeMatch] && matches[activeMatch].line === i;
@@ -244,8 +290,8 @@ export function CodeView(props: {
                 onContextMenu={onLineContext}
                 style={{
                   display: "flex",
-                  padding: isFnHeader && i > 0 ? "10px 24px 0" : "0 24px",
-                  marginTop: isFnHeader && i > 0 ? 8 : 0,
+                  minHeight: rowH,
+                  padding: "0 24px",
                   borderTop: lineBorderTop,
                   whiteSpace: "pre",
                   alignItems: "baseline",
@@ -283,7 +329,7 @@ export function CodeView(props: {
               </div>
             );
           })}
-          <div style={{ height: 40 }} />
+          </div>
         </div>
       </div>
       {fnCtx && (

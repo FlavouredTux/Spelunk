@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import { demangle, displayName, formatSize, loadFunction } from "../api";
 import type { BinaryInfo, FunctionInfo, ViewKind, Annotations } from "../types";
@@ -26,6 +26,7 @@ export function Sidebar(props: {
   const { info, currentAddr, annotations, functionsLoading, width, onSelect, onOpen, onReopen,
           onRename, onAddNote, onEditSignature, onExport, onImport } = props;
   const [q, setQ] = useState("");
+  const deferredQ = useDeferredValue(q);
   const [showImports, setShowImports] = useState(false);
   const [sortBy, setSortBy] = useState<"addr" | "size">("addr");
   const [ctx, setCtx] = useState<{ x: number; y: number; fn: FunctionInfo } | null>(null);
@@ -42,7 +43,7 @@ export function Sidebar(props: {
 
   const list = useMemo(() => {
     const pool = showImports ? info.imports : info.functions;
-    const needle = q.trim().toLowerCase();
+    const needle = deferredQ.trim().toLowerCase();
     const filtered = !needle ? pool : pool.filter((f) => {
       const rn = annotations.renames[f.addr];
       return (
@@ -60,7 +61,7 @@ export function Sidebar(props: {
     // checks in VirtualList. Sort biggest first: the large functions are
     // almost always the ones worth opening.
     return [...filtered].sort((a, b) => b.size - a.size);
-  }, [q, info, showImports, sortBy, annotations]);
+  }, [deferredQ, info, showImports, sortBy, annotations]);
 
   const buildMenu = (fn: FunctionInfo): MenuItem[] => {
     const hasRename = !!annotations.renames[fn.addr];

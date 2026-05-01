@@ -23,6 +23,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <system_error>
@@ -896,9 +897,9 @@ int run_recognize(const Args& args, const Binary& b) {
         std::println(stderr, "ember: recognize: query runtime detected as '{}'", query_runtime);
     }
 
-    std::vector<std::string> rows(total);
     std::atomic<std::size_t> next{0};
     std::atomic<std::size_t> hit_count{0};
+    std::atomic<std::size_t> done_count{0};
     const float threshold = args.recognize_threshold;
     const bool show = progress_enabled();
     if (show) {
@@ -907,12 +908,30 @@ int run_recognize(const Args& args, const Binary& b) {
             total, threads, corpus.function_count());
         std::fflush(stderr);
     }
+    // Stream output as each fn finishes — gives the user visible progress
+    // on big-corpus runs that previously sat silent for minutes. Order is
+    // completion-order (workers race), not address-sorted; pipe through
+    // `sort -n` if you need sorted output. The mutex bounds the number of
+    // print calls to one in flight; the actual `recognize()` work runs
+    // unlocked.
+    std::mutex out_mu;
+    const std::size_t progress_tick = std::max<std::size_t>(1, total / 50);
     auto worker = [&] {
         while (true) {
             const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
             if (i >= total) break;
             const addr_t a = fns_vec[i];
             const auto& tf = fps[i];
+            // Even when we skip the recognize call, count progress —
+            // otherwise the progress bar advances only on hits, which
+            // looks stalled on stripped binaries with many sub_*-only
+            // queries.
+            const std::size_t d = done_count.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (show && (d % progress_tick == 0 || d == total)) {
+                std::lock_guard<std::mutex> lock(out_mu);
+                std::fprintf(stderr, "\r  recognize [%zu/%zu]", d, total);
+                std::fflush(stderr);
+            }
             if (tf.whole.exact_hash == 0) continue;
             // Skip query functions whose whole-fn TEEF appears too
             // many times in this binary — they're trivial-shape stubs
@@ -934,12 +953,16 @@ int run_recognize(const Args& args, const Binary& b) {
                                           matches[0].name,
                                           matches[0].confidence,
                                           matches[0].via);
-            // Append top-2/top-3 alternates if present, for transparency
+            // Append top-2/top-3 alternates if present, for transparency.
             for (std::size_t k = 1; k < matches.size(); ++k) {
                 row += std::format("\t{}={:.3f}", matches[k].name, matches[k].confidence);
             }
             row += '\n';
-            rows[i] = std::move(row);
+            {
+                std::lock_guard<std::mutex> lock(out_mu);
+                std::fputs(row.c_str(), stdout);
+                std::fflush(stdout);
+            }
         }
     };
     std::vector<std::thread> pool;
@@ -947,9 +970,7 @@ int run_recognize(const Args& args, const Binary& b) {
     for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
     for (auto& t : pool) t.join();
 
-    std::string out;
-    for (const auto& r : rows) out += r;
-    std::print("{}", out);
+    if (show) std::fputc('\n', stderr);
     std::println(stderr, "ember: recognize: {} suggestions at threshold {:.2f}",
                  hit_count.load(), threshold);
     return EXIT_SUCCESS;

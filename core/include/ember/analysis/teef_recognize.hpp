@@ -127,6 +127,13 @@ private:
     std::unordered_multimap<u64, std::size_t>              whole_exact_;          // L2 exact_hash → idx into whole_by_name_
     std::unordered_multimap<u64, std::size_t>              whole_l4_exact_;       // L4 exact_hash → idx (behav-exact fast path)
     std::unordered_multimap<u64, std::size_t>              whole_topo_;           // L0 topo_hash → idx (jaccard pre-filter)
+    // L2 minhash inverted index: one map per slot. At recognize time
+    // we look up each of the query's 8 slot values, accumulate
+    // (entry_idx → hit_count), and only score entries with ≥3 slot
+    // hits. Cuts O(N) full-scan jaccard to O(slot_bucket * 8) per
+    // query — the difference between minutes and milliseconds on
+    // 100K-fn library corpora.
+    std::array<std::unordered_map<u64, std::vector<u32>>, 8> whole_minhash_;
     std::unordered_map<u64, std::size_t>                   whole_l4_popularity_;  // L4 hash → total occurrences (boilerplate guard)
     std::unordered_map<u64, std::size_t>                   whole_popularity_;     // L2 exact_hash → total F-row occurrences (includes sub_*)
     std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;          // chunk_exact_hash → corpus chunks

@@ -171,6 +171,13 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             if (whole_by_name_[idx].topo_hash != 0) {
                 whole_topo_.emplace(whole_by_name_[idx].topo_hash, idx);
             }
+            // L2 minhash inverted index — push idx into each slot's bucket
+            // so the recognizer can find candidates by slot-value lookup
+            // instead of scanning every entry.
+            for (std::size_t k = 0; k < 8; ++k) {
+                whole_minhash_[k][whole_by_name_[idx].minhash[k]]
+                    .push_back(static_cast<u32>(idx));
+            }
             if (addr != 0) idx_by_addr.emplace(addr, idx);
             idx_by_name_.try_emplace(whole_by_name_[idx].name, idx);
             ++rows;
@@ -361,34 +368,30 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // collapses to pure L2 and the conservative thresholds (0.875 bar,
     // 0.25 margin) apply.
     if (!hash_too_common) {
-        // Per-candidate scorer; returns combined score and whether L4
-        // contributed. Used by both the topo-bucket scan and the full
-        // fallback scan below.
+        // Per-candidate scorer + verdict, shared by the topo-bucket
+        // and full-scan paths.
         struct ScanState {
             std::string best_name;     float best_combined  = 0.0f;
             std::string second_name;   float second_combined = 0.0f;
             bool        best_has_l4 = false;
         };
-        auto scan = [&](auto begin, auto end, ScanState& s) {
-            for (auto it = begin; it != end; ++it) {
-                const auto& e = whole_by_name_[*it];
-                if (e.exact_hash == 0) continue;
-                if (!runtime_compatible(query_runtime, e.runtime)) continue;
-                if (!strings_compatible(e.string_hashes)) continue;
-                const float l2j = jaccard_minhash(query.whole.minhash, e.minhash);
-                const float l4j = l4_jaccard_with(e);
-                const bool has_l4 = (query_has_l4 && e.l4_exact != 0);
-                const float combined = has_l4 ? (0.5f * l2j + 0.5f * l4j) : l2j;
-                if (combined > s.best_combined) {
-                    s.second_combined = s.best_combined;
-                    s.second_name     = std::move(s.best_name);
-                    s.best_combined   = combined;
-                    s.best_name       = e.name;
-                    s.best_has_l4     = has_l4;
-                } else if (combined > s.second_combined) {
-                    s.second_combined = combined;
-                    s.second_name     = e.name;
-                }
+        auto score_entry = [&](const WholeEntry& e, ScanState& s) {
+            if (e.exact_hash == 0) return;
+            if (!runtime_compatible(query_runtime, e.runtime)) return;
+            if (!strings_compatible(e.string_hashes)) return;
+            const float l2j = jaccard_minhash(query.whole.minhash, e.minhash);
+            const float l4j = l4_jaccard_with(e);
+            const bool has_l4 = (query_has_l4 && e.l4_exact != 0);
+            const float combined = has_l4 ? (0.5f * l2j + 0.5f * l4j) : l2j;
+            if (combined > s.best_combined) {
+                s.second_combined = s.best_combined;
+                s.second_name     = std::move(s.best_name);
+                s.best_combined   = combined;
+                s.best_name       = e.name;
+                s.best_has_l4     = has_l4;
+            } else if (combined > s.second_combined) {
+                s.second_combined = combined;
+                s.second_name     = e.name;
             }
         };
         auto verdict = [&](ScanState& s) -> std::optional<TeefMatch> {
@@ -400,32 +403,64 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             return TeefMatch{std::move(s.best_name), s.best_combined, via, 0};
         };
 
-        // Stage 1 — topo bucket. If the query has a topo_hash and the
-        // corpus has entries in the same bucket, try those first. The
-        // common case is "exactly one match in this topo bucket" → we
-        // confirm via L2/L4 jaccard and return without scanning the
-        // rest of the corpus.
-        if (query.topo_hash != 0) {
-            std::vector<std::size_t> idxs;
-            auto [lo, hi] = whole_topo_.equal_range(query.topo_hash);
-            for (auto it = lo; it != hi; ++it) idxs.push_back(it->second);
-            if (!idxs.empty()) {
-                ScanState s;
-                scan(idxs.begin(), idxs.end(), s);
-                if (auto m = verdict(s)) return { *m };
+        // Stage 1 — L2 MinHash inverted index. The query's 8 slot
+        // values index into per-slot buckets of corpus entry idxs;
+        // entries appearing in ≥ kMinSlotHits buckets have a
+        // probabilistic L2 jaccard ≥ kMinSlotHits/8. Only those get
+        // scored. Cuts O(N) full-scan to O(slot_bucket × 8) per query
+        // — the difference between minutes and milliseconds on
+        // 100K-fn library corpora.
+        //
+        // EMBER_TEEF_MAX_SLOT_BUCKET caps the size of any single slot
+        // bucket we'll iterate; values shared by thousands of corpus
+        // entries are "popular trivial bits" (boilerplate stubs) that
+        // would dominate the candidate set without adding precision.
+        // Threshold of 2/8 lets L4-corroborated low-L2-jaccard candidates
+        // through: combined = 0.5·L2 + 0.5·L4, and a query with weak L2
+        // (≥0.25) but strong L4 (=1.0) gives combined ≈ 0.625 > 0.6 bar.
+        // Higher thresholds drop those L4-rescued matches in cross-config
+        // runs (verified: kMinSlotHits=3 lost 4/361 matches in the
+        // probe2 6-config matrix).
+        constexpr u8 kMinSlotHits = 2;     // estimate jaccard ≥ 2/8 = 0.25
+        static const std::size_t kMaxSlotBucket = []() -> std::size_t {
+            if (const char* s = std::getenv("EMBER_TEEF_MAX_SLOT_BUCKET")) {
+                try { return static_cast<std::size_t>(std::stoull(s)); }
+                catch (...) { /* fall through */ }
             }
+            return 5000;
+        }();
+        {
+            std::unordered_map<u32, u8> hits;
+            for (std::size_t k = 0; k < 8; ++k) {
+                const u64 v = query.whole.minhash[k];
+                auto it = whole_minhash_[k].find(v);
+                if (it == whole_minhash_[k].end()) continue;
+                if (it->second.size() > kMaxSlotBucket) continue;
+                for (u32 idx : it->second) ++hits[idx];
+            }
+            ScanState s;
+            for (const auto& [idx, count] : hits) {
+                if (count < kMinSlotHits) continue;
+                score_entry(whole_by_name_[idx], s);
+            }
+            if (auto m = verdict(s)) return { *m };
         }
 
-        // Stage 2 — full scan fallback. We arrive here when no topo
-        // pre-filter applied (query has no topo, or no corpus entry
-        // shared its topo, or the topo bucket didn't yield a confident
-        // match). Scan every corpus entry; same scorer.
-        std::vector<std::size_t> all;
-        all.reserve(whole_by_name_.size());
-        for (std::size_t i = 0; i < whole_by_name_.size(); ++i) all.push_back(i);
-        ScanState s;
-        scan(all.begin(), all.end(), s);
-        if (auto m = verdict(s)) return { *m };
+        // Stage 2 — topo bucket fallback. Catches cases where slot
+        // collisions are too sparse to cross kMinSlotHits but the L0
+        // topology agrees (small fns where minhash entropy is low and
+        // jaccard estimates are noisy). Bounded — topo buckets are
+        // rarely huge.
+        if (query.topo_hash != 0) {
+            auto [lo, hi] = whole_topo_.equal_range(query.topo_hash);
+            if (lo != hi) {
+                ScanState s2;
+                for (auto it = lo; it != hi; ++it) {
+                    score_entry(whole_by_name_[it->second], s2);
+                }
+                if (auto m = verdict(s2)) return { *m };
+            }
+        }
     }
 
     // ---- Chunk vote ----

@@ -268,11 +268,31 @@ void parse_chunk(const char* begin, const char* end,
 
 }  // namespace
 
-std::unordered_set<u64> TeefCorpus::topo_hashes() const {
-    std::unordered_set<u64> out;
-    out.reserve(whole_by_name_.size());
+std::unordered_set<u64>
+TeefCorpus::topo_hashes(std::size_t max_popularity) const {
+    if (max_popularity == 0) {
+        // No popularity guard — return every distinct topo.
+        std::unordered_set<u64> out;
+        out.reserve(whole_by_name_.size());
+        for (const auto& e : whole_by_name_) {
+            if (e.topo_hash != 0) out.insert(e.topo_hash);
+        }
+        return out;
+    }
+    // Two-pass: count occurrences per topo, then keep only those with
+    // count <= max_popularity. Excludes generic boilerplate shapes
+    // (single-block return-stub etc.) that match thousands of fns
+    // and would force every target fn with the same shape through
+    // the full pipeline for no real-match opportunity.
+    std::unordered_map<u64, std::size_t> counts;
+    counts.reserve(whole_by_name_.size());
     for (const auto& e : whole_by_name_) {
-        if (e.topo_hash != 0) out.insert(e.topo_hash);
+        if (e.topo_hash != 0) ++counts[e.topo_hash];
+    }
+    std::unordered_set<u64> out;
+    out.reserve(counts.size());
+    for (const auto& [t, c] : counts) {
+        if (c <= max_popularity) out.insert(t);
     }
     return out;
 }

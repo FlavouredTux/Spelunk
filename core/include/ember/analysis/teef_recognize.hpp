@@ -104,7 +104,15 @@ public:
     // anything anyway, so the K=64 trace pass is wasted. On obfuscator-
     // spawned targets (hundreds of thousands of unique-shape stubs)
     // this filter saves the bulk of corpus-build time.
-    [[nodiscard]] std::unordered_set<u64> topo_hashes() const;
+    //
+    // `max_popularity` (when > 0) excludes topologies shared by more
+    // than that many corpus entries — generic shapes (single-block
+    // return-stub, two-block if-then) match thousands of unrelated
+    // corpus fns AND a target's stubs, so target fns with those topos
+    // run the full pipeline pointlessly. Filtering them out raises the
+    // pre-filter's skip rate dramatically. 0 = include every topology.
+    [[nodiscard]] std::unordered_set<u64>
+    topo_hashes(std::size_t max_popularity = 0) const;
 
 private:
     struct WholeEntry {

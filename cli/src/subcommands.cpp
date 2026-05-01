@@ -1000,12 +1000,28 @@ int run_recognize(const Args& args, const Binary& b) {
         // throughput win on obfuscator-heavy targets but lossy on
         // cross-opt-level matches (CFG topology shifts even for the
         // same source), so off by default.
+        //
+        // Popularity guard (kMaxTopoPopularity): exclude corpus
+        // topologies shared by more than this many corpus entries.
+        // These are generic shapes (return-stub, simple if-then) that
+        // match thousands of unrelated fns AND a target's stubs;
+        // letting them through makes the filter useless for the
+        // target's high-volume boilerplate. Tuneable via
+        // EMBER_TEEF_MAX_TOPO_POPULARITY (0 disables the guard).
         std::unordered_set<u64> corpus_topos;
         if (args.l0_prefilter) {
-            corpus_topos = corpus.topo_hashes();
+            static const std::size_t kMaxTopoPopularity = []() -> std::size_t {
+                if (const char* s = std::getenv("EMBER_TEEF_MAX_TOPO_POPULARITY")) {
+                    try { return static_cast<std::size_t>(std::stoull(s)); }
+                    catch (...) {}
+                }
+                return 50;
+            }();
+            corpus_topos = corpus.topo_hashes(kMaxTopoPopularity);
             std::println(stderr,
-                "ember: --l0-prefilter on; {} corpus topologies",
-                corpus_topos.size());
+                "ember: --l0-prefilter on; {} corpus topologies "
+                "(after popularity guard ≤{})",
+                corpus_topos.size(), kMaxTopoPopularity);
         }
         const auto t_fp_start = std::chrono::steady_clock::now();
         target_tsv = build_teef_tsv(b, scope, /*corpus_mode=*/false,

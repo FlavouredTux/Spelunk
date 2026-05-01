@@ -319,10 +319,85 @@ ipcMain.handle("ember:setBinary", async (_e, p) => {
   return state.binary;
 });
 
-// Pull the raw sidecar JSON for a binary, or {} if missing / unreadable.
+// FNV-1a-64 of a string, used to compute the ember-side cache annotations
+// path. Must match the C++ `fnv1a_64` in core/src/common/annotations.cpp —
+// same algorithm, same offset/prime constants.
+function fnv1a64(s) {
+  let h = 0xcbf29ce484222325n;
+  const m = 0x100000001b3n;
+  for (let i = 0; i < s.length; i++) {
+    h ^= BigInt(s.charCodeAt(i));
+    h = (h * m) & 0xffffffffffffffffn;
+  }
+  return h.toString(16).padStart(16, "0");
+}
+
+// Locate the cache annotations file ember CLI / ember-agent promote
+// writes to. Mirrors `cache_annotation_path` in core/src/common/
+// annotations.cpp: path-keyed (not content-keyed), basename + FNV of
+// the absolute parent dir. The XDG_CACHE_HOME / ~/.cache fallback also
+// matches what ember does.
+function emberCacheAnnotationsPath(binaryPath) {
+  const abs = path.resolve(binaryPath);
+  const parent = path.dirname(abs) || ".";
+  const key = `${path.basename(abs)}@${fnv1a64(parent)}`;
+  const cacheRoot = process.env.XDG_CACHE_HOME
+    ? path.join(process.env.XDG_CACHE_HOME, "ember")
+    : path.join(require("node:os").homedir(), ".cache", "ember");
+  return path.join(cacheRoot, "annotations", key, "annotations.db");
+}
+
+// Parse the cache annotations.db (TSV-ish: `rename <hex_addr> <name>`,
+// `note <hex_addr> <text>`, etc.). Returns { renames, notes } only —
+// the cache format doesn't carry signatures/patches. Empty object if
+// the file doesn't exist or is unreadable.
+async function readEmberCacheAnnotations(binaryPath) {
+  const out = { renames: {}, notes: {} };
+  try {
+    const raw = await fs.readFile(emberCacheAnnotationsPath(binaryPath), "utf8");
+    for (const line of raw.split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      const sp1 = t.indexOf(" ");
+      if (sp1 < 0) continue;
+      const kind = t.slice(0, sp1);
+      const sp2 = t.indexOf(" ", sp1 + 1);
+      if (sp2 < 0) continue;
+      const addrHex = t.slice(sp1 + 1, sp2);
+      const value   = t.slice(sp2 + 1);
+      if (!/^[0-9a-fA-F]+$/.test(addrHex)) continue;
+      const addr = "0x" + addrHex.toLowerCase();
+      if      (kind === "rename") out.renames[addr] = value;
+      else if (kind === "note")   out.notes[addr]   = value;
+      // signatures/types/patches are not in the cache .db format yet —
+      // ignore unrecognised verbs rather than fail.
+    }
+  } catch { /* missing — return empty {} */ }
+  return out;
+}
+
+// Pull the merged annotations view for a binary. Two stores feed in:
+//   - the UI's JSON sidecar at <userData>/projects/<sanitized>.json
+//     (renames + notes + signatures + localRenames + patches the user
+//     edited in-app)
+//   - ember's cache annotations.db at ~/.cache/ember/annotations/<key>/
+//     (renames + notes from `ember-agent promote --apply` / `ember
+//     --apply <script>`)
+// The UI sidecar wins on conflict — manual renames override agent
+// guesses. Patches / signatures / localRenames live only in the JSON
+// sidecar (no cache-side equivalent yet).
 async function readSidecar(binaryPath) {
-  try { return JSON.parse(await fs.readFile(sidecarPath(binaryPath), "utf8")); }
-  catch { return {}; }
+  let json = {};
+  try { json = JSON.parse(await fs.readFile(sidecarPath(binaryPath), "utf8")); }
+  catch { /* no sidecar yet — that's fine, the cache may still have data */ }
+  const cache = await readEmberCacheAnnotations(binaryPath);
+  return {
+    renames:      { ...cache.renames, ...(json.renames    || {}) },
+    notes:        { ...cache.notes,   ...(json.notes      || {}) },
+    signatures:   json.signatures   || {},
+    localRenames: json.localRenames || {},
+    patches:      json.patches      || {},
+  };
 }
 
 async function saveSidecar(binaryPath, data) {
@@ -759,19 +834,10 @@ ipcMain.handle("ember:savePatchedAs", async () => {
 });
 
 ipcMain.handle("ember:loadAnnotations", async (_e, bp) => {
-  try {
-    const data = await fs.readFile(sidecarPath(bp), "utf8");
-    const parsed = JSON.parse(data);
-    return {
-      renames:      parsed.renames      || {},
-      notes:        parsed.notes        || {},
-      signatures:   parsed.signatures   || {},
-      localRenames: parsed.localRenames || {},
-      patches:      parsed.patches      || {},
-    };
-  } catch {
-    return { renames: {}, notes: {}, signatures: {}, localRenames: {}, patches: {} };
-  }
+  // readSidecar already merges the JSON sidecar with the ember cache
+  // annotations.db, so agent-applied renames flow through to the UI
+  // automatically. Returning its result keeps both paths in sync.
+  return readSidecar(bp);
 });
 
 ipcMain.handle("ember:saveAnnotations", async (_e, bp, data) => {

@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { runWorker } from "./worker.js";
 import { runassistantCodeWorker } from "./worker_assistant_code.js";
 import { isCodexCliModel, runCodexCliWorker } from "./worker_codex_cli.js";
+import { pickCodexHome, pickassistantHome } from "./cli_homes.js";
 import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { promote } from "./promote.js";
@@ -98,6 +99,13 @@ async function cmdWorker(argv: string[]) {
     }
 
     const model = f.get("model") ?? undefined;
+    // Per-worker auth-home pick. Single-shot `worker` invocations also
+    // benefit from multi-account rotation — useful when scripting many
+    // standalone workers from outside cascade.
+    const m = model ?? "";
+    const cliHome = m.startsWith("assistant-code") ? pickassistantHome()
+                  : isCodexCliModel(m)          ? pickCodexHome()
+                  :                               undefined;
     const wargs = {
         role: role as keyof typeof ROLES,
         binary: resolve(binary),
@@ -109,12 +117,11 @@ async function cmdWorker(argv: string[]) {
         runDir,
         emberBin: findEmberBin(),
         agentId: f.get("agent-id") ?? undefined,
+        cliHome,
     };
-    await ((model ?? "").startsWith("assistant-code")
-        ? runassistantCodeWorker(wargs)
-        : isCodexCliModel(model)
-            ? runCodexCliWorker(wargs)
-            : runWorker(wargs));
+    await (m.startsWith("assistant-code") ? runassistantCodeWorker(wargs)
+         : isCodexCliModel(m)          ? runCodexCliWorker(wargs)
+         :                               runWorker(wargs));
     console.log(JSON.stringify({ run_id: runId, run_dir: runDir, status: "complete" }));
 }
 

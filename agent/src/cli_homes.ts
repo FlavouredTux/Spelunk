@@ -78,11 +78,17 @@ function loadCliHomes(): CliHomes {
     return out;
 }
 
-// Module-local rotation counters. One worker process == one cascade ==
-// one rotation; per-cascade fairness is what matters. Across cascades
-// the counter resets, which is also fine — a fresh cascade starts at
-// home 0 and walks forward.
-const _rot: Record<string, number> = { codex: 0, assistant_code: 0 };
+// Rotation counters seeded from a random starting offset per process so
+// independent `ember-agent worker` invocations don't all converge on
+// home[0]. Within a single process (the cascade case where every worker
+// is an async task in the same node, or a long-running script) the
+// counter still advances sequentially — that gives us proper
+// round-robin fairness inside one run. Across processes the random seed
+// statistically spreads load across the home pool.
+const _rot: Record<string, number> = {
+    codex:       Math.floor(Math.random() * 1_000_000),
+    assistant_code: Math.floor(Math.random() * 1_000_000),
+};
 
 function pickFromList(list: string[], pool: keyof CliHomes): string | undefined {
     if (list.length === 0) return undefined;

@@ -150,7 +150,7 @@ export async function runassistantCodeWorker(args: WorkerArgs): Promise<void> {
 
     const userPrompt = buildScopeMessage(args.scope, args.binary);
     emit({ kind: "start", role: args.role, model: requested, scope: args.scope, agentId,
-           budget: args.budget, binary: args.binary });
+           budget: args.budget, binary: args.binary, cliHome: sdkHome });
 
     const tally = { ...kZeroCost };
 

@@ -137,7 +137,7 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
     const agentId = args.agentId ?? `${args.role}-${args.runId}`;
 
     emit({ kind: "start", role: args.role, model: requested, scope: args.scope, agentId,
-           budget: args.budget, binary: args.binary });
+           budget: args.budget, binary: args.binary, cliHome: codexHome });
 
     const codex = new Codex({
         env: {

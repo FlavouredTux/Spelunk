@@ -618,14 +618,38 @@ build_teef_tsv(const Binary& b,
         std::vector<std::string> rows(total);
         std::atomic<std::size_t> next{0};
         std::atomic<std::size_t> done{0};
-        // Update every ~0.5% of total work, with a floor of 32 fns —
-        // gives ~200 updates per run regardless of binary size, so a
-        // 200K-fn target produces a visible refresh every ~1k fns
-        // instead of every 5k. The floor keeps the rate sensible on
-        // tiny corpora.
-        const std::size_t tick = std::max<std::size_t>(32, total / 200);
         const auto t_fp_start = std::chrono::steady_clock::now();
         std::mutex fp_progress_mu;
+        std::atomic<bool> fp_phase_done{false};
+
+        // Time-driven progress ticker. Workers used to print every Nth
+        // fn; on huge or VM-protected targets a single fn can take
+        // hundreds of milliseconds, so the user sees no update for tens
+        // of seconds at a time. The ticker runs independently and
+        // refreshes every 500 ms with whatever `done` and the worker
+        // pool have accomplished so far. TTY-only.
+        std::thread fp_ticker;
+        if (show) {
+            fp_ticker = std::thread([&] {
+                while (!fp_phase_done.load(std::memory_order_relaxed)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    const std::size_t d = done.load(std::memory_order_relaxed);
+                    if (d == 0 || d == total) continue;
+                    const auto now = std::chrono::steady_clock::now();
+                    const double elapsed = std::chrono::duration<double>(
+                        now - t_fp_start).count();
+                    const double rate = elapsed > 0
+                        ? static_cast<double>(d) / elapsed : 0.0;
+                    const double eta = rate > 0
+                        ? static_cast<double>(total - d) / rate : 0.0;
+                    std::lock_guard<std::mutex> lock(fp_progress_mu);
+                    std::fprintf(stderr,
+                        "\r  fingerprint [%zu/%zu] %.0f fn/s · elapsed %.1fs · eta %.1fs   ",
+                        d, total, rate, elapsed, eta);
+                    std::fflush(stderr);
+                }
+            });
+        }
 
         auto worker = [&] {
             while (true) {
@@ -646,29 +670,7 @@ build_teef_tsv(const Binary& b,
                                        l4_topo_filter)
                     : compute_teef_with_chunks(b, a);
                 const auto& bs = tf.behav;
-                const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
-                // First-fn line goes out immediately so the user sees the
-                // workers are alive (otherwise on big targets the first
-                // tick is several seconds away). Then every `tick` fns +
-                // the final tally.
-                if (show && (d == 1 || d % tick == 0 || d == total)) {
-                    // Same UI as the recognize scan progress: live
-                    // [d/total] fn/s · elapsed · eta. Helps tell whether
-                    // a long fingerprint phase is steady (uniform fns)
-                    // or stuck on one giant fn (rate plummets).
-                    const auto now = std::chrono::steady_clock::now();
-                    const double elapsed = std::chrono::duration<double>(
-                        now - t_fp_start).count();
-                    const double rate = elapsed > 0
-                        ? static_cast<double>(d) / elapsed : 0.0;
-                    const double eta = rate > 0
-                        ? static_cast<double>(total - d) / rate : 0.0;
-                    std::lock_guard<std::mutex> lock(fp_progress_mu);
-                    std::fprintf(stderr,
-                        "\r  fingerprint [%zu/%zu] %.0f fn/s · elapsed %.1fs · eta %.1fs   ",
-                        d, total, rate, elapsed, eta);
-                    std::fflush(stderr);
-                }
+                done.fetch_add(1, std::memory_order_relaxed);
                 if (tf.whole.exact_hash == 0) continue;
                 std::string name;
                 if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
@@ -729,7 +731,21 @@ build_teef_tsv(const Binary& b,
         pool.reserve(threads);
         for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
         for (auto& t : pool) t.join();
-        if (show) std::fputc('\n', stderr);
+        fp_phase_done.store(true, std::memory_order_relaxed);
+        if (fp_ticker.joinable()) fp_ticker.join();
+        if (show) {
+            // Final progress line so the last `[total/total]` actually
+            // appears (the ticker only emits intermediate states).
+            const auto now = std::chrono::steady_clock::now();
+            const double elapsed = std::chrono::duration<double>(
+                now - t_fp_start).count();
+            const double rate = elapsed > 0
+                ? static_cast<double>(total) / elapsed : 0.0;
+            std::fprintf(stderr,
+                "\r  fingerprint [%zu/%zu] %.0f fn/s · elapsed %.1fs · done           \n",
+                total, total, rate, elapsed);
+            std::fflush(stderr);
+        }
 
     std::string out;
     std::size_t total_bytes = 0;
@@ -1014,38 +1030,40 @@ int run_recognize(const Args& args, const Binary& b) {
     // print calls to one in flight; the actual `recognize()` work runs
     // unlocked.
     std::mutex out_mu;
-    // Match the fingerprint progress cadence: ~200 updates per run with
-    // a floor of 32 fns. First fn forces an immediate update so the
-    // user sees the scan is alive.
-    const std::size_t progress_tick = std::max<std::size_t>(32, total / 200);
     const auto t_scan_start = std::chrono::steady_clock::now();
-    auto worker = [&] {
-        while (true) {
-            const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
-            if (i >= total) break;
-            const addr_t a = fns_vec[i];
-            const auto& tf = fps[i];
-            // Even when we skip the recognize call, count progress —
-            // otherwise the progress bar advances only on hits, which
-            // looks stalled on stripped binaries with many sub_*-only
-            // queries. Show elapsed + ETA so multi-minute scans are
-            // legible (rate × remaining = ETA, computed live).
-            const std::size_t d = done_count.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (show && (d == 1 || d % progress_tick == 0 || d == total)) {
+    std::atomic<bool> scan_phase_done{false};
+    // Same time-driven progress ticker as the fingerprint phase.
+    // Refresh independent of work cadence so a single slow recognize
+    // call doesn't leave the user staring at a stale line.
+    std::thread scan_ticker;
+    if (show) {
+        scan_ticker = std::thread([&] {
+            while (!scan_phase_done.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                const std::size_t d = done_count.load(std::memory_order_relaxed);
+                if (d == 0 || d == total) continue;
                 const auto now = std::chrono::steady_clock::now();
                 const double elapsed = std::chrono::duration<double>(
                     now - t_scan_start).count();
                 const double rate = elapsed > 0
                     ? static_cast<double>(d) / elapsed : 0.0;
-                const double eta  = rate > 0
-                    ? static_cast<double>(total - d) / rate
-                    : 0.0;
+                const double eta = rate > 0
+                    ? static_cast<double>(total - d) / rate : 0.0;
                 std::lock_guard<std::mutex> lock(out_mu);
                 std::fprintf(stderr,
                     "\r  recognize [%zu/%zu] %.0f fn/s · elapsed %.1fs · eta %.1fs   ",
                     d, total, rate, elapsed, eta);
                 std::fflush(stderr);
             }
+        });
+    }
+    auto worker = [&] {
+        while (true) {
+            const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
+            if (i >= total) break;
+            const addr_t a = fns_vec[i];
+            const auto& tf = fps[i];
+            done_count.fetch_add(1, std::memory_order_relaxed);
             if (tf.whole.exact_hash == 0) continue;
             // Skip query functions whose whole-fn TEEF appears too
             // many times in this binary — they're trivial-shape stubs
@@ -1083,11 +1101,20 @@ int run_recognize(const Args& args, const Binary& b) {
     pool.reserve(threads);
     for (unsigned k = 0; k < threads; ++k) pool.emplace_back(worker);
     for (auto& t : pool) t.join();
+    scan_phase_done.store(true, std::memory_order_relaxed);
+    if (scan_ticker.joinable()) scan_ticker.join();
 
-    if (show) std::fputc('\n', stderr);
     const auto t_scan_end = std::chrono::steady_clock::now();
     const double scan_s = std::chrono::duration<double>(
         t_scan_end - t_scan_start).count();
+    if (show) {
+        const double rate = scan_s > 0
+            ? static_cast<double>(total) / scan_s : 0.0;
+        std::fprintf(stderr,
+            "\r  recognize [%zu/%zu] %.0f fn/s · elapsed %.1fs · done           \n",
+            total, total, rate, scan_s);
+        std::fflush(stderr);
+    }
     const double per_fn_us = total > 0
         ? (scan_s * 1e6) / static_cast<double>(total) : 0.0;
     std::println(stderr,

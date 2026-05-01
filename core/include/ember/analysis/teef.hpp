@@ -34,7 +34,7 @@ namespace ember {
 // Schema string is folded into every hash so corpora produced under
 // different rule sets can't silently collide. Bumped on F-row format
 // or any per-fn signal change.
-inline constexpr std::string_view kTeefSchema = "max.2";
+inline constexpr std::string_view kTeefSchema = "max.3";
 
 // Per-function signature: an exact hash of the canonicalized pseudo-C
 // (precision: identifies bit-equivalent algorithms across compiler

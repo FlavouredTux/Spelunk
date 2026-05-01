@@ -606,22 +606,20 @@ namespace {
     return v;
 }
 
-// L0 topology hash from the freshly-lifted IR. Pre-SSA, pre-cleanup
-// so the shape we hash is the one the recognizer's pre-filter sees
-// for query fns too. Features:
+// L0 topology hash from the CFG (pre-lift). Same six features as the
+// previous IR-derived version, but read from the analysis::Function
+// directly so we can compute the hash before lift and use it as an
+// early-exit gate when --l0-prefilter is on. CFG-block-count and
+// IR-block-count usually match exactly; the few cases where lift
+// splits or merges a block produce slightly different hashes, but
+// since the corpus is also built from CFG-topo now, both sides agree.
 //   • num_blocks  — coarse size signal
 //   • num_edges   — sum of successors over all blocks
 //   • max_in_degree, max_out_degree — branching density
 //   • num_loop_headers — blocks with > 1 predecessor (proxy for loops
 //     and re-entry points; cleanup-stable)
-//   • num_returns — blocks whose terminator is Return
-// Each is folded with mix64; final u64 is the topo hash. Two
-// structurally-identical CFGs collide → recognizer can pre-filter on
-// it. Compiler diversity that adds/removes a block (e.g. an extra
-// cleanup or split-block from optimization) shifts the hash and the
-// pre-filter misses, but the recognizer falls through to the full
-// scan automatically — so this is lossy for perf, not correctness.
-[[nodiscard]] u64 compute_topo_hash_from_ir(const IrFunction& fn) noexcept {
+//   • num_returns — blocks whose CFG kind is BlockKind::Return
+[[nodiscard]] u64 compute_topo_hash_from_cfg(const Function& fn) noexcept {
     u32 num_blocks       = static_cast<u32>(fn.blocks.size());
     u32 num_edges        = 0;
     u32 max_in_degree    = 0;
@@ -635,7 +633,7 @@ namespace {
         max_out_degree  = std::max<u32>(max_out_degree,
                                         static_cast<u32>(bb.successors.size()));
         if (bb.predecessors.size() > 1) ++num_loop_headers;
-        if (!bb.insts.empty() && bb.insts.back().op == IrOp::Return) ++num_returns;
+        if (bb.kind == BlockKind::Return) ++num_returns;
     }
     u64 h = fnv1a("topo");
     h = mix64(h, num_blocks);
@@ -682,12 +680,12 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
+    out.topo_hash = compute_topo_hash_from_cfg(*fn_r);
+
     auto lifter_r = make_lifter(b);
     if (!lifter_r) return out;
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
-
-    out.topo_hash = compute_topo_hash_from_ir(*ir_r);
 
     {
         std::size_t total = 0;
@@ -716,12 +714,27 @@ compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
+    // Compute the topology hash directly from the CFG — pre-lift, so
+    // we can use it as an early-exit gate. The lift + SSA + cleanup
+    // pipeline is the dominant per-fn cost on obfuscated targets
+    // (200+ ms on a heavy fn); skipping it for fns that can't match
+    // anyway is the difference between a 50-minute scan and a few
+    // minutes.
+    out.topo_hash = compute_topo_hash_from_cfg(*fn_r);
+
+    // L0 pre-filter: when the caller passes the corpus's topo-hash
+    // set, fns whose topology isn't represented in the corpus return
+    // early with only topo populated — no lift, no L2, no L4. The
+    // recognizer ignores fns with `whole.exact_hash == 0`, so these
+    // entries effectively don't participate in matching.
+    if (l4_topo_filter && !l4_topo_filter->contains(out.topo_hash)) {
+        return out;
+    }
+
     auto lifter_r = make_lifter(b);
     if (!lifter_r) return out;
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
-
-    out.topo_hash = compute_topo_hash_from_ir(*ir_r);
 
     {
         std::size_t total = 0;
@@ -733,16 +746,8 @@ compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
     if (auto rv = ssa.convert(*ir_r); !rv) return out;
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
-    // L0 pre-filter: when the caller has a corpus's topo-hash set on
-    // hand, fns whose topology isn't represented in the corpus can't
-    // behav-exact match anything — skip the K=64 trace pass for them.
-    // Lossy on cross-topology behavioural matches but a major win on
-    // obfuscator-spawned targets where most fns have unique-shape CFGs.
-    const bool skip_l4 = l4_topo_filter &&
-                         !l4_topo_filter->contains(out.topo_hash);
-    if (!skip_l4) {
-        out.behav = compute_behav_sig_from_ir(*ir_r, b);
-    }
+    // L4 first — operates on the cleaned flat IR, no structurer needed.
+    out.behav = compute_behav_sig_from_ir(*ir_r, b);
 
     // L2 — structurer + region tokenization on the same IR.
     auto l2 = compute_l2_from_ir(b, *ir_r, min_chunk_insts);

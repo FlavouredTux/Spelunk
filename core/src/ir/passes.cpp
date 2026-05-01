@@ -225,12 +225,18 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::Add: return IrValue::make_imm(mask_signed(a.imm + b.imm, dt), dt);
             case IrOp::Sub: return IrValue::make_imm(mask_signed(a.imm - b.imm, dt), dt);
             case IrOp::Mul: return IrValue::make_imm(mask_signed(a.imm * b.imm, dt), dt);
+            // IrOp::Div / IrOp::Mod don't carry signedness — the same opcode
+            // is emitted for both DIV (unsigned) and IDIV (signed) lowerings.
+            // Folding with C++ `/` and `%` always uses signed semantics, so
+            // an unsigned divide of operands with the high bit set in their
+            // operand width produces wrong arithmetic. Skip the fold; the
+            // emitter prints `a / b` literally, which is correct C as long as
+            // the operand types match — the optimization opportunity is
+            // small (constant-by-constant divides are rare in real code) and
+            // not worth the silent miscomputation.
             case IrOp::Div:
-                if (b.imm == 0) return std::nullopt;  // don't fold UB
-                return IrValue::make_imm(mask_signed(a.imm / b.imm, dt), dt);
             case IrOp::Mod:
-                if (b.imm == 0) return std::nullopt;
-                return IrValue::make_imm(mask_signed(a.imm % b.imm, dt), dt);
+                return std::nullopt;
             case IrOp::And: return IrValue::make_imm(mask_signed(a.imm & b.imm, dt), dt);
             case IrOp::Or:  return IrValue::make_imm(mask_signed(a.imm | b.imm, dt), dt);
             case IrOp::Xor: return IrValue::make_imm(mask_signed(a.imm ^ b.imm, dt), dt);
@@ -254,14 +260,20 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::CmpSle: return IrValue::make_imm(a.imm <= b.imm ? 1 : 0, IrType::I1);
             case IrOp::CmpSgt: return IrValue::make_imm(a.imm >  b.imm ? 1 : 0, IrType::I1);
             case IrOp::CmpSge: return IrValue::make_imm(a.imm >= b.imm ? 1 : 0, IrType::I1);
+            // Unsigned compares: i64 imms are sign-extended into the i64
+            // payload, so a 32-bit value of 0x80000000 is stored as
+            // 0xffffffff80000000. A direct cast to u64 reads it as a huge
+            // unsigned number instead of 2147483648. Mask to the operand
+            // width first so the comparison reflects the actual u32/u16/u8
+            // value the program intended.
             case IrOp::CmpUlt:
-                return IrValue::make_imm(static_cast<u64>(a.imm) <  static_cast<u64>(b.imm) ? 1 : 0, IrType::I1);
+                return IrValue::make_imm(mask_unsigned(a.imm, a.type) <  mask_unsigned(b.imm, b.type) ? 1 : 0, IrType::I1);
             case IrOp::CmpUle:
-                return IrValue::make_imm(static_cast<u64>(a.imm) <= static_cast<u64>(b.imm) ? 1 : 0, IrType::I1);
+                return IrValue::make_imm(mask_unsigned(a.imm, a.type) <= mask_unsigned(b.imm, b.type) ? 1 : 0, IrType::I1);
             case IrOp::CmpUgt:
-                return IrValue::make_imm(static_cast<u64>(a.imm) >  static_cast<u64>(b.imm) ? 1 : 0, IrType::I1);
+                return IrValue::make_imm(mask_unsigned(a.imm, a.type) >  mask_unsigned(b.imm, b.type) ? 1 : 0, IrType::I1);
             case IrOp::CmpUge:
-                return IrValue::make_imm(static_cast<u64>(a.imm) >= static_cast<u64>(b.imm) ? 1 : 0, IrType::I1);
+                return IrValue::make_imm(mask_unsigned(a.imm, a.type) >= mask_unsigned(b.imm, b.type) ? 1 : 0, IrType::I1);
             default: return std::nullopt;
         }
     }

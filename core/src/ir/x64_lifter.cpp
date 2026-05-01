@@ -667,9 +667,10 @@ void lift_mul(LiftCtx& ctx) {
 
 // DIV / IDIV r/m: divides (rdx:rax) by r/m, writes quotient to rax/al and
 // remainder to rdx/ah. Dividend is built by combining the implicit register
-// pair widened to 2W; for 64-bit we don't have I128 so we degrade to using
-// rax alone as the dividend (which is what the common `xor edx, edx; div`
-// idiom produces anyway, and what `cdq; idiv` looks like once cdq is folded).
+// pair widened to 2W; for 64-bit we don't have I128 so we degrade to named
+// `divq.{s,u}.64` / `divr.{s,u}.64` intrinsics that carry both halves of
+// the dividend explicitly (same shape as the 64-bit MUL path's
+// `mulh.{s,u}.64`).
 void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 1) return;
@@ -720,11 +721,41 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
         return;
     }
 
-    // 64-bit: lossy. Use RAX as the dividend (true for compiler-emitted
-    // `xor edx, edx; div r64` and for sign-extended `cdq; idiv r64`).
+    // 64-bit: no I128, so we degrade to named intrinsics that carry both
+    // halves of the dividend explicitly — same shape as the 64-bit MUL
+    // path's `mulh.{s,u}.64`. The reader sees `divq_u64(rdx, rax, b)` so
+    // it's visible that RDX participates; the constant folder skips
+    // intrinsics, so the wrong-arithmetic class of bug from folding
+    // `Div(rax, b)` against a sign-extended i64 imm goes away too.
+    //
+    // `xor edx, edx; div r64` and `cdq; idiv r64` both still render
+    // correctly — the reader sees the constant 0 (or the sign-extended
+    // rax) flowing into the high arg.
     IrValue rax = ctx.read_reg(Reg::Rax);
-    IrValue q = ctx.emit_binop(IrOp::Div, rax, divisor);
-    IrValue r = ctx.emit_binop(IrOp::Mod, rax, divisor);
+    IrValue rdx = ctx.read_reg(Reg::Rdx);
+
+    IrInst qi;
+    qi.op   = IrOp::Intrinsic;
+    qi.name = signed_div ? "divq.s.64" : "divq.u.64";
+    qi.dst  = ctx.temp(t);
+    qi.srcs[0] = rdx;
+    qi.srcs[1] = rax;
+    qi.srcs[2] = divisor;
+    qi.src_count = 3;
+    IrValue q = qi.dst;
+    ctx.emit(std::move(qi));
+
+    IrInst ri;
+    ri.op   = IrOp::Intrinsic;
+    ri.name = signed_div ? "divr.s.64" : "divr.u.64";
+    ri.dst  = ctx.temp(t);
+    ri.srcs[0] = rdx;
+    ri.srcs[1] = rax;
+    ri.srcs[2] = divisor;
+    ri.src_count = 3;
+    IrValue r = ri.dst;
+    ctx.emit(std::move(ri));
+
     ctx.write_reg(lo_dst, q);
     ctx.write_reg(hi_dst, r);
 }

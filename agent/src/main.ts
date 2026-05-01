@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 import { runWorker } from "./worker.js";
@@ -274,7 +274,15 @@ async function cmdPromote(argv: string[]) {
         process.exit(2);
     }
     const f = parseFlags(rest);
-    const out = f.get("out") ?? `${resolve(binary)}.intel.ember`;
+    // Default `out` lives next to the intel db rather than next to the
+    // binary. Stripped system targets like /usr/bin/sha256sum live in
+    // root-owned dirs where writing `<binary>.intel.ember` was failing
+    // with EACCES — and the .ember script is a derived artifact of the
+    // intel.jsonl in the user's cache, so co-locating them is the more
+    // honest default. --out still overrides for users who specifically
+    // want it as a sidecar of a project-local binary.
+    const intelDir = dirname(intelPathFor(resolve(binary)));
+    const out = f.get("out") ?? join(intelDir, "promoted.ember");
     const r = promote({
         binary: resolve(binary),
         out,

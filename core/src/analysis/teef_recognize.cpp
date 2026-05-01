@@ -2,10 +2,16 @@
 
 #include <algorithm>
 #include <charconv>
-#include <fstream>
+#include <cstring>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
+
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <ember/analysis/teef.hpp>
 
@@ -25,20 +31,6 @@ namespace {
         v = (v << 4) | d;
     }
     return v;
-}
-
-[[nodiscard]] std::vector<std::string_view>
-split_tabs(std::string_view line) {
-    std::vector<std::string_view> out;
-    std::size_t start = 0;
-    for (std::size_t i = 0; i < line.size(); ++i) {
-        if (line[i] == '\t') {
-            out.emplace_back(line.substr(start, i - start));
-            start = i + 1;
-        }
-    }
-    out.emplace_back(line.substr(start));
-    return out;
 }
 
 [[nodiscard]] float
@@ -110,115 +102,356 @@ bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
     return true;
 }
 
-std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
-    std::ifstream f(path);
-    if (!f) return 0;
+namespace {
 
-    std::size_t rows = 0;
-    std::string active_runtime;     // set by `T runtime <tag>` rows
-    std::unordered_map<u64, std::size_t> idx_by_addr; // F-row addr → whole_by_name_ index
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-        auto fields = split_tabs(line);
-        if (fields.empty()) continue;
+// Per-row parsed records. The parallel parse phase emits these into
+// per-thread buffers; the serial merge phase below walks them in file
+// order to populate the corpus indexes.
+struct ParsedF {
+    u64                 addr;
+    u64                 l2_exact;
+    std::array<u64, 8>  l2_mh;
+    u64                 l4_exact;
+    std::array<u64, 8>  l4_mh;
+    u64                 topo_hash;
+    std::string         name;
+    std::string         runtime;
+};
+struct ParsedS {
+    u64                 addr;
+    std::vector<u64>    hashes;
+};
+struct ParsedC {
+    u64                 chunk_hash;
+    u32                 inst_count;
+    std::string         name;
+    std::string         runtime;
+};
+struct ChunkParse {
+    std::vector<ParsedF>  f;
+    std::vector<ParsedS>  s;
+    std::vector<ParsedC>  c;
+    // T rows in this chunk, ordered by position. The merge phase
+    // applies them in document order across all chunks to get the
+    // active_runtime tag right for each subsequent F/C row.
+    std::vector<std::pair<std::size_t /*chunk-relative pos*/,
+                          std::string /*runtime tag*/>> t;
+};
 
-        if (fields[0] == "T") {
-            // T<TAB>runtime<TAB><tag>  — applies to all subsequent
-            // F/C rows in this TSV. Multiple T rows in one file mean
-            // mixed-runtime corpora (rare but supported).
-            if (fields.size() >= 3 && fields[1] == "runtime") {
-                active_runtime.assign(fields[2]);
-            }
-            continue;
+// Parse one F row's 24 tab-separated fields directly from the line
+// view into a ParsedF. Skips invalid rows (returns false). The line
+// must NOT include the trailing newline.
+[[nodiscard]] bool parse_f_row(std::string_view line,
+                               const std::string& active_runtime,
+                               ParsedF& out) {
+    // Walk fields by tab, populating out as we go. We expect 24 fields:
+    //   F addr L2_exact L2_mh*8 name L4_exact L4_mh*8 L4_done L4_aborted topo_hash
+    std::array<std::string_view, 24> f;
+    std::size_t cur = 0;
+    std::size_t n   = 0;
+    for (std::size_t i = 0; i < line.size() && n < f.size(); ++i) {
+        if (line[i] == '\t') {
+            f[n++] = line.substr(cur, i - cur);
+            cur = i + 1;
         }
+    }
+    if (n < f.size()) f[n++] = line.substr(cur);
+    if (n < 24) return false;
 
-        if (fields[0] == "F") {
-            // F row: F  addr  L2_exact  L2_mh*8  name
-            //          L4_exact  L4_mh*8  L4_done  L4_aborted  topo_hash
-            // 24 fields total. Rows with fewer columns are dropped —
-            // TEEF Max requires the full per-fn signal stack.
-            if (fields.size() < 24) continue;
-            const u64 hash = parse_u64_hex(fields[2]);
-            if (hash != 0) ++whole_popularity_[hash];
-            const std::string name(fields[11]);
-            if (name.empty() || name.starts_with("sub_")) continue;
-            WholeEntry e;
-            e.name = name;
-            e.exact_hash = hash;
-            e.runtime = active_runtime;
-            for (std::size_t k = 0; k < 8; ++k) {
-                e.minhash[k] = parse_u64_hex(fields[3 + k]);
+    out.addr     = parse_u64_hex(f[1]);
+    out.l2_exact = parse_u64_hex(f[2]);
+    for (std::size_t k = 0; k < 8; ++k) out.l2_mh[k] = parse_u64_hex(f[3 + k]);
+    out.name.assign(f[11]);
+    out.l4_exact = parse_u64_hex(f[12]);
+    for (std::size_t k = 0; k < 8; ++k) out.l4_mh[k] = parse_u64_hex(f[13 + k]);
+    out.topo_hash = parse_u64_hex(f[23]);
+    out.runtime   = active_runtime;
+    return true;
+}
+
+[[nodiscard]] bool parse_c_row(std::string_view line,
+                               const std::string& active_runtime,
+                               ParsedC& out) {
+    // C addr kind insts exact mh*8 name (14 fields)
+    std::array<std::string_view, 14> f;
+    std::size_t cur = 0;
+    std::size_t n   = 0;
+    for (std::size_t i = 0; i < line.size() && n < f.size(); ++i) {
+        if (line[i] == '\t') {
+            f[n++] = line.substr(cur, i - cur);
+            cur = i + 1;
+        }
+    }
+    if (n < f.size()) f[n++] = line.substr(cur);
+    if (n < 14) return false;
+
+    out.chunk_hash = parse_u64_hex(f[4]);
+    if (out.chunk_hash == 0) return false;
+    u32 sz = 0;
+    std::from_chars(f[3].data(), f[3].data() + f[3].size(), sz);
+    out.inst_count = sz;
+    out.name.assign(f[13]);
+    out.runtime.assign(active_runtime);
+    return true;
+}
+
+[[nodiscard]] bool parse_s_row(std::string_view line, ParsedS& out) {
+    // S addr csv-of-hashes (3 fields)
+    auto t1 = line.find('\t');
+    if (t1 == std::string_view::npos) return false;
+    auto t2 = line.find('\t', t1 + 1);
+    if (t2 == std::string_view::npos) return false;
+    out.addr = parse_u64_hex(line.substr(t1 + 1, t2 - t1 - 1));
+    out.hashes.clear();
+    std::string_view csv = line.substr(t2 + 1);
+    std::size_t cp = 0;
+    while (cp < csv.size()) {
+        std::size_t comma = csv.find(',', cp);
+        if (comma == std::string_view::npos) comma = csv.size();
+        std::string_view tok = csv.substr(cp, comma - cp);
+        if (!tok.empty()) out.hashes.push_back(parse_u64_hex(tok));
+        cp = comma + 1;
+    }
+    return true;
+}
+
+// Parse a chunk of the mmap'd file [begin, end) into per-row records.
+// `initial_runtime` is the active T-tag at chunk start (determined by
+// a serial pre-scan of T rows). Each chunk's local T-row updates apply
+// only WITHIN the chunk; the merge phase serializes T-row effects
+// across the whole file.
+void parse_chunk(const char* begin, const char* end,
+                 std::string initial_runtime,
+                 std::size_t chunk_offset,
+                 ChunkParse& out) {
+    std::string runtime = std::move(initial_runtime);
+    const char* p = begin;
+    while (p < end) {
+        const char* nl = static_cast<const char*>(
+            std::memchr(p, '\n', static_cast<std::size_t>(end - p)));
+        if (!nl) nl = end;
+        std::string_view line(p, static_cast<std::size_t>(nl - p));
+        // Strip optional trailing CR.
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) { p = nl + (nl < end ? 1 : 0); continue; }
+
+        const char tag = line[0];
+        if (tag == 'F') {
+            ParsedF f;
+            if (parse_f_row(line, runtime, f)) out.f.push_back(std::move(f));
+        } else if (tag == 'S') {
+            ParsedS s;
+            if (parse_s_row(line, s)) out.s.push_back(std::move(s));
+        } else if (tag == 'C') {
+            ParsedC c;
+            if (parse_c_row(line, runtime, c)) out.c.push_back(std::move(c));
+        } else if (tag == 'T') {
+            // T runtime <tag>
+            auto t1 = line.find('\t');
+            auto t2 = (t1 != std::string_view::npos) ? line.find('\t', t1 + 1)
+                                                     : std::string_view::npos;
+            if (t1 != std::string_view::npos && t2 != std::string_view::npos) {
+                if (line.substr(t1 + 1, t2 - t1 - 1) == "runtime") {
+                    runtime.assign(line.substr(t2 + 1));
+                    out.t.emplace_back(
+                        chunk_offset + static_cast<std::size_t>(p - begin),
+                        runtime);
+                }
             }
-            // L4 columns at positions 12..22. fields[21]/[22] are
-            // diagnostic-only (traces_done / traces_aborted).
-            e.l4_exact = parse_u64_hex(fields[12]);
-            for (std::size_t k = 0; k < 8; ++k) {
-                e.l4_minhash[k] = parse_u64_hex(fields[13 + k]);
+        }
+        p = nl + (nl < end ? 1 : 0);
+    }
+}
+
+}  // namespace
+
+std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
+    // ---- mmap the file -------------------------------------------------
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) return 0;
+    struct stat st;
+    if (::fstat(fd, &st) < 0 || st.st_size <= 0) {
+        ::close(fd);
+        return 0;
+    }
+    const std::size_t sz = static_cast<std::size_t>(st.st_size);
+    void* m = ::mmap(nullptr, sz, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);   // mapping survives the close
+    if (m == MAP_FAILED) return 0;
+    const char* const data = static_cast<const char*>(m);
+    const char* const file_end = data + sz;
+
+    // ---- T-row pre-scan ------------------------------------------------
+    // T rows are rare (current build_teef_tsv emits none, but the format
+    // supports them and older corpora may have them). Walk the file
+    // serially picking out their offsets so each chunk worker starts
+    // with the correct active_runtime. Single-pass `memchr` over the
+    // mmap is fast even for 80MB inputs.
+    std::vector<std::pair<std::size_t /*offset of next char after T row*/,
+                          std::string /*runtime tag*/>> t_marks;
+    {
+        const char* p = data;
+        while (p < file_end) {
+            const char* nl = static_cast<const char*>(
+                std::memchr(p, '\n', static_cast<std::size_t>(file_end - p)));
+            const char* line_end = nl ? nl : file_end;
+            if (line_end > p && p[0] == 'T') {
+                std::string_view line(p, static_cast<std::size_t>(line_end - p));
+                if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+                auto t1 = line.find('\t');
+                auto t2 = (t1 != std::string_view::npos) ? line.find('\t', t1 + 1)
+                                                         : std::string_view::npos;
+                if (t1 != std::string_view::npos && t2 != std::string_view::npos
+                    && line.substr(t1 + 1, t2 - t1 - 1) == "runtime") {
+                    t_marks.emplace_back(
+                        static_cast<std::size_t>(line_end - data) +
+                        (nl ? 1 : 0),
+                        std::string(line.substr(t2 + 1)));
+                }
             }
-            // L0 topology hash at position 23.
-            e.topo_hash = parse_u64_hex(fields[23]);
-            const u64 addr = parse_u64_hex(fields[1]);
+            p = nl ? nl + 1 : file_end;
+        }
+    }
+    auto runtime_at_offset = [&](std::size_t off) -> std::string {
+        std::string r;
+        for (const auto& [pos, tag] : t_marks) {
+            if (pos <= off) r = tag;
+            else break;
+        }
+        return r;
+    };
+
+    // ---- Chunk the mmap'd region at line boundaries -------------------
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    // For tiny files, avoid the per-thread overhead — a single worker
+    // beats spawning four for an 80 KB input.
+    const unsigned threads = (sz < (256u * 1024u))
+        ? 1u
+        : std::min(hw, 16u);
+    std::vector<std::pair<const char*, const char*>> bounds(threads);
+    if (threads == 1) {
+        bounds[0] = {data, file_end};
+    } else {
+        const std::size_t chunk_size = sz / threads;
+        for (unsigned t = 0; t < threads; ++t) {
+            const char* begin = data + t * chunk_size;
+            const char* end_p = (t == threads - 1) ? file_end
+                                                   : data + (t + 1) * chunk_size;
+            // Align begin (except chunk 0) to the start of the next line —
+            // the previous chunk owns whatever line straddles the boundary.
+            if (t > 0 && begin < file_end) {
+                const char* nl = static_cast<const char*>(
+                    std::memchr(begin, '\n',
+                                static_cast<std::size_t>(file_end - begin)));
+                begin = nl ? nl + 1 : file_end;
+            }
+            // Align end to the start of the next line so the chunk owns
+            // its last line in full.
+            if (end_p < file_end) {
+                const char* nl = static_cast<const char*>(
+                    std::memchr(end_p, '\n',
+                                static_cast<std::size_t>(file_end - end_p)));
+                end_p = nl ? nl + 1 : file_end;
+            }
+            bounds[t] = {begin, end_p};
+        }
+    }
+
+    // ---- Parallel parse ------------------------------------------------
+    std::vector<ChunkParse> parts(threads);
+    if (threads == 1) {
+        parse_chunk(bounds[0].first, bounds[0].second,
+                    runtime_at_offset(0), 0, parts[0]);
+    } else {
+        std::vector<std::thread> pool;
+        pool.reserve(threads);
+        for (unsigned t = 0; t < threads; ++t) {
+            pool.emplace_back([&, t] {
+                const std::size_t off =
+                    static_cast<std::size_t>(bounds[t].first - data);
+                parse_chunk(bounds[t].first, bounds[t].second,
+                            runtime_at_offset(off), off, parts[t]);
+            });
+        }
+        for (auto& th : pool) th.join();
+    }
+
+    // ---- Serial merge into corpus indexes ------------------------------
+    // Order matters for correctness: F rows establish idx_by_addr that
+    // S rows depend on, so do all F rows first, then S rows. C rows are
+    // independent. Within the F pass we also build the inverted indexes
+    // (whole_exact_, whole_l4_exact_, whole_topo_, whole_minhash_,
+    // whole_popularity_, whole_l4_popularity_).
+    std::size_t rows = 0;
+    std::unordered_map<u64, std::size_t> idx_by_addr;
+
+    // Pre-reserve to avoid quadratic vector growth during merge.
+    {
+        std::size_t total_f = 0;
+        for (const auto& p : parts) total_f += p.f.size();
+        whole_by_name_.reserve(whole_by_name_.size() + total_f);
+    }
+
+    for (const auto& part : parts) {
+        for (auto& f : part.f) {
+            // Popularity counts every F row including sub_* (the
+            // recognizer's "trivial-shape" guard depends on this).
+            if (f.l2_exact != 0) ++whole_popularity_[f.l2_exact];
+            if (f.name.empty() || f.name.starts_with("sub_")) continue;
             const std::size_t idx = whole_by_name_.size();
+            WholeEntry e;
+            e.name       = f.name;
+            e.exact_hash = f.l2_exact;
+            e.minhash    = f.l2_mh;
+            e.runtime    = f.runtime;
+            e.l4_exact   = f.l4_exact;
+            e.l4_minhash = f.l4_mh;
+            e.topo_hash  = f.topo_hash;
             whole_by_name_.push_back(std::move(e));
-            if (whole_by_name_[idx].exact_hash != 0) {
-                whole_exact_.emplace(whole_by_name_[idx].exact_hash, idx);
+            const auto& we = whole_by_name_[idx];
+            if (we.exact_hash != 0) {
+                whole_exact_.emplace(we.exact_hash, idx);
             }
-            if (whole_by_name_[idx].l4_exact != 0) {
-                whole_l4_exact_.emplace(whole_by_name_[idx].l4_exact, idx);
-                ++whole_l4_popularity_[whole_by_name_[idx].l4_exact];
+            if (we.l4_exact != 0) {
+                whole_l4_exact_.emplace(we.l4_exact, idx);
+                ++whole_l4_popularity_[we.l4_exact];
             }
-            if (whole_by_name_[idx].topo_hash != 0) {
-                whole_topo_.emplace(whole_by_name_[idx].topo_hash, idx);
+            if (we.topo_hash != 0) {
+                whole_topo_.emplace(we.topo_hash, idx);
             }
-            // L2 minhash inverted index — push idx into each slot's bucket
-            // so the recognizer can find candidates by slot-value lookup
-            // instead of scanning every entry.
             for (std::size_t k = 0; k < 8; ++k) {
-                whole_minhash_[k][whole_by_name_[idx].minhash[k]]
+                whole_minhash_[k][we.minhash[k]]
                     .push_back(static_cast<u32>(idx));
             }
-            if (addr != 0) idx_by_addr.emplace(addr, idx);
-            idx_by_name_.try_emplace(whole_by_name_[idx].name, idx);
-            ++rows;
-        } else if (fields[0] == "S") {
-            // S<TAB>addr<TAB>hash1,hash2,...   (TEEF schema v4)
-            // Attaches per-fn identifying-string hashes to the WholeEntry
-            // whose F row landed at the same addr. The recognizer uses
-            // the overlap as a precision filter against structural
-            // false positives. Skipped silently if the F row was
-            // discarded (sub_*-named) — string anchors only matter for
-            // named library functions.
-            if (fields.size() < 3) continue;
-            const u64 addr = parse_u64_hex(fields[1]);
-            auto it = idx_by_addr.find(addr);
-            if (it == idx_by_addr.end()) continue;
-            std::string_view csv = fields[2];
-            std::size_t cp = 0;
-            while (cp < csv.size()) {
-                std::size_t comma = csv.find(',', cp);
-                if (comma == std::string_view::npos) comma = csv.size();
-                std::string_view tok = csv.substr(cp, comma - cp);
-                if (!tok.empty()) {
-                    whole_by_name_[it->second].string_hashes.push_back(parse_u64_hex(tok));
-                }
-                cp = comma + 1;
-            }
-            ++rows;
-        } else if (fields[0] == "C") {
-            // C<TAB>addr<TAB>kind<TAB>insts<TAB>exact<TAB>mh0..7<TAB>name
-            if (fields.size() < 14) continue;
-            const std::string name(fields[13]);
-            if (name.empty() || name.starts_with("sub_")) continue;
-            const u64 chunk_hash = parse_u64_hex(fields[4]);
-            if (chunk_hash == 0) continue;
-            u32 sz = 0;
-            std::from_chars(fields[3].data(),
-                            fields[3].data() + fields[3].size(), sz);
-            chunk_index_[chunk_hash].push_back(ChunkRef{name, sz, active_runtime});
+            if (f.addr != 0) idx_by_addr.emplace(f.addr, idx);
+            idx_by_name_.try_emplace(we.name, idx);
             ++rows;
         }
     }
+
+    // S rows attach per-fn identifying-string hashes to a previously-
+    // loaded WholeEntry by addr. F rows from sub_* drop their addr from
+    // idx_by_addr, so S rows on those silently no-op.
+    for (auto& part : parts) {
+        for (auto& s : part.s) {
+            auto it = idx_by_addr.find(s.addr);
+            if (it == idx_by_addr.end()) continue;
+            auto& target = whole_by_name_[it->second].string_hashes;
+            target.insert(target.end(), s.hashes.begin(), s.hashes.end());
+            ++rows;
+        }
+    }
+
+    for (auto& part : parts) {
+        for (auto& c : part.c) {
+            if (c.name.empty() || c.name.starts_with("sub_")) continue;
+            chunk_index_[c.chunk_hash].push_back(
+                ChunkRef{std::move(c.name), c.inst_count, std::move(c.runtime)});
+            ++rows;
+        }
+    }
+
+    ::munmap(m, sz);
     return rows;
 }
 

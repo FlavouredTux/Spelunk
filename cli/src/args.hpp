@@ -76,6 +76,11 @@ struct Args {
                                              // targets (Themida / Lua VM / hellgate) whose hundreds
                                              // of thousands of trivial stubs add no signal but
                                              // dominate corpus build time.
+    ember::u64 max_fn_bytes = 0;             // --max-fn-size N: drop fns larger than N bytes.
+                                             // VM-dispatcher functions in obfuscated targets can
+                                             // span entire sections and dominate cfg.build cost
+                                             // even when --l0-prefilter would otherwise skip
+                                             // their lift. 0 = no upper bound.
     bool l0_prefilter = false;               // --l0-prefilter: when fingerprinting a target for
                                              // --recognize, skip the K=64 L4 traces on fns whose
                                              // L0 topology hash isn't represented in the loaded

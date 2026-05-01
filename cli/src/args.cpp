@@ -183,6 +183,21 @@ Result<Args> parse_args(int argc, char** argv) {
             }
             continue;
         }
+        // `--max-fn-size N` — drop fns larger than N bytes. Filters
+        // out VM dispatchers / obfuscator giants whose cfg.build alone
+        // dominates the run.
+        if (s == "--max-fn-size") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-fn-size requires a value"));
+            }
+            try { a.max_fn_bytes = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-fn-size: bad integer"));
+            }
+            continue;
+        }
 
         // `--aux-binary PATH[@HEX]` — repeatable. Each entry is a
         // secondary Binary the debugger loads as an extra symbol

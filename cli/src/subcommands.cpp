@@ -454,11 +454,16 @@ parse_teef_tsv(std::string_view tsv) {
 // binary that may itself be stripped, so all its fns are sub_*) needs
 // L4 for every fn — leave corpus_mode at its default false.
 //
-// `min_fn_bytes` drops fns smaller than N bytes BEFORE fingerprinting.
-// Obfuscator-spawned binaries (Themida-protected, Lua-VM-tagged) emit
-// hundreds of thousands of trivial sub-32-byte stubs that can't carry
-// useful semantics; filtering them at the source slashes corpus build
-// time without losing real matches. 0 disables the filter.
+// `min_fn_bytes` / `max_fn_bytes` filter fns by their byte-extent
+// estimate BEFORE fingerprinting. Obfuscator-spawned binaries
+// (Themida, Lua-VM, hellgate) emit hundreds of thousands of trivial
+// sub-32-byte stubs alongside VM-dispatcher functions that span
+// entire sections. The dispatchers' cfg.build alone can take tens of
+// ms each and dominate the run on a 200K+-fn target — even when
+// --l0-prefilter would otherwise skip their lift, the cfg pass
+// already happened. The byte-size bracket lets the caller cull both
+// extremes before any per-fn pipeline work. 0 means no bound on that
+// side.
 //
 // `l4_topo_filter`, when non-null, is the corpus's set of L0 topology
 // hashes — passed straight to compute_teef_max so target fns whose
@@ -470,6 +475,7 @@ build_teef_tsv(const Binary& b,
                const ModuleScope& scope = {},
                bool corpus_mode = false,
                u64 min_fn_bytes = 0,
+               u64 max_fn_bytes = 0,
                const std::unordered_set<u64>* l4_topo_filter = nullptr) {
     const bool show = progress_enabled();
 
@@ -488,6 +494,7 @@ build_teef_tsv(const Binary& b,
         // alone misses these because it filters on s.size != 0.
         std::vector<addr_t> fns;
         std::size_t filtered_small = 0;
+        std::size_t filtered_large = 0;
         {
             std::set<addr_t> uniq;
             // Named fns always go in regardless of size — they may be
@@ -496,11 +503,11 @@ build_teef_tsv(const Binary& b,
             // CFG-discovered fns may have size=0 when the discovery
             // pass doesn't know the extent (linear-sweep entry points,
             // hellgate stubs, the bulk of obfuscator-spawned tiny
-            // helpers). For the --min-fn-size filter we need a usable
+            // helpers). For the size-bracket filter we need a usable
             // size estimate; derive it from the gap to the next
             // discovered fn after sorting. Upper bound — over-counts
             // when there's padding/jump tables in between, but that's
-            // the safe direction for "drop only obvious stubs".
+            // the safe direction for filtering both ends.
             auto disc = enumerate_functions(b, EnumerateMode::Auto,
                                             scope.lo, scope.hi);
             std::sort(disc.begin(), disc.end(),
@@ -516,6 +523,10 @@ build_teef_tsv(const Binary& b,
                     ++filtered_small;
                     continue;
                 }
+                if (max_fn_bytes > 0 && sz > max_fn_bytes) {
+                    ++filtered_large;
+                    continue;
+                }
                 uniq.insert(disc[i].addr);
             }
             fns.assign(uniq.begin(), uniq.end());
@@ -524,6 +535,11 @@ build_teef_tsv(const Binary& b,
             std::println(stderr,
                 "ember: TEEF: --min-fn-size dropped {} fns smaller than {} bytes",
                 filtered_small, min_fn_bytes);
+        }
+        if (show && filtered_large > 0) {
+            std::println(stderr,
+                "ember: TEEF: --max-fn-size dropped {} fns larger than {} bytes",
+                filtered_large, max_fn_bytes);
         }
 
         // ---- Per-fn reachable strings (TEEF schema v4) ----
@@ -966,7 +982,7 @@ int run_recognize(const Args& args, const Binary& b) {
         }
         const auto t_fp_start = std::chrono::steady_clock::now();
         target_tsv = build_teef_tsv(b, scope, /*corpus_mode=*/false,
-                                    args.min_fn_bytes,
+                                    args.min_fn_bytes, args.max_fn_bytes,
                                     args.l0_prefilter ? &corpus_topos : nullptr);
         const auto t_fp_end = std::chrono::steady_clock::now();
         const double fp_ms = std::chrono::duration<double, std::milli>(
@@ -1128,7 +1144,8 @@ int run_recognize(const Args& args, const Binary& b) {
 int run_teef(const Args& args, const Binary& b) {
     return run_cached(args, std::format("teef-{}", kTeefSchema),
                       [&] { return build_teef_tsv(b, {}, /*corpus_mode=*/true,
-                                                  args.min_fn_bytes); });
+                                                  args.min_fn_bytes,
+                                                  args.max_fn_bytes); });
 }
 
 // --orbit-dump: diagnostic that emits a TSV row per fn with all three

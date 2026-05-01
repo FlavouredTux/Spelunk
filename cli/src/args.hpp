@@ -63,6 +63,10 @@ struct Args {
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
     bool teef = false;              // dump TEEF (Tree-Edit Equivalence Fingerprint) per function
+    bool orbit_dump = false;        // diagnostic dump of all per-fn signatures (L2 cleanup-canonical,
+                                    // L3 orbit, L4 behavioural) side-by-side. TSV: addr name
+                                    // L2_exact L2_mh*8 L3_exact L3_mh*16 L3_nodes L3_iters L3_budget
+                                    // L4_exact L4_mh*8 L4_done L4_aborted. Tied to --module scope.
     bool recognize = false;         // run library-function recognition against --corpus
     std::vector<std::string> corpus_paths;  // --corpus PATH (repeatable): TEEF TSVs to load
     float recognize_threshold = 0.6f;        // --recognize-threshold T (margin floor; default 0.6)

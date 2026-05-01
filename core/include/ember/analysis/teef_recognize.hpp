@@ -15,8 +15,13 @@ namespace ember {
 // One library-recognition candidate for a query function.
 // `confidence` is the vote-margin of the top match against the second
 // (1.0 = clear winner, 0.5 = coin flip vs the runner-up). `via`
-// records which signal produced this match: "whole-exact",
-// "whole-jaccard", "chunk-vote".
+// records which signal produced this match:
+//   "behav-exact"          — L4 multiset-hash collision (highest precision)
+//   "whole-exact"          — L2 cleanup-canonical hash collision
+//   "whole-jaccard+behav"  — combined L2+L4 jaccard above threshold
+//   "whole-jaccard"        — L2 jaccard alone (query had no L4 sketch)
+//   "chunk-vote+behav"     — chunk vote winner with corroborating L4
+//   "chunk-vote"           — chunk vote alone
 struct TeefMatch {
     std::string name;
     float       confidence = 0.0f;
@@ -99,6 +104,18 @@ private:
         std::array<u64, 8>  minhash;
         std::string         runtime;     // empty == unknown / wildcard
         std::vector<u64>    string_hashes;  // fnv1a64 of identifying strings (≤8)
+        // L4 behavioural signature. exact_hash == 0 means the interpreter
+        // aborted on this fn at corpus-build time (rare); the recognizer
+        // gates L4 paths on this so structural paths still apply.
+        u64                 l4_exact = 0;
+        std::array<u64, 8>  l4_minhash = {};
+        // L0 topology hash. Used as a pre-filter for the L2 jaccard scan
+        // — the recognizer first walks topo_index_[query.topo] and only
+        // falls back to a full scan if that lookup misses. Stable for
+        // structurally-identical CFGs; sensitive to small CFG diffs (one
+        // extra cleanup block) which is acceptable since miss-the-pre-filter
+        // just falls back to the slow path.
+        u64                 topo_hash = 0;
     };
     struct ChunkRef {
         std::string name;
@@ -107,9 +124,12 @@ private:
     };
 
     std::vector<WholeEntry>                                whole_by_name_;
-    std::unordered_multimap<u64, std::size_t>              whole_exact_;   // exact_hash → idx into whole_by_name_
-    std::unordered_map<u64, std::size_t>                   whole_popularity_;  // exact_hash → total F-row occurrences (includes sub_*)
-    std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;   // chunk_exact_hash → corpus chunks
+    std::unordered_multimap<u64, std::size_t>              whole_exact_;          // L2 exact_hash → idx into whole_by_name_
+    std::unordered_multimap<u64, std::size_t>              whole_l4_exact_;       // L4 exact_hash → idx (behav-exact fast path)
+    std::unordered_multimap<u64, std::size_t>              whole_topo_;           // L0 topo_hash → idx (jaccard pre-filter)
+    std::unordered_map<u64, std::size_t>                   whole_l4_popularity_;  // L4 hash → total occurrences (boilerplate guard)
+    std::unordered_map<u64, std::size_t>                   whole_popularity_;     // L2 exact_hash → total F-row occurrences (includes sub_*)
+    std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;          // chunk_exact_hash → corpus chunks
     // First WholeEntry index per name. Used by chunk-vote to look up
     // string_hashes for a candidate's parent fn — chunk-vote operates
     // on names, but the strings live on the parent WholeEntry.

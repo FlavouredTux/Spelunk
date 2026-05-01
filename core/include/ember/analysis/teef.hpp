@@ -4,21 +4,35 @@
 #include <string_view>
 #include <vector>
 
+#include <ember/analysis/teef_behav.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {
 
-// Tree-Edit Equivalence Fingerprint (TEEF). Hashes the canonicalized
-// pseudo-C output of a function rather than its IR or bytes. Decompiled
-// output is downstream of every compiler decision but upstream of the
-// source — far more invariant across compiler version / optimization
-// level than the IR layer is. See docs/teef.md for the full design and
-// the cross-glibc-version validation experiment.
+// TEEF Max — the production fingerprint cascade for ember.
 //
-// Schema bumped on canonicalization rule changes; folded into the
-// hash so cached TSVs from a different schema can't collide silently.
-inline constexpr std::string_view kTeefSchema = "v5";
+// Two complementary signals fold into every corpus row:
+//   L2 (this header): hash of the canonicalized post-cleanup IR token
+//        stream. Captures structural identity — same algorithm shape
+//        across most cosmetic compiler diversity. Single-point hash
+//        with a MinHash[8] sketch for partial-overlap recovery.
+//   L4 (teef_behav.hpp): hash of the I/O-tuple multiset produced by
+//        running the function under K random concrete inputs through
+//        an abstract-state IR interpreter. Loop-shape invariant by
+//        construction; recovers cross-compiler / cross-flag matches
+//        L2's single-point hash misses (induction-variable strength
+//        reduction, vectorization, pointer-vs-index lowering).
+//
+// The recognizer (teef_recognize.hpp) runs CEBin-style two-stage
+// retrieval: L2 narrows candidates, L4 verifies/re-ranks. Behavioural
+// exact-match is the highest-precision path; L4-corroborated
+// whole-jaccard recovers near-matches that L2 alone wouldn't trust.
+//
+// Schema string is folded into every hash so corpora produced under
+// different rule sets can't silently collide. Bumped on F-row format
+// or any per-fn signal change.
+inline constexpr std::string_view kTeefSchema = "max.2";
 
 // Per-function signature: an exact hash of the canonicalized pseudo-C
 // (precision: identifies bit-equivalent algorithms across compiler
@@ -62,6 +76,23 @@ struct TeefFunction {
     // only by build_teef_tsv / parse_teef_tsv (TSV-level concept);
     // compute_teef_with_chunks leaves it empty.
     std::vector<u64>        string_hashes;
+    // L4 behavioural signature. compute_teef_with_chunks doesn't
+    // populate it (it's a flat-IR concern, not structurer-level);
+    // corpus build paths call compute_behav_sig and stuff it into the
+    // F row, parse_teef_tsv reads it back. exact_hash == 0 means the
+    // interpreter aborted on this fn (rare; the recognizer's L4 paths
+    // gate on it).
+    BehavSig                behav;
+    // L0 topology hash — a u64 over a small set of CFG-shape features
+    // (block count, edge count, in/out-degree maxes, loop-header count,
+    // return count). Cheap to compute (~5 µs/fn) and serves as a
+    // pre-filter for L2 jaccard scans: corpus entries grouped by topo
+    // hash narrow the candidate set without touching content. Two
+    // structurally-identical CFGs collide; near-but-not-identical ones
+    // (one extra cleanup block from compiler diversity) miss the
+    // pre-filter and fall through to the full scan, so it's lossy for
+    // performance, not for correctness.
+    u64                     topo_hash = 0;
 };
 
 // Compute the function-level TEEF and per-chunk fingerprints for any

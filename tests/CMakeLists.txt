@@ -57,6 +57,13 @@ add_executable(ember_arm64_decoder_test arm64_decoder_test.cpp)
 target_link_libraries(ember_arm64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME arm64_decoder_unit COMMAND ember_arm64_decoder_test)
 
+# Unit tests for the e-graph saturation engine that backs TEEF v6's L3
+# orbit-class fingerprint. Self-contained: builds e-graphs from synthetic
+# terms, no IR involved.
+add_executable(ember_egraph_test egraph_test.cpp)
+target_link_libraries(ember_egraph_test PRIVATE ember::core ember::flags)
+add_test(NAME egraph_unit COMMAND ember_egraph_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

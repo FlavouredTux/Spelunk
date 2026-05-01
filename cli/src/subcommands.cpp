@@ -43,6 +43,8 @@
 #include <ember/common/threads.hpp>
 #include <ember/analysis/syscalls.hpp>
 #include <ember/analysis/teef.hpp>
+#include <ember/analysis/teef_behav.hpp>
+#include <ember/analysis/teef_orbit.hpp>
 #include <ember/analysis/teef_recognize.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/binary/binary.hpp>
@@ -375,13 +377,28 @@ parse_teef_tsv(std::string_view tsv) {
         if (line.empty()) continue;
         auto f = split_tabs(line);
         if (f.empty()) continue;
-        if (f[0] == "F" && f.size() >= 12) {
+        if (f[0] == "F" && f.size() >= 24) {
+            // F row: addr  L2_exact  L2_mh*8  name
+            //         L4_exact  L4_mh*8  L4_done  L4_aborted  topo_hash
             const addr_t a = static_cast<addr_t>(parse_u64_hex_local(f[1]));
             TeefFunction tf;
             tf.whole.exact_hash = parse_u64_hex_local(f[2]);
             for (std::size_t k = 0; k < 8; ++k) {
                 tf.whole.minhash[k] = parse_u64_hex_local(f[3 + k]);
             }
+            tf.behav.exact_hash = parse_u64_hex_local(f[12]);
+            for (std::size_t k = 0; k < 8; ++k) {
+                tf.behav.minhash[k] = parse_u64_hex_local(f[13 + k]);
+            }
+            u32 done = 0;
+            std::from_chars(f[21].data(),
+                            f[21].data() + f[21].size(), done);
+            tf.behav.traces_done = static_cast<u8>(std::min<u32>(done, 255));
+            u32 aborted = 0;
+            std::from_chars(f[22].data(),
+                            f[22].data() + f[22].size(), aborted);
+            tf.behav.traces_aborted = static_cast<u8>(std::min<u32>(aborted, 255));
+            tf.topo_hash = parse_u64_hex_local(f[23]);
             idx_by_addr[a] = out.size();
             out.emplace_back(a, std::move(tf));
         } else if (f[0] == "S" && f.size() >= 3) {
@@ -551,6 +568,12 @@ parse_teef_tsv(std::string_view tsv) {
                 if (i >= total) break;
                 const addr_t a = fns[i];
                 const auto tf = compute_teef_with_chunks(b, a);
+                // L4 behavioural fingerprint — runs the same lift+SSA+
+                // cleanup pipeline as TEEF then samples K=64 random
+                // inputs through an abstract-state IR interpreter.
+                // ~5 ms/fn, and the corpus needs it to support the
+                // CEBin-style recognize path.
+                const auto bs = compute_behav_sig(b, a);
                 const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (show && (d % tick == 0 || d == total)) {
                     std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
@@ -563,12 +586,24 @@ parse_teef_tsv(std::string_view tsv) {
                 } else {
                     name = std::format("sub_{:x}", a);
                 }
-                // Function row: F<TAB>addr<TAB>exact<TAB>mh0..7<TAB>name
+                // F row: F addr L2_exact L2_mh*8 name L4_exact L4_mh*8
+                //         L4_done L4_aborted topo_hash
+                // (24 tab-separated fields). L4 columns trail the name
+                // so the structural-only fields stay at fixed positions
+                // 0..11 — handy for grep/awk inspection. topo_hash is
+                // the L0 CFG-shape signal, used by the recognizer as a
+                // pre-filter for L2 jaccard scans.
                 std::string buf =
                     std::format("F\t{:x}\t{:016x}", a, tf.whole.exact_hash);
                 for (u64 mh : tf.whole.minhash) buf += std::format("\t{:016x}", mh);
                 buf += '\t';
                 buf += name;
+                buf += std::format("\t{:016x}", bs.exact_hash);
+                for (u64 mh : bs.minhash) buf += std::format("\t{:016x}", mh);
+                buf += std::format("\t{}\t{}",
+                                    static_cast<u32>(bs.traces_done),
+                                    static_cast<u32>(bs.traces_aborted));
+                buf += std::format("\t{:016x}", tf.topo_hash);
                 buf += '\n';
 
                 // String-anchor row: S<TAB>addr<TAB>hash1,hash2,...
@@ -907,6 +942,75 @@ int run_recognize(const Args& args, const Binary& b) {
 int run_teef(const Args& args, const Binary& b) {
     return run_cached(args, std::format("teef-{}", kTeefSchema),
                       [&] { return build_teef_tsv(b); });
+}
+
+// --orbit-dump: diagnostic that emits a TSV row per fn with all three
+// per-fn signatures (L2 cleanup-canonical, L3 orbit-class, L4
+// behavioural) side-by-side. Used by the cross-compile recall script;
+// not part of the corpus surface. Schema:
+//
+//   addr name
+//     L2_exact L2_mh*8
+//     L3_exact L3_mh*16 L3_nodes L3_iters L3_budget
+//     L4_exact L4_mh*8  L4_traces_done L4_traces_aborted
+//
+// Names default to `sub_<addr>` for CFG-discovered fns. Module scope
+// (--module NAME) is honoured. Bypasses the disk cache so the dump
+// always reflects live computation.
+int run_orbit_dump(const Args& args, const Binary& b) {
+    const ModuleScope scope = resolve_module_scope(b, args.module_filter);
+
+    std::unordered_map<addr_t, std::string> name_by_addr;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.addr == 0 || s.name.empty()) continue;
+        if (!scope.contains(s.addr)) continue;
+        name_by_addr.try_emplace(s.addr, s.name);
+    }
+
+    std::set<addr_t> uniq;
+    for (const auto& [a, _] : name_by_addr) uniq.insert(a);
+    for (const auto& d : enumerate_functions(b, EnumerateMode::Auto, scope.lo, scope.hi)) {
+        if (!b.import_at_plt(d.addr)) uniq.insert(d.addr);
+    }
+    std::vector<addr_t> fns(uniq.begin(), uniq.end());
+
+    std::string out;
+    out.reserve(fns.size() * 384);
+    out += "# orbit-dump  cols: addr name L2_exact L2_mh*8 "
+           "L3_exact L3_mh*16 L3_nodes L3_iters L3_budget "
+           "L4_exact L4_mh*8 L4_done L4_aborted\n";
+    for (addr_t a : fns) {
+        const auto tf = compute_teef_with_chunks(b, a);
+        const auto os = compute_orbit_sig(b, a);
+        const auto bs = compute_behav_sig(b, a);
+
+        std::string name;
+        if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
+            name = it->second;
+        } else {
+            name = std::format("sub_{:x}", a);
+        }
+
+        out += std::format("0x{:x}\t{}\t{:016x}", a, name, tf.whole.exact_hash);
+        for (u64 m : tf.whole.minhash) out += std::format("\t{:016x}", m);
+        out += std::format("\t{:016x}", os.exact_hash);
+        for (u64 m : os.minhash)       out += std::format("\t{:016x}", m);
+        out += std::format("\t{}\t{}\t{}",
+                            os.egraph_nodes,
+                            static_cast<u32>(os.total_iters),
+                            os.budget_hit ? 1 : 0);
+        out += std::format("\t{:016x}", bs.exact_hash);
+        for (u64 m : bs.minhash)       out += std::format("\t{:016x}", m);
+        out += std::format("\t{}\t{}",
+                            static_cast<u32>(bs.traces_done),
+                            static_cast<u32>(bs.traces_aborted));
+        out += '\n';
+    }
+    std::cout << out;
+    std::cout.flush();
+    return EXIT_SUCCESS;
 }
 
 int run_fingerprints(const Args& args, const Binary& b) {

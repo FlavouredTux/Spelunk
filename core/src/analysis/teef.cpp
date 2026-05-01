@@ -603,6 +603,48 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
 
+    // ---- L0 topology hash ----
+    // Computed from the fresh-lifted IR (pre-SSA, pre-cleanup) so the
+    // shape we hash is the one the recognizer's pre-filter will see
+    // for query fns too. Features:
+    //   • num_blocks  — coarse size signal
+    //   • num_edges   — sum of successors over all blocks
+    //   • max_in_degree, max_out_degree — branching density
+    //   • num_loop_headers — blocks with > 1 predecessor (proxy for loops
+    //     and re-entry points; cleanup-stable)
+    //   • num_returns — blocks whose terminator is Return
+    // Each is folded with mix64; final u64 is the topo hash. Two
+    // structurally-identical CFGs collide → recognizer can pre-filter on
+    // it. Compiler diversity that adds/removes a block (e.g. an extra
+    // cleanup or split-block from optimization) shifts the hash and the
+    // pre-filter misses, but the recognizer falls through to the full
+    // scan automatically — so this is lossy for perf, not correctness.
+    {
+        u32 num_blocks       = static_cast<u32>(ir_r->blocks.size());
+        u32 num_edges        = 0;
+        u32 max_in_degree    = 0;
+        u32 max_out_degree   = 0;
+        u32 num_loop_headers = 0;
+        u32 num_returns      = 0;
+        for (const auto& bb : ir_r->blocks) {
+            num_edges      += static_cast<u32>(bb.successors.size());
+            max_in_degree   = std::max<u32>(max_in_degree,
+                                            static_cast<u32>(bb.predecessors.size()));
+            max_out_degree  = std::max<u32>(max_out_degree,
+                                            static_cast<u32>(bb.successors.size()));
+            if (bb.predecessors.size() > 1) ++num_loop_headers;
+            if (!bb.insts.empty() && bb.insts.back().op == IrOp::Return) ++num_returns;
+        }
+        u64 h = fnv1a("topo");
+        h = mix64(h, num_blocks);
+        h = mix64(h, num_edges);
+        h = mix64(h, max_in_degree);
+        h = mix64(h, max_out_degree);
+        h = mix64(h, num_loop_headers);
+        h = mix64(h, num_returns);
+        out.topo_hash = h;
+    }
+
     // Insn-count gate. VMP / Themida / Enigma protected code expands
     // every original fn into tens of thousands of junk-injected,
     // deeply nested regions; TEEF's region-tree walk is roughly

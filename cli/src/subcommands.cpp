@@ -618,7 +618,12 @@ build_teef_tsv(const Binary& b,
         std::vector<std::string> rows(total);
         std::atomic<std::size_t> next{0};
         std::atomic<std::size_t> done{0};
-        const std::size_t tick = std::max<std::size_t>(1, total / 40);
+        // Update every ~0.5% of total work, with a floor of 32 fns —
+        // gives ~200 updates per run regardless of binary size, so a
+        // 200K-fn target produces a visible refresh every ~1k fns
+        // instead of every 5k. The floor keeps the rate sensible on
+        // tiny corpora.
+        const std::size_t tick = std::max<std::size_t>(32, total / 200);
         const auto t_fp_start = std::chrono::steady_clock::now();
         std::mutex fp_progress_mu;
 
@@ -642,7 +647,11 @@ build_teef_tsv(const Binary& b,
                     : compute_teef_with_chunks(b, a);
                 const auto& bs = tf.behav;
                 const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (show && (d % tick == 0 || d == total)) {
+                // First-fn line goes out immediately so the user sees the
+                // workers are alive (otherwise on big targets the first
+                // tick is several seconds away). Then every `tick` fns +
+                // the final tally.
+                if (show && (d == 1 || d % tick == 0 || d == total)) {
                     // Same UI as the recognize scan progress: live
                     // [d/total] fn/s · elapsed · eta. Helps tell whether
                     // a long fingerprint phase is steady (uniform fns)
@@ -1005,7 +1014,10 @@ int run_recognize(const Args& args, const Binary& b) {
     // print calls to one in flight; the actual `recognize()` work runs
     // unlocked.
     std::mutex out_mu;
-    const std::size_t progress_tick = std::max<std::size_t>(1, total / 50);
+    // Match the fingerprint progress cadence: ~200 updates per run with
+    // a floor of 32 fns. First fn forces an immediate update so the
+    // user sees the scan is alive.
+    const std::size_t progress_tick = std::max<std::size_t>(32, total / 200);
     const auto t_scan_start = std::chrono::steady_clock::now();
     auto worker = [&] {
         while (true) {
@@ -1019,7 +1031,7 @@ int run_recognize(const Args& args, const Binary& b) {
             // queries. Show elapsed + ETA so multi-minute scans are
             // legible (rate × remaining = ETA, computed live).
             const std::size_t d = done_count.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (show && (d % progress_tick == 0 || d == total)) {
+            if (show && (d == 1 || d % progress_tick == 0 || d == total)) {
                 const auto now = std::chrono::steady_clock::now();
                 const double elapsed = std::chrono::duration<double>(
                     now - t_scan_start).count();

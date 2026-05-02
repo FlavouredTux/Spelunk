@@ -10,10 +10,15 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#if defined(_WIN32)
+#include <cstdio>
+#include <vector>
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #include <ember/analysis/teef.hpp>
 #include <ember/common/progress.hpp>
@@ -314,7 +319,35 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
                        std::getenv("EMBER_QUIET")[0] == '1');
     const auto t_open = clock_t::now();
 
-    // ---- mmap the file -------------------------------------------------
+    // ---- Acquire the file as a contiguous byte range -------------------
+    // POSIX mmaps for zero-copy parallel parse. Windows reads the whole
+    // file into a heap buffer — the platform's file-mapping API works
+    // but the wstring/HANDLE plumbing isn't worth it for a one-shot
+    // load; the parsing phase dwarfs the copy on multi-100MB inputs.
+#if defined(_WIN32)
+    std::vector<char> buf;
+    {
+#ifdef _MSC_VER
+        FILE* fp = nullptr;
+        if (::fopen_s(&fp, path.string().c_str(), "rb") != 0 || !fp) return 0;
+#else
+        FILE* fp = std::fopen(path.string().c_str(), "rb");
+        if (!fp) return 0;
+#endif
+        std::fseek(fp, 0, SEEK_END);
+        const long n = std::ftell(fp);
+        std::fseek(fp, 0, SEEK_SET);
+        if (n <= 0) { std::fclose(fp); return 0; }
+        buf.resize(static_cast<std::size_t>(n));
+        const std::size_t got = std::fread(buf.data(), 1,
+                                           static_cast<std::size_t>(n), fp);
+        std::fclose(fp);
+        if (got != static_cast<std::size_t>(n)) return 0;
+    }
+    const std::size_t sz = buf.size();
+    const char* const data = buf.data();
+    const char* const file_end = data + sz;
+#else
     const int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) return 0;
     struct stat st;
@@ -328,6 +361,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     if (m == MAP_FAILED) return 0;
     const char* const data = static_cast<const char*>(m);
     const char* const file_end = data + sz;
+#endif
     const auto t_mmap = clock_t::now();
 
     // ---- T-row pre-scan ------------------------------------------------
@@ -507,7 +541,9 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     }
 
     const auto t_merged = clock_t::now();
+#if !defined(_WIN32)
     ::munmap(m, sz);
+#endif
 
     if (dbg) {
         const double mb       = static_cast<double>(sz) / (1024.0 * 1024.0);

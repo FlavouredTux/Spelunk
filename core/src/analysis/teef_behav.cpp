@@ -11,6 +11,10 @@
 #include <unordered_map>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
@@ -427,20 +431,42 @@ struct Trace {
     // ---- divq.{u,s}.64 / divr.{u,s}.64: 128/64 div quotient/remainder ---
     // srcs for div: (rdx, rax, divisor). x86 DIV/IDIV semantics. Divide-
     // by-zero is hardware-trapping; we substitute 0 to keep the trace
-    // alive deterministically. Both families use __int128 — non-ISO but
-    // GCC and clang both accept it; pedantic warning suppressed locally.
+    // alive deterministically. GCC/clang use __int128 (non-ISO; pedantic
+    // warning suppressed); MSVC has no __int128 so we use the _umul128 /
+    // _udiv128 / _div128 intrinsics from <intrin.h>.
+#if defined(_MSC_VER)
+    auto mulh_u_64 = [](u64 a, u64 b) -> u64 {
+        u64 hi = 0;
+        (void)_umul128(a, b, &hi);
+        return hi;
+    };
+    auto mulh_s_64 = [](u64 a, u64 b) -> u64 {
+        i64 hi = 0;
+        (void)_mul128(static_cast<i64>(a), static_cast<i64>(b), &hi);
+        return static_cast<u64>(hi);
+    };
+#else
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
     using u128 = unsigned __int128;
     using i128 =          __int128;
+#pragma GCC diagnostic pop
+    auto mulh_u_64 = [](u64 a, u64 b) -> u64 {
+        return static_cast<u64>((static_cast<u128>(a) * static_cast<u128>(b)) >> 64);
+    };
+    auto mulh_s_64 = [](u64 a, u64 b) -> u64 {
+        const i128 prod = static_cast<i128>(static_cast<i64>(a)) *
+                          static_cast<i128>(static_cast<i64>(b));
+        return static_cast<u64>(static_cast<u128>(prod) >> 64);
+    };
+#endif
 
     if (n == "mulh.u.64") {
         if (inst.src_count < 2) return false;
         const auto a = t.get(inst.srcs[0]);
         const auto b = t.get(inst.srcs[1]);
         if (!a || !b) return false;
-        const u128 prod = static_cast<u128>(*a) * static_cast<u128>(*b);
-        t.set(inst.dst, static_cast<u64>(prod >> 64));
+        t.set(inst.dst, mulh_u_64(*a, *b));
         return true;
     }
     if (n == "mulh.s.64") {
@@ -448,9 +474,7 @@ struct Trace {
         const auto a = t.get(inst.srcs[0]);
         const auto b = t.get(inst.srcs[1]);
         if (!a || !b) return false;
-        const i128 prod = static_cast<i128>(static_cast<i64>(*a)) *
-                          static_cast<i128>(static_cast<i64>(*b));
-        t.set(inst.dst, static_cast<u64>(static_cast<u128>(prod) >> 64));
+        t.set(inst.dst, mulh_s_64(*a, *b));
         return true;
     }
 
@@ -461,6 +485,19 @@ struct Trace {
         const auto div = t.get(inst.srcs[2]);
         if (!rdx || !rax || !div) return false;
         if (*div == 0) { t.set(inst.dst, 0); return true; }
+#if defined(_MSC_VER)
+        if (sgn) {
+            i64 rem = 0;
+            const i64 q = _div128(static_cast<i64>(*rdx),
+                                  static_cast<i64>(*rax),
+                                  static_cast<i64>(*div), &rem);
+            t.set(inst.dst, static_cast<u64>(quotient ? q : rem));
+        } else {
+            u64 rem = 0;
+            const u64 q = _udiv128(*rdx, *rax, *div, &rem);
+            t.set(inst.dst, quotient ? q : rem);
+        }
+#else
         if (sgn) {
             const i128 num = (static_cast<i128>(static_cast<i64>(*rdx)) << 64)
                            |  static_cast<i128>(*rax);
@@ -473,13 +510,13 @@ struct Trace {
             const u128 r = quotient ? (num / *div) : (num % *div);
             t.set(inst.dst, static_cast<u64>(r));
         }
+#endif
         return true;
     };
     if (n == "divq.u.64") return do_div(/*quotient=*/true,  /*sgn=*/false);
     if (n == "divq.s.64") return do_div(/*quotient=*/true,  /*sgn=*/true);
     if (n == "divr.u.64") return do_div(/*quotient=*/false, /*sgn=*/false);
     if (n == "divr.s.64") return do_div(/*quotient=*/false, /*sgn=*/true);
-#pragma GCC diagnostic pop
 
     // ---- parity / not_parity: even-parity of low byte -------------------
     // x86 PF — set when low byte has even number of set bits. The lifter

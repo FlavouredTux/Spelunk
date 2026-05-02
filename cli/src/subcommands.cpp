@@ -12,7 +12,19 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#if defined(_WIN32)
+#include <io.h>
+#define ember_dup     _dup
+#define ember_dup2    _dup2
+#define ember_close   _close
+#define ember_fileno  _fileno
+#else
 #include <unistd.h>
+#define ember_dup     ::dup
+#define ember_dup2    ::dup2
+#define ember_close   ::close
+#define ember_fileno  ::fileno
+#endif
 
 #if defined(__linux__)
 #include <sys/prctl.h>
@@ -2041,7 +2053,7 @@ namespace {
 // fn is allowed to emit megabytes (whole-binary --functions runs do).
 [[nodiscard]] std::string capture_stdout(auto&& fn) {
     std::fflush(stdout);
-    int saved = ::dup(::fileno(stdout));
+    int saved = ember_dup(ember_fileno(stdout));
     std::FILE* tmp = std::tmpfile();
     if (!tmp || saved < 0) {
         // Fallback: just run fn without capture. Worst case the
@@ -2050,11 +2062,11 @@ namespace {
         fn();
         return {};
     }
-    ::dup2(::fileno(tmp), ::fileno(stdout));
+    ember_dup2(ember_fileno(tmp), ember_fileno(stdout));
     fn();
     std::fflush(stdout);
-    ::dup2(saved, ::fileno(stdout));
-    ::close(saved);
+    ember_dup2(saved, ember_fileno(stdout));
+    ember_close(saved);
     std::rewind(tmp);
     std::string out;
     char buf[8192];

@@ -540,6 +540,39 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         }
     }
 
+    // Recompute distinct-name counts for every hashed key. Bucket-size
+    // guards (kMaxWholeBucket / kMaxL4Bucket / kMaxPrefixBucket /
+    // kMaxChunkFns) operate on these — a popular fn replicated across N
+    // corpus versions (50× glibc memcpy under the same name) would
+    // otherwise trip the boilerplate floor and get dropped, when really
+    // it's one well-known fn replicated. Done as an end-of-load pass so
+    // multi-TSV loads don't double-count names seen in both files.
+    {
+        std::unordered_map<u64, std::unordered_set<std::string_view>> seen;
+        auto recount_whole = [&](const std::unordered_multimap<u64, std::size_t>& src,
+                                 std::unordered_map<u64, std::size_t>& dst) {
+            seen.clear();
+            for (const auto& [hash, idx] : src) {
+                seen[hash].insert(whole_by_name_[idx].name);
+            }
+            dst.clear();
+            dst.reserve(seen.size());
+            for (const auto& [hash, names] : seen) dst[hash] = names.size();
+        };
+        recount_whole(whole_exact_,    whole_exact_distinct_);
+        recount_whole(whole_l4_exact_, whole_l4_distinct_);
+        recount_whole(whole_prefix_,   whole_prefix_distinct_);
+
+        seen.clear();
+        for (const auto& [hash, refs] : chunk_index_) {
+            auto& s = seen[hash];
+            for (const auto& r : refs) s.insert(r.name);
+        }
+        chunk_distinct_.clear();
+        chunk_distinct_.reserve(seen.size());
+        for (const auto& [hash, names] : seen) chunk_distinct_[hash] = names.size();
+    }
+
     const auto t_merged = steady_t::now();
 #if !defined(_WIN32)
     ::munmap(m, sz);
@@ -608,11 +641,13 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // many corpus fns is a generic stub shape, not an identity.
     constexpr std::size_t kMaxPrefixBucket = 4;
     if (query.prefix_hash != 0) {
-        auto pop = whole_prefix_popularity_.find(query.prefix_hash);
-        const std::size_t pop_n = (pop == whole_prefix_popularity_.end())
-            ? 0u : pop->second;
+        // Distinct-name count instead of raw bucket — see the comment on
+        // whole_prefix_distinct_ for why.
+        auto dn = whole_prefix_distinct_.find(query.prefix_hash);
+        const std::size_t names_n = (dn == whole_prefix_distinct_.end())
+            ? 0u : dn->second;
         const std::size_t bucket = whole_prefix_.count(query.prefix_hash);
-        if (pop_n <= kMaxPrefixBucket && bucket > 0 && bucket <= kMaxPrefixBucket) {
+        if (names_n > 0 && names_n <= kMaxPrefixBucket && bucket > 0) {
             auto [lo, hi] = whole_prefix_.equal_range(query.prefix_hash);
             std::unordered_set<std::string> distinct;
             std::vector<std::string> ordered;
@@ -648,11 +683,13 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // unusual.
     constexpr std::size_t kMaxL4Bucket = 4;
     if (query_has_l4) {
-        auto l4_pop = whole_l4_popularity_.find(query.behav.exact_hash);
-        const std::size_t l4_pop_n = (l4_pop == whole_l4_popularity_.end())
-            ? 0u : l4_pop->second;
+        // Distinct-name count: 50 corpus versions of `memcpy` should
+        // collapse to 1 distinct name, not trip the boilerplate floor.
+        auto dn = whole_l4_distinct_.find(query.behav.exact_hash);
+        const std::size_t names_n = (dn == whole_l4_distinct_.end())
+            ? 0u : dn->second;
         const std::size_t bucket = whole_l4_exact_.count(query.behav.exact_hash);
-        if (l4_pop_n <= kMaxL4Bucket && bucket > 0 && bucket <= kMaxL4Bucket) {
+        if (names_n > 0 && names_n <= kMaxL4Bucket && bucket > 0) {
             auto [it_lo, it_hi] = whole_l4_exact_.equal_range(query.behav.exact_hash);
             std::unordered_set<std::string> distinct;
             std::vector<std::string> ordered;
@@ -700,8 +737,16 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // stub that happens to match a popular name. Skip and fall through
     // to chunk-vote, which requires substantive evidence.
     {
+        // Distinct-name guard: same bug pattern as L4/prefix. The
+        // hash_too_common check above stays — it counts ALL F rows
+        // (including sub_*) and detects "this L2 hash is a generic
+        // shape that many trivial stubs share," which is a different
+        // signal than the named-fn replication we're fixing here.
+        auto dn = whole_exact_distinct_.find(query.whole.exact_hash);
+        const std::size_t names_n = (dn == whole_exact_distinct_.end())
+            ? 0u : dn->second;
         const std::size_t bucket = whole_exact_.count(query.whole.exact_hash);
-        if (!hash_too_common && bucket > 0 && bucket <= kMaxWholeBucket) {
+        if (!hash_too_common && names_n > 0 && names_n <= kMaxWholeBucket && bucket > 0) {
             auto [it_lo, it_hi] = whole_exact_.equal_range(query.whole.exact_hash);
             std::unordered_set<std::string> distinct;
             std::vector<std::string> ordered;
@@ -851,7 +896,14 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         if (ch.sig.exact_hash == 0) continue;
         auto it = chunk_index_.find(ch.sig.exact_hash);
         if (it == chunk_index_.end()) continue;
-        if (it->second.size() > kMaxChunkFns) continue;
+        // Boilerplate floor: a chunk used by many DISTINCT named fns is
+        // generic. Raw bucket size would falsely flag a popular chunk
+        // (memcpy's hot loop replicated across 50 glibc versions, all
+        // under the same name) as boilerplate.
+        auto dn = chunk_distinct_.find(ch.sig.exact_hash);
+        const std::size_t names_n = (dn == chunk_distinct_.end())
+            ? it->second.size() : dn->second;
+        if (names_n > kMaxChunkFns) continue;
         for (const auto& ref : it->second) {
             if (!runtime_compatible(query_runtime, ref.runtime)) continue;
             votes[ref.name] += ch.inst_count;

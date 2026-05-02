@@ -159,6 +159,17 @@ private:
     std::array<std::unordered_map<u64, std::vector<u32>>, 8> whole_minhash_;
     std::unordered_map<u64, std::size_t>                   whole_l4_popularity_;  // L4 hash → total occurrences (boilerplate guard)
     std::unordered_map<u64, std::size_t>                   whole_popularity_;     // L2 exact_hash → total F-row occurrences (includes sub_*)
+    // Distinct-name counts. Populated at the end of load_tsv. The
+    // bucket-size guards (kMaxWholeBucket, kMaxL4Bucket, kMaxChunkFns,
+    // kMaxPrefixBucket) operate on these instead of raw multimap bucket
+    // sizes — otherwise a popular fn replicated across many corpus
+    // versions (50× glibc memcpy) trips the boilerplate floor and gets
+    // dropped, when in reality it's one well-known fn replicated. Keys
+    // are the same as the corresponding multimap.
+    std::unordered_map<u64, std::size_t>                   whole_exact_distinct_; // L2 hash → distinct name count
+    std::unordered_map<u64, std::size_t>                   whole_l4_distinct_;    // L4 hash → distinct name count
+    std::unordered_map<u64, std::size_t>                   whole_prefix_distinct_;// L1 prefix → distinct name count
+    std::unordered_map<u64, std::size_t>                   chunk_distinct_;       // chunk hash → distinct name count
     std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;          // chunk_exact_hash → corpus chunks
     // First WholeEntry index per name. Used by chunk-vote to look up
     // string_hashes for a candidate's parent fn — chunk-vote operates

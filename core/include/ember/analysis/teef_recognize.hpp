@@ -17,6 +17,7 @@ namespace ember {
 // `confidence` is the vote-margin of the top match against the second
 // (1.0 = clear winner, 0.5 = coin flip vs the runner-up). `via`
 // records which signal produced this match:
+//   "prefix-exact"         — L1 byte-prefix collision on a tiny fn
 //   "behav-exact"          — L4 multiset-hash collision (highest precision)
 //   "whole-exact"          — L2 cleanup-canonical hash collision
 //   "whole-jaccard+behav"  — combined L2+L4 jaccard above threshold
@@ -133,6 +134,9 @@ private:
         // extra cleanup block) which is acceptable since miss-the-pre-filter
         // just falls back to the slow path.
         u64                 topo_hash = 0;
+        // L1 byte-prefix hash. 0 ⇒ fn was too large to qualify or
+        // decode failed; the recognizer skips L1 on those entries.
+        u64                 prefix_hash = 0;
     };
     struct ChunkRef {
         std::string name;
@@ -144,6 +148,8 @@ private:
     std::unordered_multimap<u64, std::size_t>              whole_exact_;          // L2 exact_hash → idx into whole_by_name_
     std::unordered_multimap<u64, std::size_t>              whole_l4_exact_;       // L4 exact_hash → idx (behav-exact fast path)
     std::unordered_multimap<u64, std::size_t>              whole_topo_;           // L0 topo_hash → idx (jaccard pre-filter)
+    std::unordered_multimap<u64, std::size_t>              whole_prefix_;         // L1 prefix_hash → idx (tiny-fn fast path)
+    std::unordered_map<u64, std::size_t>                   whole_prefix_popularity_; // prefix_hash → occurrences
     // L2 minhash inverted index: one map per slot. At recognize time
     // we look up each of the query's 8 slot values, accumulate
     // (entry_idx → hit_count), and only score entries with ≥3 slot

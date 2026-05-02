@@ -117,6 +117,7 @@ struct ParsedF {
     u64                 l4_exact;
     std::array<u64, 8>  l4_mh;
     u64                 topo_hash;
+    u64                 prefix_hash;
     std::string         name;
     std::string         runtime;
 };
@@ -147,9 +148,12 @@ struct ChunkParse {
 [[nodiscard]] bool parse_f_row(std::string_view line,
                                const std::string& active_runtime,
                                ParsedF& out) {
-    // Walk fields by tab, populating out as we go. We expect 24 fields:
-    //   F addr L2_exact L2_mh*8 name L4_exact L4_mh*8 L4_done L4_aborted topo_hash
-    std::array<std::string_view, 24> f;
+    // Walk fields by tab, populating out as we go. We expect 25 fields:
+    //   F addr L2_exact L2_mh*8 name L4_exact L4_mh*8 L4_done L4_aborted
+    //     topo_hash prefix_hash
+    // Pre-max.4 corpora omit the last field; older 24-field rows still
+    // load with prefix_hash defaulted to 0 (no L1 fast path on those).
+    std::array<std::string_view, 25> f;
     std::size_t cur = 0;
     std::size_t n   = 0;
     for (std::size_t i = 0; i < line.size() && n < f.size(); ++i) {
@@ -167,8 +171,9 @@ struct ChunkParse {
     out.name.assign(f[11]);
     out.l4_exact = parse_u64_hex(f[12]);
     for (std::size_t k = 0; k < 8; ++k) out.l4_mh[k] = parse_u64_hex(f[13 + k]);
-    out.topo_hash = parse_u64_hex(f[23]);
-    out.runtime   = active_runtime;
+    out.topo_hash   = parse_u64_hex(f[23]);
+    out.prefix_hash = (n >= 25) ? parse_u64_hex(f[24]) : 0u;
+    out.runtime     = active_runtime;
     return true;
 }
 
@@ -451,7 +456,8 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             e.runtime    = f.runtime;
             e.l4_exact   = f.l4_exact;
             e.l4_minhash = f.l4_mh;
-            e.topo_hash  = f.topo_hash;
+            e.topo_hash   = f.topo_hash;
+            e.prefix_hash = f.prefix_hash;
             whole_by_name_.push_back(std::move(e));
             const auto& we = whole_by_name_[idx];
             if (we.exact_hash != 0) {
@@ -463,6 +469,10 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             }
             if (we.topo_hash != 0) {
                 whole_topo_.emplace(we.topo_hash, idx);
+            }
+            if (we.prefix_hash != 0) {
+                whole_prefix_.emplace(we.prefix_hash, idx);
+                ++whole_prefix_popularity_[we.prefix_hash];
             }
             for (std::size_t k = 0; k < 8; ++k) {
                 whole_minhash_[k][we.minhash[k]]
@@ -549,6 +559,47 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         }
         return static_cast<float>(eq) / 8.0f;
     };
+
+    // ---- L1 byte-prefix exact match (tiny-fn fast path) ----
+    // For functions ≤ 16 insns / ≤ 64 bytes, L2 cleanup-canonical
+    // collapses to a 2-3 token bag (every getter / thunk hashes alike)
+    // and L4 K=64 traces collapse to a 1-2 outcome multiset (every
+    // identity stub matches everything). The byte prefix preserves
+    // register identity and small immediates verbatim — that's what
+    // FLIRT's literal byte-pattern model gets right at this size, and
+    // we replicate it here as a discrete tier above the structural
+    // ones. Same popularity guard as whole-exact: a prefix shared by
+    // many corpus fns is a generic stub shape, not an identity.
+    constexpr std::size_t kMaxPrefixBucket = 4;
+    if (query.prefix_hash != 0) {
+        auto pop = whole_prefix_popularity_.find(query.prefix_hash);
+        const std::size_t pop_n = (pop == whole_prefix_popularity_.end())
+            ? 0u : pop->second;
+        const std::size_t bucket = whole_prefix_.count(query.prefix_hash);
+        if (pop_n <= kMaxPrefixBucket && bucket > 0 && bucket <= kMaxPrefixBucket) {
+            auto [lo, hi] = whole_prefix_.equal_range(query.prefix_hash);
+            std::unordered_set<std::string> distinct;
+            std::vector<std::string> ordered;
+            for (auto it = lo; it != hi; ++it) {
+                const auto& we = whole_by_name_[it->second];
+                if (!runtime_compatible(query_runtime, we.runtime)) continue;
+                if (!strings_compatible(we.string_hashes)) continue;
+                if (distinct.insert(we.name).second) ordered.push_back(we.name);
+            }
+            if (ordered.size() == 1) {
+                return { TeefMatch{ordered[0], 1.0f, "prefix-exact", 0} };
+            }
+            if (!ordered.empty()) {
+                std::vector<TeefMatch> out;
+                const float conf = 1.0f / static_cast<float>(ordered.size());
+                for (auto& nm : ordered) {
+                    out.push_back(TeefMatch{std::move(nm), conf, "prefix-exact-tied", 0});
+                    if (out.size() >= top_k) break;
+                }
+                return out;
+            }
+        }
+    }
 
     // ---- Behavioural exact match (highest precision) ----
     // L4 collisions are 64-trace I/O-multiset hashes; an accidental

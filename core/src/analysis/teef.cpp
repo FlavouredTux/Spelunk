@@ -645,6 +645,85 @@ namespace {
     return h;
 }
 
+// L1 byte-prefix hash for tiny functions. Walks the CFG's pre-decoded
+// instruction stream in address order and folds (mnemonic, operand-shape,
+// reg identity, classed immediates) into a single u64. Skipped (returns
+// 0) unless the function is small enough that a literal byte signature
+// is the right tier — large fns are better served by L2/L4. The byte
+// budget (≤ 64 bytes, ≤ 16 insns) targets the FLIRT sweet spot: tiny
+// thunks, getters, stubs that L2 cleanup-canonical and L4 K=64 traces
+// can't tell apart.
+//
+// Immediates are kept verbatim when ≤ 0x10000 (struct offsets, syscall
+// numbers, flag bits — distinguishing signal) and classed to ADDR
+// otherwise (rip-relative globals shift across builds). Register
+// identity is preserved literally — a `mov rax, [rdi]` is NOT equivalent
+// to `mov rcx, [rsi]` at this tier; that's exactly the discriminating
+// power FLIRT relies on.
+[[nodiscard]] u64 compute_prefix_hash(const Function& fn) noexcept {
+    constexpr u32 kMaxInsns = 16;
+    constexpr u32 kMaxBytes = 64;
+    constexpr u32 kMinInsns = 3;
+
+    std::vector<const BasicBlock*> ordered;
+    ordered.reserve(fn.blocks.size());
+    for (const auto& bb : fn.blocks) ordered.push_back(&bb);
+    std::sort(ordered.begin(), ordered.end(),
+              [](const BasicBlock* a, const BasicBlock* b) {
+                  return a->start < b->start;
+              });
+
+    u32 inst_count = 0;
+    u32 byte_count = 0;
+    u64 h = fnv1a("prefix.v1");
+
+    for (const auto* bb : ordered) {
+        for (const auto& insn : bb->instructions) {
+            if (insn.mnemonic == Mnemonic::Invalid) continue;
+            ++inst_count;
+            byte_count += insn.length;
+            if (inst_count > kMaxInsns || byte_count > kMaxBytes) return 0;
+
+            h = mix64(h, fnv1a(mnemonic_name(insn.mnemonic)));
+            h = mix64(h, static_cast<u64>(insn.num_operands));
+            for (u8 oi = 0; oi < insn.num_operands; ++oi) {
+                const auto& op = insn.operands[oi];
+                h = mix64(h, static_cast<u64>(op.kind));
+                switch (op.kind) {
+                    case Operand::Kind::None:
+                        break;
+                    case Operand::Kind::Register:
+                        h = mix64(h, fnv1a(reg_name(op.reg)));
+                        break;
+                    case Operand::Kind::Memory:
+                        h = mix64(h, fnv1a(reg_name(op.mem.base)));
+                        h = mix64(h, fnv1a(reg_name(op.mem.index)));
+                        h = mix64(h, static_cast<u64>(op.mem.scale));
+                        h = mix64(h, static_cast<u64>(op.mem.size));
+                        if (op.mem.has_disp) {
+                            h = mix64(h, literal_class(static_cast<u64>(op.mem.disp)));
+                        }
+                        break;
+                    case Operand::Kind::Immediate:
+                        h = mix64(h, literal_class(static_cast<u64>(op.imm.value)));
+                        h = mix64(h, static_cast<u64>(op.imm.size));
+                        break;
+                    case Operand::Kind::Relative:
+                        // Branch/call relative — the target is address-
+                        // dependent, so class it. Direction (forward/back)
+                        // is preserved by the sign of offset.
+                        h = mix64(h, op.rel.offset > 0 ? 1u : 0u);
+                        h = mix64(h, static_cast<u64>(op.rel.size));
+                        break;
+                }
+            }
+        }
+    }
+
+    if (inst_count < kMinInsns) return 0;
+    return h;
+}
+
 // Tail half of compute_teef_with_chunks / compute_teef_max — given a
 // post-cleanup IR, run the structurer and produce L2 + chunks. Returns
 // a partially-filled TeefFunction (whole/chunks). Caller is responsible
@@ -680,7 +759,8 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
-    out.topo_hash = compute_topo_hash_from_cfg(*fn_r);
+    out.topo_hash   = compute_topo_hash_from_cfg(*fn_r);
+    out.prefix_hash = compute_prefix_hash(*fn_r);
 
     auto lifter_r = make_lifter(b);
     if (!lifter_r) return out;
@@ -720,7 +800,8 @@ compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
     // (200+ ms on a heavy fn); skipping it for fns that can't match
     // anyway is the difference between a 50-minute scan and a few
     // minutes.
-    out.topo_hash = compute_topo_hash_from_cfg(*fn_r);
+    out.topo_hash   = compute_topo_hash_from_cfg(*fn_r);
+    out.prefix_hash = compute_prefix_hash(*fn_r);
 
     // L0 pre-filter: when the caller passes the corpus's topo-hash
     // set, fns whose topology isn't represented in the corpus return

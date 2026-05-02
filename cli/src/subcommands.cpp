@@ -380,6 +380,8 @@ parse_teef_tsv(std::string_view tsv) {
         auto f = split_tabs(line);
         if (f.empty()) continue;
         if (f[0] == "F" && f.size() >= 24) {
+            // 24-field rows are pre-max.4; 25-field rows carry prefix_hash
+            // in the trailing column.
             // F row: addr  L2_exact  L2_mh*8  name
             //         L4_exact  L4_mh*8  L4_done  L4_aborted  topo_hash
             const addr_t a = static_cast<addr_t>(parse_u64_hex_local(f[1]));
@@ -401,6 +403,7 @@ parse_teef_tsv(std::string_view tsv) {
                             f[22].data() + f[22].size(), aborted);
             tf.behav.traces_aborted = static_cast<u8>(std::min<u32>(aborted, 255));
             tf.topo_hash = parse_u64_hex_local(f[23]);
+            tf.prefix_hash = (f.size() >= 25) ? parse_u64_hex_local(f[24]) : 0u;
             idx_by_addr[a] = out.size();
             out.emplace_back(a, std::move(tf));
         } else if (f[0] == "S" && f.size() >= 3) {
@@ -715,12 +718,15 @@ build_teef_tsv(const Binary& b,
                     name = std::format("sub_{:x}", a);
                 }
                 // F row: F addr L2_exact L2_mh*8 name L4_exact L4_mh*8
-                //         L4_done L4_aborted topo_hash
-                // (24 tab-separated fields). L4 columns trail the name
+                //         L4_done L4_aborted topo_hash prefix_hash
+                // (25 tab-separated fields). L4 columns trail the name
                 // so the structural-only fields stay at fixed positions
                 // 0..11 — handy for grep/awk inspection. topo_hash is
                 // the L0 CFG-shape signal, used by the recognizer as a
-                // pre-filter for L2 jaccard scans.
+                // pre-filter for L2 jaccard scans. prefix_hash is the
+                // L1 byte-prefix hash; non-zero only on tiny fns
+                // (≤16 insns / ≤64 bytes), used as a FLIRT-style fast
+                // path for stubs L2/L4 can't disambiguate.
                 std::string buf =
                     std::format("F\t{:x}\t{:016x}", a, tf.whole.exact_hash);
                 for (u64 mh : tf.whole.minhash) buf += std::format("\t{:016x}", mh);
@@ -732,6 +738,7 @@ build_teef_tsv(const Binary& b,
                                     static_cast<u32>(bs.traces_done),
                                     static_cast<u32>(bs.traces_aborted));
                 buf += std::format("\t{:016x}", tf.topo_hash);
+                buf += std::format("\t{:016x}", tf.prefix_hash);
                 buf += '\n';
 
                 // String-anchor row: S<TAB>addr<TAB>hash1,hash2,...

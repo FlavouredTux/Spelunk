@@ -34,7 +34,7 @@ namespace ember {
 // Schema string is folded into every hash so corpora produced under
 // different rule sets can't silently collide. Bumped on F-row format
 // or any per-fn signal change.
-inline constexpr std::string_view kTeefSchema = "max.3";
+inline constexpr std::string_view kTeefSchema = "max.4";
 
 // Per-function signature: an exact hash of the canonicalized pseudo-C
 // (precision: identifies bit-equivalent algorithms across compiler
@@ -95,6 +95,13 @@ struct TeefFunction {
     // pre-filter and fall through to the full scan, so it's lossy for
     // performance, not for correctness.
     u64                     topo_hash = 0;
+    // L1 byte-prefix hash for tiny fns (≤16 insns AND ≤64 bytes,
+    // ≥3 insns). Hashes the decoded instruction sequence with register
+    // identity preserved and immediates classed (small literals kept,
+    // large addrs collapsed) — FLIRT-style direct identity for stubs
+    // where L2/L4 have too little signal to disambiguate. 0 means
+    // "not tiny" or decode failed; the recognizer skips L1 on those.
+    u64                     prefix_hash = 0;
 };
 
 // Compute the function-level TEEF and per-chunk fingerprints for any

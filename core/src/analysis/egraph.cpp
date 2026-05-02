@@ -135,6 +135,10 @@ u64 EGraph::enode_key(const ENode& n) const noexcept {
     // Pack everything that distinguishes one node from another into a
     // contiguous buffer and FNV it. Order matters so two distinct
     // canonical forms always hash differently.
+    // MSVC has no __attribute__((packed)); use #pragma pack so the
+    // hashed struct has the same byte layout (28 bytes, no trailing
+    // alignment) on every compiler.
+#pragma pack(push, 1)
     struct Packed {
         u16     op;
         u8      type;
@@ -142,7 +146,8 @@ u64 EGraph::enode_key(const ENode& n) const noexcept {
         u32     _pad;
         u64     imm;
         ClassId c0, c1, c2;
-    } __attribute__((packed));
+    };
+#pragma pack(pop)
     Packed p{};
     p.op = static_cast<u16>(n.op);
     p.type = static_cast<u8>(n.type);

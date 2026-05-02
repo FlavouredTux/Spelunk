@@ -308,7 +308,7 @@ TeefCorpus::topo_hashes(std::size_t max_popularity) const {
 }
 
 std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
-    using clock_t  = std::chrono::steady_clock;
+    using steady_t  = std::chrono::steady_clock;
     using ms_t     = std::chrono::duration<double, std::milli>;
     // Per-file load timing. Suppressed when EMBER_QUIET=1; printed
     // unconditionally otherwise (even when stderr isn't a TTY, since
@@ -317,7 +317,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     // gates the noisy progress bars; this is a one-shot per file.
     const bool dbg = !(std::getenv("EMBER_QUIET") != nullptr &&
                        std::getenv("EMBER_QUIET")[0] == '1');
-    const auto t_open = clock_t::now();
+    const auto t_open = steady_t::now();
 
     // ---- Acquire the file as a contiguous byte range -------------------
     // POSIX mmaps for zero-copy parallel parse. Windows reads the whole
@@ -362,7 +362,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     const char* const data = static_cast<const char*>(m);
     const char* const file_end = data + sz;
 #endif
-    const auto t_mmap = clock_t::now();
+    const auto t_mmap = steady_t::now();
 
     // ---- T-row pre-scan ------------------------------------------------
     // T rows are rare (current build_teef_tsv emits none, but the format
@@ -458,7 +458,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         }
         for (auto& th : pool) th.join();
     }
-    const auto t_parsed = clock_t::now();
+    const auto t_parsed = steady_t::now();
 
     // ---- Serial merge into corpus indexes ------------------------------
     // Order matters for correctness: F rows establish idx_by_addr that
@@ -540,7 +540,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         }
     }
 
-    const auto t_merged = clock_t::now();
+    const auto t_merged = steady_t::now();
 #if !defined(_WIN32)
     ::munmap(m, sz);
 #endif
@@ -554,7 +554,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         std::fprintf(stderr,
             "ember: corpus %s: %.1f MB / %zu rows  "
             "(mmap+pre %.0fms · parse %.0fms ×%u · merge %.0fms · total %.0fms)\n",
-            path.c_str(), mb, rows,
+            path.string().c_str(), mb, rows,
             t_open_ms, t_parse_ms, threads, t_merge_ms, t_total_ms);
     }
     return rows;

@@ -9,7 +9,7 @@ document covers what we accept, what we don't, and why.
   or `ui/`. Open a PR; include a test if you're fixing user-visible
   behavior.
 - **New analyses, decoders, lifters, structurer passes.** Same flow.
-  See `assistant.md` for style notes.
+  See the style notes at the bottom of this file.
 - **Documentation.** Fixes to `docs/`, the README, this file, code
   comments. Typos through reorganization, all welcome.
 - **Test fixtures you built yourself.** A small C/Rust/asm source plus
@@ -64,6 +64,18 @@ public issue. See the address in `git log`.
 
 ## Code style
 
-See `assistant.md` for the project's style conventions. Short version:
-C++23, stdlib only, terse and decisive, no speculative error handling,
-edits are batched and tests are run before pushing.
+- C++23, CMake, warnings-as-errors on.
+- stdlib only — no Capstone, Zydis, Ghidra, LLVM, or vendored deps.
+  Don't propose adding libraries.
+- Terse and decisive. No speculative error handling, no fallbacks for
+  cases that can't happen, no validation outside system boundaries.
+- Don't add comments that narrate the obvious. Only note non-obvious
+  invariants, workarounds, or surprises.
+- Goldens live in `tests/golden/`. When you intentionally change
+  behaviour that shifts output, update goldens in the same commit and
+  narrate what changed in the commit message.
+- Build + run tests before pushing:
+  ```sh
+  cmake --build build
+  ctest --test-dir build
+  ```

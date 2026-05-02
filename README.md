@@ -129,6 +129,7 @@ ember [options] <binary>
 
       --regions PATH     load via raw-region manifest (Scylla-style scrape)
       --apply-patches F  apply (vaddr_hex, bytes_hex) patches to the binary
+      --trace PATH        load observed indirect edges (TSV: from_va  to_va)
       --cache-dir DIR    override ~/.cache/ember
       --no-cache         bypass the on-disk cache
 ```
@@ -229,6 +230,39 @@ The minidump loader pulls per-module symbols from each module's
 in-memory PE headers, so imports and exports get named even when the
 on-disk image was junk. Module-name collisions get prefixed:
 `kernel32!CreateFileA`.
+
+## Runtime indirect-call traces
+
+For callbacks, JIT glue, VM dispatch, and C++ calls where the static
+shape does not bottom out at an IAT slot or constant vtable, feed Ember
+observed indirect edges:
+
+```sh
+ember --trace edges.tsv --resolve-calls -p -s call_fp ./target
+```
+
+`edges.tsv` is tab-separated `from_va  to_va`, where `from_va` is the
+indirect call instruction and `to_va` is an observed target. Trace edges
+are used by CFG recovery and by pseudo-C emission. A traced
+function-pointer wrapper such as:
+
+```c
+int call_fp(int (*fn)(int), int x) {
+    return fn(x) + 1;
+}
+```
+
+renders as:
+
+```c
+u32 call_fp(u32 (*fn)(u32), u32 x) {
+  return plus7(x) /* observed targets: plus7, minus3 */ + 1;
+}
+```
+
+The first observed target names the expression; additional observed
+targets stay attached as a compact comment so the dynamic evidence is
+not lost.
 
 ## Library function recognition (TEEF Max)
 
@@ -415,9 +449,11 @@ Active. The pipeline is solid enough to beat hand-reading x86-64 on
 real binaries; pseudo-C output is generally readable and improves
 visibly with `--ipa --resolve-calls --eh` on. Known rough edges:
 
-- Indirect calls without IAT or constant-vtable shape render as
-  `(*(u64*)0x...)(...)`. Receiver-typed dispatch is gated on the IPA
-  work in progress.
+- Indirect calls without IAT or constant-vtable shape need either
+  `--trace` observations or stronger receiver-type facts. Trace-fed
+  callbacks render with named targets, recovered arity, function-pointer
+  parameter types, narrowed integer widths, and multi-target comments.
+  Static receiver-typed dispatch is gated on the IPA work in progress.
 - Sub-register arithmetic corners can still look clunky after the
   cast-simplification pass.
 - Switch cases whose default falls outside the bounds check can

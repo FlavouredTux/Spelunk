@@ -375,6 +375,15 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache) {
             for (const auto& inst : bb.insts) {
                 if (inst.op != IrOp::CallIndirect) continue;
                 if (inst.src_count < 1 || inst.source_addr == 0) continue;
+                if (auto traced = b.indirect_edges_from(inst.source_addr);
+                    !traced.empty()) {
+                    const addr_t t = traced.front();
+                    if (addr_in_executable_section(b, t) ||
+                        b.import_at_plt(t) != nullptr) {
+                        out.emplace(inst.source_addr, t);
+                        continue;
+                    }
+                }
                 if (auto t = resolve_target(b, defs, vtables, inst.srcs[0]); t) {
                     out.emplace(inst.source_addr, *t);
                 }

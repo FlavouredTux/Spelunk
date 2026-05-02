@@ -1,0 +1,4 @@
+// call_fp
+u32 call_fp(u32 (*fn)(u32), u32 x) {
+  return plus7(x) /* observed targets: plus7, minus3 */ + 1;
+}

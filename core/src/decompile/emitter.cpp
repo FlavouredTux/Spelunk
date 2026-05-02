@@ -142,6 +142,7 @@ struct Emitter {
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
     std::map<SsaKey, std::string>                    call_return_names;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
+    std::map<SsaKey, std::string>                    merge_value_names;
     // SSA values whose C binding has already been emitted in this function
     // body. Used by the materializer to avoid exposing fallback names like
     // `rax_3` / `t17` when a structured condition or return reads a value
@@ -476,6 +477,10 @@ struct Emitter {
         // producer: render a stable name rather than a raw register so the
         // output never mentions architectural names like `rax`, `rdx`.
         if (version > 0) {
+            SsaKey k{u8{0}, static_cast<u32>(canonical_reg(r)), version};
+            if (auto it = merge_value_names.find(k); it != merge_value_names.end()) {
+                return it->second;
+            }
             return std::format("{}_{}", reg_name(r), version);
         }
         return std::string(reg_name(r));
@@ -805,6 +810,24 @@ struct Emitter {
                            inst.segment == Reg::None) {
                     record_struct_access(inst.srcs[0]);
                 }
+            }
+        }
+    }
+
+    void name_merge_values() {
+        std::set<std::string> used;
+        u32 n = 0;
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Phi) continue;
+                auto k = ssa_key(inst.dst);
+                if (!k || use_count_by_key(*k) == 0) continue;
+                std::string name;
+                do {
+                    name = std::format("v{}", n++);
+                } while (used.contains(name));
+                used.insert(name);
+                merge_value_names.emplace(*k, std::move(name));
             }
         }
     }
@@ -1998,6 +2021,11 @@ struct Emitter {
     }
 
     [[nodiscard]] std::optional<std::string> fallback_ssa_name(const IrValue& v) const {
+        if (auto k = ssa_key(v); k) {
+            if (auto it = merge_value_names.find(*k); it != merge_value_names.end()) {
+                return it->second;
+            }
+        }
         switch (v.kind) {
             case IrValueKind::Reg:
                 if (v.version == 0) return std::nullopt;
@@ -2011,6 +2039,12 @@ struct Emitter {
 
     void mark_binding_emitted(const IrValue& v) const {
         if (auto k = ssa_key(v); k) emitted_bindings.insert(*k);
+    }
+
+    [[nodiscard]] bool renders_raw_arch_reg_name(const IrValue& v) const {
+        if (v.kind != IrValueKind::Reg || v.version == 0) return false;
+        const std::string raw = std::format("{}_{}", reg_name(v.reg), v.version);
+        return expr(v, 1, 0) == raw;
     }
 
     void emit_materializations_for_value(const IrValue& v,
@@ -3540,21 +3574,19 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         return s;
     };
 
-    // When we know the callee's arity, show exactly that many args.
-    // Special case: arity == max_arity (6 on SysV / 4 on Win64) is what
-    // the heuristic infer_arity returns when it couldn't analyse the
-    // callee's body — e.g. an obfuscated stub or an entry whose bytes
-    // didn't decode. In those cases we don't actually know the real
-    // arity; trim the trailing args that look stale (live-in arg regs
-    // the caller never set, or unbound call-clobber pass-throughs)
-    // before printing. A genuinely max-arg function would have caller-
-    // set values in every slot, so no trim happens. Below max_arity we
-    // trust the inference and print exactly that many args.
-    const u8 max_int_arity = static_cast<u8>(int_arg_regs(abi).size());
+    // When we know the callee's arity, show up to that many args. Trim
+    // trailing args that are provably stale ABI register pass-throughs:
+    // live-ins the caller never set, or values whose only local def is a
+    // call-clobber marker. This used to happen only for max-arity guesses,
+    // but stripped callees can infer a smaller concrete arity from noisy
+    // register reads; printing `foo(a1, rdx_4, rcx_3)` is worse than
+    // admitting the trailing values were not real caller-provided args.
     auto format_call_args_with_arity = [&](const std::vector<IrValue>& args, u8 arity) {
         std::size_t limit = std::min<std::size_t>(arity, args.size());
-        if (arity == max_int_arity) {
-            while (limit > 0 && is_stale_arg_reg(args[limit - 1])) --limit;
+        while (limit > 0 &&
+               (is_stale_arg_reg(args[limit - 1]) ||
+                renders_raw_arch_reg_name(args[limit - 1]))) {
+            --limit;
         }
         std::string s;
         for (std::size_t i = 0; i < limit; ++i) {
@@ -3743,46 +3775,6 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
 
     flush_args_as_intrinsics();
 
-    // Loop-back-edge phi update visualisation. For each *back-edge*
-    // successor (one whose start address is at-or-before this block),
-    // surface the phi's per-iteration update as a synthetic
-    // `<reg> = <expr>;` so accumulator loops don't decompile to
-    // `do { } while (cond)` with the body invisible.
-    //
-    // Restricted to back-edges to avoid leaking forward-merge phis the
-    // structurer has already consumed via sink-return. Forward phis
-    // typically end up resolved at the Return / IfElse the structurer
-    // restructured, and their dst's only "use" is in that consumed
-    // Return — emitting an extra `rax = 0;` ahead of `return 0;` is
-    // redundant noise.
-    for (addr_t succ : bb.successors) {
-        if (succ > bb.start) continue;  // forward edge — skip
-        auto sit = fn->block_at.find(succ);
-        if (sit == fn->block_at.end()) continue;
-        const auto& sbb = fn->blocks[sit->second];
-        for (const auto& phi : sbb.insts) {
-            if (phi.op != IrOp::Phi) continue;
-            if (phi.dst.kind != IrValueKind::Reg) continue;
-            auto dst_key = ssa_key(phi.dst);
-            if (!dst_key) continue;
-            if (use_count_by_key(*dst_key) == 0) continue;
-            const std::size_t n = std::min(phi.phi_operands.size(),
-                                           phi.phi_preds.size());
-            for (std::size_t i = 0; i < n; ++i) {
-                if (phi.phi_preds[i] != bb.start) continue;
-                const IrValue& op = phi.phi_operands[i];
-                auto opk = ssa_key(op);
-                if (opk && opk == dst_key) continue;  // self-ref
-                // Use the canonical reg name without version subscript so
-                // back-edge updates read as `r14 = r14 + …;` rather
-                // than `r14_3 = r14_2 + …;`.
-                const std::string lhs(reg_name(phi.dst.reg));
-                const std::string rhs = expr(op, 0, 0);
-                if (rhs == lhs) continue;
-                out += std::format("{}{} = {};\n", ind, lhs, rhs);
-            }
-        }
-    }
 }
 
 void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
@@ -4245,6 +4237,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
     }
     e.analyze(*sf.ir);
+    e.name_merge_values();
     e.frame_layout = compute_frame_layout(*sf.ir, binary);
     if (sf.body) {
         e.suppress_canary_regions(*sf.body);
@@ -4530,6 +4523,12 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (sf.body) {
         e.emit_region(*sf.body, 1, body_buf);
     }
+    for (const auto& [k, name] : e.merge_value_names) {
+        if (body_buf.find(name) == std::string::npos) continue;
+        auto dit = e.defs.find(k);
+        if (dit == e.defs.end()) continue;
+        out += std::format("  {} {};\n", e.c_type_name_for(dit->second->dst), name);
+    }
     // Slot extent → array recovery: if a slot's footprint (the gap to the
     // next slot above it in the frame) is bigger than its observed access
     // width, the user wrote `T arr[N]`, not a single scalar. Render it as
@@ -4736,6 +4735,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
         e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
     }
     e.analyze(*sf.ir);
+    e.name_merge_values();
     if (!has_user_sig) e.bump_arity_from_body_reads();
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
@@ -4751,6 +4751,11 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
                                     ? std::string("<unknown>") : sf.ir->name);
     out += std::format("//   per-block pseudo-C ({} blocks)\n",
                        sf.ir->blocks.size());
+    for (const auto& [k, name] : e.merge_value_names) {
+        auto dit = e.defs.find(k);
+        if (dit == e.defs.end()) continue;
+        out += std::format("//   {} {};\n", e.c_type_name_for(dit->second->dst), name);
+    }
 
     const auto rpo = compute_rpo(*sf.ir);
     for (addr_t ba : rpo) {

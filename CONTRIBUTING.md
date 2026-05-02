@@ -59,8 +59,8 @@ publish the output of it.
 ## Reporting security issues
 
 For vulnerabilities in ember itself (parser bugs, debugger memory
-safety, etc.), email the maintainer directly rather than filing a
-public issue. See the address in `git log`.
+safety, etc.), see `SECURITY.md` for private disclosure via GitHub's
+security advisories.
 
 ## Code style
 

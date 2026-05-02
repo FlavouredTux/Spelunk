@@ -447,15 +447,20 @@ CI runs in a `gcc:15` container so goldens are toolchain-stable.
 
 Active. The pipeline is solid enough to beat hand-reading x86-64 on
 real binaries; pseudo-C output is generally readable and improves
-visibly with `--ipa --resolve-calls --eh` on. Known rough edges:
+visibly with `--ipa --resolve-calls --eh` on.
 
-- Indirect calls without IAT or constant-vtable shape need either
-  `--trace` observations or stronger receiver-type facts. Trace-fed
-  callbacks render with named targets, recovered arity, function-pointer
-  parameter types, narrowed integer widths, and multi-target comments.
-  Static receiver-typed dispatch is gated on the IPA work in progress.
-- Sub-register arithmetic corners can still look clunky after the
-  cast-simplification pass.
+Recent pseudo-C cleanup fixed the main readability traps from the last
+round of stripped-binary testing: trace-fed indirect calls now render
+with named targets, recovered arity, function-pointer parameter types,
+narrowed integer widths, and multi-target comments; pointer-like
+comparison constants stay numeric instead of turning into accidental
+string literals; and suppressed SSA values are materialized before use
+instead of leaking raw names like `rax_3`.
+
+Known remaining limits:
+
+- Indirect calls without IAT, constant-vtable shape, trace observations,
+  or receiver-type facts still fall back to expression calls.
 - Switch cases whose default falls outside the bounds check can
   misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and

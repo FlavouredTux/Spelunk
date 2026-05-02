@@ -1,5 +1,5 @@
 // sse_memclr
-u64 sse_memclr(void) {
+void sse_memclr(void) {
   rep.stosq(0x404040, 0, 0x200);
-  return rax_2;
+  return;
 }

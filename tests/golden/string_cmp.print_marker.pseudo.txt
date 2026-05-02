@@ -1,0 +1,4 @@
+// print_marker
+u64 print_marker(void) {
+  return puts("PlatformImpl");
+}

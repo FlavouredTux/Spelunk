@@ -142,6 +142,11 @@ struct Emitter {
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
     std::map<SsaKey, std::string>                    call_return_names;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
+    // SSA values whose C binding has already been emitted in this function
+    // body. Used by the materializer to avoid exposing fallback names like
+    // `rax_3` / `t17` when a structured condition or return reads a value
+    // whose defining IR statement was otherwise suppressed as single-use.
+    mutable std::set<SsaKey>                          emitted_bindings;
 
     // Try to resolve an integer immediate as a pointer to a NUL-terminated
     // printable string in the binary image. Results are cached.
@@ -1331,6 +1336,30 @@ struct Emitter {
         return false;
     }
 
+    [[nodiscard]] bool is_unbound_clobber_result(const IrValue& v) const {
+        if (v.kind != IrValueKind::Reg) return false;
+        const IrInst* def = def_of(v);
+        if (!def || def->op != IrOp::Clobber) return false;
+        auto k = ssa_key(v);
+        if (!k) return false;
+        if (call_return_names.contains(*k) ||
+            fold_return_expr.contains(*k) ||
+            fold_void_call_stmt.contains(*k)) {
+            return false;
+        }
+        auto pos_it = def_pos.find(*k);
+        if (pos_it == def_pos.end()) return true;
+        auto [bi, ii] = pos_it->second;
+        const auto& bb = fn->blocks[bi];
+        while (ii > 0) {
+            --ii;
+            const IrInst& prev = bb.insts[ii];
+            if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
+            return prev.op != IrOp::Call && prev.op != IrOp::CallIndirect;
+        }
+        return true;
+    }
+
     // Find Return regions whose value is the ABI integer return register
     // coming directly from a call's Clobber — record the Call position and
     // the SSA key so emit_block
@@ -1968,6 +1997,87 @@ struct Emitter {
         return true;
     }
 
+    [[nodiscard]] std::optional<std::string> fallback_ssa_name(const IrValue& v) const {
+        switch (v.kind) {
+            case IrValueKind::Reg:
+                if (v.version == 0) return std::nullopt;
+                return std::format("{}_{}", reg_name(v.reg), v.version);
+            case IrValueKind::Temp:
+                return std::format("t{}", v.temp);
+            default:
+                return std::nullopt;
+        }
+    }
+
+    void mark_binding_emitted(const IrValue& v) const {
+        if (auto k = ssa_key(v); k) emitted_bindings.insert(*k);
+    }
+
+    void emit_materializations_for_value(const IrValue& v,
+                                         int depth,
+                                         std::string& out,
+                                         std::string_view ind) const {
+        if (depth > 12) return;
+        if (v.kind != IrValueKind::Reg && v.kind != IrValueKind::Temp) return;
+        auto k = ssa_key(v);
+        if (!k || emitted_bindings.contains(*k)) return;
+        const IrInst* d = def_of(v);
+        if (!d) return;
+
+        // If the regular expression renderer can produce anything better
+        // than the raw SSA fallback name, use that at the use site instead
+        // of inventing a redundant binding.
+        const auto fallback = fallback_ssa_name(v);
+        if (!fallback) return;
+        if (expr(v, depth + 1, 0) != *fallback) {
+            return;
+        }
+
+        // Phi and clobber defs need path/call-site context. Calls should be
+        // handled by call_return_names; divergent phis are better left as a
+        // stable SSA name than rendered as a misleading unconditional assign.
+        if (d->op == IrOp::Phi || d->op == IrOp::Clobber) return;
+        if (d->op != IrOp::Assign && d->op != IrOp::Load &&
+            d->op != IrOp::Intrinsic && !inlinable_op(d->op)) {
+            return;
+        }
+
+        for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
+            emit_materializations_for_value(d->srcs[i], depth + 1, out, ind);
+        }
+
+        std::string rhs;
+        if (d->op == IrOp::Intrinsic) {
+            std::string args;
+            for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(d->srcs[i]);
+            }
+            rhs = std::format("{}({})", d->name, args);
+        } else if (d->op == IrOp::Load) {
+            if (d->src_count < 1) return;
+            rhs = format_mem(d->srcs[0], d->dst.type, d->segment);
+        } else if (d->op == IrOp::Assign) {
+            if (d->src_count < 1) return;
+            rhs = expr(d->srcs[0]);
+        } else {
+            rhs = expand(*d, 0);
+        }
+        if (rhs.empty()) return;
+        out += std::format("{}{} {} = {};\n",
+                           ind, c_type_name_for(v), *fallback, rhs);
+        emitted_bindings.insert(*k);
+    }
+
+    void emit_materializations_for_inst(const IrInst& inst,
+                                        std::string& out,
+                                        std::string_view ind) const {
+        if (inst.op == IrOp::Phi || is_call_arg_barrier(inst)) return;
+        for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+            emit_materializations_for_value(inst.srcs[i], 0, out, ind);
+        }
+    }
+
     // Trace a value back through Add/Sub/Assign chains to see if it's rsp/rbp-relative.
     [[nodiscard]] std::optional<i64> stack_offset(const IrValue& v, int depth = 0) const {
         if (depth > 16) return std::nullopt;
@@ -2018,6 +2128,15 @@ struct Emitter {
     }
 
     [[nodiscard]] std::string format_imm(const IrValue& v) const {
+        return format_imm_impl(v, /*allow_string_literals=*/true);
+    }
+
+    [[nodiscard]] std::string format_numeric_imm(const IrValue& v) const {
+        return format_imm_impl(v, /*allow_string_literals=*/false);
+    }
+
+    [[nodiscard]] std::string format_imm_impl(const IrValue& v,
+                                              bool allow_string_literals) const {
         // Annotated constant? Lets users name a hash, magic value, or
         // sentinel without touching the binary. The original hex stays
         // in a trailing comment so the user can audit the substitution.
@@ -2048,14 +2167,16 @@ struct Emitter {
         // `{isa, flags, data, length}` records for compile-time NSString/
         // CFString constants. Rendering as `@"..."` matches what the
         // source-level code actually wrote.
-        if (binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
+        if (allow_string_literals &&
+            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
             if (auto s = try_decode_cfstring(static_cast<u64>(v.imm)); s) {
                 return "@" + escape_string(*s);
             }
         }
         // If the immediate points into the binary and resolves to a NUL-terminated
         // printable string, render as a C string literal.
-        if (binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
+        if (allow_string_literals &&
+            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
             if (auto s = try_string_at(static_cast<u64>(v.imm)); s) {
                 return escape_string(*s);
             }
@@ -2815,8 +2936,13 @@ struct Emitter {
         // otherwise the compare's own precedence is enough.
         const int lp = cast_l ? std::to_underlying(Prec::Unary) : p;
         const int rp = cast_r ? std::to_underlying(Prec::Unary) : p + 1;
-        std::string left  = expr(a, depth + 1, lp);
-        std::string right = expr(b, depth + 1, rp);
+        auto cmp_expr = [&](const IrValue& v, int prec) {
+            return v.kind == IrValueKind::Imm
+                ? format_numeric_imm(v)
+                : expr(v, depth + 1, prec);
+        };
+        std::string left  = cmp_expr(a, lp);
+        std::string right = cmp_expr(b, rp);
         if (cast_l) left  = std::format("({}){}", c, left);
         if (cast_r) right = std::format("({}){}", c, right);
         return wrap_if_lt(std::format("{} {} {}", left, op, right), own, min_prec);
@@ -3475,6 +3601,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         }
 
         if (inst.op == IrOp::Call) {
+            for (const auto& a : pending_args) {
+                emit_materializations_for_value(a, 0, out, ind);
+            }
             auto import_name = import_name_for_direct_call(inst.target1);
             // Arity sources: imports → user sig at PLT / baked-in libc table;
             // printf/scanf family → parse format string to count args;
@@ -3510,6 +3639,10 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 have_pending = false;
                 out += std::format("{}(*?)();\n", ind);
                 continue;
+            }
+            emit_materializations_for_value(inst.srcs[0], 0, out, ind);
+            for (const auto& a : pending_args) {
+                emit_materializations_for_value(a, 0, out, ind);
             }
             std::string call_expr;
             if (auto name = import_name_for_indirect_call(inst.srcs[0]); name) {
@@ -3594,6 +3727,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             continue;
         }
 
+        emit_materializations_for_inst(inst, out, ind);
         const std::string stmt = format_stmt(inst);
         if (!stmt.empty()) {
             flush_args_as_intrinsics();
@@ -3603,6 +3737,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 options.line_map->hits.push_back({out.size(), inst.source_addr});
             }
             out += std::format("{}{}\n", ind, stmt);
+            mark_binding_emitted(inst.dst);
         }
     }
 
@@ -3785,28 +3920,40 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
     // — emitting the dead conditional is just visual noise, since the
     // condition itself has no observable effect.
     std::string body;
+    const auto bindings_before_body = emitted_bindings;
     if (!r.children.empty()) emit_region(*r.children[0], depth + 1, body);
+    const auto bindings_after_body = emitted_bindings;
+    emitted_bindings = bindings_before_body;
     if (body.empty()) return;
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    emit_materializations_for_value(r.condition, 0, out, ind);
     const std::string cond = render_condition(r.condition, r.invert);
     out += std::format("{}if ({}) {{\n", ind, cond);
     out += body;
+    emitted_bindings.insert(bindings_after_body.begin(), bindings_after_body.end());
     out += std::format("{}}}\n", ind);
 }
 
 void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    const auto bindings_before_children = emitted_bindings;
     std::string then_buf;
     if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, then_buf);
+    auto bindings_after_then = emitted_bindings;
+    emitted_bindings = bindings_before_children;
     std::string else_buf;
     if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, else_buf);
+    auto bindings_after_else = emitted_bindings;
+    emitted_bindings = bindings_before_children;
     // If only the else arm has content, invert the condition and drop the
     // dead then. Reads much cleaner than `if (!x) {} else {…}`.
     bool invert_effective = r.invert;
     if (then_buf.empty() && !else_buf.empty()) {
         invert_effective = !invert_effective;
         std::swap(then_buf, else_buf);
+        std::swap(bindings_after_then, bindings_after_else);
     }
+    emit_materializations_for_value(r.condition, 0, out, ind);
     const std::string cond = render_condition(r.condition, invert_effective);
     // Early-return collapse: when the then arm always exits (last statement
     // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
@@ -3818,20 +3965,28 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     if (r.children.size() > 1 && r.children[0] && r.children[1] &&
         region_always_exits(*r.children[0])) {
         std::string else_outer;
+        const auto bindings_before_else_outer = emitted_bindings;
         emit_region(*r.children[1], depth, else_outer);
+        const auto bindings_after_else_outer = emitted_bindings;
+        emitted_bindings = bindings_before_else_outer;
         if (!else_outer.empty()) {
             out += std::format("{}if ({}) {{\n", ind, cond);
             out += then_buf;
+            emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
             out += std::format("{}}}\n", ind);
             out += else_outer;
+            emitted_bindings.insert(bindings_after_else_outer.begin(),
+                                   bindings_after_else_outer.end());
             return;
         }
     }
     out += std::format("{}if ({}) {{\n", ind, cond);
     out += then_buf;
+    emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
     if (!else_buf.empty()) {
         out += std::format("{}}} else {{\n", ind);
         out += else_buf;
+        emitted_bindings.insert(bindings_after_else.begin(), bindings_after_else.end());
     }
     out += std::format("{}}}\n", ind);
 }
@@ -3853,10 +4008,14 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
 
     std::string header_buf;
+    const auto bindings_before_header = emitted_bindings;
     if (!r.children.empty()) {
         emit_region(*r.children[0], depth + 1, header_buf);
     }
+    const auto bindings_after_header = emitted_bindings;
+    emitted_bindings = bindings_before_header;
     if (header_buf.empty()) {
+        emit_materializations_for_value(r.condition, 0, out, ind);
         const std::string cond = render_condition(r.condition, r.invert);
         out += std::format("{}while ({}) {{\n", ind, cond);
         for (std::size_t i = 1; i < r.children.size(); ++i) {
@@ -3868,6 +4027,8 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     const std::string break_cond = render_condition(r.condition, !r.invert);
     out += std::format("{}for (;;) {{\n", ind);
     out += header_buf;
+    emitted_bindings.insert(bindings_after_header.begin(), bindings_after_header.end());
+    emit_materializations_for_value(r.condition, 0, out, inner_ind);
     out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
     for (std::size_t i = 1; i < r.children.size(); ++i) {
         emit_region(*r.children[i], depth + 1, out);
@@ -3895,6 +4056,7 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
     const std::string update = r.has_update
         ? render_update_inst(r.update_block, r.update_inst)
         : std::string{};
+    emit_materializations_for_value(r.condition, 0, out, ind);
     const std::string cond = render_condition(r.condition, r.invert);
     if (update.empty()) {
         out += std::format("{}while ({}) {{\n", ind, cond);
@@ -3923,6 +4085,10 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         out += std::format("{}return;\n", ind);
         return;
     }
+    if (is_unbound_clobber_result(r.condition)) {
+        out += std::format("{}return;\n", ind);
+        return;
+    }
     if (auto k = ssa_key(r.condition); k) {
         auto f = fold_return_expr.find(*k);
         if (f != fold_return_expr.end()) {
@@ -3940,6 +4106,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
             && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
         v = d->srcs[0];
     }
+    emit_materializations_for_value(v, 0, out, ind);
     out += std::format("{}return {};\n", ind, expr(v));
 }
 
@@ -4124,6 +4291,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             if (r.kind == RegionKind::Return &&
                 r.condition.kind != IrValueKind::None) {
                 if (e.is_void_call_result(r.condition)) return;
+                if (e.is_unbound_clobber_result(r.condition)) return;
                 IrValue v = r.condition;
                 if (narrow_return_from_indirect_evidence) {
                     if (const IrInst* d = e.def_of(v); d && d->src_count >= 1

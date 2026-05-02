@@ -174,6 +174,7 @@ ember_build_fixture(decoder_misc)
 ember_build_fixture(tail_call)
 ember_build_fixture(indirect_tail)
 ember_build_fixture(indirect_trace)
+ember_build_fixture(string_cmp)
 # -O0 so the compiler literally emits every redundant store; at -O2 the
 # compiler would DSE itself and leave nothing for us to test.
 ember_build_fixture(dead_store OPT "-O0")
@@ -553,6 +554,20 @@ ember_golden_test(
     FIXTURE indirect_trace
     ARGS    "--trace|${_fixture_dir}/indirect_trace.trace|--resolve-calls|-p|-s|call_fp"
     GOLDEN  indirect_trace.call_fp.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    string_cmp_cmp_marker_pseudo
+    FIXTURE string_cmp
+    ARGS    "-p|-s|cmp_marker"
+    GOLDEN  string_cmp.cmp_marker.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    string_cmp_print_marker_pseudo
+    FIXTURE string_cmp
+    ARGS    "-p|-s|print_marker"
+    GOLDEN  string_cmp.print_marker.pseudo.txt
 )
 
 # printf/fprintf — variadic arg trimming driven by format-string parsing.

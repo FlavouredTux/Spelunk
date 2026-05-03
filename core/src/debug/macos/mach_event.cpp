@@ -333,6 +333,12 @@ Result<Event> MachOTarget::wait_event() {
                 ts.parked_at_bp = bp->info.id;
                 return Event{EvBreakpointHit{tid, bp->info.id, fault_va}};
             }
+            // Not a debugger-placed breakpoint — try the int3
+            // resolver callback if one is registered.
+            if (const auto& resolver = int3_resolver()) {
+                auto resolution = resolver(pc);
+                return Event{EvInt3Trap{tid, pc, std::move(resolution)}};
+            }
             return Event{EvSignal{tid, SIGTRAP}};
         }
 

@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <set>
 #include <span>
 #include <string>
 #include <vector>
 
+#include <ember/analysis/int3_resolver.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
 #include <ember/debug/breakpoint.hpp>
@@ -87,6 +89,20 @@ public:
     [[nodiscard]] virtual Result<void>  cont      ()             = 0;
     [[nodiscard]] virtual Result<void>  interrupt ()             = 0;
     [[nodiscard]] virtual Result<Event> wait_event()             = 0;
+
+    // ---- Int3 resolver callback ------------------------------------------
+    // When set, the event loop calls this on an unexpected int3 (one
+    // that doesn't match a debugger-placed breakpoint) instead of
+    // emitting a bare EvSignal{SIGTRAP}. The callback receives the
+    // int3's VA and returns an Int3Resolution; the event loop wraps
+    // it in EvInt3Trap. When not set (default), the old EvSignal
+    // behaviour is preserved.
+    using Int3ResolverFn = std::function<Int3Resolution(addr_t)>;
+    void set_int3_resolver(Int3ResolverFn fn) { int3_resolver_ = std::move(fn); }
+    [[nodiscard]] const Int3ResolverFn& int3_resolver() const noexcept { return int3_resolver_; }
+
+private:
+    Int3ResolverFn int3_resolver_;
 };
 
 // Platform dispatch. Linux: ptrace. macOS/Windows: NotImplemented for v0.

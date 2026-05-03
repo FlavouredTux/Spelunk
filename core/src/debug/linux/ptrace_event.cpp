@@ -317,7 +317,17 @@ Result<Event> LinuxTarget::wait_event() {
                     ts.parked_at_bp = bp->info.id;
                     return Event{EvBreakpointHit{tid, bp->info.id, hit_pc}};
                 }
+                // Not a debugger-placed breakpoint — try the int3
+                // resolver callback if one is registered.
+                if (const auto& resolver = int3_resolver()) {
+                    auto resolution = resolver(hit_pc);
+                    return Event{EvInt3Trap{tid, hit_pc, std::move(resolution)}};
+                }
                 return Event{EvSignal{tid, stopsig}};
+            }
+            if (const auto& resolver = int3_resolver()) {
+                auto resolution = resolver(0);  // couldn't read regs
+                return Event{EvInt3Trap{tid, 0, std::move(resolution)}};
             }
             return Event{EvSignal{tid, stopsig}};
         }

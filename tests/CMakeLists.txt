@@ -64,6 +64,13 @@ add_executable(ember_egraph_test egraph_test.cpp)
 target_link_libraries(ember_egraph_test PRIVATE ember::core ember::flags)
 add_test(NAME egraph_unit COMMAND ember_egraph_test)
 
+# Unit test for the int3 resolver. Self-contained: a MockBinary with
+# hand-placed 0xCC bytes so the classifier is exercised without a
+# compiled C fixture.
+add_executable(ember_int3_resolver_test int3_resolver_test.cpp)
+target_link_libraries(ember_int3_resolver_test PRIVATE ember::core ember::flags)
+add_test(NAME int3_resolver_unit COMMAND ember_int3_resolver_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

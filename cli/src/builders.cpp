@@ -14,6 +14,7 @@
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/analysis/vm_detect.hpp>
+#include <ember/analysis/int3_resolver.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/disasm/register.hpp>
@@ -280,6 +281,55 @@ std::string build_vm_detect_output(const Binary& b) {
             out += std::format("    ... +{} more\n", vm.handlers.size() - shown);
         }
         ++idx;
+    }
+    return out;
+}
+
+std::string build_int3_resolve_output(const Binary& b) {
+    auto fn_label = [&](addr_t va) -> std::string {
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.addr == va && !s.name.empty()) return s.name;
+        }
+        return std::format("sub_{:x}", va);
+    };
+
+    std::string out;
+    auto results = resolve_embedded_int3s(b);
+    if (results.empty()) {
+        out = "(no embedded int3 bytes found)\n";
+        return out;
+    }
+
+    out += std::format("embedded int3 sites: {}\n", results.size());
+    out += "\n";
+
+    // Group by kind for a summary header.
+    std::unordered_map<Int3Kind, std::size_t> by_kind;
+    for (const auto& r : results) ++by_kind[r.kind];
+    out += "summary by kind:\n";
+    for (auto [kind, count] : by_kind) {
+        out += std::format("  {:12s} {}\n", int3_kind_name(kind), count);
+    }
+    out += "\n";
+
+    // Per-site detail.
+    for (const auto& r : results) {
+        out += std::format("{:#x}  {:14s}", r.addr, int3_kind_name(r.kind));
+        if (r.kind == Int3Kind::StubbedBranch && r.predicate) {
+            out += std::format("[{}] ", branch_predicate_name(*r.predicate));
+        }
+        if (r.containing_fn != 0) {
+            out += std::format("  in {}+{:#x}",
+                               fn_label(r.containing_fn), r.fn_offset);
+        } else {
+            out += "  (outside any function)";
+        }
+        if (!r.note.empty()) {
+            out += std::format("  — {}", r.note);
+        }
+        out += "\n";
     }
     return out;
 }

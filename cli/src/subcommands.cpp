@@ -1380,6 +1380,10 @@ int run_vm_detect(const Args& args, const Binary& b) {
     return run_cached(args, "vm-detect", [&] { return build_vm_detect_output(b); });
 }
 
+int run_int3_resolve(const Args& args, const Binary& b) {
+    return run_cached(args, "int3-resolve", [&] { return build_int3_resolve_output(b); });
+}
+
 int run_arities(const Args& args, const Binary& b) {
     return run_cached(args, "arities", [&] { return build_arities_output(b); });
 }

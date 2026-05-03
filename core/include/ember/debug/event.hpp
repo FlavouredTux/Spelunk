@@ -2,6 +2,7 @@
 
 #include <variant>
 
+#include <ember/analysis/int3_resolver.hpp>
 #include <ember/common/types.hpp>
 #include <ember/debug/breakpoint.hpp>
 #include <ember/debug/types.hpp>
@@ -38,6 +39,12 @@ struct EvSyscallStop {
 // Single-step finished — used by step() and the breakpoint step-over.
 struct EvSingleStep    { ThreadId tid; addr_t pc; };
 
+// An int3 that wasn't placed by the debugger. `resolution` explains
+// the likely reason (padding, anti-debug trap, __debugbreak, etc.).
+// Emitted instead of bare EvSignal{SIGTRAP} when an int3_resolver
+// callback is registered on the Target.
+struct EvInt3Trap      { ThreadId tid; addr_t pc; Int3Resolution resolution; };
+
 // Tracee received a signal we don't intercept (SIGSEGV, SIGFPE, …).
 // The signal is held; cont() forwards it back unless the caller clears
 // it via set_regs / explicit suppress (deferred for v0).
@@ -68,6 +75,7 @@ using Event = std::variant<
     EvWatchpointHit,
     EvSyscallStop,
     EvSingleStep,
+    EvInt3Trap,
     EvSignal,
     EvStopped,
     EvThreadCreated,

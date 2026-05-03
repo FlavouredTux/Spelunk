@@ -187,14 +187,14 @@ struct Emitter {
                 s += std::format("\\x{:02x}", c);
                 ++escaped_count;
             }
-            // Heuristic for "this is actually a string": at least 3
+            // Heuristic for "this is actually a string": at least 2
             // printable characters (excluding hex-escapes), and printable
-            // bytes outnumber escaped ones. Three-char keywords like
-            // "add", "sub", "nop", "%s\n" are real string content in
-            // codegen tables; the printable-vs-escaped tiebreak still
-            // keeps `*(u64*)(" ")`-style noise out.
-            if (terminated && printable_count >= 3 &&
-                printable_count > escaped_count) {
+            // bytes outnumber escaped ones. Two-char format specifiers like
+            // "%d", "%s", "%c" and short keywords like "OK", "No" are real
+            // string content in codegen tables; the printable-vs-escaped
+            // tiebreak still keeps `*(u64*)(" ")`-style noise out.
+            if (terminated && printable_count >= 2 &&
+                printable_count >= escaped_count) {
                 result = std::move(s);
             }
         }
@@ -1902,6 +1902,106 @@ struct Emitter {
             r.kind = RegionKind::Empty;
             r.children.clear();
             r.condition = {};
+        }
+    }
+
+    [[nodiscard]] bool return_matches(const Region& r,
+                                      const IrValue& value) const noexcept {
+        return r.kind == RegionKind::Return &&
+               r.condition.kind != IrValueKind::None &&
+               same_ssa(r.condition, value);
+    }
+
+    [[nodiscard]] bool always_returns_value(const Region& r,
+                                            const IrValue& value) const noexcept {
+        switch (r.kind) {
+            case RegionKind::Return:
+                return return_matches(r, value);
+            case RegionKind::Seq:
+                return !r.children.empty() &&
+                       r.children.back() &&
+                       always_returns_value(*r.children.back(), value);
+            case RegionKind::IfElse:
+                return r.children.size() >= 2 &&
+                       r.children[0] && r.children[1] &&
+                       always_returns_value(*r.children[0], value) &&
+                       always_returns_value(*r.children[1], value);
+            default:
+                return false;
+        }
+    }
+
+    void strip_matching_tail_returns(Region& r, const IrValue& value) const {
+        if (return_matches(r, value)) {
+            r.kind = RegionKind::Empty;
+            r.condition = {};
+            r.children.clear();
+            return;
+        }
+        for (auto& c : r.children) {
+            if (c) strip_matching_tail_returns(*c, value);
+        }
+        if (r.kind == RegionKind::Seq) {
+            while (!r.children.empty()) {
+                auto& last = r.children.back();
+                if (!last || last->kind == RegionKind::Empty ||
+                    return_matches(*last, value)) {
+                    r.children.pop_back();
+                    continue;
+                }
+                break;
+            }
+            if (r.children.empty()) {
+                r.kind = RegionKind::Empty;
+            }
+        }
+    }
+
+    void fold_common_tail_returns(Region& r) const {
+        for (auto& c : r.children) {
+            if (c) fold_common_tail_returns(*c);
+        }
+        if (r.kind != RegionKind::Seq || r.children.size() < 3) return;
+        Region* tail = r.children.back().get();
+        if (!tail || tail->kind != RegionKind::Return ||
+            tail->condition.kind == IrValueKind::None) {
+            return;
+        }
+        const IrValue tail_value = tail->condition;
+        for (std::size_t i = 0; i + 2 < r.children.size(); ++i) {
+            Region* cur = r.children[i].get();
+            if (!cur || cur->kind != RegionKind::IfThen ||
+                cur->children.empty() || !cur->children[0]) {
+                continue;
+            }
+            if (!always_returns_value(*cur->children[0], tail_value)) continue;
+
+            auto rewritten = std::make_unique<Region>();
+            rewritten->kind = RegionKind::IfElse;
+            rewritten->condition = cur->condition;
+            rewritten->invert = cur->invert;
+            rewritten->target = cur->target;
+            rewritten->block_start = cur->block_start;
+            rewritten->children.push_back(std::move(cur->children[0]));
+            strip_matching_tail_returns(*rewritten->children[0], tail_value);
+
+            auto else_seq = std::make_unique<Region>();
+            else_seq->kind = RegionKind::Seq;
+            for (std::size_t j = i + 1; j + 1 < r.children.size(); ++j) {
+                else_seq->children.push_back(std::move(r.children[j]));
+            }
+            rewritten->children.push_back(std::move(else_seq));
+
+            std::vector<std::unique_ptr<Region>> next;
+            next.reserve(i + 2);
+            for (std::size_t j = 0; j < i; ++j) {
+                next.push_back(std::move(r.children[j]));
+            }
+            next.push_back(std::move(rewritten));
+            next.push_back(std::move(r.children.back()));
+            r.children = std::move(next);
+            fold_common_tail_returns(r);
+            return;
         }
     }
 
@@ -4241,6 +4341,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.frame_layout = compute_frame_layout(*sf.ir, binary);
     if (sf.body) {
         e.suppress_canary_regions(*sf.body);
+        e.fold_common_tail_returns(*sf.body);
         e.analyze_return_folds(*sf.body);
         e.analyze_return_expr_call_folds(*sf.body);
         e.collect_for_updates(*sf.body);

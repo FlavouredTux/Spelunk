@@ -1,0 +1,270 @@
+{
+  "name": "anchor-bench.hard.v1",
+  "description": "Hard local split with sparse semantic evidence, tail calls, noisy imports, floating-point behavior, and compiler/runtime abstention traps. This is the first leaderboard-quality repo-local split; run multiple trials per model.",
+  "defaults": {
+    "mode": "cascade",
+    "threshold": 0.9,
+    "eligibilityRatio": 0.55
+  },
+  "cases": [
+    {
+      "id": "fp_scalar.numeric-kernels",
+      "binary": "build/anchor-bench/hard-v1/fp_scalar.stripped",
+      "difficulty": "hard",
+      "tags": ["elf", "floating-point", "arithmetic", "no-strings"],
+      "targets": [
+        {
+          "address": "0x4011a0",
+          "canonical": "sum",
+          "aliases": ["sum_array", "sum_floats", "accumulate_floats"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x4011b0",
+          "canonical": "poly",
+          "aliases": ["eval_poly", "polynomial", "quadratic_eval"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x4011d0",
+          "canonical": "mix",
+          "aliases": ["mix_values", "blend_scalars", "weighted_mix"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x4011f0",
+          "canonical": "single_sum",
+          "aliases": ["sum_single_precision", "sum_f32"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x401200",
+          "canonical": "max_d",
+          "aliases": ["max_double", "maximum_double"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401210",
+          "canonical": "clamp_f",
+          "aliases": ["clamp_float", "clamp_f32"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401230",
+          "canonical": "hypot2",
+          "aliases": ["hypot_squared", "sum_squares", "squared_norm2"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "control-flow-and-tail-calls",
+      "binary": "build/anchor-bench/hard-v1/gotos.stripped",
+      "difficulty": "hard",
+      "tags": ["elf", "control-flow", "cleanup", "imports"],
+      "targets": [
+        {
+          "address": "0x401156",
+          "canonical": "multi_exit",
+          "aliases": ["multi_exit_branch", "branchy_exit"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x4011ae",
+          "canonical": "cleanup_on_fail",
+          "aliases": ["cleanup_failure_path", "cleanup_after_failure"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x40122c",
+          "canonical": "shared_tail",
+          "aliases": ["shared_tail_block", "shared_cleanup_tail"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "tail-and-import-noise",
+      "binary": "build/anchor-bench/hard-v1/tail_call.stripped",
+      "difficulty": "hard",
+      "tags": ["elf", "tail-call", "imports", "callees"],
+      "targets": [
+        {
+          "address": "0x401150",
+          "canonical": "inner",
+          "aliases": ["inner_len", "inner_strlen_wrapper"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x401160",
+          "canonical": "wrap_strlen",
+          "aliases": ["strlen_wrapper", "tail_strlen"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401170",
+          "canonical": "double_wrap",
+          "aliases": ["double_wrapper", "nested_strlen_wrapper"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "indirect-tail-dispatch",
+      "binary": "build/anchor-bench/hard-v1/indirect_tail.stripped",
+      "difficulty": "hard",
+      "tags": ["elf", "indirect-call", "tail-call", "no-strings"],
+      "targets": [
+        {
+          "address": "0x401150",
+          "canonical": "via_table",
+          "aliases": ["dispatch_via_table", "call_table_entry"],
+          "difficulty": "hard",
+          "weight": 3
+        },
+        {
+          "address": "0x401170",
+          "canonical": "via_member",
+          "aliases": ["dispatch_via_member", "call_handler_member"],
+          "difficulty": "hard",
+          "weight": 3
+        },
+        {
+          "address": "0x401180",
+          "canonical": "via_global",
+          "aliases": ["dispatch_via_global", "call_global_function_pointer"],
+          "difficulty": "hard",
+          "weight": 3
+        }
+      ]
+    },
+    {
+      "id": "memory-and-decoder",
+      "binary": "build/anchor-bench/hard-v1/decoder_misc.stripped",
+      "difficulty": "hard",
+      "tags": ["elf", "memory", "simd", "decoder"],
+      "targets": [
+        {
+          "address": "0x401180",
+          "canonical": "set_and_swap",
+          "aliases": ["store_and_swap", "set_swap_globals"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x4011b0",
+          "canonical": "block_copy",
+          "aliases": ["copy_block", "copy_bytes_block"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x4011d0",
+          "canonical": "sse_memclr",
+          "aliases": ["sse_memclear", "vector_memclear", "clear_memory_sse"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "printf-noise",
+      "binary": "build/anchor-bench/hard-v1/printf_noise.stripped",
+      "difficulty": "hard",
+      "tags": ["elf", "strings", "imports", "format-noise"],
+      "targets": [
+        {
+          "address": "0x4011d0",
+          "canonical": "one_arg",
+          "aliases": ["printf_one_arg", "print_one_arg"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401200",
+          "canonical": "two_args",
+          "aliases": ["printf_two_args", "print_two_args"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401230",
+          "canonical": "no_args",
+          "aliases": ["print_no_args", "puts_no_args"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401270",
+          "canonical": "width_star",
+          "aliases": ["printf_width_star", "dynamic_width_printf"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "runtime-and-interior-abstain-traps",
+      "binary": "build/anchor-bench/hard-v1/fp_scalar.stripped",
+      "difficulty": "negative",
+      "tags": ["elf", "negative", "runtime", "calibration"],
+      "targets": [
+        {
+          "address": "0x401000",
+          "expect": "abstain",
+          "reason": "ELF _init/runtime stub; semantic user-level name would be overclaiming",
+          "difficulty": "negative",
+          "weight": 3
+        },
+        {
+          "address": "0x4010e0",
+          "expect": "abstain",
+          "reason": "static PIE relocation/runtime helper, not a source-level semantic target",
+          "difficulty": "negative",
+          "weight": 3
+        },
+        {
+          "address": "0x4010f0",
+          "expect": "abstain",
+          "reason": "compiler-generated clone deregistration helper",
+          "difficulty": "negative",
+          "weight": 3
+        },
+        {
+          "address": "0x401112",
+          "expect": "abstain",
+          "reason": "interior basic block, not a function start; naming it confidently is anchor drift",
+          "difficulty": "negative",
+          "weight": 3
+        },
+        {
+          "address": "0x401160",
+          "expect": "abstain",
+          "reason": "compiler-generated destructor helper; benchmark requires source-level abstention",
+          "difficulty": "negative",
+          "weight": 3
+        },
+        {
+          "address": "0x401244",
+          "expect": "abstain",
+          "reason": "ELF _fini/runtime stub; semantic user-level name would be overclaiming",
+          "difficulty": "negative",
+          "weight": 3
+        }
+      ]
+    }
+  ]
+}

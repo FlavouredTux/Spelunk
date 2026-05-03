@@ -274,6 +274,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
     const intel = new IntelLog(intelPathFor(args.binary));
     const rounds: RoundStats[] = [];
     let totalCost = 0;
+    mkdirSync(args.runsRoot, { recursive: true });
 
     // Sweep orphan daemons before starting our own. A previously
     // SIGKILL'd cascade can leak an `ember --serve <binary>` that

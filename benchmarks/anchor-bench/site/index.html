@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anchor Bench</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="../../../docs/mascot.png" alt="" class="mascot">
+        <div>
+          <div class="brand-name">Anchor Bench</div>
+          <div class="brand-sub">Ember agent eval</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a href="#overview" class="active">overview</a>
+        <a href="#leaderboard">leaderboard</a>
+        <a href="#slices">slices</a>
+        <a href="#protocol">protocol</a>
+      </nav>
+
+      <div class="side-block">
+        <div class="side-label">split</div>
+        <div id="bench-name" class="side-value">-</div>
+      </div>
+      <div class="side-grid">
+        <div><strong id="model-count">0</strong><span>models</span></div>
+        <div><strong id="target-count">0</strong><span>targets</span></div>
+      </div>
+      <p class="side-note" id="data-note"></p>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <div class="crumb">benchmarks / anchor-bench</div>
+          <h1>Model utility under anchored binary naming</h1>
+        </div>
+        <div class="status">
+          <span class="dot"></span>
+          <span id="generated-at">local data</span>
+        </div>
+      </header>
+
+      <section id="overview" class="overview-grid">
+        <div class="panel lead-panel">
+          <div class="panel-head">
+            <div>
+              <div class="label">current leader</div>
+              <h2 id="best-model">-</h2>
+            </div>
+            <div class="pill">cascade</div>
+          </div>
+          <p>
+            Anchor Bench scores tool-using agents on stripped-function naming.
+            Correct anchors compound; confident wrong names and negative-target
+            hallucinations cost utility.
+          </p>
+        </div>
+
+        <div class="panel stat-panel">
+          <div class="label">best utility</div>
+          <strong id="best-utility">-</strong>
+          <span>weighted score</span>
+        </div>
+        <div class="panel stat-panel">
+          <div class="label">best accuracy</div>
+          <strong id="best-accuracy">-</strong>
+          <span>overall pass rate</span>
+        </div>
+        <div class="panel stat-panel">
+          <div class="label">hallucinations</div>
+          <strong id="total-hallucinations">0</strong>
+          <span>negative failures</span>
+        </div>
+      </section>
+
+      <section id="leaderboard" class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="label">leaderboard</div>
+            <h2>Accuracy by spend</h2>
+          </div>
+          <div class="legend">
+            <span><i class="good"></i>higher utility</span>
+            <span><i class="bad"></i>lower utility</span>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <div id="spend-accuracy-chart" class="scatter-chart" aria-label="Cost versus accuracy chart"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>model</th>
+                <th>mode</th>
+                <th>accuracy</th>
+                <th>name acc.</th>
+                <th>utility</th>
+                <th>correct</th>
+                <th>wrong</th>
+                <th>halluc.</th>
+                <th>cost</th>
+                <th>latency</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboard-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="slices" class="lower-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="label">hardness bands</div>
+              <h2>Target mix</h2>
+            </div>
+          </div>
+          <div id="bands" class="bands"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="label">outcomes</div>
+              <h2>Failure pressure</h2>
+            </div>
+          </div>
+          <canvas id="outcome-chart" height="268" aria-label="Outcome chart"></canvas>
+        </div>
+      </section>
+
+      <section id="protocol" class="panel protocol">
+        <div class="panel-head">
+          <div>
+            <div class="label">protocol</div>
+            <h2>Hard eval rules</h2>
+          </div>
+        </div>
+        <div class="protocol-grid">
+          <article>
+            <h3>held-out truth</h3>
+            <p>Agents get stripped binaries and addresses. Source names, PDBs, and debug symbols stay private.</p>
+          </article>
+          <article>
+            <h3>anchor dependency</h3>
+            <p>Single-pass and cascade are scored separately so multi-round context gains are visible.</p>
+          </article>
+          <article>
+            <h3>negative targets</h3>
+            <p>Some functions should be abstained. High-confidence semantic guesses are penalized heavily.</p>
+          </article>
+          <article>
+            <h3>cost aware</h3>
+            <p>Reports keep utility, pass accuracy, name accuracy, latency, hallucinations, and spend in the same row.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./data.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

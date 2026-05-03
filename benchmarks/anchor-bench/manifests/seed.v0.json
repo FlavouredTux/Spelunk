@@ -1,0 +1,120 @@
+{
+  "name": "anchor-bench.seed.v0",
+  "description": "Repo-local multi-fixture seed split. This is harder than fixtures.v0 but still not a held-out leaderboard split.",
+  "defaults": {
+    "mode": "cascade",
+    "threshold": 0.85,
+    "eligibilityRatio": 0.4
+  },
+  "cases": [
+    {
+      "id": "return_value.runtime-and-arithmetic",
+      "binary": "build/tests/fixtures/return_value",
+      "difficulty": "medium",
+      "tags": ["elf", "runtime", "arithmetic"],
+      "targets": [
+        {
+          "address": "0x4010ed",
+          "canonical": "__do_global_dtors_aux",
+          "aliases": ["do_global_dtors_aux", "global_destructors_aux", "global_dtors_aux"],
+          "difficulty": "smoke",
+          "weight": 1
+        },
+        {
+          "address": "0x401120",
+          "canonical": "add32",
+          "aliases": ["add_i32", "add_ints"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401130",
+          "canonical": "compound",
+          "aliases": ["linear_transform", "mul3_add7"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401140",
+          "canonical": "big",
+          "aliases": ["xor_add_shift", "combine_u64"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "string_cmp.marker",
+      "binary": "build/tests/fixtures/string_cmp",
+      "difficulty": "medium",
+      "tags": ["elf", "strings", "control-flow"],
+      "targets": [
+        {
+          "address": "0x401150",
+          "canonical": "cmp_marker",
+          "aliases": ["compare_marker", "check_marker_pointer"],
+          "difficulty": "medium",
+          "weight": 1
+        },
+        {
+          "address": "0x401170",
+          "canonical": "print_marker",
+          "aliases": ["puts_marker", "emit_marker"],
+          "difficulty": "medium",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "indirect_tail.dispatch",
+      "binary": "build/tests/fixtures/indirect_tail",
+      "difficulty": "hard",
+      "tags": ["elf", "indirect-call", "tail-call", "no-strings"],
+      "targets": [
+        {
+          "address": "0x401150",
+          "canonical": "via_table",
+          "aliases": ["dispatch_via_table", "call_table_entry"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x401170",
+          "canonical": "via_member",
+          "aliases": ["dispatch_via_member", "call_handler_member"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x401180",
+          "canonical": "via_global",
+          "aliases": ["dispatch_via_global", "call_global_function_pointer"],
+          "difficulty": "hard",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "negative.compiler-thunks",
+      "binary": "build/tests/fixtures/return_value",
+      "difficulty": "negative",
+      "tags": ["elf", "negative", "runtime"],
+      "targets": [
+        {
+          "address": "0x401004",
+          "expect": "abstain",
+          "reason": "interior/runtime startup fragment; semantic user-level name would be overclaiming",
+          "difficulty": "negative",
+          "weight": 2
+        },
+        {
+          "address": "0x40114c",
+          "expect": "abstain",
+          "reason": "tiny fini-adjacent fragment with insufficient semantic signal",
+          "difficulty": "negative",
+          "weight": 2
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "anchor-bench.hard.v0",
+  "description": "Template for a real hard Anchor Bench split. Replace binaries and targets with private held-out cases before publishing scores.",
+  "defaults": {
+    "mode": "cascade",
+    "threshold": 0.85,
+    "eligibilityRatio": 0.5
+  },
+  "cases": [
+    {
+      "id": "oss.release-stripped.call-chain-depth-3",
+      "binary": "PATH/TO/stripped/binary",
+      "truth_source": "unstripped sibling symbols, withheld from agents",
+      "difficulty": "hard",
+      "tags": ["oss", "elf", "stripped", "deep-anchor-chain"],
+      "targets": [
+        {
+          "address": "0x0",
+          "canonical": "parse_config_file",
+          "aliases": ["load_config", "read_config_file"],
+          "difficulty": "hard",
+          "weight": 2
+        },
+        {
+          "address": "0x0",
+          "expect": "abstain",
+          "reason": "low-signal compiler/runtime thunk; high-confidence semantic name is a hallucination",
+          "difficulty": "negative",
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "pe.pdb-stripped.cxx-rtti",
+      "binary": "PATH/TO/stripped.exe",
+      "truth_source": "private PDB, withheld from agents",
+      "difficulty": "expert",
+      "tags": ["pe", "pdb", "cxx", "rtti", "methods"],
+      "targets": [
+        {
+          "address": "0x0",
+          "canonical": "WidgetManager::dispatch_event",
+          "aliases": ["WidgetManager_dispatch_event"],
+          "difficulty": "expert",
+          "weight": 3
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "anchor-bench.fixtures.v0",
+  "description": "Repo-local smoke cases for Anchor Bench harness validation.",
+  "defaults": {
+    "mode": "cascade",
+    "threshold": 0.85,
+    "eligibilityRatio": 0.3
+  },
+  "cases": [
+    {
+      "id": "return_value.gcc-global-dtors",
+      "binary": "build/tests/fixtures/return_value",
+      "notes": "Compiler-generated destructor helper recovered from the return_value fixture.",
+      "targets": [
+        {
+          "address": "0x4010ed",
+          "canonical": "__do_global_dtors_aux",
+          "difficulty": "smoke",
+          "weight": 1,
+          "aliases": [
+            "do_global_dtors_aux",
+            "global_destructors_aux",
+            "global_dtors_aux"
+          ]
+        }
+      ]
+    }
+  ]
+}

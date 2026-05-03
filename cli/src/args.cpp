@@ -37,6 +37,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
     {"",   "--teef",     &Args::teef},
+    {"",   "--teef-no-l4", &Args::teef_no_l4},
     {"",   "--orbit-dump", &Args::orbit_dump},
     {"",   "--l0-prefilter", &Args::l0_prefilter},
     {"",   "--recognize", &Args::recognize},
@@ -195,6 +196,54 @@ Result<Args> parse_args(int argc, char** argv) {
             catch (...) {
                 return std::unexpected(Error::invalid_format(
                     "--max-fn-size: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--max-cfg-blocks") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-cfg-blocks requires a value"));
+            }
+            try { a.max_cfg_blocks = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-cfg-blocks: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--max-cfg-edges") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-cfg-edges requires a value"));
+            }
+            try { a.max_cfg_edges = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-cfg-edges: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--max-cfg-insts") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-cfg-insts requires a value"));
+            }
+            try { a.max_cfg_insts = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-cfg-insts: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--max-ir-insts") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-ir-insts requires a value"));
+            }
+            try { a.max_ir_insts = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-ir-insts: bad integer"));
             }
             continue;
         }

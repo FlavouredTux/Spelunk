@@ -64,6 +64,7 @@ struct Args {
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
     bool teef = false;              // dump TEEF (Tree-Edit Equivalence Fingerprint) per function
+    bool teef_no_l4 = false;        // --teef-no-l4: skip behavioral L4 during corpus TEEF builds
     bool orbit_dump = false;        // diagnostic dump of all per-fn signatures (L2 cleanup-canonical,
                                     // L3 orbit, L4 behavioural) side-by-side. TSV: addr name
                                     // L2_exact L2_mh*8 L3_exact L3_mh*16 L3_nodes L3_iters L3_budget
@@ -88,6 +89,14 @@ struct Args {
                                              // targets where most fns have unique-shape CFGs;
                                              // lossy on cross-opt-level matches whose topology
                                              // shifts. Off by default.
+    ember::u64 max_cfg_blocks = 0;           // --max-cfg-blocks N: skip TEEF fns whose pre-lift CFG
+                                             // exceeds N blocks. 0 = disabled.
+    ember::u64 max_cfg_edges = 0;            // --max-cfg-edges N: skip TEEF fns whose pre-lift CFG
+                                             // exceeds N edges. 0 = disabled.
+    ember::u64 max_cfg_insts = 0;            // --max-cfg-insts N: skip TEEF fns whose decoded CFG
+                                             // exceeds N instructions. 0 = disabled.
+    ember::u64 max_ir_insts = 0;             // --max-ir-insts N: override the post-lift TEEF IR cap.
+                                             // 0 = built-in default.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)

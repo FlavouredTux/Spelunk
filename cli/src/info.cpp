@@ -90,6 +90,11 @@ void print_help() {
     std::println("      --fingerprint-out P  also write --fingerprints TSV to P (portable across machines)");
     std::println("      --fingerprint-old P  skip OLD-side fingerprint compute in --diff; read TSV from P");
     std::println("      --fingerprint-new P  skip NEW-side fingerprint compute in --diff; read TSV from P");
+    std::println("      --teef-no-l4     with --teef, skip behavioral L4; faster/lower-RAM corpus build");
+    std::println("      --max-cfg-blocks N  with --teef/--recognize, skip fns above N CFG blocks");
+    std::println("      --max-cfg-edges N   with --teef/--recognize, skip fns above N CFG edges");
+    std::println("      --max-cfg-insts N   with --teef/--recognize, skip fns above N decoded CFG insts");
+    std::println("      --max-ir-insts N    with --teef/--recognize, override post-lift IR inst cap");
     std::println("      --refs-to VA     list callers of VA (one-shot reverse xref)");
     std::println("      --data-xrefs     TSV: <target>\\t<site>\\t<kind> for every rip-rel/abs");
     std::println("                       data-section reference (kind=read/write/lea)");

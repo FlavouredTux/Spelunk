@@ -104,6 +104,16 @@ struct TeefFunction {
     u64                     prefix_hash = 0;
 };
 
+struct TeefComputeOptions {
+    u32 min_chunk_insts = 10;
+    const std::unordered_set<u64>* l4_topo_filter = nullptr;
+    bool skip_l4 = false;
+    u64 max_cfg_blocks = 0;
+    u64 max_cfg_edges = 0;
+    u64 max_cfg_insts = 0;
+    u64 max_ir_insts = 0;
+};
+
 // Compute the function-level TEEF and per-chunk fingerprints for any
 // region whose subtree contains ≥ `min_chunk_insts` IR instructions.
 // Smaller regions are skipped to avoid corpus pollution by trivial
@@ -112,6 +122,10 @@ struct TeefFunction {
 [[nodiscard]] TeefFunction
 compute_teef_with_chunks(const Binary& b, addr_t fn_start,
                          u32 min_chunk_insts = 10);
+
+[[nodiscard]] TeefFunction
+compute_teef_with_chunks(const Binary& b, addr_t fn_start,
+                         const TeefComputeOptions& opts);
 
 // Combined L0 + L2 + L4 fingerprint. Runs the lift→SSA→cleanup pipeline
 // once and feeds the result into both the structurer-driven L2 path and
@@ -133,6 +147,10 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start,
 compute_teef_max(const Binary& b, addr_t fn_start,
                  u32 min_chunk_insts = 10,
                  const std::unordered_set<u64>* l4_topo_filter = nullptr);
+
+[[nodiscard]] TeefFunction
+compute_teef_max(const Binary& b, addr_t fn_start,
+                 const TeefComputeOptions& opts);
 
 // Hash + MinHash a pseudo-C source string directly. Useful for
 // callers that already have the emitted text (the CLI fingerprint

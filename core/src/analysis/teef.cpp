@@ -606,6 +606,32 @@ namespace {
     return v;
 }
 
+[[nodiscard]] bool cfg_over_budget(const Function& fn,
+                                   const TeefComputeOptions& opts) noexcept {
+    if (opts.max_cfg_blocks > 0 && fn.blocks.size() > opts.max_cfg_blocks) {
+        return true;
+    }
+    std::size_t edges = 0;
+    std::size_t insts = 0;
+    for (const auto& bb : fn.blocks) {
+        edges += bb.successors.size();
+        insts += bb.instructions.size();
+    }
+    if (opts.max_cfg_edges > 0 && edges > opts.max_cfg_edges) return true;
+    if (opts.max_cfg_insts > 0 && insts > opts.max_cfg_insts) return true;
+    return false;
+}
+
+[[nodiscard]] bool ir_over_budget(const IrFunction& fn,
+                                  const TeefComputeOptions& opts) noexcept {
+    std::size_t total = 0;
+    for (const auto& bb : fn.blocks) total += bb.insts.size();
+    const u64 cap = opts.max_ir_insts > 0
+        ? opts.max_ir_insts
+        : static_cast<u64>(teef_max_insns_per_fn());
+    return total > cap;
+}
+
 // L0 topology hash from the CFG (pre-lift). Same six features as the
 // previous IR-derived version, but read from the analysis::Function
 // directly so we can compute the hash before lift and use it as an
@@ -751,6 +777,14 @@ compute_l2_from_ir(const Binary& b, IrFunction& ir, u32 min_chunk_insts) {
 
 TeefFunction
 compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) {
+    TeefComputeOptions opts;
+    opts.min_chunk_insts = min_chunk_insts;
+    return compute_teef_with_chunks(b, fn_start, opts);
+}
+
+TeefFunction
+compute_teef_with_chunks(const Binary& b, addr_t fn_start,
+                         const TeefComputeOptions& opts) {
     TeefFunction out;
 
     auto dec_r = make_decoder(b);
@@ -761,23 +795,20 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
 
     out.topo_hash   = compute_topo_hash_from_cfg(*fn_r);
     out.prefix_hash = compute_prefix_hash(*fn_r);
+    if (cfg_over_budget(*fn_r, opts)) return out;
 
     auto lifter_r = make_lifter(b);
     if (!lifter_r) return out;
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
 
-    {
-        std::size_t total = 0;
-        for (const auto& bb : ir_r->blocks) total += bb.insts.size();
-        if (total > teef_max_insns_per_fn()) return out;
-    }
+    if (ir_over_budget(*ir_r, opts)) return out;
 
     const SsaBuilder ssa;
     if (auto rv = ssa.convert(*ir_r); !rv) return out;
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
-    auto l2 = compute_l2_from_ir(b, *ir_r, min_chunk_insts);
+    auto l2 = compute_l2_from_ir(b, *ir_r, opts.min_chunk_insts);
     out.whole  = std::move(l2.whole);
     out.chunks = std::move(l2.chunks);
     return out;
@@ -786,6 +817,15 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start, u32 min_chunk_insts) 
 TeefFunction
 compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
                  const std::unordered_set<u64>* l4_topo_filter) {
+    TeefComputeOptions opts;
+    opts.min_chunk_insts = min_chunk_insts;
+    opts.l4_topo_filter = l4_topo_filter;
+    return compute_teef_max(b, fn_start, opts);
+}
+
+TeefFunction
+compute_teef_max(const Binary& b, addr_t fn_start,
+                 const TeefComputeOptions& opts) {
     TeefFunction out;
 
     auto dec_r = make_decoder(b);
@@ -802,13 +842,14 @@ compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
     // minutes.
     out.topo_hash   = compute_topo_hash_from_cfg(*fn_r);
     out.prefix_hash = compute_prefix_hash(*fn_r);
+    if (cfg_over_budget(*fn_r, opts)) return out;
 
     // L0 pre-filter: when the caller passes the corpus's topo-hash
     // set, fns whose topology isn't represented in the corpus return
     // early with only topo populated — no lift, no L2, no L4. The
     // recognizer ignores fns with `whole.exact_hash == 0`, so these
     // entries effectively don't participate in matching.
-    if (l4_topo_filter && !l4_topo_filter->contains(out.topo_hash)) {
+    if (opts.l4_topo_filter && !opts.l4_topo_filter->contains(out.topo_hash)) {
         return out;
     }
 
@@ -817,21 +858,17 @@ compute_teef_max(const Binary& b, addr_t fn_start, u32 min_chunk_insts,
     auto ir_r = (*lifter_r)->lift(*fn_r);
     if (!ir_r) return out;
 
-    {
-        std::size_t total = 0;
-        for (const auto& bb : ir_r->blocks) total += bb.insts.size();
-        if (total > teef_max_insns_per_fn()) return out;
-    }
+    if (ir_over_budget(*ir_r, opts)) return out;
 
     const SsaBuilder ssa;
     if (auto rv = ssa.convert(*ir_r); !rv) return out;
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
     // L4 first — operates on the cleaned flat IR, no structurer needed.
-    out.behav = compute_behav_sig_from_ir(*ir_r, b);
+    if (!opts.skip_l4) out.behav = compute_behav_sig_from_ir(*ir_r, b);
 
     // L2 — structurer + region tokenization on the same IR.
-    auto l2 = compute_l2_from_ir(b, *ir_r, min_chunk_insts);
+    auto l2 = compute_l2_from_ir(b, *ir_r, opts.min_chunk_insts);
     out.whole  = std::move(l2.whole);
     out.chunks = std::move(l2.chunks);
     return out;

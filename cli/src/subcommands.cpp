@@ -277,6 +277,18 @@ int run_strings(const Args& args, const Binary& b) {
 
 namespace {
 
+std::string teef_cache_tag(const Args& args) {
+    std::string tag = std::format("teef-{}", kTeefSchema);
+    if (args.teef_no_l4) tag += "-nol4";
+    if (args.min_fn_bytes) tag += std::format("-min{}", args.min_fn_bytes);
+    if (args.max_fn_bytes) tag += std::format("-max{}", args.max_fn_bytes);
+    if (args.max_cfg_blocks) tag += std::format("-cb{}", args.max_cfg_blocks);
+    if (args.max_cfg_edges) tag += std::format("-ce{}", args.max_cfg_edges);
+    if (args.max_cfg_insts) tag += std::format("-ci{}", args.max_cfg_insts);
+    if (args.max_ir_insts) tag += std::format("-ii{}", args.max_ir_insts);
+    return tag;
+}
+
 // Address-range scope filter, populated from --module NAME against a
 // minidump (or any Binary that synthesizes module Symbols of kind=Section
 // with addr=base / size=image-size — currently just MinidumpBinary). When
@@ -491,7 +503,8 @@ build_teef_tsv(const Binary& b,
                bool corpus_mode = false,
                u64 min_fn_bytes = 0,
                u64 max_fn_bytes = 0,
-               const std::unordered_set<u64>* l4_topo_filter = nullptr) {
+               const TeefComputeOptions& compute_opts = {},
+               std::ostream* stream = nullptr) {
     const bool show = progress_enabled();
 
         std::unordered_map<addr_t, std::string> name_by_addr;
@@ -646,7 +659,9 @@ build_teef_tsv(const Binary& b,
         // Per-function results in input order. Workers pull indices off
         // `next` atomically; ordering is preserved by writing into the
         // pre-sized result vector at the function's index.
-        std::vector<std::string> rows(total);
+        std::vector<std::string> rows;
+        if (!stream) rows.resize(total);
+        std::mutex stream_mu;
         std::atomic<std::size_t> next{0};
         std::atomic<std::size_t> done{0};
         // Counters for the post-phase summary so the user can see how
@@ -704,10 +719,10 @@ build_teef_tsv(const Binary& b,
                 // so query-side stripped binaries still get full L4.
                 const bool is_named = name_by_addr.contains(a);
                 const bool full_l4  = !corpus_mode || is_named;
+                auto opts = compute_opts;
                 const auto tf = full_l4
-                    ? compute_teef_max(b, a, /*min_chunk_insts=*/10,
-                                       l4_topo_filter)
-                    : compute_teef_with_chunks(b, a);
+                    ? compute_teef_max(b, a, opts)
+                    : compute_teef_with_chunks(b, a, opts);
                 const auto& bs = tf.behav;
                 done.fetch_add(1, std::memory_order_relaxed);
                 // Telemetry: distinguish "early-exited via topo filter"
@@ -715,8 +730,8 @@ build_teef_tsv(const Binary& b,
                 // empty" (e.g., insn-cap hit). Lets the user see at a
                 // glance whether --l0-prefilter is paying off.
                 if (tf.whole.exact_hash == 0) {
-                    if (l4_topo_filter && tf.topo_hash != 0 &&
-                        !l4_topo_filter->contains(tf.topo_hash)) {
+                    if (compute_opts.l4_topo_filter && tf.topo_hash != 0 &&
+                        !compute_opts.l4_topo_filter->contains(tf.topo_hash)) {
                         early_exit_topo.fetch_add(1, std::memory_order_relaxed);
                     } else {
                         empty_fingerprint.fetch_add(1, std::memory_order_relaxed);
@@ -778,7 +793,12 @@ build_teef_tsv(const Binary& b,
                     buf += name;
                     buf += '\n';
                 }
-                rows[i] = std::move(buf);
+                if (stream) {
+                    std::lock_guard lock(stream_mu);
+                    (*stream) << buf;
+                } else {
+                    rows[i] = std::move(buf);
+                }
             }
         };
 
@@ -808,6 +828,11 @@ build_teef_tsv(const Binary& b,
                 "{} empty (insn-cap / lift bail)",
                 full_pipe, ee, eg);
         }
+
+    if (stream) {
+        stream->flush();
+        return {};
+    }
 
     std::string out;
     std::size_t total_bytes = 0;
@@ -1006,7 +1031,7 @@ int run_recognize(const Args& args, const Binary& b) {
             ? cache::default_dir()
             : std::filesystem::path(args.cache_dir);
         if (auto k = cache::key_for(args.binary); k) {
-            const std::string tag = std::format("teef-{}", kTeefSchema);
+            const std::string tag = teef_cache_tag(args);
             if (auto hit = cache::read(dir, *k, tag); hit) {
                 target_tsv = std::move(*hit);
                 cache_hit = true;
@@ -1042,10 +1067,19 @@ int run_recognize(const Args& args, const Binary& b) {
                 "(after popularity guard ≤{})",
                 corpus_topos.size(), kMaxTopoPopularity);
         }
+        TeefComputeOptions target_opts;
+        target_opts.min_chunk_insts = 10;
+        target_opts.l4_topo_filter = args.l0_prefilter ? &corpus_topos : nullptr;
+        target_opts.skip_l4 = args.teef_no_l4;
+        target_opts.max_cfg_blocks = args.max_cfg_blocks;
+        target_opts.max_cfg_edges = args.max_cfg_edges;
+        target_opts.max_cfg_insts = args.max_cfg_insts;
+        target_opts.max_ir_insts = args.max_ir_insts;
+
         const auto t_fp_start = std::chrono::steady_clock::now();
         target_tsv = build_teef_tsv(b, scope, /*corpus_mode=*/false,
                                     args.min_fn_bytes, args.max_fn_bytes,
-                                    args.l0_prefilter ? &corpus_topos : nullptr);
+                                    target_opts);
         const auto t_fp_end = std::chrono::steady_clock::now();
         const double fp_ms = std::chrono::duration<double, std::milli>(
             t_fp_end - t_fp_start).count();
@@ -1057,7 +1091,7 @@ int run_recognize(const Args& args, const Binary& b) {
                 ? cache::default_dir()
                 : std::filesystem::path(args.cache_dir);
             if (auto k = cache::key_for(args.binary); k) {
-                const std::string tag = std::format("teef-{}", kTeefSchema);
+                const std::string tag = teef_cache_tag(args);
                 (void)cache::write(dir, *k, tag, target_tsv);
             }
         }
@@ -1217,10 +1251,26 @@ int run_recognize(const Args& args, const Binary& b) {
 
 
 int run_teef(const Args& args, const Binary& b) {
-    return run_cached(args, std::format("teef-{}", kTeefSchema),
+    TeefComputeOptions opts;
+    opts.min_chunk_insts = 10;
+    opts.skip_l4 = args.teef_no_l4;
+    opts.max_cfg_blocks = args.max_cfg_blocks;
+    opts.max_cfg_edges = args.max_cfg_edges;
+    opts.max_cfg_insts = args.max_cfg_insts;
+    opts.max_ir_insts = args.max_ir_insts;
+
+    if (args.no_cache) {
+        (void)build_teef_tsv(b, {}, /*corpus_mode=*/true,
+                             args.min_fn_bytes, args.max_fn_bytes,
+                             opts, &std::cout);
+        return EXIT_SUCCESS;
+    }
+
+    return run_cached(args, teef_cache_tag(args),
                       [&] { return build_teef_tsv(b, {}, /*corpus_mode=*/true,
                                                   args.min_fn_bytes,
-                                                  args.max_fn_bytes); });
+                                                  args.max_fn_bytes,
+                                                  opts); });
 }
 
 // --orbit-dump: diagnostic that emits a TSV row per fn with all three

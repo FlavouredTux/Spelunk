@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -21,6 +22,14 @@ struct FnExtent {
     u64    size  = 0;
     std::string name;
 };
+
+[[nodiscard]] std::string cc_run_note(u64 count, std::string_view suffix = {}) {
+    std::string note = "run of ";
+    note += std::to_string(count);
+    note += " CC bytes";
+    note += suffix;
+    return note;
+}
 
 // Build a sorted vector of function extents from defined symbols.
 [[nodiscard]] std::vector<FnExtent>
@@ -295,8 +304,9 @@ resolve_embedded_int3s(const Binary& b) {
 
                 if (is_debug_break_name(sym.name)) {
                     res.kind = Int3Kind::DebugBreak;
-                    res.note = std::format("inside debug-break wrapper '{}'",
-                                          sym.name);
+                    res.note = "inside debug-break wrapper '";
+                    res.note += sym.name;
+                    res.note += "'";
                 } else {
                     // Try stubbed-branch detection: decode backwards
                     // from int3 to find the previous instruction boundary.
@@ -324,14 +334,15 @@ resolve_embedded_int3s(const Binary& b) {
                                             break;
                                         }
                                     }
-                                    res.note = std::format(
-                                        "stubbed {} (predicate: {})",
-                                        format_instruction(*try_dec),
-                                        branch_predicate_name(*recovered));
+                                    res.note = "stubbed ";
+                                    res.note += format_instruction(*try_dec);
+                                    res.note += " (predicate: ";
+                                    res.note += branch_predicate_name(*recovered);
+                                    res.note += ")";
                                 } else {
-                                    res.note = std::format(
-                                        "stubbed branch after {} (predicate unknown)",
-                                        format_instruction(*try_dec));
+                                    res.note = "stubbed branch after ";
+                                    res.note += format_instruction(*try_dec);
+                                    res.note += " (predicate unknown)";
                                 }
                                 // Fall-through is the byte after int3.
                                 res.branch_target = pc + 1;
@@ -349,9 +360,8 @@ resolve_embedded_int3s(const Binary& b) {
                                 if (!import_list.empty()) import_list += ", ";
                                 import_list += name;
                             }
-                            res.note = std::format(
-                                "binary imports anti-debug API(s): {}",
-                                import_list);
+                            res.note = "binary imports anti-debug API(s): ";
+                            res.note += import_list;
                         } else {
                             res.kind = Int3Kind::Unknown;
                             res.note = "int3 inside function";
@@ -392,8 +402,7 @@ resolve_embedded_int3s(const Binary& b) {
                 Int3Resolution res;
                 res.addr = va;
                 res.kind = Int3Kind::Padding;
-                res.note = std::format("run of {} CC bytes between functions",
-                                       cc_run);
+                res.note = cc_run_note(cc_run, " between functions");
                 out.push_back(std::move(res));
                 va += cc_run;
             } else {
@@ -507,9 +516,9 @@ resolve_embedded_int3s(const Binary& b) {
                                     }
                                 }
                                 if (res.predicate) {
-                                    res.note = std::format(
-                                        "stubbed branch (predicate: {})",
-                                        branch_predicate_name(*res.predicate));
+                                    res.note = "stubbed branch (predicate: ";
+                                    res.note += branch_predicate_name(*res.predicate);
+                                    res.note += ")";
                                 } else {
                                     res.note = "stubbed branch (predicate unknown)";
                                 }
@@ -524,8 +533,7 @@ resolve_embedded_int3s(const Binary& b) {
                         const u64 cc_run = count_cc_run(b, pc);
                         if (cc_run >= 4) {
                             res.kind = Int3Kind::Padding;
-                            res.note = std::format(
-                                "run of {} CC bytes", cc_run);
+                            res.note = cc_run_note(cc_run);
                         } else {
                             res.kind = Int3Kind::Unknown;
                             res.note = "int3 in executable section";

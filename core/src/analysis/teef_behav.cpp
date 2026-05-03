@@ -124,6 +124,21 @@ struct Trace {
     Trace(const IrFunction& f, const Binary& b, u64 mem_salt)
         : fn(f), bin(b) { mem.salt = mem_salt; }
 
+    // Reset all per-trace mutable state while preserving allocated
+    // capacity (buckets, heap buffers). Called between traces in the
+    // K=64 loop so that each trace starts from a clean slate without
+    // paying for 64× construct/destroy + rehash.
+    void reset(u64 new_mem_salt) {
+        values.clear();           // keeps bucket array
+        side_effects.clear();     // keeps capacity
+        mem.cells.clear();        // keeps bucket array
+        mem.salt = new_mem_salt;
+        insns_done = 0;
+        loads_done = 0;
+        aborted = false;
+        prev_block = 0;
+    }
+
     [[nodiscard]] std::optional<u64> get(const IrValue& v) noexcept {
         if (v.kind == IrValueKind::Imm) return static_cast<u64>(v.imm);
         if (v.kind == IrValueKind::None) return std::nullopt;
@@ -664,24 +679,9 @@ struct Trace {
 // then resolves the terminator to pick the next block. Returns the
 // per-trace outcome hash on success, or 0 on abort.
 
-[[nodiscard]] u64 run_trace(const IrFunction& fn, const Binary& bin,
-                            const std::array<u64, 6>& argv,
-                            u64 input_seed,
-                            std::size_t max_blocks_visited) {
-    Trace t(fn, bin, /*mem_salt=*/mix64(0xC0FFEEULL, input_seed));
-    // EMBER_BEHAV_DEBUG=1 logs every trace abort with its reason; useful
-    // when inspecting why a particular fn produces no traces. Off by
-    // default — the tally in BehavSig.traces_aborted is enough for
-    // routine telemetry.
-    const bool dbg = std::getenv("EMBER_BEHAV_DEBUG") != nullptr;
-    auto bail = [&](const char* why) -> u64 {
-        if (dbg) {
-            std::fprintf(stderr, "behav abort: %s @insns=%zu fn=0x%lx\n",
-                         why, t.insns_done, static_cast<unsigned long>(fn.start));
-        }
-        return 0;
-    };
-
+// Seed the argument registers into the trace's value map.
+// Called once per trace after reset().
+static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
     // SysV ABI argument registers (seven incoming integer slots: rdi rsi
     // rdx rcx r8 r9 + return rax pre-init to 0). The lifter exposes
     // these as Reg::* with version=0.
@@ -698,8 +698,22 @@ struct Trace {
         rax0.version = 0;
         t.values[value_key(rax0)] = 0;
     }
+}
 
-    addr_t cur = fn.start;
+// Execute the block-walking interpreter loop on an already-seeded
+// Trace. Returns the outcome hash, or 0 on abort.
+[[nodiscard]] u64 run_trace_body(Trace& t, u64 input_seed,
+                                 std::size_t max_blocks_visited) {
+    static const bool dbg = std::getenv("EMBER_BEHAV_DEBUG") != nullptr;
+    auto bail = [&](const char* why) -> u64 {
+        if (dbg) {
+            std::fprintf(stderr, "behav abort: %s @insns=%zu fn=0x%lx\n",
+                         why, t.insns_done, static_cast<unsigned long>(t.fn.start));
+        }
+        return 0;
+    };
+
+    addr_t cur = t.fn.start;
     addr_t prev = 0;
     u64 ret_value = 0;
     bool returned = false;
@@ -707,9 +721,9 @@ struct Trace {
 
     while (!returned) {
         if (++blocks_visited > max_blocks_visited) return bail("max-blocks");
-        auto it = fn.block_at.find(cur);
-        if (it == fn.block_at.end()) return bail("block-not-found");
-        const IrBlock& bb = fn.blocks[it->second];
+        auto it = t.fn.block_at.find(cur);
+        if (it == t.fn.block_at.end()) return bail("block-not-found");
+        const IrBlock& bb = t.fn.blocks[it->second];
 
         // Resolve phi nodes against `prev`. Phi nodes appear at the
         // block's start; a single pass.
@@ -925,6 +939,13 @@ BehavSig compute_behav_sig_from_ir(const IrFunction& fn, const Binary& bin) {
     // single-insn blocks.
     const std::size_t max_blocks_visited = 4 * kBehavMaxInsnsTrace;
 
+    // Reuse a single Trace across all K traces to avoid 64×
+    // construct/destroy of the value map, side-effects vector, and
+    // memory model. reset() clears all mutable state while preserving
+    // allocated capacity; seed_trace() re-populates arg registers
+    // with the new trace's inputs.
+    Trace t(fn, bin, /*mem_salt=*/0);
+
     std::vector<u64> outcomes;
     outcomes.reserve(kBehavTraces);
     u8 done = 0;
@@ -932,7 +953,9 @@ BehavSig compute_behav_sig_from_ir(const IrFunction& fn, const Binary& bin) {
     for (std::size_t k = 0; k < kBehavTraces; ++k) {
         const auto argv = mk_inputs(k);
         const u64 seed = mix64(0xDEADBEEFCAFEULL, k);
-        const u64 outcome = run_trace(fn, bin, argv, seed, max_blocks_visited);
+        t.reset(mix64(0xC0FFEEULL, seed));
+        seed_trace(t, argv);
+        const u64 outcome = run_trace_body(t, seed, max_blocks_visited);
         if (outcome != 0) { outcomes.push_back(outcome); ++done; }
         else               { ++aborted; }
     }

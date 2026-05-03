@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -116,12 +117,19 @@ public:
     topo_hashes(std::size_t max_popularity = 0) const;
 
 private:
+    struct SmallStringHashes {
+        std::array<u64, 8> values = {};
+        u8 count = 0;
+
+        [[nodiscard]] bool empty() const noexcept { return count == 0; }
+        [[nodiscard]] std::size_t size() const noexcept { return count; }
+    };
     struct WholeEntry {
-        std::string         name;
+        u32                 name_id = 0;
         u64                 exact_hash;
         std::array<u64, 8>  minhash;
-        std::string         runtime;     // empty == unknown / wildcard
-        std::vector<u64>    string_hashes;  // fnv1a64 of identifying strings (≤8)
+        u32                 runtime_id = 0; // empty string == unknown / wildcard
+        SmallStringHashes   string_hashes;  // fnv1a64 of identifying strings (≤8)
         // L4 behavioural signature. exact_hash == 0 means the interpreter
         // aborted on this fn at corpus-build time (rare); the recognizer
         // gates L4 paths on this so structural paths still apply.
@@ -139,10 +147,13 @@ private:
         u64                 prefix_hash = 0;
     };
     struct ChunkRef {
-        std::string name;
+        u32         name_id = 0;
         u32         size;     // inst count, used as vote weight
-        std::string runtime;  // empty == unknown / wildcard
+        u32         runtime_id = 0;  // empty string == unknown / wildcard
     };
+
+    [[nodiscard]] u32 intern_string(std::string_view s);
+    [[nodiscard]] std::string_view interned(u32 id) const noexcept;
 
     std::vector<WholeEntry>                                whole_by_name_;
     std::unordered_multimap<u64, std::size_t>              whole_exact_;          // L2 exact_hash → idx into whole_by_name_
@@ -175,6 +186,8 @@ private:
     // string_hashes for a candidate's parent fn — chunk-vote operates
     // on names, but the strings live on the parent WholeEntry.
     std::unordered_map<std::string, std::size_t>           idx_by_name_;
+    std::unordered_map<std::string, u32>                   intern_ids_;
+    std::vector<const std::string*>                        intern_strings_;
 
     // Chunks that appear in too many distinct functions are
     // boilerplate. The recognizer drops them from voting.

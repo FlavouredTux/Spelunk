@@ -25,6 +25,21 @@
 
 namespace ember {
 
+u32 TeefCorpus::intern_string(std::string_view s) {
+    std::string key(s);
+    auto [it, inserted] = intern_ids_.try_emplace(std::move(key), 0);
+    if (inserted) {
+        it->second = static_cast<u32>(intern_strings_.size());
+        intern_strings_.push_back(&it->first);
+    }
+    return it->second;
+}
+
+std::string_view TeefCorpus::interned(u32 id) const noexcept {
+    if (id >= intern_strings_.size()) return {};
+    return *intern_strings_[id];
+}
+
 namespace {
 
 // Parse a 16-char lowercase hex token into u64. Returns 0 on failure
@@ -484,10 +499,10 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             if (f.name.empty() || f.name.starts_with("sub_")) continue;
             const std::size_t idx = whole_by_name_.size();
             WholeEntry e;
-            e.name       = f.name;
+            e.name_id    = intern_string(f.name);
             e.exact_hash = f.l2_exact;
             e.minhash    = f.l2_mh;
-            e.runtime    = f.runtime;
+            e.runtime_id = intern_string(f.runtime);
             e.l4_exact   = f.l4_exact;
             e.l4_minhash = f.l4_mh;
             e.topo_hash   = f.topo_hash;
@@ -513,7 +528,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
                     .push_back(static_cast<u32>(idx));
             }
             if (f.addr != 0) idx_by_addr.emplace(f.addr, idx);
-            idx_by_name_.try_emplace(we.name, idx);
+            idx_by_name_.try_emplace(std::string(interned(we.name_id)), idx);
             ++rows;
         }
     }
@@ -526,7 +541,10 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             auto it = idx_by_addr.find(s.addr);
             if (it == idx_by_addr.end()) continue;
             auto& target = whole_by_name_[it->second].string_hashes;
-            target.insert(target.end(), s.hashes.begin(), s.hashes.end());
+            for (u64 h : s.hashes) {
+                if (target.count >= target.values.size()) break;
+                target.values[target.count++] = h;
+            }
             ++rows;
         }
     }
@@ -535,7 +553,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         for (auto& c : part.c) {
             if (c.name.empty() || c.name.starts_with("sub_")) continue;
             chunk_index_[c.chunk_hash].push_back(
-                ChunkRef{std::move(c.name), c.inst_count, std::move(c.runtime)});
+                ChunkRef{intern_string(c.name), c.inst_count, intern_string(c.runtime)});
             ++rows;
         }
     }
@@ -553,7 +571,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
                                  std::unordered_map<u64, std::size_t>& dst) {
             seen.clear();
             for (const auto& [hash, idx] : src) {
-                seen[hash].insert(whole_by_name_[idx].name);
+                seen[hash].insert(interned(whole_by_name_[idx].name_id));
             }
             dst.clear();
             dst.reserve(seen.size());
@@ -566,7 +584,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         seen.clear();
         for (const auto& [hash, refs] : chunk_index_) {
             auto& s = seen[hash];
-            for (const auto& r : refs) s.insert(r.name);
+            for (const auto& r : refs) s.insert(interned(r.name_id));
         }
         chunk_distinct_.clear();
         chunk_distinct_.reserve(seen.size());
@@ -607,10 +625,12 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // strings (small fns, EH cleanup, anonymous helpers), the filter
     // is bypassed and structural match is the sole signal as before.
     const auto& qs = query.string_hashes;
-    auto strings_compatible = [&](const std::vector<u64>& cs) -> bool {
+    auto strings_compatible = [&](const SmallStringHashes& cs) -> bool {
         if (qs.size() < 2 || cs.size() < 2) return true;
         for (u64 q : qs) {
-            for (u64 c : cs) if (q == c) return true;
+            for (std::size_t i = 0; i < cs.count; ++i) {
+                if (q == cs.values[i]) return true;
+            }
         }
         return false;
     };
@@ -653,9 +673,10 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             std::vector<std::string> ordered;
             for (auto it = lo; it != hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
-                if (!runtime_compatible(query_runtime, we.runtime)) continue;
+                if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
                 if (!strings_compatible(we.string_hashes)) continue;
-                if (distinct.insert(we.name).second) ordered.push_back(we.name);
+                const auto name = interned(we.name_id);
+                if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
             if (ordered.size() == 1) {
                 return { TeefMatch{ordered[0], 1.0f, "prefix-exact", 0} };
@@ -695,9 +716,10 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             std::vector<std::string> ordered;
             for (auto it = it_lo; it != it_hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
-                if (!runtime_compatible(query_runtime, we.runtime)) continue;
+                if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
                 if (!strings_compatible(we.string_hashes)) continue;
-                if (distinct.insert(we.name).second) ordered.push_back(we.name);
+                const auto name = interned(we.name_id);
+                if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
             if (ordered.size() == 1) {
                 return { TeefMatch{ordered[0], 1.0f, "behav-exact", 0} };
@@ -752,9 +774,10 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             std::vector<std::string> ordered;
             for (auto it = it_lo; it != it_hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
-                if (!runtime_compatible(query_runtime, we.runtime)) continue;
+                if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
                 if (!strings_compatible(we.string_hashes)) continue;
-                if (distinct.insert(we.name).second) ordered.push_back(we.name);
+                const auto name = interned(we.name_id);
+                if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
             if (ordered.size() == 1) {
                 return { TeefMatch{ordered[0], 1.0f, "whole-exact", 0} };
@@ -801,7 +824,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         };
         auto score_entry = [&](const WholeEntry& e, ScanState& s) {
             if (e.exact_hash == 0) return;
-            if (!runtime_compatible(query_runtime, e.runtime)) return;
+            if (!runtime_compatible(query_runtime, interned(e.runtime_id))) return;
             if (!strings_compatible(e.string_hashes)) return;
             const float l2j = jaccard_minhash(query.whole.minhash, e.minhash);
             const float l4j = l4_jaccard_with(e);
@@ -811,11 +834,11 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                 s.second_combined = s.best_combined;
                 s.second_name     = std::move(s.best_name);
                 s.best_combined   = combined;
-                s.best_name       = e.name;
+                s.best_name       = std::string(interned(e.name_id));
                 s.best_has_l4     = has_l4;
             } else if (combined > s.second_combined) {
                 s.second_combined = combined;
-                s.second_name     = e.name;
+                s.second_name     = std::string(interned(e.name_id));
             }
         };
         auto verdict = [&](ScanState& s) -> std::optional<TeefMatch> {
@@ -905,8 +928,8 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             ? it->second.size() : dn->second;
         if (names_n > kMaxChunkFns) continue;
         for (const auto& ref : it->second) {
-            if (!runtime_compatible(query_runtime, ref.runtime)) continue;
-            votes[ref.name] += ch.inst_count;
+            if (!runtime_compatible(query_runtime, interned(ref.runtime_id))) continue;
+            votes[std::string(interned(ref.name_id))] += ch.inst_count;
         }
     }
     if (votes.empty()) return {};

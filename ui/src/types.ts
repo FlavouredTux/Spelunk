@@ -236,6 +236,17 @@ declare global {
       }>;
       exportAnnotations: (bp: string, data: Annotations) => Promise<string | null>;
       importAnnotations: () => Promise<(Annotations & { path: string }) | null>;
+      importCorpusRenames: (opts?: {
+        threshold?: number;
+        minFnSize?: number;
+        maxFnSize?: number;
+        l0Prefilter?: boolean;
+      } | null) => Promise<{
+        annotations: Annotations;
+        imported: number;
+        scanned: number;
+        corpusPaths: string[];
+      } | null>;
       savePatchedAs:     () => Promise<string | null>;
 
       recents:          () => Promise<string[]>;

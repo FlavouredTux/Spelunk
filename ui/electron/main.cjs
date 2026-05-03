@@ -16,6 +16,7 @@ const { makePluginHost } = require("./plugins.cjs");
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { pipeline } = require("node:stream/promises");
 // Official assistant SDK that wraps the user's installed `assistant` binary
 // and handles subscription auth (Pro/Max OAuth) correctly. Loaded
@@ -135,6 +136,45 @@ function runCapture(bin, args, cwd = process.cwd()) {
       reject(new Error(msg));
     });
   });
+}
+
+function canonicalAddr(hex) {
+  const s = String(hex || "").trim().replace(/^0x/i, "").toLowerCase();
+  if (!/^[0-9a-f]+$/.test(s)) return null;
+  return "0x" + s.padStart(16, "0");
+}
+
+function defaultCorpusPath() {
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, "corpus_humongous_combined.teef"),
+    path.join(home, "corpus_combined.teef"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fsSync.existsSync(p)) return p;
+    } catch {}
+  }
+  return home;
+}
+
+function parseRecognizeRenames(stdout, threshold) {
+  const renames = {};
+  let scanned = 0;
+  for (const line of String(stdout || "").split("\n")) {
+    if (!line.trim()) continue;
+    ++scanned;
+    const parts = line.split("\t");
+    if (parts.length < 5) continue;
+    const addr = canonicalAddr(parts[0]);
+    const suggested = String(parts[2] || "").trim();
+    const confidence = Number(parts[3]);
+    if (!addr || !suggested || !Number.isFinite(confidence)) continue;
+    if (confidence < threshold) continue;
+    if (/^sub_[0-9a-f]+$/i.test(suggested)) continue;
+    renames[addr] = suggested;
+  }
+  return { renames, scanned };
 }
 
 function parseGitHubRepo(url) {
@@ -964,6 +1004,60 @@ ipcMain.handle("ember:importAnnotations", async () => {
     signatures:   parsed.signatures   || {},
     localRenames: parsed.localRenames || {},
     patches:      parsed.patches      || {},
+  };
+});
+
+// Pick one or more TEEF corpus TSVs, run recognition against the current
+// binary, and merge high-confidence suggestions into the same sidecar
+// used by the manual "import renames" flow.
+ipcMain.handle("ember:importCorpusRenames", async (_e, opts) => {
+  if (!state.binary) throw new Error("no binary selected");
+  const o = opts && typeof opts === "object" ? opts : {};
+  const threshold = Number.isFinite(Number(o.threshold)) ? Number(o.threshold) : 0.85;
+  const minFnSize = Number.isFinite(Number(o.minFnSize)) ? Math.max(0, Math.floor(Number(o.minFnSize))) : 32;
+  const maxFnSize = Number.isFinite(Number(o.maxFnSize)) ? Math.max(0, Math.floor(Number(o.maxFnSize))) : 200000;
+  const l0Prefilter = o.l0Prefilter !== false;
+
+  const picked = await dialog.showOpenDialog({
+    title: "Import renames from TEEF corpus",
+    defaultPath: defaultCorpusPath(),
+    filters: [
+      { name: "TEEF corpora", extensions: ["teef", "tsv"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+    properties: ["openFile", "multiSelections"],
+  });
+  if (picked.canceled || picked.filePaths.length === 0) return null;
+
+  const annPath = await writeCliAnnotations(state.binary);
+  const effective = await materializePatchedBinary(state.binary);
+  const args = ["--quiet", "--recognize"];
+  if (l0Prefilter) args.push("--l0-prefilter");
+  if (minFnSize > 0) args.push("--min-fn-size", String(minFnSize));
+  if (maxFnSize > 0) args.push("--max-fn-size", String(maxFnSize));
+  args.push("--recognize-threshold", String(threshold));
+  for (const p of picked.filePaths) args.push("--corpus", p);
+  if (annPath) args.push("--annotations", annPath);
+  args.push(effective);
+
+  const stdout = await runEmber(args);
+  const parsed = parseRecognizeRenames(stdout, threshold);
+
+  const sidecar = await readSidecar(state.binary);
+  const next = {
+    renames:      { ...(sidecar.renames || {}), ...parsed.renames },
+    notes:        sidecar.notes || {},
+    signatures:   sidecar.signatures || {},
+    localRenames: sidecar.localRenames || {},
+    patches:      sidecar.patches || {},
+  };
+  await saveSidecar(state.binary, next);
+
+  return {
+    annotations: next,
+    imported: Object.keys(parsed.renames).length,
+    scanned: parsed.scanned,
+    corpusPaths: picked.filePaths,
   };
 });
 

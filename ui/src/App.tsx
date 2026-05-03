@@ -36,7 +36,7 @@ import { SkelCode, SkelFunctionHeader, SkelXrefs } from "./components/Skeleton";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
-  exportAnnotations, importAnnotations,
+  exportAnnotations, importAnnotations, importCorpusRenames,
   checkForReleaseUpdate, downloadAndInstallReleaseUpdate,
   clearRendererCaches,
   displayName, demangle,
@@ -955,6 +955,25 @@ export default function App() {
     }
   }, [info, annotations]);
 
+  const handleImportCorpus = useCallback(async () => {
+    if (!info) return;
+    try {
+      setToast("running corpus recognition...");
+      const res = await importCorpusRenames({
+        threshold: 0.85,
+        minFnSize: 32,
+        maxFnSize: 200000,
+        l0Prefilter: true,
+      });
+      if (!res) return;
+      clearRendererCaches();
+      setAnnotations(res.annotations);
+      setToast(`imported ${res.imported} corpus rename${res.imported === 1 ? "" : "s"}`);
+    } catch (e: unknown) {
+      setError(`Corpus import failed: ${(e as Error).message}`);
+    }
+  }, [info]);
+
   const saveRename = useCallback((fn: FunctionInfo, value: string) => {
     const next = cloneAnn();
     if (value) next.renames[fn.addr] = value;
@@ -1399,6 +1418,7 @@ export default function App() {
           onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
           onExport={handleExport}
           onImport={handleImport}
+          onImportCorpus={handleImportCorpus}
         />
         <ResizeHandle
           edge="right"

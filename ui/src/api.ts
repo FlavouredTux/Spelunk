@@ -379,6 +379,22 @@ export async function importAnnotations(): Promise<ImportedAnnotations | null> {
   return await window.ember.importAnnotations();
 }
 
+export type CorpusImportResult = {
+  annotations: Annotations;
+  imported: number;
+  scanned: number;
+  corpusPaths: string[];
+};
+
+export async function importCorpusRenames(opts?: {
+  threshold?: number;
+  minFnSize?: number;
+  maxFnSize?: number;
+  l0Prefilter?: boolean;
+}): Promise<CorpusImportResult | null> {
+  return await window.ember.importCorpusRenames(opts ?? null);
+}
+
 function parseSummary(raw: string, path: string): BinaryInfo {
   const lines = raw.split("\n");
   const info: BinaryInfo = {

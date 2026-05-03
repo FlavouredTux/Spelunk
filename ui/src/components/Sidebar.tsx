@@ -22,9 +22,10 @@ export function Sidebar(props: {
   onEditSignature: (fn: FunctionInfo) => void;
   onExport?: () => void;
   onImport?: () => void;
+  onImportCorpus?: () => void;
 }) {
   const { info, currentAddr, annotations, functionsLoading, width, onSelect, onOpen, onReopen,
-          onRename, onAddNote, onEditSignature, onExport, onImport } = props;
+          onRename, onAddNote, onEditSignature, onExport, onImport, onImportCorpus } = props;
   const [q, setQ] = useState("");
   const deferredQ = useDeferredValue(q);
   const [showImports, setShowImports] = useState(false);
@@ -174,10 +175,11 @@ export function Sidebar(props: {
           <span><span style={{ color: C.textMuted }}>endian</span> {info.endian || "?"}</span>
           <span><span style={{ color: C.textMuted }}>entry</span> {info.entry.replace(/^0x0+/, "0x")}</span>
         </div>
-        {(onExport || onImport) && (
+        {(onExport || onImport || onImportCorpus) && (
           <div style={{
             display: "flex", gap: 6, marginTop: 10,
             fontFamily: sans, fontSize: 10,
+            flexWrap: "wrap",
           }}>
             {onImport && (
               <button
@@ -189,6 +191,17 @@ export function Sidebar(props: {
                   borderRadius: 3, color: C.textMuted,
                 }}
               >import renames</button>
+            )}
+            {onImportCorpus && (
+              <button
+                onClick={onImportCorpus}
+                title="Run TEEF recognition against a corpus and merge high-confidence matches as renames"
+                style={{
+                  flex: 1, padding: "4px 8px",
+                  background: "transparent", border: `1px solid ${C.border}`,
+                  borderRadius: 3, color: C.textMuted,
+                }}
+              >import corpus</button>
             )}
             {onExport && (
               <button

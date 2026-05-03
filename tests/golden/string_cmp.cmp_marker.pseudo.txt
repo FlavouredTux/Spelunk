@@ -1,6 +1,6 @@
 // cmp_marker
 u64 cmp_marker(u64 a1) {
-  if (0x402009 <= a1) {
+  if (a1 >= 0x402009) {
     return puts("PlatformImpl");
   }
   return 0;

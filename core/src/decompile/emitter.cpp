@@ -3061,6 +3061,12 @@ struct Emitter {
                 return wrap_if_lt("!" + rendered, Prec::Unary, min_prec);
             }
         }
+        if (a.kind == IrValueKind::Imm && b.kind != IrValueKind::Imm) {
+            if (op == "<")  return render_cmp(">",  b, a, depth, signed_cmp, in_bool_ctx, min_prec);
+            if (op == "<=") return render_cmp(">=", b, a, depth, signed_cmp, in_bool_ctx, min_prec);
+            if (op == ">")  return render_cmp("<",  b, a, depth, signed_cmp, in_bool_ctx, min_prec);
+            if (op == ">=") return render_cmp("<=", b, a, depth, signed_cmp, in_bool_ctx, min_prec);
+        }
         const Prec own = (op == "==" || op == "!=") ? Prec::Eq : Prec::Rel;
         const int p = std::to_underlying(own);
         const std::string_view c = "i64";

@@ -7,7 +7,7 @@
 namespace ember {
 
 class Binary;
-class Section;
+struct Section;
 
 // True iff `a` falls inside any section that looks like code
 // (executable flag or canonical text-section name).

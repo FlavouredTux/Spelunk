@@ -15,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -30,7 +31,7 @@
 namespace ember::cli {
 
 std::string fingerprints_cache_tag() {
-    return std::format("fingerprints-{}-o2", kFingerprintSchema);
+    return std::format("fingerprints-{}-o3", kFingerprintSchema);
 }
 
 std::string build_fingerprints_output(const Binary& b) {
@@ -65,6 +66,21 @@ std::string build_fingerprints_output(const Binary& b) {
     for (const auto& [a, _] : name_by_addr) fns.insert(a);
     for (const auto& e : edges) {
         if (!b.import_at_plt(e.callee)) fns.insert(e.callee);
+    }
+    // On stripped binaries the symbol table and call graph are both empty.
+    // Fall back to enumerate_functions so we still fingerprint discovered subs.
+    // Zero-sized discovered `sub_*` entries are deliberately non-fingerprintable:
+    // they are usually interior prologue-shaped addresses inside a real symbol.
+    std::unordered_set<addr_t> zero_sized_discovered_subs;
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Auto)) {
+        if (fn.kind == DiscoveredFunction::Kind::Sub && fn.size == 0) {
+            zero_sized_discovered_subs.insert(fn.addr);
+            continue;
+        }
+        if (!b.import_at_plt(fn.addr)) fns.insert(fn.addr);
+    }
+    for (addr_t a : zero_sized_discovered_subs) {
+        if (!name_by_addr.contains(a)) fns.erase(a);
     }
 
     struct Row {

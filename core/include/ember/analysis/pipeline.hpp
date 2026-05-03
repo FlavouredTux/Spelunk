@@ -62,9 +62,10 @@ std::vector<addr_t>   compute_callers(const Binary& b, addr_t fn);
 // A function entry the decompiler can walk from: either a defined
 // function symbol, or a call target the CFG builder discovered at
 // another function's call site (classic stripped-binary `sub_*`).
-// `size` comes from the symbol table when kind == Symbol; for Sub
-// entries it's left 0 because determining the extent requires building
-// the CFG, which `enumerate_functions` intentionally doesn't do.
+// `size` comes from the symbol table when available; otherwise it is estimated
+// from the gap to the next discovered function (or section boundary) so that
+// downstream tools (fingerprints, xrefs, size filters) still work on sparse or
+// stripped symbol metadata.
 struct DiscoveredFunction {
     enum class Kind : u8 { Symbol, Sub };
     addr_t      addr = 0;

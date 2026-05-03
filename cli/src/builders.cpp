@@ -122,18 +122,17 @@ std::string build_data_xrefs_output(const Binary& b, bool json) {
 
 std::string build_arities_output(const Binary& b) {
     std::string out;
-    for (const auto& s : b.symbols()) {
-        if (s.is_import) continue;
-        if (s.kind != SymbolKind::Function) continue;
-        if (s.size == 0 || s.name.empty()) continue;
-        out += std::format("{:#x} {}\n", s.addr, infer_arity(b, s.addr));
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Auto)) {
+        if (b.import_at_plt(fn.addr)) continue;
+        out += std::format("{:#x} {}\n", fn.addr, infer_arity(b, fn.addr));
     }
     return out;
 }
 
 // TSV: <addr_hex>\t<size_hex>\t<kind>\t<name>. `kind` is "symbol" for a
-// defined function symbol or "sub" for an entry that only appeared as a
-// call target during CFG walking. Size is 0 for `sub` rows.
+// defined function symbol or "sub" for a CFG-discovered entry. Missing sizes
+// are estimated from the gap to the next function (or section boundary) so
+// downstream tools still work with sparse or stripped symbol metadata.
 std::string build_functions_output(const Binary& b, bool full_analysis) {
     std::string out;
     const auto mode = full_analysis ? EnumerateMode::Full : EnumerateMode::Auto;

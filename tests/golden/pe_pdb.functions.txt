@@ -1,2 +1,2 @@
-0x0000000140001000	0x0	symbol	extracted_main
-0x0000000140001020	0x0	symbol	extracted_helper
+0x0000000140001000	0x20	symbol	extracted_main
+0x0000000140001020	0x3	symbol	extracted_helper

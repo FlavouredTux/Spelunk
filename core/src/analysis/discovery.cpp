@@ -9,17 +9,13 @@
 #include <unordered_set>
 #include <vector>
 
-#include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/packed.hpp>
-#include <ember/analysis/rtti.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/format.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {
-
-namespace {
 
 // "Code-shaped" = either flagged executable, or has the canonical text
 // section name. Byfron / VMProtect strip the executable bit on disk
@@ -34,7 +30,7 @@ namespace {
     return name_is_code_section(s.name);
 }
 
-[[nodiscard]] bool addr_in_code_section(const Binary& b, addr_t a) noexcept {
+bool addr_in_code_section(const Binary& b, addr_t a) noexcept {
     for (const auto& s : b.sections()) {
         if (!section_is_code(s)) continue;
         if (a >= s.vaddr && a < s.vaddr + s.size) return true;
@@ -42,6 +38,7 @@ namespace {
     return false;
 }
 
+namespace {
 // Common MSVC / clang-on-Windows / SysV-x64 function prologues. The
 // match is on the first 1–4 bytes; the decoder validates the rest.
 // These hits are the tail of an enormous distribution — there are
@@ -107,36 +104,6 @@ namespace {
 }
 
 }  // namespace
-
-std::vector<addr_t> discover_from_vtables(const Binary& b, addr_t lo, addr_t hi) {
-    const bool scoped = hi > lo;
-    auto in_scope = [&](addr_t a) noexcept { return !scoped || (a >= lo && a < hi); };
-
-    std::vector<addr_t> out;
-    if (b.format() == Format::Pe) {
-        for (const auto& cls : parse_msvc_rtti(b)) {
-            for (addr_t m : cls.methods) {
-                if (m == 0) continue;
-                if (!in_scope(m)) continue;
-                if (!addr_in_code_section(b, m)) continue;
-                out.push_back(m);
-            }
-        }
-    }
-    // Itanium RTTI applies to ELF and Mach-O. Empty on plain-C
-    // binaries; cheap on PE (returns empty fast).
-    if (b.format() != Format::Pe) {
-        for (const auto& cls : parse_itanium_rtti(b)) {
-            for (addr_t m : cls.methods) {
-                if (m == 0) continue;
-                if (!in_scope(m)) continue;
-                if (!addr_in_code_section(b, m)) continue;
-                out.push_back(m);
-            }
-        }
-    }
-    return out;
-}
 
 // Sweep one section's bytes for prologue patterns. Pure function — no
 // shared state — so the parallel driver can have N copies running on

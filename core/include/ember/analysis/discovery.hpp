@@ -7,17 +7,11 @@
 namespace ember {
 
 class Binary;
+class Section;
 
-// Vtable slot harvest. Walks Itanium and MSVC RTTI (whichever applies
-// to the binary's format), returns each method-slot address that
-// already lands in an executable section. Cheap — RTTI parsing is
-// already required for naming.
-//
-// `lo`/`hi`: when `hi > lo`, only emit addresses inside [lo, hi). Used
-// by `--module` scoping on minidumps so we don't return method
-// pointers that belong to wine reimpl pages outside the module's image.
-[[nodiscard]] std::vector<addr_t>
-discover_from_vtables(const Binary& b, addr_t lo = 0, addr_t hi = 0);
+// True iff `a` falls inside any section that looks like code
+// (executable flag or canonical text-section name).
+[[nodiscard]] bool addr_in_code_section(const Binary& b, addr_t a) noexcept;
 
 // Linear-sweep `.text` for x64 function prologue byte patterns. Each
 // candidate is validated by decoding two instructions; the address is

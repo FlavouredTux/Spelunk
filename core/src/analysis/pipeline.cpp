@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <ember/analysis/discovery.hpp>
+#include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/packed.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -604,6 +605,14 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
         if (s.size == 0 || s.name.empty()) continue;
         work.push_back({s.addr, s.name});
     }
+    if (work.empty()) {
+        // Stripped binary — fall back to discovered function entries.
+        // Use Cheap mode to avoid recursive compute_call_graph calls.
+        for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+            if (b.import_at_plt(fn.addr)) continue;
+            work.push_back({fn.addr, fn.name});
+        }
+    }
     if (work.empty()) return {};
 
     // CfgBuilder caches per-function unwind ranges in a mutable map
@@ -722,6 +731,66 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
     return out;
 }
 
+namespace {
+
+// Some defined symbols and all CFG-discovered `sub_*` entries have no reliable
+// extent in the loader metadata. Downstream tools (fingerprints, xrefs, size
+// filters) still need a usable estimate. Derive an upper-bound size from the
+// gap to the next discovered function entry (or the end of the containing
+// executable section). Over-counts when there's padding / jump tables in
+// between, but that's the safe direction for filtering both ends.
+void fill_unknown_sizes(std::vector<DiscoveredFunction>& fns, const Binary& b) {
+    if (fns.empty()) return;
+
+    auto is_code_section = [](const Section& s) noexcept {
+        return s.flags.executable
+            || s.name == ".text" || s.name == "__text" || s.name == "CODE"
+            || s.name == ".byfron";
+    };
+    auto containing_code_section = [&](addr_t a) -> const Section* {
+        for (const auto& s : b.sections()) {
+            if (!is_code_section(s)) continue;
+            if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
+        }
+        return nullptr;
+    };
+
+    for (std::size_t i = 0; i < fns.size(); ++i) {
+        if (fns[i].size != 0) continue;
+        if (fns[i].kind == DiscoveredFunction::Kind::Sub) {
+            bool inside_sized_symbol = false;
+            for (std::size_t j = i; j-- > 0;) {
+                if (fns[j].size == 0) continue;
+                if (fns[j].addr + fns[j].size <= fns[i].addr) break;
+                if (fns[j].kind == DiscoveredFunction::Kind::Symbol) {
+                    inside_sized_symbol = true;
+                    break;
+                }
+            }
+            if (inside_sized_symbol) continue;
+        }
+
+        u64 upper = 0;
+        const Section* sec = containing_code_section(fns[i].addr);
+        if (sec != nullptr) {
+            upper = sec->vaddr + sec->size;
+        }
+        if (i + 1 < fns.size() && fns[i + 1].addr > fns[i].addr) {
+            const Section* next_sec = containing_code_section(fns[i + 1].addr);
+            if (sec == nullptr || next_sec == sec) {
+                upper = (upper == 0)
+                    ? fns[i + 1].addr
+                    : std::min<u64>(upper, fns[i + 1].addr);
+            }
+        }
+        if (upper > fns[i].addr) {
+            fns[i].size = upper - fns[i].addr;
+        }
+    }
+}
+
+}  // namespace
+
 std::vector<DiscoveredFunction>
 enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     const bool scoped = hi > lo;
@@ -782,15 +851,24 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         }
         return nullptr;
     };
-    auto add_candidate = [&](addr_t a, std::string_view label) {
+    auto add_candidate = [&](addr_t a, std::string_view label,
+                            bool trusted = false,
+                            const std::string* explicit_name = nullptr) {
         if (!in_scope(a)) return;
         if (b.import_at_plt(a) != nullptr) return;
         if (index.count(a)) return;
         const Section* sec = section_for(a);
         if (!sec) return;
-        if (mode == EnumerateMode::Auto && is_encrypted_cached(sec)) return;
+        // Trusted entries (vtable pointers from RTTI) bypass the
+        // encrypted-section filter — they come from structural
+        // metadata in .rdata, not heuristic pattern matching in
+        // encrypted code. Even on a packed binary, these are real
+        // class methods that will exist after unpacking.
+        if (!trusted && mode == EnumerateMode::Auto && is_encrypted_cached(sec)) return;
         index.emplace(a, out.size());
-        out.push_back({a, 0, std::format("{}_{:x}", label, a),
+        out.push_back({a, 0,
+                       explicit_name ? *explicit_name
+                                     : std::format("{}_{:x}", label, a),
                        DiscoveredFunction::Kind::Sub});
     };
 
@@ -801,7 +879,34 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // by decoding two instructions. Both run on packed binaries
     // too — RTTI lives in unencrypted .rdata, and the prologue
     // sweep itself skips encrypted sections.
-    for (addr_t a : discover_from_vtables(b, lo, hi))   add_candidate(a, "vt");
+    if (b.format() == Format::Pe) {
+        auto msvc_classes = parse_msvc_rtti(b);
+        auto rtti_names   = rtti_method_names(msvc_classes);
+        for (const auto& cls : msvc_classes) {
+            for (addr_t m : cls.methods) {
+                if (m == 0) continue;
+                if (!in_scope(m)) continue;
+                if (!addr_in_code_section(b, m)) continue;
+                auto it = rtti_names.find(m);
+                add_candidate(m, "sub", true,
+                              it != rtti_names.end() ? &it->second : nullptr);
+            }
+        }
+    }
+    if (b.format() != Format::Pe) {
+        auto itanium_classes = parse_itanium_rtti(b);
+        auto rtti_names      = rtti_method_names(itanium_classes);
+        for (const auto& cls : itanium_classes) {
+            for (addr_t m : cls.methods) {
+                if (m == 0) continue;
+                if (!in_scope(m)) continue;
+                if (!addr_in_code_section(b, m)) continue;
+                auto it = rtti_names.find(m);
+                add_candidate(m, "sub", true,
+                              it != rtti_names.end() ? &it->second : nullptr);
+            }
+        }
+    }
     for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
 
     // Loader-only mode: on a packed binary the call-graph walker chases
@@ -821,18 +926,20 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
         std::sort(out.begin(), out.end(),
                   [](const auto& x, const auto& y) { return x.addr < y.addr; });
+        fill_unknown_sizes(out, b);
         return out;
     }
 
     // Pass 2: CFG-walked call targets. Skip PLT stubs (import thunks).
-    // Unknown size for these — stripped binaries don't tell us where they
-    // end without a CFG build we don't want to run on every enumerate.
+    // Sizes for these are filled in later by fill_unknown_sizes() using the
+    // gap to the next discovered function (or section boundary).
     for (const auto& e : compute_call_graph(b)) {
         add_candidate(e.callee, "sub");
     }
 
     std::sort(out.begin(), out.end(),
               [](const auto& x, const auto& y) { return x.addr < y.addr; });
+    fill_unknown_sizes(out, b);
     return out;
 }
 

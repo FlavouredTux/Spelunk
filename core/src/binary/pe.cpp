@@ -220,7 +220,7 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
         s.size        = static_cast<u64>(virt_size);
         s.flags.readable   = (characteristics & kScnMemRead)    != 0;
         s.flags.writable   = (characteristics & kScnMemWrite)   != 0;
-        s.flags.executable = (characteristics & kScnMemExecute) != 0;
+        s.flags.executable = (characteristics & (kScnMemExecute | kScnCntCode)) != 0;
         s.flags.allocated  = (characteristics & (kScnCntCode | kScnCntInit
                                                  | kScnCntUninit)) != 0;
 

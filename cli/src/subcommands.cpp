@@ -82,6 +82,15 @@
 
 namespace ember::cli {
 
+namespace {
+
+constexpr std::string_view kXrefsCacheTag = "xrefs-v2";
+constexpr std::string_view kAritiesCacheTag = "arities-v2";
+constexpr std::string_view kFunctionsCacheTag = "functions-v4";
+constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v4";
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // One-shot helpers
 // ---------------------------------------------------------------------------
@@ -257,7 +266,7 @@ void load_trace_edges(const Args& args, const Binary& b) {
 // ---------------------------------------------------------------------------
 
 int run_xrefs(const Args& args, const Binary& b) {
-    return run_cached(args, "xrefs", [&] { return build_xrefs_output(b); });
+    return run_cached(args, kXrefsCacheTag, [&] { return build_xrefs_output(b); });
 }
 
 int run_data_xrefs(const Args& args, const Binary& b) {
@@ -1385,7 +1394,7 @@ int run_int3_resolve(const Args& args, const Binary& b) {
 }
 
 int run_arities(const Args& args, const Binary& b) {
-    return run_cached(args, "arities", [&] { return build_arities_output(b); });
+    return run_cached(args, kAritiesCacheTag, [&] { return build_arities_output(b); });
 }
 
 int run_functions(const Args& args, const Binary& b) {
@@ -1410,7 +1419,9 @@ int run_functions(const Args& args, const Binary& b) {
     // superset (and on packed binaries, a polluted one). Sharing one tag
     // would let a fast --functions run poison the cache for a later
     // --full-analysis user.
-    const std::string_view fns_tag = args.full_analysis ? "functions_full" : "functions";
+    const std::string_view fns_tag = args.full_analysis
+        ? kFunctionsFullCacheTag
+        : kFunctionsCacheTag;
     if (cacheable) {
         if (auto hit = cache::read(dir, key, fns_tag); hit) {
             tsv.assign(hit->data(), hit->size());
@@ -1507,7 +1518,7 @@ int run_refs_to(const Args& args, const Binary& b) {
         if (k) key = std::move(*k);
     }
     if (!key.empty()) {
-        if (auto hit = cache::read(dir, key, "xrefs"); hit) {
+        if (auto hit = cache::read(dir, key, kXrefsCacheTag); hit) {
             xrefs_tsv = std::move(*hit);
         }
     }
@@ -1518,7 +1529,7 @@ int run_refs_to(const Args& args, const Binary& b) {
         std::fflush(stderr);
         xrefs_tsv = build_xrefs_output(b);
         if (!key.empty()) {
-            (void)cache::write(dir, key, "xrefs", xrefs_tsv);
+            (void)cache::write(dir, key, kXrefsCacheTag, xrefs_tsv);
         }
     }
     const std::string needle = std::format("-> {:#x}\n", *va);

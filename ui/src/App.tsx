@@ -101,7 +101,25 @@ function detectPackedBinary(info: BinaryInfo): string | null {
     if (!s.flags.includes("x")) {
       return `'${s.name}' is ${(sz >>> 20).toString()} MB but not marked executable — this binary may be packed or protected`;
     }
+    // Tertiary: section has exec but lacks read — Byfron/Themida strip
+    // all memory-protection flags from .text except CNT_CODE. A real
+    // compiler always emits MEM_READ alongside MEM_EXECUTE.
+    if (s.flags.includes("x") && !s.flags.includes("r")) {
+      return `'${s.name}' is marked executable but not readable — packer stripped section flags (Byfron, Themida); decompilation will mostly fail`;
+    }
   }
+
+  // Quaternary: entry point is outside the main code section. Packers
+  // redirect entry to a tiny unpacker stub (tempest, .byfron, etc.)
+  // while the real .text is encrypted.
+  if (entrySec) {
+    const mainCode = info.sections.find((s) =>
+      CODE_NAMES.has(s.name) && parseInt(s.size, 16) > 0x40000);
+    if (mainCode && entrySec.name !== mainCode.name) {
+      return `entry point is in '${entrySec.name || "(unnamed)"}', not '${mainCode.name}' — likely packed; decompilation will mostly fail`;
+    }
+  }
+
   return null;
 }
 
@@ -1680,6 +1698,16 @@ export default function App() {
         <AgentPanel
           binaryPath={info?.path ?? null}
           onClose={() => setAgentPanelOpen(false)}
+          onNavigate={(addr) => {
+            if (!info) return;
+            const num = parseInt(addr, 16);
+            if (Number.isNaN(num)) return;
+            const fn = fnByAddr.get(num) ?? fnByAddr.get(fnAddrByName.get(addr) ?? -1);
+            if (fn) {
+              navigateTo(fn);
+              setAgentPanelOpen(false);
+            }
+          }}
         />
       )}
       {diffOpen && info && (

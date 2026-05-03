@@ -92,7 +92,7 @@ export function Sidebar(props: {
         label: "Copy pseudo-C",
         onClick: async () => {
           try {
-            const code = await loadFunction(fn.name, "pseudo");
+            const code = await loadFunction(fn.addr, "pseudo");
             await navigator.clipboard.writeText(code);
             setToast(`${code.split("\n").length} lines copied`);
           } catch { setToast("copy failed"); }
@@ -103,7 +103,7 @@ export function Sidebar(props: {
         label: "Copy assembly",
         onClick: async () => {
           try {
-            const code = await loadFunction(fn.name, "asm");
+            const code = await loadFunction(fn.addr, "asm");
             await navigator.clipboard.writeText(code);
             setToast("assembly copied");
           } catch { setToast("copy failed"); }

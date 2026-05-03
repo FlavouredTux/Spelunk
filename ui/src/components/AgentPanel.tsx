@@ -1,11 +1,10 @@
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type ErrorInfo } from "react";
+import { Component, useEffect, useMemo, useState, type ReactNode, type ErrorInfo } from "react";
 import { C, sans, mono, serif } from "../theme";
-import { NeuralView } from "./NeuralView";
 import { AgentSettings } from "./AgentSettings";
 
 // Tiny boundary so a render exception (typically: malformed claim
-// from an older worker writing out incomplete fields, NeuralView
-// SVG hiccup, etc.) doesn't black-screen the whole panel. Surfaces
+// from an older worker writing out incomplete fields) doesn't
+// black-screen the whole panel. Surfaces
 // the error message in-panel and lets the user reload via the
 // onClose path.
 class AgentErrorBoundary extends Component<
@@ -121,6 +120,7 @@ function fmtUsd(usd: number): string {
 export function AgentPanel(props: {
     binaryPath: string | null;
     onClose: () => void;
+    onNavigate?: (addr: string) => void;
 }) {
     return (
         <AgentErrorBoundary onReset={props.onClose}>
@@ -132,6 +132,7 @@ export function AgentPanel(props: {
 function AgentPanelInner(props: {
     binaryPath: string | null;
     onClose: () => void;
+    onNavigate?: (addr: string) => void;
 }) {
     const [intel, setIntel]   = useState<IntelView>({ entries: [], view: [] });
     const [rawRuns, setRuns]  = useState<RunSummary[]>([]);
@@ -140,7 +141,6 @@ function AgentPanelInner(props: {
     const [busy, setBusy] = useState<string | null>(null);
     const [toast, setToast] = useState<string | null>(null);
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [viewMode, setViewMode] = useState<"dashboard" | "neural">("neural");
 
     // Refresh poller. 2s feels live without thrashing the FS.
     useEffect(() => {
@@ -289,8 +289,6 @@ function AgentPanelInner(props: {
                 onCascade={onCascade}
                 onTiebreak={onTiebreak}
                 onOpenSettings={() => setSettingsOpen(true)}
-                viewMode={viewMode}
-                setViewMode={setViewMode}
                 disabled={!props.binaryPath || busy != null}
                 busyLabel={busy}
             />
@@ -317,47 +315,25 @@ function AgentPanelInner(props: {
                 <Stat label="swarm spend" value={fmtUsd(stats.totalUsd)} tint={C.yellow} />
             </div>
 
-            {/* Main content — toggleable between dashboard + neural */}
-            {viewMode === "neural" ? (
-                <div style={{
-                    flex: 1, display: "flex", flexDirection: "column",
-                    minHeight: 0,
-                }}>
-                    <NeuralView
-                        runs={runs}
-                        view={intel.view}
-                        claimCount={intel.entries.filter((e) => e.kind === "claim").length}
-                        disputedCount={stats.disputed}
-                    />
-                    {disputed.length > 0 && (
-                        <div style={{
-                            padding: "8px 20px",
-                            borderTop: `1px solid ${C.border}`,
-                            background: C.bgMuted,
-                            fontFamily: mono, fontSize: 11, color: C.red,
-                        }}>
-                            {disputed.length} disputed — switch to dashboard to inspect
-                        </div>
-                    )}
-                </div>
-            ) : (
-                <div style={{
-                    flex: 1,
-                    display: "grid",
-                    gridTemplateColumns: "1.1fr 1fr 1.4fr",
-                    gap: 0,
-                    minHeight: 0,
-                }}>
-                    <DisputesColumn disputes={disputed} />
-                    <RecentClaimsColumn recent={recent} />
-                    <RunsColumn
-                        runs={runs}
-                        activeRun={activeRun}
-                        setActiveRun={setActiveRun}
-                        tailEvents={tailEvents}
-                    />
-                </div>
-            )}
+            {/* Dashboard — disputes, claims, runs */}
+            <div style={{
+                flex: 1,
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr 1.4fr",
+                gap: 1,
+                minHeight: 0,
+                background: C.bgDark,
+                padding: 12,
+            }}>
+                <DisputesColumn disputes={disputed} onNavigate={props.onNavigate} />
+                <RecentClaimsColumn recent={recent} onNavigate={props.onNavigate} />
+                <RunsColumn
+                    runs={runs}
+                    activeRun={activeRun}
+                    setActiveRun={setActiveRun}
+                    tailEvents={tailEvents}
+                />
+            </div>
 
             {/* Bottom: agent activity ribbon */}
             <ActivityRibbon claims={intel.entries.filter((e): e is Claim => e.kind === "claim")} />
@@ -388,8 +364,6 @@ function Header(props: {
     onCascade: () => void;
     onTiebreak: () => void;
     onOpenSettings: () => void;
-    viewMode: "dashboard" | "neural";
-    setViewMode: (m: "dashboard" | "neural") => void;
     disabled: boolean;
     busyLabel: string | null;
 }) {
@@ -420,7 +394,6 @@ function Header(props: {
                 )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <ViewToggle value={props.viewMode} onChange={props.setViewMode} />
                 {props.busyLabel && (
                     <span style={{ fontFamily: mono, fontSize: 11, color: C.textMuted }}>
                         {props.busyLabel}
@@ -445,37 +418,6 @@ function Header(props: {
     );
 }
 
-function ViewToggle(props: { value: "dashboard" | "neural"; onChange: (v: "dashboard" | "neural") => void }) {
-    const item = (id: "dashboard" | "neural", label: string) => {
-        const active = props.value === id;
-        return (
-            <button onClick={() => props.onChange(id)}
-                style={{
-                    fontFamily: mono, fontSize: 10,
-                    padding: "4px 10px",
-                    background: active ? C.bgDark : "transparent",
-                    color: active ? C.text : C.textMuted,
-                    border: "none",
-                    cursor: "pointer",
-                    borderRadius: 3,
-                }}
-            >{label}</button>
-        );
-    };
-    return (
-        <div style={{
-            display: "inline-flex",
-            background: C.bgInput,
-            border: `1px solid ${C.border}`,
-            borderRadius: 4,
-            padding: 2,
-            marginRight: 6,
-        }}>
-            {item("neural", "neural")}
-            {item("dashboard", "dashboard")}
-        </div>
-    );
-}
 
 function Btn(props: { onClick: () => void; children: React.ReactNode; ghost?: boolean; disabled?: boolean }) {
     return (
@@ -568,22 +510,40 @@ function PulseDot(props: { tint: string }) {
     );
 }
 
-function DisputesColumn(props: { disputes: Decision[] }) {
+function DisputesColumn(props: { disputes: Decision[]; onNavigate?: (addr: string) => void }) {
     return (
         <Column title="Disputes" subtitle="orchestrator decides">
             {props.disputes.length === 0 && (
                 <Empty msg="No disputes. Swarm in agreement." />
             )}
             {props.disputes.map((d) => (
-                <div key={d.key} style={{
-                    border: `1px solid ${C.red}`,
-                    background: "rgba(199,93,58,0.06)",
-                    borderRadius: 6, padding: 10, marginBottom: 8,
-                }}>
-                    <div style={{ fontFamily: mono, fontSize: 11, color: C.textMuted }}>
-                        {d.winner.subject}<span style={{ color: C.textFaint }}> · {d.winner.predicate}</span>
+                <div key={d.key}
+                    onClick={() => props.onNavigate?.(d.winner.subject)}
+                    style={{
+                        border: `1px solid ${C.red}`,
+                        background: "rgba(199,93,58,0.08)",
+                        borderRadius: 8,
+                        padding: "12px 14px",
+                        marginBottom: 10,
+                        transition: "background 0.1s ease, transform 0.1s ease",
+                        cursor: props.onNavigate ? "pointer" : "default",
+                    }}
+                    onMouseEnter={(e) => { if (props.onNavigate) (e.currentTarget as HTMLElement).style.background = "rgba(199,93,58,0.14)"; }}
+                    onMouseLeave={(e) => { if (props.onNavigate) (e.currentTarget as HTMLElement).style.background = "rgba(199,93,58,0.08)"; }}
+                >
+                    <div style={{
+                        fontFamily: mono,
+                        fontSize: 10,
+                        color: C.textFaint,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.8,
+                        marginBottom: 8,
+                        borderBottom: `1px solid rgba(199,93,58,0.25)`,
+                        paddingBottom: 6,
+                    }}>
+                        {d.winner.subject}<span style={{ color: C.textMuted, marginLeft: 6 }}>{d.winner.predicate}</span>
                     </div>
-                    <div style={{ marginTop: 6 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         <ClaimRow claim={d.winner} mark="A" />
                         {d.runners_up[0] && <ClaimRow claim={d.runners_up[0]} mark="B" />}
                     </div>
@@ -603,46 +563,54 @@ function ClaimRow(props: { claim: Claim; mark: string }) {
     const color = ROLE_COLOR[agent.split("-")[0]] ?? C.text;
     return (
         <div style={{
-            display: "grid",
-            gridTemplateColumns: "auto 1fr auto",
+            display: "flex",
+            alignItems: "flex-start",
             gap: 8,
-            alignItems: "baseline",
-            padding: "4px 0",
+            padding: "6px 0",
         }}>
             <span style={{
                 fontFamily: mono, fontSize: 10,
                 color: C.textFaint,
-                width: 14, textAlign: "center",
+                width: 18, textAlign: "center",
+                flexShrink: 0,
+                marginTop: 2,
             }}>{props.mark}</span>
-            <div style={{ minWidth: 0 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{
                     fontFamily: mono, fontSize: 12, color,
                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    lineHeight: 1.3,
                 }}>{value}</div>
-                <div style={{
-                    fontFamily: serif, fontStyle: "italic", fontSize: 10.5,
-                    color: C.textMuted,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>{evidence}</div>
+                {evidence && (
+                    <div style={{
+                        fontFamily: serif, fontStyle: "italic", fontSize: 10.5,
+                        color: C.textMuted,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        marginTop: 2,
+                    }}>{evidence}</div>
+                )}
             </div>
-            <div style={{ fontFamily: mono, fontSize: 10, color: C.textMuted, textAlign: "right" }}>
-                <div>{confStr}</div>
-                <div style={{ color: C.textFaint }}>{agent.split("-")[0]}</div>
+            <div style={{
+                fontFamily: mono, fontSize: 10,
+                color: C.textMuted,
+                textAlign: "right",
+                flexShrink: 0,
+                minWidth: 42,
+            }}>
+                <div style={{ color: confRaw && confRaw >= 0.85 ? C.green : confRaw && confRaw >= 0.7 ? C.blue : C.textMuted }}>
+                    {confStr}
+                </div>
+                <div style={{ color: C.textFaint, fontSize: 9, marginTop: 1 }}>{agent.split("-")[0]}</div>
             </div>
         </div>
     );
 }
 
-function RecentClaimsColumn(props: { recent: Claim[] }) {
+function RecentClaimsColumn(props: { recent: Claim[]; onNavigate?: (addr: string) => void }) {
     return (
         <Column title="Recent claims" subtitle="last 30 entries">
             {props.recent.length === 0 && <Empty msg="No claims yet — spawn workers via fanout." />}
-            {props.recent.map((c) => {
-                // Defend against malformed claims (missing fields) — a
-                // pre-1.0.3 worker could write claims with no subject /
-                // predicate / value / confidence; those would crash the
-                // .toFixed() / split() calls below and black-screen the
-                // panel. Coerce to safe defaults.
+            {props.recent.map((c, idx) => {
                 const subject  = c.subject   ?? "—";
                 const predicate = c.predicate ?? "—";
                 const value    = c.value     ?? "(missing)";
@@ -652,34 +620,80 @@ function RecentClaimsColumn(props: { recent: Claim[] }) {
                     ? confRaw.toFixed(2) : "—";
                 const roleColor = ROLE_COLOR[agent.split("-")[0]] ?? C.textMuted;
                 const predColor = PRED_COLOR[predicate] ?? C.textMuted;
+                const isHighConf = typeof confRaw === "number" && confRaw >= 0.85;
                 return (
-                    <div key={c.id} style={{
-                        padding: "6px 0",
-                        borderBottom: `1px solid ${C.border}`,
-                    }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "baseline", fontFamily: mono, fontSize: 11 }}>
-                            <span style={{ color: C.textFaint, width: 56 }}>{subject}</span>
-                            <span style={{ color: predColor, width: 56 }}>{predicate}</span>
-                            <span style={{ color: C.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div key={c.id}
+                        onClick={() => props.onNavigate?.(c.subject ?? "")}
+                        style={{
+                            padding: "8px 4px",
+                            borderBottom: idx < props.recent.length - 1 ? `1px solid ${C.border}` : "none",
+                            cursor: props.onNavigate && c.subject ? "pointer" : "default",
+                            borderRadius: 4,
+                            transition: "background 0.1s ease",
+                        }}
+                        onMouseEnter={(e) => { if (props.onNavigate && c.subject) (e.currentTarget as HTMLElement).style.background = C.bgMuted; }}
+                        onMouseLeave={(e) => { if (props.onNavigate && c.subject) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                    >
+                        <div style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontFamily: mono, fontSize: 11,
+                            lineHeight: 1.3,
+                        }}>
+                            <span style={{
+                                color: C.textFaint,
+                                minWidth: 52,
+                                maxWidth: 72,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                fontSize: 10,
+                            }}>{subject}</span>
+                            <span style={{
+                                color: predColor,
+                                minWidth: 44,
+                                fontSize: 10,
+                                textTransform: "uppercase",
+                                letterSpacing: 0.4,
+                            }}>{predicate}</span>
+                            <span style={{
+                                color: C.text,
+                                flex: 1,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                            }}>
                                 {value}
                             </span>
-                            <span style={{ color: roleColor, fontSize: 10 }}>{agent.split("-")[0]}</span>
-                            <span style={{ color: C.textMuted, fontSize: 10, width: 32, textAlign: "right" }}>
+                            <span style={{
+                                color: roleColor,
+                                fontSize: 9,
+                                textTransform: "uppercase",
+                                letterSpacing: 0.4,
+                                minWidth: 36,
+                                textAlign: "right",
+                            }}>{agent.split("-")[0]}</span>
+                            <span style={{
+                                color: isHighConf ? C.green : C.textMuted,
+                                fontSize: 10,
+                                minWidth: 34,
+                                textAlign: "right",
+                                fontVariantNumeric: "tabular-nums",
+                            }}>
                                 {confStr}
                             </span>
                         </div>
                         {c.evidence && (
                             <div style={{
                                 fontFamily: serif, fontStyle: "italic", fontSize: 10.5,
-                                color: C.textMuted, marginTop: 2, paddingLeft: 64, paddingRight: 8,
-                                // Wrap to ~2 lines max — long agent evidence
-                                // strings would otherwise blow out the column
-                                // width on the dashboard view.
+                                color: C.textMuted, marginTop: 4, paddingLeft: 104,
                                 display: "-webkit-box",
                                 WebkitLineClamp: 2,
                                 WebkitBoxOrient: "vertical",
                                 overflow: "hidden",
                                 wordBreak: "break-word",
+                                lineHeight: 1.35,
                             } as React.CSSProperties}>{c.evidence}</div>
                         )}
                     </div>
@@ -700,11 +714,14 @@ function RunsColumn(props: {
             <div style={{
                 display: "grid", gridTemplateColumns: "1fr 1fr",
                 height: "100%", minHeight: 0,
+                gap: 1,
+                background: C.border,
             }}>
                 {/* List */}
                 <div style={{
-                    overflowY: "auto", borderRight: `1px solid ${C.border}`,
-                    padding: "0 12px",
+                    overflowY: "auto",
+                    background: C.bg,
+                    padding: "6px 8px",
                 }}>
                     {props.runs.length === 0 && <Empty msg="No runs yet." />}
                     {props.runs.slice(0, 40).map((r) => {
@@ -717,34 +734,48 @@ function RunsColumn(props: {
                                 style={{
                                     display: "block",
                                     width: "100%",
-                                    background: active ? C.bgDark : "transparent",
-                                    border: `1px solid ${active ? C.borderStrong : "transparent"}`,
+                                    background: active ? C.bgDark : C.bgMuted,
+                                    border: `1px solid ${active ? C.borderStrong : C.border}`,
                                     color: C.text,
                                     textAlign: "left",
-                                    padding: "8px 8px",
-                                    borderRadius: 4,
+                                    padding: "8px 10px",
+                                    borderRadius: 6,
                                     cursor: "pointer",
-                                    marginTop: 4,
+                                    marginBottom: 4,
                                     fontFamily: mono, fontSize: 11,
+                                    transition: "border-color 0.12s, background 0.12s",
                                 }}
-                                onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLElement).style.background = C.bgMuted; }}
-                                onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                                onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLElement).style.background = C.bgAlt; }}
+                                onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLElement).style.background = C.bgMuted; }}
                             >
-                                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
                                     {live && <PulseDot tint={tint} />}
-                                    <span style={{ color: tint }}>{r.role}</span>
-                                    <span style={{ color: C.textFaint }}>{r.id}</span>
+                                    <span style={{ color: tint, fontWeight: 500, fontSize: 11 }}>{r.role}</span>
+                                    <span style={{
+                                        color: C.textFaint, fontSize: 10,
+                                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                        flex: 1,
+                                    }}>{r.id.slice(0, 12)}</span>
                                 </div>
-                                <div style={{ color: C.textMuted, fontSize: 10, marginTop: 2 }}>
-                                    {r.scope} · {r.turns} turns · {fmtUsd(r.usd)} · {fmtAgo(r.mtime)} ago
+                                <div style={{ color: C.textMuted, fontSize: 10, lineHeight: 1.4 }}>
+                                    <span style={{ color: C.textFaint }}>{r.scope}</span>
+                                    <span style={{ margin: "0 4px", color: C.borderStrong }}>·</span>
+                                    {r.turns} turns
+                                    <span style={{ margin: "0 4px", color: C.borderStrong }}>·</span>
+                                    {fmtUsd(r.usd)}
+                                    <span style={{ margin: "0 4px", color: C.borderStrong }}>·</span>
+                                    {fmtAgo(r.mtime)}
                                 </div>
                                 {!live && (r.claimsFiled === 0 || r.forced) && (
                                     <div style={{
-                                        marginTop: 4,
+                                        marginTop: 6,
                                         fontFamily: mono, fontSize: 9.5,
                                         color: r.claimsFiled === 0 ? C.red : C.yellow,
+                                        padding: "2px 0",
+                                        borderRadius: 3,
+                                        display: "inline-block",
                                     }}>
-                                        {r.claimsFiled === 0 ? "✗ no claim filed" : "⚠ forced to claim"}
+                                        {r.claimsFiled === 0 ? "no claim filed" : "forced to claim"}
                                     </div>
                                 )}
                             </button>
@@ -752,17 +783,25 @@ function RunsColumn(props: {
                     })}
                 </div>
                 {/* Tail */}
-                <div style={{ overflowY: "auto", padding: "0 12px" }}>
+                <div style={{ overflowY: "auto", background: C.bg, padding: "6px 8px" }}>
                     {!props.activeRun && <Empty msg="select a run" />}
                     {props.activeRun && props.tailEvents.length === 0 && <Empty msg="no events yet" />}
                     {props.activeRun && props.tailEvents.slice(-80).reverse().map((e, i) => (
                         <div key={i} style={{
-                            fontFamily: mono, fontSize: 10.5, color: C.textMuted,
-                            padding: "3px 0",
+                            fontFamily: mono, fontSize: 10, color: C.textMuted,
+                            padding: "4px 6px",
                             borderBottom: `1px solid ${C.border}`,
                             wordBreak: "break-all",
+                            lineHeight: 1.4,
                         }}>
-                            <span style={{ color: kindColor(e.kind) }}>{e.kind}</span>
+                            <span style={{
+                                color: kindColor(e.kind),
+                                fontWeight: 600,
+                                fontSize: 9.5,
+                                textTransform: "uppercase",
+                                letterSpacing: 0.4,
+                                marginRight: 6,
+                            }}>{e.kind}</span>
                             {e.kind === "tool_ok" && <> {e.name}({JSON.stringify(e.input).slice(0, 40)}) → {e.bytes}B</>}
                             {e.kind === "tool_err" && <> {e.name}: <span style={{ color: C.red }}>{(e.err ?? "").slice(0, 60)}</span></>}
                             {e.kind === "turn" && <> {e.turn} stop={e.stop} usd={e.tally?.usd?.toFixed(4)}</>}
@@ -853,26 +892,42 @@ function Column(props: { title: string; subtitle?: string; children: React.React
             display: "flex", flexDirection: "column",
             borderRight: `1px solid ${C.border}`,
             minHeight: 0,
-            minWidth: 0,        // grid children default to min-content; force shrink + scroll
+            minWidth: 0,
             overflow: "hidden",
+            background: C.bg,
         }}>
             <div style={{
-                padding: "10px 16px",
+                padding: "12px 16px",
                 borderBottom: `1px solid ${C.border}`,
                 background: C.bgAlt,
+                display: "flex",
+                alignItems: "baseline",
+                gap: 10,
             }}>
-                <div style={{ fontFamily: serif, fontStyle: "italic", fontSize: 13, color: C.text }}>
+                <div style={{
+                    fontFamily: serif,
+                    fontStyle: "italic",
+                    fontSize: 14,
+                    color: C.text,
+                    letterSpacing: 0.2,
+                }}>
                     {props.title}
                 </div>
                 {props.subtitle && (
-                    <div style={{ fontFamily: mono, fontSize: 10, color: C.textFaint, marginTop: 2 }}>
+                    <div style={{
+                        fontFamily: mono,
+                        fontSize: 10,
+                        color: C.textFaint,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.8,
+                    }}>
                         {props.subtitle}
                     </div>
                 )}
             </div>
             <div style={{
                 flex: 1, overflowY: "auto",
-                padding: props.noPad ? 0 : "10px 16px",
+                padding: props.noPad ? 0 : "10px 14px",
                 minHeight: 0,
             }}>
                 {props.children}
@@ -884,10 +939,27 @@ function Column(props: { title: string; subtitle?: string; children: React.React
 function Empty(props: { msg: string }) {
     return (
         <div style={{
-            fontFamily: serif, fontStyle: "italic",
-            color: C.textFaint, fontSize: 12,
-            padding: "20px 8px",
-            textAlign: "center",
-        }}>{props.msg}</div>
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100%",
+            minHeight: 120,
+        }}>
+            <div style={{
+                fontFamily: serif,
+                fontStyle: "italic",
+                fontSize: 13,
+                color: C.textFaint,
+                textAlign: "center",
+                padding: "20px 16px",
+                borderRadius: 8,
+                border: `1px dashed ${C.border}`,
+                background: C.bgMuted,
+                maxWidth: "80%",
+                lineHeight: 1.5,
+            }}>
+                {props.msg}
+            </div>
+        </div>
     );
 }

@@ -131,39 +131,52 @@ export function NeuralView(props: {
     return (
         <div style={{
             position: "relative",
-            background: C.bg,
+            background: C.bgDark,
             borderTop: `1px solid ${C.border}`,
             height: H,
             overflow: "hidden",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
         }}>
-            <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
-                {/* Subtle radial backdrop */}
+            <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ maxWidth: 900 }}>
+                {/* Refined radial backdrop */}
                 <defs>
-                    <radialGradient id="bgrad" cx="50%" cy="50%" r="50%">
-                        <stop offset="0%"  stopColor={C.bgAlt}  stopOpacity="0.7" />
-                        <stop offset="100%" stopColor={C.bg} stopOpacity="0" />
+                    <radialGradient id="bgrad" cx="50%" cy="50%" r="55%">
+                        <stop offset="0%"  stopColor={C.bgAlt}  stopOpacity="0.6" />
+                        <stop offset="60%" stopColor={C.bgDark} stopOpacity="0.2" />
+                        <stop offset="100%" stopColor={C.bgDark} stopOpacity="0" />
                     </radialGradient>
                     <filter id="glow">
-                        <feGaussianBlur stdDeviation="3" result="blur" />
+                        <feGaussianBlur stdDeviation="2.5" result="blur" />
+                        <feMerge>
+                            <feMergeNode in="blur" />
+                            <feMergeNode in="SourceGraphic" />
+                        </feMerge>
+                    </filter>
+                    <filter id="glow-soft">
+                        <feGaussianBlur stdDeviation="1.5" result="blur" />
                         <feMerge>
                             <feMergeNode in="blur" />
                             <feMergeNode in="SourceGraphic" />
                         </feMerge>
                     </filter>
                 </defs>
-                <circle cx={cx} cy={cy} r={R_SUBJECT + 30} fill="url(#bgrad)" />
+                <circle cx={cx} cy={cy} r={R_SUBJECT + 35} fill="url(#bgrad)" />
 
                 {/* Worker → hub edges. Width by claims_filed. Live ones pulse. */}
                 {workers.map((w) => {
                     const wx = cx + Math.cos(w.angle) * R_WORKER;
                     const wy = cy + Math.sin(w.angle) * R_WORKER;
                     const stroke = ROLE_COLOR[w.role] ?? C.textMuted;
+                    const edgeWidth = Math.max(0.5, Math.min(2.5, 0.5 + w.claimsFiled * 0.6));
                     return (
                         <line key={`we-${w.id}`}
                             x1={cx} y1={cy} x2={wx} y2={wy}
                             stroke={stroke}
-                            strokeWidth={Math.max(0.5, Math.min(3, 0.5 + w.claimsFiled * 0.8))}
-                            strokeOpacity={w.live ? 0.6 : 0.25}
+                            strokeWidth={edgeWidth}
+                            strokeOpacity={w.live ? 0.55 : 0.18}
+                            strokeLinecap="round"
                         />
                     );
                 })}
@@ -181,9 +194,10 @@ export function NeuralView(props: {
                         <line key={`ws-${w.id}`}
                             x1={wx} y1={wy} x2={sx} y2={sy}
                             stroke={ROLE_COLOR[w.role] ?? C.textMuted}
-                            strokeWidth={0.4}
-                            strokeOpacity={w.live ? 0.45 : 0.15}
-                            strokeDasharray="2 3"
+                            strokeWidth={0.5}
+                            strokeOpacity={w.live ? 0.35 : 0.12}
+                            strokeDasharray="2 4"
+                            strokeLinecap="round"
                         />
                     );
                 })}
@@ -193,14 +207,15 @@ export function NeuralView(props: {
                     const sx = cx + Math.cos(s.angle) * R_SUBJECT;
                     const sy = cy + Math.sin(s.angle) * R_SUBJECT;
                     const stroke = s.disputed ? C.red : (ROLE_COLOR[s.role] ?? C.text);
-                    const r = 3 + s.confidence * 4;
+                    const r = 2.5 + s.confidence * 4.5;
                     return (
                         <g key={`s-${s.subject}`} className={s.disputed ? "neural-jitter" : undefined}>
                             <circle cx={sx} cy={sy} r={r}
                                 fill={s.disputed ? C.red : stroke}
-                                fillOpacity={s.disputed ? 0.85 : (0.3 + s.confidence * 0.6)}
+                                fillOpacity={s.disputed ? 0.9 : (0.25 + s.confidence * 0.65)}
                                 stroke={stroke}
-                                strokeWidth={s.disputed ? 1.5 : 0.5}
+                                strokeWidth={s.disputed ? 1.2 : 0.6}
+                                strokeOpacity={s.disputed ? 0.7 : 0.4}
                                 filter={s.disputed ? "url(#glow)" : undefined}
                             />
                         </g>
@@ -212,21 +227,25 @@ export function NeuralView(props: {
                     const wx = cx + Math.cos(w.angle) * R_WORKER;
                     const wy = cy + Math.sin(w.angle) * R_WORKER;
                     const fill = ROLE_COLOR[w.role] ?? C.textMuted;
+                    const nodeR = 4 + Math.min(5, w.turns * 0.35);
                     return (
                         <g key={`w-${w.id}`}>
                             {w.live && (
-                                <circle cx={wx} cy={wy} r={9}
+                                <circle cx={wx} cy={wy} r={nodeR + 5}
                                     fill="none"
                                     stroke={fill}
-                                    strokeWidth={1}
-                                    strokeOpacity={0.6}
+                                    strokeWidth={0.8}
+                                    strokeOpacity={0.45}
                                     className="neural-halo"
                                 />
                             )}
-                            <circle cx={wx} cy={wy} r={5 + Math.min(4, w.turns * 0.4)}
+                            <circle cx={wx} cy={wy} r={nodeR}
                                 fill={fill}
-                                fillOpacity={w.live ? 1 : 0.35}
-                                filter={w.live ? "url(#glow)" : undefined}
+                                fillOpacity={w.live ? 0.95 : 0.3}
+                                stroke={fill}
+                                strokeWidth={w.live ? 1.2 : 0.5}
+                                strokeOpacity={w.live ? 0.8 : 0.25}
+                                filter={w.live ? "url(#glow-soft)" : undefined}
                             />
                         </g>
                     );
@@ -254,28 +273,32 @@ export function NeuralView(props: {
                 })}
 
                 {/* Hub */}
-                <circle cx={cx} cy={cy} r={R_HUB + 8}
-                    fill="none" stroke={C.borderStrong} strokeWidth={1}
-                    strokeDasharray="3 4" />
+                <circle cx={cx} cy={cy} r={R_HUB + 12}
+                    fill="none" stroke={C.border} strokeWidth={1}
+                    strokeDasharray="4 5"
+                    opacity={0.5} />
+                <circle cx={cx} cy={cy} r={R_HUB + 4}
+                    fill="none" stroke={C.borderStrong} strokeWidth={0.5}
+                    opacity={0.3} />
                 <circle cx={cx} cy={cy} r={R_HUB}
                     fill={C.bgDark}
                     stroke={C.accent}
-                    strokeWidth={1.5}
+                    strokeWidth={2}
                     filter="url(#glow)" />
-                <text x={cx} y={cy - 4}
+                <text x={cx} y={cy - 6}
                     textAnchor="middle"
                     fontFamily={mono}
-                    fontSize={10}
-                    fill={C.textMuted}
-                    style={{ letterSpacing: 1, textTransform: "uppercase" }}
+                    fontSize={9}
+                    fill={C.textFaint}
+                    style={{ letterSpacing: 1.2, textTransform: "uppercase", fontWeight: 500 }}
                 >
                     intel
                 </text>
-                <text x={cx} y={cy + 14}
+                <text x={cx} y={cy + 12}
                     textAnchor="middle"
                     fontFamily={serif}
                     fontStyle="italic"
-                    fontSize={18}
+                    fontSize={20}
                     fill={C.text}
                 >
                     {props.claimCount}
@@ -283,8 +306,17 @@ export function NeuralView(props: {
             </svg>
 
             <div style={{
-                position: "absolute", bottom: 8, left: 12,
-                fontFamily: mono, fontSize: 10, color: C.textFaint,
+                position: "absolute",
+                bottom: 10,
+                left: 14,
+                fontFamily: mono,
+                fontSize: 10,
+                color: C.textFaint,
+                background: C.bgDark,
+                padding: "3px 8px",
+                borderRadius: 4,
+                border: `1px solid ${C.border}`,
+                letterSpacing: 0.3,
             }}>
                 {workers.filter((w) => w.live).length} live · {workers.length} total · {props.disputedCount} disputed
             </div>
@@ -303,18 +335,30 @@ function Legend() {
     ];
     return (
         <div style={{
-            position: "absolute", top: 12, right: 16,
-            display: "flex", gap: 14,
-            fontFamily: mono, fontSize: 10, color: C.textFaint,
+            position: "absolute",
+            top: 14,
+            right: 16,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            fontFamily: mono,
+            fontSize: 10,
+            color: C.textFaint,
+            background: C.bgDark,
+            padding: "10px 12px",
+            borderRadius: 8,
+            border: `1px solid ${C.border}`,
+            boxShadow: `0 2px 8px rgba(0,0,0,0.3)`,
         }}>
             {items.map((it) => (
-                <span key={it.label} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <span key={it.label} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     <span style={{
-                        width: 8, height: 8, borderRadius: "50%",
+                        width: 7, height: 7, borderRadius: "50%",
                         background: it.color,
-                        boxShadow: `0 0 6px ${it.color}`,
+                        boxShadow: `0 0 5px ${it.color}80`,
+                        flexShrink: 0,
                     }} />
-                    {it.label}
+                    <span style={{ letterSpacing: 0.2 }}>{it.label}</span>
                 </span>
             ))}
         </div>

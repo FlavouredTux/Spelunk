@@ -989,14 +989,20 @@ ipcMain.handle("ember:exportAnnotations", async (_e, bp, data) => {
 ipcMain.handle("ember:importAnnotations", async () => {
   const r = await dialog.showOpenDialog({
     title: "Import annotations",
-    filters: [{ name: "Ember annotations", extensions: ["json"] }],
+    filters: [
+      { name: "Ember annotations", extensions: ["json", "ember", "ann", "db"] },
+      { name: "All files", extensions: ["*"] },
+    ],
     properties: ["openFile"],
   });
   if (r.canceled || r.filePaths.length === 0) return null;
   const raw = await fs.readFile(r.filePaths[0], "utf8");
   let parsed;
-  try { parsed = JSON.parse(raw); }
-  catch (e) { throw new Error(`not valid JSON: ${e.message}`); }
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = parseAnnText(raw);
+  }
   return {
     path:         r.filePaths[0],
     renames:      parsed.renames      || {},

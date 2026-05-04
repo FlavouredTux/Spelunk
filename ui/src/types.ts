@@ -21,7 +21,7 @@ export type BinaryInfo = {
 // `cfg` and `cfgPseudo` differ only in body content — both render in
 // the graph view. The CfgGraph component owns a toggle that switches
 // between them.
-export type ViewKind = "pseudo" | "asm" | "cfg" | "cfgPseudo" | "ir" | "ssa";
+export type ViewKind = "pseudo" | "asm" | "cfg" | "cfgPseudo" | "ir" | "ssa" | "identify";
 
 export type ParamSig = {
   type: string;    // e.g. "const char *"
@@ -33,10 +33,24 @@ export type FunctionSig = {
   params: ParamSig[];
 };
 
+export type IdentifyResult = {
+  addr: string;        // "0x4747"
+  addrNum: number;     // 0x4747
+  name: string;        // "sha256", "chacha20", etc.
+  category: string;    // "hash", "encryption", "network", "encoding"
+  confidence: number;  // 0..1
+  signal: string;      // "constants" or "imports"
+  via: string;         // detail string
+};
+
 export type Annotations = {
   renames:    Record<string, string>;        // addr hex ("0x6661") -> user-given name
   notes:      Record<string, string>;        // addr hex -> note text
   signatures: Record<string, FunctionSig>;   // addr hex -> declared signature
+  // Struct field names keyed as `<function-addr>:<param-index>:<offset>`,
+  // where param-index is 0-based and offset is the textual value passed
+  // through to the CLI annotation file (decimal or 0x-prefixed hex).
+  fields?: Record<string, string>;
   // Per-function local / arg / SSA-result renames. Outer key is the
   // owning function's address hex; inner map is `from-name → to-name`.
   // Applied renderer-side as word-boundary substitutions on pseudo-C
@@ -247,6 +261,7 @@ declare global {
         scanned: number;
         corpusPaths: string[];
       } | null>;
+      identify: (opts?: { threshold?: number } | null) => Promise<IdentifyResult[]>;
       savePatchedAs:     () => Promise<string | null>;
 
       recents:          () => Promise<string[]>;

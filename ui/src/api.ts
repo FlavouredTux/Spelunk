@@ -63,6 +63,7 @@ export function clearRendererCaches(): void {
   XREFS_PROMISE   = null;
   STRINGS_PROMISE = null;
   ARITIES_PROMISE = null;
+  IDENTIFY_PROMISE = null;
 }
 
 // Promise-cache wrapper that evicts on rejection so a transient error
@@ -224,8 +225,11 @@ export async function loadFunction(
   const wantsLabels = !!opts.showBbLabels &&
     (view === "pseudo" || view === "cfgPseudo");
   const key = `${view}|${sym}|labels=${wantsLabels ? 1 : 0}`;
-  const hit = FUNC_CACHE.get(key);
-  if (hit) return hit;
+  const cacheInRenderer = !wantsLabels;
+  if (cacheInRenderer) {
+    const hit = FUNC_CACHE.get(key);
+    if (hit) return hit;
+  }
   const args: Record<ViewKind, string[]> = {
     pseudo:    ["-p", "-s", sym],
     asm:       ["-d", "-s", sym],
@@ -233,6 +237,7 @@ export async function loadFunction(
     cfgPseudo: ["--cfg-pseudo", "-s", sym],
     ir:        ["-i", "-s", sym],
     ssa:       ["-i", "--ssa", "-s", sym],
+    identify:  ["--identify"],
   };
   const finalArgs = [...args[view]];
   if (wantsLabels) finalArgs.push("--labels");
@@ -240,7 +245,7 @@ export async function loadFunction(
     FUNC_CACHE.delete(key);
     throw e;
   });
-  FUNC_CACHE.set(key, p);
+  if (cacheInRenderer) FUNC_CACHE.set(key, p);
   return p;
 }
 
@@ -393,6 +398,21 @@ export async function importCorpusRenames(opts?: {
   l0Prefilter?: boolean;
 }): Promise<CorpusImportResult | null> {
   return await window.ember.importCorpusRenames(opts ?? null);
+}
+
+import type { IdentifyResult } from "./types";
+export type { IdentifyResult };
+
+let IDENTIFY_PROMISE: Promise<IdentifyResult[]> | null = null;
+
+export async function loadIdentifications(opts?: {
+  threshold?: number;
+}): Promise<IdentifyResult[]> {
+  return memoOnce<IdentifyResult[]>(
+    () => window.ember.identify(opts ?? null),
+    (p) => { IDENTIFY_PROMISE = p; },
+    IDENTIFY_PROMISE,
+  );
 }
 
 function parseSummary(raw: string, path: string): BinaryInfo {

@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import { demangle, displayName, formatSize, loadFunction } from "../api";
+import { useFmtAddr } from "../RebaseContext";
 import type { BinaryInfo, FunctionInfo, ViewKind, Annotations } from "../types";
 import { ContextMenu, ToastPill, type MenuItem } from "./ContextMenu";
 import { SkelSidebarRow } from "./Skeleton";
@@ -26,6 +27,7 @@ export function Sidebar(props: {
 }) {
   const { info, currentAddr, annotations, functionsLoading, width, onSelect, onOpen, onReopen,
           onRename, onAddNote, onEditSignature, onExport, onImport, onImportCorpus } = props;
+  const fmtAddr = useFmtAddr();
   const [q, setQ] = useState("");
   const deferredQ = useDeferredValue(q);
   const [showImports, setShowImports] = useState(false);
@@ -359,6 +361,7 @@ function VirtualList(props: {
 }) {
   const { list, showImports, currentAddr, annotations, activeCtxAddr,
           onSelect, onContext } = props;
+  const fmtAddr = useFmtAddr();
 
   const scRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -438,7 +441,7 @@ function VirtualList(props: {
                   width: 72, flexShrink: 0,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                   fontWeight: active ? 600 : 400,
-                }} title={f.addr}>{f.addr.replace(/^0x0+(?=.)/, "0x")}</span>
+                }} title={f.addr}>{fmtAddr(f.addrNum).replace(/^0x0+(?=.)/, "0x")}</span>
                 <span
                   style={{
                     flex: 1, overflow: "hidden", textOverflow: "ellipsis",

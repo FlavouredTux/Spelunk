@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
+import { displayName, formatAddrHex } from "../api";
+import { useFmtAddr } from "../RebaseContext";
 import type { IdentifyResult, FunctionInfo, BinaryInfo, Annotations } from "../types";
-import { displayName } from "../api";
 
 const MAX_VISIBLE = 500;
 
@@ -34,6 +35,7 @@ export function IdentifyPanel(props: {
   onClose: () => void;
 }) {
   const { info, hits, loading, annotations, onSelect, onClose } = props;
+  const fmtAddr = useFmtAddr();
   const [q, setQ] = useState("");
   const [catFilter, setCatFilter] = useState<string>("all");
 
@@ -258,7 +260,7 @@ export function IdentifyPanel(props: {
                       onMouseLeave={(e) => { e.currentTarget.style.background = i === 0 ? "transparent" : C.bgMuted + "40"; }}
                     >
                       <td style={{ padding: "6px 14px", color: C.blue, whiteSpace: "nowrap" }}>
-                        {i === 0 ? h.addr : ""}
+                        {i === 0 ? fmtAddr(h.addrNum) : ""}
                       </td>
                       <td style={{ padding: "6px 10px", color: C.textWarm, whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>
                         {i === 0 && fn ? displayName(fn, annotations) : ""}

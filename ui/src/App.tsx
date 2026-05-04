@@ -34,6 +34,7 @@ import type { Bookmark } from "./components/BookmarksPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { Breadcrumb } from "./components/Breadcrumb";
 import { SkelCode, SkelFunctionHeader, SkelXrefs } from "./components/Skeleton";
+import { RebaseProvider, makeRebaseFn, useFmtAddr } from "./RebaseContext";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
@@ -297,6 +298,12 @@ export default function App() {
       if (f.addrNum !== 0) m.set(f.addrNum, f);
     return m;
   }, [info]);
+
+  // Rebase function: remaps absolute VAs into the user's chosen display base.
+  const rebaseFn = useMemo(
+    () => makeRebaseFn(info?.base ?? "0x0", settings.rebaseAddr),
+    [info?.base, settings.rebaseAddr],
+  );
 
   // Palette searches the union of defined + imports so the user can
   // jump straight to printf / malloc / etc. by name. Imports with
@@ -1143,6 +1150,7 @@ export default function App() {
   }
 
   return (
+    <RebaseProvider value={rebaseFn}>
     <div {...dragHandlers} style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* Title bar */}
       <div
@@ -1897,6 +1905,7 @@ export default function App() {
         />
       )}
     </div>
+    </RebaseProvider>
   );
 }
 
@@ -2107,6 +2116,7 @@ function NavHistoryDropdown(props: {
   annotations: Annotations;
   onPick: (addr: number) => void;
 }) {
+  const fmtAddr = useFmtAddr();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -2164,7 +2174,7 @@ function NavHistoryDropdown(props: {
             const i = props.history.length - 1 - ri;
             const isCurrent = i === props.histIdx;
             const fn = props.fnByAddr.get(addr);
-            const name = fn ? displayName(fn, props.annotations) : `0x${addr.toString(16)}`;
+            const name = fn ? displayName(fn, props.annotations) : fmtAddr(addr);
             return (
               <button
                 key={`${addr}-${i}`}
@@ -2197,7 +2207,7 @@ function NavHistoryDropdown(props: {
                   color: isCurrent ? C.accent : C.textFaint,
                   width: 84, flexShrink: 0,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>0x{addr.toString(16)}</span>
+                }}>{fmtAddr(addr)}</span>
                 <span style={{
                   flex: 1, minWidth: 0,
                   fontFamily: sans, fontSize: 12,
@@ -2244,10 +2254,13 @@ function FunctionHeader(props: {
   current: FunctionInfo | null;
   annotations: Annotations;
   arities: Arities;
-  code: string;
-  onToast: (msg: string) => void;
+  onRename: (fn: FunctionInfo) => void;
+  onAddNote: (fn: FunctionInfo) => void;
+  onEditSignature: (fn: FunctionInfo) => void;
   view: ViewKind;
+  onToast: (msg: string) => void;
 }) {
+  const fmtAddr = useFmtAddr();
   const c = props.current;
   const [copied, setCopied] = useState(false);
   if (!c) return null;
@@ -2283,7 +2296,7 @@ function FunctionHeader(props: {
         title={c.addr}
         style={{ fontFamily: mono, fontSize: 11, color: C.accent, letterSpacing: .5 }}
       >
-        {c.addr.replace(/^0x0+(?=.)/, "0x")}
+        {fmtAddr(c.addrNum).replace(/^0x0+(?=.)/, "0x")}
       </span>
       <span
         style={{

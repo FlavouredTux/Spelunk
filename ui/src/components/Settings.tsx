@@ -167,6 +167,18 @@ export function SettingsPanel(props: {
             </Row>
           </Section>
 
+          <Section title="Address rebasing">
+            <Row
+              label="Display base address"
+              hint="Subtract the binary's image base and add this value. 0x0 = show RVAs (addresses from 0). Set to the image base (e.g. 0x400000) to keep original VAs."
+            >
+              <HexInput
+                value={props.settings.rebaseAddr}
+                onChange={(v) => set("rebaseAddr", v)}
+              />
+            </Row>
+          </Section>
+
           <Section title="CFG view">
             <Row
               label="Default body mode"
@@ -715,6 +727,37 @@ const stepBtnStyle: React.CSSProperties = {
   cursor: "pointer",
   display: "flex", alignItems: "center", justifyContent: "center",
 };
+
+// Hex address input: validates 0x-prefixed hex, normalizes on blur.
+function HexInput(props: { value: string; onChange: (v: string) => void }) {
+  const [draft, setDraft] = useState(props.value);
+  useEffect(() => { setDraft(props.value); }, [props.value]);
+  const commit = () => {
+    const clean = draft.trim().toLowerCase();
+    const hex = clean.startsWith("0x") ? clean : `0x${clean}`;
+    if (/^0x[0-9a-f]+$/.test(hex) || hex === "0x0" || hex === "0x") {
+      props.onChange(hex === "0x" ? "0x0" : hex);
+    } else {
+      setDraft(props.value);  // revert on invalid
+    }
+  };
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+      spellCheck={false}
+      style={{
+        width: 120,
+        fontFamily: mono, fontSize: 11,
+        color: C.text, background: C.bg,
+        border: `1px solid ${C.border}`, borderRadius: 4,
+        padding: "5px 8px",
+      }}
+    />
+  );
+}
 
 // AI provider + key + model picker. Talks to the main process
 // directly so credentials never live in renderer state — we hold an

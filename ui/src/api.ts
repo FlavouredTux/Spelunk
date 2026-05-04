@@ -423,18 +423,20 @@ function parseSummary(raw: string, path: string): BinaryInfo {
     arch: "",
     endian: "",
     entry: "",
+    base: "0x0",
     sections: [],
     functions: [],
     imports: [],
   };
 
   for (const l of lines) {
-    const m = /^(file|format|arch|endian|entry)\s+(.+)$/.exec(l.trim());
+    const m = /^(file|format|arch|endian|entry|base)\s+(.+)$/.exec(l.trim());
     if (m) {
       if (m[1] === "format") info.format = m[2];
       else if (m[1] === "arch") info.arch = m[2];
       else if (m[1] === "endian") info.endian = m[2];
       else if (m[1] === "entry") info.entry = m[2];
+      else if (m[1] === "base") info.base = m[2];
     }
   }
 
@@ -444,7 +446,7 @@ function parseSummary(raw: string, path: string): BinaryInfo {
     if (/^sections\s+\(\d+\)/.test(line)) { mode = "sections"; continue; }
     if (/^defined symbols\s+\(\d+\)/.test(line)) { mode = "defined"; continue; }
     if (/^imports\s+\(\d+\)/.test(line)) { mode = "imports"; continue; }
-    if (/^(file|format|arch|endian|entry)/.test(line.trim())) { mode = "none"; continue; }
+    if (/^(file|format|arch|endian|entry|base)/.test(line.trim())) { mode = "none"; continue; }
     if (!line.trim()) continue;
 
     if (mode === "sections") {
@@ -523,4 +525,19 @@ export function displayName(fn: FunctionInfo, annotations?: Ann): string {
 // Format a raw address as "0x1234" like the backend does
 export function formatAddrHex(n: number): string {
   return "0x" + n.toString(16);
+}
+
+// Rebase a display address: subtract the binary's preferred_load_base
+// and add the user's chosen display base.  With defaults (base=0x0,
+// rebaseAddr=0x0) this shows RVAs.  Set rebaseAddr to the actual
+// image base to keep original VAs.
+export function rebaseDisplayAddr(addr: number, binaryBase: string, userBase: string): number {
+  const base = parseInt(binaryBase, 16) || 0;
+  const target = parseInt(userBase, 16) || 0;
+  return addr - base + target;
+}
+
+// Format a rebased address as "0x1234"
+export function formatAddrRebased(addr: number, binaryBase: string, userBase: string): string {
+  return "0x" + rebaseDisplayAddr(addr, binaryBase, userBase).toString(16);
 }

@@ -31,6 +31,7 @@ void print_info(const Binary& b, std::string_view path) {
     std::println("arch    {}", arch_name(b.arch()));
     std::println("endian  {}", endian_name(b.endian()));
     std::println("entry   {:#018x}", b.entry_point());
+    std::println("base    {:#018x}", b.preferred_load_base());
 
     const auto secs = b.sections();
     std::println("");

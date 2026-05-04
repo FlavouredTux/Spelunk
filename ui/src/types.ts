@@ -13,6 +13,7 @@ export type BinaryInfo = {
   arch: string;
   endian: string;
   entry: string;
+  base: string;       // preferred_load_base, e.g. "0x400000"
   sections: { name: string; vaddr: string; size: string; flags: string }[];
   functions: FunctionInfo[];
   imports: FunctionInfo[];

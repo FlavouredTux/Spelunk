@@ -1,5 +1,6 @@
 import { C, sans, mono, serif } from "../theme";
 import { demangle, formatSize } from "../api";
+import { useFmtAddr } from "../RebaseContext";
 import type { FunctionInfo, ViewKind } from "../types";
 
 export function StatusBar(props: {
@@ -9,6 +10,7 @@ export function StatusBar(props: {
   loading: boolean;
   pending?: Set<string>;
 }) {
+  const fmtAddr = useFmtAddr();
   const { current, view, lines, loading, pending } = props;
   const pendingList = pending && pending.size > 0
     ? Array.from(pending).sort().join(", ")
@@ -39,7 +41,7 @@ export function StatusBar(props: {
       {current ? (
         <>
           <span style={{ color: C.accent }} title={current.addr}>
-            {current.addr.replace(/^0x0+(?=.)/, "0x")}
+            {fmtAddr(current.addrNum).replace(/^0x0+(?=.)/, "0x")}
           </span>
           <span style={{ color: C.text, fontFamily: sans, fontWeight: 500 }}>
             {demangle(current.name)}

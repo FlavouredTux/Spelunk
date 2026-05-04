@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import { displayName } from "../api";
+import { useFmtAddr } from "../RebaseContext";
 import type { BinaryInfo, FunctionInfo, Annotations } from "../types";
 
 export type Bookmark = { addr: string; label?: string };
@@ -15,6 +16,7 @@ export function BookmarksPanel(props: {
   onClose: () => void;
 }) {
   const { info, bookmarks, annotations, onSelect, onRemove, onRename, onClose } = props;
+  const fmtAddr = useFmtAddr();
   const [editing, setEditing] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState("");
 
@@ -102,7 +104,7 @@ export function BookmarksPanel(props: {
                 <span style={{
                   fontFamily: mono, fontSize: 11, color: C.accent,
                   width: 96, flexShrink: 0,
-                }}>{b.addr}</span>
+                }}>{fmtAddr(parseInt(b.addr, 16))}</span>
                 <button
                   onClick={() => fn && onSelect(fn)}
                   disabled={!fn}

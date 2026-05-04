@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { C, sans, mono, serif } from "../theme";
 import { displayName, formatAddrHex } from "../api";
+import { useFmtAddr } from "../RebaseContext";
 import type { BinaryInfo, FunctionInfo, Xrefs, Annotations } from "../types";
 import { SkelXrefs } from "./Skeleton";
 
@@ -18,6 +19,7 @@ export function XrefsPanel(props: {
   open: boolean;
 }) {
   const { info, current, xrefs, annotations, width, loading, onSelect, onToggle, open } = props;
+  const fmtAddr = useFmtAddr();
 
   const byAddr = useMemo(() => {
     const m = new Map<number, FunctionInfo>();
@@ -96,7 +98,7 @@ export function XrefsPanel(props: {
                   fontFamily: mono, fontSize: 10, color: C.textFaint,
                   width: 70, flexShrink: 0,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }} title={f.addr}>{f.addr.replace(/^0x0+(?=.)/, "0x")}</span>
+                }} title={f.addr}>{fmtAddr(f.addrNum).replace(/^0x0+(?=.)/, "0x")}</span>
                 <span style={{
                   fontFamily: sans, fontSize: 11, color: C.textWarm,
                   flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",

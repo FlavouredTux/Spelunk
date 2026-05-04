@@ -170,7 +170,7 @@ export function SettingsPanel(props: {
           <Section title="Address rebasing">
             <Row
               label="Display base address"
-              hint="Subtract the binary's image base and add this value. 0x0 = show RVAs (addresses from 0). Set to the image base (e.g. 0x400000) to keep original VAs."
+              hint="Subtract the binary's image base and add this value. 0x0 = show RVAs (addresses from 0). Set to the image base (e.g. 0x400000) to keep original VAs. Takes effect immediately."
             >
               <HexInput
                 value={props.settings.rebaseAddr}

@@ -70,7 +70,7 @@ export type AppSettings = {
   // Rebase display addresses: subtract the binary's preferred_load_base
   // and add this value. Default 0x0 means addresses display as if the
   // binary were loaded at 0x0 (RVA mode). Set to the actual load base
-  // (e.g. "0x400000") to keep original VAs. Takes effect on next binary load.
+  // (e.g. "0x400000") to keep original VAs. Takes effect immediately.
   rebaseAddr: string;  // hex string like "0x0" or "0x400000"
   // Resume the last binary on launch. Off by default for first-run users
   // since they may want to choose. Becomes default-on after first open.

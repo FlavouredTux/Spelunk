@@ -42,6 +42,7 @@ add_library(ember_core STATIC
     src/analysis/discovery.cpp
     src/analysis/frame.cpp
     src/analysis/sigs.cpp
+    src/analysis/identify.cpp
     src/analysis/libcxx_string.cpp
     src/analysis/rtti.cpp
     src/analysis/msvc_rtti.cpp

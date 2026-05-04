@@ -28,6 +28,7 @@ import { Shortcuts } from "./components/Shortcuts";
 import { HexView } from "./components/HexView";
 import { SymbolsView } from "./components/SymbolsView";
 import { BookmarksPanel } from "./components/BookmarksPanel";
+import { IdentifyPanel } from "./components/IdentifyPanel";
 import { BulkRenameDialog } from "./components/BulkRenameDialog";
 import type { Bookmark } from "./components/BookmarksPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
@@ -36,18 +37,18 @@ import { SkelCode, SkelFunctionHeader, SkelXrefs } from "./components/Skeleton";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
   loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
-  exportAnnotations, importAnnotations, importCorpusRenames,
+  exportAnnotations, importAnnotations, importCorpusRenames, loadIdentifications,
   checkForReleaseUpdate, downloadAndInstallReleaseUpdate,
   clearRendererCaches,
   displayName, demangle,
 } from "./api";
 import type {
   BinaryInfo, FunctionInfo, ViewKind, Xrefs, Annotations, StringEntry, Arities,
-  FunctionSig, ReleaseUpdateStatus,
+  FunctionSig, ReleaseUpdateStatus, IdentifyResult,
 } from "./types";
 
 const EMPTY_XREFS: Xrefs = { callers: {}, callees: {} };
-const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {}, localRenames: {}, patches: {} };
+const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {}, fields: {}, localRenames: {}, patches: {} };
 const EMPTY_STRINGS: StringEntry[] = [];
 const EMPTY_ARITIES: Arities = {};
 
@@ -204,6 +205,9 @@ export default function App() {
   const [hexInitialVaddr, setHexInitialVaddr] = useState<number | null>(null);
   const [symbolsOpen, setSymbolsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [identifyOpen, setIdentifyOpen] = useState(false);
+  const [identifyHits, setIdentifyHits] = useState<IdentifyResult[]>([]);
+  const [identifyLoading, setIdentifyLoading] = useState(false);
   const [bulkRenameOpen, setBulkRenameOpen] = useState(false);
   // Dirty indicator: pulses when annotations are mid-flight to disk so
   // the user can see saves are happening. "saved" sticks for ~1.5s
@@ -261,6 +265,18 @@ export default function App() {
       .catch(() => {})
       .finally(() => setStringsLoading(false)));
   }, [stringsOpen, strings.length, stringsLoading, info, track]);
+
+  // Identification panel data loading
+  useEffect(() => {
+    if (!identifyOpen) return;
+    if (identifyHits.length > 0 || identifyLoading) return;
+    if (!info) return;
+    setIdentifyLoading(true);
+    track("identify", loadIdentifications()
+      .then(setIdentifyHits)
+      .catch(() => {})
+      .finally(() => setIdentifyLoading(false)));
+  }, [identifyOpen, identifyHits.length, identifyLoading, info, track]);
 
   // Edit dialog
   const [editing, setEditing] =
@@ -417,6 +433,7 @@ export default function App() {
       cfgPseudo: { glyph: "◆", label: "control-flow", key: "view_cfg"    },
       ir:        { glyph: "λ", label: "lifted IR",    key: "view_ir"     },
       ssa:       { glyph: "φ", label: "SSA",          key: "view_ssa"    },
+      identify:  { glyph: "🔍", label: "identification", key: "view_identify" },
     };
     const badge = viewBadge[view];
     // Two privacy modes:
@@ -538,6 +555,7 @@ export default function App() {
       const header = await loadHeader();
       setInfo(header);
       setStrings(EMPTY_STRINGS);
+      setIdentifyHits([]);
       undoStackRef.current = [];
       xrefsRequestedRef.current = false;
       patchSettings({ lastBinary: header.path });
@@ -690,6 +708,7 @@ export default function App() {
         if (hexOpen)        { setHexOpen(false);       return; }
         if (symbolsOpen)    { setSymbolsOpen(false);   return; }
         if (bookmarksOpen)  { setBookmarksOpen(false); return; }
+        if (identifyOpen)   { setIdentifyOpen(false);  return; }
         if (bulkRenameOpen) { setBulkRenameOpen(false); return; }
       }
 
@@ -738,7 +757,8 @@ export default function App() {
         return;
       }
       // Ctrl+H — hex view; Ctrl+Shift+S — symbols & sections;
-      // Ctrl+B — bookmarks panel; bare "b" — toggle bookmark on current.
+      // Ctrl+B — bookmarks panel; Ctrl+I — identification panel;
+      // bare "b" — toggle bookmark on current.
       if (mod && !e.shiftKey && (e.key === "h" || e.key === "H")) {
         if (info) { e.preventDefault(); setHexOpen((o) => !o); }
         return;
@@ -749,6 +769,10 @@ export default function App() {
       }
       if (mod && (e.key === "b" || e.key === "B")) {
         if (info) { e.preventDefault(); setBookmarksOpen((o) => !o); }
+        return;
+      }
+      if (mod && (e.key === "i" || e.key === "I")) {
+        if (info) { e.preventDefault(); setIdentifyOpen((o) => !o); }
         return;
       }
       if (!inInput && !mod && !e.altKey && !e.shiftKey && (e.key === "b" || e.key === "B")) {
@@ -833,7 +857,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, diffOpen, emberApplyOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
+  }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, diffOpen, emberApplyOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, identifyOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
 
   // Load code whenever selection or view (or CFG sub-mode) changes.
   // Pseudo-C views also get local-rename substitution applied on top
@@ -928,6 +952,7 @@ export default function App() {
     renames:      { ...annotations.renames    },
     notes:        { ...annotations.notes      },
     signatures:   { ...annotations.signatures },
+    fields:       { ...(annotations.fields     || {}) },
     localRenames: { ...(annotations.localRenames || {}) },
     patches:      { ...(annotations.patches      || {}) },
   }), [annotations]);
@@ -959,6 +984,7 @@ export default function App() {
         renames:      { ...annotations.renames,    ...imp.renames    },
         notes:        { ...annotations.notes,      ...imp.notes      },
         signatures:   { ...annotations.signatures, ...imp.signatures },
+        fields:       { ...(annotations.fields || {}), ...(imp.fields || {}) },
         localRenames: { ...(annotations.localRenames || {}) },
         patches:      { ...(annotations.patches || {}),   ...(imp.patches || {}) },
       };
@@ -1257,6 +1283,24 @@ export default function App() {
             <span style={{ color: C.textFaint }}>⌃T</span>
           </button>
           <button
+            onClick={() => setIdentifyOpen(true)}
+            style={{
+              padding: "4px 10px",
+              fontFamily: mono, fontSize: 10,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Identification (Ctrl+I)"
+            aria-label="Open identification panel"
+          >
+            <span>identify</span>
+            <span style={{ color: C.textFaint }}>⌃I</span>
+          </button>
+          <button
             onClick={() => setCallGraphOpen(true)}
             style={{
               padding: "4px 10px",
@@ -1523,7 +1567,7 @@ export default function App() {
               />
             : <SkelFunctionHeader />
           }
-          <Tabs view={view} setView={setView} />
+          <Tabs view={view} setView={setView} onIdentify={() => setIdentifyOpen(true)} />
           {error ? (
             <ErrorView message={error} currentView={view} onSwitchView={setView} />
           ) : !current ? (
@@ -1821,6 +1865,16 @@ export default function App() {
           onRename={(addr, label) => updateBookmarks(currentBookmarks.map(
             (b) => b.addr === addr ? { ...b, label: label || undefined } : b))}
           onClose={() => setBookmarksOpen(false)}
+        />
+      )}
+      {identifyOpen && (
+        <IdentifyPanel
+          info={info}
+          hits={identifyHits}
+          loading={identifyLoading}
+          annotations={annotations}
+          onSelect={(f) => { navigateTo(f); setIdentifyOpen(false); }}
+          onClose={() => setIdentifyOpen(false)}
         />
       )}
       {bulkRenameOpen && (

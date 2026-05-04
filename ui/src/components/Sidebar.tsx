@@ -74,6 +74,7 @@ export function Sidebar(props: {
       { kind: "item", label: "Open as CFG",       hint: "c", onClick: () => { onOpen(fn, "cfg"); } },
       { kind: "item", label: "Open as IR",        hint: "i", onClick: () => { onOpen(fn, "ir"); } },
       { kind: "item", label: "Open as SSA",       hint: "s", onClick: () => { onOpen(fn, "ssa"); } },
+      { kind: "item", label: "Identification",    hint: "⌃I", onClick: () => { onOpen(fn, "identify"); } },
       { kind: "sep" },
       { kind: "item", label: hasRename ? "Rename…" : "Rename…",
         onClick: () => onRename(fn) },

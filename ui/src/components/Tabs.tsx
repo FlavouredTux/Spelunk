@@ -2,14 +2,15 @@ import { C, sans, mono, serif } from "../theme";
 import type { ViewKind } from "../types";
 
 const VIEWS: { id: ViewKind; label: string; hint: string }[] = [
-  { id: "pseudo", label: "pseudo-C",  hint: "decompiled"   },
-  { id: "asm",    label: "asm",       hint: "linear disasm"},
-  { id: "cfg",    label: "cfg",       hint: "graph"        },
-  { id: "ir",     label: "ir",        hint: "lifted"       },
-  { id: "ssa",    label: "ssa",       hint: "ssa form"     },
+  { id: "pseudo",    label: "pseudo-C",  hint: "decompiled"   },
+  { id: "asm",       label: "asm",       hint: "linear disasm"},
+  { id: "cfg",       label: "cfg",       hint: "graph"        },
+  { id: "ir",        label: "ir",        hint: "lifted"       },
+  { id: "ssa",       label: "ssa",       hint: "ssa form"     },
+  { id: "identify",  label: "identify",  hint: "YARA-like"    },
 ];
 
-export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void }) {
+export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void; onIdentify?: () => void }) {
   return (
     <div
       data-tutorial="tabs"
@@ -24,10 +25,11 @@ export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void }) 
     >
       {VIEWS.map((v) => {
         const active = props.view === v.id;
+        const isIdentify = v.id === "identify";
         return (
           <button
             key={v.id}
-            onClick={() => props.setView(v.id)}
+            onClick={() => isIdentify ? (props.onIdentify?.()) : props.setView(v.id)}
             style={{
               padding: "12px 14px 10px",
               fontFamily: sans,

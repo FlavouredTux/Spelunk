@@ -60,6 +60,7 @@
 #include <ember/analysis/teef_behav.hpp>
 #include <ember/analysis/teef_orbit.hpp>
 #include <ember/analysis/teef_recognize.hpp>
+#include <ember/analysis/identify.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
@@ -196,13 +197,15 @@ int run_apply_ember(const Args& args, const Binary& b) {
     if (!args.quiet) {
         const char* tag = args.dry_run ? "--apply --dry-run" : "--apply";
         std::println(stderr,
-            "ember: {}: +{} renames, +{} notes, +{} sigs, "
+            "ember: {}: +{} renames, +{} notes, +{} sigs, +{} fields, "
             "{} pattern-matches, {} from-strings, "
-            "-{} renames / -{} notes / -{} sigs -> {} ({})",
+            "-{} renames / -{} notes / -{} sigs / -{} fields -> {} ({})",
             tag,
             rv->renames_added, rv->notes_added, rv->signatures_added,
+            rv->fields_added,
             rv->pattern_renames_applied, rv->string_renames_applied,
             rv->renames_removed, rv->notes_removed, rv->signatures_removed,
+            rv->fields_removed,
             loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
             annotation_source_name(loc.source));
         for (const auto& w : rv->warnings) {
@@ -1258,6 +1261,13 @@ int run_recognize(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
+
+int run_identify(const Args& args, const Binary& b) {
+    auto hits = identify_functions(b, args.identify_threshold);
+    const auto tsv = format_identify_tsv(hits);
+    std::fwrite(tsv.data(), 1, tsv.size(), stdout);
+    return EXIT_SUCCESS;
+}
 
 int run_teef(const Args& args, const Binary& b) {
     TeefComputeOptions opts;
@@ -2430,6 +2440,13 @@ int run_serve(const Args& base, const Binary& b) {
                 Args a = derive_args(base);
                 a.recognize = true;
                 std::string body = capture_stdout([&]{ run_recognize(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "identify") {
+                Args a = derive_args(base);
+                a.identify = true;
+                std::string body = capture_stdout([&]{ run_identify(a, b); });
                 write_ok(body);
                 continue;
             }

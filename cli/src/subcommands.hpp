@@ -39,6 +39,7 @@ int run_fingerprints(const Args& args, const Binary& b);
 int run_teef        (const Args& args, const Binary& b);
 int run_orbit_dump  (const Args& args, const Binary& b);
 int run_recognize   (const Args& args, const Binary& b);
+int run_identify    (const Args& args, const Binary& b);
 int run_objc_names  (const Args& args, const Binary& b);
 int run_objc_protos (const Args& args, const Binary& b);
 int run_rtti        (const Args& args, const Binary& b);

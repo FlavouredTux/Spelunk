@@ -144,6 +144,22 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
+        // `--identify` — run YARA-like function identification.
+        if (s == "--identify") { a.identify = true; continue; }
+        // `--identify-threshold T`
+        if (s == "--identify-threshold") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--identify-threshold requires a value"));
+            }
+            try { a.identify_threshold = std::stof(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--identify-threshold: bad float"));
+            }
+            continue;
+        }
+
         // `--corpus PATH` — repeatable. Each is a TEEF TSV (output of
         // `ember --teef <lib>`); the recognizer merges them.
         if (s == "--corpus") {

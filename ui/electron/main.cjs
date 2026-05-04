@@ -392,7 +392,7 @@ function emberCacheAnnotationsPath(binaryPath) {
 // the cache format doesn't carry signatures/patches. Empty object if
 // the file doesn't exist or is unreadable.
 async function readEmberCacheAnnotations(binaryPath) {
-  const out = { renames: {}, notes: {} };
+  const out = { renames: {}, notes: {}, fields: {} };
   try {
     const raw = await fs.readFile(emberCacheAnnotationsPath(binaryPath), "utf8");
     for (const line of raw.split("\n")) {
@@ -414,6 +414,13 @@ async function readEmberCacheAnnotations(binaryPath) {
       const addr = "0x" + addrHex.toLowerCase().padStart(16, "0");
       if      (kind === "rename") out.renames[addr] = value;
       else if (kind === "note")   out.notes[addr]   = value;
+      else if (kind === "field") {
+        const parts = value.split("|");
+        if (parts.length >= 3) {
+          out.fields[`${addr}:${parts[0].trim()}:${parts[1].trim()}`] =
+            parts.slice(2).join("|").trim();
+        }
+      }
       // signatures/types/patches are not in the cache .db format yet —
       // ignore unrecognised verbs rather than fail.
     }
@@ -440,6 +447,7 @@ async function readSidecar(binaryPath) {
     renames:      { ...cache.renames, ...(json.renames    || {}) },
     notes:        { ...cache.notes,   ...(json.notes      || {}) },
     signatures:   json.signatures   || {},
+    fields:       { ...cache.fields,  ...(json.fields     || {}) },
     localRenames: json.localRenames || {},
     patches:      json.patches      || {},
   };
@@ -544,6 +552,7 @@ function parseAnnText(text) {
   const renames = {};
   const signatures = {};
   const notes = {};
+  const fields = {};
   for (const raw of String(text).split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
@@ -573,11 +582,18 @@ function parseAnnText(text) {
       if (sp2 < 0) continue;
       const addr = `0x${rest.slice(0, sp2)}`;
       notes[addr] = unescapeNote(rest.slice(sp2 + 1));
+    } else if (kind === "field") {
+      const sp2 = rest.indexOf(" ");
+      if (sp2 < 0) continue;
+      const addr = `0x${rest.slice(0, sp2)}`;
+      const parts = rest.slice(sp2 + 1).split("|").map((s) => s.trim());
+      if (parts.length < 3) continue;
+      fields[`${addr}:${parts[0]}:${parts[1]}`] = parts.slice(2).join("|");
     }
     // `const` (named_constants) isn't surfaced in the renderer's
     // annotation shape yet — silently ignored.
   }
-  return { renames, signatures, notes };
+  return { renames, signatures, notes, fields };
 }
 
 // Convert the on-disk JSON sidecar into the plain-text format the CLI
@@ -591,9 +607,11 @@ async function writeCliAnnotations(binaryPath) {
   const renames = parsed.renames || {};
   const sigs    = parsed.signatures || {};
   const notes   = parsed.notes || {};
+  const fields  = parsed.fields || {};
   if (Object.keys(renames).length === 0 &&
       Object.keys(sigs).length === 0 &&
-      Object.keys(notes).length === 0) {
+      Object.keys(notes).length === 0 &&
+      Object.keys(fields).length === 0) {
     return null;
   }
   const lines = [];
@@ -613,6 +631,14 @@ async function writeCliAnnotations(binaryPath) {
     const hex = String(addr).replace(/^0x/, "");
     lines.push(`note ${hex} ${escapeNote(text)}`);
   }
+  for (const [key, name] of Object.entries(fields)) {
+    const parts = String(key).split(":");
+    if (parts.length < 3) continue;
+    const hex = parts[0].replace(/^0x/, "");
+    const param = parts[1];
+    const off = parts.slice(2).join(":");
+    lines.push(`field ${hex} ${param}|${off}|${name}`);
+  }
   const outPath = path.join(app.getPath("userData"), "projects",
                             sanitize(binaryPath) + ".ann");
   await fs.mkdir(path.dirname(outPath), { recursive: true });
@@ -631,10 +657,13 @@ ipcMain.handle("ember:run", async (_e, args) => {
 
   const binMtime = await safeMtime(effective);
   const annMtime = await safeMtime(annPath);
+  const cliMtime = await safeMtime(EMBER_BIN);
   // Embed mtimes in the key. When the binary, patches or annotations
   // change, the new key won't hit prior entries — they fall out via
-  // LRU. The patched-copy mtime captures the patches themselves.
-  const key = `${effective}|${binMtime}|${annMtime}|${args.join("\x00")}`;
+  // LRU. The patched-copy mtime captures the patches themselves; the
+  // CLI mtime keeps dev UI sessions from serving old pseudo-C after a
+  // local rebuild.
+  const key = `${effective}|${binMtime}|${annMtime}|${cliMtime}|${args.join("\x00")}`;
 
   if (RUN_CACHE.has(key)) {
     const v = RUN_CACHE.get(key);
@@ -948,6 +977,7 @@ ipcMain.handle("ember:applyEmberScript", async (_e, scriptPath, dryRun) => {
     renames:      merged?.renames    ?? sidecar.renames    ?? {},
     signatures:   merged?.signatures ?? sidecar.signatures ?? {},
     notes:        merged?.notes      ?? sidecar.notes      ?? {},
+    fields:       merged?.fields     ?? sidecar.fields     ?? {},
     // localRenames + patches never live in the .ann — preserve sidecar.
     localRenames: sidecar.localRenames || {},
     patches:      sidecar.patches      || {},
@@ -976,6 +1006,7 @@ ipcMain.handle("ember:exportAnnotations", async (_e, bp, data) => {
     renames:      data?.renames      || {},
     notes:        data?.notes        || {},
     signatures:   data?.signatures   || {},
+    fields:       data?.fields       || {},
     localRenames: data?.localRenames || {},
     patches:      data?.patches      || {},
   };
@@ -1008,6 +1039,7 @@ ipcMain.handle("ember:importAnnotations", async () => {
     renames:      parsed.renames      || {},
     notes:        parsed.notes        || {},
     signatures:   parsed.signatures   || {},
+    fields:       parsed.fields       || {},
     localRenames: parsed.localRenames || {},
     patches:      parsed.patches      || {},
   };
@@ -1054,6 +1086,7 @@ ipcMain.handle("ember:importCorpusRenames", async (_e, opts) => {
     renames:      { ...(sidecar.renames || {}), ...parsed.renames },
     notes:        sidecar.notes || {},
     signatures:   sidecar.signatures || {},
+    fields:       sidecar.fields || {},
     localRenames: sidecar.localRenames || {},
     patches:      sidecar.patches || {},
   };
@@ -1065,6 +1098,37 @@ ipcMain.handle("ember:importCorpusRenames", async (_e, opts) => {
     scanned: parsed.scanned,
     corpusPaths: picked.filePaths,
   };
+});
+
+// Run YARA-like function identification (--identify) and return parsed
+// results. No file picker needed — the built-in profile DB is always
+// available.
+ipcMain.handle("ember:identify", async (_e, opts) => {
+  if (!state.binary) throw new Error("no binary selected");
+  const o = opts && typeof opts === "object" ? opts : {};
+  const threshold = Number.isFinite(Number(o.threshold)) ? Number(o.threshold) : 0.4;
+  const effective = await materializePatchedBinary(state.binary);
+  const args = ["--quiet", "--identify"];
+  if (threshold !== 0.4) args.push("--identify-threshold", String(threshold));
+  args.push(effective);
+  const stdout = await runEmber(args);
+  // Parse TSV: addr\tname\tcategory\tconfidence\tsignal\tvia
+  const hits = [];
+  for (const line of String(stdout || "").split("\n")) {
+    if (!line.trim()) continue;
+    const parts = line.split("\t");
+    if (parts.length < 4) continue;
+    hits.push({
+      addr: parts[0],
+      addrNum: parseInt(parts[0], 16),
+      name: parts[1],
+      category: parts[2],
+      confidence: parseFloat(parts[3]) || 0,
+      signal: parts[4] || "",
+      via: parts[5] || "",
+    });
+  }
+  return hits;
 });
 
 // ----- AI providers -----

@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
-#include <format>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -287,7 +286,12 @@ float score_profile(const Profile& p,
 std::string via_consts(const Profile& p, const std::unordered_map<u64,u32>& imms) {
     std::string s;
     for (std::size_t i = 0; i < p.nc; ++i)
-        if (imms.count(p.cs[i].v)) { if (!s.empty()) s+=','; s+=std::format("{:x}",p.cs[i].v); }
+        if (imms.count(p.cs[i].v)) {
+            if (!s.empty()) s+=',';
+            char buf[24];
+            std::snprintf(buf, sizeof(buf), "%llx", static_cast<unsigned long long>(p.cs[i].v));
+            s += buf;
+        }
     return s;
 }
 
@@ -347,7 +351,10 @@ std::string via_bytepat(const Profile& p, const Binary& b, addr_t start, u64 sz)
         auto off = match_bytepat(p.bp[i], b, start, sz);
         if (off >= 0) {
             if (!s.empty()) s += ',';
-            s += std::format("pattern[{}]@+{}", i, off);
+            s += "pattern[";
+            s += std::to_string(i);
+            s += "]@+";
+            s += std::to_string(off);
         }
     }
     return s;
@@ -527,9 +534,12 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
 std::string format_identify_tsv(const std::vector<IdentifyHit>& hits) {
     std::string out;
     for (const auto& h : hits) {
-        out += std::format("{:x}\t{}\t{}\t{:.2f}\t{}\t{}\n",
-            h.addr, h.name, category_name(h.category),
-            h.confidence, h.signal, h.via);
+        char buf[512];
+        std::string cat(category_name(h.category));
+        std::snprintf(buf, sizeof(buf), "%llx\t%s\t%s\t%.2f\t%s\t%s\n",
+            static_cast<unsigned long long>(h.addr), h.name.c_str(), cat.c_str(),
+            static_cast<double>(h.confidence), h.signal.c_str(), h.via.c_str());
+        out += buf;
     }
     return out;
 }

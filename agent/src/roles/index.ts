@@ -6,6 +6,52 @@
 // the schema. Easier than maintaining per-role tool whitelists, and lets
 // a role escalate (e.g. namer wants to read the call graph before naming)
 // without reconfiguration.
+//
+// Every role's prompt is automatically prefixed with EMBER.md (the
+// agent-facing operating manual) at module load. The preamble is stable
+// across roles, which means it sits at the front of the cached prefix
+// and amortizes via prompt caching after the first call. Each role's
+// variable tail is small.
+
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+// EMBER.md lives at the repo root. Try the relative paths that cover ts
+// dev (src/roles/), built dist/ output, and packaged Electron extra-
+// resources layouts. Best-effort: if none resolve, roles still work
+// without the preamble (the warning surfaces at startup, not as an
+// exception).
+function loadEmberManual(): string {
+    const candidates = [
+        join(HERE, "..", "..", "..", "EMBER.md"),
+        join(HERE, "..", "..", "EMBER.md"),
+        join(HERE, "..", "EMBER.md"),
+        join(HERE, "EMBER.md"),
+    ];
+    for (const p of candidates) {
+        try {
+            return readFileSync(p, "utf8");
+        } catch {
+            // try next
+        }
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[ember/agent] EMBER.md not found in ${candidates.join(", ")}; ` +
+        `workers will run without the operating-manual preamble.`,
+    );
+    return "";
+}
+
+const EMBER_MANUAL = loadEmberManual();
+
+function withEmberPreamble(roleSystem: string): string {
+    if (!EMBER_MANUAL) return roleSystem;
+    return `${EMBER_MANUAL}\n\n---\n\n# Your role\n\n${roleSystem}`;
+}
 
 export interface RoleSpec {
     name: string;
@@ -121,9 +167,13 @@ Be unbiased. The agent identities of the disputants do not weigh into your decis
 Stop after resolving one dispute. The orchestrator will hand you the next.`,
 };
 
+function withPreamble(role: RoleSpec): RoleSpec {
+    return { ...role, system: withEmberPreamble(role.system) };
+}
+
 export const ROLES: Record<string, RoleSpec> = {
-    namer: NAMER,
-    mapper: MAPPER,
-    typer: TYPER,
-    tiebreaker: TIEBREAKER,
+    namer:      withPreamble(NAMER),
+    mapper:     withPreamble(MAPPER),
+    typer:      withPreamble(TYPER),
+    tiebreaker: withPreamble(TIEBREAKER),
 };

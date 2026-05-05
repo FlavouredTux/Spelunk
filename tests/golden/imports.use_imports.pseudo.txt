@@ -1,5 +1,5 @@
 // use_imports
-u64 use_imports(char* a1, u64 a2) {
+char* use_imports(char* a1, u64 a2) {
   if (a1) {
     u64 r_strlen = strlen(a1);
     g_count += r_strlen;

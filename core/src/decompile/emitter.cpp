@@ -4422,7 +4422,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 break;
             }
         }
-        std::optional<IrType> t;
+        std::vector<IrValue> candidates;
         std::function<void(const Region&)> walk = [&](const Region& r) {
             if (r.kind == RegionKind::Return &&
                 r.condition.kind != IrValueKind::None) {
@@ -4436,23 +4436,32 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                         v = d->srcs[0];
                     }
                 }
-                if (!t) t = v.type;
+                candidates.push_back(v);
             }
             for (const auto& c : r.children) if (c) walk(*c);
         };
         walk(*s.body);
-        if (!t) return "void";
-        switch (*t) {
-            case IrType::F32:  return "float";
-            case IrType::F64:  return "double";
-            case IrType::I1:   return "bool";
-            case IrType::I8:   return "u8";
-            case IrType::I16:  return "u16";
-            case IrType::I32:  return "u32";
-            case IrType::I64:  return "u64";
-            case IrType::I128: return "__m128i";
+        if (candidates.empty()) return "void";
+        // Pick the most-informative Return candidate. Many functions have
+        // an early-return arm with `return 0;` (e.g. `if (!v0) return 0;`)
+        // alongside the real-value path that yields the inferred-pointer
+        // return. Walking-order picks the early-return first, so its
+        // bit-width-only Imm type would mask the real `u64*` shape. Prefer
+        // candidates whose c_type_name_for resolves to something other
+        // than the raw IR-bit-width name (i.e. picked up a refined type
+        // from infer_local_types — `u64*`, `char*`, `s32`, …).
+        const auto raw_name_for = [&](const IrValue& v) {
+            return std::string(c_type_name(v.type));
+        };
+        const IrValue* refined = nullptr;
+        for (const auto& v : candidates) {
+            if (e.c_type_name_for(v) != raw_name_for(v)) {
+                refined = &v;
+                break;
+            }
         }
-        return "u64";
+        const IrValue& picked = refined ? *refined : candidates.front();
+        return e.c_type_name_for(picked);
     };
 
     // Pick a display name: user rename beats binary symbol beats the

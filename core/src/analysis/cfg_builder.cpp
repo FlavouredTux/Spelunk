@@ -2,6 +2,7 @@
 
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/pe_unwind.hpp>
+#include <ember/analysis/pipeline.hpp>
 #include <ember/ir/ssa.hpp>  // canonical_reg
 
 #include <algorithm>
@@ -37,17 +38,8 @@ struct WalkState {
     std::set<addr_t>              tail_calls;
 };
 
-// A jmp is a tail call if its target is the entry of some function — either
-// a defined non-import function symbol, or a PLT stub for an imported one.
-// Self-recursive tail calls (target == current function's entry) also count.
-[[nodiscard]] bool is_tail_call_target(const Binary& b, addr_t target) noexcept {
-    if (const Symbol* s = b.defined_object_at(target);
-        s && s->kind == SymbolKind::Function && s->addr == target) {
-        return true;
-    }
-    if (b.import_at_plt(target) != nullptr) return true;
-    return false;
-}
+// (`is_function_entry` lives on CfgBuilder so it can lazy-cache the
+// discovered-fn entry set; see the method below.)
 
 // ---------- Jump-table detection ----------------------------------------------
 //
@@ -559,7 +551,8 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     return jt;
 }
 
-void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry) {
+void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
+               const std::unordered_set<addr_t>& known_entries) {
     std::deque<addr_t> wl;
     wl.push_back(entry);
     ws.leaders.insert(entry);
@@ -606,7 +599,8 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry)
             }
             if (is_unconditional_jmp(mn)) {
                 if (auto t = branch_target(insn); t) {
-                    if (is_tail_call_target(b, *t)) {
+                    if (known_entries.contains(*t) ||
+                        b.import_at_plt(*t) != nullptr) {
                         // Tail call: don't walk into the target; record the
                         // call for xrefs and mark this jmp so partition()
                         // can materialize a TailCall block.
@@ -749,6 +743,31 @@ void CfgBuilder::ensure_unwind_ranges_() const {
     }
 }
 
+void CfgBuilder::ensure_known_entries_() const {
+    if (known_entries_init_) return;
+    known_entries_init_ = true;
+    for (const auto& s : binary_.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.addr == 0) continue;
+        known_entries_.insert(s.addr);
+    }
+    // Discovered functions on stripped binaries — without these every
+    // tail-call jmp on a stripped target looks like an intra-function
+    // branch, and the caller side of `--refs-to <fn>` comes back empty
+    // for tail-call-only callers (very common Lua / VM dispatch shape).
+    // Cheap mode skips the recursive call-graph compute.
+    for (const auto& fn : enumerate_functions(binary_, EnumerateMode::Cheap)) {
+        known_entries_.insert(fn.addr);
+    }
+}
+
+bool CfgBuilder::is_function_entry(addr_t target) const noexcept {
+    ensure_known_entries_();
+    if (known_entries_.contains(target)) return true;
+    return binary_.import_at_plt(target) != nullptr;
+}
+
 Result<Function>
 CfgBuilder::build(addr_t entry, std::string name) const {
     if (binary_.bytes_at(entry).empty()) {
@@ -756,8 +775,10 @@ CfgBuilder::build(addr_t entry, std::string name) const {
             "cfg: no mapped bytes at entry {:#x}", entry)));
     }
 
+    ensure_known_entries_();
+
     WalkState ws;
-    walk_from(binary_, decoder_, ws, entry);
+    walk_from(binary_, decoder_, ws, entry, known_entries_);
 
     if (ws.insns.empty()) {
         return std::unexpected(Error::invalid_format(std::format(
@@ -782,13 +803,13 @@ CfgBuilder::build(addr_t entry, std::string name) const {
 
             for (addr_t t : table->targets) {
                 if (ws.leaders.insert(t).second) {
-                    walk_from(binary_, decoder_, ws, t);
+                    walk_from(binary_, decoder_, ws, t, known_entries_);
                     added_work = true;
                 }
             }
             if (table->default_tgt) {
                 if (ws.leaders.insert(*table->default_tgt).second) {
-                    walk_from(binary_, decoder_, ws, *table->default_tgt);
+                    walk_from(binary_, decoder_, ws, *table->default_tgt, known_entries_);
                     added_work = true;
                 }
             }

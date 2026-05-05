@@ -218,6 +218,11 @@ struct Emitter {
     // the merge declaration is already emitted at the function head.
     std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
+    // Block addresses referenced by some `RegionKind::Goto` in the
+    // structured tree. emit_block prepends a C `bb_<addr>:` label at
+    // these blocks so the gotos resolve. Without this the structurer's
+    // gotos point at comments and the C is ill-formed.
+    std::set<addr_t>                                 goto_targets;
     // SSA values whose C binding has already been emitted in this function
     // body. Used by the materializer to avoid exposing fallback names like
     // `rax_3` / `t17` when a structured condition or return reads a value
@@ -994,6 +999,17 @@ struct Emitter {
             }
         }
         for (const auto& c : r.children) if (c) collect_for_updates(*c);
+    }
+
+    // Collect every block targeted by a `RegionKind::Goto` so emit_block
+    // can prepend a matching `bb_<addr>:` C label. Without this the
+    // structurer's `goto bb_<addr>;` references resolve to nothing —
+    // there's no destination, just a `// bb_<addr>` comment.
+    void collect_goto_targets(const Region& r) {
+        if (r.kind == RegionKind::Goto) {
+            goto_targets.insert(r.target);
+        }
+        for (const auto& c : r.children) if (c) collect_goto_targets(*c);
     }
 
     // Render a single instruction at (block_addr, inst_idx) as its compound-
@@ -3908,6 +3924,17 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     const auto& bb = fn->blocks[it->second];
 
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    // C label for any block referenced by a structurer-emitted goto. Sit
+    // one indent shallower than the block body when possible — that's the
+    // conventional layout for `bb_<addr>:` and avoids the label appearing
+    // to belong to the surrounding statement.
+    if (goto_targets.contains(bb.start)) {
+        const std::size_t label_indent = depth > 0
+            ? (static_cast<std::size_t>(depth) - 1) * 2u
+            : 0u;
+        out += std::format("{}bb_{:x}:\n",
+                           std::string(label_indent, ' '), bb.start);
+    }
     if (options.show_bb_labels) {
         out += std::format("{}// bb_{:x}\n", ind, bb.start);
     }
@@ -4359,6 +4386,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         e.analyze_return_folds(*sf.body);
         e.analyze_return_expr_call_folds(*sf.body);
         e.collect_for_updates(*sf.body);
+        e.collect_goto_targets(*sf.body);
     }
     if (!has_user_sig) e.bump_arity_from_call_sites();
     if (!has_user_sig) e.bump_arity_from_body_reads();

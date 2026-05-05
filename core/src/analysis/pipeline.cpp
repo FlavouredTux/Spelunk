@@ -30,6 +30,7 @@
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/type_infer_local.hpp>
 #include <ember/common/progress.hpp>
+#include <ember/common/timing.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/instruction.hpp>
@@ -704,26 +705,47 @@ format_struct(const Binary& b, const FuncWindow& w,
     if (!dec_r) return std::unexpected(dec_r.error());
     const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
-    auto fn_r = builder.build(w.start, w.label);
+
+    auto fn_r = [&] {
+        ScopedTimer t("  cfg_build");
+        return builder.build(w.start, w.label);
+    }();
     if (!fn_r) return std::unexpected(fn_r.error());
 
     auto lifter_r = make_lifter(b);
     if (!lifter_r) return std::unexpected(lifter_r.error());
-    auto ir_r = (*lifter_r)->lift(*fn_r);
+    auto ir_r = [&] {
+        ScopedTimer t("  ir_lift");
+        return (*lifter_r)->lift(*fn_r);
+    }();
     if (!ir_r) return std::unexpected(ir_r.error());
 
-    const SsaBuilder ssa;
-    if (auto rv = ssa.convert(*ir_r); !rv) return std::unexpected(rv.error());
+    {
+        ScopedTimer t("  ssa_convert");
+        const SsaBuilder ssa;
+        if (auto rv = ssa.convert(*ir_r); !rv) return std::unexpected(rv.error());
+    }
 
-    if (auto rv = run_cleanup(*ir_r); !rv) return std::unexpected(rv.error());
-    seed_call_return_types(b, *ir_r);
-    infer_local_types(*ir_r);
+    {
+        ScopedTimer t("  cleanup");
+        if (auto rv = run_cleanup(*ir_r); !rv) return std::unexpected(rv.error());
+    }
+
+    {
+        ScopedTimer t("  type_inference");
+        seed_call_return_types(b, *ir_r);
+        infer_local_types(*ir_r);
+    }
 
     const Structurer structurer;
-    auto s_r = structurer.structure(*ir_r);
+    auto s_r = [&] {
+        ScopedTimer t("  structurer");
+        return structurer.structure(*ir_r);
+    }();
     if (!s_r) return std::unexpected(s_r.error());
 
     if (pseudo) {
+        ScopedTimer t("  emit");
         const PseudoCEmitter emitter;
         auto c_r = emitter.emit(*s_r, &b, ann, options);
         if (!c_r) return std::unexpected(c_r.error());

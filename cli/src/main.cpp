@@ -6,6 +6,7 @@
 #include <ember/binary/binary.hpp>
 #include <ember/binary/raw_regions.hpp>
 #include <ember/common/error.hpp>
+#include <ember/common/timing.hpp>
 
 #include "args.hpp"
 #include "cli_error.hpp"
@@ -150,7 +151,10 @@ int main(int argc, char** argv) {
         return run_debug(args, nullptr, aux_specs);
     }
 
-    auto bin = load_binary_from_args(args);
+    auto bin = [&] {
+        ember::ScopedTimer t("load_binary");
+        return load_binary_from_args(args);
+    }();
     if (!bin) return report(bin.error());
 
     // --force-fn-start: synthesize Function symbols at each user-

@@ -67,6 +67,7 @@
 #include <ember/binary/pe.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
+#include <ember/common/timing.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/ir/ir.hpp>
@@ -2078,6 +2079,7 @@ int run_emit(const Args& args, const Binary& b) {
     IrCache shared_ir_cache;
     InferenceResult ipa;
     if (args.ipa && (args.pseudo || args.strct)) {
+        ScopedTimer t("ipa");
         std::println(stderr, "ember: running IPA (this pass lifts every function once)...");
         std::fflush(stderr);
         ipa = infer_signatures(b, &shared_ir_cache);
@@ -2087,6 +2089,7 @@ int run_emit(const Args& args, const Binary& b) {
     }
     std::map<addr_t, addr_t> resolutions;
     if (args.resolve_calls && (args.pseudo || args.strct)) {
+        ScopedTimer t("resolve_calls");
         // Scope to the requested function — emit only renders one fn at a
         // time, so the rest of the binary's indirect calls would never be
         // observed. When the symbol can't be resolved the format step is
@@ -2105,6 +2108,7 @@ int run_emit(const Args& args, const Binary& b) {
     }
     LpMap lp_map;
     if (args.eh && (args.pseudo || args.strct)) {
+        ScopedTimer t("eh_landing_pads");
         lp_map = parse_landing_pads(b);
         std::println(stderr, "ember: EH data: {} landing-pad ranges parsed",
                      lp_map.size());
@@ -2117,6 +2121,7 @@ int run_emit(const Args& args, const Binary& b) {
     // unwinder already describes.
     std::map<addr_t, addr_t> prologue_ranges;
     if ((args.pseudo || args.strct) && b.format() == Format::Pe) {
+        ScopedTimer t("pe_unwind_prologues");
         prologue_ranges = build_prologue_ranges(b);
         if (!prologue_ranges.empty()) emit_opts.prologue_ranges = &prologue_ranges;
     }
@@ -2125,13 +2130,16 @@ int run_emit(const Args& args, const Binary& b) {
     // without requiring a separate flag.
     std::map<addr_t, std::string> selrefs;
     if ((args.pseudo || args.strct) && b.format() == Format::MachO) {
+        ScopedTimer t("objc_selrefs");
         selrefs = parse_objc_selrefs(b);
         if (!selrefs.empty()) emit_opts.objc_selrefs = &selrefs;
     }
     if (args.pseudo) {
+        ScopedTimer t("emit_pseudo");
         return run_struct(b, args.symbol, /*pseudo=*/true, ann_ptr, emit_opts);
     }
     if (args.strct) {
+        ScopedTimer t("emit_struct");
         return run_struct(b, args.symbol, /*pseudo=*/false, ann_ptr, emit_opts);
     }
     if (args.ir) {

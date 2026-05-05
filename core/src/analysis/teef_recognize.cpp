@@ -687,12 +687,26 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                 const auto name = interned(we.name_id);
                 if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
+            // Confidence floor for prefix-exact when the query has no
+            // string evidence. Anonymous helpers (no strings) hitting a
+            // single corpus prefix-exact target previously emitted 1.0 —
+            // for a 3-instruction stub that's overconfident: the corpus
+            // entry could be from any unrelated codebase that happens to
+            // share the same byte prefix. Cap at 0.7 so the match still
+            // surfaces for review but won't auto-promote at the typical
+            // 0.85 cascade threshold. Queries WITH strings already
+            // require an overlap in strings_compatible above.
+            const float zero_string_cap =
+                qs.empty() ? 0.7f : 1.0f;
             if (ordered.size() == 1) {
-                return { TeefMatch{ordered[0], 1.0f, "prefix-exact", 0} };
+                return { TeefMatch{ordered[0],
+                                   std::min(1.0f, zero_string_cap),
+                                   "prefix-exact", 0} };
             }
             if (!ordered.empty()) {
                 std::vector<TeefMatch> out;
-                const float conf = 1.0f / static_cast<float>(ordered.size());
+                const float base = 1.0f / static_cast<float>(ordered.size());
+                const float conf = std::min(base, zero_string_cap);
                 for (auto& nm : ordered) {
                     out.push_back(TeefMatch{std::move(nm), conf, "prefix-exact-tied", 0});
                     if (out.size() >= top_k) break;

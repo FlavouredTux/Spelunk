@@ -484,6 +484,21 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
             if (ip_score >= p.mc) ++signals;
             if (signals >= 2) score = std::min(1.0f, score + 0.15f);
 
+            // Tiny-fn collision guard. A 12-instruction stub loading
+            // XTEA's `0x9E3779B9` is NOT XTEA — that constant appears
+            // in countless hash helpers and PRNGs. Same shape as the
+            // teef compareMappings rename: a thin signal in a small
+            // function fingerprints to anything. Require ≥ 2 distinct
+            // signals to emit a high-confidence hit on tiny fns;
+            // single-signal hits get capped below the 0.85 promotion
+            // bar so they surface for review but won't auto-rename.
+            constexpr u64  kTinyFnBytes = 64;
+            constexpr int  kMinSignalsForTiny = 2;
+            if (fn.size > 0 && fn.size < kTinyFnBytes &&
+                signals < kMinSignalsForTiny) {
+                score = std::min(score, 0.6f);
+            }
+
             if (score < threshold) continue;
 
             IdentifyHit h;

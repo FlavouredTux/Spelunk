@@ -626,7 +626,16 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // is bypassed and structural match is the sole signal as before.
     const auto& qs = query.string_hashes;
     auto strings_compatible = [&](const SmallStringHashes& cs) -> bool {
-        if (qs.size() < 2 || cs.size() < 2) return true;
+        // Query has no string evidence (anonymous helper, EH cleanup, pure
+        // arithmetic) → can't filter, structural match is the sole signal.
+        if (qs.empty()) return true;
+        // Query has strings, candidate has none → different domain. Without
+        // this check, a tiny fn referencing one library-specific string
+        // (e.g. a Lua error builder pushing "%s: bytecode version
+        // mismatch...") collides with any tiny fn from a foreign codebase
+        // (e.g. ICU's compareMappings) on prefix/whole-exact and emits a
+        // confident rename across unrelated libraries.
+        if (cs.count == 0) return false;
         for (u64 q : qs) {
             for (std::size_t i = 0; i < cs.count; ++i) {
                 if (q == cs.values[i]) return true;

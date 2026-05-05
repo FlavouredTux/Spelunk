@@ -116,16 +116,29 @@ compute_data_xrefs(const Binary& b) {
 
             for (u8 j = 0; j < insn.num_operands; ++j) {
                 const Operand& op = insn.operands[j];
-                if (op.kind != Operand::Kind::Memory) continue;
-                if (!op.mem.has_disp) continue;
 
                 addr_t target = 0;
-                if (op.mem.base == Reg::Rip && op.mem.index == Reg::None) {
-                    target = ip + insn.length +
-                             static_cast<addr_t>(op.mem.disp);
-                } else if (op.mem.base == Reg::None &&
-                           op.mem.index == Reg::None) {
-                    target = static_cast<addr_t>(op.mem.disp);
+                bool   is_immediate_addr = false;
+                if (op.kind == Operand::Kind::Memory && op.mem.has_disp) {
+                    if (op.mem.base == Reg::Rip && op.mem.index == Reg::None) {
+                        target = ip + insn.length +
+                                 static_cast<addr_t>(op.mem.disp);
+                    } else if (op.mem.base == Reg::None &&
+                               op.mem.index == Reg::None) {
+                        target = static_cast<addr_t>(op.mem.disp);
+                    } else {
+                        continue;
+                    }
+                } else if (op.kind == Operand::Kind::Immediate &&
+                           op.imm.size >= 4) {
+                    // movabs-style: `mov rax, &lua_pcall` loads a code
+                    // address as an immediate before the caller stuffs it
+                    // into a runtime-built dispatch table (luaL_register
+                    // and friends). Without this branch the only static
+                    // signal that lua_pcall is reachable is the table-init
+                    // store, and that store has no rip-rel disp to follow.
+                    target = static_cast<addr_t>(op.imm.value);
+                    is_immediate_addr = true;
                 } else {
                     continue;
                 }
@@ -134,13 +147,18 @@ compute_data_xrefs(const Binary& b) {
                 if (cls == SectionTable::Class::Unmapped) continue;
 
                 DataXrefKind k = classify(insn, j);
-                // LEA-to-code is a function-address-taken event — keep it
-                // (with CodePtr kind so consumers can filter). Other
-                // operand kinds against code sections are call/jmp
-                // targets, which belong on the call graph, not here.
+                // Code-address-taken event: LEA-to-code (rip-rel) and
+                // movabs-of-code (immediate) both put a function pointer
+                // in a register from which it usually flows into a
+                // dispatch table. Tag CodePtr so --refs-to surfaces them.
+                // Other operand kinds against code sections are
+                // call/jmp targets, which belong on the call graph.
                 if (cls == SectionTable::Class::Code) {
-                    if (k != DataXrefKind::Lea) continue;
-                    k = DataXrefKind::CodePtr;
+                    if (k == DataXrefKind::Lea || is_immediate_addr) {
+                        k = DataXrefKind::CodePtr;
+                    } else {
+                        continue;
+                    }
                 }
 
                 auto& bucket = out[target];

@@ -4,7 +4,10 @@
 #include <cstddef>
 #include <map>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
+#include <ember/analysis/pipeline.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
@@ -116,19 +119,37 @@ std::vector<StringEntry> scan_strings(const Binary& b) {
         return &results[it->second];
     };
 
-    // Walk every defined function, decode linearly, collect xrefs.
-    X64Decoder dec;
+    // Walk every defined function + every discovered function (deduped
+    // by address), decode linearly, collect xrefs. Earlier this walked
+    // named symbols only, which on a partially-stripped binary missed
+    // 95%+ of code and produced an empty xrefs column for strings only
+    // referenced from anonymous fns. Same union-with-discovered fix as
+    // compute_call_graph and compute_data_xrefs.
+    struct WorkItem { addr_t addr; u64 size; };
+    std::vector<WorkItem> work;
+    std::unordered_set<addr_t> seen;
     for (const auto& sym : b.symbols()) {
         if (sym.is_import) continue;
         if (sym.kind != SymbolKind::Function) continue;
         if (sym.size == 0) continue;
+        if (!seen.insert(sym.addr).second) continue;
+        work.push_back({sym.addr, sym.size});
+    }
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr) != nullptr) continue;
+        if (fn.size == 0) continue;
+        if (!seen.insert(fn.addr).second) continue;
+        work.push_back({fn.addr, fn.size});
+    }
 
-        auto span = b.bytes_at(sym.addr);
+    X64Decoder dec;
+    for (const auto& w : work) {
+        auto span = b.bytes_at(w.addr);
         if (span.empty()) continue;
         const std::size_t limit = std::min<std::size_t>(
-            span.size(), static_cast<std::size_t>(sym.size));
+            span.size(), static_cast<std::size_t>(w.size));
 
-        addr_t ip = sym.addr;
+        addr_t ip = w.addr;
         std::size_t off = 0;
         while (off < limit) {
             auto remaining = span.subspan(off, limit - off);

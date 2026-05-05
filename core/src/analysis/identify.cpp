@@ -534,12 +534,16 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
 std::string format_identify_tsv(const std::vector<IdentifyHit>& hits) {
     std::string out;
     for (const auto& h : hits) {
-        char buf[512];
-        std::string cat(category_name(h.category));
-        std::snprintf(buf, sizeof(buf), "%llx\t%s\t%s\t%.2f\t%s\t%s\n",
-            static_cast<unsigned long long>(h.addr), h.name.c_str(), cat.c_str(),
-            static_cast<double>(h.confidence), h.signal.c_str(), h.via.c_str());
-        out += buf;
+        char addr[24], conf[16];
+        std::snprintf(addr, sizeof(addr), "%llx", static_cast<unsigned long long>(h.addr));
+        std::snprintf(conf, sizeof(conf), "%.2f", static_cast<double>(h.confidence));
+        out += addr;
+        out += '\t'; out += h.name;
+        out += '\t'; out += category_name(h.category);
+        out += '\t'; out += conf;
+        out += '\t'; out += h.signal;
+        out += '\t'; out += h.via;
+        out += '\n';
     }
     return out;
 }

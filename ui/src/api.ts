@@ -527,17 +527,3 @@ export function formatAddrHex(n: number): string {
   return "0x" + n.toString(16);
 }
 
-// Rebase a display address: subtract the binary's preferred_load_base
-// and add the user's chosen display base.  With defaults (base=0x0,
-// rebaseAddr=0x0) this shows RVAs.  Set rebaseAddr to the actual
-// image base to keep original VAs.
-export function rebaseDisplayAddr(addr: number, binaryBase: string, userBase: string): number {
-  const base = parseInt(binaryBase, 16) || 0;
-  const target = parseInt(userBase, 16) || 0;
-  return addr - base + target;
-}
-
-// Format a rebased address as "0x1234"
-export function formatAddrRebased(addr: number, binaryBase: string, userBase: string): string {
-  return "0x" + rebaseDisplayAddr(addr, binaryBase, userBase).toString(16);
-}

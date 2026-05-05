@@ -213,6 +213,10 @@ struct Emitter {
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
     std::map<SsaKey, std::string>                    call_return_names;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
+    // Bound-call positions whose binding name reuses a phi merge-value
+    // name (e.g. `v0`). Such call statements skip the type prefix because
+    // the merge declaration is already emitted at the function head.
+    std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
     // SSA values whose C binding has already been emitted in this function
     // body. Used by the materializer to avoid exposing fallback names like
@@ -1531,6 +1535,74 @@ struct Emitter {
     // run first so calls whose return folds straight into a Return are
     // skipped here.
     void bind_call_returns() {
+        // When a call's return-register clobber flows into a Phi that
+        // name_merge_values has labelled (`v0`, `v1`, …) AND the merge
+        // name will actually be read by the body, bind the call to that
+        // merge name instead of inventing `r_<callee>`. The call statement
+        // then becomes `v0 = sub_X(...);`, which:
+        //   - actually defines the merge variable declared at the function
+        //     head (otherwise `v0` is uninitialized, and every read prints
+        //     `v0` with no producer in sight),
+        //   - escapes the trailing dead-decl pass, which only strips lines
+        //     of the `TYPE NAME = ...;` shape — `v0 = ...` has no type
+        //     prefix, so it stays.
+        // Without this, calls whose result fans out through a phi got
+        // emitted as `u64 r_sub_X = ...;`, the use site rendered the phi
+        // as `v0`, `r_sub_X` appeared nowhere else, and the dead-decl pass
+        // silently deleted the call statement (side effect and all).
+        //
+        // The "merge name will be read by body" gate matters: when the
+        // phi's only readers are Return regions, the structurer folds each
+        // path's return value independently and the merge name is never
+        // referenced. In that case the original `r_<callee>` binding
+        // reads better — e.g. `char* r_getenv = getenv("HOME"); if
+        // (r_getenv) ...; return r_getenv;` instead of an arbitrary `v5`.
+        const auto phi_has_non_return_user = [&](SsaKey pk) {
+            std::set<SsaKey> seen;
+            const auto walk = [&](SsaKey cur, auto& self) -> bool {
+                if (!seen.insert(cur).second) return false;
+                for (const auto& bb : fn->blocks) {
+                    for (const auto& inst : bb.insts) {
+                        if (inst.op == IrOp::Return) continue;
+                        if (inst.op == IrOp::Phi) {
+                            for (const auto& op : inst.phi_operands) {
+                                if (auto ok = ssa_key(op); ok && *ok == cur) {
+                                    if (auto dpk = ssa_key(inst.dst); dpk) {
+                                        if (self(*dpk, self)) return true;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                            if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == cur) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+            };
+            return walk(pk, walk);
+        };
+
+        std::map<SsaKey, std::string> ret_key_to_merge_name;
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Phi) continue;
+                auto pk = ssa_key(inst.dst);
+                if (!pk) continue;
+                auto mit = merge_value_names.find(*pk);
+                if (mit == merge_value_names.end()) continue;
+                if (!phi_has_non_return_user(*pk)) continue;
+                for (const auto& op : inst.phi_operands) {
+                    if (auto ok = ssa_key(op); ok) {
+                        ret_key_to_merge_name.emplace(*ok, mit->second);
+                    }
+                }
+            }
+        }
+
         std::set<std::string> used;
         const Reg ret_reg = int_return_reg(abi);
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
@@ -1561,12 +1633,19 @@ struct Emitter {
                 // dead-decl pass at the end strips any binding nothing ended
                 // up referencing.
 
-                std::string base = callee_display_short(inst);
-                std::string name = "r_" + base;
-                for (int n = 2; used.contains(name); ++n) {
-                    name = std::format("r_{}_{}", base, n);
+                std::string name;
+                if (auto mit = ret_key_to_merge_name.find(*ret_key);
+                    mit != ret_key_to_merge_name.end()) {
+                    name = mit->second;
+                    merge_bound_calls.insert({bi, ii});
+                } else {
+                    std::string base = callee_display_short(inst);
+                    name = "r_" + base;
+                    for (int n = 2; used.contains(name); ++n) {
+                        name = std::format("r_{}_{}", base, n);
+                    }
+                    used.insert(name);
                 }
-                used.insert(name);
                 call_return_names.emplace(*ret_key, name);
                 bound_call_key.emplace(std::pair{bi, ii}, *ret_key);
             }
@@ -3799,15 +3878,22 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
         : addr_t{0};
 
     if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
-        std::string type_name = "u64";
-        if (auto df = defs.find(bk->second); df != defs.end()) {
-            type_name = c_type_name_for(df->second->dst);
-        }
         if (options.line_map) {
             options.line_map->hits.push_back({out.size(), src});
         }
-        out += std::format("{}{} {} = {};\n", ind, type_name,
-                           call_return_names.at(bk->second), call_expr);
+        const std::string& name = call_return_names.at(bk->second);
+        if (merge_bound_calls.contains(pos)) {
+            // Merge name already declared at the function head; emit a plain
+            // assignment so the dead-decl pass (which only matches
+            // `TYPE NAME = ...;`) doesn't strip it.
+            out += std::format("{}{} = {};\n", ind, name, call_expr);
+        } else {
+            std::string type_name = "u64";
+            if (auto df = defs.find(bk->second); df != defs.end()) {
+                type_name = c_type_name_for(df->second->dst);
+            }
+            out += std::format("{}{} {} = {};\n", ind, type_name, name, call_expr);
+        }
         return;
     }
     if (options.line_map) {

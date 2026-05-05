@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import { displayName } from "../api";
 import type { BinaryInfo, FunctionInfo, StringEntry, Annotations } from "../types";
 
-const MAX_VISIBLE = 500;  // cap rendered rows; filter narrows
+// Row height in px. Each row is `padding: 5px 20px` over a single line of
+// 11px mono — measured at 24px in practice. If the row layout changes,
+// re-measure or the windowed set will desync from scroll position.
+const ROW_H = 24;
+const OVERSCAN = 8;
 
 function hexAddr(n: number): string {
   return "0x" + n.toString(16);
@@ -73,8 +77,35 @@ export function StringsView(props: {
     return rows;
   }, [strings, q, onlyReferenced]);
 
-  const visible = filtered.slice(0, MAX_VISIBLE);
-  const truncated = filtered.length > MAX_VISIBLE;
+  // Hand-rolled windowing — keeps the DOM at ~50 nodes regardless of how
+  // many strings the binary has. Replaces the previous MAX_VISIBLE = 500
+  // cap that both bottlenecked the render and silently truncated the list.
+  const scRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewH,    setViewH]    = useState(0);
+  useEffect(() => {
+    const el = scRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => setViewH(el.clientHeight));
+    ro.observe(el);
+    setViewH(el.clientHeight);
+    return () => { el.removeEventListener("scroll", onScroll); ro.disconnect(); };
+  }, []);
+  // Reset scroll when filter changes — otherwise scrollTop survives a
+  // shrinking list and the user lands in empty space.
+  useEffect(() => {
+    if (scRef.current) scRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [q, onlyReferenced]);
+
+  const total  = filtered.length;
+  const first  = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const last   = Math.min(total, Math.ceil((scrollTop + viewH) / ROW_H) + OVERSCAN);
+  const padTop = first * ROW_H;
+  const padBot = Math.max(0, (total - last) * ROW_H);
+  const visible = filtered.slice(first, last);
 
   const selectedEntry =
     selected != null ? strings.find((s) => s.addrNum === selected) ?? null : null;
@@ -132,7 +163,6 @@ export function StringsView(props: {
             </span>
             <span style={{ fontFamily: serif, fontStyle: "italic", fontSize: 11, color: C.textMuted, marginTop: 2 }}>
               {strings.length} total · {filtered.length} shown
-              {truncated ? ` (first ${MAX_VISIBLE})` : ""}
             </span>
           </div>
 
@@ -193,12 +223,12 @@ export function StringsView(props: {
 
         {/* Body: list + detail panel */}
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-          <div style={{
+          <div ref={scRef} style={{
             flex: 1,
             overflowY: "auto",
             padding: "6px 0",
           }} className="sel">
-            {visible.length === 0 ? (
+            {total === 0 ? (
               <div style={{
                 padding: 40,
                 textAlign: "center",
@@ -211,8 +241,9 @@ export function StringsView(props: {
                     ? "no strings extracted"
                     : "no matches"}
               </div>
-            ) : (
-              visible.map((s) => {
+            ) : (<>
+              <div style={{ height: padTop }} />
+              {visible.map((s) => {
                 const isSel = s.addrNum === selected;
                 return (
                   <button
@@ -265,8 +296,9 @@ export function StringsView(props: {
                     </span>
                   </button>
                 );
-              })
-            )}
+              })}
+              <div style={{ height: padBot }} />
+            </>)}
           </div>
 
           {/* Detail */}

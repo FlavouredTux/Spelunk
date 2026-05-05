@@ -418,6 +418,14 @@ function FunctionList(props: {
               cursor: navigable ? "pointer" : "default",
               background: "transparent",
               textAlign: "left",
+              // Skip layout/paint for off-screen rows. Each row is a
+              // single-line ellipsised flexbox of fixed ~30px height,
+              // which makes the intrinsic-size hint reliable. Cheap
+              // browser-native virtualization without restructuring the
+              // scroll container — important here because the parent
+              // scroll holds two FunctionLists in the "all" tab.
+              contentVisibility: "auto",
+              containIntrinsicSize: "30px",
             }}
             onMouseEnter={(e) => {
               if (navigable) (e.currentTarget as HTMLElement).style.background = C.bgMuted;

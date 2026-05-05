@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
@@ -693,10 +694,12 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
     // referenced from both a fallback handler and a re-entry).
     std::unordered_set<addr_t> seen_dispatch;
 
-    for (const auto& sym : b.symbols()) {
-        if (sym.is_import) continue;
-        if (sym.kind != SymbolKind::Function) continue;
-        if (sym.addr == 0) continue;
+    // Walk every function entry — symbol-only would silently skip Luau /
+    // VMProtect / Themida dispatchers in stripped binaries, which is
+    // exactly the case --vm-detect exists to handle.
+    for (const auto& dfn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(dfn.addr) != nullptr) continue;
+        if (dfn.addr == 0) continue;
 
         // Per-function rolling state: most-recent load on each canonical
         // register. Only writes invalidate; reads are passive.
@@ -720,7 +723,7 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
         // which is fine since the dispatcher pattern lives in a linear
         // chain of blocks even when obfuscators split it.
         std::unordered_set<addr_t> visited;
-        addr_t ip = sym.addr;
+        addr_t ip = dfn.addr;
         for (std::size_t step = 0; step < kMaxFunctionInsns; ++step) {
             if (!visited.insert(ip).second) break;
             auto bytes = b.bytes_at(ip);
@@ -860,7 +863,7 @@ std::vector<VmDispatcher> detect_vm_dispatchers(const Binary& b) {
                             }
                             if (handlers.size() >= kMinHandlerCount) {
                                 VmDispatcher dsp;
-                                dsp.function_addr     = sym.addr;
+                                dsp.function_addr     = dfn.addr;
                                 dsp.dispatch_addr     = insn.address;
                                 dsp.opcode_load_addr  = idx_load.at_addr;
                                 dsp.table_addr        = *table_va;

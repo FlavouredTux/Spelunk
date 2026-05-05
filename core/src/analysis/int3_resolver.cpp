@@ -31,15 +31,16 @@ struct FnExtent {
     return note;
 }
 
-// Build a sorted vector of function extents from defined symbols.
+// Build a sorted vector of function extents — named symbols + discovered
+// sub_* both. Symbol-only would miss 95%+ of code on stripped binaries;
+// enumerate_functions(Cheap) does the union.
 [[nodiscard]] std::vector<FnExtent>
 collect_fn_extents(const Binary& b) {
     std::vector<FnExtent> out;
-    for (const auto& sym : b.symbols()) {
-        if (sym.is_import) continue;
-        if (sym.kind != SymbolKind::Function) continue;
-        if (sym.addr == 0) continue;
-        out.push_back(FnExtent{sym.addr, sym.size, sym.name});
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr) != nullptr) continue;
+        if (fn.addr == 0) continue;
+        out.push_back(FnExtent{fn.addr, fn.size, fn.name});
     }
     std::sort(out.begin(), out.end(),
               [](const FnExtent& a, const FnExtent& rhs) {
@@ -272,14 +273,14 @@ resolve_embedded_int3s(const Binary& b) {
 
     std::vector<Int3Resolution> out;
 
-    // Walk each defined function's decoded instruction stream.
-    for (const auto& sym : b.symbols()) {
-        if (sym.is_import) continue;
-        if (sym.kind != SymbolKind::Function) continue;
-        if (sym.addr == 0) continue;
+    // Walk each function's decoded instruction stream — named + discovered.
+    // Symbol-only would silently skip the bulk of a stripped binary.
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr) != nullptr) continue;
+        if (fn.addr == 0) continue;
 
-        const addr_t fn_entry = sym.addr;
-        const u64 fn_size = sym.size > 0 ? sym.size : 256;  // cap for size-0 syms
+        const addr_t fn_entry = fn.addr;
+        const u64 fn_size = fn.size > 0 ? fn.size : 256;  // cap for size-0 entries
 
         addr_t pc = fn_entry;
         const addr_t fn_end = fn_entry + fn_size;
@@ -302,10 +303,10 @@ resolve_embedded_int3s(const Binary& b) {
                 // 3. AntiDebug (heuristic)
                 // 4. Unknown (fallback)
 
-                if (is_debug_break_name(sym.name)) {
+                if (is_debug_break_name(fn.name)) {
                     res.kind = Int3Kind::DebugBreak;
                     res.note = "inside debug-break wrapper '";
-                    res.note += sym.name;
+                    res.note += fn.name;
                     res.note += "'";
                 } else {
                     // Try stubbed-branch detection: decode backwards
@@ -353,7 +354,7 @@ resolve_embedded_int3s(const Binary& b) {
 
                     if (res.kind == Int3Kind::Unknown) {
                         // Not a stubbed branch. Check anti-debug.
-                        if (fn_uses_anti_debug(sym.name, ad_imports)) {
+                        if (fn_uses_anti_debug(fn.name, ad_imports)) {
                             res.kind = Int3Kind::AntiDebug;
                             std::string import_list;
                             for (const auto& name : ad_imports) {
@@ -377,13 +378,15 @@ resolve_embedded_int3s(const Binary& b) {
         }
     }
 
-    // Also scan inter-function gaps for CC padding.
+    // Also scan inter-function gaps for CC padding. Union with discovered
+    // entries so the gap definition is correct on stripped binaries —
+    // otherwise "the gap between symbol A and symbol B" overshoots into
+    // dozens of intervening discovered subs.
     std::vector<std::pair<addr_t, u64>> fn_ranges;  // (entry, size)
-    for (const auto& sym : b.symbols()) {
-        if (sym.is_import) continue;
-        if (sym.kind != SymbolKind::Function) continue;
-        if (sym.addr == 0 || sym.size == 0) continue;
-        fn_ranges.emplace_back(sym.addr, sym.size);
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr) != nullptr) continue;
+        if (fn.addr == 0 || fn.size == 0) continue;
+        fn_ranges.emplace_back(fn.addr, fn.size);
     }
     std::sort(fn_ranges.begin(), fn_ranges.end());
 

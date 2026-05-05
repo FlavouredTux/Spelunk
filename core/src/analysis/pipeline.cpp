@@ -134,6 +134,40 @@ std::optional<addr_t> rip_relative_target(const Instruction& insn) noexcept {
     return std::nullopt;
 }
 
+// String literal at `addr` if the bytes there are NUL-terminated printable
+// ASCII (≥ kMin chars). Result is escaped for inline-comment safety and
+// truncated at kMax chars with an ellipsis. Conservative on purpose — a
+// false positive shows up as junk in the comment column, so we require
+// strict printable-only and a hard min length.
+[[nodiscard]] std::optional<std::string>
+disasm_string_at(const Binary& b, addr_t addr) {
+    auto span = b.bytes_at(addr);
+    if (span.empty()) return std::nullopt;
+    constexpr std::size_t kMin = 4;
+    constexpr std::size_t kMax = 48;
+    const std::size_t lim = std::min(span.size(), kMax + 1);
+    std::string s;
+    s.reserve(kMax);
+    bool terminated = false;
+    std::size_t i = 0;
+    for (; i < lim; ++i) {
+        const auto c = static_cast<unsigned char>(span[i]);
+        if (c == 0) { terminated = true; break; }
+        if (i >= kMax) break;
+        if (c == '\t') { s += "\\t"; continue; }
+        if (c == '\n') { s += "\\n"; continue; }
+        if (c == '\r') { s += "\\r"; continue; }
+        if (c == '\\') { s += "\\\\"; continue; }
+        if (c == '"')  { s += "\\\""; continue; }
+        if (c < 0x20 || c > 0x7e) return std::nullopt;
+        s.push_back(static_cast<char>(c));
+    }
+    if (!terminated && i < kMax) return std::nullopt;
+    if (s.size() < kMin) return std::nullopt;
+    if (!terminated) s += "...";
+    return s;
+}
+
 std::string format_instruction_annotated(const Binary& b, const Instruction& insn) {
     std::string text = format_instruction(insn);
     std::optional<addr_t> target;
@@ -145,6 +179,13 @@ std::string format_instruction_annotated(const Binary& b, const Instruction& ins
     if (!target) return text;
     if (auto label = resolve_address_name(b, *target); label) {
         text += std::format("  ; {}", format_address_comment(*label));
+        return text;
+    }
+    // No symbol at the target — see if it's a string literal. RIP-relative
+    // loads of `.rodata` strings are extremely common; surfacing them
+    // turns `lea rdi, [rip+0x1234]` into an actually-readable line.
+    if (auto s = disasm_string_at(b, *target); s) {
+        text += std::format("  ; \"{}\"", *s);
     }
     return text;
 }
@@ -469,10 +510,43 @@ format_disasm(const Binary& b, const FuncWindow& w) {
     // in /usr/bin/git stopping after 13% of its 5435 bytes.
     const bool size_known = w.size != 0;
 
+    // Padding-run collapse. MSVC/clang frequently align function exits and
+    // sled gaps with runs of `cc` (Int3) or `90` (Nop). One line per byte
+    // makes a 32-byte gap fill a screen; collapse runs of ≥ kPadCollapse
+    // identical pad bytes into a single line.
+    constexpr std::size_t kPadCollapse = 3;
+    addr_t pad_start = 0;
+    std::size_t pad_count = 0;
+    Mnemonic pad_kind = Mnemonic::Nop;  // unused while pad_count == 0
+    auto flush_padding = [&] {
+        if (pad_count == 0) return;
+        const char* name = (pad_kind == Mnemonic::Int3) ? "int3" : "nop";
+        if (pad_count >= kPadCollapse) {
+            out += std::format("{:#018x}  {:<30}  ; padding ({} {} bytes)\n",
+                               pad_start,
+                               std::format("{0:02x} {0:02x} ... x{1}",
+                                           static_cast<unsigned>(
+                                               pad_kind == Mnemonic::Int3 ? 0xcc : 0x90),
+                                           pad_count),
+                               pad_count, name);
+        } else {
+            // Sub-threshold: flush as individual lines so we don't lose info.
+            const u8 byte = (pad_kind == Mnemonic::Int3) ? 0xcc : 0x90;
+            for (std::size_t k = 0; k < pad_count; ++k) {
+                out += std::format("{:#018x}  {:<30}  {}\n",
+                                   pad_start + k,
+                                   std::format("{:02x}", static_cast<unsigned>(byte)),
+                                   name);
+            }
+        }
+        pad_count = 0;
+    };
+
     while (off < bytes.size()) {
         const auto remaining = bytes.subspan(off);
         auto decoded = dec.decode(remaining, ip);
         if (!decoded) {
+            flush_padding();
             const std::size_t skip = decode_failure_advance(remaining);
             out += std::format("{:#018x}  {:<30}  ; decode error: {}\n",
                                ip, hex_bytes(remaining.first(std::min(skip, remaining.size()))),
@@ -482,13 +556,28 @@ format_disasm(const Binary& b, const FuncWindow& w) {
             continue;
         }
         const auto& insn = *decoded;
-        const auto bv = remaining.first(insn.length);
-        out += std::format("{:#018x}  {:<30}  {}\n",
-                           ip, hex_bytes(bv), format_instruction_annotated(b, insn));
+        const bool is_pad = insn.length == 1 &&
+            (insn.mnemonic == Mnemonic::Int3 || insn.mnemonic == Mnemonic::Nop);
+        if (is_pad) {
+            if (pad_count > 0 && pad_kind == insn.mnemonic) {
+                ++pad_count;
+            } else {
+                flush_padding();
+                pad_start = ip;
+                pad_kind  = insn.mnemonic;
+                pad_count = 1;
+            }
+        } else {
+            flush_padding();
+            const auto bv = remaining.first(insn.length);
+            out += std::format("{:#018x}  {:<30}  {}\n",
+                               ip, hex_bytes(bv), format_instruction_annotated(b, insn));
+        }
         ip  += insn.length;
         off += insn.length;
         if (!size_known && is_terminator(insn.mnemonic)) break;
     }
+    flush_padding();
     return out;
 }
 

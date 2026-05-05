@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -77,6 +78,33 @@ namespace {
     auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
     if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
     out = static_cast<addr_t>(v);
+    return true;
+}
+
+[[nodiscard]] bool parse_i64_auto(std::string_view s, i64& out) noexcept {
+    bool neg = false;
+    if (s.starts_with("-")) {
+        neg = true;
+        s.remove_prefix(1);
+    } else if (s.starts_with("+")) {
+        s.remove_prefix(1);
+    }
+    int base = 10;
+    if (s.starts_with("0x") || s.starts_with("0X")) {
+        s.remove_prefix(2);
+        base = 16;
+    }
+    if (s.empty()) return false;
+    u64 uv = 0;
+    auto r = std::from_chars(s.data(), s.data() + s.size(), uv, base);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+    const u64 limit = static_cast<u64>(std::numeric_limits<i64>::max()) + (neg ? 1ull : 0ull);
+    if (uv > limit) return false;
+    if (neg && uv == limit) {
+        out = std::numeric_limits<i64>::min();
+    } else {
+        out = neg ? -static_cast<i64>(uv) : static_cast<i64>(uv);
+    }
     return true;
 }
 
@@ -395,6 +423,71 @@ resolve_to_addr(const Binary& b, const Annotations& ann, std::string_view s) {
     return std::nullopt;
 }
 
+struct FieldRef {
+    addr_t      fn = 0;
+    std::size_t param = 0;
+    i64         offset = 0;
+};
+
+[[nodiscard]] std::optional<std::size_t>
+parse_param_ref(std::string_view ref, addr_t fn, const Annotations& ann) {
+    if (ref.size() >= 2 && ref[0] == 'a') {
+        u64 one_based = 0;
+        auto body = ref.substr(1);
+        auto r = std::from_chars(body.data(), body.data() + body.size(), one_based, 10);
+        if (r.ec == std::errc{} && r.ptr == body.data() + body.size() &&
+            one_based > 0) {
+            return static_cast<std::size_t>(one_based - 1);
+        }
+    }
+    if (const FunctionSig* sig = ann.signature_for(fn); sig) {
+        for (std::size_t i = 0; i < sig->params.size(); ++i) {
+            if (sig->params[i].name == ref) return i;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<FieldRef>
+parse_field_ref(const Directive& d, const Binary& b, const Annotations& ann,
+                ApplyStats& st) {
+    const auto colon = d.lhs.find(':');
+    const auto plus = d.lhs.find('+', colon == std::string::npos ? 0 : colon + 1);
+    const auto minus = d.lhs.find('-', colon == std::string::npos ? 0 : colon + 1);
+    std::size_t op = std::string::npos;
+    if (plus != std::string::npos && minus != std::string::npos) op = std::min(plus, minus);
+    else if (plus != std::string::npos) op = plus;
+    else op = minus;
+    if (colon == std::string::npos || op == std::string::npos || op <= colon + 1) {
+        st.warnings.push_back(std::format(
+            "line {}: [field] lhs must be `<function>:<param>+<offset>`", d.line));
+        return std::nullopt;
+    }
+    auto fn = resolve_to_addr(b, ann, trim(std::string_view{d.lhs}.substr(0, colon)));
+    if (!fn) {
+        st.warnings.push_back(std::format(
+            "line {}: [field] cannot resolve function `{}`",
+            d.line, d.lhs.substr(0, colon)));
+        return std::nullopt;
+    }
+    const auto param_sv = trim(std::string_view{d.lhs}.substr(colon + 1, op - colon - 1));
+    auto param = parse_param_ref(param_sv, *fn, ann);
+    if (!param) {
+        st.warnings.push_back(std::format(
+            "line {}: [field] cannot resolve param `{}`; use a1/a2 or add a signature",
+            d.line, param_sv));
+        return std::nullopt;
+    }
+    i64 off = 0;
+    if (!parse_i64_auto(trim(std::string_view{d.lhs}.substr(op)), off)) {
+        st.warnings.push_back(std::format(
+            "line {}: [field] cannot parse offset `{}`",
+            d.line, d.lhs.substr(op)));
+        return std::nullopt;
+    }
+    return FieldRef{*fn, *param, off};
+}
+
 // ---------------------------------------------------------------------------
 // Apply each directive kind
 // ---------------------------------------------------------------------------
@@ -452,6 +545,20 @@ void apply_signature(const Directive& d, const Binary& b,
     if (inserted) ++st.signatures_added;
 }
 
+void apply_field(const Directive& d, const Binary& b,
+                 Annotations& ann, ApplyStats& st) {
+    auto ref = parse_field_ref(d, b, ann, st);
+    if (!ref) return;
+    if (d.rhs.empty()) {
+        st.warnings.push_back(std::format(
+            "line {}: [field] empty field name", d.line));
+        return;
+    }
+    auto [_, inserted] = ann.field_names.try_emplace(
+        FieldKey{ref->fn, ref->param, ref->offset}, d.rhs);
+    if (inserted) ++st.fields_added;
+}
+
 void apply_pattern_rename(const Directive& d, const Binary& b,
                           Annotations& ann, ApplyStats& st) {
     const auto fns = enumerate_functions(b);
@@ -486,15 +593,26 @@ void apply_delete(const Directive& d, const Binary& b,
     const bool ren   = any || (kind == "rename");
     const bool note  = any || (kind == "note");
     const bool sig   = any || (kind == "signature") || (kind == "sig");
-    if (!ren && !note && !sig) {
+    const bool field = any || (kind == "field") || (kind == "fields");
+    if (!ren && !note && !sig && !field) {
         st.warnings.push_back(std::format(
-            "line {}: [delete] unknown kind `{}` (want rename/note/signature/all)",
+            "line {}: [delete] unknown kind `{}` (want rename/note/signature/field/all)",
             d.line, kind));
         return;
     }
     if (ren  && ann.renames.erase   (*a) > 0) ++st.renames_removed;
     if (note && ann.notes.erase     (*a) > 0) ++st.notes_removed;
     if (sig  && ann.signatures.erase(*a) > 0) ++st.signatures_removed;
+    if (field) {
+        for (auto it = ann.field_names.begin(); it != ann.field_names.end();) {
+            if (it->first.function == *a) {
+                it = ann.field_names.erase(it);
+                ++st.fields_removed;
+            } else {
+                ++it;
+            }
+        }
+    }
 }
 
 void apply_from_strings(const Directive& d, const Binary& b,
@@ -569,6 +687,7 @@ Result<std::vector<Directive>> parse(std::string_view text) {
         if      (iequals(section, "rename"))         d.kind = Directive::Kind::Rename;
         else if (iequals(section, "note"))           d.kind = Directive::Kind::Note;
         else if (iequals(section, "signature"))      d.kind = Directive::Kind::Signature;
+        else if (iequals(section, "field"))          d.kind = Directive::Kind::Field;
         else if (iequals(section, "pattern-rename")) d.kind = Directive::Kind::PatternRename;
         else if (iequals(section, "from-strings"))   d.kind = Directive::Kind::FromStrings;
         else if (iequals(section, "delete"))         d.kind = Directive::Kind::Delete;
@@ -622,6 +741,7 @@ ApplyStats apply(std::span<const Directive> directives,
             case Directive::Kind::Rename:    apply_rename   (d, b, ann, st); break;
             case Directive::Kind::Note:      apply_note     (d, b, ann, st); break;
             case Directive::Kind::Signature: apply_signature(d, b, ann, st); break;
+            case Directive::Kind::Field:     apply_field    (d, b, ann, st); break;
             default: break;
         }
     }

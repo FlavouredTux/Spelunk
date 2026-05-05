@@ -1,0 +1,4 @@
+sig 401120 u64|struct packet*|p
+field 401120 0|0x0|magic
+field 401120 0|0x4|flags
+field 401120 0|0x8|payload

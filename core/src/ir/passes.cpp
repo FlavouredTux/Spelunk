@@ -906,6 +906,251 @@ struct GvnOp {
 }
 
 // ============================================================================
+// Pass: idiom recognition
+// ============================================================================
+//
+// Pattern-matches common compiler-emitted idioms on the SSA def chain and
+// replaces them with semantically cleaner IR. Runs after cast_simplify so
+// cast chains are already collapsed, and before GVN so the canonicalised
+// forms get deduplicated.
+//
+// Recognised patterns (N = type_bits, sign_bit = N - 1):
+//
+//   1. And(Ashr(x, sign_bit), x)
+//      → the "sign mask" of x: all-ones when x < 0, zero otherwise.
+//      Used inside the abs forms below; not rewritten on its own but
+//      tracked so enclosing patterns can match.
+//
+//   2. Add(x, And(Ashr(x, sign_bit), x))
+//      → abs(x) for signed integers.  The sign-mask term is either -x
+//      (when negative, turning x + (-x) into -x) or 0 (when positive).
+//      Rewritten to Select(CmpSlt(x, 0), Neg(x), x).
+//
+//   3. Add(Xor(x, Ashr(x, sign_bit)), Ashr(x, sign_bit))
+//      → abs(x) — the other two's-complement form.  Xor(x, sign_mask)
+//      flips the bits when negative; adding the sign_mask back
+//      completes the two's-complement negation.  Same rewrite as #2.
+//
+//   4. Select(CmpSlt(x, 0), Neg(x), x)
+//      → already in canonical abs form; no rewrite needed (this is the
+//      target form).
+//
+//   5. Sub(0, x)  where 0 is an immediate
+//      → Neg(x).  The constant-fold pass handles this when both operands
+//      are constant, but Sub(0, x) with a symbolic x survives.  Neg is
+//      the cleaner IR representation and renders as `-x` in pseudo-C.
+//
+//   6. Xor(x, Ashr(x, sign_bit))
+//      → conditional bit-flip: ~x when x < 0, x otherwise.  This is
+//      `OnesComplementAbs(x) - 1` (i.e. |x| - 1 for negative x, x for
+//      non-negative).  Not a standalone C idiom, but when wrapped in
+//      Add(..., Ashr(x, sign_bit)) it becomes pattern #3.  Left alone
+//      when not part of a larger pattern — the raw form is more honest.
+
+namespace {
+
+const IrInst* strip_assigns_to_def(const IrFunction& fn,
+                                   const SsaMap<DefLoc>& defs,
+                                   IrValue v, int max_hops = 8) {
+    for (int i = 0; i < max_hops; ++i) {
+        auto k = ssa_key(v);
+        if (!k) return nullptr;
+        auto it = defs.find(*k);
+        if (it == defs.end()) return nullptr;
+        const IrInst& d = fn.blocks[it->second.block].insts[it->second.inst];
+        if (d.op == IrOp::Assign && d.src_count == 1 &&
+            d.srcs[0].type == v.type) {
+            v = d.srcs[0];
+            continue;
+        }
+        return &d;
+    }
+    return nullptr;
+}
+
+const IrValue* match_sign_extend_shift(const IrFunction& fn,
+                                       const SsaMap<DefLoc>& defs,
+                                       const IrValue& v) {
+    const IrInst* d = strip_assigns_to_def(fn, defs, v);
+    if (!d || d->op != IrOp::Ashr || d->src_count < 2) return nullptr;
+    const IrValue& amt = d->srcs[1];
+    if (amt.kind != IrValueKind::Imm) return nullptr;
+    const unsigned sign_bit = type_bits(d->srcs[0].type) - 1;
+    if (static_cast<unsigned>(amt.imm) != sign_bit) return nullptr;
+    return &d->srcs[0];
+}
+
+const IrValue* match_sign_mask(const IrFunction& fn,
+                               const SsaMap<DefLoc>& defs,
+                               const IrValue& v) {
+    const IrInst* d = strip_assigns_to_def(fn, defs, v);
+    if (!d || d->op != IrOp::And || d->src_count < 2) return nullptr;
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (const IrValue* x = match_sign_extend_shift(fn, defs, d->srcs[i])) {
+            const IrValue& other = d->srcs[1 - i];
+            if (same_ssa_value(*x, other)) return x;
+            auto xk = ssa_key(*x);
+            auto ok = ssa_key(other);
+            if (xk && ok && *xk == *ok && other.type == x->type) return x;
+        }
+    }
+    return nullptr;
+}
+
+struct IdiomRewrite {
+    std::size_t insert_before;
+    IrInst replacement;
+    std::vector<IrInst> helpers;
+};
+
+}  // namespace
+
+[[nodiscard]] std::size_t pass_idiom_recognize(
+    IrFunction& fn, AnalysisManager& am,
+    std::span<const u32> dirty, std::vector<u32>& touched)
+{
+    const auto& defs = am.defs(fn);
+    std::size_t count = 0;
+
+    for_blocks(fn, dirty, [&](u32 bi, IrBlock& bb) {
+        const std::size_t before = count;
+        std::vector<IdiomRewrite> rewrites;
+
+        for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+            const auto& inst = bb.insts[ii];
+            if (inst.src_count < 1 || inst.src_count > 3) continue;
+
+            // Pattern 5: Sub(0, x) → Neg(x)
+            if (inst.op == IrOp::Sub && inst.src_count == 2) {
+                if (inst.srcs[0].kind == IrValueKind::Imm && inst.srcs[0].imm == 0) {
+                    IdiomRewrite r;
+                    r.insert_before = ii;
+                    r.replacement.op          = IrOp::Neg;
+                    r.replacement.dst         = inst.dst;
+                    r.replacement.srcs[0]     = inst.srcs[1];
+                    r.replacement.srcs[1]     = IrValue{};
+                    r.replacement.srcs[2]     = IrValue{};
+                    r.replacement.src_count   = 1;
+                    r.replacement.source_addr = inst.source_addr;
+                    rewrites.push_back(std::move(r));
+                    ++count;
+                    continue;
+                }
+            }
+
+            // Pattern 2: Add(x, And(Ashr(x, sign_bit), x)) → abs(x)
+            if (inst.op == IrOp::Add && inst.src_count == 2) {
+                for (std::size_t i = 0; i < 2; ++i) {
+                    const IrValue& lhs = inst.srcs[i];
+                    const IrValue& rhs = inst.srcs[1 - i];
+                    if (const IrValue* x = match_sign_mask(fn, defs, rhs)) {
+                        if (same_ssa_value(lhs, *x)) {
+                            const IrValue zero = IrValue::make_imm(0, x->type);
+                            const IrValue cmp  = IrValue::make_temp(fn.next_temp_id++, IrType::I1);
+                            const IrValue neg  = IrValue::make_temp(fn.next_temp_id++, inst.dst.type);
+
+                            IdiomRewrite r;
+                            r.insert_before = ii;
+
+                            IrInst ci;
+                            ci.op = IrOp::CmpSlt; ci.dst = cmp;
+                            ci.srcs[0] = *x; ci.srcs[1] = zero; ci.srcs[2] = IrValue{};
+                            ci.src_count = 2; ci.source_addr = inst.source_addr;
+
+                            IrInst ni;
+                            ni.op = IrOp::Neg; ni.dst = neg;
+                            ni.srcs[0] = *x; ni.srcs[1] = IrValue{}; ni.srcs[2] = IrValue{};
+                            ni.src_count = 1; ni.source_addr = inst.source_addr;
+
+                            r.helpers.push_back(std::move(ci));
+                            r.helpers.push_back(std::move(ni));
+
+                            r.replacement.op = IrOp::Select; r.replacement.dst = inst.dst;
+                            r.replacement.srcs[0] = cmp; r.replacement.srcs[1] = neg;
+                            r.replacement.srcs[2] = *x;
+                            r.replacement.src_count = 3; r.replacement.source_addr = inst.source_addr;
+
+                            rewrites.push_back(std::move(r));
+                            ++count;
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Pattern 3: Add(Xor(x, Ashr(x, sign_bit)), Ashr(x, sign_bit)) → abs(x)
+            if (inst.op == IrOp::Add && inst.src_count == 2) {
+                for (std::size_t i = 0; i < 2; ++i) {
+                    const IrValue& xor_val   = inst.srcs[i];
+                    const IrValue& shift_val = inst.srcs[1 - i];
+
+                    const IrInst* xd = strip_assigns_to_def(fn, defs, xor_val);
+                    if (!xd || xd->op != IrOp::Xor || xd->src_count < 2) continue;
+
+                    const IrValue* sx = match_sign_extend_shift(fn, defs, shift_val);
+                    if (!sx) continue;
+
+                    bool ok = false;
+                    for (std::size_t j = 0; j < 2; ++j) {
+                        if (!same_ssa_value(xd->srcs[j], *sx)) continue;
+                        const IrValue& xs = xd->srcs[1 - j];
+                        if (same_ssa_value(xs, shift_val)) { ok = true; break; }
+                        auto sk = ssa_key(shift_val); auto xk = ssa_key(xs);
+                        if (sk && xk && *sk == *xk) { ok = true; break; }
+                    }
+                    if (!ok) continue;
+
+                    const IrValue zero = IrValue::make_imm(0, sx->type);
+                    const IrValue cmp  = IrValue::make_temp(fn.next_temp_id++, IrType::I1);
+                    const IrValue neg  = IrValue::make_temp(fn.next_temp_id++, inst.dst.type);
+
+                    IdiomRewrite r;
+                    r.insert_before = ii;
+
+                    IrInst ci;
+                    ci.op = IrOp::CmpSlt; ci.dst = cmp;
+                    ci.srcs[0] = *sx; ci.srcs[1] = zero; ci.srcs[2] = IrValue{};
+                    ci.src_count = 2; ci.source_addr = inst.source_addr;
+
+                    IrInst ni;
+                    ni.op = IrOp::Neg; ni.dst = neg;
+                    ni.srcs[0] = *sx; ni.srcs[1] = IrValue{}; ni.srcs[2] = IrValue{};
+                    ni.src_count = 1; ni.source_addr = inst.source_addr;
+
+                    r.helpers.push_back(std::move(ci));
+                    r.helpers.push_back(std::move(ni));
+
+                    r.replacement.op = IrOp::Select; r.replacement.dst = inst.dst;
+                    r.replacement.srcs[0] = cmp; r.replacement.srcs[1] = neg;
+                    r.replacement.srcs[2] = *sx;
+                    r.replacement.src_count = 3; r.replacement.source_addr = inst.source_addr;
+
+                    rewrites.push_back(std::move(r));
+                    ++count;
+                    break;
+                }
+            }
+        }
+
+        // Apply rewrites in reverse index order so earlier positions stay valid.
+        if (!rewrites.empty()) {
+            std::sort(rewrites.begin(), rewrites.end(),
+                      [](const IdiomRewrite& a, const IdiomRewrite& b) {
+                          return a.insert_before > b.insert_before;
+                      });
+            for (auto& r : rewrites) {
+                auto pos = bb.insts.begin() + static_cast<std::ptrdiff_t>(r.insert_before);
+                pos = bb.insts.insert(pos, r.helpers.begin(), r.helpers.end());
+                *(pos + static_cast<std::ptrdiff_t>(r.helpers.size())) = std::move(r.replacement);
+            }
+        }
+        if (count != before) touched.push_back(bi);
+    });
+    return count;
+}
+
+// ============================================================================
 // PassManager — fixpoint driver with per-block dirty tracking
 // ============================================================================
 //
@@ -934,6 +1179,7 @@ CleanupStats run_pipeline(IrFunction& fn) {
 
         const auto folded  = pass_constant_fold (fn, am, dirty, next_dirty);
         const auto casted  = pass_cast_simplify (fn, am, dirty, next_dirty);
+        const auto idiomed = pass_idiom_recognize(fn, am, dirty, next_dirty);
         // GVN must run before memory_forward so both stores and loads see
         // the same canonical SSA id for their address expression.
         const auto gvned   = pass_local_gvn     (fn, am, dirty, next_dirty);
@@ -945,11 +1191,11 @@ CleanupStats run_pipeline(IrFunction& fn) {
         if (deleted) am.invalidate_defs();
 
         stats.constants_folded  += folded + casted;
-        stats.copies_propagated += copied + memfwd + gvned;
+        stats.copies_propagated += copied + memfwd + gvned + idiomed;
         stats.phis_removed      += phied;
         stats.insts_removed     += deleted + dse;
 
-        if (!folded && !casted && !gvned && !memfwd &&
+        if (!folded && !casted && !idiomed && !gvned && !memfwd &&
             !dse && !copied && !phied && !deleted) break;
 
         std::sort(next_dirty.begin(), next_dirty.end());

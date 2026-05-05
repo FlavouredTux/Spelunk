@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string_view>
 #include <system_error>
@@ -49,6 +50,32 @@ split(std::string_view s, char delim) {
 
 [[nodiscard]] bool parse_hex_u64(std::string_view s, u64& out) noexcept {
     return parse_hex_addr(s, out);  // same wire format as addr_t
+}
+
+[[nodiscard]] bool parse_i64_auto(std::string_view s, i64& out) noexcept {
+    bool neg = false;
+    if (s.starts_with("-")) {
+        neg = true;
+        s.remove_prefix(1);
+    } else if (s.starts_with("+")) {
+        s.remove_prefix(1);
+    }
+    if (s.starts_with("0x") || s.starts_with("0X")) {
+        s.remove_prefix(2);
+        u64 v = 0;
+        auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
+        if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+        const u64 limit = static_cast<u64>(std::numeric_limits<i64>::max()) + (neg ? 1ull : 0ull);
+        if (v > limit) return false;
+        if (neg && v == limit) out = std::numeric_limits<i64>::min();
+        else out = neg ? -static_cast<i64>(v) : static_cast<i64>(v);
+        return true;
+    }
+    i64 v = 0;
+    auto r = std::from_chars(s.data(), s.data() + s.size(), v, 10);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+    out = neg ? -v : v;
+    return true;
 }
 
 }  // namespace
@@ -128,6 +155,22 @@ Annotations::load(const std::filesystem::path& path) {
             if (name.empty()) continue;
             out.named_constants[value] = std::string(name);
         }
+        else if (kind == "field") {
+            const std::size_t sp = rest.find(' ');
+            if (sp == std::string_view::npos) continue;
+            addr_t addr = 0;
+            if (!parse_hex_addr(rest.substr(0, sp), addr)) continue;
+            auto parts = split(trim(rest.substr(sp + 1)), '|');
+            if (parts.size() < 3) continue;
+            u64 param = 0;
+            if (!parse_hex_u64(trim(parts[0]), param)) continue;
+            i64 off = 0;
+            if (!parse_i64_auto(trim(parts[1]), off)) continue;
+            const std::string_view name = trim(parts[2]);
+            if (name.empty()) continue;
+            out.field_names[FieldKey{addr, static_cast<std::size_t>(param), off}] =
+                std::string(name);
+        }
     }
 
     return out;
@@ -171,6 +214,10 @@ std::string Annotations::to_text() const {
     }
     for (const auto& [value, name] : named_constants) {
         out += std::format("const {:x} {}\n", value, name);
+    }
+    for (const auto& [key, name] : field_names) {
+        out += std::format("field {:x} {:x}|{:#x}|{}\n",
+                           key.function, key.param, key.offset, name);
     }
     return out;
 }

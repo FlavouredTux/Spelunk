@@ -39,6 +39,10 @@ namespace script {
 //     0x401234 = int do_thing(char* name, int x)
 //     do_thing = void do_thing(void)
 //
+//   [field]
+//     do_thing:ctx+0x10 = length              # by signature param name
+//     do_thing:a1+0x18 = flags                # by ABI param slot (1-based)
+//
 //   [pattern-rename]
 //     sub_4* -> roblox_sub_*                 # `*` in template = matched part
 //
@@ -61,6 +65,7 @@ struct Directive {
         Rename,
         Note,
         Signature,
+        Field,
         PatternRename,
         FromStrings,
         Delete,
@@ -81,11 +86,13 @@ struct ApplyStats {
     std::size_t renames_added            = 0;
     std::size_t notes_added              = 0;
     std::size_t signatures_added         = 0;
+    std::size_t fields_added             = 0;
     std::size_t pattern_renames_applied  = 0;
     std::size_t string_renames_applied   = 0;
     std::size_t renames_removed          = 0;
     std::size_t notes_removed            = 0;
     std::size_t signatures_removed       = 0;
+    std::size_t fields_removed           = 0;
     // Non-fatal issues encountered while applying directives:
     // unresolvable names, malformed signature bodies, glob templates
     // that produced empty names, etc. Each entry is prefixed with the

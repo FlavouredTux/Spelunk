@@ -1,0 +1,5 @@
+// abs_i64
+u64 abs_i64(u64 a1) {
+  s64 t2 = -a1;
+  return (i64)t2 < 0 ? a1 : t2;
+}

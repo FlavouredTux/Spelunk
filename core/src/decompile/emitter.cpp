@@ -18,6 +18,7 @@
 #include <ember/analysis/cfg_util.hpp>
 #include <ember/analysis/demangle.hpp>
 #include <ember/analysis/frame.hpp>
+#include <ember/analysis/name_resolver.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -32,6 +33,76 @@
 namespace ember {
 
 namespace {
+
+[[nodiscard]] std::string_view trim_line_view(std::string_view line) noexcept {
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+        line.remove_prefix(1);
+    }
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' ||
+                             line.back() == '\r')) {
+        line.remove_suffix(1);
+    }
+    return line;
+}
+
+[[nodiscard]] bool is_bb_label_line(std::string_view line) noexcept {
+    line = trim_line_view(line);
+    if (!line.starts_with("// bb_")) return false;
+    auto rest = line.substr(6);
+    if (rest.empty()) return false;
+    for (char c : rest) {
+        if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool line_semantically_empty(std::string_view line) noexcept {
+    line = trim_line_view(line);
+    return line.empty() || is_bb_label_line(line);
+}
+
+[[nodiscard]] bool line_starts_empty_if(std::string_view line) noexcept {
+    line = trim_line_view(line);
+    return line.starts_with("if (") && line.ends_with("{");
+}
+
+[[nodiscard]] bool line_is_close_brace(std::string_view line) noexcept {
+    return trim_line_view(line) == "}";
+}
+
+[[nodiscard]] std::string strip_label_only_if_blocks(std::string_view text) {
+    std::vector<std::string_view> lines;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) end = text.size();
+        lines.push_back(text.substr(start, end - start));
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (line_starts_empty_if(lines[i])) {
+            std::size_t j = i + 1;
+            bool saw_label = false;
+            while (j < lines.size() && line_semantically_empty(lines[j])) {
+                if (is_bb_label_line(lines[j])) saw_label = true;
+                ++j;
+            }
+            if (saw_label && j < lines.size() && line_is_close_brace(lines[j])) {
+                i = j;
+                continue;
+            }
+        }
+        if (!lines[i].empty() || i + 1 < lines.size()) {
+            out += lines[i];
+            out += '\n';
+        }
+    }
+    return out;
+}
 
 // SsaKey and ssa_key() live in <ember/ir/ssa.hpp>.
 
@@ -236,6 +307,17 @@ struct Emitter {
             return clean_import_name(s->name);
         }
         return std::nullopt;
+    }
+
+    // Exact code/data address used as an immediate. This catches cases such
+    // as returning a function pointer or materializing a global address, where
+    // a bare 0x40xxxx obscures information the loader already knows.
+    [[nodiscard]] std::optional<std::string>
+    named_address_for_imm(addr_t target) const {
+        if (!binary) return std::nullopt;
+        auto resolved = resolve_address_name(*binary, target);
+        if (!resolved || resolved->addr != resolved->base) return std::nullopt;
+        return format_address_expr(*resolved);
     }
 
     // Walk Assign copies until we hit something that's plausibly the
@@ -2315,6 +2397,12 @@ struct Emitter {
                 return escape_string(*s);
             }
         }
+        if (allow_string_literals &&
+            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
+            if (auto n = named_address_for_imm(static_cast<addr_t>(v.imm)); n) {
+                return std::format("{} /* {:#x} */", *n, static_cast<u64>(v.imm));
+            }
+        }
         // Small single-digit ints read much better as decimal; larger values
         // are generally addresses, masks, or byte counts where hex carries
         // information.
@@ -2462,6 +2550,14 @@ struct Emitter {
         if (!k) return false;
         auto it = struct_offsets.find(*k);
         return it != struct_offsets.end() && it->second.size() >= 2;
+    }
+
+    [[nodiscard]] const std::string*
+    annotated_field_name(const IrValue& base, i64 off) const {
+        if (!annotations || !fn) return nullptr;
+        auto slot = trace_to_self_arg_slot(base);
+        if (!slot) return nullptr;
+        return annotations->field_name_for(fn->start, *slot, off);
     }
 
     // Three-pointer-at-{0,8,16} pattern matches every flavour of
@@ -2687,6 +2783,20 @@ struct Emitter {
             if (auto g = render_global_mem(addr, t); g) {
                 return *g;
             }
+            // User-supplied struct field names beat array heuristics. This
+            // lets annotations turn ambiguous fixed-stride accesses like
+            // `a1[1]` back into source-level members such as `hdr->flags`.
+            if (auto bo = try_base_plus_offset(addr)) {
+                const IrValue& base = bo->first;
+                const i64 off = bo->second;
+                if (off >= 0) {
+                    if (const std::string* field = annotated_field_name(base, off); field) {
+                        const std::string base_expr =
+                            expr(base, depth + 1, std::to_underlying(Prec::Unary));
+                        return std::format("{}->{}", base_expr, *field);
+                    }
+                }
+            }
             // Array-indexing form takes priority over the struct-field
             // rendering when both apply — u64 stride-8 accesses usually mean
             // "argv-style pointer-to-pointer", which reads more naturally
@@ -2723,6 +2833,9 @@ struct Emitter {
                     return std::format("*({}*)({} - {:#x})",
                                        c_type_name(t), base_expr,
                                        static_cast<u64>(-off));
+                }
+                if (const std::string* field = annotated_field_name(base, off); field) {
+                    return std::format("{}->{}", base_expr, *field);
                 }
                 if (t == IrType::I64) {
                     return std::format("{}->field_{:x}", base_expr,
@@ -2834,6 +2947,21 @@ struct Emitter {
             default:
                 return false;
         }
+    }
+
+    [[nodiscard]] static bool rendered_region_empty(std::string_view s) noexcept {
+        std::size_t line_start = 0;
+        while (line_start <= s.size()) {
+            std::size_t line_end = s.find('\n', line_start);
+            if (line_end == std::string_view::npos) line_end = s.size();
+            std::string_view line = trim_line_view(s.substr(line_start, line_end - line_start));
+            if (!line.empty()) {
+                if (!line_semantically_empty(line)) return false;
+            }
+            if (line_end == s.size()) break;
+            line_start = line_end + 1;
+        }
+        return true;
     }
     void emit_region_while    (const Region& r, int depth, std::string& out) const;
     void emit_region_do_while (const Region& r, int depth, std::string& out) const;
@@ -3002,6 +3130,38 @@ struct Emitter {
         return std::nullopt;
     }
 
+    [[nodiscard]] std::optional<IrValue> match_eq_zero_value(const IrValue& v) const {
+        const IrInst* d = def_stripped(v);
+        if (!d || d->op != IrOp::CmpEq || d->src_count < 2) return std::nullopt;
+        if (d->srcs[1].kind == IrValueKind::Imm && d->srcs[1].imm == 0) return d->srcs[0];
+        if (d->srcs[0].kind == IrValueKind::Imm && d->srcs[0].imm == 0) return d->srcs[1];
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<IrValue> match_slt_zero_value(const IrValue& v) const {
+        const IrInst* d = def_stripped(v);
+        if (!d || d->op != IrOp::CmpSlt || d->src_count < 2) return std::nullopt;
+        if (d->srcs[1].kind != IrValueKind::Imm || d->srcs[1].imm != 0) return std::nullopt;
+        return d->srcs[0];
+    }
+
+    [[nodiscard]] std::optional<IrValue> match_or_eq_zero_slt_zero(const IrValue& v) const {
+        const IrInst* d = def_stripped(v);
+        if (!d || d->op != IrOp::Or || d->dst.type != IrType::I1 || d->src_count < 2) {
+            return std::nullopt;
+        }
+        auto try_match = [&](const IrValue& eq_side,
+                             const IrValue& lt_side) -> std::optional<IrValue> {
+            auto eq = match_eq_zero_value(eq_side);
+            auto lt = match_slt_zero_value(lt_side);
+            if (eq && lt && same_ssa(*eq, *lt)) return *eq;
+            return std::nullopt;
+        };
+        if (auto r = try_match(d->srcs[0], d->srcs[1]); r) return r;
+        if (auto r = try_match(d->srcs[1], d->srcs[0]); r) return r;
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::string render_cmp(std::string_view op, const IrValue& a,
                                          const IrValue& b, int depth,
                                          bool signed_cmp,
@@ -3088,6 +3248,18 @@ struct Emitter {
         return wrap_if_lt(std::format("{} {} {}", left, op, right), own, min_prec);
     }
 
+    [[nodiscard]] std::string render_bool_operand(const IrValue& v, int depth,
+                                                  bool negate, int min_prec) const {
+        if (auto s = try_simplify_flag(v, depth + 1, negate,
+                                       /*in_bool_ctx=*/true, min_prec);
+            s) return *s;
+        if (negate) {
+            std::string inner = expr(v, depth + 1, std::to_underlying(Prec::Unary));
+            return wrap_if_lt("!" + inner, Prec::Unary, min_prec);
+        }
+        return expr(v, depth + 1, min_prec);
+    }
+
     // `negate`: emit the semantic NOT of the matched compare (e.g., Je → ==, with negate → !=).
     // This cleanly cancels double-negation when the structurer wraps a CondBranch that
     // was itself a Not-of-flag.
@@ -3116,6 +3288,11 @@ struct Emitter {
         if (auto s = match_or_zf_sfxorof(v); s)          return emit_sub("<=", ">",  *s, true);
         if (auto s = match_and_notzf_notcf(v); s)        return emit_sub(">",  "<=", *s, false);
         if (auto s = match_and_notzf_not_sfxorof(v); s)  return emit_sub(">",  "<=", *s, true);
+        if (auto x = match_or_eq_zero_slt_zero(v); x) {
+            IrValue zero = IrValue::make_imm(0, x->type);
+            return render_cmp(negate ? ">" : "<=", *x, zero, depth, true,
+                              in_bool_ctx, min_prec);
+        }
 
         const IrInst* d = def_stripped(v);
 
@@ -3144,6 +3321,26 @@ struct Emitter {
                 case IrOp::CmpUgt: return emit_cmp(">",  "<=", d->srcs[0], d->srcs[1], false);
                 case IrOp::CmpUge: return emit_cmp(">=", "<",  d->srcs[0], d->srcs[1], false);
                 default: break;
+            }
+        }
+        if (d && d->dst.type == IrType::I1 && d->src_count >= 2) {
+            if (d->op == IrOp::Or) {
+                const Prec own = negate ? Prec::LogAnd : Prec::LogOr;
+                const std::string op = negate ? " && " : " || ";
+                const int child_prec = std::to_underlying(own) + 1;
+                return wrap_if_lt(
+                    render_bool_operand(d->srcs[0], depth, negate, child_prec) + op +
+                    render_bool_operand(d->srcs[1], depth, negate, child_prec),
+                    own, min_prec);
+            }
+            if (d->op == IrOp::And) {
+                const Prec own = negate ? Prec::LogOr : Prec::LogAnd;
+                const std::string op = negate ? " || " : " && ";
+                const int child_prec = std::to_underlying(own) + 1;
+                return wrap_if_lt(
+                    render_bool_operand(d->srcs[0], depth, negate, child_prec) + op +
+                    render_bool_operand(d->srcs[1], depth, negate, child_prec),
+                    own, min_prec);
             }
         }
 
@@ -3983,282 +4180,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
     }
 }
 
-void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-
-    switch (r.kind) {
-        case RegionKind::Empty:                                              return;
-        case RegionKind::Block:        emit_block(r.block_start, depth, out); return;
-        case RegionKind::Seq:
-            for (const auto& c : r.children) emit_region(*c, depth, out);
-            return;
-        case RegionKind::IfThen:       emit_region_if_then  (r, depth, out); return;
-        case RegionKind::IfElse:       emit_region_if_else  (r, depth, out); return;
-        case RegionKind::While:        emit_region_while    (r, depth, out); return;
-        case RegionKind::Loop:
-            out += std::format("{}for (;;) {{\n", ind);
-            for (const auto& c : r.children) emit_region(*c, depth + 1, out);
-            out += std::format("{}}}\n", ind);
-            return;
-        case RegionKind::DoWhile:      emit_region_do_while (r, depth, out); return;
-        case RegionKind::For:          emit_region_for      (r, depth, out); return;
-        case RegionKind::Return:       emit_region_return   (r, depth, out); return;
-        case RegionKind::Unreachable:  out += std::format("{}__unreachable();\n",   ind); return;
-        case RegionKind::Break:        out += std::format("{}break;\n",             ind); return;
-        case RegionKind::Continue:     out += std::format("{}continue;\n",          ind); return;
-        case RegionKind::Goto:         out += std::format("{}goto bb_{:x};\n", ind, r.target); return;
-        case RegionKind::Switch:       emit_region_switch   (r, depth, out); return;
-    }
-}
-
-void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) const {
-    // Pre-render the body and skip the whole if when nothing survived. The
-    // body can collapse to empty after store/decl suppression (e.g. an
-    // -O0 prologue's xmm spill block that becomes literally `if (rax) {}`)
-    // — emitting the dead conditional is just visual noise, since the
-    // condition itself has no observable effect.
-    std::string body;
-    const auto bindings_before_body = emitted_bindings;
-    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, body);
-    const auto bindings_after_body = emitted_bindings;
-    emitted_bindings = bindings_before_body;
-    if (body.empty()) return;
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    emit_materializations_for_value(r.condition, 0, out, ind);
-    const std::string cond = render_condition(r.condition, r.invert);
-    out += std::format("{}if ({}) {{\n", ind, cond);
-    out += body;
-    emitted_bindings.insert(bindings_after_body.begin(), bindings_after_body.end());
-    out += std::format("{}}}\n", ind);
-}
-
-void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) const {
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    const auto bindings_before_children = emitted_bindings;
-    std::string then_buf;
-    if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, then_buf);
-    auto bindings_after_then = emitted_bindings;
-    emitted_bindings = bindings_before_children;
-    std::string else_buf;
-    if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, else_buf);
-    auto bindings_after_else = emitted_bindings;
-    emitted_bindings = bindings_before_children;
-    // If only the else arm has content, invert the condition and drop the
-    // dead then. Reads much cleaner than `if (!x) {} else {…}`.
-    bool invert_effective = r.invert;
-    if (then_buf.empty() && !else_buf.empty()) {
-        invert_effective = !invert_effective;
-        std::swap(then_buf, else_buf);
-        std::swap(bindings_after_then, bindings_after_else);
-    }
-    emit_materializations_for_value(r.condition, 0, out, ind);
-    const std::string cond = render_condition(r.condition, invert_effective);
-    // Early-return collapse: when the then arm always exits (last statement
-    // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
-    // if, so we can drop the `else` wrapper and let the else body run at
-    // the surrounding indent. Cascaded across nested if/elses this turns
-    // a goto-fail ladder back into an early-return chain — the same shape
-    // the user originally wrote. Re-emit the else at the outer depth so
-    // the indentation matches the new flat layout.
-    if (r.children.size() > 1 && r.children[0] && r.children[1] &&
-        region_always_exits(*r.children[0])) {
-        std::string else_outer;
-        const auto bindings_before_else_outer = emitted_bindings;
-        emit_region(*r.children[1], depth, else_outer);
-        const auto bindings_after_else_outer = emitted_bindings;
-        emitted_bindings = bindings_before_else_outer;
-        if (!else_outer.empty()) {
-            out += std::format("{}if ({}) {{\n", ind, cond);
-            out += then_buf;
-            emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
-            out += std::format("{}}}\n", ind);
-            out += else_outer;
-            emitted_bindings.insert(bindings_after_else_outer.begin(),
-                                   bindings_after_else_outer.end());
-            return;
-        }
-    }
-    out += std::format("{}if ({}) {{\n", ind, cond);
-    out += then_buf;
-    emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
-    if (!else_buf.empty()) {
-        out += std::format("{}}} else {{\n", ind);
-        out += else_buf;
-        emitted_bindings.insert(bindings_after_else.begin(), bindings_after_else.end());
-    }
-    out += std::format("{}}}\n", ind);
-}
-
-void Emitter::emit_region_while(const Region& r, int depth, std::string& out) const {
-    // Two render shapes for a top-tested loop:
-    //
-    //   `while (cond) { body }`     — preferred, source-shape.
-    //   `for (;;) { header; if (!cond) break; body }`
-    //          — fallback when the header block has live statements that
-    //            need to stay in the loop's scope (typically a Load or
-    //            Call whose result the condition reads).
-    //
-    // We pre-render the header into a buffer and pick by emptiness. The
-    // common case at -O2 is an empty header — the cond uses live-in args
-    // or pre-loop locals — and the cleaner `while (cond)` reads as the
-    // user originally wrote.
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
-
-    std::string header_buf;
-    const auto bindings_before_header = emitted_bindings;
-    if (!r.children.empty()) {
-        emit_region(*r.children[0], depth + 1, header_buf);
-    }
-    const auto bindings_after_header = emitted_bindings;
-    emitted_bindings = bindings_before_header;
-    if (header_buf.empty()) {
-        emit_materializations_for_value(r.condition, 0, out, ind);
-        const std::string cond = render_condition(r.condition, r.invert);
-        out += std::format("{}while ({}) {{\n", ind, cond);
-        for (std::size_t i = 1; i < r.children.size(); ++i) {
-            emit_region(*r.children[i], depth + 1, out);
-        }
-        out += std::format("{}}}\n", ind);
-        return;
-    }
-    const std::string break_cond = render_condition(r.condition, !r.invert);
-    out += std::format("{}for (;;) {{\n", ind);
-    out += header_buf;
-    emitted_bindings.insert(bindings_after_header.begin(), bindings_after_header.end());
-    emit_materializations_for_value(r.condition, 0, out, inner_ind);
-    out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
-    for (std::size_t i = 1; i < r.children.size(); ++i) {
-        emit_region(*r.children[i], depth + 1, out);
-    }
-    out += std::format("{}}}\n", ind);
-}
-
-void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out) const {
-    // Body runs at least once, condition tested at the tail. r.invert is
-    // set when the decoded back-edge is a "loop-on-false" test — mirror it
-    // here so the rendered `while (...)` expresses the actual continue
-    // condition.
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    out += std::format("{}do {{\n", ind);
-    for (const auto& c : r.children) emit_region(*c, depth + 1, out);
-    const std::string cond = render_condition(r.condition, r.invert);
-    out += std::format("{}}} while ({});\n", ind, cond);
-}
-
-void Emitter::emit_region_for(const Region& r, int depth, std::string& out) const {
-    // The update slot renders the increment inst. If rendering fails
-    // (pattern didn't reduce), degrade gracefully to a plain while — the
-    // body will include the update statement at its natural spot.
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    const std::string update = r.has_update
-        ? render_update_inst(r.update_block, r.update_inst)
-        : std::string{};
-    emit_materializations_for_value(r.condition, 0, out, ind);
-    const std::string cond = render_condition(r.condition, r.invert);
-    if (update.empty()) {
-        out += std::format("{}while ({}) {{\n", ind, cond);
-    } else {
-        out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
-    }
-    for (const auto& c : r.children) emit_region(*c, depth + 1, out);
-    out += std::format("{}}}\n", ind);
-}
-
-void Emitter::emit_region_return(const Region& r, int depth, std::string& out) const {
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    if (r.condition.kind == IrValueKind::None) {
-        out += std::format("{}return;\n", ind);
-        return;
-    }
-    if (auto k = ssa_key(r.condition); k) {
-        auto s = fold_void_call_stmt.find(*k);
-        if (s != fold_void_call_stmt.end()) {
-            out += std::format("{}{};\n", ind, s->second);
-            out += std::format("{}return;\n", ind);
-            return;
-        }
-    }
-    if (is_void_call_result(r.condition)) {
-        out += std::format("{}return;\n", ind);
-        return;
-    }
-    if (is_unbound_clobber_result(r.condition)) {
-        out += std::format("{}return;\n", ind);
-        return;
-    }
-    if (auto k = ssa_key(r.condition); k) {
-        auto f = fold_return_expr.find(*k);
-        if (f != fold_return_expr.end()) {
-            out += std::format("{}return {};\n", ind, f->second);
-            return;
-        }
-    }
-    // Strip a redundant outer widen: in a return context the caller's
-    // declared type already coerces, so `return (u64)x;` where `x` has the
-    // return type reads as noise. One hop only — deeper casts are
-    // semantically real.
-    IrValue v = r.condition;
-    if (const IrInst* d = def_of(v); d && d->src_count >= 1
-            && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
-            && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
-        v = d->srcs[0];
-    }
-    emit_materializations_for_value(v, 0, out, ind);
-    out += std::format("{}return {};\n", ind, expr(v));
-}
-
-void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) const {
-    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    const std::string_view rn = reg_name(r.switch_index);
-    out += std::format("{}switch ({}) {{\n", ind,
-                       rn.empty() ? std::string("<idx>") : std::string(rn));
-    const std::string cind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
-    const std::size_t n_cases = r.case_values.size();
-
-    auto ends_in_terminator = [](const Region& body) {
-        const Region* cur = &body;
-        while (cur && cur->kind == RegionKind::Seq && !cur->children.empty()) {
-            cur = cur->children.back().get();
-        }
-        if (!cur) return false;
-        switch (cur->kind) {
-            case RegionKind::Return:
-            case RegionKind::Break:
-            case RegionKind::Continue:
-            case RegionKind::Unreachable:
-                return true;
-            default:
-                return false;
-        }
-    };
-
-    for (std::size_t i = 0; i < n_cases; ++i) {
-        out += std::format("{}case {}:", cind, r.case_values[i]);
-        const Region* child = i < r.children.size() ? r.children[i].get() : nullptr;
-        const bool is_empty_child =
-            !child || child->kind == RegionKind::Empty ||
-            (child->kind == RegionKind::Seq && child->children.empty());
-        if (is_empty_child) {
-            out += "\n";
-            continue;
-        }
-        out += "\n";
-        emit_region(*child, depth + 2, out);
-        if (!ends_in_terminator(*child)) {
-            out += std::format("{}  break;\n", cind);
-        }
-    }
-    if (r.has_default && r.children.size() > n_cases) {
-        out += std::format("{}default:\n", cind);
-        const Region& dflt = *r.children.back();
-        emit_region(dflt, depth + 2, out);
-        if (!ends_in_terminator(dflt)) {
-            out += std::format("{}  break;\n", cind);
-        }
-    }
-    out += std::format("{}}}\n", ind);
-}
+#include "emitter_regions.inc"
 
 }  // anonymous namespace
 
@@ -4699,6 +4621,8 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // can live with a slightly noisier function listing in exchange
     // for accurate PC-to-line mapping).
     if (!options.line_map) {
+        out = strip_label_only_if_blocks(out);
+
         std::vector<std::string> lines;
         {
             std::string buf;

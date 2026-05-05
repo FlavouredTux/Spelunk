@@ -1,5 +1,5 @@
 // sse_memclr
 void sse_memclr(void) {
-  rep.stosq(0x404040, 0, 0x200);
+  rep.stosq(&big_dst /* 0x404040 */, 0, 0x200);
   return;
 }

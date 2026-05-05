@@ -194,9 +194,13 @@ ember_build_fixture(gotos OPT "-O0")
 # -O0 so the `%` operator survives as a real IDIV (and the IR Mod op),
 # and the do-while body keeps its conditional structure intact.
 ember_build_fixture(arith OPT "-O0")
+# -O2 so gcc emits the branchless abs patterns (sign-mask, two's-complement)
+# that the idiom-recognition pass should match and simplify.
+ember_build_fixture(arith_idiom OPT "-O2")
 # 24-byte 3-pointer struct shaped like libstdc++ / libc++ / MSVC STL
 # std::vector<T> for the looks_like_vector predicate to fire on.
 ember_build_fixture(vector_like)
+ember_build_fixture(struct_fields)
 # -O0 so dbg_marker stays a real function (no inlining, no tail-call
 # fold) and gets a stable symbol address the smoke test can set a
 # software breakpoint at. Built once non-PIE (dbg_target) and once
@@ -663,6 +667,29 @@ ember_golden_test(
     GOLDEN  arith.dowhile_with_skip.pseudo.txt
 )
 
+# Idiom-recognition pass: branchless abs patterns compiled at -O2 should
+# simplify from (x >> 31 & x) + x / xor+ashr forms to `x < 0 ? -x : x`.
+ember_golden_test(
+    NAME    arith_idiom_abs_i32_pseudo
+    FIXTURE arith_idiom
+    ARGS    "-p|-s|abs_i32"
+    GOLDEN  arith_idiom.abs_i32.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    arith_idiom_abs_i64_pseudo
+    FIXTURE arith_idiom
+    ARGS    "-p|-s|abs_i64"
+    GOLDEN  arith_idiom.abs_i64.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    arith_idiom_neg_i32_pseudo
+    FIXTURE arith_idiom
+    ARGS    "-p|-s|neg_i32"
+    GOLDEN  arith_idiom.neg_i32.pseudo.txt
+)
+
 # Locks Phase 4a-2 vector-shape recognition: the 24-byte 3-pointer
 # struct's accesses render as begin / end / capacity, and indexed
 # reads through the begin pointer come out as `b[idx]`.
@@ -671,6 +698,13 @@ ember_golden_test(
     FIXTURE vector_like
     ARGS    "-p|-s|sum_vec"
     GOLDEN  vector_like.sum_vec.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    struct_fields_inspect_packet_pseudo
+    FIXTURE struct_fields
+    ARGS    "-p|-s|inspect_packet|--annotations|${_fixture_dir}/struct_fields.ann"
+    GOLDEN  struct_fields.inspect_packet.pseudo.txt
 )
 
 ember_golden_test(

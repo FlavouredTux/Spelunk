@@ -7,7 +7,7 @@ function sub_1800011c0
 
 bb_1800011c0  (entry):
   0x00000001800011c0  83 f9 05                        cmp ecx, 0x5
-  0x00000001800011c3  77 27                           ja 0x1800011ec
+  0x00000001800011c3  77 27                           ja 0x1800011ec  ; sub_1800011c0+0x2c
   -> bb_1800011ec  (taken)
   -> bb_1800011c5  (fallthrough)
 

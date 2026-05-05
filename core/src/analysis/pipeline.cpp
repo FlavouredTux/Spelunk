@@ -20,6 +20,7 @@
 
 #include <ember/analysis/discovery.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
+#include <ember/analysis/name_resolver.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/packed.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -120,7 +121,35 @@ std::size_t decode_failure_advance(std::span<const std::byte> bytes) noexcept {
     return std::max<std::size_t>(i + 1, 1);
 }
 
-void append_function_text(std::string& out, const Function& fn) {
+std::optional<addr_t> rip_relative_target(const Instruction& insn) noexcept {
+    const addr_t end = insn.address + insn.length;
+    for (std::size_t i = 0; i < insn.num_operands; ++i) {
+        const Operand& op = insn.operands[i];
+        if (op.kind != Operand::Kind::Memory) continue;
+        const Mem& m = op.mem;
+        if (m.base == Reg::Rip && m.index == Reg::None) {
+            return end + static_cast<u64>(m.disp);
+        }
+    }
+    return std::nullopt;
+}
+
+std::string format_instruction_annotated(const Binary& b, const Instruction& insn) {
+    std::string text = format_instruction(insn);
+    std::optional<addr_t> target;
+    if (is_call(insn.mnemonic) || is_unconditional_jmp(insn.mnemonic) ||
+        is_conditional_branch(insn.mnemonic)) {
+        target = branch_target(insn);
+    }
+    if (!target) target = rip_relative_target(insn);
+    if (!target) return text;
+    if (auto label = resolve_address_name(b, *target); label) {
+        text += std::format("  ; {}", format_address_comment(*label));
+    }
+    return text;
+}
+
+void append_function_text(std::string& out, const Binary& b, const Function& fn) {
     out += std::format("function {}\n", fn.name.empty() ? "<unknown>" : fn.name);
     out += std::format("  entry    {:#018x}\n", fn.start);
     out += std::format("  extent   {:#018x} - {:#018x}  ({} bytes)\n",
@@ -144,7 +173,7 @@ void append_function_text(std::string& out, const Function& fn) {
                 insn.raw_bytes.data(), insn.length);
             out += std::format("  {:#018x}  {:<30}  {}\n",
                                insn.address, hex_bytes(bytes),
-                               format_instruction(insn));
+                               format_instruction_annotated(b, insn));
         }
 
         switch (bb.kind) {
@@ -450,7 +479,7 @@ format_disasm(const Binary& b, const FuncWindow& w) {
         const auto& insn = *decoded;
         const auto bv = remaining.first(insn.length);
         out += std::format("{:#018x}  {:<30}  {}\n",
-                           ip, hex_bytes(bv), format_instruction(insn));
+                           ip, hex_bytes(bv), format_instruction_annotated(b, insn));
         ip  += insn.length;
         off += insn.length;
         if (!size_known && is_terminator(insn.mnemonic)) break;
@@ -492,7 +521,7 @@ format_disasm_range(const Binary& b, addr_t start, addr_t end) {
         const auto& insn = *decoded;
         const auto bv = remaining.first(insn.length);
         out += std::format("{:#018x}  {:<30}  {}\n",
-                           ip, hex_bytes(bv), format_instruction(insn));
+                           ip, hex_bytes(bv), format_instruction_annotated(b, insn));
         ip  += insn.length;
         off += insn.length;
     }
@@ -508,7 +537,7 @@ format_cfg(const Binary& b, const FuncWindow& w) {
     auto fn_r = builder.build(w.start, w.label);
     if (!fn_r) return std::unexpected(fn_r.error());
     std::string out;
-    append_function_text(out, *fn_r);
+    append_function_text(out, b, *fn_r);
     return out;
 }
 

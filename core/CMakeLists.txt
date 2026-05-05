@@ -19,6 +19,7 @@ add_library(ember_core STATIC
     src/analysis/strings.cpp
     src/analysis/data_xrefs.cpp
     src/analysis/pipeline.cpp
+    src/analysis/name_resolver.cpp
     src/analysis/fingerprint.cpp
     src/analysis/teef.cpp
     src/analysis/teef_recognize.cpp

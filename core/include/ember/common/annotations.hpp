@@ -1,5 +1,6 @@
 #pragma once
 
+#include <compare>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -19,6 +20,14 @@ struct ParamSig {
 struct FunctionSig {
     std::string           return_type;
     std::vector<ParamSig> params;
+};
+
+struct FieldKey {
+    addr_t      function = 0;
+    std::size_t param    = 0;  // 0-based ABI/signature param slot
+    i64         offset   = 0;
+
+    [[nodiscard]] constexpr auto operator<=>(const FieldKey&) const noexcept = default;
 };
 
 // Where the current annotation file came from. Drives the writeback
@@ -79,6 +88,7 @@ resolve_annotation_location(const std::filesystem::path& binary,
 //   sig    <hex-addr>  <return-type>|<param-type>|<param-name>|...
 //   note   <hex-addr>  <text>
 //   const  <hex-value> <name>
+//   field  <hex-addr>  <param-index>|<hex-offset>|<field-name>
 //
 // Addresses are hex without a 0x prefix. The `const` record names a
 // numeric immediate (width-agnostic) — its primary use is mapping a
@@ -93,6 +103,7 @@ struct Annotations {
     std::map<addr_t, FunctionSig>  signatures;
     std::map<addr_t, std::string>  notes;
     std::map<u64,    std::string>  named_constants;
+    std::map<FieldKey, std::string> field_names;
 
     static Result<Annotations>
     load(const std::filesystem::path& path);
@@ -123,6 +134,13 @@ struct Annotations {
     const std::string* constant_name_for(u64 v) const noexcept {
         auto it = named_constants.find(v);
         return it == named_constants.end() ? nullptr : &it->second;
+    }
+
+    const std::string* field_name_for(addr_t function,
+                                      std::size_t param,
+                                      i64 offset) const noexcept {
+        auto it = field_names.find(FieldKey{function, param, offset});
+        return it == field_names.end() ? nullptr : &it->second;
     }
 };
 

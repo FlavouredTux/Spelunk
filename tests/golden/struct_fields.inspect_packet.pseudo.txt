@@ -1,0 +1,7 @@
+// inspect_packet
+u64 inspect_packet(struct packet* p) {
+  if (p->magic == 0x1234) {
+    return p->flags + p->payload;
+  }
+  return 0;
+}

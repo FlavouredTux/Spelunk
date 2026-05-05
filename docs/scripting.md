@@ -42,6 +42,10 @@ log_handler = handle_log_line     # by symbol or existing rename
 0x401234   = int do_thing(char* name, int x)
 log_handler = void log_handler(void)
 
+[field]
+do_thing:name+0x10 = length       # signature param name
+do_thing:a1+0x18   = flags        # ABI arg slot, 1-based
+
 [pattern-rename]
 sub_4* -> roblox_sub_*            # `*` in template = matched part
 log_*  -> Logger_*
@@ -64,6 +68,7 @@ log_handler = all                    # drop rename + note + signature
 | `[rename]` | `=` | hex VA, `sub_<hex>`, symbol, or existing rename | new name |
 | `[note]` | `=` | same as rename | free-form text |
 | `[signature]` | `=` | same as rename | C-style decl: `<ret> <name>(<params>)` |
+| `[field]` | `=` | `<function>:<param>+<offset>` | field name for pseudo-C struct rendering |
 | `[pattern-rename]` | `->` | glob over discovered function names (`*`) | template using `*` |
 | `[from-strings]` | `->` | `printf`-style pattern (`%s`/`%d`/`%x`/`%*`) | template using `$1..$9` |
 | `[delete]` | `=` | same as rename | one of `rename`, `note`, `signature`, `all` |
@@ -77,6 +82,8 @@ applied in source order *within their pass* (see below).
    the same file clears the old slot before the new value lands. Source
    order between the two does not matter; semantics are pass-based.
 2. `[rename]`, `[note]`, `[signature]` — direct user-intent sections.
+   `[field]` runs here too; it can refer to signature parameter names
+   declared earlier in the same file.
 3. `[pattern-rename]` — walks `enumerate_functions()` and matches the
    current name (existing rename if any, else the discovered name).
    Skips any address with an existing rename.
@@ -111,6 +118,9 @@ are taken verbatim from the trimmed line.
   address wins.
 - The signature parser handles plain C declarations (`int foo(char*
   name, int x)`) but not function-pointer params or templated types.
+- `[field]` names are scoped to one function parameter. The parameter can
+  be a signature name (`ctx`) or an ABI slot (`a1`, `a2`, ...). Offsets
+  accept decimal or hex, with optional sign.
 
 For workflows that genuinely need expressions or control flow (walk
 callees, decide based on string contents, drive renames from a CFG

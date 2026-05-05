@@ -1,5 +1,5 @@
 // block_copy
 u64 block_copy(u64 a1) {
-  rep.movsq(0x405040, a1, 8);
+  rep.movsq(&buf /* 0x405040 */, a1, 8);
   return rax;
 }

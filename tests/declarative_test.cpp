@@ -176,6 +176,8 @@ int main() {
             "\n"
             "[signature]\n"
             "0x401000 = int log_handler(char* msg, int level)\n"
+            "[field]\n"
+            "0x401000:msg+0x10 = length\n"
             "\n"
             "[pattern-rename]\n"
             "sub_4* -> roblox_sub_*\n"
@@ -187,8 +189,8 @@ int main() {
         check(rv.has_value(), "parse: clean input parses");
         if (!rv) std::fprintf(stderr, "  err: %s\n", rv.error().message.c_str());
         if (rv) {
-            check_eq_sz(rv->size(), 6, "parse: 6 directives");
-            if (rv->size() >= 6) {
+            check_eq_sz(rv->size(), 7, "parse: 7 directives");
+            if (rv->size() >= 7) {
                 const auto& ds = *rv;
                 check_eq(static_cast<int>(ds[0].kind),
                          static_cast<int>(Directive::Kind::Rename), "parse: d0 rename");
@@ -200,13 +202,17 @@ int main() {
                 check_eq(static_cast<int>(ds[3].kind),
                          static_cast<int>(Directive::Kind::Signature), "parse: d3 sig");
                 check_eq(static_cast<int>(ds[4].kind),
-                         static_cast<int>(Directive::Kind::PatternRename), "parse: d4 pattern");
-                check_eq_str(ds[4].lhs, "sub_4*",         "parse: d4 lhs glob");
-                check_eq_str(ds[4].rhs, "roblox_sub_*",   "parse: d4 rhs template");
+                         static_cast<int>(Directive::Kind::Field), "parse: d4 field");
+                check_eq_str(ds[4].lhs, "0x401000:msg+0x10", "parse: d4 field lhs");
+                check_eq_str(ds[4].rhs, "length",            "parse: d4 field rhs");
                 check_eq(static_cast<int>(ds[5].kind),
-                         static_cast<int>(Directive::Kind::FromStrings), "parse: d5 from-strings");
-                check_eq_str(ds[5].lhs, "[HttpClient] %s", "parse: d5 unquoted lhs");
-                check_eq_str(ds[5].rhs, "HttpClient_$1",   "parse: d5 template");
+                         static_cast<int>(Directive::Kind::PatternRename), "parse: d5 pattern");
+                check_eq_str(ds[5].lhs, "sub_4*",         "parse: d5 lhs glob");
+                check_eq_str(ds[5].rhs, "roblox_sub_*",   "parse: d5 rhs template");
+                check_eq(static_cast<int>(ds[6].kind),
+                         static_cast<int>(Directive::Kind::FromStrings), "parse: d6 from-strings");
+                check_eq_str(ds[6].lhs, "[HttpClient] %s", "parse: d6 unquoted lhs");
+                check_eq_str(ds[6].rhs, "HttpClient_$1",   "parse: d6 template");
             }
         }
     }
@@ -236,11 +242,14 @@ int main() {
             {Directive::Kind::Rename,    "log_handler", "skipped_due_to_first_win",                                          2},
             {Directive::Kind::Note,      "0x401000",    "this is a note",                                                    3},
             {Directive::Kind::Signature, "0x401000",    "int log_handler(char* msg, int level)",                             4},
+            {Directive::Kind::Field,     "0x401000:msg+0x10", "length",                                                       5},
+            {Directive::Kind::Field,     "0x401000:a1+0x18",  "flags",                                                        6},
         };
         auto st = ember::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_added,    1, "apply: 1 rename added (first wins)");
         check_eq_sz(st.notes_added,      1, "apply: 1 note added");
         check_eq_sz(st.signatures_added, 1, "apply: 1 signature added");
+        check_eq_sz(st.fields_added,     2, "apply: 2 fields added");
         check(ann.renames.contains(0x401000),  "apply: rename map has 0x401000");
         if (auto* n = ann.name_for(0x401000)) check_eq_str(*n, "renamed_by_va", "apply: rename value");
         if (auto* n = ann.note_for(0x401000)) check_eq_str(*n, "this is a note", "apply: note value");
@@ -253,6 +262,12 @@ int main() {
                 check_eq_str(s->params[1].type, "int",   "apply: sig p1 type");
                 check_eq_str(s->params[1].name, "level", "apply: sig p1 name");
             }
+        }
+        if (auto* f = ann.field_name_for(0x401000, 0, 0x10)) {
+            check_eq_str(*f, "length", "apply: field by param name");
+        }
+        if (auto* f = ann.field_name_for(0x401000, 0, 0x18)) {
+            check_eq_str(*f, "flags", "apply: field by a1");
         }
         // The second rename targeted the same address by name lookup; with
         // first-win semantics, it should have produced one warning and no
@@ -319,6 +334,7 @@ int main() {
         ember::Annotations ann;
         ann.renames[0x401000]    = "old_rename";
         ann.notes[0x401000]      = "old_note";
+        ann.field_names[{0x401000, 0, 0x10}] = "old_field";
         ember::FunctionSig sig;
         sig.return_type = "int";
         ann.signatures[0x401000] = sig;
@@ -326,14 +342,17 @@ int main() {
             {Directive::Kind::Delete, "0x401000", "rename",    1},
             {Directive::Kind::Delete, "0x401000", "note",      2},
             {Directive::Kind::Delete, "0x401000", "signature", 3},
+            {Directive::Kind::Delete, "0x401000", "field",     4},
         };
         auto st = ember::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_removed,    1, "delete: rename removed");
         check_eq_sz(st.notes_removed,      1, "delete: note removed");
         check_eq_sz(st.signatures_removed, 1, "delete: signature removed");
+        check_eq_sz(st.fields_removed,     1, "delete: field removed");
         check(!ann.renames.contains(0x401000),    "delete: rename gone");
         check(!ann.notes.contains(0x401000),      "delete: note gone");
         check(!ann.signatures.contains(0x401000), "delete: signature gone");
+        check(ann.field_names.empty(),            "delete: fields gone");
     }
 
     // ---- Apply: [delete]=all clears all three at once ---------------------
@@ -344,6 +363,7 @@ int main() {
         ember::FunctionSig sig;
         sig.return_type = "void";
         ann.signatures[0x401000] = sig;
+        ann.field_names[{0x401000, 0, 0x10}] = "xfield";
         const std::vector<Directive> ds = {
             {Directive::Kind::Delete, "log_handler", "all", 1},
         };
@@ -351,6 +371,7 @@ int main() {
         check_eq_sz(st.renames_removed,    1, "delete=all: rename removed");
         check_eq_sz(st.notes_removed,      1, "delete=all: note removed");
         check_eq_sz(st.signatures_removed, 1, "delete=all: sig removed");
+        check_eq_sz(st.fields_removed,     1, "delete=all: field removed");
     }
 
     // ---- Apply: [delete] runs before [rename] (pass 0) --------------------
@@ -392,6 +413,7 @@ int main() {
         sig.params.push_back({"char*", "msg"});
         sig.params.push_back({"int",   "level"});
         original.signatures[0x401000] = sig;
+        original.field_names[{0x401000, 0, 0x10}] = "length";
 
         const auto root = scratch_root();
         const auto p = root / "round.proj";
@@ -406,6 +428,7 @@ int main() {
             check_eq_sz(reloaded->renames.size(),    1, "to_text: 1 rename round-trips");
             check_eq_sz(reloaded->notes.size(),      1, "to_text: 1 note round-trips");
             check_eq_sz(reloaded->signatures.size(), 1, "to_text: 1 sig round-trips");
+            check_eq_sz(reloaded->field_names.size(), 1, "to_text: 1 field round-trips");
             if (auto* n = reloaded->name_for(0x401000)) {
                 check_eq_str(*n, "round_trip", "to_text: rename round-trip value");
             }
@@ -421,7 +444,9 @@ int main() {
             "[note]\n"
             "log_handler = via name lookup\n"
             "[signature]\n"
-            "log_handler = void log_handler(void)\n");
+            "log_handler = void log_handler(char* msg)\n"
+            "[field]\n"
+            "log_handler:msg+0x10 = length\n");
         ember::Annotations ann;
         auto rv = ember::script::apply_file(p, mb, ann);
         check(rv.has_value(), "apply_file: ok");
@@ -429,6 +454,7 @@ int main() {
             check_eq_sz(rv->renames_added,    1, "apply_file: 1 rename");
             check_eq_sz(rv->notes_added,      1, "apply_file: 1 note");
             check_eq_sz(rv->signatures_added, 1, "apply_file: 1 sig");
+            check_eq_sz(rv->fields_added,     1, "apply_file: 1 field");
         }
         if (auto* n = ann.name_for(0x401000)) check_eq_str(*n, "end_to_end", "apply_file: rename");
         if (auto* n = ann.note_for(0x401000)) check_eq_str(*n, "via name lookup", "apply_file: note");

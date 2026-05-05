@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <span>
 
 #include <ember/analysis/ir_cache.hpp>
 #include <ember/binary/binary.hpp>
@@ -32,7 +33,15 @@ namespace ember {
 // (small) subset of functions IPA didn't touch — typically reduces this
 // pass's cost from "lift every function again" to ~zero on a binary that
 // just ran through `--ipa`.
+//
+// `scope`, when non-empty, restricts the resolver to call sites inside
+// the listed function entry addresses. Use this when the caller only
+// needs resolutions for one function (typical CLI usage: `-p -s NAME
+// --resolve-calls`); the whole-program lift loop drops from O(fns with
+// indirect calls) to O(|scope|). Empty span keeps the original
+// whole-program behaviour for serve-mode prefetch and the like.
 [[nodiscard]] std::map<addr_t, addr_t>
-resolve_indirect_calls(const Binary& b, IrCache* cache = nullptr);
+resolve_indirect_calls(const Binary& b, IrCache* cache = nullptr,
+                       std::span<const addr_t> scope = {});
 
 }  // namespace ember

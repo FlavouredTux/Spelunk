@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
@@ -246,7 +247,8 @@ resolve_target(const Binary& b,
 }  // namespace
 
 std::map<addr_t, addr_t>
-resolve_indirect_calls(const Binary& b, IrCache* shared_cache) {
+resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
+                       std::span<const addr_t> scope) {
     std::map<addr_t, addr_t> out;
 
     // Build the vtable index from both Itanium and MSVC parsers. The
@@ -356,6 +358,15 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache) {
             if (b.import_at_plt(d.addr) != nullptr) continue;
             fns_with_indirect.insert(d.addr);
         }
+    }
+    // Caller-supplied scope drops the lift loop to the requested entries.
+    // Empty span = whole-program (preserved). Doing the intersect after the
+    // candidate set is built keeps the byte-scan branch (which is cheap and
+    // architecture-aware) unchanged.
+    if (!scope.empty()) {
+        std::unordered_set<addr_t> keep(scope.begin(), scope.end());
+        std::erase_if(fns_with_indirect,
+                      [&](addr_t a) noexcept { return !keep.contains(a); });
     }
     IrCache local_cache;
     IrCache& cache = shared_cache ? *shared_cache : local_cache;

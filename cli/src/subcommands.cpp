@@ -2063,12 +2063,21 @@ int run_emit(const Args& args, const Binary& b) {
     }
     std::map<addr_t, addr_t> resolutions;
     if (args.resolve_calls && (args.pseudo || args.strct)) {
-        std::println(stderr, "ember: resolving indirect calls (vtable + import back-trace)...");
-        std::fflush(stderr);
-        resolutions = resolve_indirect_calls(b, &shared_ir_cache);
-        std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
-                     resolutions.size());
-        emit_opts.call_resolutions = &resolutions;
+        // Scope to the requested function — emit only renders one fn at a
+        // time, so the rest of the binary's indirect calls would never be
+        // observed. When the symbol can't be resolved the format step is
+        // about to bail with "no symbol named X", so don't bother
+        // resolving anything either.
+        if (auto win = resolve_function(b, args.symbol)) {
+            const addr_t fn = win->start;
+            const std::span<const addr_t> scope{&fn, 1};
+            std::println(stderr, "ember: resolving indirect calls (vtable + import back-trace)...");
+            std::fflush(stderr);
+            resolutions = resolve_indirect_calls(b, &shared_ir_cache, scope);
+            std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
+                         resolutions.size());
+            emit_opts.call_resolutions = &resolutions;
+        }
     }
     LpMap lp_map;
     if (args.eh && (args.pseudo || args.strct)) {

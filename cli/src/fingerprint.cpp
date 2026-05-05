@@ -1,4 +1,5 @@
 #include "fingerprint.hpp"
+#include "subcommands.hpp"
 
 #include <algorithm>
 #include <array>
@@ -170,7 +171,7 @@ std::string fingerprints_tsv_for(const Args& args, const Binary& b) {
         : std::filesystem::path(args.cache_dir);
     const std::string tag = fingerprints_cache_tag();
     if (!args.no_cache) {
-        if (auto k = cache::key_for(args.binary); k) {
+        if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             if (auto hit = cache::read(dir, *k, tag); hit) {
                 return std::move(*hit);
             }
@@ -178,7 +179,7 @@ std::string fingerprints_tsv_for(const Args& args, const Binary& b) {
     }
     std::string out = build_fingerprints_output(b);
     if (!args.no_cache) {
-        if (auto k = cache::key_for(args.binary); k) {
+        if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             if (auto rv = cache::write(dir, *k, tag, out); !rv) {
                 std::println(stderr, "ember: warning: {}: {}",
                              rv.error().kind_name(), rv.error().message);

@@ -22,7 +22,8 @@ std::filesystem::path default_dir() {
     return fs::current_path() / ".ember-cache";
 }
 
-Result<std::string> key_for(const std::filesystem::path& binary) {
+Result<std::string>
+key_for(const std::filesystem::path& binary, std::string_view scope_tag) {
     namespace fs = std::filesystem;
     std::error_code ec;
     const auto abs = fs::weakly_canonical(binary, ec).string();
@@ -44,8 +45,9 @@ Result<std::string> key_for(const std::filesystem::path& binary) {
             binary.string(), ec.message())));
     }
     const auto mts = mtime.time_since_epoch().count();
-    const std::string manifest = std::format(
-        "{}|{}|{}|v{}", abs, size, mts, kVersion);
+    const std::string manifest = scope_tag.empty()
+        ? std::format("{}|{}|{}|v{}", abs, size, mts, kVersion)
+        : std::format("{}|{}|{}|v{}|s:{}", abs, size, mts, kVersion, scope_tag);
     return std::format("{:016x}", fnv1a_64(manifest));
 }
 

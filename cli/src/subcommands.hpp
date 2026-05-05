@@ -89,6 +89,20 @@ int run_struct    (const Binary& b, std::string_view symbol, bool pseudo,
 // otherwise call `compute()` to build the canonical output, write it
 // back to the cache, and stream to stdout. `tag` keys the cache slot
 // alongside the binary-content hash. --no-cache bypasses both legs.
+
+// Scope tag folded into the cache key for any flag that restricts which
+// addresses / functions a pass walks. Without this, `--fingerprints
+// --module=ntdll <dump>` followed by `--fingerprints --module=kernel32
+// <dump>` would silently serve the first run's results both times — the
+// binary file is unchanged so the legacy key was identical. New scoping
+// flags should append to this tag, not invent their own key plumbing.
+inline std::string cache_scope_tag(const Args& args) {
+    if (!args.module_filter.empty()) {
+        return std::string{"module:"} + args.module_filter;
+    }
+    return {};
+}
+
 template <class Compute>
 int run_cached(const Args& args, std::string_view tag, Compute compute) {
     const auto dir = args.cache_dir.empty()
@@ -97,7 +111,7 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
     std::string key;
     bool cacheable = !args.no_cache;
     if (cacheable) {
-        auto k = cache::key_for(args.binary);
+        auto k = cache::key_for(args.binary, cache_scope_tag(args));
         if (k) {
             key = std::move(*k);
         } else {

@@ -1043,7 +1043,7 @@ int run_recognize(const Args& args, const Binary& b) {
         const auto dir = args.cache_dir.empty()
             ? cache::default_dir()
             : std::filesystem::path(args.cache_dir);
-        if (auto k = cache::key_for(args.binary); k) {
+        if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             const std::string tag = teef_cache_tag(args);
             if (auto hit = cache::read(dir, *k, tag); hit) {
                 target_tsv = std::move(*hit);
@@ -1103,7 +1103,7 @@ int run_recognize(const Args& args, const Binary& b) {
             const auto dir = args.cache_dir.empty()
                 ? cache::default_dir()
                 : std::filesystem::path(args.cache_dir);
-            if (auto k = cache::key_for(args.binary); k) {
+            if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
                 const std::string tag = teef_cache_tag(args);
                 (void)cache::write(dir, *k, tag, target_tsv);
             }
@@ -1372,7 +1372,7 @@ int run_fingerprints(const Args& args, const Binary& b) {
         const auto dir = args.cache_dir.empty()
             ? cache::default_dir()
             : std::filesystem::path(args.cache_dir);
-        auto k = cache::key_for(args.binary);
+        auto k = cache::key_for(args.binary, cache_scope_tag(args));
         if (k) {
             if (auto hit = cache::read(dir, *k, fingerprints_cache_tag()); hit) {
                 std::ofstream f(args.fp_out, std::ios::binary | std::ios::trunc);
@@ -1418,7 +1418,7 @@ int run_functions(const Args& args, const Binary& b) {
     std::string key;
     bool cacheable = !args.no_cache;
     if (cacheable) {
-        auto k = cache::key_for(args.binary);
+        auto k = cache::key_for(args.binary, cache_scope_tag(args));
         if (k) key = std::move(*k);
         else {
             std::println(stderr, "ember: warning: {}: {} (caching disabled)",
@@ -1525,7 +1525,7 @@ int run_refs_to(const Args& args, const Binary& b) {
         : std::filesystem::path(args.cache_dir);
     std::string key;
     if (!args.no_cache) {
-        auto k = cache::key_for(args.binary);
+        auto k = cache::key_for(args.binary, cache_scope_tag(args));
         if (k) key = std::move(*k);
     }
     if (!key.empty()) {

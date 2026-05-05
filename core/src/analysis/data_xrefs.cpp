@@ -73,6 +73,14 @@ classify(const Instruction& insn, u8 mem_op_idx) noexcept {
 std::map<addr_t, std::vector<DataXref>>
 compute_data_xrefs(const Binary& b) {
     std::map<addr_t, std::vector<DataXref>> out;
+    // Arch guard: every operand inspection below assumes x86-64 (RIP-rel,
+    // movabs immediates, ModR/M byte shapes). On AArch64 / PPC64 the
+    // X64Decoder fails on every instruction and the loop produces an
+    // empty map silently, which the user reads as "this binary has no
+    // data references" rather than "this analysis doesn't run on this
+    // arch". Bail explicitly. Re-enable per arch once we have a decoder
+    // + operand model that can answer the same question.
+    if (b.arch() != Arch::X86_64) return out;
     const SectionTable sects(b);
     X64Decoder dec;
 

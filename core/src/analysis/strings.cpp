@@ -119,6 +119,17 @@ std::vector<StringEntry> scan_strings(const Binary& b) {
         return &results[it->second];
     };
 
+    // String discovery itself (scan_section above) is arch-agnostic, so
+    // the results vector still contains every string in the binary on
+    // any arch. Xref collection requires decoding instructions, which
+    // currently only the X64Decoder does in this file. Bail before the
+    // xref walk on non-x86 — strings still surface, the xrefs column
+    // is just empty (the same as a stripped binary with no decodable
+    // callers). Better than the prior silent miscount where each
+    // discovered fn's bytes failed to decode and advanced one byte at a
+    // time forever.
+    if (b.arch() != Arch::X86_64) return results;
+
     // Walk every defined function + every discovered function (deduped
     // by address), decode linearly, collect xrefs. Earlier this walked
     // named symbols only, which on a partially-stripped binary missed

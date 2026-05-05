@@ -462,7 +462,12 @@ format_disasm(const Binary& b, const FuncWindow& w) {
     const Decoder& dec = **dec_r;
     addr_t ip = w.start;
     std::size_t off = 0;
-    const bool size_known = bytes.size() < 1024 && w.size != 0;
+    // FuncWindow contract: size != 0 means the caller has a reliable
+    // extent (real symbol or CFG-built range), so walk all of it. Earlier
+    // this also gated on `size < 1024`, which had the perverse effect of
+    // truncating large functions at their first jmp/ret — e.g. `main`
+    // in /usr/bin/git stopping after 13% of its 5435 bytes.
+    const bool size_known = w.size != 0;
 
     while (off < bytes.size()) {
         const auto remaining = bytes.subspan(off);

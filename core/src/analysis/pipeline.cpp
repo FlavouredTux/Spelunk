@@ -626,21 +626,29 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
         addr_t      addr;
         std::string name;
     };
+    // Always union named symbols with discovered functions. Earlier this
+    // gated the discovery walk on `work.empty()`, which only fires on a
+    // *fully* stripped binary — anything keeping even one named function
+    // (partial strips are common: GNU `strip` leaves dynsym entries; some
+    // distros retain a single anchor symbol) would skip discovery and the
+    // call graph would contain edges from that handful of named functions
+    // only. Symbols are pushed first so the symbol name wins on address
+    // collisions with the `sub_<hex>` discovery name. Cheap mode avoids
+    // recursing back into compute_call_graph.
     std::vector<WorkItem> work;
     work.reserve(b.symbols().size());
+    std::unordered_set<addr_t> seen;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.size == 0 || s.name.empty()) continue;
+        if (!seen.insert(s.addr).second) continue;
         work.push_back({s.addr, s.name});
     }
-    if (work.empty()) {
-        // Stripped binary — fall back to discovered function entries.
-        // Use Cheap mode to avoid recursive compute_call_graph calls.
-        for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
-            if (b.import_at_plt(fn.addr)) continue;
-            work.push_back({fn.addr, fn.name});
-        }
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr)) continue;
+        if (!seen.insert(fn.addr).second) continue;
+        work.push_back({fn.addr, fn.name});
     }
     if (work.empty()) return {};
 

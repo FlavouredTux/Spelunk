@@ -32,6 +32,18 @@ struct Dem {
     bool is_ctor_dtor = false;
     bool failed = false;
 
+    // Guard against pathologically nested mangled types (5000-level
+    // pointer chains, deeply mutual-recursive template params from a
+    // hostile / corrupt symbol table). Itanium permits arbitrary
+    // nesting; without a cap, parse_type → parse_type recursion can
+    // exhaust the 8 MB Linux stack and crash the whole process. Real
+    // symbols never approach this depth — clang's own mangler caps
+    // around 256 in practice. Bail past the cap by setting `failed`
+    // (the caller treats failure as "leave the symbol mangled" rather
+    // than crashing).
+    static constexpr int kMaxDepth = 256;
+    int depth = 0;
+
     [[nodiscard]] bool eof() const { return pos >= in.size(); }
     char peek(std::size_t off = 0) const {
         return pos + off < in.size() ? in[pos + off] : '\0';
@@ -502,6 +514,9 @@ void parse_nested(Dem& d, std::string& out, std::string* cv_suffix) {
 //          | F ... E               (function type — rare in params; skip)
 void parse_type(Dem& d, std::string& out) {
     if (d.eof()) { d.fail(); return; }
+    if (d.depth >= Dem::kMaxDepth) { d.fail(); return; }
+    ++d.depth;
+    struct DepthPop { Dem& d; ~DepthPop() { --d.depth; } } pop{d};
     // Record position of the "unmodified" root so we can add the full type
     // (with modifiers) to the substitution table at the end.
     const std::size_t root_start = out.size();

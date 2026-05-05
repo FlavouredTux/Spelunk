@@ -498,6 +498,29 @@ format_disasm(const Binary& b, const FuncWindow& w) {
         "; disassembly of {} at {:#018x} ({} bytes)\n",
         w.label, w.start, bytes.size());
 
+    // Xref summary: who calls this function. Costs one call-graph walk on
+    // first invocation (~1s on a 12k-fn binary), but the result reads as a
+    // jump-off point — `; xrefs from: foo, bar, baz (+12 more)` saves the
+    // common "open disasm, then go grep callers separately" round trip.
+    if (const auto callers = compute_callers(b, w.start); !callers.empty()) {
+        constexpr std::size_t kMaxShown = 8;
+        const std::size_t shown = std::min(callers.size(), kMaxShown);
+        std::string line = ";   xrefs from: ";
+        for (std::size_t i = 0; i < shown; ++i) {
+            if (i > 0) line += ", ";
+            if (auto r = resolve_address_name(b, callers[i]); r) {
+                line += r->name;
+            } else {
+                line += std::format("sub_{:x}", callers[i]);
+            }
+        }
+        if (callers.size() > kMaxShown) {
+            line += std::format(" (+{} more)", callers.size() - kMaxShown);
+        }
+        line += '\n';
+        out += line;
+    }
+
     auto dec_r = make_decoder(b);
     if (!dec_r) return std::unexpected(dec_r.error());
     const Decoder& dec = **dec_r;

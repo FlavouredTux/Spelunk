@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <unordered_set>
 
+#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -36,16 +38,15 @@ struct SectionTable {
         });
     }
 
-    // True when `a` lies inside a loaded, non-executable section. Data
-    // sections (.data/.bss/.rodata/.got/__DATA*) answer yes; code
-    // sections (.text/__TEXT) answer no; unmapped addresses answer no.
-    [[nodiscard]] bool is_data(addr_t a) const noexcept {
+    enum class Class : u8 { Unmapped, Data, Code };
+
+    [[nodiscard]] Class classify(addr_t a) const noexcept {
         auto it = std::ranges::upper_bound(rows, a,
             {}, [](const Row& r) noexcept { return r.beg; });
-        if (it == rows.begin()) return false;
+        if (it == rows.begin()) return Class::Unmapped;
         --it;
-        if (a >= it->end) return false;
-        return it->allocated && !it->executable;
+        if (a >= it->end || !it->allocated) return Class::Unmapped;
+        return it->executable ? Class::Code : Class::Data;
     }
 };
 
@@ -75,17 +76,37 @@ compute_data_xrefs(const Binary& b) {
     const SectionTable sects(b);
     X64Decoder dec;
 
+    // Build the work list: every named-symbol function + every discovered
+    // function (deduped by address). Earlier this was symbol-only, which
+    // on a 109 MB stripped binary (Roblox client) walked < 5% of code and
+    // produced ~2k xrefs instead of the hundreds of thousands actually
+    // present. Same union-with-discovered fix that compute_call_graph
+    // needed.
+    struct WorkItem { addr_t addr; u64 size; };
+    std::vector<WorkItem> work;
+    std::unordered_set<addr_t> seen;
     for (const auto& sym : b.symbols()) {
         if (sym.is_import) continue;
         if (sym.kind != SymbolKind::Function) continue;
         if (sym.size == 0) continue;
+        if (!seen.insert(sym.addr).second) continue;
+        work.push_back({sym.addr, sym.size});
+    }
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr) != nullptr) continue;
+        if (fn.size == 0) continue;  // truly-unknown extent — skip rather
+                                     // than guess wildly past the function
+        if (!seen.insert(fn.addr).second) continue;
+        work.push_back({fn.addr, fn.size});
+    }
 
-        auto span = b.bytes_at(sym.addr);
+    for (const auto& w : work) {
+        auto span = b.bytes_at(w.addr);
         if (span.empty()) continue;
         const std::size_t limit = std::min<std::size_t>(
-            span.size(), static_cast<std::size_t>(sym.size));
+            span.size(), static_cast<std::size_t>(w.size));
 
-        addr_t ip = sym.addr;
+        addr_t ip = w.addr;
         std::size_t off = 0;
         while (off < limit) {
             auto remaining = span.subspan(off, limit - off);
@@ -109,10 +130,20 @@ compute_data_xrefs(const Binary& b) {
                     continue;
                 }
 
-                if (!sects.is_data(target)) continue;
+                const auto cls = sects.classify(target);
+                if (cls == SectionTable::Class::Unmapped) continue;
+
+                DataXrefKind k = classify(insn, j);
+                // LEA-to-code is a function-address-taken event — keep it
+                // (with CodePtr kind so consumers can filter). Other
+                // operand kinds against code sections are call/jmp
+                // targets, which belong on the call graph, not here.
+                if (cls == SectionTable::Class::Code) {
+                    if (k != DataXrefKind::Lea) continue;
+                    k = DataXrefKind::CodePtr;
+                }
 
                 auto& bucket = out[target];
-                const DataXrefKind k = classify(insn, j);
                 // Collapse the common case where one insn references the
                 // same target twice (e.g. read-modify-write): take the
                 // more specific kind (Write > Read).

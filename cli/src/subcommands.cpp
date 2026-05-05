@@ -43,6 +43,7 @@
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/indirect_calls.hpp>
 #include <ember/analysis/ir_cache.hpp>
@@ -1551,6 +1552,29 @@ int run_refs_to(const Args& args, const Binary& b) {
         while (ls > 0 && xrefs_tsv[ls - 1] != '\n') --ls;
         out.append(xrefs_tsv, ls, (pos + needle.size()) - ls);
         pos += needle.size();
+    }
+    // Also surface address-taken events from compute_data_xrefs. A function
+    // whose pointer ends up in a vtable / dispatch-table / callback-list
+    // slot in `.data` has no direct call edge — its callers reach it
+    // through the table, completely invisible to call-graph xrefs. The
+    // CodePtr kind exists exactly to recover this. Lea entries pointing at
+    // the same address are also surfaced (user passed a data target).
+    {
+        const auto dx = compute_data_xrefs(b);
+        if (auto it = dx.find(static_cast<addr_t>(*va)); it != dx.end()) {
+            for (const auto& r : it->second) {
+                if (r.kind != DataXrefKind::CodePtr &&
+                    r.kind != DataXrefKind::Lea) continue;
+                std::string_view tag =
+                    r.kind == DataXrefKind::CodePtr ? "code-ptr" : "lea";
+                std::string ctx;
+                if (auto cf = containing_function(b, r.from_pc); cf) {
+                    ctx = std::format("  ; {}+{:#x}", cf->name, cf->offset_within);
+                }
+                out += std::format("{:#x} -> {:#x}  ({}){}\n",
+                                   r.from_pc, *va, tag, ctx);
+            }
+        }
     }
     std::fwrite(out.data(), 1, out.size(), stdout);
     return EXIT_SUCCESS;

@@ -110,6 +110,10 @@ void print_help() {
     std::println("                       TSV (file_offset, va, nr, name). Traces a recent constant");
     std::println("                       write to rax/eax to resolve the number; unresolved sites");
     std::println("                       still surface, with `?` for nr/name. Linux x86-64 names.");
+    std::println("      --forge-spec ENTRY:VA  minimum struct/branch shape required for control to");
+    std::println("                       reach VA from ENTRY. Reports a witness call chain, the");
+    std::println("                       canonicalized branch decisions, and a deduped list of");
+    std::println("                       parameter-rooted load constraints. --json for machine form.");
     std::println("      --ipa            run interprocedural char*-arg propagation before -p/--struct");
     std::println("      --eh             parse __eh_frame + LSDA; annotate landing-pad blocks");
     std::println("      --objc-names     dump recovered Obj-C methods as TSV (imp, ±, class, selector, sig)");

@@ -71,6 +71,15 @@ add_executable(ember_int3_resolver_test int3_resolver_test.cpp)
 target_link_libraries(ember_int3_resolver_test PRIVATE ember::core ember::flags)
 add_test(NAME int3_resolver_unit COMMAND ember_int3_resolver_test)
 
+# Unit test for the forge-spec inferencer. Self-contained: a MockBinary
+# with hand-encoded x86-64 bytes for an `if (p->magic == 0x1234)` shape,
+# so the constraint extractor is exercised without depending on the
+# fixture C compiler. Compiler drift can't move addresses around
+# because the bytes are hand-laid.
+add_executable(ember_forge_spec_test forge_spec_test.cpp)
+target_link_libraries(ember_forge_spec_test PRIVATE ember::core ember::flags)
+add_test(NAME forge_spec_unit COMMAND ember_forge_spec_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

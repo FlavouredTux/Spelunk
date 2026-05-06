@@ -33,6 +33,7 @@ add_library(ember_core STATIC
     src/analysis/import_sigs.cpp
     src/analysis/indirect_calls.cpp
     src/analysis/type_infer_local.cpp
+    src/analysis/forge_spec.cpp
     src/analysis/eh_frame.cpp
     src/analysis/cfi.cpp
     src/analysis/objc.cpp

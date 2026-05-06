@@ -203,6 +203,7 @@ int main(int argc, char** argv) {
     if (!args.callees_class.empty()) return run_callees_class(args, b);
     if (!args.disasm_at.empty()) return run_disasm_at(args, b);
     if (!args.list_syscalls.empty()) return run_list_syscalls(args, b);
+    if (!args.forge_spec.empty())    return run_forge_spec(args, b);
     if (args.strings)            return run_strings(args, b);
     if (args.fingerprints)       return run_fingerprints(args, b);
     if (args.teef)               return run_teef(args, b);

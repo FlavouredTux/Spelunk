@@ -45,6 +45,7 @@
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/eh_frame.hpp>
+#include <ember/analysis/forge_spec.hpp>
 #include <ember/analysis/indirect_calls.hpp>
 #include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/objc.hpp>
@@ -1855,6 +1856,42 @@ int run_list_syscalls(const Args& args, const Binary& b) {
             std::print("?\t");
         }
         std::print("{}\n", s.name.empty() ? std::string{"?"} : s.name);
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_forge_spec(const Args& args, const Binary& b) {
+    // --forge-spec accepts ENTRY:VA. ENTRY = symbol name | hex VA | sub_<hex>;
+    // VA = hex | sub_<hex>. Both halves are required; bail with a useful
+    // error otherwise (mirroring how --apply-patches refuses malformed
+    // input rather than silently doing nothing).
+    const std::string_view raw = args.forge_spec;
+    const auto colon = raw.find(':');
+    if (colon == std::string_view::npos) {
+        std::println(stderr,
+            "ember: --forge-spec: expected ENTRY:VA, got '{}'", raw);
+        return EXIT_FAILURE;
+    }
+    const std::string_view entry_tok = raw.substr(0, colon);
+    const std::string_view target_tok = raw.substr(colon + 1);
+
+    auto entry_win = resolve_function(b, entry_tok);
+    if (!entry_win) return EXIT_FAILURE;  // resolve_function already printed
+
+    auto target_va = parse_cli_addr(target_tok);
+    if (!target_va) {
+        std::println(stderr,
+            "ember: --forge-spec: bad target VA '{}'", target_tok);
+        return EXIT_FAILURE;
+    }
+
+    auto spec = infer_forge_spec(b, entry_win->start, *target_va);
+    if (!spec) return report(spec.error());
+
+    if (args.json) {
+        std::print("{}\n", format_forge_spec_json(*spec));
+    } else {
+        std::print("{}", format_forge_spec(*spec));
     }
     return EXIT_SUCCESS;
 }

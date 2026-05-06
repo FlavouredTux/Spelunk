@@ -80,6 +80,16 @@ add_executable(ember_forge_spec_test forge_spec_test.cpp)
 target_link_libraries(ember_forge_spec_test PRIVATE ember::core ember::flags)
 add_test(NAME forge_spec_unit COMMAND ember_forge_spec_test)
 
+# Unit test for the structurer's drop-block diagnostic. Builds a
+# synthetic IrFunction with one reachable Return plus a disconnected
+# block carrying a Call, runs the structurer, and asserts the
+# pseudo-C output contains a STRUCTURER_FAIL marker for the dropped
+# block instead of silently omitting it.
+add_executable(ember_structurer_fail_test structurer_fail_test.cpp)
+target_link_libraries(ember_structurer_fail_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()

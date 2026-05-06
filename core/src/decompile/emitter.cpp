@@ -4675,6 +4675,44 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (sf.body) {
         e.emit_region(*sf.body, 1, body_buf);
     }
+    // Surface blocks the structurer failed to fit as explicit markers
+    // rather than letting their content vanish silently. Any IR block
+    // not reached by a `RegionKind::Block` node in the structured tree
+    // is unrendered — its instructions (calls included) would otherwise
+    // disappear with no diagnostic. The marker carries the address range
+    // so the user can fall back to `--disasm-at` to see what was dropped.
+    //
+    // Blocks the emitter intentionally suppressed (the canary `if
+    // (cookie) __stack_chk_fail()` fail-arm) are exempt — they're
+    // dropped on purpose, not by structurer failure.
+    if (sf.body && !sf.ir->blocks.empty()) {
+        std::set<addr_t> rendered_blocks;
+        std::function<void(const Region&)> collect = [&](const Region& r) {
+            if (r.kind == RegionKind::Block) rendered_blocks.insert(r.block_start);
+            for (const auto& c : r.children) if (c) collect(*c);
+        };
+        collect(*sf.body);
+        auto is_intentionally_suppressed = [&](const IrBlock& bb) noexcept {
+            if (!binary) return false;
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Call) continue;
+                if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
+                    if (Emitter::clean_import_name(s->name) == "__stack_chk_fail") {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        for (const auto& bb : sf.ir->blocks) {
+            if (bb.end <= bb.start) continue;
+            if (rendered_blocks.contains(bb.start)) continue;
+            if (is_intentionally_suppressed(bb)) continue;
+            body_buf += std::format(
+                "  // STRUCTURER_FAIL: {:#x}..{:#x} (see --disasm-at)\n",
+                bb.start, bb.end);
+        }
+    }
     for (const auto& [k, name] : e.merge_value_names) {
         if (body_buf.find(name) == std::string::npos) continue;
         auto dit = e.defs.find(k);

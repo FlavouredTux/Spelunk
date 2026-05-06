@@ -187,15 +187,20 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
         auto hit = fn.block_at.find(header);
         if (hit == fn.block_at.end()) continue;
         const auto& hbb = fn.blocks[hit->second];
-        // Top-tested loop (while/for): header itself is the predicate.
+        // Top-tested loop (while/for): header itself is the predicate
+        // and exactly one arm exits the loop.
         if (hbb.kind == BlockKind::Conditional && hbb.successors.size() == 2) {
             addr_t s1 = hbb.successors[0];
             addr_t s2 = hbb.successors[1];
             const bool s1_loops = can_reach(s1, backs, /*forbidden=*/header);
             const bool s2_loops = can_reach(s2, backs, /*forbidden=*/header);
-            if (s1_loops && !s2_loops)      info.loop_exit[header] = s2;
-            else if (s2_loops && !s1_loops) info.loop_exit[header] = s1;
-            continue;
+            if (s1_loops && !s2_loops)      { info.loop_exit[header] = s2; continue; }
+            else if (s2_loops && !s1_loops) { info.loop_exit[header] = s1; continue; }
+            // Both arms loop — header's conditional is internal to the
+            // body (e.g. a skip-and-accumulate fork), and the real exit
+            // sits on a back-edge tail. Fall through to do-while
+            // detection rather than leaving loop_exit unset, which would
+            // strand the post-loop block in the parent build_sequence.
         }
         // Bottom-tested loop (do-while): header isn't conditional, but a
         // back-edge tail tests-and-exits. Pick the first qualifying tail's
@@ -1179,6 +1184,25 @@ std::string format_structured(const StructuredFunction& sf) {
     out += std::format("function {} @ {:#x} {{\n", name, sf.ir->start);
     if (sf.body) {
         print_region(*sf.body, *sf.ir, 1, out);
+    }
+    // Mirror PseudoCEmitter::emit: any IR block not referenced by a
+    // RegionKind::Block in the structured tree was dropped by the
+    // structurer. Surface it as an explicit marker so the omission
+    // is visible to the reader.
+    if (sf.body && !sf.ir->blocks.empty()) {
+        std::set<addr_t> rendered_blocks;
+        std::function<void(const Region&)> collect = [&](const Region& r) {
+            if (r.kind == RegionKind::Block) rendered_blocks.insert(r.block_start);
+            for (const auto& c : r.children) if (c) collect(*c);
+        };
+        collect(*sf.body);
+        for (const auto& bb : sf.ir->blocks) {
+            if (bb.end <= bb.start) continue;
+            if (rendered_blocks.contains(bb.start)) continue;
+            out += std::format(
+                "  ; STRUCTURER_FAIL: {:#x}..{:#x} (see --disasm-at)\n",
+                bb.start, bb.end);
+        }
     }
     out += "}\n";
     return out;

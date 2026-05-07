@@ -13,7 +13,6 @@
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/strings.hpp>
-#include <ember/analysis/vm_detect.hpp>
 #include <ember/analysis/int3_resolver.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
@@ -187,99 +186,6 @@ std::string build_rtti_output(const Binary& b) {
             out += std::format("vfn\t{:x}\t{}\t{}::vfn_{}\n",
                                c.methods[i], i, c.demangled_name, i);
         }
-    }
-    return out;
-}
-
-// One block per VM (handler-table cluster). Lists the table + anatomy
-// once and breaks the per-site rows into entry sites (central /
-// external dispatchers) and threaded sites (handler tail-dispatches),
-// so a 16-handler threaded VM reads as one VM with 16 slots instead
-// of 16 disconnected dispatchers.
-std::string build_vm_detect_output(const Binary& b) {
-    auto fn_label = [&](addr_t va) -> std::string {
-        for (const auto& s : b.symbols()) {
-            if (s.is_import) continue;
-            if (s.kind != SymbolKind::Function) continue;
-            if (s.addr == va && !s.name.empty()) return s.name;
-        }
-        return std::format("sub_{:x}", va);
-    };
-
-    constexpr std::size_t kHandlersShown   = 16;
-
-    std::string out;
-    std::size_t idx = 0;
-    for (const auto& vm : analyze_vms(b)) {
-        if (idx > 0) out += "\n";
-        out += std::format("vm #{}\n", idx + 1);
-        out += std::format("  handler table:   {:#x}  ({} entries, {} unique)\n",
-                           vm.table_addr, vm.table_entries, vm.handlers.size());
-        out += std::format("  opcode register: {}  ({}-byte opcode)\n",
-                           reg_name(vm.opcode_index_reg),
-                           static_cast<unsigned>(vm.opcode_size_bytes));
-        out += std::format("  pc register:     {}\n",
-                           vm.pc_register == Reg::None
-                               ? std::string_view{"unknown"}
-                               : reg_name(vm.pc_register));
-        if (vm.pc_disp != 0) {
-            out += std::format("  pc disp:         {:#x}\n",
-                               static_cast<u64>(static_cast<i64>(vm.pc_disp)));
-        }
-        if (vm.pc_advance != 0) {
-            const char sign = vm.pc_advance > 0 ? '+' : '-';
-            out += std::format("  pc advance:      {}{}\n",
-                               sign,
-                               vm.pc_advance > 0 ? vm.pc_advance : -vm.pc_advance);
-        } else {
-            out += "  pc advance:      (unobserved — may live inside handlers)\n";
-        }
-        if (vm.bytecode_addr != 0) {
-            out += std::format("  bytecode:        {:#x}  (constant via lea rip+disp)\n",
-                               vm.bytecode_addr);
-        } else {
-            out += "  bytecode:        (runtime / caller-supplied)\n";
-        }
-
-        auto emit_sites = [&](std::string_view header,
-                              const std::vector<VmDispatcher>& sites) {
-            if (sites.empty()) return;
-            out += std::format("  {} ({}):\n", header, sites.size());
-            for (const auto& d : sites) {
-                out += std::format("    {} → dispatch {:#x} (load {:#x})\n",
-                                   fn_label(d.function_addr),
-                                   d.dispatch_addr, d.opcode_load_addr);
-            }
-        };
-        emit_sites("entry sites",    vm.entry_sites);
-        emit_sites("threaded sites", vm.threaded_sites);
-
-        const std::size_t shown = std::min(vm.handlers.size(), kHandlersShown);
-        out += std::format("  handlers ({} shown):\n", shown);
-        // Each row: "[idx] addr → kind detail (insns=N)" — kind from
-        // the body classifier, detail is the kind's short summary
-        // (arith mnemonic, load/store mem operand, branch mnemonic,
-        // call target VA), and insn count is the body length.
-        for (std::size_t i = 0; i < shown; ++i) {
-            const HandlerClassification* hc = nullptr;
-            if (i < vm.handler_classes.size()) hc = &vm.handler_classes[i];
-            const std::string_view kind_name = hc
-                ? handler_kind_name(hc->kind)
-                : std::string_view{"?"};
-            out += std::format("    [{:#04x}] {:#x} → {}",
-                               i, vm.handlers[i], kind_name);
-            if (hc && !hc->summary.empty()) {
-                out += std::format(" {}", hc->summary);
-            }
-            if (hc && hc->insn_count > 0) {
-                out += std::format(" (insns={})", hc->insn_count);
-            }
-            out += "\n";
-        }
-        if (vm.handlers.size() > shown) {
-            out += std::format("    ... +{} more\n", vm.handlers.size() - shown);
-        }
-        ++idx;
     }
     return out;
 }

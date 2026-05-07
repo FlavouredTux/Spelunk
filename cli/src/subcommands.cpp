@@ -1398,10 +1398,6 @@ int run_rtti(const Args& args, const Binary& b) {
     return run_cached(args, "rtti", [&] { return build_rtti_output(b); });
 }
 
-int run_vm_detect(const Args& args, const Binary& b) {
-    return run_cached(args, "vm-detect", [&] { return build_vm_detect_output(b); });
-}
-
 int run_int3_resolve(const Args& args, const Binary& b) {
     return run_cached(args, "int3-resolve", [&] { return build_int3_resolve_output(b); });
 }

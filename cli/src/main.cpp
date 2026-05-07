@@ -213,7 +213,6 @@ int main(int argc, char** argv) {
     if (args.objc_names)         return run_objc_names(args, b);
     if (args.objc_protos)        return run_objc_protos(args, b);
     if (args.rtti)               return run_rtti(args, b);
-    if (args.vm_detect)          return run_vm_detect(args, b);
     if (args.int3_resolve)       return run_int3_resolve(args, b);
     if (args.arities)            return run_arities(args, b);
     if (args.functions)          return run_functions(args, b);

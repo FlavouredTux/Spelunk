@@ -9,10 +9,7 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes. Bumped to 12
-// when the vm-detect dispatcher walker grew stack-slot shadow tracking
-// (mov [base+disp], reg save / mov reg, [base+disp] restore) — the
-// new fixture's VM #6 only shows up under v12.
+// Bump when any cached payload's on-disk format changes.
 inline constexpr int kVersion = 12;
 
 std::filesystem::path default_dir();

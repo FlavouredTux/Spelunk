@@ -110,7 +110,6 @@ struct Args {
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
-    bool vm_detect = false;         // scan for interpreter-style VM dispatchers
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)

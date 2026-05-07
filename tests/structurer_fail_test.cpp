@@ -42,10 +42,21 @@ ember::IrInst make_call_imm(ember::addr_t pc, ember::addr_t target) {
     return ci;
 }
 
-}  // namespace
+ember::IrInst make_branch(ember::addr_t pc, ember::addr_t target) {
+    ember::IrInst bi;
+    bi.op          = ember::IrOp::Branch;
+    bi.source_addr = pc;
+    bi.target1     = target;
+    return bi;
+}
 
-int main() {
+// ----------------------------------------------------------------------------
+// Test 1: a disconnected block carrying a Call surfaces as STRUCTURER_FAIL
+// instead of vanishing silently.
+
+int test_dropped_block_diagnostic() {
     using namespace ember;
+
 
     IrFunction fn;
     fn.start = 0x10404a846;
@@ -113,5 +124,82 @@ int main() {
               "PseudoCEmitter::emit surfaces STRUCTURER_FAIL");
     }
 
-    return fails == 0 ? 0 : 1;
+    return 0;
+}
+
+// ----------------------------------------------------------------------------
+// Test 2: a multi-block infinite loop renders both header and body, not just
+// the header. Shape:
+//   bb_a (header): foo();   jmp bb_b
+//   bb_b:          bar();   jmp bb_a   ; back-edge
+// Without the body-walk fix in build_loop's RegionKind::Loop branch, bb_b
+// would silently disappear inside `for (;;) { bb_a-only; }`. We detect the
+// fix indirectly: format_structured should reference bb_b somewhere in the
+// loop body, AND no STRUCTURER_FAIL marker should be emitted for bb_b.
+
+int test_infinite_loop_body_recovered() {
+    using namespace ember;
+
+    constexpr addr_t kA = 0x401000;
+    constexpr addr_t kB = 0x401010;
+
+    IrFunction fn;
+    fn.start = kA;
+    fn.end   = kB + 0x10;
+    fn.name  = "infinite_loop";
+
+    {
+        IrBlock bb;
+        bb.start = kA;
+        bb.end   = kA + 0x10;
+        bb.kind  = BlockKind::Unconditional;
+        bb.insts.push_back(make_call_imm(kA, 0x402000));   // foo()
+        bb.insts.push_back(make_branch(kA + 5, kB));
+        bb.successors.push_back(kB);
+        fn.block_at[bb.start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(bb));
+    }
+    {
+        IrBlock bb;
+        bb.start = kB;
+        bb.end   = kB + 0x10;
+        bb.kind  = BlockKind::Unconditional;
+        bb.insts.push_back(make_call_imm(kB, 0x402010));   // bar()
+        bb.insts.push_back(make_branch(kB + 5, kA));
+        bb.successors.push_back(kA);
+        fn.block_at[bb.start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(bb));
+    }
+    // Cross-link predecessors so find_loops sees a real back-edge.
+    fn.blocks[0].predecessors.push_back(kB);  // bb_b → bb_a (back-edge)
+    fn.blocks[1].predecessors.push_back(kA);  // bb_a → bb_b
+
+    Structurer s;
+    auto sf_r = s.structure(fn);
+    check(sf_r.has_value(), "structurer returned a result for infinite loop");
+    if (!sf_r) return 1;
+
+    const std::string structured_text = format_structured(*sf_r);
+
+    // bb_b's address must appear in the rendered tree — the body block
+    // would be omitted under the pre-fix `RegionKind::Loop` branch.
+    const std::string bb_b_marker = std::format("bb_{:x}", kB);
+    check(structured_text.find(bb_b_marker) != std::string::npos,
+          "infinite-loop body block surfaces in the structured output");
+
+    // And no STRUCTURER_FAIL should fire for either block — the diagnostic
+    // is a safety net, not a substitute for actually rendering the body.
+    check(structured_text.find("STRUCTURER_FAIL") == std::string::npos,
+          "no STRUCTURER_FAIL fires for a recovered infinite-loop body");
+
+    return 0;
+}
+
+}  // namespace
+
+int main() {
+    int rc = 0;
+    rc |= test_dropped_block_diagnostic();
+    rc |= test_infinite_loop_body_recovered();
+    return (fails == 0 && rc == 0) ? 0 : 1;
 }

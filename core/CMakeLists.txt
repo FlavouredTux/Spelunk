@@ -38,7 +38,6 @@ add_library(ember_core STATIC
     src/analysis/cfi.cpp
     src/analysis/objc.cpp
     src/analysis/pe_unwind.cpp
-    src/analysis/vm_detect.cpp
     src/analysis/int3_resolver.cpp
     src/analysis/packed.cpp
     src/analysis/discovery.cpp

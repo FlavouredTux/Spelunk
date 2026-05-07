@@ -43,7 +43,6 @@ int run_identify    (const Args& args, const Binary& b);
 int run_objc_names  (const Args& args, const Binary& b);
 int run_objc_protos (const Args& args, const Binary& b);
 int run_rtti        (const Args& args, const Binary& b);
-int run_vm_detect   (const Args& args, const Binary& b);
 int run_int3_resolve(const Args& args, const Binary& b);
 int run_arities     (const Args& args, const Binary& b);
 int run_functions   (const Args& args, const Binary& b);

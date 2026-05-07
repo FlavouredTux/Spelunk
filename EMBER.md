@@ -302,7 +302,7 @@ Stop trying these things; they're known limits, not bugs:
 - **Computed-goto VM dispatchers** (one big function with `jmp [tab+rax*8]`
   to internal labels) aren't real callers from the compiler's POV.
   `--refs-to` on the "labels" returns nothing because they're not
-  separate functions. Use `--vm-detect` to find the dispatcher.
+  separate functions — read the dispatcher's pseudo-C directly.
 - **Anti-debug / packed binaries** that flip section permissions at
   runtime: load a runtime memory image instead — Microsoft minidump
   (`ember -p ./crash.dmp`) or a `--regions <manifest>` scrape.

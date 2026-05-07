@@ -795,10 +795,41 @@ public:
 
         // For a do-while the body continues through fallthrough / block
         // successors from the header until (but not including) the exit.
-        // For a while, body starts at body_entry.
+        // For a while, body starts at body_entry. For a pure infinite
+        // loop (no recognised exit anywhere), walk the header's
+        // non-back-edge successors with stop=header so multi-block
+        // bodies aren't silently dropped under `for (;;) { header; }`.
         if (body_entry != kNoAddr) {
             auto body = build_sequence(body_entry, header);
             loop_r->children.push_back(std::move(body));
+        } else if (loop_r->kind == RegionKind::Loop) {
+            if (bb.kind == BlockKind::Conditional && bb.successors.size() == 2) {
+                const addr_t s1 = bb.successors[0];
+                const addr_t s2 = bb.successors[1];
+                auto then_r = (s1 == header)
+                    ? make_simple(RegionKind::Continue)
+                    : build_sequence(s1, header);
+                auto else_r = (s2 == header)
+                    ? make_simple(RegionKind::Continue)
+                    : build_sequence(s2, header);
+                auto ifr = std::make_unique<Region>();
+                ifr->condition = extract_condition(bb);
+                if (else_r && !is_empty_region(else_r.get())) {
+                    ifr->kind = RegionKind::IfElse;
+                    ifr->children.push_back(std::move(then_r));
+                    ifr->children.push_back(std::move(else_r));
+                } else {
+                    ifr->kind = RegionKind::IfThen;
+                    ifr->children.push_back(std::move(then_r));
+                }
+                loop_r->children.push_back(std::move(ifr));
+            } else if (!bb.successors.empty()) {
+                const addr_t s = bb.successors.front();
+                if (s != header) {
+                    auto body = build_sequence(s, header);
+                    loop_r->children.push_back(std::move(body));
+                }
+            }
         } else if (do_while) {
             // Walk header → tail via the body path. Stop *before* dw_tail so
             // its cond-branch isn't rendered as `if (cond) continue; else break;`

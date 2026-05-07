@@ -190,7 +190,6 @@ ember [options] <binary>
       --ipa              run IPA before pseudo-C (typed sigs across calls)
       --resolve-calls    resolve indirect calls (IAT + constant vtables)
       --eh               parse unwind tables, mark landing pads
-      --vm-detect        scan for interpreter-style VM dispatchers
       --list-syscalls VA report each `syscall` site in the function at VA
       --debug            launch / attach a debugger; see docs/debugger.md
 
@@ -306,7 +305,7 @@ cli/              command-line driver
 ui/               Electron + React + TypeScript frontend
 agent/            TypeScript multi-agent LLM harness
 tests/            golden-output CTest suite
-docs/             scripting, debugger, vm-detect, raw-input, plugin platform,
+docs/             scripting, debugger, raw-input, plugin platform,
                   agent harness, TEEF Max
 ```
 

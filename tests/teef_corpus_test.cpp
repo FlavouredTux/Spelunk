@@ -466,6 +466,53 @@ void test_boilerplate_label_cap() {
     fs::remove(path);
 }
 
+void test_boilerplate_label_mangled_forms() {
+    // Real Rust binaries store names in mangled form. The detector
+    // must catch the `drop_in_place` / `panic_fmt` substrings inside
+    // both legacy mangle (length-prefixed + $LT$/$GT$/$u20$ escapes)
+    // and v0 mangle (_R-prefixed, length-prefixed). Without this,
+    // the boilerplate cap silently fails on every real Rust target.
+    std::string tsv;
+    // Legacy mangle of `core::ptr::drop_in_place::<HashMap<K,V>>`
+    tsv += make_f_row(0x1000, /*l2*/0x111, 0x10,
+                      "_ZN4core3ptr181drop_in_place$LT$std..collections..hash..map.."
+                      "HashMap$LT$alloc..string..String$C$alloc..vec..Vec$LT$i32$GT$"
+                      "$GT$$GT$17h20d4f14c1cf79a0aE");
+    // v0 mangle of `core::panicking::panic_fmt`
+    tsv += make_f_row(0x2000, /*l2*/0x222, 0x20,
+                      "_RNvNtCsgEmfK2I1SDS_4core9panicking9panic_fmt");
+    // v0 mangle of `core::ptr::drop_in_place::<…>`
+    tsv += make_f_row(0x3000, /*l2*/0x333, 0x30,
+                      "_RINvNtCsgEmfK2I1SDS_4core3ptr13drop_in_placeINtNtCs_"
+                      "alloc6string6StringEEB1n_");
+    // Legacy mangle of `<T as core::fmt::Debug>::fmt`
+    tsv += make_f_row(0x4000, /*l2*/0x444, 0x40,
+                      "_ZN52_$LT$alloc..string..String$u20$as$u20$core..fmt.."
+                      "Debug$GT$3fmt17habcdef0123456789E");
+    const auto path = write_tmp(tsv, "mangled");
+    ember::TeefCorpus c;
+    (void)c.load_tsv(path);
+
+    struct Case { ember::u64 hash; ember::u64 mh; const char* desc; };
+    const Case cases[] = {
+        {0x111, 0x10, "legacy mangle drop_in_place"},
+        {0x222, 0x20, "v0 mangle panic_fmt"},
+        {0x333, 0x30, "v0 mangle drop_in_place"},
+        {0x444, 0x40, "legacy mangle fmt::Debug impl"},
+    };
+    for (const auto& tc : cases) {
+        auto q = make_query(tc.hash, tc.mh);
+        auto m = c.recognize(q, 3);
+        check_true(!m.empty(), tc.desc);
+        if (!m.empty()) {
+            // Cap should fire — confidence ≤ 0.7 regardless of how
+            // strong the structural collision was.
+            check_true(m[0].confidence <= 0.7f, tc.desc);
+        }
+    }
+    fs::remove(path);
+}
+
 void test_chunk_vote_thin_evidence_cap() {
     // Chunk-vote with no string anchor and no L4 corroboration is
     // the most FP-prone lane — multiple unrelated functions share
@@ -528,6 +575,7 @@ int main() {
     test_strings_filter_rejects_disjoint();
     test_thin_evidence_cap();
     test_boilerplate_label_cap();
+    test_boilerplate_label_mangled_forms();
     test_chunk_vote_thin_evidence_cap();
 
     if (fails) {

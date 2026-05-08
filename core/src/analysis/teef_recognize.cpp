@@ -101,20 +101,30 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
 // destructors and `__cxa_*` runtime forwarders; treated together
 // since the symptom and remedy are identical.
 [[nodiscard]] bool is_boilerplate_label(std::string_view nm) noexcept {
-    // Rust drop glue / panic / fmt patterns.
-    if (nm.starts_with("core::ptr::drop_in_place"))   return true;
-    if (nm.starts_with("core::panicking::"))          return true;
-    if (nm.starts_with("alloc::raw_vec::"))           return true;
-    if (nm.find("as core::fmt::Debug") != std::string_view::npos)   return true;
-    if (nm.find("as core::fmt::Display") != std::string_view::npos) return true;
-    if (nm.find("core::fmt::Formatter") != std::string_view::npos)  return true;
+    // Match raw identifier substrings that appear in all three name
+    // forms a real Rust binary will throw at us:
+    //   1. demangled                  : `core::ptr::drop_in_place::<…>`
+    //   2. legacy mangle (length+$..) : `_ZN4core3ptr…drop_in_place$LT$…$GT$…E`
+    //   3. v0 mangle      (_R prefix) : `_RINvNtCs…_4core3ptr13drop_in_place…`
+    // Length-prefixed identifiers like `13drop_in_place` and
+    // `9panic_fmt` always contain the bare identifier as a substring,
+    // so a single `find()` covers all three encodings.
+    if (nm.find("drop_in_place") != std::string_view::npos) return true;
+    if (nm.find("panic_fmt")     != std::string_view::npos) return true;
+    if (nm.find("panicking")     != std::string_view::npos) return true;
+    if (nm.find("raw_vec")       != std::string_view::npos) return true;
+    // fmt trait impls — three encodings of the "X as Trait" qualifier.
+    if (nm.find("as core::fmt::") != std::string_view::npos)         return true;  // demangled
+    if (nm.find("$u20$as$u20$core..fmt..") != std::string_view::npos) return true; // legacy
+    if (nm.find("core::fmt::Formatter") != std::string_view::npos)   return true;  // demangled
     // Itanium-mangled C++ destructors (D0 base-object, D1 complete,
-    // D2 deleting). Hash heavily across types.
+    // D2 deleting) and __cxa_* runtime forwarders. Same FP-class as
+    // Rust drop glue: trivial bodies that hash across types.
     if (nm.starts_with("_ZN") &&
         (nm.find("D0Ev") != std::string_view::npos ||
          nm.find("D1Ev") != std::string_view::npos ||
          nm.find("D2Ev") != std::string_view::npos)) return true;
-    if (nm.starts_with("__cxa_"))                    return true;
+    if (nm.starts_with("__cxa_")) return true;
     return false;
 }
 

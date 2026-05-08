@@ -18,12 +18,29 @@
 
 namespace ember::debug {
 
+// Which kernel-side mechanism backs the Target. Default = the platform's
+// classic debugger backend (ptrace on Linux, Mach on macOS). Perf is
+// the Linux-only `perf_event_open` + `/proc/<pid>/mem` backend used to
+// observe processes the kernel won't let us ptrace (anti-cheat games
+// running their own tracer, yama-scoped processes attached after spawn,
+// targets that watch `TracerPid` in /proc). Capabilities are reduced —
+// no software breakpoints, no single-step, no on-demand register read,
+// no syscall catch — but the target stays unaware: TracerPid is 0, the
+// 4 HW debug slots are programmed by the kernel rather than by us, and
+// every memory operation goes through /proc/<pid>/mem.
+enum class BackendKind : u8 {
+    Default,   // platform default (ptrace on Linux, Mach on macOS)
+    Ptrace,    // explicit ptrace (Linux x86-64 only)
+    Perf,      // perf_event_open + /proc, no ptrace (Linux x86-64 only)
+};
+
 struct LaunchOptions {
     std::string              program;        // path to the executable
     std::vector<std::string> args;           // argv excluding argv[0]
     std::vector<std::string> env;            // empty → inherit parent's environ
     std::string              cwd;            // empty → inherit
     bool                     stop_at_entry = true;  // first wait_event() yields EvStopped at the first user instruction
+    BackendKind              backend = BackendKind::Default;
 };
 
 struct LoadedImage {
@@ -105,8 +122,11 @@ private:
     Int3ResolverFn int3_resolver_;
 };
 
-// Platform dispatch. Linux: ptrace. macOS/Windows: NotImplemented for v0.
+// Platform + backend dispatch. Linux: ptrace by default, perf when
+// LaunchOptions::backend / kind selects it. macOS: Mach (Default only).
+// Other platforms: NotImplemented.
 [[nodiscard]] Result<std::unique_ptr<Target>> launch(const LaunchOptions&);
-[[nodiscard]] Result<std::unique_ptr<Target>> attach(ProcessId pid);
+[[nodiscard]] Result<std::unique_ptr<Target>>
+    attach(ProcessId pid, BackendKind kind = BackendKind::Default);
 
 }  // namespace ember::debug

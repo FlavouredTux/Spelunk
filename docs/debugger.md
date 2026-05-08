@@ -23,6 +23,79 @@ seed the [ignored-fault filter](#ignored-faults) so a binary that
 catches and recovers from `SIGSEGV` / `SIGILL` internally doesn't stop
 the debugger on every recoverable hit.
 
+## Backend selection (Linux)
+
+`--debug-backend=<kind>` picks which kernel mechanism backs the
+session. Default is `ptrace`.
+
+| kind     | mechanism                                | when to pick                                                            |
+|----------|------------------------------------------|-------------------------------------------------------------------------|
+| `ptrace` | classic `ptrace(2)` (PTRACE_SEIZE etc.)  | default — full feature set, works against most targets                  |
+| `perf`   | `perf_event_open` + `/proc/<pid>/mem`    | TracerPid must stay 0; another tracer (anti-cheat, debugger) is already attached; observation-only; or kernel hardening blocks ptrace but not perf |
+| `auto`   | try `perf` first, fall back to `ptrace`  | you want the perf benefits when available without a hard requirement    |
+
+The perf backend is the answer to "ptrace doesn't work on this game."
+It opens its hardware breakpoint slots through the kernel's perf
+subsystem instead of a tracer relationship, leaves `TracerPid` at 0
+in `/proc/<pid>/status`, and never has to pause the target to inspect
+it. The trade-off is a smaller capability surface:
+
+| capability                  | ptrace | perf       |
+|-----------------------------|--------|------------|
+| memory read/write           | yes    | yes        |
+| HW execute breakpoint       | yes    | yes (4)    |
+| HW data watchpoint          | yes    | yes (4)    |
+| software breakpoint (int3)  | yes    | **no**     |
+| single-step                 | yes    | **no**     |
+| on-demand register read     | yes    | **no — cached from last sample only** |
+| register write              | yes    | **no**     |
+| syscall catch               | yes    | **no**     |
+| stop-at-entry on launch     | clean  | best-effort (microsecond race vs. `_start`) |
+| invisible to TracerPid scan | no     | yes        |
+
+HW breakpoints and watchpoints share the same four-slot pool (the
+kernel programs them through DR0..DR3). When all four are taken,
+the next `set_breakpoint` / `set_watchpoint` returns
+`out-of-bounds: no free HW debug slot`.
+
+`get_regs` returns the register snapshot captured by the *last* perf
+sample for that thread. Before the first BP/WP fires, all GPRs read
+as zero (`present == 0`). After a sample, the snapshot is GPR-only
+(`PresentGpr` set, FP/SIMD/DR slots empty) and represents the state
+*at the trap point*, not the target's current state — which by
+default keeps running.
+
+`set_regs`, `step`, `set_syscall_catch`, and software breakpoints
+all return `unsupported: ... — switch to the ptrace backend`. The
+REPL prints those errors verbatim; the session keeps going.
+
+### Permissions
+
+`perf_event_open(PERF_TYPE_BREAKPOINT)` is gated by
+`/proc/sys/kernel/perf_event_paranoid`:
+
+- `paranoid <= 1`: works for any task you can ptrace (same uid, or
+  with `CAP_SYS_PTRACE`).
+- `paranoid >= 2`: denied unless the binary has `CAP_PERFMON` /
+  `CAP_SYS_ADMIN`. Grant via `setcap cap_perfmon+ep ./build/cli/ember`.
+
+When denied, the backend reports `unsupported: perf_event_open
+denied — set /proc/sys/kernel/perf_event_paranoid to 1 (or below),
+or grant CAP_PERFMON to ember`. With `--debug-backend=auto` the CLI
+falls through to `ptrace` automatically.
+
+### Stealth caveats
+
+`perf` keeps `TracerPid` at 0 — the most common anti-debug check —
+but isn't undetectable. A target that audits its own DR0..DR3 (e.g.
+via `perf_event_open(PERF_TYPE_BREAKPOINT, ..., self_pid)` to see if
+slots are taken, or with the `arch_prctl` debug-state introspection
+in some kernels) will still notice. Kernel-mode anti-cheat sees
+everything. For more resistant targets, the right move is to attach
+to a long-running process from outside rather than launch under the
+debugger — the launch path's brief SIGSTOP at entry is a tell that
+`attach` doesn't have.
+
 ## REPL surface
 
 ```
@@ -321,4 +394,10 @@ parent stays armed in the child without re-typing the verb.
   watchpoints through `thread_set_state` with `x86_DEBUG_STATE64`,
   and Mach has no clean syscall-trap analogue without per-syscall
   exception ports).
-- No remote target mode; everything is in-process ptrace / Mach.
+- The perf backend is Linux x86-64 only — it leans on
+  `perf_event_open(PERF_TYPE_BREAKPOINT)`, `pidfd_open`,
+  `process_vm_readv`, and the per-fd mmap ring. AArch64 has the same
+  primitives in the kernel but the sample-regs-user enum is
+  different and we don't bind it yet.
+- No remote target mode; everything is in-process ptrace / Mach /
+  perf.

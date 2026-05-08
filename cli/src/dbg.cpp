@@ -290,6 +290,13 @@ struct ReplState {
     // signal back instead of stopping. Slide-correction happens at
     // match time using whichever Binary owns the live PC.
     std::set<addr_t>               ignored_faults;
+
+    // Backend selection lifted from --debug-backend at startup so
+    // every cmd_run / cmd_attach invocation in the REPL uses the
+    // same kind without re-parsing args. allow_fallback is set only
+    // when the user explicitly chose "auto".
+    debug::BackendKind             backend_kind           = debug::BackendKind::Default;
+    bool                           backend_allow_fallback = false;
 };
 
 // Strip directories and the trailing extension from a path; the
@@ -701,6 +708,24 @@ void on_target_released(ReplState& rs) {
     rs.wp_specs.clear();
 }
 
+// Resolve --debug-backend into a (BackendKind, allow-fallback) pair.
+// "auto" means try perf first, fall through to ptrace on Error::Unsupported
+// or any io error from perf_event_open denial.
+struct BackendChoice {
+    debug::BackendKind kind = debug::BackendKind::Default;
+    bool               allow_fallback = false;
+};
+
+BackendChoice parse_debug_backend(std::string_view s) {
+    if (s.empty() || s == "ptrace") return {debug::BackendKind::Ptrace,  false};
+    if (s == "perf")                return {debug::BackendKind::Perf,    false};
+    if (s == "auto")                return {debug::BackendKind::Perf,    true};
+    std::println(stderr,
+        "ember-dbg: --debug-backend: unknown value '{}' (expected ptrace|perf|auto) — using ptrace",
+        s);
+    return {debug::BackendKind::Ptrace, false};
+}
+
 int cmd_run(ReplState& rs, const Args& args) {
     if (rs.live) {
         std::println("Already running. Use `kill` then `run` to restart.");
@@ -714,7 +739,15 @@ int cmd_run(ReplState& rs, const Args& args) {
     opts.program = args.binary;
     opts.args    = args.debug_args;
     opts.stop_at_entry = true;
+    opts.backend = rs.backend_kind;
     auto t = debug::launch(opts);
+    if (!t && rs.backend_allow_fallback &&
+        rs.backend_kind == debug::BackendKind::Perf) {
+        std::println("Backend `perf` failed ({}: {}); falling back to `ptrace`.",
+                     t.error().kind_name(), t.error().message);
+        opts.backend = debug::BackendKind::Ptrace;
+        t = debug::launch(opts);
+    }
     if (!t) { print_error(t.error()); return 1; }
     rs.tgt = std::move(*t);
     on_target_acquired(rs);
@@ -731,7 +764,15 @@ int cmd_attach(ReplState& rs, std::string_view pid_str) {
         std::println(stderr, "ember-dbg: attach: bad pid '{}'", pid_str);
         return 1;
     }
-    auto t = debug::attach(static_cast<debug::ProcessId>(*pid));
+    auto t = debug::attach(static_cast<debug::ProcessId>(*pid),
+                           rs.backend_kind);
+    if (!t && rs.backend_allow_fallback &&
+        rs.backend_kind == debug::BackendKind::Perf) {
+        std::println("Backend `perf` failed ({}: {}); falling back to `ptrace`.",
+                     t.error().kind_name(), t.error().message);
+        t = debug::attach(static_cast<debug::ProcessId>(*pid),
+                          debug::BackendKind::Ptrace);
+    }
     if (!t) { print_error(t.error()); return 1; }
     rs.tgt = std::move(*t);
     on_target_acquired(rs);
@@ -1833,6 +1874,12 @@ int run_debug(const Args& args, const Binary* bin,
     if (!rs.ignored_faults.empty()) {
         std::println("{} ignored-fault PC(s) configured.",
                      rs.ignored_faults.size());
+    }
+
+    {
+        const auto choice = parse_debug_backend(args.debug_backend);
+        rs.backend_kind           = choice.kind;
+        rs.backend_allow_fallback = choice.allow_fallback;
     }
 
     // Warn at startup if any short names collide. Lookups still pick

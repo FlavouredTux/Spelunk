@@ -629,6 +629,45 @@ void test_behav_exact_low_entropy_floor() {
     fs::remove(path);
 }
 
+void test_behav_exact_topo_disagreement() {
+    // Third corroboration signal: topology hash. Same source across
+    // compiler versions = same high-level CFG = same topo. Spurious
+    // L4 collisions across semantically-unrelated fns differ in
+    // topo. Even when L4 hash matches AND L2 jaccard clears the
+    // floor, a topo mismatch caps the match — wrapper fns stop
+    // getting confidently labeled as libstdc++ regex internals.
+    std::string tsv;
+    // Corpus: an entry with L4=0xC0FFEE, topo=0xAAAA, full-entropy
+    // L2 minhash that agrees with the test query.
+    tsv += make_f_row(0x1000, /*l2*/0x9001, /*mh*/0x100,
+                      "real_fn", /*l4*/0xC0FFEE,
+                      /*topo*/0xAAAA);
+    const auto path = write_tmp(tsv, "topo_disagree");
+    ember::TeefCorpus c;
+    (void)c.load_tsv(path);
+
+    // Query agrees on L4 + L2 minhash but topo differs.
+    auto q = make_query(/*l2*/0xDEADBEEF, /*mh*/0x100,
+                        /*l4*/0xC0FFEE, /*topo*/0xBBBB);
+    auto m = c.recognize(q, 3);
+    check_true(!m.empty(), "topo_disagree: still surfaces");
+    if (!m.empty()) {
+        check_true(m[0].confidence <= 0.7f,
+                   "topo_disagree: capped despite L4+L2 agreement");
+    }
+
+    // Query agrees on all three signals — stays at 1.0.
+    auto q_ok = make_query(/*l2*/0xDEADBEEF, /*mh*/0x100,
+                           /*l4*/0xC0FFEE, /*topo*/0xAAAA);
+    auto m_ok = c.recognize(q_ok, 3);
+    check_true(!m_ok.empty(), "topo_disagree: agreement passes");
+    if (!m_ok.empty()) {
+        check_true(m_ok[0].confidence > 0.9f,
+                   "topo_disagree: full agreement stays high");
+    }
+    fs::remove(path);
+}
+
 void test_partition_variants_dropped_at_load() {
     // gcc emits .cold/.isra/.constprop/.part/.lto_priv suffixed
     // clones of real fns. They're fragments, not standalone
@@ -811,6 +850,7 @@ int main() {
     test_partition_variants_dropped_at_load();
     test_behav_exact_l2_corroboration();
     test_behav_exact_low_entropy_floor();
+    test_behav_exact_topo_disagreement();
     test_anti_corpus_blocks_l2();
     test_anti_corpus_blocks_l4_and_prefix();
 

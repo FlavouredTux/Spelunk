@@ -964,17 +964,30 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             // wrapper fns.
             const float l2_floor = (q_entropy <= 4) ? 0.625f : 0.25f;
             float best_l2j = 0.0f;
+            // Topology agreement: a third orthogonal signal. Same
+            // source across compiler versions produces the same
+            // high-level CFG (block/edge/return/loop counts), so
+            // same topo_hash. Spurious L4 collisions across
+            // semantically-unrelated fns produce different CFGs and
+            // different topo hashes. Only apply when both sides
+            // actually have a non-zero topo (build_teef_tsv emits 0
+            // for fns whose CFG signal is unreliable).
+            bool topo_disagrees = false;
             for (auto it = it_lo; it != it_hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
                 if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
                 if (!strings_compatible(we.string_hashes)) continue;
                 const float l2j = jaccard_minhash(query.whole.minhash, we.minhash);
                 if (l2j > best_l2j) best_l2j = l2j;
+                if (query.topo_hash != 0 && we.topo_hash != 0 &&
+                    query.topo_hash != we.topo_hash) {
+                    topo_disagrees = true;
+                }
                 const auto name = interned(we.name_id);
                 if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
             const float l2_cap =
-                (best_l2j >= l2_floor) ? 1.0f : 0.7f;
+                (best_l2j >= l2_floor && !topo_disagrees) ? 1.0f : 0.7f;
             auto cap_for = [&](float raw, std::string_view nm) {
                 float c = std::min(raw, l2_cap);
                 if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);

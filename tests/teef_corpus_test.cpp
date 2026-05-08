@@ -571,6 +571,64 @@ void test_behav_exact_l2_corroboration() {
     fs::remove(path);
 }
 
+void test_behav_exact_low_entropy_floor() {
+    // Small / low-entropy fns can collide on BOTH L4 trace AND L2
+    // minhash simultaneously — the canonicalized token stream is so
+    // short that it sketches into a tiny set of unique slot values,
+    // and 2/8 minhash agreement happens by chance. Tighten the L2
+    // floor when the query's minhash has few unique slot values
+    // (degenerate sketch) so the FP gets capped.
+    std::string corpus_tsv;
+    // Corpus entry: low-entropy minhash (only 2 unique values across
+    // 8 slots), L4 hash 0xCAFE. make_f_row generates seed+0..7 which
+    // are normally all distinct; we hand-craft via a name and trust
+    // that the loader will store whatever minhash we give. But
+    // make_f_row doesn't expose per-slot values, so we mimic by using
+    // a seed pattern that the test framework supports: build the row
+    // manually with mostly-duplicate slot values.
+    std::string row = "F\t1000\t" + hex16(0x1) + "\t";
+    // 8 minhash slots: only 2 unique values (0xAA, 0xBB alternating).
+    for (std::size_t k = 0; k < 8; ++k) {
+        row += hex16((k % 2 == 0) ? 0xAA : 0xBB);
+        row += '\t';
+    }
+    row += "small_wrapper\t" + hex16(0xCAFE) + "\t";
+    for (int k = 0; k < 8; ++k) row += hex16(0xCAFE + static_cast<ember::u64>(k)) + "\t";
+    row += "0\t0\t" + hex16(0) + "\t" + hex16(0) + "\n";
+    corpus_tsv += row;
+    const auto path = write_tmp(corpus_tsv, "low_entropy");
+    ember::TeefCorpus c;
+    (void)c.load_tsv(path);
+
+    // Query: SAME low-entropy minhash pattern (2 unique slot values).
+    // Pre-fix: best_l2j = 1.0 (perfect minhash match) → cap = 1.0,
+    // returns 1.000. Post-fix: q_entropy = 2 ≤ 4 → floor = 0.625, but
+    // best_l2j = 1.0 still ≥ 0.625 → 1.000. So this case alone
+    // doesn't catch the FP; we need to verify the case where
+    // ENTROPY IS LOW AND L2 jaccard is moderate (e.g., 0.5 = 4/8).
+    ember::TeefFunction q;
+    q.whole.exact_hash = 0xDEADBEEF;
+    // Query minhash: low entropy + only 4/8 slots agree with corpus
+    // (alternating pattern but offset).
+    for (std::size_t k = 0; k < 8; ++k) {
+        // Slots 0,1,2,3 match corpus (alternating AA/BB), 4-7 differ.
+        if (k < 4) q.whole.minhash[k] = (k % 2 == 0) ? 0xAA : 0xBB;
+        else       q.whole.minhash[k] = (k % 2 == 0) ? 0xCC : 0xDD;
+    }
+    // → q has 4 unique slot values (AA/BB/CC/DD); j = 4/8 = 0.5.
+    q.behav.exact_hash = 0xCAFE;
+    for (std::size_t k = 0; k < 8; ++k) q.behav.minhash[k] = 0xCAFE + static_cast<ember::u64>(k);
+
+    auto m = c.recognize(q, 3);
+    check_true(!m.empty(), "low_entropy: still surfaces");
+    if (!m.empty()) {
+        // q_entropy = 4 → floor = 0.625; best_l2j = 0.5 < 0.625 → cap.
+        check_true(m[0].confidence <= 0.7f,
+                   "low_entropy: tightened floor caps small-fn collision");
+    }
+    fs::remove(path);
+}
+
 void test_partition_variants_dropped_at_load() {
     // gcc emits .cold/.isra/.constprop/.part/.lto_priv suffixed
     // clones of real fns. They're fragments, not standalone
@@ -752,6 +810,7 @@ int main() {
     test_chunk_vote_thin_evidence_cap();
     test_partition_variants_dropped_at_load();
     test_behav_exact_l2_corroboration();
+    test_behav_exact_low_entropy_floor();
     test_anti_corpus_blocks_l2();
     test_anti_corpus_blocks_l4_and_prefix();
 

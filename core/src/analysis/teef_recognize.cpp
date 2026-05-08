@@ -944,10 +944,25 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             // Track best L2 minhash jaccard across the L4-colliding
             // candidates. K=64 traces on small / low-entropy fns can
             // collide spuriously across semantically-unrelated fns
-            // whose I/O arity happens to match. A behav-exact match
-            // with strong L2 corroboration (jaccard ≥ floor) stays at
-            // 1.0; weak L2 (≤ floor) gets capped — surface for review
-            // but don't auto-promote on a single signal.
+            // whose I/O arity happens to match. Adapt the corroboration
+            // floor to the QUERY's L2 minhash entropy: a query with
+            // many duplicate minhash slot values has a degenerate
+            // canonical token stream and even high-jaccard L2 agreement
+            // is suspect for small wrappers. Tighten the floor when
+            // entropy is low.
+            auto minhash_unique_slots = [](const std::array<u64, 8>& mh) -> int {
+                std::array<u64, 8> sorted = mh;
+                std::sort(sorted.begin(), sorted.end());
+                return static_cast<int>(
+                    std::unique(sorted.begin(), sorted.end()) - sorted.begin());
+            };
+            const int q_entropy = minhash_unique_slots(query.whole.minhash);
+            // Empirical floors: full-entropy (8 unique slots) → 0.25
+            // catches genuine cross-compiler matches; ≤4 unique slots
+            // → 0.625 (5/8 agree) demands stronger structural overlap
+            // because both K=64 trace AND minhash collapse on small
+            // wrapper fns.
+            const float l2_floor = (q_entropy <= 4) ? 0.625f : 0.25f;
             float best_l2j = 0.0f;
             for (auto it = it_lo; it != it_hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
@@ -958,12 +973,8 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                 const auto name = interned(we.name_id);
                 if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
-            // L2 corroboration floor. 0.25 = at least 2/8 minhash slots
-            // agree. Empirically, true cross-version matches sit well
-            // above this; spurious L4 collisions on small fns sit at 0.
-            constexpr float kBehavExactL2Floor = 0.25f;
             const float l2_cap =
-                (best_l2j >= kBehavExactL2Floor) ? 1.0f : 0.7f;
+                (best_l2j >= l2_floor) ? 1.0f : 0.7f;
             auto cap_for = [&](float raw, std::string_view nm) {
                 float c = std::min(raw, l2_cap);
                 if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);

@@ -117,6 +117,23 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
     if (nm.find("as core::fmt::") != std::string_view::npos)         return true;  // demangled
     if (nm.find("$u20$as$u20$core..fmt..") != std::string_view::npos) return true; // legacy
     if (nm.find("core::fmt::Formatter") != std::string_view::npos)   return true;  // demangled
+    // <T as core::ops::drop::Drop>::drop — user-defined Drop impls.
+    // Same FP-class as drop_in_place: structurally trivial, hashes
+    // across types. Three encodings: legacy Itanium uses "Drop$GT$4drop"
+    // (the '$GT$' = '>' closes the "as Drop" qualifier); v0 mangle of
+    // the trait method nests the trait Drop and method drop as length-
+    // prefixed identifiers ("Drop4drop"); demangled is the human form.
+    if (nm.find("Drop$GT$4drop") != std::string_view::npos)            return true;
+    if (nm.find("Drop4drop")     != std::string_view::npos)            return true;
+    if (nm.find("as core::ops::drop::Drop") != std::string_view::npos) return true;
+    // FnOnce / FnMut / Fn trait dispatch shims. These are vtable-shim
+    // bodies that load a fn pointer and jump — minimal IR, structural
+    // collisions across closure types are guaranteed. Use length-
+    // prefixed substrings (Itanium and v0 both length-prefix idents)
+    // so we don't accidentally cap user fns named "call_once".
+    if (nm.find("6FnOnce9call_once") != std::string_view::npos) return true;
+    if (nm.find("5FnMut8call_mut")   != std::string_view::npos) return true;
+    if (nm.find("function2Fn4call")  != std::string_view::npos) return true;
     // Itanium-mangled C++ destructors (D0 base-object, D1 complete,
     // D2 deleting) and __cxa_* runtime forwarders. Same FP-class as
     // Rust drop glue: trivial bodies that hash across types.

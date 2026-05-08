@@ -489,6 +489,19 @@ void test_boilerplate_label_mangled_forms() {
     tsv += make_f_row(0x4000, /*l2*/0x444, 0x40,
                       "_ZN52_$LT$alloc..string..String$u20$as$u20$core..fmt.."
                       "Debug$GT$3fmt17habcdef0123456789E");
+    // Drop trait impls (legacy + v0).
+    tsv += make_f_row(0x5000, /*l2*/0x555, 0x50,
+                      "_ZN79_$LT$hashbrown..raw..RawTable$LT$T$C$A$GT$$u20$as$u20$"
+                      "core..ops..drop..Drop$GT$4drop17h01fccb7352015a5eE");
+    tsv += make_f_row(0x6000, /*l2*/0x666, 0x60,
+                      "_RNvXNtNtCs_4core3ops4drop4Drop4dropNtCs_5alloc6String");
+    // FnOnce / Fn / FnMut trait dispatch shims (legacy + v0).
+    tsv += make_f_row(0x7000, /*l2*/0x777, 0x70,
+                      "_ZN4core3ops8function6FnOnce9call_once17hb78e1388b07d89d7E");
+    tsv += make_f_row(0x8000, /*l2*/0x888, 0x80,
+                      "_RNvXs_NtNtCs_4core3ops8function5FnMut8call_mut");
+    tsv += make_f_row(0x9000, /*l2*/0x999, 0x90,
+                      "_RNvXs_NtNtCs_4core3ops8function2Fn4callNtB6_OurClosure");
     const auto path = write_tmp(tsv, "mangled");
     ember::TeefCorpus c;
     (void)c.load_tsv(path);
@@ -499,6 +512,11 @@ void test_boilerplate_label_mangled_forms() {
         {0x222, 0x20, "v0 mangle panic_fmt"},
         {0x333, 0x30, "v0 mangle drop_in_place"},
         {0x444, 0x40, "legacy mangle fmt::Debug impl"},
+        {0x555, 0x50, "legacy mangle <T as Drop>::drop"},
+        {0x666, 0x60, "v0 mangle Drop trait method"},
+        {0x777, 0x70, "FnOnce::call_once shim"},
+        {0x888, 0x80, "FnMut::call_mut shim"},
+        {0x999, 0x90, "Fn::call shim"},
     };
     for (const auto& tc : cases) {
         auto q = make_query(tc.hash, tc.mh);

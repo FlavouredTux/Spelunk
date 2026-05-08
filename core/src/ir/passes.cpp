@@ -245,17 +245,25 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::Or:  return IrValue::make_imm(mask_signed(a.imm | b.imm, dt), dt);
             case IrOp::Xor: return IrValue::make_imm(mask_signed(a.imm ^ b.imm, dt), dt);
             case IrOp::Shl: {
-                const unsigned shift = static_cast<unsigned>(b.imm) & 63u;
+                // x86 masks the shift count to 5 bits for 8/16/32-bit
+                // operands and 6 bits for 64-bit. A blanket 63-bit mask
+                // miscomputed `shl i32 x, 32` as 0 instead of x (real
+                // hardware: 32 & 0x1f = 0 → no shift). Match hardware
+                // for all three Shl/Lshr/Ashr below.
+                const unsigned shift = static_cast<unsigned>(b.imm) &
+                                       (type_bits(a.type) == 64 ? 63u : 31u);
                 return IrValue::make_imm(
                     mask_signed(static_cast<i64>(static_cast<u64>(a.imm) << shift), dt), dt);
             }
             case IrOp::Lshr: {
-                const unsigned shift = static_cast<unsigned>(b.imm) & 63u;
+                const unsigned shift = static_cast<unsigned>(b.imm) &
+                                       (type_bits(a.type) == 64 ? 63u : 31u);
                 const u64 av = mask_unsigned(a.imm, a.type);
                 return IrValue::make_imm(static_cast<i64>(av >> shift), dt);
             }
             case IrOp::Ashr: {
-                const unsigned shift = static_cast<unsigned>(b.imm) & 63u;
+                const unsigned shift = static_cast<unsigned>(b.imm) &
+                                       (type_bits(a.type) == 64 ? 63u : 31u);
                 return IrValue::make_imm(mask_signed(a.imm >> shift, dt), dt);
             }
             case IrOp::CmpEq:  return IrValue::make_imm(a.imm == b.imm ? 1 : 0, IrType::I1);

@@ -114,6 +114,150 @@ int main() {
              cache_b.string());
     }
 
+    // ----------------------------------------------------------------
+    // meta record round-trip + forward / backward compat.
+    //
+    // Phase 1 added an `AnnotationMeta` (confidence / evidence / source)
+    // attached to renames / notes / signatures via parallel maps and a
+    // new `meta <kind> <addr> ...` line. Three properties are
+    // load-bearing:
+    //   1. round-trip — write a populated Annotations, reload, see
+    //      the same metadata,
+    //   2. backward compat — files without `meta` lines load with
+    //      empty metadata (no crash, no spurious entries),
+    //   3. forward compat — files with `meta` lines for unknown
+    //      subkinds or unknown keys are silently skipped, and the
+    //      primary records remain untouched.
+    // ----------------------------------------------------------------
+    {
+        const auto path = root / "meta_round_trip.ann";
+        ember::Annotations a;
+        a.renames[0x401000]      = "do_thing";
+        a.notes[0x401000]        = "see ticket #42";
+        ember::AnnotationMeta rm;
+        rm.confidence = 0.875f;
+        rm.evidence   = "3-arg, called by 0x3f94380; pipe |, newline\n in ev";
+        rm.source     = "agent:namer";
+        a.rename_meta[0x401000] = rm;
+        a.note_meta[0x401000]   = ember::AnnotationMeta{0.5f, "from doc-comment", "cli"};
+
+        if (auto rv = a.save(path); !rv) {
+            fail("save with metadata", "ought to write cleanly");
+        }
+        auto loaded = ember::Annotations::load(path);
+        if (!loaded) {
+            fail("load round-trip", "save then load failed");
+        } else {
+            const auto* m = loaded->meta_for_rename(0x401000);
+            if (!m) fail("rename meta missing after round-trip", path.string());
+            else {
+                if (m->confidence < 0.87f || m->confidence > 0.88f) {
+                    fail("rename meta confidence drifted",
+                         std::to_string(m->confidence));
+                }
+                check_eq(m->evidence, rm.evidence,
+                         "rename meta evidence survives pipe + newline escapes");
+                check_eq(m->source, rm.source, "rename meta source preserved");
+            }
+            const auto* n = loaded->meta_for_note(0x401000);
+            if (!n) fail("note meta missing after round-trip", path.string());
+            else check_eq(n->source, std::string{"cli"}, "note meta source preserved");
+            // Sanity: the name itself must still be there.
+            const auto* name = loaded->name_for(0x401000);
+            if (!name || *name != "do_thing") {
+                fail("rename text drifted under meta serializer",
+                     name ? *name : std::string{"<null>"});
+            }
+        }
+    }
+
+    // Backward compat: a file with no `meta` lines is the existing
+    // baseline. Loaders treat absent metadata as nullptr from
+    // `meta_for_rename` etc. (different from "metadata recorded with
+    // confidence=0", which would still return a valid pointer).
+    {
+        const auto path = root / "no_meta.ann";
+        write_stub(path, "# legacy file\n"
+                         "rename 401000 do_thing\n"
+                         "note   401000 hand-written; no meta line\n");
+        auto loaded = ember::Annotations::load(path);
+        if (!loaded) fail("backward compat load", "legacy file rejected");
+        else {
+            if (loaded->meta_for_rename(0x401000) != nullptr) {
+                fail("backward compat: spurious rename meta", path.string());
+            }
+            if (loaded->meta_for_note(0x401000) != nullptr) {
+                fail("backward compat: spurious note meta", path.string());
+            }
+            const auto* name = loaded->name_for(0x401000);
+            if (!name || *name != "do_thing") {
+                fail("backward compat: rename lost",
+                     name ? *name : std::string{"<null>"});
+            }
+        }
+    }
+
+    // Forward compat: an unknown meta subkind and unknown meta keys
+    // must not corrupt the primary records or crash the parser. An
+    // older ember reading a file produced by a newer ember should see
+    // the names / notes intact and silently drop what it doesn't
+    // recognise.
+    {
+        const auto path = root / "future_meta.ann";
+        write_stub(path,
+            "# ember annotations\n"
+            "rename 401000 do_thing\n"
+            "meta rename 401000 conf=0.9|src=cli|future_key=x|ev=ok\n"
+            "meta unknown_kind 401000 conf=1|src=mystery\n"
+            "rename 402000 other_fn\n");
+        auto loaded = ember::Annotations::load(path);
+        if (!loaded) fail("forward compat load", "newer-format file rejected");
+        else {
+            const auto* m = loaded->meta_for_rename(0x401000);
+            if (!m) fail("forward compat: known meta dropped", path.string());
+            else {
+                if (m->confidence < 0.89f || m->confidence > 0.91f) {
+                    fail("forward compat: confidence parsing fragile under unknown keys",
+                         std::to_string(m->confidence));
+                }
+                check_eq(m->evidence, std::string{"ok"},
+                         "forward compat: known keys survive alongside unknown ones");
+            }
+            const auto* name = loaded->name_for(0x402000);
+            if (!name || *name != "other_fn") {
+                fail("forward compat: subsequent records lost after unknown meta",
+                     name ? *name : std::string{"<null>"});
+            }
+        }
+    }
+
+    // Confidence clamping: values outside [0,1] would break downstream
+    // consumers (sort by conf, threshold filters, etc.). The parser
+    // clamps on load, the CLI clamps on write — covered here for the
+    // load path.
+    {
+        const auto path = root / "clamp.ann";
+        write_stub(path,
+            "rename 401000 too_high\n"
+            "meta rename 401000 conf=2.5\n"
+            "rename 402000 too_low\n"
+            "meta rename 402000 conf=-0.5\n");
+        auto loaded = ember::Annotations::load(path);
+        if (!loaded) fail("clamp load", "rejected unexpectedly");
+        else {
+            const auto* hi = loaded->meta_for_rename(0x401000);
+            const auto* lo = loaded->meta_for_rename(0x402000);
+            if (!hi || hi->confidence != 1.0f) {
+                fail("clamp: above-1 not clamped",
+                     hi ? std::to_string(hi->confidence) : std::string{"<null>"});
+            }
+            if (!lo || lo->confidence != 0.0f) {
+                fail("clamp: below-0 not clamped",
+                     lo ? std::to_string(lo->confidence) : std::string{"<null>"});
+            }
+        }
+    }
+
     if (fails == 0) std::puts("ok");
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

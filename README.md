@@ -196,7 +196,13 @@ ember [options] <binary>
   -s, --symbol NAME      target a specific symbol (default: main)
       --annotations P    user renames / signatures sidecar file
       --apply PATH       apply a .ember declarative script
-      --dry-run          with --apply: don't write; dump the would-be TSV
+      --annotate ADDR    one-shot: append a single rename / note / signature
+                         to the resolved annotations file. Pair with
+                         --set-name / --set-note / --set-signature, plus
+                         optional --confidence / --evidence / --source.
+      --show-provenance  -p only: emit `// confidence: …` lines under
+                         function headers when annotations carry metadata
+      --dry-run          with --apply / --annotate: don't write; dump TSV
       --regions PATH     load via raw-region manifest (Scylla-style scrape)
       --apply-patches F  apply (vaddr_hex, bytes_hex) patches to the binary
       --trace PATH       observed indirect edges (TSV: from_va  to_va)

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -70,10 +71,15 @@ struct Directive {
         FromStrings,
         Delete,
     };
-    Kind        kind = Kind::Rename;
-    std::string lhs;        // VA, identifier, glob, or string-pattern
-    std::string rhs;        // new name, note, signature decl, template, or delete-kind
-    std::size_t line = 0;   // 1-based source line, for error/warning context
+    Kind           kind = Kind::Rename;
+    std::string    lhs;        // VA, identifier, glob, or string-pattern
+    std::string    rhs;        // new name, note, signature decl, template, or delete-kind
+    std::size_t    line = 0;   // 1-based source line, for error/warning context
+    // Optional `; conf=… src=… ev=…` suffix. When `kind` is Rename /
+    // Note / Signature, this gets stored in the corresponding
+    // `Annotations::*_meta` map alongside the primary value.
+    AnnotationMeta meta{};
+    bool           has_meta = false;
 };
 
 [[nodiscard]] Result<std::vector<Directive>>
@@ -115,6 +121,16 @@ apply(std::span<const Directive> directives,
 apply_file(const std::filesystem::path& path,
            const Binary& b,
            Annotations& ann);
+
+// Parse a C-style function signature into the Annotations representation.
+// Accepts the same form `[signature]` directives use:
+//   "int do_thing(char* name, int x)"  -> ret="int", params={(char*,name),(int,x)}
+//   "void foo(void)"                   -> ret="void", params={}
+// Returns nullopt on malformed input. Exposed so the one-shot
+// `ember annotate --set-signature` CLI can reuse the parser instead of
+// duplicating it.
+[[nodiscard]] std::optional<FunctionSig>
+parse_signature(std::string_view src);
 
 }  // namespace script
 }  // namespace ember

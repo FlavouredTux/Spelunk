@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <fstream>
 #include <format>
+#include <limits>
 #include <sstream>
 #include <string_view>
 
@@ -87,6 +88,17 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
         auto sz_r = parse_hex(tsz);
         if (!sz_r) return std::unexpected(std::move(sz_r).error());
 
+        // Cap a single region at 4 GiB and reject buffer-growth overflow.
+        // Without this an attacker-controlled manifest size of UINT64_MAX
+        // wraps the resize() arithmetic, producing a tiny buffer that
+        // bytes_at() then hands out as a multi-GB span.
+        constexpr u64 kMaxRegionBytes = u64{1} << 32;
+        if (*sz_r > kMaxRegionBytes) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "regions: line {}: size 0x{:x} exceeds {} GiB cap",
+                lineno, *sz_r, kMaxRegionBytes >> 30)));
+        }
+
         const auto file_path = base_dir / tfile;
         std::ifstream rf(file_path, std::ios::binary | std::ios::ate);
         if (!rf) {
@@ -99,7 +111,12 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
         // is shorter (uninitialized BSS-like range), truncate if longer.
         const std::size_t take = std::min<std::size_t>(disk_sz, *sz_r);
         const std::size_t file_off = out->buffer_.size();
-        out->buffer_.resize(file_off + *sz_r);
+        const std::size_t sz = static_cast<std::size_t>(*sz_r);
+        if (file_off > std::numeric_limits<std::size_t>::max() - sz) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "regions: line {}: aggregate buffer would overflow", lineno)));
+        }
+        out->buffer_.resize(file_off + sz);
         if (take > 0) {
             rf.read(reinterpret_cast<char*>(out->buffer_.data() + file_off),
                     static_cast<std::streamsize>(take));

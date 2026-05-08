@@ -14,6 +14,7 @@
 #include <ember/binary/minidump.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/extension/loader_registry.hpp>
 
 namespace ember {
 
@@ -404,6 +405,12 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
         }
 
         return std::unique_ptr<Binary>(std::move(*pe));
+    }
+
+    for (const auto& entry : ext::registered_loaders()) {
+        if (entry.sniff && entry.load && entry.sniff(*buffer)) {
+            return entry.load(std::move(*buffer), opts);
+        }
     }
 
     return std::unexpected(Error::unsupported(

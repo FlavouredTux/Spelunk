@@ -460,6 +460,115 @@ int main() {
         if (auto* n = ann.note_for(0x401000)) check_eq_str(*n, "via name lookup", "apply_file: note");
     }
 
+    // ----------------------------------------------------------------
+    // Metadata suffix on rename / note / signature directives.
+    //
+    // Phase 4 added a `; conf=… ; src=… ; ev=…` tail consumed by both
+    // hand-written .ember files and `agent/src/promote.ts`. The suffix
+    // must:
+    //   - parse off the rhs cleanly (so the rename / note text is not
+    //     polluted by the metadata),
+    //   - flow into the matching `*_meta` map on apply,
+    //   - degrade gracefully when only a subset of keys is given.
+    // ----------------------------------------------------------------
+    {
+        const auto root = scratch_root();
+        const auto p = write_text(root, "meta.ember",
+            "[rename]\n"
+            "0x401000 = with_meta ; conf=0.85 ; src=agent:namer "
+                ";  ev=3-arg, called by 0x402000\n"
+            "[note]\n"
+            "0x401000 = brief note ; conf=0.5 ; src=cli\n"
+            "[signature]\n"
+            "0x401000 = void with_meta(char* msg) ; conf=0.95 ; src=hand\n");
+        ember::Annotations ann;
+        auto rv = ember::script::apply_file(p, mb, ann);
+        check(rv.has_value(), "meta apply_file: ok");
+
+        // The suffix must not bleed into the persisted name / note /
+        // signature; if it does, the rename text would be
+        // "with_meta ; conf=…" and downstream rendering would surface
+        // garbage in pseudo-C.
+        if (auto* n = ann.name_for(0x401000)) {
+            check_eq_str(*n, "with_meta", "rename text excludes meta suffix");
+        }
+        if (auto* n = ann.note_for(0x401000)) {
+            check_eq_str(*n, "brief note", "note text excludes meta suffix");
+        }
+        if (auto* sig = ann.signature_for(0x401000)) {
+            check_eq_str(sig->return_type, "void",
+                         "signature return type excludes meta suffix");
+        }
+
+        // Parsed metadata lands in the parallel maps with the right values.
+        if (const auto* m = ann.meta_for_rename(0x401000)) {
+            check(m->confidence > 0.84f && m->confidence < 0.86f,
+                  "rename meta confidence parsed");
+            check_eq_str(m->source, "agent:namer", "rename meta source parsed");
+            check_eq_str(m->evidence, "3-arg, called by 0x402000",
+                         "rename meta evidence parsed (extra whitespace ok)");
+        } else {
+            check(false, "rename meta missing after suffix apply");
+        }
+        if (const auto* m = ann.meta_for_note(0x401000)) {
+            check(m->evidence.empty(), "note meta has no evidence (none given)");
+            check_eq_str(m->source, "cli", "note meta source parsed");
+        }
+        if (const auto* m = ann.meta_for_signature(0x401000)) {
+            check(m->confidence > 0.94f && m->confidence < 0.96f,
+                  "signature meta confidence parsed");
+            check_eq_str(m->source, "hand", "signature meta source parsed");
+        }
+    }
+
+    // Edge case: a rename with `;` *inside* a quoted note value (no
+    // leading whitespace) must NOT be treated as a meta suffix. Used
+    // to guard against false-positive splits on values that contain a
+    // literal `;`. The marker is whitespace-anchored — `something;`
+    // doesn't trigger, only ` ; ` does.
+    {
+        const auto root = scratch_root();
+        const auto p = write_text(root, "no_split.ember",
+            "[note]\n"
+            "0x401000 = step 1; step 2; step 3\n");
+        ember::Annotations ann;
+        auto rv = ember::script::apply_file(p, mb, ann);
+        check(rv.has_value(), "no_split apply: ok");
+        if (auto* n = ann.note_for(0x401000)) {
+            check_eq_str(*n, "step 1; step 2; step 3",
+                         "non-anchored `;` stays in the note text");
+        }
+        check(ann.meta_for_note(0x401000) == nullptr,
+              "no spurious meta record for non-anchored `;`");
+    }
+
+    // Cache file → --apply: a persisted Annotations file (no section
+    // headers, lines like `rename <hex> <name>` and `meta rename <hex>
+    // …`) used to fail the declarative parser with "directive outside
+    // any section". The applier now sniffs the format and merges via
+    // `Annotations::load` so a cache file copies cleanly into another
+    // binary's destination — preserving meta records too.
+    {
+        const auto root = scratch_root();
+        const auto p = write_text(root, "persisted.cache",
+            "# ember annotations\n"
+            "rename 401000 cache_imported\n"
+            "meta rename 401000 conf=0.95|src=agent:from_other_binary"
+                "|ev=copied across builds\n");
+        ember::Annotations ann;
+        auto rv = ember::script::apply_file(p, mb, ann);
+        // Important: this used to be std::unexpected. After the sniff,
+        // it's expected to fail — the helper only reads `.ember`. The
+        // CLI path (`run_apply_ember`) handles persisted files
+        // separately. So here we exercise the *parser-level* contract:
+        // the persisted form is rejected as an .ember script. The
+        // Annotations::load round-trip for the same file is covered in
+        // tests/annotations_resolver_test.cpp.
+        check(!rv.has_value(),
+              "persisted-format file rejected by .ember parser "
+              "(CLI sniffer reroutes it via Annotations::load)");
+    }
+
     if (fails) {
         std::fprintf(stderr, "%d failure(s)\n", fails);
         return 1;

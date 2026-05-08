@@ -16,6 +16,8 @@ enum class Arch {
     Ppc64,
     Riscv32,
     Riscv64,
+    Mips32,
+    Mips64,
 };
 
 enum class Endian : u8 {
@@ -35,6 +37,8 @@ enum class Endian : u8 {
         case Arch::Ppc64:   return "ppc64";
         case Arch::Riscv32: return "riscv32";
         case Arch::Riscv64: return "riscv64";
+        case Arch::Mips32:  return "mips32";
+        case Arch::Mips64:  return "mips64";
     }
     return "unknown";
 }
@@ -55,11 +59,13 @@ enum class Endian : u8 {
         case Arch::Arm:
         case Arch::Ppc32:
         case Arch::Riscv32:
+        case Arch::Mips32:
             return 32;
         case Arch::X86_64:
         case Arch::Arm64:
         case Arch::Ppc64:
         case Arch::Riscv64:
+        case Arch::Mips64:
             return 64;
         case Arch::Unknown:
             break;

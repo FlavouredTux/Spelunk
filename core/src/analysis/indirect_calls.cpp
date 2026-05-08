@@ -351,7 +351,10 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
         // Architectures we don't have a byte-level filter for fall back
         // to the original full sweep — call-graph callers plus every
         // defined entry — so AArch64 BR/BLR cracking still works.
-        for (const auto& cc : compute_call_graph(b)) {
+        // Forward `scope` so the call-graph builder only lifts callers
+        // we'll keep after the post-build intersect, instead of every
+        // function in the binary.
+        for (const auto& cc : compute_call_graph(b, scope)) {
             fns_with_indirect.insert(cc.caller);
         }
         for (const auto& d : enumerate_functions(b, EnumerateMode::Full)) {

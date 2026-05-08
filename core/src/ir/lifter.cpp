@@ -3,6 +3,7 @@
 #include <format>
 
 #include <ember/binary/binary.hpp>
+#include <ember/extension/lifter_registry.hpp>
 #include <ember/ir/arm64_lifter.hpp>
 #include <ember/ir/ppc_lifter.hpp>
 #include <ember/ir/x64_lifter.hpp>
@@ -23,6 +24,9 @@ make_lifter(const Binary& b) {
                 abi == Abi::Unknown ? Abi::Aapcs64 : abi));
         default:
             break;
+    }
+    if (auto factory = ext::get_lifter_factory(b.arch())) {
+        return factory(b, abi);
     }
     return std::unexpected(Error::unsupported(std::format(
         "no lifter for arch {}", arch_name(b.arch()))));

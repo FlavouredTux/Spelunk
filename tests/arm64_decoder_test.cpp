@@ -194,6 +194,40 @@ void test_misc() {
     check_eq(i.mnemonic, Mnemonic::A64Svc, "svc: mnemonic");
 }
 
+// Reserved / unallocated encodings used to silently masquerade as valid
+// instructions in two places. These tests pin the corrected behaviour:
+// the decoder should land on A64Udf (the catch-all the validator uses
+// for unallocated encodings) rather than reporting a real mnemonic.
+void test_reserved_encodings() {
+    // DP-1 source, sf=0, opcode=000011 — UNALLOCATED per ARM ARM C4.1.7.
+    // sf=1 + same opcode is REV (64-bit). Both branches used to land on
+    // A64Rev, so the bit-31 disagreement was lost.
+    auto rev_unalloc = must_decode(0x5ac00c00);
+    check_eq(rev_unalloc.mnemonic, Mnemonic::A64Udf,
+             "rev unallocated (sf=0, opcode=000011): falls through to udf");
+    auto rev_valid = must_decode(0xdac00c00);
+    check_eq(rev_valid.mnemonic, Mnemonic::A64Rev,
+             "rev valid (sf=1, opcode=000011): A64Rev");
+
+    // LDP/STP family, opc=11 — RESERVED per ARM ARM C4.1.4. Used to be
+    // accepted as A64Ldpsw because the gate `opc != 0b00 && opc != 0b10`
+    // didn't exclude it. Build a representative encoding: opc=11,
+    // bits 29:27 = 101, bit 26 = 0, signed-offset variant.
+    auto ldp_reserved = must_decode(0xe9400000);
+    check_eq(ldp_reserved.mnemonic, Mnemonic::A64Udf,
+             "load-pair opc=11: reserved encoding falls through to udf");
+
+    // Valid LDPSW pins the regression so the legitimate opc=01, L=1
+    // case keeps decoding correctly through the tightened gate.
+    // ldpsw x2, x1, [x0, #16]: opc=01, signed offset, imm7=4 (scale 2).
+    auto ldpsw = must_decode(0x69420402);
+    check_eq(ldpsw.mnemonic, Mnemonic::A64Ldpsw,
+             "ldpsw valid: still A64Ldpsw after gate tightening");
+    check_eq(ldpsw.operands[0].reg, Reg::X2, "ldpsw: rt");
+    check_eq(ldpsw.operands[1].reg, Reg::X1, "ldpsw: rt2");
+    check_eq(ldpsw.operands[2].mem.disp, std::int64_t{16}, "ldpsw: disp");
+}
+
 }  // namespace
 
 int main() {
@@ -204,6 +238,7 @@ int main() {
     test_dp_reg();
     test_pcrel();
     test_misc();
+    test_reserved_encodings();
 
     if (fails == 0) {
         std::fprintf(stderr, "arm64_decoder_test: ok\n");

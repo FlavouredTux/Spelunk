@@ -494,15 +494,38 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
         const unsigned opc = bits(raw, 31, 30);
         const bool L  = bit(raw, 22);
         const i64 imm7 = sign_extend(bits(raw, 21, 15), 7);
-        const Reg rt2 = gpr_of(bits(raw, 14, 10), opc == 0b10, /*is_sp=*/false);
-        const Reg rn  = gpr_of(bits(raw, 9, 5), /*sf=*/true,  /*is_sp=*/true);
-        const Reg rt  = gpr_of(bits(raw, 4, 0), opc == 0b10, /*is_sp=*/false);
-        if (opc != 0b00 && opc != 0b10) {
-            // 32/64-bit forms only; skip 0b01 (LDPSW) for now.
+        // opc encoding (ARM ARM C4.1.4):
+        //   00: STP/LDP 32-bit
+        //   01: STGP (v8.5) when L=0; LDPSW when L=1
+        //   10: STP/LDP 64-bit
+        //   11: reserved
+        // The previous gate accepted opc=0b11 as LDPSW and STGP-with-L=0
+        // as LDPSW too — reserved encodings (and the not-yet-modelled
+        // STGP) silently rendered as a 32-bit signed-load-pair, which
+        // would mislead anyone reading the disasm against fuzzed input.
+        if (opc == 0b11) {
+            insn.mnemonic = Mnemonic::Invalid;
+            return;
+        }
+        if (opc == 0b01 && !L) {
+            // STGP — not yet decoded; fall through to other matchers
+            // rather than mislabel it.
+            return;
+        }
+        // LDPSW destinations are 64-bit (sign-extended from 32-bit
+        // memory) regardless of the underlying access width, so its
+        // `sf` differs from LDP/STP's. Bake that into the gpr_of call
+        // instead of the previous `opc == 0b10` shortcut.
+        const bool dest_64 = (opc == 0b10) || (opc == 0b01);
+        const Reg rt2 = gpr_of(bits(raw, 14, 10), dest_64, /*is_sp=*/false);
+        const Reg rn  = gpr_of(bits(raw, 9, 5), /*sf=*/true, /*is_sp=*/true);
+        const Reg rt  = gpr_of(bits(raw, 4, 0), dest_64, /*is_sp=*/false);
+        if (opc == 0b01) {
+            // LDPSW (opc=01, L=1): 32-bit signed load, sign-extended to 64.
             insn.mnemonic = Mnemonic::A64Ldpsw;
             const unsigned scale = 2;
             set_ops(insn, make_reg(rt), make_reg(rt2),
-                          make_mem(rn, imm7 << scale, opc == 0b10 ? 8 : 4));
+                          make_mem(rn, imm7 << scale, 4));
             return;
         }
         const unsigned scale = (opc == 0b10) ? 3u : 2u;
@@ -770,8 +793,14 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
         return;
     }
 
-    // Data processing (2-source): bits 28:21 = 11010110.
-    if (bits(raw, 28, 21) == 0b11010110) {
+    // Data processing (2-source): bit 30 = 0, bits 28:21 = 11010110.
+    // The bit-30 guard distinguishes DP-2-source from DP-1-source — both
+    // share the same bits-28:21 signature, but bit 30 (op) is 0 for DP-2
+    // and 1 for DP-1. Without this guard, DP-1 instructions (REV / CLZ /
+    // CLS / RBIT / REV16 / REV32) get caught by DP-2's switch first and
+    // mislabelled as SDIV / UDIV / LSLV / etc. depending on their
+    // opcode-15:10 collision.
+    if (bit(raw, 30) == 0 && bits(raw, 28, 21) == 0b11010110) {
         const unsigned opcode = bits(raw, 15, 10);
         const Reg rd = gpr_of(Rd, sf, false);
         const Reg rn = gpr_of(Rn, sf, false);
@@ -801,7 +830,11 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
             case 0b000000: m = Mnemonic::A64Rbit; break;
             case 0b000001: m = Mnemonic::A64Rev16; break;
             case 0b000010: m = sf ? Mnemonic::A64Rev32 : Mnemonic::A64Rev; break;
-            case 0b000011: m = sf ? Mnemonic::A64Rev   : Mnemonic::A64Rev; break;
+            // opcode=000011 is REV (64-bit) when sf=1; sf=0 is unallocated
+            // per ARM ARM C4.1.7. The previous mapping fell through to a
+            // valid REV in both branches and silently accepted reserved
+            // 32-bit encodings as a real instruction.
+            case 0b000011: m = sf ? Mnemonic::A64Rev   : Mnemonic::Invalid; break;
             case 0b000100: m = Mnemonic::A64Clz; break;
             case 0b000101: m = Mnemonic::A64Cls; break;
         }

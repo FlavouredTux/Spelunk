@@ -85,6 +85,9 @@ function createWindow() {
   if (!app.isPackaged) {
     const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
     win.loadURL(devUrl);
+    // Auto-open DevTools in dev so the React Profiler / Performance tab
+    // is one click away. Detached so it doesn't squeeze the app window.
+    win.webContents.openDevTools({ mode: "detach" });
   } else {
     win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
@@ -97,16 +100,27 @@ function createWindow() {
   });
 }
 
+// stdout/stderr accumulated as a stream of UTF-8 string chunks rather
+// than an ever-growing string. Two reasons:
+//   1. setEncoding("utf8") gives the stream a stateful decoder that
+//      doesn't split multi-byte sequences across `data` events — the
+//      old `d.toString()` per chunk produced replacement chars in
+//      demangled C++ symbols at chunk boundaries.
+//   2. `arr.push(s)` + `arr.join("")` is O(n) regardless of V8's
+//      cord-string heuristics, where `out += s` can fall back to
+//      worst-case copying on multi-MB outputs.
 function runEmber(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(EMBER_BIN, args, { cwd: path.dirname(EMBER_BIN) });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    const outChunks = [];
+    const errChunks = [];
+    proc.stdout.on("data", (d) => { outChunks.push(d); });
+    proc.stderr.on("data", (d) => { errChunks.push(d); });
     proc.on("error", (e) => reject(e));
     proc.on("close", (code, signal) => {
-      if (code === 0) return resolve(stdout);
+      if (code === 0) return resolve(outChunks.join(""));
       // code === null means the process was killed by a signal (segfault,
       // OOM, SIGTERM, ...). Surface the signal + whatever stderr we got
       // so the renderer can show something actionable instead of a
@@ -114,7 +128,7 @@ function runEmber(args) {
       const how = code === null
         ? `ember killed by ${signal || "signal"}`
         : `ember exited ${code}`;
-      const tail = stderr.trim();
+      const tail = errChunks.join("").trim();
       const msg = tail ? `${how}\n${tail.slice(-2000)}` : how;
       const full = `${msg}\n(cmd: ${EMBER_BIN} ${args.join(" ")})`;
       reject(new Error(full));
@@ -125,14 +139,16 @@ function runEmber(args) {
 function runCapture(bin, args, cwd = process.cwd()) {
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { cwd });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    const outChunks = [];
+    const errChunks = [];
+    proc.stdout.on("data", (d) => { outChunks.push(d); });
+    proc.stderr.on("data", (d) => { errChunks.push(d); });
     proc.on("error", reject);
     proc.on("close", (code) => {
-      if (code === 0) return resolve(stdout.trim());
-      const msg = stderr.trim() || `${bin} exited ${code}`;
+      if (code === 0) return resolve(outChunks.join("").trim());
+      const msg = errChunks.join("").trim() || `${bin} exited ${code}`;
       reject(new Error(msg));
     });
   });
@@ -293,9 +309,17 @@ async function fetchLatestReleaseInfo() {
 // invalidates the cache automatically when the user rebuilds the
 // binary or commits annotation changes.
 
-const RUN_CACHE     = new Map();   // key → stdout string
-const RUN_CACHE_CAP = 200;          // entries; bound memory on giant inputs
-const RUN_INFLIGHT  = new Map();   // key → in-flight Promise (dedup concurrent)
+const RUN_CACHE       = new Map();   // key → stdout string
+// Cap by total payload bytes, not entry count. Entries are stdout
+// strings of unpredictable size: a `--functions` on a 150 MB PE can
+// produce 30+ MB of TSV. The previous count-of-200 cap meant the cache
+// could pin gigabytes — which was the renderer's "memory leak" feel
+// after a few binaries opened. 256 MB matches a comfortable working
+// set on machines with 8+ GB and gets evicted immediately on smaller
+// outputs.
+const RUN_CACHE_BYTES_CAP = 256 * 1024 * 1024;
+let   RUN_CACHE_BYTES     = 0;
+const RUN_INFLIGHT        = new Map();  // key → in-flight Promise (dedup concurrent)
 
 async function safeMtime(p) {
   if (!p) return 0;
@@ -303,11 +327,23 @@ async function safeMtime(p) {
   catch { return 0; }
 }
 
+// JS strings are UTF-16 internally; .length × 2 is the on-heap cost
+// V8 actually pays for the string body (ignoring any rope overhead,
+// which is small relative to multi-MB stdout payloads).
+function approxStringBytes(s) {
+  return typeof s === "string" ? s.length * 2 : 0;
+}
+
 function lruTouch(map, key, value) {
-  if (map.has(key)) map.delete(key);
+  if (map.has(key)) {
+    RUN_CACHE_BYTES -= approxStringBytes(map.get(key));
+    map.delete(key);
+  }
   map.set(key, value);
-  while (map.size > RUN_CACHE_CAP) {
+  RUN_CACHE_BYTES += approxStringBytes(value);
+  while (RUN_CACHE_BYTES > RUN_CACHE_BYTES_CAP && map.size > 1) {
     const first = map.keys().next().value;
+    RUN_CACHE_BYTES -= approxStringBytes(map.get(first));
     map.delete(first);
   }
 }
@@ -387,11 +423,34 @@ function emberCacheAnnotationsPath(binaryPath) {
   return path.join(cacheRoot, "annotations", key, "annotations.db");
 }
 
+// Memoize the parsed sidecar JSON and ember cache .db keyed by
+// (path, mtime). Pre-fix every ember:run IPC call read+parsed each of
+// these from scratch, costing ~50ms of pure I/O before the RUN_CACHE
+// lookup even started — visible as per-click lag on slow disks.
+const _SIDECAR_PARSE_CACHE  = new Map();   // binaryPath → { mtime, val }
+const _CACHE_DB_PARSE_CACHE = new Map();   // binaryPath → { mtime, val }
+
+async function memoByMtime(cache, key, filePath, parser) {
+  const mtime = await safeMtime(filePath);
+  const hit = cache.get(key);
+  if (hit && hit.mtime === mtime) return hit.val;
+  const val = await parser();
+  cache.set(key, { mtime, val });
+  return val;
+}
+
 // Parse the cache annotations.db (TSV-ish: `rename <hex_addr> <name>`,
 // `note <hex_addr> <text>`, etc.). Returns { renames, notes } only —
 // the cache format doesn't carry signatures/patches. Empty object if
 // the file doesn't exist or is unreadable.
 async function readEmberCacheAnnotations(binaryPath) {
+  return memoByMtime(
+    _CACHE_DB_PARSE_CACHE, binaryPath,
+    emberCacheAnnotationsPath(binaryPath),
+    () => parseEmberCacheAnnotations(binaryPath));
+}
+
+async function parseEmberCacheAnnotations(binaryPath) {
   const out = { renames: {}, notes: {}, fields: {} };
   try {
     const raw = await fs.readFile(emberCacheAnnotationsPath(binaryPath), "utf8");
@@ -438,11 +497,21 @@ async function readEmberCacheAnnotations(binaryPath) {
 // The UI sidecar wins on conflict — manual renames override agent
 // guesses. Patches / signatures / localRenames live only in the JSON
 // sidecar (no cache-side equivalent yet).
+async function readSidecarJson(binaryPath) {
+  return memoByMtime(
+    _SIDECAR_PARSE_CACHE, binaryPath,
+    sidecarPath(binaryPath),
+    async () => {
+      try { return JSON.parse(await fs.readFile(sidecarPath(binaryPath), "utf8")); }
+      catch { return {}; }
+    });
+}
+
 async function readSidecar(binaryPath) {
-  let json = {};
-  try { json = JSON.parse(await fs.readFile(sidecarPath(binaryPath), "utf8")); }
-  catch { /* no sidecar yet — that's fine, the cache may still have data */ }
-  const cache = await readEmberCacheAnnotations(binaryPath);
+  const [json, cache] = await Promise.all([
+    readSidecarJson(binaryPath),
+    readEmberCacheAnnotations(binaryPath),
+  ]);
   return {
     renames:      { ...cache.renames, ...(json.renames    || {}) },
     notes:        { ...cache.notes,   ...(json.notes      || {}) },
@@ -457,6 +526,10 @@ async function saveSidecar(binaryPath, data) {
   const p = sidecarPath(binaryPath);
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, JSON.stringify(data, null, 2), "utf8");
+  // Bust the parse cache so the next reader doesn't see stale JSON
+  // before mtime resolution catches up (some filesystems quantize to
+  // 1 ms, which on a fast machine can land within the same tick).
+  _SIDECAR_PARSE_CACHE.delete(binaryPath);
 }
 
 // Stable per-patch-set hash used as the patched-binary filename suffix
@@ -494,9 +567,11 @@ async function materializePatchedBinary(originalPath) {
   // Reuse a previously-materialised file if it's still newer than the
   // original binary. The hash already covers patch-set identity, so
   // mtime is a belt-and-braces guard for the user editing the binary
-  // in place.
-  const origMtime    = await safeMtime(originalPath);
-  const patchedMtime = await safeMtime(patchedPath);
+  // in place. Run the two stats in parallel.
+  const [origMtime, patchedMtime] = await Promise.all([
+    safeMtime(originalPath),
+    safeMtime(patchedPath),
+  ]);
   if (patchedMtime && origMtime && patchedMtime >= origMtime) {
     return patchedPath;
   }
@@ -598,12 +673,18 @@ function parseAnnText(text) {
 
 // Convert the on-disk JSON sidecar into the plain-text format the CLI
 // expects. Returns the temp file path, or null if there's nothing to write.
+//
+// Cache the projected text in memory keyed by binaryPath, and skip the
+// write when content is byte-identical to what's already on disk. This
+// keeps the .ann file's mtime stable across repeated `ember:run` calls,
+// which is the only thing that lets RUN_CACHE actually hit — without
+// this guard, every IPC call rewrote the file with fresh mtime,
+// invalidating every cached entry on every click.
+const ANN_TEXT_CACHE = new Map();   // binaryPath → last projected text
+
 async function writeCliAnnotations(binaryPath) {
-  const jsonPath = sidecarPath(binaryPath);
-  let parsed;
-  try {
-    parsed = JSON.parse(await fs.readFile(jsonPath, "utf8"));
-  } catch { return null; }
+  const parsed = await readSidecarJson(binaryPath);
+  if (!parsed || Object.keys(parsed).length === 0) return null;
   const renames = parsed.renames || {};
   const sigs    = parsed.signatures || {};
   const notes   = parsed.notes || {};
@@ -639,25 +720,44 @@ async function writeCliAnnotations(binaryPath) {
     const off = parts.slice(2).join(":");
     lines.push(`field ${hex} ${param}|${off}|${name}`);
   }
+  const text = lines.join("\n") + "\n";
   const outPath = path.join(app.getPath("userData"), "projects",
                             sanitize(binaryPath) + ".ann");
+
+  // In-memory fast path: same projected text as the previous call for
+  // this binary → assume the on-disk file still matches, skip both the
+  // disk read and the write. The `readFile` path below covers cold
+  // starts where the cache is empty but the file already exists.
+  if (ANN_TEXT_CACHE.get(binaryPath) === text) return outPath;
+
   await fs.mkdir(path.dirname(outPath), { recursive: true });
-  await fs.writeFile(outPath, lines.join("\n") + "\n", "utf8");
+  let onDisk = null;
+  try { onDisk = await fs.readFile(outPath, "utf8"); } catch {}
+  if (onDisk !== text) {
+    await fs.writeFile(outPath, text, "utf8");
+  }
+  ANN_TEXT_CACHE.set(binaryPath, text);
   return outPath;
 }
 
 ipcMain.handle("ember:run", async (_e, args) => {
   if (!state.binary) throw new Error("no binary selected");
   if (!Array.isArray(args)) throw new Error("args must be array");
-  const annPath  = await writeCliAnnotations(state.binary);
-  // Resolve the binary path to the patched copy when patches exist.
-  // All downstream analysis sees the patched bytes, so disasm and
-  // pseudo-C reflect patches live without a UI reload.
-  const effective = await materializePatchedBinary(state.binary);
+  // writeCliAnnotations + materializePatchedBinary both end up reading
+  // the same sidecar JSON, so they can run in parallel now that the
+  // parse is memoized by mtime. This was 50–100 ms of serial I/O on
+  // every click before — the user sees it as "even small functions
+  // load slowly."
+  const [annPath, effective] = await Promise.all([
+    writeCliAnnotations(state.binary),
+    materializePatchedBinary(state.binary),
+  ]);
 
-  const binMtime = await safeMtime(effective);
-  const annMtime = await safeMtime(annPath);
-  const cliMtime = await safeMtime(EMBER_BIN);
+  const [binMtime, annMtime, cliMtime] = await Promise.all([
+    safeMtime(effective),
+    safeMtime(annPath),
+    safeMtime(EMBER_BIN),
+  ]);
   // Embed mtimes in the key. When the binary, patches or annotations
   // change, the new key won't hit prior entries — they fall out via
   // LRU. The patched-copy mtime captures the patches themselves; the
@@ -674,8 +774,26 @@ ipcMain.handle("ember:run", async (_e, args) => {
   if (RUN_INFLIGHT.has(key)) return RUN_INFLIGHT.get(key);
 
   const extra = annPath ? ["--annotations", annPath] : [];
+  const t0 = Date.now();
   const p = runEmber([...args, ...extra, effective])
-    .then((out) => { lruTouch(RUN_CACHE, key, out); return out; })
+    .then((out) => {
+      lruTouch(RUN_CACHE, key, out);
+      const dt = Date.now() - t0;
+      // Anything over a second on a single ember spawn is worth knowing
+      // about — either the binary's hot pages got evicted, the user is
+      // on cold-cache after an annotations save, or a CLI flag changed
+      // the cost class. Surface in the [electron] dev log so the user
+      // can correlate to clicks without recording a full Performance
+      // trace.
+      if (dt >= 1000) {
+        const argSummary = args.join(" ").slice(0, 80);
+        const sizeKB = Math.round(out.length / 1024);
+        console.warn(
+          `[ember:run] slow: ${dt}ms  args=[${argSummary}]  out=${sizeKB}KB`
+        );
+      }
+      return out;
+    })
     .finally(() => { RUN_INFLIGHT.delete(key); });
   RUN_INFLIGHT.set(key, p);
   return p;
@@ -2499,9 +2617,12 @@ ipcMain.handle("agent:cascade", async (_e, opts) => {
 
 app.on("before-quit", async () => {
   // Best-effort clear so the user's profile doesn't show "viewing X"
-  // after the app has quit. We don't await — Electron is mid-shutdown.
-  try { discordClient?.user?.clearActivity?.(); } catch {}
-  try { discordClient?.destroy?.(); } catch {}
+  // after the app has quit. Both calls return Promises — a sync try/catch
+  // wouldn't trap CONNECTION_ENDED when Discord has already dropped the
+  // socket, which surfaces as an UnhandledPromiseRejectionWarning during
+  // shutdown. Swallow async rejections too.
+  try { Promise.resolve(discordClient?.user?.clearActivity?.()).catch(() => {}); } catch {}
+  try { Promise.resolve(discordClient?.destroy?.()).catch(() => {}); } catch {}
 });
 
 // -------------------------------------------------------------------------

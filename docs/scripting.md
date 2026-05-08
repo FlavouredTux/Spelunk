@@ -111,6 +111,110 @@ Values containing spaces, `=`, `->`, `#`, or `%` should be quoted with
 `"..."`. Standard escapes: `\\`, `\"`, `\n`, `\r`, `\t`. Unquoted values
 are taken verbatim from the trimmed line.
 
+### Provenance (`; conf=… ; src=… ; ev=…`)
+
+`[rename]`, `[note]`, and `[signature]` directives accept an optional
+metadata suffix carrying confidence + source + evidence:
+
+```ember
+[rename]
+0x401234 = do_thing ; conf=0.9 ; src=agent:namer ; ev=3-arg, called by 0x401120
+
+[note]
+0x401234 = entry point ; conf=0.7 ; src=cli
+
+[signature]
+0x401234 = int do_thing(char* name, int x) ; conf=0.85 ; src=hand
+```
+
+The suffix marker is **space-semicolon-space** (` ; `) — anchored by
+the leading whitespace, so a literal `;` in a note value (e.g.
+`0x401234 = step 1; step 2`) does NOT trigger metadata parsing.
+Within the suffix, pairs are separated by `;`; each pair is
+`key=value`, split on the first `=`.
+
+Recognised keys:
+
+- `conf=<float>` — 0..1, clamped on load.
+- `src=<tag>` — short identifier for who's claiming. By convention
+  `cli` (typed by hand), `agent:<role>` (worker in the agent harness),
+  `import` (derived from binary symbols).
+- `ev=<text>` — free-form reason. Ends at the next `;` in the
+  suffix block, so embed `;` in evidence by replacing it with
+  `,` upstream (the agent harness does this in `metaSuffix`).
+
+Unknown keys are silently ignored — older ember reading a newer
+script keeps the rename/note/signature, just drops the metadata.
+
+Provenance lands in parallel maps (`rename_meta` / `note_meta` /
+`signature_meta`) on the `Annotations` struct and persists in the
+on-disk format as separate `meta` records (see "On-disk format"
+below). `--show-provenance` surfaces it in pseudo-C output;
+`--functions --json` emits it as `confidence` / `source` /
+`evidence` columns.
+
+### On-disk format
+
+`Annotations::save` produces a flat line-per-record file. Most
+records are self-describing:
+
+```
+rename <hex-addr>  <new-name>
+sig    <hex-addr>  <return-type>|<param-type>|<param-name>|...
+note   <hex-addr>  <text>
+const  <hex-value> <name>
+field  <hex-addr>  <param-index>|<hex-offset>|<field-name>
+meta   <kind> <hex-addr> conf=<float>|src=<tag>|ev=<text>
+```
+
+`meta` carries provenance for one of the records above; `<kind>` is
+`rename`, `note`, or `sig`. Pipes are the field separator inside the
+`meta` tail; embedded `|` is `\|`. `\n` / `\r` / `\\` also escape
+themselves. Unknown record kinds and unknown meta subkinds are
+silently skipped, so an older ember reading a newer file pulls the
+names through cleanly and just loses the metadata.
+
+### Importing a persisted cache file
+
+`--apply` also accepts the persisted on-disk format (the same format
+`Annotations::save` writes to the cache). Useful for copying
+annotations between binary versions:
+
+```sh
+# Bulk-copy renames from binary v1 to binary v2:
+ember --apply ~/.cache/ember/annotations/<v1-key>/annotations.db v2.elf
+```
+
+Detection is automatic — if the file's first non-comment line starts
+with `[`, it's parsed as a declarative script; if it starts with
+`rename ` / `note ` / `sig ` / `meta `, it's loaded as a persisted
+Annotations file and merged into the destination. Conflicts keep the
+existing destination value.
+
+### One-shot annotate
+
+`ember annotate ADDR ...` is the single-call equivalent of writing a
+one-line `.ember` file and `--apply`-ing it:
+
+```sh
+ember annotate 0x2f8908a --set-name cap_check_v2 \
+    --confidence 0.9 --source agent:namer \
+    --evidence "3-arg, called by 0x3f94380 with esi=immediate" \
+    <binary>
+
+# Multiple kinds in one call (rename + signature):
+ember annotate 0x401234 --set-name do_thing \
+    --set-signature "int do_thing(char*, int)" \
+    --confidence 0.85 --source hand <binary>
+
+# Preview only:
+ember annotate 0x401234 --set-name foo --confidence 0.6 --dry-run <binary>
+```
+
+Resolves the destination using the same precedence as `--apply`
+(explicit `--annotations` > `<binary>.ember-annotations` sidecar >
+cache slot); the cache slot is created on first use.
+
 ### Limits
 
 - `[pattern-rename]` glob is bare `*` — no `?`, no character classes.

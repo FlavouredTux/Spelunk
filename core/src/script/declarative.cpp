@@ -256,6 +256,62 @@ struct KvPair {
     bool        arrow = false;  // `->` if true, `=` if false
 };
 
+// Find the start of a `; ` meta suffix in a directive RHS, or npos if
+// none. The marker is a *space-semicolon* outside any quoted span — so
+// values like `note = 0x42; halt` keep their literal `;`. Mirrors
+// strip_trailing_comment's whitespace-anchored shape.
+[[nodiscard]] std::size_t find_meta_suffix(std::string_view s) noexcept {
+    bool in_str = false;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '"' && (i == 0 || s[i - 1] != '\\')) {
+            in_str = !in_str;
+        } else if (!in_str && c == ';' && i > 0 &&
+                   (s[i - 1] == ' ' || s[i - 1] == '\t')) {
+            return i;
+        }
+    }
+    return std::string_view::npos;
+}
+
+// Parse a `conf=0.9; src=agent:namer; ev=3-arg ...` block.
+// `;`-separated key=value pairs; `=` splits each at the first occurrence
+// so values can contain `=`. Whitespace around keys / values is trimmed.
+// Unknown keys are silently ignored. Confidence values outside [0,1]
+// clamp on load (mirrors the on-disk meta-record clamping).
+[[nodiscard]] AnnotationMeta parse_meta_block(std::string_view block) {
+    AnnotationMeta m;
+    std::size_t start = 0;
+    while (start < block.size()) {
+        std::size_t end = start;
+        while (end < block.size() && block[end] != ';') ++end;
+        const std::string_view chunk = trim(block.substr(start, end - start));
+        if (!chunk.empty()) {
+            const auto eq = chunk.find('=');
+            if (eq != std::string_view::npos) {
+                const std::string_view key = trim(chunk.substr(0, eq));
+                const std::string_view val = trim(chunk.substr(eq + 1));
+                if (key == "conf") {
+                    float v = 0.0f;
+                    auto r = std::from_chars(val.data(), val.data() + val.size(), v);
+                    if (r.ec == std::errc{} && r.ptr == val.data() + val.size()) {
+                        if (v < 0.0f) v = 0.0f;
+                        if (v > 1.0f) v = 1.0f;
+                        m.confidence = v;
+                    }
+                } else if (key == "src") {
+                    m.source = std::string(val);
+                } else if (key == "ev") {
+                    m.evidence = std::string(val);
+                }
+            }
+        }
+        if (end >= block.size()) break;
+        start = end + 1;
+    }
+    return m;
+}
+
 [[nodiscard]] Result<KvPair>
 split_kv(std::string_view line, std::size_t lineno) {
     // Skip a leading quoted span so an `=` or `->` inside doesn't
@@ -370,7 +426,7 @@ split_kv(std::string_view line, std::size_t lineno) {
 }
 
 [[nodiscard]] std::optional<FunctionSig>
-parse_signature(std::string_view src) {
+parse_signature_impl(std::string_view src) {
     auto v = trim(src);
     const std::size_t lp = v.find('(');
     const std::size_t rp = v.rfind(')');
@@ -513,6 +569,11 @@ void apply_rename(const Directive& d, const Binary& b,
         return;
     }
     if (inserted) ++st.renames_added;
+    // Carry the trailing `; conf= src= ev=` suffix into the parallel
+    // metadata map. Only writes when the directive actually contributed
+    // a new rename, so a no-op apply (same target already there) won't
+    // overwrite existing meta with a stale entry from the script.
+    if (inserted && d.has_meta) ann.rename_meta[*a] = d.meta;
 }
 
 void apply_note(const Directive& d, const Binary& b,
@@ -525,6 +586,7 @@ void apply_note(const Directive& d, const Binary& b,
     }
     auto [_, inserted] = ann.notes.try_emplace(*a, d.rhs);
     if (inserted) ++st.notes_added;
+    if (inserted && d.has_meta) ann.note_meta[*a] = d.meta;
 }
 
 void apply_signature(const Directive& d, const Binary& b,
@@ -535,7 +597,7 @@ void apply_signature(const Directive& d, const Binary& b,
             "line {}: [signature] cannot resolve `{}` to an address", d.line, d.lhs));
         return;
     }
-    auto sig = parse_signature(d.rhs);
+    auto sig = parse_signature_impl(d.rhs);
     if (!sig) {
         st.warnings.push_back(std::format(
             "line {}: [signature] cannot parse `{}`", d.line, d.rhs));
@@ -543,6 +605,7 @@ void apply_signature(const Directive& d, const Binary& b,
     }
     auto [_, inserted] = ann.signatures.try_emplace(*a, std::move(*sig));
     if (inserted) ++st.signatures_added;
+    if (inserted && d.has_meta) ann.signature_meta[*a] = d.meta;
 }
 
 void apply_field(const Directive& d, const Binary& b,
@@ -647,6 +710,10 @@ void apply_from_strings(const Directive& d, const Binary& b,
 // Public API
 // ===========================================================================
 
+std::optional<FunctionSig> parse_signature(std::string_view src) {
+    return parse_signature_impl(src);
+}
+
 Result<std::vector<Directive>> parse(std::string_view text) {
     std::vector<Directive> out;
     std::string_view section;
@@ -683,6 +750,25 @@ Result<std::vector<Directive>> parse(std::string_view text) {
         d.lhs  = std::move(kv->lhs);
         d.rhs  = std::move(kv->rhs);
         d.line = lineno;
+
+        // Optional ` ; conf=… ; src=… ; ev=…` metadata suffix on the
+        // RHS. Only meaningful for direct-section directives (rename /
+        // note / signature) — apply_* for the pattern / from-strings
+        // sections never reads d.meta. We still parse and store it
+        // uniformly so a future user of those sections doesn't have
+        // to retrofit the lexer.
+        if (auto pos = find_meta_suffix(d.rhs); pos != std::string::npos) {
+            const std::string_view block_view = std::string_view{d.rhs}.substr(pos + 1);
+            d.meta = parse_meta_block(block_view);
+            d.has_meta = true;
+            // Trim the suffix off the rhs in-place so apply_* never has
+            // to know it was there.
+            std::size_t cut = pos;
+            while (cut > 0 && (d.rhs[cut - 1] == ' ' || d.rhs[cut - 1] == '\t')) {
+                --cut;
+            }
+            d.rhs.resize(cut);
+        }
 
         if      (iequals(section, "rename"))         d.kind = Directive::Kind::Rename;
         else if (iequals(section, "note"))           d.kind = Directive::Kind::Note;

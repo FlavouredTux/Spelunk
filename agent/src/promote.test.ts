@@ -100,6 +100,26 @@ test("promote: notes go into [note], names into [rename]", () => {
     cleanup();
 });
 
+test("promote: writes ; conf=… ; src=… ; ev=… meta suffix on each directive", () => {
+    const { binary, intel, cleanup } = setup();
+    intel.append({
+        kind: "claim", id: "1", agent: "namer", ts: "2026-01-01T00:00:00Z",
+        subject: "0x401000", predicate: "name", value: "do_thing",
+        evidence: "3-arg, called by 0x402000 with esi=immediate", confidence: 0.9,
+    });
+    const out = join(tmpdir(), `promote-${Date.now()}.ember`);
+    promote({ binary, out, threshold: 0.85, apply: false, dryRun: false, emberBin: "/bin/false" });
+    const script = readFileSync(out, "utf8");
+    // declarative.cpp consumes ` ; conf=… ; src=… ; ev=…` — three pieces, in
+    // that order, separated by ` ; `. The exact regex below is what the C++
+    // parser keys off of, so a regression on the wire format breaks both
+    // sides of the contract at once.
+    assert.match(script,
+        /0x401000 = do_thing ; conf=0\.900 ; src=agent:promote ; ev=3-arg, called by 0x402000 with esi=immediate/);
+    rmSync(out, { force: true });
+    cleanup();
+});
+
 test("promote: sanitizes #, newline in value (would break .ember syntax)", () => {
     const { binary, intel, cleanup } = setup();
     intel.append({

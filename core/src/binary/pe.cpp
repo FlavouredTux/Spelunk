@@ -533,8 +533,13 @@ collect_exports(const Binary& bin,
     // Forwarder exports point *into* the export data directory itself —
     // the RVA there is the "DLL.Symbol" redirect string, not a function
     // address. Skip them instead of emitting a garbage Symbol at a
-    // string VA.
-    const u32 dd_end = dd.virtual_address + dd.size;
+    // string VA. Widen to u64 for the upper-bound check: a hostile PE
+    // with `dd.virtual_address + dd.size` that overflows u32 would
+    // otherwise wrap to a tiny number, causing every export to fail
+    // (or pass) the forwarder test depending on which side the wrap
+    // lands on.
+    const u64 dd_end = static_cast<u64>(dd.virtual_address) +
+                       static_cast<u64>(dd.size);
     const auto is_forwarder = [&](u32 rva) noexcept {
         return rva >= dd.virtual_address && rva < dd_end;
     };

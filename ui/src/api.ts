@@ -47,6 +47,34 @@ class Lru<K, V> {
 // browsing on a multi-thousand-function binary (5 views × ~100 functions
 // before LRU eviction kicks in).
 const FUNC_CACHE = new Lru<string, Promise<string>>(512);
+
+// Yield the event loop so the browser can paint between parser chunks.
+// `setTimeout(0)` is the only primitive that defers past the current
+// microtask queue *and* lets a paint frame in. `await Promise.resolve()`
+// stays inside the microtask queue and would not relieve a long render.
+const yieldToPaint = (): Promise<void> =>
+  new Promise<void>((r) => setTimeout(r, 0));
+
+// Chunk `raw` on '\n' and feed each line to `perLine`, surrendering the
+// main thread every `chunkSize` lines. Used for the multi-MB stdout
+// payloads coming back from `ember --functions` / `--strings` / `--xrefs`,
+// where parsing the entire output in one synchronous pass produced
+// 17-second blocked frames in the Performance recording.
+async function forEachLineChunked(
+  raw: string,
+  perLine: (line: string) => void,
+  chunkSize = 4096,
+): Promise<void> {
+  // V8's string.split is a native fast-path, so the up-front split cost
+  // is negligible compared to the JS regex+parseInt loop that follows.
+  const all = raw.split("\n");
+  for (let i = 0; i < all.length; ++i) {
+    perLine(all[i]);
+    if ((i + 1) % chunkSize === 0 && i + 1 < all.length) {
+      await yieldToPaint();
+    }
+  }
+}
 let SUMMARY_PROMISE:  Promise<BinaryInfo>    | null = null;
 let XREFS_PROMISE:    Promise<Xrefs>         | null = null;
 let STRINGS_PROMISE:  Promise<StringEntry[]> | null = null;
@@ -150,7 +178,7 @@ export async function loadHeader(): Promise<BinaryInfo> {
     async () => {
       const path = (await window.ember.binary()) ?? "";
       const rawSummary = await window.ember.run([]);
-      const info = parseSummary(rawSummary, path);
+      const info = await parseSummary(rawSummary, path);
       info.functions = [];
       return info;
     },
@@ -169,27 +197,27 @@ export async function loadFunctions(
     ? ["--functions", "--full-analysis"]
     : ["--functions"];
   const raw = await window.ember.run(args);
-  return parseFunctionsTsv(raw);
+  return await parseFunctionsTsv(raw);
 }
 
-function parseFunctionsTsv(raw: string): FunctionInfo[] {
+async function parseFunctionsTsv(raw: string): Promise<FunctionInfo[]> {
   const out: FunctionInfo[] = [];
   // Pass 1: parse every row, collapsing kinds onto "function".
   type Row = FunctionInfo & { rawKind: string };
   const rows: Row[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
+  await forEachLineChunked(raw, (line) => {
+    if (!line) return;
     // Columns: addr\tsize\tkind\tname — all four required.
     const parts = line.split("\t");
-    if (parts.length < 4) continue;
+    if (parts.length < 4) return;
     const addr = parts[0];
     const addrNum = parseInt(addr, 16);
-    if (!Number.isFinite(addrNum)) continue;
+    if (!Number.isFinite(addrNum)) return;
     const size    = parseInt(parts[1], 16) || 0;
     const rawKind = parts[2];
     const name    = parts.slice(3).join("\t").trim();
     rows.push({ addr, addrNum, size, kind: "function", name, rawKind });
-  }
+  });
   // Pass 2: drop sub entries that duplicate a real symbol at the same
   // address (the symbol carries the name; the sub row would just be a
   // gray placeholder). Earlier this filter also dropped every size=0
@@ -261,14 +289,14 @@ async function loadXrefsImpl(): Promise<Xrefs> {
   const raw = await window.ember.run(["--xrefs"]);
   const callers: Record<number, number[]> = {};
   const callees: Record<number, number[]> = {};
-  for (const line of raw.split("\n")) {
+  await forEachLineChunked(raw, (line) => {
     const m = /^(0x[0-9a-f]+)\s*->\s*(0x[0-9a-f]+)/.exec(line);
-    if (!m) continue;
+    if (!m) return;
     const caller = parseInt(m[1], 16);
     const callee = parseInt(m[2], 16);
     (callees[caller] ??= []).push(callee);
     (callers[callee] ??= []).push(caller);
-  }
+  });
   // Dedupe
   for (const k in callers) callers[k] = Array.from(new Set(callers[k]));
   for (const k in callees) callees[k] = Array.from(new Set(callees[k]));
@@ -286,20 +314,20 @@ export async function loadStrings(): Promise<StringEntry[]> {
 async function loadStringsImpl(): Promise<StringEntry[]> {
   const raw = await window.ember.run(["--strings"]);
   const out: StringEntry[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
+  await forEachLineChunked(raw, (line) => {
+    if (!line) return;
     // Split on unescaped '|' only (the emitter escapes any embedded '|' as '\|').
     const parts = splitPipes(line);
-    if (parts.length < 3) continue;
+    if (parts.length < 3) return;
     const [addrHex, escText, xrefStr] = parts;
     const addrNum = parseInt(addrHex, 16);
-    if (!Number.isFinite(addrNum)) continue;
+    if (!Number.isFinite(addrNum)) return;
     const text = unescape(escText);
     const xrefs = xrefStr
       ? xrefStr.split(",").map((s) => parseInt(s, 16)).filter(Number.isFinite)
       : [];
     out.push({ addr: "0x" + addrNum.toString(16), addrNum, text, xrefs });
-  }
+  });
   return out;
 }
 
@@ -314,11 +342,11 @@ export async function loadArities(): Promise<Arities> {
 async function loadAritiesImpl(): Promise<Arities> {
   const raw = await window.ember.run(["--arities"]);
   const out: Arities = {};
-  for (const line of raw.split("\n")) {
+  await forEachLineChunked(raw, (line) => {
     const m = /^(0x[0-9a-f]+)\s+(\d+)$/.exec(line.trim());
-    if (!m) continue;
+    if (!m) return;
     out[parseInt(m[1], 16)] = parseInt(m[2], 10);
-  }
+  });
   return out;
 }
 
@@ -415,8 +443,13 @@ export async function loadIdentifications(opts?: {
   );
 }
 
-function parseSummary(raw: string, path: string): BinaryInfo {
-  const lines = raw.split("\n");
+// Single-pass over the summary stream. The earlier two-pass version
+// (one for header keys, one for section/defined/imports tables) walked
+// every line twice; on a partially-stripped 150 MB PE the "defined
+// symbols" table alone is tens of thousands of rows, which made
+// loadHeader the dominant cost of app startup. We now read header keys
+// inline as long as we're in the no-section "preamble" mode.
+async function parseSummary(raw: string, path: string): Promise<BinaryInfo> {
   const info: BinaryInfo = {
     path,
     format: "",
@@ -428,49 +461,61 @@ function parseSummary(raw: string, path: string): BinaryInfo {
     functions: [],
     imports: [],
   };
-
-  for (const l of lines) {
-    const m = /^(file|format|arch|endian|entry|base)\s+(.+)$/.exec(l.trim());
-    if (m) {
-      if (m[1] === "format") info.format = m[2];
-      else if (m[1] === "arch") info.arch = m[2];
-      else if (m[1] === "endian") info.endian = m[2];
-      else if (m[1] === "entry") info.entry = m[2];
-      else if (m[1] === "base") info.base = m[2];
-    }
-  }
+  const headerKey = /^(file|format|arch|endian|entry|base)\s+(.+)$/;
+  const sectionRow = /^\s*(\d+)\s+(\S+)?\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(\S+)/;
+  const definedRow = /^\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(\S+)\s+(.+)$/;
+  const importRow  = /^\s*(\S+)\s+(.+)$/;
 
   let mode: "none" | "sections" | "defined" | "imports" = "none";
-  for (const raw_line of lines) {
+  await forEachLineChunked(raw, (raw_line) => {
     const line = raw_line.replace(/\r$/, "");
-    if (/^sections\s+\(\d+\)/.test(line)) { mode = "sections"; continue; }
-    if (/^defined symbols\s+\(\d+\)/.test(line)) { mode = "defined"; continue; }
-    if (/^imports\s+\(\d+\)/.test(line)) { mode = "imports"; continue; }
-    if (/^(file|format|arch|endian|entry|base)/.test(line.trim())) { mode = "none"; continue; }
-    if (!line.trim()) continue;
-
+    if (/^sections\s+\(\d+\)/.test(line)) { mode = "sections"; return; }
+    if (/^defined symbols\s+\(\d+\)/.test(line)) { mode = "defined"; return; }
+    if (/^imports\s+\(\d+\)/.test(line)) { mode = "imports"; return; }
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    // Header keys can appear at the top of the dump or between section
+    // tables. When we see one, capture it AND reset mode so subsequent
+    // rows aren't misparsed as table rows. Matches the original
+    // two-pass parser's defensive behavior.
+    const h = headerKey.exec(trimmed);
+    if (h) {
+      if (h[1] === "format") info.format = h[2];
+      else if (h[1] === "arch") info.arch = h[2];
+      else if (h[1] === "endian") info.endian = h[2];
+      else if (h[1] === "entry") info.entry = h[2];
+      else if (h[1] === "base") info.base = h[2];
+      mode = "none";
+      return;
+    }
+    if (mode === "none") return;
     if (mode === "sections") {
-      const m = /^\s*(\d+)\s+(\S+)?\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(\S+)/.exec(line);
+      const m = sectionRow.exec(line);
       if (m && m[2]) {
         info.sections.push({ name: m[2], vaddr: m[3], size: m[4], flags: m[5] });
       }
-      continue;
+      return;
     }
     if (mode === "defined") {
-      const m = /^\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(\S+)\s+(.+)$/.exec(line);
-      if (m) {
-        info.functions.push({
-          addr: m[1],
-          addrNum: parseInt(m[1], 16),
-          size: parseInt(m[2], 16),
-          kind: m[3],
-          name: m[4].trim(),
-        });
+      const m = definedRow.exec(line);
+      if (m && m[3] === "function") {
+        const name = m[4].trim();
+        // Filter placeholders (<section-N> etc.) inline so we don't
+        // store-then-discard hundreds of thousands of rows.
+        if (name && !name.startsWith("<")) {
+          info.functions.push({
+            addr: m[1],
+            addrNum: parseInt(m[1], 16),
+            size: parseInt(m[2], 16),
+            kind: m[3],
+            name,
+          });
+        }
       }
-      continue;
+      return;
     }
     if (mode === "imports") {
-      const m = /^\s*(\S+)\s+(.+)$/.exec(line);
+      const m = importRow.exec(line);
       if (m) {
         info.imports.push({
           addr: "0x0",
@@ -481,16 +526,9 @@ function parseSummary(raw: string, path: string): BinaryInfo {
           isImport: true,
         });
       }
-      continue;
+      return;
     }
-  }
-
-  // Keep real named functions, drop placeholders (<section-N>, etc.).
-  // `size > 0` used to gate here too, but dynsym on stripped binaries
-  // has no size info — `_start` and library exports would vanish.
-  info.functions = info.functions.filter(
-    (f) => f.kind === "function" && f.name && !f.name.startsWith("<"),
-  );
+  });
 
   return info;
 }

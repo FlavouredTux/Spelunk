@@ -52,6 +52,54 @@ split(std::string_view s, char delim) {
     return parse_hex_addr(s, out);  // same wire format as addr_t
 }
 
+[[nodiscard]] bool parse_float_clamped(std::string_view s, float& out) noexcept {
+    // Accept "0.9" / ".9" / "1" / "0". Locale-independent because
+    // from_chars on float is C-locale fixed. Out-of-range values clamp
+    // to [0,1] to keep the persisted layer well-defined regardless of
+    // what an over-eager agent claims.
+    float v = 0.0f;
+    auto r = std::from_chars(s.data(), s.data() + s.size(), v);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    out = v;
+    return true;
+}
+
+// Pipe-separated split that honours `\|` as an escaped delimiter.
+// Used by the meta-record tail parser.
+[[nodiscard]] std::vector<std::string_view>
+split_unescaped_pipe(std::string_view s) {
+    std::vector<std::string_view> out;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i <= s.size(); ++i) {
+        if (i + 1 < s.size() && s[i] == '\\' && s[i + 1] == '|') {
+            ++i;  // skip past the escaped pipe
+            continue;
+        }
+        if (i == s.size() || s[i] == '|') {
+            out.emplace_back(s.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] std::string unescape_meta_value(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            const char n = s[i + 1];
+            if (n == '\\' || n == '|') { out += n; ++i; continue; }
+            if (n == 'n')               { out += '\n'; ++i; continue; }
+            if (n == 'r')               { out += '\r'; ++i; continue; }
+        }
+        out += s[i];
+    }
+    return out;
+}
+
 [[nodiscard]] bool parse_i64_auto(std::string_view s, i64& out) noexcept {
     bool neg = false;
     if (s.starts_with("-")) {
@@ -155,6 +203,45 @@ Annotations::load(const std::filesystem::path& path) {
             if (name.empty()) continue;
             out.named_constants[value] = std::string(name);
         }
+        else if (kind == "meta") {
+            // meta <subkind> <hex-addr> conf=<float>|src=<tag>|ev=<text>
+            // Subkind: rename | note | sig. Tail keys are pipe-separated
+            // key=value pairs; embedded `|` is `\|`, `\n` / `\r` / `\\`
+            // also escape themselves. Unknown subkinds and unknown keys
+            // are silently dropped — newer ember can produce records old
+            // ember reads cleanly without exploding.
+            const std::size_t sp1 = rest.find(' ');
+            if (sp1 == std::string_view::npos) continue;
+            const std::string_view subkind = rest.substr(0, sp1);
+            const std::string_view rest2 = trim(rest.substr(sp1 + 1));
+            const std::size_t sp2 = rest2.find(' ');
+            if (sp2 == std::string_view::npos) continue;
+            addr_t addr = 0;
+            if (!parse_hex_addr(rest2.substr(0, sp2), addr)) continue;
+            const std::string_view tail = trim(rest2.substr(sp2 + 1));
+
+            AnnotationMeta m;
+            for (auto raw_part : split_unescaped_pipe(tail)) {
+                const std::string_view part = trim(raw_part);
+                const std::size_t eq = part.find('=');
+                if (eq == std::string_view::npos) continue;
+                const std::string_view key = trim(part.substr(0, eq));
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "conf") {
+                    (void)parse_float_clamped(trim(val), m.confidence);
+                } else if (key == "ev") {
+                    m.evidence = unescape_meta_value(val);
+                } else if (key == "src") {
+                    m.source = unescape_meta_value(trim(val));
+                }
+                // Unknown keys: skip silently (forward compat).
+            }
+
+            if (subkind == "rename")    out.rename_meta[addr]    = std::move(m);
+            else if (subkind == "note") out.note_meta[addr]      = std::move(m);
+            else if (subkind == "sig")  out.signature_meta[addr] = std::move(m);
+            // Unknown subkinds: skip silently (forward compat).
+        }
         else if (kind == "field") {
             const std::size_t sp = rest.find(' ');
             if (sp == std::string_view::npos) continue;
@@ -192,12 +279,60 @@ std::string escape_note(std::string_view s) {
     return out;
 }
 
+// Same as escape_note but also escapes `|` since meta-record values
+// share their line with pipe-separated key=value siblings. Round-trips
+// cleanly through unescape_meta_value above.
+std::string escape_meta_value(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '|':  out += "\\|";  break;
+            default:   out += c;
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] bool meta_is_empty(const AnnotationMeta& m) noexcept {
+    return m.confidence == 0.0f && m.evidence.empty() && m.source.empty();
+}
+
+void append_meta_line(std::string& out, std::string_view subkind,
+                      addr_t addr, const AnnotationMeta& m) {
+    if (meta_is_empty(m)) return;
+    out += std::format("meta {} {:x}", subkind, addr);
+    bool first = true;
+    auto sep = [&] { out += first ? ' ' : '|'; first = false; };
+    if (m.confidence > 0.0f) {
+        sep();
+        out += std::format("conf={:.3g}", m.confidence);
+    }
+    if (!m.source.empty()) {
+        sep();
+        out += "src=";
+        out += escape_meta_value(m.source);
+    }
+    if (!m.evidence.empty()) {
+        sep();
+        out += "ev=";
+        out += escape_meta_value(m.evidence);
+    }
+    out += '\n';
+}
+
 }  // namespace
 
 std::string Annotations::to_text() const {
     std::string out = "# ember annotations\n";
     for (const auto& [addr, name] : renames) {
         out += std::format("rename {:x} {}\n", addr, name);
+        if (auto it = rename_meta.find(addr); it != rename_meta.end()) {
+            append_meta_line(out, "rename", addr, it->second);
+        }
     }
     for (const auto& [addr, sig] : signatures) {
         out += std::format("sig {:x} {}", addr, sig.return_type);
@@ -208,9 +343,15 @@ std::string Annotations::to_text() const {
             out += p.name;
         }
         out += '\n';
+        if (auto it = signature_meta.find(addr); it != signature_meta.end()) {
+            append_meta_line(out, "sig", addr, it->second);
+        }
     }
     for (const auto& [addr, text] : notes) {
         out += std::format("note {:x} {}\n", addr, escape_note(text));
+        if (auto it = note_meta.find(addr); it != note_meta.end()) {
+            append_meta_line(out, "note", addr, it->second);
+        }
     }
     for (const auto& [value, name] : named_constants) {
         out += std::format("const {:x} {}\n", value, name);
@@ -234,17 +375,28 @@ Annotations::save(const std::filesystem::path& path) const {
         }
     }
 
-    std::ofstream f(path, std::ios::trunc);
-    if (!f) {
-        return std::unexpected(Error::io(std::format(
-            "annotations: cannot write '{}'", path.string())));
+    // Write to a sibling tmp file then rename, so a crash or ENOSPC
+    // mid-write can't leave the annotations file truncated.
+    namespace fs = std::filesystem;
+    const fs::path tmp = path.string() + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::trunc);
+        if (!f) {
+            return std::unexpected(Error::io(std::format(
+                "annotations: cannot write '{}'", tmp.string())));
+        }
+        const std::string text = to_text();
+        f.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!f) {
+            return std::unexpected(Error::io(std::format(
+                "annotations: short write to '{}'", tmp.string())));
+        }
     }
-
-    const std::string text = to_text();
-    f.write(text.data(), static_cast<std::streamsize>(text.size()));
-    if (!f) {
+    fs::rename(tmp, path, ec);
+    if (ec) {
         return std::unexpected(Error::io(std::format(
-            "annotations: short write to '{}'", path.string())));
+            "annotations: rename '{}' -> '{}': {}",
+            tmp.string(), path.string(), ec.message())));
     }
     return {};
 }

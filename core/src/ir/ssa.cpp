@@ -277,12 +277,18 @@ void rename_variables(IrFunction& fn,
                 const auto dv = variable_of(inst.dst);
                 if (!dv) continue;
                 const u32 cur = current_version(*dv);
+                // Fill every operand slot whose predecessor matches the
+                // current block. If a CFG has parallel edges from this
+                // block to the same successor (a Conditional whose two
+                // arms target the same block, for instance), the
+                // predecessor list contains the source twice and BOTH
+                // operand slots need the renamed version. Breaking
+                // after the first match left the second slot at
+                // version 0, surfacing as a phantom live-in elsewhere.
                 for (std::size_t k = 0; k < inst.phi_preds.size(); ++k) {
-                    if (inst.phi_preds[k] == block_addr) {
-                        if (k < inst.phi_operands.size()) {
-                            inst.phi_operands[k].version = cur;
-                        }
-                        break;
+                    if (inst.phi_preds[k] == block_addr &&
+                        k < inst.phi_operands.size()) {
+                        inst.phi_operands[k].version = cur;
                     }
                 }
             }

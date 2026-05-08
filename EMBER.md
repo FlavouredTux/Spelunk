@@ -82,6 +82,7 @@ tail.
 | `ember -c -s <fn> <binary>` | CFG dump with block edges | branch structure |
 | `ember -p -s <fn> <binary>` | pseudo-C | default for understanding |
 | `ember --disasm-at <VA> --count N <binary>` | N instructions from VA | inspect a specific spot |
+| `ember --disasm-window VA1,VA2,... --count N <binary>` | batch disasm; one block per VA, separated by `# <hex-va>` lines (or `--json` array). `@FILE` reads VAs one-per-line | sweep thousands of hits without per-call ember startup |
 
 ### Recognition
 | Command | Output | Use when |
@@ -96,6 +97,8 @@ tail.
 | Command | Output | Use when |
 |---|---|---|
 | `ember --refs-to <VA> <binary>` | callers of VA (incl. tail-jumps + code-ptr) | "who uses this?" |
+| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --refs-to <VA> --json <binary>` | same shape as above, just direct + CodePtr/Lea | machine-readable refs-to for pipelines that prefer structured rows |
 | `ember --containing-fn <VA> <binary>` | enclosing fn entry / size / name / offset | "which function is this in?" |
 | `ember --callees <fn> <binary>` | classified call edges out of fn | "what does this fn call?" |
 | `ember --validate <name> <binary>` | bound addr + lookalikes | sanity-check a name |
@@ -104,8 +107,23 @@ tail.
 | Command | Effect | Use when |
 |---|---|---|
 | `--annotations <path>` | use this file (overrides default) | non-default sidecar |
-| `--apply <path.ember>` | write annotations back | persist conclusions |
+| `--apply <path.ember>` | apply a declarative script (renames + notes + sigs in bulk) | persist many conclusions at once |
 | `--apply --dry-run` | preview as TSV on stdout | audit before commit |
+| `--annotate <addr> --set-name X --confidence 0.9 --evidence "…" --source agent:foo` | one-shot append for a single record | agent / single-call writes |
+| `-s <rename>` | resolve a function by its annotation rename, not just its symbol | after `ember annotate`, the new name is reachable directly |
+| `--show-provenance` | with `-p`, surface `// confidence: …` under each annotated function | downstream agent reading pseudo-C wants to know whether to trust the rename |
+| `--functions --json` | function list with `confidence` / `source` / `evidence` columns when set; renames substitute into the `name` column | machine-readable triage; `--functions=cap_check` matches the annotated name |
+| `--list-annotations` | every record in the resolved annotations file (rename / note / signature) with its meta. TSV by default, structured form under `--json` | enumerate notes — `--functions --json` only surfaces named records, so pure `--set-note` annotations are otherwise invisible |
+| `--apply <cache.db>` | same as `--apply <script.ember>` — auto-detects persisted-format cache files | copy annotations between binary versions |
+| `--validate NAME` | bound rows include `confidence=` / `source=` when annotated | sanity-check a name with provenance |
+
+Provenance rides through the whole stack: `(confidence, source, evidence)`
+fields persist alongside the rename / note / signature. When the agent
+harness promotes a `.ember` file via `agent/src/promote.ts`, the suffix
+` ; conf=0.9 ; src=agent:namer ; ev=…` is consumed by `[rename]` /
+`[note]` / `[signature]` directives and written into parallel `*_meta`
+maps. Avoid stating inferences as facts — pass `--confidence` so the
+next agent / tool can decide whether to verify.
 
 ### Performance
 - First-run heavyweight passes (`--xrefs`, `--strings`, `--arities`,

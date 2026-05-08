@@ -4399,6 +4399,39 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     out += std::format("// {}\n", sf.ir->name.empty()
                                     ? std::string("<unknown>") : sf.ir->name);
 
+    // Optional provenance preamble: when --show-provenance is set and
+    // the resolved annotations carry metadata for this function, surface
+    // confidence + source + evidence as a comment block right under the
+    // function name. Lets a downstream agent decide whether to trust
+    // the rename without re-deriving it. Off by default — these lines
+    // double the visible header for human readers.
+    if (annotations && options.show_provenance) {
+        if (const AnnotationMeta* m = annotations->meta_for_rename(sf.ir->start);
+                m && (m->confidence > 0.0f || !m->evidence.empty() || !m->source.empty())) {
+            std::string head = "// provenance:";
+            if (m->confidence > 0.0f) {
+                head += std::format(" confidence={:.3g}", m->confidence);
+            }
+            if (!m->source.empty()) {
+                head += std::format(" source={}", m->source);
+            }
+            out += head + "\n";
+            if (!m->evidence.empty()) {
+                // Multi-line evidence renders as one comment per line so
+                // long reasons don't break the surrounding comment shape.
+                std::size_t i = 0;
+                while (i < m->evidence.size()) {
+                    const auto nl = m->evidence.find('\n', i);
+                    const auto end = nl == std::string::npos ? m->evidence.size() : nl;
+                    out += "//   evidence: ";
+                    out.append(m->evidence, i, end - i);
+                    out += '\n';
+                    i = nl == std::string::npos ? end : nl + 1;
+                }
+            }
+        }
+    }
+
     // Infer return type from body: any Return region carrying a non-None
     // condition means the function yields a value. We use the condition's
     // IrType to pick an appropriate C type rather than always saying `u64`.

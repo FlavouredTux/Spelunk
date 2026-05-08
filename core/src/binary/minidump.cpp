@@ -150,11 +150,14 @@ MinidumpBinary::bytes_at(addr_t vaddr) const noexcept {
     const u64 off = vaddr - it->vaddr;
     if (off >= it->size) return {};
     const std::size_t avail = static_cast<std::size_t>(it->size - off);
-    if (it->file_off + off >= buffer_.size()) return {};
-    const std::size_t bound =
-        std::min<std::size_t>(avail, buffer_.size() - (it->file_off + off));
-    return std::span<const std::byte>(
-        buffer_.data() + it->file_off + off, bound);
+    // Compute file_off + off without wrap. A corrupt minidump can put
+    // file_off near UINT64_MAX so the addition would silently land back
+    // inside buffer_, leaking adjacent memory.
+    if (it->file_off > buffer_.size()) return {};
+    if (off > buffer_.size() - it->file_off) return {};
+    const std::size_t base = static_cast<std::size_t>(it->file_off + off);
+    const std::size_t bound = std::min<std::size_t>(avail, buffer_.size() - base);
+    return std::span<const std::byte>(buffer_.data() + base, bound);
 }
 
 Result<std::unique_ptr<MinidumpBinary>>

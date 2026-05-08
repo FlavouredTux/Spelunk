@@ -77,7 +77,14 @@ constexpr u16 kLfUQuadword = 0x800A;   // u64
 // ---------------------------------------------------------------------------
 
 [[nodiscard]] inline u32 div_up(u32 a, u32 b) noexcept {
-    return (a + b - 1) / b;
+    // Widen the numerator before adding (b - 1) so a near-UINT32_MAX
+    // value doesn't wrap and produce a tiny block count downstream.
+    // Crafted PDBs would otherwise convince the directory walker to
+    // read zero pages instead of the real (huge) page count, masking
+    // truncation behind a clean parse.
+    return static_cast<u32>(
+        (static_cast<u64>(a) + static_cast<u64>(b) - 1) /
+        static_cast<u64>(b));
 }
 
 // Round up to the next 4-byte boundary. CodeView records (type and
@@ -135,13 +142,16 @@ constexpr u16 kLfUQuadword = 0x800A;   // u64
             if (pos + 8 > body.size()) return false;
             value_out = read_le_at<u64>(body.data() + pos); pos += 8; return true;
         }
-        case kLfReal32: {
-            if (pos + 4 > body.size()) return false;
-            value_out = read_le_at<u32>(body.data() + pos); pos += 4; return true;
-        }
+        case kLfReal32:
         case kLfReal64: {
-            if (pos + 8 > body.size()) return false;
-            value_out = read_le_at<u64>(body.data() + pos); pos += 8; return true;
+            // Floating-point numeric leaves are valid encodings (used
+            // for template arguments, enum-of-floats values) but every
+            // call site downstream consumes the result as an integer
+            // (array sizes, struct offsets, bitfield widths). Rather
+            // than silently feeding the raw bit pattern as if it were
+            // an int, reject — callers handle "not a usable integer
+            // literal" already and skip the record cleanly.
+            return false;
         }
         default:
             return false;
@@ -400,7 +410,12 @@ struct ModuleEntry {
 parse_dbi_modules(std::span<const std::byte> dbi, const DbiHeader& h) {
     std::vector<ModuleEntry> mods;
     if (h.mod_info_size == 0) return mods;
-    if (h.mod_info_offset + h.mod_info_size > dbi.size()) return mods;
+    // Widen the bounds check: both fields are u32 and a hostile DBI
+    // header with mod_info_size near UINT32_MAX would wrap the sum
+    // and slip past `> dbi.size()`, then UB at subspan(). Same shape
+    // as the div_up fix above.
+    if (static_cast<u64>(h.mod_info_offset) +
+        static_cast<u64>(h.mod_info_size) > dbi.size()) return mods;
     const auto block = dbi.subspan(h.mod_info_offset, h.mod_info_size);
 
     std::size_t pos = 0;

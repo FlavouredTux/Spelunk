@@ -71,14 +71,14 @@ export function promote(args: PromoteArgs): {
     if (renames.length) {
         lines.push(`[rename]`);
         for (const r of renames) {
-            lines.push(`${r.subject} = ${sanitize(r.value)}    # conf=${r.conf} ${truncate(r.ev, 60)}`);
+            lines.push(`${r.subject} = ${sanitize(r.value)}${metaSuffix(r.conf, r.ev, "agent:promote")}`);
         }
         lines.push(``);
     }
     if (notes.length) {
         lines.push(`[note]`);
         for (const n of notes) {
-            lines.push(`${n.subject} = ${sanitize(n.value)}`);
+            lines.push(`${n.subject} = ${sanitize(n.value)}${metaSuffix(n.conf, n.ev, "agent:promote")}`);
         }
         lines.push(``);
     }
@@ -117,4 +117,21 @@ function sanitize(v: string): string {
 
 function truncate(s: string, n: number): string {
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// Build the `; conf=… ; src=… ; ev=…` metadata suffix consumed by
+// declarative.cpp's parse_meta_block. Confidence and source are
+// always present; evidence is optional and tail-positioned (the
+// parser slurps everything after `ev=` up to the next `;`, so we
+// strip embedded `;` from evidence before emitting).
+function metaSuffix(conf: number, evidence: string, source: string): string {
+    const parts: string[] = [`conf=${conf.toFixed(3)}`, `src=${source}`];
+    if (evidence) {
+        const cleaned = evidence
+            .replace(/[\r\n]+/g, " ")
+            .replace(/;/g, ",")
+            .trim();
+        if (cleaned) parts.push(`ev=${truncate(cleaned, 200)}`);
+    }
+    return ` ; ${parts.join(" ; ")}`;
 }

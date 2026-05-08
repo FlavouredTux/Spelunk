@@ -23,8 +23,19 @@ struct FuncWindow {
     std::string label;
 };
 
+// Resolve a `-s NAME` token to a function entry. Lookup chain:
+//   1. Obj-C bracket form: `-[Class sel]` / `+[Class sel]`.
+//   2. Hex VA / `sub_<hex>` — jump to VA-driven resolution.
+//   3. Binary symbol table.
+//   4. `ann->renames` reverse lookup, when `ann` is non-null. Lets the
+//      user type the rename (e.g. `cap_check_v2`) instead of the
+//      original `sub_<hex>` after `ember annotate` / `--apply` lands.
+//      Ambiguous renames (one name bound to multiple addrs in the
+//      annotations file) are rejected the same way ambiguous symbols
+//      are — pass the VA to disambiguate.
 std::optional<FuncWindow>
-resolve_function(const Binary& b, std::string_view symbol);
+resolve_function(const Binary& b, std::string_view symbol,
+                 const Annotations* ann = nullptr);
 
 std::optional<FuncWindow>
 resolve_function_at(const Binary& b, addr_t addr);
@@ -55,7 +66,14 @@ format_struct(const Binary& b, const FuncWindow& w,
               EmitOptions options = {});
 
 struct CallEdge { addr_t caller = 0; addr_t callee = 0; };
-std::vector<CallEdge> compute_call_graph(const Binary& b);
+// `scope`, when non-empty, restricts edge construction to callers in
+// the set — the work list is intersected with `scope` before lifting,
+// so a single-function CLI invocation pays only for its function
+// instead of every function in the binary. Empty span = whole program
+// (the back-compat default). Edges to callees outside `scope` are
+// still emitted; only the *caller* side is filtered.
+std::vector<CallEdge> compute_call_graph(const Binary& b,
+                                         std::span<const addr_t> scope = {});
 std::vector<addr_t>   compute_callees(const Binary& b, addr_t fn);
 std::vector<addr_t>   compute_callers(const Binary& b, addr_t fn);
 

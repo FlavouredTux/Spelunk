@@ -47,16 +47,16 @@ namespace ember {
 
 namespace {
 
+// Stops the linear-walk fallback at unconditional flow exits — the
+// shape we need is "control doesn't fall through past this insn".
+// Conditional branches stay out of this set: the next byte after a
+// `je rel32` is a real instruction. Multi-arch coverage piggybacks on
+// the public classifiers so a Mnemonic added there (A64Ret, etc.) is
+// automatically picked up here without a duplicate switch to keep in
+// sync. Without this, ARM64 functions whose size we don't know walked
+// straight past `ret` and emitted whatever followed in the section.
 bool is_terminator(Mnemonic m) noexcept {
-    switch (m) {
-        case Mnemonic::Ret:
-        case Mnemonic::Jmp:
-        case Mnemonic::Ud2:
-        case Mnemonic::Hlt:
-            return true;
-        default:
-            return false;
-    }
+    return is_unconditional_jmp(m) || is_return_like(m);
 }
 
 std::string hex_bytes(std::span<const std::byte> b) {
@@ -387,7 +387,8 @@ resolve_containing_function(const Binary& b, addr_t addr) {
 }  // namespace
 
 std::optional<FuncWindow>
-resolve_function(const Binary& b, std::string_view symbol) {
+resolve_function(const Binary& b, std::string_view symbol,
+                 const Annotations* ann) {
     // Obj-C bracket form: -[Class sel] / +[Class sel] — look up the IMP
     // in the classlist, then resolve by VA.
     if (!symbol.empty() && (symbol.front() == '-' || symbol.front() == '+') &&
@@ -469,6 +470,51 @@ resolve_function(const Binary& b, std::string_view symbol) {
         }
         return window_from_addr(chosen->addr, chosen->size, chosen->name);
     }
+
+    // Annotation-rename fallback: a name typed by the user that doesn't
+    // match the binary symbol table may match a `rename` record in the
+    // resolved annotations file. Without this, freshly-named functions
+    // (`ember annotate ADDR --set-name X`) wouldn't be reachable via
+    // `-s X` until the user remembered the original `sub_<hex>` form.
+    if (ann && !symbol.empty()) {
+        std::vector<addr_t> hits;
+        hits.reserve(2);
+        for (const auto& [addr, name] : ann->renames) {
+            if (name == lookup) hits.push_back(addr);
+        }
+        if (hits.size() > 1) {
+            std::fprintf(stderr,
+                "ember: rename '%.*s' is ambiguous — bound to %zu addresses:",
+                static_cast<int>(lookup.size()), lookup.data(), hits.size());
+            const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
+            for (std::size_t i = 0; i < shown; ++i) {
+                std::fprintf(stderr, " %#llx",
+                    static_cast<unsigned long long>(hits[i]));
+            }
+            if (hits.size() > shown) {
+                std::fprintf(stderr, " ... (+%zu more)",
+                    hits.size() - shown);
+            }
+            std::fprintf(stderr,
+                "; pass the VA (0x…) to pick one\n");
+            return std::nullopt;
+        }
+        if (hits.size() == 1) {
+            const addr_t a = hits.front();
+            if (b.bytes_at(a).empty()) {
+                std::fprintf(stderr,
+                    "ember: rename '%.*s' resolves to %#llx but no bytes are mapped there\n",
+                    static_cast<int>(lookup.size()), lookup.data(),
+                    static_cast<unsigned long long>(a));
+                return std::nullopt;
+            }
+            // Width unknown without lifting; window_from_addr's 0-size
+            // fallback uses the terminator scan, same shape as the
+            // sub_<hex> case.
+            return window_from_addr(a, 0, std::string(lookup));
+        }
+    }
+
     if (!symbol.empty()) {
         std::fprintf(stderr,
             "ember: no symbol named '%.*s'\n",
@@ -754,7 +800,8 @@ format_struct(const Binary& b, const FuncWindow& w,
     return format_structured(*s_r);
 }
 
-std::vector<CallEdge> compute_call_graph(const Binary& b) {
+std::vector<CallEdge> compute_call_graph(const Binary& b,
+                                         std::span<const addr_t> scope) {
     auto dec_r = make_decoder(b);
     if (!dec_r) return {};
     const Decoder& dec = **dec_r;
@@ -777,15 +824,21 @@ std::vector<CallEdge> compute_call_graph(const Binary& b) {
     std::vector<WorkItem> work;
     work.reserve(b.symbols().size());
     std::unordered_set<addr_t> seen;
+    const std::unordered_set<addr_t> scope_set(scope.begin(), scope.end());
+    auto in_scope = [&](addr_t a) noexcept {
+        return scope_set.empty() || scope_set.contains(a);
+    };
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.size == 0 || s.name.empty()) continue;
+        if (!in_scope(s.addr)) continue;
         if (!seen.insert(s.addr).second) continue;
         work.push_back({s.addr, s.name});
     }
     for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
         if (b.import_at_plt(fn.addr)) continue;
+        if (!in_scope(fn.addr)) continue;
         if (!seen.insert(fn.addr).second) continue;
         work.push_back({fn.addr, fn.name});
     }
@@ -908,6 +961,57 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
 }
 
 namespace {
+
+// Drop discovered `sub_*` entries that fall inside the first decoded
+// instruction of an earlier entry. The prologue sweep iterates byte by
+// byte and accepts every offset whose first 1–4 bytes match a prologue
+// shape AND whose first two instructions decode validly — at offsets
+// 1 byte after a real prologue, the bytes are usually still a valid
+// (different) instruction sequence, so both pass and the discovery
+// list ends up with phantom 1-byte entries adjacent to real ones.
+// Real symbols are authoritative and survive unconditionally.
+//
+// This runs before fill_unknown_sizes so the gap-to-next-entry size
+// computation isn't poisoned by the phantoms either (a real fn
+// followed by a phantom 1-byte fn would otherwise be reported as
+// size 1 instead of its true extent).
+void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
+                             const Binary& b) {
+    if (fns.size() < 2) return;
+    std::sort(fns.begin(), fns.end(),
+              [](const auto& x, const auto& y) { return x.addr < y.addr; });
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return;
+    const Decoder& dec = **dec_r;
+
+    std::vector<DiscoveredFunction> out;
+    out.reserve(fns.size());
+    addr_t shadow_until = 0;       // exclusive upper bound of the
+                                   // last-emitted entry's first insn
+    for (auto& fn : fns) {
+        if (fn.kind != DiscoveredFunction::Kind::Sub ||
+            fn.addr >= shadow_until) {
+            // Not shadowed by a prior entry. Push it, then advance the
+            // shadow window using its first instruction's length so the
+            // *next* iteration can detect overlap.
+            const auto bytes = b.bytes_at(fn.addr);
+            if (!bytes.empty()) {
+                if (auto insn = dec.decode(bytes, fn.addr); insn && insn->length > 0) {
+                    shadow_until = fn.addr + static_cast<addr_t>(insn->length);
+                } else {
+                    shadow_until = fn.addr + 1;
+                }
+            } else {
+                shadow_until = fn.addr + 1;
+            }
+            out.push_back(std::move(fn));
+        }
+        // else: fn.addr falls inside out.back()'s first decoded
+        // instruction — drop silently. Symbols never reach this
+        // branch because they bypass the shadow check above.
+    }
+    fns = std::move(out);
+}
 
 // Some defined symbols and all CFG-discovered `sub_*` entries have no reliable
 // extent in the loader metadata. Downstream tools (fingerprints, xrefs, size
@@ -1100,8 +1204,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // pass, so the answers we get from Pass 1 + 1.5 are sufficient.
     if (mode == EnumerateMode::Cheap ||
         (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
-        std::sort(out.begin(), out.end(),
-                  [](const auto& x, const auto& y) { return x.addr < y.addr; });
+        filter_shadowed_entries(out, b);
         fill_unknown_sizes(out, b);
         return out;
     }
@@ -1113,8 +1216,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         add_candidate(e.callee, "sub");
     }
 
-    std::sort(out.begin(), out.end(),
-              [](const auto& x, const auto& y) { return x.addr < y.addr; });
+    filter_shadowed_entries(out, b);
     fill_unknown_sizes(out, b);
     return out;
 }

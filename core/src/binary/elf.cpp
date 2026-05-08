@@ -61,6 +61,7 @@ constexpr u8 DATA_MSB = 2;
 
 namespace em {
 constexpr u16 I386    = 3;
+constexpr u16 MIPS    = 8;
 constexpr u16 PPC     = 20;
 constexpr u16 PPC64   = 21;
 constexpr u16 ARM     = 40;
@@ -72,6 +73,7 @@ constexpr u16 RISCV   = 243;
 namespace sht {
 constexpr u32 NOBITS = 8;
 constexpr u32 SYMTAB = 2;
+constexpr u32 STRTAB = 3;
 constexpr u32 DYNSYM = 11;
 constexpr u32 RELA   = 4;
 }  // namespace sht
@@ -81,6 +83,19 @@ namespace rx64 {
 constexpr u32 GLOB_DAT = 6;
 constexpr u32 JUMP_SLOT = 7;
 }  // namespace rx64
+
+// R_*_RELATIVE values vary across architectures. Used by
+// ElfBinary::relocated_qwords() to recognise dynamic-linker-patched
+// pointers (.data.rel.ro slots that the static qword-value scan
+// misses because their on-disk value is zero / sentinel).
+[[nodiscard]] u32 relative_reloc_type_for(Arch a) noexcept {
+    switch (a) {
+        case Arch::X86_64:  return 8;
+        case Arch::Arm64:   return 1027;
+        case Arch::Ppc64:   return 22;
+        default:            return 0;  // not modelled; relocated_qwords returns empty
+    }
+}
 
 namespace shf {
 constexpr u64 WRITE     = 0x1;
@@ -141,6 +156,7 @@ template <typename T>
         case em::X86_64:  return Arch::X86_64;
         case em::AARCH64: return Arch::Arm64;
         case em::RISCV:   return is_64bit ? Arch::Riscv64 : Arch::Riscv32;
+        case em::MIPS:    return is_64bit ? Arch::Mips64  : Arch::Mips32;
         default:          return Arch::Unknown;
     }
 }
@@ -273,6 +289,17 @@ Result<void> ElfBinary::parse_sections(const ParsedEhdr& h) {
     if (!shtab) return std::unexpected(std::move(shtab).error());
 
     const Shdr shstr_hdr = shdr_at(endian_, shtab->data(), h.e_shstrndx);
+    if (shstr_hdr.type != sht::STRTAB) {
+        // A crafted ELF can point e_shstrndx at any in-range section
+        // (the index check above doesn't guarantee the type). Without
+        // this, every section name below is read from arbitrary
+        // section bytes — symbol-by-name lookup, --refs-to, and
+        // anything else that keys off section names quietly returns
+        // garbage on malformed input.
+        return std::unexpected(Error::invalid_format(std::format(
+            "elf: e_shstrndx {} points to section type {} (want STRTAB)",
+            h.e_shstrndx, shstr_hdr.type)));
+    }
     auto shstr_bytes = r.slice(shstr_hdr.offset, shstr_hdr.size);
     if (!shstr_bytes) return std::unexpected(std::move(shstr_bytes).error());
     const ByteReader shstr_r(*shstr_bytes);
@@ -347,6 +374,15 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
         }
 
         const Shdr strtab_hdr = shdr_at(endian_, shtab->data(), static_cast<u16>(sh.link));
+        if (strtab_hdr.type != sht::STRTAB) {
+            // Same shape as the e_shstrndx guard above: the index
+            // check earlier doesn't guarantee the linked section is a
+            // string table. Crafted ELF would otherwise leak garbage
+            // into every symbol name we surface.
+            return std::unexpected(Error::invalid_format(std::format(
+                "elf: symtab {} links to section type {} (want STRTAB)",
+                i, strtab_hdr.type)));
+        }
         auto strtab_bytes = r.slice(strtab_hdr.offset, strtab_hdr.size);
         if (!strtab_bytes) return std::unexpected(std::move(strtab_bytes).error());
         const ByteReader str_r(*strtab_bytes);
@@ -1027,6 +1063,67 @@ Result<void> ElfBinary::parse() {
     normalize_ppc64_descriptors();
     sort_and_dedupe_symbols();
     return {};
+}
+
+std::map<addr_t, addr_t> ElfBinary::relocated_qwords() const {
+    std::map<addr_t, addr_t> out;
+    const u32 rel_type = relative_reloc_type_for(arch_);
+    if (rel_type == 0) return out;
+
+    // Re-derive the section table from buffer_. We could cache it on
+    // load, but the rela tables are small relative to .text and this
+    // path is only walked when --refs-to-loose runs. Keeping the
+    // cached state minimal is a deliberate tradeoff.
+    if (buffer_.size() < 64) return out;
+    const ByteReader r(buffer_);
+    const u8 ei_class = static_cast<u8>(buffer_[ei::CLASS]);
+    if (ei_class != ei::CLASS_64) return out;  // 32-bit ELF unsupported here.
+
+    auto e_shoff_bytes      = r.slice(0x28, 8);
+    auto e_shentsize_bytes  = r.slice(0x3a, 2);
+    auto e_shnum_bytes      = r.slice(0x3c, 2);
+    if (!e_shoff_bytes || !e_shentsize_bytes || !e_shnum_bytes) return out;
+    const u64 e_shoff     = read_at<u64>(endian_, e_shoff_bytes->data());
+    const u16 e_shentsize = read_at<u16>(endian_, e_shentsize_bytes->data());
+    const u16 e_shnum     = read_at<u16>(endian_, e_shnum_bytes->data());
+    if (e_shentsize != kShdr64Size || e_shnum == 0) return out;
+
+    auto shtab = r.slice(e_shoff,
+                         static_cast<std::size_t>(e_shentsize) * e_shnum);
+    if (!shtab) return out;
+
+    // Walk every SHT_RELA. Filter to the RELATIVE-type rows and emit
+    // (r_offset -> r_addend). r_offset is the slot's virtual address
+    // (post-load); r_addend is the absolute target VA the dynamic
+    // linker writes there at startup.
+    for (u16 i = 0; i < e_shnum; ++i) {
+        const Shdr sh = shdr_at(endian_, shtab->data(), i);
+        if (sh.type != sht::RELA) continue;
+        if (sh.entsize != kRela64Size) continue;
+        if (sh.size == 0) continue;
+
+        auto rela_bytes = r.slice(sh.offset, sh.size);
+        if (!rela_bytes) continue;
+        const std::size_t count = sh.size / kRela64Size;
+        const std::byte* const base = rela_bytes->data();
+
+        for (std::size_t k = 0; k < count; ++k) {
+            const std::byte* const p = base + k * kRela64Size;
+            const u64 r_offset = read_at<u64>(endian_, p + 0);
+            const u64 r_info   = read_at<u64>(endian_, p + 8);
+            const i64 r_addend = static_cast<i64>(read_at<u64>(endian_, p + 16));
+            const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
+            if (r_type != rel_type) continue;
+            // RELATIVE relocs have sym=0 by definition; r_addend is
+            // the absolute target VA. Skip non-positive addends —
+            // those are ELF padding / sentinel rows that don't
+            // resolve to real code.
+            if (r_addend <= 0) continue;
+            out[static_cast<addr_t>(r_offset)] =
+                static_cast<addr_t>(static_cast<u64>(r_addend));
+        }
+    }
+    return out;
 }
 
 }  // namespace ember

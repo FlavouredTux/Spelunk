@@ -177,7 +177,13 @@ export default function App() {
   // backend route based on the sub-mode toggle.
   const fetchView: ViewKind =
     view === "cfg" ? (cfgMode === "pseudo" ? "cfgPseudo" : "cfg") : view;
-  const [code, setCode] = useState<string>("");
+  // `rawCode` is the verbatim CLI output for the current (function, view)
+  // pair. `code` (below) is the user-visible string with the per-function
+  // local-rename map substituted in. Splitting these means a local rename
+  // toggle just re-runs a string substitution on cached text, instead of
+  // re-spawning ember to re-emit pseudo-C that doesn't actually depend on
+  // localRenames at the C++ side.
+  const [rawCode, setRawCode] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -237,6 +243,21 @@ export default function App() {
   const [arities, setArities] = useState<Arities>(EMPTY_ARITIES);
   const [recents, setRecents] = useState<string[]>([]);
   const [releaseUpdate, setReleaseUpdate] = useState<ReleaseUpdateStatus | null>(null);
+
+  // Apply per-function local renames on top of the cached emitter output.
+  // Pure string substitution — fast even on multi-MB pseudo-C bodies.
+  // Declared early because the keyboard-handler effect (~line 873) lists
+  // `code` in its dep array; declaring the memo lower would put it in
+  // the temporal dead zone on first render. All deps (rawCode, current,
+  // fetchView, annotations) are declared above this point.
+  const code = useMemo(() => {
+    if (!rawCode) return rawCode;
+    if (!current) return rawCode;
+    const isPseudo = fetchView === "pseudo" || fetchView === "cfgPseudo";
+    if (!isPseudo) return rawCode;
+    const locals = annotations.localRenames?.[current.addr];
+    return locals ? applyLocalRenames(rawCode, locals) : rawCode;
+  }, [rawCode, current, fetchView, annotations.localRenames]);
 
   // Strings are only consumed by StringsView and the payload can be hundreds
   // In-flight async analyses — shown in the status bar so huge binaries
@@ -866,32 +887,27 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, diffOpen, emberApplyOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, identifyOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
 
-  // Load code whenever selection or view (or CFG sub-mode) changes.
-  // Pseudo-C views also get local-rename substitution applied on top
-  // of whatever the C++ emitter produced, since localRenames live in
-  // the UI sidecar only and never round-trip through the analysis
-  // pipeline.
+  // Load raw CLI text whenever the (function, view) pair changes. This
+  // effect deliberately does NOT depend on `annotations.localRenames`:
+  // local renames are a UI-only post-processing pass (see `code` memo
+  // below), so toggling a local rename pill should not re-spawn ember
+  // to re-emit pseudo-C that the emitter doesn't even know about.
   useEffect(() => {
     if (!current || !info) return;
     let cancel = false;
     setLoading(true);
     setError(null);
-    setCode("");
+    setRawCode("");
     // Pass the VA, not the symbol name. Mangled C++ names can be
     // bound to several addresses (e.g. `.constprop.0.cold` clones
     // share the parent's symbol), and the CLI's --symbol then refuses
     // to guess. Address is always unique.
     loadFunction(current.addr, fetchView, { showBbLabels: settings.showBbLabels })
-      .then((text) => {
-        if (cancel) return;
-        const locals = annotations.localRenames?.[current.addr];
-        const isPseudo = fetchView === "pseudo" || fetchView === "cfgPseudo";
-        setCode(isPseudo && locals ? applyLocalRenames(text, locals) : text);
-      })
+      .then((text) => { if (!cancel) setRawCode(text); })
       .catch((e) => { if (!cancel) setError(e?.message ?? String(e)); })
       .finally(() => { if (!cancel) setLoading(false); });
     return () => { cancel = true; };
-  }, [current, fetchView, info, settings.showBbLabels, annotations.localRenames]);
+  }, [current, fetchView, info, settings.showBbLabels]);
 
   const onXref = useCallback((addr: number) => {
     if (!info) return;
@@ -903,7 +919,10 @@ export default function App() {
   }, [info, fnByAddr, navigateTo]);
 
   // Annotation mutations
-  const writeAnnotations = useCallback(async (a: Annotations, opts?: { skipUndo?: boolean }) => {
+  const writeAnnotations = useCallback(async (
+    a: Annotations,
+    opts?: { skipUndo?: boolean; uiOnly?: boolean },
+  ) => {
     // Push current state to the undo stack BEFORE replacing it so
     // Ctrl+Z restores exactly what was visible. Cap the stack so
     // long-running sessions don't grow unbounded.
@@ -912,11 +931,14 @@ export default function App() {
       if (undoStackRef.current.length > 80) undoStackRef.current.shift();
     }
     setAnnotations(a);
-    // Renames and signature changes flow into pseudo-C output via the
-    // CLI's --annotations file, so cached function bodies are stale
-    // after any mutation. Drop them so the next view reload picks up
-    // the fresh names.
-    clearRendererCaches();
+    // Renames / notes / signatures / fields / patches flow into the CLI
+    // via --annotations, so cached pseudo-C is stale after them. Local
+    // renames are UI-only (post-processed in the renderer), so the
+    // emitter output is still valid — `uiOnly` skips the cache nuke
+    // and the otherwise-mandatory ember CLI re-spawn for the function
+    // currently on screen, which used to make every "apply" pill click
+    // wait for a full lift+SSA+cleanup pipeline run.
+    if (!opts?.uiOnly) clearRendererCaches();
     if (info) {
       setSaveState("saving");
       try {
@@ -1093,7 +1115,11 @@ export default function App() {
     }
     if (Object.keys(cur).length > 0) next.localRenames[fn.addr] = cur;
     else delete next.localRenames[fn.addr];
-    writeAnnotations(next);
+    // UI-only mutation: localRenames are substituted client-side in the
+    // `code` memo, never round-trip through the CLI. Skipping the
+    // renderer-cache nuke turns "apply all" on a 20-pill batch from
+    // ~20 ember spawns to zero.
+    writeAnnotations(next, { uiOnly: true });
   }, [cloneAnn, writeAnnotations]);
 
   // Adapter for CodeView: single-token rename from the pseudo-C context

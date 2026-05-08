@@ -531,6 +531,43 @@ void test_boilerplate_label_mangled_forms() {
     fs::remove(path);
 }
 
+void test_partition_variants_dropped_at_load() {
+    // gcc emits .cold/.isra/.constprop/.part/.lto_priv suffixed
+    // clones of real fns. They're fragments, not standalone
+    // identities. Pre-existing TSVs (built before the corpus-emit
+    // filter shipped) still contain them; the loader drops them so
+    // the recognize cascade can't surface them as labels.
+    std::string tsv;
+    tsv += make_f_row(0x1000, /*l2*/0xAAAA, 0x10, "real_fn");
+    tsv += make_f_row(0x2000, /*l2*/0xBBBB, 0x20, "real_fn.cold");
+    tsv += make_f_row(0x3000, /*l2*/0xCCCC, 0x30, "real_fn.isra.0");
+    tsv += make_f_row(0x4000, /*l2*/0xDDDD, 0x40, "real_fn.constprop.1");
+    tsv += make_f_row(0x5000, /*l2*/0xEEEE, 0x50, "real_fn.part.0");
+    tsv += make_f_row(0x6000, /*l2*/0xFFFF, 0x60, "real_fn.lto_priv.42");
+    const auto path = write_tmp(tsv, "partition");
+    ember::TeefCorpus c;
+    (void)c.load_tsv(path);
+    // Only real_fn (no suffix) should be indexed; the 5 variants drop.
+    check_eq(c.function_count(), std::size_t{1},
+             "partition_variants: only base fn indexed");
+
+    // Direct lookup of a partition-variant hash returns no matches —
+    // the index doesn't have it.
+    auto q = make_query(0xBBBB, 0x20);  // .cold's hash
+    auto m = c.recognize(q, 3);
+    check_true(m.empty(), "partition_variants: .cold hash unmatchable");
+
+    // Base fn still matches normally.
+    auto q_real = make_query(0xAAAA, 0x10);
+    auto m_real = c.recognize(q_real, 3);
+    check_true(!m_real.empty(), "partition_variants: real_fn still matches");
+    if (!m_real.empty()) {
+        check_eq(m_real[0].name, std::string{"real_fn"},
+                 "partition_variants: real_fn name");
+    }
+    fs::remove(path);
+}
+
 void test_anti_corpus_blocks_l2() {
     // Anti-corpus blocks queries whose L2 exact hash matches a known
     // junk fingerprint (UPX prologue, packer trampoline, etc.).
@@ -673,6 +710,7 @@ int main() {
     test_boilerplate_label_cap();
     test_boilerplate_label_mangled_forms();
     test_chunk_vote_thin_evidence_cap();
+    test_partition_variants_dropped_at_load();
     test_anti_corpus_blocks_l2();
     test_anti_corpus_blocks_l4_and_prefix();
 

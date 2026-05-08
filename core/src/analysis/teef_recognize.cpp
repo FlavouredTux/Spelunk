@@ -102,6 +102,24 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
 // C++ has the same class via Itanium-mangled `_ZN_..._D[012]Ev`
 // destructors and `__cxa_*` runtime forwarders; treated together
 // since the symptom and remedy are identical.
+// gcc partition-variant suffixes — fragments of real fns, never
+// independent labels worth surfacing. Cold halves all share a
+// "load string + call printf + abort" shape and chunk-vote-collide
+// against arbitrary library functions; .isra/.constprop/.part are
+// IPA clones whose body diverged enough to be a different fingerprint
+// but whose name still claims to be the parent. Drop both kinds at
+// corpus load time so existing TSVs (built before the corpus-emit
+// filter shipped) get the FP suppression for free, no re-fingerprint
+// required.
+[[nodiscard]] bool is_compiler_partition_variant(std::string_view nm) noexcept {
+    if (nm.find(".cold")      != std::string_view::npos) return true;
+    if (nm.find(".isra")      != std::string_view::npos) return true;
+    if (nm.find(".constprop") != std::string_view::npos) return true;
+    if (nm.find(".part")      != std::string_view::npos) return true;
+    if (nm.find(".lto_priv")  != std::string_view::npos) return true;
+    return false;
+}
+
 [[nodiscard]] bool is_boilerplate_label(std::string_view nm) noexcept {
     // Match raw identifier substrings that appear in all three name
     // forms a real Rust binary will throw at us:
@@ -648,6 +666,10 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             // recognizer's "trivial-shape" guard depends on this).
             if (f.l2_exact != 0) ++whole_popularity_[f.l2_exact];
             if (f.name.empty() || f.name.starts_with("sub_")) continue;
+            // Drop gcc partition variants at load time — works for
+            // pre-existing TSVs built before subcommands.cpp learned
+            // to skip them at emit, without forcing a re-fingerprint.
+            if (is_compiler_partition_variant(f.name)) continue;
             const std::size_t idx = whole_by_name_.size();
             WholeEntry e;
             e.name_id    = intern_string(f.name);
@@ -709,6 +731,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     for (auto& part : parts) {
         for (auto& c : part.c) {
             if (c.name.empty() || c.name.starts_with("sub_")) continue;
+            if (is_compiler_partition_variant(c.name)) continue;
             const u32 nm_id  = intern_string(c.name);
             const u32 rt_id  = intern_string(std::move(c.runtime));
             chunk_index_[c.chunk_hash].push_back(

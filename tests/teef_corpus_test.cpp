@@ -531,6 +531,84 @@ void test_boilerplate_label_mangled_forms() {
     fs::remove(path);
 }
 
+void test_anti_corpus_blocks_l2() {
+    // Anti-corpus blocks queries whose L2 exact hash matches a known
+    // junk fingerprint (UPX prologue, packer trampoline, etc.).
+    // Without it, the cascade would fall through to whole-jaccard or
+    // chunk-vote and emit a misleading confident label from a
+    // coincidentally-shaped corpus entry.
+    std::string corpus_tsv;
+    corpus_tsv += make_f_row(0x1000, /*l2*/0xAAAA, 0x10, "real_function");
+    const auto corpus_path = write_tmp(corpus_tsv, "anti_l2_corpus");
+
+    std::string anti_tsv;
+    anti_tsv += make_f_row(0xFA51000, /*l2*/0xAAAA, 0x10, "upx_stub");
+    const auto anti_path = write_tmp(anti_tsv, "anti_l2_anti");
+
+    ember::TeefCorpus c;
+    (void)c.load_tsv(corpus_path);
+    check_eq(c.load_anti_tsv(anti_path), std::size_t{1},
+             "anti_corpus_l2: anti row ingested");
+
+    // Query whose L2 hash matches the blocked entry → zero suggestions.
+    auto q = make_query(0xAAAA, 0x10);
+    auto m = c.recognize(q, 3);
+    check_true(m.empty(), "anti_corpus_l2: blocked query returns no matches");
+
+    // A second corpus instance loaded WITHOUT anti-corpus must surface
+    // the match — confirms the block is what made the difference, not
+    // some pre-existing reason the query couldn't match.
+    ember::TeefCorpus c2;
+    (void)c2.load_tsv(corpus_path);
+    auto m2 = c2.recognize(q, 3);
+    check_true(!m2.empty(), "anti_corpus_l2: unblocked corpus DOES surface");
+    if (!m2.empty()) {
+        check_eq(m2[0].name, std::string{"real_function"},
+                 "anti_corpus_l2: unblocked surfaces real_function");
+    }
+
+    fs::remove(corpus_path);
+    fs::remove(anti_path);
+}
+
+void test_anti_corpus_blocks_l4_and_prefix() {
+    // Anti-corpus also blocks via L4 exact hash and L1 prefix hash.
+    std::string corpus_tsv;
+    corpus_tsv += make_f_row(0x1000, /*l2*/0x1, 0x10, "real_a",
+                             /*l4*/0xCAFE, /*topo*/0, /*prefix*/0xBABE);
+    corpus_tsv += make_f_row(0x2000, /*l2*/0x2, 0x20, "real_b");
+    const auto corpus_path = write_tmp(corpus_tsv, "anti_lp_corpus");
+
+    std::string anti_tsv;
+    // Anti row matches by L4 only.
+    anti_tsv += make_f_row(0xF001, /*l2*/0xDEAD, 0x99,
+                           "junk_l4", /*l4*/0xCAFE);
+    // Anti row matches by prefix only.
+    anti_tsv += make_f_row(0xF002, /*l2*/0xBEEF, 0x99,
+                           "junk_prefix", /*l4*/0, /*topo*/0,
+                           /*prefix*/0xBABE);
+    const auto anti_path = write_tmp(anti_tsv, "anti_lp_anti");
+
+    ember::TeefCorpus c;
+    (void)c.load_tsv(corpus_path);
+    (void)c.load_anti_tsv(anti_path);
+
+    // Query carrying the blocked L4 → suppressed even though L2 matches
+    // a real corpus entry.
+    auto q_l4 = make_query(/*l2*/0x1, 0x10, /*l4*/0xCAFE);
+    auto m_l4 = c.recognize(q_l4, 3);
+    check_true(m_l4.empty(), "anti_corpus_l4: L4 block short-circuits");
+
+    // Query carrying the blocked prefix → suppressed.
+    auto q_pref = make_query(/*l2*/0x2, 0x20, /*l4*/0,
+                             /*topo*/0, /*prefix*/0xBABE);
+    auto m_pref = c.recognize(q_pref, 3);
+    check_true(m_pref.empty(), "anti_corpus_prefix: prefix block short-circuits");
+
+    fs::remove(corpus_path);
+    fs::remove(anti_path);
+}
+
 void test_chunk_vote_thin_evidence_cap() {
     // Chunk-vote with no string anchor and no L4 corroboration is
     // the most FP-prone lane — multiple unrelated functions share
@@ -595,6 +673,8 @@ int main() {
     test_boilerplate_label_cap();
     test_boilerplate_label_mangled_forms();
     test_chunk_vote_thin_evidence_cap();
+    test_anti_corpus_blocks_l2();
+    test_anti_corpus_blocks_l4_and_prefix();
 
     if (fails) {
         std::fprintf(stderr, "teef_corpus_test: %d failure(s)\n", fails);

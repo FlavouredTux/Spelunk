@@ -84,6 +84,25 @@ public:
     // earlier indexes. Returns the number of F + C rows ingested.
     [[nodiscard]] std::size_t load_tsv(const std::filesystem::path& path);
 
+    // Load (and merge) anti-corpus rows from a TSV with the same
+    // format as load_tsv. Only the hash fields (L2 exact, L4 exact,
+    // L1 prefix) are kept — names and chunks are discarded. Queries
+    // whose corresponding hashes match any blocked entry short-
+    // circuit at the top of recognize() and return no matches.
+    //
+    // Use case: structurally-identifiable junk that lives inside
+    // every binary of a class — UPX prologues, packer trampolines,
+    // CRT bootloaders that wrap real code with no semantic identity.
+    // Without an anti-corpus, those functions structurally collide
+    // with library entry points and surface as confident-but-wrong
+    // labels. Multiple paths supported. Returns the number of rows
+    // whose hashes were ingested.
+    [[nodiscard]] std::size_t load_anti_tsv(const std::filesystem::path& path);
+
+    [[nodiscard]] std::size_t blocked_count() const noexcept {
+        return blocked_l2_.size() + blocked_l4_.size() + blocked_prefix_.size();
+    }
+
     // Look up a query function's matches. The query is a TeefFunction
     // produced by compute_teef_with_chunks on the unknown binary.
     // Returns up to `top_k` candidates ranked by combined confidence.
@@ -209,6 +228,13 @@ private:
     std::unordered_map<std::string, u32,
                        transparent_string_hash, std::equal_to<>> intern_ids_;
     std::vector<const std::string*>                        intern_strings_;
+
+    // Anti-corpus: blocked hash sets. A query whose L2/L4/prefix hash
+    // matches any of these short-circuits recognize() — no matches
+    // surfaced. Loaded via load_anti_tsv from a same-format TSV.
+    std::unordered_set<u64>                                blocked_l2_;
+    std::unordered_set<u64>                                blocked_l4_;
+    std::unordered_set<u64>                                blocked_prefix_;
 
     // Chunks that appear in too many distinct functions are
     // boilerplate. The recognizer drops them from voting.

@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -417,6 +419,37 @@ TeefCorpus::topo_hashes(std::size_t max_popularity) const {
     return out;
 }
 
+std::size_t TeefCorpus::load_anti_tsv(const std::filesystem::path& path) {
+    // Anti-corpora are typically small (a UPX dump is ~50 fns; even a
+    // chunky packer-prologue collection is < 1k rows). Skip the
+    // mmap+parallel-parse path used by load_tsv — a serial readline
+    // pass is plenty and avoids the merge-phase machinery we don't
+    // need (no name interning, no minhash inverted index).
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return 0;
+    std::string line;
+    std::size_t rows = 0;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line.front() == '#') continue;
+        if (line.front() != 'F') continue;  // S/C/T rows carry no
+                                            // hashes worth blocking
+        std::string_view sv(line);
+        std::array<std::string_view, 25> f;
+        const std::size_t n = split_tabs(sv, f);
+        if (n < 24) continue;
+        // Same field offsets as parse_f_row: f[2] = L2 exact, f[12]
+        // = L4 exact, f[24] = L1 prefix (only present in max.4+).
+        if (const u64 h = parse_u64_hex(f[2]);  h != 0) blocked_l2_.insert(h);
+        if (const u64 h = parse_u64_hex(f[12]); h != 0) blocked_l4_.insert(h);
+        if (n >= 25) {
+            if (const u64 h = parse_u64_hex(f[24]); h != 0) blocked_prefix_.insert(h);
+        }
+        ++rows;
+    }
+    return rows;
+}
+
 std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     using steady_t  = std::chrono::steady_clock;
     using ms_t     = std::chrono::duration<double, std::milli>;
@@ -746,6 +779,18 @@ std::vector<TeefMatch>
 TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                       std::string_view query_runtime) const {
     if (query.whole.exact_hash == 0) return {};
+
+    // Anti-corpus short-circuit. Queries whose L2/L4/prefix hash
+    // matches any blocked entry are structurally-identifiable junk
+    // (UPX prologues, packer trampolines, CRT bootloaders) — surface
+    // nothing rather than letting the cascade emit a misleading
+    // confident label from a coincidentally-shaped corpus entry.
+    // Cheap: three unordered_set lookups, all O(1).
+    if (blocked_l2_.contains(query.whole.exact_hash))           return {};
+    if (query.behav.exact_hash != 0 &&
+        blocked_l4_.contains(query.behav.exact_hash))           return {};
+    if (query.prefix_hash != 0 &&
+        blocked_prefix_.contains(query.prefix_hash))            return {};
 
     // String-anchor disqualifier. If the query AND the candidate both
     // have ≥2 identifying strings and they share zero hashes, the

@@ -97,6 +97,10 @@ struct Args {
     float identify_threshold = 0.4f; // --identify-threshold T (confidence floor; default 0.4)
     bool recognize = false;         // run library-function recognition against --corpus
     std::vector<std::string> corpus_paths;  // --corpus PATH (repeatable): TEEF TSVs to load
+    std::vector<std::string> anti_corpus_paths;  // --anti-corpus PATH (repeatable): TSVs whose
+                                                 // hashes block recognition (UPX, packer
+                                                 // prologues, CRT bootloaders that have no
+                                                 // semantic identity beyond their wrapper shape).
     float recognize_threshold = 0.6f;        // --recognize-threshold T (margin floor; default 0.6)
     ember::u64 min_fn_bytes = 0;             // --min-fn-size N: drop fns smaller than N bytes
                                              // before fingerprinting. Useful on obfuscator-spawned

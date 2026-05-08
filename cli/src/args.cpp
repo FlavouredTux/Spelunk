@@ -185,6 +185,23 @@ Result<Args> parse_args(int argc, char** argv) {
             a.corpus_paths.emplace_back(s.substr(9));
             continue;
         }
+        // `--anti-corpus PATH` — repeatable. Same TSV format as
+        // --corpus, but only the hash fields are kept; queries
+        // matching any blocked hash short-circuit recognize() and
+        // return no suggestions. Use to suppress recognition of
+        // structurally-identifiable junk (UPX prologues, packer
+        // trampolines, CRT bootloaders).
+        if (s == "--anti-corpus") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format("--anti-corpus requires a path"));
+            }
+            a.anti_corpus_paths.emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--anti-corpus=")) {
+            a.anti_corpus_paths.emplace_back(s.substr(14));
+            continue;
+        }
         // `--recognize-threshold T`
         if (s == "--recognize-threshold") {
             if (++i >= argc) {

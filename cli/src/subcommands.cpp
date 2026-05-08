@@ -1015,6 +1015,23 @@ load_corpus_from_args(const Args& args) {
         "({} rows) in {:.0f} ms",
         corpus->function_count(), corpus->chunk_count(),
         args.corpus_paths.size(), total_rows, total_ms);
+    // Anti-corpus: same TSV format but only hashes are kept. Recognize
+    // short-circuits any query whose L2/L4/prefix hash matches.
+    if (!args.anti_corpus_paths.empty()) {
+        std::size_t anti_rows = 0;
+        const auto t_anti_start = std::chrono::steady_clock::now();
+        for (const auto& p : args.anti_corpus_paths) {
+            anti_rows += corpus->load_anti_tsv(p);
+        }
+        const auto t_anti_end = std::chrono::steady_clock::now();
+        const double anti_ms = std::chrono::duration<double, std::milli>(
+            t_anti_end - t_anti_start).count();
+        std::println(stderr,
+            "ember: anti-corpus loaded: {} blocked hashes from {} rows "
+            "across {} TSVs in {:.0f} ms",
+            corpus->blocked_count(), anti_rows,
+            args.anti_corpus_paths.size(), anti_ms);
+    }
     return corpus;
 }
 
@@ -1099,10 +1116,14 @@ int run_recognize(const Args& args, const Binary& b) {
     // a no-op for them; --serve sessions repeating recognize against
     // the same corpus get the load amortized away.
     static std::vector<std::string> cached_paths;
+    static std::vector<std::string> cached_anti_paths;
     static std::unique_ptr<TeefCorpus> cached_corpus;
-    if (!cached_corpus || cached_paths != args.corpus_paths) {
+    if (!cached_corpus ||
+        cached_paths != args.corpus_paths ||
+        cached_anti_paths != args.anti_corpus_paths) {
         cached_corpus = load_corpus_from_args(args);
         cached_paths = args.corpus_paths;
+        cached_anti_paths = args.anti_corpus_paths;
     } else {
         std::println(stderr,
             "ember: reusing cached corpus ({} fns / {} chunks)",

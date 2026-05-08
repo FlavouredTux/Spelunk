@@ -92,6 +92,9 @@ void print_help() {
     std::println("      --fingerprint-old P  skip OLD-side fingerprint compute in --diff; read TSV from P");
     std::println("      --fingerprint-new P  skip NEW-side fingerprint compute in --diff; read TSV from P");
     std::println("      --teef-no-l4     with --teef, skip behavioral L4; faster/lower-RAM corpus build");
+    std::println("      --anti-corpus P  same TSV format as --corpus; queries whose L2/L4/prefix hash");
+    std::println("                       matches block recognition entirely. Use for UPX prologues,");
+    std::println("                       packer trampolines, CRT bootloaders that have no semantic identity.");
     std::println("      --max-cfg-blocks N  with --teef/--recognize, skip fns above N CFG blocks");
     std::println("      --max-cfg-edges N   with --teef/--recognize, skip fns above N CFG edges");
     std::println("      --max-cfg-insts N   with --teef/--recognize, skip fns above N decoded CFG insts");

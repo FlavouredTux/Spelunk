@@ -941,15 +941,33 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             auto [it_lo, it_hi] = whole_l4_exact_.equal_range(query.behav.exact_hash);
             std::unordered_set<std::string> distinct;
             std::vector<std::string> ordered;
+            // Track best L2 minhash jaccard across the L4-colliding
+            // candidates. K=64 traces on small / low-entropy fns can
+            // collide spuriously across semantically-unrelated fns
+            // whose I/O arity happens to match. A behav-exact match
+            // with strong L2 corroboration (jaccard ≥ floor) stays at
+            // 1.0; weak L2 (≤ floor) gets capped — surface for review
+            // but don't auto-promote on a single signal.
+            float best_l2j = 0.0f;
             for (auto it = it_lo; it != it_hi; ++it) {
                 const auto& we = whole_by_name_[it->second];
                 if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
                 if (!strings_compatible(we.string_hashes)) continue;
+                const float l2j = jaccard_minhash(query.whole.minhash, we.minhash);
+                if (l2j > best_l2j) best_l2j = l2j;
                 const auto name = interned(we.name_id);
                 if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
+            // L2 corroboration floor. 0.25 = at least 2/8 minhash slots
+            // agree. Empirically, true cross-version matches sit well
+            // above this; spurious L4 collisions on small fns sit at 0.
+            constexpr float kBehavExactL2Floor = 0.25f;
+            const float l2_cap =
+                (best_l2j >= kBehavExactL2Floor) ? 1.0f : 0.7f;
             auto cap_for = [&](float raw, std::string_view nm) {
-                return is_boilerplate_label(nm) ? std::min(raw, 0.7f) : raw;
+                float c = std::min(raw, l2_cap);
+                if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
+                return c;
             };
             if (ordered.size() == 1) {
                 return { TeefMatch{ordered[0], cap_for(1.0f, ordered[0]),

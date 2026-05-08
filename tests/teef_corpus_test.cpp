@@ -531,6 +531,46 @@ void test_boilerplate_label_mangled_forms() {
     fs::remove(path);
 }
 
+void test_behav_exact_l2_corroboration() {
+    // K=64 behavioural traces on small / low-entropy fns can produce
+    // identical L4 multiset hashes across semantically-unrelated fns
+    // whose I/O arity happens to match. behav-exact at 1.0 was firing
+    // even when the L2 minhash jaccard between query and matched
+    // candidate was 0 — a single-signal label. Require ≥0.25 L2
+    // jaccard (2/8 slots) to keep behav-exact at 1.0; weaker L2 caps
+    // the match to 0.7 so it surfaces for review.
+    std::string tsv;
+    // Corpus entry with L4=0xC0FFEE and a particular L2 minhash seed.
+    tsv += make_f_row(0x1000, /*l2*/0x9001, /*mh*/0x100,
+                      "regex_quantifier",
+                      /*l4*/0xC0FFEE);
+    const auto path = write_tmp(tsv, "behav_l2corr");
+    ember::TeefCorpus c;
+    (void)c.load_tsv(path);
+
+    // Strong L2: minhash matches corpus exactly. behav-exact stays 1.0.
+    auto q_strong = make_query(/*l2*/0x9001, /*mh*/0x100, /*l4*/0xC0FFEE);
+    auto m_strong = c.recognize(q_strong, 3);
+    check_true(!m_strong.empty(), "behav_l2corr: strong L2 still matches");
+    if (!m_strong.empty()) {
+        check_true(m_strong[0].confidence > 0.9f,
+                   "behav_l2corr: strong L2 stays high");
+    }
+
+    // Weak L2: same L4 collision, but L2 minhash differs entirely
+    // (different seed → all 8 slots disagree, jaccard = 0).
+    auto q_weak = make_query(/*l2*/0xDEADBEEF, /*mh*/0x999,
+                             /*l4*/0xC0FFEE);
+    auto m_weak = c.recognize(q_weak, 3);
+    check_true(!m_weak.empty(),
+               "behav_l2corr: weak L2 still surfaces (capped, not dropped)");
+    if (!m_weak.empty()) {
+        check_true(m_weak[0].confidence <= 0.7f,
+                   "behav_l2corr: weak L2 capped at 0.7");
+    }
+    fs::remove(path);
+}
+
 void test_partition_variants_dropped_at_load() {
     // gcc emits .cold/.isra/.constprop/.part/.lto_priv suffixed
     // clones of real fns. They're fragments, not standalone
@@ -711,6 +751,7 @@ int main() {
     test_boilerplate_label_mangled_forms();
     test_chunk_vote_thin_evidence_cap();
     test_partition_variants_dropped_at_load();
+    test_behav_exact_l2_corroboration();
     test_anti_corpus_blocks_l2();
     test_anti_corpus_blocks_l4_and_prefix();
 

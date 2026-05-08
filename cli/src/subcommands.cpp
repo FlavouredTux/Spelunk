@@ -381,6 +381,36 @@ int run_strings(const Args& args, const Binary& b) {
 
 namespace {
 
+// Compiler-partition variant detector. gcc's -fpartition-functions /
+// LTO splitting / IPA passes emit suffixed clones of real functions:
+//   foo.cold       — unlikely-path partition (panic/throw/error glue)
+//   foo.isra.0     — interprocedural scalar-replacement-of-aggregates clone
+//   foo.constprop.0 — constant-propagation clone
+//   foo.part.0     — partial-inline clone
+//   foo.lto_priv.0 — LTO private clone
+//
+// The cold halves in particular are tiny string-load + call + abort
+// stubs that all share the same shape — a chunk-vote will FP-match
+// them to any generic-shape libstdc++ fn (std::getline being a
+// canonical victim). Drop them from both corpus emit (so they don't
+// pollute the search space) and from recognize input (so we don't
+// emit confident garbage labels for cold-path fragments). The base
+// function — without the suffix — is fingerprinted normally and
+// retains the real identity.
+//
+// LLVM's `.llvm.<hash>` clone marker is NOT in this list — those are
+// genuine instantiation clones whose parent symbol carries the real
+// identity. Treating them as fragments would lose recall on real
+// matches.
+[[nodiscard]] inline bool is_compiler_partition_variant(std::string_view nm) noexcept {
+    if (nm.find(".cold")      != std::string_view::npos) return true;
+    if (nm.find(".isra")      != std::string_view::npos) return true;
+    if (nm.find(".constprop") != std::string_view::npos) return true;
+    if (nm.find(".part")      != std::string_view::npos) return true;
+    if (nm.find(".lto_priv")  != std::string_view::npos) return true;
+    return false;
+}
+
 // Hand-rolled hex appenders. The TSV worker emits ~22 fixed-width and
 // 1-2 variable-width hex tokens per F row plus 9 per chunk row; on a
 // 200K-fn binary that's millions of std::format calls, each of which
@@ -853,6 +883,19 @@ build_teef_tsv(const Binary& b,
                 // copy it per fn.
                 const auto name_it = name_by_addr.find(a);
                 const bool is_named = (name_it != name_by_addr.end());
+                // Skip gcc partition variants (.cold/.isra/.constprop/
+                // .part/.lto_priv) — fragments of real fns, not
+                // standalone targets. Cold halves in particular all
+                // share a "load string + call printf + abort" shape
+                // that chunk-vote-collides against generic libstdc++
+                // fns and emits confidently-wrong labels at recognize
+                // time. The base function (without the suffix) still
+                // gets fingerprinted; we just don't pollute the
+                // corpus with its partition fragments.
+                if (is_named && is_compiler_partition_variant(name_it->second)) {
+                    done.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
                 const bool full_l4  = !corpus_mode || is_named;
                 const auto tf = full_l4
                     ? compute_teef_max(b, a, compute_opts)
@@ -1357,6 +1400,15 @@ int run_recognize(const Args& args, const Binary& b) {
             const auto& tf = fps[i];
             done_count.fetch_add(1, std::memory_order_relaxed);
             if (tf.whole.exact_hash == 0) continue;
+            // Skip gcc partition variants in the query — they're
+            // fragments of real fns whose generic shape (load string +
+            // call + abort, for the .cold case) chunk-vote-matches
+            // arbitrary library functions and emits garbage labels.
+            // The base function (without the suffix) goes through
+            // recognize normally and surfaces the real identity.
+            if (auto qit = name_by_addr.find(a);
+                qit != name_by_addr.end() &&
+                is_compiler_partition_variant(qit->second)) continue;
             // Skip query functions whose whole-fn TEEF appears too
             // many times in this binary — they're trivial-shape stubs
             // (xgetbv, return-zero) that would ALL collapse onto a

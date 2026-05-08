@@ -90,6 +90,18 @@ target_link_libraries(ember_structurer_fail_test
     PRIVATE ember::core ember::flags)
 add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)
 
+# Unit tests for the TeefCorpus loader/recognizer. Synthesizes tiny
+# F/C/S/T-row TSVs in-memory, writes them to a temp file, loads via
+# the public API, and asserts recognize() returns the expected
+# matches. Covers basic L2 exact, sub_* drop, multi-TSV merge name
+# interning, distinct-name guard, T-row runtime transitions,
+# 24-field back-compat, L1 prefix-exact, chunk-vote, and the
+# string-anchor filter — all paths previously had zero coverage.
+add_executable(ember_teef_corpus_test teef_corpus_test.cpp)
+target_link_libraries(ember_teef_corpus_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME teef_corpus_unit COMMAND ember_teef_corpus_test)
+
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()
@@ -254,6 +266,19 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
              COMMAND ember_dbg_smoke_test "${EMBER_FIXTURE_dbg_target_PATH}")
     add_test(NAME dbg_smoke_pie
              COMMAND ember_dbg_smoke_test "${EMBER_FIXTURE_dbg_target_pie_PATH}")
+
+    # Same fixture run through the perf_event_open backend. Skips at
+    # runtime (exit 77) when the kernel denies perf_event_open due to
+    # /proc/sys/kernel/perf_event_paranoid >= 2 without CAP_PERFMON,
+    # so the test passes uniformly across paranoid and permissive
+    # CI environments.
+    add_executable(ember_dbg_perf_smoke_test dbg_perf_smoke_test.cpp)
+    target_link_libraries(ember_dbg_perf_smoke_test
+        PRIVATE ember::core ember::flags)
+    add_dependencies(ember_dbg_perf_smoke_test ember_fixture_dbg_target)
+    add_test(NAME dbg_perf_smoke
+             COMMAND ember_dbg_perf_smoke_test "${EMBER_FIXTURE_dbg_target_PATH}")
+    set_tests_properties(dbg_perf_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
     # .eh_frame unwinder vs RBP-walk on -fomit-frame-pointer.
     add_executable(ember_dbg_eh_unwind_test dbg_eh_unwind_test.cpp)

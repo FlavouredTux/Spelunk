@@ -153,7 +153,26 @@ private:
     };
 
     [[nodiscard]] u32 intern_string(std::string_view s);
+    [[nodiscard]] u32 intern_string(std::string&& s);
     [[nodiscard]] std::string_view interned(u32 id) const noexcept;
+
+    // Transparent hash + equal_to for heterogeneous lookup on
+    // string-keyed maps. Lets us call .find(string_view) without
+    // allocating a std::string for the lookup key — the hot path
+    // through intern_string and idx_by_name_ during corpus merge
+    // and recognize.
+    struct transparent_string_hash {
+        using is_transparent = void;
+        std::size_t operator()(std::string_view sv) const noexcept {
+            return std::hash<std::string_view>{}(sv);
+        }
+        std::size_t operator()(const std::string& s) const noexcept {
+            return std::hash<std::string_view>{}(std::string_view(s));
+        }
+        std::size_t operator()(const char* s) const noexcept {
+            return std::hash<std::string_view>{}(std::string_view(s));
+        }
+    };
 
     std::vector<WholeEntry>                                whole_by_name_;
     std::unordered_multimap<u64, std::size_t>              whole_exact_;          // L2 exact_hash → idx into whole_by_name_
@@ -185,8 +204,10 @@ private:
     // First WholeEntry index per name. Used by chunk-vote to look up
     // string_hashes for a candidate's parent fn — chunk-vote operates
     // on names, but the strings live on the parent WholeEntry.
-    std::unordered_map<std::string, std::size_t>           idx_by_name_;
-    std::unordered_map<std::string, u32>                   intern_ids_;
+    std::unordered_map<std::string, std::size_t,
+                       transparent_string_hash, std::equal_to<>> idx_by_name_;
+    std::unordered_map<std::string, u32,
+                       transparent_string_hash, std::equal_to<>> intern_ids_;
     std::vector<const std::string*>                        intern_strings_;
 
     // Chunks that appear in too many distinct functions are

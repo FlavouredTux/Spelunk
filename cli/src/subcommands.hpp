@@ -50,14 +50,18 @@ int run_functions   (const Args& args, const Binary& b);
 // Direct-output runners (cache logic varies, so they handle it locally).
 
 int run_refs_to      (const Args& args, const Binary& b);
+int run_refs_to_loose(const Args& args, const Binary& b);
 int run_containing_fn(const Args& args, const Binary& b);
 int run_validate_name(const Args& args, const Binary& b);
 int run_collisions   (const Args& args, const Binary& b);
 int run_callees      (const Args& args, const Binary& b);
 int run_callees_class(const Args& args, const Binary& b);
 int run_disasm_at    (const Args& args, const Binary& b);
+int run_disasm_window(const Args& args, const Binary& b);
 int run_list_syscalls(const Args& args, const Binary& b);
 int run_forge_spec   (const Args& args, const Binary& b);
+int run_annotate     (const Args& args, const Binary& b);
+int run_list_annotations(const Args& args, const Binary& b);
 
 // The pseudo / struct / ir / cfg / cfg-pseudo / disasm pipeline. Loads
 // annotations, applies any --pat sigs, runs IPA / EH / indirect-call
@@ -76,12 +80,19 @@ int run_serve(const Args& args, const Binary& b);
 // Lower-level handlers retained for callers that already have the
 // emit-options block built and just want to drive a single view.
 
-int run_disasm    (const Binary& b, std::string_view symbol);
-int run_cfg       (const Binary& b, std::string_view symbol);
+// `ann` (when non-null) is only used by resolve_function — it lets a
+// `-s <rename>` token find a function whose name lives only in the
+// annotations file. Pass nullptr from contexts that don't have a
+// resolved annotations file.
+int run_disasm    (const Binary& b, std::string_view symbol,
+                   const Annotations* ann = nullptr);
+int run_cfg       (const Binary& b, std::string_view symbol,
+                   const Annotations* ann = nullptr);
 int run_cfg_pseudo(const Binary& b, std::string_view symbol,
                    const Annotations* ann, EmitOptions opts);
 int run_ir        (const Binary& b, std::string_view symbol,
-                   bool run_ssa, bool run_opt);
+                   bool run_ssa, bool run_opt,
+                   const Annotations* ann = nullptr);
 int run_struct    (const Binary& b, std::string_view symbol, bool pseudo,
                    const Annotations* annotations, EmitOptions opts);
 

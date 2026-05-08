@@ -44,6 +44,8 @@
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/data_xrefs.hpp>
+#include <ember/binary/elf.hpp>
+#include <ember/common/bytes.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/forge_spec.hpp>
 #include <ember/analysis/indirect_calls.hpp>
@@ -82,6 +84,7 @@
 #include "cli_error.hpp"
 #include "fingerprint.hpp"
 #include "info.hpp"
+#include "progress_panel.hpp"
 #include "util.hpp"
 
 namespace ember::cli {
@@ -92,6 +95,26 @@ constexpr std::string_view kXrefsCacheTag = "xrefs-v2";
 constexpr std::string_view kAritiesCacheTag = "arities-v2";
 constexpr std::string_view kFunctionsCacheTag = "functions-v4";
 constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v4";
+
+// Quiet sibling of load_annotations_for(): resolves and reads the
+// annotations file using the same precedence chain (explicit > sidecar
+// > cache, with --no-cache suppressing the cache leg) but never prints
+// the "ember: annotations: …" status line. Used by the per-command
+// resolvers that just need to thread renames into resolve_function;
+// the noisy variant lives further down and runs once per emit pass.
+[[nodiscard]] Annotations load_annotations_quiet(const Args& args) {
+    Annotations ann;
+    const std::filesystem::path cache_dir =
+        !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                : cache::default_dir();
+    auto loc = resolve_annotation_location(args.binary, args.annotations_path, cache_dir);
+    if (args.no_cache && loc.source == AnnotationSource::Cache) return ann;
+    if (loc.source == AnnotationSource::None || loc.path.empty()) return ann;
+    std::error_code ec;
+    if (!std::filesystem::exists(loc.path, ec) || ec) return ann;
+    if (auto rv = Annotations::load(loc.path); rv) ann = std::move(*rv);
+    return ann;
+}
 
 }  // namespace
 
@@ -179,7 +202,73 @@ int run_apply_ember(const Args& args, const Binary& b) {
         }
     }
 
-    auto rv = script::apply_file(args.apply_ember, b, ann);
+    // Sniff the input format. The persisted on-disk format (what
+    // `Annotations::save` writes — what the cache stores) is line-per-
+    // record without section headers; the .ember declarative format is
+    // section-keyed (`[rename]` etc.). Feeding the persisted form to
+    // the script parser used to fail with "directive outside any
+    // section". Detect it and merge via `Annotations::load` instead so
+    // a cache file from one binary copies cleanly onto another.
+    bool is_persisted_form = false;
+    {
+        std::ifstream sniff(args.apply_ember);
+        std::string line;
+        while (std::getline(sniff, line)) {
+            std::string_view sv = line;
+            while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t' ||
+                                   sv.front() == '\r')) {
+                sv.remove_prefix(1);
+            }
+            if (sv.empty() || sv.front() == '#') continue;
+            if (sv.front() == '[') break;  // declarative — section header
+            if (sv.starts_with("rename ") || sv.starts_with("note ") ||
+                sv.starts_with("sig ")    || sv.starts_with("const ") ||
+                sv.starts_with("field ")  || sv.starts_with("meta ")) {
+                is_persisted_form = true;
+            }
+            break;
+        }
+    }
+
+    script::ApplyStats import_stats;
+    if (is_persisted_form) {
+        auto loaded = Annotations::load(args.apply_ember);
+        if (!loaded) return report(loaded.error());
+        // Merge into the destination, preserving existing values on
+        // conflict — same precedence the declarative apply uses.
+        for (const auto& [a, name] : loaded->renames) {
+            if (ann.renames.try_emplace(a, name).second) ++import_stats.renames_added;
+        }
+        for (const auto& [a, sig] : loaded->signatures) {
+            if (ann.signatures.try_emplace(a, sig).second) ++import_stats.signatures_added;
+        }
+        for (const auto& [a, text] : loaded->notes) {
+            if (ann.notes.try_emplace(a, text).second) ++import_stats.notes_added;
+        }
+        for (const auto& [k, name] : loaded->field_names) {
+            if (ann.field_names.try_emplace(k, name).second) ++import_stats.fields_added;
+        }
+        for (const auto& [k, v] : loaded->named_constants) {
+            ann.named_constants.try_emplace(k, v);
+        }
+        // Carry provenance for any record we just imported (try_emplace
+        // semantics: source-side entry wins only when the destination
+        // had no prior record, so the meta we copy here is paired
+        // correctly with the value we just adopted).
+        for (const auto& [a, m] : loaded->rename_meta) {
+            if (ann.renames.contains(a)) ann.rename_meta.try_emplace(a, m);
+        }
+        for (const auto& [a, m] : loaded->note_meta) {
+            if (ann.notes.contains(a)) ann.note_meta.try_emplace(a, m);
+        }
+        for (const auto& [a, m] : loaded->signature_meta) {
+            if (ann.signatures.contains(a)) ann.signature_meta.try_emplace(a, m);
+        }
+    }
+
+    auto rv = is_persisted_form
+        ? Result<script::ApplyStats>{std::move(import_stats)}
+        : script::apply_file(args.apply_ember, b, ann);
     if (!rv) return report(rv.error());
 
     if (args.dry_run) {
@@ -291,6 +380,36 @@ int run_strings(const Args& args, const Binary& b) {
 }
 
 namespace {
+
+// Hand-rolled hex appenders. The TSV worker emits ~22 fixed-width and
+// 1-2 variable-width hex tokens per F row plus 9 per chunk row; on a
+// 200K-fn binary that's millions of std::format calls, each of which
+// goes through the format-spec parser, allocates a temporary string,
+// and concatenates. These appenders write directly into the row
+// buffer with a 16-byte char[] on the stack — measured 3-5× faster
+// than std::format("{:016x}", v) for the hot path on gcc 15.
+inline void append_hex16(std::string& s, u64 v) noexcept {
+    static constexpr char kHex[] = "0123456789abcdef";
+    char buf[16];
+    for (int i = 15; i >= 0; --i) {
+        buf[i] = kHex[v & 0xF];
+        v >>= 4;
+    }
+    s.append(buf, 16);
+}
+
+inline void append_hex(std::string& s, u64 v) noexcept {
+    // Variable-length lowercase hex matching std::format("{:x}", v).
+    static constexpr char kHex[] = "0123456789abcdef";
+    if (v == 0) { s += '0'; return; }
+    char buf[16];
+    int i = 16;
+    while (v) {
+        buf[--i] = kHex[v & 0xF];
+        v >>= 4;
+    }
+    s.append(buf + i, static_cast<std::size_t>(16 - i));
+}
 
 std::string teef_cache_tag(const Args& args) {
     std::string tag = std::format("teef-{}", kTeefSchema);
@@ -538,6 +657,14 @@ build_teef_tsv(const Binary& b,
         std::vector<addr_t> fns;
         std::size_t filtered_small = 0;
         std::size_t filtered_large = 0;
+        // Run enumerate_functions once and reuse for both the fn-address
+        // gather AND the sized_fns table built below. The pass walks the
+        // call graph and CFG-discovery sweep — on a 200K-fn binary it's
+        // tens of seconds; doing it twice was outright duplicated work.
+        auto disc = enumerate_functions(b, EnumerateMode::Auto,
+                                        scope.lo, scope.hi);
+        std::sort(disc.begin(), disc.end(),
+            [](const auto& x, const auto& y) { return x.addr < y.addr; });
         {
             std::set<addr_t> uniq;
             // Named fns always go in regardless of size — they may be
@@ -551,10 +678,6 @@ build_teef_tsv(const Binary& b,
             // discovered fn after sorting. Upper bound — over-counts
             // when there's padding/jump tables in between, but that's
             // the safe direction for filtering both ends.
-            auto disc = enumerate_functions(b, EnumerateMode::Auto,
-                                            scope.lo, scope.hi);
-            std::sort(disc.begin(), disc.end(),
-                [](const auto& x, const auto& y) { return x.addr < y.addr; });
             for (std::size_t i = 0; i < disc.size(); ++i) {
                 u64 sz = disc[i].size;
                 if (sz == 0 && i + 1 < disc.size() &&
@@ -604,7 +727,8 @@ build_teef_tsv(const Binary& b,
         // probes inside another fn's body) are skipped; their xref
         // sites get attributed to the containing real fn instead.
         std::vector<std::pair<addr_t, u64>> sized_fns;
-        for (const auto& d : enumerate_functions(b, EnumerateMode::Auto, scope.lo, scope.hi)) {
+        sized_fns.reserve(disc.size());
+        for (const auto& d : disc) {
             if (b.import_at_plt(d.addr)) continue;
             if (d.size == 0) continue;
             sized_fns.emplace_back(d.addr, d.size);
@@ -684,38 +808,29 @@ build_teef_tsv(const Binary& b,
         // still go through the full pipeline.
         std::atomic<std::size_t> early_exit_topo{0};
         std::atomic<std::size_t> empty_fingerprint{0};
-        const auto t_fp_start = std::chrono::steady_clock::now();
-        std::mutex fp_progress_mu;
         std::atomic<bool> fp_phase_done{false};
 
-        // Time-driven progress ticker. Workers used to print every Nth
+        // Time-driven progress panel. Workers used to print every Nth
         // fn; on huge or VM-protected targets a single fn can take
-        // hundreds of milliseconds, so the user sees no update for tens
-        // of seconds at a time. The ticker runs independently and
-        // refreshes every 500 ms with whatever `done` and the worker
-        // pool have accomplished so far. TTY-only.
+        // hundreds of milliseconds, so the user saw no update for tens
+        // of seconds at a time. The ticker runs independently, refreshes
+        // every 500 ms with whatever `done` and the worker pool have
+        // accomplished, and renders a 3-line ANSI panel (header / bar /
+        // stats) that's atomically repainted in place — no scrollback
+        // noise. Falls back to a one-shot info line when stderr isn't
+        // a TTY (`progress_enabled()` returns false).
+        ProgressPanel panel;
+        if (show) {
+            panel.start("TEEF fingerprint", total, threads);
+        }
         std::thread fp_ticker;
         if (show) {
             fp_ticker = std::thread([&] {
                 while (!fp_phase_done.load(std::memory_order_relaxed)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                    const std::size_t d = done.load(std::memory_order_relaxed);
-                    if (d == 0 || d == total) continue;
+                    const std::size_t d  = done.load(std::memory_order_relaxed);
                     const std::size_t ee = early_exit_topo.load(std::memory_order_relaxed);
-                    const auto now = std::chrono::steady_clock::now();
-                    const double elapsed = std::chrono::duration<double>(
-                        now - t_fp_start).count();
-                    const double rate = elapsed > 0
-                        ? static_cast<double>(d) / elapsed : 0.0;
-                    const double eta = rate > 0
-                        ? static_cast<double>(total - d) / rate : 0.0;
-                    const double pct_ee = d > 0
-                        ? 100.0 * static_cast<double>(ee) / static_cast<double>(d) : 0.0;
-                    std::lock_guard<std::mutex> lock(fp_progress_mu);
-                    std::fprintf(stderr,
-                        "\r  fingerprint [%zu/%zu] %.0f fn/s · skip %.0f%% · elapsed %.1fs · eta %.1fs   ",
-                        d, total, rate, pct_ee, elapsed, eta);
-                    std::fflush(stderr);
+                    panel.tick(d, ee);
                 }
             });
         }
@@ -732,12 +847,16 @@ build_teef_tsv(const Binary& b,
                 // (L0 + L2 only, no K=64 traces). ~3 ms saved per sub_*.
                 // Recognize-time fingerprinting leaves corpus_mode false
                 // so query-side stripped binaries still get full L4.
-                const bool is_named = name_by_addr.contains(a);
+                // Single name-by-addr lookup reused below for the row's
+                // emitted name field. compute_opts is passed by const&
+                // through compute_teef_max/with_chunks — no need to
+                // copy it per fn.
+                const auto name_it = name_by_addr.find(a);
+                const bool is_named = (name_it != name_by_addr.end());
                 const bool full_l4  = !corpus_mode || is_named;
-                auto opts = compute_opts;
                 const auto tf = full_l4
-                    ? compute_teef_max(b, a, opts)
-                    : compute_teef_with_chunks(b, a, opts);
+                    ? compute_teef_max(b, a, compute_opts)
+                    : compute_teef_with_chunks(b, a, compute_opts);
                 const auto& bs = tf.behav;
                 done.fetch_add(1, std::memory_order_relaxed);
                 // Telemetry: distinguish "early-exited via topo filter"
@@ -754,8 +873,8 @@ build_teef_tsv(const Binary& b,
                 }
                 if (tf.whole.exact_hash == 0) continue;
                 std::string name;
-                if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
-                    name = it->second;
+                if (is_named) {
+                    name = name_it->second;
                 } else {
                     name = std::format("sub_{:x}", a);
                 }
@@ -769,18 +888,32 @@ build_teef_tsv(const Binary& b,
                 // L1 byte-prefix hash; non-zero only on tiny fns
                 // (≤16 insns / ≤64 bytes), used as a FLIRT-style fast
                 // path for stubs L2/L4 can't disambiguate.
-                std::string buf =
-                    std::format("F\t{:x}\t{:016x}", a, tf.whole.exact_hash);
-                for (u64 mh : tf.whole.minhash) buf += std::format("\t{:016x}", mh);
+                std::string buf;
+                buf.reserve(512);
+                buf += "F\t";
+                append_hex(buf, a);
+                buf += '\t';
+                append_hex16(buf, tf.whole.exact_hash);
+                for (u64 mh : tf.whole.minhash) {
+                    buf += '\t';
+                    append_hex16(buf, mh);
+                }
                 buf += '\t';
                 buf += name;
-                buf += std::format("\t{:016x}", bs.exact_hash);
-                for (u64 mh : bs.minhash) buf += std::format("\t{:016x}", mh);
-                buf += std::format("\t{}\t{}",
-                                    static_cast<u32>(bs.traces_done),
-                                    static_cast<u32>(bs.traces_aborted));
-                buf += std::format("\t{:016x}", tf.topo_hash);
-                buf += std::format("\t{:016x}", tf.prefix_hash);
+                buf += '\t';
+                append_hex16(buf, bs.exact_hash);
+                for (u64 mh : bs.minhash) {
+                    buf += '\t';
+                    append_hex16(buf, mh);
+                }
+                buf += '\t';
+                buf += std::to_string(static_cast<u32>(bs.traces_done));
+                buf += '\t';
+                buf += std::to_string(static_cast<u32>(bs.traces_aborted));
+                buf += '\t';
+                append_hex16(buf, tf.topo_hash);
+                buf += '\t';
+                append_hex16(buf, tf.prefix_hash);
                 buf += '\n';
 
                 // String-anchor row: S<TAB>addr<TAB>hash1,hash2,...
@@ -789,21 +922,31 @@ build_teef_tsv(const Binary& b,
                 // uses overlap as a precision filter against
                 // structural false positives.
                 if (auto sit = strings_by_fn.find(a); sit != strings_by_fn.end() && !sit->second.empty()) {
-                    buf += std::format("S\t{:x}", a);
+                    buf += "S\t";
+                    append_hex(buf, a);
                     bool first = true;
                     for (const auto& str : sit->second) {
                         buf += first ? '\t' : ',';
                         first = false;
-                        buf += std::format("{:016x}", fnv1a_64(str));
+                        append_hex16(buf, fnv1a_64(str));
                     }
                     buf += '\n';
                 }
                 // Chunk rows: C<TAB>addr<TAB>kind<TAB>insts<TAB>exact<TAB>mh0..7<TAB>name
                 for (const auto& ch : tf.chunks) {
                     if (ch.sig.exact_hash == 0) continue;
-                    buf += std::format("C\t{:x}\t{}\t{}\t{:016x}",
-                                       a, ch.kind, ch.inst_count, ch.sig.exact_hash);
-                    for (u64 mh : ch.sig.minhash) buf += std::format("\t{:016x}", mh);
+                    buf += "C\t";
+                    append_hex(buf, a);
+                    buf += '\t';
+                    buf += std::to_string(static_cast<unsigned>(ch.kind));
+                    buf += '\t';
+                    buf += std::to_string(ch.inst_count);
+                    buf += '\t';
+                    append_hex16(buf, ch.sig.exact_hash);
+                    for (u64 mh : ch.sig.minhash) {
+                        buf += '\t';
+                        append_hex16(buf, mh);
+                    }
                     buf += '\t';
                     buf += name;
                     buf += '\n';
@@ -824,19 +967,11 @@ build_teef_tsv(const Binary& b,
         fp_phase_done.store(true, std::memory_order_relaxed);
         if (fp_ticker.joinable()) fp_ticker.join();
         if (show) {
-            // Final progress line so the last `[total/total]` actually
-            // appears (the ticker only emits intermediate states).
-            const auto now = std::chrono::steady_clock::now();
-            const double elapsed = std::chrono::duration<double>(
-                now - t_fp_start).count();
-            const double rate = elapsed > 0
-                ? static_cast<double>(total) / elapsed : 0.0;
-            std::fprintf(stderr,
-                "\r  fingerprint [%zu/%zu] %.0f fn/s · elapsed %.1fs · done           \n",
-                total, total, rate, elapsed);
-            std::fflush(stderr);
             const std::size_t ee = early_exit_topo.load(std::memory_order_relaxed);
             const std::size_t eg = empty_fingerprint.load(std::memory_order_relaxed);
+            // Pin the final frame in scrollback so the user can see
+            // the completed run after the next phase prints over it.
+            panel.finish(total, ee);
             const std::size_t full_pipe = (total > ee + eg) ? (total - ee - eg) : 0;
             std::println(stderr,
                 "ember: TEEF: {} fns full-pipeline, {} early-exit (l0-prefilter), "
@@ -1451,13 +1586,6 @@ int run_functions(const Args& args, const Binary& b) {
     const ModuleScope scope = resolve_module_scope(b, args.module_filter);
     if (!args.module_filter.empty() && !scope.active) return EXIT_FAILURE;
 
-    if (args.functions_pattern.empty() && !scope.active) {
-        std::fwrite(tsv.data(), 1, tsv.size(), stdout);
-        return EXIT_SUCCESS;
-    }
-    std::string needle = args.functions_pattern;
-    for (auto& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
     auto parse_addr = [](std::string_view s) -> std::optional<addr_t> {
         if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
         addr_t v = 0;
@@ -1472,38 +1600,105 @@ int run_functions(const Args& args, const Binary& b) {
         return v;
     };
 
+    // Always consult resolved annotations. Renames substitute into the
+    // emitted `name` column at print time so a `--functions=cap_check`
+    // pattern matches the annotated name, and JSON rows pick up
+    // `confidence` / `source` / `evidence` when present. The cached
+    // TSV stays unannotated so changes to the annotations file don't
+    // invalidate the cache slot.
+    const Annotations ann_for_print = load_annotations_quiet(args);
+    auto rename_for = [&](addr_t a) -> const std::string* {
+        auto it = ann_for_print.renames.find(a);
+        return it == ann_for_print.renames.end() ? nullptr : &it->second;
+    };
+    const bool any_rename = !ann_for_print.renames.empty();
+
+    if (!args.json && args.functions_pattern.empty() && !scope.active && !any_rename) {
+        std::fwrite(tsv.data(), 1, tsv.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::string needle = args.functions_pattern;
+    for (auto& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (args.json) std::fputs("[", stdout);
+    bool first = true;
+
     std::size_t pos = 0;
     while (pos < tsv.size()) {
         const auto nl = tsv.find('\n', pos);
         const std::size_t end = (nl == std::string::npos) ? tsv.size() : nl;
         std::string_view line(tsv.data() + pos, end - pos);
         // Columns: addr\tsize\tkind\tname.
-        std::size_t tabs = 0, name_start = 0, addr_end = 0;
+        std::size_t tabs = 0, name_start = 0, addr_end = 0,
+                    size_end = 0, kind_end = 0;
         for (std::size_t i = 0; i < line.size() && tabs < 3; ++i) {
             if (line[i] == '\t') {
-                if (tabs == 0) addr_end = i;
-                if (++tabs == 3) name_start = i + 1;
+                if (tabs == 0)      addr_end = i;
+                else if (tabs == 1) size_end = i;
+                else if (tabs == 2) kind_end = i;
+                if (++tabs == 3)    name_start = i + 1;
             }
         }
+        const std::string_view addr_s = line.substr(0, addr_end);
+        const auto row_addr = parse_addr(addr_s);
         if (scope.active) {
-            auto a = parse_addr(line.substr(0, addr_end));
-            if (!a || !scope.contains(*a)) {
+            if (!row_addr || !scope.contains(*row_addr)) {
                 pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
                 continue;
             }
         }
+        // Substitute the annotation rename (if any) into the rendered
+        // name. The original discovered name is dropped from the output;
+        // it's reachable via `--no-cache` against an empty annotations
+        // file when needed.
+        const std::string_view discovered_name = line.substr(name_start);
+        const std::string* rn = row_addr ? rename_for(*row_addr) : nullptr;
+        const std::string_view effective_name =
+            rn ? std::string_view{*rn} : discovered_name;
         if (!needle.empty()) {
-            std::string name_lc(line.substr(name_start));
+            std::string name_lc(effective_name);
             for (auto& c : name_lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             if (name_lc.find(needle) == std::string::npos) {
                 pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
                 continue;
             }
         }
-        std::fwrite(line.data(), 1, line.size(), stdout);
-        std::fputc('\n', stdout);
+        if (args.json) {
+            if (!first) std::fputs(",", stdout);
+            first = false;
+            const std::string_view size_s = line.substr(addr_end + 1, size_end - addr_end - 1);
+            const std::string_view kind_s = line.substr(size_end + 1, kind_end - size_end - 1);
+            std::string row = std::format(
+                "{{\"addr\":\"{}\",\"size\":\"{}\",\"kind\":\"{}\",\"name\":\"{}\"",
+                addr_s, size_s, kind_s, json_escape(effective_name));
+            if (row_addr) {
+                if (const auto* m = ann_for_print.meta_for_rename(*row_addr); m) {
+                    if (m->confidence > 0.0f) {
+                        row += std::format(",\"confidence\":{:.3g}", m->confidence);
+                    }
+                    if (!m->source.empty()) {
+                        row += std::format(",\"source\":\"{}\"", json_escape(m->source));
+                    }
+                    if (!m->evidence.empty()) {
+                        row += std::format(",\"evidence\":\"{}\"", json_escape(m->evidence));
+                    }
+                }
+            }
+            row += "}";
+            std::fwrite(row.data(), 1, row.size(), stdout);
+        } else if (rn) {
+            // Reconstruct the line with the annotation name in place.
+            std::fwrite(line.data(), 1, name_start, stdout);
+            std::fwrite(effective_name.data(), 1, effective_name.size(), stdout);
+            std::fputc('\n', stdout);
+        } else {
+            std::fwrite(line.data(), 1, line.size(), stdout);
+            std::fputc('\n', stdout);
+        }
         pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
     }
+    if (args.json) std::fputs("]\n", stdout);
     return EXIT_SUCCESS;
 }
 
@@ -1511,12 +1706,68 @@ int run_functions(const Args& args, const Binary& b) {
 // Direct-output runners
 // ---------------------------------------------------------------------------
 
-int run_refs_to(const Args& args, const Binary& b) {
-    auto va = parse_cli_addr(args.refs_to);
-    if (!va) {
-        std::println(stderr, "ember: --refs-to: bad address '{}'", args.refs_to);
-        return EXIT_FAILURE;
+// One row of refs-to output. Both TSV and JSON formatters consume this
+// shape; the agent-facing JSON mode picks up `slot` / `fn_name` /
+// `fn_offset` as proper fields instead of having to grep them out of
+// `(kind via 0xSLOT)  ; fn+0xN`.
+struct RefRow {
+    addr_t                   from_pc   = 0;
+    addr_t                   target    = 0;
+    std::string              kind;       // "direct" / "code-ptr" / "lea" / "imm64-stored" / "relocated"
+    std::optional<addr_t>    slot;       // populated for imm64-stored / relocated
+    std::optional<std::string> fn_name;
+    std::optional<u64>       fn_offset;
+};
+
+[[nodiscard]] std::string format_ref_rows_tsv(std::span<const RefRow> rows) {
+    std::string out;
+    for (const auto& r : rows) {
+        std::string ctx;
+        if (r.fn_name) {
+            ctx = std::format("  ; {}+{:#x}", *r.fn_name, r.fn_offset.value_or(0));
+        }
+        if (r.slot) {
+            out += std::format("{:#x} -> {:#x}  ({} via {:#x}){}\n",
+                               r.from_pc, r.target, r.kind, *r.slot, ctx);
+        } else {
+            out += std::format("{:#x} -> {:#x}  ({}){}\n",
+                               r.from_pc, r.target, r.kind, ctx);
+        }
     }
+    return out;
+}
+
+[[nodiscard]] std::string format_ref_rows_json(std::span<const RefRow> rows) {
+    std::string out = "[";
+    bool first = true;
+    for (const auto& r : rows) {
+        if (!first) out += ',';
+        first = false;
+        out += std::format(
+            "{{\"from\":\"{:#x}\",\"target\":\"{:#x}\",\"kind\":\"{}\"",
+            r.from_pc, r.target, r.kind);
+        if (r.slot) {
+            out += std::format(",\"slot\":\"{:#x}\"", *r.slot);
+        }
+        if (r.fn_name) {
+            out += std::format(",\"fn\":\"{}\",\"fn_offset\":\"{:#x}\"",
+                               json_escape(*r.fn_name),
+                               r.fn_offset.value_or(0));
+        }
+        out += "}";
+    }
+    out += "]\n";
+    return out;
+}
+
+// Internal helper: gather the standard --refs-to rows (direct callers
+// from the cached call-graph plus CodePtr/Lea events from
+// compute_data_xrefs) for a single target VA. Both run_refs_to and
+// run_refs_to_loose use this; loose mode appends extra `imm64-stored`
+// / `relocated` rows on top.
+[[nodiscard]] std::vector<RefRow>
+gather_refs_to_rows(const Args& args, const Binary& b, addr_t va) {
+    std::vector<RefRow> out;
     std::string xrefs_tsv;
     const auto dir = args.cache_dir.empty()
         ? cache::default_dir()
@@ -1532,8 +1783,6 @@ int run_refs_to(const Args& args, const Binary& b) {
         }
     }
     if (xrefs_tsv.empty()) {
-        // Populate the cache now. First run is expensive (one full
-        // call-graph walk); every subsequent --refs-to hit is instant.
         std::println(stderr, "ember: --refs-to: building xrefs cache (one-time)...");
         std::fflush(stderr);
         xrefs_tsv = build_xrefs_output(b);
@@ -1541,40 +1790,181 @@ int run_refs_to(const Args& args, const Binary& b) {
             (void)cache::write(dir, key, kXrefsCacheTag, xrefs_tsv);
         }
     }
-    const std::string needle = std::format("-> {:#x}\n", *va);
+    const std::string needle = std::format("-> {:#x}\n", va);
     std::size_t pos = 0;
-    std::string out;
     while ((pos = xrefs_tsv.find(needle, pos)) != std::string::npos) {
-        // Walk back to the start of the line to pull the caller addr.
         std::size_t ls = pos;
         while (ls > 0 && xrefs_tsv[ls - 1] != '\n') --ls;
-        out.append(xrefs_tsv, ls, (pos + needle.size()) - ls);
+        // Cached TSV rows are `<from> -> <to>\n`; pull from for the
+        // structured form. The original line had no extra context.
+        std::string_view fs(xrefs_tsv.data() + ls, pos - ls);
+        if (fs.starts_with("0x") || fs.starts_with("0X")) fs.remove_prefix(2);
+        u64 from = 0;
+        auto rc = std::from_chars(fs.data(), fs.data() + fs.size(), from, 16);
+        if (rc.ec == std::errc{}) {
+            RefRow row;
+            row.from_pc = static_cast<addr_t>(from);
+            row.target  = va;
+            row.kind    = "direct";
+            if (auto cf = containing_function(b, row.from_pc); cf) {
+                row.fn_name   = cf->name;
+                row.fn_offset = cf->offset_within;
+            }
+            out.push_back(std::move(row));
+        }
         pos += needle.size();
     }
-    // Also surface address-taken events from compute_data_xrefs. A function
-    // whose pointer ends up in a vtable / dispatch-table / callback-list
-    // slot in `.data` has no direct call edge — its callers reach it
-    // through the table, completely invisible to call-graph xrefs. The
-    // CodePtr kind exists exactly to recover this. Lea entries pointing at
-    // the same address are also surfaced (user passed a data target).
-    {
-        const auto dx = compute_data_xrefs(b);
-        if (auto it = dx.find(static_cast<addr_t>(*va)); it != dx.end()) {
-            for (const auto& r : it->second) {
-                if (r.kind != DataXrefKind::CodePtr &&
-                    r.kind != DataXrefKind::Lea) continue;
-                std::string_view tag =
-                    r.kind == DataXrefKind::CodePtr ? "code-ptr" : "lea";
-                std::string ctx;
-                if (auto cf = containing_function(b, r.from_pc); cf) {
-                    ctx = std::format("  ; {}+{:#x}", cf->name, cf->offset_within);
-                }
-                out += std::format("{:#x} -> {:#x}  ({}){}\n",
-                                   r.from_pc, *va, tag, ctx);
+    const auto dx = compute_data_xrefs(b);
+    if (auto it = dx.find(va); it != dx.end()) {
+        for (const auto& r : it->second) {
+            if (r.kind != DataXrefKind::CodePtr &&
+                r.kind != DataXrefKind::Lea) continue;
+            RefRow row;
+            row.from_pc = r.from_pc;
+            row.target  = va;
+            row.kind    = (r.kind == DataXrefKind::CodePtr) ? "code-ptr" : "lea";
+            if (auto cf = containing_function(b, r.from_pc); cf) {
+                row.fn_name   = cf->name;
+                row.fn_offset = cf->offset_within;
+            }
+            out.push_back(std::move(row));
+        }
+    }
+    return out;
+}
+
+int run_refs_to(const Args& args, const Binary& b) {
+    auto va = parse_cli_addr(args.refs_to);
+    if (!va) {
+        std::println(stderr, "ember: --refs-to: bad address '{}'", args.refs_to);
+        return EXIT_FAILURE;
+    }
+    const auto rows = gather_refs_to_rows(args, b, *va);
+    const std::string out = args.json
+        ? format_ref_rows_json(rows)
+        : format_ref_rows_tsv(rows);
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    return EXIT_SUCCESS;
+}
+
+int run_refs_to_loose(const Args& args, const Binary& b) {
+    // Heavier sibling of --refs-to. Beyond the cached call-graph
+    // xrefs and CodePtr/Lea events surfaced by compose_refs_to_output,
+    // this also walks every readable section for the literal target
+    // VA stored as an 8-byte (or 4-byte on 32-bit) value, then folds
+    // in the per-function references to those slots — recovering the
+    // fn-pointer-only case where the target is reached as
+    // `lea rax, [rip+disp_to_table]; mov rbx, [rax+N]; call rbx`
+    // and there is no static call edge to the target itself.
+    //
+    // Confidence tagging in the row body lets a downstream agent
+    // weight follow-ups: `code-ptr` / `lea` rows are static-evidence
+    // strong; `imm64-stored` rows are circumstantial — the function
+    // reads from a slot whose value matches the target, but the read
+    // hasn't been chased to a call.
+    auto va = parse_cli_addr(args.refs_to_loose);
+    if (!va) {
+        std::println(stderr, "ember: --refs-to-loose: bad address '{}'",
+                     args.refs_to_loose);
+        return EXIT_FAILURE;
+    }
+
+    std::vector<RefRow> rows = gather_refs_to_rows(args, b, *va);
+
+    // Constant-pool scan: every readable section. Function-pointer
+    // tables live in .rodata / .data / .data.rel.ro, sometimes inside
+    // an .init_array ctor's frame. Bounded by total readable bytes —
+    // a 100MB binary's data sections are the budget on agent flows.
+    std::vector<addr_t> slot_addrs;
+    const u64 target = static_cast<u64>(*va);
+    const bool is_64 = arch_pointer_bits(b.arch()) == 64;
+    const std::size_t needle_size = is_64 ? 8u : 4u;
+    // Only scan at pointer-aligned slot VAs (8-byte for 64-bit pointers,
+    // 4-byte for 32-bit). Without this guard, a single legitimate
+    // function-pointer slot whose value contains the target's bytes
+    // produces a cluster of byte-shifted false positives at the same
+    // location — every bit-shift coincidentally matching the lower
+    // 8 bytes of the next slot. Function-pointer tables are
+    // pointer-aligned by linker convention; the rare unaligned case
+    // is not worth the noise.
+    for (const auto& s : b.sections()) {
+        if (!s.flags.readable) continue;
+        if (s.data.empty()) continue;
+        const std::byte* p = s.data.data();
+        const std::size_t n = s.data.size();
+        if (n < needle_size) continue;
+        const auto sec_base = static_cast<addr_t>(s.vaddr);
+        // Step the cursor up to the first aligned slot VA inside this
+        // section, then advance by `needle_size` from there.
+        const std::size_t first_aligned =
+            (needle_size - (sec_base % needle_size)) % needle_size;
+        for (std::size_t i = first_aligned; i + needle_size <= n;
+             i += needle_size) {
+            const u64 v = is_64
+                ? read_le_at<u64>(p + i)
+                : static_cast<u64>(read_le_at<u32>(p + i));
+            if (v == target) {
+                slot_addrs.push_back(sec_base + static_cast<addr_t>(i));
             }
         }
     }
+
+    const auto dx = compute_data_xrefs(b);
+
+    // De-dupe against direct rows so `--refs-to-loose` stays a strict
+    // superset without re-listing the same from_pc twice.
+    std::set<addr_t> already_emitted;
+    for (const auto& r : rows) already_emitted.insert(r.from_pc);
+
+    auto emit_slot_readers = [&](addr_t slot, std::string_view tag) {
+        if (auto it = dx.find(slot); it != dx.end()) {
+            for (const auto& xr : it->second) {
+                if (xr.kind != DataXrefKind::Read &&
+                    xr.kind != DataXrefKind::Lea) continue;
+                if (!already_emitted.insert(xr.from_pc).second) continue;
+                RefRow row;
+                row.from_pc = xr.from_pc;
+                row.target  = *va;
+                row.kind    = std::string(tag);
+                row.slot    = slot;
+                if (auto cf = containing_function(b, xr.from_pc); cf) {
+                    row.fn_name   = cf->name;
+                    row.fn_offset = cf->offset_within;
+                }
+                rows.push_back(std::move(row));
+            }
+        }
+    };
+    for (addr_t slot : slot_addrs) emit_slot_readers(slot, "imm64-stored");
+
+    // Relocation-driven slots: a `.data.rel.ro` qword whose static
+    // on-disk value is zero but whose dynamic-linker addend is the
+    // target VA. The static qword scan above misses these because
+    // it only matches against the file bytes; the relocation table
+    // knows the *post-load* value. ELF-only path; non-ELF binaries
+    // get an empty map.
+    std::size_t reloc_slot_count = 0;
+    if (const auto* elf = dynamic_cast<const ElfBinary*>(&b)) {
+        const auto reloc_map = elf->relocated_qwords();
+        for (const auto& [slot, addend] : reloc_map) {
+            if (addend != static_cast<addr_t>(*va)) continue;
+            ++reloc_slot_count;
+            emit_slot_readers(slot, "relocated");
+        }
+    }
+
+    const std::string out = args.json
+        ? format_ref_rows_json(rows)
+        : format_ref_rows_tsv(rows);
     std::fwrite(out.data(), 1, out.size(), stdout);
+    if (rows.empty()) {
+        std::println(stderr, "ember: --refs-to-loose: 0 references found "
+                             "({} static slot{}, {} relocated slot{}, 0 readers)",
+                     slot_addrs.size(),
+                     slot_addrs.size() == 1 ? "" : "s",
+                     reloc_slot_count,
+                     reloc_slot_count == 1 ? "" : "s");
+    }
     return EXIT_SUCCESS;
 }
 
@@ -1609,6 +1999,33 @@ int run_validate_name(const Args& args, const Binary& b) {
     const auto rows   = fingerprint_rows_from_tsv(fp_tsv);
     const auto v = validate_name(b, args.validate_name, rows);
     const std::string_view verdict = verdict_name(v.verdict);
+
+    // Pull annotations once for provenance lookup. Bound rows that
+    // carry a meta record get an extra `confidence=` / `source=`
+    // hint so a verifier knows whether the binding was cheap (a
+    // symbol) or earned (a high-conf agent claim).
+    Annotations validate_ann;
+    bool validate_ann_ready = false;
+    {
+        const auto adir = !args.cache_dir.empty()
+            ? std::filesystem::path{args.cache_dir}
+            : cache::default_dir();
+        auto loc = resolve_annotation_location(args.binary, args.annotations_path, adir);
+        if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
+        if (loc.source != AnnotationSource::None && !loc.path.empty()) {
+            std::error_code ec;
+            if (std::filesystem::exists(loc.path, ec) && !ec) {
+                if (auto rv = Annotations::load(loc.path); rv) {
+                    validate_ann = std::move(*rv);
+                    validate_ann_ready = true;
+                }
+            }
+        }
+    }
+    auto bound_meta = [&](addr_t a) -> const AnnotationMeta* {
+        return validate_ann_ready ? validate_ann.meta_for_rename(a) : nullptr;
+    };
+
     if (args.json) {
         std::string out = std::format(
             "{{\"name\":\"{}\",\"verdict\":\"{}\",\"bound\":[",
@@ -1618,8 +2035,18 @@ int run_validate_name(const Args& args, const Binary& b) {
             const auto& fp = v.fps[i];
             out += std::format(
                 "{{\"addr\":\"{:#x}\",\"hash\":\"{:#x}\","
-                "\"blocks\":{},\"insts\":{},\"calls\":{},\"offset\":{}}}",
+                "\"blocks\":{},\"insts\":{},\"calls\":{},\"offset\":{}",
                 v.bound[i], fp.hash, fp.blocks, fp.insts, fp.calls, v.offsets[i]);
+            if (const auto* m = bound_meta(v.bound[i]); m) {
+                if (m->confidence > 0.0f) {
+                    out += std::format(",\"confidence\":{:.3g}", m->confidence);
+                }
+                if (!m->source.empty()) {
+                    out += std::format(",\"source\":\"{}\"",
+                                       json_escape(m->source));
+                }
+            }
+            out += "}";
         }
         out += "],\"near_matches\":[";
         for (std::size_t i = 0; i < v.near_matches.size(); ++i) {
@@ -1637,11 +2064,20 @@ int run_validate_name(const Args& args, const Binary& b) {
         std::string out = std::format("verdict\t{}\n", verdict);
         for (std::size_t i = 0; i < v.bound.size(); ++i) {
             const auto& fp = v.fps[i];
-            out += std::format(
+            std::string row = std::format(
                 "bound\t{:#x}\thash={:#x}\tblocks={}\tinsts={}\tcalls={}"
-                "\tname={}\toffset_in_fn={:#x}\n",
+                "\tname={}\toffset_in_fn={:#x}",
                 v.bound[i], fp.hash, fp.blocks, fp.insts, fp.calls,
                 args.validate_name, v.offsets[i]);
+            if (const auto* m = bound_meta(v.bound[i]); m) {
+                if (m->confidence > 0.0f) {
+                    row += std::format("\tconfidence={:.3g}", m->confidence);
+                }
+                if (!m->source.empty()) {
+                    row += std::format("\tsource={}", m->source);
+                }
+            }
+            out += row + "\n";
         }
         // Cap near-match output at 8 lines: a name with hundreds of shape
         // twins is uninformative, and the verdict label is what the
@@ -1720,7 +2156,8 @@ int run_collisions(const Args& args, const Binary& b) {
 }
 
 int run_callees(const Args& args, const Binary& b) {
-    auto win = resolve_function(b, args.callees);
+    const Annotations callees_ann = load_annotations_quiet(args);
+    auto win = resolve_function(b, args.callees, &callees_ann);
     if (!win) {
         std::println(stderr, "ember: --callees: could not resolve '{}'", args.callees);
         return EXIT_FAILURE;
@@ -1828,12 +2265,127 @@ int run_disasm_at(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
+int run_disasm_window(const Args& args, const Binary& b) {
+    // Batch sibling of --disasm-at. Accepts a comma-separated VA list
+    // (`0x...,sub_...,...`) or `@PATH` to read VAs one-per-line from a
+    // file, runs the same per-VA window each --disasm-at does, and
+    // separates blocks with a `# <hex-va>` line so a downstream
+    // splitter can pull them apart. Saves an agent the per-invocation
+    // ember startup cost when sweeping thousands of refs-to / scan
+    // hits.
+    std::vector<addr_t> vas;
+    auto push_va = [&](std::string_view tok) -> bool {
+        // Trim whitespace.
+        while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t' ||
+                                tok.front() == '\r')) tok.remove_prefix(1);
+        while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t' ||
+                                tok.back() == '\r')) tok.remove_suffix(1);
+        if (tok.empty()) return true;
+        auto a = parse_cli_addr(tok);
+        if (!a) {
+            std::println(stderr,
+                "ember: --disasm-window: bad address '{}'", tok);
+            return false;
+        }
+        vas.push_back(*a);
+        return true;
+    };
+
+    const std::string_view raw = args.disasm_window;
+    if (!raw.empty() && raw.front() == '@') {
+        // File source: one VA per line, blank lines and `#`-prefixed
+        // comment lines skipped.
+        const std::string path{raw.substr(1)};
+        std::ifstream f(path);
+        if (!f) {
+            std::println(stderr, "ember: --disasm-window: cannot open '{}'", path);
+            return EXIT_FAILURE;
+        }
+        std::string line;
+        while (std::getline(f, line)) {
+            std::string_view sv = line;
+            while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t')) sv.remove_prefix(1);
+            if (sv.empty() || sv.front() == '#') continue;
+            if (!push_va(sv)) return EXIT_FAILURE;
+        }
+    } else {
+        std::size_t start = 0;
+        for (std::size_t i = 0; i <= raw.size(); ++i) {
+            if (i == raw.size() || raw[i] == ',') {
+                if (!push_va(raw.substr(start, i - start))) return EXIT_FAILURE;
+                start = i + 1;
+            }
+        }
+    }
+
+    if (vas.empty()) {
+        std::println(stderr, "ember: --disasm-window: empty VA list");
+        return EXIT_FAILURE;
+    }
+
+    std::size_t count = 32;
+    if (!args.disasm_count.empty()) {
+        u64 n = 0;
+        auto r = std::from_chars(args.disasm_count.data(),
+                                 args.disasm_count.data() + args.disasm_count.size(),
+                                 n, 10);
+        if (r.ec == std::errc{}) count = static_cast<std::size_t>(n);
+    }
+
+    auto window_for_va = [&](addr_t va) -> std::string {
+        // Mirror run_disasm_at: 15 bytes/insn upper bound, then trim to
+        // `count` non-comment lines after the formatter returns.
+        const addr_t end = va + static_cast<addr_t>(count * 15);
+        auto rv = format_disasm_range(b, va, end);
+        if (!rv) {
+            return std::format("# error: {}\n", rv.error().message);
+        }
+        std::string out;
+        std::size_t emitted = 0;
+        std::size_t line_start = 0;
+        for (std::size_t i = 0; i <= rv->size(); ++i) {
+            if (i == rv->size() || (*rv)[i] == '\n') {
+                const std::string_view line(rv->data() + line_start, i - line_start);
+                out.append(line);
+                out += '\n';
+                if (!line.empty() && line.front() != ';') ++emitted;
+                if (emitted >= count) break;
+                line_start = i + 1;
+            }
+        }
+        return out;
+    };
+
+    if (args.json) {
+        std::string out = "[";
+        bool first = true;
+        for (addr_t va : vas) {
+            if (!first) out += ',';
+            first = false;
+            const std::string body = window_for_va(va);
+            out += std::format("{{\"addr\":\"{:#x}\",\"disasm\":\"{}\"}}",
+                               va, json_escape(body));
+        }
+        out += "]\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+    } else {
+        std::string out;
+        for (addr_t va : vas) {
+            out += std::format("# {:#x}\n", va);
+            out += window_for_va(va);
+        }
+        std::fwrite(out.data(), 1, out.size(), stdout);
+    }
+    return EXIT_SUCCESS;
+}
+
 int run_list_syscalls(const Args& args, const Binary& b) {
     // Resolve target — accept symbol-by-name (`-s NAME`-style strings),
     // hex VA, or `sub_<hex>`. The address is the function entry the
     // syscall walker starts decoding from; mid-function VAs get
     // rebound to the containing function's start, same as `-p`.
-    auto win = resolve_function(b, args.list_syscalls);
+    const Annotations syscalls_ann = load_annotations_quiet(args);
+    auto win = resolve_function(b, args.list_syscalls, &syscalls_ann);
     if (!win) return EXIT_FAILURE;  // resolve_function already printed
 
     auto sites = analyze_syscalls(b, win->start);
@@ -1871,7 +2423,8 @@ int run_forge_spec(const Args& args, const Binary& b) {
     const std::string_view entry_tok = raw.substr(0, colon);
     const std::string_view target_tok = raw.substr(colon + 1);
 
-    auto entry_win = resolve_function(b, entry_tok);
+    const Annotations forge_ann = load_annotations_quiet(args);
+    auto entry_win = resolve_function(b, entry_tok, &forge_ann);
     if (!entry_win) return EXIT_FAILURE;  // resolve_function already printed
 
     auto target_va = parse_cli_addr(target_tok);
@@ -1892,12 +2445,276 @@ int run_forge_spec(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
+int run_annotate(const Args& args, const Binary& /*b*/) {
+    // One-shot annotation write. Resolves the destination file with the
+    // same chain `--apply` uses (explicit > sidecar > cache), loads the
+    // existing contents, sets whichever record(s) the user asked for,
+    // attaches provenance (--confidence / --evidence / --source), and
+    // writes back atomically. --dry-run prints the would-be file to
+    // stdout instead of touching disk.
+    auto va = parse_cli_addr(args.annotate_addr);
+    if (!va) {
+        std::println(stderr,
+            "ember: --annotate: bad address '{}'", args.annotate_addr);
+        return EXIT_FAILURE;
+    }
+
+    if (args.annotate_name.empty() && args.annotate_note.empty() &&
+        args.annotate_signature.empty()) {
+        std::println(stderr,
+            "ember: --annotate: nothing to set "
+            "(pass --set-name, --set-note, or --set-signature)");
+        return EXIT_FAILURE;
+    }
+
+    AnnotationMeta meta;
+    if (!args.annotate_conf.empty()) {
+        // Reuse charconv on a local view; clamp to [0,1] to match the
+        // annotations parser's clamp on load.
+        float v = 0.0f;
+        const auto* first = args.annotate_conf.data();
+        const auto* last  = first + args.annotate_conf.size();
+        auto rc = std::from_chars(first, last, v);
+        if (rc.ec != std::errc{} || rc.ptr != last) {
+            std::println(stderr,
+                "ember: --confidence: expected a float in [0,1], got '{}'",
+                args.annotate_conf);
+            return EXIT_FAILURE;
+        }
+        if (v < 0.0f) v = 0.0f;
+        if (v > 1.0f) v = 1.0f;
+        meta.confidence = v;
+    }
+    meta.evidence = args.annotate_evidence;
+    meta.source   = args.annotate_source.empty()
+        ? std::string{"cli"}
+        : args.annotate_source;
+    // A user passing --evidence / --source without --confidence still
+    // wants the metadata persisted; promote to a tiny non-zero
+    // confidence if explicitly empty would suppress it. The serializer
+    // omits empty-meta records entirely (confidence==0 + empty
+    // evidence + empty source), so we have to keep at least one field
+    // populated. `source` is always populated above, so this is fine.
+
+    const std::filesystem::path cache_dir =
+        !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                : cache::default_dir();
+    auto loc = resolve_annotation_location(args.binary, args.annotations_path, cache_dir);
+    if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
+    if (loc.source == AnnotationSource::None || loc.path.empty()) {
+        std::println(stderr,
+            "ember: --annotate: nowhere to write annotations "
+            "(no --annotations / sidecar / cache)");
+        return EXIT_FAILURE;
+    }
+
+    Annotations ann;
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(loc.path, ec) && !ec) {
+            auto rv = Annotations::load(loc.path);
+            if (!rv) return report(rv.error());
+            ann = std::move(*rv);
+        }
+    }
+
+    // Apply each requested mutation. Provenance attaches to every kind
+    // the user set in this invocation — most agent flows set one
+    // (typically --set-name) per call, but a human dropping in a known
+    // signature might want both --set-name and --set-signature, in
+    // which case both meta records get the same evidence.
+    if (!args.annotate_name.empty()) {
+        ann.renames[*va]      = args.annotate_name;
+        ann.rename_meta[*va]  = meta;
+    }
+    if (!args.annotate_note.empty()) {
+        ann.notes[*va]        = args.annotate_note;
+        ann.note_meta[*va]    = meta;
+    }
+    if (!args.annotate_signature.empty()) {
+        auto sig = ::ember::script::parse_signature(args.annotate_signature);
+        if (!sig) {
+            std::println(stderr,
+                "ember: --set-signature: cannot parse '{}'",
+                args.annotate_signature);
+            return EXIT_FAILURE;
+        }
+        ann.signatures[*va]       = std::move(*sig);
+        ann.signature_meta[*va]   = meta;
+    }
+
+    if (args.dry_run) {
+        const std::string text = ann.to_text();
+        std::fwrite(text.data(), 1, text.size(), stdout);
+    } else {
+        if (auto sv = ann.save(loc.path); !sv) return report(sv.error());
+    }
+
+    if (!args.quiet) {
+        const char* tag = args.dry_run ? "--annotate --dry-run" : "--annotate";
+        std::println(stderr,
+            "ember: {}: {:#x} -> {} ({})",
+            tag, static_cast<u64>(*va),
+            loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
+            annotation_source_name(loc.source));
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_list_annotations(const Args& args, const Binary& /*b*/) {
+    // Walk the resolved annotations file and emit every record. Sibling
+    // of `--functions --json` for the cases where what the user wrote is
+    // a `--set-note` (no rename), which `--functions` can't surface
+    // because its TSV row keys off the discovered name. TSV output
+    // groups one record per line:
+    //
+    //   <hex-addr> <kind> <value> [conf=<f> [src=<tag> [ev=<text>]]]
+    //
+    // where <kind> is `rename` / `note` / `signature`. JSON form
+    // returns one object per address with `rename` / `note` /
+    // `signature` keys (only those actually set) plus the matching
+    // `*_meta` blocks. Both forms emit nothing if the destination file
+    // is missing — silence is correct for "no annotations yet".
+    const std::filesystem::path cache_dir =
+        !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
+                                : cache::default_dir();
+    auto loc = resolve_annotation_location(args.binary, args.annotations_path, cache_dir);
+    if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
+
+    Annotations ann;
+    if (loc.source != AnnotationSource::None && !loc.path.empty()) {
+        std::error_code ec;
+        if (std::filesystem::exists(loc.path, ec) && !ec) {
+            auto rv = Annotations::load(loc.path);
+            if (!rv) return report(rv.error());
+            ann = std::move(*rv);
+        }
+    }
+
+    auto sig_to_string = [](const FunctionSig& s) {
+        std::string out = s.return_type.empty() ? std::string{"void"} : s.return_type;
+        out += '(';
+        for (std::size_t i = 0; i < s.params.size(); ++i) {
+            if (i) out += ", ";
+            out += s.params[i].type;
+            if (!s.params[i].name.empty()) {
+                out += ' ';
+                out += s.params[i].name;
+            }
+        }
+        if (s.params.empty()) out += "void";
+        out += ')';
+        return out;
+    };
+
+    auto append_meta_tsv = [](std::string& row, const AnnotationMeta* m) {
+        if (!m) return;
+        if (m->confidence > 0.0f) {
+            row += std::format("\tconf={:.3g}", m->confidence);
+        }
+        if (!m->source.empty()) {
+            row += std::format("\tsrc={}", m->source);
+        }
+        if (!m->evidence.empty()) {
+            row += std::format("\tev={}", escape_for_line(m->evidence));
+        }
+    };
+
+    if (args.json) {
+        // Build the union of all addresses appearing in any record kind
+        // so each address gets one combined object, regardless of which
+        // map it shows up in.
+        std::set<addr_t> addrs;
+        for (const auto& [a, _] : ann.renames)    addrs.insert(a);
+        for (const auto& [a, _] : ann.notes)      addrs.insert(a);
+        for (const auto& [a, _] : ann.signatures) addrs.insert(a);
+
+        std::string out = "[";
+        bool first = true;
+        for (addr_t a : addrs) {
+            if (!first) out += ',';
+            first = false;
+            out += std::format("{{\"addr\":\"{:#x}\"", a);
+            if (auto it = ann.renames.find(a); it != ann.renames.end()) {
+                out += std::format(",\"rename\":\"{}\"", json_escape(it->second));
+                if (const auto* m = ann.meta_for_rename(a); m) {
+                    if (m->confidence > 0.0f)
+                        out += std::format(",\"rename_confidence\":{:.3g}", m->confidence);
+                    if (!m->source.empty())
+                        out += std::format(",\"rename_source\":\"{}\"", json_escape(m->source));
+                    if (!m->evidence.empty())
+                        out += std::format(",\"rename_evidence\":\"{}\"", json_escape(m->evidence));
+                }
+            }
+            if (auto it = ann.notes.find(a); it != ann.notes.end()) {
+                out += std::format(",\"note\":\"{}\"", json_escape(it->second));
+                if (const auto* m = ann.meta_for_note(a); m) {
+                    if (m->confidence > 0.0f)
+                        out += std::format(",\"note_confidence\":{:.3g}", m->confidence);
+                    if (!m->source.empty())
+                        out += std::format(",\"note_source\":\"{}\"", json_escape(m->source));
+                    if (!m->evidence.empty())
+                        out += std::format(",\"note_evidence\":\"{}\"", json_escape(m->evidence));
+                }
+            }
+            if (auto it = ann.signatures.find(a); it != ann.signatures.end()) {
+                out += std::format(",\"signature\":\"{}\"",
+                                   json_escape(sig_to_string(it->second)));
+                if (const auto* m = ann.meta_for_signature(a); m) {
+                    if (m->confidence > 0.0f)
+                        out += std::format(",\"signature_confidence\":{:.3g}", m->confidence);
+                    if (!m->source.empty())
+                        out += std::format(",\"signature_source\":\"{}\"", json_escape(m->source));
+                    if (!m->evidence.empty())
+                        out += std::format(",\"signature_evidence\":\"{}\"", json_escape(m->evidence));
+                }
+            }
+            out += '}';
+        }
+        out += "]\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    // TSV: one record per line. Iteration order is by address, then by
+    // kind (rename, note, signature) — stable across runs so diffs read
+    // cleanly.
+    std::set<addr_t> addrs;
+    for (const auto& [a, _] : ann.renames)    addrs.insert(a);
+    for (const auto& [a, _] : ann.notes)      addrs.insert(a);
+    for (const auto& [a, _] : ann.signatures) addrs.insert(a);
+    std::string out;
+    for (addr_t a : addrs) {
+        if (auto it = ann.renames.find(a); it != ann.renames.end()) {
+            std::string row = std::format("{:#x}\trename\t{}", a,
+                                          escape_for_line(it->second));
+            append_meta_tsv(row, ann.meta_for_rename(a));
+            out += row + "\n";
+        }
+        if (auto it = ann.notes.find(a); it != ann.notes.end()) {
+            std::string row = std::format("{:#x}\tnote\t{}", a,
+                                          escape_for_line(it->second));
+            append_meta_tsv(row, ann.meta_for_note(a));
+            out += row + "\n";
+        }
+        if (auto it = ann.signatures.find(a); it != ann.signatures.end()) {
+            std::string row = std::format("{:#x}\tsignature\t{}", a,
+                                          escape_for_line(sig_to_string(it->second)));
+            append_meta_tsv(row, ann.meta_for_signature(a));
+            out += row + "\n";
+        }
+    }
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    return EXIT_SUCCESS;
+}
+
 // ---------------------------------------------------------------------------
 // Per-view runners (asm / cfg / ir / pseudo / struct / cfg-pseudo)
 // ---------------------------------------------------------------------------
 
-int run_disasm(const Binary& b, std::string_view symbol) {
-    auto win = resolve_function(b, symbol);
+int run_disasm(const Binary& b, std::string_view symbol,
+               const Annotations* ann) {
+    auto win = resolve_function(b, symbol, ann);
     if (!win) return EXIT_FAILURE;  // resolve_function already printed
     auto out = format_disasm(b, *win);
     if (!out) return report(out.error());
@@ -1905,8 +2722,9 @@ int run_disasm(const Binary& b, std::string_view symbol) {
     return EXIT_SUCCESS;
 }
 
-int run_cfg(const Binary& b, std::string_view symbol) {
-    auto win = resolve_function(b, symbol);
+int run_cfg(const Binary& b, std::string_view symbol,
+            const Annotations* ann) {
+    auto win = resolve_function(b, symbol, ann);
     if (!win) return EXIT_FAILURE;
     auto out = format_cfg(b, *win);
     if (!out) return report(out.error());
@@ -1916,7 +2734,7 @@ int run_cfg(const Binary& b, std::string_view symbol) {
 
 int run_cfg_pseudo(const Binary& b, std::string_view symbol,
                    const Annotations* ann, EmitOptions opts) {
-    auto win = resolve_function(b, symbol);
+    auto win = resolve_function(b, symbol, ann);
     if (!win) return EXIT_FAILURE;
     auto out = format_cfg_pseudo(b, *win, ann, opts);
     if (!out) return report(out.error());
@@ -1925,8 +2743,8 @@ int run_cfg_pseudo(const Binary& b, std::string_view symbol,
 }
 
 int run_ir(const Binary& b, std::string_view symbol,
-           bool run_ssa, bool run_opt) {
-    auto win = resolve_function(b, symbol);
+           bool run_ssa, bool run_opt, const Annotations* ann) {
+    auto win = resolve_function(b, symbol, ann);
     if (!win) return EXIT_FAILURE;
 
     auto dec_r = make_decoder(b);
@@ -1960,7 +2778,7 @@ int run_ir(const Binary& b, std::string_view symbol,
 
 int run_struct(const Binary& b, std::string_view symbol, bool pseudo,
                const Annotations* annotations, EmitOptions opts) {
-    auto win = resolve_function(b, symbol);
+    auto win = resolve_function(b, symbol, annotations);
     if (!win) return EXIT_FAILURE;
     // Vtable back-trace: resolve indirect call sites in this function
     // once, up-front. Per-function so we only pay the RTTI parse + CFG
@@ -2100,7 +2918,8 @@ int run_emit(const Args& args, const Binary& b) {
     const Annotations* ann_ptr = ann_loaded ? &annotations : nullptr;
 
     EmitOptions emit_opts;
-    emit_opts.show_bb_labels = args.labels;
+    emit_opts.show_bb_labels  = args.labels;
+    emit_opts.show_provenance = args.show_provenance;
 
     // IPA: one-shot fixed-point over the call graph before emission so
     // char*-arg propagation can cross function boundaries. Expensive on
@@ -2176,16 +2995,16 @@ int run_emit(const Args& args, const Binary& b) {
         return run_struct(b, args.symbol, /*pseudo=*/false, ann_ptr, emit_opts);
     }
     if (args.ir) {
-        return run_ir(b, args.symbol, args.ssa, args.opt);
+        return run_ir(b, args.symbol, args.ssa, args.opt, ann_ptr);
     }
     if (args.cfg_pseudo) {
         return run_cfg_pseudo(b, args.symbol, ann_ptr, emit_opts);
     }
     if (args.cfg) {
-        return run_cfg(b, args.symbol);
+        return run_cfg(b, args.symbol, ann_ptr);
     }
     if (args.disasm) {
-        return run_disasm(b, args.symbol);
+        return run_disasm(b, args.symbol, ann_ptr);
     }
     print_info(b, args.binary);
     return EXIT_SUCCESS;

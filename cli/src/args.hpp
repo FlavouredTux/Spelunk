@@ -21,12 +21,20 @@ struct Args {
     std::string fp_old_in;          // --fingerprint-old PATH: read OLD side fingerprints from PATH
     std::string fp_new_in;          // --fingerprint-new PATH: read NEW side fingerprints from PATH
     std::string refs_to;            // --refs-to VA: print callers of VA
+    std::string refs_to_loose;      // --refs-to-loose VA: extend --refs-to with constant-pool /
+                                    // imm64 scanning. Surfaces functions whose body holds the
+                                    // target as a literal — the fn-ptr-only case where direct
+                                    // E8/E9 callers are absent (Roblox-style mov reg,imm64;call reg).
     std::string callees;            // --callees VA: print direct call targets of the function at VA
     std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
     std::string validate_name;      // --validate NAME: report all addrs bound to NAME + byte-similar lookalikes
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
-    std::string disasm_count;       // --count N: instructions for --disasm-at
+    std::string disasm_count;       // --count N: instructions for --disasm-at / --disasm-window
+    std::string disasm_window;      // --disasm-window VA1,VA2,... — batch disassembly. Same per-VA
+                                    // shape as --disasm-at, but emits one block per VA so an agent
+                                    // can pipeline thousands of hits without per-call CLI startup.
+                                    // `@PATH` reads VAs (one per line) from a file.
     std::string list_syscalls;      // --list-syscalls VA: walk fn @ VA, report each syscall site (file_offset + nr if known)
     std::string forge_spec;         // --forge-spec ENTRY:VA — minimum struct/branch
                                     // shape required for control to reach VA from
@@ -47,6 +55,18 @@ struct Args {
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
     std::vector<std::string> force_fn_starts; // --force-fn-start VA (repeatable): synthetic Function symbols at these VAs
     std::string apply_ember;        // --apply PATH: declarative .ember script applied to annotations
+    // --annotate ADDR: append a single annotation to the resolved file
+    // (explicit --annotations beats sidecar beats cache, same chain
+    // --apply uses). Companion flags pick what to set: --set-name,
+    // --set-note, --set-signature; --confidence / --evidence / --source
+    // attach provenance to whichever record was written.
+    std::string annotate_addr;
+    std::string annotate_name;      // --set-name NEW: store as a `rename` record
+    std::string annotate_note;      // --set-note TEXT: store as a `note` record
+    std::string annotate_signature; // --set-signature DECL: parsed C-style decl, stored as `sig`
+    std::string annotate_conf;      // --confidence FLOAT: 0..1, applied to whichever record(s) get set
+    std::string annotate_evidence;  // --evidence TEXT: short reason; survives in the meta record
+    std::string annotate_source;    // --source TAG: who's claiming. Defaults to `cli`.
     std::string pdb_path;           // --pdb PATH: explicit PDB file (skips auto-discovery)
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely
     bool dry_run = false;           // --dry-run: with --apply, don't write the result; print TSV to stdout
@@ -104,6 +124,16 @@ struct Args {
     ember::u64 max_ir_insts = 0;             // --max-ir-insts N: override the post-lift TEEF IR cap.
                                              // 0 = built-in default.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
+    bool show_provenance = false;   // emit `// confidence: 0.9 (cli) — evidence`
+                                    // header lines under -p when the resolved
+                                    // annotation carries metadata. Default off
+                                    // because it clutters the listing for
+                                    // human readers; agent flows turn it on.
+    bool list_annotations = false;  // --list-annotations: dump every record in
+                                    // the resolved annotations file (rename,
+                                    // note, signature) with its meta. Sibling
+                                    // of --functions --json that surfaces
+                                    // note-only annotations too.
     bool ipa    = false;            // run interprocedural signature inference for -p
     bool resolve_calls = false;     // global indirect-call resolver (vtable dispatch → named call)
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
@@ -121,6 +151,15 @@ struct Args {
     bool debug  = false;            // --debug: launch the binary under the built-in REPL debugger
     bool serve  = false;            // --serve: read JSON-line tool requests on stdin, reply on stdout. Long-lived daemon for agent fanout.
     std::string attach_pid;         // --attach-pid PID: attach to an existing process instead of launching
+    std::string debug_backend;      // --debug-backend: "ptrace" (default), "perf", or "auto"
+                                    //   ptrace = classic Linux ptrace backend; full features
+                                    //   perf   = perf_event_open + /proc/<pid>/mem; HW BP/WP only,
+                                    //            no SW BP / no step / no on-demand reg read /
+                                    //            no syscall catch. Sets TracerPid=0 in the
+                                    //            target's /proc/self/status — useful when an
+                                    //            anti-cheat or other tracer is already attached.
+                                    //   auto   = try perf first; fall back to ptrace if the
+                                    //            kernel denies perf_event_open (e.g. paranoid≥2)
     std::vector<std::string> debug_args;  // tokens after `--`: argv for the launched program
     // --aux-binary PATH (repeatable): secondary Binary to load as a
     // symbol oracle for non-ELF code regions in the tracee — i.e.

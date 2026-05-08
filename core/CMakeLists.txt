@@ -6,6 +6,7 @@ add_library(ember_core STATIC
     src/binary/minidump.cpp
     src/binary/raw_regions.cpp
     src/binary/loader.cpp
+    src/extension/registry.cpp
     src/disasm/decoder.cpp
     src/disasm/register.cpp
     src/disasm/instruction.cpp
@@ -81,6 +82,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
         src/debug/linux/ptrace_watch.cpp
         src/debug/linux/ptrace_catch.cpp
         src/debug/linux/ptrace_event.cpp
+        src/debug/linux/perf_target.cpp
+        src/debug/linux/perf_proc.cpp
+        src/debug/linux/perf_mem.cpp
+        src/debug/linux/perf_regs.cpp
+        src/debug/linux/perf_break.cpp
+        src/debug/linux/perf_watch.cpp
+        src/debug/linux/perf_event.cpp
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
        CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")

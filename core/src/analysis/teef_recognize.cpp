@@ -26,13 +26,26 @@
 namespace ember {
 
 u32 TeefCorpus::intern_string(std::string_view s) {
-    std::string key(s);
-    auto [it, inserted] = intern_ids_.try_emplace(std::move(key), 0);
-    if (inserted) {
-        it->second = static_cast<u32>(intern_strings_.size());
-        intern_strings_.push_back(&it->first);
-    }
-    return it->second;
+    // Fast path: heterogeneous find avoids allocating a std::string
+    // for the lookup key. Names like "memcpy" and runtime tags like
+    // "libc" are repeated millions of times across a multi-100MB
+    // corpus — the cold-path allocation only fires on first sight.
+    if (auto it = intern_ids_.find(s); it != intern_ids_.end()) return it->second;
+    const u32 id = static_cast<u32>(intern_strings_.size());
+    auto [it, _] = intern_ids_.emplace(std::string(s), id);
+    intern_strings_.push_back(&it->first);
+    return id;
+}
+
+u32 TeefCorpus::intern_string(std::string&& s) {
+    // Move overload for the F/C-row merge: the parser already produced
+    // a std::string per row, so on miss we move it straight into the
+    // map instead of copying.
+    if (auto it = intern_ids_.find(s); it != intern_ids_.end()) return it->second;
+    const u32 id = static_cast<u32>(intern_strings_.size());
+    auto [it, _] = intern_ids_.emplace(std::move(s), id);
+    intern_strings_.push_back(&it->first);
+    return id;
 }
 
 std::string_view TeefCorpus::interned(u32 id) const noexcept {
@@ -42,16 +55,25 @@ std::string_view TeefCorpus::interned(u32 id) const noexcept {
 
 namespace {
 
-// Parse a 16-char lowercase hex token into u64. Returns 0 on failure
-// — corpus rows with malformed hashes are dropped.
+// 256-entry hex digit table. 0xFF = invalid (treated as 0 by the
+// parser to preserve original "malformed → 0" semantics).
+inline constexpr auto kHexTable = []() {
+    std::array<u8, 256> t{};
+    for (auto& x : t) x = 0;
+    for (unsigned c = '0'; c <= '9'; ++c) t[c] = static_cast<u8>(c - '0');
+    for (unsigned c = 'a'; c <= 'f'; ++c) t[c] = static_cast<u8>(c - 'a' + 10);
+    for (unsigned c = 'A'; c <= 'F'; ++c) t[c] = static_cast<u8>(c - 'A' + 10);
+    return t;
+}();
+
+// Parse a lowercase hex token (typically 16 chars) into u64. Returns
+// 0 on empty input. A 16-char hash is read 16× per F row × millions
+// of rows; the table lookup beats the ternary chain on branch
+// predictability and per-char latency.
 [[nodiscard]] u64 parse_u64_hex(std::string_view s) noexcept {
     u64 v = 0;
     for (char c : s) {
-        u64 d = (c >= '0' && c <= '9') ? static_cast<u64>(c - '0')
-              : (c >= 'a' && c <= 'f') ? static_cast<u64>(c - 'a' + 10)
-              : (c >= 'A' && c <= 'F') ? static_cast<u64>(c - 'A' + 10)
-              : 0u;
-        v = (v << 4) | d;
+        v = (v << 4) | kHexTable[static_cast<unsigned char>(c)];
     }
     return v;
 }
@@ -63,6 +85,37 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
         if (a[i] == b[i]) ++eq;
     }
     return static_cast<float>(eq) / 8.0f;
+}
+
+// "Correct but useless" name classes — drop glue, panic forwarders,
+// and fmt trait impls. These are real Rust functions present in
+// every binary, with structurally-trivial bodies that collide with
+// thousands of unrelated user fns. A single-collision lookup here
+// would otherwise emit confidence 1.0 with a meaningless type label
+// (e.g. labeling a query as `core::ptr::drop_in_place::<HashMap<K,V>>`
+// just because it happens to be a 4-instruction free-and-return).
+// Cap the confidence so the match still surfaces for human review
+// but doesn't auto-promote at the typical 0.85 cascade threshold.
+//
+// C++ has the same class via Itanium-mangled `_ZN_..._D[012]Ev`
+// destructors and `__cxa_*` runtime forwarders; treated together
+// since the symptom and remedy are identical.
+[[nodiscard]] bool is_boilerplate_label(std::string_view nm) noexcept {
+    // Rust drop glue / panic / fmt patterns.
+    if (nm.starts_with("core::ptr::drop_in_place"))   return true;
+    if (nm.starts_with("core::panicking::"))          return true;
+    if (nm.starts_with("alloc::raw_vec::"))           return true;
+    if (nm.find("as core::fmt::Debug") != std::string_view::npos)   return true;
+    if (nm.find("as core::fmt::Display") != std::string_view::npos) return true;
+    if (nm.find("core::fmt::Formatter") != std::string_view::npos)  return true;
+    // Itanium-mangled C++ destructors (D0 base-object, D1 complete,
+    // D2 deleting). Hash heavily across types.
+    if (nm.starts_with("_ZN") &&
+        (nm.find("D0Ev") != std::string_view::npos ||
+         nm.find("D1Ev") != std::string_view::npos ||
+         nm.find("D2Ev") != std::string_view::npos)) return true;
+    if (nm.starts_with("__cxa_"))                    return true;
+    return false;
 }
 
 }  // namespace
@@ -130,6 +183,12 @@ namespace {
 // Per-row parsed records. The parallel parse phase emits these into
 // per-thread buffers; the serial merge phase below walks them in file
 // order to populate the corpus indexes.
+// Per-row parsed records. Names are string_view into the mmap'd
+// region (which outlives the merge phase); the merge interns them
+// into the corpus's intern_ids_ table on first sighting. Runtime
+// tags are kept as std::string — they're short (≤10 chars) and
+// covered by SSO, and stable storage during T-row tag transitions
+// would otherwise require a separate per-load runtime pool.
 struct ParsedF {
     u64                 addr;
     u64                 l2_exact;
@@ -138,7 +197,7 @@ struct ParsedF {
     std::array<u64, 8>  l4_mh;
     u64                 topo_hash;
     u64                 prefix_hash;
-    std::string         name;
+    std::string_view    name;
     std::string         runtime;
 };
 struct ParsedS {
@@ -148,7 +207,7 @@ struct ParsedS {
 struct ParsedC {
     u64                 chunk_hash;
     u32                 inst_count;
-    std::string         name;
+    std::string_view    name;
     std::string         runtime;
 };
 struct ChunkParse {
@@ -165,30 +224,47 @@ struct ChunkParse {
 // Parse one F row's 24 tab-separated fields directly from the line
 // view into a ParsedF. Skips invalid rows (returns false). The line
 // must NOT include the trailing newline.
+// Tab-walk a line into up to N fields via memchr (SIMD-vectorized
+// in glibc). Returns the number of fields populated. Matches the
+// previous byte-loop semantics: at most N fields, with the final
+// field bounded by the next tab (not the end of line) — extra
+// trailing tabs are dropped on the floor as before.
+template <std::size_t N>
+[[nodiscard]] std::size_t split_tabs(std::string_view line,
+                                     std::array<std::string_view, N>& out) {
+    const char* const begin = line.data();
+    const char* const end   = begin + line.size();
+    const char* cur = begin;
+    std::size_t n = 0;
+    while (n < N) {
+        const char* tab = static_cast<const char*>(
+            std::memchr(cur, '\t', static_cast<std::size_t>(end - cur)));
+        if (!tab) {
+            out[n++] = std::string_view(cur, static_cast<std::size_t>(end - cur));
+            break;
+        }
+        out[n++] = std::string_view(cur, static_cast<std::size_t>(tab - cur));
+        cur = tab + 1;
+    }
+    return n;
+}
+
 [[nodiscard]] bool parse_f_row(std::string_view line,
                                const std::string& active_runtime,
                                ParsedF& out) {
-    // Walk fields by tab, populating out as we go. We expect 25 fields:
+    // We expect 25 fields:
     //   F addr L2_exact L2_mh*8 name L4_exact L4_mh*8 L4_done L4_aborted
     //     topo_hash prefix_hash
     // Pre-max.4 corpora omit the last field; older 24-field rows still
     // load with prefix_hash defaulted to 0 (no L1 fast path on those).
     std::array<std::string_view, 25> f;
-    std::size_t cur = 0;
-    std::size_t n   = 0;
-    for (std::size_t i = 0; i < line.size() && n < f.size(); ++i) {
-        if (line[i] == '\t') {
-            f[n++] = line.substr(cur, i - cur);
-            cur = i + 1;
-        }
-    }
-    if (n < f.size()) f[n++] = line.substr(cur);
+    const std::size_t n = split_tabs(line, f);
     if (n < 24) return false;
 
     out.addr     = parse_u64_hex(f[1]);
     out.l2_exact = parse_u64_hex(f[2]);
     for (std::size_t k = 0; k < 8; ++k) out.l2_mh[k] = parse_u64_hex(f[3 + k]);
-    out.name.assign(f[11]);
+    out.name     = f[11];
     out.l4_exact = parse_u64_hex(f[12]);
     for (std::size_t k = 0; k < 8; ++k) out.l4_mh[k] = parse_u64_hex(f[13 + k]);
     out.topo_hash   = parse_u64_hex(f[23]);
@@ -202,15 +278,7 @@ struct ChunkParse {
                                ParsedC& out) {
     // C addr kind insts exact mh*8 name (14 fields)
     std::array<std::string_view, 14> f;
-    std::size_t cur = 0;
-    std::size_t n   = 0;
-    for (std::size_t i = 0; i < line.size() && n < f.size(); ++i) {
-        if (line[i] == '\t') {
-            f[n++] = line.substr(cur, i - cur);
-            cur = i + 1;
-        }
-    }
-    if (n < f.size()) f[n++] = line.substr(cur);
+    const std::size_t n = split_tabs(line, f);
     if (n < 14) return false;
 
     out.chunk_hash = parse_u64_hex(f[4]);
@@ -218,7 +286,7 @@ struct ChunkParse {
     u32 sz = 0;
     std::from_chars(f[3].data(), f[3].data() + f[3].size(), sz);
     out.inst_count = sz;
-    out.name.assign(f[13]);
+    out.name       = f[13];
     out.runtime.assign(active_runtime);
     return true;
 }
@@ -374,6 +442,12 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     void* m = ::mmap(nullptr, sz, PROT_READ, MAP_PRIVATE, fd, 0);
     ::close(fd);   // mapping survives the close
     if (m == MAP_FAILED) return 0;
+    // Sequential-read hint — kernel reads ahead more aggressively
+    // and drops pages behind us. Free win on cold-cache loads of
+    // multi-100MB corpus TSVs. WILLNEED kicks readahead immediately
+    // so the parse phase isn't first-touching every page.
+    ::madvise(m, sz, MADV_SEQUENTIAL);
+    ::madvise(m, sz, MADV_WILLNEED);
     const char* const data = static_cast<const char*>(m);
     const char* const file_end = data + sz;
 #endif
@@ -484,14 +558,31 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     std::size_t rows = 0;
     std::unordered_map<u64, std::size_t> idx_by_addr;
 
-    // Pre-reserve to avoid quadratic vector growth during merge.
+    // Pre-reserve to avoid rehashing during merge. Sizes here are
+    // upper bounds (sub_* rows get filtered out for some indexes) —
+    // reserving a touch high is far cheaper than a rehash at 80%
+    // load with 100K+ entries.
+    std::size_t total_f = 0;
+    std::size_t total_c = 0;
+    for (const auto& p : parts) { total_f += p.f.size(); total_c += p.c.size(); }
     {
-        std::size_t total_f = 0;
-        for (const auto& p : parts) total_f += p.f.size();
         whole_by_name_.reserve(whole_by_name_.size() + total_f);
+        const std::size_t hint_f = whole_by_name_.size() + total_f;
+        whole_exact_.reserve(hint_f);
+        whole_l4_exact_.reserve(hint_f);
+        whole_topo_.reserve(hint_f);
+        whole_prefix_.reserve(hint_f);
+        whole_popularity_.reserve(hint_f);
+        whole_l4_popularity_.reserve(hint_f);
+        whole_prefix_popularity_.reserve(hint_f);
+        for (auto& slot : whole_minhash_) slot.reserve(hint_f);
+        idx_by_name_.reserve(hint_f);
+        intern_ids_.reserve(intern_ids_.size() + total_f * 2 + total_c * 2);
+        idx_by_addr.reserve(total_f);
+        chunk_index_.reserve(chunk_index_.size() + total_c);
     }
 
-    for (const auto& part : parts) {
+    for (auto& part : parts) {
         for (auto& f : part.f) {
             // Popularity counts every F row including sub_* (the
             // recognizer's "trivial-shape" guard depends on this).
@@ -502,7 +593,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             e.name_id    = intern_string(f.name);
             e.exact_hash = f.l2_exact;
             e.minhash    = f.l2_mh;
-            e.runtime_id = intern_string(f.runtime);
+            e.runtime_id = intern_string(std::move(f.runtime));
             e.l4_exact   = f.l4_exact;
             e.l4_minhash = f.l4_mh;
             e.topo_hash   = f.topo_hash;
@@ -528,7 +619,13 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
                     .push_back(static_cast<u32>(idx));
             }
             if (f.addr != 0) idx_by_addr.emplace(f.addr, idx);
-            idx_by_name_.try_emplace(std::string(interned(we.name_id)), idx);
+            // Heterogeneous find — name string already lives in
+            // intern_strings_; only allocate when this is a name we
+            // haven't seen before in idx_by_name_.
+            const auto name_sv = interned(we.name_id);
+            if (idx_by_name_.find(name_sv) == idx_by_name_.end()) {
+                idx_by_name_.emplace(std::string(name_sv), idx);
+            }
             ++rows;
         }
     }
@@ -552,8 +649,10 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     for (auto& part : parts) {
         for (auto& c : part.c) {
             if (c.name.empty() || c.name.starts_with("sub_")) continue;
+            const u32 nm_id  = intern_string(c.name);
+            const u32 rt_id  = intern_string(std::move(c.runtime));
             chunk_index_[c.chunk_hash].push_back(
-                ChunkRef{intern_string(c.name), c.inst_count, intern_string(c.runtime)});
+                ChunkRef{nm_id, c.inst_count, rt_id});
             ++rows;
         }
     }
@@ -566,12 +665,17 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     // it's one well-known fn replicated. Done as an end-of-load pass so
     // multi-TSV loads don't double-count names seen in both files.
     {
-        std::unordered_map<u64, std::unordered_set<std::string_view>> seen;
+        // Distinct names per hash bucket. Keyed on interned name_id
+        // (u32) instead of string_view — same identity (intern_string
+        // returns the same id for the same string regardless of which
+        // TSV it came from), but a u32 hash is a single instruction
+        // vs. a multi-cache-line string hash.
+        std::unordered_map<u64, std::unordered_set<u32>> seen;
         auto recount_whole = [&](const std::unordered_multimap<u64, std::size_t>& src,
                                  std::unordered_map<u64, std::size_t>& dst) {
             seen.clear();
             for (const auto& [hash, idx] : src) {
-                seen[hash].insert(interned(whole_by_name_[idx].name_id));
+                seen[hash].insert(whole_by_name_[idx].name_id);
             }
             dst.clear();
             dst.reserve(seen.size());
@@ -584,7 +688,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         seen.clear();
         for (const auto& [hash, refs] : chunk_index_) {
             auto& s = seen[hash];
-            for (const auto& r : refs) s.insert(interned(r.name_id));
+            for (const auto& r : refs) s.insert(r.name_id);
         }
         chunk_distinct_.clear();
         chunk_distinct_.reserve(seen.size());
@@ -698,16 +802,21 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             // require an overlap in strings_compatible above.
             const float zero_string_cap =
                 qs.empty() ? 0.7f : 1.0f;
+            auto cap_for = [&](float raw, std::string_view nm) {
+                float c = std::min(raw, zero_string_cap);
+                if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
+                return c;
+            };
             if (ordered.size() == 1) {
                 return { TeefMatch{ordered[0],
-                                   std::min(1.0f, zero_string_cap),
+                                   cap_for(1.0f, ordered[0]),
                                    "prefix-exact", 0} };
             }
             if (!ordered.empty()) {
                 std::vector<TeefMatch> out;
                 const float base = 1.0f / static_cast<float>(ordered.size());
-                const float conf = std::min(base, zero_string_cap);
                 for (auto& nm : ordered) {
+                    const float conf = cap_for(base, nm);
                     out.push_back(TeefMatch{std::move(nm), conf, "prefix-exact-tied", 0});
                     if (out.size() >= top_k) break;
                 }
@@ -744,13 +853,18 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                 const auto name = interned(we.name_id);
                 if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
+            auto cap_for = [&](float raw, std::string_view nm) {
+                return is_boilerplate_label(nm) ? std::min(raw, 0.7f) : raw;
+            };
             if (ordered.size() == 1) {
-                return { TeefMatch{ordered[0], 1.0f, "behav-exact", 0} };
+                return { TeefMatch{ordered[0], cap_for(1.0f, ordered[0]),
+                                   "behav-exact", 0} };
             }
             if (!ordered.empty()) {
                 std::vector<TeefMatch> out;
-                const float conf = 1.0f / static_cast<float>(ordered.size());
+                const float base = 1.0f / static_cast<float>(ordered.size());
                 for (auto& nm : ordered) {
+                    const float conf = cap_for(base, nm);
                     out.push_back(TeefMatch{std::move(nm), conf, "behav-exact-tied", 0});
                     if (out.size() >= top_k) break;
                 }
@@ -802,13 +916,27 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
                 const auto name = interned(we.name_id);
                 if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
             }
+            // Thin-evidence cap: pure-structural L2 collision with no
+            // string anchor and no behavioural corroboration is the FP
+            // class for Rust generic helpers (e.g. small `impl<T>` fns
+            // whose canonical token stream collides across types). The
+            // match still surfaces but doesn't auto-promote at 0.85.
+            // Mirrors the prefix-exact zero_string_cap.
+            const float thin_cap = (qs.empty() && !query_has_l4) ? 0.7f : 1.0f;
+            auto cap_for = [&](float raw, std::string_view nm) {
+                float c = std::min(raw, thin_cap);
+                if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
+                return c;
+            };
             if (ordered.size() == 1) {
-                return { TeefMatch{ordered[0], 1.0f, "whole-exact", 0} };
+                return { TeefMatch{ordered[0], cap_for(1.0f, ordered[0]),
+                                   "whole-exact", 0} };
             }
             if (!ordered.empty()) {
                 std::vector<TeefMatch> out;
-                const float conf = 1.0f / static_cast<float>(ordered.size());
+                const float base = 1.0f / static_cast<float>(ordered.size());
                 for (auto& nm : ordered) {
+                    const float conf = cap_for(base, nm);
                     out.push_back(TeefMatch{std::move(nm), conf, "whole-exact-tied", 0});
                     if (out.size() >= top_k) break;
                 }
@@ -870,7 +998,9 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             if (s.best_combined < bar) return std::nullopt;
             if ((s.best_combined - s.second_combined) < margin) return std::nullopt;
             const std::string via = s.best_has_l4 ? "whole-jaccard+behav" : "whole-jaccard";
-            return TeefMatch{std::move(s.best_name), s.best_combined, via, 0};
+            float conf = s.best_combined;
+            if (is_boilerplate_label(s.best_name)) conf = std::min(conf, 0.7f);
+            return TeefMatch{std::move(s.best_name), conf, via, 0};
         };
 
         // Stage 1 — L2 MinHash inverted index. The query's 8 slot
@@ -1059,12 +1189,26 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         ? std::min(1.0f, margin_raw + 0.25f)
         : margin_raw;
     const std::string_view via_tag = behav_agreed ? "chunk-vote+behav" : "chunk-vote";
+    // Thin-evidence cap: chunk-vote alone (no string anchor on the
+    // query, no L4 corroboration on the winner) is the most FP-prone
+    // lane — multiple unrelated functions can share enough chunk
+    // shapes to win the vote. Cap to 0.7 so the match surfaces but
+    // doesn't auto-promote at 0.85. behav_agreed=true means L4
+    // re-ranking confirmed the winner; that lifts the cap.
+    const float thin_cap =
+        (qs.empty() && !behav_agreed) ? 0.7f : 1.0f;
+    auto cap_for = [&](float raw, std::string_view nm) {
+        float c = std::min(raw, thin_cap);
+        if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
+        return c;
+    };
     for (std::size_t i = 0; i < ranked.size() && i < top_k; ++i) {
         TeefMatch m;
         m.name       = std::move(ranked[i].first);
         m.via        = std::string(via_tag);
-        m.confidence = (i == 0) ? margin :
+        const float raw_conf = (i == 0) ? margin :
             static_cast<float>(ranked[i].second) / static_cast<float>(top1 + top2);
+        m.confidence = cap_for(raw_conf, m.name);
         m.vote_score = static_cast<u32>(ranked[i].second);
         out.push_back(std::move(m));
     }

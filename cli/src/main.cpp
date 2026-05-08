@@ -196,14 +196,18 @@ int main(int argc, char** argv) {
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);
     if (!args.refs_to.empty())   return run_refs_to(args, b);
+    if (!args.refs_to_loose.empty()) return run_refs_to_loose(args, b);
     if (!args.containing_fn.empty())  return run_containing_fn(args, b);
     if (!args.validate_name.empty())  return run_validate_name(args, b);
     if (args.collisions)         return run_collisions(args, b);
     if (!args.callees.empty())   return run_callees(args, b);
     if (!args.callees_class.empty()) return run_callees_class(args, b);
     if (!args.disasm_at.empty()) return run_disasm_at(args, b);
+    if (!args.disasm_window.empty()) return run_disasm_window(args, b);
     if (!args.list_syscalls.empty()) return run_list_syscalls(args, b);
     if (!args.forge_spec.empty())    return run_forge_spec(args, b);
+    if (!args.annotate_addr.empty()) return run_annotate(args, b);
+    if (args.list_annotations)       return run_list_annotations(args, b);
     if (args.strings)            return run_strings(args, b);
     if (args.fingerprints)       return run_fingerprints(args, b);
     if (args.teef)               return run_teef(args, b);

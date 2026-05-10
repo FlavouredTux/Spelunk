@@ -382,6 +382,7 @@ resolve_containing_function(const Binary& b, addr_t addr) {
         return window_from_addr(cf->entry, cf->size,
             std::format("{}+{:#x}", cf->name, cf->offset_within));
     }
+    if (!addr_in_code_section(b, addr)) return std::nullopt;
     return window_from_addr(addr, 0, std::format("sub_{:x}", addr));
 }
 
@@ -412,10 +413,10 @@ resolve_function(const Binary& b, std::string_view symbol,
         // clearly meant the call target itself.
         const bool explicit_entry = symbol.starts_with("sub_");
         if (explicit_entry) {
-            if (b.bytes_at(*va).empty()) {
+            if (b.bytes_at(*va).empty() || !addr_in_code_section(b, *va)) {
                 std::fprintf(stderr,
-                    "ember: address %#llx is not in any mapped section "
-                    "(or the bytes there don't decode as code)\n",
+                    "ember: address %#llx is not in any code section "
+                    "(or the bytes there are not mapped)\n",
                     static_cast<unsigned long long>(*va));
                 return std::nullopt;
             }

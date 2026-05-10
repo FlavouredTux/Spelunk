@@ -1,4 +1,4 @@
-import { C, sans, mono, serif } from "../theme";
+import { C, sans } from "../theme";
 import type { ViewKind } from "../types";
 
 const VIEWS: { id: ViewKind; label: string; hint: string }[] = [
@@ -52,8 +52,8 @@ export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void; on
               if (!active) (e.currentTarget as HTMLElement).style.color = C.textMuted;
             }}
           >
-            <span style={{ fontFamily: mono, fontSize: 11.5, whiteSpace: "nowrap" }}>{v.label}</span>
-            <span style={{ fontFamily: serif, fontStyle: "italic", fontSize: 9.5, color: C.textFaint }}>
+            <span style={{ fontFamily: sans, fontSize: 12.5, whiteSpace: "nowrap" }}>{v.label}</span>
+            <span style={{ fontFamily: sans, fontSize: 10.5, color: C.textFaint }}>
               {v.hint}
             </span>
           </button>

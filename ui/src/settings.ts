@@ -9,6 +9,11 @@
 // from here.
 
 const STORAGE_KEY = "ember.settings.v1";
+const DEFAULT_CODE_FONT_FAMILY = "'DejaVu Sans Mono','Noto Sans Mono','Cascadia Mono','Cascadia Code','JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace";
+const LEGACY_CODE_FONT_FAMILIES = new Set([
+  "'JetBrains Mono','SF Mono','Fira Code',monospace",
+  "'SF Mono','Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace",
+]);
 
 // Per-binary view state: which function was last open, scroll position,
 // view mode, plus user bookmarks. Keyed by absolute binary path so
@@ -81,7 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   cfgDefaultMode: "pseudo",
   showBbLabels:   false,
   codeFontSize:   12,
-  codeFontFamily: "'JetBrains Mono','SF Mono','Fira Code',monospace",
+  codeFontFamily: DEFAULT_CODE_FONT_FAMILY,
   theme:          "warm",
   sidebarWidth:   288,
   xrefsWidth:     260,
@@ -103,7 +108,11 @@ export function loadSettings(): AppSettings {
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     // Merge with defaults so missing keys (newer settings vs older
     // saved file) get sensible values instead of `undefined`.
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const merged = { ...DEFAULT_SETTINGS, ...parsed };
+    if (LEGACY_CODE_FONT_FAMILIES.has(merged.codeFontFamily)) {
+      merged.codeFontFamily = DEFAULT_CODE_FONT_FAMILY;
+    }
+    return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

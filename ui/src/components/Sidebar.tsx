@@ -140,7 +140,7 @@ export function Sidebar(props: {
           >A</div>
           <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
             <span style={{ fontFamily: sans, fontWeight: 600, fontSize: 14 }}>Ember</span>
-            <span style={{ fontFamily: serif, fontStyle: "italic", fontSize: 10, color: C.textMuted, marginTop: 2 }}>
+            <span style={{ fontFamily: sans, fontSize: 11, color: C.textMuted, marginTop: 2 }}>
               reverse engineering
             </span>
           </div>
@@ -155,7 +155,7 @@ export function Sidebar(props: {
             background: C.bgMuted,
             border: `1px solid ${C.border}`,
             borderRadius: 4,
-            fontFamily: mono,
+            fontFamily: sans,
             fontSize: 12,
             color: C.textWarm,
             display: "flex",
@@ -172,7 +172,7 @@ export function Sidebar(props: {
             {info.path.split("/").pop() || info.path}
           </span>
         </button>
-        <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10.5, fontFamily: mono, color: C.textFaint }}>
+        <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 11, fontFamily: sans, color: C.textFaint }}>
           <span><span style={{ color: C.textMuted }}>fmt</span> {info.format}</span>
           <span><span style={{ color: C.textMuted }}>arch</span> {info.arch}</span>
           <span><span style={{ color: C.textMuted }}>endian</span> {info.endian || "?"}</span>
@@ -233,7 +233,7 @@ export function Sidebar(props: {
             borderRadius: 4,
           }}
         >
-          <span style={{ color: C.textFaint, fontSize: 12 }}>/</span>
+          <span style={{ color: C.textFaint, fontSize: 12, fontFamily: sans }}>/</span>
           <input
             placeholder="search functions…"
             value={q}
@@ -274,7 +274,7 @@ export function Sidebar(props: {
               }}
             >
               <span>{t.label}</span>
-              <span style={{ fontFamily: mono, fontSize: 10.5, color: C.textFaint }}>
+              <span style={{ fontFamily: sans, fontSize: 11, color: C.textFaint }}>
                 {functionsLoading && t.k === false ? "…" : t.count}
               </span>
             </button>

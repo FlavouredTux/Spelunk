@@ -114,12 +114,12 @@ export function applyTheme(mode: ThemeMode): void {
   if (tag) tag.textContent = makeGlobalCSS();
 }
 
-export const sans  = "Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+export const sans  = "system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Ubuntu,Cantarell,'Noto Sans',sans-serif";
 export const serif = "Georgia,'Times New Roman',serif";
 // Default mono stack. App overrides at runtime when the user picks a
 // different font family in Settings; we expose a setter so the rest of
 // the codebase can keep importing `mono` as a const expression.
-export let mono = "'SF Mono','Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace";
+export let mono = "'DejaVu Sans Mono','Noto Sans Mono','Cascadia Mono','Cascadia Code','JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace";
 export function setMonoFamily(family: string): void {
   if (typeof family === "string" && family.trim()) mono = family;
   // Re-inject globalCSS so any rule that hard-references the mono var
@@ -158,15 +158,6 @@ export const SH = {
   // unless you're actively reading structure.
   indent:     "rgba(255,255,245,0.06)",
 };
-
-const fontHref =
-  "https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;1,400;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap";
-if (!document.querySelector(`link[href="${fontHref}"]`)) {
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = fontHref;
-  document.head.appendChild(link);
-}
 
 function makeGlobalCSS(): string {
   return `

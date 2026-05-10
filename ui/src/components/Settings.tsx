@@ -13,10 +13,10 @@ import type {
 // preferred face; trailing entries are fallbacks if the user doesn't
 // have the headline font installed locally.
 const FONT_FAMILIES = {
-  jetbrains: "'JetBrains Mono','SF Mono','Fira Code',monospace",
-  sf:        "'SF Mono','JetBrains Mono','Menlo',monospace",
-  fira:      "'Fira Code','JetBrains Mono','SF Mono',monospace",
-  system:    "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+  system:    "'DejaVu Sans Mono','Noto Sans Mono','Cascadia Mono','Cascadia Code','JetBrains Mono','SF Mono',ui-monospace,Menlo,Consolas,monospace",
+  jetbrains: "'JetBrains Mono','DejaVu Sans Mono','Noto Sans Mono',ui-monospace,monospace",
+  sf:        "'SF Mono','DejaVu Sans Mono','Noto Sans Mono',Menlo,monospace",
+  fira:      "'Fira Code','DejaVu Sans Mono','Noto Sans Mono',ui-monospace,monospace",
 } as const;
 type FontKey = keyof typeof FONT_FAMILIES;
 
@@ -24,7 +24,7 @@ function selectFontKey(stack: string): FontKey {
   for (const k of Object.keys(FONT_FAMILIES) as FontKey[]) {
     if (FONT_FAMILIES[k] === stack) return k;
   }
-  return "jetbrains";
+  return "system";
 }
 
 // Settings gear. Stroked-outline style (matches the rest of the
@@ -152,7 +152,7 @@ export function SettingsPanel(props: {
             >
               <Segmented
                 value={selectFontKey(props.settings.codeFontFamily)}
-                options={["jetbrains", "sf", "fira", "system"] as const}
+                options={["system", "jetbrains", "sf", "fira"] as const}
                 onChange={(key) => set("codeFontFamily", FONT_FAMILIES[key])}
               />
             </Row>

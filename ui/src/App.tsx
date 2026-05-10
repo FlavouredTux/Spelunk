@@ -1227,7 +1227,7 @@ export default function App() {
             onClick={() => setHexOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1245,7 +1245,7 @@ export default function App() {
             onClick={() => setSymbolsOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1263,7 +1263,7 @@ export default function App() {
             onClick={() => setBookmarksOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1284,7 +1284,7 @@ export default function App() {
             onClick={() => setBulkRenameOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1302,7 +1302,7 @@ export default function App() {
             onClick={() => setStringsOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1320,7 +1320,7 @@ export default function App() {
             onClick={() => setIdentifyOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1338,7 +1338,7 @@ export default function App() {
             onClick={() => setCallGraphOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1355,7 +1355,7 @@ export default function App() {
             onClick={() => setPluginsPanelOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1372,7 +1372,7 @@ export default function App() {
             onClick={() => setAgentPanelOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.text,
               background: "transparent",
               border: `1px solid ${C.accent}`,
@@ -1389,7 +1389,7 @@ export default function App() {
             onClick={() => setDiffOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1405,7 +1405,7 @@ export default function App() {
             onClick={() => setEmberApplyOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1422,7 +1422,7 @@ export default function App() {
             onClick={() => setPaletteOpen(true)}
             style={{
               padding: "6px 12px",
-              fontFamily: mono, fontSize: 11,
+              fontFamily: sans, fontSize: 12,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1435,7 +1435,7 @@ export default function App() {
             <span>jump</span>
             <span style={{ color: C.textFaint }}>⌃P</span>
           </button>
-          <span style={{ fontFamily: mono, fontSize: 10.5, color: C.textFaint, letterSpacing: 0, marginLeft: 4, whiteSpace: "nowrap" }}>
+          <span style={{ fontFamily: sans, fontSize: 11, color: C.textFaint, letterSpacing: 0, marginLeft: 4, whiteSpace: "nowrap" }}>
             {info.arch.toUpperCase()} · {info.endian.toUpperCase()} · {info.format.toUpperCase()}
           </span>
           <button
@@ -1979,7 +1979,7 @@ function Toast(props: { message: string; onDone: () => void }) {
         background: C.bgAlt,
         border: `1px solid ${C.borderStrong}`,
         borderRadius: 999,
-        fontFamily: mono, fontSize: 11, color: C.textWarm,
+        fontFamily: sans, fontSize: 12, color: C.textWarm,
         boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
         zIndex: 2300,
         animation: "fadeIn .15s ease-out",

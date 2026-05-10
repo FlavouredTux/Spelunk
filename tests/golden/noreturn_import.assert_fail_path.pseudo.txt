@@ -1,0 +1,8 @@
+// assert_fail_path
+u64 assert_fail_path(u64 a1) {
+  if (!(u32)a1) {
+    __assert_fail("x != 0", "noreturn_import.c", 5, "assert_fail_path");
+    __unreachable();
+  }
+  return (u32)a1;
+}

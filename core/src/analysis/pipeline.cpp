@@ -26,6 +26,7 @@
 #include <ember/analysis/rtti.hpp>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/type_infer_local.hpp>
@@ -1092,6 +1093,30 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
                        DiscoveredFunction::Kind::Symbol});
     }
 
+    constexpr std::size_t kDenseFdeThreshold = 4096;
+
+    // Pass 1.1: unwind metadata. On stripped ELF/Mach-O binaries this is
+    // much stronger evidence than bytewise prologue sweeping: an FDE gives
+    // both the exact entry and an extent, while a prologue-shaped byte
+    // sequence inside a function body is only a guess. Large Android C++
+    // libraries in particular can have hundreds of thousands of FDEs; once
+    // that metadata is dense, the prologue sweep mostly adds false positives.
+    std::size_t fde_added = 0;
+    const auto fde_extents = enumerate_fde_extents(b);
+    if (fde_extents.size() >= kDenseFdeThreshold) {
+        for (const auto& fde : fde_extents) {
+            if (fde.pc_begin == 0 || fde.pc_range == 0) continue;
+            if (!in_scope(fde.pc_begin)) continue;
+            if (b.import_at_plt(fde.pc_begin) != nullptr) continue;
+            if (index.count(fde.pc_begin)) continue;
+            index.emplace(fde.pc_begin, out.size());
+            out.push_back({fde.pc_begin, fde.pc_range,
+                           std::format("sub_{:x}", fde.pc_begin),
+                           DiscoveredFunction::Kind::Sub});
+            ++fde_added;
+        }
+    }
+
     // Two address-level gates filter the noise from later passes:
     //   1. Target must land in some executable section.
     //   2. That section must not be encrypted (high entropy).
@@ -1187,7 +1212,9 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
             }
         }
     }
-    for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
+    if (fde_added < kDenseFdeThreshold) {
+        for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
+    }
 
     // Loader-only mode: on a packed binary the call-graph walker chases
     // garbage targets through encrypted stub code, blocks the UI for

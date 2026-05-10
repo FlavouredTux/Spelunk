@@ -31,6 +31,10 @@ struct WalkState {
     std::set<addr_t>              leaders;
     std::unordered_set<addr_t>    call_seen;
     std::vector<addr_t>           calls;
+    // Direct calls known not to return. Partition treats these as terminal
+    // blocks so cleanup/cold bytes after stack-fail/abort paths do not get
+    // pulled into the normal fallthrough CFG.
+    std::set<addr_t>              noreturn_calls;
     // Switch tables, keyed by the address of the indirect jmp that reads them.
     std::map<addr_t, JumpTable>   tables;
     // Addresses of `jmp`s that are tail calls (target is a known function
@@ -40,6 +44,40 @@ struct WalkState {
 
 // (`is_function_entry` lives on CfgBuilder so it can lazy-cache the
 // discovered-fn entry set; see the method below.)
+
+[[nodiscard]] std::string_view clean_import_name(std::string_view name) noexcept {
+    if (name.starts_with("__imp_")) name.remove_prefix(6);
+    if (const auto at = name.find('@'); at != std::string_view::npos) {
+        name = name.substr(0, at);
+    }
+    return name;
+}
+
+[[nodiscard]] bool is_noreturn_import_name(std::string_view name) noexcept {
+    name = clean_import_name(name);
+    return name == "__stack_chk_fail" ||
+           name == "__android_log_assert" ||
+           name == "__assert" ||
+           name == "__assert2" ||
+           name == "__assert_fail" ||
+           name == "abort" ||
+           name == "exit" ||
+           name == "_exit" ||
+           name == "_Exit" ||
+           name == "longjmp" ||
+           name == "pthread_exit";
+}
+
+[[nodiscard]] bool is_noreturn_target(const Binary& b, addr_t target) noexcept {
+    if (const Symbol* s = b.import_at_plt(target); s && !s->name.empty()) {
+        return is_noreturn_import_name(s->name);
+    }
+    if (const Symbol* s = b.find_by_name("__stack_chk_fail");
+        s && !s->is_import && s->addr == target) {
+        return true;
+    }
+    return false;
+}
 
 // ---------- Jump-table detection ----------------------------------------------
 //
@@ -586,6 +624,10 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
                     if (ws.call_seen.insert(*t).second) {
                         ws.calls.push_back(*t);
                     }
+                    if (is_noreturn_target(b, *t)) {
+                        ws.noreturn_calls.insert(ip);
+                        break;
+                    }
                 }
                 ip = fallthrough;
                 continue;
@@ -637,6 +679,10 @@ void partition(const Binary& b, const WalkState& ws, Function& fn) {
             bb.end = next;
 
             const Mnemonic mn = insn.mnemonic;
+            if (ws.noreturn_calls.contains(addr)) {
+                bb.kind = BlockKind::IndirectJmp;
+                break;
+            }
             if (ends_basic_block(mn)) {
                 if (is_return_like(mn)) {
                     bb.kind = BlockKind::Return;

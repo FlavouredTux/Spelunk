@@ -256,6 +256,7 @@ ember_build_fixture(fp_scalar)
 ember_build_fixture(printf_noise)
 # Stack-protector on so the canary prologue/epilogue actually get emitted.
 ember_build_fixture(canary PROTECTOR "-fstack-protector-strong")
+ember_build_fixture(noreturn_import)
 # -O0 so the explicit gotos survive for the tail-duplication test.
 ember_build_fixture(gotos OPT "-O0")
 # -O0 so the `%` operator survives as a real IDIV (and the IR Mod op),
@@ -834,6 +835,12 @@ ember_golden_test(
     FIXTURE canary
     ARGS    "-p|-s|uses_buffer"
     GOLDEN  canary.uses_buffer.pseudo.txt
+)
+ember_golden_test(
+    NAME    noreturn_import_assert_fail_pseudo
+    FIXTURE noreturn_import
+    ARGS    "-p|-s|assert_fail_path"
+    GOLDEN  noreturn_import.assert_fail_path.pseudo.txt
 )
 
 # Trivial-tail goto inlining: goto fail; ... fail: cleanup; return -1;

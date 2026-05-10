@@ -1,0 +1,5 @@
+fn_va	callsite	symbol
+0x401000	uses_alpha_and_delta+0x7	alpha
+0x401000	uses_alpha_and_delta+0x12	delta
+0x40101e	uses_bravo+0x7	bravo
+0x401031	uses_charlie+0x7	charlie

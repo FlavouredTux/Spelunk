@@ -1,0 +1,4 @@
+fn_va	n_uses	symbols
+0x401000	1	alpha
+0x401013	1	charlie
+0x401026	1	charlie

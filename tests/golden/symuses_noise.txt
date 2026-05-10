@@ -1,0 +1,2 @@
+fn_va	n_uses	symbols
+0x401000	1	charlie

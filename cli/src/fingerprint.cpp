@@ -3,18 +3,21 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <print>
 #include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -25,6 +28,7 @@
 #include <ember/binary/binary.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/common/progress.hpp>
+#include <ember/common/threads.hpp>
 
 #include "args.hpp"
 #include "util.hpp"
@@ -91,36 +95,87 @@ std::string build_fingerprints_output(const Binary& b) {
         u32 insts;
         u32 calls;
         std::string name;
+        bool filled = false;
     };
-    std::vector<Row> rows;
-    rows.reserve(fns.size());
 
-    const auto total = fns.size();
-    std::size_t done = 0;
+    // `fns` is a std::set<addr_t>: iteration is sorted by address, so the
+    // produced TSV (and disk-cached output) stays deterministic regardless
+    // of how the per-function work is scheduled across worker threads.
+    std::vector<addr_t> addrs(fns.begin(), fns.end());
+    const auto total = addrs.size();
+    std::vector<Row> rows(total);
+
     const auto tick = std::max<std::size_t>(1, total / 40);
+    const std::size_t worker_count = std::min<std::size_t>(
+        static_cast<std::size_t>(thread_pool_size(8)), total);
+
     if (show) {
-        std::println(stderr, "ember: fingerprinting {} functions...", total);
+        std::println(stderr,
+                     "ember: fingerprinting {} functions across {} thread{}...",
+                     total, worker_count, worker_count == 1 ? "" : "s");
         std::fflush(stderr);
     }
 
-    for (addr_t a : fns) {
+    auto fingerprint_one = [&](std::size_t i) {
+        const addr_t a = addrs[i];
         const auto fp = compute_fingerprint(b, a);
-        ++done;
-        if (show && (done % tick == 0 || done == total)) {
-            std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
-            std::fflush(stderr);
-        }
-        if (fp.hash == 0) continue;
+        if (fp.hash == 0) return;
         std::string name;
         if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
             name = it->second;
         } else {
             name = std::format("sub_{:x}", a);
         }
-        rows.push_back(Row{a, fp.hash, fp.blocks, fp.insts, fp.calls,
-                           std::move(name)});
+        rows[i] = Row{a, fp.hash, fp.blocks, fp.insts, fp.calls,
+                      std::move(name), true};
+    };
+
+    if (worker_count <= 1) {
+        std::size_t done = 0;
+        for (std::size_t i = 0; i < total; ++i) {
+            fingerprint_one(i);
+            ++done;
+            if (show && (done % tick == 0 || done == total)) {
+                std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
+                std::fflush(stderr);
+            }
+        }
+    } else {
+        std::atomic<std::size_t> next{0};
+        std::atomic<std::size_t> done{0};
+        std::mutex log_mu;
+
+        auto worker = [&]() {
+            while (true) {
+                const std::size_t i =
+                    next.fetch_add(1, std::memory_order_relaxed);
+                if (i >= total) break;
+                fingerprint_one(i);
+                const std::size_t d =
+                    done.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (show && (d % tick == 0 || d == total)) {
+                    std::lock_guard lk(log_mu);
+                    std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
+                    std::fflush(stderr);
+                }
+            }
+        };
+
+        std::vector<std::thread> threads;
+        threads.reserve(worker_count);
+        for (std::size_t i = 0; i < worker_count; ++i) threads.emplace_back(worker);
+        for (auto& t : threads) t.join();
     }
     if (show) std::fputc('\n', stderr);
+
+    // Compact: drop slots whose fingerprint came back empty (decoder /
+    // lifter / SSA bailed). Order is preserved — addrs is sorted.
+    std::vector<Row> filled;
+    filled.reserve(rows.size());
+    for (auto& r : rows) {
+        if (r.filled) filled.push_back(std::move(r));
+    }
+    rows = std::move(filled);
 
     std::unordered_map<u64, u32> hash_count;
     hash_count.reserve(rows.size());

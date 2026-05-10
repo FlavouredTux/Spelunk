@@ -1,0 +1,7 @@
+fn_va	n_uses	symbols
+0x4010c2	2	alpha, delta
+0x40106e	1	alpha
+0x401083	1	bravo
+0x401098	1	charlie
+0x4010ad	1	charlie
+0x4010e5	1	<full_table_walker>

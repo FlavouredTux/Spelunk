@@ -18,6 +18,9 @@ add_library(ember_core STATIC
     src/analysis/arity.cpp
     src/analysis/syscalls.cpp
     src/analysis/strings.cpp
+    src/analysis/symtable.cpp
+    src/analysis/symresolve.cpp
+    src/analysis/symuses.cpp
     src/analysis/data_xrefs.cpp
     src/analysis/pipeline.cpp
     src/analysis/name_resolver.cpp

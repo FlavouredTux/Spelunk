@@ -20,6 +20,18 @@ struct Args {
     std::string fp_out;             // --fingerprint-out PATH: also write fingerprints TSV here
     std::string fp_old_in;          // --fingerprint-old PATH: read OLD side fingerprints from PATH
     std::string fp_new_in;          // --fingerprint-new PATH: read NEW side fingerprints from PATH
+    std::string symtable;           // --symtable VA: dump packed NUL-terminated string table at VA
+    std::string symresolve;         // --symresolve VA: pair string table with fnptr table + callsites
+    std::string symuses;            // --symuses VA: per-function references into the string table at VA
+    std::string category_filter;    // --filter cat1,cat2,...: shared by --symresolve / --symuses; limits
+                                    // rows / sites to symbols falling in the named categorize_symtable buckets
+    ember::u64  symresolve_max_callsites = 5;  // --max-callsites N: cap top_callsites column (0 = unlimited)
+    ember::u64  symuses_min_uses    = 1;   // --min-uses N: drop --symuses rows below N uses
+    bool        symuses_show_empty  = false;  // --show-empty: emit --symuses rows with 0 post-filter uses
+    bool        symuses_no_taint    = false;  // --no-taint: drop the register-taint walker; emit every
+                                              // matching IMM in candidate fns. Diagnostic only — useful
+                                              // for "did the taint walker miss anything obvious?"
+    bool        verbose             = false;  // --verbose: per-callsite TSV under --symuses
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string refs_to_loose;      // --refs-to-loose VA: extend --refs-to with constant-pool /
                                     // imm64 scanning. Surfaces functions whose body holds the
@@ -184,6 +196,8 @@ struct Args {
     // at startup, the debugger consumes it, new entries auto-pick-up.
     std::vector<std::string> ignore_fault_files;
     bool help   = false;
+    std::string help_topic;         // --help <topic>: pick one section of the
+                                    // help text; empty means "short overview"
 };
 
 // Parse argv into Args. Recognises the canonical short/long flags from

@@ -49,6 +49,9 @@ int run_functions   (const Args& args, const Binary& b);
 
 // Direct-output runners (cache logic varies, so they handle it locally).
 
+int run_symtable     (const Args& args, const Binary& b);
+int run_symresolve   (const Args& args, const Binary& b);
+int run_symuses      (const Args& args, const Binary& b);
 int run_refs_to      (const Args& args, const Binary& b);
 int run_refs_to_loose(const Args& args, const Binary& b);
 int run_containing_fn(const Args& args, const Binary& b);

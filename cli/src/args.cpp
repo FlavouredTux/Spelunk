@@ -23,7 +23,8 @@ struct ValueFlag {
 };
 
 constexpr auto kBoolFlags = std::to_array<BoolFlag>({
-    {"-h", "--help",      &Args::help},
+    // --help / -h are handled in parse_args() before the generic
+    // bool-flag loop so they can take an optional topic argument.
     {"-d", "--disasm",    &Args::disasm},
     {"-c", "--cfg",       &Args::cfg},
     {"-i", "--ir",        &Args::ir},
@@ -63,6 +64,9 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--dry-run",   &Args::dry_run},
     {"",   "--debug",     &Args::debug},
     {"",   "--serve",     &Args::serve},
+    {"",   "--show-empty", &Args::symuses_show_empty},
+    {"",   "--no-taint",  &Args::symuses_no_taint},
+    {"",   "--verbose",   &Args::verbose},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
@@ -76,6 +80,10 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--fingerprint-out", &Args::fp_out},
     {"",   "--fingerprint-old", &Args::fp_old_in},
     {"",   "--fingerprint-new", &Args::fp_new_in},
+    {"",   "--symtable",    &Args::symtable},
+    {"",   "--symresolve",  &Args::symresolve},
+    {"",   "--symuses",     &Args::symuses},
+    {"",   "--filter",      &Args::category_filter},
     {"",   "--refs-to",     &Args::refs_to},
     {"",   "--refs-to-loose", &Args::refs_to_loose},
     {"",   "--callees",      &Args::callees},
@@ -124,6 +132,27 @@ Result<Args> parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {
         const std::string_view s = argv[i];
+
+        // `--help [topic]` / `-h [topic]` — when the next token doesn't
+        // start with `-` and isn't an existing binary path candidate,
+        // take it as the topic name (the topic helper itself decides
+        // what's known). Otherwise fall through to the bool-flag form.
+        if (s == "--help" || s == "-h") {
+            a.help = true;
+            if (i + 1 < argc) {
+                std::string_view next = argv[i + 1];
+                if (!next.empty() && next.front() != '-') {
+                    a.help_topic = std::string(next);
+                    ++i;
+                }
+            }
+            continue;
+        }
+        if (s.starts_with("--help=")) {
+            a.help = true;
+            a.help_topic = std::string(s.substr(7));
+            continue;
+        }
 
         // `--` sentinel: every remaining token is argv for the launched
         // program under --debug. Stash and stop parsing flags.
@@ -242,6 +271,30 @@ Result<Args> parse_args(int argc, char** argv) {
             catch (...) {
                 return std::unexpected(Error::invalid_format(
                     "--max-fn-size: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--min-uses") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--min-uses requires a value"));
+            }
+            try { a.symuses_min_uses = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--min-uses: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--max-callsites") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-callsites requires a value"));
+            }
+            try { a.symresolve_max_callsites = std::stoull(argv[i]); }
+            catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--max-callsites: bad integer"));
             }
             continue;
         }

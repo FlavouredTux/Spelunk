@@ -1,0 +1,4 @@
+fn_va	n_uses	symbols
+0x401000	2	alpha, delta
+0x40101e	1	bravo
+0x401031	1	charlie

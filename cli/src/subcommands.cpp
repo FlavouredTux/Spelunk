@@ -57,6 +57,9 @@
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/analysis/sigs.hpp>
 #include <ember/analysis/strings.hpp>
+#include <ember/analysis/symtable.hpp>
+#include <ember/analysis/symresolve.hpp>
+#include <ember/analysis/symuses.hpp>
 #include <ember/common/hash.hpp>
 #include <ember/common/threads.hpp>
 #include <ember/analysis/syscalls.hpp>
@@ -1904,6 +1907,320 @@ gather_refs_to_rows(const Args& args, const Binary& b, addr_t va) {
         }
     }
     return out;
+}
+
+int run_symtable(const Args& args, const Binary& b) {
+    auto va = parse_cli_addr(args.symtable);
+    if (!va) {
+        std::println(stderr, "ember: --symtable: bad address '{}'", args.symtable);
+        return EXIT_FAILURE;
+    }
+    auto walk = analysis::walk_symtable(b, *va);
+    if (!walk) {
+        std::println(stderr, "ember: --symtable: {}", walk.error().message);
+        return EXIT_FAILURE;
+    }
+
+    // Per-entry TSV: VA \t offset \t length \t string. Display column
+    // truncates at 256 chars + "…"; the length column always reports
+    // the true byte length.
+    constexpr std::size_t kDisplayCap = 256;
+    for (const auto& e : walk->entries) {
+        if (e.length > kDisplayCap) {
+            std::print("{:#x}\t{:#x}\t{}\t",
+                       e.va, e.offset, e.length);
+            std::fwrite(e.text.data(), 1, kDisplayCap, stdout);
+            std::print("…\n");
+        } else {
+            std::println("{:#x}\t{:#x}\t{}\t{}",
+                         e.va, e.offset, e.length, e.text);
+        }
+    }
+    std::println("# total: {} strings, table_size {:#x} bytes, ends @ {:#x} ({})",
+                 walk->entries.size(), walk->table_size, walk->end_va,
+                 analysis::symtable_termination_name(walk->terminated_by));
+
+    // Bonus: keyword-bucketed view. Skipped when nothing matches —
+    // keeps the output clean for tables that aren't dlsym targets.
+    const auto cats = analysis::categorize_symtable(*walk);
+    if (!cats.empty()) {
+        std::println("# categories:");
+        std::size_t pad = 0;
+        for (const auto& c : cats) pad = std::max(pad, c.name.size());
+        for (const auto& c : cats) {
+            std::print("#   {:<{}}  ", c.name, pad);
+            for (std::size_t i = 0; i < c.hits.size(); ++i) {
+                if (i) std::print(", ");
+                std::print("{}", c.hits[i]);
+            }
+            std::print("\n");
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
+namespace {
+
+// Parse a comma-separated list of category names. Returns the input
+// unchanged when empty. Whitespace is trimmed; empty tokens dropped.
+[[nodiscard]] std::vector<std::string>
+split_filter_arg(std::string_view raw) {
+    std::vector<std::string> out;
+    std::size_t i = 0;
+    while (i < raw.size()) {
+        std::size_t j = raw.find(',', i);
+        if (j == std::string_view::npos) j = raw.size();
+        std::size_t a = i, b = j;
+        while (a < b && std::isspace(static_cast<unsigned char>(raw[a]))) ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(raw[b - 1]))) --b;
+        if (b > a) out.emplace_back(raw.substr(a, b - a));
+        i = j + 1;
+    }
+    return out;
+}
+
+// Render a callsite VA as `<containing_fn>+0xN`, falling back to the
+// raw VA when nothing covers it. Looking up `containing_function` per
+// site re-enumerates fns each time, but the volume here is bounded by
+// the per-row callsite cap so it's not the hot path.
+[[nodiscard]] std::string
+render_callsite(const Binary& b, addr_t va) {
+    if (auto cf = containing_function(b, va); cf) {
+        return std::format("{}+{:#x}", cf->name, cf->offset_within);
+    }
+    return std::format("{:#x}", va);
+}
+
+}  // namespace
+
+int run_symresolve(const Args& args, const Binary& b) {
+    auto va = parse_cli_addr(args.symresolve);
+    if (!va) {
+        std::println(stderr, "ember: --symresolve: bad address '{}'", args.symresolve);
+        return EXIT_FAILURE;
+    }
+    auto res = analysis::resolve_symtable(b, *va);
+    if (!res) {
+        std::println(stderr, "ember: --symresolve: {}", res.error().message);
+        return EXIT_FAILURE;
+    }
+
+    // Build the filter set (category buckets → membership-by-name) once.
+    // The filter rejects unknown category names early so a typo doesn't
+    // silently degrade to "show everything".
+    std::vector<std::string> wanted_cats = split_filter_arg(args.category_filter);
+    std::unordered_set<std::string_view> wanted_names;
+    bool have_filter = !wanted_cats.empty();
+    if (have_filter) {
+        const auto cats = analysis::categorize_symtable(res->walk);
+        for (const auto& want : wanted_cats) {
+            for (const auto& c : cats) {
+                if (c.name == want) {
+                    for (auto h : c.hits) wanted_names.insert(h);
+                }
+            }
+        }
+    }
+
+    if (!res->resolvers.empty()) {
+        std::string list;
+        for (std::size_t i = 0; i < res->resolvers.size(); ++i) {
+            const auto& r = res->resolvers[i];
+            if (i) list += ", ";
+            list += std::format("{} ({} slots @ {:#x})",
+                                r.fn_name.empty() ? "<unnamed>" : r.fn_name,
+                                r.slots, r.base_va);
+        }
+        std::println(stderr, "ember: --symresolve: resolver(s) = {}", list);
+    } else {
+        std::println(stderr,
+            "ember: --symresolve: no resolver function found for table at "
+            "{:#x} — falling back to string table only", *va);
+    }
+    {
+        const std::size_t total    = res->non_empty_count;
+        const std::size_t resolved = res->resolved_count;
+        const double pct = total == 0 ? 0.0
+                                       : (100.0 * static_cast<double>(resolved)
+                                                  / static_cast<double>(total));
+        std::println(stderr,
+            "ember: --symresolve: coverage: {}/{} slots resolved ({:.1f}%)",
+            resolved, total, pct);
+        if (total != 0 && pct < 50.0) {
+            std::println(stderr,
+                "ember: --symresolve: tip: try --symuses {:#x} for the "
+                "lazy/per-function dispatch pattern", *va);
+        }
+    }
+
+    std::println("idx\tstr_va\tsymbol\tfnptr_va\tn_callsites\ttop_callsites");
+    const std::size_t cap = static_cast<std::size_t>(args.symresolve_max_callsites);
+    for (const auto& r : res->rows) {
+        if (have_filter && !wanted_names.contains(r.name)) continue;
+
+        const std::string fnptr_col = r.fnptr_va
+            ? std::format("{:#x}", *r.fnptr_va)
+            : std::string{"-"};
+
+        std::string sites_col;
+        if (r.callsites.empty()) {
+            sites_col = "-";
+        } else {
+            const std::size_t shown = (cap == 0)
+                ? r.callsites.size()
+                : std::min(cap, r.callsites.size());
+            for (std::size_t i = 0; i < shown; ++i) {
+                if (i) sites_col += ", ";
+                sites_col += render_callsite(b, r.callsites[i]);
+            }
+            if (shown < r.callsites.size()) sites_col += ", ...";
+        }
+
+        std::println("{}\t{:#x}\t{}\t{}\t{}\t{}",
+                     r.index, r.string_va, r.name,
+                     fnptr_col, r.callsites.size(), sites_col);
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_symuses(const Args& args, const Binary& b) {
+    auto va = parse_cli_addr(args.symuses);
+    if (!va) {
+        std::println(stderr, "ember: --symuses: bad address '{}'", args.symuses);
+        return EXIT_FAILURE;
+    }
+    analysis::SymUseOptions opts;
+    opts.no_taint = args.symuses_no_taint;
+    auto uses = analysis::collect_symbol_uses(b, *va, opts);
+    if (!uses) {
+        std::println(stderr, "ember: --symuses: {}", uses.error().message);
+        return EXIT_FAILURE;
+    }
+
+    // Filter set: when --filter is given, only sites whose symbol
+    // falls in any requested category bucket count toward n_uses or
+    // appear in the symbols column. Empty filter = unrestricted.
+    std::unordered_set<std::string_view> wanted_names;
+    const bool have_filter = !args.category_filter.empty();
+    if (have_filter) {
+        const auto cats = analysis::categorize_symtable(uses->walk);
+        for (const auto& want : split_filter_arg(args.category_filter)) {
+            for (const auto& c : cats) {
+                if (c.name == want) {
+                    for (auto h : c.hits) wanted_names.insert(h);
+                }
+            }
+        }
+    }
+
+    // Scope summary: which paths admitted candidate functions. Always
+    // surfaced — operators reading the TSV need to know whether the
+    // analysis even had a non-empty scope to scan, since "0 rows"
+    // could mean "no consumers exist" or "the scope detector found
+    // nothing to feed the per-fn pass".
+    std::println(stderr,
+        "ember: --symuses: scope: {} candidate function{} "
+        "({} imm64-stored slot{}, {} relocated slot{})",
+        uses->scope_fn_count, uses->scope_fn_count == 1 ? "" : "s",
+        uses->scope_imm64_slots, uses->scope_imm64_slots == 1 ? "" : "s",
+        uses->scope_relocated_slots, uses->scope_relocated_slots == 1 ? "" : "s");
+
+    if (args.verbose) {
+        // Per-fn diag: surfaces base-load count, raw IMM matches, and
+        // unique-entry count. The sub-counts let an operator catch
+        // the case where some scope candidate is producing no hits
+        // because its body uses a different indirection than the
+        // weak-filter exact-offset match.
+        for (const auto& row : uses->rows) {
+            if (row.base_load_sites.empty()) continue;
+            std::unordered_set<std::string_view> uniq;
+            for (const auto& s : row.sites) uniq.insert(s.name);
+            std::println(stderr,
+                "ember: --symuses:   {}: {} base-load{}, "
+                "{} IMM match{} -> {} unique entr{}",
+                row.fn_name.empty()
+                    ? std::format("{:#x}", row.fn_addr)
+                    : row.fn_name,
+                row.base_load_sites.size(),
+                row.base_load_sites.size() == 1 ? "" : "s",
+                row.sites.size(),
+                row.sites.size() == 1 ? "" : "es",
+                uniq.size(),
+                uniq.size() == 1 ? "y" : "ies");
+        }
+    }
+
+    auto site_passes = [&](const analysis::SymUseSite& s) noexcept {
+        if (s.name.empty()) return false;   // leading-empty entry: handled separately
+        if (have_filter && !wanted_names.contains(s.name)) return false;
+        return true;
+    };
+
+    if (args.verbose) {
+        std::println("fn_va\tcallsite\tsymbol");
+        for (const auto& row : uses->rows) {
+            // Verbose mode emits every site individually. Table-walker
+            // rows still surface their per-site refs to the leading
+            // empty entry — render those as "<table_base>" so an
+            // operator can see the walk-shape without confusing it
+            // with a real symbol.
+            for (const auto& s : row.sites) {
+                if (s.name.empty()) {
+                    if (have_filter) continue;
+                    std::println("{:#x}\t{}+{:#x}\t<table_base>",
+                                 row.fn_addr, row.fn_name,
+                                 s.callsite - row.fn_addr);
+                    continue;
+                }
+                if (!site_passes(s)) continue;
+                std::println("{:#x}\t{}+{:#x}\t{}",
+                             row.fn_addr, row.fn_name,
+                             s.callsite - row.fn_addr, s.name);
+            }
+        }
+        return EXIT_SUCCESS;
+    }
+
+    std::println("fn_va\tn_uses\tsymbols");
+    for (const auto& row : uses->rows) {
+        // Dedupe symbol names in walk-order — preserves the order in
+        // which the function first touched each symbol, which is the
+        // shape an operator wants when scanning a long row.
+        std::vector<std::string_view> names_in_order;
+        std::unordered_set<std::string_view> seen;
+        std::size_t passing_uses = 0;
+        for (const auto& s : row.sites) {
+            if (!site_passes(s)) continue;
+            ++passing_uses;
+            if (seen.insert(s.name).second) names_in_order.push_back(s.name);
+        }
+
+        // No specific symbol hits but the function loaded the table
+        // base — that's the table-walker shape (looping the table by
+        // index rather than by constant offset). Emit a single
+        // placeholder row, gated by --min-uses on the lea-to-base
+        // count. Filtering is suppressed since there's no per-symbol
+        // signal to match against.
+        if (passing_uses == 0 && row.walks_full_table && !have_filter) {
+            const std::size_t n = row.sites.empty() ? 1 : row.sites.size();
+            if (n < args.symuses_min_uses) continue;
+            std::println("{:#x}\t{}\t<full_table_walker>", row.fn_addr, n);
+            continue;
+        }
+
+        if (passing_uses < args.symuses_min_uses) continue;
+        if (passing_uses == 0 && !args.symuses_show_empty) continue;
+
+        std::string symbols_col;
+        for (std::size_t i = 0; i < names_in_order.size(); ++i) {
+            if (i) symbols_col += ", ";
+            symbols_col += names_in_order[i];
+        }
+        if (symbols_col.empty()) symbols_col = "-";
+
+        std::println("{:#x}\t{}\t{}", row.fn_addr, passing_uses, symbols_col);
+    }
+    return EXIT_SUCCESS;
 }
 
 int run_refs_to(const Args& args, const Binary& b) {

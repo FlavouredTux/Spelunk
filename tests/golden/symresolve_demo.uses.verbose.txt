@@ -1,0 +1,8 @@
+fn_va	callsite	symbol
+0x4010c2	touch_alpha_and_delta+0x4	alpha
+0x4010c2	touch_alpha_and_delta+0x12	delta
+0x40106e	touch_alpha+0x4	alpha
+0x401083	touch_bravo+0x4	bravo
+0x401098	touch_charlie_a+0x4	charlie
+0x4010ad	touch_charlie_b+0x4	charlie
+0x4010e5	walks_table+0x4	<table_base>

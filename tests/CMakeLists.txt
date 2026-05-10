@@ -213,6 +213,42 @@ ember_build_fixture(tail_call)
 ember_build_fixture(indirect_tail)
 ember_build_fixture(indirect_trace)
 ember_build_fixture(string_cmp)
+# Resolver-pattern fixture: packed string table + writable fnptr table
+# + a function that fills the fnptr table with N consecutive stride-8
+# constant stores. Built without CRT glue so the only stride-8 write
+# run in the binary is the resolver itself, which keeps the detection
+# heuristic unambiguous across gcc point-releases.
+ember_build_fixture(symresolve_demo
+    OPT "-O0"
+    EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
+# Multi-resolver: two functions populating disjoint slot ranges of one
+# fnptr table — the iterative detector has to find both, the merged
+# output has to attribute every slot to the right resolver.
+ember_build_fixture(symresolve_multi
+    OPT "-O0"
+    EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
+# Base+offset access pattern: functions never reference individual
+# entry VAs directly, only `lea reg, [rip+table_base]` followed by
+# arithmetic with constant offsets. -O1 so the optimizer keeps the
+# base in a register and emits a real `lea reg, [reg+disp]` rather
+# than the -O0 spill-everything-to-stack shape.
+ember_build_fixture(symuses_indirect
+    OPT "-O1"
+    EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
+# imm64-stored slot pattern: the table base is reached only via a
+# qword in .data, the way obfuscated loaders typically stash it. The
+# strict data_xref scan returns zero hits for the table base VA;
+# the loose-scope path has to find the slot and admit its readers.
+ember_build_fixture(symuses_imm64
+    OPT "-O1"
+    EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
+# Mixes legit base+offset access with decoy arithmetic on an unrelated
+# counter using the same constants as string-table entry offsets.
+# Default --symuses (taint on) must produce exactly one row; --no-taint
+# must surface the decoys too.
+ember_build_fixture(symuses_noise
+    OPT "-O1"
+    EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
 # -O0 so the compiler literally emits every redundant store; at -O2 the
 # compiler would DSE itself and leave nothing for us to test.
 ember_build_fixture(dead_store OPT "-O0")
@@ -538,6 +574,140 @@ ember_golden_test(
     FIXTURE imports
     ARGS    "--no-cache|--validate|main"
     GOLDEN  imports.validate.main.txt
+)
+
+# --symtable: walks .dynstr (a real packed NUL-terminated string table)
+# at its known fixture VA. Locks the table-walk semantics (leading empty
+# entry, internal NUL handling, non-printable termination) and the
+# keyword-bucketed `# categories:` bonus block — `getenv` here lands in
+# the env bucket. The fixture's pinned bytes mean these offsets / VAs
+# don't drift unless imports.prebuilt is regenerated.
+ember_golden_test(
+    NAME    imports_symtable_dynstr
+    FIXTURE imports
+    ARGS    "--symtable|0x400410"
+    GOLDEN  imports.symtable.dynstr.txt
+)
+
+ember_expect_fail_test(
+    NAME       imports_symtable_unmapped_va
+    FIXTURE    imports
+    ARGS       "--symtable|0x999999"
+    ERR_SUBSTR "not in any loadable segment"
+)
+
+# --symresolve: pairs the string table at g_names with the fnptr table
+# (g_fns) and per-slot callsites. Locks (a) the resolver-detection
+# heuristic — longest stride-8 write run picks `resolver` correctly
+# when no other function emits a comparable run — and (b) the per-row
+# callsite counts (alpha=1, charlie=2, others=0). The fixture is built
+# at -O0 so each slot store is a separate `mov qword [rip+disp], imm`
+# rather than a vectorized 16-byte block, which is what a real
+# hand-written resolver loop emits anyway.
+ember_golden_test(
+    NAME    symresolve_demo_basic
+    FIXTURE symresolve_demo
+    ARGS    "--symresolve|0x402000"
+    GOLDEN  symresolve_demo.basic.txt
+)
+
+# Multi-resolver: locks the iterative detector — picks resolver_tail
+# (5 slots) first, then resolver_head (3 slots) on the second pass,
+# merges them in base_va order so slot 0 attributes to head and slot 3
+# attributes to tail. Coverage = 8/8 = 100% goes to stderr (not in
+# golden, which captures stdout only).
+ember_golden_test(
+    NAME    symresolve_multi_basic
+    FIXTURE symresolve_multi
+    ARGS    "--symresolve|0x402000"
+    GOLDEN  symresolve_multi.basic.txt
+)
+
+# --symuses: pure xref scan, surfaces every function that holds a
+# `lea reg, [rip+g_names+N]`-style reference into the table, deduped
+# per row and sorted by descending unique-symbol count. Locks (a)
+# touch_alpha_and_delta sorting first with 2 uses, (b) the
+# walks_table function being marked <full_table_walker> off its single
+# lea-to-base hit, (c) the deterministic ordering of single-use rows
+# (by ascending fn address as the tie-breaker).
+ember_golden_test(
+    NAME    symresolve_demo_symuses
+    FIXTURE symresolve_demo
+    ARGS    "--symuses|0x402000"
+    GOLDEN  symresolve_demo.uses.txt
+)
+
+# --symuses --verbose: one row per callsite. Demonstrates the
+# table-base reference rendering as <table_base> on walks_table.
+ember_golden_test(
+    NAME    symresolve_demo_symuses_verbose
+    FIXTURE symresolve_demo
+    ARGS    "--symuses|0x402000|--verbose"
+    GOLDEN  symresolve_demo.uses.verbose.txt
+)
+
+# --symuses --min-uses 2: drops every row below the cutoff, including
+# the <full_table_walker> row (whose lea-to-base count of 1 is a low
+# bound — same threshold rule as for symbol rows).
+ember_golden_test(
+    NAME    symresolve_demo_symuses_min2
+    FIXTURE symresolve_demo
+    ARGS    "--symuses|0x402000|--min-uses|2"
+    GOLDEN  symresolve_demo.uses.min2.txt
+)
+
+# --symuses against the base+offset access pattern. The consumers
+# never reference entry VAs directly — they hold the table base in a
+# register and add a constant offset before each use. Locks (a) the
+# scope-scan path correctly attributing the `add reg, IMM`
+# displacements to the right entries (alpha at 0x1, delta at 0x15,
+# charlie at 0xd) and (b) the touches_base_only function still
+# surfacing as <full_table_walker> when its body has no offset hits.
+ember_golden_test(
+    NAME    symuses_indirect_basic
+    FIXTURE symuses_indirect
+    ARGS    "--symuses|0x402000"
+    GOLDEN  symuses_indirect.txt
+)
+
+# Verbose form: confirms the per-site rendering of base-load events
+# as <table_base> and per-offset hits as the matched symbol name.
+ember_golden_test(
+    NAME    symuses_indirect_verbose
+    FIXTURE symuses_indirect
+    ARGS    "--symuses|0x402000|--verbose"
+    GOLDEN  symuses_indirect.verbose.txt
+)
+
+# imm64-stored slot path. The strict data_xref scan would find zero
+# refs to g_str_table itself — the only static evidence the table is
+# in use is `mov rax, [rip+g_table_ptr]` followed by `add rax, IMM`.
+# Locks the loose-scope path: walk readable sections for qwords ==
+# table_va, admit slot-readers as scope candidates, then run the
+# per-fn IMM scan over those.
+ember_golden_test(
+    NAME    symuses_imm64_basic
+    FIXTURE symuses_imm64
+    ARGS    "--symuses|0x402000"
+    GOLDEN  symuses_imm64.txt
+)
+
+# Taint-walker FP suppression. Default mode emits exactly one row
+# (the real charlie consumer); --no-taint surfaces the three decoy
+# adds (alpha / bravo / delta) on the unrelated counters too. Locks
+# the regression: removing or weakening the taint propagation would
+# reintroduce the noise on the default form.
+ember_golden_test(
+    NAME    symuses_noise_taint
+    FIXTURE symuses_noise
+    ARGS    "--symuses|0x402000"
+    GOLDEN  symuses_noise.txt
+)
+ember_golden_test(
+    NAME    symuses_noise_no_taint
+    FIXTURE symuses_noise
+    ARGS    "--symuses|0x402000|--no-taint"
+    GOLDEN  symuses_noise.no_taint.txt
 )
 
 # ---- decoder_misc (coverage of formerly-unhandled opcodes) -----------------

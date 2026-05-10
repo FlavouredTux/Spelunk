@@ -85,7 +85,11 @@ int main(int argc, char** argv) {
 
     apply_quiet_env(args);
 
-    if (args.help)        { print_help();             return EXIT_SUCCESS; }
+    if (args.help) {
+        if (args.help_topic.empty()) print_help();
+        else                         print_help_topic(args.help_topic);
+        return EXIT_SUCCESS;
+    }
     if (args.dump_types)  { return run_dump_types();                       }
 
     if (!args.diff_path.empty() ||
@@ -195,6 +199,9 @@ int main(int argc, char** argv) {
 
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);
+    if (!args.symtable.empty())  return run_symtable(args, b);
+    if (!args.symresolve.empty()) return run_symresolve(args, b);
+    if (!args.symuses.empty())   return run_symuses(args, b);
     if (!args.refs_to.empty())   return run_refs_to(args, b);
     if (!args.refs_to_loose.empty()) return run_refs_to_loose(args, b);
     if (!args.containing_fn.empty())  return run_containing_fn(args, b);

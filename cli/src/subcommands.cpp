@@ -1814,19 +1814,68 @@ struct RefRow {
     std::optional<u64>       fn_offset;
 };
 
-[[nodiscard]] std::string format_ref_rows_tsv(std::span<const RefRow> rows) {
+[[nodiscard]] std::string_view section_name_containing(const Binary& b,
+                                                       addr_t va) noexcept {
+    for (const auto& s : b.sections()) {
+        if (va < s.vaddr) continue;
+        const auto off = va - s.vaddr;
+        if (off < s.size) return s.name;
+    }
+    return {};
+}
+
+[[nodiscard]] bool addr_in_executable_section_cli(const Binary& b,
+                                                  addr_t va) noexcept {
+    for (const auto& s : b.sections()) {
+        if (!s.flags.executable) continue;
+        if (va < s.vaddr) continue;
+        if (va - s.vaddr < s.size) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] std::string first_disasm_line_at(const Binary& b, addr_t va) {
+    auto r = format_disasm_range(b, va, va + 16);
+    if (!r) return {};
+    std::string_view s(*r);
+    if (const auto nl = s.find('\n'); nl != std::string_view::npos) {
+        s = s.substr(0, nl);
+    }
+    return std::string(s);
+}
+
+[[nodiscard]] std::string
+format_ref_rows_tsv(std::span<const RefRow> rows,
+                    const Binary* b = nullptr,
+                    bool verbose = false) {
     std::string out;
     for (const auto& r : rows) {
         std::string ctx;
         if (r.fn_name) {
             ctx = std::format("  ; {}+{:#x}", *r.fn_name, r.fn_offset.value_or(0));
         }
+        std::string detail;
+        if (verbose && b != nullptr) {
+            if (r.slot) {
+                const auto sec = section_name_containing(*b, *r.slot);
+                if (!sec.empty()) {
+                    detail += std::format("  ; slot-section {}", sec);
+                }
+            }
+            if (r.kind == "direct") {
+                detail += "  ; site not cached (showing caller entry)";
+            }
+            if (const auto insn = first_disasm_line_at(*b, r.from_pc);
+                !insn.empty()) {
+                detail += std::format("  ; site {}", insn);
+            }
+        }
         if (r.slot) {
-            out += std::format("{:#x} -> {:#x}  ({} via {:#x}){}\n",
-                               r.from_pc, r.target, r.kind, *r.slot, ctx);
+            out += std::format("{:#x} -> {:#x}  ({} via {:#x}){}{}\n",
+                               r.from_pc, r.target, r.kind, *r.slot, ctx, detail);
         } else {
-            out += std::format("{:#x} -> {:#x}  ({}){}\n",
-                               r.from_pc, r.target, r.kind, ctx);
+            out += std::format("{:#x} -> {:#x}  ({}){}{}\n",
+                               r.from_pc, r.target, r.kind, ctx, detail);
         }
     }
     return out;
@@ -2251,7 +2300,7 @@ int run_refs_to(const Args& args, const Binary& b) {
     const auto rows = gather_refs_to_rows(args, b, *va);
     const std::string out = args.json
         ? format_ref_rows_json(rows)
-        : format_ref_rows_tsv(rows);
+        : format_ref_rows_tsv(rows, &b, args.verbose);
     std::fwrite(out.data(), 1, out.size(), stdout);
     return EXIT_SUCCESS;
 }
@@ -2364,7 +2413,7 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
 
     const std::string out = args.json
         ? format_ref_rows_json(rows)
-        : format_ref_rows_tsv(rows);
+        : format_ref_rows_tsv(rows, &b, args.verbose);
     std::fwrite(out.data(), 1, out.size(), stdout);
     if (rows.empty()) {
         std::println(stderr, "ember: --refs-to-loose: 0 references found "
@@ -2653,6 +2702,18 @@ int run_disasm_at(const Args& args, const Binary& b) {
     // Trim to N lines of disassembly (skip the header/comments).
     std::size_t emitted = 0;
     std::string out;
+    if (!addr_in_executable_section_cli(b, static_cast<addr_t>(*va))) {
+        const auto sec = section_name_containing(b, static_cast<addr_t>(*va));
+        if (!sec.empty()) {
+            out += std::format(
+                "; warning: {:#x} is in non-executable section {}; bytes may be data\n",
+                static_cast<addr_t>(*va), sec);
+        } else {
+            out += std::format(
+                "; warning: {:#x} is not in an executable section; bytes may be data\n",
+                static_cast<addr_t>(*va));
+        }
+    }
     std::size_t line_start = 0;
     for (std::size_t i = 0; i <= rv->size(); ++i) {
         if (i == rv->size() || (*rv)[i] == '\n') {
@@ -2742,6 +2803,18 @@ int run_disasm_window(const Args& args, const Binary& b) {
             return std::format("# error: {}\n", rv.error().message);
         }
         std::string out;
+        if (!addr_in_executable_section_cli(b, va)) {
+            const auto sec = section_name_containing(b, va);
+            if (!sec.empty()) {
+                out += std::format(
+                    "; warning: {:#x} is in non-executable section {}; bytes may be data\n",
+                    va, sec);
+            } else {
+                out += std::format(
+                    "; warning: {:#x} is not in an executable section; bytes may be data\n",
+                    va);
+            }
+        }
         std::size_t emitted = 0;
         std::size_t line_start = 0;
         for (std::size_t i = 0; i <= rv->size(); ++i) {

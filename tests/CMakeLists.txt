@@ -701,6 +701,13 @@ ember_golden_test(
     GOLDEN  symuses_imm64.txt
 )
 
+ember_golden_test(
+    NAME    refs_to_loose_verbose_site_context
+    FIXTURE symuses_imm64
+    ARGS    "--refs-to-loose|0x402000|--verbose"
+    GOLDEN  symuses_imm64.refs_to_loose.verbose.txt
+)
+
 # Taint-walker FP suppression. Default mode emits exactly one row
 # (the real charlie consumer); --no-taint surfaces the three decoy
 # adds (alpha / bravo / delta) on the unrelated counters too. Locks
@@ -1011,6 +1018,13 @@ ember_expect_fail_test(
     FIXTURE    return_value
     ARGS       "--disasm-window|0x401000|--count|0"
     ERR_SUBSTR "bad --count"
+)
+
+ember_golden_test(
+    NAME    disasm_at_nonexec_section_warns
+    FIXTURE symuses_imm64
+    ARGS    "--disasm-at|0x402000|--count|2"
+    GOLDEN  symuses_imm64.rodata_disasm_at.txt
 )
 
 ember_expect_fail_test(

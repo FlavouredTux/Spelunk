@@ -134,6 +134,7 @@ void help_xrefs() {
     std::println("      --refs-to-loose VA  superset: also scans constant-pool imm64s and");
     std::println("                       R_*_RELATIVE relocs whose addend == VA, recovering");
     std::println("                       fn-pointer-only dispatch shapes (Roblox-style)");
+    std::println("      --verbose        with --refs-to/--refs-to-loose, append site disasm");
     std::println("      --trace PATH     load indirect-edge trace (TSV from\\tto per line)");
     std::println("                       — seeds the CFG builder before any analysis runs");
 }

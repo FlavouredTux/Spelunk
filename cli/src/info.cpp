@@ -127,6 +127,8 @@ void help_syms() {
     std::println("                       scopes: all, list:VA,VA, range:A-B (body overlap),");
     std::println("                       callers-of:VA, callees-of:VA, around:VA[:radius].");
     std::println("                       --json for machine output.");
+    std::println("      --intel-promote PATH  fold agent intel JSONL into .ember script");
+    std::println("                       with -o OUT and optional --confidence threshold.");
     std::println("      --json           machine-readable output where supported");
 }
 

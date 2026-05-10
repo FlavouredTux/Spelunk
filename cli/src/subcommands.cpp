@@ -14,6 +14,7 @@
 #include <map>
 #include <limits>
 #include <optional>
+#include <sstream>
 #if defined(_WIN32)
 #include <io.h>
 #define ember_dup     _dup
@@ -3192,6 +3193,300 @@ int run_cascade_plan(const Args& args, const Binary& b) {
                      static_cast<int>(std::lround(t.ratio * 100.0)),
                      t.callers, t.callees, t.unresolved, reasons);
     }
+    return EXIT_SUCCESS;
+}
+
+namespace {
+
+struct IntelClaim {
+    std::string id;
+    std::string agent;
+    std::string ts;
+    std::string subject;
+    std::string predicate;
+    std::string value;
+    std::string evidence;
+    double confidence = 0.0;
+};
+
+struct IntelDecision {
+    IntelClaim winner;
+    std::vector<IntelClaim> runners_up;
+    bool disputed = false;
+};
+
+[[nodiscard]] std::optional<std::string>
+json_string_field(std::string_view json, std::string_view key) {
+    const std::string needle = std::format("\"{}\"", key);
+    std::size_t pos = json.find(needle);
+    if (pos == std::string_view::npos) return std::nullopt;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string_view::npos) return std::nullopt;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    if (pos >= json.size() || json[pos] != '"') return std::nullopt;
+    ++pos;
+
+    std::string out;
+    while (pos < json.size()) {
+        const char c = json[pos++];
+        if (c == '"') return out;
+        if (c != '\\') {
+            out.push_back(c);
+            continue;
+        }
+        if (pos >= json.size()) break;
+        const char e = json[pos++];
+        switch (e) {
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        case '/': out.push_back('/'); break;
+        case 'b': out.push_back('\b'); break;
+        case 'f': out.push_back('\f'); break;
+        case 'n': out.push_back('\n'); break;
+        case 'r': out.push_back('\r'); break;
+        case 't': out.push_back('\t'); break;
+        case 'u':
+            // Agent intel is ASCII for fields we promote. Preserve unknown
+            // unicode escapes as '?' rather than failing the whole JSONL row.
+            if (pos + 4 <= json.size()) pos += 4;
+            out.push_back('?');
+            break;
+        default:
+            out.push_back(e);
+            break;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<double>
+json_number_field(std::string_view json, std::string_view key) {
+    const std::string needle = std::format("\"{}\"", key);
+    std::size_t pos = json.find(needle);
+    if (pos == std::string_view::npos) return std::nullopt;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string_view::npos) return std::nullopt;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    const char* first = json.data() + pos;
+    char* last = nullptr;
+    const double v = std::strtod(first, &last);
+    if (last == first) return std::nullopt;
+    return v;
+}
+
+[[nodiscard]] std::optional<IntelClaim> parse_intel_claim(std::string_view line) {
+    const auto kind = json_string_field(line, "kind");
+    if (!kind || *kind != "claim") return std::nullopt;
+    IntelClaim c;
+    auto id = json_string_field(line, "id");
+    auto agent = json_string_field(line, "agent");
+    auto ts = json_string_field(line, "ts");
+    auto subject = json_string_field(line, "subject");
+    auto predicate = json_string_field(line, "predicate");
+    auto value = json_string_field(line, "value");
+    auto evidence = json_string_field(line, "evidence");
+    auto confidence = json_number_field(line, "confidence");
+    if (!id || !agent || !ts || !subject || !predicate || !value || !confidence) {
+        return std::nullopt;
+    }
+    c.id = std::move(*id);
+    c.agent = std::move(*agent);
+    c.ts = std::move(*ts);
+    c.subject = std::move(*subject);
+    c.predicate = std::move(*predicate);
+    c.value = std::move(*value);
+    c.evidence = evidence.value_or("");
+    c.confidence = *confidence;
+    return c;
+}
+
+[[nodiscard]] std::string sanitize_ember_value(std::string_view v) {
+    std::string out;
+    out.reserve(v.size());
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        const char c = v[i];
+        if (c == '\r' || c == '\n') {
+            if (out.empty() || out.back() != ' ') out.push_back(' ');
+        } else if (c == '#') {
+            out += "\xE2\x99\xAF";
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] std::string clean_evidence(std::string_view v) {
+    std::string out;
+    out.reserve(std::min<std::size_t>(v.size(), 200));
+    bool last_space = false;
+    for (const char c : v) {
+        if (c == '\r' || c == '\n') {
+            if (!last_space) out.push_back(' ');
+            last_space = true;
+        } else if (c == ';') {
+            out.push_back(',');
+            last_space = false;
+        } else {
+            out.push_back(c);
+            last_space = std::isspace(static_cast<unsigned char>(c));
+        }
+    }
+    while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back()))) out.pop_back();
+    if (out.size() > 200) {
+        out.resize(199);
+        out += "\xE2\x80\xA6";
+    }
+    return out;
+}
+
+[[nodiscard]] std::string intel_meta_suffix(double conf, std::string_view evidence) {
+    std::string out = std::format(" ; conf={:.3f} ; src=agent:promote", conf);
+    const std::string ev = clean_evidence(evidence);
+    if (!ev.empty()) out += std::format(" ; ev={}", ev);
+    return out;
+}
+
+[[nodiscard]] double promote_threshold(const Args& args) {
+    if (args.annotate_conf.empty()) return 0.85;
+    try {
+        const double v = std::stod(args.annotate_conf);
+        if (v >= 0.0 && v <= 1.0) return v;
+    } catch (...) {
+    }
+    return -1.0;
+}
+
+}  // namespace
+
+int run_intel_promote(const Args& args, const Binary& /*b*/) {
+    const double threshold = promote_threshold(args);
+    if (threshold < 0.0) {
+        std::println(stderr, "ember: --intel-promote: --confidence must be in [0,1]");
+        return EXIT_FAILURE;
+    }
+    if (args.output_path.empty()) {
+        std::println(stderr, "ember: --intel-promote requires -o/--output");
+        return EXIT_FAILURE;
+    }
+
+    std::ifstream in(args.intel_promote);
+    if (!in) {
+        std::println(stderr, "ember: --intel-promote: cannot open {}", args.intel_promote);
+        return EXIT_FAILURE;
+    }
+
+    std::vector<IntelClaim> claims;
+    std::set<std::string> retracted;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string_view sv = line;
+        while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) sv.remove_prefix(1);
+        if (sv.empty()) continue;
+        if (auto kind = json_string_field(sv, "kind"); kind && *kind == "retract") {
+            if (auto target = json_string_field(sv, "target_id"); target) {
+                retracted.insert(*target);
+            }
+            continue;
+        }
+        if (auto claim = parse_intel_claim(sv); claim) claims.push_back(std::move(*claim));
+    }
+
+    std::map<std::string, std::vector<IntelClaim>> buckets;
+    for (auto& c : claims) {
+        if (retracted.contains(c.id)) continue;
+        buckets[std::format("{}|{}", c.subject, c.predicate)].push_back(std::move(c));
+    }
+
+    std::vector<IntelClaim> renames;
+    std::vector<IntelClaim> notes;
+    std::size_t disputed = 0;
+    std::size_t low_conf = 0;
+    std::size_t other = 0;
+    std::vector<std::string> disputed_high_conf;
+
+    for (auto& [key, bucket] : buckets) {
+        std::sort(bucket.begin(), bucket.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.confidence != rhs.confidence) return lhs.confidence > rhs.confidence;
+            return lhs.ts > rhs.ts;
+        });
+        if (bucket.empty()) continue;
+        const IntelClaim& winner = bucket.front();
+        const bool is_disputed = bucket.size() > 1
+            && winner.confidence - bucket[1].confidence < 0.10
+            && winner.agent != bucket[1].agent
+            && winner.value != bucket[1].value;
+        if (is_disputed) {
+            ++disputed;
+            if (winner.confidence >= threshold) disputed_high_conf.push_back(key);
+            continue;
+        }
+        if (winner.confidence < threshold) {
+            ++low_conf;
+            continue;
+        }
+        if (winner.predicate == "name") {
+            renames.push_back(winner);
+        } else if (winner.predicate == "note") {
+            notes.push_back(winner);
+        } else {
+            ++other;
+        }
+    }
+
+    std::ostringstream script;
+    script << "# Generated by ember-agent promote\n";
+    script << "# Source: " << args.intel_promote << "\n";
+    script << "# Threshold: " << threshold << "\n";
+    script << "# " << renames.size() << " renames, " << notes.size() << " notes\n";
+    script << "# Disputed: " << disputed << ", low-conf: " << low_conf
+           << ", non-promotable: " << other << "\n\n";
+    if (!renames.empty()) {
+        script << "[rename]\n";
+        for (const auto& r : renames) {
+            script << r.subject << " = " << sanitize_ember_value(r.value)
+                   << intel_meta_suffix(r.confidence, r.evidence) << "\n";
+        }
+        script << "\n";
+    }
+    if (!notes.empty()) {
+        script << "[note]\n";
+        for (const auto& n : notes) {
+            script << n.subject << " = " << sanitize_ember_value(n.value)
+                   << intel_meta_suffix(n.confidence, n.evidence) << "\n";
+        }
+        script << "\n";
+    }
+
+    {
+        std::ofstream out(args.output_path, std::ios::binary);
+        if (!out) {
+            std::println(stderr, "ember: --intel-promote: cannot write {}", args.output_path);
+            return EXIT_FAILURE;
+        }
+        out << script.str();
+    }
+
+    if (args.json) {
+        std::string out;
+        std::format_to(std::back_inserter(out),
+            "{{\"ember_script\":\"{}\",\"promoted\":{},\"skipped_disputed\":{},"
+            "\"skipped_low_conf\":{},\"skipped_other\":{},\"disputed_high_conf\":[",
+            json_escape(script.str()), renames.size() + notes.size(), disputed, low_conf, other);
+        for (std::size_t i = 0; i < disputed_high_conf.size(); ++i) {
+            if (i) out.push_back(',');
+            std::format_to(std::back_inserter(out), "\"{}\"", json_escape(disputed_high_conf[i]));
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+    } else if (!args.quiet) {
+        std::println(stderr,
+            "ember: --intel-promote: {} promoted, {} disputed, {} low-conf, {} non-promotable -> {}",
+            renames.size() + notes.size(), disputed, low_conf, other, args.output_path);
+    }
+
     return EXIT_SUCCESS;
 }
 

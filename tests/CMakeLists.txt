@@ -780,6 +780,19 @@ ember_golden_test(
     GOLDEN  tail_call.cascade_plan_range_overlap.txt
 )
 
+add_test(
+    NAME tail_call_intel_promote
+    COMMAND ${CMAKE_COMMAND}
+        -DEMBER=$<TARGET_FILE:ember_cli>
+        -DBINARY=${EMBER_FIXTURE_tail_call_PATH}
+        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/tail_call_intel_promote
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_intel_promote.cmake
+)
+set_tests_properties(tail_call_intel_promote PROPERTIES
+    DEPENDS ember_cli
+    LABELS cli
+)
+
 # ---- indirect_tail (jmp [reg/mem] as return) ------------------------------
 #
 # Each of these once rendered as `__unreachable();` because the lifter

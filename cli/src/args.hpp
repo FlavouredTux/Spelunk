@@ -54,6 +54,7 @@ struct Args {
                                     // VA is hex / sub_<hex>. JSON form under --json.
     std::string cascade_scope;      // --cascade-scope all|list:..|range:..|callers-of:..
                                     // |callees-of:..|around:.. for --cascade-plan
+    std::string intel_promote;      // --intel-promote PATH: fold agent intel JSONL into .ember script
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic

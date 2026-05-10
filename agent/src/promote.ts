@@ -30,6 +30,9 @@ export function promote(args: PromoteArgs): {
     skipped_other: number;
     disputed_high_conf: string[];
 } {
+    const cpp = tryCppPromote(args);
+    if (cpp) return cpp;
+
     const intel = new IntelLog(intelPathFor(args.binary));
     const view = intel.fold();
 
@@ -107,6 +110,40 @@ export function promote(args: PromoteArgs): {
         // but lost to a dispute. Run a tiebreaker, then re-promote.
         disputed_high_conf: disputedSubjects,
     };
+}
+
+function tryCppPromote(args: PromoteArgs): ReturnType<typeof promote> | undefined {
+    const intelPath = intelPathFor(args.binary);
+    const cmd = [
+        "--intel-promote", intelPath,
+        "--output", args.out,
+        "--confidence", String(args.threshold),
+        "--json",
+        "--quiet",
+        args.binary,
+    ];
+    const r = spawnSync(args.emberBin, cmd, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    if (r.status !== 0) return undefined;
+
+    let parsed: ReturnType<typeof promote>;
+    try {
+        parsed = JSON.parse(r.stdout) as ReturnType<typeof promote>;
+    } catch {
+        return undefined;
+    }
+    if (!parsed || typeof parsed.ember_script !== "string") return undefined;
+
+    if (args.apply || args.dryRun) {
+        const applyCmd = ["--apply", args.out];
+        if (args.dryRun) applyCmd.push("--dry-run");
+        applyCmd.push(args.binary);
+        const apply = spawnSync(args.emberBin, applyCmd, { encoding: "utf8" });
+        if (apply.status !== 0) {
+            throw new Error(`ember --apply failed: ${apply.stderr || apply.stdout}`);
+        }
+        if (args.dryRun) process.stdout.write(apply.stdout);
+    }
+    return parsed;
 }
 
 // .ember directive RHS is the rest of the line up to a trailing comment;

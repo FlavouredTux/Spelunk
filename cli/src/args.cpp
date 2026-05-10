@@ -99,6 +99,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--list-syscalls", &Args::list_syscalls},
     {"",   "--forge-spec",   &Args::forge_spec},
     {"",   "--cascade-scope", &Args::cascade_scope},
+    {"",   "--intel-promote", &Args::intel_promote},
     {"",   "--annotate",     &Args::annotate_addr},
     {"",   "--set-name",     &Args::annotate_name},
     {"",   "--set-note",     &Args::annotate_note},

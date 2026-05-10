@@ -1,5 +1,9 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require("electron");
 
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("ozone-platform-hint", process.env.ELECTRON_OZONE_PLATFORM_HINT || "auto");
+}
+
 // Suppress the default File / Edit / View / Window / Help bar on
 // Linux + Windows. Ember has its own title bar (NavArrows, jump,
 // settings, …) and the platform menu duplicates nothing useful.
@@ -76,6 +80,10 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    win.webContents.setZoomFactor(1);
+    win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  });
 
   // `app.isPackaged` is the only reliable dev/prod signal — a packaged
   // Electron app does NOT set NODE_ENV, so gating on it means the
@@ -85,9 +93,9 @@ function createWindow() {
   if (!app.isPackaged) {
     const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
     win.loadURL(devUrl);
-    // Auto-open DevTools in dev so the React Profiler / Performance tab
-    // is one click away. Detached so it doesn't squeeze the app window.
-    win.webContents.openDevTools({ mode: "detach" });
+    if (process.env.EMBER_OPEN_DEVTOOLS === "1") {
+      win.webContents.openDevTools({ mode: "detach" });
+    }
   } else {
     win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }

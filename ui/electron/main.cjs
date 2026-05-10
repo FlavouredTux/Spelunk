@@ -4,6 +4,9 @@ if (process.platform === "linux") {
   const requestedOzone = process.env.ELECTRON_OZONE_PLATFORM;
   if (requestedOzone) {
     app.commandLine.appendSwitch("ozone-platform", requestedOzone);
+    if (requestedOzone === "wayland") {
+      app.commandLine.appendSwitch("enable-features", "WaylandWindowDecorations");
+    }
   } else {
     app.commandLine.appendSwitch("ozone-platform-hint", process.env.ELECTRON_OZONE_PLATFORM_HINT || "auto");
   }

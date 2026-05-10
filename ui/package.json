@@ -11,8 +11,10 @@
   },
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c magenta,cyan \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:wayland": "concurrently -k -n vite,electron -c magenta,cyan \"vite\" \"wait-on http://localhost:5173 && env GDK_BACKEND=wayland ELECTRON_OZONE_PLATFORM=wayland electron .\"",
     "build": "vite build",
     "start": "electron .",
+    "start:wayland": "env GDK_BACKEND=wayland ELECTRON_OZONE_PLATFORM=wayland electron .",
     "package": "vite build && electron-builder",
     "package:linux": "vite build && electron-builder --linux",
     "package:mac": "vite build && electron-builder --mac",

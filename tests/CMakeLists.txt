@@ -995,6 +995,20 @@ ember_golden_test(
     GOLDEN  return_value.containing_fn.json.txt
 )
 
+ember_expect_fail_test(
+    NAME       disasm_at_bad_count_rejected
+    FIXTURE    return_value
+    ARGS       "--disasm-at|0x401000|--count|2wat"
+    ERR_SUBSTR "bad --count"
+)
+
+ember_expect_fail_test(
+    NAME       disasm_window_zero_count_rejected
+    FIXTURE    return_value
+    ARGS       "--disasm-window|0x401000|--count|0"
+    ERR_SUBSTR "bad --count"
+)
+
 # ---- dead_store (DSE on global-address stores) ----------------------------
 
 ember_golden_test(

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <limits>
 #include <optional>
 #if defined(_WIN32)
 #include <io.h>
@@ -117,6 +118,24 @@ constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v4";
     if (!std::filesystem::exists(loc.path, ec) || ec) return ann;
     if (auto rv = Annotations::load(loc.path); rv) ann = std::move(*rv);
     return ann;
+}
+
+[[nodiscard]] bool parse_disasm_count(std::string_view raw,
+                                      std::size_t& out,
+                                      std::string_view command) {
+    if (raw.empty()) return true;
+    u64 n = 0;
+    const auto* first = raw.data();
+    const auto* last = raw.data() + raw.size();
+    const auto r = std::from_chars(first, last, n, 10);
+    constexpr u64 kMaxCount =
+        static_cast<u64>(std::numeric_limits<addr_t>::max() / 15);
+    if (r.ec != std::errc{} || r.ptr != last || n == 0 || n > kMaxCount) {
+        std::println(stderr, "ember: {}: bad --count '{}'", command, raw);
+        return false;
+    }
+    out = static_cast<std::size_t>(n);
+    return true;
 }
 
 }  // namespace
@@ -2623,12 +2642,8 @@ int run_disasm_at(const Args& args, const Binary& b) {
         return EXIT_FAILURE;
     }
     std::size_t count = 32;
-    if (!args.disasm_count.empty()) {
-        u64 n = 0;
-        auto r = std::from_chars(args.disasm_count.data(),
-                                 args.disasm_count.data() + args.disasm_count.size(),
-                                 n, 10);
-        if (r.ec == std::errc{}) count = static_cast<std::size_t>(n);
+    if (!parse_disasm_count(args.disasm_count, count, "--disasm-at")) {
+        return EXIT_FAILURE;
     }
     // 8 bytes/insn is the typical x86-64 average; ~15 bytes is the max.
     const addr_t end = static_cast<addr_t>(*va) +
@@ -2714,12 +2729,8 @@ int run_disasm_window(const Args& args, const Binary& b) {
     }
 
     std::size_t count = 32;
-    if (!args.disasm_count.empty()) {
-        u64 n = 0;
-        auto r = std::from_chars(args.disasm_count.data(),
-                                 args.disasm_count.data() + args.disasm_count.size(),
-                                 n, 10);
-        if (r.ec == std::errc{}) count = static_cast<std::size_t>(n);
+    if (!parse_disasm_count(args.disasm_count, count, "--disasm-window")) {
+        return EXIT_FAILURE;
     }
 
     auto window_for_va = [&](addr_t va) -> std::string {

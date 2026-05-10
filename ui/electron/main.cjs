@@ -2,12 +2,8 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = requir
 
 if (process.platform === "linux") {
   const requestedOzone = process.env.ELECTRON_OZONE_PLATFORM;
-  const isWaylandSession = !!process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland";
   if (requestedOzone) {
     app.commandLine.appendSwitch("ozone-platform", requestedOzone);
-  } else if (isWaylandSession) {
-    app.commandLine.appendSwitch("ozone-platform", "wayland");
-    app.commandLine.appendSwitch("enable-features", "WaylandWindowDecorations");
   } else {
     app.commandLine.appendSwitch("ozone-platform-hint", process.env.ELECTRON_OZONE_PLATFORM_HINT || "auto");
   }

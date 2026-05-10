@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import { displayName, demangle, formatSize } from "../api";
 import type { BinaryInfo, FunctionInfo, Annotations } from "../types";
@@ -32,7 +32,7 @@ export function SymbolsView(props: {
   const exports = useMemo(() => info.functions, [info]);
   const imports = useMemo(() => info.imports.filter((f) => f.name), [info.imports]);
 
-  const filteredFunctions = (pool: FunctionInfo[]): FunctionInfo[] => {
+  const filterFunctions = (pool: FunctionInfo[]): FunctionInfo[] => {
     const needle = deferredQ.trim().toLowerCase();
     if (!needle) return pool;
     return pool.filter((f) => {
@@ -42,6 +42,14 @@ export function SymbolsView(props: {
              f.addr.includes(needle);
     });
   };
+  const filteredImports = useMemo(
+    () => filterFunctions(imports),
+    [imports, deferredQ, annotations],
+  );
+  const filteredExports = useMemo(
+    () => filterFunctions(exports),
+    [exports, deferredQ, annotations],
+  );
 
   const filteredSections = useMemo(() => {
     const needle = deferredQ.trim().toLowerCase();
@@ -146,28 +154,24 @@ export function SymbolsView(props: {
             );
           })}
         </div>
-        <div style={{ flex: 1, overflowY: "auto" }}>
+        <div style={{ flex: 1, overflow: "hidden" }}>
           {(tab === "sections") && (
-            <SectionsList sections={filteredSections} />
+            <div style={{ height: "100%", overflowY: "auto" }}>
+              <SectionsList sections={filteredSections} />
+            </div>
           )}
           {(tab === "memmap") && (
-            <MemoryMap sections={filteredSections} />
+            <div style={{ height: "100%", overflowY: "auto" }}>
+              <MemoryMap sections={filteredSections} />
+            </div>
           )}
-          {(tab === "imports" || tab === "all") && (
+          {(tab === "imports" || tab === "exports" || tab === "all") && (
             <FunctionList
-              title={tab === "all" ? "imports" : null}
-              list={filteredFunctions(imports)}
+              imports={tab === "exports" ? [] : filteredImports}
+              exports={tab === "imports" ? [] : filteredExports}
               annotations={annotations}
               onSelect={(f) => { onSelect(f); onClose(); }}
-              isImport
-            />
-          )}
-          {(tab === "exports" || tab === "all") && (
-            <FunctionList
-              title={tab === "all" ? "exports" : null}
-              list={filteredFunctions(exports)}
-              annotations={annotations}
-              onSelect={(f) => { onSelect(f); onClose(); }}
+              showHeaders={tab === "all"}
             />
           )}
         </div>
@@ -375,14 +379,62 @@ function SectionsList(props: { sections: BinaryInfo["sections"] }) {
   );
 }
 
+const FN_ROW_H = 32;
+const FN_OVERSCAN = 10;
+
+type FunctionListEntry =
+  | { kind: "header"; id: string; label: string; count: number }
+  | { kind: "fn"; id: string; fn: FunctionInfo; isImport: boolean };
+
 function FunctionList(props: {
-  title: string | null;
-  list: FunctionInfo[];
+  imports: FunctionInfo[];
+  exports: FunctionInfo[];
   annotations: Annotations;
   onSelect: (f: FunctionInfo) => void;
-  isImport?: boolean;
+  showHeaders: boolean;
 }) {
-  if (props.list.length === 0) {
+  const scRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewH, setViewH] = useState(0);
+
+  useEffect(() => {
+    const el = scRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => setViewH(el.clientHeight));
+    ro.observe(el);
+    setViewH(el.clientHeight);
+    return () => { el.removeEventListener("scroll", onScroll); ro.disconnect(); };
+  }, []);
+
+  useEffect(() => {
+    if (scRef.current) scRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [props.imports, props.exports]);
+
+  const entries = useMemo<FunctionListEntry[]>(() => {
+    const out: FunctionListEntry[] = [];
+    if (props.imports.length > 0) {
+      if (props.showHeaders) {
+        out.push({ kind: "header", id: "imports", label: "imports", count: props.imports.length });
+      }
+      for (const fn of props.imports) {
+        out.push({ kind: "fn", id: `i-${fn.addr}-${fn.name}`, fn, isImport: true });
+      }
+    }
+    if (props.exports.length > 0) {
+      if (props.showHeaders) {
+        out.push({ kind: "header", id: "exports", label: "exports", count: props.exports.length });
+      }
+      for (const fn of props.exports) {
+        out.push({ kind: "fn", id: `e-${fn.addr}-${fn.name}`, fn, isImport: false });
+      }
+    }
+    return out;
+  }, [props.imports, props.exports, props.showHeaders]);
+
+  if (entries.length === 0) {
     return (
       <div style={{
         padding: 28, textAlign: "center",
@@ -391,75 +443,108 @@ function FunctionList(props: {
       }}>nothing matches</div>
     );
   }
+
+  const total = entries.length;
+  const first = Math.max(0, Math.floor(scrollTop / FN_ROW_H) - FN_OVERSCAN);
+  const last = Math.min(total, Math.ceil((scrollTop + viewH) / FN_ROW_H) + FN_OVERSCAN);
+  const padTop = first * FN_ROW_H;
+  const padBot = Math.max(0, (total - last) * FN_ROW_H);
+  const visible = entries.slice(first, last);
+
   return (
-    <div>
-      {props.title && (
-        <div style={{
-          padding: "10px 18px 4px",
-          fontFamily: sans, fontSize: 11, fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: 0.8,
-          color: C.textMuted,
-        }}>{props.title}</div>
-      )}
-      {props.list.map((f, i) => {
-        const dn = displayName(f, props.annotations);
-        const dm = demangle(f.name);
-        const navigable = !props.isImport || f.addrNum !== 0;
-        return (
-          <button
-            key={`${f.addr}-${i}`}
-            onClick={() => navigable && props.onSelect(f)}
-            disabled={!navigable}
-            style={{
-              width: "100%", padding: "8px 18px",
-              display: "flex", alignItems: "baseline", gap: 14,
-              borderBottom: `1px solid ${C.border}`,
-              cursor: navigable ? "pointer" : "default",
-              background: "transparent",
-              textAlign: "left",
-              // Skip layout/paint for off-screen rows. Each row is a
-              // single-line ellipsised flexbox of fixed ~30px height,
-              // which makes the intrinsic-size hint reliable. Cheap
-              // browser-native virtualization without restructuring the
-              // scroll container — important here because the parent
-              // scroll holds two FunctionLists in the "all" tab.
-              contentVisibility: "auto",
-              containIntrinsicSize: "30px",
-            }}
-            onMouseEnter={(e) => {
-              if (navigable) (e.currentTarget as HTMLElement).style.background = C.bgMuted;
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-            }}
-          >
-            <span style={{
-              fontFamily: mono, fontSize: 11, color: C.accent,
-              width: 96, flexShrink: 0,
-            }}>{f.addr}</span>
-            <span style={{
-              flex: 1,
-              fontFamily: sans, fontSize: 12, color: C.text,
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            }} title={f.name}>{dn}</span>
-            {dm !== dn && (
+    <div ref={scRef} style={{ height: "100%", overflowY: "auto" }}>
+      <div style={{ height: padTop }} />
+      {visible.map((entry) => {
+        if (entry.kind === "header") {
+          return (
+            <div
+              key={entry.id}
+              style={{
+                height: FN_ROW_H,
+                padding: "9px 18px 0",
+                fontFamily: sans, fontSize: 11, fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: 0.8,
+                color: C.textMuted,
+                borderBottom: `1px solid ${C.border}`,
+              }}
+            >
+              {entry.label}
               <span style={{
-                fontFamily: serif, fontStyle: "italic",
-                fontSize: 11, color: C.textFaint,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                maxWidth: "40%",
-              }}>{dm}</span>
-            )}
-            {f.size > 0 && (
-              <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
-                {formatSize(f.size)}
-              </span>
-            )}
-          </button>
+                marginLeft: 8, fontFamily: mono, fontSize: 10,
+                color: C.textFaint, letterSpacing: 0,
+              }}>{entry.count}</span>
+            </div>
+          );
+        }
+        return (
+          <FunctionRow
+            key={entry.id}
+            fn={entry.fn}
+            annotations={props.annotations}
+            onSelect={props.onSelect}
+            isImport={entry.isImport}
+          />
         );
       })}
+      <div style={{ height: padBot }} />
     </div>
+  );
+}
+
+function FunctionRow(props: {
+  fn: FunctionInfo;
+  annotations: Annotations;
+  onSelect: (f: FunctionInfo) => void;
+  isImport: boolean;
+}) {
+  const { fn, annotations, onSelect, isImport } = props;
+  const dn = displayName(fn, annotations);
+  const dm = demangle(fn.name);
+  const navigable = !isImport || fn.addrNum !== 0;
+  return (
+    <button
+      onClick={() => navigable && onSelect(fn)}
+      disabled={!navigable}
+      style={{
+        width: "100%", height: FN_ROW_H,
+        padding: "7px 18px",
+        display: "flex", alignItems: "baseline", gap: 14,
+        borderBottom: `1px solid ${C.border}`,
+        cursor: navigable ? "pointer" : "default",
+        background: "transparent",
+        textAlign: "left",
+      }}
+      onMouseEnter={(e) => {
+        if (navigable) (e.currentTarget as HTMLElement).style.background = C.bgMuted;
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLElement).style.background = "transparent";
+      }}
+    >
+      <span style={{
+        fontFamily: mono, fontSize: 11, color: C.accent,
+        width: 96, flexShrink: 0,
+      }}>{fn.addr}</span>
+      <span style={{
+        flex: 1,
+        fontFamily: sans, fontSize: 12, color: C.text,
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }} title={fn.name}>{dn}</span>
+      {dm !== dn && (
+        <span style={{
+          fontFamily: serif, fontStyle: "italic",
+          fontSize: 11, color: C.textFaint,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          maxWidth: "40%",
+        }}>{dm}</span>
+      )}
+      {fn.size > 0 && (
+        <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
+          {formatSize(fn.size)}
+        </span>
+      )}
+    </button>
   );
 }
 

@@ -37,15 +37,6 @@ function scoreMatch(needle: string, entry: StringEntry): number {
   return 0;
 }
 
-// Find the function whose [addr, addr+size) contains `ip`.
-function resolveFunction(info: BinaryInfo, ip: number): FunctionInfo | null {
-  // Functions can be sparse; linear scan is fine for typical binary sizes.
-  for (const f of info.functions) {
-    if (ip >= f.addrNum && ip < f.addrNum + f.size) return f;
-  }
-  return null;
-}
-
 export function StringsView(props: {
   info: BinaryInfo;
   strings: StringEntry[];
@@ -58,6 +49,36 @@ export function StringsView(props: {
   const [q, setQ] = useState("");
   const [onlyReferenced, setOnlyReferenced] = useState(true);
   const [selected, setSelected] = useState<number | null>(null);
+
+  const stringByAddr = useMemo(() => {
+    const m = new Map<number, StringEntry>();
+    for (const s of strings) m.set(s.addrNum, s);
+    return m;
+  }, [strings]);
+
+  const functionRanges = useMemo(() => {
+    return info.functions
+      .filter((f) => Number.isFinite(f.addrNum) && f.size > 0)
+      .map((f) => ({ lo: f.addrNum, hi: f.addrNum + f.size, fn: f }))
+      .sort((a, b) => a.lo - b.lo);
+  }, [info.functions]);
+
+  const resolveFunction = (ip: number): FunctionInfo | null => {
+    let lo = 0;
+    let hi = functionRanges.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const r = functionRanges[mid];
+      if (ip < r.lo) {
+        hi = mid - 1;
+      } else if (ip >= r.hi) {
+        lo = mid + 1;
+      } else {
+        return r.fn;
+      }
+    }
+    return null;
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -108,20 +129,20 @@ export function StringsView(props: {
   const visible = filtered.slice(first, last);
 
   const selectedEntry =
-    selected != null ? strings.find((s) => s.addrNum === selected) ?? null : null;
+    selected != null ? stringByAddr.get(selected) ?? null : null;
   const selectedXrefFuncs = useMemo(() => {
     if (!selectedEntry) return [];
     const seen = new Set<number>();
     const out: { ip: number; fn: FunctionInfo | null }[] = [];
     for (const ip of selectedEntry.xrefs) {
-      const fn = resolveFunction(info, ip);
+      const fn = resolveFunction(ip);
       const key = fn?.addrNum ?? ip;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({ ip, fn });
     }
     return out;
-  }, [selectedEntry, info]);
+  }, [selectedEntry, functionRanges]);
 
   return (
     <div

@@ -420,6 +420,9 @@ resolve_function(const Binary& b, std::string_view symbol,
                     static_cast<unsigned long long>(*va));
                 return std::nullopt;
             }
+            if (auto cf = containing_function(b, *va); cf && cf->entry == *va) {
+                return window_from_addr(cf->entry, cf->size, cf->name);
+            }
             return window_from_addr(*va, 0, std::format("sub_{:x}", *va));
         }
         auto win = resolve_containing_function(b, *va);

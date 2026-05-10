@@ -29,6 +29,16 @@ void check_eq(ember::addr_t got, ember::addr_t want, const char* ctx) {
     }
 }
 
+void check_eq_u64(ember::u64 got, ember::u64 want, const char* ctx) {
+    if (got != want) {
+        std::fprintf(stderr, "FAIL: %s (got %#llx, want %#llx)\n",
+                     ctx,
+                     static_cast<unsigned long long>(got),
+                     static_cast<unsigned long long>(want));
+        ++fails;
+    }
+}
+
 constexpr ember::addr_t kTextBase = 0x401000;
 constexpr ember::addr_t kDataBase = 0x402000;
 
@@ -105,7 +115,10 @@ void test_literal_sub_must_be_code() {
 
     auto text = ember::resolve_function(b, "sub_401000");
     check(text.has_value(), "sub_ literal in .text resolves");
-    if (text) check_eq(text->start, kTextBase, "text start");
+    if (text) {
+        check_eq(text->start, kTextBase, "text start");
+        check_eq_u64(text->size, 1, "text function size is preserved");
+    }
 
     auto data_sub = ember::resolve_function(b, "sub_402000");
     check(!data_sub.has_value(), "sub_ literal in .rodata is rejected");

@@ -769,14 +769,14 @@ ember_golden_test(
 ember_golden_test(
     NAME    tail_call_cascade_plan
     FIXTURE tail_call
-    ARGS    "--cascade-plan|--cascade-scope|list:0x401010|--per-round|3"
+    ARGS    "--cascade-plan|--cascade-scope|list:0x401120|--per-round|3"
     GOLDEN  tail_call.cascade_plan.txt
 )
 
 ember_golden_test(
     NAME    tail_call_cascade_plan_range_overlap
     FIXTURE tail_call
-    ARGS    "--cascade-plan|--cascade-scope|range:0x401010-0x401012|--per-round|3"
+    ARGS    "--cascade-plan|--cascade-scope|range:0x401120-0x401122|--per-round|3"
     GOLDEN  tail_call.cascade_plan_range_overlap.txt
 )
 

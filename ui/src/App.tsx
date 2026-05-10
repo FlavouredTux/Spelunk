@@ -9,7 +9,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { CfgGraph } from "./components/CfgGraph";
 import { AIPanel, SparkIcon } from "./components/AIPanel";
 import { GearIcon, SettingsPanel } from "./components/Settings";
-import { loadSettings, saveSettings } from "./settings";
+import { DEFAULT_SETTINGS, loadSettings, saveSettings } from "./settings";
 import type { AppSettings } from "./settings";
 import { CallGraphView } from "./components/CallGraphView";
 import { PluginsPanelView } from "./components/PluginsPanelView";
@@ -136,7 +136,7 @@ async function collectRendererDiagnostics(settings: AppSettings, current: Functi
   document.body.appendChild(probe);
   const probeStyle = getComputedStyle(probe);
   const bodyStyle = getComputedStyle(document.body);
-  const codePane = document.querySelector(".sel") as HTMLElement | null;
+  const codePane = document.querySelector(".ember-code-pane") as HTMLElement | null;
   const codeStyle = codePane ? getComputedStyle(codePane) : null;
   const fonts = document.fonts;
   const renderer = {
@@ -1784,6 +1784,13 @@ export default function App() {
         <DebugDiagnostics
           settings={settings}
           current={current}
+          onResetDisplay={() => patchSettings({
+            codeFontSize: 12,
+            codeFontFamily: DEFAULT_SETTINGS.codeFontFamily,
+            sidebarWidth: DEFAULT_SETTINGS.sidebarWidth,
+            xrefsWidth: DEFAULT_SETTINGS.xrefsWidth,
+            theme: DEFAULT_SETTINGS.theme,
+          })}
           onClose={() => setDebugOpen(false)}
         />
       )}
@@ -2507,6 +2514,7 @@ function FunctionHeader(props: {
 function DebugDiagnostics(props: {
   settings: AppSettings;
   current: FunctionInfo | null;
+  onResetDisplay: () => void;
   onClose: () => void;
 }) {
   const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
@@ -2584,6 +2592,21 @@ function DebugDiagnostics(props: {
               opacity: busy ? 0.6 : 1,
             }}
           >{busy ? "refreshing" : "refresh"}</button>
+          <button
+            onClick={() => {
+              props.onResetDisplay();
+              setTimeout(refresh, 0);
+            }}
+            style={{
+              padding: "5px 10px",
+              fontFamily: sans,
+              fontSize: 12,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+            }}
+          >reset display</button>
           <button
             onClick={() => {
               navigator.clipboard.writeText(text).then(() => {

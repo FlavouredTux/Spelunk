@@ -15,6 +15,12 @@ const LEGACY_CODE_FONT_FAMILIES = new Set([
   "'SF Mono','Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace",
 ]);
 
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 // Per-binary view state: which function was last open, scroll position,
 // view mode, plus user bookmarks. Keyed by absolute binary path so
 // switching back to a previous binary restores where you were.
@@ -101,10 +107,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   resumeOnLaunch: true,
 };
 
+function normalizeSettings(s: AppSettings): AppSettings {
+  return {
+    ...s,
+    codeFontSize: clampNumber(s.codeFontSize, DEFAULT_SETTINGS.codeFontSize, 9, 24),
+    sidebarWidth: clampNumber(s.sidebarWidth, DEFAULT_SETTINGS.sidebarWidth, 240, 520),
+    xrefsWidth: clampNumber(s.xrefsWidth, DEFAULT_SETTINGS.xrefsWidth, 220, 520),
+  };
+}
+
 export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
+    if (!raw) return normalizeSettings({ ...DEFAULT_SETTINGS });
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     // Merge with defaults so missing keys (newer settings vs older
     // saved file) get sensible values instead of `undefined`.
@@ -112,9 +127,9 @@ export function loadSettings(): AppSettings {
     if (LEGACY_CODE_FONT_FAMILIES.has(merged.codeFontFamily)) {
       merged.codeFontFamily = DEFAULT_CODE_FONT_FAMILY;
     }
-    return merged;
+    return normalizeSettings(merged);
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return normalizeSettings({ ...DEFAULT_SETTINGS });
   }
 }
 

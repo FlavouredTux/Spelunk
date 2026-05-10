@@ -232,7 +232,7 @@ export function CodeView(props: {
       )}
       <div
         ref={scrollerRef}
-        className="sel"
+        className="sel ember-code-pane"
         style={{
           flex: 1,
           minHeight: 0,   // same — lets overflow: auto actually scroll instead of pushing past the clip

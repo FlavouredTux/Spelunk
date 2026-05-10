@@ -2,6 +2,14 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell, screen } 
 
 if (process.platform === "linux") {
   const requestedOzone = process.env.ELECTRON_OZONE_PLATFORM;
+  const requestedScale = process.env.ELECTRON_FORCE_DEVICE_SCALE_FACTOR ||
+                         process.env.EMBER_FORCE_DEVICE_SCALE_FACTOR;
+  if (requestedScale) {
+    app.commandLine.appendSwitch("force-device-scale-factor", requestedScale);
+  }
+  if (process.env.EMBER_DISABLE_GPU === "1") {
+    app.commandLine.appendSwitch("disable-gpu");
+  }
   if (requestedOzone) {
     app.commandLine.appendSwitch("ozone-platform", requestedOzone);
     if (requestedOzone === "wayland") {

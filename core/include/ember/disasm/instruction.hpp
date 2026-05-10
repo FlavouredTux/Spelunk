@@ -169,6 +169,7 @@ enum class Mnemonic : u16 {
     // Bit-scan and double-shift — GPR ops, not SSE.
     Bsf,         // 0x0F BC
     Bsr,         // 0x0F BD
+    Popcnt,      // 0xF3 0x0F B8
     Shld,        // 0x0F A4 (imm) / A5 (CL)
     Shrd,        // 0x0F AC (imm) / AD (CL)
 

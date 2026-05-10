@@ -445,6 +445,9 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     t[0x70] = op(Mnemonic::Pshufhw,     OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);
     t[0x7E] = op(Mnemonic::MovqXmm,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x7F] = op(Mnemonic::MovdquStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
+    // POPCNT is a mandatory-F3 scalar integer opcode, not SSE. It still
+    // routes through this table because F3 0F selects it.
+    t[0xB8] = op(Mnemonic::Popcnt,      OpSpec::Gv, OpSpec::Ev, OpSpec::None, true);
     return t;
 }
 

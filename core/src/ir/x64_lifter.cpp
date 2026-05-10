@@ -959,6 +959,30 @@ void lift_bit_scan(LiftCtx& ctx, std::string_view name) {
     store_lvalue(insn.operands[0], r, ctx);
 }
 
+// POPCNT dst, src: dst = number of set bits in src. ZF reflects whether the
+// source was zero; other status flags are architecturally cleared, but ZF is
+// the one emitted code commonly consumes.
+void lift_popcnt(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    const IrType t = operand_type(insn.operands[0]);
+    src = ctx.match_size(src, t, /*sign_ext=*/false);
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, src, ctx.imm(0, t)));
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = "popcnt";
+    i.dst  = ctx.temp(t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue r = i.dst;
+    ctx.emit(std::move(i));
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
 // BT base, off: CF = (base >> (off mod W)) & 1. We don't model the mod
 // because compilers emit immediate-form `bt base, imm` where the count is
 // already in range; the symbolic shift is enough for the reader.
@@ -1670,6 +1694,7 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Cmpxchg: lift_cmpxchg(ctx); break;
         case Mnemonic::Bsf:     lift_bit_scan(ctx, "bsf"); break;
         case Mnemonic::Bsr:     lift_bit_scan(ctx, "bsr"); break;
+        case Mnemonic::Popcnt:  lift_popcnt(ctx);  break;
         case Mnemonic::Bt:      lift_bit_test(ctx, 't'); break;
         case Mnemonic::Bts:     lift_bit_test(ctx, 's'); break;
         case Mnemonic::Btr:     lift_bit_test(ctx, 'r'); break;

@@ -249,6 +249,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Pinsrw:       return "pinsrw";
         case Mnemonic::Bsf:          return "bsf";
         case Mnemonic::Bsr:          return "bsr";
+        case Mnemonic::Popcnt:       return "popcnt";
         case Mnemonic::Shld:         return "shld";
         case Mnemonic::Shrd:         return "shrd";
 

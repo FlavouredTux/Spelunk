@@ -12,7 +12,7 @@ import { ROLES } from "./roles/index.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
 import { promote } from "./promote.js";
 import { fanout } from "./fanout.js";
-import { cascade } from "./cascade.js";
+import { cascade, formatCascadePlan } from "./cascade.js";
 import { tiebreak } from "./tiebreak.js";
 
 // CLI entry. Subcommands:
@@ -330,7 +330,7 @@ async function cmdCascade(argv: string[]) {
     const f = parseFlags(argv);
     const binary = f.get("binary");
     if (!binary) {
-        console.error("usage: cascade --binary=B [--role=namer] [--per-round=N] [--max-rounds=N] [--budget=N] [--threshold=N] [--eligibility-ratio=N] [--model=M]");
+        console.error("usage: cascade --binary=B [--role=namer] [--scope=all|list:..|range:..|callers-of:..|callees-of:..|around:..] [--dry-run-plan] [--per-round=N] [--max-rounds=N] [--budget=N] [--threshold=N] [--eligibility-ratio=N] [--model=M]");
         process.exit(2);
     }
     const role = (f.get("role") ?? "namer") as "namer" | "mapper" | "typer" | "tiebreaker";
@@ -360,6 +360,12 @@ async function cmdCascade(argv: string[]) {
         : undefined;
 
     process.stderr.write(`cascade starting on ${binary}, role=${role}\n`);
+    if (f.get("scope")) {
+        process.stderr.write(`cascade: scope=${f.get("scope")}\n`);
+    }
+    if (f.get("dry-run-plan") === "true") {
+        process.stderr.write(`cascade: dry-run plan only; no workers will be spawned\n`);
+    }
     if (models && models.length > 0) {
         process.stderr.write(`cascade: per-round model rotation: ${models.join(" → ")}\n`);
     }
@@ -377,14 +383,32 @@ async function cmdCascade(argv: string[]) {
         emberBin: findEmberBin(),
         runsRoot: RUNS_ROOT,
         module: f.get("module") ?? undefined,
+        scope: f.get("scope") ?? undefined,
+        dryRunPlan: f.get("dry-run-plan") === "true",
     });
+
+    if (r.plan) {
+        for (const line of formatCascadePlan(r.plan)) {
+            process.stderr.write(`${line}\n`);
+        }
+    }
 
     // Per-round ASCII summary.
     for (const rd of r.rounds) {
         process.stderr.write(
             `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} ok=${rd.fulfilled} rej=${rd.rejected} new=${rd.new_names} model=${rd.model} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
         );
+        for (const target of rd.targets?.slice(0, 6) ?? []) {
+            process.stderr.write(
+                `    target ${target.addr}: score=${target.score.toFixed(1)} ` +
+                `${target.reasons.join(", ")}\n`,
+            );
+        }
     }
+    process.stderr.write(
+        `cascade done: rounds=${r.rounds.length} total_named=${r.total_named} ` +
+        `total_cost=$${r.total_cost.toFixed(4)}\n`,
+    );
     console.log(JSON.stringify(r, null, 2));
 }
 

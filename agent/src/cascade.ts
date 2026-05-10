@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { runWorker } from "./worker.js";
@@ -10,8 +9,6 @@ import { isCodexCliModel, runCodexCliWorker } from "./worker_codex_cli.js";
 import { pickCodexHome, pickassistantHome } from "./cli_homes.js";
 import { promote } from "./promote.js";
 import { IntelLog, intelPathFor, newId } from "./intel/log.js";
-import { EmberDaemon } from "./tools/daemon.js";
-import type { Claim } from "./intel/log.js";
 
 // Pre-warm ember's xrefs + strings disk caches so worker daemons
 // pick up cached payloads on first access instead of N×workers
@@ -168,6 +165,9 @@ export interface CascadeArgs {
                                  // the coord daemon + every worker daemon. Critical
                                  // on minidump targets where the 160K wine-DLL fns
                                  // would otherwise dominate every fn-walk.
+    scope?: string;              // target filter: all | list:0x..,.. | range:A-B |
+                                 // callers-of:A | callees-of:A | around:A[:radius]
+    dryRunPlan?: boolean;        // compute and print target plan; spawn no workers
 }
 
 export interface RoundStats {
@@ -181,82 +181,32 @@ export interface RoundStats {
     model: string;                // model actually used this round
     cost_usd: number;
     elapsed_ms: number;
+    targets?: CascadePlanEntry[]; // selected target preview, same ordering as spawned workers
 }
 
 export interface CascadeResult {
     rounds: RoundStats[];
     total_named: number;
     total_cost: number;
+    plan?: CascadePlan;
 }
 
-interface FnInfo { addr: string; size: number; kind: string; name: string; }
-
-function parseFunctionsTsv(stdout: string): FnInfo[] {
-    const out: FnInfo[] = [];
-    for (const line of stdout.split("\n")) {
-        const t = line.trim(); if (!t) continue;
-        const parts = t.split("\t");
-        if (parts.length < 4) continue;
-        const addr = "0x" + parseInt(parts[0], 16).toString(16);
-        out.push({
-            addr,
-            size: parseInt(parts[1], 16) || 0,
-            kind: parts[2],
-            name: parts[3],
-        });
-    }
-    return out;
+export interface CascadePlanEntry {
+    addr: string;
+    score: number;
+    ratio: number;
+    callees: number;
+    callers: number;
+    unresolved_callees: number;
+    size: number;
+    reasons: string[];
 }
-
-function listFunctions(binary: string, emberBin: string): FnInfo[] {
-    const r = spawnSync(emberBin, ["--functions", binary], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    if (r.status !== 0) throw new Error(`ember --functions failed: ${r.stderr}`);
-    return parseFunctionsTsv(r.stdout);
-}
-
-// Read the binary's currently-resolved rename map via the daemon. TEEF
-// anchors and prior-promoted cascade names land here (kind=sub stays
-// in --functions but the address is annotated). Cascade seeds the
-// known-neighbor set with these so round 0 can actually compound.
-async function loadAnnotations(daemon: EmberDaemon): Promise<Set<string>> {
-    const out = new Set<string>();
-    const body = await daemon.call("annotations");
-    for (const line of body.split("\n")) {
-        if (!line) continue;
-        const tab = line.indexOf("\t");
-        if (tab < 0) continue;
-        const addr = line.slice(0, tab);
-        out.add(addr);
-    }
-    return out;
-}
-
-function listCallees(addr: string, binary: string, emberBin: string): string[] {
-    const r = spawnSync(emberBin, ["--callees", addr, binary], { encoding: "utf8" });
-    if (r.status !== 0) return [];   // function may have no callees, not an error
-    const out: string[] = [];
-    for (const line of r.stdout.split("\n")) {
-        const t = line.trim(); if (!t) continue;
-        if (!t.startsWith("0x")) continue;
-        out.push("0x" + parseInt(t, 16).toString(16));
-    }
-    return out;
-}
-
-// One-shot bulk callee map via daemon. Replaces N round-trips for
-// cascade's eligibility pass. Returns Map<caller, callees[]>.
-async function loadAllCallees(daemon: EmberDaemon): Promise<Map<string, string[]>> {
-    const body = await daemon.call("callees_all");
-    const out = new Map<string, string[]>();
-    for (const line of body.split("\n")) {
-        if (!line) continue;
-        const tab = line.indexOf("\t");
-        if (tab < 0) continue;
-        const caller = line.slice(0, tab);
-        const callees = line.slice(tab + 1).split(",").filter(Boolean);
-        out.set(caller, callees);
-    }
-    return out;
+export interface CascadePlan {
+    scope: string;
+    candidates: number;
+    eligible: number;
+    selected: number;
+    top: CascadePlanEntry[];
 }
 
 function highConfNames(intel: IntelLog, threshold: number): Set<string> {
@@ -268,6 +218,81 @@ function highConfNames(intel: IntelLog, threshold: number): Set<string> {
         out.add(d.winner.subject);
     }
     return out;
+}
+
+export function formatCascadePlan(plan: CascadePlan, limit = 12): string[] {
+    const lines: string[] = [
+        `plan: scope=${plan.scope} candidates=${plan.candidates} eligible=${plan.eligible} selected=${plan.selected}`,
+    ];
+    const rows = plan.top.slice(0, limit);
+    if (rows.length === 0) {
+        lines.push("  no eligible targets");
+        return lines;
+    }
+    const addrW = Math.max(6, ...rows.map((r) => r.addr.length));
+    const scoreW = Math.max(5, ...rows.map((r) => r.score.toFixed(1).length));
+    rows.forEach((r, idx) => {
+        const n = String(idx + 1).padStart(2, " ");
+        const addr = r.addr.padEnd(addrW, " ");
+        const score = r.score.toFixed(1).padStart(scoreW, " ");
+        const ratio = `${Math.round(r.ratio * 100)}%`.padStart(4, " ");
+        lines.push(
+            `  ${n}. ${addr} score=${score} known=${ratio} ` +
+            `callers=${r.callers} callees=${r.callees} unresolved=${r.unresolved_callees} ` +
+            `- ${r.reasons.join(", ")}`,
+        );
+    });
+    if (plan.top.length > rows.length) {
+        lines.push(`  ... ${plan.top.length - rows.length} more selected target(s)`);
+    }
+    return lines;
+}
+
+function runCppCascadePlan(args: {
+    binary: string;
+    emberBin: string;
+    scope?: string;
+    perRound: number;
+    eligibilityRatio: number;
+    module?: string;
+}): CascadePlan {
+    const cmd = ["--cascade-plan"];
+    if (args.module) cmd.push("--module", args.module);
+    cmd.push(
+        "--cascade-scope", args.scope?.trim() || "all",
+        "--per-round", String(args.perRound),
+        "--eligibility-ratio", String(args.eligibilityRatio),
+        "--json",
+        args.binary,
+    );
+    const r = spawnSync(args.emberBin, cmd, {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+    });
+    if (r.status !== 0) {
+        throw new Error(`ember --cascade-plan failed: ${r.stderr || r.stdout}`);
+    }
+    const parsed = JSON.parse(r.stdout) as CascadePlan;
+    if (!parsed || !Array.isArray(parsed.top)) {
+        throw new Error("ember --cascade-plan returned malformed JSON");
+    }
+    return parsed;
+}
+
+function syncIntelToAnnotations(args: CascadeArgs, round: number): void {
+    const scriptPath = join(args.runsRoot, `cascade-pre-round-${round}.ember`);
+    try {
+        promote({
+            binary: args.binary,
+            out: scriptPath,
+            threshold: args.threshold,
+            apply: true,
+            dryRun: false,
+            emberBin: args.emberBin,
+        });
+    } catch (e) {
+        process.stderr.write(`promote failed before round ${round}: ${e}\n`);
+    }
 }
 
 export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
@@ -288,114 +313,43 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         process.stderr.write(`cascade: killed ${cleared} orphan ember --serve daemon(s) for ${args.binary}\n`);
     }
 
-    // Pre-round-0 startup, fully parallelized. Three independent cold
-    // workloads used to run serially:
-    //   1. warmEmberCaches: spawns `ember --xrefs` + `ember --strings`
-    //      to populate disk cache for worker daemons.
-    //   2. coord daemon cold-init: own binary load + analysis pipeline.
-    //   3. functions / annotations / callees_all queries against coord.
-    // (1) and (2) are different processes doing redundant cold loads
-    // — they should race, not serialize. (3) just rides on (2)'s ready
-    // signal; firing them all at once lets the daemon pipeline work
-    // across them instead of round-tripping per call. On a 9000-fn
-    // binary this cuts pre-agent wall time roughly in half.
-    const coord = (() => {
-        try { return new EmberDaemon(args.emberBin, args.binary, undefined, args.module); }
-        catch { return undefined; }
-    })();
-
-    const fnsP: Promise<FnInfo[]> = coord
-        ? coord.call("functions").then(parseFunctionsTsv).catch(() => listFunctions(args.binary, args.emberBin))
-        : Promise.resolve(listFunctions(args.binary, args.emberBin));
-    const annotP: Promise<Set<string>> = coord
-        ? loadAnnotations(coord).catch((e) => {
-            process.stderr.write(`annotations seed failed: ${e}\n`);
-            return new Set<string>();
-        })
-        : Promise.resolve(new Set<string>());
-    const calleesP: Promise<Map<string, string[]>> = coord
-        ? loadAllCallees(coord).catch((e) => {
-            process.stderr.write(`callees_all failed, falling back to per-fn: ${e}\n`);
-            return new Map<string, string[]>();
-        })
-        : Promise.resolve(new Map<string, string[]>());
-
-    const [, fns, annotated, calleeMap] = await Promise.all([
-        warmEmberCaches(args.binary, args.emberBin),
-        fnsP,
-        annotP,
-        calleesP,
-    ]);
-
-    const subAddrs = new Set<string>();
-    for (const f of fns) {
-        if (f.kind === "sub") subAddrs.add(f.addr);
+    // Planning now lives in C++ (`ember --cascade-plan`). Keep the TS side
+    // focused on auth, workers, event logs, cost accounting, and promotion.
+    if (!args.dryRunPlan) {
+        await warmEmberCaches(args.binary, args.emberBin);
+        syncIntelToAnnotations(args, 0);
     }
-    if (annotated.size > 0) {
-        process.stderr.write(`cascade: seeded with ${annotated.size} pre-existing annotations (TEEF + symbols)\n`);
-    }
-    // Daemon's callees_all only emits caller→callees edges for fns that
-    // actually have outgoing calls; true leaves (returns + intrinsics)
-    // never appear. Earlier this code treated `undefined` as "fall back
-    // to a per-fn `--callees` subprocess" — which on a 12K-fn minidump
-    // fires ~5K cold subprocesses each paying compute_call_graph again,
-    // totalling 30+ minutes of dead serial work. Treat absence as
-    // "no callees" — the daemon is authoritative; missing == leaf.
-    // The CLI fallback path stays for the no-coord case (subprocess
-    // startup failed) where calleeMap is the entirely-empty default.
-    const calleesOf = (addr: string): string[] => {
-        if (coord) return calleeMap.get(addr) ?? [];
-        let v = calleeMap.get(addr);
-        if (v == null) {
-            v = listCallees(addr, args.binary, args.emberBin);
-            calleeMap.set(addr, v);
-        }
-        return v;
-    };
 
+    let lastPlan: CascadePlan | undefined;
     for (let round = 0; round < args.maxRounds; ++round) {
         const t0 = Date.now();
 
         const namedFromIntel = highConfNames(intel, args.threshold);
-        const isKnown = (callee: string): boolean => {
-            // PLT thunks / external calls aren't in our subAddrs set —
-            // their pseudo-C rendering already includes the resolved
-            // name (puts, malloc, ...), so treat as anchored.
-            if (!subAddrs.has(callee)) return true;
-            // TEEF anchors + prior-promoted cascade names live in the
-            // annotation file, not in --functions kind=symbol.
-            if (annotated.has(callee)) return true;
-            return namedFromIntel.has(callee);
-        };
+        const plan = runCppCascadePlan({
+            binary: args.binary,
+            emberBin: args.emberBin,
+            scope: args.scope,
+            perRound: args.perRound,
+            eligibilityRatio: args.eligibilityRatio,
+            module: args.module,
+        });
+        lastPlan = plan;
 
-        // Find eligible fns.
-        const eligible: { addr: string; ratio: number; total: number; size: number }[] = [];
-        for (const f of fns) {
-            if (f.kind !== "sub") continue;             // already named (symbol)
-            if (namedFromIntel.has(f.addr)) continue;   // already named (intel)
-            const callees = calleesOf(f.addr);
-            const total = callees.length;
-            if (total === 0) {
-                // True leaf — eligible from round 0.
-                eligible.push({ addr: f.addr, ratio: 1.0, total: 0, size: f.size });
-                continue;
-            }
-            const known = callees.filter(isKnown).length;
-            const ratio = known / total;
-            if (ratio >= args.eligibilityRatio) {
-                eligible.push({ addr: f.addr, ratio, total, size: f.size });
-            }
-        }
-
-        if (eligible.length === 0) {
+        if (plan.eligible === 0 || plan.top.length === 0) {
             // Nothing left to bootstrap. Terminate.
             break;
         }
 
-        // Sort: highest known-callee ratio first (most informative
-        // pseudo-C), break ties by larger size (more signal).
-        eligible.sort((a, b) => (b.ratio - a.ratio) || (b.size - a.size));
-        const batch = eligible.slice(0, args.perRound);
+        if (args.dryRunPlan) {
+            return {
+                rounds: [],
+                total_named: namedFromIntel.size,
+                total_cost: totalCost,
+                plan,
+            };
+        }
+
+        const batch = plan.top;
 
         // Per-round model selection. If the user supplied a list, rotate
         // through it (round N uses models[N % len]). Useful for:
@@ -405,6 +359,16 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         const roundModel = (args.models && args.models.length > 0)
             ? args.models[round % args.models.length]
             : args.model;
+
+        process.stderr.write(`cascade: round ${round} target plan\n`);
+        for (const line of formatCascadePlan(plan, Math.min(args.perRound, 8))) {
+            process.stderr.write(`${line}\n`);
+        }
+        process.stderr.write(
+            `cascade: round ${round} spawning ${batch.length} worker(s), ` +
+            `model=${roundModel ?? "(role default)"}, max_turns=${args.maxTurns}, ` +
+            `budget=$${args.budget.toFixed(2)} each\n`,
+        );
 
         // Spawn workers in parallel. We use runWorker (in-process)
         // rather than spawning N node processes — the workers all share
@@ -510,7 +474,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         const after = highConfNames(intel, args.threshold).size;
         rounds.push({
             round,
-            eligible: eligible.length,
+            eligible: plan.eligible,
             spawned: batch.length,
             fulfilled,
             rejected,
@@ -519,6 +483,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             model: roundModel ?? "(role default)",
             cost_usd: roundCost,
             elapsed_ms: Date.now() - t0,
+            targets: plan.top,
         });
 
         // If a whole round produced no new high-conf names, the cascade
@@ -528,7 +493,14 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         if (after - before === 0) break;
     }
 
-    coord?.close();
+    if (args.dryRunPlan) {
+        return {
+            rounds,
+            total_named: highConfNames(intel, args.threshold).size,
+            total_cost: totalCost,
+            plan: lastPlan,
+        };
+    }
     return {
         rounds,
         total_named: highConfNames(intel, args.threshold).size,

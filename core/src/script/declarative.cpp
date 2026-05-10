@@ -81,6 +81,20 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool parse_u64_auto(std::string_view s, u64& out) noexcept {
+    int base = 10;
+    if (s.starts_with("0x") || s.starts_with("0X")) {
+        s.remove_prefix(2);
+        base = 16;
+    }
+    if (s.empty()) return false;
+    u64 v = 0;
+    auto r = std::from_chars(s.data(), s.data() + s.size(), v, base);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+    out = v;
+    return true;
+}
+
 [[nodiscard]] bool parse_i64_auto(std::string_view s, i64& out) noexcept {
     bool neg = false;
     if (s.starts_with("-")) {
@@ -622,6 +636,28 @@ void apply_field(const Directive& d, const Binary& b,
     if (inserted) ++st.fields_added;
 }
 
+void apply_constant(const Directive& d, Annotations& ann, ApplyStats& st) {
+    u64 value = 0;
+    if (!parse_u64_auto(trim(d.lhs), value)) {
+        st.warnings.push_back(std::format(
+            "line {}: [constant] cannot parse value `{}`", d.line, d.lhs));
+        return;
+    }
+    if (d.rhs.empty()) {
+        st.warnings.push_back(std::format(
+            "line {}: [constant] empty constant name", d.line));
+        return;
+    }
+    auto [it, inserted] = ann.named_constants.try_emplace(value, d.rhs);
+    if (!inserted && it->second != d.rhs) {
+        st.warnings.push_back(std::format(
+            "line {}: [constant] {:#x} already named `{}`, keeping",
+            d.line, value, it->second));
+        return;
+    }
+    if (inserted) ++st.constants_added;
+}
+
 void apply_pattern_rename(const Directive& d, const Binary& b,
                           Annotations& ann, ApplyStats& st) {
     const auto fns = enumerate_functions(b);
@@ -645,36 +681,49 @@ void apply_pattern_rename(const Directive& d, const Binary& b,
 
 void apply_delete(const Directive& d, const Binary& b,
                   Annotations& ann, ApplyStats& st) {
-    auto a = resolve_to_addr(b, ann, d.lhs);
-    if (!a) {
-        st.warnings.push_back(std::format(
-            "line {}: [delete] cannot resolve `{}` to an address", d.line, d.lhs));
-        return;
-    }
     const std::string& kind = d.rhs;
     const bool any   = (kind == "all");
     const bool ren   = any || (kind == "rename");
     const bool note  = any || (kind == "note");
     const bool sig   = any || (kind == "signature") || (kind == "sig");
     const bool field = any || (kind == "field") || (kind == "fields");
-    if (!ren && !note && !sig && !field) {
+    const bool cnst  = (kind == "constant") || (kind == "const");
+    if (!ren && !note && !sig && !field && !cnst) {
         st.warnings.push_back(std::format(
-            "line {}: [delete] unknown kind `{}` (want rename/note/signature/field/all)",
+            "line {}: [delete] unknown kind `{}` (want rename/note/signature/field/constant/all)",
             d.line, kind));
         return;
     }
-    if (ren  && ann.renames.erase   (*a) > 0) ++st.renames_removed;
-    if (note && ann.notes.erase     (*a) > 0) ++st.notes_removed;
-    if (sig  && ann.signatures.erase(*a) > 0) ++st.signatures_removed;
-    if (field) {
-        for (auto it = ann.field_names.begin(); it != ann.field_names.end();) {
-            if (it->first.function == *a) {
-                it = ann.field_names.erase(it);
-                ++st.fields_removed;
-            } else {
-                ++it;
+    std::optional<addr_t> a;
+    if (ren || note || sig || field) {
+        a = resolve_to_addr(b, ann, d.lhs);
+        if (!a) {
+            st.warnings.push_back(std::format(
+                "line {}: [delete] cannot resolve `{}` to an address", d.line, d.lhs));
+            return;
+        }
+        if (ren  && ann.renames.erase   (*a) > 0) ++st.renames_removed;
+        if (note && ann.notes.erase     (*a) > 0) ++st.notes_removed;
+        if (sig  && ann.signatures.erase(*a) > 0) ++st.signatures_removed;
+        if (field) {
+            for (auto it = ann.field_names.begin(); it != ann.field_names.end();) {
+                if (it->first.function == *a) {
+                    it = ann.field_names.erase(it);
+                    ++st.fields_removed;
+                } else {
+                    ++it;
+                }
             }
         }
+    }
+    if (cnst) {
+        u64 value = 0;
+        if (!parse_u64_auto(trim(d.lhs), value)) {
+            st.warnings.push_back(std::format(
+                "line {}: [delete] cannot parse constant value `{}`", d.line, d.lhs));
+            return;
+        }
+        if (ann.named_constants.erase(value) > 0) ++st.constants_removed;
     }
 }
 
@@ -774,6 +823,8 @@ Result<std::vector<Directive>> parse(std::string_view text) {
         else if (iequals(section, "note"))           d.kind = Directive::Kind::Note;
         else if (iequals(section, "signature"))      d.kind = Directive::Kind::Signature;
         else if (iequals(section, "field"))          d.kind = Directive::Kind::Field;
+        else if (iequals(section, "constant") ||
+                 iequals(section, "const"))          d.kind = Directive::Kind::Constant;
         else if (iequals(section, "pattern-rename")) d.kind = Directive::Kind::PatternRename;
         else if (iequals(section, "from-strings"))   d.kind = Directive::Kind::FromStrings;
         else if (iequals(section, "delete"))         d.kind = Directive::Kind::Delete;
@@ -828,6 +879,7 @@ ApplyStats apply(std::span<const Directive> directives,
             case Directive::Kind::Note:      apply_note     (d, b, ann, st); break;
             case Directive::Kind::Signature: apply_signature(d, b, ann, st); break;
             case Directive::Kind::Field:     apply_field    (d, b, ann, st); break;
+            case Directive::Kind::Constant:  apply_constant (d, ann, st);    break;
             default: break;
         }
     }

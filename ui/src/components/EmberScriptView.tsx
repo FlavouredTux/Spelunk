@@ -4,7 +4,7 @@ import type { BinaryInfo, Annotations } from "../types";
 
 // Lightweight summary parsed off the dry-run TSV: each section header
 // (`[rename]`, `[note]`, `[signature]`, `[pattern-rename]`,
-// `[from-strings]`, `[delete]`) is counted by its non-blank, non-comment
+// `[from-strings]`, `[constant]`, `[delete]`) is counted by its non-blank, non-comment
 // directive lines. The user gets an at-a-glance "+12 renames, +3 notes"
 // readout without us round-tripping ember just for stats.
 function summarize(text: string): { sections: { name: string; count: number }[] } {

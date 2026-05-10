@@ -19,8 +19,8 @@ against the pseudo-C view. There is no DWARF dependency; Ember invents a
 source view from the binary itself.
 
 A `.ember` annotation file persists everything you discover (renames,
-type signatures, struct field names, free-form notes). Every Ember
-command reads from it; `--apply` writes to it.
+type signatures, struct field names, named constants, free-form notes).
+Every Ember command reads from it; `--apply` writes to it.
 
 You drive Ember through the CLI. Output is TSV, plain text, or pseudo-C —
 all designed to be parsed by another tool.
@@ -107,7 +107,7 @@ tail.
 | Command | Effect | Use when |
 |---|---|---|
 | `--annotations <path>` | use this file (overrides default) | non-default sidecar |
-| `--apply <path.ember>` | apply a declarative script (renames + notes + sigs in bulk) | persist many conclusions at once |
+| `--apply <path.ember>` | apply a declarative script (renames + notes + sigs + fields + constants in bulk) | persist many conclusions at once |
 | `--apply --dry-run` | preview as TSV on stdout | audit before commit |
 | `--annotate <addr> --set-name X --confidence 0.9 --evidence "…" --source agent:foo` | one-shot append for a single record | agent / single-call writes |
 | `-s <rename>` | resolve a function by its annotation rename, not just its symbol | after `ember annotate`, the new name is reachable directly |
@@ -182,6 +182,9 @@ vtables / callback lists / Lua C-API style runtime tables.
 - `sub_<hex>` is an unnamed function. Rename via the agent loop.
 - `field_<hex>` is an unnamed struct field at offset hex from a
   parameter pointer. Name via `[field]` in `.ember`.
+- `NAME /* 0x... */` in an immediate expression is a named constant
+  supplied by annotations. Use `[const]` for hashes, magic values,
+  protocol IDs, or resolver constants that make the pseudo-C readable.
 - `(*(u64*)(0x...))(...)` is an unresolved indirect call. Means: vtable
   / function-pointer table the static analyzer couldn't bottom out.
   Either run `--resolve-calls`, supply a `--trace edges.tsv`, or accept
@@ -246,6 +249,10 @@ parse_packet:pkt+0x00 = magic       # signature param name
 parse_packet:pkt+0x04 = length
 parse_packet:a2+0x18  = dst_buf     # ABI slot when no signature param
 
+[const]                             # [constant] works too
+0xDEADBEEF = kernel32_CreateFileW_hash
+31337      = protocol_magic
+
 [from-strings]
 "[HttpClient] %s" -> HttpClient_$1  # %s captures, $1 in template
 "error: %d at %s"  -> err_$2
@@ -255,18 +262,20 @@ sub_4* -> roblox_sub_*              # glob match, * captures, * in template
 log_*  -> Logger_*
 
 [delete]
-log_handler = all                   # drop rename + note + signature
+log_handler = all                   # drop rename + note + signature + fields
 0x401234    = signature             # drop just the signature
+0xDEADBEEF  = constant              # drop a named immediate
 ```
 
 **Apply order matters.** Within one file: `[delete]` runs first, then
-direct sections (`[rename]`, `[note]`, `[signature]`, `[field]`), then
-`[pattern-rename]`, then `[from-strings]`. So a glob can rename a
-function and a later direct rename can override it in the same file.
+direct sections (`[rename]`, `[note]`, `[signature]`, `[field]`,
+`[const]`), then `[pattern-rename]`, then `[from-strings]`.
+Use this to clear stale annotations and write replacements in one file.
 
-**Address resolution.** Hex VA (`0x401234`), `sub_<hex>`, current
-symbol name, or existing rename — all valid LHS forms. RHS is the
-literal value.
+**Address/value resolution.** Rename/note/signature/field LHS accepts
+hex VA (`0x401234`), `sub_<hex>`, current symbol name, or existing
+rename. `[const]` LHS is a numeric value (decimal or hex), not an
+address lookup. RHS is the literal value.
 
 **`--dry-run`** prints the resolved TSV that *would* be written
 without touching the file. Always dry-run first when the script came

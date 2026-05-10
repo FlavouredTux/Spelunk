@@ -271,7 +271,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
             if (ann.field_names.try_emplace(k, name).second) ++import_stats.fields_added;
         }
         for (const auto& [k, v] : loaded->named_constants) {
-            ann.named_constants.try_emplace(k, v);
+            if (ann.named_constants.try_emplace(k, v).second) ++import_stats.constants_added;
         }
         // Carry provenance for any record we just imported (try_emplace
         // semantics: source-side entry wins only when the destination
@@ -311,15 +311,15 @@ int run_apply_ember(const Args& args, const Binary& b) {
     if (!args.quiet) {
         const char* tag = args.dry_run ? "--apply --dry-run" : "--apply";
         std::println(stderr,
-            "ember: {}: +{} renames, +{} notes, +{} sigs, +{} fields, "
+            "ember: {}: +{} renames, +{} notes, +{} sigs, +{} fields, +{} consts, "
             "{} pattern-matches, {} from-strings, "
-            "-{} renames / -{} notes / -{} sigs / -{} fields -> {} ({})",
+            "-{} renames / -{} notes / -{} sigs / -{} fields / -{} consts -> {} ({})",
             tag,
             rv->renames_added, rv->notes_added, rv->signatures_added,
-            rv->fields_added,
+            rv->fields_added, rv->constants_added,
             rv->pattern_renames_applied, rv->string_renames_applied,
             rv->renames_removed, rv->notes_removed, rv->signatures_removed,
-            rv->fields_removed,
+            rv->fields_removed, rv->constants_removed,
             loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
             annotation_source_name(loc.source));
         for (const auto& w : rv->warnings) {

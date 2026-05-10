@@ -179,6 +179,9 @@ int main() {
             "[field]\n"
             "0x401000:msg+0x10 = length\n"
             "\n"
+            "[constant]\n"
+            "0xDEADBEEF = resolver_hash\n"
+            "\n"
             "[pattern-rename]\n"
             "sub_4* -> roblox_sub_*\n"
             "\n"
@@ -189,8 +192,8 @@ int main() {
         check(rv.has_value(), "parse: clean input parses");
         if (!rv) std::fprintf(stderr, "  err: %s\n", rv.error().message.c_str());
         if (rv) {
-            check_eq_sz(rv->size(), 7, "parse: 7 directives");
-            if (rv->size() >= 7) {
+            check_eq_sz(rv->size(), 8, "parse: 8 directives");
+            if (rv->size() >= 8) {
                 const auto& ds = *rv;
                 check_eq(static_cast<int>(ds[0].kind),
                          static_cast<int>(Directive::Kind::Rename), "parse: d0 rename");
@@ -206,13 +209,17 @@ int main() {
                 check_eq_str(ds[4].lhs, "0x401000:msg+0x10", "parse: d4 field lhs");
                 check_eq_str(ds[4].rhs, "length",            "parse: d4 field rhs");
                 check_eq(static_cast<int>(ds[5].kind),
-                         static_cast<int>(Directive::Kind::PatternRename), "parse: d5 pattern");
-                check_eq_str(ds[5].lhs, "sub_4*",         "parse: d5 lhs glob");
-                check_eq_str(ds[5].rhs, "roblox_sub_*",   "parse: d5 rhs template");
+                         static_cast<int>(Directive::Kind::Constant), "parse: d5 constant");
+                check_eq_str(ds[5].lhs, "0xDEADBEEF", "parse: d5 constant lhs");
+                check_eq_str(ds[5].rhs, "resolver_hash", "parse: d5 constant rhs");
                 check_eq(static_cast<int>(ds[6].kind),
-                         static_cast<int>(Directive::Kind::FromStrings), "parse: d6 from-strings");
-                check_eq_str(ds[6].lhs, "[HttpClient] %s", "parse: d6 unquoted lhs");
-                check_eq_str(ds[6].rhs, "HttpClient_$1",   "parse: d6 template");
+                         static_cast<int>(Directive::Kind::PatternRename), "parse: d6 pattern");
+                check_eq_str(ds[6].lhs, "sub_4*",         "parse: d6 lhs glob");
+                check_eq_str(ds[6].rhs, "roblox_sub_*",   "parse: d6 rhs template");
+                check_eq(static_cast<int>(ds[7].kind),
+                         static_cast<int>(Directive::Kind::FromStrings), "parse: d7 from-strings");
+                check_eq_str(ds[7].lhs, "[HttpClient] %s", "parse: d7 unquoted lhs");
+                check_eq_str(ds[7].rhs, "HttpClient_$1",   "parse: d7 template");
             }
         }
     }
@@ -233,6 +240,17 @@ int main() {
               "parse: [pattern-rename] rejects `=`");
     }
 
+    // ---- Parser: [const] alias -------------------------------------------
+    {
+        auto rv = ember::script::parse("[const]\n31337 = decimal_magic\n");
+        check(rv.has_value(), "parse: [const] alias parses");
+        if (rv && !rv->empty()) {
+            check_eq(static_cast<int>((*rv)[0].kind),
+                     static_cast<int>(Directive::Kind::Constant),
+                     "parse: [const] is Constant");
+        }
+    }
+
     // ---- Apply: direct sections -------------------------------------------
     MockBinary mb;
     {
@@ -244,12 +262,15 @@ int main() {
             {Directive::Kind::Signature, "0x401000",    "int log_handler(char* msg, int level)",                             4},
             {Directive::Kind::Field,     "0x401000:msg+0x10", "length",                                                       5},
             {Directive::Kind::Field,     "0x401000:a1+0x18",  "flags",                                                        6},
+            {Directive::Kind::Constant,  "0xDEADBEEF",  "resolver_hash",                                                     7},
+            {Directive::Kind::Constant,  "31337",       "decimal_magic",                                                     8},
         };
         auto st = ember::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_added,    1, "apply: 1 rename added (first wins)");
         check_eq_sz(st.notes_added,      1, "apply: 1 note added");
         check_eq_sz(st.signatures_added, 1, "apply: 1 signature added");
         check_eq_sz(st.fields_added,     2, "apply: 2 fields added");
+        check_eq_sz(st.constants_added,  2, "apply: 2 constants added");
         check(ann.renames.contains(0x401000),  "apply: rename map has 0x401000");
         if (auto* n = ann.name_for(0x401000)) check_eq_str(*n, "renamed_by_va", "apply: rename value");
         if (auto* n = ann.note_for(0x401000)) check_eq_str(*n, "this is a note", "apply: note value");
@@ -268,6 +289,12 @@ int main() {
         }
         if (auto* f = ann.field_name_for(0x401000, 0, 0x18)) {
             check_eq_str(*f, "flags", "apply: field by a1");
+        }
+        if (auto* c = ann.constant_name_for(0xDEADBEEFull)) {
+            check_eq_str(*c, "resolver_hash", "apply: hex constant value");
+        }
+        if (auto* c = ann.constant_name_for(31337)) {
+            check_eq_str(*c, "decimal_magic", "apply: decimal constant value");
         }
         // The second rename targeted the same address by name lookup; with
         // first-win semantics, it should have produced one warning and no
@@ -334,6 +361,7 @@ int main() {
         ember::Annotations ann;
         ann.renames[0x401000]    = "old_rename";
         ann.notes[0x401000]      = "old_note";
+        ann.named_constants[0xDEADBEEFull] = "old_const";
         ann.field_names[{0x401000, 0, 0x10}] = "old_field";
         ember::FunctionSig sig;
         sig.return_type = "int";
@@ -343,19 +371,22 @@ int main() {
             {Directive::Kind::Delete, "0x401000", "note",      2},
             {Directive::Kind::Delete, "0x401000", "signature", 3},
             {Directive::Kind::Delete, "0x401000", "field",     4},
+            {Directive::Kind::Delete, "0xDEADBEEF", "constant", 5},
         };
         auto st = ember::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_removed,    1, "delete: rename removed");
         check_eq_sz(st.notes_removed,      1, "delete: note removed");
         check_eq_sz(st.signatures_removed, 1, "delete: signature removed");
         check_eq_sz(st.fields_removed,     1, "delete: field removed");
+        check_eq_sz(st.constants_removed,  1, "delete: constant removed");
         check(!ann.renames.contains(0x401000),    "delete: rename gone");
         check(!ann.notes.contains(0x401000),      "delete: note gone");
         check(!ann.signatures.contains(0x401000), "delete: signature gone");
         check(ann.field_names.empty(),            "delete: fields gone");
+        check(ann.named_constants.empty(),        "delete: constants gone");
     }
 
-    // ---- Apply: [delete]=all clears all three at once ---------------------
+    // ---- Apply: [delete]=all clears function-scoped entries at once -------
     {
         ember::Annotations ann;
         ann.renames[0x401000]    = "x";
@@ -446,7 +477,9 @@ int main() {
             "[signature]\n"
             "log_handler = void log_handler(char* msg)\n"
             "[field]\n"
-            "log_handler:msg+0x10 = length\n");
+            "log_handler:msg+0x10 = length\n"
+            "[const]\n"
+            "0xDEADBEEF = resolver_hash\n");
         ember::Annotations ann;
         auto rv = ember::script::apply_file(p, mb, ann);
         check(rv.has_value(), "apply_file: ok");
@@ -455,6 +488,7 @@ int main() {
             check_eq_sz(rv->notes_added,      1, "apply_file: 1 note");
             check_eq_sz(rv->signatures_added, 1, "apply_file: 1 sig");
             check_eq_sz(rv->fields_added,     1, "apply_file: 1 field");
+            check_eq_sz(rv->constants_added,  1, "apply_file: 1 constant");
         }
         if (auto* n = ann.name_for(0x401000)) check_eq_str(*n, "end_to_end", "apply_file: rename");
         if (auto* n = ann.note_for(0x401000)) check_eq_str(*n, "via name lookup", "apply_file: note");

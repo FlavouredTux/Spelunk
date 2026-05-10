@@ -46,6 +46,10 @@ log_handler = void log_handler(void)
 do_thing:name+0x10 = length       # signature param name
 do_thing:a1+0x18   = flags        # ABI arg slot, 1-based
 
+[constant]                         # [const] is accepted too
+0xDEADBEEF = kernel32_CreateFileW_hash
+31337      = protocol_magic
+
 [pattern-rename]
 sub_4* -> roblox_sub_*            # `*` in template = matched part
 log_*  -> Logger_*
@@ -58,7 +62,8 @@ log_*  -> Logger_*
 0x401234   = rename                  # drop one entry kind
 0x401234   = note
 0x401234   = signature
-log_handler = all                    # drop rename + note + signature
+0xDEADBEEF = constant
+log_handler = all                    # drop rename + note + signature + fields
 ```
 
 ### Sections
@@ -69,9 +74,10 @@ log_handler = all                    # drop rename + note + signature
 | `[note]` | `=` | same as rename | free-form text |
 | `[signature]` | `=` | same as rename | C-style decl: `<ret> <name>(<params>)` |
 | `[field]` | `=` | `<function>:<param>+<offset>` | field name for pseudo-C struct rendering |
+| `[constant]` / `[const]` | `=` | decimal or hex integer value | name for pseudo-C immediates |
 | `[pattern-rename]` | `->` | glob over discovered function names (`*`) | template using `*` |
 | `[from-strings]` | `->` | `printf`-style pattern (`%s`/`%d`/`%x`/`%*`) | template using `$1..$9` |
-| `[delete]` | `=` | same as rename | one of `rename`, `note`, `signature`, `all` |
+| `[delete]` | `=` | same as rename, or integer for `constant` | one of `rename`, `note`, `signature`, `field`, `constant`, `all` |
 
 Section names are case-insensitive. Sections may repeat; directives are
 applied in source order *within their pass* (see below).
@@ -82,8 +88,8 @@ applied in source order *within their pass* (see below).
    the same file clears the old slot before the new value lands. Source
    order between the two does not matter; semantics are pass-based.
 2. `[rename]`, `[note]`, `[signature]` — direct user-intent sections.
-   `[field]` runs here too; it can refer to signature parameter names
-   declared earlier in the same file.
+   `[field]` and `[constant]` run here too; fields can refer to signature
+   parameter names declared earlier in the same file.
 3. `[pattern-rename]` — walks `enumerate_functions()` and matches the
    current name (existing rename if any, else the discovered name).
    Skips any address with an existing rename.

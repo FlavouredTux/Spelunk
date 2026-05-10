@@ -189,7 +189,7 @@ void help_ann() {
     std::println("                       optionally --confidence FLOAT / --evidence TEXT / --source TAG");
     std::println("                       (default `cli`). Pair with --dry-run to preview.");
     std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");
-    std::println("                       pattern-renames, log-format-driven renames, deletes)");
+    std::println("                       constants, pattern-renames, log-format renames, deletes)");
     std::println("      --dry-run        with --apply: dump the would-be TSV to stdout, don't write");
     std::println("      --list-annotations  dump every record in the resolved annotations file");
     std::println("                       (rename / note / signature) with its meta");

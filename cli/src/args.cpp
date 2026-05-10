@@ -1,8 +1,10 @@
 #include "args.hpp"
 
 #include <array>
+#include <charconv>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <string_view>
 #include <system_error>
 
@@ -117,6 +119,15 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
 template <class F>
 [[nodiscard]] bool matches(std::string_view s, const F& f) {
     return (!f.short_.empty() && s == f.short_) || s == f.long_;
+}
+
+[[nodiscard]] std::optional<std::uint64_t>
+parse_u64_strict(std::string_view s) noexcept {
+    if (s.empty()) return std::nullopt;
+    std::uint64_t v = 0;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), v, 10);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return std::nullopt;
+    return v;
 }
 
 }  // namespace
@@ -252,8 +263,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--min-fn-size requires a value"));
             }
-            try { a.min_fn_bytes = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.min_fn_bytes = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--min-fn-size: bad integer"));
             }
@@ -267,8 +279,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--max-fn-size requires a value"));
             }
-            try { a.max_fn_bytes = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.max_fn_bytes = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-fn-size: bad integer"));
             }
@@ -279,8 +292,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--min-uses requires a value"));
             }
-            try { a.symuses_min_uses = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.symuses_min_uses = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--min-uses: bad integer"));
             }
@@ -291,8 +305,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--max-callsites requires a value"));
             }
-            try { a.symresolve_max_callsites = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.symresolve_max_callsites = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-callsites: bad integer"));
             }
@@ -303,8 +318,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--max-cfg-blocks requires a value"));
             }
-            try { a.max_cfg_blocks = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.max_cfg_blocks = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-cfg-blocks: bad integer"));
             }
@@ -315,8 +331,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--max-cfg-edges requires a value"));
             }
-            try { a.max_cfg_edges = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.max_cfg_edges = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-cfg-edges: bad integer"));
             }
@@ -327,8 +344,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--max-cfg-insts requires a value"));
             }
-            try { a.max_cfg_insts = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.max_cfg_insts = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-cfg-insts: bad integer"));
             }
@@ -339,8 +357,9 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--max-ir-insts requires a value"));
             }
-            try { a.max_ir_insts = std::stoull(argv[i]); }
-            catch (...) {
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.max_ir_insts = *v;
+            } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-ir-insts: bad integer"));
             }

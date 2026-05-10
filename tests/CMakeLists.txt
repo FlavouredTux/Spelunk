@@ -1009,6 +1009,13 @@ ember_expect_fail_test(
     ERR_SUBSTR "bad --count"
 )
 
+ember_expect_fail_test(
+    NAME       numeric_filter_bad_integer_rejected
+    FIXTURE    return_value
+    ARGS       "--min-fn-size|12wat|--functions"
+    ERR_SUBSTR "--min-fn-size: bad integer"
+)
+
 # ---- dead_store (DSE on global-address stores) ----------------------------
 
 ember_golden_test(

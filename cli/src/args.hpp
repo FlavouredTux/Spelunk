@@ -52,6 +52,8 @@ struct Args {
                                     // shape required for control to reach VA from
                                     // ENTRY. ENTRY is a name, hex VA, or sub_<hex>;
                                     // VA is hex / sub_<hex>. JSON form under --json.
+    std::string cascade_scope;      // --cascade-scope all|list:..|range:..|callers-of:..
+                                    // |callees-of:..|around:.. for --cascade-plan
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
@@ -158,6 +160,9 @@ struct Args {
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
+    bool cascade_plan = false;      // --cascade-plan: deterministic anchor-cascade target planner
+    ember::u64 cascade_per_round = 12; // --per-round N: number of cascade targets to select
+    double cascade_eligibility_ratio = 0.3; // --eligibility-ratio R for --cascade-plan
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
     bool collisions = false;        // --collisions: dump every name/fingerprint group bound to >1 address
     std::string functions_pattern;  // optional substring filter for --functions (second positional)

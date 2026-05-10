@@ -122,6 +122,11 @@ void help_syms() {
     std::println("      --refs-to VA     callers of VA (one-shot reverse xref)");
     std::println("      --callees VA     direct/tail/indirect_const callees of the fn at VA");
     std::println("      --callees-class NAME  JSON {{slot_N: [callees]}} for every vfn of an RTTI class");
+    std::println("      --cascade-plan   anchor-cascade target planner; use --cascade-scope,");
+    std::println("                       --per-round, and --eligibility-ratio");
+    std::println("                       scopes: all, list:VA,VA, range:A-B (body overlap),");
+    std::println("                       callers-of:VA, callees-of:VA, around:VA[:radius].");
+    std::println("                       --json for machine output.");
     std::println("      --json           machine-readable output where supported");
 }
 

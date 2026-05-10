@@ -213,6 +213,7 @@ int main(int argc, char** argv) {
     if (!args.disasm_window.empty()) return run_disasm_window(args, b);
     if (!args.list_syscalls.empty()) return run_list_syscalls(args, b);
     if (!args.forge_spec.empty())    return run_forge_spec(args, b);
+    if (args.cascade_plan)           return run_cascade_plan(args, b);
     if (!args.annotate_addr.empty()) return run_annotate(args, b);
     if (args.list_annotations)       return run_list_annotations(args, b);
     if (args.strings)            return run_strings(args, b);

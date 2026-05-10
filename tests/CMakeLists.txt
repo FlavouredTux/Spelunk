@@ -766,6 +766,20 @@ ember_golden_test(
     GOLDEN  tail_call.wrap_strlen.pseudo.txt
 )
 
+ember_golden_test(
+    NAME    tail_call_cascade_plan
+    FIXTURE tail_call
+    ARGS    "--cascade-plan|--cascade-scope|list:0x401010|--per-round|3"
+    GOLDEN  tail_call.cascade_plan.txt
+)
+
+ember_golden_test(
+    NAME    tail_call_cascade_plan_range_overlap
+    FIXTURE tail_call
+    ARGS    "--cascade-plan|--cascade-scope|range:0x401010-0x401012|--per-round|3"
+    GOLDEN  tail_call.cascade_plan_range_overlap.txt
+)
+
 # ---- indirect_tail (jmp [reg/mem] as return) ------------------------------
 #
 # Each of these once rendered as `__unreachable();` because the lifter

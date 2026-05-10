@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -2915,6 +2916,281 @@ int run_forge_spec(const Args& args, const Binary& b) {
         std::print("{}\n", format_forge_spec_json(*spec));
     } else {
         std::print("{}", format_forge_spec(*spec));
+    }
+    return EXIT_SUCCESS;
+}
+
+namespace {
+
+struct CascadeFn {
+    addr_t      addr = 0;
+    u64         size = 0;
+    bool        is_sub = false;
+    std::string name;
+};
+
+struct CascadeTarget {
+    addr_t addr = 0;
+    u64    size = 0;
+    double ratio = 0.0;
+    std::size_t callees = 0;
+    std::size_t callers = 0;
+    std::size_t unresolved = 0;
+    double score = 0.0;
+    std::vector<std::string> reasons;
+};
+
+[[nodiscard]] addr_t cascade_entry_for(const Binary& b, addr_t a) {
+    if (auto cf = containing_function(b, a); cf) return cf->entry;
+    return a;
+}
+
+void add_scope_addr(const Binary& b, std::set<addr_t>& include, std::string_view tok) {
+    if (auto a = parse_cli_addr(tok); a) include.insert(cascade_entry_for(b, *a));
+}
+
+[[nodiscard]] bool cascade_fn_overlaps(const CascadeFn& f, addr_t lo, addr_t hi) {
+    const u64 width = std::max<u64>(1, f.size);
+    const addr_t end = width > std::numeric_limits<addr_t>::max() - f.addr
+        ? std::numeric_limits<addr_t>::max()
+        : f.addr + width - 1;
+    return f.addr <= hi && end >= lo;
+}
+
+[[nodiscard]] std::set<addr_t>
+select_cascade_scope(const Binary& b,
+                     std::string_view scope,
+                     const std::vector<CascadeFn>& fns,
+                     const std::map<addr_t, std::vector<addr_t>>& callees,
+                     const std::map<addr_t, std::vector<addr_t>>& callers) {
+    std::set<addr_t> include;
+    if (scope.empty() || scope == "all") {
+        for (const auto& f : fns) include.insert(f.addr);
+        return include;
+    }
+
+    if (scope.starts_with("list:")) {
+        std::string_view rest = scope.substr(5);
+        std::size_t pos = 0;
+        while (pos <= rest.size()) {
+            std::size_t comma = rest.find(',', pos);
+            if (comma == std::string_view::npos) comma = rest.size();
+            add_scope_addr(b, include, rest.substr(pos, comma - pos));
+            if (comma == rest.size()) break;
+            pos = comma + 1;
+        }
+        return include;
+    }
+
+    if (scope.starts_with("range:")) {
+        std::string_view rest = scope.substr(6);
+        const auto dash = rest.find('-');
+        if (dash == std::string_view::npos) return include;
+        auto lo_raw = parse_cli_addr(rest.substr(0, dash));
+        auto hi_raw = parse_cli_addr(rest.substr(dash + 1));
+        if (!lo_raw || !hi_raw) return include;
+        const addr_t lo = std::min(*lo_raw, *hi_raw);
+        const addr_t hi = std::max(*lo_raw, *hi_raw);
+        for (const auto& f : fns) {
+            if (cascade_fn_overlaps(f, lo, hi)) include.insert(f.addr);
+        }
+        return include;
+    }
+
+    auto add_neighbors = [&](const auto& graph, addr_t seed) {
+        seed = cascade_entry_for(b, seed);
+        if (auto it = graph.find(seed); it != graph.end()) {
+            include.insert(it->second.begin(), it->second.end());
+        }
+    };
+
+    if (scope.starts_with("callers-of:")) {
+        if (auto seed = parse_cli_addr(scope.substr(11)); seed) add_neighbors(callers, *seed);
+        return include;
+    }
+
+    if (scope.starts_with("callees-of:")) {
+        if (auto seed = parse_cli_addr(scope.substr(11)); seed) add_neighbors(callees, *seed);
+        return include;
+    }
+
+    if (scope.starts_with("around:")) {
+        std::string_view rest = scope.substr(7);
+        const auto colon = rest.find(':');
+        const auto seed_tok = colon == std::string_view::npos ? rest : rest.substr(0, colon);
+        auto seed = parse_cli_addr(seed_tok);
+        if (!seed) return include;
+        *seed = cascade_entry_for(b, *seed);
+        u64 radius = 1;
+        if (colon != std::string_view::npos) {
+            const std::string_view raw = rest.substr(colon + 1);
+            u64 parsed = 0;
+            const auto r = std::from_chars(raw.data(), raw.data() + raw.size(), parsed, 10);
+            if (r.ec == std::errc{} && r.ptr == raw.data() + raw.size()) {
+                radius = std::min<u64>(parsed, 8);
+            }
+        }
+        std::set<addr_t> frontier{*seed};
+        include.insert(*seed);
+        for (u64 depth = 0; depth < radius; ++depth) {
+            std::set<addr_t> next;
+            for (addr_t a : frontier) {
+                if (auto it = callees.find(a); it != callees.end()) {
+                    next.insert(it->second.begin(), it->second.end());
+                }
+                if (auto it = callers.find(a); it != callers.end()) {
+                    next.insert(it->second.begin(), it->second.end());
+                }
+            }
+            include.insert(next.begin(), next.end());
+            frontier = std::move(next);
+        }
+        return include;
+    }
+
+    return include;
+}
+
+}  // namespace
+
+int run_cascade_plan(const Args& args, const Binary& b) {
+    const ModuleScope module_scope = resolve_module_scope(b, args.module_filter);
+    if (!args.module_filter.empty() && !module_scope.active) return EXIT_FAILURE;
+
+    const auto disc = enumerate_functions(b, EnumerateMode::Auto,
+                                          module_scope.lo, module_scope.hi);
+    std::vector<CascadeFn> fns;
+    fns.reserve(disc.size());
+    std::set<addr_t> sub_addrs;
+    for (const auto& d : disc) {
+        const bool is_sub = d.kind == DiscoveredFunction::Kind::Sub;
+        fns.push_back({d.addr, d.size, is_sub, d.name});
+        if (is_sub) sub_addrs.insert(d.addr);
+    }
+
+    std::map<addr_t, std::vector<addr_t>> callees;
+    std::map<addr_t, std::vector<addr_t>> callers;
+    for (const auto& edge : compute_call_graph(b)) {
+        if (!module_scope.contains(edge.caller)) continue;
+        callees[edge.caller].push_back(edge.callee);
+        callers[edge.callee].push_back(edge.caller);
+    }
+    for (auto& [_, v] : callees) {
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+    }
+    for (auto& [_, v] : callers) {
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+    }
+
+    const Annotations ann = load_annotations_quiet(args);
+    std::set<addr_t> annotated;
+    for (const auto& [addr, _] : ann.renames) annotated.insert(addr);
+
+    const std::string scope_label = args.cascade_scope.empty() ? "all" : args.cascade_scope;
+    const auto include = select_cascade_scope(b, scope_label, fns, callees, callers);
+
+    std::vector<CascadeTarget> eligible;
+    eligible.reserve(fns.size());
+    for (const auto& f : fns) {
+        if (!include.contains(f.addr)) continue;
+        if (!f.is_sub) continue;
+        if (annotated.contains(f.addr)) continue;
+
+        const auto callee_it = callees.find(f.addr);
+        const auto empty = std::vector<addr_t>{};
+        const auto& cs = callee_it == callees.end() ? empty : callee_it->second;
+        const std::size_t total = cs.size();
+        std::size_t known = 0;
+        std::size_t unresolved = 0;
+        for (addr_t c : cs) {
+            const bool is_sub = sub_addrs.contains(c);
+            const bool is_known = !is_sub || annotated.contains(c);
+            if (is_known) ++known;
+            else ++unresolved;
+        }
+        const double ratio = total == 0 ? 1.0 : static_cast<double>(known) / static_cast<double>(total);
+        if (ratio < args.cascade_eligibility_ratio) continue;
+
+        const std::size_t caller_count = callers.contains(f.addr) ? callers[f.addr].size() : 0;
+        CascadeTarget t;
+        t.addr = f.addr;
+        t.size = f.size;
+        t.ratio = ratio;
+        t.callees = total;
+        t.callers = caller_count;
+        t.unresolved = unresolved;
+        t.score = ratio * 100.0
+                + static_cast<double>(caller_count) * 5.0
+                + static_cast<double>(unresolved) * 8.0
+                + std::log2(static_cast<double>(std::max<u64>(1, f.size)));
+        if (ratio >= 1.0) {
+            t.reasons.push_back("all callees known");
+        } else {
+            t.reasons.push_back(std::format("{}% callees known",
+                static_cast<int>(std::lround(ratio * 100.0))));
+        }
+        if (caller_count > 0) {
+            t.reasons.push_back(std::format("{} caller{}", caller_count, caller_count == 1 ? "" : "s"));
+        }
+        if (unresolved > 0) {
+            t.reasons.push_back(std::format("{} unresolved callee{}", unresolved, unresolved == 1 ? "" : "s"));
+        }
+        if (f.size > 0) t.reasons.push_back(std::format("{} bytes", f.size));
+        eligible.push_back(std::move(t));
+    }
+
+    std::sort(eligible.begin(), eligible.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.ratio != rhs.ratio) return lhs.ratio > rhs.ratio;
+        if (lhs.size != rhs.size) return lhs.size > rhs.size;
+        return lhs.addr < rhs.addr;
+    });
+
+    const std::size_t selected = std::min<std::size_t>(
+        eligible.size(), static_cast<std::size_t>(args.cascade_per_round));
+
+    if (args.json) {
+        std::string out;
+        std::format_to(std::back_inserter(out),
+            "{{\"scope\":\"{}\",\"candidates\":{},\"eligible\":{},\"selected\":{},\"top\":[",
+            json_escape(scope_label), include.size(), eligible.size(), selected);
+        for (std::size_t i = 0; i < selected; ++i) {
+            const auto& t = eligible[i];
+            if (i) out.push_back(',');
+            std::format_to(std::back_inserter(out),
+                "{{\"addr\":\"{:#x}\",\"score\":{:.3f},\"ratio\":{:.3f},"
+                "\"callees\":{},\"callers\":{},\"unresolved_callees\":{},"
+                "\"size\":{},\"reasons\":[",
+                t.addr, t.score, t.ratio, t.callees, t.callers, t.unresolved, t.size);
+            for (std::size_t j = 0; j < t.reasons.size(); ++j) {
+                if (j) out.push_back(',');
+                std::format_to(std::back_inserter(out), "\"{}\"", json_escape(t.reasons[j]));
+            }
+            out += "]}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("plan: scope={} candidates={} eligible={} selected={}",
+                 scope_label, include.size(), eligible.size(), selected);
+    if (selected == 0) {
+        std::println("  no eligible targets");
+        return EXIT_SUCCESS;
+    }
+    for (std::size_t i = 0; i < selected; ++i) {
+        const auto& t = eligible[i];
+        std::string reasons;
+        for (std::size_t j = 0; j < t.reasons.size(); ++j) {
+            if (j) reasons += ", ";
+            reasons += t.reasons[j];
+        }
+        std::println("  {:>2}. {:#x} score={:.1f} known={:>3}% callers={} callees={} unresolved={} - {}",
+                     i + 1, t.addr, t.score,
+                     static_cast<int>(std::lround(t.ratio * 100.0)),
+                     t.callers, t.callees, t.unresolved, reasons);
     }
     return EXIT_SUCCESS;
 }

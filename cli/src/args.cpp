@@ -52,6 +52,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--rtti",     &Args::rtti},
     {"",   "--int3-resolve", &Args::int3_resolve},
     {"",   "--cfg-pseudo", &Args::cfg_pseudo},
+    {"",   "--cascade-plan", &Args::cascade_plan},
     {"",   "--functions", &Args::functions},
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
@@ -97,6 +98,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--disasm-window", &Args::disasm_window},
     {"",   "--list-syscalls", &Args::list_syscalls},
     {"",   "--forge-spec",   &Args::forge_spec},
+    {"",   "--cascade-scope", &Args::cascade_scope},
     {"",   "--annotate",     &Args::annotate_addr},
     {"",   "--set-name",     &Args::annotate_name},
     {"",   "--set-note",     &Args::annotate_note},
@@ -362,6 +364,36 @@ Result<Args> parse_args(int argc, char** argv) {
             } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-ir-insts: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--per-round") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--per-round requires a value"));
+            }
+            if (auto v = parse_u64_strict(argv[i]); v && *v > 0) {
+                a.cascade_per_round = *v;
+            } else {
+                return std::unexpected(Error::invalid_format(
+                    "--per-round: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--eligibility-ratio") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--eligibility-ratio requires a value"));
+            }
+            try {
+                a.cascade_eligibility_ratio = std::stod(argv[i]);
+            } catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    "--eligibility-ratio: bad float"));
+            }
+            if (a.cascade_eligibility_ratio < 0.0 || a.cascade_eligibility_ratio > 1.0) {
+                return std::unexpected(Error::invalid_format(
+                    "--eligibility-ratio: expected 0..1"));
             }
             continue;
         }

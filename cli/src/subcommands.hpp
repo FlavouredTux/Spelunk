@@ -63,6 +63,7 @@ int run_disasm_at    (const Args& args, const Binary& b);
 int run_disasm_window(const Args& args, const Binary& b);
 int run_list_syscalls(const Args& args, const Binary& b);
 int run_forge_spec   (const Args& args, const Binary& b);
+int run_cascade_plan (const Args& args, const Binary& b);
 int run_annotate     (const Args& args, const Binary& b);
 int run_list_annotations(const Args& args, const Binary& b);
 

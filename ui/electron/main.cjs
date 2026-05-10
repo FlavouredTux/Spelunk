@@ -1,7 +1,16 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require("electron");
 
 if (process.platform === "linux") {
-  app.commandLine.appendSwitch("ozone-platform-hint", process.env.ELECTRON_OZONE_PLATFORM_HINT || "auto");
+  const requestedOzone = process.env.ELECTRON_OZONE_PLATFORM;
+  const isWaylandSession = !!process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland";
+  if (requestedOzone) {
+    app.commandLine.appendSwitch("ozone-platform", requestedOzone);
+  } else if (isWaylandSession) {
+    app.commandLine.appendSwitch("ozone-platform", "wayland");
+    app.commandLine.appendSwitch("enable-features", "WaylandWindowDecorations");
+  } else {
+    app.commandLine.appendSwitch("ozone-platform-hint", process.env.ELECTRON_OZONE_PLATFORM_HINT || "auto");
+  }
 }
 
 // Suppress the default File / Edit / View / Window / Help bar on

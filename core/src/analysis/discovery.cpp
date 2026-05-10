@@ -87,6 +87,16 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool is_stack_alloc_after_frame_setup(std::span<const std::byte> data,
+                                                    std::size_t off) noexcept {
+    if (off < 4) return false;
+    const auto b0 = static_cast<std::uint8_t>(data[off - 4]);
+    const auto b1 = static_cast<std::uint8_t>(data[off - 3]);
+    const auto b2 = static_cast<std::uint8_t>(data[off - 2]);
+    const auto b3 = static_cast<std::uint8_t>(data[off - 1]);
+    return b0 == 0x55 && b1 == 0x48 && b2 == 0x89 && b3 == 0xe5;
+}
+
 // Validate a candidate by decoding two instructions. Both must
 // succeed for the candidate to count. Cheap — averages ~10 bytes of
 // decode work per acceptance.
@@ -119,6 +129,11 @@ sweep_section_chunk(std::span<const std::byte> data, addr_t base,
     for (std::size_t off = off_begin; off < off_end; ++off) {
         const auto cand = data.subspan(off);
         if (!looks_like_prologue(cand)) continue;
+        // `sub rsp, imm` is a valid frameless prologue, but it is also
+        // the stack-allocation instruction immediately after the common
+        // `push rbp; mov rbp, rsp` frame setup. Do not split the function
+        // at that third instruction.
+        if (is_stack_alloc_after_frame_setup(data, off)) continue;
         if (!validates_as_function_start(dec, cand, base + off)) continue;
         hits.push_back(base + off);
     }

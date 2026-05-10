@@ -95,10 +95,10 @@ namespace ember::cli {
 
 namespace {
 
-constexpr std::string_view kXrefsCacheTag = "xrefs-v2";
-constexpr std::string_view kAritiesCacheTag = "arities-v2";
-constexpr std::string_view kFunctionsCacheTag = "functions-v4";
-constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v4";
+constexpr std::string_view kXrefsCacheTag = "xrefs-v3";
+constexpr std::string_view kAritiesCacheTag = "arities-v3";
+constexpr std::string_view kFunctionsCacheTag = "functions-v5";
+constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v5";
 
 // Quiet sibling of load_annotations_for(): resolves and reads the
 // annotations file using the same precedence chain (explicit > sidecar

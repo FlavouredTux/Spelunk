@@ -36,7 +36,7 @@
 namespace ember::cli {
 
 std::string fingerprints_cache_tag() {
-    return std::format("fingerprints-{}-o3", kFingerprintSchema);
+    return std::format("fingerprints-{}-o3-fns2", kFingerprintSchema);
 }
 
 std::string build_fingerprints_output(const Binary& b) {

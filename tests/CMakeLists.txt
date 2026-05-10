@@ -88,6 +88,10 @@ add_executable(ember_resolve_function_test resolve_function_test.cpp)
 target_link_libraries(ember_resolve_function_test PRIVATE ember::core ember::flags)
 add_test(NAME resolve_function_unit COMMAND ember_resolve_function_test)
 
+add_executable(ember_discovery_test discovery_test.cpp)
+target_link_libraries(ember_discovery_test PRIVATE ember::core ember::flags)
+add_test(NAME discovery_unit COMMAND ember_discovery_test)
+
 # Unit test for the structurer's drop-block diagnostic. Builds a
 # synthetic IrFunction with one reachable Return plus a disconnected
 # block carrying a Call, runs the structurer, and asserts the

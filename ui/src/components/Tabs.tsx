@@ -31,7 +31,8 @@ export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void; on
             key={v.id}
             onClick={() => isIdentify ? (props.onIdentify?.()) : props.setView(v.id)}
             style={{
-              padding: "12px 14px 10px",
+              padding: "12px 18px 10px",
+              minWidth: 92,
               fontFamily: sans,
               fontSize: 12,
               fontWeight: active ? 600 : 400,
@@ -51,7 +52,7 @@ export function Tabs(props: { view: ViewKind; setView: (v: ViewKind) => void; on
               if (!active) (e.currentTarget as HTMLElement).style.color = C.textMuted;
             }}
           >
-            <span style={{ fontFamily: mono, fontSize: 11 }}>{v.label}</span>
+            <span style={{ fontFamily: mono, fontSize: 11.5, whiteSpace: "nowrap" }}>{v.label}</span>
             <span style={{ fontFamily: serif, fontStyle: "italic", fontSize: 9.5, color: C.textFaint }}>
               {v.hint}
             </span>

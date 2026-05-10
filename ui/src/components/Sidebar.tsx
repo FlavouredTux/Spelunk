@@ -156,7 +156,7 @@ export function Sidebar(props: {
             border: `1px solid ${C.border}`,
             borderRadius: 4,
             fontFamily: mono,
-            fontSize: 11,
+            fontSize: 12,
             color: C.textWarm,
             display: "flex",
             alignItems: "center",
@@ -172,7 +172,7 @@ export function Sidebar(props: {
             {info.path.split("/").pop() || info.path}
           </span>
         </button>
-        <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10, fontFamily: mono, color: C.textFaint }}>
+        <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10.5, fontFamily: mono, color: C.textFaint }}>
           <span><span style={{ color: C.textMuted }}>fmt</span> {info.format}</span>
           <span><span style={{ color: C.textMuted }}>arch</span> {info.arch}</span>
           <span><span style={{ color: C.textMuted }}>endian</span> {info.endian || "?"}</span>
@@ -181,7 +181,7 @@ export function Sidebar(props: {
         {(onExport || onImport || onImportCorpus) && (
           <div style={{
             display: "flex", gap: 6, marginTop: 10,
-            fontFamily: sans, fontSize: 10,
+            fontFamily: sans, fontSize: 11,
             flexWrap: "wrap",
           }}>
             {onImport && (
@@ -238,7 +238,7 @@ export function Sidebar(props: {
             placeholder="search functions…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            style={{ flex: 1, fontFamily: sans, fontSize: 12, color: C.text }}
+            style={{ flex: 1, fontFamily: sans, fontSize: 13, color: C.text }}
           />
           {q && (
             <button
@@ -267,14 +267,14 @@ export function Sidebar(props: {
                 border: `1px solid ${active ? C.border : "transparent"}`,
                 borderRadius: 4,
                 fontFamily: sans,
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: active ? 600 : 400,
                 color: active ? C.text : C.textMuted,
                 display: "flex", justifyContent: "space-between", alignItems: "center",
               }}
             >
               <span>{t.label}</span>
-              <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
+              <span style={{ fontFamily: mono, fontSize: 10.5, color: C.textFaint }}>
                 {functionsLoading && t.k === false ? "…" : t.count}
               </span>
             </button>
@@ -287,7 +287,7 @@ export function Sidebar(props: {
         <div style={{
           padding: "2px 14px 6px",
           display: "flex", justifyContent: "flex-end", gap: 6,
-          fontFamily: sans, fontSize: 10,
+          fontFamily: sans, fontSize: 11,
         }}>
           <span style={{ color: C.textFaint, alignSelf: "center" }}>sort</span>
           {([
@@ -347,7 +347,7 @@ export function Sidebar(props: {
   );
 }
 
-const ROW_H = 36;
+const ROW_H = 40;
 const OVERSCAN = 8;
 
 function VirtualList(props: {
@@ -415,7 +415,7 @@ function VirtualList(props: {
                   width: "100%",
                   height: ROW_H - 1,
                   textAlign: "left",
-                  padding: "8px 10px",
+                  padding: "9px 10px",
                   borderRadius: 4,
                   background: active ? C.bgDark
                             : (activeCtxAddr === f.addrNum ? C.bgMuted : "transparent"),
@@ -436,9 +436,9 @@ function VirtualList(props: {
                 }}
               >
                 <span style={{
-                  fontFamily: mono, fontSize: 10,
+                  fontFamily: mono, fontSize: 11,
                   color: active ? C.text : C.textFaint,
-                  width: 72, flexShrink: 0,
+                  width: 78, flexShrink: 0,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                   fontWeight: active ? 600 : 400,
                 }} title={f.addr}>{fmtAddr(f.addrNum).replace(/^0x0+(?=.)/, "0x")}</span>
@@ -446,16 +446,16 @@ function VirtualList(props: {
                   style={{
                     flex: 1, overflow: "hidden", textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    fontFamily: sans, fontSize: 12, fontWeight: active ? 600 : (renamed ? 500 : 400),
+                    fontFamily: sans, fontSize: 13, fontWeight: active ? 600 : (renamed ? 500 : 400),
                     color: renamed ? C.text : undefined,
                   }}
                   title={f.name}
                 >{displayLabel}</span>
                 <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                  {renamed && <span title="renamed" style={{ color: C.accent, fontSize: 9, fontFamily: mono }}>•</span>}
-                  {noted && <span title="has note" style={{ color: C.blue, fontSize: 9, fontFamily: mono }}>✎</span>}
+                  {renamed && <span title="renamed" style={{ color: C.accent, fontSize: 10, fontFamily: mono }}>•</span>}
+                  {noted && <span title="has note" style={{ color: C.blue, fontSize: 10, fontFamily: mono }}>✎</span>}
                   {!showImports && f.size > 0 && (
-                    <span style={{ fontFamily: mono, fontSize: 9, color: C.textFaint }}>
+                    <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint }}>
                       {formatSize(f.size)}
                     </span>
                   )}

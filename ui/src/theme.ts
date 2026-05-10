@@ -20,8 +20,8 @@ const WARM: Palette = {
 
   text:         "#ede9df",
   textWarm:     "#d4cfc2",
-  textMuted:    "#87867f",
-  textFaint:    "#5c5b56",
+  textMuted:    "#aaa59a",
+  textFaint:    "#777168",
 
   accent:       "#d97757",
   accentHover:  "#e8896b",
@@ -34,8 +34,8 @@ const WARM: Palette = {
   yellow:       "#b89a3a",
   violet:       "#8b7bb5",
 
-  border:       "rgba(255,255,245,0.08)",
-  borderStrong: "rgba(255,255,245,0.15)",
+  border:       "rgba(255,255,245,0.12)",
+  borderStrong: "rgba(255,255,245,0.22)",
 };
 
 const DARK: Palette = {
@@ -114,12 +114,12 @@ export function applyTheme(mode: ThemeMode): void {
   if (tag) tag.textContent = makeGlobalCSS();
 }
 
-export const sans  = "'DM Sans',system-ui,-apple-system,sans-serif";
-export const serif = "'Lora','Source Serif Pro',Georgia,serif";
+export const sans  = "Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+export const serif = "Georgia,'Times New Roman',serif";
 // Default mono stack. App overrides at runtime when the user picks a
 // different font family in Settings; we expose a setter so the rest of
 // the codebase can keep importing `mono` as a const expression.
-export let mono = "'JetBrains Mono','SF Mono','Fira Code',monospace";
+export let mono = "'SF Mono','Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace";
 export function setMonoFamily(family: string): void {
   if (typeof family === "string" && family.trim()) mono = family;
   // Re-inject globalCSS so any rule that hard-references the mono var
@@ -136,7 +136,7 @@ export const SH = {
   type:       "#b0a486",
   number:     "#9bb5c1",
   string:     "#a5b37f",
-  comment:    "#5c5b56",
+  comment:    "#777168",
   func:       "#d97757",
   xref:       "#d97757",
   addr:       "#87867f",
@@ -172,7 +172,9 @@ function makeGlobalCSS(): string {
   return `
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body, #root { height:100%; background:${C.bg}; overflow:hidden; }
-  body { font-family:${sans}; color:${C.text}; -webkit-font-smoothing:antialiased;
+  body { font-family:${sans}; color:${C.text};
+         -webkit-font-smoothing:subpixel-antialiased; -moz-osx-font-smoothing:auto;
+         text-rendering:optimizeLegibility; font-synthesis:none;
          -webkit-user-select:none; user-select:none; }
   .sel { -webkit-user-select:text; user-select:text; }
   ::selection { background:${C.accent}; color:#fff; }
@@ -180,8 +182,8 @@ function makeGlobalCSS(): string {
   ::-webkit-scrollbar-track { background:transparent; }
   ::-webkit-scrollbar-thumb { background:${C.border}; border-radius:4px; }
   ::-webkit-scrollbar-thumb:hover { background:${C.borderStrong}; }
-  button { font-family:${sans}; background:none; border:none; color:inherit; cursor:pointer; }
-  input { font-family:${sans}; background:none; border:none; color:inherit; outline:none; }
+  button { font-family:${sans}; background:none; border:none; color:inherit; cursor:pointer; line-height:1.2; }
+  input { font-family:${sans}; background:none; border:none; color:inherit; outline:none; line-height:1.25; }
   *:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 2px; }
   @keyframes fadeIn  { from {opacity:0; transform:translateY(4px)} to {opacity:1; transform:none} }
   @keyframes slideIn { from {opacity:0; transform:translateX(-6px)} to {opacity:1; transform:none} }

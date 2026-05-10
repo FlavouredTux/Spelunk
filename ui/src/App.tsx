@@ -1181,13 +1181,13 @@ export default function App() {
       {/* Title bar */}
       <div
         style={{
-          height: 36,
+          height: 42,
           background: C.bgAlt,
           borderBottom: `1px solid ${C.border}`,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "0 14px",
+          padding: "0 16px",
           flexShrink: 0,
           ...({ WebkitAppRegion: "drag" } as React.CSSProperties),
         }}
@@ -1195,7 +1195,7 @@ export default function App() {
         <div
           style={{
             display: "flex", alignItems: "center", gap: 14,
-            fontFamily: sans, fontSize: 12, color: C.textMuted,
+            fontFamily: sans, fontSize: 13, color: C.textMuted,
             ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
           }}
         >
@@ -1222,12 +1222,12 @@ export default function App() {
           </span>
           <SavePip state={saveState} />
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, overflowX: "auto", overflowY: "hidden" }}>
           <button
             onClick={() => setHexOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1244,8 +1244,8 @@ export default function App() {
           <button
             onClick={() => setSymbolsOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1262,8 +1262,8 @@ export default function App() {
           <button
             onClick={() => setBookmarksOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1283,8 +1283,8 @@ export default function App() {
           <button
             onClick={() => setBulkRenameOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1301,8 +1301,8 @@ export default function App() {
           <button
             onClick={() => setStringsOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1319,8 +1319,8 @@ export default function App() {
           <button
             onClick={() => setIdentifyOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1337,8 +1337,8 @@ export default function App() {
           <button
             onClick={() => setCallGraphOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1354,8 +1354,8 @@ export default function App() {
           <button
             onClick={() => setPluginsPanelOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1371,8 +1371,8 @@ export default function App() {
           <button
             onClick={() => setAgentPanelOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.text,
               background: "transparent",
               border: `1px solid ${C.accent}`,
@@ -1388,8 +1388,8 @@ export default function App() {
           <button
             onClick={() => setDiffOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1404,8 +1404,8 @@ export default function App() {
           <button
             onClick={() => setEmberApplyOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1421,8 +1421,8 @@ export default function App() {
             data-tutorial="jump"
             onClick={() => setPaletteOpen(true)}
             style={{
-              padding: "4px 10px",
-              fontFamily: mono, fontSize: 10,
+              padding: "6px 12px",
+              fontFamily: mono, fontSize: 11,
               color: C.textMuted,
               background: C.bgMuted,
               border: `1px solid ${C.border}`,
@@ -1435,7 +1435,7 @@ export default function App() {
             <span>jump</span>
             <span style={{ color: C.textFaint }}>⌃P</span>
           </button>
-          <span style={{ fontFamily: mono, fontSize: 10, color: C.textFaint, letterSpacing: 1, marginLeft: 4 }}>
+          <span style={{ fontFamily: mono, fontSize: 10.5, color: C.textFaint, letterSpacing: 0, marginLeft: 4, whiteSpace: "nowrap" }}>
             {info.arch.toUpperCase()} · {info.endian.toUpperCase()} · {info.format.toUpperCase()}
           </span>
           <button

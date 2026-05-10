@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell, screen } = require("electron");
 
 if (process.platform === "linux") {
   const requestedOzone = process.env.ELECTRON_OZONE_PLATFORM;
@@ -111,6 +111,70 @@ function createWindow() {
     console.error(`renderer load failed: ${code} ${desc} ${url}`);
     if (!win.isDestroyed() && !win.isVisible()) win.show();
   });
+}
+
+function collectMainDiagnostics() {
+  const win = BrowserWindow.getAllWindows()[0] ?? null;
+  const bounds = win?.getBounds() ?? null;
+  const display = win ? screen.getDisplayMatching(bounds) : screen.getPrimaryDisplay();
+  const commandLine = process.argv.filter((arg) =>
+    arg.includes("ozone") ||
+    arg.includes("wayland") ||
+    arg.includes("enable-features") ||
+    arg.includes("force-device-scale-factor")
+  );
+  const envKeys = [
+    "XDG_SESSION_TYPE",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "XCURSOR_THEME",
+    "XCURSOR_SIZE",
+    "ELECTRON_OZONE_PLATFORM",
+    "ELECTRON_OZONE_PLATFORM_HINT",
+    "ELECTRON_ENABLE_LOGGING",
+    "GDK_BACKEND",
+    "QT_QPA_PLATFORM",
+    "HYPRLAND_INSTANCE_SIGNATURE",
+  ];
+  const env = {};
+  for (const key of envKeys) {
+    if (process.env[key] != null) env[key] = process.env[key];
+  }
+  return {
+    app: {
+      version: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+      packaged: app.isPackaged,
+      commandLine,
+      env,
+    },
+    window: win ? {
+      bounds,
+      contentBounds: win.getContentBounds(),
+      size: win.getSize(),
+      contentSize: win.getContentSize(),
+      zoomFactor: win.webContents.getZoomFactor(),
+      zoomLevel: win.webContents.getZoomLevel(),
+      url: win.webContents.getURL(),
+      devToolsOpened: win.webContents.isDevToolsOpened(),
+      backgroundThrottling: win.webContents.getBackgroundThrottling?.(),
+    } : null,
+    display: {
+      id: display.id,
+      scaleFactor: display.scaleFactor,
+      bounds: display.bounds,
+      workArea: display.workArea,
+      rotation: display.rotation,
+      colorDepth: display.colorDepth,
+      colorSpace: display.colorSpace,
+      internal: display.internal,
+      label: display.label,
+    },
+  };
 }
 
 // stdout/stderr accumulated as a stream of UTF-8 string chunks rather
@@ -384,6 +448,8 @@ ipcMain.handle("ember:pick", async () => {
   await addRecent(state.binary);
   return state.binary;
 });
+
+ipcMain.handle("ember:debug:diagnostics", async () => collectMainDiagnostics());
 
 // Generic file picker for callers that need a path other than the
 // primary binary — e.g. the diff view's "old binary" selector and the

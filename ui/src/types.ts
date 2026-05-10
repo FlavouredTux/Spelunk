@@ -241,6 +241,9 @@ declare global {
       setBinary:        (p: string) => Promise<string | null>;
       binary:           () => Promise<string | null>;
       run:              (args: string[]) => Promise<string>;
+      debug?: {
+        diagnostics: () => Promise<Record<string, unknown>>;
+      };
 
       loadAnnotations:   (bp: string) => Promise<Annotations>;
       saveAnnotations:   (bp: string, data: Annotations) => Promise<boolean>;

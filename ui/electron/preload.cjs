@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld("ember", {
   setBinary:        (p) => ipcRenderer.invoke("ember:setBinary", p),
   binary:           () => ipcRenderer.invoke("ember:binary"),
   run:              (args) => ipcRenderer.invoke("ember:run", args),
+  debug: {
+    diagnostics:    () => ipcRenderer.invoke("ember:debug:diagnostics"),
+  },
 
   loadAnnotations:   (bp) => ipcRenderer.invoke("ember:loadAnnotations", bp),
   saveAnnotations:   (bp, data) => ipcRenderer.invoke("ember:saveAnnotations", bp, data),

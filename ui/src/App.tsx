@@ -125,6 +125,75 @@ function detectPackedBinary(info: BinaryInfo): string | null {
   return null;
 }
 
+async function collectRendererDiagnostics(settings: AppSettings, current: FunctionInfo | null): Promise<Record<string, unknown>> {
+  const probe = document.createElement("span");
+  probe.textContent = "Ember debug probe 0123456789";
+  probe.style.position = "fixed";
+  probe.style.left = "-10000px";
+  probe.style.top = "-10000px";
+  probe.style.fontFamily = mono;
+  probe.style.fontSize = `${settings.codeFontSize}px`;
+  document.body.appendChild(probe);
+  const probeStyle = getComputedStyle(probe);
+  const bodyStyle = getComputedStyle(document.body);
+  const codePane = document.querySelector(".sel") as HTMLElement | null;
+  const codeStyle = codePane ? getComputedStyle(codePane) : null;
+  const fonts = document.fonts;
+  const renderer = {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    devicePixelRatio: window.devicePixelRatio,
+    innerSize: { width: window.innerWidth, height: window.innerHeight },
+    outerSize: { width: window.outerWidth, height: window.outerHeight },
+    screen: {
+      width: window.screen.width,
+      height: window.screen.height,
+      availWidth: window.screen.availWidth,
+      availHeight: window.screen.availHeight,
+      colorDepth: window.screen.colorDepth,
+      pixelDepth: window.screen.pixelDepth,
+    },
+    visualViewport: window.visualViewport ? {
+      width: window.visualViewport.width,
+      height: window.visualViewport.height,
+      scale: window.visualViewport.scale,
+      offsetLeft: window.visualViewport.offsetLeft,
+      offsetTop: window.visualViewport.offsetTop,
+    } : null,
+    fonts: {
+      status: fonts?.status ?? "unavailable",
+      checkSans: fonts?.check?.(`12px ${sans}`) ?? null,
+      checkMono: fonts?.check?.(`${settings.codeFontSize}px ${settings.codeFontFamily}`) ?? null,
+      bodyFamily: bodyStyle.fontFamily,
+      codeFamily: codeStyle?.fontFamily ?? null,
+      probeFamily: probeStyle.fontFamily,
+      probeWidth: probe.getBoundingClientRect().width,
+    },
+    css: {
+      bodyBackground: bodyStyle.backgroundColor,
+      bodyFontSmoothing: bodyStyle.getPropertyValue("-webkit-font-smoothing"),
+      bodyTextRendering: bodyStyle.textRendering,
+      cursorAtBody: bodyStyle.cursor,
+      forcedColors: window.matchMedia?.("(forced-colors: active)")?.matches ?? null,
+      prefersColorSchemeDark: window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? null,
+    },
+    settings: {
+      theme: settings.theme,
+      codeFontSize: settings.codeFontSize,
+      codeFontFamily: settings.codeFontFamily,
+      sidebarWidth: settings.sidebarWidth,
+    },
+    current: current ? { addr: current.addr, name: current.name, size: current.size } : null,
+    localStorageBytes: JSON.stringify(localStorage).length,
+  };
+  probe.remove();
+  const main = await window.ember.debug?.diagnostics?.().catch((e: unknown) => ({
+    error: e instanceof Error ? e.message : String(e),
+  }));
+  return { timestamp: new Date().toISOString(), main: main ?? null, renderer };
+}
+
 export default function App() {
   const [info, setInfo] = useState<BinaryInfo | null>(null);
   const [current, setCurrent] = useState<FunctionInfo | null>(null);
@@ -134,6 +203,7 @@ export default function App() {
   // flashing defaults first.
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   // First-run coach-marks. Mounts once after a binary loads; the
   // Tutorial component itself flips `seenTutorial` on close.
@@ -837,6 +907,11 @@ export default function App() {
       // script file for "rename every sub_*" style sweeps.
       if (mod && e.shiftKey && (e.key === "r" || e.key === "R")) {
         if (info) { e.preventDefault(); setBulkRenameOpen(true); }
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        setDebugOpen((o) => !o);
         return;
       }
 
@@ -1705,6 +1780,13 @@ export default function App() {
       {shortcutsOpen && (
         <Shortcuts onClose={() => setShortcutsOpen(false)} />
       )}
+      {debugOpen && (
+        <DebugDiagnostics
+          settings={settings}
+          current={current}
+          onClose={() => setDebugOpen(false)}
+        />
+      )}
       {aiOpen && (
         <AIPanel
           context={current ? {
@@ -2418,6 +2500,137 @@ function FunctionHeader(props: {
           opacity: props.code ? 1 : 0.4,
         }}
       >{copied ? "copied" : "copy"}</button>
+    </div>
+  );
+}
+
+function DebugDiagnostics(props: {
+  settings: AppSettings;
+  current: FunctionInfo | null;
+  onClose: () => void;
+}) {
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const refresh = useCallback(() => {
+    setBusy(true);
+    collectRendererDiagnostics(props.settings, props.current)
+      .then((d) => setDiag(d))
+      .finally(() => setBusy(false));
+  }, [props.settings, props.current]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const text = diag ? JSON.stringify(diag, null, 2) : "collecting diagnostics...";
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 2800,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) props.onClose();
+      }}
+    >
+      <div
+        style={{
+          width: "min(980px, 92vw)",
+          height: "min(720px, 86vh)",
+          background: C.bgAlt,
+          border: `1px solid ${C.borderStrong}`,
+          borderRadius: 6,
+          boxShadow: "0 18px 60px rgba(0,0,0,0.45)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "12px 14px",
+            borderBottom: `1px solid ${C.border}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <span style={{ fontFamily: sans, fontSize: 14, fontWeight: 600, color: C.text }}>
+            Renderer diagnostics
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            onClick={refresh}
+            disabled={busy}
+            style={{
+              padding: "5px 10px",
+              fontFamily: sans,
+              fontSize: 12,
+              color: C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              opacity: busy ? 0.6 : 1,
+            }}
+          >{busy ? "refreshing" : "refresh"}</button>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(text).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1200);
+              }).catch(() => {});
+            }}
+            style={{
+              padding: "5px 10px",
+              fontFamily: sans,
+              fontSize: 12,
+              color: copied ? C.accent : C.textMuted,
+              background: C.bgMuted,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+            }}
+          >{copied ? "copied" : "copy"}</button>
+          <button
+            onClick={props.onClose}
+            style={{
+              padding: "5px 10px",
+              fontFamily: sans,
+              fontSize: 12,
+              color: C.textMuted,
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+            }}
+          >close</button>
+        </div>
+        <pre
+          className="sel"
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: 14,
+            fontFamily: mono,
+            fontSize: 11.5,
+            lineHeight: 1.55,
+            color: C.textWarm,
+            whiteSpace: "pre-wrap",
+            userSelect: "text",
+          }}
+        >
+          {text}
+        </pre>
+      </div>
     </div>
   );
 }

@@ -53,16 +53,63 @@ split(std::string_view s, char delim) {
 }
 
 [[nodiscard]] bool parse_float_clamped(std::string_view s, float& out) noexcept {
-    // Accept "0.9" / ".9" / "1" / "0". Locale-independent because
-    // from_chars on float is C-locale fixed. Out-of-range values clamp
-    // to [0,1] to keep the persisted layer well-defined regardless of
-    // what an over-eager agent claims.
-    float v = 0.0f;
-    auto r = std::from_chars(s.data(), s.data() + s.size(), v);
-    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
-    if (v < 0.0f) v = 0.0f;
-    if (v > 1.0f) v = 1.0f;
-    out = v;
+    // Keep this locale-independent without relying on libc++ float from_chars,
+    // which is not available on all supported CI targets.
+    if (s.empty()) return false;
+
+    std::size_t i = 0;
+    bool neg = false;
+    if (s[i] == '-' || s[i] == '+') {
+        neg = s[i] == '-';
+        ++i;
+        if (i == s.size()) return false;
+    }
+
+    double v = 0.0;
+    bool any_digit = false;
+    while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+        any_digit = true;
+        v = v * 10.0 + static_cast<double>(s[i] - '0');
+        ++i;
+    }
+    if (i < s.size() && s[i] == '.') {
+        ++i;
+        double place = 0.1;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+            any_digit = true;
+            v += static_cast<double>(s[i] - '0') * place;
+            place *= 0.1;
+            ++i;
+        }
+    }
+    if (!any_digit) return false;
+
+    if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+        ++i;
+        if (i == s.size()) return false;
+        bool exp_neg = false;
+        if (s[i] == '-' || s[i] == '+') {
+            exp_neg = s[i] == '-';
+            ++i;
+            if (i == s.size()) return false;
+        }
+        int exp = 0;
+        bool exp_digit = false;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+            exp_digit = true;
+            if (exp < 64) exp = exp * 10 + (s[i] - '0');
+            ++i;
+        }
+        if (!exp_digit) return false;
+        const int capped = exp > 64 ? 64 : exp;
+        for (int n = 0; n < capped; ++n) v = exp_neg ? (v / 10.0) : (v * 10.0);
+    }
+
+    if (i != s.size()) return false;
+    if (neg) v = -v;
+    if (v < 0.0) v = 0.0;
+    if (v > 1.0) v = 1.0;
+    out = static_cast<float>(v);
     return true;
 }
 

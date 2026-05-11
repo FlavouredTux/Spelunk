@@ -260,6 +260,16 @@ void lift_jmp(LiftCtx& ctx) {
     const auto& op = insn.operands[0];
 
     if (ctx.blk->kind == BlockKind::TailCall) {
+        if (!ctx.blk->successors.empty()) {
+            emit_arg_barriers(ctx);
+            IrInst c;
+            c.op      = IrOp::Call;
+            c.target1 = ctx.blk->successors.front();
+            ctx.emit(std::move(c));
+            emit_call_clobbers(ctx);
+            lift_ret(ctx);
+            return;
+        }
         lift_call(ctx);
         lift_ret(ctx);
         return;

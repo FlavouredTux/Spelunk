@@ -47,7 +47,7 @@ u64 multi_exit(u64 a1, u64 a2) {
 
 What ember refuses to link, vendor, or import:
 
-- **No Capstone.** Own x86-64 decoder. AArch64 and PPC64 have decoders too.
+- **No Capstone.** Own x86-64 decoder. AArch64, PPC32, and PPC64 have decoders too.
 - **No Zydis. No Ghidra SLEIGH.** Same reason.
 - **No LLVM.** Own IR, own SSA, own cleanup, own structurer.
 - **No vendored dependencies.** A C++23 compiler and the standard library. That's it.
@@ -64,7 +64,7 @@ The whole pipeline fits in your head.
 binary → loader → decoder → CFG → IR lift → SSA → cleanup → structure → pseudo-C
 ```
 
-Loader handles ELF, Mach-O, PE, Microsoft minidump, and raw-region scrapes from packed targets. Cleanup is const-fold, copy-prop, GVN, store→load forward, dead-store elimination, plus a type lattice that propagates through phis. Structurer recovers `if`, `while`, `for`, `switch`, and as a last resort `goto`. Per-function latency is a few milliseconds.
+Loader handles ELF, DOL, Mach-O, PE, Microsoft minidump, and raw-region scrapes from packed targets. Cleanup is const-fold, copy-prop, GVN, store→load forward, dead-store elimination, plus a type lattice that propagates through phis. Structurer recovers `if`, `while`, `for`, `switch`, and as a last resort `goto`. Per-function latency is a few milliseconds.
 
 ---
 
@@ -117,14 +117,14 @@ The first observed target names the expression; the rest stay attached as a comm
 
 |                       | x86-64                | AArch64           | PPC32 / PPC64 |
 |---                    |---                    |---                |---            |
-| Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF32 / ELF64 |
+| Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF32 / ELF64 / DOL |
 | Decoder + IR lift     | full                  | partial           | partial       |
 | SSA + cleanup         | full                  | partial           | partial       |
 | Pseudo-C              | full                  | partial           | partial       |
 | ABI                   | SysV / Win64          | AAPCS64           | SysV / ELFv1 / v2 |
 | RTTI                  | Itanium + MSVC        | Itanium           | —           |
 | Switch idioms         | 5 patterns (incl. MSVC two-table) | inherited | — |
-| Indirect calls        | IAT + const vtable + trace + IPA receiver-type | inherited | — |
+| Indirect calls        | IAT + const vtable + trace + IPA receiver-type | inherited | CTR constants + trace |
 
 ---
 
@@ -135,7 +135,7 @@ Limits, not bug reports:
 - Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as `(*(u64*)(0x...))(...)`. By design — see *By omission*.
 - Switch cases whose default falls outside the bounds check can misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
-- PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics only.
+- PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics, DOL function discovery, and code-pointer xrefs.
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`) uses a fixed alias table; uncommon container/allocator instantiations stay long.
 
@@ -295,8 +295,8 @@ Target-specific reversing — games, engines, protocols, build-to-build knowledg
 
 ```
 core/             C++23 library — everything except the CLI shim
-  binary/         ELF + Mach-O + PE + minidump + raw-regions + PDB v7
-  disasm/         x86-64 + AArch64 + PPC64 instruction decoders
+  binary/         ELF + DOL + Mach-O + PE + minidump + raw-regions + PDB v7
+  disasm/         x86-64 + AArch64 + PPC32/PPC64 instruction decoders
   analysis/       CFG, arity, strings, xrefs, sig inference, type inference,
                   indirect-call resolver, MSVC + Itanium RTTI, eh_frame,
                   PE UNWIND_INFO, ObjC, fingerprints, name resolver,

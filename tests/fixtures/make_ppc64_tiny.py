@@ -61,6 +61,14 @@ def build(mode: str) -> bytes:
             0x4E800020,  # blr
             0x60000000,  # nop
             0x9421FFF0,  # stwu r1, -16(r1)
+            0x3D808000,  # lis r12, 0x8000
+            0x618C3160,  # ori r12, r12, 0x3160
+            0x7D8903A6,  # mtctr r12
+            0x4E800421,  # bctrl
+            0x38210010,  # addi r1, r1, 16
+            0x4E800020,  # blr
+            0x60000000,  # nop
+            0x9421FFF0,  # stwu r1, -16(r1)
             0x38600007,  # li r3, 7
             0x38210010,  # addi r1, r1, 16
             0x4E800020,  # blr
@@ -70,7 +78,7 @@ def build(mode: str) -> bytes:
         code_addr = 0x80003100
         data_offset = code_offset + len(code)
         data_addr = 0x80004000
-        data = struct.pack(">II", code_addr + 0x40, code_addr)
+        data = struct.pack(">II", code_addr + 0x40, code_addr + 0x60)
         header = bytearray(0x100)
         for off, value in [
             (0x00, code_offset),

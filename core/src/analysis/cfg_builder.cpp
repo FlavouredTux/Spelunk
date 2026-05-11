@@ -40,6 +40,9 @@ struct WalkState {
     // Addresses of `jmp`s that are tail calls (target is a known function
     // entry or PLT stub). Partition converts these into TailCall blocks.
     std::set<addr_t>              tail_calls;
+    // Resolved targets for register-indirect PPC branches such as
+    // `lis/ori/mtctr/bctrl` where the local instruction window proves CTR.
+    std::map<addr_t, addr_t>      resolved_indirect;
 };
 
 // (`is_function_entry` lives on CfgBuilder so it can lazy-cache the
@@ -589,6 +592,80 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
     return jt;
 }
 
+[[nodiscard]] std::optional<u64>
+ppc_constant_for_reg(const std::vector<const Instruction*>& recent, Reg want) noexcept {
+    want = canonical_reg(want);
+    std::optional<u64> value;
+    for (auto it = recent.rbegin(); it != recent.rend(); ++it) {
+        const Instruction& in = **it;
+        if (in.num_operands == 0 || in.operands[0].kind != Operand::Kind::Register) continue;
+        const Reg dst = canonical_reg(in.operands[0].reg);
+        if (dst != want) continue;
+
+        if ((in.mnemonic == Mnemonic::Addi || in.mnemonic == Mnemonic::Addis) &&
+            in.num_operands == 2 && in.operands[1].kind == Operand::Kind::Immediate) {
+            u64 imm = static_cast<u64>(in.operands[1].imm.value);
+            if (in.mnemonic == Mnemonic::Addis) imm <<= 16;
+            value = imm;
+            continue;
+        }
+        if (in.mnemonic == Mnemonic::Or && in.num_operands == 3 &&
+            in.operands[1].kind == Operand::Kind::Register &&
+            canonical_reg(in.operands[1].reg) == want &&
+            in.operands[2].kind == Operand::Kind::Immediate && value) {
+            value = *value | static_cast<u64>(in.operands[2].imm.value);
+            continue;
+        }
+        if (in.mnemonic == Mnemonic::Addi && in.num_operands == 3 &&
+            in.operands[1].kind == Operand::Kind::Register &&
+            canonical_reg(in.operands[1].reg) == want &&
+            in.operands[2].kind == Operand::Kind::Immediate && value) {
+            value = *value + static_cast<u64>(in.operands[2].imm.value);
+            continue;
+        }
+        value.reset();
+    }
+    return value;
+}
+
+[[nodiscard]] std::optional<addr_t>
+resolve_ppc_ctr_target(const Binary& b, const WalkState& ws, addr_t branch_addr) {
+    if (b.arch() != Arch::Ppc32 && b.arch() != Arch::Ppc64) return std::nullopt;
+    auto bit = ws.insns.find(branch_addr);
+    if (bit == ws.insns.end()) return std::nullopt;
+    const Instruction& br = bit->second;
+    if (br.num_operands != 1 || br.operands[0].kind != Operand::Kind::Register ||
+        canonical_reg(br.operands[0].reg) != Reg::PpcCtr) {
+        return std::nullopt;
+    }
+
+    std::vector<const Instruction*> recent;
+    for (auto it = bit; it != ws.insns.begin() && recent.size() < 8;) {
+        --it;
+        recent.push_back(&it->second);
+        if (it->second.mnemonic == Mnemonic::Call || is_unconditional_jmp(it->second.mnemonic) ||
+            is_return_like(it->second.mnemonic)) {
+            break;
+        }
+    }
+
+    std::optional<Reg> ctr_source;
+    for (const Instruction* in : recent) {
+        if (in->mnemonic != Mnemonic::Mov || in->num_operands != 2) continue;
+        if (in->operands[0].kind != Operand::Kind::Register ||
+            canonical_reg(in->operands[0].reg) != Reg::PpcCtr) continue;
+        if (in->operands[1].kind != Operand::Kind::Register) continue;
+        ctr_source = canonical_reg(in->operands[1].reg);
+        break;
+    }
+    if (!ctr_source) return std::nullopt;
+    auto value = ppc_constant_for_reg(recent, *ctr_source);
+    if (!value) return std::nullopt;
+    const u64 mask = b.arch() == Arch::Ppc32 ? 0xffffffffULL : ~0ULL;
+    const addr_t target = static_cast<addr_t>(*value & mask);
+    return find_exec_section_for(b, target) ? std::optional<addr_t>(target) : std::nullopt;
+}
+
 void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
                const std::unordered_set<addr_t>& known_entries) {
     std::deque<addr_t> wl;
@@ -628,6 +705,15 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
                         ws.noreturn_calls.insert(ip);
                         break;
                     }
+                } else if (auto ct = resolve_ppc_ctr_target(b, ws, ip); ct) {
+                    ws.resolved_indirect[ip] = *ct;
+                    if (ws.call_seen.insert(*ct).second) {
+                        ws.calls.push_back(*ct);
+                    }
+                    if (is_noreturn_target(b, *ct)) {
+                        ws.noreturn_calls.insert(ip);
+                        break;
+                    }
                 }
                 ip = fallthrough;
                 continue;
@@ -652,6 +738,14 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
                         ws.tail_calls.insert(ip);
                     } else if (ws.leaders.insert(*t).second) {
                         wl.push_back(*t);
+                    }
+                } else if (auto ct = resolve_ppc_ctr_target(b, ws, ip); ct) {
+                    ws.resolved_indirect[ip] = *ct;
+                    if (known_entries.contains(*ct) || b.import_at_plt(*ct) != nullptr) {
+                        if (ws.call_seen.insert(*ct).second) {
+                            ws.calls.push_back(*ct);
+                        }
+                        ws.tail_calls.insert(ip);
                     }
                 }
                 break;
@@ -708,7 +802,10 @@ void partition(const Binary& b, const WalkState& ws, Function& fn) {
                         // Record the target as the single successor so later
                         // stages (lifter, emitter) can recover `return fn(...);`.
                         bb.kind = BlockKind::TailCall;
-                        if (auto t = branch_target(insn); t) {
+                        if (auto rt = ws.resolved_indirect.find(addr);
+                            rt != ws.resolved_indirect.end()) {
+                            bb.successors.push_back(rt->second);
+                        } else if (auto t = branch_target(insn); t) {
                             bb.successors.push_back(*t);
                         }
                     } else if (auto t = branch_target(insn); t) {

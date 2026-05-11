@@ -40,7 +40,7 @@ OPD_VADDR = 0x102000
 
 
 def build(mode: str) -> bytes:
-    if mode not in {"le", "be", "be-opd", "32le", "32be", "32be-scalar", "32be-fp", "dol-scalar"}:
+    if mode not in {"le", "be", "be-opd", "be-ds", "32le", "32be", "32be-scalar", "32be-fp", "dol-scalar"}:
         raise ValueError(mode)
     if mode == "dol-scalar":
         words = [
@@ -181,8 +181,18 @@ def build(mode: str) -> bytes:
 
     phnum = 2 if use_opd else 1
     code_offset = EHDR_SIZE + PHDR_SIZE * phnum
-    code = struct.pack(order + "I", 0x3860002A)
-    code += struct.pack(order + "I", 0x4E800020)
+    words = [0x3860002A, 0x4E800020]
+    if mode == "be-ds":
+        words = [
+            0xF821FFE1,  # stdu r1, -32(r1)
+            0xE8630008,  # ld r3, 8(r3)
+            0xE8830011,  # ldu r4, 16(r3)
+            0xE8A30016,  # lwa r5, 20(r3)
+            0xF8610018,  # std r3, 24(r1)
+            0x38210020,  # addi r1, r1, 32
+            0x4E800020,  # blr
+        ]
+    code = b"".join(struct.pack(order + "I", w) for w in words)
     descriptor = b""
     entry = BASE_VADDR + code_offset
     if use_opd:
@@ -253,9 +263,9 @@ def build(mode: str) -> bytes:
 
 
 def main() -> int:
-    modes = {"le", "be", "be-opd", "32le", "32be", "32be-scalar", "32be-fp", "dol-scalar"}
+    modes = {"le", "be", "be-opd", "be-ds", "32le", "32be", "32be-scalar", "32be-fp", "dol-scalar"}
     if len(sys.argv) != 3 or sys.argv[1] not in modes:
-        print("usage: make_ppc64_tiny.py <le|be|be-opd|32le|32be|32be-scalar|32be-fp|dol-scalar> <out>", file=sys.stderr)
+        print("usage: make_ppc64_tiny.py <le|be|be-opd|be-ds|32le|32be|32be-scalar|32be-fp|dol-scalar> <out>", file=sys.stderr)
         return 1
     out = pathlib.Path(sys.argv[2])
     out.write_bytes(build(sys.argv[1]))

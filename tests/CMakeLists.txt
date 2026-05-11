@@ -1224,6 +1224,20 @@ if(Python3_Interpreter_FOUND)
     add_custom_target(ember_fixture_ppc64be_opd_tiny ALL DEPENDS "${_ppc64be_opd_tiny}")
     set(EMBER_FIXTURE_ppc64be_opd_tiny_PATH "${_ppc64be_opd_tiny}")
 
+    set(_ppc64be_ds "${_build_dir}/ppc64be_ds")
+    add_custom_command(
+        OUTPUT "${_ppc64be_ds}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                be-ds
+                "${_ppc64be_ds}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating PPC64 DS-form fixture ppc64be_ds"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc64be_ds ALL DEPENDS "${_ppc64be_ds}")
+    set(EMBER_FIXTURE_ppc64be_ds_PATH "${_ppc64be_ds}")
+
     ember_golden_test(
         NAME    ppc64le_tiny_disasm
         FIXTURE ppc64le_tiny
@@ -1265,6 +1279,18 @@ if(Python3_Interpreter_FOUND)
         FIXTURE ppc64be_opd_tiny
         ARGS    "-p"
         GOLDEN  ppc64be_opd_tiny.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_ds_disasm
+        FIXTURE ppc64be_ds
+        ARGS    "-d"
+        GOLDEN  ppc64be_ds.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc64be_ds_ssa
+        FIXTURE ppc64be_ds
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc64be_ds.ssa.txt
     )
 
     # ---- ppc32_tiny (hand-built ELF32, both endian modes) -----------------

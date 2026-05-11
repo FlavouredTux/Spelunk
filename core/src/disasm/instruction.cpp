@@ -20,7 +20,10 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Addi:     return "addi";
         case Mnemonic::Addis:    return "addis";
         case Mnemonic::Ld:       return "ld";
+        case Mnemonic::Ldu:      return "ldu";
+        case Mnemonic::Lwa:      return "lwa";
         case Mnemonic::Std:      return "std";
+        case Mnemonic::Stdu:     return "stdu";
         case Mnemonic::Lwz:      return "lwz";
         case Mnemonic::Stw:      return "stw";
         case Mnemonic::Lbz:      return "lbz";

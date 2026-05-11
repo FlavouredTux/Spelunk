@@ -17,7 +17,7 @@ enum class Mnemonic : u16 {
     Mov, Movzx, Movsx, Movsxd, Lea, Xchg,
     Push, Pop,
     Addi, Addis,
-    Ld, Std, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha,
+    Ld, Ldu, Lwa, Std, Stdu, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha,
     Lwzu, Lbzu, Lhzu, Lhau, Stwu, Stbu, Sthu,
     Lwzx, Stwx, Lbzx, Stbx, Lhzx, Sthx, Lhax,
     Lfs, Lfd, Stfs, Stfd,

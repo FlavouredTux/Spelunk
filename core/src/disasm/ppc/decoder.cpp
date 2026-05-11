@@ -477,11 +477,22 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         }
         case 58:
         case 62: {
-            insn.mnemonic = (op == 58) ? Mnemonic::Ld : Mnemonic::Std;
+            const u32 xo = w & 0x3u;
+            if (op == 58) {
+                if (xo == 0) insn.mnemonic = Mnemonic::Ld;
+                else if (xo == 1) insn.mnemonic = Mnemonic::Ldu;
+                else if (xo == 2) insn.mnemonic = Mnemonic::Lwa;
+                else return std::unexpected(Error::unsupported("ppc: unsupported ld form"));
+            } else {
+                if (xo == 0) insn.mnemonic = Mnemonic::Std;
+                else if (xo == 1) insn.mnemonic = Mnemonic::Stdu;
+                else return std::unexpected(Error::unsupported("ppc: unsupported std form"));
+            }
             const i64 disp = sign_extend(((w >> 2) & 0x3fffu) << 2, 16);
+            const u8 size = (insn.mnemonic == Mnemonic::Lwa) ? 4 : 8;
             insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
             insn.operands[1] = Operand::make_mem(make_mem(ra == 0 ? Reg::None : ppc_gpr(ra),
-                                                          disp, 8));
+                                                          disp, size));
             insn.num_operands = 2;
             return insn;
         }

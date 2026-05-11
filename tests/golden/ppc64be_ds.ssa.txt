@@ -1,0 +1,31 @@
+function <entry> @ 0x100078
+  blocks: 1
+
+bb_100078  (entry):
+  ; 0x100078
+  t0 = add i64 r1, -0x20
+  store i64 [t0], r1
+  r1_1 = t0
+  ; 0x10007c
+  t1 = add i64 r3, 0x8
+  t2 = load i64 [t1]
+  r3_1 = t2
+  ; 0x100080
+  t3 = add i64 r3_1, 0x10
+  t4 = load i64 [t3]
+  r4_1 = t4
+  r3_2 = t3
+  ; 0x100084
+  t5 = add i64 r3_2, 0x14
+  t6 = load i32 [t5]
+  t7 = sext i64 t6
+  r5_1 = t7
+  ; 0x100088
+  t8 = add i64 r1_1, 0x18
+  store i64 [t8], r3_2
+  ; 0x10008c
+  t9 = add i64 r1_1, 0x20
+  r1_2 = t9
+  ; 0x100090
+  return r3_2
+

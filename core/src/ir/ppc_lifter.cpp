@@ -558,10 +558,17 @@ void lift_instruction(LiftCtx& ctx) {
             lift_intrinsic(ctx, "ppc.cror");
             break;
         case Mnemonic::Ld:
+        case Mnemonic::Ldu:
             if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
-                IrValue out = ctx.emit_load(compute_ea(insn.operands[1].mem, ctx), IrType::I64);
+                const Mem& mem = insn.operands[1].mem;
+                IrValue ea = compute_ea(mem, ctx);
+                IrValue out = ctx.emit_load(ea, IrType::I64);
                 store_lvalue(insn.operands[0], out, ctx);
+                if (insn.mnemonic == Mnemonic::Ldu && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
             }
+            break;
+        case Mnemonic::Lwa:
+            load_int(IrType::I32, true);
             break;
         case Mnemonic::Lwz:
         case Mnemonic::Lwzx:
@@ -633,9 +640,13 @@ void lift_instruction(LiftCtx& ctx) {
             lift_fp_cmp(ctx, IrType::F64);
             break;
         case Mnemonic::Std:
+        case Mnemonic::Stdu:
             if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
-                ctx.emit_store(compute_ea(insn.operands[1].mem, ctx),
+                const Mem& mem = insn.operands[1].mem;
+                IrValue ea = compute_ea(mem, ctx);
+                ctx.emit_store(ea,
                                ctx.match_size(materialize_rvalue(insn.operands[0], ctx), IrType::I64));
+                if (insn.mnemonic == Mnemonic::Stdu && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
             }
             break;
         case Mnemonic::Stw:

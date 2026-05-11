@@ -1,7 +1,7 @@
-; disassembly of <entry> at 0x0000000080003100 (60 bytes)
+; disassembly of <entry> at 0x0000000080003100 (80 bytes)
 0x0000000080003100  94 21 ff f0                     stwu r1, dword ptr [r1 - 0x10]
 0x0000000080003104  2c 03 00 00                     cmp r3, 0x0
-0x0000000080003108  41 82 00 28                     beq 0x80003130  ; scalar_entry+0x30
+0x0000000080003108  41 82 00 28                     beq 0x80003130
 0x000000008000310c  80 83 00 00                     lwz r4, dword ptr [r3]
 0x0000000080003110  88 a3 00 04                     lbz r5, byte ptr [r3 + 0x4]
 0x0000000080003114  a0 c3 00 06                     lhz r6, word ptr [r3 + 0x6]

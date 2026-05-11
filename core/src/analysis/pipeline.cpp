@@ -30,6 +30,7 @@
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/type_infer_local.hpp>
+#include <ember/common/bytes.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/common/timing.hpp>
 #include <ember/decompile/emitter.hpp>
@@ -1074,6 +1075,29 @@ void fill_unknown_sizes(std::vector<DiscoveredFunction>& fns, const Binary& b) {
     }
 }
 
+[[nodiscard]] std::vector<addr_t> discover_code_pointers(const Binary& b) {
+    const u8 width = (b.arch() == Arch::Ppc64 || b.arch() == Arch::X86_64) ? 8 : 4;
+    std::vector<addr_t> out;
+    auto in_code = [&](addr_t a) noexcept { return addr_in_code_section(b, a); };
+    for (const auto& s : b.sections()) {
+        if (!s.flags.allocated || s.flags.executable || s.data.size() < width) continue;
+        for (std::size_t off = 0; off + width <= s.data.size(); off += width) {
+            const std::byte* p = s.data.data() + off;
+            addr_t target = 0;
+            if (width == 4) {
+                target = b.endian() == Endian::Big ? read_be_at<u32>(p) : read_le_at<u32>(p);
+            } else {
+                target = b.endian() == Endian::Big ? read_be_at<u64>(p) : read_le_at<u64>(p);
+            }
+            if (target == 0 || !in_code(target)) continue;
+            out.push_back(target);
+        }
+    }
+    std::ranges::sort(out);
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 }  // namespace
 
 std::vector<DiscoveredFunction>
@@ -1218,6 +1242,9 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     }
     if (fde_added < kDenseFdeThreshold) {
         for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
+    }
+    if (b.format() == Format::Dol || b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+        for (addr_t a : discover_code_pointers(b)) add_candidate(a, "sub", true);
     }
 
     // Loader-only mode: on a packed binary the call-graph walker chases

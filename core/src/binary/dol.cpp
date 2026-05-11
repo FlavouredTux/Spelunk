@@ -197,13 +197,6 @@ Result<void> DolBinary::parse() {
     start.kind = SymbolKind::Function;
     start.is_import = false;
     start.is_export = true;
-    for (const auto& s : sections_) {
-        if (!s.flags.executable) continue;
-        if (entry_ >= s.vaddr && entry_ < s.vaddr + s.size) {
-            start.size = (s.vaddr + s.size) - entry_;
-            break;
-        }
-    }
     symbols_.push_back(std::move(start));
     sort_and_dedupe_symbols();
     return {};
@@ -250,7 +243,7 @@ Result<std::size_t> DolBinary::attach_map_from_path(const std::filesystem::path&
             if (synthetic_start != symbols_.end()) {
                 synthetic_start->name = std::string(name);
                 synthetic_start->kind = executable ? SymbolKind::Function : SymbolKind::Object;
-                synthetic_start->size = size;
+                synthetic_start->size = executable ? 0 : size;
                 ++added;
                 break;
             }
@@ -263,7 +256,7 @@ Result<std::size_t> DolBinary::attach_map_from_path(const std::filesystem::path&
             Symbol sym;
             sym.name = std::string(name);
             sym.addr = *addr;
-            sym.size = size;
+            sym.size = executable ? 0 : size;
             sym.kind = executable ? SymbolKind::Function : SymbolKind::Object;
             sym.is_import = false;
             sym.is_export = true;

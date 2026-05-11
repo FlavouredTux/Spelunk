@@ -6,6 +6,7 @@
 
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/section.hpp>
+#include <ember/common/bytes.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
@@ -50,6 +51,50 @@ struct SectionTable {
     }
 };
 
+[[nodiscard]] bool read_ptr_slot(std::span<const std::byte> bytes, std::size_t off,
+                                 u8 width, Endian endian, addr_t& out) noexcept {
+    if (off + width > bytes.size()) return false;
+    const std::byte* p = bytes.data() + off;
+    if (width == 4) {
+        out = endian == Endian::Big ? read_be_at<u32>(p) : read_le_at<u32>(p);
+        return true;
+    }
+    if (width == 8) {
+        out = endian == Endian::Big ? read_be_at<u64>(p) : read_le_at<u64>(p);
+        return true;
+    }
+    return false;
+}
+
+void add_xref(std::map<addr_t, std::vector<DataXref>>& out,
+              addr_t from, addr_t target, DataXrefKind kind) {
+    auto& bucket = out[target];
+    if (!bucket.empty() && bucket.back().from_pc == from &&
+        bucket.back().to_addr == target) {
+        if (kind == DataXrefKind::Write) bucket.back().kind = kind;
+        return;
+    }
+    bucket.push_back({from, target, kind});
+}
+
+void scan_pointer_slots(const Binary& b, const SectionTable& sects,
+                        std::map<addr_t, std::vector<DataXref>>& out) {
+    const u8 width = (b.arch() == Arch::Ppc64 || b.arch() == Arch::X86_64) ? 8 : 4;
+    for (const auto& s : b.sections()) {
+        if (!s.flags.allocated || s.flags.executable || s.data.size() < width) continue;
+        for (std::size_t off = 0; off + width <= s.data.size(); off += width) {
+            addr_t target = 0;
+            if (!read_ptr_slot(s.data, off, width, b.endian(), target)) continue;
+            const auto cls = sects.classify(target);
+            if (cls == SectionTable::Class::Unmapped) continue;
+            const auto kind = cls == SectionTable::Class::Code
+                ? DataXrefKind::CodePtr
+                : DataXrefKind::Lea;
+            add_xref(out, s.vaddr + static_cast<addr_t>(off), target, kind);
+        }
+    }
+}
+
 [[nodiscard]] DataXrefKind
 classify(const Instruction& insn, u8 mem_op_idx) noexcept {
     if (insn.mnemonic == Mnemonic::Lea) return DataXrefKind::Lea;
@@ -73,6 +118,12 @@ classify(const Instruction& insn, u8 mem_op_idx) noexcept {
 std::map<addr_t, std::vector<DataXref>>
 compute_data_xrefs(const Binary& b) {
     std::map<addr_t, std::vector<DataXref>> out;
+    const SectionTable sects(b);
+
+    if (b.format() == Format::Dol || b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+        scan_pointer_slots(b, sects, out);
+    }
+
     // Arch guard: every operand inspection below assumes x86-64 (RIP-rel,
     // movabs immediates, ModR/M byte shapes). On AArch64 / PPC64 the
     // X64Decoder fails on every instruction and the loop produces an
@@ -80,8 +131,15 @@ compute_data_xrefs(const Binary& b) {
     // data references" rather than "this analysis doesn't run on this
     // arch". Bail explicitly. Re-enable per arch once we have a decoder
     // + operand model that can answer the same question.
-    if (b.arch() != Arch::X86_64) return out;
-    const SectionTable sects(b);
+    if (b.arch() != Arch::X86_64) {
+        for (auto& [_, bucket] : out) {
+            std::ranges::sort(bucket, [](const DataXref& a, const DataXref& bb) noexcept {
+                if (a.from_pc != bb.from_pc) return a.from_pc < bb.from_pc;
+                return static_cast<u8>(a.kind) < static_cast<u8>(bb.kind);
+            });
+        }
+        return out;
+    }
     X64Decoder dec;
 
     // Build the work list: every named-symbol function + every discovered
@@ -169,16 +227,10 @@ compute_data_xrefs(const Binary& b) {
                     }
                 }
 
-                auto& bucket = out[target];
                 // Collapse the common case where one insn references the
                 // same target twice (e.g. read-modify-write): take the
                 // more specific kind (Write > Read).
-                if (!bucket.empty() && bucket.back().from_pc == ip &&
-                    bucket.back().to_addr == target) {
-                    if (k == DataXrefKind::Write) bucket.back().kind = k;
-                    continue;
-                }
-                bucket.push_back({ip, target, k});
+                add_xref(out, ip, target, k);
             }
 
             ip  += insn.length;

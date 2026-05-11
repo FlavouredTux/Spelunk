@@ -13,6 +13,8 @@
 #include <ember/binary/binary.hpp>
 #include <ember/binary/format.hpp>
 #include <ember/binary/section.hpp>
+#include <ember/common/bytes.hpp>
+#include <ember/disasm/ppc_decoder.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {
@@ -87,6 +89,18 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool looks_like_ppc_prologue(std::span<const std::byte> bytes,
+                                           Endian endian) noexcept {
+    if (bytes.size() < 4) return false;
+    const u32 w = endian == Endian::Big ? read_be_at<u32>(bytes.data())
+                                       : read_le_at<u32>(bytes.data());
+    const u32 op = w >> 26;
+    const u32 rt = (w >> 21) & 0x1f;
+    const u32 ra = (w >> 16) & 0x1f;
+    const i16 imm = static_cast<i16>(w & 0xffffu);
+    return op == 37 && rt == 1 && ra == 1 && imm < 0;
+}
+
 [[nodiscard]] bool is_stack_alloc_after_frame_setup(std::span<const std::byte> data,
                                                     std::size_t off) noexcept {
     if (off < 4) return false;
@@ -113,6 +127,15 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool validates_as_ppc_function_start(const PpcDecoder& dec,
+                                                   std::span<const std::byte> bytes,
+                                                   addr_t addr) noexcept {
+    auto first = dec.decode(bytes, addr);
+    if (!first || first->length != 4 || first->length >= bytes.size()) return false;
+    auto second = dec.decode(bytes.subspan(4), addr + 4);
+    return static_cast<bool>(second);
+}
+
 }  // namespace
 
 // Sweep one section's bytes for prologue patterns. Pure function — no
@@ -135,6 +158,21 @@ sweep_section_chunk(std::span<const std::byte> data, addr_t base,
         // at that third instruction.
         if (is_stack_alloc_after_frame_setup(data, off)) continue;
         if (!validates_as_function_start(dec, cand, base + off)) continue;
+        hits.push_back(base + off);
+    }
+    return hits;
+}
+
+[[nodiscard]] static std::vector<addr_t>
+sweep_ppc_section(std::span<const std::byte> data, addr_t base,
+                  std::size_t off_begin, std::size_t off_end,
+                  const PpcDecoder& dec, Endian endian) {
+    std::vector<addr_t> hits;
+    if (off_end > data.size()) off_end = data.size();
+    for (std::size_t off = off_begin; off + 8 <= off_end; off += 4) {
+        const auto cand = data.subspan(off);
+        if (!looks_like_ppc_prologue(cand, endian)) continue;
+        if (!validates_as_ppc_function_start(dec, cand, base + off)) continue;
         hits.push_back(base + off);
     }
     return hits;
@@ -181,6 +219,13 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
             scope_off_hi = static_cast<std::size_t>(cut_hi - s_lo);
         }
         const std::size_t scope_size = scope_off_hi - scope_off_lo;
+        if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+            PpcDecoder dec(b.endian());
+            per_section_hits.push_back(
+                sweep_ppc_section(data, base, scope_off_lo, scope_off_hi, dec, b.endian()));
+            continue;
+        }
+
         // Tiny sections (or low core counts) — just sweep serially.
         constexpr std::size_t kSerialThreshold = 1 << 20;     // 1 MB
         if (scope_size < kSerialThreshold || target_workers <= 1) {

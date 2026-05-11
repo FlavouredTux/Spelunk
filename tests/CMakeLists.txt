@@ -1411,6 +1411,18 @@ if(Python3_Interpreter_FOUND)
         ARGS    "-p"
         GOLDEN  ppc32be_dol.pseudo.txt
     )
+    ember_golden_test(
+        NAME    ppc32be_dol_functions
+        FIXTURE ppc32be_dol
+        ARGS    "--no-cache|--functions"
+        GOLDEN  ppc32be_dol.functions.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_dol_data_xrefs
+        FIXTURE ppc32be_dol
+        ARGS    "--no-cache|--data-xrefs"
+        GOLDEN  ppc32be_dol.data_xrefs.txt
+    )
 
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------
     #

@@ -59,21 +59,32 @@ def build(mode: str) -> bytes:
             0x38600000,  # li r3, 0
             0x38210010,  # addi r1, r1, 16
             0x4E800020,  # blr
+            0x60000000,  # nop
+            0x9421FFF0,  # stwu r1, -16(r1)
+            0x38600007,  # li r3, 7
+            0x38210010,  # addi r1, r1, 16
+            0x4E800020,  # blr
         ]
         code = b"".join(struct.pack(">I", w) for w in words)
         code_offset = 0x100
         code_addr = 0x80003100
+        data_offset = code_offset + len(code)
+        data_addr = 0x80004000
+        data = struct.pack(">II", code_addr + 0x40, code_addr)
         header = bytearray(0x100)
         for off, value in [
             (0x00, code_offset),
+            (0x1C, data_offset),
             (0x48, code_addr),
+            (0x64, data_addr),
             (0x90, len(code)),
+            (0xAC, len(data)),
             (0xD8, 0x80004000),
             (0xDC, 0x100),
             (0xE0, code_addr),
         ]:
             header[off:off + 4] = struct.pack(">I", value)
-        return bytes(header) + code
+        return bytes(header) + code + data
     is_32 = mode.startswith("32")
     big = mode not in {"le", "32le"}
     use_opd = mode == "be-opd"

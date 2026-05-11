@@ -1,0 +1,14 @@
+; disassembly of <entry> at 0x0000000000100054 (52 bytes)
+0x0000000000100054  c0 23 00 00                     lfs f1, dword ptr [r3]
+0x0000000000100058  c8 43 00 08                     lfd f2, qword ptr [r3 + 0x8]
+0x000000000010005c  ec 61 10 2a                     fadds f3, f1, f2
+0x0000000000100060  ec 82 08 28                     fsubs f4, f2, f1
+0x0000000000100064  ec a1 00 b2                     fmuls f5, f1, f2
+0x0000000000100068  ec c5 18 24                     fdivs f6, f5, f3
+0x000000000010006c  fc 06 00 40                     fcmpo f6, f0
+0x0000000000100070  fc e0 32 10                     fabs f7, f6
+0x0000000000100074  fd 00 38 90                     fmr f8, f7
+0x0000000000100078  fd 20 40 50                     fneg f9, f8
+0x000000000010007c  d0 63 00 10                     stfs f3, dword ptr [r3 + 0x10]
+0x0000000000100080  d8 83 00 18                     stfd f4, qword ptr [r3 + 0x18]
+0x0000000000100084  4e 80 00 20                     ret

@@ -6,7 +6,7 @@
 
 namespace ember {
 
-enum class Reg : u8 {
+enum class Reg : u16 {
     None = 0,
 
     Al, Cl, Dl, Bl, Ah, Ch, Dh, Bh,
@@ -36,6 +36,10 @@ enum class Reg : u8 {
     PpcR16, PpcR17, PpcR18, PpcR19, PpcR20, PpcR21, PpcR22, PpcR23,
     PpcR24, PpcR25, PpcR26, PpcR27, PpcR28, PpcR29, PpcR30, PpcR31,
     PpcLr, PpcCtr,
+    PpcF0,  PpcF1,  PpcF2,  PpcF3,  PpcF4,  PpcF5,  PpcF6,  PpcF7,
+    PpcF8,  PpcF9,  PpcF10, PpcF11, PpcF12, PpcF13, PpcF14, PpcF15,
+    PpcF16, PpcF17, PpcF18, PpcF19, PpcF20, PpcF21, PpcF22, PpcF23,
+    PpcF24, PpcF25, PpcF26, PpcF27, PpcF28, PpcF29, PpcF30, PpcF31,
 
     // AArch64 GPRs. X0..X28 are general-purpose, X29 is the frame pointer
     // (FP), X30 is the link register (LR). Xsp is the stack pointer (a
@@ -87,6 +91,8 @@ enum class Reg : u8 {
         v <= static_cast<unsigned>(Reg::PpcR31)) return 8;
     if (v == static_cast<unsigned>(Reg::PpcLr) ||
         v == static_cast<unsigned>(Reg::PpcCtr)) return 8;
+    if (v >= static_cast<unsigned>(Reg::PpcF0) &&
+        v <= static_cast<unsigned>(Reg::PpcF31)) return 8;
     if (v >= static_cast<unsigned>(Reg::X0) &&
         v <= static_cast<unsigned>(Reg::Xzr)) return 8;
     if (v >= static_cast<unsigned>(Reg::W0) &&
@@ -108,6 +114,12 @@ enum class Reg : u8 {
             v <= static_cast<unsigned>(Reg::Xzr)) ||
            (v >= static_cast<unsigned>(Reg::W0) &&
             v <= static_cast<unsigned>(Reg::Wzr));
+}
+
+[[nodiscard]] constexpr bool is_ppc_fpr(Reg r) noexcept {
+    const auto v = static_cast<unsigned>(r);
+    return v >= static_cast<unsigned>(Reg::PpcF0) &&
+           v <= static_cast<unsigned>(Reg::PpcF31);
 }
 
 [[nodiscard]] constexpr bool is_aarch64_vector(Reg r) noexcept {

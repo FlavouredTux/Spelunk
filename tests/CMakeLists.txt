@@ -1368,6 +1368,33 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  ppc32be_scalar.pseudo.txt
     )
 
+    set(_ppc32be_fp "${_build_dir}/ppc32be_fp")
+    add_custom_command(
+        OUTPUT "${_ppc32be_fp}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                32be-fp
+                "${_ppc32be_fp}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating scalar FP ELF PPC32BE fixture ppc32be_fp"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc32be_fp ALL DEPENDS "${_ppc32be_fp}")
+    set(EMBER_FIXTURE_ppc32be_fp_PATH "${_ppc32be_fp}")
+
+    ember_golden_test(
+        NAME    ppc32be_fp_disasm
+        FIXTURE ppc32be_fp
+        ARGS    "-d"
+        GOLDEN  ppc32be_fp.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_fp_ssa
+        FIXTURE ppc32be_fp
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc32be_fp.ssa.txt
+    )
+
     set(_ppc32be_dol "${_build_dir}/ppc32be_dol.dol")
     set(_ppc32be_dol_map "${_ppc32be_dol}.map")
     add_custom_command(

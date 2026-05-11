@@ -41,6 +41,8 @@ void check_eq_u64(ember::u64 got, ember::u64 want, const char* ctx) {
 
 constexpr ember::addr_t kTextBase = 0x401000;
 constexpr ember::addr_t kDataBase = 0x402000;
+constexpr ember::addr_t kPpcTextBase = 0x1000;
+constexpr ember::addr_t kPpcDataBase = 0x2000;
 
 class MockBinary final : public ember::Binary {
 public:
@@ -110,6 +112,60 @@ private:
     std::vector<ember::Symbol>       syms_{};
 };
 
+class MockPpcDol final : public ember::Binary {
+public:
+    MockPpcDol() {
+        // ret at 0x1004. 0x1001 deliberately lands inside the same executable
+        // section but is not a valid PPC instruction boundary.
+        text_[4] = static_cast<std::byte>(0x4e);
+        text_[5] = static_cast<std::byte>(0x80);
+        text_[6] = static_cast<std::byte>(0x00);
+        text_[7] = static_cast<std::byte>(0x20);
+
+        write_be32(data_.data(), 0x1001);
+        write_be32(data_.data() + 4, 0x1004);
+
+        sections_[0].name = "text";
+        sections_[0].vaddr = kPpcTextBase;
+        sections_[0].size = text_.size();
+        sections_[0].flags.readable = true;
+        sections_[0].flags.executable = true;
+        sections_[0].flags.allocated = true;
+        sections_[0].data = std::span<const std::byte>(text_.data(), text_.size());
+
+        sections_[1].name = "data";
+        sections_[1].vaddr = kPpcDataBase;
+        sections_[1].size = data_.size();
+        sections_[1].flags.readable = true;
+        sections_[1].flags.allocated = true;
+        sections_[1].data = std::span<const std::byte>(data_.data(), data_.size());
+    }
+
+    [[nodiscard]] ember::Format format() const noexcept override { return ember::Format::Dol; }
+    [[nodiscard]] ember::Arch arch() const noexcept override { return ember::Arch::Ppc32; }
+    [[nodiscard]] ember::Endian endian() const noexcept override { return ember::Endian::Big; }
+    [[nodiscard]] ember::addr_t entry_point() const noexcept override { return kPpcTextBase + 4; }
+    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override { return sections_; }
+    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override { return syms_; }
+    [[nodiscard]] std::span<const std::byte> image() const noexcept override { return {}; }
+
+protected:
+    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override { return syms_; }
+
+private:
+    static void write_be32(std::byte* p, ember::u32 v) noexcept {
+        p[0] = static_cast<std::byte>((v >> 24) & 0xffu);
+        p[1] = static_cast<std::byte>((v >> 16) & 0xffu);
+        p[2] = static_cast<std::byte>((v >> 8) & 0xffu);
+        p[3] = static_cast<std::byte>(v & 0xffu);
+    }
+
+    std::array<std::byte, 0x10>      text_{};
+    std::array<std::byte, 0x10>      data_{};
+    std::array<ember::Section, 2>    sections_{};
+    std::vector<ember::Symbol>       syms_{};
+};
+
 void test_literal_sub_must_be_code() {
     MockBinary b;
 
@@ -127,9 +183,25 @@ void test_literal_sub_must_be_code() {
     check(!data_hex.has_value(), "hex literal in .rodata is rejected");
 }
 
+void test_ppc_code_pointer_alignment() {
+    MockPpcDol b;
+    const auto fns = ember::enumerate_functions(b, ember::EnumerateMode::Cheap);
+
+    bool found_unaligned = false;
+    bool found_aligned = false;
+    for (const auto& fn : fns) {
+        found_unaligned = found_unaligned || fn.addr == 0x1001;
+        found_aligned = found_aligned || fn.addr == 0x1004;
+    }
+
+    check(!found_unaligned, "PPC code-pointer discovery rejects unaligned target");
+    check(found_aligned, "PPC code-pointer discovery keeps aligned decodable target");
+}
+
 }  // namespace
 
 int main() {
     test_literal_sub_must_be_code();
+    test_ppc_code_pointer_alignment();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

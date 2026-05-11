@@ -79,7 +79,8 @@ std::string hex_bytes(std::span<const std::byte> b) {
 // seeing them twice. VEX/EVEX take a wider swath because their payload
 // bytes are drawn from a very different opcode space; one cautious
 // forward jump is better than a multi-instruction cascade.
-std::size_t decode_failure_advance(std::span<const std::byte> bytes) noexcept {
+std::size_t decode_failure_advance(Arch arch, std::span<const std::byte> bytes) noexcept {
+    if (arch == Arch::Ppc32 || arch == Arch::Ppc64) return std::min<std::size_t>(4, bytes.size());
     std::size_t i = 0;
     // Walk legacy prefixes. There are at most ~4 in practice; cap at 15
     // to match the architecture's maximum instruction length.
@@ -338,6 +339,16 @@ void note_mid_function(addr_t addr, std::string_view name, u64 off) {
         static_cast<unsigned long long>(off));
 }
 
+[[nodiscard]] std::optional<FuncWindow>
+exact_discovered_function(const Binary& b, addr_t addr, EnumerateMode mode) {
+    for (const auto& fn : enumerate_functions(b, mode)) {
+        if (fn.addr != addr) continue;
+        if (b.bytes_at(addr).empty()) return std::nullopt;
+        return window_from_addr(fn.addr, fn.size, fn.name);
+    }
+    return std::nullopt;
+}
+
 // Resolve `addr` to the nearest containing function entry. Uses the
 // defined-objects cache for an O(log n) lookup. Returns a FuncWindow
 // whose `start` is the function entry (NOT `addr` itself) when `addr`
@@ -357,6 +368,9 @@ resolve_containing_function(const Binary& b, addr_t addr) {
             if (b.bytes_at(addr).empty()) return std::nullopt;
             return window_from_addr(addr, s.size, s.name);
         }
+    }
+    if (auto exact = exact_discovered_function(b, addr, EnumerateMode::Cheap); exact) {
+        return exact;
     }
     const Symbol* c = b.defined_object_at(addr);
     if (c && c->kind == SymbolKind::Function && c->addr != 0) {
@@ -378,6 +392,9 @@ resolve_containing_function(const Binary& b, addr_t addr) {
     // anchored window the named branch produces — otherwise `-s 0xVA`
     // on a hex literal in the middle of a discovered function silently
     // disasms from the wrong instruction boundary.
+    if (auto exact = exact_discovered_function(b, addr, EnumerateMode::Auto); exact) {
+        return exact;
+    }
     if (auto cf = containing_function(b, addr); cf && cf->entry != addr) {
         note_mid_function(addr, cf->name, cf->offset_within);
         return window_from_addr(cf->entry, cf->size,
@@ -623,7 +640,7 @@ format_disasm(const Binary& b, const FuncWindow& w) {
         auto decoded = dec.decode(remaining, ip);
         if (!decoded) {
             flush_padding();
-            const std::size_t skip = decode_failure_advance(remaining);
+            const std::size_t skip = decode_failure_advance(b.arch(), remaining);
             out += std::format("{:#018x}  {:<30}  ; decode error: {}\n",
                                ip, hex_bytes(remaining.first(std::min(skip, remaining.size()))),
                                decoded.error().message);
@@ -680,7 +697,7 @@ format_disasm_range(const Binary& b, addr_t start, addr_t end) {
         const auto remaining = bytes.subspan(off);
         auto decoded = dec.decode(remaining, ip);
         if (!decoded) {
-            const std::size_t skip = decode_failure_advance(remaining);
+            const std::size_t skip = decode_failure_advance(b.arch(), remaining);
             out += std::format("{:#018x}  {:<30}  ; decode error: {}\n",
                                ip, hex_bytes(remaining.first(std::min(skip, remaining.size()))),
                                decoded.error().message);
@@ -1184,14 +1201,25 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         }
         return nullptr;
     };
+    auto ppc_candidate_decodes = [&](addr_t a) -> bool {
+        if (b.arch() != Arch::Ppc32 && b.arch() != Arch::Ppc64) return true;
+        if ((a & 3u) != 0) return false;
+        auto bytes = b.bytes_at(a);
+        if (bytes.size() < 4) return false;
+        auto dec_r = make_decoder(b);
+        if (!dec_r) return false;
+        auto insn = (*dec_r)->decode(bytes, a);
+        return insn && insn->length == 4;
+    };
     auto add_candidate = [&](addr_t a, std::string_view label,
-                            bool trusted = false,
-                            const std::string* explicit_name = nullptr) {
+                             bool trusted = false,
+                             const std::string* explicit_name = nullptr) {
         if (!in_scope(a)) return;
         if (b.import_at_plt(a) != nullptr) return;
         if (index.count(a)) return;
         const Section* sec = section_for(a);
         if (!sec) return;
+        if (!ppc_candidate_decodes(a)) return;
         // Trusted entries (vtable pointers from RTTI) bypass the
         // encrypted-section filter — they come from structural
         // metadata in .rdata, not heuristic pattern matching in

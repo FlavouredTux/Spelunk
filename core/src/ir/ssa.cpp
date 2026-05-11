@@ -56,6 +56,14 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::PpcR24, Reg::PpcR25, Reg::PpcR26, Reg::PpcR27,
     Reg::PpcR28, Reg::PpcR29, Reg::PpcR30, Reg::PpcR31,
     Reg::PpcLr, Reg::PpcCtr,
+    Reg::PpcF0,  Reg::PpcF1,  Reg::PpcF2,  Reg::PpcF3,
+    Reg::PpcF4,  Reg::PpcF5,  Reg::PpcF6,  Reg::PpcF7,
+    Reg::PpcF8,  Reg::PpcF9,  Reg::PpcF10, Reg::PpcF11,
+    Reg::PpcF12, Reg::PpcF13, Reg::PpcF14, Reg::PpcF15,
+    Reg::PpcF16, Reg::PpcF17, Reg::PpcF18, Reg::PpcF19,
+    Reg::PpcF20, Reg::PpcF21, Reg::PpcF22, Reg::PpcF23,
+    Reg::PpcF24, Reg::PpcF25, Reg::PpcF26, Reg::PpcF27,
+    Reg::PpcF28, Reg::PpcF29, Reg::PpcF30, Reg::PpcF31,
     // AArch64 X*: self-canonical.
     Reg::X0,  Reg::X1,  Reg::X2,  Reg::X3,  Reg::X4,  Reg::X5,  Reg::X6,  Reg::X7,
     Reg::X8,  Reg::X9,  Reg::X10, Reg::X11, Reg::X12, Reg::X13, Reg::X14, Reg::X15,
@@ -81,13 +89,13 @@ static_assert(kCanonical.back() == Reg::V31,
               "kCanonical must be updated to match Reg enum");
 
 struct VarKey {
-    u8 kind = 0;   // 0 = Reg, 1 = Flag
-    u8 id   = 0;   // Reg enum value or Flag enum value
+    u8  kind = 0;   // 0 = Reg, 1 = Flag
+    u32 id   = 0;   // Reg enum value or Flag enum value
 
     auto operator<=>(const VarKey&) const = default;
 
     static VarKey of_reg(Reg r) noexcept {
-        return {0, static_cast<u8>(canonical_reg(r))};
+        return {0, static_cast<u32>(canonical_reg(r))};
     }
     static VarKey of_flag(Flag f) noexcept {
         return {1, static_cast<u8>(f)};
@@ -201,7 +209,8 @@ void insert_phis(IrFunction& fn,
                 if (var.kind == 0) {
                     const Reg canon = static_cast<Reg>(var.id);
                     phi.dst = IrValue::make_reg(canon,
-                        type_for_bits(reg_size(canon) * 8));
+                        is_ppc_fpr(canon) ? IrType::F64
+                                          : type_for_bits(reg_size(canon) * 8));
                 } else {
                     phi.dst = IrValue::make_flag(static_cast<Flag>(var.id));
                 }

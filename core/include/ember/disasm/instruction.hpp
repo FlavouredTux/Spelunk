@@ -20,6 +20,10 @@ enum class Mnemonic : u16 {
     Ld, Std, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha,
     Lwzu, Lbzu, Lhzu, Lhau, Stwu, Stbu, Sthu,
     Lwzx, Stwx, Lbzx, Stbx, Lhzx, Sthx, Lhax,
+    Lfs, Lfd, Stfs, Stfd,
+    Fadds, Fsubs, Fmuls, Fdivs,
+    Fadd, Fsub, Fmul, Fdiv,
+    Fcmpu, Fcmpo, Fabs, Fmr, Fneg,
     Mulli, Rlwinm,
 
     Add, Sub, Adc, Sbb, Inc, Dec, Neg,
@@ -27,6 +31,7 @@ enum class Mnemonic : u16 {
 
     And, Or, Xor, Not,
     Shl, Shr, Sar, Rol, Ror, Rcl, Rcr,
+    Cror, Mfcr, Mulhw,
 
     Cmp, Cmn, Test,
 

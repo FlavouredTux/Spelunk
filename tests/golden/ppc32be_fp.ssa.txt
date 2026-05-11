@@ -1,0 +1,46 @@
+function <entry> @ 0x100054
+  blocks: 1
+
+bb_100054  (entry):
+  ; 0x100054
+  t0 = load f32 [r3]
+  f1_1 = t0
+  ; 0x100058
+  t1 = add i32 r3, 0x8
+  t2 = load f64 [t1]
+  f2_1 = t2
+  ; 0x10005c
+  t3 = add f32 f1_1, f2_1
+  f3_1 = t3
+  ; 0x100060
+  t4 = sub f32 f2_1, f1_1
+  f4_1 = t4
+  ; 0x100064
+  t5 = mul f32 f1_1, f2_1
+  f5_1 = t5
+  ; 0x100068
+  t6 = div f32 f5_1, f3_1
+  f6_1 = t6
+  ; 0x10006c
+  t7 = cmp.eq i1 f6_1, f0
+  zf_1 = t7
+  t8 = cmp.slt i1 f6_1, f0
+  sf_1 = t8
+  cf_1 = 0x0
+  of_1 = 0x0
+  ; 0x100070
+  f7_1 = f6_1
+  ; 0x100074
+  f8_1 = f7_1
+  ; 0x100078
+  t9 = neg f64 f8_1
+  f9_1 = t9
+  ; 0x10007c
+  t10 = add i32 r3, 0x10
+  store f32 [t10], f3_1
+  ; 0x100080
+  t11 = add i32 r3, 0x18
+  store f64 [t11], f4_1
+  ; 0x100084
+  return r3
+

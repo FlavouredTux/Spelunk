@@ -115,13 +115,13 @@ The first observed target names the expression; the rest stay attached as a comm
 
 ## Receipts
 
-|                       | x86-64                | AArch64           | PPC64       |
-|---                    |---                    |---                |---          |
-| Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF |
-| Decoder + IR lift     | full                  | partial           | partial     |
-| SSA + cleanup         | full                  | partial           | —           |
-| Pseudo-C              | full                  | partial           | —           |
-| ABI                   | SysV / Win64          | AAPCS64           | ELFv1 / v2  |
+|                       | x86-64                | AArch64           | PPC32 / PPC64 |
+|---                    |---                    |---                |---            |
+| Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF32 / ELF64 |
+| Decoder + IR lift     | full                  | partial           | partial       |
+| SSA + cleanup         | full                  | partial           | partial       |
+| Pseudo-C              | full                  | partial           | partial       |
+| ABI                   | SysV / Win64          | AAPCS64           | SysV / ELFv1 / v2 |
 | RTTI                  | Itanium + MSVC        | Itanium           | —           |
 | Switch idioms         | 5 patterns (incl. MSVC two-table) | inherited | — |
 | Indirect calls        | IAT + const vtable + trace + IPA receiver-type | inherited | — |
@@ -135,7 +135,7 @@ Limits, not bug reports:
 - Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as `(*(u64*)(0x...))(...)`. By design — see *By omission*.
 - Switch cases whose default falls outside the bounds check can misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
-- PPC64 stops at CFG. No lifter, no pseudo-C — yet.
+- PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics only.
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`) uses a fixed alias table; uncommon container/allocator instantiations stay long.
 

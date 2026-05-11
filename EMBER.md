@@ -321,7 +321,7 @@ Stop trying these things; they're known limits, not bugs:
 - **AArch64 floating-point and Advanced SIMD** lift as
   `arm64.<op>(...)` intrinsics. Shape-only, not modelled. SVE / SME
   unmapped.
-- **PPC64** stops at CFG. No lifter, no pseudo-C.
+- **PPC32/PPC64** lifting is intentionally small: scalar GPR/control-flow basics only.
 - **Switch defaults** outside the bounds-check guard can misattribute
   to a wrong case label.
 - **MSVC demangle** is partial (Itanium is comprehensive). Don't trust

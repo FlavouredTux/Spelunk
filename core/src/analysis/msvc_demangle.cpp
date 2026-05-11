@@ -10,6 +10,12 @@ namespace ember {
 
 namespace {
 
+struct FunctionPrefix {
+    bool        is_global = false;
+    bool        is_static = false;
+    std::string cv_suffix;
+};
+
 // Operator codes after `??`. Indexed table beats a switch for the
 // dense `?A`..`?Z` range and a small fallthrough handles `?_X` two-char
 // operators below.
@@ -136,6 +142,7 @@ public:
     explicit MsvcDemangler(std::string_view in) noexcept : in_(in) {}
 
     std::optional<std::string> run();
+    std::optional<std::string> run_full();
 
 private:
     static constexpr int kMaxDepth = 32;
@@ -170,6 +177,12 @@ private:
     // After a `V`/`U`/`W`/`T` named-type marker — reads the qualified
     // class name terminator.
     std::optional<std::string> parse_named_type();
+    std::optional<std::string> parse_symbol_name(bool& has_return_type);
+    std::optional<std::string> parse_function_tail(std::string name,
+                                                   bool has_return_type);
+    std::optional<std::string> parse_data_tail(std::string name);
+    std::optional<FunctionPrefix> parse_function_prefix();
+    std::optional<std::vector<std::string>> parse_param_list();
 
     std::string_view              in_;
     std::size_t                   pos_   = 0;
@@ -179,6 +192,22 @@ private:
 };
 
 std::optional<std::string> MsvcDemangler::run() {
+    bool has_return_type = true;
+    return parse_symbol_name(has_return_type);
+}
+
+std::optional<std::string> MsvcDemangler::run_full() {
+    bool has_return_type = true;
+    auto name = parse_symbol_name(has_return_type);
+    if (!name) return std::nullopt;
+    if (eof()) return name;
+    if (auto full = parse_function_tail(*name, has_return_type); full) return full;
+    if (auto data = parse_data_tail(*name); data) return data;
+    return name;
+}
+
+std::optional<std::string> MsvcDemangler::parse_symbol_name(bool& has_return_type) {
+    has_return_type = true;
     if (in_.empty()) return std::nullopt;
 
     // RTTI type descriptor: ".?AV<name>@@" or ".?AU<name>@@". Anything
@@ -196,13 +225,14 @@ std::optional<std::string> MsvcDemangler::run() {
     if (consume('?')) {
         std::string op_marker;
         const char c = eat();
-        if (c == '0') op_marker = "<ctor>";
-        else if (c == '1') op_marker = "<dtor>";
+        if (c == '0') { op_marker = "<ctor>"; has_return_type = false; }
+        else if (c == '1') { op_marker = "<dtor>"; has_return_type = false; }
         else if (c == '_') {
             const char c2 = eat();
             const std::string_view sv = operator2_for(c2);
             if (sv.empty()) return std::nullopt;
             op_marker = std::string(sv);
+            if (op_marker == "<dtor>") has_return_type = false;
         } else {
             const std::string_view sv = operator_for(c);
             if (sv.empty()) return std::nullopt;
@@ -239,6 +269,138 @@ std::optional<std::string> MsvcDemangler::run() {
     // Non-special mangled name. The first fragment is the basename;
     // subsequent ones are scopes.
     return parse_qualified_name();
+}
+
+std::optional<FunctionPrefix> MsvcDemangler::parse_function_prefix() {
+    FunctionPrefix out;
+    if (eof()) return std::nullopt;
+
+    // Free functions use a one-byte function class (`Y`) followed by the
+    // calling convention. Member functions add this-pointer metadata before
+    // the calling convention on 64-bit MSVC (`Q E A A ...` is the common
+    // public non-static shape). We only need to skip it; the current renderer
+    // intentionally omits access/calling-convention noise.
+    const char cls = eat();
+    if (cls == 'Y') {
+        out.is_global = true;
+        if (eof()) return std::nullopt;
+        eat();  // calling convention
+        return out;
+    }
+
+    const std::string_view member_classes = "ABCDEFGHIQRSUVW";
+    if (member_classes.find(cls) == std::string_view::npos) return std::nullopt;
+
+    // Static member functions (`C`, `K`, `S`) have no this-pointer CV byte:
+    // class marker, calling convention, return type, params.
+    out.is_static = (cls == 'C' || cls == 'K' || cls == 'S');
+    if (!out.is_static) {
+        consume('E');             // ptr64 this marker
+        const char this_cv = peek();
+        if (this_cv >= 'A' && this_cv <= 'D') {
+            eat();
+            if (this_cv == 'B') out.cv_suffix = " const";
+            else if (this_cv == 'C') out.cv_suffix = " volatile";
+            else if (this_cv == 'D') out.cv_suffix = " const volatile";
+        }
+    }
+    if (eof()) return std::nullopt;
+    eat();                        // calling convention
+    return out;
+}
+
+std::optional<std::vector<std::string>> MsvcDemangler::parse_param_list() {
+    std::vector<std::string> params;
+
+    // `X` as the whole argument list means `void`.
+    if (peek() == 'X') {
+        eat();
+        consume('Z');
+        return params;
+    }
+
+    while (!eof()) {
+        if (consume('@')) {
+            consume('Z');
+            return params;
+        }
+        if (consume('Z')) return params;
+        auto p = parse_type();
+        if (!p) return std::nullopt;
+        params.push_back(std::move(*p));
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string>
+MsvcDemangler::parse_function_tail(std::string name, bool has_return_type) {
+    if (peek() == '6') return std::nullopt;  // vftable/vbtable and friends
+
+    const std::size_t saved = pos_;
+    auto prefix = parse_function_prefix();
+    if (!prefix) {
+        pos_ = saved;
+        return std::nullopt;
+    }
+
+    std::optional<std::string> ret;
+    if (has_return_type) {
+        ret = parse_type();
+        if (!ret) { pos_ = saved; return std::nullopt; }
+    } else {
+        consume('@');  // ctors/dtors encode no return type; params follow.
+    }
+
+    auto params = parse_param_list();
+    if (!params) { pos_ = saved; return std::nullopt; }
+
+    std::string out;
+    if (ret && !ret->empty()) {
+        out += *ret;
+        out += ' ';
+    }
+    out += name;
+    out += '(';
+    for (std::size_t i = 0; i < params->size(); ++i) {
+        if (i) out += ", ";
+        out += (*params)[i];
+    }
+    out += ')';
+    out += prefix->cv_suffix;
+
+    return out;
+}
+
+std::optional<std::string> MsvcDemangler::parse_data_tail(std::string name) {
+    const std::size_t saved = pos_;
+    const char storage = peek();
+    if (storage < '0' || storage > '4') return std::nullopt;
+    eat();
+
+    auto type = parse_type();
+    if (!type || type->empty()) {
+        pos_ = saved;
+        return std::nullopt;
+    }
+
+    // Data symbols usually carry one or more trailing storage/CV bytes after
+    // the type. They do not change the high-value display form here, so keep
+    // parsing permissive and render the type/name we already recovered.
+    while (!eof()) {
+        const char c = peek();
+        if (c >= 'A' && c <= 'Z') { eat(); continue; }
+        if (c == '_') {
+            eat();
+            if (!eof()) eat();
+            continue;
+        }
+        break;
+    }
+
+    std::string out = *type;
+    out += ' ';
+    out += name;
+    return out;
 }
 
 std::optional<std::string> MsvcDemangler::parse_qualified_name() {
@@ -432,6 +594,14 @@ std::optional<std::string> MsvcDemangler::parse_type() {
 std::optional<std::string> demangle_msvc(std::string_view mangled) {
     MsvcDemangler d(mangled);
     auto out = d.run();
+    if (!out) return std::nullopt;
+    if (out->empty()) return std::nullopt;
+    return out;
+}
+
+std::optional<std::string> demangle_msvc_full(std::string_view mangled) {
+    MsvcDemangler d(mangled);
+    auto out = d.run_full();
     if (!out) return std::nullopt;
     if (out->empty()) return std::nullopt;
     return out;

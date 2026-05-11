@@ -31,4 +31,11 @@ namespace ember {
 [[nodiscard]] std::optional<std::string>
 demangle_msvc(std::string_view mangled);
 
+// Full renderer for the same parser. This keeps the name-only API above
+// stable for RTTI/vtable labels, while symbol views can opt into common
+// function signatures (`?foo@@YAXH@Z` -> `void foo(int)`). Unsupported
+// signature tails degrade to the name-only spelling.
+[[nodiscard]] std::optional<std::string>
+demangle_msvc_full(std::string_view mangled);
+
 }  // namespace ember

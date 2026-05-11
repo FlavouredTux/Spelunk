@@ -1,4 +1,5 @@
 #include <ember/analysis/demangle.hpp>
+#include <ember/analysis/msvc_demangle.hpp>
 
 #include <cstddef>
 #include <string>
@@ -859,6 +860,9 @@ std::string pretty_symbol(std::string_view name) {
     if (auto r = demangle_itanium(name); r) {
         return simplify_stdlib_templates(std::move(*r));
     }
+    if (auto r = demangle_msvc_full(name); r) {
+        return simplify_stdlib_templates(std::move(*r));
+    }
     return std::string(name);
 }
 
@@ -895,6 +899,9 @@ std::string strip_signature_suffix(std::string_view s) {
 }
 
 std::string pretty_symbol_base(std::string_view name) {
+    if (auto r = demangle_msvc(name); r) {
+        return *r;
+    }
     return strip_signature_suffix(pretty_symbol(name));
 }
 

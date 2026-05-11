@@ -33,6 +33,18 @@ void check_msvc(std::string_view mangled, std::string_view expected) {
     }
 }
 
+void check_msvc_full(std::string_view mangled, std::string_view expected) {
+    auto got_opt = ember::demangle_msvc_full(mangled);
+    const std::string got = got_opt ? *got_opt : std::string("<nullopt>");
+    if (got != expected) {
+        std::fprintf(stderr, "FAIL msvc full: %.*s\n  got:      %s\n  expected: %.*s\n",
+                     static_cast<int>(mangled.size()), mangled.data(),
+                     got.c_str(),
+                     static_cast<int>(expected.size()), expected.data());
+        ++fails;
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -118,6 +130,32 @@ int main() {
     // Operators.
     check_msvc("??4Foo@@QEAAAEAU0@AEBU0@@Z",  "Foo::operator=");
     check_msvc("??_7Foo@@6B@",                "Foo::`vftable'");
+
+    // Full MSVC signatures keep the old name-only API separate.
+    check_msvc_full("?foo@@YAXXZ",                 "void foo()");
+    check_msvc_full("?take_int@@YAXH@Z",           "void take_int(int)");
+    check_msvc_full("?sum@@YAHHH@Z",               "int sum(int, int)");
+    check_msvc_full("?bar@Foo@@QEAAXH@Z",          "void Foo::bar(int)");
+    check_msvc_full("?size@Foo@@QEBAHXZ",          "int Foo::size() const");
+    check_msvc_full("?tick@Foo@@QECAHXZ",          "int Foo::tick() volatile");
+    check_msvc_full("?stat@Foo@@SAXH@Z",           "void Foo::stat(int)");
+    check_msvc_full("?make@Foo@@SAPEAV1@XZ",       "Foo* Foo::make()");
+    check_msvc_full("?cstr@@YAPEBDXZ",             "const char* cstr()");
+    check_msvc_full("?puts2@@YAXPEBD@Z",           "void puts2(const char*)");
+    check_msvc_full("??0Foo@@QEAA@XZ",             "Foo::Foo()");
+    check_msvc_full("??1Foo@@QEAA@XZ",             "Foo::~Foo()");
+    check_msvc_full("??4Foo@@QEAAAEAU0@AEBU0@@Z",  "Foo& Foo::operator=(const Foo&)");
+
+    // Data symbols: common global / static-member decorated tails.
+    check_msvc_full("?g_counter@@3HA",              "int g_counter");
+    check_msvc_full("?limit@Foo@@2HB",              "int Foo::limit");
+    check_msvc_full("?g_name@@3PEBDA",              "const char* g_name");
+
+    check("?foo@@YAXH@Z",                 "void foo(int)");
+    check("?size@Foo@@QEBAHXZ",           "int Foo::size() const");
+    check("?g_counter@@3HA",              "int g_counter");
+    check_base("?bar@Foo@@QEAAXH@Z",      "Foo::bar");
+    check_base("?g_counter@@3HA",         "g_counter");
 
     // Not mangled / unsupported → nullopt (rendered as "<nullopt>").
     check_msvc("plain_name",                  "<nullopt>");

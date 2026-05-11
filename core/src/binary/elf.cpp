@@ -17,7 +17,9 @@ namespace ember {
 namespace {
 
 constexpr std::size_t kEhdr64Size = 64;
+constexpr std::size_t kEhdr32Size = 52;
 constexpr std::size_t kPhdr64Size = 56;
+constexpr std::size_t kPhdr32Size = 32;
 constexpr std::size_t kShdr64Size = 64;
 constexpr std::size_t kSym64Size  = 24;
 constexpr std::size_t kRela64Size = 24;
@@ -55,6 +57,7 @@ constexpr std::size_t CLASS    = 4;
 constexpr std::size_t DATA     = 5;
 
 constexpr u8 CLASS_64 = 2;
+constexpr u8 CLASS_32 = 1;
 constexpr u8 DATA_LSB = 1;
 constexpr u8 DATA_MSB = 2;
 }  // namespace ei
@@ -185,9 +188,9 @@ ElfBinary::load_from_buffer(std::vector<std::byte> buffer) {
 Result<ElfBinary::ParsedEhdr> ElfBinary::parse_ehdr() {
     const ByteReader r(buffer_);
 
-    if (r.size() < kEhdr64Size) {
+    if (r.size() < kEhdr32Size) {
         return std::unexpected(Error::truncated(std::format(
-            "elf: file smaller than ELF64 header ({} < {})", r.size(), kEhdr64Size)));
+            "elf: file smaller than ELF header ({} < {})", r.size(), kEhdr32Size)));
     }
 
     const std::byte* const ident = buffer_.data();
@@ -200,9 +203,9 @@ Result<ElfBinary::ParsedEhdr> ElfBinary::parse_ehdr() {
 
     const u8 ei_class = static_cast<u8>(ident[ei::CLASS]);
     const u8 ei_data  = static_cast<u8>(ident[ei::DATA]);
-    if (ei_class != ei::CLASS_64) {
+    if (ei_class != ei::CLASS_64 && ei_class != ei::CLASS_32) {
         return std::unexpected(Error::unsupported(std::format(
-            "elf: only ELFCLASS64 supported (got {})", ei_class)));
+            "elf: unsupported ELF class {}", ei_class)));
     }
     if (ei_data != ei::DATA_LSB && ei_data != ei::DATA_MSB) {
         return std::unexpected(Error::unsupported(std::format(
@@ -210,7 +213,29 @@ Result<ElfBinary::ParsedEhdr> ElfBinary::parse_ehdr() {
     }
     endian_ = (ei_data == ei::DATA_MSB) ? Endian::Big : Endian::Little;
 
+    const bool is_64bit = ei_class == ei::CLASS_64;
+    if (is_64bit && r.size() < kEhdr64Size) {
+        return std::unexpected(Error::truncated(std::format(
+            "elf: file smaller than ELF64 header ({} < {})", r.size(), kEhdr64Size)));
+    }
+
+    if (!is_64bit) {
+        return ParsedEhdr{
+            .is_64bit    = false,
+            .e_machine   = read_at<u16>(endian_, ident + 0x12),
+            .e_entry     = read_at<u32>(endian_, ident + 0x18),
+            .e_phoff     = read_at<u32>(endian_, ident + 0x1c),
+            .e_shoff     = read_at<u32>(endian_, ident + 0x20),
+            .e_phentsize = read_at<u16>(endian_, ident + 0x2a),
+            .e_phnum     = read_at<u16>(endian_, ident + 0x2c),
+            .e_shentsize = read_at<u16>(endian_, ident + 0x2e),
+            .e_shnum     = read_at<u16>(endian_, ident + 0x30),
+            .e_shstrndx  = read_at<u16>(endian_, ident + 0x32),
+        };
+    }
+
     return ParsedEhdr{
+        .is_64bit    = true,
         .e_machine   = read_at<u16>(endian_, ident + 0x12),
         .e_entry     = read_at<u64>(endian_, ident + 0x18),
         .e_phoff     = read_at<u64>(endian_, ident + 0x20),
@@ -227,10 +252,11 @@ Result<ElfBinary::ParsedEhdr> ElfBinary::parse_ehdr() {
 // no program headers; callers fall back to section-table lookup there.
 Result<void> ElfBinary::parse_segments(const ParsedEhdr& h) {
     if (h.e_phnum == 0) return {};
-    if (h.e_phentsize != kPhdr64Size) {
+    const std::size_t want_phdr_size = h.is_64bit ? kPhdr64Size : kPhdr32Size;
+    if (h.e_phentsize != want_phdr_size) {
         return std::unexpected(Error::invalid_format(std::format(
             "elf: unexpected e_phentsize {} (want {})",
-            h.e_phentsize, kPhdr64Size)));
+            h.e_phentsize, want_phdr_size)));
     }
     const ByteReader r(buffer_);
     const std::size_t phtab_bytes =
@@ -241,13 +267,26 @@ Result<void> ElfBinary::parse_segments(const ParsedEhdr& h) {
     segments_.reserve(h.e_phnum);
     for (u16 i = 0; i < h.e_phnum; ++i) {
         const std::byte* const p =
-            phtab->data() + static_cast<std::size_t>(i) * kPhdr64Size;
+            phtab->data() + static_cast<std::size_t>(i) * want_phdr_size;
         const u32 p_type   = read_at<u32>(endian_, p + 0x00);
-        const u32 p_flags  = read_at<u32>(endian_, p + 0x04);
-        const u64 p_offset = read_at<u64>(endian_, p + 0x08);
-        const u64 p_vaddr  = read_at<u64>(endian_, p + 0x10);
-        const u64 p_filesz = read_at<u64>(endian_, p + 0x20);
-        const u64 p_memsz  = read_at<u64>(endian_, p + 0x28);
+        u32 p_flags = 0;
+        u64 p_offset = 0;
+        u64 p_vaddr = 0;
+        u64 p_filesz = 0;
+        u64 p_memsz = 0;
+        if (h.is_64bit) {
+            p_flags  = read_at<u32>(endian_, p + 0x04);
+            p_offset = read_at<u64>(endian_, p + 0x08);
+            p_vaddr  = read_at<u64>(endian_, p + 0x10);
+            p_filesz = read_at<u64>(endian_, p + 0x20);
+            p_memsz  = read_at<u64>(endian_, p + 0x28);
+        } else {
+            p_offset = read_at<u32>(endian_, p + 0x04);
+            p_vaddr  = read_at<u32>(endian_, p + 0x08);
+            p_filesz = read_at<u32>(endian_, p + 0x10);
+            p_memsz  = read_at<u32>(endian_, p + 0x14);
+            p_flags  = read_at<u32>(endian_, p + 0x18);
+        }
 
         if (p_type != pt::LOAD) continue;
         if (p_memsz == 0) continue;
@@ -701,6 +740,29 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     auto phtab = r.slice(h.e_phoff, static_cast<std::size_t>(h.e_phentsize) * h.e_phnum);
     if (!phtab) return std::unexpected(std::move(phtab).error());
 
+    if (!h.is_64bit) {
+        for (const auto& seg : segments_) {
+            if (seg.data.empty()) continue;
+            std::string name = seg.executable ? ".text"
+                            : seg.writable    ? ".data"
+                            :                   ".rodata";
+            sections_.push_back(make_section(std::move(name), seg.vaddr, seg.data,
+                                             seg.executable, seg.writable));
+        }
+        if (entry_ != 0) {
+            Symbol s;
+            s.name      = "_start";
+            s.addr      = entry_;
+            s.size      = 0;
+            s.kind      = SymbolKind::Function;
+            s.is_import = false;
+            s.is_export = true;
+            symbols_.push_back(std::move(s));
+        }
+        sort_and_dedupe_symbols();
+        return {};
+    }
+
     // First pass: locate PT_DYNAMIC and PT_GNU_EH_FRAME so we know what
     // metadata is recoverable. Both are optional — a statically-linked or
     // no-EH binary will legitimately lack one or both.
@@ -1031,7 +1093,7 @@ Result<void> ElfBinary::parse() {
     auto hdr = parse_ehdr();
     if (!hdr) return std::unexpected(std::move(hdr).error());
 
-    arch_  = arch_from_machine(hdr->e_machine, /*is_64bit=*/true);
+    arch_  = arch_from_machine(hdr->e_machine, hdr->is_64bit);
     entry_ = hdr->e_entry;
 
     if (auto rv = parse_segments(*hdr);  !rv) return std::unexpected(rv.error());

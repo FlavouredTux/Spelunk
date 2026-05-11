@@ -23,6 +23,14 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Std:      return "std";
         case Mnemonic::Lwz:      return "lwz";
         case Mnemonic::Stw:      return "stw";
+        case Mnemonic::Lbz:      return "lbz";
+        case Mnemonic::Stb:      return "stb";
+        case Mnemonic::Lhz:      return "lhz";
+        case Mnemonic::Sth:      return "sth";
+        case Mnemonic::Lha:      return "lha";
+        case Mnemonic::Stwu:     return "stwu";
+        case Mnemonic::Mulli:    return "mulli";
+        case Mnemonic::Rlwinm:   return "rlwinm";
         case Mnemonic::Add:      return "add";
         case Mnemonic::Sub:      return "sub";
         case Mnemonic::Adc:      return "adc";

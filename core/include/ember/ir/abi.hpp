@@ -18,6 +18,7 @@ enum class Abi : u8 {
     Unknown,
     SysVAmd64,
     Win64,
+    Ppc32Sysv,
     Ppc64ElfV2Le,
     Ppc64ElfV1Be,
     Aapcs64,
@@ -39,6 +40,9 @@ enum class Abi : u8 {
         // distinguish those at this level).
         return Abi::Aapcs64;
     }
+    if (f == Format::Elf && a == Arch::Ppc32) {
+        return Abi::Ppc32Sysv;
+    }
     if (f == Format::Elf && a == Arch::Ppc64) {
         return (e == Endian::Big) ? Abi::Ppc64ElfV1Be : Abi::Ppc64ElfV2Le;
     }
@@ -48,13 +52,13 @@ enum class Abi : u8 {
 // Integer/pointer argument registers in order.
 //   SysV:  rdi, rsi, rdx, rcx, r8, r9        (6 args then stack)
 //   Win64: rcx, rdx, r8, r9                  (4 args, 32-byte shadow, then stack)
-//   PPC64: r3-r10                            (8 args then stack)
+//   PPC32/PPC64: r3-r10                      (8 args then stack)
 [[nodiscard]] std::span<const Reg> int_arg_regs(Abi a) noexcept;
 
 // Caller-saved integer registers. Any call may destroy these.
 //   SysV:  rax, rcx, rdx, rsi, rdi, r8-r11
 //   Win64: rax, rcx, rdx, r8-r11             (rsi, rdi are callee-saved)
-//   PPC64: r0, r3-r12, lr, ctr               (r2/TOC intentionally preserved)
+//   PPC32/PPC64: r0, r3-r12, lr, ctr         (r2/TOC intentionally preserved)
 [[nodiscard]] std::span<const Reg> caller_saved_int_regs(Abi a) noexcept;
 
 [[nodiscard]] Reg int_return_reg(Abi a) noexcept;

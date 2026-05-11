@@ -1,0 +1,10 @@
+function <entry> @ 0x100054
+  blocks: 1
+
+bb_100054  (entry):
+  ; 0x100054
+  t0 = add i32 0x0, 0x2a
+  r3_1 = t0
+  ; 0x100058
+  return r3_1
+

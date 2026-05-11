@@ -117,6 +117,7 @@ private:
     // dependency, symbols must come after sections, and the PLT/GOT
     // attachment needs symbols + sections.
     struct ParsedEhdr {
+        bool is_64bit;
         u16 e_machine;
         u64 e_entry;
         u64 e_phoff, e_shoff;

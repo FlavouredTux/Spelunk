@@ -17,7 +17,8 @@ enum class Mnemonic : u16 {
     Mov, Movzx, Movsx, Movsxd, Lea, Xchg,
     Push, Pop,
     Addi, Addis,
-    Ld, Std, Lwz, Stw,
+    Ld, Std, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha, Stwu,
+    Mulli, Rlwinm,
 
     Add, Sub, Adc, Sbb, Inc, Dec, Neg,
     Mul, Imul, Div, Idiv,
@@ -310,7 +311,7 @@ struct Instruction {
     u8                       length       = 0;
     Mnemonic                 mnemonic     = Mnemonic::Invalid;
     PrefixSet                prefixes     = {};
-    std::array<Operand, 4>   operands     = {};
+    std::array<Operand, 5>   operands     = {};
     u8                       num_operands = 0;
     std::array<std::byte, 15> raw_bytes   = {};
 };

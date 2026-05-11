@@ -19,11 +19,11 @@ constexpr Reg kWin64CallerSaved[7] = {
     Reg::Rax, Reg::Rcx, Reg::Rdx,
     Reg::R8,  Reg::R9,  Reg::R10, Reg::R11,
 };
-constexpr Reg kPpc64ArgRegs[8] = {
+constexpr Reg kPpcArgRegs[8] = {
     Reg::PpcR3, Reg::PpcR4, Reg::PpcR5, Reg::PpcR6,
     Reg::PpcR7, Reg::PpcR8, Reg::PpcR9, Reg::PpcR10,
 };
-constexpr Reg kPpc64CallerSaved[13] = {
+constexpr Reg kPpcCallerSaved[13] = {
     Reg::PpcR0, Reg::PpcR3, Reg::PpcR4,  Reg::PpcR5,  Reg::PpcR6,
     Reg::PpcR7, Reg::PpcR8, Reg::PpcR9,  Reg::PpcR10, Reg::PpcR11,
     Reg::PpcR12, Reg::PpcLr, Reg::PpcCtr,
@@ -50,8 +50,9 @@ constexpr Reg kAapcs64CallerSaved[18] = {
 
 std::span<const Reg> int_arg_regs(Abi a) noexcept {
     switch (a) {
+        case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
-        case Abi::Ppc64ElfV1Be: return kPpc64ArgRegs;
+        case Abi::Ppc64ElfV1Be: return kPpcArgRegs;
         case Abi::Win64:        return kWin64ArgRegs;
         case Abi::Aapcs64:      return kAapcs64ArgRegs;
         case Abi::SysVAmd64:
@@ -62,8 +63,9 @@ std::span<const Reg> int_arg_regs(Abi a) noexcept {
 
 std::span<const Reg> caller_saved_int_regs(Abi a) noexcept {
     switch (a) {
+        case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
-        case Abi::Ppc64ElfV1Be: return kPpc64CallerSaved;
+        case Abi::Ppc64ElfV1Be: return kPpcCallerSaved;
         case Abi::Win64:        return kWin64CallerSaved;
         case Abi::Aapcs64:      return kAapcs64CallerSaved;
         case Abi::SysVAmd64:
@@ -74,6 +76,7 @@ std::span<const Reg> caller_saved_int_regs(Abi a) noexcept {
 
 Reg int_return_reg(Abi a) noexcept {
     switch (a) {
+        case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be: return Reg::PpcR3;
         case Abi::Aapcs64:      return Reg::X0;
@@ -92,6 +95,7 @@ Reg fp_return_reg(Abi a) noexcept {
             return Reg::Xmm0;
         case Abi::Aapcs64:
             return Reg::V0;
+        case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be:
         default:

@@ -1267,6 +1267,107 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  ppc64be_opd_tiny.pseudo.txt
     )
 
+    # ---- ppc32_tiny (hand-built ELF32, both endian modes) -----------------
+    # Reuses the PPC decoder/lifter path with a 32-bit ABI so the same
+    # minimal addi+blr program returns u32 rather than the PPC64 u64 shape.
+    set(_ppc32le_tiny "${_build_dir}/ppc32le_tiny")
+    add_custom_command(
+        OUTPUT "${_ppc32le_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                32le
+                "${_ppc32le_tiny}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating ELF PPC32LE fixture ppc32le_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc32le_tiny ALL DEPENDS "${_ppc32le_tiny}")
+    set(EMBER_FIXTURE_ppc32le_tiny_PATH "${_ppc32le_tiny}")
+
+    set(_ppc32be_tiny "${_build_dir}/ppc32be_tiny")
+    add_custom_command(
+        OUTPUT "${_ppc32be_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                32be
+                "${_ppc32be_tiny}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating ELF PPC32BE fixture ppc32be_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc32be_tiny ALL DEPENDS "${_ppc32be_tiny}")
+    set(EMBER_FIXTURE_ppc32be_tiny_PATH "${_ppc32be_tiny}")
+
+    ember_golden_test(
+        NAME    ppc32le_tiny_disasm
+        FIXTURE ppc32le_tiny
+        ARGS    "-d"
+        GOLDEN  ppc32le_tiny.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_tiny_disasm
+        FIXTURE ppc32be_tiny
+        ARGS    "-d"
+        GOLDEN  ppc32be_tiny.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc32le_tiny_ssa
+        FIXTURE ppc32le_tiny
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc32le_tiny.ssa.txt
+    )
+    ember_golden_test(
+        NAME    ppc32le_tiny_pseudo
+        FIXTURE ppc32le_tiny
+        ARGS    "-p"
+        GOLDEN  ppc32le_tiny.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_tiny_ssa
+        FIXTURE ppc32be_tiny
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc32be_tiny.ssa.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_tiny_pseudo
+        FIXTURE ppc32be_tiny
+        ARGS    "-p"
+        GOLDEN  ppc32be_tiny.pseudo.txt
+    )
+
+    set(_ppc32be_wii "${_build_dir}/ppc32be_wii")
+    add_custom_command(
+        OUTPUT "${_ppc32be_wii}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                32be-wii
+                "${_ppc32be_wii}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating Wii-like ELF PPC32BE fixture ppc32be_wii"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc32be_wii ALL DEPENDS "${_ppc32be_wii}")
+    set(EMBER_FIXTURE_ppc32be_wii_PATH "${_ppc32be_wii}")
+
+    ember_golden_test(
+        NAME    ppc32be_wii_disasm
+        FIXTURE ppc32be_wii
+        ARGS    "-d"
+        GOLDEN  ppc32be_wii.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_wii_ssa
+        FIXTURE ppc32be_wii
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc32be_wii.ssa.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_wii_pseudo
+        FIXTURE ppc32be_wii
+        ARGS    "-p"
+        GOLDEN  ppc32be_wii.pseudo.txt
+    )
+
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------
     #
     # Locks the AArch64 decoder + lifter + structurer + emitter pipeline

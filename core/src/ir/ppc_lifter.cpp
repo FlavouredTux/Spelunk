@@ -19,11 +19,27 @@ struct LiftCtx {
 
     [[nodiscard]] u32 new_temp_id() noexcept { return fn->next_temp_id++; }
 
+    [[nodiscard]] bool is_ppc32() const noexcept { return abi == Abi::Ppc32Sysv; }
+
+    [[nodiscard]] IrType ppc_reg_type() const noexcept {
+        return is_ppc32() ? IrType::I32 : IrType::I64;
+    }
+
+    [[nodiscard]] IrType reg_type(Reg r) const noexcept {
+        const auto v = static_cast<unsigned>(r);
+        if ((v >= static_cast<unsigned>(Reg::PpcR0) &&
+             v <= static_cast<unsigned>(Reg::PpcR31)) ||
+            r == Reg::PpcLr || r == Reg::PpcCtr) {
+            return ppc_reg_type();
+        }
+        return type_for_bits(reg_size(r) * 8);
+    }
+
     [[nodiscard]] IrValue temp(IrType t) noexcept {
         return IrValue::make_temp(new_temp_id(), t);
     }
     [[nodiscard]] IrValue reg(Reg r) noexcept {
-        return IrValue::make_reg(r, type_for_bits(reg_size(r) * 8));
+        return IrValue::make_reg(r, reg_type(r));
     }
     [[nodiscard]] IrValue imm(i64 v, IrType t = IrType::I64) noexcept {
         return IrValue::make_imm(v, t);
@@ -108,15 +124,20 @@ struct LiftCtx {
     }
 
     [[nodiscard]] IrValue read_reg(Reg r) noexcept {
-        return IrValue::make_reg(canonical_reg(r), type_for_bits(reg_size(canonical_reg(r)) * 8));
+        const Reg canon = canonical_reg(r);
+        return IrValue::make_reg(canon, reg_type(canon));
     }
 
     void write_reg(Reg r, IrValue value) {
         const Reg canon = canonical_reg(r);
-        const IrType t = type_for_bits(reg_size(canon) * 8);
+        const IrType t = reg_type(canon);
         emit_assign(IrValue::make_reg(canon, t), match_size(value, t));
     }
 };
+
+[[nodiscard]] IrType ppc_abi_reg_type(Abi abi) noexcept {
+    return abi == Abi::Ppc32Sysv ? IrType::I32 : IrType::I64;
+}
 
 [[nodiscard]] IrType operand_type(const Operand& op) noexcept {
     switch (op.kind) {
@@ -134,7 +155,16 @@ struct LiftCtx {
 [[nodiscard]] IrValue compute_ea(const Mem& mem, LiftCtx& ctx) {
     IrValue base = mem.base == Reg::None ? ctx.imm(0) : ctx.read_reg(mem.base);
     if (!mem.has_disp || mem.disp == 0) return base;
-    return ctx.emit_binop(IrOp::Add, base, ctx.imm(mem.disp));
+    return ctx.emit_binop(IrOp::Add, base, ctx.imm(mem.disp, base.type), base.type);
+}
+
+[[nodiscard]] u32 ppc_mask32(u32 mb, u32 me) noexcept {
+    u32 mask = 0;
+    for (u32 i = 0; i < 32; ++i) {
+        const bool in_range = mb <= me ? (i >= mb && i <= me) : (i >= mb || i <= me);
+        if (in_range) mask |= 1u << (31u - i);
+    }
+    return mask;
 }
 
 [[nodiscard]] IrValue materialize_rvalue(const Operand& op, LiftCtx& ctx) {
@@ -322,13 +352,39 @@ void lift_instruction(LiftCtx& ctx) {
 
     auto binop = [&](IrOp op) {
         if (insn.num_operands < 2) return;
+        const IrType ty = ctx.ppc_reg_type();
         IrValue lhs = (insn.num_operands >= 3)
             ? materialize_rvalue(insn.operands[1], ctx)
-            : ctx.imm(0);
+            : ctx.imm(0, ty);
         IrValue rhs = materialize_rvalue(insn.operands[insn.num_operands - 1], ctx);
-        IrValue out = ctx.emit_binop(op, ctx.match_size(lhs, IrType::I64, true),
-                                     ctx.match_size(rhs, IrType::I64, true));
+        IrValue out = ctx.emit_binop(op, ctx.match_size(lhs, ty, true),
+                                     ctx.match_size(rhs, ty, true), ty);
         store_lvalue(insn.operands[0], out, ctx);
+    };
+
+    auto unop = [&](IrOp op) {
+        if (insn.num_operands != 2) return;
+        const IrType ty = ctx.ppc_reg_type();
+        IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), ty, true);
+        store_lvalue(insn.operands[0], ctx.emit_unop(op, src, ty), ctx);
+    };
+
+    auto load_int = [&](IrType mem_ty, bool sign_ext) {
+        if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
+            IrValue out = ctx.emit_load(compute_ea(insn.operands[1].mem, ctx), mem_ty);
+            out = ctx.match_size(out, ctx.ppc_reg_type(), sign_ext);
+            store_lvalue(insn.operands[0], out, ctx);
+        }
+    };
+
+    auto store_int = [&](IrType mem_ty, bool update_base) {
+        if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
+            const Mem& mem = insn.operands[1].mem;
+            IrValue ea = compute_ea(mem, ctx);
+            IrValue out = ctx.match_size(materialize_rvalue(insn.operands[0], ctx), mem_ty);
+            ctx.emit_store(ea, out);
+            if (update_base && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
+        }
     };
 
     switch (insn.mnemonic) {
@@ -340,22 +396,55 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Addi:
         case Mnemonic::Addis:
             if (insn.num_operands >= 2) {
+                const IrType ty = ctx.ppc_reg_type();
                 IrValue lhs = (insn.num_operands == 3)
                     ? materialize_rvalue(insn.operands[1], ctx)
-                    : ctx.imm(0);
+                    : ctx.imm(0, ty);
                 i64 imm = insn.operands[insn.num_operands - 1].imm.value;
                 if (insn.mnemonic == Mnemonic::Addis) imm <<= 16;
                 IrValue out = ctx.emit_binop(IrOp::Add,
-                                             ctx.match_size(lhs, IrType::I64, true),
-                                             ctx.imm(imm));
+                                             ctx.match_size(lhs, ty, true),
+                                             ctx.imm(imm, ty), ty);
                 store_lvalue(insn.operands[0], out, ctx);
             }
             break;
+        case Mnemonic::Mulli:
+            binop(IrOp::Mul);
+            break;
         case Mnemonic::Add: binop(IrOp::Add); break;
         case Mnemonic::Sub: binop(IrOp::Sub); break;
+        case Mnemonic::Mul: binop(IrOp::Mul); break;
         case Mnemonic::And: binop(IrOp::And); break;
         case Mnemonic::Or:  binop(IrOp::Or);  break;
         case Mnemonic::Xor: binop(IrOp::Xor); break;
+        case Mnemonic::Neg: unop(IrOp::Neg); break;
+        case Mnemonic::Not: unop(IrOp::Not); break;
+        case Mnemonic::Shl: binop(IrOp::Shl); break;
+        case Mnemonic::Shr: binop(IrOp::Lshr); break;
+        case Mnemonic::Sar: binop(IrOp::Ashr); break;
+        case Mnemonic::Rlwinm:
+            if (insn.num_operands == 5) {
+                const u32 sh = static_cast<u32>(insn.operands[2].imm.value) & 31u;
+                const u32 mb = static_cast<u32>(insn.operands[3].imm.value) & 31u;
+                const u32 me = static_cast<u32>(insn.operands[4].imm.value) & 31u;
+                IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx),
+                                             IrType::I32);
+                IrValue rot = src;
+                if (sh != 0) {
+                    IrValue left = ctx.emit_binop(IrOp::Shl, src, ctx.imm(sh, IrType::I32),
+                                                  IrType::I32);
+                    IrValue right = ctx.emit_binop(IrOp::Lshr, src, ctx.imm(32u - sh, IrType::I32),
+                                                   IrType::I32);
+                    rot = ctx.emit_binop(IrOp::Or, left, right, IrType::I32);
+                }
+                const u32 mask = ppc_mask32(mb, me);
+                IrValue out = (mask == 0xffffffffu)
+                    ? rot
+                    : ctx.emit_binop(IrOp::And, rot,
+                                     ctx.imm(static_cast<i64>(mask), IrType::I32), IrType::I32);
+                store_lvalue(insn.operands[0], ctx.match_size(out, ctx.ppc_reg_type()), ctx);
+            }
+            break;
         case Mnemonic::Cmp:
             if (insn.num_operands == 2) {
                 set_compare_flags(ctx, materialize_rvalue(insn.operands[0], ctx),
@@ -369,11 +458,16 @@ void lift_instruction(LiftCtx& ctx) {
             }
             break;
         case Mnemonic::Lwz:
-            if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
-                IrValue out = ctx.emit_load(compute_ea(insn.operands[1].mem, ctx), IrType::I32);
-                out = ctx.emit_unop(IrOp::ZExt, out, IrType::I64);
-                store_lvalue(insn.operands[0], out, ctx);
-            }
+            load_int(IrType::I32, false);
+            break;
+        case Mnemonic::Lbz:
+            load_int(IrType::I8, false);
+            break;
+        case Mnemonic::Lhz:
+            load_int(IrType::I16, false);
+            break;
+        case Mnemonic::Lha:
+            load_int(IrType::I16, true);
             break;
         case Mnemonic::Std:
             if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
@@ -382,10 +476,16 @@ void lift_instruction(LiftCtx& ctx) {
             }
             break;
         case Mnemonic::Stw:
-            if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
-                IrValue out = ctx.match_size(materialize_rvalue(insn.operands[0], ctx), IrType::I32);
-                ctx.emit_store(compute_ea(insn.operands[1].mem, ctx), out);
-            }
+            store_int(IrType::I32, false);
+            break;
+        case Mnemonic::Stwu:
+            store_int(IrType::I32, true);
+            break;
+        case Mnemonic::Stb:
+            store_int(IrType::I8, false);
+            break;
+        case Mnemonic::Sth:
+            store_int(IrType::I16, false);
             break;
         case Mnemonic::Call:
             lift_call(ctx);
@@ -423,7 +523,7 @@ void append_return_terminator(IrBlock& bb, Abi abi) {
     i.op = IrOp::Return;
     const Reg int_ret = int_return_reg(abi);
     if (int_ret != Reg::None) {
-        i.srcs[i.src_count++] = IrValue::make_reg(int_ret, IrType::I64);
+        i.srcs[i.src_count++] = IrValue::make_reg(int_ret, ppc_abi_reg_type(abi));
     }
     const Reg fp_ret = fp_return_reg(abi);
     if (fp_ret != Reg::None) {

@@ -1,0 +1,4 @@
+// <entry>
+u32 _start(void) {
+  return 0x2a;
+}

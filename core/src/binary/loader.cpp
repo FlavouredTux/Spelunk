@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <ember/binary/elf.hpp>
+#include <ember/binary/dol.hpp>
 #include <ember/binary/macho.hpp>
 #include <ember/binary/minidump.hpp>
 #include <ember/binary/pe.hpp>
@@ -346,6 +347,21 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
         if (!elf) return std::unexpected(std::move(elf).error());
         return std::unique_ptr<Binary>(std::move(*elf));
     }
+    if (looks_like_dol_path(path, *buffer)) {
+        auto dol = DolBinary::load_from_buffer(std::move(*buffer));
+        if (!dol) return std::unexpected(std::move(dol).error());
+        std::error_code ec;
+        auto try_map = [&](const std::filesystem::path& p) -> bool {
+            if (p.empty()) return false;
+            if (!std::filesystem::exists(p, ec) || ec) return false;
+            auto loaded = (*dol)->attach_map_from_path(p);
+            return loaded && *loaded != 0;
+        };
+        if (!try_map(path.string() + ".map")) {
+            try_map(path.parent_path() / (path.stem().string() + ".map"));
+        }
+        return std::unique_ptr<Binary>(std::move(*dol));
+    }
     if (looks_like_macho_64(*buffer)) {
         auto m = MachOBinary::load_from_buffer(std::move(*buffer));
         if (!m) return std::unexpected(std::move(m).error());
@@ -414,7 +430,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
     }
 
     return std::unexpected(Error::unsupported(
-        "unrecognized binary format (only ELF, Mach-O 64-bit, and PE32+ supported)"));
+        "unrecognized binary format (only ELF, DOL, Mach-O 64-bit, and PE32+ supported)"));
 }
 
 }  // namespace ember

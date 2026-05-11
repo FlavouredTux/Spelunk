@@ -40,7 +40,7 @@ enum class Abi : u8 {
         // distinguish those at this level).
         return Abi::Aapcs64;
     }
-    if (f == Format::Elf && a == Arch::Ppc32) {
+    if ((f == Format::Elf || f == Format::Dol) && a == Arch::Ppc32) {
         return Abi::Ppc32Sysv;
     }
     if (f == Format::Elf && a == Arch::Ppc64) {

@@ -14,6 +14,7 @@
 #include <ember/structure/structurer.hpp>
 
 #include <cstdio>
+#include <format>
 #include <string>
 
 namespace {

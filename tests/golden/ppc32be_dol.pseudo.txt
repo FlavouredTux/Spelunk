@@ -1,6 +1,5 @@
 // <entry>
-u32 _start(u32* a1) {
-  r1[-4] = r1;
+u32 scalar_entry(u32* a1) {
   if (!(u64)a1) {
     return 0;
   }

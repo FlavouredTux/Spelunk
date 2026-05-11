@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Emit a minimal PPC ELF executable in either endian mode.
+"""Emit minimal PPC ELF and DOL fixtures.
 
-The binary has one PT_LOAD segment covering the whole file and two
-instructions at the entry point:
+The default ELF modes have one PT_LOAD segment covering the whole file and
+two instructions at the entry point:
 
   addi r3, 42
   blr
@@ -40,8 +40,40 @@ OPD_VADDR = 0x102000
 
 
 def build(mode: str) -> bytes:
-    if mode not in {"le", "be", "be-opd", "32le", "32be", "32be-wii"}:
+    if mode not in {"le", "be", "be-opd", "32le", "32be", "32be-scalar", "dol-scalar"}:
         raise ValueError(mode)
+    if mode == "dol-scalar":
+        words = [
+            0x9421FFF0,  # stwu r1, -16(r1)
+            0x2C030000,  # cmpwi r3, 0
+            0x41820028,  # beq +0x28
+            0x80830000,  # lwz r4, 0(r3)
+            0x88A30004,  # lbz r5, 4(r3)
+            0xA0C30006,  # lhz r6, 6(r3)
+            0x1C840003,  # mulli r4, r4, 3
+            0x54A5103A,  # rlwinm r5, r5, 2, 0, 29
+            0x7C642A14,  # add r3, r4, r5
+            0x7C633214,  # add r3, r3, r6
+            0x38210010,  # addi r1, r1, 16
+            0x4E800020,  # blr
+            0x38600000,  # li r3, 0
+            0x38210010,  # addi r1, r1, 16
+            0x4E800020,  # blr
+        ]
+        code = b"".join(struct.pack(">I", w) for w in words)
+        code_offset = 0x100
+        code_addr = 0x80003100
+        header = bytearray(0x100)
+        for off, value in [
+            (0x00, code_offset),
+            (0x48, code_addr),
+            (0x90, len(code)),
+            (0xD8, 0x80004000),
+            (0xDC, 0x100),
+            (0xE0, code_addr),
+        ]:
+            header[off:off + 4] = struct.pack(">I", value)
+        return bytes(header) + code
     is_32 = mode.startswith("32")
     big = mode not in {"le", "32le"}
     use_opd = mode == "be-opd"
@@ -51,7 +83,7 @@ def build(mode: str) -> bytes:
     if is_32:
         code_offset = 52 + 32
         words = [0x3860002A, 0x4E800020]
-        if mode == "32be-wii":
+        if mode == "32be-scalar":
             words = [
                 0x9421FFF0,  # stwu r1, -16(r1)
                 0x2C030000,  # cmpwi r3, 0
@@ -181,9 +213,9 @@ def build(mode: str) -> bytes:
 
 
 def main() -> int:
-    modes = {"le", "be", "be-opd", "32le", "32be", "32be-wii"}
+    modes = {"le", "be", "be-opd", "32le", "32be", "32be-scalar", "dol-scalar"}
     if len(sys.argv) != 3 or sys.argv[1] not in modes:
-        print("usage: make_ppc64_tiny.py <le|be|be-opd|32le|32be|32be-wii> <out>", file=sys.stderr)
+        print("usage: make_ppc64_tiny.py <le|be|be-opd|32le|32be|32be-scalar|dol-scalar> <out>", file=sys.stderr)
         return 1
     out = pathlib.Path(sys.argv[2])
     out.write_bytes(build(sys.argv[1]))

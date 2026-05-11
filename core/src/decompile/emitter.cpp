@@ -718,7 +718,14 @@ struct Emitter {
         const Reg c = canonical_reg(r);
         return c == Reg::Rbx || c == Reg::Rbp ||
                c == Reg::R12 || c == Reg::R13 ||
-               c == Reg::R14 || c == Reg::R15;
+               c == Reg::R14 || c == Reg::R15 ||
+               (c >= Reg::PpcR14 && c <= Reg::PpcR31);
+    }
+
+    [[nodiscard]] static bool is_stack_base_reg(Reg r) noexcept {
+        const Reg c = canonical_reg(r);
+        return c == Reg::Rsp || c == Reg::Rbp ||
+               c == Reg::PpcR1;
     }
 
     // Render an IPA-arena TypeRef as a C type name. Returns empty if the
@@ -1946,10 +1953,9 @@ struct Emitter {
     }
 
     [[nodiscard]] bool is_abi_noise(const IrInst& inst) const {
-        // rsp/rbp = <anything>  → frame manipulation
+        // Stack-base register writes → frame manipulation.
         if (inst.op == IrOp::Assign && inst.dst.kind == IrValueKind::Reg) {
-            const Reg c = canonical_reg(inst.dst.reg);
-            if (c == Reg::Rsp || c == Reg::Rbp) return true;
+            if (is_stack_base_reg(inst.dst.reg)) return true;
         }
         // Prologue canary: Store of fs:[0x28] into a stack slot.
         if (inst.op == IrOp::Store && inst.src_count >= 2) {
@@ -2389,12 +2395,11 @@ struct Emitter {
         }
     }
 
-    // Trace a value back through Add/Sub/Assign chains to see if it's rsp/rbp-relative.
+    // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.
     [[nodiscard]] std::optional<i64> stack_offset(const IrValue& v, int depth = 0) const {
         if (depth > 16) return std::nullopt;
         if (v.kind == IrValueKind::Reg) {
-            const Reg canon = canonical_reg(v.reg);
-            if (canon == Reg::Rsp || canon == Reg::Rbp) return 0;
+            if (is_stack_base_reg(v.reg)) return 0;
             return std::nullopt;
         }
         if (v.kind != IrValueKind::Temp) return std::nullopt;

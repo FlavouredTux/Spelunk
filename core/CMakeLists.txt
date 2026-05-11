@@ -1,5 +1,6 @@
 add_library(ember_core STATIC
     src/binary/elf.cpp
+    src/binary/dol.cpp
     src/binary/macho.cpp
     src/binary/pe.cpp
     src/binary/pdb.cpp

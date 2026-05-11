@@ -1335,37 +1335,81 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  ppc32be_tiny.pseudo.txt
     )
 
-    set(_ppc32be_wii "${_build_dir}/ppc32be_wii")
+    set(_ppc32be_scalar "${_build_dir}/ppc32be_scalar")
     add_custom_command(
-        OUTPUT "${_ppc32be_wii}"
+        OUTPUT "${_ppc32be_scalar}"
         COMMAND ${Python3_EXECUTABLE}
                 "${_fixture_dir}/make_ppc64_tiny.py"
-                32be-wii
-                "${_ppc32be_wii}"
+                32be-scalar
+                "${_ppc32be_scalar}"
         DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
-        COMMENT "Generating Wii-like ELF PPC32BE fixture ppc32be_wii"
+        COMMENT "Generating scalar ELF PPC32BE fixture ppc32be_scalar"
         VERBATIM
     )
-    add_custom_target(ember_fixture_ppc32be_wii ALL DEPENDS "${_ppc32be_wii}")
-    set(EMBER_FIXTURE_ppc32be_wii_PATH "${_ppc32be_wii}")
+    add_custom_target(ember_fixture_ppc32be_scalar ALL DEPENDS "${_ppc32be_scalar}")
+    set(EMBER_FIXTURE_ppc32be_scalar_PATH "${_ppc32be_scalar}")
 
     ember_golden_test(
-        NAME    ppc32be_wii_disasm
-        FIXTURE ppc32be_wii
+        NAME    ppc32be_scalar_disasm
+        FIXTURE ppc32be_scalar
         ARGS    "-d"
-        GOLDEN  ppc32be_wii.disasm.txt
+        GOLDEN  ppc32be_scalar.disasm.txt
     )
     ember_golden_test(
-        NAME    ppc32be_wii_ssa
-        FIXTURE ppc32be_wii
+        NAME    ppc32be_scalar_ssa
+        FIXTURE ppc32be_scalar
         ARGS    "-i|--ssa"
-        GOLDEN  ppc32be_wii.ssa.txt
+        GOLDEN  ppc32be_scalar.ssa.txt
     )
     ember_golden_test(
-        NAME    ppc32be_wii_pseudo
-        FIXTURE ppc32be_wii
+        NAME    ppc32be_scalar_pseudo
+        FIXTURE ppc32be_scalar
         ARGS    "-p"
-        GOLDEN  ppc32be_wii.pseudo.txt
+        GOLDEN  ppc32be_scalar.pseudo.txt
+    )
+
+    set(_ppc32be_dol "${_build_dir}/ppc32be_dol.dol")
+    set(_ppc32be_dol_map "${_ppc32be_dol}.map")
+    add_custom_command(
+        OUTPUT "${_ppc32be_dol}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc64_tiny.py"
+                dol-scalar
+                "${_ppc32be_dol}"
+        DEPENDS "${_fixture_dir}/make_ppc64_tiny.py"
+        COMMENT "Generating scalar DOL PPC32BE fixture ppc32be_dol"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${_ppc32be_dol_map}"
+        COMMAND ${CMAKE_COMMAND} -E copy
+                "${_fixture_dir}/ppc32be_dol.map"
+                "${_ppc32be_dol_map}"
+        DEPENDS "${_fixture_dir}/ppc32be_dol.map"
+        COMMENT "Staging DOL PPC32BE map ppc32be_dol.dol.map"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc32be_dol ALL
+        DEPENDS "${_ppc32be_dol}" "${_ppc32be_dol_map}")
+    set(EMBER_FIXTURE_ppc32be_dol_PATH "${_ppc32be_dol}")
+
+    ember_golden_test(
+        NAME    ppc32be_dol_disasm
+        FIXTURE ppc32be_dol
+        ARGS    "-d"
+        GOLDEN  ppc32be_dol.disasm.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_dol_ssa
+        FIXTURE ppc32be_dol
+        ARGS    "-i|--ssa"
+        GOLDEN  ppc32be_dol.ssa.txt
+    )
+    ember_golden_test(
+        NAME    ppc32be_dol_pseudo
+        FIXTURE ppc32be_dol
+        ARGS    "-p"
+        GOLDEN  ppc32be_dol.pseudo.txt
     )
 
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------

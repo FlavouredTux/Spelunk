@@ -18,6 +18,9 @@ enum class Format {
     // an attacker dumped pages out of a process with no surrounding
     // minidump container.
     RawRegions,
+    // DOL executable: header lists up to 7 text and 11 data segments with
+    // physical/runtime addresses, no magic bytes.
+    Dol,
 };
 
 [[nodiscard]] constexpr std::string_view format_name(Format f) noexcept {
@@ -28,6 +31,7 @@ enum class Format {
         case Format::MachO:      return "mach-o";
         case Format::Minidump:   return "minidump";
         case Format::RawRegions: return "raw-regions";
+        case Format::Dol:        return "dol";
     }
     return "unknown";
 }

@@ -1,0 +1,66 @@
+function <entry> @ 0x80003100
+  blocks: 3
+
+bb_80003100  (entry):
+  ; 0x80003100
+  t0 = add i32 r1, -0x10
+  store i32 [t0], r1
+  r1_1 = t0
+  ; 0x80003104
+  t1 = sext i64 r3
+  t2 = sext i64 0x0
+  t3 = cmp.eq i1 t1, t2
+  zf_1 = t3
+  t4 = cmp.slt i1 t1, t2
+  sf_1 = t4
+  t5 = cmp.ult i1 t1, t2
+  cf_1 = t5
+  of_1 = 0x0
+  ; 0x80003108
+  cbr zf_1, bb_80003130, bb_8000310c
+
+bb_8000310c  <- bb_80003100:
+  ; 0x8000310c
+  t6 = load i32 [r3]
+  r4_1 = t6
+  ; 0x80003110
+  t7 = add i32 r3, 0x4
+  t8 = load i8 [t7]
+  t9 = zext i32 t8
+  r5_1 = t9
+  ; 0x80003114
+  t10 = add i32 r3, 0x6
+  t11 = load i16 [t10]
+  t12 = zext i32 t11
+  r6_1 = t12
+  ; 0x80003118
+  t13 = mul i32 r4_1, 0x3
+  r4_2 = t13
+  ; 0x8000311c
+  t14 = shl i32 r5_1, 0x2
+  t15 = lshr i32 r5_1, 0x1e
+  t16 = or i32 t14, t15
+  t17 = and i32 t16, 0xfffffffc
+  r5_2 = t17
+  ; 0x80003120
+  t18 = add i32 r4_2, r5_2
+  r3_1 = t18
+  ; 0x80003124
+  t19 = add i32 r3_1, r6_1
+  r3_2 = t19
+  ; 0x80003128
+  t20 = add i32 r1_1, 0x10
+  r1_2 = t20
+  ; 0x8000312c
+  return r3_2
+
+bb_80003130  <- bb_80003100:
+  ; 0x80003130
+  t21 = add i32 0x0, 0x0
+  r3_3 = t21
+  ; 0x80003134
+  t22 = add i32 r1_1, 0x10
+  r1_3 = t22
+  ; 0x80003138
+  return r3_3
+

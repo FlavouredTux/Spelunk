@@ -1,4 +1,4 @@
-; disassembly of <entry> at 0x0000000080003100 (112 bytes)
+; disassembly of <entry> at 0x0000000080003100 (132 bytes)
 0x0000000080003100  94 21 ff f0                     stwu r1, dword ptr [r1 - 0x10]
 0x0000000080003104  2c 03 00 00                     cmp r3, 0x0
 0x0000000080003108  41 82 00 28                     beq 0x80003130

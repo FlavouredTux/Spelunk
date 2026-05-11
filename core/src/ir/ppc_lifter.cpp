@@ -154,6 +154,13 @@ struct LiftCtx {
 
 [[nodiscard]] IrValue compute_ea(const Mem& mem, LiftCtx& ctx) {
     IrValue base = mem.base == Reg::None ? ctx.imm(0) : ctx.read_reg(mem.base);
+    if (mem.index != Reg::None) {
+        IrValue idx = ctx.read_reg(mem.index);
+        if (mem.scale != 1) {
+            idx = ctx.emit_binop(IrOp::Mul, idx, ctx.imm(mem.scale, idx.type), idx.type);
+        }
+        base = ctx.emit_binop(IrOp::Add, ctx.match_size(base, idx.type), idx, idx.type);
+    }
     if (!mem.has_disp || mem.disp == 0) return base;
     return ctx.emit_binop(IrOp::Add, base, ctx.imm(mem.disp, base.type), base.type);
 }
@@ -379,11 +386,14 @@ void lift_instruction(LiftCtx& ctx) {
         store_lvalue(insn.operands[0], ctx.emit_unop(op, src, ty), ctx);
     };
 
-    auto load_int = [&](IrType mem_ty, bool sign_ext) {
+    auto load_int = [&](IrType mem_ty, bool sign_ext, bool update_base = false) {
         if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
-            IrValue out = ctx.emit_load(compute_ea(insn.operands[1].mem, ctx), mem_ty);
+            const Mem& mem = insn.operands[1].mem;
+            IrValue ea = compute_ea(mem, ctx);
+            IrValue out = ctx.emit_load(ea, mem_ty);
             out = ctx.match_size(out, ctx.ppc_reg_type(), sign_ext);
             store_lvalue(insn.operands[0], out, ctx);
+            if (update_base && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
         }
     };
 
@@ -468,16 +478,32 @@ void lift_instruction(LiftCtx& ctx) {
             }
             break;
         case Mnemonic::Lwz:
+        case Mnemonic::Lwzx:
             load_int(IrType::I32, false);
             break;
+        case Mnemonic::Lwzu:
+            load_int(IrType::I32, false, true);
+            break;
         case Mnemonic::Lbz:
+        case Mnemonic::Lbzx:
             load_int(IrType::I8, false);
             break;
+        case Mnemonic::Lbzu:
+            load_int(IrType::I8, false, true);
+            break;
         case Mnemonic::Lhz:
+        case Mnemonic::Lhzx:
             load_int(IrType::I16, false);
             break;
+        case Mnemonic::Lhzu:
+            load_int(IrType::I16, false, true);
+            break;
         case Mnemonic::Lha:
+        case Mnemonic::Lhax:
             load_int(IrType::I16, true);
+            break;
+        case Mnemonic::Lhau:
+            load_int(IrType::I16, true, true);
             break;
         case Mnemonic::Std:
             if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
@@ -486,16 +512,25 @@ void lift_instruction(LiftCtx& ctx) {
             }
             break;
         case Mnemonic::Stw:
+        case Mnemonic::Stwx:
             store_int(IrType::I32, false);
             break;
         case Mnemonic::Stwu:
             store_int(IrType::I32, true);
             break;
         case Mnemonic::Stb:
+        case Mnemonic::Stbx:
             store_int(IrType::I8, false);
             break;
+        case Mnemonic::Stbu:
+            store_int(IrType::I8, true);
+            break;
         case Mnemonic::Sth:
+        case Mnemonic::Sthx:
             store_int(IrType::I16, false);
+            break;
+        case Mnemonic::Sthu:
+            store_int(IrType::I16, true);
             break;
         case Mnemonic::Call:
             lift_call(ctx);

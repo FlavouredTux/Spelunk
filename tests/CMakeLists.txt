@@ -1429,6 +1429,12 @@ if(Python3_Interpreter_FOUND)
         ARGS    "--no-cache|--xrefs"
         GOLDEN  ppc32be_dol.xrefs.txt
     )
+    ember_golden_test(
+        NAME    ppc32be_dol_indexed_disasm
+        FIXTURE ppc32be_dol
+        ARGS    "-d|--disasm-at|0x80003160|--count|9"
+        GOLDEN  ppc32be_dol.indexed_disasm.txt
+    )
 
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------
     #

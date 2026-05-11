@@ -41,6 +41,15 @@ namespace {
     return m;
 }
 
+[[nodiscard]] Mem make_indexed_mem(Reg base, Reg index, u8 size) noexcept {
+    Mem m;
+    m.base = base;
+    m.index = index;
+    m.scale = 1;
+    m.size = size;
+    return m;
+}
+
 [[nodiscard]] std::optional<Mnemonic>
 cond_branch_mnemonic(u32 bo, u32 bi) noexcept {
     if (bo == 12) {
@@ -252,6 +261,34 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     insn.operands[2] = Operand::make_reg(ppc_gpr(rb));
                     insn.num_operands = 3;
                     return insn;
+                case 23:
+                case 87:
+                case 279:
+                case 343: {
+                    insn.mnemonic = (xo == 23) ? Mnemonic::Lwzx
+                                    : (xo == 87) ? Mnemonic::Lbzx
+                                    : (xo == 279) ? Mnemonic::Lhzx
+                                                  : Mnemonic::Lhax;
+                    const u8 size = (xo == 87) ? 1 : (xo == 279 || xo == 343) ? 2 : 4;
+                    insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
+                    insn.operands[1] = Operand::make_mem(make_indexed_mem(
+                        ra == 0 ? Reg::None : ppc_gpr(ra), ppc_gpr(rb), size));
+                    insn.num_operands = 2;
+                    return insn;
+                }
+                case 151:
+                case 215:
+                case 407: {
+                    insn.mnemonic = (xo == 151) ? Mnemonic::Stwx
+                                    : (xo == 215) ? Mnemonic::Stbx
+                                                  : Mnemonic::Sthx;
+                    const u8 size = (xo == 215) ? 1 : (xo == 407) ? 2 : 4;
+                    insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
+                    insn.operands[1] = Operand::make_mem(make_indexed_mem(
+                        ra == 0 ? Reg::None : ppc_gpr(ra), ppc_gpr(rb), size));
+                    insn.num_operands = 2;
+                    return insn;
+                }
                 case 339: {
                     const u32 spr = ((w >> 16) & 0x1f) | (((w >> 11) & 0x1f) << 5);
                     auto reg = decode_spr(spr);
@@ -310,24 +347,36 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             break;
         }
         case 32:
+        case 33:
         case 34:
+        case 35:
         case 36:
         case 37:
         case 38:
+        case 39:
         case 40:
+        case 41:
         case 42:
-        case 44: {
+        case 43:
+        case 44:
+        case 45: {
             insn.mnemonic = (op == 32) ? Mnemonic::Lwz
+                            : (op == 33) ? Mnemonic::Lwzu
                             : (op == 34) ? Mnemonic::Lbz
+                            : (op == 35) ? Mnemonic::Lbzu
                             : (op == 36) ? Mnemonic::Stw
                             : (op == 37) ? Mnemonic::Stwu
                             : (op == 38) ? Mnemonic::Stb
+                            : (op == 39) ? Mnemonic::Stbu
                             : (op == 40) ? Mnemonic::Lhz
+                            : (op == 41) ? Mnemonic::Lhzu
                             : (op == 42) ? Mnemonic::Lha
-                                         : Mnemonic::Sth;
-            const u8 size = (op == 34 || op == 38) ? 1
-                          : (op == 40 || op == 42 || op == 44) ? 2
-                                                               : 4;
+                            : (op == 43) ? Mnemonic::Lhau
+                            : (op == 44) ? Mnemonic::Sth
+                                          : Mnemonic::Sthu;
+            const u8 size = (op == 34 || op == 35 || op == 38 || op == 39) ? 1
+                          : (op == 40 || op == 41 || op == 42 || op == 43 || op == 44 || op == 45) ? 2
+                                                                                                    : 4;
             insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
             insn.operands[1] = Operand::make_mem(make_mem(ra == 0 ? Reg::None : ppc_gpr(ra),
                                                           sign_extend(w & 0xffff, 16), size));

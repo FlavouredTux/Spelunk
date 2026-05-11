@@ -69,7 +69,12 @@ def build(mode: str) -> bytes:
             0x4E800020,  # blr
             0x60000000,  # nop
             0x9421FFF0,  # stwu r1, -16(r1)
-            0x38600007,  # li r3, 7
+            0x38800000,  # li r4, 0
+            0x7CA320AE,  # lbzx r5, r3, r4
+            0x7CC3222E,  # lhzx r6, r3, r4
+            0x7C63202E,  # lwzx r3, r3, r4
+            0x7C632A14,  # add r3, r3, r5
+            0x7C633214,  # add r3, r3, r6
             0x38210010,  # addi r1, r1, 16
             0x4E800020,  # blr
         ]

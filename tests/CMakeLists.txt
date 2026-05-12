@@ -227,12 +227,13 @@ ember_build_fixture(indirect_trace)
 ember_build_fixture(string_cmp)
 # Resolver-pattern fixture: packed string table + writable fnptr table
 # + a function that fills the fnptr table with N consecutive stride-8
-# constant stores. Built without CRT glue so the only stride-8 write
-# run in the binary is the resolver itself, which keeps the detection
-# heuristic unambiguous across gcc point-releases.
-ember_build_fixture(symresolve_demo
-    OPT "-O0"
-    EXTRA_LDFLAGS "-nostartfiles" "-Wl,-e,main")
+# constant stores. The symuses goldens bake in xref sites from the
+# compiled function bodies, so pin the bytes rather than chasing
+# gcc-image drift. Rebuild with:
+#   gcc -O0 -g -fno-stack-protector -no-pie -nostartfiles -Wl,-e,main \
+#       -o tests/fixtures/symresolve_demo.prebuilt \
+#       tests/fixtures/symresolve_demo.c
+ember_use_prebuilt_fixture(symresolve_demo)
 # Multi-resolver: two functions populating disjoint slot ranges of one
 # fnptr table — the iterative detector has to find both, the merged
 # output has to attribute every slot to the right resolver.

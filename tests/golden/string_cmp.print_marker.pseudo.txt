@@ -1,4 +1,4 @@
 // print_marker
-s32 print_marker(void) {
+int32_t print_marker(void) {
   return puts("PlatformImpl");
 }

@@ -1,4 +1,6 @@
 // via_global
-u64 via_global(void) {
+extern uint64_t (*g_fp)();
+
+uint64_t via_global(void) {
   return g_fp();
 }

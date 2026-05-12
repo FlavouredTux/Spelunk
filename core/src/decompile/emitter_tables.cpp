@@ -275,10 +275,10 @@ bool libc_arg_is_charp(std::string_view name, u8 arg_idx_1) noexcept {
 std::string_view c_type_name(IrType t) noexcept {
     switch (t) {
         case IrType::I1:   return "bool";
-        case IrType::I8:   return "u8";
-        case IrType::I16:  return "u16";
-        case IrType::I32:  return "u32";
-        case IrType::I64:  return "u64";
+        case IrType::I8:   return "uint8_t";
+        case IrType::I16:  return "uint16_t";
+        case IrType::I32:  return "uint32_t";
+        case IrType::I64:  return "uint64_t";
         // 128-bit SIMD register. Render with the canonical Intel name so
         // pseudo-C consumers recognise it as a packed value; the SIMD
         // intrinsic name on the same line carries the int-vs-fp interpretation.

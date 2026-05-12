@@ -1,4 +1,4 @@
 // divmod_runtime
-u32 divmod_runtime(u32 a1, u32 a2) {
-  return (u32)((u32)a1 % (u32)a2);
+uint32_t divmod_runtime(uint32_t a1, uint32_t a2) {
+  return (uint32_t)((uint32_t)a1 % (uint32_t)a2);
 }

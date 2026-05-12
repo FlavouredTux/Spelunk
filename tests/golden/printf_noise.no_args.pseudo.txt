@@ -1,5 +1,7 @@
 // no_args
-u64 no_args(void) {
+extern FILE* stdout;
+
+uint64_t no_args(void) {
   fwrite("hello\\n", 1, 6, stdout);
   puts("ready");
   return 0;

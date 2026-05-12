@@ -1,5 +1,7 @@
 // two_args
-u64 two_args(u64 a1, u64 a2) {
+extern FILE* stderr;
+
+uint64_t two_args(uint64_t a1, uint64_t a2) {
   fprintf(stderr, "a=%s b=%s\\n", a1, a2);
   return 0;
 }

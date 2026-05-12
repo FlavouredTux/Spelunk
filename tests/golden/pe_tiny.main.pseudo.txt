@@ -1,4 +1,4 @@
 // sub_140001000
-u64 sub_140001000(void) {
+uint64_t sub_140001000(void) {
   return GetTickCount();
 }

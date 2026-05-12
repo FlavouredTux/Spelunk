@@ -1,6 +1,6 @@
 // cleanup_on_fail
-u64 cleanup_on_fail(u64 a1) {
-  u64 local_10;
+uint64_t cleanup_on_fail(uint64_t a1) {
+  uint64_t local_10;
   void* r_malloc = malloc(0x40);
   local_10 = r_malloc;
   if (r_malloc) {
@@ -8,7 +8,7 @@ u64 cleanup_on_fail(u64 a1) {
       free(local_10);
       return -1;
     }
-    u64 r_strlen = strlen(a1);
+    uint64_t r_strlen = strlen(a1);
     if (r_strlen > 0x20) {
       free(local_10);
       return -1;

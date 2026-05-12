@@ -208,6 +208,7 @@ struct Emitter {
     std::set<std::pair<std::size_t, std::size_t>>    inline_call_positions;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> inline_call_ssa_key;
     mutable std::map<SsaKey, std::string>            inline_call_expr;
+    mutable std::map<std::string, std::string>       global_decls;
     // rax/xmm0 SSA key → bound local name for Call returns whose result is
     // read downstream. Makes `fopen(...); if (rax == 0)` render as
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
@@ -330,6 +331,14 @@ struct Emitter {
             resolved->kind != ResolvedNameKind::Object &&
             resolved->kind != ResolvedNameKind::Got) {
             return std::nullopt;
+        }
+        if (resolved->kind == ResolvedNameKind::Object || resolved->kind == ResolvedNameKind::Got) {
+            if (const Symbol* s = binary->defined_object_at(target);
+                s && s->kind == SymbolKind::Object) {
+                note_global_decl(*s, resolved->addr == resolved->base
+                    ? std::string{"uint64_t"}
+                    : std::string{"uint64_t[]"});
+            }
         }
         return format_address_expr(*resolved);
     }
@@ -733,6 +742,72 @@ struct Emitter {
                c == Reg::PpcR1;
     }
 
+    [[nodiscard]] static std::string normalize_c_type_alias(std::string_view t) {
+        auto map_base = [](std::string_view base) -> std::string_view {
+            if (base == "u8")  return "uint8_t";
+            if (base == "u16") return "uint16_t";
+            if (base == "u32") return "uint32_t";
+            if (base == "u64") return "uint64_t";
+            if (base == "s8" || base == "i8")   return "int8_t";
+            if (base == "s16" || base == "i16") return "int16_t";
+            if (base == "s32" || base == "i32") return "int32_t";
+            if (base == "s64" || base == "i64") return "int64_t";
+            return {};
+        };
+
+        std::string out(t);
+        std::size_t star = out.find('*');
+        std::string_view base = star == std::string::npos
+            ? std::string_view(out)
+            : std::string_view(out).substr(0, star);
+        while (!base.empty() && base.back() == ' ') base.remove_suffix(1);
+        if (auto mapped = map_base(base); !mapped.empty()) {
+            std::string suffix = star == std::string::npos
+                ? std::string{}
+                : out.substr(star);
+            return std::string(mapped) + suffix;
+        }
+        return out;
+    }
+
+    [[nodiscard]] static std::optional<std::string_view>
+    standard_global_type(std::string_view name) noexcept {
+        if (name == "stdin" || name == "stdout" || name == "stderr") {
+            return "FILE*";
+        }
+        return std::nullopt;
+    }
+
+    void note_global_decl(const Symbol& s, std::string type_name) const {
+        if (s.name.empty()) return;
+        type_name = normalize_c_type_alias(type_name);
+        if (type_name.find("(*") == std::string::npos &&
+            !type_name.ends_with("[]")) {
+            if (auto standard = standard_global_type(s.name); standard) {
+                type_name = *standard;
+            }
+        }
+        auto [it, inserted] = global_decls.emplace(s.name, type_name);
+        if (inserted || it->second == type_name) return;
+
+        const bool old_funcptr = it->second.find("(*") != std::string::npos;
+        const bool new_funcptr = type_name.find("(*") != std::string::npos;
+        if (old_funcptr) return;
+        if (new_funcptr) {
+            it->second = std::move(type_name);
+            return;
+        }
+
+        const bool old_array = it->second.ends_with("[]");
+        const bool new_array = type_name.ends_with("[]");
+        if (old_array && !new_array) return;
+        if (new_array && !old_array) {
+            it->second = std::move(type_name);
+            return;
+        }
+        it->second = "uint64_t";
+    }
+
     // Render an IPA-arena TypeRef as a C type name. Returns empty if the
     // ref is Top or no arena is supplied — caller should fall back.
     [[nodiscard]] std::string ipa_type_name(TypeRef r) const {
@@ -743,9 +818,9 @@ struct Emitter {
             case TypeKind::Void: return "void";
             case TypeKind::Int:
                 if (n.i.sign_known && n.i.is_signed) {
-                    return std::format("s{}", n.i.bits);
+                    return std::format("int{}_t", n.i.bits);
                 }
-                return std::format("u{}", n.i.bits);
+                return std::format("uint{}_t", n.i.bits);
             case TypeKind::Float:
                 return n.f.bits == 32 ? "float" : "double";
             case TypeKind::Ptr: {
@@ -754,7 +829,7 @@ struct Emitter {
                     return "char*";  // canonical char* rendering
                 }
                 if (pn.kind == TypeKind::Int) {
-                    return std::format("u{}*", pn.i.bits);
+                    return std::format("uint{}_t*", pn.i.bits);
                 }
                 return "void*";
             }
@@ -776,13 +851,13 @@ struct Emitter {
                 const auto& pn = fn->types.node(node.p.pointee);
                 if (pn.kind == TypeKind::Int) {
                     if (pn.i.bits == 8) return "char*";
-                    return std::format("u{}*", pn.i.bits);
+                    return std::format("uint{}_t*", pn.i.bits);
                 }
                 return "void*";
             }
             case TypeKind::Int:
                 if (node.i.sign_known && node.i.is_signed) {
-                    return std::format("s{}", node.i.bits);
+                    return std::format("int{}_t", node.i.bits);
                 }
                 return std::string(c_type_name(v.type));
             default:
@@ -1100,6 +1175,18 @@ struct Emitter {
             return std::nullopt;
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] const Symbol*
+    global_object_for_load(const IrValue& v) const {
+        if (!binary) return nullptr;
+        const IrInst* d = def_stripped(v);
+        if (!d || d->op != IrOp::Load || d->src_count < 1) return nullptr;
+        auto imm = try_resolve_imm_addr(d->srcs[0]);
+        if (!imm) return nullptr;
+        const Symbol* s = binary->defined_object_at(static_cast<addr_t>(*imm));
+        if (!s || s->kind != SymbolKind::Object || s->name.empty()) return nullptr;
+        return s;
     }
 
     [[nodiscard]] IrType call_arg_display_type(const IrValue& v) const {
@@ -1461,7 +1548,7 @@ struct Emitter {
             // Refined local inference already found a stronger type such as
             // `char*` / `u32*`; don't overwrite pointer evidence with an
             // integer-width guess from an incidental cast.
-            if (c_type_name_for(arg) != "u64") continue;
+            if (c_type_name_for(arg) != "uint64_t") continue;
 
             std::optional<IrType> narrowed;
             bool saw_use = false;
@@ -2656,16 +2743,20 @@ struct Emitter {
         const i64 off = static_cast<i64>(a) - static_cast<i64>(s->addr);
 
         if (off == 0 && (s->size == 0 || s->size == t_bytes)) {
+            note_global_decl(*s, std::string(c_type_name(t)));
             return s->name;
         }
         if (s->size == 0 && t_bytes != 0 && off > 0 &&
             (off % static_cast<i64>(t_bytes)) == 0) {
+            note_global_decl(*s, std::format("{}[]", c_type_name(t)));
             return std::format("{}[{}]", s->name,
                                off / static_cast<i64>(t_bytes));
         }
         if (off == 0) {
+            note_global_decl(*s, std::string(c_type_name(t)));
             return std::format("*({}*)&{}", c_type_name(t), s->name);
         }
+        note_global_decl(*s, std::format("{}[]", c_type_name(t)));
         return std::format("*({}*)(&{} + {:#x})",
                            c_type_name(t), s->name,
                            static_cast<u64>(off));
@@ -2876,6 +2967,7 @@ struct Emitter {
                     s && s->kind == SymbolKind::Object &&
                     !s->name.empty() &&
                     static_cast<addr_t>(s->addr) == a) {
+                    note_global_decl(*s, std::format("{}[]", c_type_name(t)));
                     return std::format("{}[{}]", s->name,
                                        expr(idx, depth + 1));
                 }
@@ -3395,10 +3487,10 @@ struct Emitter {
         }
         const Prec own = (op == "==" || op == "!=") ? Prec::Eq : Prec::Rel;
         const int p = std::to_underlying(own);
-        const std::string_view c = "i64";
+        const std::string_view c = "int64_t";
         const bool cast_l = signed_cmp && a.kind != IrValueKind::Imm;
         const bool cast_r = signed_cmp && b.kind != IrValueKind::Imm;
-        // If we're going to wrap in `(i64)`, the inner must bind at Unary;
+        // If we're going to wrap in `(int64_t)`, the inner must bind at Unary;
         // otherwise the compare's own precedence is enough.
         const int lp = cast_l ? std::to_underlying(Prec::Unary) : p;
         const int rp = cast_r ? std::to_underlying(Prec::Unary) : p + 1;
@@ -3984,7 +4076,7 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
             // `TYPE NAME = ...;`) doesn't strip it.
             out += std::format("{}{} = {};\n", ind, name, call_expr);
         } else {
-            std::string type_name = "u64";
+            std::string type_name = "uint64_t";
             if (auto df = defs.find(bk->second); df != defs.end()) {
                 type_name = c_type_name_for(df->second->dst);
             }
@@ -4239,6 +4331,10 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     // a double-deref read.
                     const std::string tgt =
                         expr(inst.srcs[0], 0, std::to_underlying(Prec::Postfix));
+                    if (const Symbol* s = global_object_for_load(inst.srcs[0]);
+                        s && tgt == s->name) {
+                        note_global_decl(*s, std::format("uint64_t (*{})()", s->name));
+                    }
                     if (!tgt.empty() && tgt.front() == '*') {
                         call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
                     } else {
@@ -4619,13 +4715,13 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 for (std::size_t i = 0; i < sig->params.size(); ++i) {
                     if (i > 0) params += ", ";
                     params += std::format("{} {}",
-                                          sig->params[i].type,
+                                          Emitter::normalize_c_type_alias(sig->params[i].type),
                                           sig->params[i].name);
                 }
             }
             const std::string ret = sig->return_type.empty()
                 ? inferred_return_type(e, sf)
-                : sig->return_type;
+                : Emitter::normalize_c_type_alias(sig->return_type);
             header = std::format("{} {}({}) {{\n", ret, display_name(), params);
         }
     }
@@ -4691,11 +4787,11 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                     IrValue probe = IrValue::make_reg(int_args[i], IrType::I64);
                     probe.version = 0;
                     const auto local = e.c_type_name_for(probe);
-                    if (local != "u64") t = local;
+                    if (local != "uint64_t") t = local;
                 }
                 if (t.empty()) {
                     t = (i < e.charp_arg.size() && e.charp_arg[i])
-                        ? std::string{"char*"} : std::string{"u64"};
+                        ? std::string{"char*"} : std::string{"uint64_t"};
                 }
                 if (ipa_sig == nullptr && i < e.self_arg_type_overrides.size() &&
                     e.self_arg_type_overrides[i]) {
@@ -4717,7 +4813,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                 j < e.self_funcptr_arg_types[i].size()) {
                                 fn_params += c_type_name(e.self_funcptr_arg_types[i][j]);
                             } else {
-                                fn_params += "u64";
+                                fn_params += "uint64_t";
                             }
                         }
                     }
@@ -4725,7 +4821,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                         (i < e.self_funcptr_return_type.size() &&
                          e.self_funcptr_return_type[i])
                             ? std::string{c_type_name(*e.self_funcptr_return_type[i])}
-                            : std::string{"u64"};
+                            : std::string{"uint64_t"};
                     params += std::format("{} (*{})({})", fn_ret, name, fn_params);
                 } else {
                     params += std::format("{} {}", t, name);
@@ -4763,8 +4859,6 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
         }
     }
-    out += header;
-
     // Render the body into a buffer first so we can decide which
     // recovered frame slots actually appear in the output text. Some
     // Loads / Stores get hidden by the emitter (canary writes, ABI
@@ -4822,6 +4916,19 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 bb.start, bb.end);
         }
     }
+    for (const auto& [name, ty] : e.global_decls) {
+        if (ty.find("(*") != std::string::npos) {
+            out += std::format("extern {};\n", ty);
+        } else if (ty.ends_with("[]")) {
+            out += std::format("extern {} {}[];\n",
+                               std::string_view(ty).substr(0, ty.size() - 2),
+                               name);
+        } else {
+            out += std::format("extern {} {};\n", ty, name);
+        }
+    }
+    if (!e.global_decls.empty()) out += "\n";
+    out += header;
     for (const auto& [k, name] : e.merge_value_names) {
         if (body_buf.find(name) == std::string::npos) continue;
         auto dit = e.defs.find(k);
@@ -4850,7 +4957,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         std::string ty;
         u32 elem_size = slot.size_bytes;
         if (!slot.type_override.empty()) {
-            ty = slot.type_override;
+            ty = Emitter::normalize_c_type_alias(slot.type_override);
         } else if (charp) {
             ty = "char";
             elem_size = 1;

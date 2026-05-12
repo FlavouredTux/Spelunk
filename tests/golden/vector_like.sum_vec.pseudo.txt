@@ -1,10 +1,12 @@
 // sum_vec
-u32 sum_vec(u64* a1, u32 a2) {
-  u64 t0 = a1->begin;
-  u32* t11 = t0 + (u64)a2 * 4;
-  g_sink = (u32)(a1->capacity - t0 >> 2);
+extern uint32_t g_sink;
+
+uint32_t sum_vec(uint64_t* a1, uint32_t a2) {
+  uint64_t t0 = a1->begin;
+  uint32_t* t11 = t0 + (uint64_t)a2 * 4;
+  g_sink = (uint32_t)(a1->capacity - t0 >> 2);
   if (t11 < a1->end) {
-    return t0[(u64)a2];
+    return t0[(uint64_t)a2];
   }
   return 0;
 }

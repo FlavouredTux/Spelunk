@@ -1,4 +1,4 @@
 // wrap_strlen
-u64 wrap_strlen(char* a1) {
+uint64_t wrap_strlen(char* a1) {
   return strlen(a1);
 }

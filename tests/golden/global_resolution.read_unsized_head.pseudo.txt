@@ -1,4 +1,6 @@
 // read_unsized_head
-u64 read_unsized_head(void) {
+extern uint64_t g_unsized;
+
+uint64_t read_unsized_head(void) {
   return g_unsized;
 }

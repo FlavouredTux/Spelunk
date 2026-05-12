@@ -1,4 +1,4 @@
 // big
-u64 big(u64 a1, u64 a2, u64 a3) {
+uint64_t big(uint64_t a1, uint64_t a2, uint64_t a3) {
   return (a1 ^ a2) + a3 * 4;
 }

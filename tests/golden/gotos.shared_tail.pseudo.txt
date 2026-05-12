@@ -1,11 +1,13 @@
 // shared_tail
-u32 shared_tail(u64 a1) {
-  u32 local_c;
+extern uint32_t g_log;
+
+uint32_t shared_tail(uint64_t a1) {
+  uint32_t local_c;
   local_c = 0;
   if (a1) {
     if (a1[0]) {
-      u64 r_strlen = strlen(a1);
-      local_c = (u32)r_strlen;
+      uint64_t r_strlen = strlen(a1);
+      local_c = (uint32_t)r_strlen;
     }
   }
   g_log = local_c;

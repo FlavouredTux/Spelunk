@@ -1,4 +1,4 @@
 // compound
-u32 compound(u64 a1) {
-  return (u32)(a1 + a1 * 2 + 7);
+uint32_t compound(uint64_t a1) {
+  return (uint32_t)(a1 + a1 * 2 + 7);
 }

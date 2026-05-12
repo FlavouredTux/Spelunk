@@ -1,13 +1,13 @@
 // multi_exit
-u64 multi_exit(u64 a1, u64 a2) {
+uint64_t multi_exit(uint64_t a1, uint64_t a2) {
   if (!a1) {
     return -1;
   }
   if (!a2) {
     return -1;
   }
-  u64 r_strlen = strlen(a1);
-  u64 r_strlen_2 = strlen(a2);
+  uint64_t r_strlen = strlen(a1);
+  uint64_t r_strlen_2 = strlen(a2);
   if (r_strlen != r_strlen_2) {
     return -1;
   }

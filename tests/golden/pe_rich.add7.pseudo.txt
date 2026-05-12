@@ -1,4 +1,4 @@
 // add7
-u32 add7(u64 a1) {
-  return (u32)(a1 + 7);
+uint32_t add7(uint64_t a1) {
+  return (uint32_t)(a1 + 7);
 }

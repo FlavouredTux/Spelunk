@@ -1,6 +1,6 @@
 // forward_local
-u32 forward_local(u32 a1) {
-  u32 t1 = a1;
-  u32 t9 = t1 + 1;
+uint32_t forward_local(uint32_t a1) {
+  uint32_t t1 = a1;
+  uint32_t t9 = t1 + 1;
   return t9 + 2;
 }

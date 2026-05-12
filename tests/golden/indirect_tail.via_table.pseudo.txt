@@ -1,4 +1,6 @@
 // via_table
-u64 via_table(u32 a1, u64 a2) {
-  return fn_table[(u64)a1]((u32)a2, a2);
+extern uint64_t fn_table[];
+
+uint64_t via_table(uint32_t a1, uint64_t a2) {
+  return fn_table[(uint64_t)a1]((uint32_t)a2, a2);
 }

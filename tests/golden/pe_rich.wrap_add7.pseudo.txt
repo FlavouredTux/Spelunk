@@ -1,4 +1,4 @@
 // sub_180001100
-u64 sub_180001100(u64 a1) {
+uint64_t sub_180001100(uint64_t a1) {
   return add7(a1);
 }

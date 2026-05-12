@@ -1,5 +1,5 @@
 // sub_180001000
-u64 sub_180001000(void) {
+uint64_t sub_180001000(void) {
   GetTickCount();
   Sleep(5);
   return 0;

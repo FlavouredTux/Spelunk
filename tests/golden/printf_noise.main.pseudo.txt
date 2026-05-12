@@ -1,13 +1,17 @@
 // main
-u32 main(u32 a1, u64* a2) {
-  u32 t2 = a1;
-  u64 r_strlen = strlen(a2[0]);
+extern uint32_t g_count;
+extern FILE* stderr;
+extern FILE* stdout;
+
+uint32_t main(uint32_t a1, uint64_t* a2) {
+  uint32_t t2 = a1;
+  uint64_t r_strlen = strlen(a2[0]);
   printf("len=%zu\\n", r_strlen);
-  if ((i64)t2 > 1) {
+  if ((int64_t)t2 > 1) {
     fprintf(stderr, "a=%s b=%s\\n", a2[0], a2[1]);
   }
   fwrite("hello\\n", 1, 6, stdout);
   puts("ready");
-  printf("%*d\\n", (u32)a1, (u64)g_count);
+  printf("%*d\\n", (uint32_t)a1, (uint64_t)g_count);
   return g_count;
 }

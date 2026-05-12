@@ -1,6 +1,6 @@
 // sub_1800011c0
-u64 sub_1800011c0(u64 a1) {
-  u32 t0 = (u32)a1;
+uint64_t sub_1800011c0(uint64_t a1) {
+  uint32_t t0 = (uint32_t)a1;
   if (t0 > 5) {
     return -1;
   }

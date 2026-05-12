@@ -1,4 +1,6 @@
 // read_after
-u64 read_after(void) {
+extern uint64_t g_after;
+
+uint64_t read_after(void) {
   return g_after;
 }

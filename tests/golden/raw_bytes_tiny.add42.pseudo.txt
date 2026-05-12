@@ -1,4 +1,4 @@
 // sub_140001000
-u32 sub_140001000(u64 a1) {
-  return (u32)(a1 + 0x2a);
+uint32_t sub_140001000(uint64_t a1) {
+  return (uint32_t)(a1 + 0x2a);
 }

@@ -1,9 +1,13 @@
 // set_and_swap
-u64 set_and_swap(u64 a1, u64 a2) {
-  s64 t8 = a1 - a2;
-  g_flag = (u32)((i64)a1 > (i64)a2);
-  u64 t22 = bswap(a1);
+extern uint32_t g_flag;
+extern uint64_t g_max;
+extern uint64_t g_swap;
+
+uint64_t set_and_swap(uint64_t a1, uint64_t a2) {
+  int64_t t8 = a1 - a2;
+  g_flag = (uint32_t)((int64_t)a1 > (int64_t)a2);
+  uint64_t t22 = bswap(a1);
   g_swap = t22;
-  g_max = (i64)a1 < (i64)a2 ? a2 : a1;
+  g_max = (int64_t)a1 < (int64_t)a2 ? a2 : a1;
   return t22;
 }

@@ -28,7 +28,11 @@ jobs:
         run: cmake --build build
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        # GitHub job containers do not provide a stable debugger
+        # substrate: ptrace/perf capabilities vary by host policy and
+        # seccomp profile. Keep this job focused on compiler/golden
+        # coverage and leave dbg_* smoke tests for local Linux runs.
+        run: ctest --test-dir build --output-on-failure -E '^dbg_'
 
       - uses: actions/setup-node@v4
         with: { node-version: '26' }

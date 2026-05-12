@@ -141,9 +141,11 @@ void help_xrefs() {
     std::println("      --refs-to-loose VA  superset: also scans constant-pool imm64s and");
     std::println("                       R_*_RELATIVE relocs whose addend == VA, recovering");
     std::println("                       fn-pointer-only dispatch shapes (Roblox-style)");
+    std::println("      --explain-vcall OBJ:OFF  resolve object vptr slot to target summary");
+    std::println("      --dump-object ADDR --size N  classify pointer-sized object fields");
     std::println("      --verbose        with --refs-to/--refs-to-loose, append site disasm");
-    std::println("      --trace PATH     load indirect-edge trace (TSV from\\tto per line)");
-    std::println("                       - seeds the CFG builder before any analysis runs");
+    std::println("      --trace PATH     load runtime facts: `from to`, `indirect from to`,");
+    std::println("                       `qword addr value`, or `object addr vtable`");
 }
 
 void help_ana() {
@@ -152,6 +154,7 @@ void help_ana() {
     std::println("      --resolve-calls  global indirect-call resolver (vtable dispatch -> named call)");
     std::println("      --eh             parse __eh_frame + LSDA; mark landing pads");
     std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
+    std::println("      --vtables        dump runtime pointer-dense vtables from data/RELRO");
     std::println("      --objc-names     Obj-C runtime methods as TSV (imp ± class selector sig)");
     std::println("      --objc-protocols Obj-C protocol method signatures");
     std::println("      --int3-resolve   classify embedded int3 bytes (handler / pad / dead)");

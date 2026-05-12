@@ -11,6 +11,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <limits>
 #include <optional>
@@ -70,6 +71,7 @@
 #include <ember/analysis/teef_behav.hpp>
 #include <ember/analysis/teef_orbit.hpp>
 #include <ember/analysis/teef_recognize.hpp>
+#include <ember/analysis/vtables.hpp>
 #include <ember/analysis/identify.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/binary/binary.hpp>
@@ -345,39 +347,55 @@ void load_trace_edges(const Args& args, const Binary& b) {
         std::println(stderr, "ember: cannot open trace '{}'", args.trace_path);
         return;
     }
+    auto parse_hex = [](std::string_view s, addr_t& out) {
+        if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+        u64 v = 0;
+        auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
+        if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
+        out = static_cast<addr_t>(v);
+        return true;
+    };
     std::string line;
-    std::size_t loaded = 0, line_no = 0;
+    std::size_t loaded_edges = 0, loaded_qwords = 0, line_no = 0;
     while (std::getline(tf, line)) {
         ++line_no;
-        if (line.empty() || line.front() == '#') continue;
-        const auto tab = line.find('\t');
-        if (tab == std::string::npos) {
-            std::println(stderr,
-                "ember: trace '{}' line {}: missing tab - expected `from\\tto`",
-                args.trace_path, line_no);
+        std::string_view sv = line;
+        while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) {
+            sv.remove_prefix(1);
+        }
+        if (sv.empty() || sv.front() == '#') continue;
+
+        std::istringstream toks{std::string(sv)};
+        std::string a, b_tok, c;
+        toks >> a >> b_tok >> c;
+        addr_t from = 0, to = 0;
+        if ((a == "qword" || a == "global" || a == "object" || a == "vptr") &&
+            !b_tok.empty() && !c.empty()) {
+            if (!parse_hex(b_tok, from) || !parse_hex(c, to)) {
+                std::println(stderr,
+                    "ember: trace '{}' line {}: bad runtime qword fact",
+                    args.trace_path, line_no);
+                continue;
+            }
+            b.record_runtime_qword(from, to);
+            ++loaded_qwords;
             continue;
         }
-        auto parse_hex = [](std::string_view s, addr_t& out) {
-            if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
-            u64 v = 0;
-            auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
-            if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return false;
-            out = static_cast<addr_t>(v);
-            return true;
-        };
-        addr_t from = 0, to = 0;
-        if (!parse_hex(std::string_view(line).substr(0, tab), from) ||
-            !parse_hex(std::string_view(line).substr(tab + 1),  to)) {
+        if ((a == "indirect" || a == "edge") && !b_tok.empty() && !c.empty()) {
+            a = std::move(b_tok);
+            b_tok = std::move(c);
+        }
+        if (!parse_hex(a, from) || !parse_hex(b_tok, to)) {
             std::println(stderr,
-                "ember: trace '{}' line {}: bad hex addr",
+                "ember: trace '{}' line {}: expected `from to`, `indirect from to`, `qword addr value`, or `object addr vtable`",
                 args.trace_path, line_no);
             continue;
         }
         b.record_indirect_edge(from, to);
-        ++loaded;
+        ++loaded_edges;
     }
-    std::println(stderr, "ember: loaded {} indirect edge(s) from '{}'",
-                 loaded, args.trace_path);
+    std::println(stderr, "ember: loaded {} indirect edge(s), {} runtime qword fact(s) from '{}'",
+                 loaded_edges, loaded_qwords, args.trace_path);
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +410,7 @@ int run_data_xrefs(const Args& args, const Binary& b) {
     // TSV and JSON share the compute step but differ in output format,
     // so they cache under distinct tags - otherwise the first form
     // served would silently satisfy the second.
-    const std::string_view tag = args.json ? "data-xrefs-json-v1" : "data-xrefs-v1";
+    const std::string_view tag = args.json ? "data-xrefs-json-v2" : "data-xrefs-v2";
     return run_cached(args, tag, [&] { return build_data_xrefs_output(b, args.json); });
 }
 
@@ -1630,6 +1648,10 @@ int run_rtti(const Args& args, const Binary& b) {
     return run_cached(args, "rtti", [&] { return build_rtti_output(b); });
 }
 
+int run_vtables(const Args& args, const Binary& b) {
+    return run_cached(args, "vtables-v1", [&] { return build_vtables_output(b); });
+}
+
 int run_int3_resolve(const Args& args, const Binary& b) {
     return run_cached(args, "int3-resolve", [&] { return build_int3_resolve_output(b); });
 }
@@ -1810,7 +1832,7 @@ int run_functions(const Args& args, const Binary& b) {
 struct RefRow {
     addr_t                   from_pc   = 0;
     addr_t                   target    = 0;
-    std::string              kind;       // "direct" / "code-ptr" / "lea" / "imm64-stored" / "relocated"
+    std::string              kind;       // "direct" / "code-ptr" / "lea" / "imm64-stored" / "relocated" / "runtime-slot"
     std::optional<addr_t>    slot;       // populated for imm64-stored / relocated
     std::optional<std::string> fn_name;
     std::optional<u64>       fn_offset;
@@ -1904,6 +1926,176 @@ format_ref_rows_tsv(std::span<const RefRow> rows,
     }
     out += "]\n";
     return out;
+}
+
+[[nodiscard]] bool address_is_mapped(const Binary& b, addr_t va) noexcept {
+    for (const auto& s : b.sections()) {
+        if (!s.flags.allocated || s.size == 0) continue;
+        if (va >= s.vaddr && va - s.vaddr < s.size) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<addr_t>
+raw_regions_runtime_base(const Binary& b) noexcept {
+    if (b.format() != Format::RawRegions) return std::nullopt;
+    std::optional<addr_t> out;
+    for (const auto& s : b.sections()) {
+        if (!s.flags.allocated || s.size == 0) continue;
+        if (!out || s.vaddr < *out) out = s.vaddr;
+    }
+    return out;
+}
+
+[[nodiscard]] std::vector<addr_t>
+refs_to_target_candidates(const Binary& b, addr_t va) {
+    std::vector<addr_t> out{va};
+    if (!address_is_mapped(b, va)) {
+        if (auto base = raw_regions_runtime_base(b); base &&
+            va <= std::numeric_limits<addr_t>::max() - *base) {
+            const addr_t slid = *base + va;
+            if (address_is_mapped(b, slid)) out.push_back(slid);
+        }
+    }
+    return out;
+}
+
+void retarget_ref_rows(std::span<RefRow> rows, addr_t target) {
+    for (auto& r : rows) r.target = target;
+}
+
+[[nodiscard]] std::optional<addr_t>
+read_pointer_value(const Binary& b, addr_t va) noexcept {
+    if (auto fact = b.runtime_qword_at(va); fact) return static_cast<addr_t>(*fact);
+    const auto width = arch_pointer_bits(b.arch()) == 32 ? 4u : 8u;
+    auto bytes = b.bytes_at(va);
+    if (bytes.size() < width) return std::nullopt;
+    if (width == 4) {
+        return b.endian() == Endian::Big
+            ? static_cast<addr_t>(read_be_at<u32>(bytes.data()))
+            : static_cast<addr_t>(read_le_at<u32>(bytes.data()));
+    }
+    return b.endian() == Endian::Big
+        ? static_cast<addr_t>(read_be_at<u64>(bytes.data()))
+        : static_cast<addr_t>(read_le_at<u64>(bytes.data()));
+}
+
+[[nodiscard]] std::optional<std::pair<addr_t, addr_t>>
+parse_obj_off_spec(std::string_view spec) {
+    std::size_t sep = spec.find(':');
+    if (sep == std::string_view::npos) sep = spec.find('+');
+    if (sep == std::string_view::npos) return std::nullopt;
+    auto obj = parse_cli_addr(spec.substr(0, sep));
+    auto off = parse_cli_addr(spec.substr(sep + 1));
+    if (!obj || !off) return std::nullopt;
+    return std::pair<addr_t, addr_t>{static_cast<addr_t>(*obj), static_cast<addr_t>(*off)};
+}
+
+[[nodiscard]] std::string compact_pseudo_summary(const Binary& b, addr_t target,
+                                                  const Annotations* ann) {
+    auto win = resolve_function_at(b, target);
+    if (!win) return {};
+    EmitOptions opts;
+    auto pseudo = format_struct(b, *win, true, ann, opts);
+    if (!pseudo) return {};
+
+    std::string out;
+    std::string_view text(*pseudo);
+    std::size_t pos = 0;
+    std::size_t emitted = 0;
+    constexpr std::size_t kMaxLines = 12;
+    while (pos <= text.size() && emitted < kMaxLines) {
+        std::size_t end = text.find('\n', pos);
+        if (end == std::string_view::npos) end = text.size();
+        std::string_view line = text.substr(pos, end - pos);
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front()))) {
+            line.remove_prefix(1);
+        }
+        if (!line.empty()) {
+            out += "  ";
+            out += line;
+            out += '\n';
+            ++emitted;
+        }
+        if (end == text.size()) break;
+        pos = end + 1;
+    }
+    return out;
+}
+
+[[nodiscard]] std::optional<std::string> read_c_string(const Binary& b, addr_t va) {
+    auto bytes = b.bytes_at(va);
+    if (bytes.empty()) return std::nullopt;
+    std::string out;
+    std::size_t printable = 0;
+    constexpr std::size_t kMax = 160;
+    for (std::size_t i = 0; i < bytes.size() && i < kMax; ++i) {
+        const auto c = static_cast<unsigned char>(bytes[i]);
+        if (c == 0) break;
+        if (c == '\n') { out += "\\n"; ++printable; continue; }
+        if (c == '\r') { out += "\\r"; ++printable; continue; }
+        if (c == '\t') { out += "\\t"; ++printable; continue; }
+        if (c == '\\') { out += "\\\\"; ++printable; continue; }
+        if (c == '"') { out += "\\\""; ++printable; continue; }
+        if (c >= 0x20 && c < 0x7f) {
+            out.push_back(static_cast<char>(c));
+            ++printable;
+            continue;
+        }
+        return std::nullopt;
+    }
+    if (printable < 3) return std::nullopt;
+    return out;
+}
+
+struct ObjectFieldRow {
+    addr_t offset = 0;
+    addr_t addr = 0;
+    u64 value = 0;
+    std::string kind;
+    std::string detail;
+};
+
+[[nodiscard]] std::vector<ObjectFieldRow>
+classify_object_fields(const Binary& b, addr_t obj, addr_t size) {
+    const unsigned bits = arch_pointer_bits(b.arch());
+    const addr_t width = bits == 32 ? 4 : 8;
+    std::vector<ObjectFieldRow> rows;
+    if (width == 0) return rows;
+
+    std::set<addr_t> vtable_addrs;
+    for (const auto& vt : discover_runtime_vtables(b)) vtable_addrs.insert(vt.vaddr);
+
+    for (addr_t off = 0; off + width <= size; off += width) {
+        const addr_t field_addr = obj + off;
+        auto val = read_pointer_value(b, field_addr);
+        if (!val) break;
+        ObjectFieldRow row;
+        row.offset = off;
+        row.addr = field_addr;
+        row.value = *val;
+        if (row.value == 0) {
+            row.kind = "null";
+        } else if (vtable_addrs.contains(static_cast<addr_t>(row.value))) {
+            row.kind = "vtable";
+            row.detail = std::format("{}", section_name_containing(b, static_cast<addr_t>(row.value)));
+        } else if (addr_in_executable_section_cli(b, static_cast<addr_t>(row.value))) {
+            row.kind = "code";
+            if (auto cf = containing_function(b, static_cast<addr_t>(row.value)); cf) {
+                row.detail = std::format("{}+{:#x}", cf->name, cf->offset_within);
+            }
+        } else if (auto s = read_c_string(b, static_cast<addr_t>(row.value)); s) {
+            row.kind = "string";
+            row.detail = *s;
+        } else if (address_is_mapped(b, static_cast<addr_t>(row.value))) {
+            row.kind = "ptr";
+            row.detail = std::format("{}", section_name_containing(b, static_cast<addr_t>(row.value)));
+        } else {
+            row.kind = "raw";
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
 }
 
 // Internal helper: gather the standard --refs-to rows (direct callers
@@ -2329,14 +2521,32 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
         return EXIT_FAILURE;
     }
 
-    std::vector<RefRow> rows = gather_refs_to_rows(args, b, *va);
+    std::vector<RefRow> rows;
+    const auto targets = refs_to_target_candidates(b, *va);
+    const std::span<const addr_t> search_targets = targets.size() > 1
+        ? std::span<const addr_t>(targets).subspan(1)
+        : std::span<const addr_t>(targets);
+    if (targets.size() > 1) {
+        std::println(stderr,
+            "ember: --refs-to-loose: treating {:#x} as raw-region offset; runtime target {:#x}",
+            *va, targets.back());
+    }
+    const bool raw_data_first = b.format() == Format::RawRegions;
+    if (!raw_data_first) {
+        for (addr_t target_va : search_targets) {
+            auto more = gather_refs_to_rows(args, b, target_va);
+            retarget_ref_rows(more, *va);
+            rows.insert(rows.end(),
+                        std::make_move_iterator(more.begin()),
+                        std::make_move_iterator(more.end()));
+        }
+    }
 
     // Constant-pool scan: every readable section. Function-pointer
     // tables live in .rodata / .data / .data.rel.ro, sometimes inside
     // an .init_array ctor's frame. Bounded by total readable bytes -
     // a 100MB binary's data sections are the budget on agent flows.
     std::vector<addr_t> slot_addrs;
-    const u64 target = static_cast<u64>(*va);
     const bool is_64 = arch_pointer_bits(b.arch()) == 64;
     const std::size_t needle_size = is_64 ? 8u : 4u;
     // Only scan at pointer-aligned slot VAs (8-byte for 64-bit pointers,
@@ -2363,18 +2573,34 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
             const u64 v = is_64
                 ? read_le_at<u64>(p + i)
                 : static_cast<u64>(read_le_at<u32>(p + i));
-            if (v == target) {
-                slot_addrs.push_back(sec_base + static_cast<addr_t>(i));
+            for (addr_t target_va : search_targets) {
+                if (v == static_cast<u64>(target_va)) {
+                    slot_addrs.push_back(sec_base + static_cast<addr_t>(i));
+                    break;
+                }
             }
         }
     }
-
-    const auto dx = compute_data_xrefs(b);
 
     // De-dupe against direct rows so `--refs-to-loose` stays a strict
     // superset without re-listing the same from_pc twice.
     std::set<addr_t> already_emitted;
     for (const auto& r : rows) already_emitted.insert(r.from_pc);
+
+    if (raw_data_first) {
+        for (addr_t slot : slot_addrs) {
+            if (!already_emitted.insert(slot).second) continue;
+            RefRow row;
+            row.from_pc = slot;
+            row.target  = *va;
+            row.kind    = "runtime-slot";
+            row.slot    = slot;
+            rows.push_back(std::move(row));
+        }
+    }
+
+    const auto dx = raw_data_first ? std::map<addr_t, std::vector<DataXref>>{}
+                                   : compute_data_xrefs(b);
 
     auto emit_slot_readers = [&](addr_t slot, std::string_view tag) {
         if (auto it = dx.find(slot); it != dx.end()) {
@@ -2395,7 +2621,9 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
             }
         }
     };
-    for (addr_t slot : slot_addrs) emit_slot_readers(slot, "imm64-stored");
+    if (!raw_data_first) {
+        for (addr_t slot : slot_addrs) emit_slot_readers(slot, "imm64-stored");
+    }
 
     // Relocation-driven slots: a `.data.rel.ro` qword whose static
     // on-disk value is zero but whose dynamic-linker addend is the
@@ -2407,7 +2635,7 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     if (const auto* elf = dynamic_cast<const ElfBinary*>(&b)) {
         const auto reloc_map = elf->relocated_qwords();
         for (const auto& [slot, addend] : reloc_map) {
-            if (addend != static_cast<addr_t>(*va)) continue;
+            if (std::ranges::find(search_targets, addend) == search_targets.end()) continue;
             ++reloc_slot_count;
             emit_slot_readers(slot, "relocated");
         }
@@ -2424,6 +2652,112 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
                      slot_addrs.size() == 1 ? "" : "s",
                      reloc_slot_count,
                      reloc_slot_count == 1 ? "" : "s");
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_explain_vcall(const Args& args, const Binary& b) {
+    const auto spec = parse_obj_off_spec(args.explain_vcall);
+    if (!spec) {
+        std::println(stderr,
+            "ember: --explain-vcall: expected OBJ:OFF, got '{}'",
+            args.explain_vcall);
+        return EXIT_FAILURE;
+    }
+    const auto [obj, slot_off] = *spec;
+    const auto vptr = read_pointer_value(b, obj);
+    if (!vptr) {
+        std::println(stderr,
+            "ember: --explain-vcall: cannot read object vptr at {:#x}", obj);
+        return EXIT_FAILURE;
+    }
+    const addr_t slot_addr = *vptr + slot_off;
+    const auto target = read_pointer_value(b, slot_addr);
+    if (!target) {
+        std::println(stderr,
+            "ember: --explain-vcall: cannot read vtable slot {:#x}", slot_addr);
+        return EXIT_FAILURE;
+    }
+
+    const Annotations ann = load_annotations_quiet(args);
+    auto cf = containing_function(b, *target);
+    std::string target_name = std::format("sub_{:x}", *target);
+    u64 target_off = 0;
+    if (cf) {
+        target_name = cf->name;
+        target_off = cf->offset_within;
+    }
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"object\":\"{:#x}\",\"slot_offset\":\"{:#x}\","
+            "\"vptr\":\"{:#x}\",\"slot\":\"{:#x}\","
+            "\"target\":\"{:#x}\",\"target_name\":\"{}\",\"target_offset\":\"{:#x}\"}}\n",
+            obj, slot_off, *vptr, slot_addr, *target,
+            json_escape(target_name), target_off);
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("object\t{:#x}", obj);
+    std::println("vptr\t{:#x}", *vptr);
+    std::println("slot\t{:#x}\t+{:#x}", slot_addr, slot_off);
+    std::println("target\t{:#x}\t{}+{:#x}", *target, target_name, target_off);
+    if (const auto sec = section_name_containing(b, slot_addr); !sec.empty()) {
+        std::println("slot_section\t{}", sec);
+    }
+    if (const auto sec = section_name_containing(b, *target); !sec.empty()) {
+        std::println("target_section\t{}", sec);
+    }
+    if (const auto line = first_disasm_line_at(b, *target); !line.empty()) {
+        std::println("disasm\t{}", line);
+    }
+    const auto summary = compact_pseudo_summary(b, *target, &ann);
+    if (!summary.empty()) {
+        std::println("pseudo:");
+        std::print("{}", summary);
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_dump_object(const Args& args, const Binary& b) {
+    auto obj = parse_cli_addr(args.dump_object);
+    auto size = parse_cli_addr(args.object_size);
+    if (!obj) {
+        std::println(stderr, "ember: --dump-object: bad address '{}'", args.dump_object);
+        return EXIT_FAILURE;
+    }
+    if (!size || *size == 0) {
+        std::println(stderr, "ember: --dump-object requires --size <hex>");
+        return EXIT_FAILURE;
+    }
+    const auto rows = classify_object_fields(b, static_cast<addr_t>(*obj),
+                                             static_cast<addr_t>(*size));
+    if (args.json) {
+        std::string out = std::format("{{\"object\":\"{:#x}\",\"size\":\"{:#x}\",\"fields\":[",
+                                     static_cast<addr_t>(*obj), static_cast<addr_t>(*size));
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (i) out += ',';
+            const auto& r = rows[i];
+            out += std::format(
+                "{{\"offset\":\"{:#x}\",\"addr\":\"{:#x}\",\"value\":\"{:#x}\",\"kind\":\"{}\"",
+                r.offset, r.addr, r.value, json_escape(r.kind));
+            if (!r.detail.empty()) {
+                out += std::format(",\"detail\":\"{}\"", json_escape(r.detail));
+            }
+            out += '}';
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("object\t{:#x}\tsize\t{:#x}", static_cast<addr_t>(*obj), static_cast<addr_t>(*size));
+    std::println("offset\taddr\tvalue\tkind\tdetail");
+    for (const auto& r : rows) {
+        std::println("{:#x}\t{:#x}\t{:#x}\t{}\t{}",
+                     r.offset, r.addr, r.value, r.kind,
+                     r.detail.empty() ? "-" : r.detail);
     }
     return EXIT_SUCCESS;
 }

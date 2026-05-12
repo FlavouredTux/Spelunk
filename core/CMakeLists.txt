@@ -52,6 +52,7 @@ add_library(ember_core STATIC
     src/analysis/libcxx_string.cpp
     src/analysis/rtti.cpp
     src/analysis/msvc_rtti.cpp
+    src/analysis/vtables.cpp
     src/common/annotations.cpp
     src/common/cache.cpp
     src/ir/abi.cpp

@@ -186,6 +186,7 @@ ember [options] <binary>
       --identify         YARA-like crypto/protocol fingerprint scan
       --validate NAME    where does NAME live + similar lookalikes
       --collisions       names / fingerprints bound to >1 address
+      --vtables          runtime pointer-dense vtables from data/RELRO
 
       --ipa              run IPA before pseudo-C (typed sigs across calls)
       --resolve-calls    resolve indirect calls (IAT + constant vtables)
@@ -204,8 +205,13 @@ ember [options] <binary>
                          function headers when annotations carry metadata
       --dry-run          with --apply / --annotate: don't write; dump TSV
       --regions PATH     load via raw-region manifest (Scylla-style scrape)
+      --raw-bytes PATH   load one raw memory range at --base-va
+      --base-va 0xVA     base address for --raw-bytes
       --apply-patches F  apply (vaddr_hex, bytes_hex) patches to the binary
-      --trace PATH       observed indirect edges (TSV: from_va  to_va)
+      --trace PATH       runtime facts: edges, qwords, objects, vptrs
+      --refs-to-loose VA find direct refs plus pointer slots to VA
+      --explain-vcall OBJ:OFF  resolve *( *(OBJ) + OFF )
+      --dump-object ADDR --size N  classify object qwords
       --cache-dir DIR    override ~/.cache/ember
       --no-cache         bypass the on-disk cache
 ```
@@ -215,9 +221,10 @@ Heavyweight passes (`--xrefs`, `--strings`, `--arities`, `--fingerprints`) cache
 </details>
 
 <details>
-<summary><b>Windows runtime images</b></summary>
+<summary><b>Runtime Memory Images</b></summary>
 
-For packed / protected targets where the on-disk PE is a stub, point ember at a runtime memory image instead:
+For packed / protected targets where the on-disk file is a stub or an
+unrelocated view, point ember at runtime memory instead:
 
 ```sh
 # Microsoft minidump (procdump, taskmgr, WinDbg can produce these)
@@ -225,9 +232,22 @@ ember -p ./crash.dmp
 
 # Hand-rolled scrape: manifest of (vaddr, size, flags, file) lines
 ember --regions ./scrape/regions.txt -p
+
+# Loaded Android / PIE dump: find RELRO vtables and explain one dispatch slot
+ember --regions ./scrape/regions.txt --vtables
+ember --regions ./scrape/regions.txt --explain-vcall 0xOBJECT:0x40
+
+# Snapshot an object as pointer-sized fields
+ember --regions ./scrape/regions.txt --dump-object 0xOBJECT --size 0x100
 ```
 
 The minidump loader pulls per-module symbols from each module's in-memory PE headers, so imports and exports are named even when the on-disk image was junk. Module-name collisions get prefixed: `kernel32!CreateFileA`.
+
+Raw-region loaded dumps are treated as runtime memory: `--data-xrefs`
+indexes relocated pointer slots, `--refs-to-loose` accepts module-relative
+offsets by trying `lowest_region_base + offset`, and `--trace` can overlay
+runtime facts such as `qword ADDR VALUE`, `object ADDR VTABLE`, and
+`indirect CALLSITE TARGET`.
 
 </details>
 

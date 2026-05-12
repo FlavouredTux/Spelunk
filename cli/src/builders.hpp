@@ -19,6 +19,7 @@ namespace ember::cli {
 [[nodiscard]] std::string build_objc_names_output  (const Binary& b);
 [[nodiscard]] std::string build_objc_protocols_output(const Binary& b);
 [[nodiscard]] std::string build_rtti_output        (const Binary& b);
+[[nodiscard]] std::string build_vtables_output     (const Binary& b);
 [[nodiscard]] std::string build_int3_resolve_output(const Binary& b);
 
 }  // namespace ember::cli

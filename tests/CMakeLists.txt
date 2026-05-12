@@ -88,6 +88,10 @@ add_executable(ember_resolve_function_test resolve_function_test.cpp)
 target_link_libraries(ember_resolve_function_test PRIVATE ember::core ember::flags)
 add_test(NAME resolve_function_unit COMMAND ember_resolve_function_test)
 
+add_executable(ember_raw_regions_test raw_regions_test.cpp)
+target_link_libraries(ember_raw_regions_test PRIVATE ember::core ember::flags)
+add_test(NAME raw_regions_unit COMMAND ember_raw_regions_test)
+
 add_executable(ember_discovery_test discovery_test.cpp)
 target_link_libraries(ember_discovery_test PRIVATE ember::core ember::flags)
 add_test(NAME discovery_unit COMMAND ember_discovery_test)

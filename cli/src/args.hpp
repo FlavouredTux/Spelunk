@@ -35,8 +35,11 @@ struct Args {
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string refs_to_loose;      // --refs-to-loose VA: extend --refs-to with constant-pool /
                                     // imm64 scanning. Surfaces functions whose body holds the
-                                    // target as a literal - the fn-ptr-only case where direct
-                                    // E8/E9 callers are absent (Roblox-style mov reg,imm64;call reg).
+                                     // target as a literal — the fn-ptr-only case where direct
+                                     // E8/E9 callers are absent (Roblox-style mov reg,imm64;call reg).
+    std::string explain_vcall;      // --explain-vcall OBJ:OFF: resolve *( *(OBJ) + OFF )
+    std::string dump_object;        // --dump-object ADDR: dump pointer-sized fields with classification
+    std::string object_size;        // --size N: byte size for --dump-object
     std::string callees;            // --callees VA: print direct call targets of the function at VA
     std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
     std::string validate_name;      // --validate NAME: report all addrs bound to NAME + byte-similar lookalikes
@@ -159,6 +162,7 @@ struct Args {
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
+    bool vtables = false;           // dump runtime pointer-dense vtables from loaded data/RELRO
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool cascade_plan = false;      // --cascade-plan: deterministic anchor-cascade target planner

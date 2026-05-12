@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <unordered_map>
@@ -146,6 +147,13 @@ public:
     [[nodiscard]] std::size_t indirect_edge_count() const noexcept;
     void clear_indirect_edges() const noexcept;
 
+    // Runtime value facts from logs/traces. These overlay sparse qword values
+    // not present in a static file view: singleton globals, object vptrs, or
+    // relocated slots observed by instrumentation.
+    void record_runtime_qword(addr_t at, u64 value) const;
+    [[nodiscard]] std::optional<u64> runtime_qword_at(addr_t at) const noexcept;
+    [[nodiscard]] std::size_t runtime_qword_count() const noexcept;
+
 private:
     // Lazy lookup caches. Built on first call to any of the lookup helpers
     // above; invalidated only by the loader during parse (which the base
@@ -167,6 +175,7 @@ private:
     // insertion. Never invalidated by symbol mutations (the oracle keys
     // off instruction VAs, not symbol identity).
     mutable std::unordered_map<addr_t, std::vector<addr_t>> indirect_edges_;
+    mutable std::unordered_map<addr_t, u64> runtime_qwords_;
 };
 
 // Optional knobs for `load_binary`. Today only PE binaries care:

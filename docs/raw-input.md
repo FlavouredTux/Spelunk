@@ -84,3 +84,56 @@ Raw input bypasses all the container-specific extras:
 For VMProtect / commercial-packer runtime analysis these
 limits are usually fine: the disk PE was a decoy anyway, and the
 captured bytes are what actually run.
+
+## Loaded Android / PIE Dumps
+
+For `--regions` memory captures, `--data-xrefs` scans readable
+non-executable regions for pointer-sized slots whose values point back
+into any loaded region. This covers RELRO/vtable tables after the
+dynamic linker has already applied ASLR relocations.
+
+`--vtables` dumps pointer-dense tables in readable non-executable
+regions without requiring RTTI. On loaded Android dumps this is the
+fast path for `.data.rel.ro` vtables whose on-disk ELF view would show
+zero-filled relocation targets:
+
+```sh
+ember --regions module.regions --vtables
+```
+
+`--refs-to-loose` also accepts a module-relative offset for raw-region
+captures. If the requested address is not mapped, Ember tries
+`lowest_region_vaddr + offset` as the runtime address. For example, a
+query for `0x2987800` against a dump whose first mapped region starts at
+`0x7fe341c0d000` also searches slots containing
+`0x7fe344594800`.
+
+For raw-region inputs, `--refs-to-loose` is data-first: it reports
+matching runtime slots directly instead of building the global callgraph
+first. That avoids the high-CPU/noisy path where table bytes are decoded
+as code-like direct references.
+
+`--explain-vcall OBJ:OFF` resolves the common C++ dispatch question for
+loaded objects: read `*(OBJ)` as the vptr, read `*(vptr + OFF)` as the
+target, then print the target section, first disassembly line, and a
+short pseudo-C summary when the target function can be recovered.
+
+```sh
+ember --regions module.regions --explain-vcall 0x7fe350001000:0x8
+```
+
+Pair it with runtime facts when the object pointer lives in a singleton
+global rather than directly in the dump:
+
+```text
+qword 0x7fe34811f10 0x7fe350001000
+object 0x7fe350001000 0x7fe344c0d000
+```
+
+`--dump-object ADDR --size N` prints pointer-sized fields and classifies
+each as `vtable`, `code`, `string`, `ptr`, `null`, or `raw`. This is the
+quick snapshot view for AppBridge / SingleSurface-style runtime objects:
+
+```sh
+ember --regions module.regions --dump-object 0x7fe350001000 --size 0x100
+```

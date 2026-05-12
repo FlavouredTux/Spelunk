@@ -3205,9 +3205,18 @@ struct Emitter {
         const int p = static_cast<int>(self_prec);
         // Left operand can share our precedence (left-assoc). Right operand
         // of a non-commutative op must bind strictly tighter to avoid
-        // reassociation - e.g. `a - (b - c)` must stay parenthesized.
-        std::string L = expr(d.srcs[0], depth, p);
-        std::string R = expr(d.srcs[1], depth, commutative ? p : p + 1);
+        // reassociation — e.g. `a - (b - c)` must stay parenthesized.
+        const bool pointer_arith =
+            (d.op == IrOp::Add || d.op == IrOp::Sub) &&
+            (d.srcs[0].type == IrType::I64 || d.srcs[1].type == IrType::I64 ||
+             d.dst.type == IrType::I64);
+        auto render = [&](const IrValue& v, int operand_prec) {
+            return pointer_arith && v.kind == IrValueKind::Imm
+                ? format_numeric_imm(v)
+                : expr(v, depth, operand_prec);
+        };
+        std::string L = render(d.srcs[0], p);
+        std::string R = render(d.srcs[1], commutative ? p : p + 1);
         std::string result = std::format("{} {} {}", L, op, R);
         return wrap_if_lt(std::move(result), self_prec, min_prec);
     }

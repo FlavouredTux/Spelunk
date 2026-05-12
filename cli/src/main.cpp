@@ -204,6 +204,8 @@ int main(int argc, char** argv) {
     if (!args.symuses.empty())   return run_symuses(args, b);
     if (!args.refs_to.empty())   return run_refs_to(args, b);
     if (!args.refs_to_loose.empty()) return run_refs_to_loose(args, b);
+    if (!args.explain_vcall.empty()) return run_explain_vcall(args, b);
+    if (!args.dump_object.empty()) return run_dump_object(args, b);
     if (!args.containing_fn.empty())  return run_containing_fn(args, b);
     if (!args.validate_name.empty())  return run_validate_name(args, b);
     if (args.collisions)         return run_collisions(args, b);
@@ -226,6 +228,7 @@ int main(int argc, char** argv) {
     if (args.objc_names)         return run_objc_names(args, b);
     if (args.objc_protos)        return run_objc_protos(args, b);
     if (args.rtti)               return run_rtti(args, b);
+    if (args.vtables)            return run_vtables(args, b);
     if (args.int3_resolve)       return run_int3_resolve(args, b);
     if (args.arities)            return run_arities(args, b);
     if (args.functions)          return run_functions(args, b);

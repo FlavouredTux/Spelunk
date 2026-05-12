@@ -200,6 +200,20 @@ void Binary::clear_indirect_edges() const noexcept {
     indirect_edges_.clear();
 }
 
+void Binary::record_runtime_qword(addr_t at, u64 value) const {
+    runtime_qwords_[at] = value;
+}
+
+std::optional<u64> Binary::runtime_qword_at(addr_t at) const noexcept {
+    auto it = runtime_qwords_.find(at);
+    if (it == runtime_qwords_.end()) return std::nullopt;
+    return it->second;
+}
+
+std::size_t Binary::runtime_qword_count() const noexcept {
+    return runtime_qwords_.size();
+}
+
 namespace {
 
 [[nodiscard]] Result<std::vector<std::byte>>

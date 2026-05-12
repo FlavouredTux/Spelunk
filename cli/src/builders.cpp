@@ -14,6 +14,7 @@
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/analysis/int3_resolver.hpp>
+#include <ember/analysis/vtables.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/disasm/register.hpp>
@@ -185,6 +186,20 @@ std::string build_rtti_output(const Binary& b) {
         for (std::size_t i = 0; i < c.methods.size(); ++i) {
             out += std::format("vfn\t{:x}\t{}\t{}::vfn_{}\n",
                                c.methods[i], i, c.demangled_name, i);
+        }
+    }
+    return out;
+}
+
+std::string build_vtables_output(const Binary& b) {
+    std::string out;
+    const addr_t width = arch_pointer_bits(b.arch()) == 32 ? 4 : 8;
+    for (const auto& vt : discover_runtime_vtables(b)) {
+        out += std::format("vtable\t{:#x}\t{}\n", vt.vaddr, vt.methods.size());
+        for (std::size_t i = 0; i < vt.methods.size(); ++i) {
+            out += std::format("slot\t{:#x}\t{:#x}\t{}\n",
+                               vt.vaddr + static_cast<addr_t>(i) * width,
+                               vt.methods[i], i);
         }
     }
     return out;

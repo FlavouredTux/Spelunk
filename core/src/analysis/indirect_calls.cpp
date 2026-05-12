@@ -15,6 +15,7 @@
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
+#include <ember/analysis/vtables.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/ir/ir.hpp>
@@ -38,6 +39,7 @@ namespace {
 }
 
 [[nodiscard]] std::optional<u64> read_u64_le(const Binary& b, addr_t a) noexcept {
+    if (auto fact = b.runtime_qword_at(a); fact) return fact;
     auto span = b.bytes_at(a);
     if (span.size() < 8) return std::nullopt;
     u64 v = 0;
@@ -229,7 +231,11 @@ resolve_target(const Binary& b,
         if (!disp) return std::nullopt;
         auto vptr = load_of_const(defs, vptr_expr);
         if (!vptr) return std::nullopt;
-        return slot_at(vtables, b, *vptr, *disp);
+        addr_t observed_vptr = *vptr;
+        if (auto fact = b.runtime_qword_at(*vptr); fact) {
+            observed_vptr = static_cast<addr_t>(*fact);
+        }
+        return slot_at(vtables, b, observed_vptr, *disp);
     };
     if (auto r = try_vtable(ad->srcs[0], ad->srcs[1])) return r;
     if (auto r = try_vtable(ad->srcs[1], ad->srcs[0])) return r;
@@ -256,11 +262,15 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
     // again here keeps this resolver self-contained.
     std::vector<RttiClass> itanium;
     std::vector<MsvcRttiClass> msvc;
+    std::vector<RuntimeVtable> runtime_vtables;
     if (b.format() == Format::MachO || b.format() == Format::Elf) {
         itanium = parse_itanium_rtti(b);
     }
     if (b.format() == Format::Pe) {
         msvc = parse_msvc_rtti(b);
+    }
+    if (b.format() == Format::RawRegions) {
+        runtime_vtables = discover_runtime_vtables(b);
     }
 
     std::map<addr_t, VtableEntry> vtables;
@@ -276,6 +286,11 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
     for (const auto& c : msvc) {
         if (c.vtable != 0 && !c.methods.empty()) {
             vtables.emplace(c.vtable, VtableEntry{&c.methods});
+        }
+    }
+    for (const auto& vt : runtime_vtables) {
+        if (vt.vaddr != 0 && !vt.methods.empty()) {
+            vtables.emplace(vt.vaddr, VtableEntry{&vt.methods});
         }
     }
 

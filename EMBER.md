@@ -27,6 +27,41 @@ all designed to be parsed by another tool.
 
 ---
 
+## Agent operating rules
+
+Your job is to turn binary evidence into names, types, notes, constants,
+and call/class facts. Be fast by being narrow:
+
+- **Use the cheapest command that answers the current question.** Start
+  with inventory and lookup commands; escalate to pseudo-C, IPA, EH, or
+  indirect-call resolution only when the extra facts change the next
+  decision.
+- **Batch before looping.** Prefer `--functions --json`, `--strings`,
+  `--xrefs`, `--data-xrefs`, `--disasm-window @FILE`, and cached TSV/JSON
+  outputs over launching Ember once per address.
+- **Carry evidence forward.** If a previous command already produced a
+  function list, xref row, string xref, vtable slot, pseudo-C body, or
+  annotation, reuse it. Do not rediscover the same fact unless it is stale
+  or disputed.
+- **Read locally, then expand.** For a target address, first ask
+  `--containing-fn`, `--refs-to`, `--callees`, or `-p -s <fn>`. Avoid
+  whole-binary heavy passes until local evidence says they are worth it.
+- **Promote only evidence-backed claims.** A rename/signature/note should
+  cite strings, callees, imports, constants, RTTI/vtables, control flow,
+  recognized library matches, or runtime facts. Use confidence values
+  honestly.
+- **Stop when the next action is clear.** Ember output is a tool result,
+  not a scroll to exhaust. Once you have enough evidence to rename, note,
+  inspect a neighbor, or mark uncertainty, act.
+
+Cost model for agents:
+
+| Cheap / broad | Medium / targeted | Expensive / use deliberately |
+|---|---|---|
+| `--functions`, `--strings`, `--identify`, `--validate`, `--containing-fn` | `-p -s`, `--callees`, `--refs-to`, `--refs-to-loose`, `--disasm-window` | `--full-analysis`, `--ipa`, `--resolve-calls`, `--eh`, whole-binary pseudo-C sweeps |
+
+---
+
 ## The investigation loop
 
 For an unknown binary, work in this order. Each step narrows what's
@@ -47,7 +82,9 @@ worth attention.
    ember --refs-to '<addr_of_string>' <binary>     # who references this string
    ember --containing-fn '<code_addr>' <binary>    # which function contains this code
    ```
-3. **Read.** Pull pseudo-C for the function you anchored.
+3. **Read.** Pull pseudo-C for the function you anchored. Start plain;
+   add expensive flags only if the simple body is blocked by missing
+   types, exceptions, or indirect calls.
    ```sh
    ember -p -s <name_or_addr> <binary>
    ember -p --ipa --resolve-calls --eh -s <fn> <binary>   # richer but slower
@@ -55,8 +92,9 @@ worth attention.
 4. **Spread.** From an anchored function, expand outward via callers
    (`--refs-to`) and callees (`--callees`). Most binaries reveal
    themselves bottom-up: a few anchors → call graph propagates names.
-5. **Persist.** Write your conclusions back as a `.ember` file and apply
-   it. Subsequent Ember invocations will use your names.
+5. **Persist.** Write conclusions back as `.ember` annotations with
+   confidence, source, and evidence. Subsequent Ember invocations will
+   use your names.
 
 ---
 
@@ -91,13 +129,16 @@ tail.
 | `ember --teef <library> > corpus.tsv` | corpus build | build a library fingerprint |
 | `ember --recognize --corpus c.tsv <binary>` | TSV: addr / current / suggested / conf | identify library functions |
 | `ember --rtti <binary>` | TSV: vtable / class info | C++ class hierarchy |
+| `ember --vtables <binary>` | runtime vtables + slots | loaded dumps / RELRO vtables without RTTI |
 | `ember --objc-names <binary>` | Mach-O ObjC method names | ObjC binaries |
 
 ### Lookups
 | Command | Output | Use when |
 |---|---|---|
 | `ember --refs-to <VA> <binary>` | callers of VA (incl. tail-jumps + code-ptr) | "who uses this?" |
-| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows - `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --explain-vcall <OBJ>:<OFF> <binary>` | object / vptr / slot / target + disasm/pseudo summary | resolve `obj->vfn_N` in loaded memory |
+| `ember --dump-object <ADDR> --size <N> <binary>` | qword fields classified as vtable/code/string/ptr/null/raw | inspect runtime object snapshots |
 | `ember --refs-to <VA> --json <binary>` | same shape as above, just direct + CodePtr/Lea | machine-readable refs-to for pipelines that prefer structured rows |
 | `ember --containing-fn <VA> <binary>` | enclosing fn entry / size / name / offset | "which function is this in?" |
 | `ember --callees <fn> <binary>` | classified call edges out of fn | "what does this fn call?" |
@@ -125,13 +166,22 @@ harness promotes a `.ember` file via `agent/src/promote.ts`, the suffix
 maps. Avoid stating inferences as facts - pass `--confidence` so the
 next agent / tool can decide whether to verify.
 
-### Performance
+### Spending analysis budget
 - First-run heavyweight passes (`--xrefs`, `--strings`, `--arities`,
-  `--fingerprints`) cache to `~/.cache/ember/`. Subsequent runs are
-  instant. `--no-cache` bypasses.
+  `--fingerprints`) cache to `~/.cache/ember/`. If you need the same
+  broad fact twice, prefer the cached command over rebuilding your own
+  scan. `--no-cache` is for freshness/debugging, not default agent use.
 - `--ipa` runs whole-program type inference; `--resolve-calls` resolves
-  indirect call sites. Both add seconds; both significantly improve
-  pseudo-C readability. Use them for hero functions, skip for triage.
+  indirect call sites; `--eh` parses exception metadata. They improve
+  pseudo-C, but they are not the opening move. Use them for functions
+  you are actively naming, typing, or explaining.
+- `--full-analysis` is for missed functions and suspicious gaps in the
+  function list. Do not add it to every inventory command by habit.
+- `--refs-to-loose` is broader than `--refs-to`; use it when ordinary
+  callers are empty but the target may live in a table, relocation slot,
+  callback array, or runtime dump.
+- For many nearby addresses, use `--disasm-window` or `@FILE` batching.
+  For one address, use `--disasm-at` or `--containing-fn`.
 
 ---
 
@@ -175,6 +225,37 @@ function taken into a register, typically en route to a dispatch table).
 `code-ptr` is the static signal that recovers indirect call edges through
 vtables / callback lists / Lua C-API style runtime tables.
 
+On `--regions` loaded-memory inputs, Ember also scans readable
+non-executable regions for pointer-sized slots that already contain
+runtime-relocated pointers. This is the path that sees Android / PIE
+`.data.rel.ro` vtable slots whose static ELF view would show zeros.
+
+### Loaded dumps: vtables, vcalls, objects
+
+```sh
+ember --regions module.regions --vtables
+ember --regions module.regions --explain-vcall 0xOBJECT:0x40
+ember --regions module.regions --dump-object 0xOBJECT --size 0x100
+```
+
+`--vtables` finds pointer-dense tables in readable non-executable
+regions whose slots point into executable memory. `--explain-vcall`
+reads `*(OBJECT)` as the vptr and `*(vptr + OFF)` as the target, then
+prints section/name/disasm and a short pseudo-C summary when available.
+`--dump-object` walks pointer-sized fields and classifies each value as
+`vtable`, `code`, `string`, `ptr`, `null`, or `raw`.
+
+Runtime facts can be supplied with `--trace`:
+
+```text
+indirect 0xCALLSITE 0xTARGET
+qword 0xGLOBAL 0xVALUE
+object 0xOBJECT 0xVTABLE
+vptr 0xADDR 0xVTABLE
+```
+
+Plain two-column `from to` still records an observed indirect edge.
+
 ### `-p` (pseudo-C)
 - Variables `a1`, `a2`, ... are ABI argument registers.
 - `r_<callee>` (e.g. `r_strlen`) is the return value of a call to that
@@ -185,10 +266,11 @@ vtables / callback lists / Lua C-API style runtime tables.
 - `NAME /* 0x... */` in an immediate expression is a named constant
   supplied by annotations. Use `[const]` for hashes, magic values,
   protocol IDs, or resolver constants that make the pseudo-C readable.
-- `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */` is
-  an unresolved indirect call. Means: vtable / function-pointer table
-  the static analyzer couldn't bottom out. Either run `--resolve-calls`,
-  supply a `--trace edges.tsv`, or accept it as a known limit.
+- `(*(u64*)(0x...))(...)` is an unresolved indirect call. Means: vtable
+  / function-pointer table the static analyzer couldn't bottom out.
+  Either run `--resolve-calls`, inspect the receiver with
+  `--explain-vcall OBJ:OFF`, supply runtime facts via `--trace`, or
+  accept it as a known limit.
 - `/* observed targets: a, b, c */` after a call expression: trace
   evidence of what the fn pointer dynamically resolved to.
 
@@ -391,6 +473,13 @@ ember --data-xrefs <binary> | awk '$3=="code-ptr"' \
   | sort -k2 | head -50
 # Each `code-ptr` line is "function whose address gets stored somewhere."
 # Cluster by from_pc to find the ctor that writes the table.
+```
+
+**"What does this runtime vcall actually target?"**
+```sh
+ember --regions module.regions --vtables
+ember --regions module.regions --dump-object 0xOBJECT --size 0x100
+ember --regions module.regions --explain-vcall 0xOBJECT:0x40
 ```
 
 ---

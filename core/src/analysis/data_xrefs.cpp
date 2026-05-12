@@ -120,7 +120,8 @@ compute_data_xrefs(const Binary& b) {
     std::map<addr_t, std::vector<DataXref>> out;
     const SectionTable sects(b);
 
-    if (b.format() == Format::Dol || b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+    if (b.format() == Format::Dol || b.format() == Format::RawRegions ||
+        b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
         scan_pointer_slots(b, sects, out);
     }
 

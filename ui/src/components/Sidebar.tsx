@@ -5,6 +5,7 @@ import { useFmtAddr } from "../RebaseContext";
 import type { BinaryInfo, FunctionInfo, ViewKind, Annotations } from "../types";
 import { ContextMenu, ToastPill, type MenuItem } from "./ContextMenu";
 import { SkelSidebarRow } from "./Skeleton";
+import mascot from "../../assets/ember-mascot.png";
 
 type FunctionScope = "all" | "code" | "renamed" | "notes" | "bookmarks";
 
@@ -34,6 +35,7 @@ export function Sidebar(props: {
   info: BinaryInfo;
   currentAddr: number | null;
   annotations: Annotations;
+  displayNames?: Map<string, string>;
   bookmarks?: { addr: string }[];
   // True while the background --functions query is still running. The
   // sidebar can already render imports + the "defined" tab shell while
@@ -50,9 +52,11 @@ export function Sidebar(props: {
   onImport?: () => void;
   onImportCorpus?: () => void;
 }) {
-  const { info, currentAddr, annotations, functionsLoading, width, onSelect, onOpen, onReopen,
+  const { info, currentAddr, annotations, displayNames, functionsLoading, width, onSelect, onOpen, onReopen,
           onRename, onAddNote, onEditSignature, onExport, onImport, onImportCorpus } = props;
   const fmtAddr = useFmtAddr();
+  const renames = annotations.renames;
+  const notes = annotations.notes;
   const [q, setQ] = useState("");
   const deferredQ = useDeferredValue(q);
   const [showImports, setShowImports] = useState(false);
@@ -80,16 +84,18 @@ export function Sidebar(props: {
     const needle = deferredQ.trim().toLowerCase();
     const scoped = showImports || scope === "all" ? pool : pool.filter((f) => {
       if (scope === "code") return inRanges(f.addrNum, codeRanges);
-      if (scope === "renamed") return !!annotations.renames[f.addr];
-      if (scope === "notes") return !!annotations.notes[f.addr];
+      if (scope === "renamed") return !!renames[f.addr];
+      if (scope === "notes") return !!notes[f.addr];
       if (scope === "bookmarks") return bookmarkAddrs.has(f.addr.toLowerCase());
       return true;
     });
     const filtered = !needle ? scoped : scoped.filter((f) => {
-      const rn = annotations.renames[f.addr];
+      const rn = renames[f.addr];
+      const dn = displayNames?.get(f.addr);
       return (
         f.name.toLowerCase().includes(needle) ||
         demangle(f.name).toLowerCase().includes(needle) ||
+        (!!dn && dn.toLowerCase().includes(needle)) ||
         f.addr.includes(needle) ||
         (rn && rn.toLowerCase().includes(needle))
       );
@@ -102,21 +108,21 @@ export function Sidebar(props: {
     // checks in VirtualList. Sort biggest first: the large functions are
     // almost always the ones worth opening.
     return [...filtered].sort((a, b) => b.size - a.size);
-  }, [deferredQ, info, showImports, sortBy, scope, codeRanges, annotations, bookmarkAddrs]);
+  }, [deferredQ, info, showImports, sortBy, scope, codeRanges, renames, notes, displayNames, bookmarkAddrs]);
 
   const scopeCounts = useMemo<Record<FunctionScope, number>>(() => ({
     all: info.functions.length,
     code: info.functions.filter((f) => inRanges(f.addrNum, codeRanges)).length,
-    renamed: info.functions.filter((f) => !!annotations.renames[f.addr]).length,
-    notes: info.functions.filter((f) => !!annotations.notes[f.addr]).length,
+    renamed: info.functions.filter((f) => !!renames[f.addr]).length,
+    notes: info.functions.filter((f) => !!notes[f.addr]).length,
     bookmarks: info.functions.filter((f) => bookmarkAddrs.has(f.addr.toLowerCase())).length,
-  }), [info.functions, codeRanges, annotations, bookmarkAddrs]);
+  }), [info.functions, codeRanges, renames, notes, bookmarkAddrs]);
 
   const buildMenu = (fn: FunctionInfo): MenuItem[] => {
     const hasRename = !!annotations.renames[fn.addr];
     const hasNote   = !!annotations.notes[fn.addr];
     return [
-      { kind: "header", label: displayName(fn, annotations), meta: `${fn.addr}  ·  ${formatSize(fn.size)}` },
+      { kind: "header", label: displayNames?.get(fn.addr) ?? displayName(fn, annotations), meta: `${fn.addr}  ·  ${formatSize(fn.size)}` },
       { kind: "item", label: "Open as pseudo-C",  hint: "p", onClick: () => { onOpen(fn, "pseudo"); } },
       { kind: "item", label: "Open as assembly",  hint: "d", onClick: () => { onOpen(fn, "asm"); } },
       { kind: "item", label: "Open as CFG",       hint: "c", onClick: () => { onOpen(fn, "cfg"); } },
@@ -175,15 +181,33 @@ export function Sidebar(props: {
     >
       {/* Header */}
       <div style={{ padding: "18px 18px 14px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
           <div
             style={{
-              width: 26, height: 26, borderRadius: 4,
-              background: C.text, color: C.bg,
+              width: 38, height: 38, borderRadius: 6,
+              background: "#f3efe7",
+              border: "1px solid rgba(255,255,255,0.18)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontFamily: sans, fontWeight: 700, fontSize: 12,
+              overflow: "hidden",
+              flexShrink: 0,
+              boxShadow: "0 1px 0 rgba(255,255,255,0.12), 0 8px 20px rgba(0,0,0,0.22)",
             }}
-          >A</div>
+          >
+            <img
+              src={mascot}
+              alt=""
+              aria-hidden
+              draggable={false}
+              style={{
+                width: 84,
+                height: 84,
+                objectFit: "contain",
+                userSelect: "none",
+                pointerEvents: "none",
+                transform: "translateY(5px)",
+              }}
+            />
+          </div>
           <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
             <span style={{ fontFamily: sans, fontWeight: 600, fontSize: 14 }}>Ember</span>
             <span style={{ fontFamily: sans, fontSize: 11, color: C.textMuted, marginTop: 2 }}>
@@ -377,6 +401,7 @@ export function Sidebar(props: {
         showImports={showImports}
         currentAddr={currentAddr}
         annotations={annotations}
+        displayNames={displayNames}
         activeCtxAddr={ctx?.fn.addrNum ?? null}
         onSelect={onSelect}
         onContext={(fn, e) => {
@@ -455,11 +480,12 @@ function VirtualList(props: {
   showImports: boolean;
   currentAddr: number | null;
   annotations: Annotations;
+  displayNames?: Map<string, string>;
   activeCtxAddr: number | null;
   onSelect: (fn: FunctionInfo) => void;
   onContext: (fn: FunctionInfo, e: React.MouseEvent) => void;
 }) {
-  const { list, showImports, currentAddr, annotations, activeCtxAddr,
+  const { list, showImports, currentAddr, annotations, displayNames, activeCtxAddr,
           onSelect, onContext } = props;
   const fmtAddr = useFmtAddr();
 
@@ -504,7 +530,7 @@ function VirtualList(props: {
             const active  = !showImports && currentAddr === f.addrNum;
             const renamed = !showImports && !!annotations.renames[f.addr];
             const noted   = !showImports && !!annotations.notes[f.addr];
-            const displayLabel = showImports ? demangle(f.name) : displayName(f, annotations);
+            const displayLabel = showImports ? demangle(f.name) : (displayNames?.get(f.addr) ?? displayName(f, annotations));
             return (
               <button
                 key={f.addr + "-" + i}

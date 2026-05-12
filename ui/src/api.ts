@@ -560,8 +560,16 @@ export function displayName(fn: FunctionInfo, annotations?: Ann): string {
   return demangle(fn.name);
 }
 
+export function buildDisplayNameMap(
+  functions: FunctionInfo[],
+  annotations?: Ann,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const f of functions) out.set(f.addr, displayName(f, annotations));
+  return out;
+}
+
 // Format a raw address as "0x1234" like the backend does
 export function formatAddrHex(n: number): string {
   return "0x" + n.toString(16);
 }
-

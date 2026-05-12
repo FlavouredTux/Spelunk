@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { C, sans, serif, mono } from "../theme";
 import type { AiMessage, AiConfig, AiProvider, FunctionInfo, Annotations } from "../types";
 import {
@@ -752,7 +752,7 @@ function ToolTrail(props: {
   );
 }
 
-function Turn(props: { turn: ChatTurn }) {
+const Turn = memo(function Turn(props: { turn: ChatTurn }) {
   const isUser = props.turn.role === "user";
   const tools = props.turn.tools;
   return (
@@ -798,7 +798,7 @@ function Turn(props: { turn: ChatTurn }) {
       </div>
     </div>
   );
-}
+});
 
 // Cheap-and-cheerful Markdown renderer covering the subset our system
 // prompt steers the model toward: paragraphs, single backtick spans,

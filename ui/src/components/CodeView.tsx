@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef, useState } from "react";
+import { memo, useMemo, useEffect, useRef, useState } from "react";
 import { C, sans, mono, SH } from "../theme";
 import { highlightLine } from "../syntax";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -15,6 +15,7 @@ const ASM_INSN_RE = /^\s*(0x[0-9a-fA-F]+)\s+((?:[0-9a-fA-F]{2}\s+)+?)\s{2,}(.+)$
 // is what we measure to draw nesting guides.
 const INDENT_UNIT = 2;
 const CODE_OVERSCAN = 24;
+const NO_MATCHES: { line: number; start: number; end: number }[] = [];
 
 // `// foo` at column 0 is the function-name header ember emits at the
 // top of a function block. Body comments use `;`, so this prefix is a
@@ -257,7 +258,7 @@ export function CodeView(props: {
             const i = visible.first + idx;
             const lineMatches = props.searchActive
               ? (matchesByLine.get(i) ?? [])
-              : [];
+              : NO_MATCHES;
             const isActiveLine = props.searchActive &&
               matches[activeMatch] && matches[activeMatch].line === i;
             // Asm-line right-click → patch. We parse here so the
@@ -449,7 +450,7 @@ function IndentGuides({ depth }: { depth: number }) {
   return <>{cells}</>;
 }
 
-function LineContent(props: {
+const LineContent = memo(function LineContent(props: {
   line: string;
   onXref: (addr: number) => void;
   fnAddrByName?: Map<string, number>;
@@ -531,7 +532,7 @@ function LineContent(props: {
       })}
     </span>
   );
-}
+});
 
 function SearchBar(props: {
   query: string;

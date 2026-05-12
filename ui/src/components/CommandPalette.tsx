@@ -7,6 +7,7 @@ export function CommandPalette(props: {
   functions: FunctionInfo[];
   recent?: FunctionInfo[];
   annotations?: Annotations;
+  displayNames?: Map<string, string>;
   onSelect: (fn: FunctionInfo) => void;
   // Optional handler for "fall through" hex addresses that don't match
   // any function start. App wires this to open the hex view at the
@@ -58,10 +59,13 @@ export function CommandPalette(props: {
         const name = f.name.toLowerCase();
         const dem  = demangle(f.name).toLowerCase();
         const rn   = (props.annotations?.renames[f.addr] ?? "").toLowerCase();
+        const dn   = (props.displayNames?.get(f.addr) ?? "").toLowerCase();
         const addr = f.addr.toLowerCase();
         let score = 0;
-        if (rn && rn.startsWith(needle))     score = 1200 - rn.length;
-        else if (rn && rn.includes(needle))  score = 900  - rn.indexOf(needle);
+        if (dn && dn.startsWith(needle))     score = 1200 - dn.length;
+        else if (rn && rn.startsWith(needle)) score = 1150 - rn.length;
+        else if (dn && dn.includes(needle))  score = 900  - dn.indexOf(needle);
+        else if (rn && rn.includes(needle))  score = 850  - rn.indexOf(needle);
         else if (name.startsWith(needle))    score = 1000 - name.length;
         else if (dem.startsWith(needle))     score = 800  - dem.length;
         else if (name.includes(needle))      score = 600 - name.indexOf(needle);
@@ -74,7 +78,7 @@ export function CommandPalette(props: {
       .slice(0, 200)
       .map((x) => x.f);
     return scored;
-  }, [q, props.functions, props.recent]);
+  }, [q, props.functions, props.recent, props.annotations?.renames, props.displayNames]);
 
   // Show the synthetic "jump to address" row when the input parses as
   // a hex value AND the user has supplied the goto handler. We always
@@ -231,8 +235,8 @@ export function CommandPalette(props: {
             const rowIdx = i + (showAddressRow ? 1 : 0);
             const active = rowIdx === idx;
             const dem = demangle(f.name);
-            const dn = displayName(f, props.annotations);
-            const isRenamed = dn !== dem && dn !== f.name;
+            const dn = props.displayNames?.get(f.addr) ?? displayName(f, props.annotations);
+            const isRenamed = !!props.annotations?.renames[f.addr];
             const isRecent = !q.trim() && !!props.recent?.some((r) => r.addr === f.addr);
             return (
               <button

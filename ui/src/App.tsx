@@ -41,7 +41,7 @@ import {
   exportAnnotations, importAnnotations, importCorpusRenames, loadIdentifications,
   checkForReleaseUpdate, downloadAndInstallReleaseUpdate,
   clearRendererCaches,
-  displayName, demangle,
+  buildDisplayNameMap, displayName, demangle,
 } from "./api";
 import type {
   BinaryInfo, FunctionInfo, ViewKind, Xrefs, Annotations, StringEntry, Arities,
@@ -53,18 +53,15 @@ const EMPTY_ANN:   Annotations = { renames: {}, notes: {}, signatures: {}, field
 const EMPTY_STRINGS: StringEntry[] = [];
 const EMPTY_ARITIES: Arities = {};
 
-// Word-boundary substitute every key in `pairs` with its mapped value
-// in one pass. One-pass matters because rename A → B and rename B → C
-// applied sequentially would chain (A → C); applied atomically they
-// don't. Identifier-shape `from` keys make `\b` anchors safe.
+// Substitute identifier tokens whose exact text appears in `pairs`.
+// This stays constant-shape as the rename map grows; the previous
+// giant alternation regex got slower with every applied pill because
+// each click rebuilt and ran a larger pattern over the whole function.
+// One-pass matters because rename A → B and rename B → C applied
+// sequentially would chain (A → C); applied atomically they don't.
 function applyLocalRenames(text: string, pairs: Record<string, string>): string {
-  const keys = Object.keys(pairs).filter(Boolean);
-  if (keys.length === 0) return text;
-  const escaped = keys
-    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .sort((a, b) => b.length - a.length);   // longest-first to avoid prefix shadowing
-  const re = new RegExp(`\\b(?:${escaped.join("|")})\\b`, "g");
-  return text.replace(re, (m) => pairs[m] ?? m);
+  if (Object.keys(pairs).length === 0) return text;
+  return text.replace(/[A-Za-z_][A-Za-z0-9_$]*/g, (m) => pairs[m] ?? m);
 }
 
 // Heuristic: spot binaries that have been packed / obfuscated /
@@ -290,6 +287,9 @@ export default function App() {
   // the user can see saves are happening. "saved" sticks for ~1.5s
   // after each successful write so single edits also flash.
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveTimerRef = useRef<number | null>(null);
+  const saveIdleTimerRef = useRef<number | null>(null);
+  const pendingAnnotationSaveRef = useRef<{ path: string; data: Annotations } | null>(null);
   // Toast for transient actions (bookmarked, exported, …).
   const [toast, setToast] = useState<string | null>(null);
   // Undo stack - snapshots of the annotations object before each write.
@@ -314,6 +314,10 @@ export default function App() {
   const [recents, setRecents] = useState<string[]>([]);
   const [releaseUpdate, setReleaseUpdate] = useState<ReleaseUpdateStatus | null>(null);
 
+  const currentLocalRenames = current
+    ? annotations.localRenames?.[current.addr]
+    : undefined;
+
   // Apply per-function local renames on top of the cached emitter output.
   // Pure string substitution - fast even on multi-MB pseudo-C bodies.
   // Declared early because the keyboard-handler effect (~line 873) lists
@@ -325,9 +329,10 @@ export default function App() {
     if (!current) return rawCode;
     const isPseudo = fetchView === "pseudo" || fetchView === "cfgPseudo";
     if (!isPseudo) return rawCode;
-    const locals = annotations.localRenames?.[current.addr];
-    return locals ? applyLocalRenames(rawCode, locals) : rawCode;
-  }, [rawCode, current, fetchView, annotations.localRenames]);
+    return currentLocalRenames
+      ? applyLocalRenames(rawCode, currentLocalRenames)
+      : rawCode;
+  }, [rawCode, current, fetchView, currentLocalRenames]);
 
   // Strings are only consumed by StringsView and the payload can be hundreds
   // In-flight async analyses - shown in the status bar so huge binaries
@@ -404,6 +409,11 @@ export default function App() {
     const imports = info.imports.filter((f) => f.addrNum !== 0);
     return [...info.functions, ...imports];
   }, [info]);
+
+  const displayNames = useMemo(
+    () => buildDisplayNameMap(paletteFunctions, annotations),
+    [paletteFunctions, annotations.renames],
+  );
 
   const recentFunctions = useMemo(() => {
     if (!info) return [];
@@ -639,7 +649,46 @@ export default function App() {
     setReleaseUpdate(null);
   }, [releaseUpdate, patchSettings]);
 
+  const flushPendingAnnotationSave = useCallback(async () => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const pendingSave = pendingAnnotationSaveRef.current;
+    pendingAnnotationSaveRef.current = null;
+    if (!pendingSave) return;
+    try {
+      await saveAnnotations(pendingSave.path, pendingSave.data);
+      setSaveState("saved");
+      if (saveIdleTimerRef.current !== null) window.clearTimeout(saveIdleTimerRef.current);
+      saveIdleTimerRef.current = window.setTimeout(() => {
+        setSaveState((s) => s === "saved" ? "idle" : s);
+      }, 1500);
+    } catch {
+      setSaveState("error");
+    }
+  }, []);
+
+  const scheduleAnnotationSave = useCallback((path: string, data: Annotations) => {
+    pendingAnnotationSaveRef.current = { path, data };
+    if (saveIdleTimerRef.current !== null) {
+      window.clearTimeout(saveIdleTimerRef.current);
+      saveIdleTimerRef.current = null;
+    }
+    setSaveState("saving");
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      void flushPendingAnnotationSave();
+    }, 250);
+  }, [flushPendingAnnotationSave]);
+
+  useEffect(() => () => {
+    void flushPendingAnnotationSave();
+    if (saveIdleTimerRef.current !== null) window.clearTimeout(saveIdleTimerRef.current);
+  }, [flushPendingAnnotationSave]);
+
   const openBinaryAt = useCallback(async (binaryPath: string | null) => {
+    await flushPendingAnnotationSave();
     setLoading(true);
     setError(null);
     try {
@@ -709,7 +758,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [forceFullAnalysisFor]);
+  }, [forceFullAnalysisFor, flushPendingAnnotationSave]);
 
   const handleOpen      = useCallback(() => openBinaryAt(null), [openBinaryAt]);
   const handleOpenRecent = useCallback(async (bp: string) => {
@@ -1101,17 +1150,8 @@ export default function App() {
     // currently on screen, which used to make every "apply" pill click
     // wait for a full lift+SSA+cleanup pipeline run.
     if (!opts?.uiOnly) clearRendererCaches();
-    if (info) {
-      setSaveState("saving");
-      try {
-        await saveAnnotations(info.path, a);
-        setSaveState("saved");
-        window.setTimeout(() => setSaveState((s) => s === "saved" ? "idle" : s), 1500);
-      } catch {
-        setSaveState("error");
-      }
-    }
-  }, [info, annotations]);
+    if (info) scheduleAnnotationSave(info.path, a);
+  }, [info, annotations, scheduleAnnotationSave]);
 
   // Restore the previous annotations snapshot. The current state is
   // pushed onto a redo stack - but we keep this minimal (undo only)
@@ -1125,6 +1165,11 @@ export default function App() {
     setAnnotations(prev);
     clearRendererCaches();
     if (info) {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      pendingAnnotationSaveRef.current = null;
       setSaveState("saving");
       saveAnnotations(info.path, prev)
         .then(() => {
@@ -1264,9 +1309,11 @@ export default function App() {
   // keyed on canonical emitter names (`local_10`, `a1`, `r_strlen`)
   // so `applyLocalRenames` does the substitution in one pass.
   const saveLocalRenames = useCallback((fn: FunctionInfo, pairs: Record<string, string>) => {
-    const next = cloneAnn();
-    next.localRenames = next.localRenames || {};
-    const cur = { ...(next.localRenames[fn.addr] || {}) };
+    const next: Annotations = {
+      ...annotations,
+      localRenames: { ...(annotations.localRenames || {}) },
+    };
+    const cur = { ...(next.localRenames![fn.addr] || {}) };
     for (const [from, to] of Object.entries(pairs)) {
       let key = from;
       for (const [k, v] of Object.entries(cur)) {
@@ -1275,14 +1322,14 @@ export default function App() {
       if (to) cur[key] = to;
       else delete cur[key];
     }
-    if (Object.keys(cur).length > 0) next.localRenames[fn.addr] = cur;
-    else delete next.localRenames[fn.addr];
+    if (Object.keys(cur).length > 0) next.localRenames![fn.addr] = cur;
+    else delete next.localRenames![fn.addr];
     // UI-only mutation: localRenames are substituted client-side in the
     // `code` memo, never round-trip through the CLI. Skipping the
     // renderer-cache nuke turns "apply all" on a 20-pill batch from
     // ~20 ember spawns to zero.
     writeAnnotations(next, { uiOnly: true });
-  }, [cloneAnn, writeAnnotations]);
+  }, [annotations, writeAnnotations]);
 
   // Adapter for CodeView: single-token rename from the pseudo-C context
   // menu. Empty `newName` removes the rename (resets to the emitter's
@@ -1667,6 +1714,7 @@ export default function App() {
         <Sidebar
           info={info}
           annotations={annotations}
+          displayNames={displayNames}
           bookmarks={currentBookmarks}
           functionsLoading={functionsLoading}
           currentAddr={current?.addrNum ?? null}
@@ -1840,6 +1888,7 @@ export default function App() {
           functions={paletteFunctions}
           recent={recentFunctions}
           annotations={annotations}
+          displayNames={displayNames}
           onSelect={(f) => navigateTo(f)}
           onJumpAddress={(v) => {
             // Palette accepts hex addresses that don't match a function

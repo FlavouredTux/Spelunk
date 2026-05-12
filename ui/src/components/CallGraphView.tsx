@@ -58,7 +58,7 @@ function buildGraph(
       byAddr.get(callee)!.inDeg++;
     }
   }
-  // Keep only functions with at least one in/out edge — the rest would be noise.
+  // Keep only functions with at least one in/out edge - the rest would be noise.
   const nodes: Node[] = [];
   byAddr.forEach((n) => {
     if (n.inDeg > 0 || n.outDeg > 0) nodes.push(n);
@@ -811,7 +811,7 @@ function hexAddr(n: number): string {
 }
 
 // Export the call graph SVG as a PNG. Uses an `<img>` + canvas roundtrip
-// so the rendered SVG is rasterised by the browser — no headless layout
+// so the rendered SVG is rasterised by the browser - no headless layout
 // pass required. Triggered by the "png" button in the panel header.
 async function exportSvgAsPng(svg: SVGSVGElement | null, baseName: string): Promise<void> {
   if (!svg) return;

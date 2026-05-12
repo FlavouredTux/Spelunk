@@ -25,7 +25,7 @@ const PATTERNS: Pattern[] = [
       "The bytes here aren't valid x86-64 instructions. " +
       "This usually means the binary is packed or protected (Themida, VMProtect, …) " +
       "and the real code only exists in memory at runtime. " +
-      "It can also mean the symbol points at data — some toolchains leave function records " +
+      "It can also mean the symbol points at data - some toolchains leave function records " +
       "for stripped or merged helpers.",
     suggest: { label: "view raw bytes", view: "asm" },
   },
@@ -44,7 +44,7 @@ const PATTERNS: Pattern[] = [
     match: (m) => /ambiguous/i.test(m),
     title: "Ambiguous symbol",
     body:
-      "Several addresses share this symbol — usually C++ template specialisations or " +
+      "Several addresses share this symbol - usually C++ template specialisations or " +
       "`.constprop` / `.cold` clones with the same mangled name. Pick a specific entry " +
       "from the function list.",
   },
@@ -58,7 +58,7 @@ export function ErrorView(props: {
   const [showDetails, setShowDetails] = useState(false);
   const hit = PATTERNS.find((p) => p.match(props.message));
 
-  // Generic fallback — keeps the original raw-error rendering for
+  // Generic fallback - keeps the original raw-error rendering for
   // anything we haven't classified yet, just in a slightly nicer card.
   if (!hit) {
     return (

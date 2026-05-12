@@ -21,7 +21,7 @@ struct ObjcMethod {
 };
 
 // A formal protocol with its required + optional method signatures. Method
-// IMPs are always zero here — protocols only carry signatures, not bodies.
+// IMPs are always zero here - protocols only carry signatures, not bodies.
 struct ObjcProtocol {
     std::string name;                         // e.g. "NSTextInputClient"
     std::vector<std::string> conforms_to;     // parent protocol names
@@ -64,8 +64,8 @@ decode_objc_type_parts(std::string_view encoding);
 // (selref_addr → selector_string).
 [[nodiscard]] std::map<addr_t, std::string> parse_objc_selrefs(const Binary& b);
 
-// Walks __objc_classrefs — an array of pointers into __objc_classlist
-// entries — so a RIP-relative `mov rdi, [rip + classref]` can render as
+// Walks __objc_classrefs - an array of pointers into __objc_classlist
+// entries - so a RIP-relative `mov rdi, [rip + classref]` can render as
 // `[ClassName class]` instead of a raw address load. Map is
 // (classref_slot_addr → class_name).
 [[nodiscard]] std::map<addr_t, std::string> parse_objc_classrefs(const Binary& b);

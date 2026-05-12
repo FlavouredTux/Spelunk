@@ -42,7 +42,7 @@ const { pipeline } = require("node:stream/promises");
 // and handles subscription auth (Pro/Max OAuth) correctly. Loaded
 // lazily so the renderer doesn't pay the import cost on startup.
 // SDK ships as ESM (sdk.mjs), so we can't `require()` it from this CJS
-// file — Node mandates dynamic `import()`. We expose query + the in-
+// file - Node mandates dynamic `import()`. We expose query + the in-
 // process MCP helpers (tool, createSdkMcpServer) since the agentic
 // flow needs all three.
 let _assistantSdk = null;
@@ -101,7 +101,7 @@ function createWindow() {
     win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
   });
 
-  // `app.isPackaged` is the only reliable dev/prod signal — a packaged
+  // `app.isPackaged` is the only reliable dev/prod signal - a packaged
   // Electron app does NOT set NODE_ENV, so gating on it means the
   // installer tries to load the Vite dev server URL, loadURL fails
   // silently, `ready-to-show` never fires, and the window stays hidden
@@ -191,7 +191,7 @@ function collectMainDiagnostics() {
 // stdout/stderr accumulated as a stream of UTF-8 string chunks rather
 // than an ever-growing string. Two reasons:
 //   1. setEncoding("utf8") gives the stream a stateful decoder that
-//      doesn't split multi-byte sequences across `data` events — the
+//      doesn't split multi-byte sequences across `data` events - the
 //      old `d.toString()` per chunk produced replacement chars in
 //      demangled C++ symbols at chunk boundaries.
 //   2. `arr.push(s)` + `arr.join("")` is O(n) regardless of V8's
@@ -401,7 +401,7 @@ const RUN_CACHE       = new Map();   // key → stdout string
 // Cap by total payload bytes, not entry count. Entries are stdout
 // strings of unpredictable size: a `--functions` on a 150 MB PE can
 // produce 30+ MB of TSV. The previous count-of-200 cap meant the cache
-// could pin gigabytes — which was the renderer's "memory leak" feel
+// could pin gigabytes - which was the renderer's "memory leak" feel
 // after a few binaries opened. 256 MB matches a comfortable working
 // set on machines with 8+ GB and gets evicted immediately on smaller
 // outputs.
@@ -463,7 +463,7 @@ ipcMain.handle("ember:pick", async () => {
 ipcMain.handle("ember:debug:diagnostics", async () => collectMainDiagnostics());
 
 // Generic file picker for callers that need a path other than the
-// primary binary — e.g. the diff view's "old binary" selector and the
+// primary binary - e.g. the diff view's "old binary" selector and the
 // .ember script applier. Doesn't touch state.binary or recents.
 ipcMain.handle("ember:pickFile", async (_e, opts) => {
   const o = opts && typeof opts === "object" ? opts : {};
@@ -486,7 +486,7 @@ ipcMain.handle("ember:setBinary", async (_e, p) => {
 });
 
 // FNV-1a-64 of a string, used to compute the ember-side cache annotations
-// path. Must match the C++ `fnv1a_64` in core/src/common/annotations.cpp —
+// path. Must match the C++ `fnv1a_64` in core/src/common/annotations.cpp -
 // same algorithm, same offset/prime constants.
 function fnv1a64(s) {
   let h = 0xcbf29ce484222325n;
@@ -516,7 +516,7 @@ function emberCacheAnnotationsPath(binaryPath) {
 // Memoize the parsed sidecar JSON and ember cache .db keyed by
 // (path, mtime). Pre-fix every ember:run IPC call read+parsed each of
 // these from scratch, costing ~50ms of pure I/O before the RUN_CACHE
-// lookup even started — visible as per-click lag on slow disks.
+// lookup even started - visible as per-click lag on slow disks.
 const _SIDECAR_PARSE_CACHE  = new Map();   // binaryPath → { mtime, val }
 const _CACHE_DB_PARSE_CACHE = new Map();   // binaryPath → { mtime, val }
 
@@ -530,7 +530,7 @@ async function memoByMtime(cache, key, filePath, parser) {
 }
 
 // Parse the cache annotations.db (TSV-ish: `rename <hex_addr> <name>`,
-// `note <hex_addr> <text>`, etc.). Returns { renames, notes } only —
+// `note <hex_addr> <text>`, etc.). Returns { renames, notes } only -
 // the cache format doesn't carry signatures/patches. Empty object if
 // the file doesn't exist or is unreadable.
 async function readEmberCacheAnnotations(binaryPath) {
@@ -570,10 +570,10 @@ async function parseEmberCacheAnnotations(binaryPath) {
             parts.slice(2).join("|").trim();
         }
       }
-      // signatures/types/patches are not in the cache .db format yet —
+      // signatures/types/patches are not in the cache .db format yet -
       // ignore unrecognised verbs rather than fail.
     }
-  } catch { /* missing — return empty {} */ }
+  } catch { /* missing - return empty {} */ }
   return out;
 }
 
@@ -584,7 +584,7 @@ async function parseEmberCacheAnnotations(binaryPath) {
 //   - ember's cache annotations.db at ~/.cache/ember/annotations/<key>/
 //     (renames + notes from `ember-agent promote --apply` / `ember
 //     --apply <script>`)
-// The UI sidecar wins on conflict — manual renames override agent
+// The UI sidecar wins on conflict - manual renames override agent
 // guesses. Patches / signatures / localRenames live only in the JSON
 // sidecar (no cache-side equivalent yet).
 async function readSidecarJson(binaryPath) {
@@ -624,7 +624,7 @@ async function saveSidecar(binaryPath, data) {
 
 // Stable per-patch-set hash used as the patched-binary filename suffix
 // so a given patch combination materialises to one cached file. Cheap
-// FNV-1a is fine — collision risk is irrelevant given the file is
+// FNV-1a is fine - collision risk is irrelevant given the file is
 // re-derivable, and it avoids dragging in node:crypto for one call.
 function hashPatches(patches) {
   let h = 0xcbf29ce484222325n;
@@ -643,7 +643,7 @@ function hashPatches(patches) {
 // If the sidecar has byte patches, materialise (or reuse cached) a
 // patched copy of the original binary and return that path. Otherwise
 // return the original. Failing to apply patches falls back to the
-// original with a stderr warning — analysis is more useful than a
+// original with a stderr warning - analysis is more useful than a
 // hard error here, and the patches panel will surface the issue.
 async function materializePatchedBinary(originalPath) {
   const ann = await readSidecar(originalPath);
@@ -670,7 +670,7 @@ async function materializePatchedBinary(originalPath) {
   const patchesFile = path.join(app.getPath("userData"), "projects",
                                 sanitize(originalPath) + ".patches.txt");
   const lines = Object.entries(patches).map(([addr, p]) => {
-    // Insert spaces every 2 hex chars for readability — the parser
+    // Insert spaces every 2 hex chars for readability - the parser
     // strips whitespace anyway. Address keeps its 0x prefix.
     const grouped = (p.bytes.match(/.{1,2}/g) || []).join(" ");
     return `${addr} ${grouped}`;
@@ -689,7 +689,7 @@ async function materializePatchedBinary(originalPath) {
 
 // Match the C++ side's escape_note: backslash, newline, carriage return.
 // The C++ load() doesn't currently unescape, so multi-line notes will
-// round-trip imperfectly through any apply that touches them — see
+// round-trip imperfectly through any apply that touches them - see
 // core/src/common/annotations.cpp. Single-line notes (the common case)
 // round-trip cleanly.
 function escapeNote(s) {
@@ -710,9 +710,9 @@ function unescapeNote(s) {
 }
 
 // Parse the .ann TSV format ember reads/writes via Annotations::load /
-// to_text — line-based: `rename <hex> <name>`, `sig <hex> <ret>|<type>|<name>|...`,
+// to_text - line-based: `rename <hex> <name>`, `sig <hex> <ret>|<type>|<name>|...`,
 // `note <hex> <escaped>`, `const <hex> <name>`. Returns the JSON shape
-// the renderer expects (subset — patches/localRenames don't live here).
+// the renderer expects (subset - patches/localRenames don't live here).
 function parseAnnText(text) {
   const renames = {};
   const signatures = {};
@@ -756,7 +756,7 @@ function parseAnnText(text) {
       fields[`${addr}:${parts[0]}:${parts[1]}`] = parts.slice(2).join("|");
     }
     // `const` (named_constants) isn't surfaced in the renderer's
-    // annotation shape yet — silently ignored.
+    // annotation shape yet - silently ignored.
   }
   return { renames, signatures, notes, fields };
 }
@@ -767,7 +767,7 @@ function parseAnnText(text) {
 // Cache the projected text in memory keyed by binaryPath, and skip the
 // write when content is byte-identical to what's already on disk. This
 // keeps the .ann file's mtime stable across repeated `ember:run` calls,
-// which is the only thing that lets RUN_CACHE actually hit — without
+// which is the only thing that lets RUN_CACHE actually hit - without
 // this guard, every IPC call rewrote the file with fresh mtime,
 // invalidating every cached entry on every click.
 const ANN_TEXT_CACHE = new Map();   // binaryPath → last projected text
@@ -836,7 +836,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
   // writeCliAnnotations + materializePatchedBinary both end up reading
   // the same sidecar JSON, so they can run in parallel now that the
   // parse is memoized by mtime. This was 50–100 ms of serial I/O on
-  // every click before — the user sees it as "even small functions
+  // every click before - the user sees it as "even small functions
   // load slowly."
   const [annPath, effective] = await Promise.all([
     writeCliAnnotations(state.binary),
@@ -849,7 +849,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
     safeMtime(EMBER_BIN),
   ]);
   // Embed mtimes in the key. When the binary, patches or annotations
-  // change, the new key won't hit prior entries — they fall out via
+  // change, the new key won't hit prior entries - they fall out via
   // LRU. The patched-copy mtime captures the patches themselves; the
   // CLI mtime keeps dev UI sessions from serving old pseudo-C after a
   // local rebuild.
@@ -860,7 +860,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
     lruTouch(RUN_CACHE, key, v);   // bubble to MRU
     return v;
   }
-  // Concurrent identical requests — coalesce to a single spawn.
+  // Concurrent identical requests - coalesce to a single spawn.
   if (RUN_INFLIGHT.has(key)) return RUN_INFLIGHT.get(key);
 
   const extra = annPath ? ["--annotations", annPath] : [];
@@ -870,7 +870,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
       lruTouch(RUN_CACHE, key, out);
       const dt = Date.now() - t0;
       // Anything over a second on a single ember spawn is worth knowing
-      // about — either the binary's hot pages got evicted, the user is
+      // about - either the binary's hot pages got evicted, the user is
       // on cold-cache after an annotations save, or a CLI flag changed
       // the cost class. Surface in the [electron] dev log so the user
       // can correlate to clicks without recording a full Performance
@@ -893,7 +893,7 @@ ipcMain.handle("ember:binary", async () => state.binary);
 
 // Hex view: read a byte slice from the currently-loaded binary. Returns
 // the bytes as a base64 string (Electron IPC serialises Uint8Array as
-// a Buffer, which the renderer sees as an Object — base64 round-trips
+// a Buffer, which the renderer sees as an Object - base64 round-trips
 // cleanly through structured clone). `eof` flags a short read so the
 // renderer can stop scrolling.
 ipcMain.handle("ember:readBytes", async (_e, offset, length) => {
@@ -934,7 +934,7 @@ async function loadVaddrMap(binaryPath) {
     const head = Buffer.alloc(4096);
     await fh.read(head, 0, head.length, 0);
     if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) {
-      // ELF — parse the program header table.
+      // ELF - parse the program header table.
       const is64   = head[4] === 2;
       const phoff  = is64 ? Number(head.readBigUInt64LE(0x20)) : head.readUInt32LE(0x1c);
       const phentsize = head.readUInt16LE(is64 ? 0x36 : 0x2a);
@@ -985,7 +985,7 @@ async function loadVaddrMap(binaryPath) {
         const imgBase = (() => {
           const ohOff = peOff + 24;
           if (head[ohOff] === 0x0b && head[ohOff + 1] === 0x02) {
-            // PE32+ — ImageBase at offset 24 of optional header (8 bytes).
+            // PE32+ - ImageBase at offset 24 of optional header (8 bytes).
             return Number(head.readBigUInt64LE(ohOff + 24));
           }
           if (head[ohOff] === 0x0b && head[ohOff + 1] === 0x01) {
@@ -1005,7 +1005,7 @@ async function loadVaddrMap(binaryPath) {
       }
     }
   } catch {
-    // Header parse failed — fall through with empty mapping. Hex view
+    // Header parse failed - fall through with empty mapping. Hex view
     // handles the empty case by refusing vaddr translation.
   } finally {
     try { await fh?.close(); } catch {}
@@ -1085,7 +1085,7 @@ ipcMain.handle("ember:plugins:match", async (_e, pluginId) => {
 // ----- Annotations sidecar -----
 
 // Save patches applied to a user-chosen output path. Prompts a save
-// dialog, then re-runs the patcher with that destination — same code
+// dialog, then re-runs the patcher with that destination - same code
 // path as the temp materialisation, so format / translation logic
 // can't drift between the two flows.
 ipcMain.handle("ember:savePatchedAs", async () => {
@@ -1164,7 +1164,7 @@ ipcMain.handle("ember:applyEmberScript", async (_e, scriptPath, dryRun) => {
 
   // The CLI wrote the merged annotations to annPath (or to its own
   // resolved destination if annPath was null). If the temp .ann is
-  // missing — script was a no-op against an empty sidecar — fall back
+  // missing - script was a no-op against an empty sidecar - fall back
   // to whatever's already in the sidecar.
   let merged = null;
   if (annPath) {
@@ -1186,7 +1186,7 @@ ipcMain.handle("ember:applyEmberScript", async (_e, scriptPath, dryRun) => {
     signatures:   merged?.signatures ?? sidecar.signatures ?? {},
     notes:        merged?.notes      ?? sidecar.notes      ?? {},
     fields:       merged?.fields     ?? sidecar.fields     ?? {},
-    // localRenames + patches never live in the .ann — preserve sidecar.
+    // localRenames + patches never live in the .ann - preserve sidecar.
     localRenames: sidecar.localRenames || {},
     patches:      sidecar.patches      || {},
   };
@@ -1197,7 +1197,7 @@ ipcMain.handle("ember:applyEmberScript", async (_e, scriptPath, dryRun) => {
 // Export the caller's in-memory annotations object to a user-chosen file.
 // We accept the object directly (rather than re-reading the sidecar) so
 // unsaved edits are captured. The file format is just the raw Annotations
-// JSON — importing on another machine feeds this back into saveAnnotations.
+// JSON - importing on another machine feeds this back into saveAnnotations.
 ipcMain.handle("ember:exportAnnotations", async (_e, bp, data) => {
   const defaultName = (bp ? path.basename(bp) : "annotations") + ".ember.json";
   const r = await dialog.showSaveDialog({
@@ -1309,7 +1309,7 @@ ipcMain.handle("ember:importCorpusRenames", async (_e, opts) => {
 });
 
 // Run YARA-like function identification (--identify) and return parsed
-// results. No file picker needed — the built-in profile DB is always
+// results. No file picker needed - the built-in profile DB is always
 // available.
 ipcMain.handle("ember:identify", async (_e, opts) => {
   if (!state.binary) throw new Error("no binary selected");
@@ -1344,27 +1344,27 @@ ipcMain.handle("ember:identify", async (_e, opts) => {
 // Three backend paths, all funnelling through the same IPC streaming
 // protocol so the renderer doesn't care which is active:
 //
-//   openrouter  — HTTPS to openrouter.ai. Requires an API key, billed
+//   openrouter  - HTTPS to openrouter.ai. Requires an API key, billed
 //                 per-token. The only path that works out of the box
 //                 without installing extra binaries.
-//   9router     — HTTP to localhost:20128 (9Router local proxy). Same
+//   9router     - HTTP to localhost:20128 (9Router local proxy). Same
 //                 OpenAI-compatible wire format as OpenRouter so it
 //                 reuses the same streaming parser. API key is
 //                 optional (the proxy only requires one when exposed
 //                 to the internet via REQUIRE_API_KEY=true).
-//   assistant-cli  — spawns `assistant -p` as a subprocess. Uses the
+//   assistant-cli  - spawns `assistant -p` as a subprocess. Uses the
 //                 user's logged-in assistant session (Pro/Max
 //                 subscription or assistant Console API billing;
 //                 configured by running `assistant auth login` once).
-//                 No API key lives in Ember — assistant Code owns its
+//                 No API key lives in Ember - assistant Code owns its
 //                 own credentials.
-//   codex-cli   — spawns `codex exec` as a subprocess. Uses the
+//   codex-cli   - spawns `codex exec` as a subprocess. Uses the
 //                 user's logged-in ChatGPT Plus/Pro subscription
 //                 (configured via `codex login`). OpenAI explicitly
 //                 supports subscription OAuth in third-party tools
 //                 for Codex, so this is on the clean side of ToS.
 //
-// The renderer never sees credentials — the main process handles
+// The renderer never sees credentials - the main process handles
 // every key / token / subprocess stdin. All three paths emit the same
 // `ai:chunk` / `ai:done` / `ai:error` IPC events keyed on a request
 // id, so the chat panel's streaming UI just works uniformly.
@@ -1380,7 +1380,7 @@ const NINE_ROUTER_URL =
   process.env.EMBER_9ROUTER_URL || "http://localhost:20128";
 
 // Per-provider model lists surfaced as autocomplete suggestions. The
-// combobox in the UI lets users type any model id regardless — these
+// combobox in the UI lets users type any model id regardless - these
 // are just the well-known defaults so the dropdown isn't empty on
 // first run.
 const AI_MODEL_SUGGESTIONS = {
@@ -1444,7 +1444,7 @@ async function loadAiConfig() {
     ? j.provider
     : AI_DEFAULT_PROVIDER;
 
-  // Migrate old single-provider config (pre-provider-split) — a
+  // Migrate old single-provider config (pre-provider-split) - a
   // top-level `model` field gets hoisted into `models[provider]` if
   // the per-provider entry doesn't already exist. Keeps the old
   // user's picked model around instead of dropping it to the default.
@@ -1454,7 +1454,7 @@ async function loadAiConfig() {
   }
   const model = models[provider] || defaultModelFor(provider);
 
-  // Decrypt only enough to know whether a key is present — we never
+  // Decrypt only enough to know whether a key is present - we never
   // surface the plaintext back to the renderer.
   let hasKey = false;
   if (j.keyEncrypted && safeStorage.isEncryptionAvailable()) {
@@ -1561,7 +1561,7 @@ ipcMain.handle("ember:ai:listModels", async (_e, provider) => {
 ipcMain.handle("ember:ai:detectCli", async (_e, kind) => detectCli(kind));
 
 // Active in-flight requests, keyed by id so `ai:cancel` can abort.
-// Each entry records a {cancel} hook — HTTP requests use req.destroy,
+// Each entry records a {cancel} hook - HTTP requests use req.destroy,
 // spawned CLIs use proc.kill. The renderer just calls cancel(id).
 const AI_INFLIGHT = new Map();
 let AI_NEXT_ID    = 1;
@@ -1596,7 +1596,7 @@ function extractSystemPrompt(messages) {
 // Shared helper: spawn a subprocess, forward every stdout chunk to
 // the renderer as `ai:chunk`, emit `ai:done` on clean exit, `ai:error`
 // on non-zero exit or spawn failure. `parseChunk` is an optional
-// line-oriented transformer — CLI tools that emit JSONL streaming
+// line-oriented transformer - CLI tools that emit JSONL streaming
 // events use it to pull out just the text delta; text-mode tools
 // pass chunks through unchanged.
 function spawnCliStream(id, send, cmd, args, stdinData, parseChunk, env) {
@@ -1646,7 +1646,7 @@ function spawnCliStream(id, send, cmd, args, stdinData, parseChunk, env) {
   proc.on("error", (err) => {
     send("ember:ai:error",
          err.code === "ENOENT"
-           ? `${cmd} not found on PATH — install it and run "${cmd} ${cmd === "assistant" ? "auth login" : "login"}"`
+           ? `${cmd} not found on PATH - install it and run "${cmd} ${cmd === "assistant" ? "auth login" : "login"}"`
            : `${cmd}: ${err.message}`);
     AI_INFLIGHT.delete(id);
   });
@@ -1692,7 +1692,7 @@ function spawnCliStream(id, send, cmd, args, stdinData, parseChunk, env) {
 // --output-format stream-json`. The format is one JSON event per
 // line; text deltas arrive as `{"type":"assistant","message":{...}}`
 // with nested content. Be permissive about shape drift between
-// versions — any string field nested under content[] is a candidate.
+// versions - any string field nested under content[] is a candidate.
 function parseassistantStreamEvent(line) {
   if (!line || line[0] !== "{") return "";
   let j; try { j = JSON.parse(line); } catch { return ""; }
@@ -1719,7 +1719,7 @@ function parseassistantStreamEvent(line) {
 // Codex `exec --json` prints newline-delimited JSON events; the text
 // deltas sit under `{ "msg": { "type": "agent_message_delta",
 // "delta": "..." } }` in recent versions. Older versions emit the
-// full assistant message under `agent_message` — we dedupe by only
+// full assistant message under `agent_message` - we dedupe by only
 // emitting deltas once the first `agent_message_delta` has appeared.
 function makeCodexParser() {
   let sawDelta = false;
@@ -1759,7 +1759,7 @@ async function buildAiTools() {
 }
 
 // OpenAI-compatible tool definitions in the format chat completions
-// expects. Mapped from our shared tool list — same descriptions, same
+// expects. Mapped from our shared tool list - same descriptions, same
 // JSON Schemas.
 function tools_openaiFormat(tools) {
   if (!tools) return undefined;
@@ -1775,7 +1775,7 @@ function tools_openaiFormat(tools) {
 
 // Run one OpenAI-format chat completion turn against the given
 // transport. Streams text deltas through `send` and accumulates any
-// tool_call deltas (which arrive piecewise per OpenAI's spec —
+// tool_call deltas (which arrive piecewise per OpenAI's spec -
 // `id` + `name` + per-chunk `arguments` strings, keyed by `index`).
 // Resolves to { contentLen, toolCalls } when the stream ends. The
 // caller decides whether to loop (when toolCalls is non-empty) or
@@ -1845,7 +1845,7 @@ function openaiTurn({ transport, reqOpts, body, send, label, registerCancel }) {
 // Drive an OpenAI-format agentic loop: send messages, execute any
 // tool_calls the model emits, append the results, send again. Stop
 // when the model answers without tool calls or the iteration cap is
-// hit. Cap is conservative — most real questions resolve in 1-3
+// hit. Cap is conservative - most real questions resolve in 1-3
 // rounds; anything more usually means the model is stuck.
 async function openrouterAgenticLoop({
   cfg, apiKey, chosenModel, messages, temperature, tools,
@@ -1902,7 +1902,7 @@ async function openrouterAgenticLoop({
 
     if (toolCalls.length === 0) return totalChars;
 
-    // Append the assistant's tool_call message verbatim — OpenAI
+    // Append the assistant's tool_call message verbatim - OpenAI
     // requires this exact shape so the follow-up can reference each
     // call by id when supplying the tool result.
     messages.push({
@@ -1947,7 +1947,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
   };
   // The renderer's model state can drift from the persisted per-
   // provider config (e.g. user opened the AI panel, then swapped
-  // provider in Settings). Config is authoritative — only honour an
+  // provider in Settings). Config is authoritative - only honour an
   // explicit model override if it belongs to this provider's known
   // suggestion list, otherwise fall back to what we have on disk.
   const providerModels = AI_MODEL_SUGGESTIONS[cfg.provider] || [];
@@ -1969,7 +1969,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
       cancel: () => { cancelled = true; currentCancel(); },
     });
 
-    // Run the agentic loop in the background — the IPC handler returns
+    // Run the agentic loop in the background - the IPC handler returns
     // the request id immediately so the renderer can subscribe.
     (async () => {
       try {
@@ -1997,7 +1997,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
   // ---- assistant (via official Agent SDK) ------------------------------
   // We call `@assistant-ai/assistant-agent-sdk`'s `query()` rather than
   // shelling out to `assistant -p` ourselves. The SDK is assistant's
-  // own programmatic surface for assistant Code — it spawns the user's
+  // own programmatic surface for assistant Code - it spawns the user's
   // installed `assistant` binary internally, handles the IPC, AND
   // crucially it accepts subscription OAuth (Pro / Max) where the
   // raw `-p` flag forces assistant_API_KEY billing. Same path t3code
@@ -2011,12 +2011,12 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
     const systemPrompt = extractSystemPrompt(messages);
     // The SDK's `prompt` field takes one user turn for one-shot
     // calls. Multi-turn history is flattened into a single string
-    // with role prefixes — same approach as the previous CLI path
+    // with role prefixes - same approach as the previous CLI path
     // and good enough for the chat panel's typical 2-3 turn arc.
     const flat = flattenMessages(messages);
 
     // Wire Ember's binary-navigation tools into assistant's agent loop
-    // via an in-process MCP server. The SDK runs the loop itself —
+    // via an in-process MCP server. The SDK runs the loop itself -
     // we just supply tool definitions and the model decides when to
     // call them. Each MCP tool name becomes `mcp__ember__<name>`
     // from the model's perspective.
@@ -2056,14 +2056,14 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
           prompt: flat,
           options: {
             ...(chosenModel ? { model: chosenModel } : {}),
-            // REPLACE assistant Code's default system prompt — we don't
+            // REPLACE assistant Code's default system prompt - we don't
             // want the autonomous-coding-agent preamble (use tools,
             // edit files, long explanations). It was diluting our
             // RE-analyst directives, in particular making the model
             // ignore the strict ```renames fenced-block requirement.
             ...(systemPrompt ? { systemPrompt: systemPrompt } : {}),
             // Allow only Ember's MCP tools. The SDK's built-in tools
-            // (Bash, Read, Write, etc.) stay disabled — the analyst
+            // (Bash, Read, Write, etc.) stay disabled - the analyst
             // shouldn't be reading random files; only navigating the
             // loaded binary via our query helpers.
             ...(allowedTools ? { allowedTools } : { allowedTools: [] }),
@@ -2073,7 +2073,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
             // Ember context we attached, no environmental drift.
             settingSources: [],
             // Extended thinking is pure latency for the short,
-            // pattern-recognition answers this panel asks for — the
+            // pattern-recognition answers this panel asks for - the
             // analyst wants the verb-led one-liner now, not after a
             // reasoning preamble.
             thinking: { type: "disabled" },
@@ -2092,7 +2092,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
           // Streaming text arrives as stream_event messages whose
           // inner `event` matches assistant's standard
           // BetaRawMessageStreamEvent shape. We only forward text
-          // deltas — tool_use / start / stop / ping events are
+          // deltas - tool_use / start / stop / ping events are
           // bookkeeping the chat panel doesn't render.
           if (msg.type === "stream_event" &&
               msg.event?.type === "content_block_delta" &&
@@ -2106,7 +2106,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
       } catch (err) {
         const m = err?.message || String(err);
         // Translate the SDK's common failure modes into actionable
-        // guidance — these are the same diagnostics the user would
+        // guidance - these are the same diagnostics the user would
         // see at the CLI but rendered in-panel where they'll be read.
         let friendly = m;
         if (/ENOENT|assistant.*not found/i.test(m)) {
@@ -2182,14 +2182,14 @@ ipcMain.handle("ember:openRecent", async (_e, bp) => {
 // ----- Discord Rich Presence ---------------------------------------------
 //
 // Pushes the user's current activity (binary + function + view) to a
-// running Discord client. Off by default — privacy-first: opening a
+// running Discord client. Off by default - privacy-first: opening a
 // reverse-engineering tool against a binary leaks the binary's name to
 // every Discord friend, which most users don't want by default.
 //
 // The renderer is the source of truth for what to display. It calls
 // `ember.discord.setActivity(payload | null)`; this main-process side
 // owns the RPC connection. Discord-not-running, no-client-id, and
-// disconnect are all silent — we never surface a "couldn't push to
+// disconnect are all silent - we never surface a "couldn't push to
 // Discord" error to the user. Failing to update presence is benign.
 //
 // To enable for distribution: register an Ember application on the
@@ -2304,7 +2304,7 @@ ipcMain.handle("ember:discord:setActivity", async (_e, payload) => {
     smallImageKey:     payload.smallImageKey,
     smallImageText:    discordClampString(payload.smallImageText),
     buttons:           discordSanitizeButtons(payload.buttons),
-    // 0=NAME / 1=STATE / 2=DETAILS — picks which field drives the
+    // 0=NAME / 1=STATE / 2=DETAILS - picks which field drives the
     // inline mini-status under the user's name. xhayper maps this
     // straight to Discord's `status_display_type`.
     statusDisplayType: typeof payload.statusDisplayType === "number" ? payload.statusDisplayType : undefined,
@@ -2332,8 +2332,8 @@ ipcMain.handle("ember:discord:setActivity", async (_e, payload) => {
 // Read-side IPC surface for the ember-agent harness. The harness is a
 // sibling process (`agent/dist/main.js`); we never link against it.
 // The renderer reads:
-//   intel.jsonl  per-binary, append-only — the materialized fold view
-//   events.jsonl per-run — turn-by-turn worker activity
+//   intel.jsonl  per-binary, append-only - the materialized fold view
+//   events.jsonl per-run - turn-by-turn worker activity
 // Locations match the layout that agent/src/intel/log.ts and
 // agent/src/worker.ts write to: ~/.cache/ember/<binary-key>/intel.jsonl
 // and ~/.cache/ember/agent/runs/r-XXXXXX/events.jsonl.
@@ -2457,7 +2457,7 @@ ipcMain.handle("agent:tailRun", async (_e, runId) => {
 // reply. Detached fanout returns immediately by design.
 // Locating the agent CLI + a usable Node.
 //
-// process.execPath in a packaged Electron app is Ember.exe — useless
+// process.execPath in a packaged Electron app is Ember.exe - useless
 // for running a node script. We need a real Node 22+. Resolution
 // order: env override → 'node' on PATH → fail with a clear setup
 // hint. Bundling node would add ~50MB to the installer; we prefer
@@ -2529,7 +2529,7 @@ ipcMain.handle("agent:promote", async (_e, opts) => {
   });
 });
 
-// Agent config — read/write of ~/.config/ember/agent.toml plus a
+// Agent config - read/write of ~/.config/ember/agent.toml plus a
 // runtime defaults JSON sibling (agent.defaults.json) for per-role
 // model + budget choices that aren't sensitive.
 function agentConfigPath() {
@@ -2542,7 +2542,7 @@ function agentDefaultsPath() {
 }
 
 function parseAgentToml(raw) {
-  // Returns arrays per provider — single-key 'key = "X"' form is
+  // Returns arrays per provider - single-key 'key = "X"' form is
   // accepted as a 1-element list; 'keys = ["A","B"]' as full list.
   const out = { assistant: [], openai: [], openrouter: [] };
   let section = "";
@@ -2707,7 +2707,7 @@ ipcMain.handle("agent:cascade", async (_e, opts) => {
 
 app.on("before-quit", async () => {
   // Best-effort clear so the user's profile doesn't show "viewing X"
-  // after the app has quit. Both calls return Promises — a sync try/catch
+  // after the app has quit. Both calls return Promises - a sync try/catch
   // wouldn't trap CONNECTION_ENDED when Discord has already dropped the
   // socket, which surfaces as an UnhandledPromiseRejectionWarning during
   // shutdown. Swallow async rejections too.
@@ -2723,7 +2723,7 @@ app.on("before-quit", async () => {
 // `ember-ui /path/to/binary` (or `npm run dev -- /path/to/binary` in dev)
 // loads that binary on startup. If the UI is already running, the second
 // invocation forwards the path to the existing window via single-instance
-// lock — no second window opens, the live session just switches binaries.
+// lock - no second window opens, the live session just switches binaries.
 //
 // Path is taken from the first non-flag positional that exists on disk.
 // Electron-internal argv (--type=, --user-data-dir=, ...) and dev-only
@@ -2738,7 +2738,7 @@ function pickBinaryFromArgv(argv) {
       if (/\.(js|cjs|mjs|ts|tsx|json)$/i.test(a)) continue;
       const st = require("fs").statSync(a);
       if (st.isFile()) return path.resolve(a);
-    } catch { /* not an existing file — skip */ }
+    } catch { /* not an existing file - skip */ }
   }
   return null;
 }
@@ -2777,7 +2777,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     createWindow();
     if (initialBinary) {
-      // Wait for the renderer's first paint before pushing — without
+      // Wait for the renderer's first paint before pushing - without
       // this the IPC fires before the listener is wired and gets dropped.
       const wins = BrowserWindow.getAllWindows();
       if (wins.length > 0) {

@@ -27,7 +27,7 @@ struct InferredSig {
 };
 
 // Output of binary-wide signature inference. The arena owns every type
-// mentioned by every InferredSig in `sigs` — TypeRefs are stable for the
+// mentioned by every InferredSig in `sigs` - TypeRefs are stable for the
 // lifetime of this struct and only valid when looked up via `arena`.
 struct InferenceResult {
     TypeArena                       arena;
@@ -43,13 +43,13 @@ struct InferenceResult {
 //      the caller's corresponding own arg slots if the data flows there.
 //   3. After convergence, harvest typed return + typed params from each
 //      function's local Phase 2 inference (infer_local_types) and meet
-//      them into the binary-wide arena. (Phase 3 v0: harvest only — no
+//      them into the binary-wide arena. (Phase 3 v0: harvest only - no
 //      iterative re-propagation of typed fields. The worklist version
 //      is Phase 3.5.)
 //
 // Runs the CFG+IR+SSA+cleanup pipeline per function once. For a binary
 // with hundreds of thousands of functions this is expensive the first
-// time — up to a few minutes — but deterministic and cacheable.
+// time - up to a few minutes - but deterministic and cacheable.
 // `cache`, when non-null, is reused for every per-function lift the IPA
 // fixed-point performs. Subsequent passes (e.g. resolve_indirect_calls)
 // can be handed the same cache so a function only ever pays its lift +

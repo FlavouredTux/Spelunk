@@ -51,7 +51,7 @@ add_test(NAME pdb_unit COMMAND ember_pdb_test)
 # Unit test for the AArch64 decoder. Hand-encoded 4-byte instructions
 # cover ALU immediate / shifted-register, move-wide, branches (B/BL/Bcc/
 # CBZ/RET), loads/stores (immediate offset + LDP), and aliases (MOV/MUL/
-# CMP). No fixture binary required — the encodings are derived directly
+# CMP). No fixture binary required - the encodings are derived directly
 # from ARM ARM Table C4-x.
 add_executable(ember_arm64_decoder_test arm64_decoder_test.cpp)
 target_link_libraries(ember_arm64_decoder_test PRIVATE ember::core ember::flags)
@@ -108,7 +108,7 @@ add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)
 # matches. Covers basic L2 exact, sub_* drop, multi-TSV merge name
 # interning, distinct-name guard, T-row runtime transitions,
 # 24-field back-compat, L1 prefix-exact, chunk-vote, and the
-# string-anchor filter — all paths previously had zero coverage.
+# string-anchor filter - all paths previously had zero coverage.
 add_executable(ember_teef_corpus_test teef_corpus_test.cpp)
 target_link_libraries(ember_teef_corpus_test
     PRIVATE ember::core ember::flags)
@@ -210,11 +210,11 @@ ember_build_fixture(return_value)
 # where memory-forwarding has maximum leverage.
 ember_build_fixture(mem_forward OPT "-O0")
 # Goldens for `imports` record absolute addresses, function sizes, and
-# data-xref offsets — every one of which shifts on a gcc point-release
+# data-xref offsets - every one of which shifts on a gcc point-release
 # even when imports.c is unchanged. We've burned multiple commits
 # regenerating against successive GCC point releases; pinning a prebuilt
 # binary against the canonical toolchain is the only stable answer.
-# Source still lives at imports.c — kept for traceability and so the
+# Source still lives at imports.c - kept for traceability and so the
 # binary can be rebuilt with `gcc -O2 -g -fno-stack-protector -no-pie
 # -nostartfiles -Wl,-e,main -o tests/fixtures/imports.prebuilt
 # tests/fixtures/imports.c` when an intentional behaviour change wants
@@ -235,7 +235,7 @@ ember_build_fixture(string_cmp)
 #       tests/fixtures/symresolve_demo.c
 ember_use_prebuilt_fixture(symresolve_demo)
 # Multi-resolver: two functions populating disjoint slot ranges of one
-# fnptr table — the iterative detector has to find both, the merged
+# fnptr table - the iterative detector has to find both, the merged
 # output has to attribute every slot to the right resolver.
 ember_build_fixture(symresolve_multi
     OPT "-O0"
@@ -286,7 +286,7 @@ ember_build_fixture(global_resolution)
 # -O0 so dbg_marker stays a real function (no inlining, no tail-call
 # fold) and gets a stable symbol address the smoke test can set a
 # software breakpoint at. Built once non-PIE (dbg_target) and once
-# PIE (dbg_target_pie) so the smoke tests cover both load shapes —
+# PIE (dbg_target_pie) so the smoke tests cover both load shapes -
 # slide-aware breakpoint resolution flows through the same path for
 # both, with the slide degenerating to 0 in the non-PIE case.
 ember_build_fixture(dbg_target     OPT "-O0")
@@ -305,7 +305,7 @@ ember_build_fixture(dbg_exec_child  OPT "-O0")
 # Linux ptrace backend, sets a breakpoint at `dbg_marker`, asserts
 # the bp fires and the process exits with code 42. Runs against
 # both fixtures so the slide-correction path is exercised. Linux /
-# x86-64 only — matches the backend's CMake gate. yama ptrace_scope
+# x86-64 only - matches the backend's CMake gate. yama ptrace_scope
 # is irrelevant for child tracees so any sysctl works.
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_executable(ember_dbg_smoke_test dbg_smoke_test.cpp)
@@ -532,7 +532,7 @@ ember_golden_test(
 )
 
 # Fingerprint stability: the address-independent content hash per function.
-# If this drifts, the rename TSV stops matching old databases — bump
+# If this drifts, the rename TSV stops matching old databases - bump
 # the "v1" schema token in fingerprint.cpp when that's intentional, and
 # regenerate goldens.
 ember_golden_test(
@@ -565,7 +565,7 @@ ember_golden_test(
 
 # Same flag with a substring filter. Locks case-insensitive name-column
 # matching. `__BINARY__` is needed so the pattern lands *after* the binary
-# positional — parse_args only treats the second positional as the
+# positional - parse_args only treats the second positional as the
 # filter pattern.
 ember_golden_test(
     NAME    imports_functions_filtered
@@ -577,7 +577,7 @@ ember_golden_test(
 # --collisions: every name and every fingerprint bound to >1 address.
 # The imports fixture has the deliberate `twin_a` / `twin_b` pair so a
 # regression in collect_collisions either drops them or invents new
-# ones — both shapes the golden catches immediately.
+# ones - both shapes the golden catches immediately.
 ember_golden_test(
     NAME    imports_collisions
     FIXTURE imports
@@ -598,7 +598,7 @@ ember_golden_test(
 # --symtable: walks .dynstr (a real packed NUL-terminated string table)
 # at its known fixture VA. Locks the table-walk semantics (leading empty
 # entry, internal NUL handling, non-printable termination) and the
-# keyword-bucketed `# categories:` bonus block — `getenv` here lands in
+# keyword-bucketed `# categories:` bonus block - `getenv` here lands in
 # the env bucket. The fixture's pinned bytes mean these offsets / VAs
 # don't drift unless imports.prebuilt is regenerated.
 ember_golden_test(
@@ -617,8 +617,8 @@ ember_expect_fail_test(
 
 # --symresolve: pairs the string table at g_names with the fnptr table
 # (g_fns) and per-slot callsites. Locks (a) the resolver-detection
-# heuristic — longest stride-8 write run picks `resolver` correctly
-# when no other function emits a comparable run — and (b) the per-row
+# heuristic - longest stride-8 write run picks `resolver` correctly
+# when no other function emits a comparable run - and (b) the per-row
 # callsite counts (alpha=1, charlie=2, others=0). The fixture is built
 # at -O0 so each slot store is a separate `mov qword [rip+disp], imm`
 # rather than a vectorized 16-byte block, which is what a real
@@ -630,7 +630,7 @@ ember_golden_test(
     GOLDEN  symresolve_demo.basic.txt
 )
 
-# Multi-resolver: locks the iterative detector — picks resolver_tail
+# Multi-resolver: locks the iterative detector - picks resolver_tail
 # (5 slots) first, then resolver_head (3 slots) on the second pass,
 # merges them in base_va order so slot 0 attributes to head and slot 3
 # attributes to tail. Coverage = 8/8 = 100% goes to stderr (not in
@@ -667,7 +667,7 @@ ember_golden_test(
 
 # --symuses --min-uses 2: drops every row below the cutoff, including
 # the <full_table_walker> row (whose lea-to-base count of 1 is a low
-# bound — same threshold rule as for symbol rows).
+# bound - same threshold rule as for symbol rows).
 ember_golden_test(
     NAME    symresolve_demo_symuses_min2
     FIXTURE symresolve_demo
@@ -676,7 +676,7 @@ ember_golden_test(
 )
 
 # --symuses against the base+offset access pattern. The consumers
-# never reference entry VAs directly — they hold the table base in a
+# never reference entry VAs directly - they hold the table base in a
 # register and add a constant offset before each use. Locks (a) the
 # scope-scan path correctly attributing the `add reg, IMM`
 # displacements to the right entries (alpha at 0x1, delta at 0x15,
@@ -699,7 +699,7 @@ ember_golden_test(
 )
 
 # imm64-stored slot path. The strict data_xref scan would find zero
-# refs to g_str_table itself — the only static evidence the table is
+# refs to g_str_table itself - the only static evidence the table is
 # in use is `mov rax, [rip+g_table_ptr]` followed by `add rax, IMM`.
 # Locks the loose-scope path: walk readable sections for qwords ==
 # table_va, admit slot-readers as scope candidates, then run the
@@ -855,7 +855,7 @@ ember_golden_test(
     GOLDEN  string_cmp.print_marker.pseudo.txt
 )
 
-# printf/fprintf — variadic arg trimming driven by format-string parsing.
+# printf/fprintf - variadic arg trimming driven by format-string parsing.
 ember_golden_test(
     NAME    printf_one_arg_pseudo
     FIXTURE printf_noise
@@ -925,11 +925,11 @@ ember_golden_test(
 # ---- arith (IR Mod op + do-while structurer) -------------------------------
 #
 # Two regressions land here. First: `IrOp::Mod` was added in adffa81 and
-# until now had no direct golden — divmod_runtime exercises a runtime
+# until now had no direct golden - divmod_runtime exercises a runtime
 # `% b` (gcc emits `IDIV r/m32`, the lifter raises it to a Mod alongside
 # the Div). Second: the structurer's do-while detection now accepts
 # loops with multiple back-edge predecessors (one cond-and-exit tail
-# plus inner unconditional jumps from skip arms) — dowhile_with_skip
+# plus inner unconditional jumps from skip arms) - dowhile_with_skip
 # is the smallest such shape and locks the rendered output so a future
 # regression that falls back to goto soup shows up as a clean diff.
 
@@ -1035,7 +1035,7 @@ ember_golden_test(
     ARGS    "--callees|wrap_strlen|--json"
     GOLDEN  tail_call.wrap_strlen.callees.json.txt
 )
-# Leaf function with no calls — acceptance criterion: empty list, exit 0.
+# Leaf function with no calls - acceptance criterion: empty list, exit 0.
 ember_golden_test(
     NAME    tail_call_inner_callees_empty
     FIXTURE tail_call
@@ -1171,7 +1171,7 @@ ember_golden_test(
 # ---- mem_forward (stack-slot load forwarding) ------------------------------
 #
 # Compiled at -O0 so every local round-trips the stack. The golden captures
-# the post-forwarding pseudo-C — if the GVN/memory-forward passes regress,
+# the post-forwarding pseudo-C - if the GVN/memory-forward passes regress,
 # `return` here will stop referencing `y` via a forwarded temp and start
 # reading from a stack-slot load again.
 
@@ -1531,7 +1531,7 @@ if(Python3_Interpreter_FOUND)
     #
     # Locks the AArch64 decoder + lifter + structurer + emitter pipeline
     # against regressions on Linux without needing an ARM cross compiler.
-    # The function is `add x0, x0, #42; ret` — minimal but exercises ALU
+    # The function is `add x0, x0, #42; ret` - minimal but exercises ALU
     # immediate, the AAPCS64 return register, and ret-via-x30.
     set(_arm64_tiny "${_build_dir}/arm64_tiny")
     add_custom_command(
@@ -1569,7 +1569,7 @@ if(Python3_Interpreter_FOUND)
     #               .text/.rdata/.pdata, one IAT import, one export,
     #               Win64 prologue, RUNTIME_FUNCTION table) ------------------
     #
-    # Same Python-generator approach as macho_tiny — no Windows toolchain
+    # Same Python-generator approach as macho_tiny - no Windows toolchain
     # required, so tests run on Linux CI. Exercises the PE loader end-to-end:
     # headers, sections, IAT import resolution, named export, PDATA-driven
     # function-start discovery, and the Win64 ABI path in the lifter.
@@ -1699,7 +1699,7 @@ if(Python3_Interpreter_FOUND)
     #                    Memory64List with one r-x range carrying tiny
     #                    x86_64 code, ModuleList with one fake module) ----
     #
-    # Same Python-generator approach as macho_tiny / pe_tiny — runs on
+    # Same Python-generator approach as macho_tiny / pe_tiny - runs on
     # Linux CI without a Windows toolchain. Exercises MinidumpBinary's
     # header + stream-directory parse, SystemInfo→arch mapping, and the
     # bytes_at(va) override. The decompile golden also locks in the
@@ -1789,7 +1789,7 @@ if(Python3_Interpreter_FOUND)
     )
 
     # extracted_main has a real stack frame and the PDB's S_REGREL32
-    # records name its two int locals "i" and "j" — this golden locks
+    # records name its two int locals "i" and "j" - this golden locks
     # the full path: TPI / module-stream / S_REGREL32 → PdbLocalHint
     # → frame layout merge → emitted declarations and body references.
     ember_golden_test(
@@ -1801,7 +1801,7 @@ if(Python3_Interpreter_FOUND)
 
     # ---- raw_regions_tiny (manifest + a single 4-byte code blob) -------
     #
-    # No magic bytes — loaded via `--regions <manifest>`. Stage the
+    # No magic bytes - loaded via `--regions <manifest>`. Stage the
     # source-tree fixture into the build dir so the manifest can use a
     # relative `code.bin` path that resolves at test-run time.
     set(_rr_src "${_fixture_dir}/raw_regions_tiny")

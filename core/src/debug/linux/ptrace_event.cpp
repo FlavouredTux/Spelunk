@@ -102,7 +102,7 @@ Result<void> LinuxTarget::cont() {
                 ts.paused = false;
                 continue;
             }
-            // bp vanished from the table while we were parked — nothing
+            // bp vanished from the table while we were parked - nothing
             // to step over, just resume.
             ts.parked_at_bp   = 0;
             ts.step_over_addr = 0;
@@ -163,7 +163,7 @@ Result<Event> LinuxTarget::wait_event() {
             return Event{EvThreadExited{tid, -sig}};
         }
         if (!WIFSTOPPED(status)) {
-            // WIFCONTINUED or some unknown status — drop and loop.
+            // WIFCONTINUED or some unknown status - drop and loop.
             continue;
         }
 
@@ -219,7 +219,7 @@ Result<Event> LinuxTarget::wait_event() {
                 // PTRACE_INTERRUPT or initial seize-stop. PC = current rip.
                 return Event{EvStopped{tid, read_rip(kt)}};
             }
-            // Unrecognised event — fall through to generic signal.
+            // Unrecognised event - fall through to generic signal.
             return Event{EvSignal{tid, stopsig}};
         }
 
@@ -242,7 +242,7 @@ Result<Event> LinuxTarget::wait_event() {
             if (match) {
                 return Event{EvSyscallStop{tid, nr, pc, entry}};
             }
-            // Filtered out — keep going. Re-issue PTRACE_SYSCALL so
+            // Filtered out - keep going. Re-issue PTRACE_SYSCALL so
             // we still see the matching exit (or the next entry).
             const int sig = ts.pending_signal;
             ts.pending_signal = 0;
@@ -307,7 +307,7 @@ Result<Event> LinuxTarget::wait_event() {
                 }
             }
 
-            // No step in flight — must be a fresh int3 hit.
+            // No step in flight - must be a fresh int3 hit.
             user_regs_struct ur{};
             if (::ptrace(PTRACE_GETREGS, kt, nullptr, &ur) == 0) {
                 const addr_t hit_pc = ur.rip - 1;
@@ -317,7 +317,7 @@ Result<Event> LinuxTarget::wait_event() {
                     ts.parked_at_bp = bp->info.id;
                     return Event{EvBreakpointHit{tid, bp->info.id, hit_pc}};
                 }
-                // Not a debugger-placed breakpoint — try the int3
+                // Not a debugger-placed breakpoint - try the int3
                 // resolver callback if one is registered.
                 if (const auto& resolver = int3_resolver()) {
                     auto resolution = resolver(hit_pc);

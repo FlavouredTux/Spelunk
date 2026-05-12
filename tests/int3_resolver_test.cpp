@@ -40,7 +40,7 @@ void check_eq(const A& got, const B& want, const char* ctx) {
 //   0x401012  5D                         ; pop rbp
 //   0x401013  C3                         ; ret
 //   0x401014  CC CC CC CC CC CC CC CC CC CC CC CC  ; 12-byte trailing padding
-//   0x401020  55                         ; push rbp (fn2 entry — __debugbreak)
+//   0x401020  55                         ; push rbp (fn2 entry - __debugbreak)
 //   0x401021  CC                         ; int3 (the debugbreak body)
 //   0x401022  5D                         ; pop rbp
 //   0x401023  C3                         ; ret
@@ -119,7 +119,7 @@ public:
         fn2.is_import = false;
         syms_.push_back(std::move(fn2));
 
-        // IsDebuggerPresent import — triggers anti-debug heuristic.
+        // IsDebuggerPresent import - triggers anti-debug heuristic.
         ember::Symbol dbg;
         dbg.name      = "IsDebuggerPresent";
         dbg.addr      = 0x401040;
@@ -161,7 +161,7 @@ private:
     std::vector<ember::Symbol> syms_{};
 };
 
-// A binary without anti-debug imports — to test the non-anti-debug path.
+// A binary without anti-debug imports - to test the non-anti-debug path.
 class CleanMockBinary final : public ember::Binary {
 public:
     CleanMockBinary() {
@@ -312,7 +312,7 @@ int main() {
         MockBinary b;
         auto results = ember::resolve_embedded_int3s(b);
 
-        // We expect at least some results — the binary has CC bytes.
+        // We expect at least some results - the binary has CC bytes.
         check(results.size() > 0, "resolve_embedded_int3s should find CC bytes");
 
         // The leading CC padding at 0x401000 should be classified as Padding.

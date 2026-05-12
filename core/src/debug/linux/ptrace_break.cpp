@@ -35,7 +35,7 @@ constexpr u8 kInt3 = 0xCC;
 
 Result<BreakpointId> LinuxTarget::set_breakpoint(addr_t va) {
     if (auto* existing = find_bp_at(va)) {
-        // Idempotent — same address yields the same id, regardless of
+        // Idempotent - same address yields the same id, regardless of
         // whether the underlying byte is currently armed.
         return existing->info.id;
     }
@@ -87,7 +87,7 @@ namespace ember::debug::linux_ {
 
 // Drop kernel-bound state after PTRACE_EVENT_EXEC. Software bp
 // patches are gone with the dead address space and DR slots were
-// auto-cleared by exec. Syscall-catch settings are NOT reset —
+// auto-cleared by exec. Syscall-catch settings are NOT reset -
 // they're a tracing mode, not address-space-bound, and we want
 // `catch syscall` to follow execve into the new image.
 void LinuxTarget::clear_all_after_exec() {

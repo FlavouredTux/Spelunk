@@ -78,7 +78,7 @@ constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
     return false;
 }
 
-// `t<digits>` and `a<digits>` are SSA temps and arg names — alpha-rename
+// `t<digits>` and `a<digits>` are SSA temps and arg names - alpha-rename
 // in order-of-first-appearance. Other identifiers (callee names, struct
 // fields, types, externs) are anchor points and stay verbatim.
 [[nodiscard]] bool is_temp_ident(std::string_view s) noexcept {
@@ -104,12 +104,12 @@ constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
 }
 
 // Classify a hex / decimal literal. Two principles:
-//   1. Small literals (<= 0x10000) keep their literal value — these are
+//   1. Small literals (<= 0x10000) keep their literal value - these are
 //      bit masks, struct offsets, flag bits, syscall numbers, TLS slot
 //      offsets, etc., and they're the dominant identifying signal that
 //      distinguishes otherwise shape-equivalent functions
 //      (e.g. isalpha vs isdigit only differ in the bit they mask).
-//   2. Anything bigger goes to ADDR — those are rip-relative addresses
+//   2. Anything bigger goes to ADDR - those are rip-relative addresses
 //      that ASLR/relocation perturbs across builds.
 [[nodiscard]] u64 literal_class(u64 v) noexcept {
     if (v <= 0x10000u) {
@@ -120,7 +120,7 @@ constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
         return fnv1a(std::string_view(buf, static_cast<std::size_t>(n)));
     }
     // Negative i64 immediates land here too (high bits set). For those
-    // we still want a stable class — emit a sign-extended-class token.
+    // we still want a stable class - emit a sign-extended-class token.
     const i64 s = static_cast<i64>(v);
     if (s < 0 && s >= -0x10000) {
         char buf[24];
@@ -148,7 +148,7 @@ constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
     return v;
 }
 
-// Strip everything outside the function body — return type, signature,
+// Strip everything outside the function body - return type, signature,
 // trailing closing brace. The emitter's signature line carries
 // type-inference results that drift between builds (the signature
 // might be `u64` in one build and `double` in another for the same
@@ -225,7 +225,7 @@ void tokenize_canonical(std::string_view src, std::vector<u64>& out) {
                 continue;
             }
             // Any other identifier (callee name, type, struct field,
-            // extern global) is an anchor — preserve verbatim. This is
+            // extern global) is an anchor - preserve verbatim. This is
             // exactly the cross-version stable signal: sigs don't
             // shift just because the compiler renumbered SSA temps.
             out.push_back(fnv1a(ident));
@@ -248,7 +248,7 @@ void tokenize_canonical(std::string_view src, std::vector<u64>& out) {
             ++i;
             continue;
         }
-        // ---- unknown byte — skip ----
+        // ---- unknown byte - skip ----
         ++i;
     }
 }
@@ -312,13 +312,13 @@ TeefSig teef_from_pseudo_c(std::string_view pseudo_c) {
 //
 // The text-based path (lift → structure → emit pseudo-C → tokenize the
 // string → hash) was bottlenecked on the emitter's recursive expression
-// inliner and std::format calls — profiling showed those alone took
+// inliner and std::format calls - profiling showed those alone took
 // >70% of compute time. Since the canonical hash doesn't actually need
 // the string, we skip the emitter and walk the structured IR directly,
 // hashing canonical tokens straight into the bigram stream.
 //
 // Token alphabet (one u64 each):
-//   • Region kinds (Block, Seq, IfThen, IfElse, While, ...) — fixed
+//   • Region kinds (Block, Seq, IfThen, IfElse, While, ...) - fixed
 //     per-RegionKind hash, plus structural delimiters.
 //   • IR opcode names from op_name(IrOp).
 //   • Operand classes:
@@ -326,7 +326,7 @@ TeefSig teef_from_pseudo_c(std::string_view pseudo_c) {
 //       Temp → alpha-rename(temp_id)
 //       Imm  → SMI / MEDI / ADDR / literal-as-string for v<16
 //       Flag → flag name verbatim
-//   • Anchor names (callee names, intrinsic names, import targets) —
+//   • Anchor names (callee names, intrinsic names, import targets) -
 //     fnv1a of the verbatim string, kept across canonicalization.
 
 namespace {
@@ -358,7 +358,7 @@ struct IrTokenizer {
     // Resolve an absolute VA to a stable name token. Try in order:
     //   PLT slot → import name (call sites)
     //   GOT slot → import name (the per-instance global pointer family
-    //     — __ctype_b_loc, __errno_location, __h_errno_location all
+    //     - __ctype_b_loc, __errno_location, __h_errno_location all
     //     read distinct GOT slots that resolve to distinct symbols)
     //   defined object → its symbol name (rip-rel global accesses)
     //   nothing matches → ADDR class
@@ -385,7 +385,7 @@ struct IrTokenizer {
 
     void emit_value(const IrValue& v) {
         // Type tag: i1, i8, ..., i64, f32/f64. Distinguishes operand
-        // shapes — `Add i32` (likely an int) hashes differently from
+        // shapes - `Add i32` (likely an int) hashes differently from
         // `Add i64` (likely a pointer offset).
         out.push_back(fnv1a(type_name(v.type)));
         switch (v.kind) {
@@ -430,7 +430,7 @@ struct IrTokenizer {
         if (inst.op == IrOp::Nop) return;
         out.push_back(fnv1a(op_name(inst.op)));
         // Segment-prefixed loads/stores (fs:[..] for TLS, gs:[..] for
-        // PEB) are distinguishing signal — `read TLS canary` vs `read
+        // PEB) are distinguishing signal - `read TLS canary` vs `read
         // ordinary global` look the same opcode-wise but the segment
         // tags them apart.
         if (inst.segment != Reg::None) {
@@ -446,7 +446,7 @@ struct IrTokenizer {
             // patterns. Repeat the resolved-name token 3x in the
             // stream so it dominates both the exact hash and the
             // bigram-derived MinHash. Unresolved (kClassAddr) calls
-            // get a single token as before — no weighting boost when
+            // get a single token as before - no weighting boost when
             // we can't tell what's being called.
             const u64 t = resolve_addr_token(inst.target1);
             out.push_back(t);
@@ -456,7 +456,7 @@ struct IrTokenizer {
             }
         } else if (inst.op == IrOp::Intrinsic && !inst.name.empty()) {
             // Intrinsic names (cpuid, rdtsc, syscall, x64.lock, etc) are
-            // also strong anchors — same 3x weighting.
+            // also strong anchors - same 3x weighting.
             const u64 nameTok = fnv1a(inst.name);
             out.push_back(kIntrinsicTok);
             out.push_back(nameTok);
@@ -529,7 +529,7 @@ namespace {
 }
 
 // Compute a fresh TeefSig over just `r`'s subtree. Each call uses its
-// own IrTokenizer, so the alpha-rename map is independent — this is
+// own IrTokenizer, so the alpha-rename map is independent - this is
 // the whole point: a chunk hashes the same regardless of where in
 // its parent it sits.
 [[nodiscard]] TeefSig sig_for_region(const Binary& b, const IrFunction& fn,
@@ -551,7 +551,7 @@ namespace {
 // Seq / Block regions, but if they're big enough they're highly
 // identifying. So we accept Seq / Block too, with the size threshold
 // (collect_chunks's min_insts gate) doing the actual filtering. Goto
-// / Return / Continue / Break / Empty stay excluded — they're
+// / Return / Continue / Break / Empty stay excluded - they're
 // terminators with no meaningful body.
 [[nodiscard]] bool is_chunkable_kind(RegionKind k) noexcept {
     switch (k) {
@@ -639,12 +639,12 @@ namespace {
 // IR-block-count usually match exactly; the few cases where lift
 // splits or merges a block produce slightly different hashes, but
 // since the corpus is also built from CFG-topo now, both sides agree.
-//   • num_blocks  — coarse size signal
-//   • num_edges   — sum of successors over all blocks
-//   • max_in_degree, max_out_degree — branching density
-//   • num_loop_headers — blocks with > 1 predecessor (proxy for loops
+//   • num_blocks  - coarse size signal
+//   • num_edges   - sum of successors over all blocks
+//   • max_in_degree, max_out_degree - branching density
+//   • num_loop_headers - blocks with > 1 predecessor (proxy for loops
 //     and re-entry points; cleanup-stable)
-//   • num_returns — blocks whose CFG kind is BlockKind::Return
+//   • num_returns - blocks whose CFG kind is BlockKind::Return
 [[nodiscard]] u64 compute_topo_hash_from_cfg(const Function& fn) noexcept {
     u32 num_blocks       = static_cast<u32>(fn.blocks.size());
     u32 num_edges        = 0;
@@ -675,15 +675,15 @@ namespace {
 // instruction stream in address order and folds (mnemonic, operand-shape,
 // reg identity, classed immediates) into a single u64. Skipped (returns
 // 0) unless the function is small enough that a literal byte signature
-// is the right tier — large fns are better served by L2/L4. The byte
+// is the right tier - large fns are better served by L2/L4. The byte
 // budget (≤ 64 bytes, ≤ 16 insns) targets the FLIRT sweet spot: tiny
 // thunks, getters, stubs that L2 cleanup-canonical and L4 K=64 traces
 // can't tell apart.
 //
 // Immediates are kept verbatim when ≤ 0x10000 (struct offsets, syscall
-// numbers, flag bits — distinguishing signal) and classed to ADDR
+// numbers, flag bits - distinguishing signal) and classed to ADDR
 // otherwise (rip-relative globals shift across builds). Register
-// identity is preserved literally — a `mov rax, [rdi]` is NOT equivalent
+// identity is preserved literally - a `mov rax, [rdi]` is NOT equivalent
 // to `mov rcx, [rsi]` at this tier; that's exactly the discriminating
 // power FLIRT relies on.
 [[nodiscard]] u64 compute_prefix_hash(const Function& fn) noexcept {
@@ -735,7 +735,7 @@ namespace {
                         h = mix64(h, static_cast<u64>(op.imm.size));
                         break;
                     case Operand::Kind::Relative:
-                        // Branch/call relative — the target is address-
+                        // Branch/call relative - the target is address-
                         // dependent, so class it. Direction (forward/back)
                         // is preserved by the sign of offset.
                         h = mix64(h, op.rel.offset > 0 ? 1u : 0u);
@@ -750,7 +750,7 @@ namespace {
     return h;
 }
 
-// Tail half of compute_teef_with_chunks / compute_teef_max — given a
+// Tail half of compute_teef_with_chunks / compute_teef_max - given a
 // post-cleanup IR, run the structurer and produce L2 + chunks. Returns
 // a partially-filled TeefFunction (whole/chunks). Caller is responsible
 // for setting topo_hash and behav.
@@ -834,7 +834,7 @@ compute_teef_max(const Binary& b, addr_t fn_start,
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
-    // Compute the topology hash directly from the CFG — pre-lift, so
+    // Compute the topology hash directly from the CFG - pre-lift, so
     // we can use it as an early-exit gate. The lift + SSA + cleanup
     // pipeline is the dominant per-fn cost on obfuscated targets
     // (200+ ms on a heavy fn); skipping it for fns that can't match
@@ -846,7 +846,7 @@ compute_teef_max(const Binary& b, addr_t fn_start,
 
     // L0 pre-filter: when the caller passes the corpus's topo-hash
     // set, fns whose topology isn't represented in the corpus return
-    // early with only topo populated — no lift, no L2, no L4. The
+    // early with only topo populated - no lift, no L2, no L4. The
     // recognizer ignores fns with `whole.exact_hash == 0`, so these
     // entries effectively don't participate in matching.
     if (opts.l4_topo_filter && !opts.l4_topo_filter->contains(out.topo_hash)) {
@@ -864,10 +864,10 @@ compute_teef_max(const Binary& b, addr_t fn_start,
     if (auto rv = ssa.convert(*ir_r); !rv) return out;
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
-    // L4 first — operates on the cleaned flat IR, no structurer needed.
+    // L4 first - operates on the cleaned flat IR, no structurer needed.
     if (!opts.skip_l4) out.behav = compute_behav_sig_from_ir(*ir_r, b);
 
-    // L2 — structurer + region tokenization on the same IR.
+    // L2 - structurer + region tokenization on the same IR.
     auto l2 = compute_l2_from_ir(b, *ir_r, opts.min_chunk_insts);
     out.whole  = std::move(l2.whole);
     out.chunks = std::move(l2.chunks);

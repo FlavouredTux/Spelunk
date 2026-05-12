@@ -292,7 +292,7 @@ parse_cie(Reader& cr, u64 cie_vaddr) {
             u8 ignore = 0;
             (void)cr.get(ignore);
         } else {
-            // Unknown augmentation char — rest of augmentation_data is
+            // Unknown augmentation char - rest of augmentation_data is
             // opaque; jump past it via aug_end below.
             break;
         }

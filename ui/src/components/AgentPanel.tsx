@@ -47,7 +47,7 @@ class AgentErrorBoundary extends Component<
 
 // Agent harness dashboard. Read-only views over agent/src/intel/log.ts
 // JSONL state plus the per-run events.jsonl files. Polls every 2s
-// while open — the underlying writes are append-only so partial reads
+// while open - the underlying writes are append-only so partial reads
 // are always consistent. No streaming subscription mechanism needed.
 
 declare global {
@@ -171,7 +171,7 @@ function AgentPanelInner(props: {
     // Filter runs by current binary. Runs ≥1.0.2 emit `binary` in
     // their start event so we can filter cleanly. Older runs (no
     // `binary` field) are kept visible to avoid losing history during
-    // the upgrade window — they'll naturally age out as new runs
+    // the upgrade window - they'll naturally age out as new runs
     // accumulate. Empty binaryPath shows everything (panel opened
     // without a binary loaded).
     const runs = useMemo(() => {
@@ -192,7 +192,7 @@ function AgentPanelInner(props: {
             r.last !== "budget_exhausted" &&
             Date.now() - r.mtime < 5 * 60_000).length;
         // Workers that completed (any terminal state) without filing a
-        // claim — the libloader.so failure mode. Surfacing this lets the
+        // claim - the libloader.so failure mode. Surfacing this lets the
         // user spot bad-faith targets early.
         const finishedRuns = runs.filter((r) =>
             r.last === "done" || r.last === "max_turns" ||
@@ -315,7 +315,7 @@ function AgentPanelInner(props: {
                 <Stat label="swarm spend" value={fmtUsd(stats.totalUsd)} tint={C.yellow} />
             </div>
 
-            {/* Dashboard — disputes, claims, runs */}
+            {/* Dashboard - disputes, claims, runs */}
             <div style={{
                 flex: 1,
                 display: "grid",
@@ -559,7 +559,7 @@ function ClaimRow(props: { claim: Claim; mark: string }) {
     const value = c.value ?? "(missing)";
     const evidence = c.evidence ?? "";
     const confRaw = (c as { confidence?: number }).confidence;
-    const confStr = typeof confRaw === "number" && Number.isFinite(confRaw) ? confRaw.toFixed(2) : "—";
+    const confStr = typeof confRaw === "number" && Number.isFinite(confRaw) ? confRaw.toFixed(2) : "-";
     const color = ROLE_COLOR[agent.split("-")[0]] ?? C.text;
     return (
         <div style={{
@@ -609,15 +609,15 @@ function ClaimRow(props: { claim: Claim; mark: string }) {
 function RecentClaimsColumn(props: { recent: Claim[]; onNavigate?: (addr: string) => void }) {
     return (
         <Column title="Recent claims" subtitle="last 30 entries">
-            {props.recent.length === 0 && <Empty msg="No claims yet — spawn workers via fanout." />}
+            {props.recent.length === 0 && <Empty msg="No claims yet - spawn workers via fanout." />}
             {props.recent.map((c, idx) => {
-                const subject  = c.subject   ?? "—";
-                const predicate = c.predicate ?? "—";
+                const subject  = c.subject   ?? "-";
+                const predicate = c.predicate ?? "-";
                 const value    = c.value     ?? "(missing)";
                 const agent    = c.agent     ?? "?";
                 const confRaw  = (c as { confidence?: number }).confidence;
                 const confStr  = typeof confRaw === "number" && Number.isFinite(confRaw)
-                    ? confRaw.toFixed(2) : "—";
+                    ? confRaw.toFixed(2) : "-";
                 const roleColor = ROLE_COLOR[agent.split("-")[0]] ?? C.textMuted;
                 const predColor = PRED_COLOR[predicate] ?? C.textMuted;
                 const isHighConf = typeof confRaw === "number" && confRaw >= 0.85;

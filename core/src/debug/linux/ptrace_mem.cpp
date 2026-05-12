@@ -46,7 +46,7 @@ LinuxTarget::read_mem(addr_t va, std::span<std::byte> out) {
         if (n < 0) {
             if (errno == EINTR) continue;
             // Crossing into an unmapped page is a short read, not an
-            // error — caller already inspects the returned count.
+            // error - caller already inspects the returned count.
             if (errno == EIO || errno == EFAULT) break;
             return std::unexpected(errno_io("pread /proc/.../mem"));
         }

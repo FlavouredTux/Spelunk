@@ -5,24 +5,24 @@
 // backend, but the underlying mechanism is completely different.
 // Instead of waitpid()-ing on tracee stops, we poll(2) over:
 //
-//   * pidfd       — wakes when the target task exits
-//   * each slot.fd — wakes when its perf_event_open BP/WP fires
+//   * pidfd       - wakes when the target task exits
+//   * each slot.fd - wakes when its perf_event_open BP/WP fires
 //
 // On a perf wake-up we drain the slot's mmap ring buffer. Records
 // of interest:
 //
-//   PERF_RECORD_SAMPLE   — BP/WP fired. Carries IP, TID, and the
+//   PERF_RECORD_SAMPLE   - BP/WP fired. Carries IP, TID, and the
 //                          full GPR snapshot at the trap point.
-//   PERF_RECORD_FORK     — kernel is telling us a new task entered
+//   PERF_RECORD_FORK     - kernel is telling us a new task entered
 //                          the inheritance tree (a clone'd thread,
 //                          since we set attr.inherit=1).
-//   PERF_RECORD_EXIT     — task left.
-//   PERF_RECORD_LOST     — ring overflowed; we surface a diagnostic
+//   PERF_RECORD_EXIT     - task left.
+//   PERF_RECORD_LOST     - ring overflowed; we surface a diagnostic
 //                          but keep going.
 //
 // The sample is the only path by which the perf backend ever gets
 // register state, so we cache it per-thread for get_regs to read.
-// We deliberately do NOT SIGSTOP the target on a hit — staying
+// We deliberately do NOT SIGSTOP the target on a hit - staying
 // quiet is the whole point of this backend (the ptrace backend
 // already stops everything; users pick perf when they want to be
 // invisible). interrupt() is the explicit "stop now" hook for cases
@@ -123,7 +123,7 @@ void perf_drain_into_target(PerfTarget& tgt, int slot_idx, std::size_t page) {
                         data_base, sizeof(h) - hdr_left);
         }
 
-        if (h.size < sizeof(h) || h.size > data_size) break;  // corrupt — bail
+        if (h.size < sizeof(h) || h.size > data_size) break;  // corrupt - bail
 
         PendingRecord rec;
         rec.type     = h.type;
@@ -230,7 +230,7 @@ Result<void> PerfTarget::interrupt() {
 Result<void> PerfTarget::step(ThreadId) {
     return std::unexpected(Error::unsupported(
         "debugger: single-step is not available on the perf backend "
-        "(no TF flag access without ptrace) — switch to the ptrace "
+        "(no TF flag access without ptrace) - switch to the ptrace "
         "backend, or set a HW BP at the next instruction"));
 }
 
@@ -238,7 +238,7 @@ Result<void>
 PerfTarget::set_syscall_catch(bool, std::span<const u32>) {
     return std::unexpected(Error::unsupported(
         "debugger: syscall catch is not implemented on the perf "
-        "backend — switch to the ptrace backend"));
+        "backend - switch to the ptrace backend"));
 }
 
 Result<void> PerfTarget::clear_syscall_catch() {
@@ -256,7 +256,7 @@ Result<Event> PerfTarget::wait_event() {
     const std::size_t page = page_l > 0 ? static_cast<std::size_t>(page_l) : 4096u;
 
     while (true) {
-        // Peel one event off the queue first — multiple samples can
+        // Peel one event off the queue first - multiple samples can
         // arrive in a single poll wake-up, and the public API hands
         // back one event per call.
         while (!pending_records_.empty()) {
@@ -300,7 +300,7 @@ Result<Event> PerfTarget::wait_event() {
                     return Event{EvThreadExited{tk.tid, 0}};
                 }
                 case PERF_RECORD_LOST: {
-                    // Body: u64 id; u64 lost. Ring overflowed — samples
+                    // Body: u64 id; u64 lost. Ring overflowed - samples
                     // were dropped. Surface to stderr so the user knows
                     // their breakpoint sequence has gaps; the alternative
                     // (silent skip) makes the perf backend appear flaky.
@@ -308,7 +308,7 @@ Result<Event> PerfTarget::wait_event() {
                         u64 lost = 0;
                         std::memcpy(&lost, rec.body.data() + 8, 8);
                         std::fprintf(stderr,
-                            "ember: perf ring overflow — %llu sample(s) lost\n",
+                            "ember: perf ring overflow - %llu sample(s) lost\n",
                             static_cast<unsigned long long>(lost));
                     }
                     continue;
@@ -359,7 +359,7 @@ Result<Event> PerfTarget::wait_event() {
             if (!(pfds[1 + i].revents & POLLIN)) continue;
             perf_drain_into_target(*this, slot_indices[i], page);
         }
-        // Loop — the next iteration peels from pending_records_.
+        // Loop - the next iteration peels from pending_records_.
     }
 }
 

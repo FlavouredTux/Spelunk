@@ -67,7 +67,7 @@ export class OpenAILLM implements LLM {
         } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
 
         // OpenRouter sometimes returns an error object as a 200-OK
-        // body — `{error: {code, message}}` — instead of a normal
+        // body - `{error: {code, message}}` - instead of a normal
         // completion shape. Without a guard, resp.choices is
         // undefined and the next line crashes with the opaque
         // "Cannot read properties of undefined (reading '0')".

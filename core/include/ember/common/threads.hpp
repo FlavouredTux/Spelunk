@@ -19,7 +19,7 @@ namespace ember {
 //   - Otherwise: min(hardware_concurrency, default_cap), floored at 1.
 //
 // `default_cap` is the historical per-call cap (most ember sites use
-// 8 or 16) — kept so a low-spec box still gets the smaller of
+// 8 or 16) - kept so a low-spec box still gets the smaller of
 // (its core count) and (the algorithm's I/O-saturation point).
 [[nodiscard]] inline unsigned thread_pool_size(unsigned default_cap) noexcept {
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());

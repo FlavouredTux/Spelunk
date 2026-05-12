@@ -4,7 +4,7 @@
 // is held at its first instruction, then task_for_pid + Mach
 // exception-port registration before the optional task_resume.
 //
-// task_for_pid privilege caveat — failure here is overwhelmingly
+// task_for_pid privilege caveat - failure here is overwhelmingly
 // the cause of "the debugger doesn't work on macOS." The ember
 // binary needs ONE of:
 //
@@ -155,7 +155,7 @@ launch_macos(const LaunchOptions& opts) {
     // SUSPENDED: tracee is held at its first instruction (technically
     // dyld's __dyld_start) so we can wire up the exception port
     // before any instruction has run. Resume happens via task_resume
-    // when the user calls cont() — or here when stop_at_entry=false.
+    // when the user calls cont() - or here when stop_at_entry=false.
     ::posix_spawnattr_setflags(&attr,
         POSIX_SPAWN_START_SUSPENDED | POSIX_SPAWN_SETPGROUP);
 
@@ -179,7 +179,7 @@ launch_macos(const LaunchOptions& opts) {
         ::kill(child, SIGKILL);
         ::waitpid(child, nullptr, 0);
         return std::unexpected(Error::io(std::format(
-            "task_for_pid({}) failed: {} — codesign ember with the "
+            "task_for_pid({}) failed: {} - codesign ember with the "
             "com.apple.security.cs.debugger entitlement, or run as root "
             "with SIP disabled, or build the tracee with get-task-allow",
             child, ::mach_error_string(kr))));
@@ -214,7 +214,7 @@ attach_macos(ProcessId pid) {
                                       static_cast<pid_t>(pid), &task_port);
     if (kr != KERN_SUCCESS) {
         return std::unexpected(Error::io(std::format(
-            "task_for_pid({}) failed: {} — codesign ember with the "
+            "task_for_pid({}) failed: {} - codesign ember with the "
             "com.apple.security.cs.debugger entitlement, or run as root "
             "with SIP disabled",
             pid, ::mach_error_string(kr))));
@@ -244,7 +244,7 @@ Result<void> MachOTarget::detach() {
     // properly would require us to have snapshotted them on attach
     // (task_get_exception_ports); for v0 we just drop ours and the
     // kernel falls back to the default crash reporter / signal
-    // handlers. Real debuggers save+restore — note for v1.
+    // handlers. Real debuggers save+restore - note for v1.
     if (task_port_) ::task_resume(task_port_);
     if (exc_port_)  ::mach_port_destroy (::mach_task_self(), exc_port_);
     if (task_port_) ::mach_port_deallocate(::mach_task_self(), task_port_);

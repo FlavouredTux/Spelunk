@@ -84,7 +84,7 @@ export function BookmarksPanel(props: {
             fontFamily: serif, fontStyle: "italic",
             fontSize: 12, color: C.textFaint,
           }}>
-            no bookmarks yet — press <span style={{ fontFamily: mono, color: C.textMuted }}>b</span> on any function to save one
+            no bookmarks yet - press <span style={{ fontFamily: mono, color: C.textMuted }}>b</span> on any function to save one
           </div>
         )}
 

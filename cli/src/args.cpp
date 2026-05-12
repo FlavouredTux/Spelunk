@@ -147,7 +147,7 @@ Result<Args> parse_args(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string_view s = argv[i];
 
-        // `--help [topic]` / `-h [topic]` — when the next token doesn't
+        // `--help [topic]` / `-h [topic]` - when the next token doesn't
         // start with `-` and isn't an existing binary path candidate,
         // take it as the topic name (the topic helper itself decides
         // what's known). Otherwise fall through to the bool-flag form.
@@ -177,7 +177,7 @@ Result<Args> parse_args(int argc, char** argv) {
             break;
         }
 
-        // `--functions=PATTERN` — unambiguous way to specify the filter
+        // `--functions=PATTERN` - unambiguous way to specify the filter
         // without positional-order gotchas (main vs binary path).
         if (s.starts_with("--functions=")) {
             a.functions = true;
@@ -185,7 +185,7 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--pat PATH` — repeatable. Collect into a vector since the
+        // `--pat PATH` - repeatable. Collect into a vector since the
         // bool/value-flag tables only handle single-shot scalars.
         if (s == "--pat") {
             if (++i >= argc) {
@@ -199,7 +199,7 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--identify` — run YARA-like function identification.
+        // `--identify` - run YARA-like function identification.
         if (s == "--identify") { a.identify = true; continue; }
         // `--identify-threshold T`
         if (s == "--identify-threshold") {
@@ -215,7 +215,7 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--corpus PATH` — repeatable. Each is a TEEF TSV (output of
+        // `--corpus PATH` - repeatable. Each is a TEEF TSV (output of
         // `ember --teef <lib>`); the recognizer merges them.
         if (s == "--corpus") {
             if (++i >= argc) {
@@ -228,7 +228,7 @@ Result<Args> parse_args(int argc, char** argv) {
             a.corpus_paths.emplace_back(s.substr(9));
             continue;
         }
-        // `--anti-corpus PATH` — repeatable. Same TSV format as
+        // `--anti-corpus PATH` - repeatable. Same TSV format as
         // --corpus, but only the hash fields are kept; queries
         // matching any blocked hash short-circuit recognize() and
         // return no suggestions. Use to suppress recognition of
@@ -258,7 +258,7 @@ Result<Args> parse_args(int argc, char** argv) {
             }
             continue;
         }
-        // `--min-fn-size N` — drop fns smaller than N bytes before
+        // `--min-fn-size N` - drop fns smaller than N bytes before
         // building TEEF fingerprints. 0 = disabled. Helps on obfuscator-
         // spawned targets where most fns are trivial stubs.
         if (s == "--min-fn-size") {
@@ -274,7 +274,7 @@ Result<Args> parse_args(int argc, char** argv) {
             }
             continue;
         }
-        // `--max-fn-size N` — drop fns larger than N bytes. Filters
+        // `--max-fn-size N` - drop fns larger than N bytes. Filters
         // out VM dispatchers / obfuscator giants whose cfg.build alone
         // dominates the run.
         if (s == "--max-fn-size") {
@@ -399,7 +399,7 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--aux-binary PATH[@HEX]` — repeatable. Each entry is a
+        // `--aux-binary PATH[@HEX]` - repeatable. Each entry is a
         // secondary Binary the debugger loads as an extra symbol
         // oracle (e.g. a Mach-O blob in a Linux tracee). Optional
         // `@<hex>` suffix overrides the runtime-base auto-detection.
@@ -416,7 +416,7 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--ignore-fault-at HEX` and `--ignore-fault-file PATH` —
+        // `--ignore-fault-at HEX` and `--ignore-fault-file PATH` -
         // repeatable. Both feed the same set of known-recovered
         // fault PCs the debugger silently passes back to the tracee.
         if (s == "--ignore-fault-at") {
@@ -444,7 +444,7 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--force-fn-start VA` — repeatable. Each VA becomes a
+        // `--force-fn-start VA` - repeatable. Each VA becomes a
         // synthetic Function symbol so resolve_containing_function
         // returns a window AT the VA instead of rebinding to the
         // closest-below symbol.
@@ -493,7 +493,7 @@ Result<Args> parse_args(int argc, char** argv) {
             // The natural shorthand for "decompile / disassemble this
             // function" is `ember -p BIN 0x4012a0` rather than
             // `ember -p BIN -s 0x4012a0`. LLM-driven agents reach for
-            // the positional form first — accept it for the view modes
+            // the positional form first - accept it for the view modes
             // where -s is the only thing a second positional could be.
             a.symbol = s;
         } else {
@@ -517,7 +517,7 @@ Result<Args> parse_args(int argc, char** argv) {
     }
 
     // A positional binary is not required when the user is diffing two
-    // already-computed fingerprint TSVs — no bytes to parse. Likewise
+    // already-computed fingerprint TSVs - no bytes to parse. Likewise
     // --dump-types is a self-test that doesn't read any binary, and
     // --regions / --raw-bytes point at non-PE inputs that bypass the
     // positional argument.

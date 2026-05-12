@@ -274,7 +274,7 @@ int main() {
         check_eq_sz(rs.size(), 0, "ref reject: no rename");
     }
 
-    // Path 3': @ref names the import the function actually calls — match.
+    // Path 3': @ref names the import the function actually calls - match.
     {
         auto db = only(
             "e81b000000c3 00 0000 0006 :0000 has_ref @0000 strlen\n");
@@ -285,7 +285,7 @@ int main() {
         }
     }
 
-    // existing_renames suppresses sig matching for that address — sigs
+    // existing_renames suppresses sig matching for that address - sigs
     // never override operator intent.
     {
         auto db = only("e81b000000c3 00 0000 0006 :0000 winmain_proc\n");
@@ -294,7 +294,7 @@ int main() {
         check_eq_sz(rs.size(), 0, "existing_renames suppresses match");
     }
 
-    // Symbol-named candidates are skipped — sigs only resolve placeholder
+    // Symbol-named candidates are skipped - sigs only resolve placeholder
     // names. A function whose kind is Symbol won't get renamed even if
     // the prefix matches.
     {

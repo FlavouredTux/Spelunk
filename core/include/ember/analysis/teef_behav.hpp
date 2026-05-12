@@ -9,9 +9,9 @@
 
 namespace ember {
 
-// L4 of TEEF Max — behavioural fingerprint via bounded IR
+// L4 of TEEF Max - behavioural fingerprint via bounded IR
 // interpretation under K random concrete inputs. Captures WHAT a
-// function computes, not HOW its loop body is shaped — invariant under
+// function computes, not HOW its loop body is shaped - invariant under
 // the compiler-driven loop transforms (induction-variable strength
 // reduction, pointer-vs-index, unrolling) that L2 (cleanup-canonical)
 // and L3 (orbit) can't recover.
@@ -22,7 +22,7 @@ namespace ember {
 //      distribution: small ints, booleans, large random, common
 //      pointer-shaped values (the address of a synthetic 4 KiB page).
 //   2. For each vector, run the interpreter on the function's IR.
-//      Memory loads are materialized lazily — first access at address
+//      Memory loads are materialized lazily - first access at address
 //      A returns a deterministic mix64(A, salt); subsequent accesses
 //      return the same value. Stores update the dict. Calls return an
 //      opaque mix64(target_class, sorted_args). Branches on concrete
@@ -31,8 +31,8 @@ namespace ember {
 //      side_effects_multiset_hash) tuple. Hash to one u64.
 //   4. Sort, dedupe, MinHash → L4 sketch.
 //
-// Two functions implementing the same algorithm — even with completely
-// different IR shape — produce the same K return values and side
+// Two functions implementing the same algorithm - even with completely
+// different IR shape - produce the same K return values and side
 // effects, so their L4 multisets coincide. The fingerprint is purely
 // behavioural, so it tolerates arbitrary syntactic compiler diversity.
 //
@@ -61,7 +61,7 @@ struct BehavSig {
 // Compute the behavioural sig from an already-pipelined IrFunction
 // (post-lift, post-SSA, post-cleanup). compute_teef_max() uses this to
 // avoid re-running the pipeline that compute_teef_with_chunks already
-// runs — both the L2 and L4 paths consume the cleaned flat IR, so
+// runs - both the L2 and L4 paths consume the cleaned flat IR, so
 // sharing the pipeline halves the per-fn work in corpus build.
 [[nodiscard]] BehavSig
 compute_behav_sig_from_ir(const IrFunction& fn, const Binary& bin);

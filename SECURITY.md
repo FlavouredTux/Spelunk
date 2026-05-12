@@ -1,6 +1,6 @@
 # Security policy
 
-ember parses untrusted binaries — ELF, Mach-O, PE, minidumps, raw
+ember parses untrusted binaries - ELF, Mach-O, PE, minidumps, raw
 memory regions, PDB sidecars. Bugs in the parsers, the disassembler,
 the lifter, or the debugger backends are a real attack surface for
 anyone using ember on hostile inputs (malware samples, CTF
@@ -38,5 +38,5 @@ publicly.
 ## Response
 
 I'm a solo maintainer. Expect a first reply within a few days.
-Coordinated disclosure is welcome — propose a timeline that works for
+Coordinated disclosure is welcome - propose a timeline that works for
 you.

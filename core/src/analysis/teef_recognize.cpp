@@ -31,7 +31,7 @@ u32 TeefCorpus::intern_string(std::string_view s) {
     // Fast path: heterogeneous find avoids allocating a std::string
     // for the lookup key. Names like "memcpy" and runtime tags like
     // "libc" are repeated millions of times across a multi-100MB
-    // corpus — the cold-path allocation only fires on first sight.
+    // corpus - the cold-path allocation only fires on first sight.
     if (auto it = intern_ids_.find(s); it != intern_ids_.end()) return it->second;
     const u32 id = static_cast<u32>(intern_strings_.size());
     auto [it, _] = intern_ids_.emplace(std::string(s), id);
@@ -89,7 +89,7 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
     return static_cast<float>(eq) / 8.0f;
 }
 
-// "Correct but useless" name classes — drop glue, panic forwarders,
+// "Correct but useless" name classes - drop glue, panic forwarders,
 // and fmt trait impls. These are real Rust functions present in
 // every binary, with structurally-trivial bodies that collide with
 // thousands of unrelated user fns. A single-collision lookup here
@@ -102,7 +102,7 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
 // C++ has the same class via Itanium-mangled `_ZN_..._D[012]Ev`
 // destructors and `__cxa_*` runtime forwarders; treated together
 // since the symptom and remedy are identical.
-// gcc partition-variant suffixes — fragments of real fns, never
+// gcc partition-variant suffixes - fragments of real fns, never
 // independent labels worth surfacing. Cold halves all share a
 // "load string + call printf + abort" shape and chunk-vote-collide
 // against arbitrary library functions; .isra/.constprop/.part are
@@ -133,11 +133,11 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
     if (nm.find("panic_fmt")     != std::string_view::npos) return true;
     if (nm.find("panicking")     != std::string_view::npos) return true;
     if (nm.find("raw_vec")       != std::string_view::npos) return true;
-    // fmt trait impls — three encodings of the "X as Trait" qualifier.
+    // fmt trait impls - three encodings of the "X as Trait" qualifier.
     if (nm.find("as core::fmt::") != std::string_view::npos)         return true;  // demangled
     if (nm.find("$u20$as$u20$core..fmt..") != std::string_view::npos) return true; // legacy
     if (nm.find("core::fmt::Formatter") != std::string_view::npos)   return true;  // demangled
-    // <T as core::ops::drop::Drop>::drop — user-defined Drop impls.
+    // <T as core::ops::drop::Drop>::drop - user-defined Drop impls.
     // Same FP-class as drop_in_place: structurally trivial, hashes
     // across types. Three encodings: legacy Itanium uses "Drop$GT$4drop"
     // (the '$GT$' = '>' closes the "as Drop" qualifier); v0 mangle of
@@ -147,7 +147,7 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
     if (nm.find("Drop4drop")     != std::string_view::npos)            return true;
     if (nm.find("as core::ops::drop::Drop") != std::string_view::npos) return true;
     // FnOnce / FnMut / Fn trait dispatch shims. These are vtable-shim
-    // bodies that load a fn pointer and jump — minimal IR, structural
+    // bodies that load a fn pointer and jump - minimal IR, structural
     // collisions across closure types are guaranteed. Use length-
     // prefixed substrings (Itanium and v0 both length-prefix idents)
     // so we don't accidentally cap user fns named "call_once".
@@ -167,7 +167,7 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
 
 }  // namespace
 
-// Whether two runtime tags can plausibly match. Conservative — only
+// Whether two runtime tags can plausibly match. Conservative - only
 // the obvious cross-language false-positive lanes are blocked. A Rust
 // binary linking libc / libcrypto / libgcc_s is normal; a Rust binary
 // matching libstdc++ template instantiations is the noise class we're
@@ -177,7 +177,7 @@ bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
     if (q == c) return true;
 
     // ---- Helper buckets (each tag belongs to one or more of these) ----
-    // Plain C — both POSIX libc-ish and Windows CRT count as "C-shaped"
+    // Plain C - both POSIX libc-ish and Windows CRT count as "C-shaped"
     // runtimes for matching purposes. A Win32 binary calling memcpy
     // can validly match a libc/musl memcpy fingerprint.
     auto is_c_family = [](std::string_view t) {
@@ -199,7 +199,7 @@ bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
     };
 
     // Rust never matches C++ stdlib (Itanium OR MSVC). Rust↔C/winapi/
-    // openssl is fine — Rust binaries link those for real.
+    // openssl is fine - Rust binaries link those for real.
     if (q == teef_runtime::kRust) {
         return !is_itanium_cxx(c) && !is_msvc_cxx(c);
     }
@@ -207,7 +207,7 @@ bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
     if (is_itanium_cxx(q) || is_msvc_cxx(q)) {
         if (c == teef_runtime::kRust) return false;
     }
-    // Itanium C++ vs MSVC C++ stdlib — different ABIs, different name
+    // Itanium C++ vs MSVC C++ stdlib - different ABIs, different name
     // mangling, different vtable layout. Block.
     if (is_itanium_cxx(q) && is_msvc_cxx(c)) return false;
     if (is_msvc_cxx(q) && is_itanium_cxx(c)) return false;
@@ -217,7 +217,7 @@ bool runtime_compatible(std::string_view q, std::string_view c) noexcept {
     // POSIX and Windows runtimes with matching structure.
     if (is_c_family(q) && is_c_family(c)) return true;
 
-    // winapi against POSIX libc — usually different (kernel32 has no
+    // winapi against POSIX libc - usually different (kernel32 has no
     // POSIX equivalent), but also low-volume. Allow; structural match
     // alone is the gate.
     if (is_winapi(q) || is_winapi(c)) return true;
@@ -233,7 +233,7 @@ namespace {
 // Per-row parsed records. Names are string_view into the mmap'd
 // region (which outlives the merge phase); the merge interns them
 // into the corpus's intern_ids_ table on first sighting. Runtime
-// tags are kept as std::string — they're short (≤10 chars) and
+// tags are kept as std::string - they're short (≤10 chars) and
 // covered by SSO, and stable storage during T-row tag transitions
 // would otherwise require a separate per-load runtime pool.
 struct ParsedF {
@@ -274,7 +274,7 @@ struct ChunkParse {
 // Tab-walk a line into up to N fields via memchr (SIMD-vectorized
 // in glibc). Returns the number of fields populated. Matches the
 // previous byte-loop semantics: at most N fields, with the final
-// field bounded by the next tab (not the end of line) — extra
+// field bounded by the next tab (not the end of line) - extra
 // trailing tabs are dropped on the floor as before.
 template <std::size_t N>
 [[nodiscard]] std::size_t split_tabs(std::string_view line,
@@ -411,7 +411,7 @@ void parse_chunk(const char* begin, const char* end,
 std::unordered_set<u64>
 TeefCorpus::topo_hashes(std::size_t max_popularity) const {
     if (max_popularity == 0) {
-        // No popularity guard — return every distinct topo.
+        // No popularity guard - return every distinct topo.
         std::unordered_set<u64> out;
         out.reserve(whole_by_name_.size());
         for (const auto& e : whole_by_name_) {
@@ -440,7 +440,7 @@ TeefCorpus::topo_hashes(std::size_t max_popularity) const {
 std::size_t TeefCorpus::load_anti_tsv(const std::filesystem::path& path) {
     // Anti-corpora are typically small (a UPX dump is ~50 fns; even a
     // chunky packer-prologue collection is < 1k rows). Skip the
-    // mmap+parallel-parse path used by load_tsv — a serial readline
+    // mmap+parallel-parse path used by load_tsv - a serial readline
     // pass is plenty and avoids the merge-phase machinery we don't
     // need (no name interning, no minhash inverted index).
     std::ifstream in(path, std::ios::binary);
@@ -473,7 +473,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     using ms_t     = std::chrono::duration<double, std::milli>;
     // Per-file load timing. Suppressed when EMBER_QUIET=1; printed
     // unconditionally otherwise (even when stderr isn't a TTY, since
-    // these lines are diagnostic — users running the recognizer over
+    // these lines are diagnostic - users running the recognizer over
     // multi-100MB corpora want to know what's slow). progress_enabled()
     // gates the noisy progress bars; this is a one-shot per file.
     const bool dbg = !(std::getenv("EMBER_QUIET") != nullptr &&
@@ -482,7 +482,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
 
     // ---- Acquire the file as a contiguous byte range -------------------
     // POSIX mmaps for zero-copy parallel parse. Windows reads the whole
-    // file into a heap buffer — the platform's file-mapping API works
+    // file into a heap buffer - the platform's file-mapping API works
     // but the wstring/HANDLE plumbing isn't worth it for a one-shot
     // load; the parsing phase dwarfs the copy on multi-100MB inputs.
 #if defined(_WIN32)
@@ -520,7 +520,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     void* m = ::mmap(nullptr, sz, PROT_READ, MAP_PRIVATE, fd, 0);
     ::close(fd);   // mapping survives the close
     if (m == MAP_FAILED) return 0;
-    // Sequential-read hint — kernel reads ahead more aggressively
+    // Sequential-read hint - kernel reads ahead more aggressively
     // and drops pages behind us. Free win on cold-cache loads of
     // multi-100MB corpus TSVs. WILLNEED kicks readahead immediately
     // so the parse phase isn't first-touching every page.
@@ -573,7 +573,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
 
     // ---- Chunk the mmap'd region at line boundaries -------------------
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    // For tiny files, avoid the per-thread overhead — a single worker
+    // For tiny files, avoid the per-thread overhead - a single worker
     // beats spawning four for an 80 KB input.
     const unsigned threads = (sz < (256u * 1024u))
         ? 1u
@@ -587,7 +587,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             const char* begin = data + t * chunk_size;
             const char* end_p = (t == threads - 1) ? file_end
                                                    : data + (t + 1) * chunk_size;
-            // Align begin (except chunk 0) to the start of the next line —
+            // Align begin (except chunk 0) to the start of the next line -
             // the previous chunk owns whatever line straddles the boundary.
             if (t > 0 && begin < file_end) {
                 const char* nl = static_cast<const char*>(
@@ -637,7 +637,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     std::unordered_map<u64, std::size_t> idx_by_addr;
 
     // Pre-reserve to avoid rehashing during merge. Sizes here are
-    // upper bounds (sub_* rows get filtered out for some indexes) —
+    // upper bounds (sub_* rows get filtered out for some indexes) -
     // reserving a touch high is far cheaper than a rehash at 80%
     // load with 100K+ entries.
     std::size_t total_f = 0;
@@ -666,7 +666,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             // recognizer's "trivial-shape" guard depends on this).
             if (f.l2_exact != 0) ++whole_popularity_[f.l2_exact];
             if (f.name.empty() || f.name.starts_with("sub_")) continue;
-            // Drop gcc partition variants at load time — works for
+            // Drop gcc partition variants at load time - works for
             // pre-existing TSVs built before subcommands.cpp learned
             // to skip them at emit, without forcing a re-fingerprint.
             if (is_compiler_partition_variant(f.name)) continue;
@@ -701,7 +701,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
                     .push_back(static_cast<u32>(idx));
             }
             if (f.addr != 0) idx_by_addr.emplace(f.addr, idx);
-            // Heterogeneous find — name string already lives in
+            // Heterogeneous find - name string already lives in
             // intern_strings_; only allocate when this is a name we
             // haven't seen before in idx_by_name_.
             const auto name_sv = interned(we.name_id);
@@ -742,14 +742,14 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
 
     // Recompute distinct-name counts for every hashed key. Bucket-size
     // guards (kMaxWholeBucket / kMaxL4Bucket / kMaxPrefixBucket /
-    // kMaxChunkFns) operate on these — a popular fn replicated across N
+    // kMaxChunkFns) operate on these - a popular fn replicated across N
     // corpus versions (50× glibc memcpy under the same name) would
     // otherwise trip the boilerplate floor and get dropped, when really
     // it's one well-known fn replicated. Done as an end-of-load pass so
     // multi-TSV loads don't double-count names seen in both files.
     {
         // Distinct names per hash bucket. Keyed on interned name_id
-        // (u32) instead of string_view — same identity (intern_string
+        // (u32) instead of string_view - same identity (intern_string
         // returns the same id for the same string regardless of which
         // TSV it came from), but a u32 hash is a single instruction
         // vs. a multi-cache-line string hash.
@@ -805,7 +805,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
 
     // Anti-corpus short-circuit. Queries whose L2/L4/prefix hash
     // matches any blocked entry are structurally-identifiable junk
-    // (UPX prologues, packer trampolines, CRT bootloaders) — surface
+    // (UPX prologues, packer trampolines, CRT bootloaders) - surface
     // nothing rather than letting the cascade emit a misleading
     // confident label from a coincidentally-shaped corpus entry.
     // Cheap: three unordered_set lookups, all O(1).
@@ -820,7 +820,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // structural similarity is overwhelmingly likely to be coincidence
     // (different error messages, different format strings, different
     // path constants). Returns true ⇒ "this candidate is plausible";
-    // false ⇒ "ditch it." Conservative — when either side has < 2
+    // false ⇒ "ditch it." Conservative - when either side has < 2
     // strings (small fns, EH cleanup, anonymous helpers), the filter
     // is bypassed and structural match is the sole signal as before.
     const auto& qs = query.string_hashes;
@@ -843,7 +843,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         return false;
     };
 
-    // L4 (behavioural) jaccard helper — used both as the primary path
+    // L4 (behavioural) jaccard helper - used both as the primary path
     // when query has an L4 sketch and as a verifier on top of the L2
     // whole-jaccard path. Returns 0.0 if either side has no L4 sketch.
     const bool query_has_l4 = (query.behav.exact_hash != 0);
@@ -862,14 +862,14 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // collapses to a 2-3 token bag (every getter / thunk hashes alike)
     // and L4 K=64 traces collapse to a 1-2 outcome multiset (every
     // identity stub matches everything). The byte prefix preserves
-    // register identity and small immediates verbatim — that's what
+    // register identity and small immediates verbatim - that's what
     // FLIRT's literal byte-pattern model gets right at this size, and
     // we replicate it here as a discrete tier above the structural
     // ones. Same popularity guard as whole-exact: a prefix shared by
     // many corpus fns is a generic stub shape, not an identity.
     constexpr std::size_t kMaxPrefixBucket = 4;
     if (query.prefix_hash != 0) {
-        // Distinct-name count instead of raw bucket — see the comment on
+        // Distinct-name count instead of raw bucket - see the comment on
         // whole_prefix_distinct_ for why.
         auto dn = whole_prefix_distinct_.find(query.prefix_hash);
         const std::size_t names_n = (dn == whole_prefix_distinct_.end())
@@ -888,7 +888,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             }
             // Confidence floor for prefix-exact when the query has no
             // string evidence. Anonymous helpers (no strings) hitting a
-            // single corpus prefix-exact target previously emitted 1.0 —
+            // single corpus prefix-exact target previously emitted 1.0 -
             // for a 3-instruction stub that's overconfident: the corpus
             // entry could be from any unrelated codebase that happens to
             // share the same byte prefix. Cap at 0.7 so the match still
@@ -923,7 +923,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // ---- Behavioural exact match (highest precision) ----
     // L4 collisions are 64-trace I/O-multiset hashes; an accidental
     // collision between two semantically-distinct functions is
-    // vanishingly rare. Same boilerplate guard as L2 — if the L4 hash
+    // vanishingly rare. Same boilerplate guard as L2 - if the L4 hash
     // is shared by many corpus rows it's a "trivial-shape behaviour"
     // (return-zero, identity stub) and a single canonical name
     // shouldn't be surfaced. kMaxL4Bucket is tighter than the L2
@@ -1029,12 +1029,12 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // Boilerplate guard: if the corpus has MANY entries with this hash
     // (e.g., a 1-instruction `xgetbv` stub that hundreds of trivial
     // functions hash equivalent to), we can't trust whole-exact even
-    // if `distinct` size is 1 — the query is itself just a trivial
+    // if `distinct` size is 1 - the query is itself just a trivial
     // stub that happens to match a popular name. Skip and fall through
     // to chunk-vote, which requires substantive evidence.
     {
         // Distinct-name guard: same bug pattern as L4/prefix. The
-        // hash_too_common check above stays — it counts ALL F rows
+        // hash_too_common check above stays - it counts ALL F rows
         // (including sub_*) and detects "this L2 hash is a generic
         // shape that many trivial stubs share," which is a different
         // signal than the named-fn replication we're fixing here.
@@ -1086,7 +1086,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // CEBin-style two-stage: L2 whole-jaccard narrows candidates, then
     // L4 re-ranks. When the query has an L4 sketch, the per-candidate
     // score is 0.5·L2_jacc + 0.5·L4_jacc and the acceptance bar drops
-    // to 0.6 (with a 0.20 second-best margin) — behavioural agreement
+    // to 0.6 (with a 0.20 second-best margin) - behavioural agreement
     // is much stronger evidence than structural similarity alone, so a
     // weaker L2 with strong L4 backing is now trusted.
     //
@@ -1095,11 +1095,11 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // fns have a unique topo collision in the corpus, so the bucket
     // narrows the candidate set from O(corpus) to O(few). Falls through
     // to a full scan if the bucket is empty or doesn't yield a
-    // confident enough match — pure perf optimization, never rejects
+    // confident enough match - pure perf optimization, never rejects
     // a candidate.
     //
     // When the query has no L4 (the L4 interpreter aborted on this
-    // function — rare, but happens on pathological IR), the score
+    // function - rare, but happens on pathological IR), the score
     // collapses to pure L2 and the conservative thresholds (0.875 bar,
     // 0.25 margin) apply.
     if (!hash_too_common) {
@@ -1140,12 +1140,12 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             return TeefMatch{std::move(s.best_name), conf, via, 0};
         };
 
-        // Stage 1 — L2 MinHash inverted index. The query's 8 slot
+        // Stage 1 - L2 MinHash inverted index. The query's 8 slot
         // values index into per-slot buckets of corpus entry idxs;
         // entries appearing in ≥ kMinSlotHits buckets have a
         // probabilistic L2 jaccard ≥ kMinSlotHits/8. Only those get
         // scored. Cuts O(N) full-scan to O(slot_bucket × 8) per query
-        // — the difference between minutes and milliseconds on
+        // - the difference between minutes and milliseconds on
         // 100K-fn library corpora.
         //
         // EMBER_TEEF_MAX_SLOT_BUCKET caps the size of any single slot
@@ -1183,10 +1183,10 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             if (auto m = verdict(s)) return { *m };
         }
 
-        // Stage 2 — topo bucket fallback. Catches cases where slot
+        // Stage 2 - topo bucket fallback. Catches cases where slot
         // collisions are too sparse to cross kMinSlotHits but the L0
         // topology agrees (small fns where minhash entropy is low and
-        // jaccard estimates are noisy). Bounded — topo buckets are
+        // jaccard estimates are noisy). Bounded - topo buckets are
         // rarely huge.
         if (query.topo_hash != 0) {
             auto [lo, hi] = whole_topo_.equal_range(query.topo_hash);
@@ -1229,7 +1229,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // on each WholeEntry. Chunk-vote operates on names, so we look
     // up each candidate's parent fn via idx_by_name_ and apply the
     // same filter. Skips when the parent has no string_hashes (the
-    // filter falls through automatically — strings_compatible
+    // filter falls through automatically - strings_compatible
     // returns true on empty corpus side).
     // Two-tier filter:
     //  - strings_compatible (lenient): empty corpus side passes;
@@ -1239,7 +1239,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     //    candidate's parent fn has zero, the chunk-vote match is
     //    structural coincidence (e.g. Wayland main hitting a
     //    libstdc++ wide-char template). Drop. Cuts the
-    //    high-volume FP class without touching the recall lane —
+    //    high-volume FP class without touching the recall lane -
     //    most library fns with shared structure also share at
     //    least some characteristic strings.
     if (!qs.empty()) {
@@ -1268,7 +1268,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // jaccard, boost confidence by re-ranking by (vote_score, L4_jacc).
     // Tag the via with "+behav" when the L4 path corroborated the vote
     // winner. Behavioural agreement on a chunk-vote winner is a strong
-    // anti-FP signal — the existing string-anchor filter already
+    // anti-FP signal - the existing string-anchor filter already
     // suppresses *most* structural FPs, but it can't help when the
     // corpus parent has empty string_hashes; L4 fills exactly that gap.
     bool behav_agreed = false;
@@ -1328,7 +1328,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     const std::string_view via_tag = behav_agreed ? "chunk-vote+behav" : "chunk-vote";
     // Thin-evidence cap: chunk-vote alone (no string anchor on the
     // query, no L4 corroboration on the winner) is the most FP-prone
-    // lane — multiple unrelated functions can share enough chunk
+    // lane - multiple unrelated functions can share enough chunk
     // shapes to win the vote. Cap to 0.7 so the match surfaces but
     // doesn't auto-promote at 0.85. behav_agreed=true means L4
     // re-ranking confirmed the winner; that lifts the cap.

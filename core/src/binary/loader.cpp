@@ -61,7 +61,7 @@ const Binary::LookupCaches& Binary::caches() const {
 const Symbol* Binary::import_at_plt(addr_t plt_addr, unsigned slot_size) const noexcept {
     if (plt_addr == 0) return nullptr;
     const auto& c = caches();
-    // Stubs are fixed-width slots — upper_bound on addr gives the slot whose
+    // Stubs are fixed-width slots - upper_bound on addr gives the slot whose
     // base is > plt_addr; step one back to get the slot that could contain it.
     auto it = std::upper_bound(
         c.imports_by_addr.begin(), c.imports_by_addr.end(), plt_addr,
@@ -91,7 +91,7 @@ const Symbol* Binary::defined_object_at(addr_t vaddr) const noexcept {
     if (it == c.defined_objects_by_addr.begin()) return nullptr;
     --it;
     while (it != c.defined_objects_by_addr.begin() && (*(it - 1))->addr == (*it)->addr) --it;
-    // Among aliases at the same addr, return the first that contains vaddr —
+    // Among aliases at the same addr, return the first that contains vaddr -
     // this preserves the (name, size)-sorted preference of the original
     // linear scan over symbols().
     const addr_t group_addr = (*it)->addr;
@@ -176,7 +176,7 @@ Binary::find_all_by_name(std::string_view name) const {
 
 void Binary::record_indirect_edge(addr_t from, addr_t to) const {
     auto& vec = indirect_edges_[from];
-    // Linear-scan dedupe — N is tiny per call site (a handful of
+    // Linear-scan dedupe - N is tiny per call site (a handful of
     // observed targets on real traces), and keeping the order means
     // downstream sees edges in the order they were learned.
     for (addr_t existing : vec) if (existing == to) return;
@@ -239,7 +239,7 @@ read_file(const std::filesystem::path& path) {
 
 [[nodiscard]] bool looks_like_macho_64(std::span<const std::byte> b) noexcept {
     // Little-endian 64-bit Mach-O magic: 0xFEEDFACF. We don't accept 32-bit
-    // (FEEDFACE) or byte-swapped (CIGAM) — only LE 64-bit slices.
+    // (FEEDFACE) or byte-swapped (CIGAM) - only LE 64-bit slices.
     return b.size() >= 4
         && b[0] == std::byte{0xCF}
         && b[1] == std::byte{0xFA}
@@ -273,7 +273,7 @@ read_file(const std::filesystem::path& path) {
         && b[e_lfanew + 3] == std::byte{0};
 }
 
-// CAFEBABE (32-bit fat) or CAFEBABF (64-bit fat) — the wrapper around a
+// CAFEBABE (32-bit fat) or CAFEBABF (64-bit fat) - the wrapper around a
 // universal binary. Big-endian on disk regardless of host.
 [[nodiscard]] bool looks_like_fat(std::span<const std::byte> b) noexcept {
     if (b.size() < 4) return false;
@@ -300,7 +300,7 @@ slice_fat(std::vector<std::byte>& buf) {
     if (!nfat_r) return std::unexpected(std::move(nfat_r).error());
     const u32 nfat = *nfat_r;
 
-    // Reject nfat values that can't possibly fit — avoids a huge reserve()
+    // Reject nfat values that can't possibly fit - avoids a huge reserve()
     // on a corrupt header before the per-entry bounds checks run.
     if (nfat > (buf.size() - 8) / arch_size) {
         return std::unexpected(Error::truncated(std::format(
@@ -414,13 +414,13 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
 
         // Three modes for PDB ingestion, in priority order:
         //   1. Explicit override (`--pdb PATH`): try that path; report
-        //      success/failure but never fall back to auto-discovery —
+        //      success/failure but never fall back to auto-discovery -
         //      the user picked a specific file.
         //   2. Disabled (`--no-pdb`): skip entirely.
         //   3. Auto-discovery: try the basename of the embedded
         //      CodeView PDB filename first (`<binary_dir>/<basename>`),
         //      then `<binary>.pdb` and `<binary stem>.pdb`. Failures
-        //      are silent — without a PDB the binary still loads with
+        //      are silent - without a PDB the binary still loads with
         //      whatever names the PE itself carried.
         std::error_code ec;
         std::filesystem::path dir = path.parent_path();
@@ -449,7 +449,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
             }
             if ((*pe)->attached_pdb_path().empty()) {
                 // Even without an embedded reference, try the
-                // conventional name — split-debug builds drop
+                // conventional name - split-debug builds drop
                 // `<basename>.pdb` next to the binary.
                 try_load(path.string() + ".pdb");
                 try_load(path.parent_path() / (path.stem().string() + ".pdb"));

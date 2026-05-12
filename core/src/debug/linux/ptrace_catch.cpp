@@ -19,7 +19,7 @@ Result<void> LinuxTarget::clear_syscall_catch() {
     syscall_catching_  = false;
     syscall_catch_all_ = false;
     syscall_nrs_.clear();
-    // Don't reset per-thread in_syscall — the kernel still tracks
+    // Don't reset per-thread in_syscall - the kernel still tracks
     // entry/exit alternation across re-arm.
     return {};
 }

@@ -110,7 +110,7 @@ u8 count_printf_specifiers(std::string_view fmt) noexcept {
 // Variadic entries live in `kVariadicImports` above.
 // Element type uses `unsigned` (not u8) so the brace-init list `{"strlen", 1}`
 // doesn't trip MSVC's C4244 narrowing warning under -Werror. The arity itself
-// is small (always ≤ 6) but the storage type doesn't matter — every caller
+// is small (always ≤ 6) but the storage type doesn't matter - every caller
 // reads it back into a u8 / int via `*x.value`.
 std::optional<u8> libc_arity_by_name(std::string_view n) noexcept {
     static const std::pair<std::string_view, unsigned> kTable[] = {

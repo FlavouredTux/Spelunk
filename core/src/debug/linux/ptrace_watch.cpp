@@ -69,7 +69,7 @@ peek_dr(ThreadId tid, int idx) {
 
 // Compose DR7 from the four-slot table. We always set Local Exact (LE)
 // so the CPU isn't relaxed about pipelining writes that would otherwise
-// race the trap. Global slots are never used — the kernel resets DR7
+// race the trap. Global slots are never used - the kernel resets DR7
 // across exec() and we want the same behaviour anyway.
 [[nodiscard]] u64 compose_dr7(const LinuxTarget& t) {
     u64 dr7 = 0;
@@ -93,7 +93,7 @@ peek_dr(ThreadId tid, int idx) {
         const u64 va = (w && w->id) ? static_cast<u64>(w->info.addr) : 0;
         if (auto rv = poke_dr(tid, i, va); !rv) return rv;
     }
-    // DR6 is the trap-status word — clear stale bits before re-arming
+    // DR6 is the trap-status word - clear stale bits before re-arming
     // so a leftover B0..B3 from a previous run can't be misread.
     if (auto rv = poke_dr(tid, 6, 0); !rv) return rv;
     if (auto rv = poke_dr(tid, 7, compose_dr7(t)); !rv) return rv;

@@ -4,8 +4,8 @@
 // the Mach VM API. Reads use mach_vm_read_overwrite into a caller-
 // owned buffer (vs mach_vm_read which would allocate kernel-side
 // storage we'd then have to vm_deallocate). Writes need a protect
-// dance — text segments are typically RX, and mach_vm_write fails on
-// non-writable pages — so we flip RWX, write, restore.
+// dance - text segments are typically RX, and mach_vm_write fails on
+// non-writable pages - so we flip RWX, write, restore.
 
 #include "mach_target.hpp"
 
@@ -78,7 +78,7 @@ MachOTarget::write_mem(addr_t va, std::span<const std::byte> in) {
     const vm_prot_t orig_prot = info.protection;
 
     // Bump to RW with COPY semantics so shared-text pages get a private
-    // CoW copy in the tracee — exactly what gdb/lldb do for int3
+    // CoW copy in the tracee - exactly what gdb/lldb do for int3
     // patches. Without VM_PROT_COPY a write to shared text would fail.
     kern_return_t kp = ::mach_vm_protect(
         task_port_, vaddr, sz, FALSE,
@@ -93,7 +93,7 @@ MachOTarget::write_mem(addr_t va, std::span<const std::byte> in) {
         static_cast<mach_msg_type_number_t>(sz));
 
     // Best-effort restore. A failure here leaves the page wider than
-    // it was — undesirable but not a correctness bug for the debugger.
+    // it was - undesirable but not a correctness bug for the debugger.
     ::mach_vm_protect(task_port_, vaddr, sz, FALSE, orig_prot);
 
     if (kw == KERN_INVALID_ADDRESS) return std::size_t{0};

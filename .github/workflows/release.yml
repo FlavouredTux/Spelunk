@@ -1,79 +1,41 @@
 name: release
 
-# Build the C++ CLI + Electron app for linux / macos / windows and
-# upload the artifacts. Two triggers:
-#   - tag push (v*) → publish a GitHub Release with the artifacts
-#   - manual (workflow_dispatch) → just upload as workflow artifacts
+# Build the C++ CLI + Electron app for Linux / Windows and upload the
+# artifacts. Two triggers:
+#   - tag push (v*) publishes a GitHub Release with the artifacts
+#   - manual (workflow_dispatch) uploads workflow artifacts only
+#
+# macOS is intentionally out of scope for packaged releases until the
+# CLI no longer depends on <print>/std::println support that the
+# macos-14 Apple clang/libc++ toolchain does not provide.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write   # needed for softprops/action-gh-release
+  contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: linux
-            cli_artifact: build/cli/ember
-            package_glob: |
-              ui/release/*.AppImage
-              ui/release/*.deb
-          - os: macos-14
-            target: mac
-            cli_artifact: build/cli/ember
-            package_glob: |
-              ui/release/*.dmg
-              ui/release/*.zip
-          - os: windows-2022
-            target: win
-            cli_artifact: build/cli/ember.exe
-            package_glob: |
-              ui/release/*.exe
-
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    runs-on: ubuntu-24.04
+    container: gcc:16
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Linux toolchain
-        if: matrix.target == 'linux'
+      - name: Install build deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc-16 g++-16 python3
+          apt-get update
+          apt-get install -y cmake ninja-build python3
 
-      - name: macOS toolchain
-        if: matrix.target == 'mac'
-        run: brew install cmake ninja
-
-      - name: Windows toolchain
-        if: matrix.target == 'win'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Configure (linux)
-        if: matrix.target == 'linux'
-        env:
-          CC:  gcc-16
-          CXX: g++-16
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Configure (mac)
-        if: matrix.target == 'mac'
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Configure (win)
-        if: matrix.target == 'win'
+      - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build CLI
         run: cmake --build build --target ember_cli
 
-      # No ctest here — release is gated on successful build only.
+      # No ctest here; release is gated on successful build only.
       # Golden tests live in ci.yml and have their own drift to chase.
 
       - uses: actions/setup-node@v4
@@ -85,26 +47,73 @@ jobs:
 
       - name: Package Electron app
         working-directory: ui
-        # GH_TOKEN env stops electron-builder from trying to publish
-        # mid-build; we upload the artifacts ourselves below.
         env:
           GH_TOKEN: ""
-        run: npm run package:${{ matrix.target }}
+        run: npm run package:linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ember-${{ matrix.target }}
-          path: ${{ matrix.package_glob }}
+          name: ember-linux
+          path: |
+            ui/release/*.AppImage
+            ui/release/*.deb
           if-no-files-found: error
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.package_glob }}
+          files: |
+            ui/release/*.AppImage
+            ui/release/*.deb
           fail_on_unmatched_files: false
-          # Keep release notes curated and stable. Every matrix leg may
-          # attach artifacts, but they all reuse the same checked-in body
-          # instead of appending generated changelog text per platform.
+          overwrite_files: true
+          body_path: .github/release-notes/${{ github.ref_name }}.md
+
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Windows toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build CLI
+        run: cmake --build build --target ember_cli
+
+      # No ctest here; release is gated on successful build only.
+      # Golden tests live in ci.yml and have their own drift to chase.
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '26' }
+
+      - name: Install UI deps
+        working-directory: ui
+        run: npm ci
+
+      - name: Package Electron app
+        working-directory: ui
+        env:
+          GH_TOKEN: ""
+        run: npm run package:win
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ember-win
+          path: ui/release/*.exe
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ui/release/*.exe
+          fail_on_unmatched_files: false
+          overwrite_files: true
           body_path: .github/release-notes/${{ github.ref_name }}.md

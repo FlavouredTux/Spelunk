@@ -21,7 +21,7 @@ namespace ember {
 namespace {
 
 // Map every sub-register (al/ah/ax/eax) to its 64-bit canonical form. Xmm
-// registers are self-canonical — we don't model sub-xmm slicing.
+// registers are self-canonical - we don't model sub-xmm slicing.
 constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::None,
     Reg::Rax, Reg::Rcx, Reg::Rdx, Reg::Rbx,

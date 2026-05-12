@@ -20,7 +20,7 @@ namespace ember {
 //   - pointer / reference / const / volatile decorations
 //   - RTTI type descriptors (`.?AV...@@`, `.?AU...@@`)
 //
-// The output is *names only* — function signatures (parameter types,
+// The output is *names only* - function signatures (parameter types,
 // calling conventions, CV qualifiers, return type) are not rendered. The
 // emitter wants pretty class names for vtable labelling; full sig
 // rendering belongs in a heavier downstream layer.

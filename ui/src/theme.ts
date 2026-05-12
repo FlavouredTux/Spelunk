@@ -98,7 +98,7 @@ const PALETTES: Record<ThemeMode, Palette> = {
   light: LIGHT,
 };
 
-// Mutable export — App swaps the underlying object's fields when the
+// Mutable export - App swaps the underlying object's fields when the
 // theme changes so existing imports of `C` continue to read the live
 // values without every component needing to re-subscribe.
 export const C: Palette = { ...WARM };
@@ -141,7 +141,7 @@ export const SH = {
   xref:       "#d97757",
   addr:       "#87867f",
   // Operators (`+ - * / % < > = ! & | ^ ~ ? :`) get a warmer, slightly
-  // more present shade — they carry meaning and were previously
+  // more present shade - they carry meaning and were previously
   // indistinguishable from punctuation. `punct` (`, ; .`) and `bracket`
   // (`{ } [ ] ( )`) stay gray, with brackets a touch lighter so deep
   // nesting reads as structure rather than fog.
@@ -154,7 +154,7 @@ export const SH = {
   arg:        "#b5a0d8",   // function params: a1, a2, ...
   bound:      "#c8a87a",   // call-return locals: r_fopen, r_strlen, ...
   // Faint vertical guides that mark each level of nesting in pseudo-C
-  // bodies — same family as borders so they fade into the background
+  // bodies - same family as borders so they fade into the background
   // unless you're actively reading structure.
   indent:     "rgba(255,255,245,0.06)",
 };

@@ -43,7 +43,7 @@ bool addr_in_code_section(const Binary& b, addr_t a) noexcept {
 namespace {
 // Common MSVC / clang-on-Windows / SysV-x64 function prologues. The
 // match is on the first 1–4 bytes; the decoder validates the rest.
-// These hits are the tail of an enormous distribution — there are
+// These hits are the tail of an enormous distribution - there are
 // dozens more rare prologue shapes, but adding them costs more in
 // false positives (any random byte sequence has a fixed chance of
 // matching) than it gains in real coverage.
@@ -76,7 +76,7 @@ namespace {
     // 40 53 / 40 55 / 40 56 / 40 57   push rbx / rbp / rsi / rdi (REX-prefixed)
     if (b0 == 0x40 && (b1 == 0x53 || b1 == 0x55 || b1 == 0x56 || b1 == 0x57)) return true;
     // 53 / 55 / 56 / 57   push rbx / rbp / rsi / rdi (no REX)
-    // — only accept these as prologue when followed by a sub rsp
+    // - only accept these as prologue when followed by a sub rsp
     //   or another push, otherwise we false-positive on call sites.
     if ((b0 == 0x53 || b0 == 0x55 || b0 == 0x56 || b0 == 0x57)
         && (b1 == 0x48 || b1 == 0x4C || b1 == 0x53 || b1 == 0x55 || b1 == 0x56 || b1 == 0x57)) {
@@ -112,7 +112,7 @@ namespace {
 }
 
 // Validate a candidate by decoding two instructions. Both must
-// succeed for the candidate to count. Cheap — averages ~10 bytes of
+// succeed for the candidate to count. Cheap - averages ~10 bytes of
 // decode work per acceptance.
 [[nodiscard]] bool validates_as_function_start(const X64Decoder& dec,
                                                 std::span<const std::byte> bytes,
@@ -138,8 +138,8 @@ namespace {
 
 }  // namespace
 
-// Sweep one section's bytes for prologue patterns. Pure function — no
-// shared state — so the parallel driver can have N copies running on
+// Sweep one section's bytes for prologue patterns. Pure function - no
+// shared state - so the parallel driver can have N copies running on
 // disjoint chunks of the same section without coordination.
 [[nodiscard]] static std::vector<addr_t>
 sweep_section_chunk(std::span<const std::byte> data, addr_t base,
@@ -196,7 +196,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
     for (const auto& s : b.sections()) {
         if (!section_is_code(s)) continue;
         if (s.size == 0) continue;
-        // High-entropy code sections are encrypted/packed — a linear
+        // High-entropy code sections are encrypted/packed - a linear
         // sweep there matches noise, not real prologues.
         if (section_looks_encrypted(s)) continue;
         if (s.data.empty()) continue;
@@ -226,7 +226,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
             continue;
         }
 
-        // Tiny sections (or low core counts) — just sweep serially.
+        // Tiny sections (or low core counts) - just sweep serially.
         constexpr std::size_t kSerialThreshold = 1 << 20;     // 1 MB
         if (scope_size < kSerialThreshold || target_workers <= 1) {
             X64Decoder dec;
@@ -261,7 +261,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
         }
         for (auto& t : threads) t.join();
 
-        // Merge into one section vector — order doesn't matter,
+        // Merge into one section vector - order doesn't matter,
         // dedup happens below.
         std::size_t total_hits = 0;
         for (const auto& v : chunk_hits) total_hits += v.size();
@@ -285,7 +285,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
                    std::make_move_iterator(v.end()));
     }
 
-    // Dedup — overlapping prefix patterns can hit the same address,
+    // Dedup - overlapping prefix patterns can hit the same address,
     // and adjacent chunks may both have produced the same hit in
     // their overlap region.
     std::unordered_set<addr_t> seen;

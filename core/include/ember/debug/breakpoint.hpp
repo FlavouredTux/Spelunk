@@ -20,7 +20,7 @@ struct Breakpoint {
 using WatchpointId = u32;
 
 // x86 hardware-debug-register data watchpoints. The CPU does not
-// support read-only watches — DR7's "data read/write" mode (`11`)
+// support read-only watches - DR7's "data read/write" mode (`11`)
 // covers reads, and "data write" (`01`) is the only narrower form.
 // We expose Write and ReadWrite; users asking for "read" get
 // ReadWrite (it'll fire on writes too, but it'll fire on reads,

@@ -27,7 +27,7 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
-    // Lowest *loaded* segment vmaddr — i.e. the linked address of the
+    // Lowest *loaded* segment vmaddr - i.e. the linked address of the
     // first segment a real loader (dyld, or any in-process userspace
     // mapper) would actually map. __PAGEZERO is excluded: it has
     // vmaddr=0 + no permissions and is a placeholder reservation, not
@@ -44,7 +44,7 @@ public:
         return set ? lo : 0;
     }
 
-    // VA span of the binary's loaded segments — same __PAGEZERO
+    // VA span of the binary's loaded segments - same __PAGEZERO
     // exclusion as preferred_load_base so the pair stays consistent.
     // For a typical Mach-O this is __TEXT-through-__LINKEDIT.
     [[nodiscard]] addr_t mapped_size() const noexcept override {

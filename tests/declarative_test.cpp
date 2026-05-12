@@ -56,7 +56,7 @@ void check(bool cond, const char* ctx) {
 }
 
 // A tiny x86-64 image: one defined function `log_handler` at 0x401000
-// that does `lea rax, [rip+0xff9]; ret` — the lea targets 0x402000 in
+// that does `lea rax, [rip+0xff9]; ret` - the lea targets 0x402000 in
 // .rodata, where the string "[HttpClient] hello" lives.
 //
 // Exact byte layout:
@@ -558,7 +558,7 @@ int main() {
     // Edge case: a rename with `;` *inside* a quoted note value (no
     // leading whitespace) must NOT be treated as a meta suffix. Used
     // to guard against false-positive splits on values that contain a
-    // literal `;`. The marker is whitespace-anchored — `something;`
+    // literal `;`. The marker is whitespace-anchored - `something;`
     // doesn't trigger, only ` ; ` does.
     {
         const auto root = scratch_root();
@@ -581,7 +581,7 @@ int main() {
     // …`) used to fail the declarative parser with "directive outside
     // any section". The applier now sniffs the format and merges via
     // `Annotations::load` so a cache file copies cleanly into another
-    // binary's destination — preserving meta records too.
+    // binary's destination - preserving meta records too.
     {
         const auto root = scratch_root();
         const auto p = write_text(root, "persisted.cache",
@@ -592,7 +592,7 @@ int main() {
         ember::Annotations ann;
         auto rv = ember::script::apply_file(p, mb, ann);
         // Important: this used to be std::unexpected. After the sniff,
-        // it's expected to fail — the helper only reads `.ember`. The
+        // it's expected to fail - the helper only reads `.ember`. The
         // CLI path (`run_apply_ember`) handles persisted files
         // separately. So here we exercise the *parser-level* contract:
         // the persisted form is rejected as an .ember script. The

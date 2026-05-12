@@ -6,7 +6,7 @@ namespace ember {
 
 // Phase 2 type inference: refine `Top` to concrete types within a single
 // function using the operations each SSA value participates in. Populates
-// `fn.value_types` in place; safe to call more than once (idempotent — a
+// `fn.value_types` in place; safe to call more than once (idempotent - a
 // second run meets the same evidence into the same lattice points).
 //
 // Rules (intra-procedural, no call-graph awareness yet):

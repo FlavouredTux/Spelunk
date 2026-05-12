@@ -51,7 +51,7 @@ struct SymResolution {
 // Walk the string table at `table_va`, locate every resolver function
 // that writes to a stride-8 run in a writable section, and pair every
 // non-empty string with whichever resolver claimed its slot. Errors
-// only on an unmapped `table_va` — a missing resolver is reported via
+// only on an unmapped `table_va` - a missing resolver is reported via
 // an empty `resolvers` vector and zero `resolved_count`.
 [[nodiscard]] Result<SymResolution>
 resolve_symtable(const Binary& b, addr_t table_va);

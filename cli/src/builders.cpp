@@ -52,7 +52,7 @@ std::string build_xrefs_output(const Binary& b) {
         nodes.insert(e.callee);
     }
     // Kahn: nodes with zero in-degree (never called) emit first. Matches
-    // reader habit — main at top, helpers below.
+    // reader habit - main at top, helpers below.
     std::vector<addr_t> order;
     std::vector<addr_t> ready;
     for (addr_t n : nodes) if (indeg[n] == 0) ready.push_back(n);
@@ -232,7 +232,7 @@ std::string build_int3_resolve_output(const Binary& b) {
             out += "  (outside any function)";
         }
         if (!r.note.empty()) {
-            out += std::format("  — {}", r.note);
+            out += std::format("  - {}", r.note);
         }
         out += "\n";
     }

@@ -8,10 +8,10 @@
 
 namespace ember {
 
-// L3 of TEEF Max — equivalence-orbit fingerprint via bounded
+// L3 of TEEF Max - equivalence-orbit fingerprint via bounded
 // e-graph saturation. Conceptually:
 //
-//   1. Lift the function to ember IR (post-SSA, post-cleanup — same as
+//   1. Lift the function to ember IR (post-SSA, post-cleanup - same as
 //      compute_teef_with_chunks).
 //   2. Walk the IR into an e-graph node-by-node. Arithmetic / bitwise /
 //      compare / cast / select map to first-class e-graph ops; loads,
@@ -29,7 +29,7 @@ namespace ember {
 // Two builds of the same source compiled with different flags or
 // compilers tend to land at *two distinct points in the same orbit*.
 // Both points appear in the saturated e-graph, so their canonical-hash
-// multisets overlap heavily — Jaccard recovers the match where the
+// multisets overlap heavily - Jaccard recovers the match where the
 // single-point cleanup-canonical hash (L2) would miss.
 //
 // Schema bumped on rule-set / canonicalization changes; folded into the
@@ -45,7 +45,7 @@ struct OrbitSig {
     // recovery. Wider than L2's 8 slots because the orbit signal is
     // diluted across more elements.
     std::array<u64, 16>  minhash    = {};
-    // Telemetry — saturation may bail on huge fns (VMP, hand-written asm
+    // Telemetry - saturation may bail on huge fns (VMP, hand-written asm
     // bombs); recognizers may prefer to skip a budget_hit signature.
     u32                  egraph_nodes  = 0;
     u8                   total_iters   = 0;

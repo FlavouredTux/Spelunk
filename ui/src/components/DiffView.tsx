@@ -48,7 +48,7 @@ export function DiffView(props: {
   const [result,  setResult]  = useState<DiffResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
-  // Default to hiding "kept" — the unchanged majority that drowns
+  // Default to hiding "kept" - the unchanged majority that drowns
   // out the interesting deltas. User can flip any chip to include it.
   const [enabled, setEnabled] = useState<Record<DiffTag, boolean>>({
     added: true, removed: true, edited: true, fuzzy: true, moved: true, kept: false,
@@ -212,7 +212,7 @@ export function DiffView(props: {
               fontFamily: serif, fontStyle: "italic", fontSize: 13,
               color: C.textMuted, textAlign: "center",
             }}>
-              Pick a previous build of this binary to compare against — ember
+              Pick a previous build of this binary to compare against - ember
               fingerprints both sides and reports kept / moved / edited /
               added / removed functions.
             </div>
@@ -223,7 +223,7 @@ export function DiffView(props: {
               fontFamily: mono, fontSize: 11,
               color: C.textMuted, textAlign: "center",
             }}>
-              fingerprinting both binaries — first run can take a moment.
+              fingerprinting both binaries - first run can take a moment.
             </div>
           )}
           {error && (
@@ -281,10 +281,10 @@ export function DiffView(props: {
                   )}
                 </div>
                 <span style={{ color: C.textFaint, fontSize: 10 }}>
-                  {e.old_addr ?? "—"}
+                  {e.old_addr ?? "-"}
                   <span style={{ margin: "0 4px" }}>→</span>
                   <span style={{ color: navigable ? C.accent : C.textFaint }}>
-                    {e.new_addr ?? "—"}
+                    {e.new_addr ?? "-"}
                   </span>
                 </span>
               </div>

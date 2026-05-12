@@ -1,11 +1,11 @@
 // Per-renderer-session settings, persisted in localStorage so they
-// survive reloads. UI-side knobs only — the backend has its own
+// survive reloads. UI-side knobs only - the backend has its own
 // flag-driven config and gets the relevant bits passed through with
 // each CLI invocation.
 //
 // Keep this file dependency-free (no React, no api imports) so it can
 // be loaded synchronously during App startup before anything else
-// initializes — the initial state of components like CfgGraph reads
+// initializes - the initial state of components like CfgGraph reads
 // from here.
 
 const STORAGE_KEY = "ember.settings.v1";
@@ -41,7 +41,7 @@ export type AppSettings = {
   // cross-referencing a function with its CFG view.
   showBbLabels: boolean;
   // Pixel font size for code panes (pseudo, IR, asm, etc.). Doesn't
-  // affect CFG graph node bodies — those are sized by the layout
+  // affect CFG graph node bodies - those are sized by the layout
   // algorithm and trying to scale them breaks layout reasoning.
   codeFontSize: number;
   // Monospace font family for code panes. Free-form so users can pin a
@@ -65,7 +65,7 @@ export type AppSettings = {
   // Replay button in Settings → Help clears this back to false.
   seenTutorial: boolean;
   // Discord Rich Presence. On by default in privacy mode (binary +
-  // function names suppressed) — broadcasts only that the user is
+  // function names suppressed) - broadcasts only that the user is
   // running Ember. Toggle off entirely in settings, or flip
   // discordHideBinaryName off to opt in to sharing what's open.
   discordRichPresence: boolean;
@@ -73,7 +73,7 @@ export type AppSettings = {
   // on by default to make Rich Presence safe-by-default. When off, the
   // binary file name and current function are visible to friends.
   discordHideBinaryName: boolean;
-  // Last binary opened — restored automatically on next launch unless
+  // Last binary opened - restored automatically on next launch unless
   // the file has been moved or deleted.
   lastBinary: string;
   // Per-binary view state (last function, bookmarks, ...).
@@ -137,7 +137,7 @@ export function saveSettings(s: AppSettings): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
   } catch {
-    // localStorage full or disabled — settings are best-effort, the
+    // localStorage full or disabled - settings are best-effort, the
     // user's session continues with the in-memory state regardless.
   }
 }

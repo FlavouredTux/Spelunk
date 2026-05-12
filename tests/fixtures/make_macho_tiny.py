@@ -6,7 +6,7 @@ The fixture carries one __TEXT segment with two functions:
   add42 (0x100001006): lea eax, [rdi + 0x2a]; ret        → returns a1+42
 
 LC_MAIN points at entry; LC_SYMTAB lists both with their C names.
-No dynamic imports / dyld-info — we only want to exercise the loader's
+No dynamic imports / dyld-info - we only want to exercise the loader's
 header, segment, symtab, LC_MAIN, and LC_FUNCTION_STARTS paths.
 
 Usage:
@@ -88,7 +88,7 @@ def main() -> int:
     # Simpler: use a one-entry starts list skipping entry=0 is awkward, so
     # fall back to just listing add42 at delta 6. Linker tools treat the
     # __TEXT base itself as implicitly a function start when the first
-    # delta is non-zero — matches what we want for coverage anyway.
+    # delta is non-zero - matches what we want for coverage anyway.
     fn_starts = uleb128(add42_vmaddr - text_vmaddr) + b"\0"
     # Align everything to 8.
     sym_off = link_file_off

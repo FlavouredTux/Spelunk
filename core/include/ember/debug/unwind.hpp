@@ -15,7 +15,7 @@ namespace ember::debug {
 // One stack frame in a backtrace. `sp` is meaningful only for the
 // innermost frame (the live RSP); for frames above we only know the
 // saved frame pointer and return address. `scavenged` = stack-scan
-// hit, not a structured unwind — order isn't guaranteed.
+// hit, not a structured unwind - order isn't guaranteed.
 struct Frame {
     addr_t pc        = 0;
     addr_t fp        = 0;

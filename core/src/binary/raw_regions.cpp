@@ -107,7 +107,7 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
         }
         const auto disk_sz = static_cast<std::size_t>(rf.tellg());
         rf.seekg(0);
-        // The manifest's declared size wins — pad with zeros if the file
+        // The manifest's declared size wins - pad with zeros if the file
         // is shorter (uninitialized BSS-like range), truncate if longer.
         const std::size_t take = std::min<std::size_t>(disk_sz, *sz_r);
         const std::size_t file_off = out->buffer_.size();

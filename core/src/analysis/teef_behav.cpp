@@ -98,7 +98,7 @@ class FlatMapU64 {
     }
 
     [[nodiscard]] u32 slot_for(u64 key) const noexcept {
-        // mix64 already defined above — high-quality hash.
+        // mix64 already defined above - high-quality hash.
         return static_cast<u32>(mix64(key, 0x9e3779b97f4a7c15ULL)) & (cap_ - 1);
     }
 
@@ -122,7 +122,7 @@ class FlatMapU64 {
         delete[] old_ctrl;
     }
 
-    // Insert during rehash — no growth check, no double-probe.
+    // Insert during rehash - no growth check, no double-probe.
     void insert_rehash(u64 key, u64 value) noexcept {
         u32 idx = slot_for(key);
         for (;;) {
@@ -496,7 +496,7 @@ struct Trace {
 }
 
 // Semantic intrinsic modeling. Without this, intrinsics get hashed as
-// `mix64("intr", name, srcs...)` — opaque-by-name. That's fine for two
+// `mix64("intr", name, srcs...)` - opaque-by-name. That's fine for two
 // compilations that both emit the same intrinsic, but breaks down when
 // one compiler lowers a computation to a single intrinsic (e.g. clang
 // emitting `bswap` for a recognized byte-swap idiom) while the other
@@ -672,7 +672,7 @@ struct Trace {
     if (n == "divr.s.64") return do_div(/*quotient=*/false, /*sgn=*/true);
 
     // ---- parity / not_parity: even-parity of low byte -------------------
-    // x86 PF — set when low byte has even number of set bits. The lifter
+    // x86 PF - set when low byte has even number of set bits. The lifter
     // emits these as the cond for Jp/Jnp jumps.
     if (n == "parity" || n == "not_parity") {
         if (inst.src_count < 1) return false;
@@ -688,7 +688,7 @@ struct Trace {
 
     // ---- unordered_fp_compare: NaN check on FP operands -----------------
     // Our abstract value model doesn't track NaN-ness; concrete inputs
-    // are always "ordered" (not NaN). Return 0 — the FP-compare path is
+    // are always "ordered" (not NaN). Return 0 - the FP-compare path is
     // a fallback the lifter only emits after ucomi when the parity flag
     // matters; on synthetic concrete inputs no FP NaN appears.
     if (n == "unordered_fp_compare") {
@@ -706,7 +706,7 @@ struct Trace {
 
 [[nodiscard]] bool step(Trace& t, const IrInst& inst) {
     if (++t.insns_done > kBehavMaxInsnsTrace) {
-        // Trace ran past the per-trace insn budget — most likely an
+        // Trace ran past the per-trace insn budget - most likely an
         // input that hits a deep / infinite loop. Don't kill the trace
         // outright; signal the budget cap into a side-effect so two
         // traces that bottomed out at the same place still produce a
@@ -765,7 +765,7 @@ struct Trace {
             }
             return true;
         case IrOp::Intrinsic:
-            // First try to compute the intrinsic semantically — bswap,
+            // First try to compute the intrinsic semantically - bswap,
             // bsr/bsf, divq/divr/mulh, etc. all have well-defined values
             // we can compute precisely so two compilations that disagree
             // on whether to emit an intrinsic vs. open-coded shifts still
@@ -876,7 +876,7 @@ static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
             }
             if (!picked) {
                 // Entry block phi from the synthetic predecessor (prev=0)
-                // — fall back to the first operand. If still nothing,
+                // - fall back to the first operand. If still nothing,
                 // give up.
                 if (!inst.phi_operands.empty()) picked = t.get(inst.phi_operands[0]);
             }
@@ -959,7 +959,7 @@ static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
                     IrValue probe = IrValue::make_reg(bb.switch_index, IrType::I64);
                     // We don't know the exact version; scan recent
                     // versions in the values map, picking the highest
-                    // version that's bound. (Cheap heuristic — better
+                    // version that's bound. (Cheap heuristic - better
                     // would be tracking last def per reg in the trace.)
                     std::optional<u64> idx;
                     for (u32 ver = 0; ver <= 8 && !idx; ++ver) {
@@ -988,7 +988,7 @@ static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
                 break;
             }
             case IrOp::Unreachable: {
-                // Trap intrinsic / unreachable — record as a side-effect
+                // Trap intrinsic / unreachable - record as a side-effect
                 // and exit cleanly so the trace contributes a hash.
                 t.side_effects.push_back(fnv1a("unreachable"));
                 returned = true;

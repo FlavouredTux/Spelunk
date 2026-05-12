@@ -1,5 +1,5 @@
 /* Exercises Phase 4a-2 vector-shape recognition: a 24-byte struct
- * with three pointer fields at offsets 0, 8, 16 — the canonical
+ * with three pointer fields at offsets 0, 8, 16 - the canonical
  * std::vector<T> layout under libstdc++ / libc++ / MSVC STL.
  *
  * sum_vec reads all three fields and indexes through `begin`. The

@@ -20,7 +20,7 @@ const STEPS: Step[] = [
     title: "Welcome to Ember",
     body:
       "A from-scratch decompiler for x86-64 ELF, Mach-O, and PE. " +
-      "Quick tour through the things you'll use every day — about a minute.",
+      "Quick tour through the things you'll use every day - about a minute.",
   },
   {
     selector: '[data-tutorial="sidebar-search"]',
@@ -59,7 +59,7 @@ const STEPS: Step[] = [
     title: "You're set",
     body:
       "Right-click any identifier in code to rename or attach a note. " +
-      "Renames, signatures, and patches stage into the project file — " +
+      "Renames, signatures, and patches stage into the project file - " +
       "export them from the sidebar to share or version-control.",
   },
 ];
@@ -122,7 +122,7 @@ export function Tutorial(props: { onClose: () => void }) {
         position: "fixed",
         inset: 0,
         zIndex: 3000,
-        // No own backdrop — the spotlight ring uses an inset box-shadow
+        // No own backdrop - the spotlight ring uses an inset box-shadow
         // that paints the dim layer in one element, so the highlight
         // and the dim stay perfectly in sync as the rect updates.
         background: rect ? "transparent" : "rgba(10,10,9,0.55)",

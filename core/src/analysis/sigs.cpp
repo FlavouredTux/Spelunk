@@ -18,7 +18,7 @@
 namespace ember::sigs {
 
 // ============================================================================
-// CRC16 — FLIRT polynomial 0x8408 (reversed CCITT). Public so a future
+// CRC16 - FLIRT polynomial 0x8408 (reversed CCITT). Public so a future
 // `.o`-file sig generator can use the same implementation.
 // ============================================================================
 
@@ -141,7 +141,7 @@ void skip_spaces(std::string_view s, std::size_t& pos) noexcept {
 
     // Tokens: `:offset name`, `@offset name`, `^offset name`. We keep the
     // first `:0000`-offset name as the canonical public name; refs land
-    // in `sig.refs`. Local refs (`^`) are recorded as refs too — the
+    // in `sig.refs`. Local refs (`^`) are recorded as refs too - the
     // matcher just consumes both types interchangeably for now.
     bool got_name = false;
     while (pos < line.size()) {
@@ -149,7 +149,7 @@ void skip_spaces(std::string_view s, std::size_t& pos) noexcept {
         if (pos >= line.size()) break;
         const char tag = line[pos];
         if (tag != ':' && tag != '@' && tag != '^') {
-            // Unknown token kind — abort parsing this line gracefully.
+            // Unknown token kind - abort parsing this line gracefully.
             return std::nullopt;
         }
         ++pos;
@@ -162,7 +162,7 @@ void skip_spaces(std::string_view s, std::size_t& pos) noexcept {
         if (tag == ':') {
             // Take the first public name at offset 0 as the function's name.
             // Later `:offset` entries on the same line are aliases (often a
-            // mangled variant) — ignore for the rename target.
+            // mangled variant) - ignore for the rename target.
             if (!got_name && offset == 0) {
                 sig.name = std::string(name);
                 got_name = true;
@@ -230,7 +230,7 @@ Result<SigDb> load_pats(std::span<const std::filesystem::path> paths) {
         if (!rv) return std::unexpected(rv.error());
         for (auto& s : rv->sigs) out.sigs.push_back(std::move(s));
     }
-    // Dedupe identical (name, prefix) entries — common when two source
+    // Dedupe identical (name, prefix) entries - common when two source
     // collections cover the same library.
     auto key = [](const Sig& s) {
         std::string k = s.name;
@@ -276,7 +276,7 @@ namespace {
 // targets. Bounded by `byte_budget` (typically the sig's reported total
 // length) and a hard step cap so a runaway misdecode can't loop. This is
 // the same pattern arity.cpp's per-path walker uses, minus the BFS over
-// branches — for sig refs we only care about calls discovered on the
+// branches - for sig refs we only care about calls discovered on the
 // fall-through walk, which is what FLIRT itself indexes from the .o.
 [[nodiscard]] std::vector<addr_t>
 linear_calls(const Binary& b, addr_t entry, u32 byte_budget) {
@@ -327,7 +327,7 @@ linear_calls(const Binary& b, addr_t entry, u32 byte_budget) {
 }
 
 // All of `sig.refs` are reachable from this function's call set. Order
-// and offset alignment are not enforced — too brittle when the
+// and offset alignment are not enforced - too brittle when the
 // candidate binary uses a different compiler or optimisation level
 // than the reference. The presence test is enough to break the common
 // "two functions share a prefix but call different libc helpers"
@@ -361,7 +361,7 @@ apply_signatures(const Binary& b,
     for (auto a : existing_renames) skip.insert(a);
 
     for (const auto& fn : candidates) {
-        // Symbol-named functions already have a real name — sigs only
+        // Symbol-named functions already have a real name - sigs only
         // exist to resolve `sub_*`/`vt_*` placeholders.
         if (fn.kind == DiscoveredFunction::Kind::Symbol) continue;
         if (skip.contains(fn.addr)) continue;
@@ -371,7 +371,7 @@ apply_signatures(const Binary& b,
         if (bytes.size() > kPrefixLen) bytes = bytes.subspan(0, kPrefixLen);
 
         // Two-stage collection: first all sigs that pass prefix + CRC,
-        // then refs verification. We harvest call targets lazily — only
+        // then refs verification. We harvest call targets lazily - only
         // when the sig actually has refs to check, and only once per
         // candidate function.
         struct Hit { const Sig* sig; u16 ref_matches; };

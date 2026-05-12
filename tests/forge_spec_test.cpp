@@ -162,7 +162,7 @@ void test_unreachable_target() {
     // 0x401005 is mid-instruction; not a function entry. Expect a clean
     // "out of bounds"-style error rather than a crash.
     auto spec = ember::infer_forge_spec(b, 0x401000, 0x4FFFFF);
-    // 0x4FFFFF is outside any function — expect an Error.
+    // 0x4FFFFF is outside any function - expect an Error.
     check(!spec.has_value(), "out-of-range target rejected");
 }
 

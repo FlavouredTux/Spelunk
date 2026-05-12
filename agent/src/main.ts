@@ -26,7 +26,7 @@ import { tiebreak } from "./tiebreak.js";
 //   runs status <run-id>
 //   runs tail <run-id>
 
-// Defaults from ~/.config/ember/agent.defaults.json — same file the UI
+// Defaults from ~/.config/ember/agent.defaults.json - same file the UI
 // Settings drawer writes through. Lets the CLI inherit user-set
 // per-role models and cascade knobs without retyping them every run.
 function loadAgentDefaults(): Record<string, any> {
@@ -100,7 +100,7 @@ async function cmdWorker(argv: string[]) {
 
     const model = f.get("model") ?? undefined;
     // Per-worker auth-home pick. Single-shot `worker` invocations also
-    // benefit from multi-account rotation — useful when scripting many
+    // benefit from multi-account rotation - useful when scripting many
     // standalone workers from outside cascade.
     const m = model ?? "";
     const cliHome = m.startsWith("assistant-code") ? pickassistantHome()
@@ -277,7 +277,7 @@ async function cmdPromote(argv: string[]) {
     // Default `out` lives next to the intel db rather than next to the
     // binary. Stripped system targets like /usr/bin/sha256sum live in
     // root-owned dirs where writing `<binary>.intel.ember` was failing
-    // with EACCES — and the .ember script is a derived artifact of the
+    // with EACCES - and the .ember script is a derived artifact of the
     // intel.jsonl in the user's cache, so co-locating them is the more
     // honest default. --out still overrides for users who specifically
     // want it as a sidecar of a project-local binary.

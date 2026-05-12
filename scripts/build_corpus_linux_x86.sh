@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a TEEF library-recognition corpus for Linux x86-64.
 #
-# Output: $DEST/*.teef.tsv — one TSV per library. Pass them to
+# Output: $DEST/*.teef.tsv - one TSV per library. Pass them to
 #   ember --recognize <bin> --corpus DIR/*.teef.tsv
 # to auto-rename functions in stripped Linux binaries that statically
 # link any of these runtimes.

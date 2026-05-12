@@ -32,7 +32,7 @@ struct BytePat {
 // instructions by mnemonic and operand shape.  The `mnem` field
 // matches the instruction mnemonic; `opmask` is a bitmask over
 // the operand kinds present (see OpMask bits below).  This lets
-// us recognise algorithmic structure — e.g. ChaCha quarter-round
+// us recognise algorithmic structure - e.g. ChaCha quarter-round
 // is rol-16 / add / xor / rol-12 / add / xor / rol-8 / add / xor / rol-7.
 struct InsnPat {
     Mnemonic mnem;
@@ -82,14 +82,14 @@ static constexpr IS i_sendrecv[]={{"send"},{"recv"}};
 
 // ---- Byte-pattern tables (0xFF = wildcard ??) ----
 
-// AES S-box first 16 bytes — the most reliable AES fingerprint.
+// AES S-box first 16 bytes - the most reliable AES fingerprint.
 static constexpr u8 bp_aes_sbox[]={
     0x63,0x7C,0x77,0x7B,0xF2,0x6B,0x6F,0xC5,
     0x30,0x01,0x67,0x2B,0xFE,0xD7,0xAB,0x76
 };
 static constexpr BytePat bpat_aes_sbox={bp_aes_sbox, sizeof(bp_aes_sbox)};
 
-// AES Inverse S-box first 16 bytes — appears in AES decryption.
+// AES Inverse S-box first 16 bytes - appears in AES decryption.
 static constexpr u8 bp_aes_inv_sbox[]={
     0x52,0x09,0x6A,0xD5,0x30,0x36,0xA5,0x38,
     0xBF,0x40,0xA3,0x9E,0x81,0xF3,0xD7,0xFB
@@ -104,7 +104,7 @@ static constexpr u8 bp_rc4_init[]={
 };
 static constexpr BytePat bpat_rc4_init={bp_rc4_init, sizeof(bp_rc4_init)};
 
-// Base64 encoding table — the classic "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef..."
+// Base64 encoding table - the classic "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef..."
 static constexpr u8 bp_base64[]={
     0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,  // A B C D E F G H
     0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,0x50,  // I J K L M N O P
@@ -159,7 +159,7 @@ static constexpr InsnPat ipat_rc4_swap[]={
 
 // ---- Profile table ----
 static const Profile kProfiles[]={
-  // Hash profiles — constant-based
+  // Hash profiles - constant-based
   {"sha256",      IdentifyCategory::Hash,       0.5f, c_sha256h,8,  nullptr,0,     nullptr,0, nullptr,0},
   {"sha256_k",    IdentifyCategory::Hash,       0.5f, c_sha256k,8,  nullptr,0,     nullptr,0, nullptr,0},
   {"sha1",        IdentifyCategory::Hash,       0.6f, c_sha1,5,     nullptr,0,     nullptr,0, nullptr,0},
@@ -172,24 +172,24 @@ static const Profile kProfiles[]={
   {"fnv1a_64",    IdentifyCategory::Hash,       1.0f, c_fnv1a64,2,  nullptr,0,     nullptr,0, nullptr,0},
   {"crc32",       IdentifyCategory::Hash,       1.0f, c_crc32,1,    nullptr,0,     nullptr,0, nullptr,0},
   {"murmurhash3", IdentifyCategory::Hash,       0.7f, c_murmur3,3,  nullptr,0,     nullptr,0, nullptr,0},
-  // Encryption profiles — constant-based
+  // Encryption profiles - constant-based
   {"chacha20",    IdentifyCategory::Encryption, 0.75f,c_chacha20,4, nullptr,0,     nullptr,0, nullptr,0},
   {"salsa20",     IdentifyCategory::Encryption, 0.75f,c_salsa20,4, nullptr,0,     nullptr,0, nullptr,0},
   {"aes_rcon",    IdentifyCategory::Encryption, 0.4f, c_aes_rcon,10,nullptr,0,     nullptr,0, nullptr,0},
   {"des",         IdentifyCategory::Encryption, 0.5f, c_des,2,      nullptr,0,     nullptr,0, nullptr,0},
   {"xtea",        IdentifyCategory::Encryption, 1.0f, c_xtea,1,     nullptr,0,     nullptr,0, nullptr,0},
-  // Encryption profiles — byte-pattern-based (YARA-like)
+  // Encryption profiles - byte-pattern-based (YARA-like)
   {"aes_sbox",    IdentifyCategory::Encryption, 1.0f, nullptr,0,    nullptr,0,     &bpat_aes_sbox,1,    nullptr,0},
   {"aes_inv_sbox",IdentifyCategory::Encryption, 1.0f, nullptr,0,    nullptr,0,     &bpat_aes_inv_sbox,1,nullptr,0},
   {"rc4_table",   IdentifyCategory::Encryption, 0.7f, nullptr,0,    nullptr,0,     &bpat_rc4_init,1,    nullptr,0},
   {"des_ip_table",IdentifyCategory::Encryption, 1.0f, nullptr,0,    nullptr,0,     &bpat_des_ip,1,      nullptr,0},
-  // Encoding profiles — byte-pattern-based
+  // Encoding profiles - byte-pattern-based
   {"base64",      IdentifyCategory::Encoding,   1.0f, nullptr,0,    nullptr,0,     &bpat_base64,1,      nullptr,0},
-  // Encryption profiles — instruction-sequence-based
+  // Encryption profiles - instruction-sequence-based
   {"chacha_qr",   IdentifyCategory::Encryption, 0.8f, nullptr,0,    nullptr,0,     nullptr,0, ipat_chacha_qr,10},
   {"aes_keyexp",  IdentifyCategory::Encryption, 0.6f, nullptr,0,    nullptr,0,     nullptr,0, ipat_aes_keyexp,6},
   {"rc4_swap",    IdentifyCategory::Encryption, 0.6f, nullptr,0,    nullptr,0,     nullptr,0, ipat_rc4_swap,4},
-  // Network profiles — import-based
+  // Network profiles - import-based
   {"wsa_sendrecv",IdentifyCategory::Network,    0.5f, nullptr,0,    i_wsa,2,       nullptr,0, nullptr,0},
   {"raknet",      IdentifyCategory::Network,    0.5f, nullptr,0,    i_raknet,2,    nullptr,0, nullptr,0},
   {"send_recv",   IdentifyCategory::Network,    0.5f, nullptr,0,    i_sendrecv,2,  nullptr,0, nullptr,0},
@@ -214,7 +214,7 @@ std::unordered_map<u64,u32> collect_imms(const Binary& b, addr_t start, u64 sz) 
             if (insn.operands[i].kind == Operand::Kind::Immediate) {
                 u64 v = static_cast<u64>(insn.operands[i].imm.value);
                 // Sign-extended 32-bit immediates look like 0xFFFFFFFF????????
-                // on x86-64 — recover the original 32-bit pattern.
+                // on x86-64 - recover the original 32-bit pattern.
                 if (v >= 0xFFFFFFFF00000000ull) v &= 0xFFFFFFFFull;
                 if (v >= 0x100)
                     imms[v]++;
@@ -485,7 +485,7 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
             if (signals >= 2) score = std::min(1.0f, score + 0.15f);
 
             // Tiny-fn collision guard. A 12-instruction stub loading
-            // XTEA's `0x9E3779B9` is NOT XTEA — that constant appears
+            // XTEA's `0x9E3779B9` is NOT XTEA - that constant appears
             // in countless hash helpers and PRNGs. Same shape as the
             // teef compareMappings rename: a thin signal in a small
             // function fingerprints to anything. Require ≥ 2 distinct

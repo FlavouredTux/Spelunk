@@ -36,16 +36,16 @@ public:
     // this from a symbol address to get the file-offset / RVA, then add
     // the runtime load base to get the slid runtime address (the
     // debugger does exactly this dance for `b <symbol>` against PIE/ASLR
-    // binaries). Default 0 — appropriate for raw-region inputs and any
+    // binaries). Default 0 - appropriate for raw-region inputs and any
     // format that treats addresses as already-absolute.
     [[nodiscard]] virtual addr_t preferred_load_base() const noexcept { return 0; }
 
     // Total VA span the loader will consume when mapping the binary's
-    // segments — i.e. max(seg.vaddr + seg.memsz) - preferred_load_base().
+    // segments - i.e. max(seg.vaddr + seg.memsz) - preferred_load_base().
     // Used by the debugger's aux-symbol-oracle path to size-match a
     // foreign-format binary (Mach-O / PE / raw) that an in-process
     // userspace loader mmap'd into the tracee, against an anon-rwx
-    // region in /proc/<pid>/maps. Default 0 — formats with segments
+    // region in /proc/<pid>/maps. Default 0 - formats with segments
     // override.
     [[nodiscard]] virtual addr_t mapped_size() const noexcept { return 0; }
 
@@ -80,7 +80,7 @@ public:
     }
 
     // Look up the import whose PLT stub covers `plt_addr`. Accepts any
-    // address within the stub's slot — typically 16 bytes on x86-64 — so
+    // address within the stub's slot - typically 16 bytes on x86-64 - so
     // that callers targeting the middle of a slot (e.g. skipping a leading
     // endbr64 prefix) still resolve to the right import.
     [[nodiscard]] const Symbol*
@@ -108,7 +108,7 @@ public:
     find_all_by_name(std::string_view name) const;
 
     // Invalidate the lookup caches. Loaders call this when symbols_
-    // changes after the initial parse() — e.g. when the PDB sidecar
+    // changes after the initial parse() - e.g. when the PDB sidecar
     // ingestion pass adds names that the on-disk PE didn't carry.
     void invalidate_caches() const noexcept { caches_.reset(); }
 
@@ -125,7 +125,7 @@ public:
 protected:
     // Mutable view of the derived class's symbol storage. Used only
     // by the small number of base-class methods that need to push
-    // synthetic entries — the public `symbols()` accessor stays
+    // synthetic entries - the public `symbols()` accessor stays
     // const-only.
     [[nodiscard]] virtual std::vector<Symbol>& mutable_symbols() noexcept = 0;
 public:
@@ -139,7 +139,7 @@ public:
     // BlockKind::IndirectJmp; if the oracle has entries, it materializes
     // them as concrete successors so the rest of the pipeline sees a
     // resolved CFG. The store is per-`Binary` instance, in-memory only
-    // — restart Ember and you start fresh.
+    // - restart Ember and you start fresh.
     void record_indirect_edge(addr_t from, addr_t to) const;
     [[nodiscard]] std::span<const addr_t>
     indirect_edges_from(addr_t from) const noexcept;
@@ -149,7 +149,7 @@ public:
 private:
     // Lazy lookup caches. Built on first call to any of the lookup helpers
     // above; invalidated only by the loader during parse (which the base
-    // class is not involved in — loaders should not call the lookup helpers
+    // class is not involved in - loaders should not call the lookup helpers
     // while they are still mutating symbols_).
     struct LookupCaches {
         std::unordered_map<std::string_view, const Symbol*> by_name;

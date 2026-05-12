@@ -30,7 +30,7 @@ export type AsmResult = {
 };
 
 // 64-bit GPR names → encoding (low 3 bits go in modrm/opcode, high bit
-// goes in REX.B / REX.R). Aliases not duplicated — write one canonical
+// goes in REX.B / REX.R). Aliases not duplicated - write one canonical
 // name per slot.
 const REG64: Record<string, number> = {
   rax: 0, rcx: 1, rdx: 2, rbx: 3, rsp: 4, rbp: 5, rsi: 6, rdi: 7,
@@ -207,7 +207,7 @@ function encodeLine(src: string, here: bigint): number[] | string {
     return `${mnem}: missing operands or unknown instruction`;
   }
 
-  // Branches — single absolute address operand.
+  // Branches - single absolute address operand.
   if (mnem === "jmp" && operands.length === 1) {
     const t = parseImm(operands[0]);
     if (t === null) return `jmp target must be a numeric address`;
@@ -248,7 +248,7 @@ function encodeLine(src: string, here: bigint): number[] | string {
       add: 0x01, or: 0x09, and: 0x21, sub: 0x29, xor: 0x31,
     };
     if (mnem in arith) {
-      if (!srcReg) return `${mnem} reg, reg only — immediates not supported yet`;
+      if (!srcReg) return `${mnem} reg, reg only - immediates not supported yet`;
       return encArithRR(arith[mnem], dst, srcReg);
     }
   }

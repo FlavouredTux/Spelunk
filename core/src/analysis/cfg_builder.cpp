@@ -102,7 +102,7 @@ struct WalkState {
 // Case-count is derived from a preceding `cmp rI, N` + `ja/jae default` guard
 // (GCC's canonical shape). If that guard isn't found, we probe the table
 // forward and stop as soon as an entry doesn't land inside an executable
-// section — good enough for v1.
+// section - good enough for v1.
 
 [[nodiscard]] const Section*
 find_exec_section_for(const Binary& b, addr_t a) noexcept {
@@ -188,7 +188,7 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
              addr_t jmp_addr,
              Reg /*index_reg_hint*/) {
     // Walk backward from the jmp, scanning up to ~48 instructions (spanning
-    // predecessor blocks is fine — we ignore control flow for this heuristic).
+    // predecessor blocks is fine - we ignore control flow for this heuristic).
     // Match `cmp rX, N` immediately followed by `ja/jae target`; the
     // register name doesn't need to equal the jmp's index register because
     // the compiler often moves it through one or two aliases.
@@ -235,7 +235,7 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
 //   jmp qword ptr [rip + .jump_table + rIDX*8]
 //
 // The outer index table holds dense slot numbers into the (compressed) jump
-// table — many outer values can map to the same target. Returns true and
+// table - many outer values can map to the same target. Returns true and
 // populates `index_table_va`/`entry_bytes`/`outer_reg` if a load-from-rip
 // for `rIDX` is found in the recent instruction window.
 struct OuterTable {
@@ -268,7 +268,7 @@ find_outer_index_table(const std::vector<const Instruction*>& recent, Reg idx_re
         if (s.mem.base == Reg::Rip) {
             // Direct rip-rel form: [rip + disp + idx*sz]. Note: x86-64 doesn't
             // actually allow rip-rel addressing with a SIB index, so this
-            // path is mostly defensive — the lea-then-load form below is
+            // path is mostly defensive - the lea-then-load form below is
             // what real compilers emit.
             if (!s.mem.has_disp) continue;
             base_va = static_cast<addr_t>(in->address + in->length) +
@@ -359,7 +359,7 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
                                  : canonical_reg(outer->outer_reg);
             if (bound) jt.default_tgt = bound->default_tgt;
             // In probe mode (no decoded bound) we tolerate one consecutive
-            // bad entry before giving up — handles rare compiler-emitted
+            // bad entry before giving up - handles rare compiler-emitted
             // unreachable-default slots without becoming a junk-data probe.
             constexpr unsigned kMaxConsecBadProbes = 1;
             unsigned consec_bad = 0;
@@ -395,7 +395,7 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
         }
 
         auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, idx_reg);
-        // Hard cap regardless of the decoded `cmp; ja` bound — a corrupt
+        // Hard cap regardless of the decoded `cmp; ja` bound - a corrupt
         // immediate in that guard could otherwise drive a billions-wide loop.
         // Real compilers fall back to other codegen well below this.
         constexpr u32 kJumpTableMax = 4096;
@@ -520,7 +520,7 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
 
     for (const auto& c : cands) {
         // Need a movsxd/movzx/movsx/mov whose dst is rOFF and whose mem
-        // base is rTAB. Accepts {1,2,4}-byte entries — Pattern (A) uses
+        // base is rTAB. Accepts {1,2,4}-byte entries - Pattern (A) uses
         // 4-byte signed offsets (movsxd); Pattern (E) uses 2-byte or
         // 1-byte entries (movzx/movsx) for dense small-offset switches.
         const Instruction* off_insn = nullptr;
@@ -895,7 +895,7 @@ void CfgBuilder::ensure_known_entries_() const {
         if (s.addr == 0) continue;
         known_entries_.insert(s.addr);
     }
-    // Discovered functions on stripped binaries — without these every
+    // Discovered functions on stripped binaries - without these every
     // tail-call jmp on a stripped target looks like an intra-function
     // branch, and the caller side of `--refs-to <fn>` comes back empty
     // for tail-call-only callers (very common Lua / VM dispatch shape).
@@ -938,7 +938,7 @@ CfgBuilder::build(addr_t entry, std::string name) const {
             if (ws.tables.contains(ip)) continue;
             if (insn.num_operands != 1) continue;
             const auto& op = insn.operands[0];
-            // Only consider "indirect" forms — register or rip-based memory.
+            // Only consider "indirect" forms - register or rip-based memory.
             if (op.kind == Operand::Kind::Relative) continue;
 
             auto table = detect_jump_table(binary_, ws, ip);
@@ -970,7 +970,7 @@ CfgBuilder::build(addr_t entry, std::string name) const {
     compute_predecessors(fn);
 
     // CFG-walk can't reach cleanup/landing-pad tails that the compiler
-    // emitted past a noreturn call — there's no branch leading into them
+    // emitted past a noreturn call - there's no branch leading into them
     // from entry. The exception tables know the true function length,
     // so use them to extend fn.end when they report more than we walked.
     ensure_unwind_ranges_();

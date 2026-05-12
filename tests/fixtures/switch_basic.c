@@ -1,4 +1,4 @@
-/* A small switch with a dense integer selector — exercises the PIC
+/* A small switch with a dense integer selector - exercises the PIC
  * jump-table pattern and the partial-register read that selects the case. */
 
 int describe(int op) {

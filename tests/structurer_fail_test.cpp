@@ -3,7 +3,7 @@
 // Builds a synthetic IrFunction with one reachable Return block plus a
 // disconnected dangling block (no predecessors, no successor edges from
 // the entry). The structurer's build_sequence walks from `start` and
-// never visits the dangling block — without the fix this dropped a
+// never visits the dangling block - without the fix this dropped a
 // real call silently. The fix surfaces the omission as a
 // `STRUCTURER_FAIL: <lo>..<hi>` marker carrying the disconnected
 // block's address range.
@@ -65,7 +65,7 @@ int test_dropped_block_diagnostic() {
     fn.name  = "sub_10404a846";
 
     // Reachable entry: just a Return. Mirrors the simplest valid lifted
-    // shape — single block, kind=Return, no successors. The structurer
+    // shape - single block, kind=Return, no successors. The structurer
     // produces `RegionKind::Block + RegionKind::Return` for this.
     {
         IrBlock bb;
@@ -99,7 +99,7 @@ int test_dropped_block_diagnostic() {
 
     const std::string structured_text = format_structured(*sf_r);
 
-    // The dangling block isn't in the structured tree — confirm the
+    // The dangling block isn't in the structured tree - confirm the
     // marker text carries its exact range so a reader can reach for
     // `--disasm-at 0x10404a8db` to see what the structurer dropped.
     const std::string expected_marker =
@@ -108,13 +108,13 @@ int test_dropped_block_diagnostic() {
           "format_structured emits STRUCTURER_FAIL for dropped block");
 
     // The reachable block should still be referenced by the structured
-    // body — guards against the diagnostic firing on every block (which
+    // body - guards against the diagnostic firing on every block (which
     // would happen if the rendered-set walk got the predicate inverted).
     check(structured_text.find("STRUCTURER_FAIL: 0x10404a846") == std::string::npos,
           "reachable block does not get a STRUCTURER_FAIL marker");
 
     // The pseudo-C emitter's body output should also surface the
-    // marker — the failure diagnostic must reach the actual rendered
+    // marker - the failure diagnostic must reach the actual rendered
     // pseudo-C, not just the structurer's debug printer.
     PseudoCEmitter em;
     auto pc_r = em.emit(*sf_r, /*binary=*/nullptr,
@@ -182,13 +182,13 @@ int test_infinite_loop_body_recovered() {
 
     const std::string structured_text = format_structured(*sf_r);
 
-    // bb_b's address must appear in the rendered tree — the body block
+    // bb_b's address must appear in the rendered tree - the body block
     // would be omitted under the pre-fix `RegionKind::Loop` branch.
     const std::string bb_b_marker = std::format("bb_{:x}", kB);
     check(structured_text.find(bb_b_marker) != std::string::npos,
           "infinite-loop body block surfaces in the structured output");
 
-    // And no STRUCTURER_FAIL should fire for either block — the diagnostic
+    // And no STRUCTURER_FAIL should fire for either block - the diagnostic
     // is a safety net, not a substitute for actually rendering the body.
     check(structured_text.find("STRUCTURER_FAIL") == std::string::npos,
           "no STRUCTURER_FAIL fires for a recovered infinite-loop body");

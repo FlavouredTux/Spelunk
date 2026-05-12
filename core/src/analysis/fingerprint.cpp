@@ -72,7 +72,7 @@ struct Hasher {
 
 // Bucket an immediate into a stable category. Tiny values go in verbatim
 // because they're usually semantic (struct offsets, flag bits, loop bounds).
-// Anything big enough to be an address collapses to a size class — absolute
+// Anything big enough to be an address collapses to a size class - absolute
 // addresses shift between PIE builds and would otherwise explode the hash.
 [[nodiscard]] std::string imm_bucket(i64 v) noexcept {
     if (v >= -15 && v <= 15) {
@@ -122,7 +122,7 @@ struct Hasher {
 }
 
 // If `addr` resolves to a named defined-object symbol, return its name.
-// Used to fold global-data references into the fingerprint — a function
+// Used to fold global-data references into the fingerprint - a function
 // that writes to `g_current_player` is uniquely identified by that xref
 // even if the surrounding code is otherwise shared with similar helpers.
 [[nodiscard]] std::string data_global_name_at(const Binary& b, u64 addr) {
@@ -210,7 +210,7 @@ void hash_inst(Hasher& h, const IrInst& inst, const Binary& b,
             h.token("call:import");
         } else {
             // Direct calls to unnamed addresses: we can't hash the address
-            // without burning PIE stability. Tag as "local" — fuzzy match
+            // without burning PIE stability. Tag as "local" - fuzzy match
             // for call-graph topology happens above this layer.
             h.token("call:local");
         }
@@ -277,7 +277,7 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     }
 
     // Sorted side-sets folded in last. std::set is already sorted, but make
-    // the intent explicit with tagged sections — future additions (e.g. a
+    // the intent explicit with tagged sections - future additions (e.g. a
     // global-data-reference set) slot in without perturbing hashes of old
     // categories.
     h.token("imports");

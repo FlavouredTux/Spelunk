@@ -1,10 +1,10 @@
 // Hardware data watchpoints for the perf backend. Same kernel
-// surface as perf_break.cpp — the only differences are bp_type
+// surface as perf_break.cpp - the only differences are bp_type
 // (HW_BREAKPOINT_W vs _RW vs _X) and the user-visible Watchpoint
 // shape. The four DR slots are pooled across BPs and WPs; the
 // kernel returns ENOSPC and we surface that as a clear error.
 //
-// x86 cannot do read-only watches at the hardware level — DR7's
+// x86 cannot do read-only watches at the hardware level - DR7's
 // length/type field has no "read-only" encoding, only "write only"
 // or "read/write". Users asking for read fire on writes too; we
 // follow the existing Watchpoint::Mode contract from breakpoint.hpp.
@@ -40,7 +40,7 @@ PerfTarget::set_watchpoint(addr_t va, u8 size, WatchMode mode) {
     auto* s = slot(*idx);
     if (!s) {
         return std::unexpected(Error::io(
-            "debugger: internal — install_perf_event returned bad slot index"));
+            "debugger: internal - install_perf_event returned bad slot index"));
     }
     s->is_watch        = true;
     s->wp_info.id      = next_wp_id();

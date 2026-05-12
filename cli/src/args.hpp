@@ -29,13 +29,13 @@ struct Args {
     ember::u64  symuses_min_uses    = 1;   // --min-uses N: drop --symuses rows below N uses
     bool        symuses_show_empty  = false;  // --show-empty: emit --symuses rows with 0 post-filter uses
     bool        symuses_no_taint    = false;  // --no-taint: drop the register-taint walker; emit every
-                                              // matching IMM in candidate fns. Diagnostic only — useful
+                                              // matching IMM in candidate fns. Diagnostic only - useful
                                               // for "did the taint walker miss anything obvious?"
     bool        verbose             = false;  // --verbose: per-callsite TSV under --symuses
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string refs_to_loose;      // --refs-to-loose VA: extend --refs-to with constant-pool /
                                     // imm64 scanning. Surfaces functions whose body holds the
-                                    // target as a literal — the fn-ptr-only case where direct
+                                    // target as a literal - the fn-ptr-only case where direct
                                     // E8/E9 callers are absent (Roblox-style mov reg,imm64;call reg).
     std::string callees;            // --callees VA: print direct call targets of the function at VA
     std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
@@ -43,12 +43,12 @@ struct Args {
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at / --disasm-window
-    std::string disasm_window;      // --disasm-window VA1,VA2,... — batch disassembly. Same per-VA
+    std::string disasm_window;      // --disasm-window VA1,VA2,... - batch disassembly. Same per-VA
                                     // shape as --disasm-at, but emits one block per VA so an agent
                                     // can pipeline thousands of hits without per-call CLI startup.
                                     // `@PATH` reads VAs (one per line) from a file.
     std::string list_syscalls;      // --list-syscalls VA: walk fn @ VA, report each syscall site (file_offset + nr if known)
-    std::string forge_spec;         // --forge-spec ENTRY:VA — minimum struct/branch
+    std::string forge_spec;         // --forge-spec ENTRY:VA - minimum struct/branch
                                     // shape required for control to reach VA from
                                     // ENTRY. ENTRY is a name, hex VA, or sub_<hex>;
                                     // VA is hex / sub_<hex>. JSON form under --json.
@@ -65,7 +65,7 @@ struct Args {
                                     // module Symbol basenames case-insensitively. Affects
                                     // --functions, --recognize, --serve's functions/recognize/
                                     // callees_all/strings_in_range. Out-of-scope addresses are
-                                    // skipped before fingerprinting — the actual bottleneck on
+                                    // skipped before fingerprinting - the actual bottleneck on
                                     // large dumps where most fns are wine-DLL noise.
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
     std::vector<std::string> force_fn_starts; // --force-fn-start VA (repeatable): synthetic Function symbols at these VAs
@@ -87,7 +87,7 @@ struct Args {
     bool dry_run = false;           // --dry-run: with --apply, don't write the result; print TSV to stdout
     bool no_cache = false;          // disable the disk cache entirely
     bool full_analysis = false;     // force pass-2 CFG walk on packed binaries
-                                    // (default: skip it — it just produces
+                                    // (default: skip it - it just produces
                                     // garbage chasing indirect-jmp imm32s
                                     // through encrypted stub code)
     bool json = false;              // --json: machine-readable output where supported
@@ -143,7 +143,7 @@ struct Args {
     ember::u64 max_ir_insts = 0;             // --max-ir-insts N: override the post-lift TEEF IR cap.
                                              // 0 = built-in default.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
-    bool show_provenance = false;   // emit `// confidence: 0.9 (cli) — evidence`
+    bool show_provenance = false;   // emit `// confidence: 0.9 (cli) - evidence`
                                     // header lines under -p when the resolved
                                     // annotation carries metadata. Default off
                                     // because it clutters the listing for
@@ -178,13 +178,13 @@ struct Args {
                                     //   perf   = perf_event_open + /proc/<pid>/mem; HW BP/WP only,
                                     //            no SW BP / no step / no on-demand reg read /
                                     //            no syscall catch. Sets TracerPid=0 in the
-                                    //            target's /proc/self/status — useful when an
+                                    //            target's /proc/self/status - useful when an
                                     //            anti-cheat or other tracer is already attached.
                                     //   auto   = try perf first; fall back to ptrace if the
                                     //            kernel denies perf_event_open (e.g. paranoid≥2)
     std::vector<std::string> debug_args;  // tokens after `--`: argv for the launched program
     // --aux-binary PATH (repeatable): secondary Binary to load as a
-    // symbol oracle for non-ELF code regions in the tracee — i.e.
+    // symbol oracle for non-ELF code regions in the tracee - i.e.
     // Mach-O / PE / raw blobs that an in-process userspace loader
     // mmap'd into anon-rwx memory. Optional `@0xBASE` suffix pins the
     // runtime base when /proc/maps auto-detection isn't unique.

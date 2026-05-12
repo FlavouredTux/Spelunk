@@ -4,7 +4,7 @@ import { displayName } from "../api";
 import type { BinaryInfo, FunctionInfo, StringEntry, Annotations } from "../types";
 
 // Row height in px. Each row is `padding: 5px 20px` over a single line of
-// 11px mono — measured at 24px in practice. If the row layout changes,
+// 11px mono - measured at 24px in practice. If the row layout changes,
 // re-measure or the windowed set will desync from scroll position.
 const ROW_H = 24;
 const OVERSCAN = 8;
@@ -98,7 +98,7 @@ export function StringsView(props: {
     return rows;
   }, [strings, q, onlyReferenced]);
 
-  // Hand-rolled windowing — keeps the DOM at ~50 nodes regardless of how
+  // Hand-rolled windowing - keeps the DOM at ~50 nodes regardless of how
   // many strings the binary has. Replaces the previous MAX_VISIBLE = 500
   // cap that both bottlenecked the render and silently truncated the list.
   const scRef = useRef<HTMLDivElement | null>(null);
@@ -114,7 +114,7 @@ export function StringsView(props: {
     setViewH(el.clientHeight);
     return () => { el.removeEventListener("scroll", onScroll); ro.disconnect(); };
   }, []);
-  // Reset scroll when filter changes — otherwise scrollTop survives a
+  // Reset scroll when filter changes - otherwise scrollTop survives a
   // shrinking list and the user lands in empty space.
   useEffect(() => {
     if (scRef.current) scRef.current.scrollTop = 0;
@@ -313,7 +313,7 @@ export function StringsView(props: {
                       color: s.xrefs.length > 0 ? C.textWarm : C.textFaint,
                       textAlign: "right",
                     }}>
-                      {s.xrefs.length > 0 ? `${s.xrefs.length}×` : "—"}
+                      {s.xrefs.length > 0 ? `${s.xrefs.length}×` : "-"}
                     </span>
                   </button>
                 );

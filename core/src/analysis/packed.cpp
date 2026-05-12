@@ -15,7 +15,7 @@ namespace ember {
 namespace {
 
 // Anything below this is too small to give a stable entropy estimate.
-// 4 KiB is a single page — comfortably above the noise floor while
+// 4 KiB is a single page - comfortably above the noise floor while
 // still flagging tiny encrypted stubs.
 constexpr std::size_t kMinEntropyBytes = 4 * 1024;
 
@@ -34,7 +34,7 @@ constexpr double kEncryptedEntropy = 7.5;
         || name == ".byfron";
 }
 
-// 64 KiB — small enough to catch toy obfuscated samples, large enough
+// 64 KiB - small enough to catch toy obfuscated samples, large enough
 // to ignore the rare legitimate non-exec `.text` (data tables emitted
 // into the code section by some toolchains).
 constexpr std::uint64_t kCodeShapedMinSize = 64 * 1024;
@@ -71,7 +71,7 @@ bool binary_looks_packed(const Binary& b) noexcept {
         }
     }
     // Heuristic 1: entry point not in any executable section. Classic
-    // unpacker stub — runtime decrypts the real code first.
+    // unpacker stub - runtime decrypts the real code first.
     if (entry != 0 && !entry_in_exec) return true;
 
     for (const auto& s : b.sections()) {

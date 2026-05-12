@@ -318,7 +318,7 @@ def main() -> int:
     patch(switch_msvc_rva - rva_text, switch_msvc)
 
     # Index table: outer 0..5 -> slot {0,0,0,1,1,2} (dense compression
-    # of a switch where multiple adjacent cases share a body — exactly
+    # of a switch where multiple adjacent cases share a body - exactly
     # what MSVC's two-table form is meant to compact).
     struct.pack_into("<BBBBBB", rdata,
                      layout["msvc_index_table"] - rva_rdata,

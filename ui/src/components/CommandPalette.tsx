@@ -10,7 +10,7 @@ export function CommandPalette(props: {
   onSelect: (fn: FunctionInfo) => void;
   // Optional handler for "fall through" hex addresses that don't match
   // any function start. App wires this to open the hex view at the
-  // typed address — letting the palette double as a goto-vaddr dialog.
+  // typed address - letting the palette double as a goto-vaddr dialog.
   onJumpAddress?: (vaddr: number) => void;
   onClose: () => void;
 }) {
@@ -80,7 +80,7 @@ export function CommandPalette(props: {
   // a hex value AND the user has supplied the goto handler. We always
   // surface it (even if a function happens to start at that addr) so
   // typing `0x4047b3` with no matching function still gives the user
-  // a way out — opening the hex view at exactly that byte.
+  // a way out - opening the hex view at exactly that byte.
   const showAddressRow =
     parsedVaddr != null && !!props.onJumpAddress;
   // Combined index space for keyboard navigation: row 0 is the

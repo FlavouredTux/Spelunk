@@ -48,13 +48,13 @@ struct ParsedUnwindInfo {
 };
 
 // Resolve and parse the UNWIND_INFO at `unwind_info_va`. Returns nullopt
-// on truncation / corrupt data — caller should treat as "no info".
+// on truncation / corrupt data - caller should treat as "no info".
 [[nodiscard]] std::optional<ParsedUnwindInfo>
 parse_unwind_info(const Binary& b, addr_t unwind_info_va);
 
 // For every PE x64 function with PDATA, the byte range [begin, begin+size_of_prolog)
 // is the prologue. Map function entry VA → prologue end VA.
-// Empty for non-PE / non-x64 / no PDATA. Chained entries are skipped — the
+// Empty for non-PE / non-x64 / no PDATA. Chained entries are skipped - the
 // prologue belongs to the parent.
 [[nodiscard]] std::map<addr_t, addr_t>
 build_prologue_ranges(const Binary& b);

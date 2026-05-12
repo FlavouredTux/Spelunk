@@ -72,22 +72,22 @@ enum class Mnemonic : u16 {
     Cmpxchg, Xadd,
 
     // ---- SSE (decoded to advance length; lifted as intrinsics) ------------
-    Movd,        // 0x66 0x0F 6E — movd xmm, r/m32
-    Movdqa,      // 0x66 0x0F 6F — movdqa xmm, xmm/m128
-    MovdqaStore, // 0x66 0x0F 7F — movdqa xmm/m128, xmm
-    Movdqu,      // 0xF3 0x0F 6F — movdqu xmm, xmm/m128
-    MovdquStore, // 0xF3 0x0F 7F — movdqu xmm/m128, xmm
-    MovqXmm,     // 0xF3 0x0F 7E — movq xmm, xmm/m64 (scalar)
-    MovdStore,   // 0x66 0x0F 7E — movd r/m32, xmm
-    Pxor,        // 0x66 0x0F EF — pxor xmm, xmm/m128
+    Movd,        // 0x66 0x0F 6E - movd xmm, r/m32
+    Movdqa,      // 0x66 0x0F 6F - movdqa xmm, xmm/m128
+    MovdqaStore, // 0x66 0x0F 7F - movdqa xmm/m128, xmm
+    Movdqu,      // 0xF3 0x0F 6F - movdqu xmm, xmm/m128
+    MovdquStore, // 0xF3 0x0F 7F - movdqu xmm/m128, xmm
+    MovqXmm,     // 0xF3 0x0F 7E - movq xmm, xmm/m64 (scalar)
+    MovdStore,   // 0x66 0x0F 7E - movd r/m32, xmm
+    Pxor,        // 0x66 0x0F EF - pxor xmm, xmm/m128
     Pand,        // 0x66 0x0F DB
     Pandn,       // 0x66 0x0F DF
     Por,         // 0x66 0x0F EB
     Pcmpeqb,     // 0x66 0x0F 74
     Pminub,      // 0x66 0x0F DA
     Pmovmskb,    // 0x66 0x0F D7
-    Movups,      // 0x0F 10 — movups xmm, xmm/m128
-    MovupsStore, // 0x0F 11 — movups xmm/m128, xmm
+    Movups,      // 0x0F 10 - movups xmm, xmm/m128
+    MovupsStore, // 0x0F 11 - movups xmm/m128, xmm
     Movaps,      // 0x0F 28
     MovapsStore, // 0x0F 29
     Movhps,      // 0x0F 16
@@ -119,28 +119,28 @@ enum class Mnemonic : u16 {
     Punpckldq,   // 0x66 0x0F 62
     Punpcklqdq,  // 0x66 0x0F 6C
     Punpckhqdq,  // 0x66 0x0F 6D
-    Pshufd,      // 0x66 0x0F 70 — takes an Ib extra
-    Pshuflw,     // 0xF2 0x0F 70 — takes an Ib extra
-    Pshufhw,     // 0xF3 0x0F 70 — takes an Ib extra
-    MovqStore,   // 0x66 0x0F D6 — movq m64, xmm (low 64 bits)
+    Pshufd,      // 0x66 0x0F 70 - takes an Ib extra
+    Pshuflw,     // 0xF2 0x0F 70 - takes an Ib extra
+    Pshufhw,     // 0xF3 0x0F 70 - takes an Ib extra
+    MovqStore,   // 0x66 0x0F D6 - movq m64, xmm (low 64 bits)
     Pcmpeqd,     // 0x66 0x0F 76
     Pcmpeqw,     // 0x66 0x0F 75
     Paddb,       // 0x66 0x0F FC
     Paddw,       // 0x66 0x0F FD
     Paddd,       // 0x66 0x0F FE
     Paddq,       // 0x66 0x0F D4
-    // Packed integer subtract — symmetric to padd family.
+    // Packed integer subtract - symmetric to padd family.
     Psubb,       // 0x66 0x0F F8
     Psubw,       // 0x66 0x0F F9
     Psubd,       // 0x66 0x0F FA
     Psubq,       // 0x66 0x0F FB
     // Packed integer multiply.
-    Pmullw,      // 0x66 0x0F D5  — multiply low signed words
-    Pmulhw,      // 0x66 0x0F E5  — multiply high signed words
-    Pmulhuw,     // 0x66 0x0F E4  — multiply high unsigned words
-    Pmuludq,     // 0x66 0x0F F4  — multiply unsigned 32→64 bits
-    Pmaddwd,     // 0x66 0x0F F5  — multiply-and-add 16→32 bits
-    // Saturating add / subtract — packed integer with clamp-on-overflow.
+    Pmullw,      // 0x66 0x0F D5  - multiply low signed words
+    Pmulhw,      // 0x66 0x0F E5  - multiply high signed words
+    Pmulhuw,     // 0x66 0x0F E4  - multiply high unsigned words
+    Pmuludq,     // 0x66 0x0F F4  - multiply unsigned 32→64 bits
+    Pmaddwd,     // 0x66 0x0F F5  - multiply-and-add 16→32 bits
+    // Saturating add / subtract - packed integer with clamp-on-overflow.
     Psubusb,     // 0x66 0x0F D8
     Psubusw,     // 0x66 0x0F D9
     Paddusb,     // 0x66 0x0F DC
@@ -166,15 +166,15 @@ enum class Mnemonic : u16 {
     // Float shuffles with imm8 selector.
     Shufps,      // 0x0F C6
     Shufpd,      // 0x66 0x0F C6
-    // Word extract — destination is a GPR.
+    // Word extract - destination is a GPR.
     Pextrw,      // 0x66 0x0F C5
     // SSE2 immediate-shift family (0x66 0x0F 71/72/73 with /N opcode
     // extension).
     Psllw, Pslld, Psllq, Pslldq,
     Psrlw, Psrld, Psrlq, Psrldq,
     Psraw, Psrad,
-    Pinsrw,      // 0x66 0x0F C4 — pinsrw xmm, r32, imm8
-    // Bit-scan and double-shift — GPR ops, not SSE.
+    Pinsrw,      // 0x66 0x0F C4 - pinsrw xmm, r32, imm8
+    // Bit-scan and double-shift - GPR ops, not SSE.
     Bsf,         // 0x0F BC
     Bsr,         // 0x0F BD
     Popcnt,      // 0xF3 0x0F B8
@@ -201,7 +201,7 @@ enum class Mnemonic : u16 {
     Cvttsd2si,
     Cvtsd2ss,
     Ucomisd,          // 66 0F 2E
-    Comisd,           // 66 0F 2F — ordered compare
+    Comisd,           // 66 0F 2F - ordered compare
     // Packed min/max (no mandatory prefix and 0x66-prefix forms).
     Minps, Maxps,
     Minpd, Maxpd,

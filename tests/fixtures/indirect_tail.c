@@ -1,7 +1,7 @@
 /* Three shapes the compiler reliably turns into an indirect tail-jmp
  * (`jmp [reg/mem]` or `jmp reg`). Without the indirect-tail-call
  * promotion in the lifter, each of these renders as a bare
- * `__unreachable();` — losing the entire call from the pseudo-C.
+ * `__unreachable();` - losing the entire call from the pseudo-C.
  *
  *   - via_table:   global fn-pointer table indexed at runtime;
  *                  -O2 emits `jmp qword ptr [tbl + idx*8]`.

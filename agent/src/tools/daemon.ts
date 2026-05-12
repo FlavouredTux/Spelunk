@@ -5,7 +5,7 @@ import type { Readable, Writable } from "node:stream";
 //
 // The C++ side is `ember --serve <binary>`. It loads the binary once,
 // then loops: tab-delimited request line in on stdin, length-framed
-// response on stdout. We hold one daemon per binary per worker — the
+// response on stdout. We hold one daemon per binary per worker - the
 // strace traces of fanout runs were 95% wait4(); reusing the same
 // process across 30 tool calls slashes that.
 //
@@ -44,7 +44,7 @@ export class EmberDaemon {
             env,
         });
         this.proc.stdout.on("data", (b: Buffer) => this.onData(b));
-        this.proc.stderr.on("data", () => { /* ignore — agent doesn't surface */ });
+        this.proc.stderr.on("data", () => { /* ignore - agent doesn't surface */ });
         this.proc.on("error", (e) => this.die(e));
         this.proc.on("close", (code) => {
             this.die(new Error(`ember --serve exited (${code})`));
@@ -52,7 +52,7 @@ export class EmberDaemon {
     }
 
     /** Wait for the daemon's "ready" line before sending the first request.
-     *  Times out after 30s — without this the client hangs forever if the
+     *  Times out after 30s - without this the client hangs forever if the
      *  daemon binary is wedged loading (huge binary + concurrent cache
      *  contention from a prior orphan, the failure mode that motivated
      *  PR_SET_PDEATHSIG on the C++ side).
@@ -62,7 +62,7 @@ export class EmberDaemon {
         if (this.deadErr) throw this.deadErr;
         await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => {
-                reject(new Error(`ember --serve handshake timeout (30s) — daemon failed to emit 'ready' line`));
+                reject(new Error(`ember --serve handshake timeout (30s) - daemon failed to emit 'ready' line`));
                 this.die(new Error("handshake timeout"));
             }, 30000);
             this.waitingReady.push(() => { clearTimeout(timer); resolve(); });

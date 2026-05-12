@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld("ember", {
   },
 
   // AI / OpenRouter proxy. The API key is held in the main process and
-  // never crosses the IPC boundary to the renderer — only the resulting
+  // never crosses the IPC boundary to the renderer - only the resulting
   // tokens do, streamed via `ai:chunk` events keyed on a request id.
   ai: {
     getConfig:    ()        => ipcRenderer.invoke("ember:ai:getConfig"),
@@ -108,7 +108,7 @@ contextBridge.exposeInMainWorld("ember", {
     },
   },
 
-  // Agent harness — read-only intel + run telemetry plus driver
+  // Agent harness - read-only intel + run telemetry plus driver
   // verbs (fanout, promote). Workers themselves run as detached
   // processes; the UI just reads their JSONL state.
   agent: {

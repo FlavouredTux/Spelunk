@@ -1,5 +1,5 @@
 // Hardware execute breakpoints for the perf backend. Each BP burns
-// one of the four x86 DR slots (DR0..DR3) — the same physical
+// one of the four x86 DR slots (DR0..DR3) - the same physical
 // resource the watchpoint code uses, so the slot pool is shared.
 // The kernel reports ENOSPC when all four are in use; we surface
 // that as Error::out_of_bounds with a message the REPL can show.
@@ -60,7 +60,7 @@ install_perf_event(PerfTarget& t, addr_t addr, u32 bp_type, u8 len_bytes) {
     const int idx = t.find_free_slot();
     if (idx < 0) {
         return std::unexpected(Error::out_of_bounds(
-            "debugger: no free HW debug slot (4 max — release a "
+            "debugger: no free HW debug slot (4 max - release a "
             "breakpoint or watchpoint first)"));
     }
 
@@ -90,7 +90,7 @@ install_perf_event(PerfTarget& t, addr_t addr, u32 bp_type, u8 len_bytes) {
         }
         if (errno == EACCES || errno == EPERM) {
             return std::unexpected(Error::unsupported(
-                "debugger: perf_event_open denied — set "
+                "debugger: perf_event_open denied - set "
                 "/proc/sys/kernel/perf_event_paranoid to 1 (or below), "
                 "or grant CAP_PERFMON to ember"));
         }
@@ -121,7 +121,7 @@ install_perf_event(PerfTarget& t, addr_t addr, u32 bp_type, u8 len_bytes) {
         ::munmap(ring, bytes);
         ::close(fd);
         return std::unexpected(Error::io(
-            "debugger: internal — find_free_slot returned out-of-range index"));
+            "debugger: internal - find_free_slot returned out-of-range index"));
     }
     sl->fd         = fd;
     sl->ring       = ring;
@@ -145,7 +145,7 @@ Result<BreakpointId> PerfTarget::set_breakpoint(addr_t va) {
     auto* s = slot(*idx);
     if (!s) {
         return std::unexpected(Error::io(
-            "debugger: internal — install_perf_event returned bad slot index"));
+            "debugger: internal - install_perf_event returned bad slot index"));
     }
     s->is_watch        = false;
     s->bp_info.id      = next_bp_id();

@@ -12,7 +12,7 @@ namespace ember {
 // One `syscall` instruction inside a function, paired with whatever
 // we could recover about which syscall it is. `syscall_nr` is set
 // when we found a constant write to rax/eax dominating the syscall
-// site within the function — the typical `mov eax, N; syscall`
+// site within the function - the typical `mov eax, N; syscall`
 // shape. `name` is non-empty when `syscall_nr` matched a known
 // Linux x86-64 syscall number.
 //
@@ -34,7 +34,7 @@ struct SyscallSite {
 //
 // The walk is per-function (no inlining across calls), so a syscall
 // number set in a different function and only carried in via a reg
-// argument shows as unresolved. That's fine — for CFF and obfuscated
+// argument shows as unresolved. That's fine - for CFF and obfuscated
 // code the user mostly wants "where are the syscalls" + "the obvious
 // ones" first, and follows up with the unresolved sites by hand.
 [[nodiscard]] std::vector<SyscallSite>

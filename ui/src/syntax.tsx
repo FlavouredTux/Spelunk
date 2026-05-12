@@ -99,7 +99,7 @@ export function highlightLine(
       i = Math.min(j + 1, len);
       continue;
     }
-    // hex — clickable xref when the address resolves to a known
+    // hex - clickable xref when the address resolves to a known
     // function. Devirtualization checks (`if (vtbl_slot != 0x401210)`)
     // and any literal that happens to be a function entry get the same
     // jump-on-click treatment as `sub_<hex>` already enjoys.
@@ -219,7 +219,7 @@ export function highlightLine(
           } else {
             // Fall-through identifier: most commonly a user-renamed local
             // (applied renderer-side) or a column header like `rax_5`.
-            // Expose the rename context menu — that's the only way a
+            // Expose the rename context menu - that's the only way a
             // user can click an already-renamed token to rename it again.
             tokens.push({
               text: word,
@@ -231,7 +231,7 @@ export function highlightLine(
         continue;
       }
     }
-    // Operators (`+ - * / % < > = ! & | ^ ~ ? : .`) — collapsed into
+    // Operators (`+ - * / % < > = ! & | ^ ~ ? : .`) - collapsed into
     // a single run so multi-char ops (`==`, `!=`, `<=`, `>>`, `&&`,
     // `||`, `->`) read as a unit. Slightly more present than punct so
     // the eye picks out where computation happens vs. where statements
@@ -243,13 +243,13 @@ export function highlightLine(
       i = j;
       continue;
     }
-    // Punctuation (`, ;`) — pure separators, kept dim.
+    // Punctuation (`, ;`) - pure separators, kept dim.
     if (ch === "," || ch === ";") {
       pushStr(ch, { color: SH.punct });
       i++;
       continue;
     }
-    // Brackets (`{ } [ ] ( )`) — visible structure markers, a touch
+    // Brackets (`{ } [ ] ( )`) - visible structure markers, a touch
     // brighter than punct so deep nesting reads as scaffolding.
     if (ch === "{" || ch === "}" || ch === "(" || ch === ")" ||
         ch === "[" || ch === "]") {

@@ -144,7 +144,7 @@ const_addr_with_offset(const std::map<SsaKey, const IrInst*>& defs,
 }
 
 // Look up the resolved method at `vtable + offset` in the union vtable
-// index. The map keys are the *vptr value the code observes* — the
+// index. The map keys are the *vptr value the code observes* - the
 // address held in an object's vptr slot, which equals `methods[0]`.
 //
 // For Itanium classes whose `RttiClass::vtable` points at the typeinfo
@@ -185,13 +185,13 @@ resolve_target(const Binary& b,
     if (auto split = const_addr_with_offset(defs, load_addr)) {
         const addr_t base = split->first;
         const i64 off = split->second;
-        // Path 1 — exact GOT slot.
+        // Path 1 - exact GOT slot.
         if (off == 0) {
             if (const Symbol* imp = b.import_at_got(base); imp != nullptr) {
                 return imp->addr;
             }
         }
-        // Path 2 — base + small. Probe the resulting slot.
+        // Path 2 - base + small. Probe the resulting slot.
         if (off >= 0 && off <= 0x10000) {
             const addr_t slot = base + static_cast<addr_t>(off);
             if (const Symbol* imp = b.import_at_got(slot); imp != nullptr) {
@@ -210,14 +210,14 @@ resolve_target(const Binary& b,
     //   load_addr = vptr_expr + slot_offset
     //   vptr_expr = Load(receiver_const)         (vptr held in a global)
     //
-    // We require the vptr to come from a constant address — the global-
+    // We require the vptr to come from a constant address - the global-
     // object case: `mov rax, [rip+global]; mov rax, [rax]; call [rax+0x18]`.
     auto split = const_addr_with_offset(defs, load_addr);
     // Two shapes feed `load_addr`:
-    //   a) Imm + Imm collapsed to a const — handled above already.
-    //   b) Add(vptr_expr, slot_imm) — vptr_expr is a non-const SSA value.
+    //   a) Imm + Imm collapsed to a const - handled above already.
+    //   b) Add(vptr_expr, slot_imm) - vptr_expr is a non-const SSA value.
     if (split) {
-        // Maybe load_addr is itself a constant pointer to a method —
+        // Maybe load_addr is itself a constant pointer to a method -
         // very rare but: fall through.
     }
     const IrInst* ad = walk_to_def(defs, load_addr);
@@ -290,7 +290,7 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
     //               valid bytes: 0x20..27, 0x60..67, 0xA0..A7, 0xE0..E7
     // A scan that flags any `FF <one of those bytes>` byte position is
     // a superset of indirect calls (false positives in immediate /
-    // displacement bytes don't matter — they just cost a lift). For
+    // displacement bytes don't matter - they just cost a lift). For
     // ember itself this collapses 7606 candidate functions down to ~50.
     auto looks_like_indirect_modrm = [](u8 byte) noexcept {
         const u8 mid = (byte >> 3) & 0b111;
@@ -349,8 +349,8 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
         }
     } else {
         // Architectures we don't have a byte-level filter for fall back
-        // to the original full sweep — call-graph callers plus every
-        // defined entry — so AArch64 BR/BLR cracking still works.
+        // to the original full sweep - call-graph callers plus every
+        // defined entry - so AArch64 BR/BLR cracking still works.
         // Forward `scope` so the call-graph builder only lifts callers
         // we'll keep after the post-build intersect, instead of every
         // function in the binary.

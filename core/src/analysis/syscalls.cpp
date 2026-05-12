@@ -18,7 +18,7 @@ namespace {
 
 // Linux x86-64 syscall name table. Subset that covers ~99% of real
 // userspace usage; gaps in the range render as the raw integer with
-// no name. Indexed directly by syscall number — sparse entries are
+// no name. Indexed directly by syscall number - sparse entries are
 // nullptr.
 //
 // Sourced from arch/x86/entry/syscalls/syscall_64.tbl. Numbers above
@@ -365,7 +365,7 @@ constexpr const char* kLinuxX64Syscalls[] = {
 constexpr u32 kSyscallTableSize =
     sizeof(kLinuxX64Syscalls) / sizeof(kLinuxX64Syscalls[0]);
 
-// True when `r` is rax / eax / ax / al — the architectural register
+// True when `r` is rax / eax / ax / al - the architectural register
 // the syscall ABI uses to pass the syscall number. We treat all four
 // width views as the same write target, since `mov eax, N` clears the
 // high 32 bits of rax (per x86-64 zero-extend rule) and is the
@@ -393,7 +393,7 @@ trace_rax_const(const Function& fn, std::size_t block_idx,
             if (!is_rax_family(dst.reg)) continue;
             // `mov rax/eax, imm`: tracked. Other writes (xor eax,eax;
             // pop rax; arithmetic) are not constant-resolvable here
-            // and abort the trace — including xor-self, which DOES
+            // and abort the trace - including xor-self, which DOES
             // produce zero but isn't always the syscall number the
             // caller intended (zero is `read`, the most common false
             // positive in pre-syscall ABI shuffling).

@@ -17,7 +17,7 @@ class Binary;
 //
 // This is orthogonal to the TEEF recognizer (which matches whole
 // functions against a corpus of known library builds).  Identification
-// recognises *algorithm families* — e.g. "this function is SHA-256"
+// recognises *algorithm families* - e.g. "this function is SHA-256"
 // even if it's a custom implementation, not a stock library copy.
 
 // Category of an identified profile.

@@ -12,14 +12,14 @@
 namespace ember {
 
 // Loader for Microsoft minidump (.dmp) files. The minidump captures a
-// snapshot of a running process — its mapped pages, loaded modules,
+// snapshot of a running process - its mapped pages, loaded modules,
 // thread contexts, exception state. For static analysis we only consume:
 //
-//   * SystemInfoStream  (7) — CPU arch.
-//   * Memory64ListStream (9) preferred, else MemoryListStream (5) — the
+//   * SystemInfoStream  (7) - CPU arch.
+//   * Memory64ListStream (9) preferred, else MemoryListStream (5) - the
 //     mapped pages, indexed by VA. These drive bytes_at().
-//   * MemoryInfoListStream (16) optional — page protection flags.
-//   * ModuleListStream  (4) — loaded modules (A2 will recover symbols
+//   * MemoryInfoListStream (16) optional - page protection flags.
+//   * ModuleListStream  (4) - loaded modules (A2 will recover symbols
 //     from their in-memory PE headers).
 //
 // All other streams are ignored. Phase A1 covers everything except the

@@ -12,11 +12,11 @@
 
 namespace ember {
 
-// TEEF Max — the production fingerprint cascade for ember.
+// TEEF Max - the production fingerprint cascade for ember.
 //
 // Two complementary signals fold into every corpus row:
 //   L2 (this header): hash of the canonicalized post-cleanup IR token
-//        stream. Captures structural identity — same algorithm shape
+//        stream. Captures structural identity - same algorithm shape
 //        across most cosmetic compiler diversity. Single-point hash
 //        with a MinHash[8] sketch for partial-overlap recovery.
 //   L4 (teef_behav.hpp): hash of the I/O-tuple multiset produced by
@@ -57,7 +57,7 @@ struct TeefSig {
 // per function depending on size. Cache aggressively.
 [[nodiscard]] TeefSig compute_teef(const Binary& b, addr_t fn_start);
 
-// One sub-function "chunk" — a region of the structured IR substantial
+// One sub-function "chunk" - a region of the structured IR substantial
 // enough to be its own identification target. Big functions tend to
 // be unrecognizable as a whole between library versions because of
 // refactors (added fast paths, rearranged error handling) but their
@@ -67,13 +67,13 @@ struct TeefSig {
 struct TeefChunk {
     TeefSig sig;
     u32     inst_count = 0;     // structured-region size; weight in matchers
-    u8      kind       = 0;     // RegionKind cast to u8 — for analysis grouping
+    u8      kind       = 0;     // RegionKind cast to u8 - for analysis grouping
 };
 
 struct TeefFunction {
     TeefSig                 whole;
     std::vector<TeefChunk>  chunks;        // sorted by inst_count desc
-    // Identifying strings reachable from this function — fnv1a64 of
+    // Identifying strings reachable from this function - fnv1a64 of
     // up to 8 distinct strings, length-biased toward unique ones. Set
     // only by build_teef_tsv / parse_teef_tsv (TSV-level concept);
     // compute_teef_with_chunks leaves it empty.
@@ -85,7 +85,7 @@ struct TeefFunction {
     // interpreter aborted on this fn (rare; the recognizer's L4 paths
     // gate on it).
     BehavSig                behav;
-    // L0 topology hash — a u64 over a small set of CFG-shape features
+    // L0 topology hash - a u64 over a small set of CFG-shape features
     // (block count, edge count, in/out-degree maxes, loop-header count,
     // return count). Cheap to compute (~5 µs/fn) and serves as a
     // pre-filter for L2 jaccard scans: corpus entries grouped by topo
@@ -98,7 +98,7 @@ struct TeefFunction {
     // L1 byte-prefix hash for tiny fns (≤16 insns AND ≤64 bytes,
     // ≥3 insns). Hashes the decoded instruction sequence with register
     // identity preserved and immediates classed (small literals kept,
-    // large addrs collapsed) — FLIRT-style direct identity for stubs
+    // large addrs collapsed) - FLIRT-style direct identity for stubs
     // where L2/L4 have too little signal to disambiguate. 0 means
     // "not tiny" or decode failed; the recognizer skips L1 on those.
     u64                     prefix_hash = 0;
@@ -137,7 +137,7 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start,
 // topology hash is computed: if `topo_hash ∉ *l4_topo_filter`, the
 // expensive L4 trace pass is skipped (out.behav stays default-zero).
 // Used by `--recognize` to avoid running K=64 traces on target fns
-// whose CFG topology has no counterpart in the loaded corpus —
+// whose CFG topology has no counterpart in the loaded corpus -
 // those fns can't behav-exact match anything anyway. nullptr disables
 // the filter (always compute L4).
 //
@@ -155,7 +155,7 @@ compute_teef_max(const Binary& b, addr_t fn_start,
 // Hash + MinHash a pseudo-C source string directly. Useful for
 // callers that already have the emitted text (the CLI fingerprint
 // command, the UI's per-function diff). Same canonicalization as
-// compute_teef — splitting it out lets us unit-test the hashing
+// compute_teef - splitting it out lets us unit-test the hashing
 // independently of the decompile pipeline.
 [[nodiscard]] TeefSig teef_from_pseudo_c(std::string_view pseudo_c);
 

@@ -19,7 +19,7 @@ export type BinaryInfo = {
   imports: FunctionInfo[];
 };
 
-// `cfg` and `cfgPseudo` differ only in body content — both render in
+// `cfg` and `cfgPseudo` differ only in body content - both render in
 // the graph view. The CfgGraph component owns a toggle that switches
 // between them.
 export type ViewKind = "pseudo" | "asm" | "cfg" | "cfgPseudo" | "ir" | "ssa" | "identify";
@@ -55,7 +55,7 @@ export type Annotations = {
   // Per-function local / arg / SSA-result renames. Outer key is the
   // owning function's address hex; inner map is `from-name → to-name`.
   // Applied renderer-side as word-boundary substitutions on pseudo-C
-  // output — they don't flow through the C++ analysis pipeline (so
+  // output - they don't flow through the C++ analysis pipeline (so
   // they don't show in asm / ir / ssa views, only in pseudo).
   localRenames?: Record<string, Record<string, string>>;
   // Byte patches keyed by virtual-address hex. Each entry replaces
@@ -198,7 +198,7 @@ export type PluginRunResult = {
 
 // Shape pushed to Discord Rich Presence by the renderer. The main
 // process does the field-length / button-URL sanitisation and owns
-// the actual RPC connection — see electron/main.cjs.
+// the actual RPC connection - see electron/main.cjs.
 export type DiscordActivityPayload = {
   details?: string;        // line 1 (e.g. binary file name)
   state?: string;          // line 2 (e.g. function + view)

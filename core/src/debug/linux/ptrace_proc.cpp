@@ -34,7 +34,7 @@ namespace ember::debug::linux_ {
 namespace {
 
 // Default ptrace options applied to every traced thread. EXITKILL
-// makes accidental tracer crashes safe — the tracee dies with us
+// makes accidental tracer crashes safe - the tracee dies with us
 // instead of being orphaned in a stopped state. TRACECLONE fans new
 // threads into our event stream automatically.
 constexpr long kPtraceOptions =
@@ -97,7 +97,7 @@ addr_t parse_hex(std::string_view s) {
 }
 
 // One LoadedImage per unique path with at least one file-backed
-// mapping. Base = lowest mapping start for that path — for an ELF
+// mapping. Base = lowest mapping start for that path - for an ELF
 // the kernel maps the lowest-vaddr PT_LOAD here, so the base lands
 // on the ELF header.
 std::vector<LoadedImage> read_proc_maps(pid_t pid) {
@@ -139,7 +139,7 @@ std::vector<LoadedImage> read_proc_maps(pid_t pid) {
     return out;
 }
 
-// Walk /proc/<pid>/task — the kernel's truth for thread membership.
+// Walk /proc/<pid>/task - the kernel's truth for thread membership.
 // attach_linux uses this once at seize time; ongoing thread tracking
 // rides on PTRACE_EVENT_CLONE in the event loop.
 std::vector<pid_t> read_task_tids(pid_t pid) {

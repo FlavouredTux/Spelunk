@@ -1,7 +1,7 @@
 # Normalize line endings on checkout/checkin.
 * text=auto eol=lf
 
-# GitHub language stats — the Electron UI ships generated TS/JS that
+# GitHub language stats - the Electron UI ships generated TS/JS that
 # would otherwise dominate the repo's language breakdown. Mark
 # vendored / generated paths so GitHub reports ember as a C++ project.
 ui/dist/**          linguist-generated=true
@@ -10,6 +10,6 @@ ui/node_modules/**  linguist-vendored=true
 docs/**             linguist-documentation=true
 tests/golden/**     linguist-generated=true
 
-# Binary fixtures — don't try to diff these.
+# Binary fixtures - don't try to diff these.
 tests/fixtures/**   binary
 *.teef              binary

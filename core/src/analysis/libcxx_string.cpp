@@ -41,7 +41,7 @@ decode_libcxx_string(const Binary& b, addr_t va) {
         return s;
     }
 
-    // Long form: three 8-byte fields — cap (with is_long in bit 0), size,
+    // Long form: three 8-byte fields - cap (with is_long in bit 0), size,
     // data pointer. Mask the flag bit out of cap before sanity checks.
     u64 cap = 0, size = 0, data_ptr = 0;
     std::memcpy(&cap,      obj.data() + 0,  8);

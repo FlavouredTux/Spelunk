@@ -36,7 +36,7 @@ export class OpenRouterLLM extends OpenAILLM {
         // Re-construct the underlying OpenAI client with attribution headers.
         // OpenRouter reads HTTP-Referer + X-Title and surfaces them in the
         // dashboard's App column. Without these, every call shows as
-        // "Unknown" — which makes per-app rate limits and free-tier quotas
+        // "Unknown" - which makes per-app rate limits and free-tier quotas
         // hard to reason about.
         this.client = new OpenAI({
             apiKey,
@@ -58,7 +58,7 @@ export class OpenRouterLLM extends OpenAILLM {
     // OpenRouter routes a single model across many provider hosts. Some hosts
     // are flaky (silent context truncation, sluggish first-token, occasional
     // schema-noncompliant tool calls). Pinning the official provider for a
-    // family avoids that — we forfeit a fraction of cost savings for
+    // family avoids that - we forfeit a fraction of cost savings for
     // determinism, which agents need more than humans do.
     protected extraBody(model: string): Record<string, unknown> {
         if (model.startsWith("deepseek/")) {
@@ -68,7 +68,7 @@ export class OpenRouterLLM extends OpenAILLM {
             return { provider: { order: ["assistant"], allow_fallbacks: false } };
         }
         // OpenAI's open-weight gpt-oss-* family isn't hosted by OpenAI itself
-        // on OpenRouter — Groq (and a few others) carry it. Force Groq for
+        // on OpenRouter - Groq (and a few others) carry it. Force Groq for
         // the speed advantage; otherwise OpenAI provider gets selected and
         // returns 404.
         if (model.startsWith("openai/gpt-oss")) {

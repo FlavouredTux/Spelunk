@@ -5,10 +5,10 @@ import { assemble, bytesToHex } from "../asm";
 type Mode = "asm" | "hex";
 
 // Modal for editing a single byte patch. Two input modes:
-//   asm — type x86-64 assembly (multi-line); branch targets are
+//   asm - type x86-64 assembly (multi-line); branch targets are
 //         absolute addresses, the assembler resolves them to rel32
 //         against the patch site.
-//   hex — raw bytes, space-tolerant (the original IDA-style entry).
+//   hex - raw bytes, space-tolerant (the original IDA-style entry).
 // Length warning surfaces matches / shorter / clobbers-next so
 // you don't accidentally overrun the next instruction.
 export function PatchDialog(props: {
@@ -203,7 +203,7 @@ export function PatchDialog(props: {
                   outline: "none", resize: "vertical",
                 }}
               />
-              {/* Live bytes preview — what we'd write to the sidecar. */}
+              {/* Live bytes preview - what we'd write to the sidecar. */}
               <div style={{
                 marginTop: 6,
                 padding: "6px 10px",

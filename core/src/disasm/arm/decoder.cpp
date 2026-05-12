@@ -135,7 +135,7 @@ void set_ops(Instruction& insn,
 }
 
 // Decode the N:imms:immr field used by logical-immediate to an actual
-// 64-bit (or 32-bit) bitmask. Returns nullopt on invalid encodings —
+// 64-bit (or 32-bit) bitmask. Returns nullopt on invalid encodings -
 // some N/imms/immr triples are reserved.
 [[nodiscard]] std::optional<u64>
 decode_bitmask_imm(unsigned N, unsigned imms, unsigned immr,
@@ -250,11 +250,11 @@ void decode_dp_imm(u32 raw, addr_t addr, Instruction& insn) {
                 case 0b01: insn.mnemonic = Mnemonic::A64Orr;  break;
                 case 0b10: insn.mnemonic = Mnemonic::A64Eor;  break;
                 case 0b11: insn.mnemonic = Rd == 31
-                                ? Mnemonic::Cmp  /* tst alias — but we have ANDS in v1; use Tst-shape */
+                                ? Mnemonic::Cmp  /* tst alias - but we have ANDS in v1; use Tst-shape */
                                 : Mnemonic::A64Ands;
                            break;
             }
-            // ORR Wd, WZR, #imm == MOV Wd, #imm — recognise the alias.
+            // ORR Wd, WZR, #imm == MOV Wd, #imm - recognise the alias.
             if (insn.mnemonic == Mnemonic::A64Orr && Rn == 31) {
                 insn.mnemonic = Mnemonic::A64Mov;
                 set_ops(insn, make_reg(rd), make_imm_u(*bm));
@@ -500,7 +500,7 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
         //   10: STP/LDP 64-bit
         //   11: reserved
         // The previous gate accepted opc=0b11 as LDPSW and STGP-with-L=0
-        // as LDPSW too — reserved encodings (and the not-yet-modelled
+        // as LDPSW too - reserved encodings (and the not-yet-modelled
         // STGP) silently rendered as a 32-bit signed-load-pair, which
         // would mislead anyone reading the disasm against fuzzed input.
         if (opc == 0b11) {
@@ -508,7 +508,7 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
             return;
         }
         if (opc == 0b01 && !L) {
-            // STGP — not yet decoded; fall through to other matchers
+            // STGP - not yet decoded; fall through to other matchers
             // rather than mislabel it.
             return;
         }
@@ -564,7 +564,7 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
         const u8 access_size = static_cast<u8>(1u << size);
         const u32 disp = imm12 * access_size;
         if (V) {
-            // FP/SIMD load/store — emit as opaque LDR/STR with v-reg.
+            // FP/SIMD load/store - emit as opaque LDR/STR with v-reg.
             insn.mnemonic = (opc & 1) ? Mnemonic::A64Ldr : Mnemonic::A64Str;
             set_ops(insn, make_reg(vreg_of(bits(raw, 4, 0))),
                           make_mem(rn, static_cast<i64>(disp), access_size));
@@ -794,7 +794,7 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
     }
 
     // Data processing (2-source): bit 30 = 0, bits 28:21 = 11010110.
-    // The bit-30 guard distinguishes DP-2-source from DP-1-source — both
+    // The bit-30 guard distinguishes DP-2-source from DP-1-source - both
     // share the same bits-28:21 signature, but bit 30 (op) is 0 for DP-2
     // and 1 for DP-1. Without this guard, DP-1 instructions (REV / CLZ /
     // CLS / RBIT / REV16 / REV32) get caught by DP-2's switch first and

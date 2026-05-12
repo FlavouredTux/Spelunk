@@ -2,9 +2,9 @@
 """Emit a minimal x86_64 Microsoft minidump for cross-platform golden tests.
 
 Streams included:
-  * SystemInfoStream    — declares processor architecture = AMD64
-  * Memory64ListStream  — one memory range carrying tiny x86_64 code
-  * ModuleListStream    — one fake module pointing at the memory range,
+  * SystemInfoStream    - declares processor architecture = AMD64
+  * Memory64ListStream  - one memory range carrying tiny x86_64 code
+  * ModuleListStream    - one fake module pointing at the memory range,
                           name "tiny.dll" stored as a UTF-16LE string.
 
 The code in the memory range matches `add42` from make_pe_tiny.py:
@@ -16,7 +16,7 @@ Lifted+decompiled the result should read like the existing pe_tiny.add42
 golden: returns its first arg + 0x2a under the Win64 ABI.
 
 The minidump is structurally valid: signature, version, stream directory,
-and per-stream RVAs all line up. It is not a real process snapshot —
+and per-stream RVAs all line up. It is not a real process snapshot -
 there are no thread contexts, no exception record, no handle table. None
 of those are needed to drive Ember's static-analysis pipeline.
 
@@ -141,7 +141,7 @@ def main() -> int:
     # ---- Stream directory entries ---------------------------------------
     sysinfo_size = 56
     mem64_size   = len(blob) - mem64_rva  # everything from mem64_rva to EOF
-                                          # — but trim back to just the list
+                                          # - but trim back to just the list
     # Actually: the Memory64List "size" field is just the descriptor part
     # (header + entries), not the bytes themselves; the bytes live at
     # BaseRva and are referenced, not embedded.

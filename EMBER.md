@@ -1,4 +1,4 @@
-# Ember — agent reference
+# Ember - agent reference
 
 You are using **Ember**, a from-scratch reverse-engineering toolkit. This
 file is your operating manual: what Ember can tell you, how to ask it,
@@ -22,7 +22,7 @@ A `.ember` annotation file persists everything you discover (renames,
 type signatures, struct field names, named constants, free-form notes).
 Every Ember command reads from it; `--apply` writes to it.
 
-You drive Ember through the CLI. Output is TSV, plain text, or pseudo-C —
+You drive Ember through the CLI. Output is TSV, plain text, or pseudo-C -
 all designed to be parsed by another tool.
 
 ---
@@ -97,7 +97,7 @@ tail.
 | Command | Output | Use when |
 |---|---|---|
 | `ember --refs-to <VA> <binary>` | callers of VA (incl. tail-jumps + code-ptr) | "who uses this?" |
-| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows - `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
 | `ember --refs-to <VA> --json <binary>` | same shape as above, just direct + CodePtr/Lea | machine-readable refs-to for pipelines that prefer structured rows |
 | `ember --containing-fn <VA> <binary>` | enclosing fn entry / size / name / offset | "which function is this in?" |
 | `ember --callees <fn> <binary>` | classified call edges out of fn | "what does this fn call?" |
@@ -113,8 +113,8 @@ tail.
 | `-s <rename>` | resolve a function by its annotation rename, not just its symbol | after `ember annotate`, the new name is reachable directly |
 | `--show-provenance` | with `-p`, surface `// confidence: …` under each annotated function | downstream agent reading pseudo-C wants to know whether to trust the rename |
 | `--functions --json` | function list with `confidence` / `source` / `evidence` columns when set; renames substitute into the `name` column | machine-readable triage; `--functions=cap_check` matches the annotated name |
-| `--list-annotations` | every record in the resolved annotations file (rename / note / signature) with its meta. TSV by default, structured form under `--json` | enumerate notes — `--functions --json` only surfaces named records, so pure `--set-note` annotations are otherwise invisible |
-| `--apply <cache.db>` | same as `--apply <script.ember>` — auto-detects persisted-format cache files | copy annotations between binary versions |
+| `--list-annotations` | every record in the resolved annotations file (rename / note / signature) with its meta. TSV by default, structured form under `--json` | enumerate notes - `--functions --json` only surfaces named records, so pure `--set-note` annotations are otherwise invisible |
+| `--apply <cache.db>` | same as `--apply <script.ember>` - auto-detects persisted-format cache files | copy annotations between binary versions |
 | `--validate NAME` | bound rows include `confidence=` / `source=` when annotated | sanity-check a name with provenance |
 
 Provenance rides through the whole stack: `(confidence, source, evidence)`
@@ -122,7 +122,7 @@ fields persist alongside the rename / note / signature. When the agent
 harness promotes a `.ember` file via `agent/src/promote.ts`, the suffix
 ` ; conf=0.9 ; src=agent:namer ; ev=…` is consumed by `[rename]` /
 `[note]` / `[signature]` directives and written into parallel `*_meta`
-maps. Avoid stating inferences as facts — pass `--confidence` so the
+maps. Avoid stating inferences as facts - pass `--confidence` so the
 next agent / tool can decide whether to verify.
 
 ### Performance
@@ -143,7 +143,7 @@ next agent / tool can decide whether to verify.
 0x000000000040229c    0x47      sub       sub_40229c
 ```
 Columns: `addr`, `size` (hex), `kind` (`symbol` for named, `sub` for
-discovered), `name`. `sub_<hex>` names are placeholders — your job is to
+discovered), `name`. `sub_<hex>` names are placeholders - your job is to
 replace them with meaningful ones.
 
 ### `--strings`
@@ -178,7 +178,7 @@ vtables / callback lists / Lua C-API style runtime tables.
 ### `-p` (pseudo-C)
 - Variables `a1`, `a2`, ... are ABI argument registers.
 - `r_<callee>` (e.g. `r_strlen`) is the return value of a call to that
-  fn — bound to a name when the receiver is used downstream.
+  fn - bound to a name when the receiver is used downstream.
 - `sub_<hex>` is an unnamed function. Rename via the agent loop.
 - `field_<hex>` is an unnamed struct field at offset hex from a
   parameter pointer. Name via `[field]` in `.ember`.
@@ -201,7 +201,7 @@ vtables / callback lists / Lua C-API style runtime tables.
 ```
 
 First two lines: direct call edges (caller fn entry → target). Third
-line: `code-ptr` — `sub_9780` takes the address of `0x405068` at
+line: `code-ptr` - `sub_9780` takes the address of `0x405068` at
 instruction `0x97d8` (likely storing it into a dispatch table). Surface
 the table that lives at the destination of this `lea` to find indirect
 callers.
@@ -212,7 +212,7 @@ callers.
 ```
 Columns: `addr`, `name` (the recognized profile), `category`,
 `confidence`, `signal` (what fired: `constants` / `pattern` /
-`insn_seq` / a `+`-joined combination), `via` (the specific evidence —
+`insn_seq` / a `+`-joined combination), `via` (the specific evidence -
 constants matched, pattern offset, etc.).
 
 ### `--recognize`
@@ -287,17 +287,17 @@ from an automated source (LLM, batch tool).
 
 Numbers you'll see attached to claims, suggestions, identifications:
 
-- **1.00** — exact-match path (behavioural-exact, whole-exact at
+- **1.00** - exact-match path (behavioural-exact, whole-exact at
   unique distinct-name bucket, identify with all required constants
   matched + corroborating signals). Trust enough to auto-apply.
-- **0.85 – 0.99** — high confidence. Cascade workflows promote at
+- **0.85 – 0.99** - high confidence. Cascade workflows promote at
   ≥ 0.85. Spot-check before bulk-applying.
-- **0.60 – 0.84** — likely, but worth a human-grade glance. Especially
-  for functions < 64 bytes — short-fn fingerprints collide.
-- **< 0.60** — speculative. Surface for review, do not auto-rename.
+- **0.60 – 0.84** - likely, but worth a human-grade glance. Especially
+  for functions < 64 bytes - short-fn fingerprints collide.
+- **< 0.60** - speculative. Surface for review, do not auto-rename.
 
 If two claims for the same address are within 0.10 confidence and
-disagree on value, that's a **dispute** — the right move is to gather
+disagree on value, that's a **dispute** - the right move is to gather
 more evidence (xrefs, strings, callees) before picking, not to
 arbitrarily promote the higher one.
 
@@ -314,7 +314,7 @@ Stop trying these things; they're known limits, not bugs:
   evidence; otherwise note the call site and move on.
 - **Function pointers installed by `.init_array` ctors at runtime**
   (Lua C-API tables, plugin registration patterns). Static analysis
-  doesn't see the assignment yet — the table address is computed in
+  doesn't see the assignment yet - the table address is computed in
   ctor code that builds the dispatch slot dynamically. `--refs-to` on
   these returns empty even though they're called constantly.
   Workaround: identify the ctor, read its pseudo-C, manually note the
@@ -330,9 +330,9 @@ Stop trying these things; they're known limits, not bugs:
 - **Computed-goto VM dispatchers** (one big function with `jmp [tab+rax*8]`
   to internal labels) aren't real callers from the compiler's POV.
   `--refs-to` on the "labels" returns nothing because they're not
-  separate functions — read the dispatcher's pseudo-C directly.
+  separate functions - read the dispatcher's pseudo-C directly.
 - **Anti-debug / packed binaries** that flip section permissions at
-  runtime: load a runtime memory image instead — Microsoft minidump
+  runtime: load a runtime memory image instead - Microsoft minidump
   (`ember -p ./crash.dmp`) or a `--regions <manifest>` scrape.
 
 ---
@@ -357,7 +357,7 @@ ember --refs-to 0x402240 <binary>
 ```sh
 ember --identify <binary>     # YARA-like (crypto/hash/encoding)
 ember --recognize --corpus libcrypto.tsv --corpus libssl.tsv <binary>
-                              # TEEF Max — cross-compiler library-fn ID
+                              # TEEF Max - cross-compiler library-fn ID
 ```
 
 **"What's at this hex address?"**
@@ -409,5 +409,5 @@ ember --data-xrefs <binary> | awk '$3=="code-ptr"' \
 ---
 
 If a command in this file disagrees with `ember --help` on a recent
-binary, trust `--help` — Ember's CLI is the source of truth, this
+binary, trust `--help` - Ember's CLI is the source of truth, this
 document is a curated subset.

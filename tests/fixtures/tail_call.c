@@ -2,7 +2,7 @@
  *   - wrap_strlen: last statement is a bare call to another function;
  *     -O2 emits `jmp strlen@PLT`.
  *   - double_wrap: same but calling another defined function in the same
- *     binary — exercises the non-import tail-call path. */
+ *     binary - exercises the non-import tail-call path. */
 
 #include <string.h>
 

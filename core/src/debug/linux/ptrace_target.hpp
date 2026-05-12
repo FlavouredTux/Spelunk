@@ -15,7 +15,7 @@
 namespace ember::debug::linux_ {
 
 // Per-breakpoint bookkeeping kept alongside the public Breakpoint
-// view — we need the original code byte to restore on clear and
+// view - we need the original code byte to restore on clear and
 // during step-over.
 struct SoftwareBreakpoint {
     Breakpoint info{};
@@ -114,7 +114,7 @@ public:
     [[nodiscard]] WpSlot* wp_slot(int idx) { return idx >= 0 && idx < 4 ? &wp_[idx] : nullptr; }
     [[nodiscard]] const WpSlot* wp_slot(int idx) const { return idx >= 0 && idx < 4 ? &wp_[idx] : nullptr; }
 
-    // Thread state — exposed for ptrace_event.cpp's loop to consult
+    // Thread state - exposed for ptrace_event.cpp's loop to consult
     // and update without duplicating the bookkeeping.
     [[nodiscard]] ThreadState&       thread_state(ThreadId tid);
     [[nodiscard]] const ThreadState* thread_state_lookup(ThreadId tid) const;

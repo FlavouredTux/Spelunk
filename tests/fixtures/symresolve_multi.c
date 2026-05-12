@@ -21,7 +21,7 @@ const char m_names[] =
 
 void* m_fns[8];
 
-/* Covers slots 0..2 — short, runs first in the binary's init path. */
+/* Covers slots 0..2 - short, runs first in the binary's init path. */
 __attribute__((noinline))
 void resolver_head(void) {
     m_fns[0] = (void*)(unsigned long)0x1100;
@@ -29,7 +29,7 @@ void resolver_head(void) {
     m_fns[2] = (void*)(unsigned long)0x1300;
 }
 
-/* Covers slots 3..7 — the larger of the two, populates the bulk of
+/* Covers slots 3..7 - the larger of the two, populates the bulk of
  * the table. */
 __attribute__((noinline))
 void resolver_tail(void) {

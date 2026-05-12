@@ -1,6 +1,6 @@
 // Unit tests for the TeefCorpus loader (`core/src/analysis/teef_recognize.cpp`).
 //
-// The corpus loader has historically had no direct test coverage — its
+// The corpus loader has historically had no direct test coverage - its
 // behavior was only exercised end-to-end via `--corpus + --recognize`,
 // which means parser regressions, intern-table bugs, and merge-phase
 // rewrites all flew under the radar. These tests synthesize tiny TSVs
@@ -57,7 +57,7 @@ void check_true(bool cond, const char* ctx) {
     if (!cond) fail(ctx);
 }
 
-// Format a u64 as 16-char lowercase hex — matches build_teef_tsv output.
+// Format a u64 as 16-char lowercase hex - matches build_teef_tsv output.
 std::string hex16(ember::u64 v) {
     char buf[17];
     std::snprintf(buf, sizeof(buf), "%016lx", static_cast<unsigned long>(v));
@@ -102,7 +102,7 @@ std::string make_f_row(ember::u64 addr, ember::u64 l2_exact,
     return row;
 }
 
-// Same as make_f_row but emits a 24-field row (no prefix_hash) — the
+// Same as make_f_row but emits a 24-field row (no prefix_hash) - the
 // pre-max.4 corpus shape we still claim back-compat for.
 std::string make_f_row_24(ember::u64 addr, ember::u64 l2_exact,
                           ember::u64 minhash_seed,
@@ -207,7 +207,7 @@ void test_basic_l2_exact() {
 
 void test_sub_star_dropped() {
     // sub_* rows count toward popularity (trivial-shape guard) but
-    // never become indexed corpus entries — they have no ground-truth
+    // never become indexed corpus entries - they have no ground-truth
     // name to surface.
     std::string tsv;
     tsv += make_f_row(0x1000, 0x1111, 0x10, "sub_1000");
@@ -237,7 +237,7 @@ void test_sub_star_dropped() {
 void test_multi_tsv_merge() {
     // Two TSVs loaded into the same corpus. Names that appear in both
     // intern to the same id (same string content), so the
-    // distinct-name guard treats them as one — same-name replicas
+    // distinct-name guard treats them as one - same-name replicas
     // across versions don't trip the boilerplate floor.
     std::string a;
     a += make_f_row(0x1000, /*l2*/0x9001, 0x10, "memcpy");
@@ -255,12 +255,12 @@ void test_multi_tsv_merge() {
              "multi_tsv_merge: 4 raw F entries indexed");
 
     // memcpy hash appears 2× in whole_exact_, but with one distinct
-    // name — recognizer must surface it as the unique answer, not
+    // name - recognizer must surface it as the unique answer, not
     // ambiguous. (Without the distinct-name guard, raw bucket size
     // 2 with kMaxWholeBucket=8 would still pass; the test ensures
     // the merged corpus actually returns it cleanly.) Confidence is
     // capped at 0.7 by the thin-evidence guard since the query has
-    // no string anchors and no L4 — see test_thin_evidence_cap below
+    // no string anchors and no L4 - see test_thin_evidence_cap below
     // for the rationale.
     auto q = make_query(0x9001, 0x10);
     auto m = c.recognize(q, 3);
@@ -288,7 +288,7 @@ void test_distinct_name_guard_rejects_ambiguous() {
     auto m = c.recognize(q, 3);
     if (!m.empty()) {
         // Either candidate is fine; what's NOT fine is a 1.0 confidence
-        // claim — both are equally valid so confidence must be split.
+        // claim - both are equally valid so confidence must be split.
         check_true(m[0].confidence < 1.0f,
                    "distinct_name_guard: ambiguous match split confidence");
     }
@@ -297,7 +297,7 @@ void test_distinct_name_guard_rejects_ambiguous() {
 
 void test_t_runtime_transition() {
     // T row mid-file flips active runtime. Subsequent F rows pick up
-    // the new tag — verify by querying with a runtime that's
+    // the new tag - verify by querying with a runtime that's
     // compatible with one but not the other.
     std::string tsv;
     tsv += make_t_runtime("rust");
@@ -344,7 +344,7 @@ void test_24_field_back_compat() {
 }
 
 void test_prefix_exact_l1_lane() {
-    // L1 byte-prefix fast path — for tiny fns (≤16 insns / ≤64 bytes)
+    // L1 byte-prefix fast path - for tiny fns (≤16 insns / ≤64 bytes)
     // where L2/L4 collapse to noise. Set a non-zero prefix on both
     // corpus and query.
     std::string tsv;
@@ -359,7 +359,7 @@ void test_prefix_exact_l1_lane() {
     auto m = c.recognize(q, 3);
     check_true(!m.empty(), "prefix_exact: matches");
     if (!m.empty()) {
-        // Either prefix-exact or whole-exact lane — both are valid for
+        // Either prefix-exact or whole-exact lane - both are valid for
         // a single-entry corpus. Just check we got the right name.
         check_eq(m[0].name, std::string{"tiny_stub"}, "prefix_exact: name");
     }
@@ -382,7 +382,7 @@ void test_chunk_vote() {
     (void)c.load_tsv(path);
     check_eq(c.chunk_count(), std::size_t{3}, "chunk_vote: 3 distinct chunks");
 
-    // Query L2 hash deliberately doesn't match the corpus — exercises
+    // Query L2 hash deliberately doesn't match the corpus - exercises
     // the chunk-vote fallback exclusively.
     auto q = make_query(/*l2*/0xDEAD, 0x99);
     ember::TeefChunk c1; c1.sig.exact_hash = 0xC0FFEE01; c1.inst_count = 50;
@@ -399,7 +399,7 @@ void test_chunk_vote() {
 
 void test_thin_evidence_cap() {
     // Whole-exact with a structurally-thin query (no strings, no L4)
-    // is FP-prone on Rust generic helpers — the L2 token stream
+    // is FP-prone on Rust generic helpers - the L2 token stream
     // collides across small impl<T> bodies. Cap confidence to 0.7
     // so the match still surfaces but doesn't auto-promote at the
     // typical 0.85 cascade threshold.
@@ -418,7 +418,7 @@ void test_thin_evidence_cap() {
                    "thin_evidence: capped at 0.7");
     }
 
-    // Same query but with L4 corroboration — cap lifts.
+    // Same query but with L4 corroboration - cap lifts.
     auto q_l4 = make_query(0xCAFE01, 0x10, /*l4*/0x1234);
     auto m_l4 = c.recognize(q_l4, 3);
     check_true(!m_l4.empty(), "thin_evidence: L4 query matches");
@@ -432,7 +432,7 @@ void test_thin_evidence_cap() {
 void test_boilerplate_label_cap() {
     // drop_in_place / panic / fmt-trait names are correct-but-useless
     // labels. A single-collision lookup must NOT auto-rename a query
-    // function with one of these — cap confidence to 0.7 even when
+    // function with one of these - cap confidence to 0.7 even when
     // the structural and string evidence is otherwise solid.
     std::string tsv;
     tsv += make_f_row(0x1000, /*l2*/0xDEADC0DE, 0x10,
@@ -444,7 +444,7 @@ void test_boilerplate_label_cap() {
     ember::TeefCorpus c;
     (void)c.load_tsv(path);
 
-    // Query with matching strings — would normally get conf 1.0 via
+    // Query with matching strings - would normally get conf 1.0 via
     // whole-exact, but the boilerplate-label cap demotes to 0.7.
     auto q = make_query(0xDEADC0DE, 0x10);
     q.string_hashes = {0xAAA1, 0xAAA2};
@@ -523,7 +523,7 @@ void test_boilerplate_label_mangled_forms() {
         auto m = c.recognize(q, 3);
         check_true(!m.empty(), tc.desc);
         if (!m.empty()) {
-            // Cap should fire — confidence ≤ 0.7 regardless of how
+            // Cap should fire - confidence ≤ 0.7 regardless of how
             // strong the structural collision was.
             check_true(m[0].confidence <= 0.7f, tc.desc);
         }
@@ -536,7 +536,7 @@ void test_behav_exact_l2_corroboration() {
     // identical L4 multiset hashes across semantically-unrelated fns
     // whose I/O arity happens to match. behav-exact at 1.0 was firing
     // even when the L2 minhash jaccard between query and matched
-    // candidate was 0 — a single-signal label. Require ≥0.25 L2
+    // candidate was 0 - a single-signal label. Require ≥0.25 L2
     // jaccard (2/8 slots) to keep behav-exact at 1.0; weaker L2 caps
     // the match to 0.7 so it surfaces for review.
     std::string tsv;
@@ -573,7 +573,7 @@ void test_behav_exact_l2_corroboration() {
 
 void test_behav_exact_low_entropy_floor() {
     // Small / low-entropy fns can collide on BOTH L4 trace AND L2
-    // minhash simultaneously — the canonicalized token stream is so
+    // minhash simultaneously - the canonicalized token stream is so
     // short that it sketches into a tiny set of unique slot values,
     // and 2/8 minhash agreement happens by chance. Tighten the L2
     // floor when the query's minhash has few unique slot values
@@ -634,7 +634,7 @@ void test_behav_exact_topo_disagreement() {
     // compiler versions = same high-level CFG = same topo. Spurious
     // L4 collisions across semantically-unrelated fns differ in
     // topo. Even when L4 hash matches AND L2 jaccard clears the
-    // floor, a topo mismatch caps the match — wrapper fns stop
+    // floor, a topo mismatch caps the match - wrapper fns stop
     // getting confidently labeled as libstdc++ regex internals.
     std::string tsv;
     // Corpus: an entry with L4=0xC0FFEE, topo=0xAAAA, full-entropy
@@ -656,7 +656,7 @@ void test_behav_exact_topo_disagreement() {
                    "topo_disagree: capped despite L4+L2 agreement");
     }
 
-    // Query agrees on all three signals — stays at 1.0.
+    // Query agrees on all three signals - stays at 1.0.
     auto q_ok = make_query(/*l2*/0xDEADBEEF, /*mh*/0x100,
                            /*l4*/0xC0FFEE, /*topo*/0xAAAA);
     auto m_ok = c.recognize(q_ok, 3);
@@ -688,7 +688,7 @@ void test_partition_variants_dropped_at_load() {
     check_eq(c.function_count(), std::size_t{1},
              "partition_variants: only base fn indexed");
 
-    // Direct lookup of a partition-variant hash returns no matches —
+    // Direct lookup of a partition-variant hash returns no matches -
     // the index doesn't have it.
     auto q = make_query(0xBBBB, 0x20);  // .cold's hash
     auto m = c.recognize(q, 3);
@@ -730,7 +730,7 @@ void test_anti_corpus_blocks_l2() {
     check_true(m.empty(), "anti_corpus_l2: blocked query returns no matches");
 
     // A second corpus instance loaded WITHOUT anti-corpus must surface
-    // the match — confirms the block is what made the difference, not
+    // the match - confirms the block is what made the difference, not
     // some pre-existing reason the query couldn't match.
     ember::TeefCorpus c2;
     (void)c2.load_tsv(corpus_path);
@@ -785,7 +785,7 @@ void test_anti_corpus_blocks_l4_and_prefix() {
 
 void test_chunk_vote_thin_evidence_cap() {
     // Chunk-vote with no string anchor and no L4 corroboration is
-    // the most FP-prone lane — multiple unrelated functions share
+    // the most FP-prone lane - multiple unrelated functions share
     // chunk shapes. Cap to 0.7.
     std::string tsv;
     tsv += make_f_row(0x1000, /*l2*/0x77001, 0x10, "vote_winner");

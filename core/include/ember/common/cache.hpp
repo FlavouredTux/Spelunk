@@ -15,7 +15,7 @@ inline constexpr int kVersion = 14;
 std::filesystem::path default_dir();
 
 // `scope_tag`, when non-empty, is folded into the manifest before
-// hashing — use it to differentiate cache slots that share the same
+// hashing - use it to differentiate cache slots that share the same
 // binary but were produced under different analysis scopes
 // (e.g. --module restricts enumerate_functions to one DLL of a
 // minidump; without folding the scope into the key, switching modules

@@ -12,9 +12,9 @@ namespace ember {
 // Global indirect-call resolver. Walks every discovered function's SSA IR
 // looking for `CallIndirect` whose target traces back to one of:
 //
-//   1. `Load(imm_addr)` where imm_addr is a known import GOT slot — the
+//   1. `Load(imm_addr)` where imm_addr is a known import GOT slot - the
 //      thunk's PLT/IAT address is recorded.
-//   2. `Load(imm_addr + small_const)` — same as above, one arithmetic hop.
+//   2. `Load(imm_addr + small_const)` - same as above, one arithmetic hop.
 //   3. Vtable dispatch through a constant vtable address: the SSA def-walk
 //      bottoms out at `Load(vtable_const + slot*8)`. Resolved against the
 //      union of Itanium (`parse_itanium_rtti`) and MSVC (`parse_msvc_rtti`)
@@ -25,13 +25,13 @@ namespace ember {
 // emitter renders an unresolved function-pointer-slot call as a named
 // function call.
 //
-// Only fires when the receiver/vtable resolves to a CONSTANT — runtime
+// Only fires when the receiver/vtable resolves to a CONSTANT - runtime
 // receiver-typed dispatch needs IPA (Phase 3) and is intentionally
 // out of scope here.
 //
 // `cache`, when non-null, is reused for every per-function lift this pass
 // performs. Pass IPA's cache through and the resolver only re-lifts the
-// (small) subset of functions IPA didn't touch — typically reduces this
+// (small) subset of functions IPA didn't touch - typically reduces this
 // pass's cost from "lift every function again" to ~zero on a binary that
 // just ran through `--ipa`.
 //

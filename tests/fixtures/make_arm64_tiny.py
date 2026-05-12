@@ -42,7 +42,7 @@ def build() -> bytes:
 
     # add x0, x0, #42  (sf=1, op=add, sh=0, imm12=0x2a, Rn=0, Rd=0)
     # ret              (br opc=0010, Rn=30; encoding RET defaults to x30)
-    # Encoding: sf<<31 | fixed<<23 | imm12<<10 — note imm12 sits in bits
+    # Encoding: sf<<31 | fixed<<23 | imm12<<10 - note imm12 sits in bits
     # 21:10, NOT bits 11:0; that's a frequent off-by-N when hand-coding.
     code  = struct.pack("<I", 0x9100A800)
     code += struct.pack("<I", 0xD65F03C0)

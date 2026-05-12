@@ -53,7 +53,7 @@ export function SkelCode(props: { lines?: number; lineHeight?: number }) {
   const lineH = props.lineHeight ?? 20;
   const widths = useMemo(() => {
     const out: number[] = [];
-    // Hand-tuned "shape" — depth-of-indent tracks block structure so
+    // Hand-tuned "shape" - depth-of-indent tracks block structure so
     // the placeholder reads as code, not as blocks of static text.
     for (let i = 0; i < lines; i++) {
       const t = (Math.sin(i * 1.7) + 1) * 0.5;     // 0..1

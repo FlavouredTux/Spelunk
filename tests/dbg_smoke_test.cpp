@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
     CHECK(hit->id == bp_id,       "bp id mismatch");
     CHECK(hit->pc == bp_va,       "bp pc mismatch");
 
-    // Register read/write round-trip — exercises the same get_regs /
+    // Register read/write round-trip - exercises the same get_regs /
     // set_regs path that backs the REPL's `set` command. Read, mutate
     // a callee-saved-but-unused register, write back, read again to
     // verify it stuck. Restore before continuing so the tracee's
@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
         CHECK(t->set_regs(tid, regs_w).has_value(), "set_regs restore");
     }
 
-    // Memory read/write round-trip — exercises the same write_mem /
+    // Memory read/write round-trip - exercises the same write_mem /
     // read_mem path the REPL's `poke` / `x` commands use. The bp
     // overwrote the first byte at bp_va with a 0xCC trap; round-trip
     // a single byte through a stack-resident scratch slot instead so
@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
         const auto tid = tids.front();
         auto regs = t->get_regs(tid);
         CHECK(regs.has_value(), "get_regs for stack");
-        // Pick a slot a few bytes below RSP — within the red zone the
+        // Pick a slot a few bytes below RSP - within the red zone the
         // SysV ABI guarantees the kernel won't trample. Read it,
         // verify, then write a fresh pattern, verify, then restore.
         const ember::addr_t scratch = regs->rsp - 16;
@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
     // (0x401122 in the non-PIE fixture) MUST be on the stack and
     // MUST satisfy both filters. Use the `main` symbol's extent
     // directly to check rather than going through containing_function
-    // — CFG-discovered sub_* synthesised on a non-entry block boundary
+    // - CFG-discovered sub_* synthesised on a non-entry block boundary
     // can otherwise out-rank the real symbol in the binary search.
     {
         const auto* main_sym = (*bin)->find_by_name("main");
@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
         CHECK(found,                                "scavenge surfaces a frame inside main()");
     }
 
-    // Hardware watchpoint round-trip — exercises the DR0..DR3 path.
+    // Hardware watchpoint round-trip - exercises the DR0..DR3 path.
     // Arm a write-watch on `watch_slot`, drop the bp at dbg_marker so
     // we don't re-hit it, continue, expect the store in main() to
     // trip the watchpoint, then continue to exit.
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
         CHECK(t->clear_watchpoint(wp_id).has_value(), "clear watchpoint");
     }
 
-    // Syscall catchpoint round-trip — the C runtime issues exit_group
+    // Syscall catchpoint round-trip - the C runtime issues exit_group
     // (nr 231) on `return 42`. Filter on that nr, continue, and expect
     // an EvSyscallStop entry stop before the process actually exits.
     {
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
         CHECK(sc->nr == kExitGroup,                          "syscall nr is exit_group");
         CHECK(sc->entry == true,                             "syscall entry stop");
 
-        // Don't bother clearing — just resume; exit_group never returns,
+        // Don't bother clearing - just resume; exit_group never returns,
         // so the next event should be the process actually exiting.
     }
 

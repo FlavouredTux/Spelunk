@@ -1,7 +1,7 @@
 /* Multi-emit lea-form access pattern. The table base is loaded once
  * via an imm64-stored slot (g_base_ptr); each consumer then uses
  * `lea reg, [tainted_base + disp]` once per offset within the same
- * basic block. This is the shape sober's actual consumers use — base
+ * basic block. This is the shape sober's actual consumers use - base
  * stays in a register across multiple offset computations.
  *
  * Distinguishes from symuses_imm64 which exercises the
@@ -35,7 +35,7 @@ void uses_alpha_and_delta(void) {
 __attribute__((noinline))
 void uses_bravo(void) {
     const char* p = g_base_ptr;
-    g_seen_b = p + 0x07;             /* one-shot — emit bravo via add or lea */
+    g_seen_b = p + 0x07;             /* one-shot - emit bravo via add or lea */
 }
 
 __attribute__((noinline))

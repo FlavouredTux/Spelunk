@@ -13,7 +13,7 @@
 namespace ember::pdb {
 
 // Public symbol from the PDB's symbol-record stream. Coordinates are
-// (segment, offset) pairs — segment is a 1-based index into the PE's
+// (segment, offset) pairs - segment is a 1-based index into the PE's
 // section table, offset is the byte offset inside that section. Resolving
 // to a VA is the caller's responsibility (the PDB does not carry the
 // image base or section addresses).
@@ -28,7 +28,7 @@ struct PublicSymbol {
 // inside a procedure scope. The offset's frame of reference is named
 // by `reg`: CV register IDs CV_AMD64_RSP (332) / CV_AMD64_RBP (333)
 // are the only ones we currently translate. `reg == 0` is the
-// S_BPREL32 form — implicit RBP on x64 — and is treated like the
+// S_BPREL32 form - implicit RBP on x64 - and is treated like the
 // REGREL32-RBP case downstream.
 struct LocalVarSymbol {
     std::string name;
@@ -39,7 +39,7 @@ struct LocalVarSymbol {
 
 // Per-procedure symbol from a module's compile-unit stream
 // (S_GPROC32 / S_LPROC32 / *_ID variants). Carries a TPI/IPI type
-// index on top of the address — the link to the function's signature.
+// index on top of the address - the link to the function's signature.
 struct ProcSymbol {
     std::string name;
     u32         section_offset = 0;
@@ -62,7 +62,7 @@ struct DataSymbol {
 };
 
 // PDB Info stream (stream 1) header. The GUID + age form the unique
-// identity stamp the PE's CodeView RSDS record refers to — verifying
+// identity stamp the PE's CodeView RSDS record refers to - verifying
 // the match is a cheap way to reject mismatched PDB / EXE pairs.
 struct PdbInfo {
     u32 version    = 0;            // 20000404 (V41) / 20030901 (V50) / 20091201 (V70)
@@ -77,7 +77,7 @@ struct PdbInfo {
 // read-access to each stream as a contiguous byte buffer.
 //
 // Stream-index conventions (well-known):
-//   1 = PDB Info        (signature, age, GUID — used to match against
+//   1 = PDB Info        (signature, age, GUID - used to match against
 //                        the .exe's CodeView entry)
 //   2 = TPI             (type index)
 //   3 = DBI             (debug info header + module list)
@@ -112,23 +112,23 @@ private:
 };
 
 // Parsed CodeView type record. We collapse the LF_* universe into a
-// small enum + a few unioned fields — every consumer in Ember speaks
+// small enum + a few unioned fields - every consumer in Ember speaks
 // "render to a C string", not "I need to programmatically inspect a
 // struct's field list."
 struct TypeRecord {
     enum class Kind : u8 {
         Unknown,    // unrecognized leaf code; rendered as `?`
-        Pointer,    // LF_POINTER — to base_type, with const/volatile/ref bits
-        Modifier,   // LF_MODIFIER — const/volatile wrap around base_type
+        Pointer,    // LF_POINTER - to base_type, with const/volatile/ref bits
+        Modifier,   // LF_MODIFIER - const/volatile wrap around base_type
         Array,      // LF_ARRAY
-        Procedure,  // LF_PROCEDURE — return + arg list + call conv
-        MFunction,  // LF_MFUNCTION — like Procedure plus class/this
-        ArgList,    // LF_ARGLIST — list of arg types
+        Procedure,  // LF_PROCEDURE - return + arg list + call conv
+        MFunction,  // LF_MFUNCTION - like Procedure plus class/this
+        ArgList,    // LF_ARGLIST - list of arg types
         Structure,  // LF_STRUCTURE / LF_CLASS
         Union,      // LF_UNION
         Enum,       // LF_ENUM
         Bitfield,   // LF_BITFIELD
-        Alias,      // LF_ALIAS — typedef-ish wrapper
+        Alias,      // LF_ALIAS - typedef-ish wrapper
     };
 
     Kind kind = Kind::Unknown;
@@ -170,7 +170,7 @@ struct TypeRecord {
 
 // Flat type table indexed by CodeView type index. TPI hands us
 // records with indices in [ti_begin, ti_end); we materialize them
-// lazily during parse (no explicit hash stream is consulted —
+// lazily during parse (no explicit hash stream is consulted -
 // renaming "look up by name" isn't a current consumer).
 class TpiTable {
 public:
@@ -186,7 +186,7 @@ public:
     [[nodiscard]] const TypeRecord*
     lookup(u32 type_index) const noexcept;
 
-    // Render `type_index` as a C type string — primitives get their
+    // Render `type_index` as a C type string - primitives get their
     // canonical short names (`int`, `unsigned int`, `char*`, `void`),
     // structs/classes/unions get their name (or an anonymous tag when
     // the PDB didn't carry one), pointers/modifiers wrap recursively.
@@ -215,8 +215,8 @@ struct PdbReader {
 
 // Read the PDB at `path`, walk every interesting stream, return a
 // fully-populated reader. Any individual sub-parse that fails is
-// non-fatal — the caller still gets whatever bits we managed to
-// extract — except for the MSF / DBI header parse, which is the
+// non-fatal - the caller still gets whatever bits we managed to
+// extract - except for the MSF / DBI header parse, which is the
 // minimum viable surface (without it we can't find anything else).
 [[nodiscard]] Result<PdbReader>
 load_pdb(const std::filesystem::path& path);

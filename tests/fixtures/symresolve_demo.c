@@ -7,7 +7,7 @@
  *
  * Built with `-nostartfiles -Wl,-e,main` so CRT glue doesn't pollute
  * the search space. The constants stored into g_fns are nonsense as
- * far as runtime behaviour goes — the binary is parsed by ember, not
+ * far as runtime behaviour goes - the binary is parsed by ember, not
  * executed. */
 
 #include <stddef.h>

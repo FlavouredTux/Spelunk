@@ -137,7 +137,7 @@ trace_to_arg_slot(const IrFunction& fn,
     return std::nullopt;
 }
 
-// Resolve a call's target to (charp_bitset, typed_params) — combines the
+// Resolve a call's target to (charp_bitset, typed_params) - combines the
 // import-sigs table for known imports and the IPA's running `known` map
 // for our own functions. Returns true if we got any usable callee info.
 struct CalleeInfo {
@@ -162,7 +162,7 @@ struct CalleeInfo {
                 if (!spec->params[i].is_top()) out.any = true;
             }
         }
-        // Bridge the legacy charp table — covers any name not yet in
+        // Bridge the legacy charp table - covers any name not yet in
         // import_sigs (Win32, etc.) so we don't regress char* slots.
         for (u8 k = 0; k < out.charp.size(); ++k) {
             out.charp[k] = libc_arg_is_charp(name, static_cast<u8>(k + 1));
@@ -257,7 +257,7 @@ std::set<addr_t> collect_entries(const Binary& b) {
 }
 
 // Translate a TypeRef from `src` arena into `dst`. Recurses on Ptr
-// pointees; struct/array translation is left as future work — Phase 3 v0
+// pointees; struct/array translation is left as future work - Phase 3 v0
 // only flows scalar + pointer types.
 [[nodiscard]] TypeRef translate(const TypeArena& src, TypeArena& dst, TypeRef r) {
     if (r.is_top())    return dst.top();

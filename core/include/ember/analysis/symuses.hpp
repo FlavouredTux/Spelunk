@@ -20,7 +20,7 @@ struct SymUseSite {
 
 // One row of the per-function aggregated view. `sites` is sorted by
 // callsite address. `walks_full_table` is set when the function has
-// access to the table base — either by direct rip-rel ref to it or
+// access to the table base - either by direct rip-rel ref to it or
 // by reading a slot whose value is the table base. Loose-scope rows
 // have non-empty `base_load_sites`; that's the diagnostic signal for
 // "we admitted this fn into the scope because it loads the base via
@@ -47,7 +47,7 @@ struct SymUses {
 struct SymUseOptions {
     // When true, drop the lightweight register-taint walker and emit
     // every IMM operand in candidate fns that lands on an exact entry
-    // offset. Bumps recall but spikes false positives — `0x10` is a
+    // offset. Bumps recall but spikes false positives - `0x10` is a
     // common struct-field constant and matches `_ITM_*` on a typical
     // ELF table. Diagnostic only.
     bool no_taint = false;
@@ -57,7 +57,7 @@ struct SymUseOptions {
 // every function whose body references it. Three discovery paths:
 //   (1) direct rip-rel / abs-mem refs to the entry VA
 //       (the `lea reg, [rip+entry_va]` shape)
-//   (2) imm64-stored slots — readable-section qwords that hold
+//   (2) imm64-stored slots - readable-section qwords that hold
 //       `table_va`; functions that read those slots are admitted
 //   (3) ELF R_*_RELATIVE relocations whose addend == table_va
 // For paths (2)/(3), each candidate fn is re-decoded under a tiny

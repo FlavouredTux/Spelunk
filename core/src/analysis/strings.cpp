@@ -35,7 +35,7 @@ void scan_section(const Section& sec, std::vector<StringEntry>& out) {
     if (sec.data.empty()) return;
     if (!sec.flags.readable) return;
     // Mach-O puts `__cstring` (and `__const`, `__ustring`, etc.) inside the
-    // executable `__TEXT` segment — so filtering by the segment's X bit
+    // executable `__TEXT` segment - so filtering by the segment's X bit
     // means we miss the overwhelming majority of string literals on Mach-O.
     // The printable-run + NUL-terminated checks below filter out code bytes
     // perfectly well; trust them instead of a permissions heuristic.
@@ -110,7 +110,7 @@ std::vector<StringEntry> scan_strings(const Binary& b) {
     }
 
     // For an operand-derived absolute address, find the string whose range
-    // *contains* the address — since lea/mov/call immediates always target the
+    // *contains* the address - since lea/mov/call immediates always target the
     // string start, we only match exact starts (simpler and avoids false hits
     // into the middle of a string).
     auto match = [&](addr_t a) -> StringEntry* {
@@ -123,7 +123,7 @@ std::vector<StringEntry> scan_strings(const Binary& b) {
     // the results vector still contains every string in the binary on
     // any arch. Xref collection requires decoding instructions, which
     // currently only the X64Decoder does in this file. Bail before the
-    // xref walk on non-x86 — strings still surface, the xrefs column
+    // xref walk on non-x86 - strings still surface, the xrefs column
     // is just empty (the same as a stripped binary with no decodable
     // callers). Better than the prior silent miscount where each
     // discovered fn's bytes failed to decode and advanced one byte at a

@@ -37,7 +37,7 @@ struct CfgInfo {
     // Immediate post-dominators. `ipdom[b]` is the first node that every
     // non-terminating path from `b` passes through. `kNoAddr` (the virtual
     // exit) means every path from `b` terminates with no finite merge.
-    // Used by the structurer to pick if/switch convergence points — proper
+    // Used by the structurer to pick if/switch convergence points - proper
     // post-dominance, not a BFS-depth heuristic.
     std::unordered_map<addr_t, addr_t>      ipdom;
     // loop_headers stays std::map because find_loops iterates it to populate
@@ -196,7 +196,7 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
             const bool s2_loops = can_reach(s2, backs, /*forbidden=*/header);
             if (s1_loops && !s2_loops)      { info.loop_exit[header] = s2; continue; }
             else if (s2_loops && !s1_loops) { info.loop_exit[header] = s1; continue; }
-            // Both arms loop — header's conditional is internal to the
+            // Both arms loop - header's conditional is internal to the
             // body (e.g. a skip-and-accumulate fork), and the real exit
             // sits on a back-edge tail. Fall through to do-while
             // detection rather than leaving loop_exit unset, which would
@@ -329,7 +329,7 @@ public:
 
     // Append the merge's `Block + Return` pair to `branch`, materialising
     // `branch` as a Seq if it isn't one already. `pred` is the CFG predecessor
-    // along this branch — used by make_return_from_block's phi resolution to
+    // along this branch - used by make_return_from_block's phi resolution to
     // pick the operand that actually flowed in along this path.
     void sink_return_into_branch(std::unique_ptr<Region>& branch,
                                  const IrBlock& mbb, addr_t pred) {
@@ -354,14 +354,14 @@ public:
 
         // Default: branch terminated internally (return / goto / break /
         // continue). Only natural fall-through exits update this with the
-        // actual exit-pred — see end of function.
+        // actual exit-pred - see end of function.
         if (out_last_block) *out_last_block = kNoAddr;
 
         addr_t current = entry;
         // Last block we just walked through, in order to identify the CFG
         // predecessor of a Return / inline target. Reset whenever we descend
         // into a sub-region whose own seq could end on multiple predecessors
-        // (if/else, switch, loop) — those merge points are genuinely multi-pred
+        // (if/else, switch, loop) - those merge points are genuinely multi-pred
         // and the phi resolution should leave the value as a real merge.
         addr_t last_block = kNoAddr;
         while (current != kNoAddr && current != stop) {
@@ -409,7 +409,7 @@ public:
             switch (bb.kind) {
                 case BlockKind::Return:
                 case BlockKind::TailCall: {
-                    // TailCall was lifted as `call; return rax;` — the block
+                    // TailCall was lifted as `call; return rax;` - the block
                     // ends with a Return IR inst, identical in shape to a
                     // Return block. Treat them uniformly. `last_block` is the
                     // single CFG predecessor we walked in from (kNoAddr if we
@@ -427,7 +427,7 @@ public:
                 case BlockKind::Switch: {
                     seq->children.push_back(make_block(current));
                     auto sw = build_switch(bb);
-                    // Pick a merge point for what comes after the switch —
+                    // Pick a merge point for what comes after the switch -
                     // approximate the post-dominator as the shortest point
                     // reachable from every case target.
                     addr_t merge = compute_switch_merge(bb);
@@ -471,7 +471,7 @@ public:
                     // If the merge is a phi-only return block, sink the
                     // return into each branch that actually falls through to
                     // it, with the phi resolved per that branch's exit
-                    // predecessor — turning `return rax_N;` into
+                    // predecessor - turning `return rax_N;` into
                     // `return 0;` / `return -1;` per arm.
                     //
                     // Branches that already terminated internally (via
@@ -499,7 +499,7 @@ public:
                                 sink_return_into_branch(else_r, mbb, else_last);
                             }
                             // No else region but the merge is phi-only-return
-                            // — the condition-false path falls through and
+                            // - the condition-false path falls through and
                             // also needs a resolved return after the if.
                             // Predecessor for that operand is the conditional
                             // block itself (`current`).
@@ -535,7 +535,7 @@ public:
                                     make_return_from_block(mbb, current));
                             }
                         }
-                        // Merge consumed (in branches and/or trailing) —
+                        // Merge consumed (in branches and/or trailing) -
                         // nothing more to emit at this level.
                         if (out_last_block) *out_last_block = kNoAddr;
                         return seq;
@@ -553,7 +553,7 @@ public:
 
         // Natural exit: we walked off the loop because `current == stop` (or
         // hit kNoAddr). `last_block` holds the predecessor of `stop` along
-        // this branch — the caller (e.g. the if/else handler) needs it to
+        // this branch - the caller (e.g. the if/else handler) needs it to
         // resolve a phi at the merge.
         if (out_last_block) *out_last_block = last_block;
         return seq;
@@ -578,7 +578,7 @@ public:
         // For sparse switches the compiler pads the jump table by pointing
         // missing-case slots at the default block. Without recognising this,
         // those slots render as `case N:` falling through to the next
-        // listed body — a bald lie about control flow. Treat any case
+        // listed body - a bald lie about control flow. Treat any case
         // whose target equals the default's target as "covered by default"
         // and drop it from the rendered switch entirely.
         const addr_t dflt_target =
@@ -590,7 +590,7 @@ public:
         // body would otherwise render as empty (each arm is just a
         // br-to-merge after cleanup hoists case-specific assignments
         // into the merge's phi). Sink the return into each non-empty
-        // case body, with the phi resolved per the case's exit pred —
+        // case body, with the phi resolved per the case's exit pred -
         // typically the case's own block when it falls through to merge
         // directly, which is the common compiler-emitted shape for big
         // jump-table switches over enums returning a value.
@@ -603,7 +603,7 @@ public:
             }
         }
 
-        // De-duplicate cases that share the same target — the resulting
+        // De-duplicate cases that share the same target - the resulting
         // switch would be structurally identical; instead we group them
         // by target and let the emitter render multiple "case N:" labels
         // before a single body. We encode this by emitting empty children
@@ -669,7 +669,7 @@ public:
             // successors actually IS the loop's exit. Otherwise the
             // header's conditional is an *internal* branch (e.g. a
             // skip-and-accumulate inside a do-while body), and we must
-            // fall through to do_while detection — picking up the
+            // fall through to do_while detection - picking up the
             // tail-tested predicate from the back-edge tail. Without
             // this guard the header's internal cond gets emitted as the
             // loop test, swallowing one of its arms entirely.
@@ -756,7 +756,7 @@ public:
                 // approximate by requiring the address to be a Temp or Reg.)
                 // Delta RHS must be an Add/Sub(Load(same_addr), Imm) shape.
                 // That's the exact invariant we already rely on in the
-                // emitter's peephole — if it matches, it'll render cleanly.
+                // emitter's peephole - if it matches, it'll render cleanly.
                 for_update_block = tail;
                 for_update_inst  = static_cast<u32>(k);
                 return true;
@@ -833,14 +833,14 @@ public:
         } else if (do_while) {
             // Walk header → tail via the body path. Stop *before* dw_tail so
             // its cond-branch isn't rendered as `if (cond) continue; else break;`
-            // — the trailing `} while (cond);` already carries the predicate.
+            // - the trailing `} while (cond);` already carries the predicate.
             // Then emit dw_tail's block (non-branch insts) as the loop's last
             // body element so observable effects match the asm.
             if (header != dw_tail && !bb.successors.empty()) {
                 if (bb.kind == BlockKind::Conditional &&
                     bb.successors.size() == 2) {
                     // Header has its own *internal* conditional (neither arm
-                    // is the loop exit — that's at dw_tail). Structure the
+                    // is the loop exit - that's at dw_tail). Structure the
                     // two arms as an if/else inside the body so the skip /
                     // accumulate halves both render. Without this, only
                     // bb.successors[0]'s path is emitted and the other arm
@@ -907,7 +907,7 @@ public:
     // Emit a Return region carrying the best available return-value source
     // from `bb`'s Return instruction (same policy the Conditional switch uses).
     // `from_pred`, when known, is the immediate CFG predecessor in the cloned
-    // structural context — used to resolve the value through any Phi whose
+    // structural context - used to resolve the value through any Phi whose
     // operand list mentions it (e.g. a fail/success arm rendered into one of
     // its predecessors as `return -1;` / `return 0;` instead of `return rax_N;`).
     [[nodiscard]] std::unique_ptr<Region>
@@ -946,7 +946,7 @@ public:
     // A "trivial tail" is a chain of at most 6 blocks linked by Unconditional/
     // Fallthrough edges, ending in a Return or TailCall block. Phi nodes and
     // Calls are fine: duplicating them in the textual pseudo-C doesn't change
-    // observed behaviour — both paths still execute the same IR at runtime.
+    // observed behaviour - both paths still execute the same IR at runtime.
     [[nodiscard]] std::optional<std::vector<addr_t>>
     collect_trivial_tail(addr_t start) const {
         constexpr std::size_t kMaxLen = 6;
@@ -975,7 +975,7 @@ public:
 
     // If `start` heads a trivial tail, produce a Seq that inlines the chain
     // followed by the appropriate Return region. Null otherwise. `from_pred`
-    // is the structural predecessor at the inline site — used together with
+    // is the structural predecessor at the inline site - used together with
     // `chain[size-2]` to resolve the return-value phi to the operand that
     // actually flowed in along this clone's path.
     [[nodiscard]] std::unique_ptr<Region>

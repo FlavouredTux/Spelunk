@@ -29,7 +29,7 @@ inline TypeRef t_voidp (TypeArena& a) { return a.ptr_t(a.top());    }
 inline TypeRef t_intp  (TypeArena& a) { return a.ptr_t(t_int32s(a)); }
 
 // Tag for "this entry's return is the same as void* (FILE*, DIR*, etc.)
-// rendered as void* for now — struct types are out of scope until the
+// rendered as void* for now - struct types are out of scope until the
 // type system grows opaque-struct support".
 inline TypeRef t_filep (TypeArena& a) { return t_voidp(a); }
 
@@ -39,7 +39,7 @@ inline TypeRef t_filep (TypeArena& a) { return t_voidp(a); }
 //
 // Coverage targets the imports that show up in nearly every binary:
 // stdio + string + stdlib + unistd basics + a few syscalls. Adding
-// entries is mechanical — keep them grouped by header for readability.
+// entries is mechanical - keep them grouped by header for readability.
 std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     using SV = std::string_view;
     auto m = [&](TypeRef ret, std::vector<TypeRef> params, bool variadic = false)

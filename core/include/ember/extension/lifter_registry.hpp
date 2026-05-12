@@ -1,7 +1,7 @@
 #pragma once
 
 // Extension hook for adding IR lifters out-of-tree. Mirror of
-// decoder_registry — see that header for the contract. Builtins win;
+// decoder_registry - see that header for the contract. Builtins win;
 // the registry only fires for arches core has no lifter for.
 //
 // The factory receives the resolved ABI (`abi_for(format, arch, endian)`)

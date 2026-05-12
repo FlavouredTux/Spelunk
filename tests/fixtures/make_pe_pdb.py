@@ -3,7 +3,7 @@
 
 Used to lock the PE → CodeView (RSDS) → MSF → S_PUB32 → symbol-table
 flow that ember does when a Microsoft binary lands next to its `.pdb`.
-The PE has no imports/exports/PDATA — only the bare minimum that loads.
+The PE has no imports/exports/PDATA - only the bare minimum that loads.
 
 Two arguments: the output PE path and the output PDB path. The PE
 embeds the basename of the PDB path in its CodeView RSDS record, so
@@ -23,7 +23,7 @@ import sys
 # ---- PE constants -----------------------------------------------------
 
 # extracted_main is hand-assembled as a 25-byte function with two
-# stack-resident `int` locals — exercised by the PDB merge below.
+# stack-resident `int` locals - exercised by the PDB merge below.
 EXTRACTED_MAIN_LEN   = 0x19
 EXTRACTED_HELPER_OFF = 0x20
 
@@ -212,7 +212,7 @@ def build_s_pub32(name: str, flags: int, section_offset: int,
 def build_msf(streams: list[bytes]) -> bytes:
     """Pack `streams` into a v7 MSF. Block layout:
        block 0: superblock
-       block 1: free-block map (zeros — never read)
+       block 1: free-block map (zeros - never read)
        blocks 2..: stream data blocks, in stream order
        last-1:   directory
        last:     directory block-map (one u32 → directory's block index)
@@ -278,10 +278,10 @@ def build_pdb() -> bytes:
     # Streams:
     #   0: old directory (empty)
     #   1: PDB info (we put 4 bytes; ember doesn't validate it)
-    #   2: TPI — LF_ARGLIST(int,int), LF_PROCEDURE(int <- int,int)
+    #   2: TPI - LF_ARGLIST(int,int), LF_PROCEDURE(int <- int,int)
     #   3: DBI header + 1 ModInfo entry pointing at stream 5
-    #   4: global symbol-record stream — two S_PUB32
-    #   5: module stream — S_GPROC32 for extracted_main, two S_REGREL32
+    #   4: global symbol-record stream - two S_PUB32
+    #   5: module stream - S_GPROC32 for extracted_main, two S_REGREL32
     #      naming the locals "i" and "j", S_END.
     sym_record_stream = 4
     mod_sym_stream    = 5
@@ -296,7 +296,7 @@ def build_pdb() -> bytes:
 
     # Module stream: signature 4 (C13) followed by:
     #   S_GPROC32 covering extracted_main (RVA 0x1000, length 0x19),
-    #   S_REGREL32 "i" at [rsp+0x20], "j" at [rsp+0x24] — both int,
+    #   S_REGREL32 "i" at [rsp+0x20], "j" at [rsp+0x24] - both int,
     #   S_END to close the proc scope.
     mod_records = b""
     mod_records += build_s_gproc32(
@@ -370,7 +370,7 @@ def build_pe(pdb_basename: str) -> bytes:
     rdata += b"\x00" * 28
     cv_rva_in_rdata = rva_rdata + len(rdata)
     rdata += b"RSDS"
-    rdata += b"\x00" * 16            # GUID — value irrelevant for our parser
+    rdata += b"\x00" * 16            # GUID - value irrelevant for our parser
     rdata += struct.pack("<I", 1)    # Age
     rdata += pdb_basename.encode() + b"\x00"
     cv_size = len(rdata) - (cv_rva_in_rdata - rva_rdata)

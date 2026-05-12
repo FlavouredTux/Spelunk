@@ -17,7 +17,7 @@ enum class BlockKind : u8 {
     Return,
     IndirectJmp,
     Switch,
-    // Terminating jmp to a known function entry — treated as
+    // Terminating jmp to a known function entry - treated as
     // `call target; return rax;` at the IR level.
     TailCall,
 };

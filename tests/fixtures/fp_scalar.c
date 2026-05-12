@@ -34,7 +34,7 @@ float clamp_f(float x, float lo, float hi) {
     return x;
 }
 
-/* sqrtsd intrinsic — exercises lift_fp_unop / libm-style intrinsic name. */
+/* sqrtsd intrinsic - exercises lift_fp_unop / libm-style intrinsic name. */
 double hypot2(double a, double b) {
     return sqrt(a * a + b * b);
 }

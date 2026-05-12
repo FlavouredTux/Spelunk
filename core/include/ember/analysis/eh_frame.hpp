@@ -11,7 +11,7 @@ namespace ember {
 
 // An exception-handler landing pad the unwinder will jump to when a call
 // inside the associated function throws. `lp_addr == 0` is a "cleanup"
-// landing pad — always runs during unwind; doesn't catch a specific type.
+// landing pad - always runs during unwind; doesn't catch a specific type.
 // `action_index` points into the LSDA action table (1-based); we don't
 // decode actions yet, so 0 means "no typed catch information available".
 struct LandingPad {

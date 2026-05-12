@@ -16,16 +16,16 @@ import { join } from "node:path";
 //   homes = ["~/.assistant-personal", "~/.assistant-work"]
 //
 // Each path points at a directory containing the same auth artifacts
-// the corresponding CLI's `login` command writes — for codex that's
+// the corresponding CLI's `login` command writes - for codex that's
 // `auth.json`, for assistant-code that's `.credentials.json`. Per-worker
 // the dispatcher picks one in round-robin order, so a 30-worker cascade
-// with 5 codex homes spreads load to 6 workers per account per round —
+// with 5 codex homes spreads load to 6 workers per account per round -
 // staying well under any per-plan rate limit.
 //
 // Env override: CODEX_HOMES_CSV / assistant_HOMES_CSV (comma-separated)
 // take precedence over the toml file. Single-account users who don't
-// set anything fall through to the legacy default — runCodexCliWorker
-// reads ~/.codex, runassistantCodeWorker reads ~/.assistant — and the
+// set anything fall through to the legacy default - runCodexCliWorker
+// reads ~/.codex, runassistantCodeWorker reads ~/.assistant - and the
 // previous behaviour is unchanged.
 
 interface CliHomes {
@@ -82,7 +82,7 @@ function loadCliHomes(): CliHomes {
 // independent `ember-agent worker` invocations don't all converge on
 // home[0]. Within a single process (the cascade case where every worker
 // is an async task in the same node, or a long-running script) the
-// counter still advances sequentially — that gives us proper
+// counter still advances sequentially - that gives us proper
 // round-robin fairness inside one run. Across processes the random seed
 // statistically spreads load across the home pool.
 const _rot: Record<string, number> = {

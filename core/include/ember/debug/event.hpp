@@ -15,7 +15,7 @@ struct EvBreakpointHit { ThreadId tid; BreakpointId id; addr_t pc; };
 
 // A hardware data watchpoint fired. PC is the *next* instruction
 // (data watches trap after the access completes), `addr` is the
-// watched VA from the DR slot that fired, `slot` is 0..3 — useful
+// watched VA from the DR slot that fired, `slot` is 0..3 - useful
 // when the user wants to know which DR caught the hit.
 struct EvWatchpointHit {
     ThreadId     tid;
@@ -36,7 +36,7 @@ struct EvSyscallStop {
     bool     entry;  // true = about to execute syscall; false = it just returned
 };
 
-// Single-step finished — used by step() and the breakpoint step-over.
+// Single-step finished - used by step() and the breakpoint step-over.
 struct EvSingleStep    { ThreadId tid; addr_t pc; };
 
 // An int3 that wasn't placed by the debugger. `resolution` explains
@@ -50,7 +50,7 @@ struct EvInt3Trap      { ThreadId tid; addr_t pc; Int3Resolution resolution; };
 // it via set_regs / explicit suppress (deferred for v0).
 struct EvSignal        { ThreadId tid; int signo; };
 
-// Generic stop with no cause we recognised — used after attach() and
+// Generic stop with no cause we recognised - used after attach() and
 // at launch entry when stop_at_entry=true.
 struct EvStopped       { ThreadId tid; addr_t pc; };
 

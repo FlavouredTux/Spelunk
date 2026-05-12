@@ -12,7 +12,7 @@ namespace {
 constexpr std::size_t kDdException     = 3;
 constexpr std::size_t kRuntimeFuncSize = 12;  // x86-64 RUNTIME_FUNCTION
 
-// UWOP_* opcodes — see Microsoft's "x64 exception handling".
+// UWOP_* opcodes - see Microsoft's "x64 exception handling".
 constexpr u8 UWOP_PUSH_NONVOL     = 0;
 constexpr u8 UWOP_ALLOC_LARGE     = 1;
 constexpr u8 UWOP_ALLOC_SMALL     = 2;
@@ -82,7 +82,7 @@ parse_unwind_info(const Binary& b, addr_t unwind_info_va) {
     info.flags         = static_cast<u8>((ver_flags >> 3) & 0x1F);
     // MS only ever defined versions 1 and 2 for UNWIND_INFO. Anything
     // else means the entry's UnwindInfo RVA is bogus (stub fixtures,
-    // packed images, garbage) — refusing to parse here keeps a wild
+    // packed images, garbage) - refusing to parse here keeps a wild
     // size_of_prolog from accidentally hiding the entire function body.
     if (info.version != 1 && info.version != 2) return std::nullopt;
     info.size_of_prolog = read_le_at<u8>(span.data() + 1);
@@ -165,7 +165,7 @@ parse_unwind_info(const Binary& b, addr_t unwind_info_va) {
 
     // Past the codes (with 1 padding slot when count is odd) sits either a
     // chained RUNTIME_FUNCTION or an exception-handler RVA. Ignore handler
-    // payload bytes — only the RVA itself is captured here.
+    // payload bytes - only the RVA itself is captured here.
     const std::size_t aligned_codes_bytes = (codes_bytes + 3u) & ~std::size_t{3u};
     const std::size_t tail = 4u + aligned_codes_bytes;
 

@@ -17,7 +17,7 @@ namespace ember {
 // statement's first character lands, `source_addr` is the IR's
 // source_addr (i.e. the machine-instruction VA the IR was lifted
 // from). Translate to line numbers by counting '\n's up to the
-// offset — keeps the emitter hot path O(1) per statement.
+// offset - keeps the emitter hot path O(1) per statement.
 struct LineMap {
     struct Hit {
         std::size_t byte_offset = 0;
@@ -28,11 +28,11 @@ struct LineMap {
 
 
 struct EmitOptions {
-    // Emit `// bb_XXXX` labels before each block. Off by default — labels
+    // Emit `// bb_XXXX` labels before each block. Off by default - labels
     // are useful when cross-ref'ing with the CFG view but pure clutter in
     // day-to-day reading.
     bool show_bb_labels = false;
-    // Emit `// confidence: <conf> (<source>) — <evidence>` lines under
+    // Emit `// confidence: <conf> (<source>) - <evidence>` lines under
     // the function name when the resolved annotation file carries
     // metadata for this function. Off by default because it doubles
     // the visible header for human readers; agent flows turn it on so

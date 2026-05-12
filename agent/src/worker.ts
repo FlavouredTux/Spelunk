@@ -27,7 +27,7 @@ export interface WorkerArgs {
                               // (cascade plumbs this on minidump targets)
     cliHome?: string;         // explicit auth-home dir for SDK-driven workers
                               // (Codex CLI / assistant Code). When set, overrides
-                              // the worker's EMBER_*_HOME / default lookup —
+                              // the worker's EMBER_*_HOME / default lookup -
                               // cascade uses it to round-robin a multi-account
                               // pool across workers.
 }
@@ -49,7 +49,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
     const agentId = args.agentId ?? `${args.role}-${args.runId}`;
 
     // One ember --serve daemon per worker. Loads the binary once,
-    // answers tool calls in-process — wins back the wait4 dominance
+    // answers tool calls in-process - wins back the wait4 dominance
     // the strace traces of cascade runs were showing. Daemon dies
     // when the worker exits (try/finally below).
     let daemon: EmberDaemon | undefined;
@@ -109,7 +109,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
     const maxTurns = args.maxTurns ?? 30;
 
     // Track claim filings. Workers that hit max_turns without filing
-    // anything are wasted budget — see the libloader.so finding where
+    // anything are wasted budget - see the libloader.so finding where
     // 6 workers spent ~$0.024 collectively on context-gathering and
     // produced zero claims. After kForceAfter tool-use turns without
     // a claim, inject a forcing function user message.
@@ -133,7 +133,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
 
         // Transient-error retry. Providers (OpenRouter especially)
         // intermittently return 429s, 5xx wrapped as 200, or empty-
-        // choices bodies under load — losing one whole worker to a
+        // choices bodies under load - losing one whole worker to a
         // 1.5s blip is bad value. Two retries with exponential
         // backoff catch ~95% of the transient class without making
         // permanent failures slow.
@@ -232,7 +232,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
 
         // Forcing function: if we've burned kForceAfter+ tool turns
         // without filing a claim, append a stern reminder to the user
-        // message. Only fires once per worker — if the model still
+        // message. Only fires once per worker - if the model still
         // refuses, max_turns will cap it.
         const userBlocks: ContentBlock[] = [...results];
         if (!forcedOnce && claimsFiled === 0 && turn + 1 >= kForceAfter) {
@@ -242,7 +242,7 @@ export async function runWorker(args: WorkerArgs): Promise<void> {
                 text: "STOP RESEARCHING. You have used " + (turn + 1) + " tool turns and filed zero claims. " +
                       "File an intel_claim NOW. If you cannot name confidently, file predicate=\"note\" with " +
                       "confidence 0.3-0.6 summarizing what you found and why you can't name. Going deeper " +
-                      "will not help — file something on this turn.",
+                      "will not help - file something on this turn.",
             });
             emit({ kind: "force_claim", turn });
         }
@@ -260,7 +260,7 @@ function buildScopeMessage(scope: string, binary: string): string {
         return `Target: ${binary}\nFunction: ${scope.slice(3)}\n\nProceed.`;
     }
     if (scope.startsWith("dispute:")) {
-        // dispute:<subject>|<predicate>  — points at exactly one
+        // dispute:<subject>|<predicate>  - points at exactly one
         // disputed claim. Tiebreaker workers each handle one assigned
         // dispute in parallel, so we don't race them on intel_disputes.
         const tail = scope.slice("dispute:".length);

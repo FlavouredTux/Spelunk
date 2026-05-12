@@ -169,7 +169,7 @@ std::string build_fingerprints_output(const Binary& b) {
     if (show) std::fputc('\n', stderr);
 
     // Compact: drop slots whose fingerprint came back empty (decoder /
-    // lifter / SSA bailed). Order is preserved — addrs is sorted.
+    // lifter / SSA bailed). Order is preserved - addrs is sorted.
     std::vector<Row> filled;
     filled.reserve(rows.size());
     for (auto& r : rows) {
@@ -307,9 +307,9 @@ struct ParsedFps {
 
 // Fuzzy-pair unmatched "removed" and "added" entries. Two heuristics,
 // applied in order:
-//   1. Exact-name match across versions — obvious case of "same named
+//   1. Exact-name match across versions - obvious case of "same named
 //      function, body differs by a few instructions". Tagged `edited`.
-//   2. Shape proximity — equal (blocks, insts, calls) tuple plus (sub_*
+//   2. Shape proximity - equal (blocks, insts, calls) tuple plus (sub_*
 //      in both OR close hash-prefix). Tagged `fuzzy`.
 struct FuzzyPair {
     FpEntry old_e;
@@ -339,7 +339,7 @@ fuzzy_pair(std::vector<FpEntry>& removed, std::vector<FpEntry>& added) {
     }
     // Pass 2: shape proximity on sub_* pairs. Both sides must be sub_*
     // (named collisions were handled in pass 1), same shape tuple, and a
-    // shared 4-hex-char fingerprint prefix — that's a generous-but-sane
+    // shared 4-hex-char fingerprint prefix - that's a generous-but-sane
     // signal that they started as the same function.
     for (std::size_t i = 0; i < removed.size(); ++i) {
         if (rm_taken[i]) continue;

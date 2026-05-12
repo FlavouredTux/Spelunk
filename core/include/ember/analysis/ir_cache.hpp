@@ -23,7 +23,7 @@ struct IrCache {
     std::set<addr_t> failed;
 };
 
-// Look up — and build on cache miss — the SSA-cleaned IR of the function
+// Look up - and build on cache miss - the SSA-cleaned IR of the function
 // at `fn`. Returns nullptr if any step in the lift chain fails (the
 // failure is remembered so callers don't retry).
 [[nodiscard]] IrFunction* lift_cached(IrCache& cache, const Binary& b, addr_t fn);

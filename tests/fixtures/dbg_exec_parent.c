@@ -1,7 +1,7 @@
 // Parent process for the exec-persistence smoke test. Sets up a
 // known global, then execve's argv[1] (the child fixture path).
 // The smoke test arms a watchpoint on `marker` here and expects
-// it to re-arm against the child's same-named global after exec —
+// it to re-arm against the child's same-named global after exec -
 // the runtime address differs, but symbol re-resolution lands the
 // watch on the right slot in the new image.
 #include <stdio.h>

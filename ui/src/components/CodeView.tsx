@@ -20,7 +20,7 @@ const CODE_OVERSCAN = 24;
 // top of a function block. Body comments use `;`, so this prefix is a
 // clean signal that the next line is a function signature.
 const FN_HEADER_RE = /^\/\/\s+\S/;
-// Indent-0 line that ends with `)` or `) {` — heuristic for the
+// Indent-0 line that ends with `)` or `) {` - heuristic for the
 // function signature line that immediately follows the header. Used
 // only for adding a subtle bottom-border, never for parsing semantics.
 const FN_SIG_RE = /^[A-Za-z_][^\n]*\)\s*\{?\s*$/;
@@ -243,7 +243,7 @@ export function CodeView(props: {
         className="sel ember-code-pane"
         style={{
           flex: 1,
-          minHeight: 0,   // same — lets overflow: auto actually scroll instead of pushing past the clip
+          minHeight: 0,   // same - lets overflow: auto actually scroll instead of pushing past the clip
           overflow: "auto",
           fontFamily: mono,
           fontSize: props.fontSize ?? 12.5,
@@ -267,7 +267,7 @@ export function CodeView(props: {
             const onLineContext = props.onPatchInsn || props.onPatchBytes
               ? (ev: React.MouseEvent) => {
                   const m = ASM_INSN_RE.exec(line);
-                  if (!m) return;       // not an asm line — let default menu show
+                  if (!m) return;       // not an asm line - let default menu show
                   ev.preventDefault();
                   const vaddr = parseInt(m[1], 16);
                   if (!Number.isFinite(vaddr)) return;
@@ -283,7 +283,7 @@ export function CodeView(props: {
             // Function-block decoration: top rule above each `// fn-name`
             // marker, slight emphasis on the matching signature line.
             // Detection is heuristic but stable for ember's emitter
-            // output — body comments use `;`, so `// ` at col 0 is
+            // output - body comments use `;`, so `// ` at col 0 is
             // unambiguous.
             const isFnHeader = FN_HEADER_RE.test(line);
             const prevLine = i > 0 ? lines[i - 1] : "";
@@ -490,7 +490,7 @@ function LineContent(props: {
   // Match offsets are computed against the full original line, so
   // shift them into `content`-relative coordinates. Matches that fall
   // entirely inside the indent prefix get dropped (rare; would be a
-  // user searching for spaces) — the guide span has no text to land
+  // user searching for spaces) - the guide span has no text to land
   // a highlight on.
   const slices: { text: string; match: boolean; start: number }[] = [];
   let cursor = prefix;

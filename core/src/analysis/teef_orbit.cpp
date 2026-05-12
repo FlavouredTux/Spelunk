@@ -213,8 +213,8 @@ struct Walker {
         if (inst.op == IrOp::Nop) return kNullClass;
         if (inst.dst.kind == IrValueKind::None) {
             // Side-effecting / control-flow inst. Build a stable opaque
-            // node from (op, target-class, src classes) — NOT from
-            // insertion order — so the e-class is positionally invariant
+            // node from (op, target-class, src classes) - NOT from
+            // insertion order - so the e-class is positionally invariant
             // across compilations that order ops differently.
             u64 oid = fnv1a(op_name(inst.op));
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
@@ -351,7 +351,7 @@ struct Walker {
 // hash to B's, dragging Jaccard down with no informational gain.
 //
 // The fix: push every dst into the e-graph (so saturation has full
-// context) but build the FINAL multiset only from "frontier" roots —
+// context) but build the FINAL multiset only from "frontier" roots -
 // dst keys that no later insn reads. Plus all observable side effects
 // (stores, calls, returns) and the function's live-out values.
 //
@@ -366,7 +366,7 @@ struct Walker {
     // before Walker exists. Keys are byte-equal to Walker's only for
     // Reg / Flag (no temp_alpha indirection); Walker resolves Temp keys
     // through the per-fn alpha map, but for the use-set we only need a
-    // bijection from raw IrValue to a u64 — so we use the raw temp id
+    // bijection from raw IrValue to a u64 - so we use the raw temp id
     // here, on both sides. Identity within the fn is what matters.
     constexpr u64 kFnvOff = 0xcbf29ce484222325ULL;
     constexpr u64 kFnvPr  = 0x100000001b3ULL;
@@ -399,7 +399,7 @@ struct Walker {
 compute_frontier_mask(const IrFunction& fn) {
     // Returns a parallel mask indicating, for each insn in fn (block-major
     // order), whether its dst is "frontier" (no subsequent read) and
-    // whether it's an observable side effect — both push to roots.
+    // whether it's an observable side effect - both push to roots.
     std::unordered_map<u64, std::size_t> last_read_pos;     // use_key → last-read insn pos
     std::vector<std::size_t> dst_pos;                       // insn pos → dst use_key (or 0)
     std::vector<u64>         dst_key;
@@ -453,7 +453,7 @@ compute_frontier_mask(const IrFunction& fn) {
 // ---- Rule set ------------------------------------------------------------
 //
 // Six rule families across i32 + i64 (the bitwidths that make up >95% of
-// real x86-64 / aarch64 IR). Patterns are short by design — the orbit
+// real x86-64 / aarch64 IR). Patterns are short by design - the orbit
 // signal comes from saturating these against the function's algebra,
 // not from cleverness in any single rule.
 
@@ -610,7 +610,7 @@ OrbitSig compute_orbit_sig(const Binary& bin, addr_t fn_start) {
         if (h != 0) hashes.push_back(h);
     }
     if (hashes.empty()) return out;
-    // Sort and dedupe — multiplicity is sensitive to compiler-driven
+    // Sort and dedupe - multiplicity is sensitive to compiler-driven
     // intermediate reordering whereas presence-or-absence is robust.
     // MinHash is multiplicity-invariant by construction; the exact-hash
     // (sorted-multiset fold) DOES drift with multiplicities, so dedup

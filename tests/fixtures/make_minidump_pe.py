@@ -99,7 +99,7 @@ def main() -> int:
     struct.pack_into("<H", sysinfo_data, 0, PROCESSOR_ARCHITECTURE_AMD64)
     blob.extend(sysinfo_data)
 
-    # Memory64ListStream — header now, image bytes appended later.
+    # Memory64ListStream - header now, image bytes appended later.
     mem64_rva = len(blob)
     nranges = 1
     blob.extend(struct.pack("<Q", nranges))

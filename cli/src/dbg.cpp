@@ -119,7 +119,7 @@ bool print_event(const debug::Event& ev, const ReplState& rs) {
             std::println("Stepped to {}{} in thread {}",
                          fmt_addr(e.pc), sym_at(e.pc), e.tid);
         } else if constexpr (std::is_same_v<T, debug::EvSignal>) {
-            std::println("Signal {} ({}) in thread {} — held for forward on next cont",
+            std::println("Signal {} ({}) in thread {} - held for forward on next cont",
                          fmt_signal(e.signo), e.signo, e.tid);
         } else if constexpr (std::is_same_v<T, debug::EvStopped>) {
             std::println("Stopped at {}{} in thread {}",
@@ -152,9 +152,9 @@ void print_error(const Error& e) {
     std::println(stderr, "ember-dbg: {}: {}", e.kind_name(), e.message);
 }
 
-// Two flavours of address: a hex literal (already a runtime VA — no
+// Two flavours of address: a hex literal (already a runtime VA - no
 // slide) versus a symbol resolved from one of the loaded Binaries
-// (a static / linker VA — needs that bin's slide added). When the
+// (a static / linker VA - needs that bin's slide added). When the
 // match is a symbol, `bin` and `slide` carry the source so the
 // caller can apply the right slide without re-searching.
 struct AddrSpec {
@@ -261,13 +261,13 @@ std::vector<std::string> tokenize(const std::string& line) {
 struct AuxBin {
     const Binary*         bin = nullptr;
     std::string           path;
-    std::string           short_name;       // basename(path) — e.g. "engine"
+    std::string           short_name;       // basename(path) - e.g. "engine"
     addr_t                slide = 0;
     bool                  slide_resolved = false;
     std::optional<addr_t> manual_base;
 };
 
-// Whatever the user typed to `b` / `watch` — replayed through
+// Whatever the user typed to `b` / `watch` - replayed through
 // parse_addr_spec_multi after exec to re-arm against the new image.
 struct BpSpec  { std::string spec; };
 struct WpSpec  { std::string spec; u8 size; debug::WatchMode mode; };
@@ -352,7 +352,7 @@ std::size_t load_ignored_faults_file(const std::string& path,
             sv.remove_suffix(1);
         }
         if (sv.empty()) continue;
-        // Take just the leading token — comments after whitespace.
+        // Take just the leading token - comments after whitespace.
         if (auto sp = sv.find_first_of(" \t"); sp != std::string_view::npos) {
             sv.remove_suffix(sv.size() - sp);
         }
@@ -433,7 +433,7 @@ find_symbol(const ReplState& rs, std::string_view name) {
             tags += also_in[i];
         }
         std::println(stderr,
-            "ember-dbg: warning: '{}' resolves in {} bins; using first match — qualify with <bin>:<sym> to pick (also: {})",
+            "ember-dbg: warning: '{}' resolves in {} bins; using first match - qualify with <bin>:<sym> to pick (also: {})",
             name, also_in.size() + 1, tags);
     }
     return first;
@@ -671,7 +671,7 @@ void on_target_acquired(ReplState& rs) {
 
     std::println("Process {} attached, {} thread(s){}.",
                  rs.tgt->pid(), rs.tgt->threads().size(),
-                 rs.slide ? std::format(" — slide {}", fmt_addr(rs.slide))
+                 rs.slide ? std::format(" - slide {}", fmt_addr(rs.slide))
                           : std::string{});
     for (const auto& aux : rs.aux_bins) {
         if (aux.slide_resolved) {
@@ -681,7 +681,7 @@ void on_target_acquired(ReplState& rs) {
                          aux.manual_base ? " (manual)" : " (auto)");
         } else {
             std::println(stderr,
-                "  aux: {} — slide unresolved (no unique anon-rwx region of size {} bytes); "
+                "  aux: {} - slide unresolved (no unique anon-rwx region of size {} bytes); "
                 "specify '--aux-binary {}@<hex>' or use the `aux` REPL command",
                 aux.path, aux.bin->mapped_size(), aux.path);
         }
@@ -701,7 +701,7 @@ void on_target_released(ReplState& rs) {
         aux.slide = 0;
         aux.slide_resolved = false;
     }
-    // Persisted bp/wp specs are scoped to a target's lifetime —
+    // Persisted bp/wp specs are scoped to a target's lifetime -
     // re-arm-across-exec is for the same process that called execve,
     // not for a fresh `run` after the previous tracee exited.
     rs.bp_specs.clear();
@@ -721,7 +721,7 @@ BackendChoice parse_debug_backend(std::string_view s) {
     if (s == "perf")                return {debug::BackendKind::Perf,    false};
     if (s == "auto")                return {debug::BackendKind::Perf,    true};
     std::println(stderr,
-        "ember-dbg: --debug-backend: unknown value '{}' (expected ptrace|perf|auto) — using ptrace",
+        "ember-dbg: --debug-backend: unknown value '{}' (expected ptrace|perf|auto) - using ptrace",
         s);
     return {debug::BackendKind::Ptrace, false};
 }
@@ -793,7 +793,7 @@ int cmd_kill(ReplState& rs) {
     return 0;
 }
 
-// `<symbol>:<line>` — resolve to the runtime PC of the smallest IR
+// `<symbol>:<line>` - resolve to the runtime PC of the smallest IR
 // source_addr whose emit lands on the requested pseudo-C line, then
 // set a breakpoint there. Returns true on a match (breakpoint set or
 // error already reported); false to fall through to plain addr / sym
@@ -857,7 +857,7 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
     return true;
 }
 
-// `<bin>:<sym>` — restrict the symbol lookup to the named binary.
+// `<bin>:<sym>` - restrict the symbol lookup to the named binary.
 // The bin name is the basename of the path (no extension); primary
 // uses basename(args.binary). Returns true on a hit (bp set or
 // error reported); false to fall through.
@@ -1011,7 +1011,7 @@ int cmd_dcatch(ReplState& rs) {
 
 // `watch <addr> [r|w|rw] [size]`. Default mode = rw, default size = 8.
 // Mode `r` is accepted but realised as ReadWrite at the architectural
-// level — x86 has no read-only watchpoint mode. Emit a one-line note
+// level - x86 has no read-only watchpoint mode. Emit a one-line note
 // so the user knows their `r` request also fires on writes.
 int cmd_watch(ReplState& rs, std::span<const std::string> toks) {
     if (!rs.live) { std::println("Not attached."); return 0; }
@@ -1049,7 +1049,7 @@ int cmd_watch(ReplState& rs, std::span<const std::string> toks) {
                  *id, fmt_addr(va), size,
                  mode == debug::WatchMode::Write ? "write" : "read+write");
     if (requested_read_only) {
-        std::println("note: x86 has no read-only watch mode — armed as read+write "
+        std::println("note: x86 has no read-only watch mode - armed as read+write "
                      "(it'll fire on reads as you wanted; it'll also fire on writes).");
     }
     return 0;
@@ -1326,7 +1326,7 @@ int cmd_regs(ReplState& rs, bool full) {
 
 // Map a register name (lowercase, dollar-prefix optional) to a writable
 // pointer inside Registers. Only the GPRs + RIP + RFLAGS + segment regs
-// are exposed — those are the ones a debugger typically wants to nudge
+// are exposed - those are the ones a debugger typically wants to nudge
 // to skip past faults or redirect control flow. SIMD / x87 / DR are
 // reachable via `regs all` for inspection; if someone needs to write
 // them, that's a future extension.
@@ -1366,7 +1366,7 @@ int cmd_set_reg(ReplState& rs, std::string_view reg_tok,
         return 1;
     }
     // Accept hex (with or without `0x`), decimal, or address-spec
-    // (sym, sym+ofs, bin:sym) — same syntax as `b` and `x` so a user
+    // (sym, sym+ofs, bin:sym) - same syntax as `b` and `x` so a user
     // can `set rip <symbol>` to force a jump back into known code.
     std::optional<u64> value;
     if (auto h = parse_hex_addr(value_tok); h) {
@@ -1437,7 +1437,7 @@ int cmd_poke(ReplState& rs, std::string_view addr_tok,
     const std::size_t got = *rv;
     std::println("wrote {} byte(s) at {}", got, fmt_addr(va_runtime));
     if (got < bytes->size()) {
-        std::println("(write short — {} of {} requested bytes)", got, bytes->size());
+        std::println("(write short - {} of {} requested bytes)", got, bytes->size());
     }
     return 0;
 }
@@ -1476,7 +1476,7 @@ int cmd_xmem(ReplState& rs, std::string_view addr_tok, std::string_view count_to
         std::print("\n");
     }
     if (got < buf.size()) {
-        std::println("(read short — {} of {} requested bytes)", got, buf.size());
+        std::println("(read short - {} of {} requested bytes)", got, buf.size());
     }
     return 0;
 }
@@ -1590,7 +1590,7 @@ int cmd_code(ReplState& rs) {
     // Two-tier match: prefer the hit with the largest source_addr <=
     // pc_static (the IR currently in flight). If we're sitting inside
     // a region that the emitter folded away (prologue, dead code), no
-    // such hit exists — fall back to the first emitted IR after pc, so
+    // such hit exists - fall back to the first emitted IR after pc, so
     // the user sees the next visible statement marked instead of no
     // mark at all.
     const LineMap::Hit* best = nullptr;
@@ -1790,7 +1790,7 @@ void print_help() {
   d <id>                    delete a breakpoint
   watch <addr> [r|w|rw] [N] hardware data watchpoint at <addr>; N=1/2/4/8 byte
                             window (default 8); default mode rw. `r` is
-                            accepted but armed as rw — x86 has no read-only
+                            accepted but armed as rw - x86 has no read-only
                             mode at the architectural level. Up to 4 watches
                             active at once (DR0..DR3).
   wp                        list watchpoints
@@ -1826,7 +1826,7 @@ void print_help() {
   aux                       list loaded aux symbol oracles
   aux <path>[@hex]          load a Binary as an aux oracle; auto-detect slide
                             (or pin it with @hex). Used for non-ELF code in
-                            the tracee — e.g. Mach-O blobs mmap'd by an
+                            the tracee - e.g. Mach-O blobs mmap'd by an
                             in-process userspace loader.
   ignored                   list known-recovered fault PCs (silently passed
                             back to the tracee's own handler)
@@ -1893,7 +1893,7 @@ int run_debug(const Args& args, const Binary* bin,
                 if (s == a.short_name) {
                     std::println(stderr,
                         "ember-dbg: warning: short name '{}' collides between "
-                        "primary and aux — `<bin>:<sym>` will pick the first match",
+                        "primary and aux - `<bin>:<sym>` will pick the first match",
                         a.short_name);
                     break;
                 }

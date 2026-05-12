@@ -20,7 +20,7 @@ const char g_str_table[] =
 /* Static-init pointer to the table. Volatile so the compiler can't
  * see through the indirection and constant-fold `g_table_ptr + N`
  * back to a direct `lea` against g_str_table. The on-disk qword
- * still contains the absolute VA of g_str_table — exactly the
+ * still contains the absolute VA of g_str_table - exactly the
  * imm64-stored shape --refs-to-loose scans for. */
 const char* volatile g_table_ptr = g_str_table;
 

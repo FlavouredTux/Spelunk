@@ -20,8 +20,8 @@ import type { WorkerArgs } from "./worker.js";
 // History note: an earlier version of this file shelled out to `codex
 // exec --json` directly and parsed JSONL on stdout. The official
 // @openai/codex-sdk now exposes a typed Thread/Codex API that does the
-// same thing more cleanly — typed events, abortable streams, proper
-// usage reporting — so this is now an SDK adapter. Behaviour and model
+// same thing more cleanly - typed events, abortable streams, proper
+// usage reporting - so this is now an SDK adapter. Behaviour and model
 // prefix unchanged so existing config/dispatch keeps working.
 //
 // Auth: the Codex CLI persists OAuth tokens at ~/.codex/auth.json. The
@@ -30,11 +30,11 @@ import type { WorkerArgs } from "./worker.js";
 //
 // Tool surface: ember already has a CLI (ember --decompile, --xrefs,
 // --strings, --refs-to, --recognize) and ember-agent has an `intel claim`
-// subcommand. So we let Codex use its built-in shell to drive those —
+// subcommand. So we let Codex use its built-in shell to drive those -
 // every shell call lands in events.jsonl as a tool_ok / tool_err entry,
 // every claim is filed via `ember-agent intel claim` writing directly
 // to the same intel.jsonl the rest of cascade reads. No MCP bridge
-// required — the CLI surface IS the tool surface.
+// required - the CLI surface IS the tool surface.
 
 export function isCodexCliModel(model: string | undefined): boolean {
     return (model ?? "").startsWith("codex-cli");
@@ -55,7 +55,7 @@ Use shell commands only for analysis and for writing intel claims.
 ${scope}
 Agent id: ${agentId}
 
-Available shell commands. Copy the exact flag layout — the binary path
+Available shell commands. Copy the exact flag layout - the binary path
 and address positions matter:
 
   ${args.emberBin} -p ${args.binary} -s 0x${args.scope.startsWith("fn:") ? args.scope.slice(3).replace(/^0x/i, "") : "401120"}
@@ -64,12 +64,12 @@ and address positions matter:
   ${args.emberBin} --refs-to 0x401120 ${args.binary}
       Callers of an address. The address is the FLAG value, not a
       positional after the binary. \`--xrefs\` with no arg dumps the
-      entire table (slow on big binaries) — prefer --refs-to.
+      entire table (slow on big binaries) - prefer --refs-to.
   ${args.emberBin} --callees 0x401120 ${args.binary}
       Direct call targets of the function at the given address (flag
       value, same shape as --refs-to).
   ${args.emberBin} --strings ${args.binary} | grep -iE 'pattern1|pattern2'
-      String literals. Note: grep exits non-zero when nothing matches —
+      String literals. Note: grep exits non-zero when nothing matches -
       that's expected, not a tool failure. The "no output" itself is
       the answer ("no strings of that flavour reachable").
 
@@ -115,17 +115,17 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
     }
 
     // Auth-home resolution order:
-    //   1. WorkerArgs.cliHome — cascade plumbs a per-worker pick from
+    //   1. WorkerArgs.cliHome - cascade plumbs a per-worker pick from
     //      pickCodexHome() so a multi-account pool round-robins across
     //      a single cascade's workers.
-    //   2. EMBER_CODEX_HOME — one-shot env override.
-    //   3. ~/.codex — default for the typical single-account case.
+    //   2. EMBER_CODEX_HOME - one-shot env override.
+    //   3. ~/.codex - default for the typical single-account case.
     const codexHome = args.cliHome
                    ?? process.env.EMBER_CODEX_HOME
                    ?? join(homedir(), ".codex");
     if (!existsSync(join(codexHome, "auth.json"))) {
         throw new Error(
-            `codex: no auth at ${codexHome}/auth.json — ` +
+            `codex: no auth at ${codexHome}/auth.json - ` +
             `run \`codex login\` once to authenticate (or with CODEX_HOME set ` +
             `to the directory above for a non-default account), or set ` +
             `EMBER_CODEX_HOME / [codex] homes = [...] in agent.toml`);
@@ -155,12 +155,12 @@ export async function runCodexCliWorker(args: WorkerArgs): Promise<void> {
         // danger-full-access: the agent runs Ember's CLI which writes to
         // ~/.cache/ember/* (the intel db, the disk cache for xrefs /
         // strings / TEEF). workspace-write would deny those writes.
-        // Codex isn't running untrusted code — it's running the same
+        // Codex isn't running untrusted code - it's running the same
         // ember CLIs every other cascade worker runs. The sandbox rules
         // are out of scope here.
         sandboxMode: "danger-full-access",
         approvalPolicy: "never",
-        // No web search — every tool the agent needs is local. Saves
+        // No web search - every tool the agent needs is local. Saves
         // quota on irrelevant lookups.
         networkAccessEnabled: false,
         webSearchMode: "disabled",

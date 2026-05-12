@@ -14,7 +14,7 @@ namespace ember {
 
 namespace {
 
-// ah/bh/ch/dh — the upper 8 bits of the low 16.
+// ah/bh/ch/dh - the upper 8 bits of the low 16.
 [[nodiscard]] constexpr bool is_high_byte(Reg r) noexcept {
     return r == Reg::Ah || r == Reg::Bh || r == Reg::Ch || r == Reg::Dh;
 }
@@ -156,7 +156,7 @@ struct LiftCtx {
         emit_set_flag(Flag::Zf, emit_cmp(IrOp::CmpEq, result, imm(0, t)));
         emit_set_flag(Flag::Sf, emit_cmp(IrOp::CmpSlt, result, imm(0, t)));
         last_flag_src = result;
-        // Integer flag-setter happened — any prior FP-compare context is now
+        // Integer flag-setter happened - any prior FP-compare context is now
         // invalid for PF interpretation.
         last_fp_cmp_a = {};
         last_fp_cmp_b = {};
@@ -197,7 +197,7 @@ struct LiftCtx {
         const IrType natural_t = type_for_bits(bytes * 8);
 
         if (canon == r) {
-            // Own canonical — read at the register's natural width.
+            // Own canonical - read at the register's natural width.
             // GPRs (rax/rdi/r8/...) → I64; segment regs (fs/gs/...) → I16;
             // Rip → I64. No trunc or partial-register logic applies.
             return IrValue::make_reg(r, natural_t);
@@ -221,7 +221,7 @@ struct LiftCtx {
         const IrType natural_t = type_for_bits(bytes * 8);
 
         if (canon == r) {
-            // Own canonical — direct assign at natural width. No partial-
+            // Own canonical - direct assign at natural width. No partial-
             // register merge concept applies to segment regs, rip, etc.;
             // for GPRs this is simply the full 64-bit write.
             if (value.type != natural_t) {
@@ -566,7 +566,7 @@ void lift_sar(LiftCtx& ctx) { lift_shift(ctx, IrOp::Ashr); }
 // bit-stitch rather than an opaque intrinsic. Flag handling is approximate:
 // we set ZF/SF on the result and leave CF/OF as their pre-shift values
 // (true Intel semantics: undefined for count >= W, otherwise CF = last bit
-// shifted out — which adds another four ops per shift; the dataflow is the
+// shifted out - which adds another four ops per shift; the dataflow is the
 // part that matters for decompiled output).
 void lift_double_shift(LiftCtx& ctx, bool right) {
     const auto& insn = *ctx.insn;
@@ -638,7 +638,7 @@ void lift_mul_one_op(LiftCtx& ctx, bool signed_mul) {
     } else {
         // 64-bit: low half is just rax * src; high half degrades to a named
         // intrinsic so the reader sees both operands. RAX is also clobbered
-        // first by the low product before RDX takes the high — that ordering
+        // first by the low product before RDX takes the high - that ordering
         // matches Intel's atomicity (both updated together).
         IrValue lo = ctx.emit_binop(IrOp::Mul, a, b);
         ctx.write_reg(lo_dst, lo);
@@ -736,14 +736,14 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
     }
 
     // 64-bit: no I128, so we degrade to named intrinsics that carry both
-    // halves of the dividend explicitly — same shape as the 64-bit MUL
+    // halves of the dividend explicitly - same shape as the 64-bit MUL
     // path's `mulh.{s,u}.64`. The reader sees `divq_u64(rdx, rax, b)` so
     // it's visible that RDX participates; the constant folder skips
     // intrinsics, so the wrong-arithmetic class of bug from folding
     // `Div(rax, b)` against a sign-extended i64 imm goes away too.
     //
     // `xor edx, edx; div r64` and `cdq; idiv r64` both still render
-    // correctly — the reader sees the constant 0 (or the sign-extended
+    // correctly - the reader sees the constant 0 (or the sign-extended
     // rax) flowing into the high arg.
     IrValue rax = ctx.read_reg(Reg::Rax);
     IrValue rdx = ctx.read_reg(Reg::Rdx);
@@ -777,7 +777,7 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
 // ADC dst, src: dst = dst + src + CF. Update CF/OF/ZF/SF.
 // SBB dst, src: dst = dst - src - CF.
 // We model carry by widening to I1 and adding into the result; CF/OF for the
-// combined operation are computed against (a OP b) — the second-step carry
+// combined operation are computed against (a OP b) - the second-step carry
 // from adding the cf bit is folded in via OR with the first-step carry.
 // That's an approximation: in cases where (a+b) doesn't overflow but
 // (a+b+1) does, OF will miss the second step. The dataflow side (the actual
@@ -835,7 +835,7 @@ void lift_adc_sbb(LiftCtx& ctx, bool subtract) {
 }
 
 // CMOVcc dst, src: dst = cond ? src : dst. Lift as IrOp::Select so the
-// emitter renders it as `dst = (cond ? src : dst);` — matches the source
+// emitter renders it as `dst = (cond ? src : dst);` - matches the source
 // idiom `dst = cond ? src : dst;` rather than an opaque branch or intrinsic.
 void lift_cmov(LiftCtx& ctx, Mnemonic mn) {
     const auto& insn = *ctx.insn;
@@ -907,7 +907,7 @@ void lift_cmpxchg(LiftCtx& ctx) {
     IrValue acc = ctx.read_reg(accum);
     IrValue eq  = ctx.emit_cmp(IrOp::CmpEq, acc, dst_v);
     ctx.emit_set_flag(Flag::Zf, eq);
-    // Integer flag-setter — invalidate any prior FP-compare context so a
+    // Integer flag-setter - invalidate any prior FP-compare context so a
     // later Jp/Jnp doesn't lower against stale ucomi operands.
     ctx.last_fp_cmp_a = {};
     ctx.last_fp_cmp_b = {};
@@ -944,7 +944,7 @@ void lift_bit_scan(LiftCtx& ctx, std::string_view name) {
     const IrType t = operand_type(insn.operands[0]);
     src = ctx.match_size(src, t, /*sign_ext=*/false);
     ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, src, ctx.imm(0, t)));
-    // Integer flag-setter — clear any prior FP-compare context.
+    // Integer flag-setter - clear any prior FP-compare context.
     ctx.last_fp_cmp_a = {};
     ctx.last_fp_cmp_b = {};
 
@@ -1000,7 +1000,7 @@ void lift_bit_test(LiftCtx& ctx, char op) {
     ctx.emit_set_flag(Flag::Cf,
                       ctx.emit_cmp(IrOp::CmpNe, bit, ctx.imm(0, base.type)));
 
-    if (op == 't') return;  // BT — read-only
+    if (op == 't') return;  // BT - read-only
 
     IrValue mask = ctx.emit_binop(IrOp::Shl, one_t, off);
     IrValue r;
@@ -1009,7 +1009,7 @@ void lift_bit_test(LiftCtx& ctx, char op) {
     } else if (op == 'r') {
         IrValue inv_mask = ctx.emit_unop(IrOp::Not, mask);
         r = ctx.emit_binop(IrOp::And, base, inv_mask);
-    } else {  // 'c' — complement
+    } else {  // 'c' - complement
         r = ctx.emit_binop(IrOp::Xor, base, mask);
     }
     store_lvalue(insn.operands[0], r, ctx);
@@ -1157,7 +1157,7 @@ void lift_jmp(LiftCtx& ctx) {
 
     // Tail call: the CFG builder marked this jmp's block as TailCall because
     // the target is a known function entry. Lift as `call target; return rax;`
-    // — the same shape as a regular call, which gives us the call.args.*
+    // - the same shape as a regular call, which gives us the call.args.*
     // argument barriers and natural pseudo-C output.
     if (ctx.blk->kind == BlockKind::TailCall &&
         op.kind == Operand::Kind::Relative) {
@@ -1169,7 +1169,7 @@ void lift_jmp(LiftCtx& ctx) {
     // Indirect tail call: `jmp [mem]` / `jmp reg` is the canonical x86-64
     // form for indirect tail-calls (vtable dispatch, fn-ptr-table dispatch,
     // PLT thunks). The CFG builder couldn't classify the target as a known
-    // function entry — neither a defined function nor a switch table — so
+    // function entry - neither a defined function nor a switch table - so
     // it left this block as IndirectJmp. Promoting to TailCall here
     // recovers `return (*ptr)(args);` in the pseudo-C; the previous
     // shape rendered as a bare `unreachable;` and dropped the call entirely.
@@ -1233,7 +1233,7 @@ IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx) {
         case Mnemonic::Jp:
         case Mnemonic::Jnp: {
             // After a scalar-FP compare (ucomi*/comi*), PF means "unordered"
-            // — at least one operand is NaN. Lower to a typed intrinsic so
+            // - at least one operand is NaN. Lower to a typed intrinsic so
             // the reader sees `if (unordered_fp_compare(a, b))`, the SSA
             // pass keeps both operands live, and the cleanup pass doesn't
             // try to apply the integer parity formula to FP values.
@@ -1325,7 +1325,7 @@ void lift_intrinsic(LiftCtx& ctx, std::string_view name) {
     // lock xchg, ...) render with their arguments instead of as empty
     // `xadd();` calls. Memory operands lift as loads, which is accurate
     // for the read-modify-write side and at worst slightly lossy for the
-    // write-back — still more useful than nothing.
+    // write-back - still more useful than nothing.
     for (u8 j = 0; j < insn.num_operands && j < 3; ++j) {
         IrValue v = materialize_rvalue(insn.operands[j], ctx);
         if (v.kind == IrValueKind::None) break;
@@ -1387,8 +1387,8 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
 
 // ----- Packed SIMD intrinsics --------------------------------------------
 //
-// XMM dataflow at the register-width level uses IrType::I128 — the actual
-// 128-bit width — so the upper 64 bits aren't silently truncated by the
+// XMM dataflow at the register-width level uses IrType::I128 - the actual
+// 128-bit width - so the upper 64 bits aren't silently truncated by the
 // loads/stores that used to flow through F64. The reader still gets named
 // intrinsics (`_mm_xor_ps`, `_mm_add_pd`, …) that carry the lane-width
 // interpretation; the IR-level type is just an honest "16-byte
@@ -1430,7 +1430,7 @@ void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
 //   - I128 for any full-XMM op (every `_mm_*_ps`, `_mm_*_pd`, `_mm_*_si128`,
 //     `_mm_*_epi*`, shuffle/unpack, etc.). Carries the full 128-bit width so
 //     SSA / cleanup / emit don't truncate the upper 64 bits.
-//   - F32 / F64 for scalar-low-lane ops (`_mm_min_ss`, `_mm_max_sd`, etc.) —
+//   - F32 / F64 for scalar-low-lane ops (`_mm_min_ss`, `_mm_max_sd`, etc.) -
 //     architecturally these only modify the low lane and the compiler treats
 //     the result as scalar. Keeping them at scalar width lets the surrounding
 //     scalar-FP code (Movss/Movsd loads, return values) flow naturally.
@@ -1463,7 +1463,7 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
 
 // SSE2 immediate-shift shape: `psllw xmm, imm8` and friends. The
 // regular lift_simd_binop path tries to `read_xmm(operands[1])`,
-// which fails for immediates — so the shift would silently emit
+// which fails for immediates - so the shift would silently emit
 // nothing. Here we pin operand[0] as the xmm to shift, operand[1]
 // as the imm, and emit a named intrinsic with both. Result writes
 // back to operand[0].
@@ -1488,7 +1488,7 @@ void lift_simd_shift_imm(LiftCtx& ctx, std::string_view name, IrType t) {
 }
 
 // `movdqa xmm, xmm/m128` (and unaligned `movdqu`). Treated as a typed
-// load+store at the chosen SIMD width — the IR carries the dataflow, the
+// load+store at the chosen SIMD width - the IR carries the dataflow, the
 // emitter prints `xmm0 = *(__m128i*)(rsi);` style.
 void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
     const auto& insn = *ctx.insn;
@@ -1504,7 +1504,7 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
 //   ordered:    ZF = (a == b)   CF = (a < b)   PF = 0
 //   unordered:  ZF = 1          CF = 1         PF = 1     (one of a, b is NaN)
 //
-// We model the ordered case directly with CmpEq / CmpUlt — that's what
+// We model the ordered case directly with CmpEq / CmpUlt - that's what
 // downstream `ja`/`jb`/`je` need to render as `if (a > b)` etc, and it's
 // correct for any compare where neither operand is NaN (the overwhelming
 // common case).
@@ -1514,7 +1514,7 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
 // `unordered_fp_compare(a, b)` intrinsic instead of the integer XOR-fold
 // parity formula that's correct for arith results but meaningless after
 // a scalar-FP compare. NaN-aware codecs (audio decoders, math kernels)
-// rely on `jp` after `ucomi*` to detect unordered — without this they
+// rely on `jp` after `ucomi*` to detect unordered - without this they
 // would silently take the ordered branch. `last_flag_src` is intentionally
 // left as-is: it carries integer-arith provenance, the FP pair takes
 // precedence in the parity-lowering path.
@@ -1552,7 +1552,7 @@ void lift_fp_unop(LiftCtx& ctx, std::string_view name, IrType t) {
 
 // Conversions: gpr/m -> xmm (cvtsi2ss/sd), xmm/m -> gpr (cvtt*2si),
 // xmm -> xmm width change (cvtss2sd / cvtsd2ss). Kept as named intrinsics
-// rather than introducing a dedicated IrOp::FpConv — the cast itself is
+// rather than introducing a dedicated IrOp::FpConv - the cast itself is
 // the dataflow, and the emitter prints `xmm0 = cvtsi2ss(rax);` cleanly.
 void lift_int_to_fp(LiftCtx& ctx, std::string_view name, IrType dst_t) {
     const auto& insn = *ctx.insn;
@@ -1606,7 +1606,7 @@ void lift_fp_to_fp(LiftCtx& ctx, std::string_view name, IrType src_t,
 
 // SetCC: write 0 or 1 to a byte destination based on the flag predicate.
 // Reuses jcc_predicate() so the flag logic is shared with conditional
-// branches — i.e. `sete` and `je` compute the same i1.
+// branches - i.e. `sete` and `je` compute the same i1.
 void lift_setcc(LiftCtx& ctx, Mnemonic mn) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 1) return;
@@ -1746,7 +1746,7 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         }
         case Mnemonic::Cwde: {
-            // eax = sext32(ax)   — 32-bit write then zero-extends per x64 rules.
+            // eax = sext32(ax)   - 32-bit write then zero-extends per x64 rules.
             IrValue ax = ctx.read_reg(Reg::Ax);
             IrValue sx = ctx.emit_convert(IrOp::SExt, ax, IrType::I32);
             ctx.write_reg(Reg::Eax, sx);
@@ -1788,7 +1788,7 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::MovsdXmm:      lift_fp_mov(ctx, IrType::F64, false); break;
         case Mnemonic::MovsdXmmStore: lift_fp_mov(ctx, IrType::F64, true);  break;
         // Packed moves: compiler-emitted shortcuts for copying a whole
-        // xmm register — we model as scalar F64 copies. This loses the
+        // xmm register - we model as scalar F64 copies. This loses the
         // upper 64 bits of SIMD data (which we never reason about anyway)
         // but preserves the scalar dataflow that compiler output relies on.
         // movaps/movups transfer all 128 bits of an XMM register; route
@@ -1802,7 +1802,7 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Sqrtss: lift_fp_unop(ctx, "sqrtf", IrType::F32); break;
         case Mnemonic::Sqrtsd: lift_fp_unop(ctx, "sqrt",  IrType::F64); break;
 
-        // Scalar min/max — modeled as named intrinsics (`_mm_min_ss`,
+        // Scalar min/max - modeled as named intrinsics (`_mm_min_ss`,
         // `_mm_max_sd`, …). The compiler emits these for `(a < b) ? a : b`
         // patterns; recovering the ternary requires lifting them as
         // IrOp::Select with a proper FP compare, which we don't have a
@@ -1883,7 +1883,7 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Pshuflw:    lift_simd_binop(ctx, "_mm_shufflelo_epi16", IrType::I128); break;
         case Mnemonic::Pshufhw:    lift_simd_binop(ctx, "_mm_shufflehi_epi16", IrType::I128); break;
 
-        // Packed integer arithmetic — same xmm-binop shape as Pxor/Pand.
+        // Packed integer arithmetic - same xmm-binop shape as Pxor/Pand.
         case Mnemonic::Paddb:   lift_simd_binop(ctx, "_mm_add_epi8",   IrType::I128); break;
         case Mnemonic::Paddw:   lift_simd_binop(ctx, "_mm_add_epi16",  IrType::I128); break;
         case Mnemonic::Paddd:   lift_simd_binop(ctx, "_mm_add_epi32",  IrType::I128); break;
@@ -1926,12 +1926,12 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Punpckhwd: lift_simd_binop(ctx, "_mm_unpackhi_epi16", IrType::I128); break;
         case Mnemonic::Punpckhdq: lift_simd_binop(ctx, "_mm_unpackhi_epi32", IrType::I128); break;
 
-        // Float shuffles take an imm8 selector — same 3-operand shape
+        // Float shuffles take an imm8 selector - same 3-operand shape
         // lift_simd_binop already handles for Pshufd.
         case Mnemonic::Shufps:  lift_simd_binop(ctx, "_mm_shuffle_ps", IrType::I128); break;
         case Mnemonic::Shufpd:  lift_simd_binop(ctx, "_mm_shuffle_pd", IrType::I128); break;
 
-        // SSE2 shift family — same mnemonic doubles for the imm8 form
+        // SSE2 shift family - same mnemonic doubles for the imm8 form
         // (0x66 0F 71/72/73 /N) and the xmm-count form (0x66 0F D1..F3).
         // Branch on operand[1].kind to pick the matching intrinsic.
         case Mnemonic::Psllw:
@@ -1978,11 +1978,11 @@ void lift_instruction(LiftCtx& ctx) {
             break;
 
         // 128-bit aligned + unaligned moves. Operand 0 may be memory for the
-        // *Store variants — lift_simd_mov handles either direction.
+        // *Store variants - lift_simd_mov handles either direction.
         // movdqa/movdqu transfer the entire 128-bit register; pin I128 so the
         // upper 64 bits aren't dropped by the F64 surrogate. movhps/movlps
         // genuinely transfer 64 bits to one half of the register and stay at
-        // F64 — the half-merge semantics are still approximate (we don't
+        // F64 - the half-merge semantics are still approximate (we don't
         // model the unmodified half of the XMM destination), separate issue.
         case Mnemonic::Movdqa:      lift_simd_mov(ctx, IrType::I128, false); break;
         case Mnemonic::MovdqaStore: lift_simd_mov(ctx, IrType::I128, true);  break;
@@ -1992,7 +1992,7 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Movlps:      lift_simd_mov(ctx, IrType::F64,  false); break;
 
         // movd / movq: 32 / 64-bit transfer between xmm and gpr-or-mem. Model
-        // as a copy at the matching scalar width — the destination type
+        // as a copy at the matching scalar width - the destination type
         // tracks naturally.
         case Mnemonic::Movd:        lift_simd_mov(ctx, IrType::I32, false); break;
         case Mnemonic::MovdStore:   lift_simd_mov(ctx, IrType::I32, true);  break;

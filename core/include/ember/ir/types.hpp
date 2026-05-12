@@ -13,11 +13,11 @@ namespace ember {
 // First-class types for the IR. Decoupled from the bit-width-only `IrType`
 // every SSA value still carries; this lattice runs alongside as a
 // refinement layer that Phase 2+ inference will populate. Phase 1 wires
-// the lattice and arena only — no SSA value is annotated yet, so the
+// the lattice and arena only - no SSA value is annotated yet, so the
 // effective type of every value is Top (unknown).
 enum class TypeKind : u8 {
     Top,        // id == 0
-    Bottom,     // id == 1 — irreconcilable conflict
+    Bottom,     // id == 1 - irreconcilable conflict
     Void,
     Int,
     Float,

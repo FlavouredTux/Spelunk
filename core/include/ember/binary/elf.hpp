@@ -47,7 +47,7 @@ public:
     // R_*_RELATIVE-style relocations: slot-vaddr → absolute target-vaddr
     // baked into a `.data.rel.ro` / `.data` qword at load time. Static
     // `bytes_at(slot_va)` reads zero on disk because the linker's value
-    // is the *addend*, not the slot contents — the dynamic linker
+    // is the *addend*, not the slot contents - the dynamic linker
     // patches the slot at startup. A constant-pool scan that only
     // matches qword values therefore misses every relocated function
     // pointer; this map closes that gap.
@@ -57,7 +57,7 @@ public:
     // are decoded yet) and for binaries without a `.rela.*` section.
     [[nodiscard]] std::map<addr_t, addr_t> relocated_qwords() const;
 
-    // Lowest PT_LOAD vaddr — 0 for PIE/ET_DYN, the linker's preferred
+    // Lowest PT_LOAD vaddr - 0 for PIE/ET_DYN, the linker's preferred
     // base (typically 0x400000 on x86-64 sysv) for non-PIE.
     [[nodiscard]] addr_t preferred_load_base() const noexcept override {
         addr_t lo = 0;
@@ -97,7 +97,7 @@ public:
             if (vaddr < seg.vaddr) continue;
             const u64 off = vaddr - seg.vaddr;
             if (off >= seg.memsz) continue;
-            if (off >= seg.filesz) return {};  // in BSS tail — no file bytes
+            if (off >= seg.filesz) return {};  // in BSS tail - no file bytes
             if (seg.data.empty()) continue;
             return seg.data.subspan(static_cast<std::size_t>(off));
         }

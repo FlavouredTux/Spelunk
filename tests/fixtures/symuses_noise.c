@@ -37,7 +37,7 @@ void noisy_consumer(void) {
 
     /* Decoy noise: read-modify-write on three separate volatile
      * counters using the same constants as alpha / bravo / delta
-     * offsets. The volatile reads/writes can't be fused — each
+     * offsets. The volatile reads/writes can't be fused - each
      * `add reg, IMM` ends up in the disasm. Without taint each is
      * a false-positive entry hit. */
     g_counter_a += 0x01;          /* alpha-shaped noise */

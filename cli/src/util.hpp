@@ -13,7 +13,7 @@ namespace ember::cli {
 // decimal-looking names). Nullopt on malformed input.
 [[nodiscard]] std::optional<addr_t> parse_cli_addr(std::string_view s);
 
-// Minimal JSON string-escape — emits a tight, machine-readable form.
+// Minimal JSON string-escape - emits a tight, machine-readable form.
 [[nodiscard]] std::string json_escape(std::string_view s);
 
 // Escape non-printables and the `|` separator so the strings TSV is

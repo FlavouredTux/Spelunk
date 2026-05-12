@@ -19,7 +19,7 @@ namespace {
 // A typeinfo's name pointer targets a C string like "3Foo", "N3Foo3BarE",
 // "Pi" (pointer to int), "Sa" etc. We detect validity by trying to route
 // the name through the Itanium demangler as the "encoding" part of a
-// `_Z` symbol — if the demangler accepts it, it's RTTI.
+// `_Z` symbol - if the demangler accepts it, it's RTTI.
 [[nodiscard]] std::string read_cstring(const Binary& b, addr_t va,
                                        std::size_t max = 512) {
     auto span = b.bytes_at(va);
@@ -64,7 +64,7 @@ try_demangle_typeinfo(std::string_view name) {
     mangled.append(name);
     auto r = demangle_itanium(mangled);
     if (!r) return std::nullopt;
-    // Strip the parenthesized arg list the demangler inserts — RTTI names
+    // Strip the parenthesized arg list the demangler inserts - RTTI names
     // aren't functions, they're types.
     std::string s = *r;
     const auto lp = s.find('(');
@@ -97,7 +97,7 @@ struct CodeRanges {
         // `__eh_frame`, `__gcc_except_tab`) all show up as "executable" even
         // though they aren't real code. If the walker accepts pointers into
         // them as vtable entries, we end up labelling the addresses of
-        // typeinfo-name C strings as methods — the exact Bug C failure.
+        // typeinfo-name C strings as methods - the exact Bug C failure.
         const std::string_view n = s.name;
         auto contains = [&](std::string_view needle) {
             return n.find(needle) != std::string_view::npos;
@@ -178,7 +178,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
     //
     // Key subtlety: a pure-virtual slot points at `__cxa_pure_virtual`,
     // which on Mach-O binaries that link against the dyld shared cache
-    // is an *imported* symbol — its address lives outside our __TEXT
+    // is an *imported* symbol - its address lives outside our __TEXT
     // ranges, and on chained-fixups images it may read as 0 or a fixup
     // descriptor. Bailing on the first such slot under-counts abstract
     // interfaces (HttpClient, RakPeerInterface, NetworkStream etc.) and
@@ -196,7 +196,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
             auto it = ti_by_addr.find(static_cast<addr_t>(ti));
             if (it == ti_by_addr.end()) continue;
 
-            // vtable base is (i+1)*8 — the typeinfo slot; primary IMPs
+            // vtable base is (i+1)*8 - the typeinfo slot; primary IMPs
             // start one u64 later.
             RttiClass& cls = out[it->second];
             if (cls.vtable != 0) continue;  // already recorded the primary
@@ -209,7 +209,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
                 u64 m = 0;
                 std::memcpy(&m, sec.bytes.data() + k * 8, 8);
                 // Structural boundary #1: current slot IS a typeinfo vptr
-                // — we've walked straight into the next RTTI struct.
+                // - we've walked straight into the next RTTI struct.
                 if (ti_by_addr.count(static_cast<addr_t>(m))) break;
                 // Structural boundary #2: the NEXT slot is a known
                 // typeinfo, so this slot is the offset_to_top of a
@@ -226,7 +226,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
                     }
                 }
                 if (m == 0 || !code.contains(static_cast<addr_t>(m))) {
-                    // Pure-virtual / imported / padding — placeholder so
+                    // Pure-virtual / imported / padding - placeholder so
                     // downstream slot indices stay aligned with the real
                     // vtable layout.
                     cls.methods.push_back(0);
@@ -237,7 +237,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
                 cls.methods.push_back(static_cast<addr_t>(m));
             }
             // Trim trailing zero placeholders only when there's real
-            // content before them — an all-zero method list means the
+            // content before them - an all-zero method list means the
             // class is purely abstract (every slot is __cxa_pure_virtual
             // routed through chained-fixups), and we still want the
             // class registered so the resolver can report it exists.
@@ -264,7 +264,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
 std::map<addr_t, std::string>
 rtti_method_names(std::span<const RttiClass> classes) {
     // Count how many vtable slots each IMP appears in. Addresses that show
-    // up across many classes are almost always shared thunks — most
+    // up across many classes are almost always shared thunks - most
     // commonly `__cxa_pure_virtual`, but also deleting-destructor stubs
     // and ICF-folded methods. Labelling call sites `SomeRandomClass::vfn_3`
     // when the target is really the pure-virtual trampoline is worse than

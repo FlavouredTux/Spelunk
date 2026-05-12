@@ -4,17 +4,17 @@ import { C, sans, mono, serif } from "../theme";
 // Settings drawer for the agent harness. Slides in from the right when
 // the gear is clicked. Provider keys live in ~/.config/ember/agent.toml
 // (mode 0600); the renderer never sees the raw key after the initial
-// paste — agent:getConfig returns a masked tail like "••••sk-…xyz9".
+// paste - agent:getConfig returns a masked tail like "••••sk-…xyz9".
 
 const ROLES = ["namer", "mapper", "typer", "tiebreaker"] as const;
 const ROLE_HINTS: Record<string, string> = {
-    namer:      "bulk worker — owl-alpha or deepseek-v4-flash (free / cheap)",
-    mapper:     "bulk worker — same tier as namer",
-    typer:      "type-shape inference — flash class is fine",
-    tiebreaker: "dispute resolver — use a stronger model (v4-pro / opus)",
+    namer:      "bulk worker - owl-alpha or deepseek-v4-flash (free / cheap)",
+    mapper:     "bulk worker - same tier as namer",
+    typer:      "type-shape inference - flash class is fine",
+    tiebreaker: "dispute resolver - use a stronger model (v4-pro / opus)",
 };
 const MODEL_PRESETS = [
-    "openrouter/owl-alpha",        // free, 1M ctx — current default
+    "openrouter/owl-alpha",        // free, 1M ctx - current default
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-r1",
@@ -129,7 +129,7 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
                     }}>×</button>
                 </div>
                 <div style={{ fontFamily: mono, fontSize: 10, color: C.textFaint, marginBottom: 18 }}>
-                    keys live in {cfgPath || "~/.config/ember/agent.toml"} — chmod 0600
+                    keys live in {cfgPath || "~/.config/ember/agent.toml"} - chmod 0600
                 </div>
 
                 <Section title="Provider keys">
@@ -171,9 +171,9 @@ export function AgentSettings(props: { open: boolean; onClose: () => void }) {
                         fontSize: 11, color: C.textMuted, marginBottom: 10,
                         lineHeight: 1.4,
                     }}>
-                        Cascade spawns <b>namer</b> workers (volume — pick a cheap or
+                        Cascade spawns <b>namer</b> workers (volume - pick a cheap or
                         free model). <b>Tiebreaker</b> is the high-stakes role that
-                        resolves disputes — pick a stronger model since each call has
+                        resolves disputes - pick a stronger model since each call has
                         much higher leverage.
                     </div>
                     {ROLES.map((r) => (

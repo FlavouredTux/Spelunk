@@ -7,9 +7,9 @@ import { newId } from "./intel/log.js";
 // Fanout: pick N functions from a binary, spawn N detached workers.
 //
 // Selection strategy depends on --pick:
-//   "all"      — every fn ember reports (filter trivial < min-size)
-//   "unnamed"  — only sub_* (skips already-named symbols)
-//   "list:..." — comma-separated list of explicit fn addrs
+//   "all"      - every fn ember reports (filter trivial < min-size)
+//   "unnamed"  - only sub_* (skips already-named symbols)
+//   "list:..." - comma-separated list of explicit fn addrs
 //
 // Each spawned worker is fully detached (parent exits as soon as it has
 // printed run-ids), so this can be invoked from a long-lived
@@ -100,12 +100,12 @@ function pickFunctions(args: FanoutArgs): PickResult {
         if (parts.length < 4) continue;
         const [addrFull, sizeHex, _kind, name] = parts;
         const size = parseInt(sizeHex, 16);
-        // ember reports size 0 for sub_* in some configs — still useful
+        // ember reports size 0 for sub_* in some configs - still useful
         // to dispatch, just less informative. Apply the min-size filter
         // only to fns that report a real size.
         if (size > 0 && size < args.minSize) { ++too_small; continue; }
         if (args.pick === "unnamed" && !name.startsWith("sub_")) { ++already_named; continue; }
-        // Compact hex form (drop leading zeros) — that's what our scope
+        // Compact hex form (drop leading zeros) - that's what our scope
         // parser and ember -s both accept.
         const addr = "0x" + parseInt(addrFull, 16).toString(16);
         candidates.push(addr);

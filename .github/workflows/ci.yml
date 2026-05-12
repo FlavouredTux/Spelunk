@@ -159,7 +159,7 @@ jobs:
   # tag pushes, but per-PR we want to catch MSVC-only issues
   # (/permissive- enforcement, header order sensitivity, _CRT_SECURE_*
   # interactions) before they land on main and break a release. Goldens
-  # don't run here — addresses + sig hashes are gcc-pinned by design.
+  # don't run here - addresses + sig hashes are gcc-pinned by design.
   build-windows:
     runs-on: windows-2022
     steps:

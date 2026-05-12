@@ -15,7 +15,7 @@ enum class RuleKind : u8 {
     ValOffset,    // CFA + offset (the value, not stored at that addr)
     Register,     // value of another DWARF register
     // DWARF expressions (DW_CFA_expression / val_expression) are
-    // intentionally absent — recover() returns nullopt when it
+    // intentionally absent - recover() returns nullopt when it
     // encounters them, and the caller falls back to RBP-walk.
 };
 

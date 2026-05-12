@@ -16,7 +16,7 @@ namespace ember {
 // raw region `.bin` files. Used by Scylla-style scrape workflows where
 // pages were dumped out of a process without a minidump container.
 //
-// Manifest format — one record per non-blank, non-`#` line:
+// Manifest format - one record per non-blank, non-`#` line:
 //
 //     <vaddr-hex>  <size-hex>  <flags>  <file-relative-to-manifest>
 //

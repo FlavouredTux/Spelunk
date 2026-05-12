@@ -38,7 +38,7 @@ demangle_itanium(std::string_view mangled);
 // No-op on anything that doesn't look like a demangled signature.
 [[nodiscard]] std::string strip_signature_suffix(std::string_view demangled);
 
-// Convenience: like pretty_symbol but for function-header use — demangles
+// Convenience: like pretty_symbol but for function-header use - demangles
 // and strips the arg list, so the name can go in a declaration where the
 // header builder will attach its own argument list.
 [[nodiscard]] std::string pretty_symbol_base(std::string_view name);

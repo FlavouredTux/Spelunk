@@ -1,4 +1,4 @@
-// Process control for the perf backend. No PTRACE_* anywhere — the
+// Process control for the perf backend. No PTRACE_* anywhere - the
 // child is spawned with plain fork+execvpe, and "stop" semantics are
 // driven by SIGSTOP/SIGCONT instead of tracer-side waitpid stops.
 //
@@ -7,8 +7,8 @@
 // instructions into its new image by the time the signal is
 // delivered (kernel context-switch latency), but everything stops
 // before the first cont(). Unlike the ptrace path, we do NOT have
-// regs at the SIGSTOP point — perf only samples on a HW BP/WP hit
-// — so the first get_regs after entry returns an all-zero Registers
+// regs at the SIGSTOP point - perf only samples on a HW BP/WP hit
+// - so the first get_regs after entry returns an all-zero Registers
 // with present == 0. That's the documented gap; users who need
 // regs-at-entry can set a HW BP at the executable's entry address
 // before resuming.
@@ -210,7 +210,7 @@ launch_perf(const LaunchOptions& opts) {
     }
 
     // execve has completed in the kernel. If stop_at_entry, freeze
-    // the new task NOW — the SIGSTOP is queued before the kernel's
+    // the new task NOW - the SIGSTOP is queued before the kernel's
     // final signal-check before returning to user mode at the new
     // image's _start, so the child stops before any user instruction
     // in the new image runs. Worst-case scheduling latency may let a
@@ -252,7 +252,7 @@ attach_perf(ProcessId pid) {
     auto t = std::make_unique<PerfTarget>(pid, pidfd, /*spawned=*/false);
 
     // Seed thread map from /proc/<pid>/task. The perf backend has no
-    // CLONE event — new threads will be discovered lazily on the
+    // CLONE event - new threads will be discovered lazily on the
     // first sample that names them. Listing them up front lets
     // images() / threads() report a sensible state to the REPL right
     // after attach.
@@ -292,7 +292,7 @@ Result<void> PerfTarget::kill() {
     if (spawned_) {
         int status = 0;
         while (::waitpid(static_cast<pid_t>(pid_v_), &status, WNOHANG) == 0) {
-            // Drain — give the kernel a moment after SIGKILL.
+            // Drain - give the kernel a moment after SIGKILL.
             ::usleep(1000);
         }
     }

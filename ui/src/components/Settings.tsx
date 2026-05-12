@@ -9,7 +9,7 @@ import type {
 } from "../types";
 
 // Monospace font presets surfaced in the Settings panel. Each value
-// is a CSS font-family stack — the first listed family is the
+// is a CSS font-family stack - the first listed family is the
 // preferred face; trailing entries are fallbacks if the user doesn't
 // have the headline font installed locally.
 const FONT_FAMILIES = {
@@ -55,7 +55,7 @@ export function GearIcon(props: { size?: number; style?: React.CSSProperties }) 
 
 // Settings overlay. Reads/writes through the parent (which owns the
 // settings state and persists on change). Esc / backdrop-click closes;
-// changes are applied live, no Save/Cancel — the toggle IS the apply.
+// changes are applied live, no Save/Cancel - the toggle IS the apply.
 export function SettingsPanel(props: {
   settings: AppSettings;
   onChange: (s: AppSettings) => void;
@@ -234,7 +234,7 @@ export function SettingsPanel(props: {
           <Section title="Discord">
             <Row
               label="Rich Presence"
-              hint="Broadcast Ember activity on your Discord profile. On by default in privacy mode — only the current view is shown, never the binary or function names."
+              hint="Broadcast Ember activity on your Discord profile. On by default in privacy mode - only the current view is shown, never the binary or function names."
             >
               <Toggle
                 value={props.settings.discordRichPresence}
@@ -328,7 +328,7 @@ export function SettingsPanel(props: {
               fontFamily: serif, fontSize: 11, color: C.textFaint, fontStyle: "italic",
             }}
           >
-            <span>Ember — from-scratch binary decompiler</span>
+            <span>Ember - from-scratch binary decompiler</span>
             <span style={{ fontFamily: mono, fontStyle: "normal" }}>
               github.com/FlavouredTux/Ember
             </span>
@@ -796,7 +796,7 @@ function PresetButton(props: { label: string; active: boolean; onClick: () => vo
 }
 
 // AI provider + key + model picker. Talks to the main process
-// directly so credentials never live in renderer state — we hold an
+// directly so credentials never live in renderer state - we hold an
 // opaque "have a key" boolean and only ever ship a fresh string back
 // when the user pastes a new one. The CLI providers don't need keys
 // at all; their auth lives inside the installed CLI.
@@ -850,7 +850,7 @@ function AiConfigSection() {
     <>
       <Row
         label="Provider"
-        hint="Which backend handles AI requests. CLI paths use the logged-in subscription of the matching tool — no API key lives in Ember."
+        hint="Which backend handles AI requests. CLI paths use the logged-in subscription of the matching tool - no API key lives in Ember."
       >
         <Segmented
           value={cfg.provider}
@@ -873,7 +873,7 @@ function AiConfigSection() {
           status={assistant}
           onRefresh={reloadProbes}
           loginCmd="assistant auth login"
-          note="Uses the official @assistant-ai/assistant-agent-sdk to invoke your installed assistant Code session. Works for both Pro / Max subscription auth (the SDK handles the OAuth that `assistant -p` alone refuses) and assistant Console API billing — whichever `assistant auth login` was run with."
+          note="Uses the official @assistant-ai/assistant-agent-sdk to invoke your installed assistant Code session. Works for both Pro / Max subscription auth (the SDK handles the OAuth that `assistant -p` alone refuses) and assistant Console API billing - whichever `assistant auth login` was run with."
         />
       )}
 
@@ -913,8 +913,8 @@ function OpenRouterKeySection(props: {
         hint={props.cfg.hasKey
           ? (props.cfg.encrypted
               ? "Stored encrypted via the OS keychain (safeStorage). Paste a new key to replace."
-              : "Stored as plaintext — your platform doesn't expose a keychain. Treat the userData dir as sensitive.")
-          : "Paste a key from openrouter.ai/keys — never leaves the main process."}
+              : "Stored as plaintext - your platform doesn't expose a keychain. Treat the userData dir as sensitive.")
+          : "Paste a key from openrouter.ai/keys - never leaves the main process."}
       >
         <div style={{ display: "flex", gap: 4 }}>
           <input
@@ -971,7 +971,7 @@ function NineRouterSection(props: {
     <>
       <Row
         label="9Router endpoint"
-        hint="Local proxy that fans out to 40+ providers with subscription / cheap / free tier fallback. Defaults to http://localhost:20128 — override with EMBER_9ROUTER_URL."
+        hint="Local proxy that fans out to 40+ providers with subscription / cheap / free tier fallback. Defaults to http://localhost:20128 - override with EMBER_9ROUTER_URL."
       >
         <code style={{
           fontFamily: mono, fontSize: 11,
@@ -1093,7 +1093,7 @@ const iconBtnStyle: React.CSSProperties = {
 // and can't be themed to match the rest of the UI. We render the
 // popup ourselves so it picks up Ember's dark tokens. Still
 // free-text-editable so the user can type any model id the proxy
-// supports — the suggestion list is just a hinted shortlist.
+// supports - the suggestion list is just a hinted shortlist.
 export function ModelCombobox(props: {
   value:    string;
   options:  string[];

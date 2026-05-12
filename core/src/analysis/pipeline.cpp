@@ -49,7 +49,7 @@ namespace ember {
 
 namespace {
 
-// Stops the linear-walk fallback at unconditional flow exits — the
+// Stops the linear-walk fallback at unconditional flow exits - the
 // shape we need is "control doesn't fall through past this insn".
 // Conditional branches stay out of this set: the next byte after a
 // `je rel32` is a real instruction. Multi-arch coverage piggybacks on
@@ -75,7 +75,7 @@ std::string hex_bytes(std::span<const std::byte> b) {
 // always 1, which routinely misdecoded the ModR/M byte of a failed
 // 0x0F-escaped opcode as a fresh one-byte instruction (`0f 57 c0`
 // became "decode error + push rdi"). Prefixes and the two-byte escape
-// aren't themselves a valid instruction start — skipping them avoids
+// aren't themselves a valid instruction start - skipping them avoids
 // seeing them twice. VEX/EVEX take a wider swath because their payload
 // bytes are drawn from a very different opcode space; one cautious
 // forward jump is better than a multi-instruction cascade.
@@ -140,7 +140,7 @@ std::optional<addr_t> rip_relative_target(const Instruction& insn) noexcept {
 
 // String literal at `addr` if the bytes there are NUL-terminated printable
 // ASCII (≥ kMin chars). Result is escaped for inline-comment safety and
-// truncated at kMax chars with an ellipsis. Conservative on purpose — a
+// truncated at kMax chars with an ellipsis. Conservative on purpose - a
 // false positive shows up as junk in the comment column, so we require
 // strict printable-only and a hard min length.
 [[nodiscard]] std::optional<std::string>
@@ -185,7 +185,7 @@ std::string format_instruction_annotated(const Binary& b, const Instruction& ins
         text += std::format("  ; {}", format_address_comment(*label));
         return text;
     }
-    // No symbol at the target — see if it's a string literal. RIP-relative
+    // No symbol at the target - see if it's a string literal. RIP-relative
     // loads of `.rodata` strings are extremely common; surfacing them
     // turns `lea rdi, [rip+0x1234]` into an actually-readable line.
     if (auto s = disasm_string_at(b, *target); s) {
@@ -287,7 +287,7 @@ clamp_bytes(std::span<const std::byte> avail, u64 size) {
 namespace {
 
 // Try to parse `s` as a hex VA. Accepts `0x...`, `0X...`, or `sub_...`
-// only — bare hex strings collide with legitimate symbol names like
+// only - bare hex strings collide with legitimate symbol names like
 // `add32`, so we require an explicit prefix.
 [[nodiscard]] std::optional<addr_t> try_parse_va(std::string_view s) {
     if (s.starts_with("sub_"))          s.remove_prefix(4);
@@ -322,7 +322,7 @@ try_parse_objc_bracket(const Binary& b, std::string_view s) {
     return std::nullopt;
 }
 
-// True when EMBER_QUIET=1 — the CLI sets this for --quiet, and we honour
+// True when EMBER_QUIET=1 - the CLI sets this for --quiet, and we honour
 // it for one-shot diagnostics too so a `--quiet` invocation produces no
 // stderr noise even when -s lands mid-function.
 [[nodiscard]] bool diagnostics_silenced() noexcept {
@@ -389,7 +389,7 @@ resolve_containing_function(const Binary& b, addr_t addr) {
     // Fall back to the broader function index (CFG-discovered `sub_*`
     // entries that aren't in the symbol table). When the literal VA
     // lands mid-`sub_*` we still want the same offset note + entry-
-    // anchored window the named branch produces — otherwise `-s 0xVA`
+    // anchored window the named branch produces - otherwise `-s 0xVA`
     // on a hex literal in the middle of a discovered function silently
     // disasms from the wrong instruction boundary.
     if (auto exact = exact_discovered_function(b, addr, EnumerateMode::Auto); exact) {
@@ -409,7 +409,7 @@ resolve_containing_function(const Binary& b, addr_t addr) {
 std::optional<FuncWindow>
 resolve_function(const Binary& b, std::string_view symbol,
                  const Annotations* ann) {
-    // Obj-C bracket form: -[Class sel] / +[Class sel] — look up the IMP
+    // Obj-C bracket form: -[Class sel] / +[Class sel] - look up the IMP
     // in the classlist, then resolve by VA.
     if (!symbol.empty() && (symbol.front() == '-' || symbol.front() == '+') &&
         symbol.size() > 1 && symbol[1] == '[') {
@@ -423,7 +423,7 @@ resolve_function(const Binary& b, std::string_view symbol,
     if (auto va = try_parse_va(symbol); va) {
         // `sub_<hex>` is the canonical name for a discovered function
         // entry. When the user types it explicitly, treat the address
-        // as its own entry — even if a separate `sub_*` candidate's
+        // as its own entry - even if a separate `sub_*` candidate's
         // closest-below container also covers it. Without this guard,
         // call targets that the prologue scan misses (because they
         // sit inside a larger prologue-detected blob) get rebound to
@@ -464,12 +464,12 @@ resolve_function(const Binary& b, std::string_view symbol,
     if (chosen) {
         // Fingerprint import and user renames can silently bind the same
         // name to multiple addresses. Refuse the lookup rather than
-        // picking the first — a wrong-address answer presents as phantom
+        // picking the first - a wrong-address answer presents as phantom
         // bugs downstream.
         const auto all = b.find_all_by_name(lookup);
         if (all.size() > 1) {
             std::fprintf(stderr,
-                "ember: name '%.*s' is ambiguous — matches %zu addresses:",
+                "ember: name '%.*s' is ambiguous - matches %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), all.size());
             const std::size_t shown = std::min<std::size_t>(all.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
@@ -507,7 +507,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         }
         if (hits.size() > 1) {
             std::fprintf(stderr,
-                "ember: rename '%.*s' is ambiguous — bound to %zu addresses:",
+                "ember: rename '%.*s' is ambiguous - bound to %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), hits.size());
             const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
@@ -570,7 +570,7 @@ format_disasm(const Binary& b, const FuncWindow& w) {
 
     // Xref summary: who calls this function. Costs one call-graph walk on
     // first invocation (~1s on a 12k-fn binary), but the result reads as a
-    // jump-off point — `; xrefs from: foo, bar, baz (+12 more)` saves the
+    // jump-off point - `; xrefs from: foo, bar, baz (+12 more)` saves the
     // common "open disasm, then go grep callers separately" round trip.
     if (const auto callers = compute_callers(b, w.start); !callers.empty()) {
         constexpr std::size_t kMaxShown = 8;
@@ -599,7 +599,7 @@ format_disasm(const Binary& b, const FuncWindow& w) {
     // FuncWindow contract: size != 0 means the caller has a reliable
     // extent (real symbol or CFG-built range), so walk all of it. Earlier
     // this also gated on `size < 1024`, which had the perverse effect of
-    // truncating large functions at their first jmp/ret — e.g. `main`
+    // truncating large functions at their first jmp/ret - e.g. `main`
     // in /usr/bin/git stopping after 13% of its 5435 bytes.
     const bool size_known = w.size != 0;
 
@@ -751,7 +751,7 @@ format_cfg_pseudo(const Binary& b, const FuncWindow& w,
 
     // Bypass the structurer entirely. Per-block emission needs the SSA-
     // cleaned IR but explicitly does NOT want regions collapsing block
-    // boundaries — that's the whole point of the per-bb view.
+    // boundaries - that's the whole point of the per-bb view.
     // StructuredFunction holds a non-owning raw IR pointer; the IR
     // itself stays in the local `ir` value for the lifetime of the
     // emit call.
@@ -837,7 +837,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     };
     // Always union named symbols with discovered functions. Earlier this
     // gated the discovery walk on `work.empty()`, which only fires on a
-    // *fully* stripped binary — anything keeping even one named function
+    // *fully* stripped binary - anything keeping even one named function
     // (partial strips are common: GNU `strip` leaves dynsym entries; some
     // distros retain a single anchor symbol) would skip discovery and the
     // call graph would contain edges from that handful of named functions
@@ -871,7 +871,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     // and isn't thread-safe; give each worker its own. The Binary +
     // Decoder are read-only and shared.
     const std::size_t total = work.size();
-    // Cap at 8 — beyond that the binary's I/O cache becomes the
+    // Cap at 8 - beyond that the binary's I/O cache becomes the
     // bottleneck and extra threads just bounce cache lines. Also cap
     // by work size to avoid spawning idle threads for tiny binaries.
     // EMBER_THREADS env can lower further when many ember processes
@@ -900,7 +900,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
         return out;
     }
 
-    // Parallel worker pool — each worker pops indices from a shared
+    // Parallel worker pool - each worker pops indices from a shared
     // atomic counter and accumulates edges into its own buffer. The
     // CfgBuilder is per-thread because it lazily caches unwind ranges
     // in a map that isn't safe to populate concurrently.
@@ -941,7 +941,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     if (show) std::fputc('\n', stderr);
 
     // Merge per-thread buffers into the output. Order isn't observable
-    // by callers — every consumer sorts/dedupes — so a simple
+    // by callers - every consumer sorts/dedupes - so a simple
     // concatenation works.
     std::size_t total_edges = 0;
     for (const auto& v : per_thread) total_edges += v.size();
@@ -988,7 +988,7 @@ namespace {
 // Drop discovered `sub_*` entries that fall inside the first decoded
 // instruction of an earlier entry. The prologue sweep iterates byte by
 // byte and accepts every offset whose first 1–4 bytes match a prologue
-// shape AND whose first two instructions decode validly — at offsets
+// shape AND whose first two instructions decode validly - at offsets
 // 1 byte after a real prologue, the bytes are usually still a valid
 // (different) instruction sequence, so both pass and the discovery
 // list ends up with phantom 1-byte entries adjacent to real ones.
@@ -1030,7 +1030,7 @@ void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
             out.push_back(std::move(fn));
         }
         // else: fn.addr falls inside out.back()'s first decoded
-        // instruction — drop silently. Symbols never reach this
+        // instruction - drop silently. Symbols never reach this
         // branch because they bypass the shadow check above.
     }
     fns = std::move(out);
@@ -1171,7 +1171,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // garbage targets. Section-level filtering catches that case
     // without needing the binary-level heuristic to fire.
     //
-    // Cache the encrypted-section verdict by Section pointer — without
+    // Cache the encrypted-section verdict by Section pointer - without
     // this cache, `section_looks_encrypted(*sec)` runs the O(n) entropy
     // sweep over the whole section once per discovered prologue
     // (~24 k hits on a 14 MB Roblox-shaped DLL = ~336 GB of byte
@@ -1188,7 +1188,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     };
     auto section_for = [&](addr_t a) -> const Section* {
         for (const auto& s : sections) {
-            // "Code-shaped" — either flagged exec or named .text /
+            // "Code-shaped" - either flagged exec or named .text /
             // __text / CODE. Byfron / VMProtect strip the exec bit
             // on disk and flip it at runtime; pretending those
             // bytes aren't code drops every discovered function on
@@ -1221,7 +1221,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         if (!sec) return;
         if (!ppc_candidate_decodes(a)) return;
         // Trusted entries (vtable pointers from RTTI) bypass the
-        // encrypted-section filter — they come from structural
+        // encrypted-section filter - they come from structural
         // metadata in .rdata, not heuristic pattern matching in
         // encrypted code. Even on a packed binary, these are real
         // class methods that will exist after unpacking.
@@ -1234,11 +1234,11 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     };
 
     // Pass 1.5: cheap structural discovery. Vtables come from RTTI
-    // (already parsed for naming) — every slot is a guaranteed
+    // (already parsed for naming) - every slot is a guaranteed
     // function pointer. Prologue sweep linear-scans executable
     // bytes for x64 prologue patterns and validates each candidate
     // by decoding two instructions. Both run on packed binaries
-    // too — RTTI lives in unencrypted .rdata, and the prologue
+    // too - RTTI lives in unencrypted .rdata, and the prologue
     // sweep itself skips encrypted sections.
     if (b.format() == Format::Pe) {
         auto msvc_classes = parse_msvc_rtti(b);
@@ -1278,12 +1278,12 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // Loader-only mode: on a packed binary the call-graph walker chases
     // garbage targets through encrypted stub code, blocks the UI for
     // ~30s, and pollutes the function list with `sub_…` entries that
-    // never decompile. Skip pass 2 — the user can pass --full-analysis
+    // never decompile. Skip pass 2 - the user can pass --full-analysis
     // if they want it anyway. Pass 1.5 above already gave us anything
     // recoverable from the unencrypted parts of the image.
     //
     // `Cheap` callers (resolve_containing_function on per-function CLI
-    // invocations) bail here unconditionally — they only need a
+    // invocations) bail here unconditionally - they only need a
     // best-effort "is this a function entry?" answer, and the call-
     // graph walk costs minutes on big DLLs. Sidebar-driven UI
     // workflows always pass exact entries from a prior `--functions`
@@ -1309,7 +1309,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
 
 namespace {
 
-// True when `target` is the entry of a defined function or a PLT stub —
+// True when `target` is the entry of a defined function or a PLT stub -
 // the same predicate the CFG builder uses to convert a `jmp` into a
 // TailCall block. Duplicated here so the pipeline doesn't need to expose
 // CFG-builder internals.
@@ -1358,12 +1358,12 @@ compute_classified_callees(const Binary& b, addr_t fn) {
     // Vtable index for the back-trace. Itanium ABI covers both Mach-O
     // and ELF C++ binaries; `parse_itanium_rtti` already walks
     // `__const`, `.data.rel.ro`, and `.rodata`. PE is MSVC-RTTI shaped
-    // differently — handled elsewhere, not yet wired here.
+    // differently - handled elsewhere, not yet wired here.
     //
     // Key subtlety: `RttiClass::vtable` is the *typeinfo slot* (offset
-    // 8 inside the vtable struct). The ABI-defined vptr — the value
+    // 8 inside the vtable struct). The ABI-defined vptr - the value
     // stored in every object's head and the value the compiler loads
-    // when emitting `lea reg, [rip + K]` — points at `methods[0]`,
+    // when emitting `lea reg, [rip + K]` - points at `methods[0]`,
     // which sits at `vtable + 8`. We index by the vptr value the code
     // actually sees, so `call [reg + slot*8]` resolves directly with
     // no adjustment at the call site.
@@ -1416,7 +1416,7 @@ compute_classified_callees(const Binary& b, addr_t fn) {
         for (const auto& insn : bb.instructions) {
             const Mnemonic mn = insn.mnemonic;
 
-            // `lea dst, [rip + K]` — arm dst as carrying a vptr when
+            // `lea dst, [rip + K]` - arm dst as carrying a vptr when
             // K is exactly a known vptr address.
             if (mn == Mnemonic::Lea && insn.num_operands == 2 &&
                 insn.operands[0].kind == Operand::Kind::Register) {
@@ -1441,7 +1441,7 @@ compute_classified_callees(const Binary& b, addr_t fn) {
                 continue;
             }
 
-            // `mov dst, <src>` — multiple cases. See disarm() fallback
+            // `mov dst, <src>` - multiple cases. See disarm() fallback
             // at the bottom.
             if (mn == Mnemonic::Mov && insn.num_operands == 2 &&
                 insn.operands[0].kind == Operand::Kind::Register) {
@@ -1450,7 +1450,7 @@ compute_classified_callees(const Binary& b, addr_t fn) {
                 const auto& src = insn.operands[1];
                 bool armed = false;
                 if (reg_size(dst) == 8) {
-                    // mov dst, [rip + K] — *K might be a stored vptr.
+                    // mov dst, [rip + K] - *K might be a stored vptr.
                     if (src.kind == Operand::Kind::Memory &&
                         src.mem.base == Reg::Rip &&
                         src.mem.index == Reg::None &&
@@ -1466,7 +1466,7 @@ compute_classified_callees(const Binary& b, addr_t fn) {
                             }
                         }
                     }
-                    // mov dst, [reg + disp] — slot load from an armed
+                    // mov dst, [reg + disp] - slot load from an armed
                     // vptr-carrying register. Resolves to an IMP.
                     else if (src.kind == Operand::Kind::Memory &&
                              src.mem.base != Reg::None &&
@@ -1483,7 +1483,7 @@ compute_classified_callees(const Binary& b, addr_t fn) {
                             }
                         }
                     }
-                    // mov dst, src_reg — one-hop reg→reg copy of any
+                    // mov dst, src_reg - one-hop reg→reg copy of any
                     // currently-armed state.
                     else if (src.kind == Operand::Kind::Register) {
                         const Reg src_c = canonical_reg(src.reg);
@@ -1641,7 +1641,7 @@ containing_function(const Binary& b, addr_t addr) {
 
     // Respect the known extent when the symbol gives us one. A symbol
     // with size=0 (stripped `sub_*` entries) is bounded implicitly by
-    // the next function's start — without that, an addr that lands far
+    // the next function's start - without that, an addr that lands far
     // outside any real function would still be claimed by the
     // largest-start ≤ addr entry, surfacing absurd offsets like
     // `sub_53290+0x29586126579c` on backtrace frames pointing into
@@ -1677,7 +1677,7 @@ std::map<addr_t, addr_t>
 compute_call_resolutions(const Binary& b, addr_t fn) {
     std::map<addr_t, addr_t> out;
     for (const auto& e : compute_classified_callees(b, fn)) {
-        // First writer wins when two edges share a site — the
+        // First writer wins when two edges share a site - the
         // classifier already sorts by (target, kind, site), but a given
         // `call` instruction is only classified once in practice.
         out.emplace(e.site, e.target);
@@ -1697,7 +1697,7 @@ validate_name(const Binary& b, std::string_view name,
     out.offsets.reserve(matches.size());
 
     // The bound-address path always needs an "enclosing function entry"
-    // lookup — a wrong rename can pin a name mid-function, and the
+    // lookup - a wrong rename can pin a name mid-function, and the
     // fingerprint we report has to be the enclosing fn's, not 0. That
     // table comes from enumerate_functions regardless of caching.
     const auto fns = enumerate_functions(b);
@@ -1796,7 +1796,7 @@ collect_collisions(const Binary& b,
                    std::span<const FingerprintRow> precomputed) {
     Collisions out;
 
-    // Name collisions come straight from the symbol table — find_all_by_name
+    // Name collisions come straight from the symbol table - find_all_by_name
     // already does the per-name filter, but here we want every duplicate
     // in one pass. Skip imports (PLT stubs share names with their defined
     // counterparts and that's not a collision worth flagging).

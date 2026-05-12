@@ -8,7 +8,7 @@
 namespace ember {
 
 // Set EMBER_TIMING=1 in the environment to surface ScopedTimer output on
-// stderr. Disabled by default — the constructor reads the env var once
+// stderr. Disabled by default - the constructor reads the env var once
 // per process and short-circuits both the clock read and the print, so a
 // timer in a hot loop costs ~zero when the env var is unset.
 [[nodiscard]] inline bool timing_enabled() noexcept {

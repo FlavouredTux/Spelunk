@@ -6,9 +6,9 @@ import { IntelLog, intelPathFor, type Decision } from "./intel/log.js";
 // Promote intel claims into a .ember script that ember --apply can ingest.
 //
 // Filtering rules:
-//   - Skip disputed (subject, predicate) — orchestrator should resolve first.
-//   - Skip below threshold (default 0.85) — uncertain claims stay agent-only.
-//   - Only promote `name` and `note` predicates — they map cleanly onto
+//   - Skip disputed (subject, predicate) - orchestrator should resolve first.
+//   - Skip below threshold (default 0.85) - uncertain claims stay agent-only.
+//   - Only promote `name` and `note` predicates - they map cleanly onto
 //     [rename] and [note] sections. `type` claims about new structs are
 //     not promotable yet (no .ember surface for struct definitions).
 //     `tag` and `xref` are agent-internal hints, not user-facing.
@@ -45,7 +45,7 @@ export function promote(args: PromoteArgs): {
         if (d.disputed) {
             ++disputed;
             // Surface disputed subjects that would have promoted on
-            // confidence alone — the user couldn't otherwise tell whether
+            // confidence alone - the user couldn't otherwise tell whether
             // a 0.85+ claim got skipped due to threshold or dispute.
             if (d.winner.confidence >= args.threshold) {
                 disputedSubjects.push(`${d.winner.subject}|${d.winner.predicate}`);

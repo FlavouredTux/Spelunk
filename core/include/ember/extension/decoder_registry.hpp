@@ -3,7 +3,7 @@
 // Extension hook for adding architecture decoders out-of-tree.
 //
 // Builtin arches (x86_64, ARM64, PPC32/64) are dispatched directly in
-// make_decoder() — registering a factory for one of those arches has no
+// make_decoder() - registering a factory for one of those arches has no
 // effect; the builtin path always wins. Arches that core doesn't ship a
 // decoder for fall through to this registry, so an out-of-tree extension
 // (ember-pro, a research fork) can plug in RISC-V / MIPS / etc. without

@@ -23,9 +23,9 @@ namespace ember::debug {
 // the Linux-only `perf_event_open` + `/proc/<pid>/mem` backend used to
 // observe processes the kernel won't let us ptrace (anti-cheat games
 // running their own tracer, yama-scoped processes attached after spawn,
-// targets that watch `TracerPid` in /proc). Capabilities are reduced —
+// targets that watch `TracerPid` in /proc). Capabilities are reduced -
 // no software breakpoints, no single-step, no on-demand register read,
-// no syscall catch — but the target stays unaware: TracerPid is 0, the
+// no syscall catch - but the target stays unaware: TracerPid is 0, the
 // 4 HW debug slots are programmed by the kernel rather than by us, and
 // every memory operation goes through /proc/<pid>/mem.
 enum class BackendKind : u8 {

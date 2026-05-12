@@ -31,7 +31,7 @@ struct FnExtent {
     return note;
 }
 
-// Build a sorted vector of function extents — named symbols + discovered
+// Build a sorted vector of function extents - named symbols + discovered
 // sub_* both. Symbol-only would miss 95%+ of code on stripped binaries;
 // enumerate_functions(Cheap) does the union.
 [[nodiscard]] std::vector<FnExtent>
@@ -210,10 +210,10 @@ decode_window(const Binary& b, addr_t va, unsigned count) {
 //   2. If the immediately preceding instruction is a flag-setter,
 //      the int3 likely stubbed a Jcc that tested those flags.
 //   3. Look at the fall-through block (after int3) for a matching
-//      Jcc that reveals the condition — obfuscators sometimes
+//      Jcc that reveals the condition - obfuscators sometimes
 //      leave the complementary branch or a duplicate.
 //   4. If no Jcc is found nearby, we can't determine the specific
-//      predicate — return nullopt.
+//      predicate - return nullopt.
 [[nodiscard]] std::optional<BranchPredicate>
 recover_predicate(const Binary& b, addr_t int3_addr, addr_t fn_entry) {
     // Decode 8 instructions before the int3.
@@ -235,12 +235,12 @@ recover_predicate(const Binary& b, addr_t int3_addr, addr_t fn_entry) {
     if (!before.empty()) {
         const auto& prev = before.back();
         if (is_flag_setting(prev.mnemonic)) {
-            // The int3 follows a flag-setting instruction — likely
+            // The int3 follows a flag-setting instruction - likely
             // a stubbed Jcc. Look at the fall-through for a hint.
             auto after = decode_window(b, int3_addr + 1, 4);
             for (const auto& insn : after) {
                 if (auto pred = mnemonic_to_predicate(insn.mnemonic)) {
-                    // Found a Jcc right after the int3 — this might
+                    // Found a Jcc right after the int3 - this might
                     // be the complementary branch or a re-emit of the
                     // original condition. Return it as our best guess.
                     return pred;
@@ -250,7 +250,7 @@ recover_predicate(const Binary& b, addr_t int3_addr, addr_t fn_entry) {
                     break;  // block boundary, stop looking
                 }
             }
-            // No Jcc found after — we know it's a stubbed branch
+            // No Jcc found after - we know it's a stubbed branch
             // but can't determine which predicate. Return nullopt;
             // the caller will mark it as StubbedBranch without a
             // specific predicate.
@@ -273,7 +273,7 @@ resolve_embedded_int3s(const Binary& b) {
 
     std::vector<Int3Resolution> out;
 
-    // Walk each function's decoded instruction stream — named + discovered.
+    // Walk each function's decoded instruction stream - named + discovered.
     // Symbol-only would silently skip the bulk of a stripped binary.
     for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
         if (b.import_at_plt(fn.addr) != nullptr) continue;
@@ -379,7 +379,7 @@ resolve_embedded_int3s(const Binary& b) {
     }
 
     // Also scan inter-function gaps for CC padding. Union with discovered
-    // entries so the gap definition is correct on stripped binaries —
+    // entries so the gap definition is correct on stripped binaries -
     // otherwise "the gap between symbol A and symbol B" overshoots into
     // dozens of intervening discovered subs.
     std::vector<std::pair<addr_t, u64>> fn_ranges;  // (entry, size)
@@ -430,7 +430,7 @@ resolve_embedded_int3s(const Binary& b) {
         }
 
         // If functions cover less than 10% of the section, do a full
-        // linear sweep — the binary is stripped/packed and the symbol
+        // linear sweep - the binary is stripped/packed and the symbol
         // table is useless.
         const bool needs_sweep = (covered * 10 < sec.size);
 
@@ -438,7 +438,7 @@ resolve_embedded_int3s(const Binary& b) {
             // Before doing a full linear sweep, sample the first 4KB
             // to check if the section is actually decodable. Packed
             // sections (Byfron, Themida, VMProtect) have high entropy
-            // and the decoder will fail on most bytes — wasting time
+            // and the decoder will fail on most bytes - wasting time
             // and producing garbage. If the decode-failure rate in the
             // sample exceeds 80%, skip the section entirely.
             {
@@ -458,7 +458,7 @@ resolve_embedded_int3s(const Binary& b) {
                     if (total >= 200) break;  // enough samples
                 }
                 if (total > 50 && failures * 10 > total * 8) {
-                    // >80% failure rate — section is packed. Skip.
+                    // >80% failure rate - section is packed. Skip.
                     continue;
                 }
             }

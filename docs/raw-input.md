@@ -1,7 +1,7 @@
 # Raw Input
 
 Two ways to feed Ember bytes that aren't a complete PE / ELF / Mach-O
-container — runtime memory captures, Scylla scrapes, hand-rolled
+container - runtime memory captures, Scylla scrapes, hand-rolled
 fixtures, anything where the file-magic dispatch in `load_binary()`
 doesn't have a container to recognise.
 
@@ -20,7 +20,7 @@ ember --raw-bytes runtime.bin --base-va 0x180010000 --functions
 ```
 
 `--base-va` is mandatory. It accepts `0x`-prefixed hex or bare hex
-(`0x180010000`, `180010000`, both valid). Decimal isn't supported —
+(`0x180010000`, `180010000`, both valid). Decimal isn't supported -
 addresses in this codebase are always hex.
 
 The region is marked `rwx` so all of analysis (CFG walking, prologue
@@ -50,7 +50,7 @@ Example `regions.txt`:
 0x140400000  0x00100000  rw-  rdata.bin
 ```
 
-The manifest's declared size wins over the on-disk file size — pad
+The manifest's declared size wins over the on-disk file size - pad
 with zeros if the file is shorter (for uninitialised BSS-like
 ranges), truncate if longer.
 
@@ -71,14 +71,14 @@ When to pick which:
 
 Raw input bypasses all the container-specific extras:
 
-- No symbol table — every discovered function reads as `sub_<hex>`
+- No symbol table - every discovered function reads as `sub_<hex>`
   unless you pair with `--annotations` or `--apply <script>`.
-- No imports / exports — runtime captures of a process *do* contain
+- No imports / exports - runtime captures of a process *do* contain
   the IAT bytes, but Ember can't recognise an IAT without the
   IMAGE_DIRECTORY_ENTRY_IMPORT directory the PE loader normally
   parses. Indirect calls through the captured IAT slots stay
   unresolved.
-- No PDATA-derived function starts — function discovery falls back
+- No PDATA-derived function starts - function discovery falls back
   to the prologue-sweep + vtable-harvest pipeline.
 
 For VMProtect / commercial-packer runtime analysis these

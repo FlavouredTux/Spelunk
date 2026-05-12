@@ -407,7 +407,7 @@ function MemoryMap(props: { sections: BinaryInfo["sections"] }) {
       .sort((a, b) => a.vaddr - b.vaddr);
     // Compute gaps between consecutive sections so the user sees the
     // unmapped space in the address range too. We treat a gap > 4 KB
-    // as worth surfacing — anything smaller is likely alignment slop
+    // as worth surfacing - anything smaller is likely alignment slop
     // and would only add noise.
     const out: Array<
       | { kind: "section"; name: string; flags: string; vaddr: number; size: number }
@@ -436,7 +436,7 @@ function MemoryMap(props: { sections: BinaryInfo["sections"] }) {
   }
 
   // Total address span we draw. Use the union of sizes (excluding gaps)
-  // for percentage widths so the bars use space efficiently — drawing
+  // for percentage widths so the bars use space efficiently - drawing
   // gaps proportionally would dwarf the actual sections on binaries
   // with sparse layouts (e.g. shared libraries with .got far from .text).
   const totalSizeExcludingGaps = items.reduce(
@@ -452,7 +452,7 @@ function MemoryMap(props: { sections: BinaryInfo["sections"] }) {
     if (exec)        return { bg: "rgba(217,119,87,0.20)",  bd: C.accent,                 fg: C.accent,        label: "exec" };
     if (wr)          return { bg: "rgba(199,93,58,0.12)",   bd: "rgba(199,93,58,0.45)",  fg: "#c75d3a",       label: "data" };
     if (rd)          return { bg: "rgba(176,164,134,0.16)", bd: "rgba(176,164,134,0.55)", fg: "#b0a486",       label: "rodata" };
-    return                  { bg: C.bgMuted,                bd: C.border,                 fg: C.textMuted,    label: "—"     };
+    return                  { bg: C.bgMuted,                bd: C.border,                 fg: C.textMuted,    label: "-"     };
   };
 
   return (

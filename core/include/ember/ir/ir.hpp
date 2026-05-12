@@ -24,7 +24,7 @@ enum class IrType : u8 {
     // 128-bit register-shaped value. Used for XMM/SSE dataflow so the upper
     // 64 bits of a vector aren't silently truncated through the F64 surrogate
     // the lifter used to fall back on. Interpretation (packed-int vs packed-fp)
-    // is carried by the named SIMD intrinsic, not the IR type tag — the type
+    // is carried by the named SIMD intrinsic, not the IR type tag - the type
     // just guarantees the bit-width is preserved across SSA / cleanup / emit.
     // Constant folding doesn't apply (no I128 immediates); arithmetic at this
     // width only happens through Intrinsic nodes.
@@ -147,7 +147,7 @@ enum class IrOp : u16 {
     Return, Unreachable,
 
     Phi,
-    Clobber,   // dst becomes undefined — models caller-saved regs across calls.
+    Clobber,   // dst becomes undefined - models caller-saved regs across calls.
                // Non-side-effecting; DCE removes it if the new SSA value is unused.
 
     Intrinsic,
@@ -199,7 +199,7 @@ struct IrBlock {
 
 // Pack an SSA value's identity into a single key for the value_types
 // side table. Distinct from ssa.hpp's `ssa_key` (which returns a tuple
-// for SSA-conversion bookkeeping) — this one is just a hash key.
+// for SSA-conversion bookkeeping) - this one is just a hash key.
 [[nodiscard]] inline u64 value_type_key(const IrValue& v) noexcept {
     auto pack = [](IrValueKind kind, u32 id, u32 version) -> u64 {
         return (static_cast<u64>(static_cast<u8>(kind)) << 56)
@@ -227,7 +227,7 @@ struct IrFunction {
     u32                               next_temp_id = 0;
 
     // Phase 1 type lattice: every SSA value defaults to Top (unknown).
-    // value_types is sparse — a missing entry means Top, so the lifter
+    // value_types is sparse - a missing entry means Top, so the lifter
     // doesn't have to populate anything for the no-inference baseline.
     // Phase 2 inference will start writing entries here.
     TypeArena                         types;
@@ -235,7 +235,7 @@ struct IrFunction {
 
     [[nodiscard]] TypeRef type_of(const IrValue& v) const noexcept {
         const u64 k = value_type_key(v);
-        if (k == 0) return TypeRef{};  // Imm / None — typed by IrValue.type
+        if (k == 0) return TypeRef{};  // Imm / None - typed by IrValue.type
         auto it = value_types.find(k);
         return it == value_types.end() ? TypeRef{} : it->second;
     }

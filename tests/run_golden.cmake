@@ -1,10 +1,10 @@
 # Golden-output test runner.
 #
 # Required vars on the CMake invocation:
-#   EMBER    — path to the ember CLI executable
-#   BINARY   — path to the compiled fixture binary
-#   ARGS     — semicolon-separated list of args to pass (before BINARY)
-#   GOLDEN   — path to the expected-output file
+#   EMBER    - path to the ember CLI executable
+#   BINARY   - path to the compiled fixture binary
+#   ARGS     - semicolon-separated list of args to pass (before BINARY)
+#   GOLDEN   - path to the expected-output file
 #
 # Behavior:
 #   Runs "$EMBER $ARGS $BINARY", captures stdout, and compares against GOLDEN.

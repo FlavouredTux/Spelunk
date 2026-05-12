@@ -1,4 +1,4 @@
-// Stack-scan ("scavenged") unwinder — see unwind.hpp.
+// Stack-scan ("scavenged") unwinder - see unwind.hpp.
 // Filter pair: address falls in a known function AND the byte
 // before it decodes as a `call`. Both together kill the bulk of
 // false positives a naïve scan would surface.

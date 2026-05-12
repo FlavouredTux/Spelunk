@@ -143,7 +143,7 @@ void unpack_xsave(const std::byte* buf, std::size_t len, Registers& r) {
                 }
             }
         }
-        // Init state for YMM_Hi128 is zero — Registers default already is.
+        // Init state for YMM_Hi128 is zero - Registers default already is.
         r.present |= Registers::PresentAvx;
     }
 
@@ -338,7 +338,7 @@ Result<void> LinuxTarget::set_regs(ThreadId tid, const Registers& r) {
         // DR4 and DR5 are reserved by the architecture (the CPU
         // aliases them to DR6/DR7 when CR4.DE=0). The kernel rejects
         // POKEUSER writes to them with EIO, which would fail an
-        // otherwise valid set_regs round-trip — even one that didn't
+        // otherwise valid set_regs round-trip - even one that didn't
         // touch DR state at all, since the present bit covers the
         // whole array. Skip the reserved indices and only write the
         // four address slots, the status, and the control word.

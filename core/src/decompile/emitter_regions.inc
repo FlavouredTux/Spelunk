@@ -30,7 +30,7 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
     // Pre-render the body and skip the whole if when nothing survived. The
     // body can collapse to empty after store/decl suppression (e.g. an
     // -O0 prologue's xmm spill block that becomes literally `if (rax) {}`)
-    // — emitting the dead conditional is just visual noise, since the
+    // - emitting the dead conditional is just visual noise, since the
     // condition itself has no observable effect.
     std::string body;
     const auto bindings_before_body = emitted_bindings;
@@ -76,7 +76,7 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
     // if, so we can drop the `else` wrapper and let the else body run at
     // the surrounding indent. Cascaded across nested if/elses this turns
-    // a goto-fail ladder back into an early-return chain — the same shape
+    // a goto-fail ladder back into an early-return chain - the same shape
     // the user originally wrote. Re-emit the else at the outer depth so
     // the indentation matches the new flat layout.
     if (r.children.size() > 1 && r.children[0] && r.children[1] &&
@@ -111,15 +111,15 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
 void Emitter::emit_region_while(const Region& r, int depth, std::string& out) const {
     // Two render shapes for a top-tested loop:
     //
-    //   `while (cond) { body }`     — preferred, source-shape.
+    //   `while (cond) { body }`     - preferred, source-shape.
     //   `for (;;) { header; if (!cond) break; body }`
-    //          — fallback when the header block has live statements that
+    //          - fallback when the header block has live statements that
     //            need to stay in the loop's scope (typically a Load or
     //            Call whose result the condition reads).
     //
     // We pre-render the header into a buffer and pick by emptiness. The
-    // common case at -O2 is an empty header — the cond uses live-in args
-    // or pre-loop locals — and the cleaner `while (cond)` reads as the
+    // common case at -O2 is an empty header - the cond uses live-in args
+    // or pre-loop locals - and the cleaner `while (cond)` reads as the
     // user originally wrote.
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
@@ -155,7 +155,7 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
 
 void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out) const {
     // Body runs at least once, condition tested at the tail. r.invert is
-    // set when the decoded back-edge is a "loop-on-false" test — mirror it
+    // set when the decoded back-edge is a "loop-on-false" test - mirror it
     // here so the rendered `while (...)` expresses the actual continue
     // condition.
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
@@ -167,7 +167,7 @@ void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out)
 
 void Emitter::emit_region_for(const Region& r, int depth, std::string& out) const {
     // The update slot renders the increment inst. If rendering fails
-    // (pattern didn't reduce), degrade gracefully to a plain while — the
+    // (pattern didn't reduce), degrade gracefully to a plain while - the
     // body will include the update statement at its natural spot.
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string update = r.has_update
@@ -215,7 +215,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     }
     // Strip a redundant outer widen: in a return context the caller's
     // declared type already coerces, so `return (u64)x;` where `x` has the
-    // return type reads as noise. One hop only — deeper casts are
+    // return type reads as noise. One hop only - deeper casts are
     // semantically real.
     IrValue v = r.condition;
     if (const IrInst* d = def_of(v); d && d->src_count >= 1

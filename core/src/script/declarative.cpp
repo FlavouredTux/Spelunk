@@ -104,7 +104,7 @@ namespace {
 }
 
 // Strip a trailing ` # comment`. The `#` must be preceded by whitespace
-// AND not be inside a `"..."` quoted span — so values like `note = see
+// AND not be inside a `"..."` quoted span - so values like `note = see
 // ticket #42` keep the literal `#42` while `name = foo  # alias` drops
 // the comment.
 [[nodiscard]] std::string_view strip_trailing_comment(std::string_view line) noexcept {
@@ -332,7 +332,7 @@ struct KvPair {
 };
 
 // Find the start of a `; ` meta suffix in a directive RHS, or npos if
-// none. The marker is a *space-semicolon* outside any quoted span — so
+// none. The marker is a *space-semicolon* outside any quoted span - so
 // values like `note = 0x42; halt` keep their literal `;`. Mirrors
 // strip_trailing_comment's whitespace-anchored shape.
 [[nodiscard]] std::size_t find_meta_suffix(std::string_view s) noexcept {
@@ -448,7 +448,7 @@ split_kv(std::string_view line, std::size_t lineno) {
 }
 
 // ---------------------------------------------------------------------------
-// Signature parsing — `<ret> <name>(<params>)` or just `(<params>) -> <ret>`
+// Signature parsing - `<ret> <name>(<params>)` or just `(<params>) -> <ret>`
 // ---------------------------------------------------------------------------
 
 [[nodiscard]] bool is_type_keyword(std::string_view s) noexcept {
@@ -507,12 +507,12 @@ parse_signature_impl(std::string_view src) {
     }
     FunctionSig sig;
     // Header: everything before `(`. Drop the function name (last
-    // identifier before the paren) — keep everything else as the return
+    // identifier before the paren) - keep everything else as the return
     // type. `int foo` → return=`int`, `void` → return=`void`.
     std::string_view header = trim(v.substr(0, lp));
     std::size_t hsp = header.find_last_of(" \t");
     if (hsp == std::string_view::npos) {
-        // `void(...)` or `int(...)` — just a return type, no fn name.
+        // `void(...)` or `int(...)` - just a return type, no fn name.
         sig.return_type = std::string(header);
     } else {
         sig.return_type = std::string(trim(header.substr(0, hsp)));
@@ -797,7 +797,7 @@ void apply_from_strings(const Directive& d, const Binary& b,
                 "line {}: [from-strings] empty rename for `{}`", d.line, s.text));
             continue;
         }
-        // Each xref instruction is in some function — collect the
+        // Each xref instruction is in some function - collect the
         // distinct enclosing entries.
         std::set<addr_t> targets;
         for (addr_t xr : s.xrefs) {
@@ -860,7 +860,7 @@ Result<std::vector<Directive>> parse(std::string_view text) {
 
         // Optional ` ; conf=… ; src=… ; ev=…` metadata suffix on the
         // RHS. Only meaningful for direct-section directives (rename /
-        // note / signature) — apply_* for the pattern / from-strings
+        // note / signature) - apply_* for the pattern / from-strings
         // sections never reads d.meta. We still parse and store it
         // uniformly so a future user of those sections doesn't have
         // to retrofit the lexer.

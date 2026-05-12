@@ -283,7 +283,7 @@ function commandRef(pluginId, commandId) {
 // Validate and strip a panel payload returned from a plugin command.
 // Phase 2 supports one kind: "list" with rows of { addr?, label, detail?, tags[]? }.
 // Invalid shapes are dropped (null) rather than rejected so a misbehaving
-// plugin doesn't take down the whole run — the rename/note path still works.
+// plugin doesn't take down the whole run - the rename/note path still works.
 function sanitizePanelData(raw) {
   if (!raw || typeof raw !== "object") return null;
   if (raw.kind !== "list") return null;
@@ -480,7 +480,7 @@ function makePluginHost(opts) {
       return { score: 100, matched: true, evidence: [], failed: [] };
     }
 
-    // Each source is fetched at most once per evaluation — matchers of the
+    // Each source is fetched at most once per evaluation - matchers of the
     // same kind share the same underlying CLI call.
     let summary = null;
     let strings = null;

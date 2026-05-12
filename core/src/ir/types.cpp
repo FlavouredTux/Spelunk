@@ -222,7 +222,7 @@ TypeRef TypeArena::meet(TypeRef a, TypeRef b) {
 
         case TypeKind::Top:
         case TypeKind::Bottom:
-            return bottom();  // unreachable — handled above
+            return bottom();  // unreachable - handled above
     }
     return bottom();
 }

@@ -78,7 +78,7 @@ export function EmberScriptView(props: {
     try {
       const out = await window.ember.applyEmberScript(scriptPath, false);
       if (out.annotations) onApplied(out.annotations);
-      setAppliedMsg(`Applied ${scriptPath.split("/").pop()} — annotations updated.`);
+      setAppliedMsg(`Applied ${scriptPath.split("/").pop()} - annotations updated.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -202,7 +202,7 @@ export function EmberScriptView(props: {
               fontFamily: serif, fontStyle: "italic", fontSize: 13,
               color: C.textMuted, textAlign: "center",
             }}>
-              Pick a declarative .ember script — sections like
+              Pick a declarative .ember script - sections like
               <code style={{ fontFamily: mono, fontSize: 11, color: C.textWarm,
                               padding: "0 4px" }}>[rename]</code>,
               <code style={{ fontFamily: mono, fontSize: 11, color: C.textWarm,

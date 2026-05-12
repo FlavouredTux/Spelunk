@@ -13,7 +13,7 @@ class Binary;
 
 // Classification of an int3 (0xCC) found inside a known function's
 // decoded instruction stream. The resolver does NOT blindly scan
-// executable sections — it walks the disassembled instruction stream
+// executable sections - it walks the disassembled instruction stream
 // so encrypted/packed sections are never touched. Each int3 is
 // classified by its structural role in the surrounding code.
 enum class Int3Kind : u8 {
@@ -24,7 +24,7 @@ enum class Int3Kind : u8 {
     // 0xCC bytes between function boundaries.
     Padding,
 
-    // A conditional branch (Jcc) that was stubbed out — replaced
+    // A conditional branch (Jcc) that was stubbed out - replaced
     // with int3 by an obfuscator or optimizer. The `predicate`
     // field records the flag condition the original branch would
     // have tested. This is the most valuable classification: it
@@ -38,14 +38,14 @@ enum class Int3Kind : u8 {
     // or CheckRemoteDebuggerPresent.
     AntiDebug,
 
-    // Programmatic breakpoint — __debugbreak() (MSVC) or
+    // Programmatic breakpoint - __debugbreak() (MSVC) or
     // DebugBreak() (Win32). Identified by: the containing function's
     // symbol name matches known debug-break wrappers.
     DebugBreak,
 
     // The target program placed its own software breakpoint at
     // runtime (e.g. a JIT or instrumentation layer). Cannot be
-    // detected from static analysis alone — requires comparing live
+    // detected from static analysis alone - requires comparing live
     // memory against the on-disk image. Always classified as Unknown
     // by the static pass.
     RuntimeBp,
@@ -67,25 +67,25 @@ enum class Int3Kind : u8 {
 }
 
 // The flag predicate that a stubbed conditional branch would have
-// tested. Maps 1:1 to the Jcc family — each entry names the
+// tested. Maps 1:1 to the Jcc family - each entry names the
 // condition and the flags it depends on.
 enum class BranchPredicate : u8 {
-    Overflow,      // JO   — OF==1
-    NotOverflow,   // JNO  — OF==0
-    Below,         // JB   — CF==1          (unsigned <)
-    AboveEq,       // JAE  — CF==0          (unsigned >=)
-    Equal,         // JE   — ZF==1
-    NotEqual,      // JNE  — ZF==0
-    BelowEq,       // JBE  — CF==1 || ZF==1  (unsigned <=)
-    Above,         // JA   — CF==0 && ZF==0  (unsigned >)
-    Sign,          // JS   — SF==1
-    NotSign,       // JNS  — SF==0
-    Parity,        // JP   — PF==1
-    NotParity,     // JNP  — PF==0
-    Less,          // JL   — SF!=OF          (signed <)
-    GreaterEq,     // JGE  — SF==OF          (signed >=)
-    LessEq,        // JLE  — ZF==1 || SF!=OF (signed <=)
-    Greater,       // JG   — ZF==0 && SF==OF (signed >)
+    Overflow,      // JO   - OF==1
+    NotOverflow,   // JNO  - OF==0
+    Below,         // JB   - CF==1          (unsigned <)
+    AboveEq,       // JAE  - CF==0          (unsigned >=)
+    Equal,         // JE   - ZF==1
+    NotEqual,      // JNE  - ZF==0
+    BelowEq,       // JBE  - CF==1 || ZF==1  (unsigned <=)
+    Above,         // JA   - CF==0 && ZF==0  (unsigned >)
+    Sign,          // JS   - SF==1
+    NotSign,       // JNS  - SF==0
+    Parity,        // JP   - PF==1
+    NotParity,     // JNP  - PF==0
+    Less,          // JL   - SF!=OF          (signed <)
+    GreaterEq,     // JGE  - SF==OF          (signed >=)
+    LessEq,        // JLE  - ZF==1 || SF!=OF (signed <=)
+    Greater,       // JG   - ZF==0 && SF==OF (signed >)
 };
 
 [[nodiscard]] constexpr std::string_view branch_predicate_name(BranchPredicate p) noexcept {
@@ -158,7 +158,7 @@ struct Int3Resolution {
 
 // Walk the decoded instruction stream of every discovered function,
 // find int3 instructions, and classify each one. Analyzes ALL
-// executable sections unconditionally — no opt-out. Returns results
+// executable sections unconditionally - no opt-out. Returns results
 // sorted by address. Only fires on X86_64/X86 binaries.
 [[nodiscard]] std::vector<Int3Resolution>
 resolve_embedded_int3s(const Binary& b);

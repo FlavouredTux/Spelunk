@@ -1,7 +1,7 @@
 # Debugger
 
 `ember --debug PATH` (Linux ptrace, macOS Mach) launches a REPL-driven
-debugger with the same view you decompile against — pseudo-C lines as
+debugger with the same view you decompile against - pseudo-C lines as
 the source view, ember's symbol resolution for breakpoints, and the
 same `Annotations` pulled in for naming. The point is not to replace
 gdb; it's to debug the binary you've been reading without leaving
@@ -30,7 +30,7 @@ session. Default is `ptrace`.
 
 | kind     | mechanism                                | when to pick                                                            |
 |----------|------------------------------------------|-------------------------------------------------------------------------|
-| `ptrace` | classic `ptrace(2)` (PTRACE_SEIZE etc.)  | default — full feature set, works against most targets                  |
+| `ptrace` | classic `ptrace(2)` (PTRACE_SEIZE etc.)  | default - full feature set, works against most targets                  |
 | `perf`   | `perf_event_open` + `/proc/<pid>/mem`    | TracerPid must stay 0; another tracer (anti-cheat, debugger) is already attached; observation-only; or kernel hardening blocks ptrace but not perf |
 | `auto`   | try `perf` first, fall back to `ptrace`  | you want the perf benefits when available without a hard requirement    |
 
@@ -47,7 +47,7 @@ it. The trade-off is a smaller capability surface:
 | HW data watchpoint          | yes    | yes (4)    |
 | software breakpoint (int3)  | yes    | **no**     |
 | single-step                 | yes    | **no**     |
-| on-demand register read     | yes    | **no — cached from last sample only** |
+| on-demand register read     | yes    | **no - cached from last sample only** |
 | register write              | yes    | **no**     |
 | syscall catch               | yes    | **no**     |
 | stop-at-entry on launch     | clean  | best-effort (microsecond race vs. `_start`) |
@@ -62,11 +62,11 @@ the next `set_breakpoint` / `set_watchpoint` returns
 sample for that thread. Before the first BP/WP fires, all GPRs read
 as zero (`present == 0`). After a sample, the snapshot is GPR-only
 (`PresentGpr` set, FP/SIMD/DR slots empty) and represents the state
-*at the trap point*, not the target's current state — which by
+*at the trap point*, not the target's current state - which by
 default keeps running.
 
 `set_regs`, `step`, `set_syscall_catch`, and software breakpoints
-all return `unsupported: ... — switch to the ptrace backend`. The
+all return `unsupported: ... - switch to the ptrace backend`. The
 REPL prints those errors verbatim; the session keeps going.
 
 ### Permissions
@@ -80,20 +80,20 @@ REPL prints those errors verbatim; the session keeps going.
   `CAP_SYS_ADMIN`. Grant via `setcap cap_perfmon+ep ./build/cli/ember`.
 
 When denied, the backend reports `unsupported: perf_event_open
-denied — set /proc/sys/kernel/perf_event_paranoid to 1 (or below),
+denied - set /proc/sys/kernel/perf_event_paranoid to 1 (or below),
 or grant CAP_PERFMON to ember`. With `--debug-backend=auto` the CLI
 falls through to `ptrace` automatically.
 
 ### Stealth caveats
 
-`perf` keeps `TracerPid` at 0 — the most common anti-debug check —
+`perf` keeps `TracerPid` at 0 - the most common anti-debug check -
 but isn't undetectable. A target that audits its own DR0..DR3 (e.g.
 via `perf_event_open(PERF_TYPE_BREAKPOINT, ..., self_pid)` to see if
 slots are taken, or with the `arch_prctl` debug-state introspection
 in some kernels) will still notice. Kernel-mode anti-cheat sees
 everything. For more resistant targets, the right move is to attach
 to a long-running process from outside rather than launch under the
-debugger — the launch path's brief SIGSTOP at entry is a tell that
+debugger - the launch path's brief SIGSTOP at entry is a tell that
 `attach` doesn't have.
 
 ## REPL surface
@@ -116,7 +116,7 @@ watch <addr> [r|w|rw] [N]
                         hardware data watchpoint at <addr>; N = 1, 2, 4,
                         or 8 (default 8) sets the byte window; default
                         mode is read+write. `r` is accepted but armed
-                        as rw — x86 has no read-only mode at the
+                        as rw - x86 has no read-only mode at the
                         architectural level. Up to 4 active watches
                         (DR0..DR3); cloned threads inherit the set.
 wp                      list watchpoints
@@ -126,7 +126,7 @@ catch syscall [<nr|name>...]
                         stop on every `syscall` instruction (entry+exit).
                         With no args, catches every syscall; otherwise only
                         the listed numbers / Linux x86-64 names. Pairs with
-                        `--list-syscalls` (static analysis) — this catch
+                        `--list-syscalls` (static analysis) - this catch
                         covers CFF-buried sites the walker can't resolve.
 dcatch                  clear the syscall catchpoint
 
@@ -138,7 +138,7 @@ set <reg> <value>       write rax/.../rip/rflags/cs/.../gs_base.
                         `b` accepts (sym, sym+ofs, bin:sym).
 
 x <addr> [n]            read n bytes (default 16) and hex-dump
-poke <addr> <hex>...    write hex bytes — `poke 0x401234 c3` writes a
+poke <addr> <hex>...    write hex bytes - `poke 0x401234 c3` writes a
                         RET, `poke <a> 90 90 90` nops out three bytes
 
 bt | where              backtrace (.eh_frame; RBP-walk fallback)
@@ -147,7 +147,7 @@ code | list | l         pseudo-C of the function containing the current PC
 aux                     list loaded aux symbol oracles
 aux <path>[@hex]        load a Binary as an aux oracle; auto-detect slide
                         (or pin it with @hex). Used for non-ELF code in
-                        the tracee — Mach-O / PE blobs an in-process
+                        the tracee - Mach-O / PE blobs an in-process
                         loader mmap'd into anon-rwx memory.
 
 ignored                 list known-recovered fault PCs
@@ -164,7 +164,7 @@ q | quit | exit         leave the REPL
 ## Skip-past-trap workflow
 
 The reason `set` and `poke` exist: a breakpoint or fault lands you at
-`syscall` or `int3` you want to skip — without detaching to gdb just
+`syscall` or `int3` you want to skip - without detaching to gdb just
 to nudge state.
 
 ```
@@ -196,7 +196,7 @@ wrote 5 byte(s) at 0x0000000000401234
 ```
 
 The mapping comes from the same `LineMap` the emitter records when it
-generates the function's pseudo-C. There's no DWARF requirement —
+generates the function's pseudo-C. There's no DWARF requirement -
 ember derives line numbers from its own decompile output, not from
 the binary's debug info.
 
@@ -218,7 +218,7 @@ format magic. If detection misfires, pin it: `aux /path@0x7fff80000000`.
 
 ## Ignored faults
 
-Some binaries — anti-tamper, JITs, exception-handling tests — catch
+Some binaries - anti-tamper, JITs, exception-handling tests - catch
 and recover from `SIGSEGV` / `SIGILL` / `SIGBUS` / `SIGFPE` internally.
 Without help, the debugger stops on every recoverable hit and ruins
 the trace. The `ignored` set names PCs whose fault should be silently
@@ -246,7 +246,7 @@ When CFI + RBP-walk together produce fewer than three frames (Rust
 abort-shim chains, control-flow-flattened code, hand-rolled assembler
 that doesn't carry CFI), `bt` falls through to a **scavenged unwinder**:
 it reads up to 256 qwords from RSP and surfaces every value that
-satisfies *both* checks —
+satisfies *both* checks -
 
 1. The address falls inside a known function in one of the loaded
    Binaries (primary or aux).
@@ -269,7 +269,7 @@ caller→callee:
 ```
 
 All `bt` frames now render as `func+0xOFFSET` rather than naked hex
-when the PC is inside a known function but not at the entry — true
+when the PC is inside a known function but not at the entry - true
 for return addresses, mid-body breakpoints, and every scavenged
 candidate. Pure unknown PCs stay bare so the user can see them.
 
@@ -284,7 +284,7 @@ each thread's signal state independently.
 
 Interrupts the tracee back to the prompt instead of killing the REPL.
 Internally ember installs a `SIGINT` handler that calls
-`Target::interrupt()` on the active session — without it, the
+`Target::interrupt()` on the active session - without it, the
 `PTRACE_O_EXITKILL` linkage we install for safety would take the
 tracee down on the first Ctrl+C.
 
@@ -314,19 +314,19 @@ on the literal `0F 05` byte after a `mov rax, 0x3b`).
 Limits worth knowing:
 
 - Only **4 active** watches (DR0..DR3).
-- **No read-only mode** on x86 — the CPU's "data read/write" type
+- **No read-only mode** on x86 - the CPU's "data read/write" type
   fires on both reads and writes. `watch <a> r` is accepted; it's
   armed as rw and prints a one-line note.
 - Sizes are 1, 2, 4, or 8 bytes; the address must be aligned to the
   size. To cover a wider field, set multiple slots.
 - New threads spawned via `clone(2)` after the watch is armed get
-  the same DR set re-applied — no per-thread re-arming needed.
+  the same DR set re-applied - no per-thread re-arming needed.
 
 ## Syscall catchpoints
 
 `catch syscall [<nr|name>...]` is the dynamic complement to
 `--list-syscalls`. The static walker maps every `mov rax, N; syscall`
-shape it can resolve; the catchpoint covers the rest — CFF-buried
+shape it can resolve; the catchpoint covers the rest - CFF-buried
 sites, indirect rax aliases, JIT-emitted code that the walker never
 sees in the static binary.
 
@@ -345,7 +345,7 @@ Syscall EXIT  execve(59) at PC 0x... in thread ...
 Behind the scenes ember sets `PTRACE_O_TRACESYSGOOD` so syscall-stops
 arrive as `SIGTRAP | 0x80` and never collide with int3 hits or DR
 watchpoints. With a non-empty filter, sites whose `orig_rax` doesn't
-match the user's set are silently re-issued as `PTRACE_SYSCALL` —
+match the user's set are silently re-issued as `PTRACE_SYSCALL` -
 the user only sees the syscalls they asked for.
 
 ## Persistence across exec(2)
@@ -394,7 +394,7 @@ parent stays armed in the child without re-typing the verb.
   watchpoints through `thread_set_state` with `x86_DEBUG_STATE64`,
   and Mach has no clean syscall-trap analogue without per-syscall
   exception ports).
-- The perf backend is Linux x86-64 only — it leans on
+- The perf backend is Linux x86-64 only - it leans on
   `perf_event_open(PERF_TYPE_BREAKPOINT)`, `pidfd_open`,
   `process_vm_readv`, and the per-fd mmap ring. AArch64 has the same
   primitives in the kernel but the sample-regs-user enum is

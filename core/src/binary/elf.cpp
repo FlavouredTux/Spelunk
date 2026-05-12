@@ -332,7 +332,7 @@ Result<void> ElfBinary::parse_sections(const ParsedEhdr& h) {
         // A crafted ELF can point e_shstrndx at any in-range section
         // (the index check above doesn't guarantee the type). Without
         // this, every section name below is read from arbitrary
-        // section bytes — symbol-by-name lookup, --refs-to, and
+        // section bytes - symbol-by-name lookup, --refs-to, and
         // anything else that keys off section names quietly returns
         // garbage on malformed input.
         return std::unexpected(Error::invalid_format(std::format(
@@ -540,8 +540,8 @@ void ElfBinary::scan_plt_stubs(
     const X64Decoder dec;
 
     // Prefer .plt-named sections (normal ELFs with a section table). When
-    // none exist — sectionless binaries synthesize their exec segment as
-    // ".text" — fall back to scanning every executable section.
+    // none exist - sectionless binaries synthesize their exec segment as
+    // ".text" - fall back to scanning every executable section.
     bool any_plt = false;
     for (const auto& sec : sections_) {
         if (sec.flags.executable && sec.name.rfind(".plt", 0) == 0) {
@@ -686,7 +686,7 @@ count_dynsym_gnu(std::span<const std::byte> gh, Endian endian) {
     for (u32 i = 0; i < nbuckets; ++i) {
         const u32 b = read_at<u32>(endian, gh.data() + buckets_off + i * 4);
         if (b == 0) continue;
-        if (b < symoffset) continue;  // malformed — skip
+        if (b < symoffset) continue;  // malformed - skip
         u32 idx = b;
         while (true) {
             const std::size_t chain_off =
@@ -734,7 +734,7 @@ make_section(std::string name, addr_t vaddr,
 }
 
 Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
-    if (h.e_phnum == 0) return {};  // neither shdrs nor phdrs — nothing to do
+    if (h.e_phnum == 0) return {};  // neither shdrs nor phdrs - nothing to do
 
     const ByteReader r(buffer_);
     auto phtab = r.slice(h.e_phoff, static_cast<std::size_t>(h.e_phentsize) * h.e_phnum);
@@ -764,7 +764,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     }
 
     // First pass: locate PT_DYNAMIC and PT_GNU_EH_FRAME so we know what
-    // metadata is recoverable. Both are optional — a statically-linked or
+    // metadata is recoverable. Both are optional - a statically-linked or
     // no-EH binary will legitimately lack one or both.
     addr_t dyn_vaddr = 0; u64 dyn_memsz = 0;
     addr_t eh_hdr_vaddr = 0; u64 eh_hdr_memsz = 0;
@@ -781,7 +781,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // Synthesize one pseudo-section per PT_LOAD so downstream analyses
     // that iterate `sections()` (strings, emitter data lookups) still
     // find the bytes. Name reflects the usual purpose of each segment's
-    // permission bits — these are not canonical section names, just the
+    // permission bits - these are not canonical section names, just the
     // closest thing that makes disasm + xrefs read naturally.
     for (const auto& seg : segments_) {
         if (seg.data.empty()) continue;
@@ -838,17 +838,17 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     }
 
     // Count dynsym entries. Three strategies, in preference order:
-    //   1. DT_HASH's nchain — exact count, always correct when present
+    //   1. DT_HASH's nchain - exact count, always correct when present
     //      (older toolchains; musl).
-    //   2. strtab_vaddr - symtab_vaddr — exact when strtab immediately
+    //   2. strtab_vaddr - symtab_vaddr - exact when strtab immediately
     //      follows symtab in memory, which every standard linker does.
     //      Works when only DT_GNU_HASH is present (modern default).
-    //   3. DT_GNU_HASH symoffset + chain walk — lower bound only (misses
+    //   3. DT_GNU_HASH symoffset + chain walk - lower bound only (misses
     //      imports, which live at [0, symoffset) in GNU hash's layout),
     //      used as last resort if neither (1) nor (2) is usable.
     std::size_t dynsym_count = 0;
     addr_t strtab_for_count_vaddr = 0;
-    // Reparse DT_STRTAB out of the dynamic segment for the vaddr alone —
+    // Reparse DT_STRTAB out of the dynamic segment for the vaddr alone -
     // we have dynstr_bytes (its content) but not the runtime address as
     // a cheap u64. The alternative (threading strtab_vaddr out of the
     // first parse loop) is more plumbing for no functional difference.
@@ -868,7 +868,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // The max r_sym referenced by any relocation is an exact lower bound
     // on dynsym size. DT_GNU_HASH alone can't give us the total (imports
     // live at indices [0, symoffset) and aren't in the hash), but every
-    // import IS referenced by a relocation — so max_rsym+1 captures them.
+    // import IS referenced by a relocation - so max_rsym+1 captures them.
     if (dynsym_count == 0) {
         u32 max_rsym = 0;
         auto scan_rela_for_max = [&](std::span<const std::byte> bytes) {
@@ -885,8 +885,8 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     }
     // strtab-dynsym adjacency is exact when both live in the same PT_LOAD
     // segment (the common linker layout). If they're in different segments
-    // — as on obfuscated binaries that move .dynstr into a writable segment
-    // — the gap spans unrelated bytes and the count is meaningless.
+    // - as on obfuscated binaries that move .dynstr into a writable segment
+    // - the gap spans unrelated bytes and the count is meaningless.
     if (dynsym_count == 0
         && dynsym_vaddr != 0 && strtab_for_count_vaddr > dynsym_vaddr
         && syment > 0) {
@@ -911,7 +911,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         && syment == kSym64Size) {
         const u64 dynsym_bytes_sz = dynsym_count * syment;
         if (dynsym_bytes_sz / syment != dynsym_count) {
-            dynsym_count = 0; // overflow — abandon dynsym parsing
+            dynsym_count = 0; // overflow - abandon dynsym parsing
         } else {
             dynsym_bytes = vaddr_slice(segments_, dynsym_vaddr, dynsym_bytes_sz);
         }
@@ -954,7 +954,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         sections_.push_back(make_section(".dynsym", dynsym_vaddr, dynsym_bytes, false, false));
     }
     if (!dynstr_bytes.empty()) {
-        // Find its vaddr again — we stored it locally during parse.
+        // Find its vaddr again - we stored it locally during parse.
         // Linear scan of segments so we don't have to plumb the vaddr out.
         addr_t va = 0;
         for (const auto& seg : segments_) {
@@ -971,7 +971,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // followed by the encoded eh_frame_ptr. Decoding that pointer gives us
     // .eh_frame's vaddr, which we can't recover any other way in a section-
     // less binary. We only need to support the one encoding GCC/clang
-    // actually emit for eh_frame_ptr — DW_EH_PE_pcrel | DW_EH_PE_sdata4
+    // actually emit for eh_frame_ptr - DW_EH_PE_pcrel | DW_EH_PE_sdata4
     // (0x1B), a 4-byte signed offset relative to the byte being read.
     addr_t eh_frame_vaddr = 0;
     if (eh_hdr_vaddr != 0 && eh_hdr_memsz >= 8) {
@@ -980,7 +980,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
             sections_.push_back(make_section(".eh_frame_hdr", eh_hdr_vaddr, eh_hdr,
                                              false, false));
             const u8 eh_frame_ptr_enc = static_cast<u8>(eh_hdr[1]);
-            if (eh_frame_ptr_enc == 0x1B) {  // pcrel | sdata4 — the common case
+            if (eh_frame_ptr_enc == 0x1B) {  // pcrel | sdata4 - the common case
                 const i32 raw = read_at<i32>(endian_, eh_hdr.data() + 4);
                 // The pointer is read_at = eh_hdr_vaddr + 4 (offset of the
                 // sdata4 field within .eh_frame_hdr).
@@ -1004,7 +1004,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // Walk every FDE in .eh_frame and seed a Function symbol for each.
     // On x86-64 GCC/clang emit unwind tables by default (-funwind-tables
     // is on unless you `-fno-*`), so this recovers essentially every
-    // function in a stripped C++/C binary — what IDA/Ghidra do as well.
+    // function in a stripped C++/C binary - what IDA/Ghidra do as well.
     // Named only if dynsym didn't already name that address; the FDE at
     // the entry point keeps the canonical `_start` name instead of `sub_`.
     std::unordered_map<addr_t, bool> named_defined;
@@ -1045,7 +1045,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // PLT → import attachment. Both DT_JMPREL (the PLT-specific rela
     // table on binaries that use lazy binding) and DT_RELA (the general
     // rela table; holds GLOB_DAT entries for imports on binaries that
-    // bind at load time — tiny executables, -fno-plt builds) contribute
+    // bind at load time - tiny executables, -fno-plt builds) contribute
     // GOT-slot → name mappings. scan_plt_stubs then walks the executable
     // segments looking for `jmp [rip+disp]` stubs that target those slots
     // and attaches the resolved name to each import Symbol.
@@ -1177,7 +1177,7 @@ std::map<addr_t, addr_t> ElfBinary::relocated_qwords() const {
             const u32 r_type   = static_cast<u32>(r_info & 0xffffffffU);
             if (r_type != rel_type) continue;
             // RELATIVE relocs have sym=0 by definition; r_addend is
-            // the absolute target VA. Skip non-positive addends —
+            // the absolute target VA. Skip non-positive addends -
             // those are ELF padding / sentinel rows that don't
             // resolve to real code.
             if (r_addend <= 0) continue;

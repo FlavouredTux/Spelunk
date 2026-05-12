@@ -94,7 +94,7 @@ void restore_reg(Vm& vm, u32 reg) {
 
 // Returns false on a stream that's malformed or uses an unsupported
 // opcode. When `target_pc` is non-zero, returns true early as soon
-// as the next advance_loc would push location past target_pc — the
+// as the next advance_loc would push location past target_pc - the
 // state at that point is the answer for target_pc.
 [[nodiscard]] bool run(Vm& vm, std::span<const std::byte> insns,
                        u64 target_pc) {
@@ -354,7 +354,7 @@ std::optional<State> recover(const Binary& b, addr_t target_pc) {
             continue;
         }
 
-        // Coverage match — run the FDE.
+        // Coverage match - run the FDE.
         Vm vm;
         vm.code_align = ci.code_alignment_factor;
         vm.data_align = ci.data_alignment_factor;

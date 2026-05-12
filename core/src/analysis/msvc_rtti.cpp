@@ -45,7 +45,7 @@ struct RdataSection {
 };
 
 // MSVC RTTI metadata and vtables live in read-only, non-executable
-// sections — classically `.rdata`. We accept any R-only section to be
+// sections - classically `.rdata`. We accept any R-only section to be
 // resilient to linker renames ("const", "xdata" variants).
 [[nodiscard]] std::vector<RdataSection>
 collect_rdata_sections(const Binary& b) {
@@ -64,7 +64,7 @@ collect_rdata_sections(const Binary& b) {
 // failure (templates we don't model, exotic operator codes, etc.), fall
 // back to a minimum-viable cleanup that strips the kind prefix and
 // reverses simple `@`-separated scope chains. The fallback exists so a
-// demangler bug can never *hide* a class from the emitter — at worst
+// demangler bug can never *hide* a class from the emitter - at worst
 // the user sees a slightly mangled name.
 [[nodiscard]] std::string pretty_from_decorated(std::string_view s) {
     if (auto d = demangle_msvc(s); d && !d->empty()) return *d;
@@ -94,7 +94,7 @@ collect_rdata_sections(const Binary& b) {
     return out.empty() ? std::string(s) : out;
 }
 
-// Read a C string at the given VA, capped. Rejects non-printable bytes —
+// Read a C string at the given VA, capped. Rejects non-printable bytes -
 // real TypeDescriptor names are ASCII with an optional leading dot.
 [[nodiscard]] std::string read_decorated_name(const Binary& b, addr_t va) {
     auto span = b.bytes_at(va);
@@ -130,7 +130,7 @@ validate_col(const PeBinary& pe, addr_t col_va) {
     // pSelf on x64 is the RVA of this COL itself. Use it as a strong
     // integrity check: a randomly-aligned byte run won't carry the
     // right self-reference. Tolerate the RVA being off by the image
-    // base quirk — the recorded value is *always* an RVA.
+    // base quirk - the recorded value is *always* an RVA.
     const addr_t self_abs = pe.image_base() + static_cast<addr_t>(p_self_rva);
     if (self_abs != col_va) return 0;
 
@@ -178,7 +178,7 @@ std::vector<MsvcRttiClass> parse_msvc_rtti(const Binary& b) {
             // The decorated name begins at offset 16.
             const std::string decorated = read_decorated_name(*pe, td_va + 16);
             if (decorated.empty()) continue;
-            // Every real MSVC type descriptor name starts with ".?" —
+            // Every real MSVC type descriptor name starts with ".?" -
             // filter out random ASCII C strings that happen to sit
             // where a TD would be.
             if (decorated.size() < 4 || decorated[0] != '.' || decorated[1] != '?') {
@@ -230,7 +230,7 @@ std::map<addr_t, std::string>
 rtti_method_names(std::span<const MsvcRttiClass> classes) {
     // Count how often each IMP shows up across vtables. Shared thunks
     // (pure-virtual, deleting-destructor) appear in many slots and should
-    // not get per-class labels — mirrors the Itanium helper.
+    // not get per-class labels - mirrors the Itanium helper.
     std::map<addr_t, unsigned> imp_count;
     for (const auto& c : classes) {
         for (addr_t m : c.methods) if (m) imp_count[m]++;

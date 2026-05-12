@@ -1,4 +1,4 @@
-// Fingerprint-extraction Rust binary — exercises a broad slice of
+// Fingerprint-extraction Rust binary - exercises a broad slice of
 // std APIs so the resulting binary contains many concrete std-fn
 // instantiations whose TEEF goes into the corpus.
 use std::collections::{HashMap, BTreeMap, HashSet, VecDeque};

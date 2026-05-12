@@ -18,13 +18,13 @@ namespace ember {
 // `confidence` is the vote-margin of the top match against the second
 // (1.0 = clear winner, 0.5 = coin flip vs the runner-up). `via`
 // records which signal produced this match:
-//   "prefix-exact"         — L1 byte-prefix collision on a tiny fn
-//   "behav-exact"          — L4 multiset-hash collision (highest precision)
-//   "whole-exact"          — L2 cleanup-canonical hash collision
-//   "whole-jaccard+behav"  — combined L2+L4 jaccard above threshold
-//   "whole-jaccard"        — L2 jaccard alone (query had no L4 sketch)
-//   "chunk-vote+behav"     — chunk vote winner with corroborating L4
-//   "chunk-vote"           — chunk vote alone
+//   "prefix-exact"         - L1 byte-prefix collision on a tiny fn
+//   "behav-exact"          - L4 multiset-hash collision (highest precision)
+//   "whole-exact"          - L2 cleanup-canonical hash collision
+//   "whole-jaccard+behav"  - combined L2+L4 jaccard above threshold
+//   "whole-jaccard"        - L2 jaccard alone (query had no L4 sketch)
+//   "chunk-vote+behav"     - chunk vote winner with corroborating L4
+//   "chunk-vote"           - chunk vote alone
 struct TeefMatch {
     std::string name;
     float       confidence = 0.0f;
@@ -37,15 +37,15 @@ struct TeefMatch {
 // pure-Rust binary should never hit confidence-1.0 against a
 // libstdc++ template instantiation).
 //
-// Empty string == unknown / wildcard — matches every query.
+// Empty string == unknown / wildcard - matches every query.
 //
 // Conventions for corpus-build scripts:
-//   "rust"      — Rust std (_R-mangled, __rust_alloc, __rust_panic, …)
-//   "libstdcxx" — GNU libstdc++ (_ZSt…, _ZNSt…, std:: instantiations)
-//   "cxx"       — Itanium C++ ABI generally (any _Z-mangled but not std::)
-//   "libc"      — glibc / musl
-//   "openssl"   — libssl / libcrypto
-//   "c"         — plain C application code (libgcc_s, libm, libz, …)
+//   "rust"      - Rust std (_R-mangled, __rust_alloc, __rust_panic, …)
+//   "libstdcxx" - GNU libstdc++ (_ZSt…, _ZNSt…, std:: instantiations)
+//   "cxx"       - Itanium C++ ABI generally (any _Z-mangled but not std::)
+//   "libc"      - glibc / musl
+//   "openssl"   - libssl / libcrypto
+//   "c"         - plain C application code (libgcc_s, libm, libz, …)
 namespace teef_runtime {
     inline constexpr std::string_view kRust       = "rust";
     inline constexpr std::string_view kLibstdcxx  = "libstdcxx";
@@ -56,7 +56,7 @@ namespace teef_runtime {
     // Windows runtimes. msvcrt.dll/msvcr*.dll = legacy CRT;
     // ucrtbase.dll = Win10+ universal CRT; vcruntime140 family =
     // modern MSVC support; cxxmsvc = MSVC's C++ stdlib (std::*
-    // shipped via msvcp140 etc — different ABI from libstdc++);
+    // shipped via msvcp140 etc - different ABI from libstdc++);
     // winapi covers kernel32/ntdll/user32/gdi32/advapi32/shell32.
     inline constexpr std::string_view kMsvcrt     = "msvcrt";
     inline constexpr std::string_view kUcrt       = "ucrt";
@@ -67,7 +67,7 @@ namespace teef_runtime {
 
 // Whether a query binary's detected runtime is allowed to match a
 // corpus entry tagged with `corpus_runtime`. Empty on either side is
-// "unknown" — match anything (preserves behavior for old corpus TSVs
+// "unknown" - match anything (preserves behavior for old corpus TSVs
 // that don't carry tags). The cross-language exclusion list is
 // curated: a Rust binary can validly link against libc / openssl,
 // but a 1.0 hit on a libstdc++ template is structural noise, not
@@ -86,12 +86,12 @@ public:
 
     // Load (and merge) anti-corpus rows from a TSV with the same
     // format as load_tsv. Only the hash fields (L2 exact, L4 exact,
-    // L1 prefix) are kept — names and chunks are discarded. Queries
+    // L1 prefix) are kept - names and chunks are discarded. Queries
     // whose corresponding hashes match any blocked entry short-
     // circuit at the top of recognize() and return no matches.
     //
     // Use case: structurally-identifiable junk that lives inside
-    // every binary of a class — UPX prologues, packer trampolines,
+    // every binary of a class - UPX prologues, packer trampolines,
     // CRT bootloaders that wrap real code with no semantic identity.
     // Without an anti-corpus, those functions structurally collide
     // with library entry points and surface as confident-but-wrong
@@ -121,13 +121,13 @@ public:
 
     // Set of distinct L0 topology hashes present in the corpus. Used by
     // `--recognize` to short-circuit L4 computation on target fns whose
-    // CFG topology has no corpus counterpart — those queries can't match
+    // CFG topology has no corpus counterpart - those queries can't match
     // anything anyway, so the K=64 trace pass is wasted. On obfuscator-
     // spawned targets (hundreds of thousands of unique-shape stubs)
     // this filter saves the bulk of corpus-build time.
     //
     // `max_popularity` (when > 0) excludes topologies shared by more
-    // than that many corpus entries — generic shapes (single-block
+    // than that many corpus entries - generic shapes (single-block
     // return-stub, two-block if-then) match thousands of unrelated
     // corpus fns AND a target's stubs, so target fns with those topos
     // run the full pipeline pointlessly. Filtering them out raises the
@@ -155,7 +155,7 @@ private:
         u64                 l4_exact = 0;
         std::array<u64, 8>  l4_minhash = {};
         // L0 topology hash. Used as a pre-filter for the L2 jaccard scan
-        // — the recognizer first walks topo_index_[query.topo] and only
+        // - the recognizer first walks topo_index_[query.topo] and only
         // falls back to a full scan if that lookup misses. Stable for
         // structurally-identical CFGs; sensitive to small CFG diffs (one
         // extra cleanup block) which is acceptable since miss-the-pre-filter
@@ -177,7 +177,7 @@ private:
 
     // Transparent hash + equal_to for heterogeneous lookup on
     // string-keyed maps. Lets us call .find(string_view) without
-    // allocating a std::string for the lookup key — the hot path
+    // allocating a std::string for the lookup key - the hot path
     // through intern_string and idx_by_name_ during corpus merge
     // and recognize.
     struct transparent_string_hash {
@@ -203,7 +203,7 @@ private:
     // we look up each of the query's 8 slot values, accumulate
     // (entry_idx → hit_count), and only score entries with ≥3 slot
     // hits. Cuts O(N) full-scan jaccard to O(slot_bucket * 8) per
-    // query — the difference between minutes and milliseconds on
+    // query - the difference between minutes and milliseconds on
     // 100K-fn library corpora.
     std::array<std::unordered_map<u64, std::vector<u32>>, 8> whole_minhash_;
     std::unordered_map<u64, std::size_t>                   whole_l4_popularity_;  // L4 hash → total occurrences (boilerplate guard)
@@ -211,7 +211,7 @@ private:
     // Distinct-name counts. Populated at the end of load_tsv. The
     // bucket-size guards (kMaxWholeBucket, kMaxL4Bucket, kMaxChunkFns,
     // kMaxPrefixBucket) operate on these instead of raw multimap bucket
-    // sizes — otherwise a popular fn replicated across many corpus
+    // sizes - otherwise a popular fn replicated across many corpus
     // versions (50× glibc memcpy) trips the boilerplate floor and gets
     // dropped, when in reality it's one well-known fn replicated. Keys
     // are the same as the corresponding multimap.
@@ -221,7 +221,7 @@ private:
     std::unordered_map<u64, std::size_t>                   chunk_distinct_;       // chunk hash → distinct name count
     std::unordered_map<u64, std::vector<ChunkRef>>         chunk_index_;          // chunk_exact_hash → corpus chunks
     // First WholeEntry index per name. Used by chunk-vote to look up
-    // string_hashes for a candidate's parent fn — chunk-vote operates
+    // string_hashes for a candidate's parent fn - chunk-vote operates
     // on names, but the strings live on the parent WholeEntry.
     std::unordered_map<std::string, std::size_t,
                        transparent_string_hash, std::equal_to<>> idx_by_name_;
@@ -230,7 +230,7 @@ private:
     std::vector<const std::string*>                        intern_strings_;
 
     // Anti-corpus: blocked hash sets. A query whose L2/L4/prefix hash
-    // matches any of these short-circuits recognize() — no matches
+    // matches any of these short-circuits recognize() - no matches
     // surfaced. Loaded via load_anti_tsv from a same-format TSV.
     std::unordered_set<u64>                                blocked_l2_;
     std::unordered_set<u64>                                blocked_l4_;

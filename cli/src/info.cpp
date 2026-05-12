@@ -74,7 +74,7 @@ namespace {
 // big enough that a single dump no longer fits a screen) and gives
 // LLM agents a stable token to ask about (`--help syms`).
 void help_view() {
-    std::println("View pipeline (each implies the earlier stages — `-p` runs everything):");
+    std::println("View pipeline (each implies the earlier stages - `-p` runs everything):");
     std::println("  -d, --disasm         linear disassembly of a function");
     std::println("  -c, --cfg            CFG with asm-body blocks");
     std::println("      --cfg-pseudo     CFG with pseudo-C body blocks");
@@ -143,7 +143,7 @@ void help_xrefs() {
     std::println("                       fn-pointer-only dispatch shapes (Roblox-style)");
     std::println("      --verbose        with --refs-to/--refs-to-loose, append site disasm");
     std::println("      --trace PATH     load indirect-edge trace (TSV from\\tto per line)");
-    std::println("                       — seeds the CFG builder before any analysis runs");
+    std::println("                       - seeds the CFG builder before any analysis runs");
 }
 
 void help_ana() {
@@ -228,7 +228,7 @@ void help_load() {
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
     std::println("      --no-pdb         skip PDB sidecar discovery / ingestion entirely");
     std::println("      --regions PATH   load via a raw-region manifest (Scylla-style scrape)");
-    std::println("                       — see docs/raw-input.md for the manifest format");
+    std::println("                       - see docs/raw-input.md for the manifest format");
     std::println("      --raw-bytes PATH  load PATH as a single rwx region at --base-va; no PE");
     std::println("                       container, useful for runtime memory captures");
     std::println("      --base-va 0xVA   required with --raw-bytes; base virtual address");

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build a Windows-targeted TEEF corpus.
 #
-# Output: $DEST/*.teef.tsv — one TSV per Windows DLL. Pass them all to
+# Output: $DEST/*.teef.tsv - one TSV per Windows DLL. Pass them all to
 #   ember --recognize <bin> --corpus DIR/*.teef.tsv
 # when analyzing a stripped Windows binary (PE32+, MSVC build, RAT
 # samples, etc).
@@ -11,7 +11,7 @@
 # kernel32.dll, ntdll.dll, user32.dll, gdi32.dll, advapi32.dll,
 # shell32.dll, ws2_32.dll, ole32.dll, …).
 #
-# IMPORTANT — DO NOT use Wine's DLLs.
+# IMPORTANT - DO NOT use Wine's DLLs.
 #   Wine's system32 is a reimplementation. Its internal structure
 #   differs from Microsoft's, so a Wine-built corpus would not match
 #   the statically-linked CRT routines or inlined library code in
@@ -50,7 +50,7 @@ if [ -z "$WIN_LIBS" ] || [ ! -d "$WIN_LIBS" ]; then
     echo "ERROR: WIN_LIBS must point at a directory containing real Microsoft Windows DLLs." >&2
     echo "       Best path: copy from a real Windows install (Win10/11 System32)" >&2
     echo "       or use a Microsoft Symbol Server downloader." >&2
-    echo "       Do NOT use Wine — its DLLs are reimplementations, not Microsoft binaries." >&2
+    echo "       Do NOT use Wine - its DLLs are reimplementations, not Microsoft binaries." >&2
     exit 1
 fi
 
@@ -59,7 +59,7 @@ case "$WIN_LIBS" in
     *.wine*|*wine/*)
         echo >&2
         echo "WARNING: WIN_LIBS looks like a Wine prefix." >&2
-        echo "         Wine DLLs are reimplementations of the Win32 API — their" >&2
+        echo "         Wine DLLs are reimplementations of the Win32 API - their" >&2
         echo "         internal structure differs from Microsoft's. A corpus built" >&2
         echo "         from them will NOT match real Windows binaries' inlined CRT" >&2
         echo "         routines or library code, leading to false negatives." >&2
@@ -104,14 +104,14 @@ shopt -s nullglob
 for L in "$WIN_LIBS"/*.dll "$WIN_LIBS"/*.DLL; do
     [ -f "$L" ] || continue
     sz=$(stat -c%s "$L" 2>/dev/null || stat -f%z "$L" 2>/dev/null || echo 0)
-    # Skip tiny forwarder stubs (<8 KB) — they're overwhelmingly api-ms-win-*
+    # Skip tiny forwarder stubs (<8 KB) - they're overwhelmingly api-ms-win-*
     # and don't contribute identifying fingerprints.
     [ "$sz" -lt 8192 ] && continue
     out="$DEST/$(basename "$L").teef.tsv"
     [ -s "$out" ] && continue
     echo "==> $(basename "$L") (${sz} bytes)" >&2
     if ! "$EMBER" --teef "$L" > "$out" 2>>"$DEST/build.log"; then
-        echo "    FAILED — see $DEST/build.log" >&2
+        echo "    FAILED - see $DEST/build.log" >&2
         rm -f "$out"
         continue
     fi

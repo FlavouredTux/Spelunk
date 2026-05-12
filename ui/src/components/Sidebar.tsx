@@ -95,9 +95,9 @@ export function Sidebar(props: {
       );
     });
     // Imports don't have real addresses or sizes, so the sort is a no-op
-    // there — keep pool order (matches dynsym insertion order).
+    // there - keep pool order (matches dynsym insertion order).
     if (showImports || sortBy === "addr") return filtered;
-    // Clone before sort — pool is a memoised prop, mutating it would
+    // Clone before sort - pool is a memoised prop, mutating it would
     // invalidate the parent's reference and break referential equality
     // checks in VirtualList. Sort biggest first: the large functions are
     // almost always the ones worth opening.
@@ -328,7 +328,7 @@ export function Sidebar(props: {
         })}
       </div>
 
-      {/* Sort toggle — disabled when viewing imports (they have no real size). */}
+      {/* Sort toggle - disabled when viewing imports (they have no real size). */}
       {!showImports && (
         <>
           <FunctionScopeBar

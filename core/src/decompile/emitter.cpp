@@ -134,7 +134,7 @@ enum class Prec : int {
     Add     = 11,   // + -
     Mul     = 12,   // * / %
     Unary   = 13,   // ! ~ unary- (T)x *x &x
-    Postfix = 14,   // a[i] a->b a.b f(x) — binds tighter than unary
+    Postfix = 14,   // a[i] a->b a.b f(x) - binds tighter than unary
     Primary = 15,   // ident, literal
 };
 
@@ -148,8 +148,8 @@ struct Emitter {
     // Calling convention the emitted function uses. Drives which int-arg
     // register set maps to a1/a2/..., which slots are considered arg regs
     // for live-in-from-caller detection, and which registers a callee may
-    // legitimately clobber. Defaults to SysV — back-compat with the
-    // pre-Win64 world — and is set by the driver when the binary carries
+    // legitimately clobber. Defaults to SysV - back-compat with the
+    // pre-Win64 world - and is set by the driver when the binary carries
     // a Win64 hint (PE on x86_64).
     Abi abi = Abi::SysVAmd64;
     const IrFunction*                                fn = nullptr;
@@ -177,7 +177,7 @@ struct Emitter {
     // `every_use_is_flag_assign` was scanning the function for). Without
     // these, those queries each O(N)-walked the IR per leaf-render, which
     // turned the emitter into O(N²) for any function with thousands of
-    // instructions — the brain crackme's 160KB hand-written `main`
+    // instructions - the brain crackme's 160KB hand-written `main`
     // bottomed out at >2 minutes purely on those scans.
     std::map<SsaKey, u32>                            visible_uses;
     std::map<SsaKey, u32>                            flag_assign_uses;
@@ -187,8 +187,8 @@ struct Emitter {
     std::map<SsaKey, std::vector<std::pair<u32, u32>>> visible_user_positions;
     // Stack-slot offsets (per stack_offset()) that have at least one Load
     // somewhere in the function. A Store to an offset NOT in this set is a
-    // dead spill — common for -O0 spill-arg-to-slot prologues whose slot is
-    // never reloaded — and should be suppressed by format_store.
+    // dead spill - common for -O0 spill-arg-to-slot prologues whose slot is
+    // never reloaded - and should be suppressed by format_store.
     std::set<i64>                                    loaded_stack_slots;
     // Stack slots written exactly once in the entry block before any
     // conditional branch, where the stored value is the unmodified live-in
@@ -250,7 +250,7 @@ struct Emitter {
             for (std::size_t i = 0; i < limit; ++i) {
                 const auto c = static_cast<unsigned char>(span[i]);
                 if (c == 0) { terminated = true; break; }
-                // Common whitespace escapes — these are legitimate string
+                // Common whitespace escapes - these are legitimate string
                 // content, count toward the printable-threshold heuristic.
                 if (c == '\t')      { s += "\\t";  ++printable_count; continue; }
                 if (c == '\n')      { s += "\\n";  ++printable_count; continue; }
@@ -376,8 +376,8 @@ struct Emitter {
     }
 
     // Receiver-shape virtual-method dispatch: if the call target traces
-    // as `Load(Add(Load(<recv>), K))` — load vptr from receiver, add
-    // slot offset, load method pointer — render as
+    // as `Load(Add(Load(<recv>), K))` - load vptr from receiver, add
+    // slot offset, load method pointer - render as
     // `<recv>->vfn_<K/8>`. Doesn't need IPA / receiver type info; just
     // recognises the canonical Itanium / MSVC vtable shape every C++
     // `obj->method()` compiles to. K must be a constant divisible by
@@ -414,7 +414,7 @@ struct Emitter {
             vptr_expr = slot_addr;
         }
 
-        // vptr_expr should be a Load of the receiver — the vtable pointer
+        // vptr_expr should be a Load of the receiver - the vtable pointer
         // sits at offset 0 of every object, so we expect a plain Load(reg).
         const IrInst* vd = def_stripped(strip_assigns(vptr_expr));
         if (!vd || vd->op != IrOp::Load || vd->src_count < 1) return std::nullopt;
@@ -427,7 +427,7 @@ struct Emitter {
         // Render the receiver expression. Keep it tight by binding at
         // Postfix so the resulting `<recv>->vfn_N` doesn't need extra
         // parens on either side. Skip when the receiver doesn't render
-        // as a simple expression — better to fall back to `(*…)(…)`
+        // as a simple expression - better to fall back to `(*…)(…)`
         // than to ship a syntactically iffy `<garbage>->vfn_3(…)`.
         std::string recv_text =
             expr(recv, 0, std::to_underlying(Prec::Postfix));
@@ -467,7 +467,7 @@ struct Emitter {
     // matching param's name (or null if nothing matches).
     //
     // Win64 passes only 4 int args in regs (rcx, rdx, r8, r9); the 5th+
-    // sit on the stack — we can't name those from a register here, so
+    // sit on the stack - we can't name those from a register here, so
     // they render as raw rsp-relative loads. That's a v1 limitation,
     // consistent with how SysV 7th+ args already render.
     [[nodiscard]] const std::string*
@@ -599,7 +599,7 @@ struct Emitter {
         if (annotations) {
             if (const std::string* n = annotations->name_for(target); n) return *n;
         }
-        // Obj-C IMPs outrank the ELF / Mach-O symbol table — a class method
+        // Obj-C IMPs outrank the ELF / Mach-O symbol table - a class method
         // with `-[Foo bar:]` shape reads at the call site better than any
         // mangled function-pointer name.
         if (auto it = objc_by_imp.find(target); it != objc_by_imp.end()) {
@@ -663,7 +663,7 @@ struct Emitter {
     // call. Both cases look like `strlen(... rsi, rdx, r8, r9)` noise.
     //
     // A live-in reg that maps to one of OUR own inferred int-arg slots
-    // (i.e. the function takes that reg as a parameter) is NOT stale —
+    // (i.e. the function takes that reg as a parameter) is NOT stale -
     // it's a forwarded argument. Without this guard, a wrapper like
     // `u64 wrap(u64 a1) { return add7(a1); }` decompiles to `add7()`
     // because is_stale_arg_reg treats `a1` as uninitialised live-in
@@ -687,7 +687,7 @@ struct Emitter {
         }
         if (const IrInst* d = def_of(a); d && d->op == IrOp::Clobber) {
             // Bound call returns (rax → r_strlen, etc.) are real values
-            // even though their def is a Clobber — the binding name
+            // even though their def is a Clobber - the binding name
             // proves a downstream reader picked the value up.
             if (auto k = ssa_key(a); k &&
                 call_return_names.find(*k) != call_return_names.end()) {
@@ -698,7 +698,7 @@ struct Emitter {
         return false;
     }
 
-    // Arity for an import by name — user signature at its PLT address beats
+    // Arity for an import by name - user signature at its PLT address beats
     // the baked-in libc table, which beats Itanium-mangled-name parsing.
     // The mangled-name path lets C++ stdlib calls (`std::istream::get`,
     // `std::ofstream::write`, …) size correctly without hand-maintaining
@@ -809,7 +809,7 @@ struct Emitter {
     }
 
     // Render an IPA-arena TypeRef as a C type name. Returns empty if the
-    // ref is Top or no arena is supplied — caller should fall back.
+    // ref is Top or no arena is supplied - caller should fall back.
     [[nodiscard]] std::string ipa_type_name(TypeRef r) const {
         if (!options.type_arena) return {};
         if (r.is_top() || r.is_bottom()) return {};
@@ -875,7 +875,7 @@ struct Emitter {
                     defs[*k] = &inst;
                     def_pos[*k] = {bi, ii};
                 }
-                // Skip uses from call.args.* intrinsics — they get absorbed into the
+                // Skip uses from call.args.* intrinsics - they get absorbed into the
                 // following Call, so they shouldn't keep their operand-feeding assignments alive.
                 if (is_call_arg_barrier(inst)) continue;
                 if (inst.op == IrOp::Phi) {
@@ -914,7 +914,7 @@ struct Emitter {
         }
         // Stack slots that are loaded from somewhere in the function. A
         // store whose address resolves to a slot NOT in this set is a dead
-        // spill — at -O0 the compiler routinely emits `mov [rbp-N], reg`
+        // spill - at -O0 the compiler routinely emits `mov [rbp-N], reg`
         // for an arg even when the slot is never read, and we want those
         // suppressed in the pseudo-C output. The set is keyed by the slot
         // offset returned by `stack_offset(addr)` so it lines up with the
@@ -933,7 +933,7 @@ struct Emitter {
         // unmodified arg-reg live-in (version 0). All loads of that slot
         // forward to the live-in name (a1, a2, …) directly, so an -O0
         // `mov [rbp-N], rdi; ... mov reg, [rbp-N]; use reg` collapses to
-        // a single use of the parameter — the way the user wrote it.
+        // a single use of the parameter - the way the user wrote it.
         //
         // The store's block doesn't have to be the entry: a spill that
         // sits inside the only conditional path that ever reads the slot
@@ -959,7 +959,7 @@ struct Emitter {
             // Forward live-in args (rdi/rsi/...) and SSA temps directly:
             // both have a single dominating def that survives unchanged
             // from the store to any later load. Skip clobbers (call-
-            // returns) — those represent post-call register state and
+            // returns) - those represent post-call register state and
             // re-rendering them at every load would duplicate the call
             // expression where the user wrote a single named local.
             const bool is_live_in_arg =
@@ -1078,7 +1078,7 @@ struct Emitter {
 
     // Walk the structured body, populate for_update_positions.
     // Only suppress the body inst if render_update_inst would actually emit
-    // it in the for-header — otherwise the For→While fallback in
+    // it in the for-header - otherwise the For→While fallback in
     // emit_region_for would silently drop the update from the output.
     void collect_for_updates(const Region& r) {
         if (r.kind == RegionKind::For && r.has_update) {
@@ -1093,7 +1093,7 @@ struct Emitter {
 
     // Collect every block targeted by a `RegionKind::Goto` so emit_block
     // can prepend a matching `bb_<addr>:` C label. Without this the
-    // structurer's `goto bb_<addr>;` references resolve to nothing —
+    // structurer's `goto bb_<addr>;` references resolve to nothing -
     // there's no destination, just a `// bb_<addr>` comment.
     void collect_goto_targets(const Region& r) {
         if (r.kind == RegionKind::Goto) {
@@ -1103,7 +1103,7 @@ struct Emitter {
     }
 
     // Render a single instruction at (block_addr, inst_idx) as its compound-
-    // assign form — e.g. `i++`, `i += 2`, `x <<= 1`. Used for the update
+    // assign form - e.g. `i++`, `i += 2`, `x <<= 1`. Used for the update
     // clause of a for-loop. Returns empty on no-match; caller falls back to
     // suppressing the For and emitting as a While.
     [[nodiscard]] std::string
@@ -1661,7 +1661,7 @@ struct Emitter {
     }
 
     // Find Return regions whose value is the ABI integer return register
-    // coming directly from a call's Clobber — record the Call position and
+    // coming directly from a call's Clobber - record the Call position and
     // the SSA key so emit_block
     // suppresses the statement and the Return handler folds the expression.
     void analyze_return_folds(const Region& r) {
@@ -1675,7 +1675,7 @@ struct Emitter {
         const IrInst* def = def_of(cond);
         if (!def || def->op != IrOp::Clobber) return;
         // Folding `return foo(args);` requires that the call's return value
-        // has no other readers — otherwise we'd silently re-emit the call
+        // has no other readers - otherwise we'd silently re-emit the call
         // expression at the return site and unbind the only name the other
         // readers had to refer to it. Phi resolution at the structurer can
         // surface a return whose value the surrounding `if` already tested,
@@ -1735,7 +1735,7 @@ struct Emitter {
         //     head (otherwise `v0` is uninitialized, and every read prints
         //     `v0` with no producer in sight),
         //   - escapes the trailing dead-decl pass, which only strips lines
-        //     of the `TYPE NAME = ...;` shape — `v0 = ...` has no type
+        //     of the `TYPE NAME = ...;` shape - `v0 = ...` has no type
         //     prefix, so it stays.
         // Without this, calls whose result fans out through a phi got
         // emitted as `u64 r_sub_X = ...;`, the use site rendered the phi
@@ -1746,7 +1746,7 @@ struct Emitter {
         // phi's only readers are Return regions, the structurer folds each
         // path's return value independently and the merge name is never
         // referenced. In that case the original `r_<callee>` binding
-        // reads better — e.g. `char* r_getenv = getenv("HOME"); if
+        // reads better - e.g. `char* r_getenv = getenv("HOME"); if
         // (r_getenv) ...; return r_getenv;` instead of an arbitrary `v5`.
         const auto phi_has_non_return_user = [&](SsaKey pk) {
             std::set<SsaKey> seen;
@@ -1975,7 +1975,7 @@ struct Emitter {
     // A short identifier derived from the callee's display name, sanitized
     // to valid C identifier chars. For C++ qualified names like
     // `std::istream::get` we keep only the last `::`-segment so the binding
-    // reads as `r_get` instead of `r_stdistreamget` — the qualified prefix
+    // reads as `r_get` instead of `r_stdistreamget` - the qualified prefix
     // is already visible at the call site.
     [[nodiscard]] std::string callee_display_short(const IrInst& call_inst) const {
         std::string raw;
@@ -1990,7 +1990,7 @@ struct Emitter {
         }
         // Keep only the last `::`-separated segment for qualified names.
         // Operators (`operator+`, `operator new`) and destructors (`~T`)
-        // are kept whole on the right side — they're already short.
+        // are kept whole on the right side - they're already short.
         if (auto pos = raw.rfind("::"); pos != std::string::npos) {
             raw.erase(0, pos + 2);
         }
@@ -2009,7 +2009,7 @@ struct Emitter {
     // frame manipulation, plus any temps whose uses are entirely within hidden insts.
     void analyze_abi_noise() {
         // Pass 0: PE UNWIND_INFO-driven prologue suppression. The byte range
-        // [entry, prologue_end) from .xdata is authoritative — every inst
+        // [entry, prologue_end) from .xdata is authoritative - every inst
         // whose source_addr falls there is prologue. The matching epilogue
         // is the trailing run of insts in the function whose source_addr
         // lies in [end - prologue_size, end); Win64 ABI requires epilogues
@@ -2190,7 +2190,7 @@ struct Emitter {
             if (d->op == IrOp::Not && d->src_count >= 1)    { cur = d->srcs[0]; continue; }
             if ((d->op == IrOp::CmpEq || d->op == IrOp::CmpNe) && d->src_count >= 1) {
                 // Compare against a constant (`cmp.eq(x, 0)` / zf). Peek through
-                // to x and try again — the real canary compare is one step up.
+                // to x and try again - the real canary compare is one step up.
                 if (d->src_count >= 2 &&
                     d->srcs[1].kind == IrValueKind::Imm && d->srcs[1].imm == 0) {
                     cur = d->srcs[0];
@@ -2422,7 +2422,7 @@ struct Emitter {
     }
 
     // The cmp result (`a - b` from a `cmp` lifted as Sub) typically has
-    // multiple uses — one per flag-set computation (zf and sf each take it
+    // multiple uses - one per flag-set computation (zf and sf each take it
     // as srcs[0] of cmp.eq / cmp.slt). Each of *those* temps then flows into
     // exactly one Assign-to-Flag. The reader doesn't want to see the explicit
     // `s64 t8 = a - b;` declaration when it's only there to feed flag math
@@ -2455,12 +2455,12 @@ struct Emitter {
             // is a small textual cost for a much cleaner output.
             if (is_flag_feeder_temp(v)) return true;
             // A Load whose address is a stack slot just renders as the
-            // slot's `local_X` name — duplicating that string at each use
+            // slot's `local_X` name - duplicating that string at each use
             // is no worse than the original `tN = local_X; ... use tN ...`
             // pair, and lets compound flag-set patterns (sub.overflow +
             // sub feeding the same slt rendering) collapse cleanly without
             // leaving a dangling `tN = local_X;` line. Skip if the slot
-            // has an unknown segment (fs:[…] etc.) — those carry side
+            // has an unknown segment (fs:[…] etc.) - those carry side
             // effects we shouldn't replay.
             if (d->op == IrOp::Load && d->src_count >= 1 &&
                 d->segment == Reg::None && stack_offset(d->srcs[0]).has_value()) {
@@ -2697,7 +2697,7 @@ struct Emitter {
             }
         }
         // i64 imms in the small-negative-as-i32 range come from `mov eax,
-        // -1; ret`-style returns the lifter widened into rax — the high
+        // -1; ret`-style returns the lifter widened into rax - the high
         // 32 bits are zero, the low 32 are the signed value. Render those
         // as their signed form too. Same -32 threshold as above so genuine
         // 32-bit bitmasks (0xFFFFFFFE used as ~1, etc.) keep their hex.
@@ -2719,7 +2719,7 @@ struct Emitter {
     }
 
     // Hard depth cap for recursive expression expansion. The emitter
-    // inlines SSA defs during render — a long def-use chain without a
+    // inlines SSA defs during render - a long def-use chain without a
     // cap recurses until the stack (or kernel OOM-killer) stops it.
     // Deeply-nested expressions past ~6 levels are illegible anyway;
     // we stop inlining and render the raw register/temp instead.
@@ -2863,11 +2863,11 @@ struct Emitter {
     }
 
     // Three-pointer-at-{0,8,16} pattern matches every flavour of
-    // std::vector<T> on x86_64 — libstdc++ (`_M_start / _M_finish /
+    // std::vector<T> on x86_64 - libstdc++ (`_M_start / _M_finish /
     // _M_end_of_storage`), libc++ (`__begin_ / __end_ / __end_cap_`),
     // and MSVC STL (`_Myfirst / _Mylast / _Myend`) all lay them out
     // at the same offsets. Any other 24-byte three-pointer struct
-    // renders the same way, which is fine — these names read better
+    // renders the same way, which is fine - these names read better
     // than `field_0 / field_8 / field_10` for *any* struct shaped
     // like a contiguous container.
     [[nodiscard]] bool looks_like_vector(const IrValue& base) const {
@@ -2877,7 +2877,7 @@ struct Emitter {
         if (it == struct_offsets.end()) return false;
         const auto& offs = it->second;
         // The full vector shape is exactly the three {ptr, end, capacity}
-        // 8-byte slots — nothing else. The previous "contains" check fired
+        // 8-byte slots - nothing else. The previous "contains" check fired
         // on any pointer whose accesses *included* {0, 8, 16}, so a 4 KB
         // jump-table initialised with `tbl[0]/[1]/[2]/[3]/...` got named
         // `tbl->begin/end/capacity/field_18/field_20/...` instead of
@@ -2893,7 +2893,7 @@ struct Emitter {
     void record_struct_access(const IrValue& addr, IrType t) {
         auto bo = try_base_plus_offset(addr);
         if (!bo) return;
-        // Skip stack-relative and global bases — those have richer rendering
+        // Skip stack-relative and global bases - those have richer rendering
         // paths already.
         if (stack_offset(bo->first).has_value()) return;
         if (auto k = ssa_key(bo->first); k) {
@@ -2909,7 +2909,7 @@ struct Emitter {
     // when base isn't stack- or global-relative. The stride must equal the
     // load width (so `*(u32*)(p + 4*N)` → `p[N]`); other strides keep their
     // explicit `*(T*)(addr)` form so the reader sees the actual byte arithmetic.
-    // Negative offsets are accepted — backward array walks are common in
+    // Negative offsets are accepted - backward array walks are common in
     // string scanners and trailing-byte readers, and `p[-1]` reads better
     // than `*(T*)(p - 8)`.
     [[nodiscard]] std::optional<std::string>
@@ -2942,7 +2942,7 @@ struct Emitter {
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;
         }
-        // Reject when the base is itself an arithmetic combination — that's
+        // Reject when the base is itself an arithmetic combination - that's
         // the runtime-index pattern (`Add(Mul(idx, stride), Imm)` and friends),
         // not a real pointer base. Without this guard, `Load(Add(idx*8, &tbl))`
         // would render as the malformed `(idx*8)[&tbl/8]`. Let the runtime-
@@ -2963,7 +2963,7 @@ struct Emitter {
     // Runtime-indexed array form: `*(T*)(base + idx * stride)` and the
     // shift-encoded `*(T*)(base + (idx << k))` (compilers emit
     // `idx << 3` for stride-8 access). Renders as `base[idx]` when
-    // the scale factor matches the access width — the same property
+    // the scale factor matches the access width - the same property
     // try_render_array_index uses for the constant-index case.
     // Foundation for STL-container recognition: `*(*v + i*4)` becomes
     // `(*v)[i]` once the inner deref is rendered cleanly.
@@ -3125,7 +3125,7 @@ struct Emitter {
                                    static_cast<u64>(off));
             }
             // Array-indexing form takes priority over the struct-field
-            // rendering when both apply — u64 stride-8 accesses usually mean
+            // rendering when both apply - u64 stride-8 accesses usually mean
             // "argv-style pointer-to-pointer", which reads more naturally
             // as `a[i]` than `a->field_N`.
             if (auto s = try_render_array_index(addr, t, depth); s) {
@@ -3205,7 +3205,7 @@ struct Emitter {
         const int p = static_cast<int>(self_prec);
         // Left operand can share our precedence (left-assoc). Right operand
         // of a non-commutative op must bind strictly tighter to avoid
-        // reassociation — e.g. `a - (b - c)` must stay parenthesized.
+        // reassociation - e.g. `a - (b - c)` must stay parenthesized.
         std::string L = expr(d.srcs[0], depth, p);
         std::string R = expr(d.srcs[1], depth, commutative ? p : p + 1);
         std::string result = std::format("{} {} {}", L, op, R);
@@ -3215,7 +3215,7 @@ struct Emitter {
     // Bitwise &/|/^ rendering with mask-friendly imm handling:
     // negative power-of-2 boundary values render as `~0xN` (the
     // C-natural mask form) instead of `-0x{N+1}`, which is opaque
-    // in a bitwise context. Always commutative — both operands
+    // in a bitwise context. Always commutative - both operands
     // share the binop's precedence.
     [[nodiscard]] std::string format_bitop(const IrInst& d, std::string_view op,
                                             int depth, int min_prec,
@@ -3310,7 +3310,7 @@ struct Emitter {
                            const std::string& call_expr,
                            bool result_is_void) const;
     // Renders the trailing summary line for a block when its kind
-    // implies one — the conditional / switch test, the return value,
+    // implies one - the conditional / switch test, the return value,
     // or an explicit `goto *...` for indirect jumps. Plain
     // unconditional / fallthrough blocks emit nothing here; their
     // successor edge is enough for the consumer.
@@ -3695,7 +3695,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
         case IrValueKind::None:
             return "";
         case IrValueKind::Reg: {
-            // For versioned regs, inline a trivial Imm assignment — lets the
+            // For versioned regs, inline a trivial Imm assignment - lets the
             // absorbed call() show the actual constant instead of an orphan reg name.
             if (v.version > 0 && depth < kMaxExprDepth) {
                 const IrInst* d = def_of(v);
@@ -3974,7 +3974,7 @@ std::string Emitter::format_store(const IrInst& inst) const {
             // only forward to the original arg-reg, so the slot's name
             // never appears in the body. Exception: slots whose name came
             // from an external source (PDB S_REGREL32, sidecar annotation)
-            // carry source-level intent — keep their stores so the user's
+            // carry source-level intent - keep their stores so the user's
             // named locals don't silently disappear.
             const bool has_reader = loaded_stack_slots.contains(*off);
             const bool init_only  = init_only_slot_value.contains(*off);
@@ -4016,7 +4016,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 //
                 // Exception: a Reg assign whose only readers are Phi
                 // operands is the per-iteration update of a loop induction
-                // variable — visible_use_count excludes phi reads, so the
+                // variable - visible_use_count excludes phi reads, so the
                 // count looks like 0 even though the value drives the loop.
                 // Without surfacing the assign, accumulator loops decompile
                 // to `do { } while (cond)` with the body work invisible.
@@ -4051,7 +4051,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (use_count(inst.dst) == 1) return "";  // will be inlined
             // A multi-use load that should_inline accepts (stack-slot
             // reads, init-only forwards) renders inline at every use site
-            // — no need to bind a name for it here.
+            // - no need to bind a name for it here.
             if (should_inline(inst.dst)) return "";
             return std::format("{} t{} = {};",
                                c_type_name_for(inst.dst),
@@ -4072,8 +4072,8 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             // `x64.*` tags a raw x86 mnemonic the lifter couldn't model
             // in the IR (SIMD, FPU, system ops). Render it as a block
             // comment so the reader sees the elision rather than an
-            // imaginary C call. The rest — explicit intrinsics like
-            // `sqrtss(x)` that the lifter emits deliberately — stay as
+            // imaginary C call. The rest - explicit intrinsics like
+            // `sqrtss(x)` that the lifter emits deliberately - stay as
             // calls because they carry real dataflow.
             if (inst.name.starts_with("x64.")) {
                 return std::format("/* {}({}) */", inst.name, args);
@@ -4096,7 +4096,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 if (visible_use_count(inst.dst) <= 1) return "";
                 if (stack_offset(inst.dst).has_value()) return "";
                 // Suppress the declaration when this temp's only consumers
-                // are flag-set instructions — those will inline the
+                // are flag-set instructions - those will inline the
                 // expression when they themselves render.
                 if (is_flag_feeder_temp(inst.dst)) return "";
                 return std::format("{} t{} = {};",
@@ -4166,7 +4166,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
 
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     // C label for any block referenced by a structurer-emitted goto. Sit
-    // one indent shallower than the block body when possible — that's the
+    // one indent shallower than the block body when possible - that's the
     // conventional layout for `bb_<addr>:` and avoids the label appearing
     // to belong to the surrounding statement.
     if (goto_targets.contains(bb.start)) {
@@ -4396,8 +4396,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 const std::string args = format_call_args_fallback(pending_args);
                 // Virtual-method-dispatch shape recognition: when the
                 // call target traces back as `Load(Add(Load(<recv>), K))`
-                // — i.e., load vptr from receiver, add slot offset,
-                // load method pointer — render as `<recv>->vfn_<K/8>(args)`.
+                // - i.e., load vptr from receiver, add slot offset,
+                // load method pointer - render as `<recv>->vfn_<K/8>(args)`.
                 // This is what every C++ `obj->method()` compiles to,
                 // and IPA isn't required to recognise the shape; type
                 // info would only refine the slot to a real class
@@ -4508,7 +4508,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                     break;
                 }
                 // Reuse the return-fold table populated during region
-                // analysis — when a call directly feeds the return,
+                // analysis - when a call directly feeds the return,
                 // `fold_return_expr` carries the rendered call expr.
                 if (auto k = ssa_key(rv); k) {
                     auto f = fold_return_expr.find(*k);
@@ -4580,7 +4580,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         ? abi_for(binary->format(), binary->arch(), binary->endian())
         : Abi::SysVAmd64;
     // Opportunistic selref lookup for Mach-O binaries when the caller
-    // didn't supply one — cheap enough to parse per emit (one section
+    // didn't supply one - cheap enough to parse per emit (one section
     // walk, a few hundred cstring reads on typical Cocoa-linked code).
     std::map<addr_t, std::string> local_selrefs;
     std::map<addr_t, std::string> local_classrefs;
@@ -4670,7 +4670,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // the resolved annotations carry metadata for this function, surface
     // confidence + source + evidence as a comment block right under the
     // function name. Lets a downstream agent decide whether to trust
-    // the rename without re-deriving it. Off by default — these lines
+    // the rename without re-deriving it. Off by default - these lines
     // double the visible header for human readers.
     if (annotations && options.show_provenance) {
         if (const AnnotationMeta* m = annotations->meta_for_rename(sf.ir->start);
@@ -4703,7 +4703,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // condition means the function yields a value. We use the condition's
     // IrType to pick an appropriate C type rather than always saying `u64`.
     auto inferred_return_type = [&](const Emitter&, const StructuredFunction& s) -> std::string {
-        // IPA wins outright when it has concrete evidence — the typed
+        // IPA wins outright when it has concrete evidence - the typed
         // return came from harvesting Return-operand types after Phase 2
         // local inference, which sees more than this lambda's
         // bit-width-only fallback.
@@ -4744,7 +4744,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         // bit-width-only Imm type would mask the real `u64*` shape. Prefer
         // candidates whose c_type_name_for resolves to something other
         // than the raw IR-bit-width name (i.e. picked up a refined type
-        // from infer_local_types — `u64*`, `char*`, `s32`, …).
+        // from infer_local_types - `u64*`, `char*`, `s32`, …).
         const auto raw_name_for = [&](const IrValue& v) {
             return std::string(c_type_name(v.type));
         };
@@ -4767,7 +4767,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             if (const std::string* n = annotations->name_for(sf.ir->start); n)
                 return *n;
         }
-        // Obj-C IMP match — the function header gets `-[Class sel]` directly.
+        // Obj-C IMP match - the function header gets `-[Class sel]` directly.
         if (auto it = e.objc_by_imp.find(sf.ir->start);
             it != e.objc_by_imp.end()) {
             return std::format("{}[{} {}]",
@@ -4775,7 +4775,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                it->second->cls,
                                it->second->selector);
         }
-        // Itanium RTTI-derived virtual-method name — usable as the header
+        // Itanium RTTI-derived virtual-method name - usable as the header
         // label on stripped C++ binaries where only typeinfos survive.
         if (e.options.rtti_methods) {
             auto it = e.options.rtti_methods->find(sf.ir->start);
@@ -4818,7 +4818,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (header.empty()) {
         // Obj-C IMP: derive the header from the method's ObjC type
         // encoding. Gives us proper self / _cmd / typed args instead of
-        // u64 placeholders — for a method with encoding "v40@0:8@16i32"
+        // u64 placeholders - for a method with encoding "v40@0:8@16i32"
         // we get `void -[Foo bar:](Foo* self, SEL _cmd, id arg0, int arg1)`.
         auto objc_it = e.objc_by_imp.find(sf.ir->start);
         if (objc_it != e.objc_by_imp.end() &&
@@ -4872,7 +4872,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 // No IPA: consult the per-function value_types side table
                 // (populated by seed_call_return_types + infer_local_types
                 // ahead of emit). This is what surfaces import-derived
-                // arg types in non-IPA mode — `char*`, `void*`, etc.
+                // arg types in non-IPA mode - `char*`, `void*`, etc.
                 if (t.empty() && i < int_args.size()) {
                     IrValue probe = IrValue::make_reg(int_args[i], IrType::I64);
                     probe.version = 0;
@@ -4922,8 +4922,8 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                              inferred_return_type(e, sf),
                              display_name(), params);
     }
-    // When the header name is a long RTTI `Class::vfn_N` — especially for
-    // templates — advertise a shorter alias the user can type with `-s`.
+    // When the header name is a long RTTI `Class::vfn_N` - especially for
+    // templates - advertise a shorter alias the user can type with `-s`.
     // Purely a discoverability comment; the resolver accepts the short form
     // via the same class_aliases machinery used here.
     if (e.options.rtti_methods) {
@@ -4971,12 +4971,12 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // Surface blocks the structurer failed to fit as explicit markers
     // rather than letting their content vanish silently. Any IR block
     // not reached by a `RegionKind::Block` node in the structured tree
-    // is unrendered — its instructions (calls included) would otherwise
+    // is unrendered - its instructions (calls included) would otherwise
     // disappear with no diagnostic. The marker carries the address range
     // so the user can fall back to `--disasm-at` to see what was dropped.
     //
     // Blocks the emitter intentionally suppressed (the canary `if
-    // (cookie) __stack_chk_fail()` fail-arm) are exempt — they're
+    // (cookie) __stack_chk_fail()` fail-arm) are exempt - they're
     // dropped on purpose, not by structurer failure.
     if (sf.body && !sf.ir->blocks.empty()) {
         std::set<addr_t> rendered_blocks;
@@ -5169,7 +5169,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
             "pseudo-c per-block: StructuredFunction has no IR"));
     }
 
-    // Setup mirrors emit() — same ABI plumbing, same ObjC / RTTI lookup,
+    // Setup mirrors emit() - same ABI plumbing, same ObjC / RTTI lookup,
     // same per-emit signature inference. We deliberately skip the
     // body-tree walks (suppress_canary_regions / analyze_return_folds /
     // collect_for_updates) since per-block output has no structured body
@@ -5240,8 +5240,8 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     if (!has_user_sig) e.infer_charp_args();
     e.bind_call_returns();
 
-    // Output mirrors format_cfg's framing — same `bb_<addr>` headers,
-    // same `<-` predecessor list, same `-> bb_xxx (label)` arrows — so
+    // Output mirrors format_cfg's framing - same `bb_<addr>` headers,
+    // same `<-` predecessor list, same `-> bb_xxx (label)` arrows - so
     // any consumer parsing the asm CFG view (UI, scripts) parses this
     // identically up to the body content swap.
     std::string out;
@@ -5272,7 +5272,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
         e.emit_block(bb.start, 1, out);
         e.emit_block_terminator(bb, 1, out);
 
-        // Successor arrows — copy the format used by append_function_text
+        // Successor arrows - copy the format used by append_function_text
         // in pipeline.cpp's `format_cfg` so a single CFG parser handles
         // both rendering modes.
         switch (bb.kind) {

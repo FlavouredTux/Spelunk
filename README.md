@@ -6,7 +6,7 @@
 <tr>
 <td width="50%" valign="top">
 
-**`gotos.c`** — the source
+**`gotos.c`** - the source
 
 ```c
 int multi_exit(const char* s, const char* t) {
@@ -22,7 +22,7 @@ fail:
 </td>
 <td width="50%" valign="top">
 
-**`ember -p -s multi_exit gotos`** — the recovery
+**`ember -p -s multi_exit gotos`** - the recovery
 
 ```c
 uint64_t multi_exit(uint64_t a1, uint64_t a2) {
@@ -39,7 +39,7 @@ uint64_t multi_exit(uint64_t a1, uint64_t a2) {
 </tr>
 </table>
 
-<sub>The right column was reconstructed from a stripped binary. Ember has never seen the source — it walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded the spilled parameters, and rendered <code>-1</code> as signed even though it lives in a <code>uint64_t</code>-typed slot.</sub>
+<sub>The right column was reconstructed from a stripped binary. Ember has never seen the source - it walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded the spilled parameters, and rendered <code>-1</code> as signed even though it lives in a <code>uint64_t</code>-typed slot.</sub>
 
 ---
 
@@ -51,8 +51,8 @@ What ember refuses to link, vendor, or import:
 - **No Zydis. No Ghidra SLEIGH.** Same reason.
 - **No LLVM.** Own IR, own SSA, own cleanup, own structurer.
 - **No vendored dependencies.** A C++23 compiler and the standard library. That's it.
-- **No DWARF — even when it's right there.** The debugger sets breakpoints against ember's own pseudo-C output. There is no source on disk; ember invents one.
-- **No pretending.** When the analyzer can't bottom something out, the output says so out loud — `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */`, not a fabricated symbol.
+- **No DWARF - even when it's right there.** The debugger sets breakpoints against ember's own pseudo-C output. There is no source on disk; ember invents one.
+- **No pretending.** When the analyzer can't bottom something out, the output says so out loud - `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */`, not a fabricated symbol.
 
 The whole pipeline fits in your head.
 
@@ -77,7 +77,7 @@ ember --debug ./target
 (ember-dbg) b sub_4000b0:42
 ```
 
-That breakpoint resolves through ember's own emitter. Line 42 does not exist in any file on disk — it exists in the decompiled view ember just generated, and the asm address it maps to is exactly where execution stops. ptrace on Linux, Mach on macOS. `code` shows the pseudo-C around the current PC; `bt` walks `.eh_frame` with an RBP fallback; `aux` lets you side-load a Binary as a symbol oracle for runtime-mmap'd Mach-O / PE blobs.
+That breakpoint resolves through ember's own emitter. Line 42 does not exist in any file on disk - it exists in the decompiled view ember just generated, and the asm address it maps to is exactly where execution stops. ptrace on Linux, Mach on macOS. `code` shows the pseudo-C around the current PC; `bt` walks `.eh_frame` with an RBP fallback; `aux` lets you side-load a Binary as a symbol oracle for runtime-mmap'd Mach-O / PE blobs.
 
 ### It recognizes library functions across compilers
 
@@ -86,7 +86,7 @@ ember --teef libcrypto.so.3 > corpus.tsv
 ember --recognize --corpus corpus.tsv ./stripped-target
 ```
 
-Three signals stacked: a CFG-shape pre-filter, a post-cleanup IR canonical with MinHash for partial overlap, and a behavioural signature that runs K=64 random inputs through an abstract IR interpreter and hashes the I/O multiset. The behavioural pass catches what canonicalization can't — pointer-vs-index lowering, intrinsic-vs-open-coded (bswap, popcnt, …), induction-variable strength reduction, gcc ↔ clang divergence.
+Three signals stacked: a CFG-shape pre-filter, a post-cleanup IR canonical with MinHash for partial overlap, and a behavioural signature that runs K=64 random inputs through an abstract IR interpreter and hashes the I/O multiset. The behavioural pass catches what canonicalization can't - pointer-vs-index lowering, intrinsic-vs-open-coded (bswap, popcnt, …), induction-variable strength reduction, gcc ↔ clang divergence.
 
 > **100% precision, 34.4% recall** on the cross-config probe2 matrix
 > (6 compiler configurations × 30 algorithms, 30 directed pairs).
@@ -122,8 +122,8 @@ The first observed target names the expression; the rest stay attached as a comm
 | SSA + cleanup         | full                  | partial           | partial       |
 | Pseudo-C              | full                  | partial           | partial       |
 | ABI                   | SysV / Win64          | AAPCS64           | SysV / ELFv1 / v2 |
-| RTTI                  | Itanium + MSVC        | Itanium           | —           |
-| Switch idioms         | 5 patterns (incl. MSVC two-table) | inherited | — |
+| RTTI                  | Itanium + MSVC        | Itanium           | -           |
+| Switch idioms         | 5 patterns (incl. MSVC two-table) | inherited | - |
 | Indirect calls        | IAT + const vtable + trace + IPA receiver-type | inherited | CTR constants + trace |
 
 ---
@@ -132,7 +132,7 @@ The first observed target names the expression; the rest stay attached as a comm
 
 Limits, not bug reports:
 
-- Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as typed unresolved function-pointer-slot calls with an evidence comment. By design — see *By omission*.
+- Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as typed unresolved function-pointer-slot calls with an evidence comment. By design - see *By omission*.
 - Switch cases whose default falls outside the bounds check can misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
 - PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics, DOL function discovery, and code-pointer xrefs.
@@ -263,14 +263,14 @@ Section-keyed, one directive per line, no expressions or control flow. Anything 
 <details>
 <summary><b>Agent harness</b></summary>
 
-`agent/` is a TypeScript multi-agent driver. Workers run a single role — namer / mapper / typer / tiebreaker — as an LLM tool-use loop, write claims into a shared per-binary intel database (append-only JSONL with retraction + dispute detection), and the orchestrator promotes high-confidence claims into the same `.ember` file `--apply` consumes. Provider-neutral over assistant / OpenAI / OpenRouter, prompt-cache-aware on both assistant-direct (`cache_control: ephemeral`) and DeepSeek-via-OpenRouter (auto-prefix caching reported in `usage.prompt_tokens_details.cached_tokens`), per-worker USD budget cap.
+`agent/` is a TypeScript multi-agent driver. Workers run a single role - namer / mapper / typer / tiebreaker - as an LLM tool-use loop, write claims into a shared per-binary intel database (append-only JSONL with retraction + dispute detection), and the orchestrator promotes high-confidence claims into the same `.ember` file `--apply` consumes. Provider-neutral over assistant / OpenAI / OpenRouter, prompt-cache-aware on both assistant-direct (`cache_control: ephemeral`) and DeepSeek-via-OpenRouter (auto-prefix caching reported in `usage.prompt_tokens_details.cached_tokens`), per-worker USD budget cap.
 
 ```sh
 # 20 namer workers in parallel against a stripped binary
 ember-agent fanout --binary=./target.elf --pick=unnamed --limit=20 \
   --budget=0.04 --model=deepseek/deepseek-v4-flash
 
-# Anchor Cascade — bottom-up rounds, each one names fns whose callees
+# Anchor Cascade - bottom-up rounds, each one names fns whose callees
 # are mostly anchored, promotes ≥0.85 conf claims, re-renders pseudo-C
 # so the next round sees richer context.
 ember-agent cascade --binary=./target.elf --per-round=30 --max-rounds=5
@@ -279,14 +279,14 @@ ember-agent intel ./target.elf disputes
 ember-agent promote ./target.elf --apply
 ```
 
-Disputes — top-2 claims within 0.10 confidence from different agents with different values — surface for unbiased tiebreaker resolution. Full surface in [docs/agent.md](docs/agent.md).
+Disputes - top-2 claims within 0.10 confidence from different agents with different values - surface for unbiased tiebreaker resolution. Full surface in [docs/agent.md](docs/agent.md).
 
 </details>
 
 <details>
 <summary><b>Plugin platform</b></summary>
 
-Target-specific reversing — games, engines, protocols, build-to-build knowledge carryover — is layered onto the Electron UI, not the C++ core. Plugins are `.cjs` bundles (`plugin.json` + `main.cjs`) loaded by the renderer's Node runtime; the surface they consume is the same `Annotations` API the `.ember` format drives. Design in [docs/plugin-platform.md](docs/plugin-platform.md).
+Target-specific reversing - games, engines, protocols, build-to-build knowledge carryover - is layered onto the Electron UI, not the C++ core. Plugins are `.cjs` bundles (`plugin.json` + `main.cjs`) loaded by the renderer's Node runtime; the surface they consume is the same `Annotations` API the `.ember` format drives. Design in [docs/plugin-platform.md](docs/plugin-platform.md).
 
 </details>
 
@@ -294,7 +294,7 @@ Target-specific reversing — games, engines, protocols, build-to-build knowledg
 <summary><b>Layout</b></summary>
 
 ```
-core/             C++23 library — everything except the CLI shim
+core/             C++23 library - everything except the CLI shim
   binary/         ELF + DOL + Mach-O + PE + minidump + raw-regions + PDB v7
   disasm/         x86-64 + AArch64 + PPC32/PPC64 instruction decoders
   analysis/       CFG, arity, strings, xrefs, sig inference, type inference,
@@ -352,4 +352,4 @@ CI runs in a `gcc:16` container so layout / signature output stays toolchain-sta
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
 </p>
 
-<p align="center"><sub>MIT — see <a href="LICENSE">LICENSE</a>. Star history at <a href="https://star-history.com/#FlavouredTux/Ember&Date">star-history.com</a>.</sub></p>
+<p align="center"><sub>MIT - see <a href="LICENSE">LICENSE</a>. Star history at <a href="https://star-history.com/#FlavouredTux/Ember&Date">star-history.com</a>.</sub></p>

@@ -113,7 +113,7 @@ constexpr u8 BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0u;
 
 // Bind records collected from the LC_DYLD_INFO opcode stream OR from the
 // modern LC_DYLD_CHAINED_FIXUPS format. Both converge on (slot vaddr,
-// imported-symbol name) — ordinal/addend/type don't affect rendering.
+// imported-symbol name) - ordinal/addend/type don't affect rendering.
 struct BindRec { addr_t vaddr; std::string name; };
 
 // One LC_SEGMENT_64 we've processed, used while resolving section vmaddrs
@@ -206,7 +206,7 @@ void parse_bind_stream(
             break;
         }
         default:
-            // Unknown opcode — bail rather than corrupt the stream.
+            // Unknown opcode - bail rather than corrupt the stream.
             return;
         }
     }
@@ -282,7 +282,7 @@ void parse_chained_fixups(
     std::span<std::byte> image,
     std::vector<BindRec>& out)
 {
-    // Preferred load address of the image — chained-rebase `target` fields
+    // Preferred load address of the image - chained-rebase `target` fields
     // are encoded relative to this, matching dyld's `runtimeOffset`
     // semantics. On typical PIE binaries this is __TEXT.vmaddr (the
     // segment whose fileoff==0 and which hosts the mach_header). Fall
@@ -687,7 +687,7 @@ Result<void> MachOBinary::parse() {
             const u8  n_type = read_le_at<u8> (np + 4);
             const u64 n_value= read_le_at<u64>(np + 8);
 
-            if (n_type & N_STAB) continue;  // debug stabs — ignore
+            if (n_type & N_STAB) continue;  // debug stabs - ignore
 
             std::string name;
             if (auto nm = str.read_cstr(n_strx); nm) name = std::string(*nm);
@@ -733,7 +733,7 @@ Result<void> MachOBinary::parse() {
     if (!weak_bind_bytes.empty()) parse_bind_stream(weak_bind_bytes, seg_info, binds, false);
     if (!lazy_bind_bytes.empty()) parse_bind_stream(lazy_bind_bytes, seg_info, binds, true);
     // Modern builds emit LC_DYLD_CHAINED_FIXUPS instead of LC_DYLD_INFO
-    // opcodes. Parse both — newer linkers occasionally emit both, older
+    // opcodes. Parse both - newer linkers occasionally emit both, older
     // ones only one.
     if (!chained_fixups_bytes.empty()) {
         parse_chained_fixups(chained_fixups_bytes, seg_info, buffer_, binds);
@@ -768,7 +768,7 @@ Result<void> MachOBinary::parse() {
     slot_to_name.reserve(binds.size());
     for (auto& b : binds) slot_to_name.emplace(b.vaddr, std::move(b.name));
 
-    // Attach got_addr to imports by name — the bind opcodes give us the
+    // Attach got_addr to imports by name - the bind opcodes give us the
     // slot (la_symbol_ptr / got) addresses, which are what the emitter uses
     // to render indirect calls through the GOT as named calls.
     for (auto& sym : symbols_) {
@@ -874,7 +874,7 @@ Result<void> MachOBinary::parse() {
 
     // ---- LC_FUNCTION_STARTS: full function-boundary map -------------------
     // Mach-O rarely carries nlist sizes, and release binaries drop most
-    // internal names — but LC_FUNCTION_STARTS is almost always present and
+    // internal names - but LC_FUNCTION_STARTS is almost always present and
     // lists every function's starting address as a ULEB128 delta stream.
     // Decoding it lets us: (a) fill in `size` on every existing function
     // symbol (next_start - this_start), and (b) add synthetic `sub_<hex>`
@@ -999,7 +999,7 @@ Result<void> MachOBinary::parse() {
                 const addr_t cls_ptr  = static_cast<addr_t>(read_u64_at(segments_, slot));
                 if (cls_ptr == 0) continue;
                 // class_t layout: 5 * 8; `data` (class_ro_t*) at +32. The low
-                // bit of data is a realized flag — mask it off.
+                // bit of data is a realized flag - mask it off.
                 const addr_t meta_ptr = static_cast<addr_t>(read_u64_at(segments_, cls_ptr + 0));
                 const addr_t ro_ptr   = static_cast<addr_t>(read_u64_at(segments_, cls_ptr + 32)) & ~addr_t{1};
                 // Grab the class name from instance ro so we can pass it to

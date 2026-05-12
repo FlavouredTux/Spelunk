@@ -143,7 +143,7 @@ read_rel_method(const Binary& b, addr_t entry_va,
 
 // Walk one method_list_t at `ml_va`. Adds entries into `out` tagged with
 // `cls` and `is_class`. `allow_zero_imp` accepts entries whose IMP is zero
-// — required for protocol method lists, which carry signatures without
+// - required for protocol method lists, which carry signatures without
 // implementations.
 bool read_method_list(const Binary& b, addr_t ml_va,
                       std::string_view cls, bool is_class,
@@ -374,7 +374,7 @@ std::string decode_objc_type_impl(std::string_view enc) {
         out += parts[i];
     }
     // When there are exactly self + _cmd (parts.size() == 3) or only return
-    // type, the loop is empty — close the parens.
+    // type, the loop is empty - close the parens.
     out += ")";
     return out;
 }
@@ -493,7 +493,7 @@ std::vector<ObjcMethod> parse_objc_methods(const Binary& b) {
             auto cmeth_p  = load_u64(b, static_cast<addr_t>(cat_p + 24));
             if (!name_p) continue;
             std::string cat_name = read_cstring(b, static_cast<addr_t>(*name_p));
-            // Category target class name — the method list belongs to it,
+            // Category target class name - the method list belongs to it,
             // tagged with `(CategoryName)` so the reader can tell it apart
             // from the base class's own methods.
             std::string target_cls;

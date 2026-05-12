@@ -3,7 +3,7 @@ import { C, mono, serif } from "../theme";
 
 // Neural-network-shaped visualization of the agent swarm.
 //
-// Center: the intel hub — shared per-binary JSONL claim db. Pulses
+// Center: the intel hub - shared per-binary JSONL claim db. Pulses
 // outward when a new claim arrives.
 //
 // Inner ring: live + recent workers, color by role. Idle workers fade.
@@ -18,7 +18,7 @@ import { C, mono, serif } from "../theme";
 // giving the swarm a feedforward-network visual signature consistent
 // with Anchor Cascade's actual topology.
 //
-// All physics is just polar arithmetic — no force-directed solver or
+// All physics is just polar arithmetic - no force-directed solver or
 // d3 dependency. Looks alive without bringing in a graphics library.
 
 const ROLE_COLOR: Record<string, string> = {
@@ -252,7 +252,7 @@ export function NeuralView(props: {
                 })}
 
                 {/* Inbound claim particles. Animate from subject angle
-                    inward to the hub over 1.4s using SMIL — works
+                    inward to the hub over 1.4s using SMIL - works
                     everywhere Electron renders SVG. */}
                 {pulses.map((p) => {
                     const sx = cx + Math.cos(p.fromAngle) * R_SUBJECT;

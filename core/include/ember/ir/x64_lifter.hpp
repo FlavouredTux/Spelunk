@@ -10,7 +10,7 @@ namespace ember {
 
 class X64Lifter final : public Lifter {
 public:
-    // The default ABI is SysV — matches historical behaviour so any
+    // The default ABI is SysV - matches historical behaviour so any
     // call site that hasn't been updated still works on ELF/Mach-O
     // binaries. Callers lifting PE x86_64 must construct with
     // `X64Lifter{Abi::Win64}` so the emitted IR models the right

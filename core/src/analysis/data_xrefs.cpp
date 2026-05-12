@@ -15,7 +15,7 @@ namespace ember {
 namespace {
 
 // Simple section-resolution helper. Caching a flat (vaddr, size, flags)
-// table avoids re-walking the section list for every operand — large
+// table avoids re-walking the section list for every operand - large
 // binaries can have thousands of operands per function.
 struct SectionTable {
     struct Row {
@@ -98,14 +98,14 @@ void scan_pointer_slots(const Binary& b, const SectionTable& sects,
 [[nodiscard]] DataXrefKind
 classify(const Instruction& insn, u8 mem_op_idx) noexcept {
     if (insn.mnemonic == Mnemonic::Lea) return DataXrefKind::Lea;
-    // CMP and TEST read both operands — memory operand is never a dest.
+    // CMP and TEST read both operands - memory operand is never a dest.
     if (insn.mnemonic == Mnemonic::Cmp ||
         insn.mnemonic == Mnemonic::Test) {
         return DataXrefKind::Read;
     }
     // x86 convention: operand 0 is the destination on writing mnemonics.
     // CALL/JMP with a memory operand read the slot (to get the indirect
-    // target) — not a write.
+    // target) - not a write.
     if (insn.mnemonic == Mnemonic::Call ||
         insn.mnemonic == Mnemonic::Jmp) {
         return DataXrefKind::Read;
@@ -160,7 +160,7 @@ compute_data_xrefs(const Binary& b) {
     }
     for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
         if (b.import_at_plt(fn.addr) != nullptr) continue;
-        if (fn.size == 0) continue;  // truly-unknown extent — skip rather
+        if (fn.size == 0) continue;  // truly-unknown extent - skip rather
                                      // than guess wildly past the function
         if (!seen.insert(fn.addr).second) continue;
         work.push_back({fn.addr, fn.size});

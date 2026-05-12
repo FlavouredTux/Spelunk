@@ -174,7 +174,7 @@ private:
     std::optional<std::string> parse_template_after_marker();
     // One template / function argument. Recursive.
     std::optional<std::string> parse_type();
-    // After a `V`/`U`/`W`/`T` named-type marker — reads the qualified
+    // After a `V`/`U`/`W`/`T` named-type marker - reads the qualified
     // class name terminator.
     std::optional<std::string> parse_named_type();
     std::optional<std::string> parse_symbol_name(bool& has_return_type);
@@ -455,7 +455,7 @@ std::optional<std::string> MsvcDemangler::parse_unqualified_name() {
 std::optional<std::string> MsvcDemangler::parse_template_after_marker() {
     if (++depth_ > kMaxDepth) { --depth_; return std::nullopt; }
 
-    // The template's bookkeeping uses a *fresh* backref table — template
+    // The template's bookkeeping uses a *fresh* backref table - template
     // arg parsing must not leak names into the outer name table, and the
     // outer name backrefs must not satisfy `0`-`9` references inside the
     // template body. Save and restore on exit.
@@ -561,7 +561,7 @@ std::optional<std::string> MsvcDemangler::parse_type() {
     }
     if (c == 'W') {
         // Enum: one byte indicating underlying type follows, then the
-        // qualified name. We don't render the underlying type — caller
+        // qualified name. We don't render the underlying type - caller
         // gets `EnumName`.
         if (eof()) return std::nullopt;
         eat();   // underlying-type code (e.g. '4' = int)
@@ -583,7 +583,7 @@ std::optional<std::string> MsvcDemangler::parse_type() {
         return std::nullopt;
     }
 
-    // Anything else we don't model — bail so the caller falls back to
+    // Anything else we don't model - bail so the caller falls back to
     // the raw mangled string.
     pop_depth();
     return std::nullopt;

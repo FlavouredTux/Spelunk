@@ -27,7 +27,7 @@ export function HexView(props: {
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   // Loaded bytes keyed by page-aligned file offset. Sparse so a 1 GB
-  // binary doesn't materialize a 1 GB array — the user only ever sees
+  // binary doesn't materialize a 1 GB array - the user only ever sees
   // the rows in the current viewport plus a small overscan.
   const [pages, setPages] = useState<Map<number, Uint8Array>>(new Map());
   // Base-N input. Hex with optional 0x prefix. Empty => not jumping.
@@ -69,7 +69,7 @@ export function HexView(props: {
 
   // Fetch any pages overlapping the visible row range that we don't
   // already have. Pages are 4 KB so a typical 1024-px window covers 1
-  // page (or 2 across a boundary). Fire-and-forget — the render falls
+  // page (or 2 across a boundary). Fire-and-forget - the render falls
   // back to "·" placeholders for any byte the page hasn't arrived for.
   useEffect(() => {
     const startPage = Math.floor((firstRow * ROW_BYTES) / PAGE_BYTES);
@@ -88,7 +88,7 @@ export function HexView(props: {
             next.set(off, r.bytes);
             return next;
           });
-        } catch { /* short read at EOF — let placeholder render */ }
+        } catch { /* short read at EOF - let placeholder render */ }
       }
     })();
     return () => { cancel = true; };
@@ -106,7 +106,7 @@ export function HexView(props: {
   // Map a file offset back to a virtual address using the in-memory
   // section table. We look for a section whose vaddr range, when
   // shifted by (vaddr - foff), would land at this offset. Cheap and
-  // good-enough for ELF; PE/Mach-O fall back to "—" when there's no
+  // good-enough for ELF; PE/Mach-O fall back to "-" when there's no
   // matching segment.
   const offsetToVaddr = useCallback((offset: number): string => {
     for (const s of info.sections) {
@@ -119,11 +119,11 @@ export function HexView(props: {
         return "0x" + offset.toString(16);
       }
     }
-    return "—";
+    return "-";
   }, [info.sections]);
 
   // Compile a `48 8b ?? c3` style pattern into an array of byte
-  // matchers. `null` slots mean "any byte" — wildcards. Whitespace is
+  // matchers. `null` slots mean "any byte" - wildcards. Whitespace is
   // free; hex pairs must be 2 characters. Returns null on parse error.
   const compilePattern = (raw: string): Array<number | null> | null => {
     const tokens = raw.trim().split(/\s+/).filter(Boolean);
@@ -182,7 +182,7 @@ export function HexView(props: {
         setScannedPct(Math.min(100, Math.floor(((off + want) / totalSize) * 100)));
         setHits(found.slice());
         if (found.length >= HIT_CAP) {
-          setPatternError(`stopped at ${HIT_CAP} hits — pattern is too generic`);
+          setPatternError(`stopped at ${HIT_CAP} hits - pattern is too generic`);
           break;
         }
         if (r.eof) break;
@@ -192,11 +192,11 @@ export function HexView(props: {
     }
   }, [totalSize]);
 
-  // Map a file offset back to a vaddr by scanning sections — same
+  // Map a file offset back to a vaddr by scanning sections - same
   // simple approximation we use elsewhere in this file. Used to label
   // pattern-match hits with a vaddr column when possible.
   const offsetToBestVaddr = useCallback((offset: number): string => {
-    // Walk loaded segments first; falls back to "—" if nothing covers
+    // Walk loaded segments first; falls back to "-" if nothing covers
     // this offset.
     for (const s of info.sections) {
       const v = parseInt(s.vaddr, 16);
@@ -204,7 +204,7 @@ export function HexView(props: {
       if (!Number.isFinite(v) || !Number.isFinite(sz)) continue;
       if (offset >= v && offset < v + sz) return "0x" + offset.toString(16);
     }
-    return "—";
+    return "-";
   }, [info.sections]);
 
   const jumpToFoff = useCallback((foff: number) => {

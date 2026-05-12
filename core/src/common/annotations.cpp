@@ -255,7 +255,7 @@ Annotations::load(const std::filesystem::path& path) {
             // Subkind: rename | note | sig. Tail keys are pipe-separated
             // key=value pairs; embedded `|` is `\|`, `\n` / `\r` / `\\`
             // also escape themselves. Unknown subkinds and unknown keys
-            // are silently dropped — newer ember can produce records old
+            // are silently dropped - newer ember can produce records old
             // ember reads cleanly without exploding.
             const std::size_t sp1 = rest.find(' ');
             if (sp1 == std::string_view::npos) continue;

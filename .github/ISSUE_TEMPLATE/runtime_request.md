@@ -21,6 +21,6 @@ What use case does recognizing this runtime unlock?
 
 **Anything you can share**
 
-Public references, blog posts, prior RE work, version-drift notes —
+Public references, blog posts, prior RE work, version-drift notes -
 **not** binary samples or annotations from RE'd builds. See
 `CONTRIBUTING.md` for what we can and can't accept.

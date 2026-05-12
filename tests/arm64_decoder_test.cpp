@@ -124,7 +124,7 @@ void test_branches() {
 }
 
 void test_loads_stores() {
-    // ldr x0, [sp, #16]   — unsigned offset, scale 8 → imm12=2
+    // ldr x0, [sp, #16]   - unsigned offset, scale 8 → imm12=2
     auto i = must_decode(0xf94007e0);
     check_eq(i.mnemonic, Mnemonic::A64Ldr, "ldr unsigned: mnemonic");
     check_eq(i.operands[0].reg, Reg::X0, "ldr unsigned: rt");
@@ -132,12 +132,12 @@ void test_loads_stores() {
     check_eq(i.operands[1].mem.disp, std::int64_t{8}, "ldr unsigned: disp");
     check_eq(i.operands[1].mem.size, std::uint8_t{8}, "ldr unsigned: size");
 
-    // str w1, [x0]   — unsigned offset, imm12=0
+    // str w1, [x0]   - unsigned offset, imm12=0
     i = must_decode(0xb9000001);
     check_eq(i.mnemonic, Mnemonic::A64Str, "str unsigned: mnemonic");
     check_eq(i.operands[0].reg, Reg::W1, "str unsigned: rt");
 
-    // ldp x29, x30, [sp, #-16]!     — pre-indexed, imm7 = -1, scale 8
+    // ldp x29, x30, [sp, #-16]!     - pre-indexed, imm7 = -1, scale 8
     // Bits: 1010 1001 0110 1111 1111 1111 1011 1111 1101  ... actually
     // let me just encode the most common LDP signed-offset variant:
     // ldp x29, x30, [sp, #16]   bits: 0xa9417bfd
@@ -168,7 +168,7 @@ void test_dp_reg() {
 }
 
 void test_pcrel() {
-    // adrp x0, +0x10000     — at addr 0x1000, target = 0x11000
+    // adrp x0, +0x10000     - at addr 0x1000, target = 0x11000
     // ADRP encoding: bit 31=1, bits 30:29=immlo, bits 28:24=10000,
     // bits 23:5=immhi, bits 4:0=Rd. immlo:immhi as a single 21-bit
     // imm. For target page 0x11000 from page 0x1000, imm = 0x10.
@@ -199,7 +199,7 @@ void test_misc() {
 // the decoder should land on A64Udf (the catch-all the validator uses
 // for unallocated encodings) rather than reporting a real mnemonic.
 void test_reserved_encodings() {
-    // DP-1 source, sf=0, opcode=000011 — UNALLOCATED per ARM ARM C4.1.7.
+    // DP-1 source, sf=0, opcode=000011 - UNALLOCATED per ARM ARM C4.1.7.
     // sf=1 + same opcode is REV (64-bit). Both branches used to land on
     // A64Rev, so the bit-31 disagreement was lost.
     auto rev_unalloc = must_decode(0x5ac00c00);
@@ -209,7 +209,7 @@ void test_reserved_encodings() {
     check_eq(rev_valid.mnemonic, Mnemonic::A64Rev,
              "rev valid (sf=1, opcode=000011): A64Rev");
 
-    // LDP/STP family, opc=11 — RESERVED per ARM ARM C4.1.4. Used to be
+    // LDP/STP family, opc=11 - RESERVED per ARM ARM C4.1.4. Used to be
     // accepted as A64Ldpsw because the gate `opc != 0b00 && opc != 0b10`
     // didn't exclude it. Build a representative encoding: opc=11,
     // bits 29:27 = 101, bit 26 = 0, signed-offset variant.

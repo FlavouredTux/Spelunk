@@ -88,7 +88,7 @@ void parse_lsda(std::span<const std::byte> lsda_bytes,
         // We record the landing pad at the RANGE's start address. Callers
         // have the call address; a more precise mapping would walk from
         // call-site address back to the covering range. For the emitter's
-        // annotation pass this granularity is enough — the call appears at
+        // annotation pass this granularity is enough - the call appears at
         // or near the range start.
         LandingPad lp;
         lp.lp_addr      = lp_addr;
@@ -211,7 +211,7 @@ parse_compact_unwind(const Binary& b) {
 LpMap parse_landing_pads(const Binary& b) {
     LpMap out;
 
-    // Apple compact-unwind contributes LSDA pointers too — Mach-O binaries
+    // Apple compact-unwind contributes LSDA pointers too - Mach-O binaries
     // built on modern SDKs use compact encoding primarily, with .eh_frame
     // only as backup or omitted entirely for leaf functions.
     for (const auto& cu : parse_compact_unwind(b)) {
@@ -236,7 +236,7 @@ LpMap parse_landing_pads(const Binary& b) {
         if (length == 0) break;  // terminator / padding
         std::size_t entry_len = length;
         if (length == 0xFFFFFFFFu) {
-            // 64-bit length extension — rare in practice; bail out safely.
+            // 64-bit length extension - rare in practice; bail out safely.
             break;
         }
         const std::size_t payload_end = top.pos + entry_len;

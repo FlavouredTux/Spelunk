@@ -15,10 +15,10 @@ enum class RegionKind : u8 {
     Seq,
     IfThen,
     IfElse,
-    While,      // while (cond) { body }  — condition tested at top
-    DoWhile,    // do { body } while (cond)  — condition tested after body
-    For,        // for (; cond; update) { body } — induction-var pattern
-    Loop,       // for (;;) { … }  — no recognized exit condition
+    While,      // while (cond) { body }  - condition tested at top
+    DoWhile,    // do { body } while (cond)  - condition tested after body
+    For,        // for (; cond; update) { body } - induction-var pattern
+    Loop,       // for (;;) { … }  - no recognized exit condition
     Switch,
     Return,
     Unreachable,

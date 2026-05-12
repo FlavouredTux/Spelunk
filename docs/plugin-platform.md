@@ -15,7 +15,7 @@ until a plugin asks for it. Shipped today:
   Other fields (categories, targets, publisher, license, and other
   `contributes.*` entries) are not read yet.
 - **Matchers** (`kind`): `format`, `arch`, `symbol-present`,
-  `string-present`, `section-present`. Literal-value only — no regex,
+  `string-present`, `section-present`. Literal-value only - no regex,
   no fingerprint matcher yet. Aggregation is strict AND (all must hit
   for score 100 / `matched: true`). Plugins without matchers implicitly
   match every binary.
@@ -29,12 +29,12 @@ until a plugin asks for it. Shipped today:
   `currentBinaryPath`, `proposalBuilders.{rename, note}`.
 - **Proposal kinds**: `rename`, `note`. Staged into the project
   annotations file via the same flow as manual edits.
-- **UI contributions — panels**: a plugin's command can return
+- **UI contributions - panels**: a plugin's command can return
   `panel: { kind: "list", rows: [{ addr?, label, detail?, tags? }] }`
   alongside its proposals. Host sanitizes the payload and the renderer
   shows it in the dedicated Plugins modal (Ctrl+U or title-bar
   "plugins" button); rows with `addr` are clickable and jump to that
-  function's pseudo-C. Plugins provide structured data only — no
+  function's pseudo-C. Plugins provide structured data only - no
   React / HTML.
 - **Settings UI**: plugin cards show a match badge + tooltip; a
   plugin's commands run normally when matched, and require a

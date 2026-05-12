@@ -105,7 +105,7 @@ bool sweep(IrFunction& fn) {
                 case IrOp::CmpUle:
                 case IrOp::CmpUgt:
                 case IrOp::CmpUge: {
-                    // Weaker signal — pointer compares often use the
+                    // Weaker signal - pointer compares often use the
                     // unsigned forms. Only mark when source isn't already
                     // refined to something that would conflict.
                     for (u8 i = 0; i < inst.src_count && i < 2; ++i) {
@@ -149,7 +149,7 @@ bool sweep(IrFunction& fn) {
 
                 case IrOp::Add: {
                     // Pointer arithmetic: Ptr + Int → Ptr. We don't try
-                    // to refine integer operand widths here — Phase 4
+                    // to refine integer operand widths here - Phase 4
                     // (struct/array recovery) will own that.
                     if (inst.src_count == 2) {
                         const TypeRef a0 = fn.type_of(inst.srcs[0]);

@@ -6,7 +6,7 @@ name: regen-goldens
 # goldens (e.g. after a sig-inference improvement) and the goldens
 # need to match the canonical CI toolchain.
 #
-# Not on push/pr — intentionally dispatch-only so it doesn't run on
+# Not on push/pr - intentionally dispatch-only so it doesn't run on
 # every commit.
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
       - name: Regenerate goldens
         env:
           UPDATE_GOLDEN: "1"
-        # Run twice — first run writes updates, second run verifies
+        # Run twice - first run writes updates, second run verifies
         # everything passes with the new goldens. If the second run
         # fails, the regen itself is nondeterministic and we need to
         # find out why before committing.

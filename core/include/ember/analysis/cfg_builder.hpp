@@ -20,7 +20,7 @@ public:
     [[nodiscard]] Result<Function>
     build(addr_t entry, std::string name = {}) const;
 
-    // True when `target` is a known function entry — named symbol, PLT
+    // True when `target` is a known function entry - named symbol, PLT
     // import stub, or discovered `sub_*`. Used by the walker to classify
     // tail-call jmps; exposed because external callers occasionally
     // need the same predicate.

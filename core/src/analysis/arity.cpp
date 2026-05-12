@@ -138,7 +138,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     // register. We track `written` as a path-state via a parallel mask, but
     // because we want a may-read-before-write across all paths (any path can
     // demonstrate the arg is consumed), we propagate the most-pessimistic
-    // written state — i.e. once an arg is reported live-in on any path, it
+    // written state - i.e. once an arg is reported live-in on any path, it
     // stays live-in regardless of later writes on a different path.
     //
     // Concretely: a register is live-in if some path reads it before writing
@@ -147,7 +147,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     // capped at kMaxVisits; addresses already visited with a strictly weaker
     // (subset) written mask are skipped to keep the worklist bounded.
     //
-    // Calls don't mark args as written — caller-saved clobbering happens
+    // Calls don't mark args as written - caller-saved clobbering happens
     // *after* the call site's argument setup, and we want to count whatever
     // setup landed before the call.
     constexpr std::size_t kMaxVisits = 1024;
@@ -190,7 +190,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
             ++visits;
             // Visit guard: skip if we've seen this addr with a written mask
             // at least as restrictive (subset). We approximate "subset" with
-            // exact equality keyed on (ip), to keep the table small — picks
+            // exact equality keyed on (ip), to keep the table small - picks
             // up the common cases (loops, shared prologues) without growing
             // the visited set unboundedly.
             const auto [it, inserted] = visited.insert(ip);

@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
                                   ember::debug::WatchMode::Write);
     CHECK(wp_r.has_value(), "set watchpoint on parent marker");
 
-    // Catch `write` (nr 1). Survives execve — same flag the user
+    // Catch `write` (nr 1). Survives execve - same flag the user
     // would set via the REPL's `catch syscall write`.
     constexpr ember::u32 kWrite = 1;
     const ember::u32 catch_nrs[1] = { kWrite };
@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     CHECK(std::holds_alternative<ember::debug::EvBreakpointHit>(*ev),
           "expected bp hit at preexec_marker");
 
-    // Loop until EvExec — printf may fire spurious watch events first.
+    // Loop until EvExec - printf may fire spurious watch events first.
     bool saw_exec = false;
     ember::addr_t exec_pc = 0;
     while (!saw_exec) {
@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
     const auto wp2_id = *wp2;
 
     // Run until the wp fires. Along the way the persisted catch
-    // should fire on the child's printf write — if it doesn't,
+    // should fire on the child's printf write - if it doesn't,
     // the catch didn't survive the exec.
     bool saw_write_in_child = false;
     ember::addr_t wp_fire_pc = 0;
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
             wp_fire_pc = whit->pc;
             break;
         }
-        // unexpected event — fail fast rather than spin
+        // unexpected event - fail fast rather than spin
         CHECK(false, "unexpected event waiting for wp");
     }
     CHECK(saw_write_in_child,

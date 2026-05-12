@@ -1,4 +1,4 @@
-/* A static global overwritten multiple times in the same function — -O0
+/* A static global overwritten multiple times in the same function - -O0
  * keeps all three stores literally; DSE should collapse to the last one.
  * Exercises the global-address (Imm-keyed) store deduplication path in
  * pass_dead_store_elim. */

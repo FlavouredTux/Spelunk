@@ -227,7 +227,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
     }
 
     // Sniff the input format. The persisted on-disk format (what
-    // `Annotations::save` writes — what the cache stores) is line-per-
+    // `Annotations::save` writes - what the cache stores) is line-per-
     // record without section headers; the .ember declarative format is
     // section-keyed (`[rename]` etc.). Feeding the persisted form to
     // the script parser used to fail with "directive outside any
@@ -244,7 +244,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
                 sv.remove_prefix(1);
             }
             if (sv.empty() || sv.front() == '#') continue;
-            if (sv.front() == '[') break;  // declarative — section header
+            if (sv.front() == '[') break;  // declarative - section header
             if (sv.starts_with("rename ") || sv.starts_with("note ") ||
                 sv.starts_with("sig ")    || sv.starts_with("const ") ||
                 sv.starts_with("field ")  || sv.starts_with("meta ")) {
@@ -259,7 +259,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
         auto loaded = Annotations::load(args.apply_ember);
         if (!loaded) return report(loaded.error());
         // Merge into the destination, preserving existing values on
-        // conflict — same precedence the declarative apply uses.
+        // conflict - same precedence the declarative apply uses.
         for (const auto& [a, name] : loaded->renames) {
             if (ann.renames.try_emplace(a, name).second) ++import_stats.renames_added;
         }
@@ -337,7 +337,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
 
 void load_trace_edges(const Args& args, const Binary& b) {
     // Indirect-edge trace must seed the oracle BEFORE any analysis runs
-    // — the CFG builder consults it lazily but the result gets cached
+    // - the CFG builder consults it lazily but the result gets cached
     // in IR caches downstream, so late-loading wouldn't take effect on
     // subsequent passes.
     std::ifstream tf(args.trace_path);
@@ -353,7 +353,7 @@ void load_trace_edges(const Args& args, const Binary& b) {
         const auto tab = line.find('\t');
         if (tab == std::string::npos) {
             std::println(stderr,
-                "ember: trace '{}' line {}: missing tab — expected `from\\tto`",
+                "ember: trace '{}' line {}: missing tab - expected `from\\tto`",
                 args.trace_path, line_no);
             continue;
         }
@@ -390,7 +390,7 @@ int run_xrefs(const Args& args, const Binary& b) {
 
 int run_data_xrefs(const Args& args, const Binary& b) {
     // TSV and JSON share the compute step but differ in output format,
-    // so they cache under distinct tags — otherwise the first form
+    // so they cache under distinct tags - otherwise the first form
     // served would silently satisfy the second.
     const std::string_view tag = args.json ? "data-xrefs-json-v1" : "data-xrefs-v1";
     return run_cached(args, tag, [&] { return build_data_xrefs_output(b, args.json); });
@@ -407,22 +407,22 @@ namespace {
 
 // Compiler-partition variant detector. gcc's -fpartition-functions /
 // LTO splitting / IPA passes emit suffixed clones of real functions:
-//   foo.cold       — unlikely-path partition (panic/throw/error glue)
-//   foo.isra.0     — interprocedural scalar-replacement-of-aggregates clone
-//   foo.constprop.0 — constant-propagation clone
-//   foo.part.0     — partial-inline clone
-//   foo.lto_priv.0 — LTO private clone
+//   foo.cold       - unlikely-path partition (panic/throw/error glue)
+//   foo.isra.0     - interprocedural scalar-replacement-of-aggregates clone
+//   foo.constprop.0 - constant-propagation clone
+//   foo.part.0     - partial-inline clone
+//   foo.lto_priv.0 - LTO private clone
 //
 // The cold halves in particular are tiny string-load + call + abort
-// stubs that all share the same shape — a chunk-vote will FP-match
+// stubs that all share the same shape - a chunk-vote will FP-match
 // them to any generic-shape libstdc++ fn (std::getline being a
 // canonical victim). Drop them from both corpus emit (so they don't
 // pollute the search space) and from recognize input (so we don't
 // emit confident garbage labels for cold-path fragments). The base
-// function — without the suffix — is fingerprinted normally and
+// function - without the suffix - is fingerprinted normally and
 // retains the real identity.
 //
-// LLVM's `.llvm.<hash>` clone marker is NOT in this list — those are
+// LLVM's `.llvm.<hash>` clone marker is NOT in this list - those are
 // genuine instantiation clones whose parent symbol carries the real
 // identity. Treating them as fragments would lose recall on real
 // matches.
@@ -440,7 +440,7 @@ namespace {
 // 200K-fn binary that's millions of std::format calls, each of which
 // goes through the format-spec parser, allocates a temporary string,
 // and concatenates. These appenders write directly into the row
-// buffer with a 16-byte char[] on the stack — measured 3-5× faster
+// buffer with a 16-byte char[] on the stack - measured 3-5× faster
 // than std::format("{:016x}", v) for the hot path on gcc 15.
 inline void append_hex16(std::string& s, u64 v) noexcept {
     static constexpr char kHex[] = "0123456789abcdef";
@@ -479,10 +479,10 @@ std::string teef_cache_tag(const Args& args) {
 
 // Address-range scope filter, populated from --module NAME against a
 // minidump (or any Binary that synthesizes module Symbols of kind=Section
-// with addr=base / size=image-size — currently just MinidumpBinary). When
+// with addr=base / size=image-size - currently just MinidumpBinary). When
 // inactive, contains() returns true for every address; the caller-side
 // code paths run unchanged. When active, fn-walking subcommands skip
-// every address outside [lo, hi) before fingerprinting/decompiling — the
+// every address outside [lo, hi) before fingerprinting/decompiling - the
 // motivating case is a process minidump where ~95% of discovered fns
 // belong to wine ntdll/kernelbase reimpl pages and would never match
 // the real-Microsoft TEEF corpus.
@@ -499,9 +499,9 @@ struct ModuleScope {
 
 // Case-insensitive substring match on basenames. The minidump loader
 // already trims paths to basenames before populating Symbol::name, so
-// `loader.exe` finds `loader.exe` — but accept partials too (`loader`
+// `loader.exe` finds `loader.exe` - but accept partials too (`loader`
 // finds `loader.exe`, `kernel32` finds `kernel32.dll`). Ambiguous
-// matches: use the first hit and warn — the user can disambiguate by
+// matches: use the first hit and warn - the user can disambiguate by
 // passing the full basename.
 [[nodiscard]] ModuleScope resolve_module_scope(const Binary& b,
                                                std::string_view name) {
@@ -532,7 +532,7 @@ struct ModuleScope {
             if (s.size == 0) continue;
             std::println(stderr, "  {}\t{:#x}\t{:#x}", s.name, s.addr, s.size);
         }
-        return ms;   // inactive — caller should bail
+        return ms;   // inactive - caller should bail
     }
     if (candidates.size() > 1) {
         std::println(stderr,
@@ -567,7 +567,7 @@ struct ModuleScope {
 
 // Parse a TEEF TSV (output of build_teef_tsv / `ember --teef`) back into
 // a per-function structure suitable for the recognizer's query path.
-// Lets `--recognize` reuse the disk cache that `--teef` writes — no need
+// Lets `--recognize` reuse the disk cache that `--teef` writes - no need
 // to re-fingerprint a binary that was already analyzed once.
 [[nodiscard]] std::vector<std::pair<addr_t, TeefFunction>>
 parse_teef_tsv(std::string_view tsv) {
@@ -663,25 +663,25 @@ parse_teef_tsv(std::string_view tsv) {
 // (`sub_<addr>`) skip the K=64 behavioural traces and emit zeros for
 // the L4 columns. The recognizer's load_tsv drops sub_* rows entirely
 // after counting their L2 exact_hash for popularity tracking, so the
-// L4 sketch on those rows is never read — computing it is pure waste.
+// L4 sketch on those rows is never read - computing it is pure waste.
 //
 // Recognize-time fingerprinting (build_teef_tsv called on a query
 // binary that may itself be stripped, so all its fns are sub_*) needs
-// L4 for every fn — leave corpus_mode at its default false.
+// L4 for every fn - leave corpus_mode at its default false.
 //
 // `min_fn_bytes` / `max_fn_bytes` filter fns by their byte-extent
 // estimate BEFORE fingerprinting. Obfuscator-spawned binaries
 // (Themida, Lua-VM, hellgate) emit hundreds of thousands of trivial
 // sub-32-byte stubs alongside VM-dispatcher functions that span
 // entire sections. The dispatchers' cfg.build alone can take tens of
-// ms each and dominate the run on a 200K+-fn target — even when
+// ms each and dominate the run on a 200K+-fn target - even when
 // --l0-prefilter would otherwise skip their lift, the cfg pass
 // already happened. The byte-size bracket lets the caller cull both
 // extremes before any per-fn pipeline work. 0 means no bound on that
 // side.
 //
 // `l4_topo_filter`, when non-null, is the corpus's set of L0 topology
-// hashes — passed straight to compute_teef_max so target fns whose
+// hashes - passed straight to compute_teef_max so target fns whose
 // topology isn't in the corpus skip the K=64 trace pass. Recognize-
 // time only; corpus build leaves it nullptr (no corpus to filter
 // against).
@@ -704,7 +704,7 @@ build_teef_tsv(const Binary& b,
             name_by_addr.try_emplace(s.addr, s.name);
         }
 
-        // Use enumerate_functions — same source as --functions — so we
+        // Use enumerate_functions - same source as --functions - so we
         // pick up CFG-discovered sub_* on stripped / static-pie targets
         // (HellGates, Rust release builds, Go binaries). compute_call_graph
         // alone misses these because it filters on s.size != 0.
@@ -713,7 +713,7 @@ build_teef_tsv(const Binary& b,
         std::size_t filtered_large = 0;
         // Run enumerate_functions once and reuse for both the fn-address
         // gather AND the sized_fns table built below. The pass walks the
-        // call graph and CFG-discovery sweep — on a 200K-fn binary it's
+        // call graph and CFG-discovery sweep - on a 200K-fn binary it's
         // tens of seconds; doing it twice was outright duplicated work.
         auto disc = enumerate_functions(b, EnumerateMode::Auto,
                                         scope.lo, scope.hi);
@@ -721,7 +721,7 @@ build_teef_tsv(const Binary& b,
             [](const auto& x, const auto& y) { return x.addr < y.addr; });
         {
             std::set<addr_t> uniq;
-            // Named fns always go in regardless of size — they may be
+            // Named fns always go in regardless of size - they may be
             // intentional small thunks (deregister_tm_clones, _init).
             for (const auto& [a, _] : name_by_addr) uniq.insert(a);
             // CFG-discovered fns may have size=0 when the discovery
@@ -729,7 +729,7 @@ build_teef_tsv(const Binary& b,
             // hellgate stubs, the bulk of obfuscator-spawned tiny
             // helpers). For the size-bracket filter we need a usable
             // size estimate; derive it from the gap to the next
-            // discovered fn after sorting. Upper bound — over-counts
+            // discovered fn after sorting. Upper bound - over-counts
             // when there's padding/jump tables in between, but that's
             // the safe direction for filtering both ends.
             for (std::size_t i = 0; i < disc.size(); ++i) {
@@ -767,7 +767,7 @@ build_teef_tsv(const Binary& b,
         // functions reach it via xref site. We bucket xref sites into
         // their containing fn by binary-searching `fns` for the largest
         // entry ≤ site, then storing the string text under that fn. The
-        // alternative — scan_strings + per-fn linear filter — is N×M
+        // alternative - scan_strings + per-fn linear filter - is N×M
         // and unbearable on big binaries.
         //
         // Strings act as a precision anchor at recognize time: two
@@ -777,7 +777,7 @@ build_teef_tsv(const Binary& b,
         // path constants), and the recognizer can use that to suppress
         // structural false positives.
         // Build (entry, size) pairs from enumerate_functions for fns
-        // with KNOWN extent — size-0 shadow entries (linear-sweep
+        // with KNOWN extent - size-0 shadow entries (linear-sweep
         // probes inside another fn's body) are skipped; their xref
         // sites get attributed to the containing real fn instead.
         std::vector<std::pair<addr_t, u64>> sized_fns;
@@ -806,7 +806,7 @@ build_teef_tsv(const Binary& b,
             std::fflush(stderr);
         }
         for (const auto& s : scan_strings(b)) {
-            // Filter pure-noise strings — too short to identify. The
+            // Filter pure-noise strings - too short to identify. The
             // scanner already enforces ≥4-char strings; we tighten here
             // to 4 (== scanner floor; everything below is library-name-
             // length-or-less and contributes more noise than signal).
@@ -815,7 +815,7 @@ build_teef_tsv(const Binary& b,
                 // Find the sized fn whose [entry, entry+size) actually
                 // contains the site. upper_bound + walk back, then
                 // verify containment. Sites that fall in gaps (no fn
-                // covers them) are skipped — they can't be reliably
+                // covers them) are skipped - they can't be reliably
                 // attributed.
                 auto it = std::upper_bound(sized_fns.begin(), sized_fns.end(),
                     std::pair<addr_t, u64>{site, ~u64{0}});
@@ -870,7 +870,7 @@ build_teef_tsv(const Binary& b,
         // of seconds at a time. The ticker runs independently, refreshes
         // every 500 ms with whatever `done` and the worker pool have
         // accomplished, and renders a 3-line ANSI panel (header / bar /
-        // stats) that's atomically repainted in place — no scrollback
+        // stats) that's atomically repainted in place - no scrollback
         // noise. Falls back to a one-shot info line when stderr isn't
         // a TTY (`progress_enabled()` returns false).
         ProgressPanel panel;
@@ -897,18 +897,18 @@ build_teef_tsv(const Binary& b,
                 // Corpus-mode fast path: sub_* (unnamed) fns are dropped
                 // by TeefCorpus::load_tsv after their L2 exact_hash is
                 // counted into the popularity guard, so their L4 sketch
-                // is never read — fall back to compute_teef_with_chunks
+                // is never read - fall back to compute_teef_with_chunks
                 // (L0 + L2 only, no K=64 traces). ~3 ms saved per sub_*.
                 // Recognize-time fingerprinting leaves corpus_mode false
                 // so query-side stripped binaries still get full L4.
                 // Single name-by-addr lookup reused below for the row's
                 // emitted name field. compute_opts is passed by const&
-                // through compute_teef_max/with_chunks — no need to
+                // through compute_teef_max/with_chunks - no need to
                 // copy it per fn.
                 const auto name_it = name_by_addr.find(a);
                 const bool is_named = (name_it != name_by_addr.end());
                 // Skip gcc partition variants (.cold/.isra/.constprop/
-                // .part/.lto_priv) — fragments of real fns, not
+                // .part/.lto_priv) - fragments of real fns, not
                 // standalone targets. Cold halves in particular all
                 // share a "load string + call printf + abort" shape
                 // that chunk-vote-collides against generic libstdc++
@@ -949,7 +949,7 @@ build_teef_tsv(const Binary& b,
                 //         L4_done L4_aborted topo_hash prefix_hash
                 // (25 tab-separated fields). L4 columns trail the name
                 // so the structural-only fields stay at fixed positions
-                // 0..11 — handy for grep/awk inspection. topo_hash is
+                // 0..11 - handy for grep/awk inspection. topo_hash is
                 // the L0 CFG-shape signal, used by the recognizer as a
                 // pre-filter for L2 jaccard scans. prefix_hash is the
                 // L1 byte-prefix hash; non-zero only on tiny fns
@@ -1069,7 +1069,7 @@ load_corpus_from_args(const Args& args) {
     std::size_t total_rows = 0;
     const auto t_start = std::chrono::steady_clock::now();
     for (const auto& p : args.corpus_paths) {
-        // Per-file timings come from TeefCorpus::load_tsv itself —
+        // Per-file timings come from TeefCorpus::load_tsv itself -
         // it logs phase breakdown (mmap / parse / merge / total).
         const std::size_t n = corpus->load_tsv(p);
         total_rows += n;
@@ -1104,7 +1104,7 @@ load_corpus_from_args(const Args& args) {
 
 // Heuristic: classify the query binary's runtime/ABI for the TEEF
 // recognizer's cross-language plausibility filter. Only the obvious
-// cases get a tag; "" means unknown / wildcard. Conservative — false
+// cases get a tag; "" means unknown / wildcard. Conservative - false
 // positives here (saying a Rust binary is C) just disable filtering;
 // false negatives (saying a C binary is Rust) would block legitimate
 // libstdc++ matches on a C++ binary.
@@ -1138,7 +1138,7 @@ load_corpus_from_args(const Args& args) {
             ++cxx_hits;
             continue;
         }
-        // Windows imports — kernel32/ntdll/user32 etc export plain
+        // Windows imports - kernel32/ntdll/user32 etc export plain
         // names, so we recognize via known-API surface. is_import
         // filters to the bound IAT entries.
         if (s.is_import) {
@@ -1200,7 +1200,7 @@ int run_recognize(const Args& args, const Binary& b) {
 
     // Resolve --module if any. Inactive scope = no-op everywhere below.
     // An unresolved scope (user passed a name but it didn't match any
-    // module) bails — running unscoped would silently process the wrong
+    // module) bails - running unscoped would silently process the wrong
     // surface and waste work.
     const ModuleScope scope = resolve_module_scope(b, args.module_filter);
     if (!args.module_filter.empty() && !scope.active) {
@@ -1259,7 +1259,7 @@ int run_recognize(const Args& args, const Binary& b) {
     // When --module is active, the disk cache is bypassed in both
     // directions: a scoped run produces a strict subset of the
     // unscoped TSV, which would either be served (incorrectly) to a
-    // future unscoped query or — worse — poison the cache slot that
+    // future unscoped query or - worse - poison the cache slot that
     // the unscoped path expects to find a full table in.
     const bool cacheable = !args.no_cache && !scope.active;
     std::string target_tsv;
@@ -1382,7 +1382,7 @@ int run_recognize(const Args& args, const Binary& b) {
             total, threads, corpus.function_count());
         std::fflush(stderr);
     }
-    // Stream output as each fn finishes — gives the user visible progress
+    // Stream output as each fn finishes - gives the user visible progress
     // on big-corpus runs that previously sat silent for minutes. Order is
     // completion-order (workers race), not address-sorted; pipe through
     // `sort -n` if you need sorted output. The mutex bounds the number of
@@ -1424,7 +1424,7 @@ int run_recognize(const Args& args, const Binary& b) {
             const auto& tf = fps[i];
             done_count.fetch_add(1, std::memory_order_relaxed);
             if (tf.whole.exact_hash == 0) continue;
-            // Skip gcc partition variants in the query — they're
+            // Skip gcc partition variants in the query - they're
             // fragments of real fns whose generic shape (load string +
             // call + abort, for the .cold case) chunk-vote-matches
             // arbitrary library functions and emits garbage labels.
@@ -1434,7 +1434,7 @@ int run_recognize(const Args& args, const Binary& b) {
                 qit != name_by_addr.end() &&
                 is_compiler_partition_variant(qit->second)) continue;
             // Skip query functions whose whole-fn TEEF appears too
-            // many times in this binary — they're trivial-shape stubs
+            // many times in this binary - they're trivial-shape stubs
             // (xgetbv, return-zero) that would ALL collapse onto a
             // single arbitrary corpus name without this gate.
             if (query_popularity[tf.whole.exact_hash] > kQueryPopularityCap) continue;
@@ -1639,7 +1639,7 @@ int run_arities(const Args& args, const Binary& b) {
 }
 
 int run_functions(const Args& args, const Binary& b) {
-    // Full TSV is cacheable independent of the pattern — build once,
+    // Full TSV is cacheable independent of the pattern - build once,
     // filter at print time so the cache works across grep sessions.
     std::string tsv;
     const auto dir = args.cache_dir.empty()
@@ -1678,7 +1678,7 @@ int run_functions(const Args& args, const Binary& b) {
         }
     }
     // Resolve --module if set. Filtering is applied at output time so
-    // the cache stays a single full-binary blob — different scope
+    // the cache stays a single full-binary blob - different scope
     // requests reuse the same cached payload.
     const ModuleScope scope = resolve_module_scope(b, args.module_filter);
     if (!args.module_filter.empty() && !scope.active) return EXIT_FAILURE;
@@ -2010,7 +2010,7 @@ int run_symtable(const Args& args, const Binary& b) {
                  walk->entries.size(), walk->table_size, walk->end_va,
                  analysis::symtable_termination_name(walk->terminated_by));
 
-    // Bonus: keyword-bucketed view. Skipped when nothing matches —
+    // Bonus: keyword-bucketed view. Skipped when nothing matches -
     // keeps the output clean for tables that aren't dlsym targets.
     const auto cats = analysis::categorize_symtable(*walk);
     if (!cats.empty()) {
@@ -2105,7 +2105,7 @@ int run_symresolve(const Args& args, const Binary& b) {
     } else {
         std::println(stderr,
             "ember: --symresolve: no resolver function found for table at "
-            "{:#x} — falling back to string table only", *va);
+            "{:#x} - falling back to string table only", *va);
     }
     {
         const std::size_t total    = res->non_empty_count;
@@ -2184,7 +2184,7 @@ int run_symuses(const Args& args, const Binary& b) {
     }
 
     // Scope summary: which paths admitted candidate functions. Always
-    // surfaced — operators reading the TSV need to know whether the
+    // surfaced - operators reading the TSV need to know whether the
     // analysis even had a non-empty scope to scan, since "0 rows"
     // could mean "no consumers exist" or "the scope detector found
     // nothing to feed the per-fn pass".
@@ -2231,7 +2231,7 @@ int run_symuses(const Args& args, const Binary& b) {
         for (const auto& row : uses->rows) {
             // Verbose mode emits every site individually. Table-walker
             // rows still surface their per-site refs to the leading
-            // empty entry — render those as "<table_base>" so an
+            // empty entry - render those as "<table_base>" so an
             // operator can see the walk-shape without confusing it
             // with a real symbol.
             for (const auto& s : row.sites) {
@@ -2253,7 +2253,7 @@ int run_symuses(const Args& args, const Binary& b) {
 
     std::println("fn_va\tn_uses\tsymbols");
     for (const auto& row : uses->rows) {
-        // Dedupe symbol names in walk-order — preserves the order in
+        // Dedupe symbol names in walk-order - preserves the order in
         // which the function first touched each symbol, which is the
         // shape an operator wants when scanning a long row.
         std::vector<std::string_view> names_in_order;
@@ -2266,7 +2266,7 @@ int run_symuses(const Args& args, const Binary& b) {
         }
 
         // No specific symbol hits but the function loaded the table
-        // base — that's the table-walker shape (looping the table by
+        // base - that's the table-walker shape (looping the table by
         // index rather than by constant offset). Emit a single
         // placeholder row, gated by --min-uses on the lea-to-base
         // count. Filtering is suppressed since there's no per-symbol
@@ -2312,14 +2312,14 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     // xrefs and CodePtr/Lea events surfaced by compose_refs_to_output,
     // this also walks every readable section for the literal target
     // VA stored as an 8-byte (or 4-byte on 32-bit) value, then folds
-    // in the per-function references to those slots — recovering the
+    // in the per-function references to those slots - recovering the
     // fn-pointer-only case where the target is reached as
     // `lea rax, [rip+disp_to_table]; mov rbx, [rax+N]; call rbx`
     // and there is no static call edge to the target itself.
     //
     // Confidence tagging in the row body lets a downstream agent
     // weight follow-ups: `code-ptr` / `lea` rows are static-evidence
-    // strong; `imm64-stored` rows are circumstantial — the function
+    // strong; `imm64-stored` rows are circumstantial - the function
     // reads from a slot whose value matches the target, but the read
     // hasn't been chased to a call.
     auto va = parse_cli_addr(args.refs_to_loose);
@@ -2333,7 +2333,7 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
 
     // Constant-pool scan: every readable section. Function-pointer
     // tables live in .rodata / .data / .data.rel.ro, sometimes inside
-    // an .init_array ctor's frame. Bounded by total readable bytes —
+    // an .init_array ctor's frame. Bounded by total readable bytes -
     // a 100MB binary's data sections are the budget on agent flows.
     std::vector<addr_t> slot_addrs;
     const u64 target = static_cast<u64>(*va);
@@ -2343,7 +2343,7 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     // 4-byte for 32-bit). Without this guard, a single legitimate
     // function-pointer slot whose value contains the target's bytes
     // produces a cluster of byte-shifted false positives at the same
-    // location — every bit-shift coincidentally matching the lower
+    // location - every bit-shift coincidentally matching the lower
     // 8 bytes of the next slot. Function-pointer tables are
     // pointer-aligned by linker convention; the rare unaligned case
     // is not worth the noise.
@@ -2558,7 +2558,7 @@ int run_validate_name(const Args& args, const Binary& b) {
         std::fwrite(out.data(), 1, out.size(), stdout);
     }
     // Exit code conveys verdict to shell pipelines: 0 STRONG, 1 anything
-    // ambiguous/weak/unknown — matches the grep-style "did you find what
+    // ambiguous/weak/unknown - matches the grep-style "did you find what
     // you wanted" contract callers already use for --refs-to et al.
     return v.verdict == NameValidation::Verdict::Strong ? EXIT_SUCCESS : EXIT_FAILURE;
 }
@@ -2856,7 +2856,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
 }
 
 int run_list_syscalls(const Args& args, const Binary& b) {
-    // Resolve target — accept symbol-by-name (`-s NAME`-style strings),
+    // Resolve target - accept symbol-by-name (`-s NAME`-style strings),
     // hex VA, or `sub_<hex>`. The address is the function entry the
     // syscall walker starts decoding from; mid-function VAs get
     // rebound to the containing function's start, same as `-p`.
@@ -3564,7 +3564,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     }
 
     // Apply each requested mutation. Provenance attaches to every kind
-    // the user set in this invocation — most agent flows set one
+    // the user set in this invocation - most agent flows set one
     // (typically --set-name) per call, but a human dropping in a known
     // signature might want both --set-name and --set-signature, in
     // which case both meta records get the same evidence.
@@ -3619,7 +3619,7 @@ int run_list_annotations(const Args& args, const Binary& /*b*/) {
     // returns one object per address with `rename` / `note` /
     // `signature` keys (only those actually set) plus the matching
     // `*_meta` blocks. Both forms emit nothing if the destination file
-    // is missing — silence is correct for "no annotations yet".
+    // is missing - silence is correct for "no annotations yet".
     const std::filesystem::path cache_dir =
         !args.cache_dir.empty() ? std::filesystem::path{args.cache_dir}
                                 : cache::default_dir();
@@ -3722,7 +3722,7 @@ int run_list_annotations(const Args& args, const Binary& /*b*/) {
     }
 
     // TSV: one record per line. Iteration order is by address, then by
-    // kind (rename, note, signature) — stable across runs so diffs read
+    // kind (rename, note, signature) - stable across runs so diffs read
     // cleanly.
     std::set<addr_t> addrs;
     for (const auto& [a, _] : ann.renames)    addrs.insert(a);
@@ -3882,7 +3882,7 @@ namespace {
 }
 
 // PDB-derived signature injection. PE binaries get a per-VA
-// FunctionSig map populated by attach_pdb_from_path() — pull those
+// FunctionSig map populated by attach_pdb_from_path() - pull those
 // records into the user-facing Annotations under a "user explicit
 // wins" precedence so PDB types feed the emitter (and the UI's
 // signature renderer) without ever overwriting hand-edits.
@@ -3894,7 +3894,7 @@ namespace {
     if (sigs.empty()) return 0;
     std::size_t added = 0;
     for (const auto& [va, sig] : sigs) {
-        // try_emplace returns (it, true) only on insertion — perfect
+        // try_emplace returns (it, true) only on insertion - perfect
         // semantics here: user explicit signature already there ⇒ skip.
         if (annotations.signatures.try_emplace(va, sig).second) ++added;
     }
@@ -3903,7 +3903,7 @@ namespace {
 
 // FLIRT-style sig matching. Loads each --pat file, runs apply_signatures
 // against the candidate function set, and merges resolved names into the
-// annotations map. User renames win on conflict — sig matches never
+// annotations map. User renames win on conflict - sig matches never
 // override operator intent.
 [[nodiscard]] int apply_pat_files(const Args& args, const Binary& b,
                                   Annotations& annotations, bool& ann_loaded) {
@@ -3968,9 +3968,9 @@ int run_emit(const Args& args, const Binary& b) {
 
     // IPA: one-shot fixed-point over the call graph before emission so
     // char*-arg propagation can cross function boundaries. Expensive on
-    // large binaries — opt-in via --ipa.
+    // large binaries - opt-in via --ipa.
     // One IrCache shared across IPA + the indirect-call resolver. Each
-    // function pays its lift+SSA+cleanup cost once — the resolver, which
+    // function pays its lift+SSA+cleanup cost once - the resolver, which
     // walks roughly the same set of functions IPA does, becomes nearly
     // free on top of the IPA pass.
     IrCache shared_ir_cache;
@@ -3987,7 +3987,7 @@ int run_emit(const Args& args, const Binary& b) {
     std::map<addr_t, addr_t> resolutions;
     if (args.resolve_calls && (args.pseudo || args.strct)) {
         ScopedTimer t("resolve_calls");
-        // Scope to the requested function — emit only renders one fn at a
+        // Scope to the requested function - emit only renders one fn at a
         // time, so the rest of the binary's indirect calls would never be
         // observed. When the symbol can't be resolved the format step is
         // about to bail with "no symbol named X", so don't bother
@@ -4013,7 +4013,7 @@ int run_emit(const Args& args, const Binary& b) {
     }
     // PE x64 prologue/epilogue suppression: parse UNWIND_INFO
     // unconditionally and feed the byte ranges to the emitter. Win64
-    // frames are unreadable without this — every function leads with
+    // frames are unreadable without this - every function leads with
     // `push rbx; sub rsp, K; mov [rsp+K], xmm6; ...` cruft that the
     // unwinder already describes.
     std::map<addr_t, addr_t> prologue_ranges;
@@ -4022,7 +4022,7 @@ int run_emit(const Args& args, const Binary& b) {
         prologue_ranges = build_prologue_ranges(b);
         if (!prologue_ranges.empty()) emit_opts.prologue_ranges = &prologue_ranges;
     }
-    // __objc_selrefs is cheap to walk — do it unconditionally on Mach-O
+    // __objc_selrefs is cheap to walk - do it unconditionally on Mach-O
     // so `objc_msgSend(*(u64*)(0x10...))` renders as `@selector(foo:)`
     // without requiring a separate flag.
     std::map<addr_t, std::string> selrefs;
@@ -4061,7 +4061,7 @@ namespace {
 
 // Capture stdout produced by `fn()` and return it as a string. Uses
 // dup2(tmpfile()) so any printf/println/std::cout/fwrite path is
-// caught — the existing subcommands write to the C stdout FILE*
+// caught - the existing subcommands write to the C stdout FILE*
 // directly. tmpfile() handles overflow past pipe-buffer size; the
 // fn is allowed to emit megabytes (whole-binary --functions runs do).
 [[nodiscard]] std::string capture_stdout(auto&& fn) {
@@ -4071,7 +4071,7 @@ namespace {
     if (!tmp || saved < 0) {
         // Fallback: just run fn without capture. Worst case the
         // request "succeeds" but the body lands on the parent's stdout
-        // — agent client treats that as a malformed frame.
+        // - agent client treats that as a malformed frame.
         fn();
         return {};
     }
@@ -4121,7 +4121,7 @@ struct Request {
 }
 
 void write_ok(std::string_view body) {
-    // Frame: "ok <bytes>\n<body>\n". Trailing \n is for client convenience —
+    // Frame: "ok <bytes>\n<body>\n". Trailing \n is for client convenience -
     // not counted in <bytes>.
     std::printf("ok %zu\n", body.size());
     std::fwrite(body.data(), 1, body.size(), stdout);
@@ -4160,10 +4160,10 @@ Args derive_args(const Args& base) {
 
 int run_serve(const Args& base, const Binary& b) {
     // Bind our lifetime to the parent. If the parent (cascade,
-    // worker, etc.) dies — even SIGKILL — the kernel sends us
+    // worker, etc.) dies - even SIGKILL - the kernel sends us
     // SIGTERM, we exit cleanly. Without this the daemon survives
     // as an orphan and the next cascade attempt either races for
-    // the disk cache with us or — worse — finds itself sharing
+    // the disk cache with us or - worse - finds itself sharing
     // mmap/cache state with a defunct sibling. Linux-only; the
     // BSD/Mach equivalents are kqueue-based and noisier to wire.
 #if defined(__linux__)
@@ -4181,7 +4181,7 @@ int run_serve(const Args& base, const Binary& b) {
 
     // Per-daemon caches. The daemon's lifetime spans one worker, and
     // annotations are loaded fresh each `decompile` request from the
-    // resolver chain — so caching the rendered output is only safe
+    // resolver chain - so caching the rendered output is only safe
     // when annotations didn't move under us. They don't (worker can't
     // promote mid-run; promote is a between-rounds orchestrator op),
     // so simple-keyed-by-symbol works.
@@ -4190,7 +4190,7 @@ int run_serve(const Args& base, const Binary& b) {
 
     // Strings cache: full --strings output is built once and cached;
     // strings_in_range filters the cached body in-place per request.
-    // The strings table on a 50MB binary can be ~10MB of text — building
+    // The strings table on a 50MB binary can be ~10MB of text - building
     // it per request was hot in profiling.
     std::optional<std::string> strings_cache;
 
@@ -4324,7 +4324,7 @@ int run_serve(const Args& base, const Binary& b) {
             if (req->method == "annotations") {
                 // Emit TSV `<addr-hex>\t<name>\n` per loaded rename.
                 // Cascade reads this at startup to seed namedFromAnnotations
-                // — TEEF anchors and prior-promoted cascade names land in
+                // - TEEF anchors and prior-promoted cascade names land in
                 // the annotation file but ember --functions still reports
                 // those addresses as `kind=sub`, so the eligibility pass
                 // wouldn't otherwise count them as known neighbors.

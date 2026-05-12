@@ -69,7 +69,7 @@ enum : u32 {
     return f;
 }
 
-// Conservative default when MemoryInfoListStream is absent — assume the
+// Conservative default when MemoryInfoListStream is absent - assume the
 // range is at least readable. The CFG walker only attempts decode on
 // ranges flagged executable, so a too-permissive default doesn't hurt.
 constexpr SectionFlags kDefaultFlags = {
@@ -99,7 +99,7 @@ constexpr u16         kPeOptMagicPlus   = 0x020b;
 
 // Try to read DOS+NT+OptionalHeader64 directly from the in-memory copy
 // at `module_base`. Returns the data-directory array; empty vector means
-// "module headers not in the dump, or malformed — skip silently".
+// "module headers not in the dump, or malformed - skip silently".
 [[nodiscard]] std::vector<pe::DataDirectory>
 read_module_data_dirs(const Binary& bin, addr_t module_base) {
     const auto dos = bin.bytes_at(module_base);
@@ -198,7 +198,7 @@ Result<void> MinidumpBinary::parse() {
     }
 
     // Find the streams we care about. Multiple of any kind is unusual but
-    // legal — last-wins semantics match what WinDbg does.
+    // legal - last-wins semantics match what WinDbg does.
     struct Loc { u32 size = 0; u32 rva = 0; bool present = false; };
     Loc sysinfo, modules, mem_list, mem64_list, mem_info;
     for (u32 i = 0; i < nstreams; ++i) {
@@ -217,7 +217,7 @@ Result<void> MinidumpBinary::parse() {
         }
     }
 
-    // SystemInfoStream — sets arch. Absent → arch stays Unknown and the
+    // SystemInfoStream - sets arch. Absent → arch stays Unknown and the
     // decoder layer will refuse to make a decoder; that's fine, the user
     // can still browse sections with a disassembler that understands more.
     if (sysinfo.present && sysinfo.size >= 2) {
@@ -279,7 +279,7 @@ Result<void> MinidumpBinary::parse() {
     std::sort(ranges_.begin(), ranges_.end(),
               [](const Range& a, const Range& b) { return a.vaddr < b.vaddr; });
 
-    // Optional MemoryInfoListStream — refines per-range page protection.
+    // Optional MemoryInfoListStream - refines per-range page protection.
     // Layout: u32 SizeOfHeader, u32 SizeOfEntry, u64 NumberOfEntries,
     // then NumberOfEntries * SizeOfEntry bytes. Each entry's first 8
     // bytes are the BaseAddress (u64); Protect is at offset 0x18 (u32).
@@ -360,7 +360,7 @@ Result<void> MinidumpBinary::parse() {
                 const u32 name_bytes = read_le_at<u32>(buffer_.data() + name_rva);
                 const std::size_t s_off = name_rva + 4;
                 if (name_bytes <= buffer_.size() - s_off) {
-                    // Decode the UTF-16LE string. ASCII-only fast path —
+                    // Decode the UTF-16LE string. ASCII-only fast path -
                     // a non-ASCII high byte gets replaced with '?' so we
                     // never produce an unprintable Symbol::name. Module
                     // names in practice are filesystem paths (ASCII).
@@ -369,7 +369,7 @@ Result<void> MinidumpBinary::parse() {
                         const u16 cu = read_le_at<u16>(buffer_.data() + s_off + k);
                         name.push_back(cu < 0x80 ? static_cast<char>(cu) : '?');
                     }
-                    // Trim to basename — minidump stores full paths
+                    // Trim to basename - minidump stores full paths
                     // (e.g. C:\Windows\System32\kernel32.dll), but
                     // Ember's symbol display is friendlier with just
                     // `kernel32.dll`.
@@ -388,7 +388,7 @@ Result<void> MinidumpBinary::parse() {
             const std::string mod_basename = s.name;
             symbols_.push_back(std::move(s));
 
-            // Per-module PE walk. Wrap defensively — a malformed module
+            // Per-module PE walk. Wrap defensively - a malformed module
             // (corrupted in-memory headers, partial capture) must not
             // poison the load. read_module_data_dirs returns an empty
             // vector on any structural problem; we just skip those.

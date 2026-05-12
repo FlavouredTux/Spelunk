@@ -13,7 +13,7 @@ document covers what we accept, what we don't, and why.
 - **Documentation.** Fixes to `docs/`, the README, this file, code
   comments. Typos through reorganization, all welcome.
 - **Test fixtures you built yourself.** A small C/Rust/asm source plus
-  a build script that produces a tiny binary — fair game, since
+  a build script that produces a tiny binary - fair game, since
   you produced the binary from scratch.
 - **Issue reports.** Bug reports with reproducible inputs are valuable
   even without a fix attached.
@@ -65,7 +65,7 @@ security advisories.
 ## Code style
 
 - C++23, CMake, warnings-as-errors on.
-- stdlib only — no Capstone, Zydis, Ghidra, LLVM, or vendored deps.
+- stdlib only - no Capstone, Zydis, Ghidra, LLVM, or vendored deps.
   Don't propose adding libraries.
 - Terse and decisive. No speculative error handling, no fallbacks for
   cases that can't happen, no validation outside system boundaries.

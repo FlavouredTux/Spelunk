@@ -26,11 +26,11 @@ namespace ember::cli {
 // ETA uses a 5-second windowed rate so the estimate stabilizes
 // quickly and tracks rate changes during heterogeneous workloads
 // (small fns chew through fast, then a 500ms VM-protected dispatcher
-// drops the rate — a cumulative-average ETA would lag by minutes).
+// drops the rate - a cumulative-average ETA would lag by minutes).
 //
 // Float formatting goes through snprintf rather than std::format to
 // avoid the libc++ 16 (macOS apple-clang job) gap on `{:.Nf}`
-// specifiers — this class compiles into core indirectly via the CLI
+// specifiers - this class compiles into core indirectly via the CLI
 // shim, so portable formatting matters.
 class ProgressPanel {
 public:
@@ -58,7 +58,7 @@ public:
             // even before the first tick lands.
             render_locked(0, 0, t_start_, /*final=*/false);
         } else {
-            std::fprintf(stderr, "ember: %s — %zu items on %u thread%s\n",
+            std::fprintf(stderr, "ember: %s - %zu items on %u thread%s\n",
                          label_.c_str(), total_, threads_,
                          threads_ == 1 ? "" : "s");
             std::fflush(stderr);
@@ -92,7 +92,7 @@ public:
                 ? static_cast<double>(done) / elapsed : 0.0;
             char buf[256];
             std::snprintf(buf, sizeof(buf),
-                "ember: %s done — %zu items in %s (%.0f/s)\n",
+                "ember: %s done - %zu items in %s (%.0f/s)\n",
                 label_.c_str(), done,
                 fmt_duration(elapsed).c_str(), rate);
             std::fputs(buf, stderr);
@@ -146,7 +146,7 @@ private:
     }
 
     static std::string fmt_count(std::size_t n) {
-        // Thousands-separator formatting — easier to scan
+        // Thousands-separator formatting - easier to scan
         // 142,857 than 142857 at a glance.
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%zu", n);
@@ -163,7 +163,7 @@ private:
     void erase_prior_locked() {
         if (first_render_ || last_lines_ == 0) return;
         // Move to start of first rendered line, then clear from cursor
-        // to the end of the screen — single repaint with no flicker.
+        // to the end of the screen - single repaint with no flicker.
         std::fputc('\r', stderr);
         for (int i = 0; i < last_lines_ - 1; ++i) {
             std::fputs("\033[1A", stderr);
@@ -221,16 +221,16 @@ private:
         std::fputs(bar_line, stderr);
         std::fputc('\n', stderr);
 
-        // "—" placeholder when rate/eta aren't meaningful yet (cold
+        // "-" placeholder when rate/eta aren't meaningful yet (cold
         // start, only one sample) or no longer apply (done == total).
         char rate_buf[32];
         if (rate > 0.0) std::snprintf(rate_buf, sizeof(rate_buf), "%.0f/s", rate);
-        else            std::snprintf(rate_buf, sizeof(rate_buf), "—");
+        else            std::snprintf(rate_buf, sizeof(rate_buf), "-");
         char eta_buf[32];
-        if (done >= total_)        std::snprintf(eta_buf, sizeof(eta_buf), "—");
+        if (done >= total_)        std::snprintf(eta_buf, sizeof(eta_buf), "-");
         else if (rate > 0.0)       std::snprintf(eta_buf, sizeof(eta_buf), "%s",
                                                  fmt_duration(eta).c_str());
-        else                       std::snprintf(eta_buf, sizeof(eta_buf), "—");
+        else                       std::snprintf(eta_buf, sizeof(eta_buf), "-");
 
         char stat_line[512];
         if (skip > 0 && done > 0) {

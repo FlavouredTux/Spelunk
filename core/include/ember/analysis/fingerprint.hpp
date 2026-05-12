@@ -10,7 +10,7 @@ namespace ember {
 // Schema token for the fingerprint algorithm. Folded into the hash itself
 // AND into cache tags so bumping it invalidates on-disk TSVs without
 // breaking unrelated cache entries (xrefs, strings, arities).
-// Bumped to v3 when Win64 support landed — the call.args.* barrier carries
+// Bumped to v3 when Win64 support landed - the call.args.* barrier carries
 // different arg-reg slots under Win64 vs SysV, so hashes of the same
 // x86-64 function emitted with the two ABIs now diverge. Existing v2
 // fingerprint databases are stale after the bump; callers must
@@ -35,7 +35,7 @@ inline constexpr std::string_view kFingerprintSchema = "v3";
 //   - concrete immediate values that look like addresses (|v| >= 0x1000)
 //   - source x86 instruction offsets
 //
-// Small immediates (|v| < 16) ARE included — they're usually loop bounds,
+// Small immediates (|v| < 16) ARE included - they're usually loop bounds,
 // struct offsets, flag bits, and help distinguish otherwise-identical shapes.
 struct FunctionFingerprint {
     u64 hash   = 0;   // 0 means "could not fingerprint"

@@ -25,7 +25,7 @@ int run_dump_types();
 int run_export_annotations(const Args& args);
 int run_apply_ember(const Args& args, const Binary& b);
 
-// Pre-analysis side effects (no exit code — caller continues).
+// Pre-analysis side effects (no exit code - caller continues).
 
 void load_trace_edges(const Args& args, const Binary& b);
 
@@ -79,13 +79,13 @@ int run_emit(const Args& args, const Binary& b);
 // stdin, dispatches to the same code paths as the one-shot
 // subcommands, writes length-framed responses on stdout. Exits on
 // EOF. The binary is loaded once at startup and reused across every
-// request — wins back the wait4 dominance in agent-fanout strace.
+// request - wins back the wait4 dominance in agent-fanout strace.
 int run_serve(const Args& args, const Binary& b);
 
 // Lower-level handlers retained for callers that already have the
 // emit-options block built and just want to drive a single view.
 
-// `ann` (when non-null) is only used by resolve_function — it lets a
+// `ann` (when non-null) is only used by resolve_function - it lets a
 // `-s <rename>` token find a function whose name lives only in the
 // annotations file. Pass nullptr from contexts that don't have a
 // resolved annotations file.
@@ -109,7 +109,7 @@ int run_struct    (const Binary& b, std::string_view symbol, bool pseudo,
 // Scope tag folded into the cache key for any flag that restricts which
 // addresses / functions a pass walks. Without this, `--fingerprints
 // --module=ntdll <dump>` followed by `--fingerprints --module=kernel32
-// <dump>` would silently serve the first run's results both times — the
+// <dump>` would silently serve the first run's results both times - the
 // binary file is unchanged so the legacy key was identical. New scoping
 // flags should append to this tag, not invent their own key plumbing.
 inline std::string cache_scope_tag(const Args& args) {

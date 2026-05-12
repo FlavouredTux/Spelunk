@@ -168,7 +168,7 @@ export async function matchPlugin(pluginId: string): Promise<PluginMatchResult> 
 }
 
 // Header-only summary: format, arch, entry, sections, imports. No
-// function list — that's the slow query, fetched separately so the UI
+// function list - that's the slow query, fetched separately so the UI
 // shell can render before it returns. `loadHeader` and `loadFunctions`
 // each spawn the CLI once and are independent; they used to be a single
 // Promise.all inside the old `loadSummary` and the slow leg blocked the
@@ -207,7 +207,7 @@ async function parseFunctionsTsv(raw: string): Promise<FunctionInfo[]> {
   const rows: Row[] = [];
   await forEachLineChunked(raw, (line) => {
     if (!line) return;
-    // Columns: addr\tsize\tkind\tname — all four required.
+    // Columns: addr\tsize\tkind\tname - all four required.
     const parts = line.split("\t");
     if (parts.length < 4) return;
     const addr = parts[0];
@@ -225,7 +225,7 @@ async function parseFunctionsTsv(raw: string): Promise<FunctionInfo[]> {
   // PE linear-sweep, but on stripped Linux/ELF binaries every
   // CFG-discovered sub legitimately reports size=0 (extents need a
   // CFG build the enumerator skips), so dropping them here hid every
-  // unnamed function from the sidebar — a fully stripped 179-fn
+  // unnamed function from the sidebar - a fully stripped 179-fn
   // sha256sum would render as 2 entries. The C++ enumerator already
   // performs stride-1 dedup against known-extent windows, so what
   // reaches us is real function entries; trust them.

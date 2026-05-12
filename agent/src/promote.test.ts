@@ -16,7 +16,7 @@ function setup(): { binary: string; intel: IntelLog; cleanup: () => void } {
     statSync(binary);  // sanity
     const intel = new IntelLog(intelPathFor(binary));
     // Wipe the resolved path in case another test on the same machine
-    // collided — intelPathFor hashes (path|size|mtime), so the dir is
+    // collided - intelPathFor hashes (path|size|mtime), so the dir is
     // unique, but be defensive.
     try { rmSync(intel.path, { force: true }); } catch {}
     return {
@@ -110,7 +110,7 @@ test("promote: writes ; conf=… ; src=… ; ev=… meta suffix on each directiv
     const out = join(tmpdir(), `promote-${Date.now()}.ember`);
     promote({ binary, out, threshold: 0.85, apply: false, dryRun: false, emberBin: "/bin/false" });
     const script = readFileSync(out, "utf8");
-    // declarative.cpp consumes ` ; conf=… ; src=… ; ev=…` — three pieces, in
+    // declarative.cpp consumes ` ; conf=… ; src=… ; ev=…` - three pieces, in
     // that order, separated by ` ; `. The exact regex below is what the C++
     // parser keys off of, so a regression on the wire format breaks both
     // sides of the contract at once.

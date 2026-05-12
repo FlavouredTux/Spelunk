@@ -62,7 +62,7 @@ struct AnnotationLocation {
 sidecar_annotation_path(const std::filesystem::path& binary);
 
 // Cache path for the resolved annotations file. Keyed by
-// `basename + '@' + fnv1a_64(parent_abspath)` — deliberately NOT by
+// `basename + '@' + fnv1a_64(parent_abspath)` - deliberately NOT by
 // content hash, so annotations survive binary version swaps at the same
 // path. `cache_dir` is usually `ember::cache::default_dir()`.
 [[nodiscard]] std::filesystem::path
@@ -71,9 +71,9 @@ cache_annotation_path(const std::filesystem::path& binary,
 
 // Resolve which annotation file to read and (symmetrically) write back
 // to. Precedence:
-//   1. explicit_path (--annotations / --project) — always wins.
-//   2. `<binary>.ember-annotations` sidecar — when the file exists.
-//   3. Cache path — returned even when the file doesn't exist yet, so
+//   1. explicit_path (--annotations / --project) - always wins.
+//   2. `<binary>.ember-annotations` sidecar - when the file exists.
+//   3. Cache path - returned even when the file doesn't exist yet, so
 //      the first commit has a destination.
 // Returns source=None and an empty path only when both `binary` and
 // `explicit_path` are empty.
@@ -107,7 +107,7 @@ struct AnnotationMeta {
 //   meta   <kind> <hex-addr-or-value> conf=<float>|src=<tag>|ev=<text>
 //
 // Addresses are hex without a 0x prefix. The `const` record names a
-// numeric immediate (width-agnostic) — its primary use is mapping a
+// numeric immediate (width-agnostic) - its primary use is mapping a
 // runtime-resolver hash like `0xDEADBEEF` to the API it resolves to,
 // e.g. `kernel32!CreateFileW`. Per-version resolver hash tables
 // are dropped in via this record.
@@ -120,7 +120,7 @@ struct AnnotationMeta {
 // annotate, so a textual diff of an annotations file groups cleanly.
 //
 // Blank lines and lines starting with `#` are ignored. Unknown record
-// kinds are skipped — an older ember reading a newer file will pass
+// kinds are skipped - an older ember reading a newer file will pass
 // `meta` lines through and just lose the metadata, never the names.
 struct Annotations {
     std::map<addr_t, std::string>  renames;
@@ -130,7 +130,7 @@ struct Annotations {
     std::map<FieldKey, std::string> field_names;
 
     // Provenance, parallel to the maps above. Keys not present here
-    // mean "no metadata recorded" — different from "metadata recorded
+    // mean "no metadata recorded" - different from "metadata recorded
     // with confidence=0", which is a deliberately-low claim.
     std::map<addr_t, AnnotationMeta> rename_meta;
     std::map<addr_t, AnnotationMeta> note_meta;

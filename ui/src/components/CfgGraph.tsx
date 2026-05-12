@@ -3,7 +3,7 @@ import { C, sans, mono, serif } from "../theme";
 import { highlightLine } from "../syntax";
 
 // Kind hint matches the BlockKind enum in core/include/ember/analysis/function.hpp
-// — derived per-block from the successor labels printed by pipeline.cpp.
+// - derived per-block from the successor labels printed by pipeline.cpp.
 // `fallthrough` is the catch-all for plain straight-line blocks. `entry`
 // overrides any of the others (see `kindOf` below).
 type CfgKind =
@@ -139,7 +139,7 @@ function mergeFallthroughs(blocks: CfgBlock[]): CfgBlock[] {
 
       p.insts = p.insts.concat(b.insts);
       p.succs = b.succs;
-      // Inherit the merged-in block's structural role — it now owns the
+      // Inherit the merged-in block's structural role - it now owns the
       // outgoing edges, so the renderer should show ITS kind (return,
       // conditional, etc.) not the original fallthrough's.
       p.kind  = b.entry ? p.kind : b.kind;
@@ -344,7 +344,7 @@ function footerSummary(b: CfgBlock): { color: string; text: string }[] {
   return [];
 }
 
-// Consolidated node renderer — a single <g> per block. At full LOD the
+// Consolidated node renderer - a single <g> per block. At full LOD the
 // body is HTML inside a <foreignObject> so we can reuse the existing
 // syntax highlighter and clickable-symbol affordances from the source
 // view. At lower LODs we degrade to plain SVG <text> for performance.
@@ -432,7 +432,7 @@ const Node = memo(function Node(props: {
         strokeWidth={finalStrokeW}
       />
 
-      {/* Left accent strip — same colour as the border, makes the kind
+      {/* Left accent strip - same colour as the border, makes the kind
           easy to spot in the corner of the eye while panning. */}
       <rect width={3} height={p.height} fill={style.border} rx={1.5} opacity={0.65} />
 
@@ -470,7 +470,7 @@ const Node = memo(function Node(props: {
         bodyHtml
           ? (
             // foreignObject lets us embed the existing HTML-based syntax
-            // highlighter and its click handlers — clicking `sub_xxx`
+            // highlighter and its click handlers - clicking `sub_xxx`
             // navigates the same way as in the pseudo-C view.
             <foreignObject
               x={PAD}
@@ -496,7 +496,7 @@ const Node = memo(function Node(props: {
                 {shown.map((ins, i) => (
                   <div key={i} style={{ display: "flex", gap: 8 }}>
                     {/* Pseudo lines have no per-instruction VA, so the
-                        gutter would just be empty space — hide it. */}
+                        gutter would just be empty space - hide it. */}
                     {ins.addr && (
                       <span style={{ color: C.textFaint, flexShrink: 0, opacity: 0.7 }}>
                         {ins.addr.padStart(5, " ")}
@@ -658,7 +658,7 @@ function collectVisibleNodes(blocks: CfgBlock[], layout: Layout, viewRect: Rect)
   return out;
 }
 
-// Edges rendered as a single memoized group — only rebuilt if layout/data
+// Edges rendered as a single memoized group - only rebuilt if layout/data
 // or the visible rect changes. Each edge gets a tiny midpoint label
 // (T/F, case N, etc.) when the LOD is high enough to read it; without
 // labels users have to chase colours through the legend.
@@ -762,14 +762,14 @@ export function CfgGraph(props: {
   const [displayScale, setDisplayScale] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   // Visible world-rect in graph coords. Updated at the tail of each pan/zoom
-  // gesture via rAF — used to cull offscreen nodes/edges.
+  // gesture via rAF - used to cull offscreen nodes/edges.
   const [viewRect, setViewRect] = useState({ x: -1e9, y: -1e9, w: 3e9, h: 3e9 });
   const visibleNodes = useMemo(
     () => collectVisibleNodes(parsed.blocks, layout, viewRect),
     [parsed.blocks, layout, viewRect],
   );
 
-  // Hover / focus / search — drives node and edge emphasis. `focusedId`
+  // Hover / focus / search - drives node and edge emphasis. `focusedId`
   // is sticky (set on click); `hoverId` is transient (mouseenter). When
   // both are set, focus wins so the user's selection isn't drowned out
   // by mouse motion.
@@ -964,7 +964,7 @@ export function CfgGraph(props: {
   };
 
   const onMouseDown: React.MouseEventHandler<SVGSVGElement> = (e) => {
-    // Reserve a small "drag intent" delta — if the user mousedowns and
+    // Reserve a small "drag intent" delta - if the user mousedowns and
     // releases without moving, treat as a click on the background and
     // clear the current focus. Distinguishes "click to deselect" from
     // an actual pan gesture so we don't drop the user's selection on
@@ -976,7 +976,7 @@ export function CfgGraph(props: {
     setIsDragging(true);
   };
 
-  // Apply a delta zoom centred on the SVG viewport — used by the
+  // Apply a delta zoom centred on the SVG viewport - used by the
   // toolbar +/- buttons. Wheel zoom keeps its mouse-anchor logic.
   const zoomBy = useCallback((delta: number) => {
     const svg = svgRef.current;
@@ -1006,14 +1006,14 @@ export function CfgGraph(props: {
     viewportRef.current.y = d.vy + (e.clientY - d.my);
     applyTransform();
   };
-  // Click-on-background to clear focus. We piggyback on `endDrag` —
+  // Click-on-background to clear focus. We piggyback on `endDrag` -
   // if the mouse hasn't moved since mousedown, treat the gesture as
   // a click rather than a (zero-length) pan and drop the focus.
   const endDrag = (e?: React.MouseEvent) => {
     const d = dragRef.current;
     if (d && e && Math.abs(e.clientX - d.mx) < 3 && Math.abs(e.clientY - d.my) < 3) {
       // Treat as a background click only when the original target was
-      // the SVG itself (not a node — nodes stop propagation).
+      // the SVG itself (not a node - nodes stop propagation).
       setFocusedId(null);
     }
     if (d) {
@@ -1032,7 +1032,7 @@ export function CfgGraph(props: {
     return () => svg.removeEventListener("wheel", handler);
   }, []);
 
-  // Keyboard shortcuts when the graph has focus — Esc clears selection,
+  // Keyboard shortcuts when the graph has focus - Esc clears selection,
   // F fits, +/- zoom, E re-centres on the entry block. Gated on `info`
   // (parser produced something) so empty graphs ignore the bindings.
   useEffect(() => {
@@ -1158,7 +1158,7 @@ export function CfgGraph(props: {
       </svg>
 
       {/* Top-left toolbar: pan/zoom controls, search, minimap toggle.
-          The toolbar lives over the SVG (no layout shift) — pointerEvents
+          The toolbar lives over the SVG (no layout shift) - pointerEvents
           on the inner buttons keeps drag-to-pan available everywhere
           else. */}
       <div style={{
@@ -1244,7 +1244,7 @@ export function CfgGraph(props: {
           emphasizeId={emphasizeId}
           searchHits={searchHits}
           onClickPoint={(wx, wy) => {
-            // wx/wy are in graph-coordinate space — recenter the
+            // wx/wy are in graph-coordinate space - recenter the
             // viewport on them at the current zoom.
             const svg = svgRef.current;
             if (!svg) return;
@@ -1326,7 +1326,7 @@ export function CfgGraph(props: {
 }
 
 // Reusable toolbar pieces. Kept as inline components so the styling
-// stays at the call site — the buttons are visually identical so a
+// stays at the call site - the buttons are visually identical so a
 // helper makes the JSX above stay readable.
 function ToolbarGroup(props: { children: React.ReactNode }) {
   return (
@@ -1369,7 +1369,7 @@ function ToolbarButton(props: {
 // Cyclomatic complexity for the merged-fallthrough graph.
 //   M = E - N + 2P
 // where E = edges (non-pseudo), N = nodes, P = connected components.
-// We assume P=1 here — a function's CFG by construction is one
+// We assume P=1 here - a function's CFG by construction is one
 // connected component (the entry reaches everything; unreachable
 // subgraphs have already been pruned by the analysis pipeline).
 function cyclomaticComplexity(blocks: CfgBlock[]): number {
@@ -1439,7 +1439,7 @@ function Minimap(props: {
           }
         }}
       >
-        {/* Block dots — colour-coded by kind, scaled to layout height
+        {/* Block dots - colour-coded by kind, scaled to layout height
             so a long block reads as a tall sliver. */}
         {blocks.map((b) => {
           const p = layout.positions.get(b.id);

@@ -11,7 +11,7 @@
 //
 // Caveats vs Linux ptrace:
 //   * x86_thread_state64 has no ds/es/ss fields. They're effectively
-//     unused in x86-64 long mode and Mach doesn't surface them — we
+//     unused in x86-64 long mode and Mach doesn't surface them - we
 //     leave them zero in the populated Registers and don't set the
 //     PresentSeg bit because there's nothing to write back.
 //   * fs_base / gs_base are NOT in x86_THREAD_STATE64 either. Mach
@@ -280,7 +280,7 @@ Result<void> MachOTarget::set_regs(ThreadId tid, const Registers& r) {
         }
     }
     // For x87/SSE: round-trip through float state. Avx/Avx512 set
-    // is deferred until we have a Mac to test against — the AVX/
+    // is deferred until we have a Mac to test against - the AVX/
     // AVX-512 state structs share the float prefix, so partial writes
     // to fp would clobber the upper halves. v0 only writes float when
     // exactly the legacy bits were changed.

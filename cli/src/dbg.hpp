@@ -24,7 +24,7 @@ struct AuxBinarySpec {
 };
 
 // Enter the debugger REPL. `bin` may be null in attach-only mode (no
-// binary path supplied) — symbol lookup is then disabled but address-
+// binary path supplied) - symbol lookup is then disabled but address-
 // only commands still work. `aux` is a list of secondary Binary
 // objects the debugger consults as additional symbol oracles, one
 // per --aux-binary CLI flag. Returns the process exit code.

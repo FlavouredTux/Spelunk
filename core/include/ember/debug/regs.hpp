@@ -11,7 +11,7 @@ namespace ember::debug {
 //
 // Subsets the host CPU/kernel doesn't expose are zeroed and have
 // their `Present*` bit clear in `present`. On `set_regs` only
-// subsets whose bit is set are written back to the tracee — the
+// subsets whose bit is set are written back to the tracee - the
 // round-trip pattern just works because get_regs sets every bit it
 // populated.
 //
@@ -19,7 +19,7 @@ namespace ember::debug {
 // bytes; ZMM[i] = full 64 bytes. zmm[16..31] are AVX-512-only.
 #ifdef _MSC_VER
 #pragma warning(push)
-#pragma warning(disable: 4324)  // structure padded due to alignas(64) — intentional
+#pragma warning(disable: 4324)  // structure padded due to alignas(64) - intentional
 #endif
 struct alignas(64) Registers {
     // ---- General-purpose + RIP + RFLAGS + segments ----

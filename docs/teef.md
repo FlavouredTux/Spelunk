@@ -1,8 +1,8 @@
 # TEEF Max
 
 Library-function recognition that survives compiler-version drift,
-optimization-level changes, cross-compiler builds (gcc ↔ clang), and —
-within reason — end-to-end function refactors. What FLIRT does for
+optimization-level changes, cross-compiler builds (gcc ↔ clang), and -
+within reason - end-to-end function refactors. What FLIRT does for
 IDA, without inheriting FLIRT's brittleness to byte-level perturbation.
 
 This is the high-level walkthrough. For wire-format details, schema
@@ -20,7 +20,7 @@ fingerprints solve this for the case where the binary was compiled
 with the same toolchain as the signature library. As soon as the
 compiler version drifts, or `-O2` becomes `-O3`, or someone turns on
 LTO, the bytes change and FLIRT misses entirely. We measured this:
-glibc 2.35 vs glibc 2.39 (one year apart, same gcc family) — only
+glibc 2.35 vs glibc 2.39 (one year apart, same gcc family) - only
 27.8% of functions still byte-match. Anything longer than ~80
 instructions falls off the cliff:
 
@@ -32,7 +32,7 @@ instructions falls off the cliff:
 | 81–300     |  0.3% |
 | > 300      |  0.0% |
 
-Tiny stubs match by accident — their bytes can't change much.
+Tiny stubs match by accident - their bytes can't change much.
 Anything substantive fails. Exactly where you most need help, the
 byte-fp gives you nothing.
 
@@ -47,7 +47,7 @@ For each function we compute three independent fingerprints. They're
 listed in order of "shallow but cheap" → "deep but expensive". The
 recognizer uses all three; each one fills in cases the others miss.
 
-### L0 — topology hash (CFG shape)
+### L0 - topology hash (CFG shape)
 
 A single u64 derived from six features of the function's control-flow
 graph:
@@ -64,11 +64,11 @@ extra cleanup block from inlining) shift the hash.
 What it's good for: fast pre-filter. Given a 100K-fn corpus and a
 query function, the corpus index `{topo_hash → [entry_idx]}` lets
 the recognizer say "out of 100K, only 12 corpus entries have this
-shape — only score those" without touching content. It's lossy
+shape - only score those" without touching content. It's lossy
 (misses cross-shape matches) but never rejects a candidate; it's
 purely a way to look in the right place first.
 
-### L2 — cleanup-canonical hash (the original TEEF)
+### L2 - cleanup-canonical hash (the original TEEF)
 
 Hash of the structured IR token stream after lift → SSA → cleanup →
 structurer. Plus an 8-slot MinHash sketch over canonical token bigrams
@@ -77,14 +77,14 @@ for partial-overlap recovery.
 Walk the structured Region tree (the same tree the pseudo-C emitter
 walks) and emit one canonical token per node. SSA temps and registers
 get alpha-renamed in first-appearance order, so `mov rax, rbx` and
-`mov rdi, rsi` hash the same as `mov v_0, v_1` — they're the same
+`mov rdi, rsi` hash the same as `mov v_0, v_1` - they're the same
 shape under different naming. Immediates split into two classes:
 small literals (≤ 0x10000, kept verbatim because they're identifying
-— bit masks, syscall numbers, struct offsets) and addresses (resolved
+- bit masks, syscall numbers, struct offsets) and addresses (resolved
 to PLT/GOT/symbol names where possible, otherwise an `ADDR` class
 token).
 
-Anchor names — calls to named imports, named intrinsics — are kept
+Anchor names - calls to named imports, named intrinsics - are kept
 verbatim *and weighted 3×* in the token stream. A function calling
 `malloc + free + memcpy` has a more discriminating identity than two
 unrelated functions sharing reg-arith patterns; the anchor weighting
@@ -97,10 +97,10 @@ builds where one compiler picks a different lowering, and any
 loop-shape transformation (gcc -O2 strength-reduces an induction
 variable; gcc -Os doesn't).
 
-### L4 — behavioural fingerprint (the loop-shape-invariant signal)
+### L4 - behavioural fingerprint (the loop-shape-invariant signal)
 
 The big idea: if two functions compute the same answer on the same
-inputs, they're behaviourally equivalent — even if their IR is
+inputs, they're behaviourally equivalent - even if their IR is
 totally different shape. So instead of hashing the IR, we run it.
 
 For each function we sample K = 64 random argument vectors. Each vector
@@ -112,11 +112,11 @@ interpreter:
 
 - **Memory** is a lazy dictionary. First load from address `A` returns
   `mix64(A, salt)`; subsequent loads from `A` return the same value.
-  Stores update the dict. This way memory is *deterministic* — two
+  Stores update the dict. This way memory is *deterministic* - two
   compilations of the same source see the same memory contents under
-  the same input vector — but no actual binary memory is touched.
+  the same input vector - but no actual binary memory is touched.
 - **Calls** to direct imports return `mix64(target_class, sorted_args)`
-  — deterministic by signature.
+  - deterministic by signature.
 - **Branches** on concrete conditions follow the natural path. Branches
   on synthesized values (rare) follow the first successor.
 - **Intrinsics** with known semantics (`bswap`, `bsr`, `bsf`, `popcnt`,
@@ -139,7 +139,7 @@ What L4 catches that L2 can't:
   different IR shapes and gives up.
 - **Algorithmic variants**. `popcount_swar` (bit-twiddling SWAR
   pattern) and `popcount_loop` (while-loop counting set bits) have
-  *radically* different IR — but the same I/O behaviour. Same L4
+  *radically* different IR - but the same I/O behaviour. Same L4
   hash.
 - **Compiler-emitted intrinsics**. `bswap`, `popcnt`, `lzcnt`,
   `bsr`/`bsf` get lowered by some compiler+arch combinations but not
@@ -157,19 +157,19 @@ things*. A real win, not a workaround.
 match paths, in order. The first one to fire returns; later paths
 only run if earlier ones didn't reach the confidence floor.
 
-1. **behav-exact** — L4 hash collision against the corpus index.
+1. **behav-exact** - L4 hash collision against the corpus index.
    Highest precision: an accidental 64-trace I/O collision between
    two semantically-distinct functions is vanishingly rare. A `behav-
    exact` match emits at confidence 1.0. A bucket of >4 same-L4
-   entries triggers the popularity guard — too many collisions = the
+   entries triggers the popularity guard - too many collisions = the
    hash is a "trivial-shape behaviour" (return-zero, identity stub)
    and we don't pick a single canonical name.
 
-2. **whole-exact** — L2 hash collision. Confidence 1.0 when the
+2. **whole-exact** - L2 hash collision. Confidence 1.0 when the
    bucket has one unique name; ties surface as `whole-exact-tied`
    at `1/N` confidence.
 
-3. **whole-jaccard+behav** — combined L2+L4 jaccard scoring. Built
+3. **whole-jaccard+behav** - combined L2+L4 jaccard scoring. Built
    on top of an L2 *MinHash inverted index*: for each of the 8 L2
    MinHash slots, the corpus has a bucket `slot_value → entry_idxs`.
    The query's 8 slot lookups produce candidates with hit counts;
@@ -178,14 +178,14 @@ only run if earlier ones didn't reach the confidence floor.
    second-best margin when L4 corroborates, conservative L2-only bar
    0.875 / 0.25 margin when the query has no L4. The 0.6 bar is
    safe because a strong L4 corroboration (jaccard 1.0) requires
-   only L2 jaccard 0.2 to cross — exactly the case L2 alone would
+   only L2 jaccard 0.2 to cross - exactly the case L2 alone would
    reject as too weak but L4 confirms is real.
 
    Falls back to the L0 topo bucket when slot collisions are too
-   sparse to cross threshold — small fns where MinHash entropy is
+   sparse to cross threshold - small fns where MinHash entropy is
    low and jaccard estimates are noisy.
 
-4. **chunk-vote+behav** — for each query chunk (substantive sub-region
+4. **chunk-vote+behav** - for each query chunk (substantive sub-region
    of a structured function), look up corpus chunks that share its
    exact hash, weight by chunk size, accumulate votes per candidate
    name. Top-voted name wins; the margin `top1 / (top1 + top2)` is
@@ -227,7 +227,7 @@ Optimizations stacked:
   and forks into both L2 (structurer + region tokenization) and L4
   (trace pass), instead of running the pipeline twice. ~3× wall.
 - **Sub_\* skip**: `--teef` (corpus build mode) drops the L4 pass
-  for unnamed functions — `TeefCorpus::load_tsv` discards them
+  for unnamed functions - `TeefCorpus::load_tsv` discards them
   anyway after counting their L2 popularity, so computing L4 is
   pure waste. Additional 2–3× on stripped libraries.
 - **`--min-fn-size N`**: drops fns smaller than N bytes before
@@ -267,14 +267,14 @@ is misbehaving.
 
 Recognize-time scan is the bulk of `--recognize` cost on big
 corpora. Worst case before optimization was an O(N) full jaccard
-scan per query fn — minutes on a 100K-fn corpus, 11+ minutes on the
+scan per query fn - minutes on a 100K-fn corpus, 11+ minutes on the
 4-library combo with libroblox queries. Now there's an L2 MinHash
 inverted index built at load time (`whole_minhash_[k] : slot_value →
 [entry_idx]` for k ∈ [0,8)). At query time we look up each of the 8
 slots, count per-entry hits, and only score entries with ≥ 2 slot
 hits. Reduces O(N) full-scan to O(slot_bucket × 8). Slot values that
 match more than 5000 entries are skipped (set with
-`EMBER_TEEF_MAX_SLOT_BUCKET`) — popular trivial bits.
+`EMBER_TEEF_MAX_SLOT_BUCKET`) - popular trivial bits.
 
 Live progress + ETA on the scan:
 
@@ -309,7 +309,7 @@ libcrypto, libz, libzstd, libbz2, libxxhash, plus Rust std and a
 broad-API extractor that surfaces concrete std-fn instantiations.
 
 `scripts/build_corpus_windows.sh` is the equivalent for PE32+
-targets — needs **real Microsoft** DLLs from a Windows install or
+targets - needs **real Microsoft** DLLs from a Windows install or
 symbol server (Wine reimplementations produce false negatives, the
 script refuses by default).
 
@@ -348,7 +348,7 @@ Output rows:
 | `--recognize-threshold T` | 0.6 | Confidence floor for emitting a match |
 | `--min-fn-size N` | 0 | Drop fns smaller than N bytes before fingerprinting |
 | `--l0-prefilter` | off | Skip L4 on target fns whose L0 isn't in the corpus. Fast on obfuscator-heavy targets, lossy on cross-opt-level matches. |
-| `--no-cache` | — | Bypass disk caches (corpus TSV + target fingerprint TSV both cache by `path \| size \| mtime \| version`) |
+| `--no-cache` | - | Bypass disk caches (corpus TSV + target fingerprint TSV both cache by `path \| size \| mtime \| version`) |
 
 | Env var | Default | What it does |
 |---|---|---|
@@ -407,7 +407,7 @@ memcpy regardless of POSIX or Windows source).
 
 ### Cross-config recognize matrix
 
-probe2.c — 30 algorithms (string ops, hashes, sorts, search, bit
+probe2.c - 30 algorithms (string ops, hashes, sorts, search, bit
 twiddling, parsing, switch dispatch). Compiled across 6 configs:
 gcc -O0/-O2/-O3/-Os, clang -O2/-O3. For each pair (corpus_config,
 target_config), build corpus from one, recognize against the other,
@@ -430,7 +430,7 @@ The behav-exact path carries 90%+ of the load. Cross-compiler unique
 wins (matches present in TEEF Max but not in pure-L2):
 `strchr_byte`, `strstr_naive`, `gcd_iter`, `popcount_swar`,
 `count_set_bits`, `strcmp_like`, `sum_array`, `dot_product`,
-`fnv1a_hash` — fns where L2 alone misses because of compiler
+`fnv1a_hash` - fns where L2 alone misses because of compiler
 diversity in loop shape or intrinsic emission.
 
 ### Real cross-binary
@@ -484,7 +484,7 @@ on `gO0 → gO2` pairs.
 
 **Cross-architecture**. The L2 hash is alpha-renamed but reg names
 are in arch-specific encoding. AArch64 ↔ x86-64 fingerprint matching
-isn't done yet — the canonical-role-tag refactor (arg0..arg5,
+isn't done yet - the canonical-role-tag refactor (arg0..arg5,
 ret0..ret1, stack) lives in the design doc but not in the lifter
 output.
 

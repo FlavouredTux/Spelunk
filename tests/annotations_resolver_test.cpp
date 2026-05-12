@@ -83,7 +83,7 @@ int main() {
                  "sidecar path");
     }
 
-    // Explicit --annotations path always wins — sidecar and cache are
+    // Explicit --annotations path always wins - sidecar and cache are
     // both ignored, the path is returned verbatim regardless of whether
     // it exists yet.
     const auto explicit_path = root / "some" / "file.db";
@@ -96,16 +96,16 @@ int main() {
                  "explicit path preserved");
     }
 
-    // Cache key is stable across content changes at the same path — the
+    // Cache key is stable across content changes at the same path - the
     // whole reason for path-keying over content-hashing. Rewrite the
     // fixture and expect the same cache path back.
     const auto cache_before = ember::cache_annotation_path(bin_a, cache);
-    write_stub(bin_a, "v2 — different bytes entirely, longer");
+    write_stub(bin_a, "v2 - different bytes entirely, longer");
     const auto cache_after = ember::cache_annotation_path(bin_a, cache);
     check_eq(cache_before.string(), cache_after.string(),
              "cache path stable across binary content change");
 
-    // Cache key changes when the binary moves directories — same
+    // Cache key changes when the binary moves directories - same
     // basename in a different parent must not share annotations.
     const auto bin_b = write_stub(root / "b" / "prog", "v1");
     const auto cache_b = ember::cache_annotation_path(bin_b, cache);
@@ -121,11 +121,11 @@ int main() {
     // attached to renames / notes / signatures via parallel maps and a
     // new `meta <kind> <addr> ...` line. Three properties are
     // load-bearing:
-    //   1. round-trip — write a populated Annotations, reload, see
+    //   1. round-trip - write a populated Annotations, reload, see
     //      the same metadata,
-    //   2. backward compat — files without `meta` lines load with
+    //   2. backward compat - files without `meta` lines load with
     //      empty metadata (no crash, no spurious entries),
-    //   3. forward compat — files with `meta` lines for unknown
+    //   3. forward compat - files with `meta` lines for unknown
     //      subkinds or unknown keys are silently skipped, and the
     //      primary records remain untouched.
     // ----------------------------------------------------------------
@@ -233,7 +233,7 @@ int main() {
 
     // Confidence clamping: values outside [0,1] would break downstream
     // consumers (sort by conf, threshold filters, etc.). The parser
-    // clamps on load, the CLI clamps on write — covered here for the
+    // clamps on load, the CLI clamps on write - covered here for the
     // load path.
     {
         const auto path = root / "clamp.ann";

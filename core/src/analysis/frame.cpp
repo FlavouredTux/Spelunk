@@ -12,7 +12,7 @@
 namespace ember {
 
 namespace {
-// CodeView x64 register IDs — only the ones the merge step interprets.
+// CodeView x64 register IDs - only the ones the merge step interprets.
 constexpr u16 kCvRegRsp = 332;
 constexpr u16 kCvRegRbp = 333;
 }  // namespace
@@ -95,7 +95,7 @@ StackFrameLayout compute_frame_layout(const IrFunction& fn,
     const DefMap defs = build_defs(fn);
 
     // Higher-priority observation: a Load/Store directly at the slot
-    // tells us its real access width. Wider wins — a slot read both as
+    // tells us its real access width. Wider wins - a slot read both as
     // u32 and u64 ends up u64.
     auto observe = [&](i64 off, IrType t) {
         if (off == 0) return;
@@ -144,7 +144,7 @@ StackFrameLayout compute_frame_layout(const IrFunction& fn,
                     }
                 }
                 // Also let the stored value participate in the
-                // address-only sweep — a stored-then-loaded stack
+                // address-only sweep - a stored-then-loaded stack
                 // pointer should still surface a declaration.
                 if (inst.src_count >= 2) {
                     if (auto off = trace_stack(inst.srcs[1], defs); off) {

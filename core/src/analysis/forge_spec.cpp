@@ -196,7 +196,7 @@ public:
         if (!k) return e;
 
         // version 0 = live-in. For Reg, that's a parameter (or a
-        // callee-saved that the function uses uninitialised — we
+        // callee-saved that the function uses uninitialised - we
         // tag both as Param and let the formatter sort it out).
         if (v.version == 0 && v.kind == IrValueKind::Reg) {
             e.kind        = ForgeExpr::Kind::Param;
@@ -299,7 +299,7 @@ private:
                 return e;
             }
             case IrOp::Select: {
-                // Pick the "then" branch as the canonical witness — the
+                // Pick the "then" branch as the canonical witness - the
                 // chosen path is per-block, not per-operand, so we pick a
                 // side and surface the other in unknown form rather than
                 // produce a Phi-ish merge node.

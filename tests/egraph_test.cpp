@@ -121,7 +121,7 @@ void test_add_zero() {
 
 // ---- 5. Strength reduction (x * 2 ↔ x << 1) ----------------------------
 //
-// The classic "compiler equivalent" — gcc -O2 emits one form, clang -Os
+// The classic "compiler equivalent" - gcc -O2 emits one form, clang -Os
 // the other. With this rule, both fingerprints collapse.
 
 void test_mul_to_shl() {
@@ -162,7 +162,7 @@ void test_congruence() {
     check_neq_u64(g.canonical_hash(fxz), g.canonical_hash(fyz),
                   "congruence: distinct before merge");
     g.merge(x, y);
-    g.saturate(0, 4096);   // 0 iters — just trigger rebuild
+    g.saturate(0, 4096);   // 0 iters - just trigger rebuild
     check_eq_u64(g.canonical_hash(fxz), g.canonical_hash(fyz),
                  "congruence: same after merging operands");
 }
@@ -183,7 +183,7 @@ void test_budget() {
         auto add = g.add_binop(Op::Add, Type::I64, y, k);
         cur = g.add_binop(Op::Mul, Type::I64, cur, add);
     }
-    // Distributivity: a*(b+c) ↔ a*b + a*c — generates exponentially many
+    // Distributivity: a*(b+c) ↔ a*b + a*c - generates exponentially many
     // forms.
     Rule r{
         "distrib",

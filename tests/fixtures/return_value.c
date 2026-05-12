@@ -1,6 +1,6 @@
 /* Pure computational functions. Without modeling the SysV return register
  * (rax) as a use of the Ret terminator, DCE delete the whole computation
- * and the pseudo-C renders as an empty body — which is wrong. */
+ * and the pseudo-C renders as an empty body - which is wrong. */
 
 int add32(int a, int b) {
     return a + b;

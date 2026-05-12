@@ -4,7 +4,7 @@ Given an entry function and a target virtual address, ember computes the
 minimum heap/struct field shape and the sequence of branch decisions
 that one representative call chain from the entry to the target
 requires. The output is a *witness* for reachability, not the meet of
-every possible reaching path — useful for quickly answering "what
+every possible reaching path - useful for quickly answering "what
 does my mocked input have to look like to drive control to this code?"
 without running the binary, and for comparing multiple candidate
 fakes head-to-head.
@@ -21,15 +21,15 @@ address (with or without the `0x` prefix), or `sub_<hex>`.
 
 The text output groups output into:
 
-* `// forge-spec: reach <target> from <entry>` — header.
-* `// call chain: a -> b -> c` — the BFS-shortest sequence of function
+* `// forge-spec: reach <target> from <entry>` - header.
+* `// call chain: a -> b -> c` - the BFS-shortest sequence of function
   entries from `<entry>` to the function containing `<target>`.
-* `required input shape:` — one line per de-duplicated field
+* `required input shape:` - one line per de-duplicated field
   requirement, formatted as a normalized comparison rooted at a
   parameter (`*(arg0 + 0x138)`, `*(*(arg0 + 0x60) + 0x10)`, etc.).
   Each line is annotated with the source VA where the constraint
   was extracted.
-* `branch decisions:` — every conditional branch on the chosen path,
+* `branch decisions:` - every conditional branch on the chosen path,
   with the direction taken and the predicate as a (canonicalized)
   comparison.
 
@@ -81,7 +81,7 @@ branch decisions:
 ```
 
 The reported parameter slots (`arg0`, `arg1`, ...) are scoped to the
-function each constraint was extracted in — interprocedural argument
+function each constraint was extracted in - interprocedural argument
 forwarding is *not* yet projected (see "Limits" below).
 
 ## How it works
@@ -130,6 +130,6 @@ Known gaps:
   hierarchy is not narrowed by the typer; an `arg0->vptr->method`
   call site shows up as a generic indirect call.
 
-These are deliberate v1 compromises — every one of them is
+These are deliberate v1 compromises - every one of them is
 implementable as an extension on top of the same `ForgeExpr` /
 `FieldRequirement` data model in `ember/analysis/forge_spec.hpp`.

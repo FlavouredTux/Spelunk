@@ -739,7 +739,7 @@ void lift_instruction(LiftCtx& ctx) {
             break;
 
         default:
-            // Unmodeled mnemonic — emit as named intrinsic so the reader sees
+            // Unmodeled mnemonic - emit as named intrinsic so the reader sees
             // *something* rather than an empty block.
             lift_intrinsic(ctx, mnemonic_name(insn.mnemonic));
             break;

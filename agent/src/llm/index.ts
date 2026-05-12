@@ -10,14 +10,14 @@ import type { LLM } from "./types.js";
 export * from "./types.js";
 
 // Provider selection: env vars first, then ~/.config/ember/agent.toml.
-// Toml parsing is dumb-line-based — just enough for our two key forms:
+// Toml parsing is dumb-line-based - just enough for our two key forms:
 //
 //   key  = "sk-..."                          # one key
 //   keys = ["sk-...", "sk-..."]              # multiple keys, round-robin
 //
 // Multiple keys are useful for free-tier providers (e.g. OpenRouter
 // owl-alpha) where one account caps before a 200-worker cascade
-// finishes round 0 — load can be split across accounts. The runtime
+// finishes round 0 - load can be split across accounts. The runtime
 // rotates keys per makeLLM() call via a module-local counter, so
 // concurrent workers get distributed across the available keys.
 
@@ -67,7 +67,7 @@ function loadKeys(): ProviderKeys {
 }
 
 // Round-robin counter per provider. Survives the lifetime of the
-// agent process — on a 200-worker cascade with 2 OpenRouter keys,
+// agent process - on a 200-worker cascade with 2 OpenRouter keys,
 // workers 0/2/4/… get key A, 1/3/5/… get key B.
 const _keyRotation: Record<string, number> = { assistant: 0, openai: 0, openrouter: 0 };
 

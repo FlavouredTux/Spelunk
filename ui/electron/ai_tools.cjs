@@ -1,4 +1,4 @@
-// AI agent tools — let the model navigate the binary instead of
+// AI agent tools - let the model navigate the binary instead of
 // being stuck with whatever pseudo-C the user attached up front.
 // Each tool wraps a `scripts/query.js` command and returns plain text
 // the model can read. The model decides when to call them; the loop
@@ -7,7 +7,7 @@
 // All exec functions return a string. Empty string is returned as
 // "(no results)" so the model doesn't have to special-case that.
 //
-// Output is truncated per-tool to keep token usage bounded — the
+// Output is truncated per-tool to keep token usage bounded - the
 // model can always issue a more specific query if the truncated
 // preview is enough to know what to ask for next.
 
@@ -41,7 +41,7 @@ function clip(text) {
     `\n\n[... truncated ${text.length - MAX_TOOL_OUTPUT} more chars]`;
 }
 
-// Spawn the ember CLI with the query.js script. We invoke per call —
+// Spawn the ember CLI with the query.js script. We invoke per call -
 // the CLI's disk cache (xrefs / strings / arities) means re-loads are
 // cheap after the first warm-up, and a fresh process avoids any
 // state drift from previous tool calls.
@@ -88,13 +88,13 @@ function escapeRegex(s) {
 // (which takes Zod schemas via the in-process MCP helper).
 function makeTools(getCtx) {
   // getCtx() must return { emberBin, binaryPath, annPath } at call
-  // time — these can change between tool calls if the user opens a
+  // time - these can change between tool calls if the user opens a
   // new binary mid-conversation, so we resolve lazily.
   return [
     {
       name: "find_function",
       description:
-        "Search the binary's defined functions by case-insensitive name regex. Use this when the user asks about a function by partial name, or when you need to discover what's available. Returns up to 50 matches as `addr  name` lines. Empty result means no match — try a broader pattern.",
+        "Search the binary's defined functions by case-insensitive name regex. Use this when the user asks about a function by partial name, or when you need to discover what's available. Returns up to 50 matches as `addr  name` lines. Empty result means no match - try a broader pattern.",
       zod: { query: z.string().describe("name regex, e.g. 'init' or '^read.*Entity'") },
       jsonSchema: {
         type: "object",
@@ -109,7 +109,7 @@ function makeTools(getCtx) {
     {
       name: "get_function",
       description:
-        "Fetch the pseudo-C decompilation of a function by name or hex address. Use this whenever you need to see another function's body — callees the user mentioned, helpers you suspect from the snippet, suspicious cross-references. Don't guess at a function's behavior when you can read it.",
+        "Fetch the pseudo-C decompilation of a function by name or hex address. Use this whenever you need to see another function's body - callees the user mentioned, helpers you suspect from the snippet, suspicious cross-references. Don't guess at a function's behavior when you can read it.",
       zod: { target: z.string().describe("function name or 0x-prefixed hex address") },
       jsonSchema: {
         type: "object",
@@ -125,7 +125,7 @@ function makeTools(getCtx) {
     {
       name: "list_callers",
       description:
-        "List the callers of a function by name or hex address. Useful when you need to know how a helper is invoked — what arguments different call sites pass, whether it's only used in one place, etc. Returns `addr  caller_name` lines.",
+        "List the callers of a function by name or hex address. Useful when you need to know how a helper is invoked - what arguments different call sites pass, whether it's only used in one place, etc. Returns `addr  caller_name` lines.",
       zod: { target: z.string().describe("function name or 0x-prefixed hex address") },
       jsonSchema: {
         type: "object",

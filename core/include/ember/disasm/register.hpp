@@ -44,7 +44,7 @@ enum class Reg : u16 {
     // AArch64 GPRs. X0..X28 are general-purpose, X29 is the frame pointer
     // (FP), X30 is the link register (LR). Xsp is the stack pointer (a
     // separate physical register, not a special encoding of x31). Xzr is
-    // the zero-encoding sink — reads return zero, writes are discarded;
+    // the zero-encoding sink - reads return zero, writes are discarded;
     // we keep it around so the lifter can recognise the alias.
     X0,  X1,  X2,  X3,  X4,  X5,  X6,  X7,
     X8,  X9,  X10, X11, X12, X13, X14, X15,

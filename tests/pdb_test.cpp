@@ -80,10 +80,10 @@ constexpr std::uint32_t kBlockSize = 1024;
 
 // Lay out blocks in this order:
 //   block 0: superblock
-//   block 1: free-block-map (zeros — we don't read it)
+//   block 1: free-block-map (zeros - we don't read it)
 //   block 2: stream 1 (PDB info, anything; we use 4 zero bytes "version")
 //   block 3: stream 2 (TPI, empty)
-//   block 4: stream 3 (DBI header — sym_record_stream = 4)
+//   block 4: stream 3 (DBI header - sym_record_stream = 4)
 //   block 5: stream 4 (S_PUB32 records, our payload)
 //   block 6: stream directory
 //   block 7: directory block-map (one u32 pointing at block 6)
@@ -91,7 +91,7 @@ constexpr std::uint32_t kBlockSize = 1024;
 std::vector<std::byte> make_dbi_header() {
     W w;
     w.put_i32(-1);          // signature (NewDBI)
-    w.put_u32(19990903);    // version (V70 — value not actually checked)
+    w.put_u32(19990903);    // version (V70 - value not actually checked)
     w.put_u32(1);           // age
     w.put_u16(0xFFFF);      // GlobalStreamIndex
     w.put_u16(0);           // BuildNumber
@@ -143,7 +143,7 @@ std::vector<std::byte> build_msf() {
     const auto dbi = make_dbi_header();
     const auto sym = make_sym_record_stream();
 
-    // Stream sizes — pre-compute layout. Stream 0 is "old dir" (we leave
+    // Stream sizes - pre-compute layout. Stream 0 is "old dir" (we leave
     // empty); stream 1 minimal placeholder; stream 2 (TPI) empty; stream 3
     // = DBI header bytes; stream 4 = symbol records.
     const std::uint32_t s0 = 0;
@@ -244,11 +244,11 @@ std::vector<std::byte> build_msf() {
 // Builds a more complete MSF that exercises the new code paths:
 //   stream 0: old dir (empty)
 //   stream 1: PDB info (version+sig+age+GUID)
-//   stream 2: TPI with two records — LF_ARGLIST (one arg, char*),
+//   stream 2: TPI with two records - LF_ARGLIST (one arg, char*),
 //             LF_PROCEDURE returning int, taking that arglist
 //   stream 3: DBI header + 1 ModInfo record pointing at stream 5
 //   stream 4: legacy global symbol-record stream (one S_PUB32)
-//   stream 5: module symbol stream — signature 4 + S_GPROC32 with
+//   stream 5: module symbol stream - signature 4 + S_GPROC32 with
 //             TypeIndex pointing at our LF_PROCEDURE record
 
 constexpr std::uint32_t kTiBegin = 0x1000;
@@ -258,7 +258,7 @@ std::vector<std::byte> make_pdb_info_stream() {
     w.put_u32(20091201);  // V70
     w.put_u32(0xCAFEBABE); // signature
     w.put_u32(7);          // age
-    // 16-byte GUID — synthetic constant value.
+    // 16-byte GUID - synthetic constant value.
     for (int i = 0; i < 16; ++i) w.put_u8(static_cast<std::uint8_t>(0x10 + i));
     return w.buf;
 }
@@ -410,7 +410,7 @@ std::vector<std::byte> make_dbi_header_with_module(std::uint16_t mod_sym_stream,
     // Append the ModInfo array (only 1 record).
     const std::size_t mod_start = w.buf.size();
     w.put_u32(0);                  // Unused1
-    // SectionContribEntry (28 bytes of zeros — we don't use it).
+    // SectionContribEntry (28 bytes of zeros - we don't use it).
     for (int i = 0; i < 28; ++i) w.put_u8(0);
     w.put_u16(0);                  // Flags
     w.put_u16(mod_sym_stream);     // ModuleSymStream  ← important
@@ -440,7 +440,7 @@ std::vector<std::byte> build_rich_msf() {
     const auto tpi      = make_tpi_stream();
     const auto sym      = make_sym_record_stream();
     const auto modstm   = make_module_stream();
-    // DBI header + ModInfo array — modules point at stream 5 carrying
+    // DBI header + ModInfo array - modules point at stream 5 carrying
     // S_GPROC32. mod_info_size will be patched after computing.
     const auto dbi = make_dbi_header_with_module(/*mod_sym_stream=*/5,
                                                   /*mod_sym_size=*/static_cast<std::uint32_t>(modstm.size()),

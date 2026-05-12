@@ -105,7 +105,7 @@ export function NotesView(props: {
               color: C.textFaint, fontSize: 13,
             }}>
               {Object.keys(annotations.notes ?? {}).length === 0
-                ? "no notes yet — add one via right-click on a function"
+                ? "no notes yet - add one via right-click on a function"
                 : "no matches"}
             </div>
           ) : rows.map((r) => (
@@ -133,7 +133,7 @@ export function NotesView(props: {
                   {r.addr}
                 </span>
                 <span style={{ fontFamily: sans, fontSize: 13, color: C.text, fontWeight: 500 }}>
-                  {r.fn ? displayName(r.fn, annotations) : <em style={{ color: C.textFaint }}>— no containing function —</em>}
+                  {r.fn ? displayName(r.fn, annotations) : <em style={{ color: C.textFaint }}>- no containing function -</em>}
                 </span>
               </div>
               <div style={{

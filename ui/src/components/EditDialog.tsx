@@ -254,7 +254,7 @@ export function EditDialog(props: {
 // or whitespace-only types but accepts pointer/qualifier-decorated
 // names (`const char *`, `void**`, `unsigned long long`, …) and any
 // known primitive plus the user-defined word characters Ember tends
-// to emit (`u64`, `s32`, `addr_t`). Strict parsing isn't possible —
+// to emit (`u64`, `s32`, `addr_t`). Strict parsing isn't possible -
 // the user might be referencing a struct that exists only in the
 // target binary.
 const KNOWN_TYPES = new Set([
@@ -286,7 +286,7 @@ function isPlausibleType(t: string): boolean {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tok)) return false;
     // Fall-through: any plausible C identifier is accepted. The
     // KNOWN_TYPES set is consulted only to suppress the warning for
-    // the most common stdlib + Ember names — we don't reject other
+    // the most common stdlib + Ember names - we don't reject other
     // identifiers because the user may be naming a target struct.
   }
   return true;
@@ -359,7 +359,7 @@ function SignatureEditor(props: {
             <span style={{
               fontFamily: serif, fontStyle: "italic",
               fontSize: 10, color: C.red, marginTop: 4, display: "block",
-            }}>unfamiliar type — saved verbatim</span>
+            }}>unfamiliar type - saved verbatim</span>
           )}
         </div>
       </div>
@@ -391,7 +391,7 @@ function SignatureEditor(props: {
             border: `1px dashed ${C.border}`,
             borderRadius: 4,
           }}>
-            no parameters — renders as <span style={{ fontFamily: mono }}>(void)</span>
+            no parameters - renders as <span style={{ fontFamily: mono }}>(void)</span>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

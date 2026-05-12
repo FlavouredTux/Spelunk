@@ -31,7 +31,7 @@ async function warmEmberCaches(binary: string, emberBin: string): Promise<void> 
     // Skip-fast check: ember's cache key is FNV1a-64 of (abspath|size|mtime|vN).
     // We don't reproduce that exactly; instead we look across all cache subdirs
     // for files tagged xrefs / strings-v* whose mtime is newer than the binary's.
-    // Cheap heuristic, false-positive-tolerant — if we skip when caches don't
+    // Cheap heuristic, false-positive-tolerant - if we skip when caches don't
     // actually cover this binary, ember will rebuild them on first call (correct,
     // just no smoothness). False negative (we re-warm when we shouldn't have to)
     // costs at most ~200ms on a warm system.
@@ -119,11 +119,11 @@ function killOrphanDaemons(binary: string): number {
     return killed;
 }
 
-// Anchor Cascade — iterative bottom-up agent naming.
+// Anchor Cascade - iterative bottom-up agent naming.
 //
 // Background: a single-pass agent fanout treats each function as an
 // island. The agent looking at sub_a sees calls to sub_b and sub_c
-// rendered as sub_b()/sub_c() — opaque. There's no way to bootstrap
+// rendered as sub_b()/sub_c() - opaque. There's no way to bootstrap
 // because every neighbor is also unknown.
 //
 // Cascade exploits ember's annotations system: emit-time name lookup
@@ -149,7 +149,7 @@ export interface CascadeArgs {
     binary: string;
     role: "namer" | "mapper" | "typer" | "tiebreaker";
     model?: string;              // single model (overridden by `models` if set)
-    models?: string[];           // optional per-round model list — round N uses
+    models?: string[];           // optional per-round model list - round N uses
                                  // models[N % models.length]. Lets you escalate
                                  // (e.g. cheap for early rounds, smarter for
                                  // later) or interleave (cross-validation).
@@ -371,7 +371,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         );
 
         // Spawn workers in parallel. We use runWorker (in-process)
-        // rather than spawning N node processes — the workers all share
+        // rather than spawning N node processes - the workers all share
         // the same intel JSONL via O_APPEND, which is atomic.
         const before = namedFromIntel.size;
         const ourDirs: string[] = [];
@@ -385,7 +385,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             // Business setup), `[codex] homes = [...]` / `[assistant_code]
             // homes = [...]` in agent.toml lets us spread cascade load
             // across them round-robin. With 30 workers/round × 5 codex
-            // homes that's 6 workers per account per round — staying
+            // homes that's 6 workers per account per round - staying
             // well under any per-plan rate limit.
             const m = roundModel ?? "";
             const cliHome = m.startsWith("assistant-code") ? pickassistantHome()
@@ -429,7 +429,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         // Tally cost from THIS round's worker dirs only. Earlier
         // versions of this code matched all `r-cas{round}-*` dirs in
         // runsRoot, which collided with prior cascade runs that happened
-        // to land at the same round number — a stripped-ember cascade
+        // to land at the same round number - a stripped-ember cascade
         // running today would inflate its $0 owl-alpha cost with stale
         // tallies from yesterday's deepseek runs. Now we tally over
         // only the directories THIS cascade just created.
@@ -487,7 +487,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         });
 
         // If a whole round produced no new high-conf names, the cascade
-        // is done — every remaining unknown is genuinely too obscured
+        // is done - every remaining unknown is genuinely too obscured
         // for the swarm to crack. Avoids burning rounds on hopeless
         // binaries.
         if (after - before === 0) break;

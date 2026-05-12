@@ -47,7 +47,7 @@ struct SigRef {
 // One library-function signature.
 struct Sig {
     // Bytes 0..prefix_len-1 of the function. `mask[i] == false` marks
-    // a wildcard position — the byte at i wasn't pinned by the .o
+    // a wildcard position - the byte at i wasn't pinned by the .o
     // file's relocations (typically a relocated address or a
     // displacement to an extern).
     std::array<u8,   kPrefixLen> prefix      = {};
@@ -102,7 +102,7 @@ struct MatchResult {
 // resolved renames. Pure: callers apply via the annotations system.
 //
 // `existing_renames`: addresses that already carry a non-default name
-// (user renames, symbol-table names) — we skip these so a sig match
+// (user renames, symbol-table names) - we skip these so a sig match
 // never overrides operator intent.
 [[nodiscard]] std::vector<MatchResult>
 apply_signatures(const Binary& b,
@@ -110,7 +110,7 @@ apply_signatures(const Binary& b,
                  std::span<const DiscoveredFunction> candidates,
                  std::span<const addr_t> existing_renames = {});
 
-// FLIRT CRC16 — reversed CCITT (polynomial 0x8408, init 0xFFFF, no
+// FLIRT CRC16 - reversed CCITT (polynomial 0x8408, init 0xFFFF, no
 // final XOR). Public so a future `.o`-file sig generator can use the
 // same routine.
 [[nodiscard]] u16 crc16(std::span<const std::byte> bytes) noexcept;

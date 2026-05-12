@@ -2,14 +2,14 @@
 
 // Internal header for the Linux perf_event_open debugger backend.
 // Mirrors the shape of ptrace_target.hpp but the underlying kernel
-// surface is completely different — no PTRACE_*, no PEEK/POKE_USER,
+// surface is completely different - no PTRACE_*, no PEEK/POKE_USER,
 // no `waitpid` semantics. Communication with the tracee happens via:
 //
-//   * /proc/<pid>/mem            — bulk read/write
-//   * perf_event_open(BREAKPOINT) — HW BP/WP (4 DR slots, shared)
-//   * perf mmap ring buffer       — sample (PC + regs + tid) on hit
-//   * pidfd_open(2) + poll(2)     — process-exit notification
-//   * SIGSTOP / SIGCONT           — fake "stopped" semantics for the
+//   * /proc/<pid>/mem            - bulk read/write
+//   * perf_event_open(BREAKPOINT) - HW BP/WP (4 DR slots, shared)
+//   * perf mmap ring buffer       - sample (PC + regs + tid) on hit
+//   * pidfd_open(2) + poll(2)     - process-exit notification
+//   * SIGSTOP / SIGCONT           - fake "stopped" semantics for the
 //                                   REPL after a HW hit
 //
 // Capability gaps relative to ptrace_target are intentional and are
@@ -18,7 +18,7 @@
 //   - software breakpoints       (no INT3 SIGTRAP catcher without ptrace)
 //   - single-step                (no TF flag access from outside)
 //   - on-demand register read    (kernel won't sample regs except on
-//                                 a perf event — we cache the last
+//                                 a perf event - we cache the last
 //                                 sample per thread instead)
 //   - register write             (no SETREGS without ptrace)
 //   - syscall catch              (would need uprobes, deferred)
@@ -39,7 +39,7 @@ namespace ember::debug::linux_perf {
 
 // Per-thread state. The cached sample is populated by the event loop
 // every time a HW BP/WP fires for that tid. get_regs() returns the
-// cached snapshot — `present` carries the GPR-only bit since perf
+// cached snapshot - `present` carries the GPR-only bit since perf
 // SAMPLE_REGS_USER doesn't reach into FP/SIMD/DR state.
 struct PerfThreadState {
     bool      paused      = false;     // tracks SIGSTOP/SIGCONT we drove
@@ -49,7 +49,7 @@ struct PerfThreadState {
 
 // One DR slot programmed via perf_event_open(PERF_TYPE_BREAKPOINT).
 // fd is the perf handle, ring is the mmap'd ring buffer (data_pages
-// + 1 metadata page). bp_id and wp_id are mutually exclusive — the
+// + 1 metadata page). bp_id and wp_id are mutually exclusive - the
 // non-zero one identifies the slot's kind for event dispatch.
 struct PerfSlot {
     int           fd         = -1;
@@ -130,7 +130,7 @@ public:
     // Locate a free slot or return -1 when all four DRs are in use.
     [[nodiscard]] int find_free_slot() const;
 
-    // Find by id — bp_id when is_watch == false, wp_id otherwise.
+    // Find by id - bp_id when is_watch == false, wp_id otherwise.
     [[nodiscard]] int find_bp_slot(BreakpointId id) const;
     [[nodiscard]] int find_wp_slot(WatchpointId id) const;
     [[nodiscard]] int find_slot_by_fd(int fd) const;

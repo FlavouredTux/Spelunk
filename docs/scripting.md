@@ -84,16 +84,16 @@ applied in source order *within their pass* (see below).
 
 ### Apply order
 
-1. `[delete]` — runs first, so a `[delete]` followed by a `[rename]` in
+1. `[delete]` - runs first, so a `[delete]` followed by a `[rename]` in
    the same file clears the old slot before the new value lands. Source
    order between the two does not matter; semantics are pass-based.
-2. `[rename]`, `[note]`, `[signature]` — direct user-intent sections.
+2. `[rename]`, `[note]`, `[signature]` - direct user-intent sections.
    `[field]` and `[constant]` run here too; fields can refer to signature
    parameter names declared earlier in the same file.
-3. `[pattern-rename]` — walks `enumerate_functions()` and matches the
+3. `[pattern-rename]` - walks `enumerate_functions()` and matches the
    current name (existing rename if any, else the discovered name).
    Skips any address with an existing rename.
-4. `[from-strings]` — walks `scan_strings()`, captures from each match,
+4. `[from-strings]` - walks `scan_strings()`, captures from each match,
    resolves the containing function for every xref instruction, applies
    the templated rename to each. Skips any address with an existing
    rename.
@@ -133,7 +133,7 @@ metadata suffix carrying confidence + source + evidence:
 0x401234 = int do_thing(char* name, int x) ; conf=0.85 ; src=hand
 ```
 
-The suffix marker is **space-semicolon-space** (` ; `) — anchored by
+The suffix marker is **space-semicolon-space** (` ; `) - anchored by
 the leading whitespace, so a literal `;` in a note value (e.g.
 `0x401234 = step 1; step 2`) does NOT trigger metadata parsing.
 Within the suffix, pairs are separated by `;`; each pair is
@@ -141,15 +141,15 @@ Within the suffix, pairs are separated by `;`; each pair is
 
 Recognised keys:
 
-- `conf=<float>` — 0..1, clamped on load.
-- `src=<tag>` — short identifier for who's claiming. By convention
+- `conf=<float>` - 0..1, clamped on load.
+- `src=<tag>` - short identifier for who's claiming. By convention
   `cli` (typed by hand), `agent:<role>` (worker in the agent harness),
   `import` (derived from binary symbols).
-- `ev=<text>` — free-form reason. Ends at the next `;` in the
+- `ev=<text>` - free-form reason. Ends at the next `;` in the
   suffix block, so embed `;` in evidence by replacing it with
   `,` upstream (the agent harness does this in `metaSuffix`).
 
-Unknown keys are silently ignored — older ember reading a newer
+Unknown keys are silently ignored - older ember reading a newer
 script keeps the rename/note/signature, just drops the metadata.
 
 Provenance lands in parallel maps (`rename_meta` / `note_meta` /
@@ -191,7 +191,7 @@ annotations between binary versions:
 ember --apply ~/.cache/ember/annotations/<v1-key>/annotations.db v2.elf
 ```
 
-Detection is automatic — if the file's first non-comment line starts
+Detection is automatic - if the file's first non-comment line starts
 with `[`, it's parsed as a declarative script; if it starts with
 `rename ` / `note ` / `sig ` / `meta `, it's loaded as a persisted
 Annotations file and merged into the destination. Conflicts keep the
@@ -223,7 +223,7 @@ cache slot); the cache slot is created on first use.
 
 ### Limits
 
-- `[pattern-rename]` glob is bare `*` — no `?`, no character classes.
+- `[pattern-rename]` glob is bare `*` - no `?`, no character classes.
 - `[from-strings]` patterns can't compose; first match for a given
   address wins.
 - The signature parser handles plain C declarations (`int foo(char*

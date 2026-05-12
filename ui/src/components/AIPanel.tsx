@@ -52,7 +52,7 @@ type ChatTurn = {
 };
 
 export function AIPanel(props: {
-  // Current code context the user is viewing — if open via the Explain
+  // Current code context the user is viewing - if open via the Explain
   // shortcut, the panel auto-attaches this so the first quick-action
   // doesn't need any setup. Optional: an empty panel just chats freely.
   context?: { fnName?: string; fnAddr?: string; view: string; code: string };
@@ -114,7 +114,7 @@ export function AIPanel(props: {
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Per-provider "ready to chat" check. OpenRouter needs an API key
-  // in our config; CLI providers defer to the installed tool — the
+  // in our config; CLI providers defer to the installed tool - the
   // user's auth status lives inside `assistant` / `codex` themselves and
   // we'll surface any failure as a chat error rather than gating here.
   const ready = !!config && (
@@ -142,7 +142,7 @@ export function AIPanel(props: {
     if (!text) return;
 
     // First user turn pulls in the active code context if the panel
-    // was opened with one. Subsequent turns are pure follow-ups —
+    // was opened with one. Subsequent turns are pure follow-ups -
     // re-attaching the body would just waste tokens since the model
     // already saw it.
     const userText = (turns.length === 0 && props.context && opts?.quickAction)
@@ -178,7 +178,7 @@ export function AIPanel(props: {
         });
       },
       (info) => {
-        // Tool invocation started — append to the assistant turn's
+        // Tool invocation started - append to the assistant turn's
         // trail in pending state.
         setTurns((cur) => {
           const last = cur[cur.length - 1];
@@ -189,7 +189,7 @@ export function AIPanel(props: {
         });
       },
       (info) => {
-        // Tool finished — match the most recent pending entry by name
+        // Tool finished - match the most recent pending entry by name
         // and mark it ok / err.
         setTurns((cur) => {
           const last = cur[cur.length - 1];
@@ -255,7 +255,7 @@ export function AIPanel(props: {
     // Find the user message immediately before the failed assistant
     // turn and resubmit it. Trim any quick-action pre-amble context
     // we'd appended on the first turn by re-pulling from the raw
-    // user content — the model already saw the code body, no need to
+    // user content - the model already saw the code body, no need to
     // attach it again.
     const lastUser = [...turns].reverse().find((t) => t.role === "user");
     if (!lastUser) return;
@@ -292,7 +292,7 @@ export function AIPanel(props: {
   // Everything else in the renames block is a per-function local /
   // arg / SSA-result rename. We track which ones are already applied
   // so the pill can render a "applied" badge instead of the apply
-  // button — clicking it then reverts. Live-derived from annotations
+  // button - clicking it then reverts. Live-derived from annotations
   // each render to stay in sync if the user mutates from elsewhere.
   const localRenames = useMemo(
     () => renames.filter((r) => r !== fnRename),
@@ -359,7 +359,7 @@ export function AIPanel(props: {
           <span style={{ fontFamily: mono, fontSize: 9, color: C.textFaint }}>esc</span>
         </div>
 
-        {/* Body — chat scroll */}
+        {/* Body - chat scroll */}
         <div ref={scrollRef} style={{
           flex: 1, overflowY: "auto", padding: "14px 18px",
           fontFamily: sans, fontSize: 13, lineHeight: 1.55, color: C.text,
@@ -376,7 +376,7 @@ export function AIPanel(props: {
           ))}
         </div>
 
-        {/* Retry affordance — surfaces when the last assistant turn
+        {/* Retry affordance - surfaces when the last assistant turn
             was an error (no credits / CLI not logged in / network).
             Lets the user re-run the same question after fixing the
             cause without having to retype it. */}
@@ -408,7 +408,7 @@ export function AIPanel(props: {
           </div>
         )}
 
-        {/* Apply-rename action — surfaces when the AI suggested a rename
+        {/* Apply-rename action - surfaces when the AI suggested a rename
             for the currently selected function. One-click commits to
             project annotations. */}
         {fnRename && props.onApplyRename && props.current && (
@@ -554,7 +554,7 @@ export function AIPanel(props: {
               disabled={busy || !ready}
               placeholder={ready
                 ? (turns.length === 0 && props.context
-                    ? "Ask about this function — or pick a quick action above. ⏎ to send, ⇧⏎ for newline."
+                    ? "Ask about this function - or pick a quick action above. ⏎ to send, ⇧⏎ for newline."
                     : "Follow up on the analysis…")
                 : "Add an OpenRouter API key in Settings to enable Ember AI."}
               rows={2}
@@ -594,7 +594,7 @@ const quickBtnStyle: React.CSSProperties = {
 
 function NoKeyHint(props: { provider: AiProvider }) {
   // Only openrouter is gated by a "missing key" state at this layer.
-  // CLI providers defer their readiness check to the spawn itself —
+  // CLI providers defer their readiness check to the spawn itself -
   // if assistant/codex isn't installed or isn't logged in, the resulting
   // chat error surfaces the fix (`assistant auth login`, install codex,
   // etc.) right in the chat stream.
@@ -639,7 +639,7 @@ function EmptyState(props: {
         padding: 24, color: C.textMuted,
         fontFamily: serif, fontStyle: "italic", fontSize: 13,
       }}>
-        Open a function in the main view, then come back — quick actions auto-attach the body as context.
+        Open a function in the main view, then come back - quick actions auto-attach the body as context.
       </div>
     );
   }
@@ -671,7 +671,7 @@ function EmptyState(props: {
 
 // One conversational turn. For assistants we light-render Markdown
 // inline (paragraphs, fenced code, single-back-tick code spans). Full
-// Markdown isn't worth the dep — the system prompt steers the model
+// Markdown isn't worth the dep - the system prompt steers the model
 // away from headers / lists / horizontal rules.
 // Renders the agentic tool-call trail attached to an assistant turn.
 // Each entry is one row: tool name + one-arg preview + status dot
@@ -770,7 +770,7 @@ function Turn(props: { turn: ChatTurn }) {
           <span style={{ marginLeft: 6, color: C.accent }}>· streaming…</span>
         )}
       </div>
-      {/* Tool trail above the answer body, scoped to this turn — so
+      {/* Tool trail above the answer body, scoped to this turn - so
           users can audit what the model looked at even after the
           response is done. Collapsible to keep multi-turn history
           tidy when calls pile up. */}
@@ -803,7 +803,7 @@ function Turn(props: { turn: ChatTurn }) {
 // Cheap-and-cheerful Markdown renderer covering the subset our system
 // prompt steers the model toward: paragraphs, single backtick spans,
 // triple-backtick fenced blocks (with optional language tag), and
-// `**bold**` runs. Lists / headers / images / links not handled —
+// `**bold**` runs. Lists / headers / images / links not handled -
 // the system prompt tells the model not to use them.
 function renderMarkdown(src: string): React.ReactNode {
   const out: React.ReactNode[] = [];

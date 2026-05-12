@@ -2,7 +2,7 @@
 
 `agent/` is a TypeScript multi-agent harness that drives assistant (or
 GPT, or any OpenRouter-fronted model) against the ember CLI to do
-reverse-engineering work. It is **not** invoked from `ember(1)` — it
+reverse-engineering work. It is **not** invoked from `ember(1)` - it
 ships as a sibling component (`ember-agent`).
 
 The orchestrator is **you** (or whatever LLM session is talking to the
@@ -52,7 +52,7 @@ key = "sk-..."
 [openrouter]
 # Single-key form (legacy):
 # key = "sk-or-..."
-# Multi-key form — round-robin across keys per worker. Useful for
+# Multi-key form - round-robin across keys per worker. Useful for
 # distributing load across multiple accounts on rate-limited free
 # tiers (e.g. owl-alpha at 200 concurrent workers):
 keys = ["sk-or-account-A", "sk-or-account-B"]
@@ -68,7 +68,7 @@ provider. The UI Settings drawer shows the per-provider key count and
 accepts comma-separated keys when adding new ones.
 
 The packaged Electron app spawns the agent CLI through the user's
-system `node` — Node 22+ is a soft prerequisite for agent features.
+system `node` - Node 22+ is a soft prerequisite for agent features.
 Override the node binary with `EMBER_AGENT_NODE=/path/to/node` if
 not on PATH.
 
@@ -115,7 +115,7 @@ Predicates: `name`, `type`, `note`, `tag`, `xref`, `signature`.
 ember-agent worker --role=namer --binary=./target.elf \
   --scope=fn:0x4012a0 --budget=0.20
 
-# Same but detached — returns run-id and exits immediately:
+# Same but detached - returns run-id and exits immediately:
 ember-agent worker --role=namer --binary=./target.elf \
   --scope=fn:0x4012a0 --budget=0.20 --detach
 
@@ -124,7 +124,7 @@ ember-agent intel ./target.elf query    --subject=0x4012a0 --predicate=name
 ember-agent intel ./target.elf evidence --subject=0x4012a0
 ember-agent intel ./target.elf disputes
 
-# Batched fold — one subprocess, full materialized view as JSON.
+# Batched fold - one subprocess, full materialized view as JSON.
 # Use this when reading N claims; --intel query is one cold start
 # per call.
 ember-agent intel ./target.elf fold --predicate=name --threshold=0.85
@@ -158,7 +158,7 @@ ember-agent fanout --binary=./target.elf --pick=unnamed \
 
 The TEEF-equivalent for agentic naming. Single-pass swarms treat
 each function as an island; the agent looking at `sub_a` sees calls
-to `sub_b` and `sub_c` rendered as `sub_b()`/`sub_c()` — opaque,
+to `sub_b` and `sub_c` rendered as `sub_b()`/`sub_c()` - opaque,
 no anchors to bootstrap from.
 
 Cascade exploits ember's emit-time annotation lookup: re-rendering
@@ -188,7 +188,7 @@ A 0.85+ claim that loses to a dispute is reported under
 see why it was held back.
 
 The loop terminates when a round produces zero new high-confidence
-names — every remaining unknown is genuinely too obscured for the
+names - every remaining unknown is genuinely too obscured for the
 swarm to crack with the current corpus. Round-by-round stats
 (eligible / spawned / new_names / cost / elapsed) print to stderr;
 the JSON result on stdout has the per-round breakdown plus totals.
@@ -247,7 +247,7 @@ namer workers on the boundaries of the most interesting clusters.
 - OpenAI / OpenRouter: input + output (no cache surfaced)
 
 A worker exits cleanly when `usd >= budget`. There is no global cap
-across workers — that's the orchestrator's responsibility.
+across workers - that's the orchestrator's responsibility.
 
 ## Daemon mode
 
@@ -264,7 +264,7 @@ Protocol (stable):
 # request  (one line, tab-delimited)
 <method>\t<key>=<val>[\t<key>=<val>]*
 
-# response — header line + body bytes
+# response - header line + body bytes
 ok <body-bytes>\n<body>\n
 err <message>\n
 ```
@@ -273,7 +273,7 @@ Methods: `ping`, `decompile`, `callees`, `refs_to`, `containing_fn`,
 `functions`, `strings`, `recognize`. The agent's tool wrappers route
 through the daemon when present and fall back to subprocess spawn
 when the daemon failed to start (binary path bad, ember not on PATH,
-etc.) — same answers either way.
+etc.) - same answers either way.
 
 Daemon dies when the worker exits (try/finally in worker.ts).
 
@@ -285,13 +285,13 @@ Daemon dies when the worker exits (try/finally in worker.ts).
   user runs the harness with an assistant API key, validate that
   `cache_creation_input_tokens` / `cache_read_input_tokens` show up
   in the tally as expected.
-- Retry/backoff on transient 429/5xx from any provider — currently a
+- Retry/backoff on transient 429/5xx from any provider - currently a
   flaky upstream kills the worker.
 
 ## Tests
 
 `npm test` runs the suite. Currently covers:
-- `intel/log.test.ts` — fold semantics, retraction, dispute detection,
+- `intel/log.test.ts` - fold semantics, retraction, dispute detection,
   same-agent self-supersede, value-equal non-dispute, id uniqueness.
-- `promote.test.ts` — high-conf rename emission, disputed-skip,
+- `promote.test.ts` - high-conf rename emission, disputed-skip,
   rename/note section split, value sanitization (`#` and newline).

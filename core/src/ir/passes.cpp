@@ -23,7 +23,7 @@ namespace {
 // ============================================================================
 
 // Helper bound: i64 representation. Widths > 64 (I128) can't fit and don't
-// occur on the constant-fold path — SIMD never folds through these helpers.
+// occur on the constant-fold path - SIMD never folds through these helpers.
 // Guarded with a passthrough so a future code path that DOES hit them won't
 // silently corrupt; the i64 payload is returned unchanged.
 [[nodiscard]] i64 mask_signed(i64 v, IrType t) noexcept {
@@ -70,7 +70,7 @@ void for_each_use(const IrInst& inst, F f) {
 }
 
 // ============================================================================
-// AnalysisManager — lazy, invalidatable function-wide analyses
+// AnalysisManager - lazy, invalidatable function-wide analyses
 // ============================================================================
 //
 // Today there's just one cached analysis: a `SsaKey -> (block, inst)` map of
@@ -85,7 +85,7 @@ struct DefLoc { u32 block; u32 inst; };
 // hash tuples, so the cleanup pipeline historically stored its lookups
 // in std::map<SsaKey, …> (red-black tree, every probe = O(log N) plus
 // a heap-allocated node per insert). Profiling on ember-on-itself
-// identified copy_prop, trivial_phi, and the def-map cache as hot — all
+// identified copy_prop, trivial_phi, and the def-map cache as hot - all
 // of them are hash-shaped lookups by their nature. A simple mix of the
 // three fields is enough; all SsaKeys with kind != 3 (Imm) have the
 // version field 0 most of the time, so we make sure it's mixed in too.
@@ -229,13 +229,13 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::Add: return IrValue::make_imm(mask_signed(a.imm + b.imm, dt), dt);
             case IrOp::Sub: return IrValue::make_imm(mask_signed(a.imm - b.imm, dt), dt);
             case IrOp::Mul: return IrValue::make_imm(mask_signed(a.imm * b.imm, dt), dt);
-            // IrOp::Div / IrOp::Mod don't carry signedness — the same opcode
+            // IrOp::Div / IrOp::Mod don't carry signedness - the same opcode
             // is emitted for both DIV (unsigned) and IDIV (signed) lowerings.
             // Folding with C++ `/` and `%` always uses signed semantics, so
             // an unsigned divide of operands with the high bit set in their
             // operand width produces wrong arithmetic. Skip the fold; the
             // emitter prints `a / b` literally, which is correct C as long as
-            // the operand types match — the optimization opportunity is
+            // the operand types match - the optimization opportunity is
             // small (constant-by-constant divides are rare in real code) and
             // not worth the silent miscomputation.
             case IrOp::Div:
@@ -411,7 +411,7 @@ try_fold(const IrInst& inst) noexcept {
     // Pre-index all defs so we can chase Assign chains when comparing phi
     // operands. Without this, `phi(rax_7, t28)` where `t28 = Assign(rax_7)`
     // looks non-trivial to the operand-equality check, and rax stays phi'd
-    // — the pattern that produces the `rax_10` leaks in the emitter.
+    // - the pattern that produces the `rax_10` leaks in the emitter.
     const auto& defs = am.defs(fn);
     auto strip_assigns = [&](IrValue v) {
         for (int hop = 0; hop < 16; ++hop) {
@@ -827,7 +827,7 @@ struct GvnOp {
     const auto& defs = am.defs(fn);
 
     // Live set as a per-block bitvector. Encoded as one big flat vector
-    // with per-block offset table — measurably faster than the previous
+    // with per-block offset table - measurably faster than the previous
     // `std::set<pair<size_t,size_t>>` for hot binaries because the
     // hash/lookup turns into a single byte read, no heap traffic, and
     // the worklist below allocates once. (~3.5x speedup on the cleanup
@@ -935,7 +935,7 @@ struct GvnOp {
 //      Rewritten to Select(CmpSlt(x, 0), Neg(x), x).
 //
 //   3. Add(Xor(x, Ashr(x, sign_bit)), Ashr(x, sign_bit))
-//      → abs(x) — the other two's-complement form.  Xor(x, sign_mask)
+//      → abs(x) - the other two's-complement form.  Xor(x, sign_mask)
 //      flips the bits when negative; adding the sign_mask back
 //      completes the two's-complement negation.  Same rewrite as #2.
 //
@@ -953,7 +953,7 @@ struct GvnOp {
 //      `OnesComplementAbs(x) - 1` (i.e. |x| - 1 for negative x, x for
 //      non-negative).  Not a standalone C idiom, but when wrapped in
 //      Add(..., Ashr(x, sign_bit)) it becomes pattern #3.  Left alone
-//      when not part of a larger pattern — the raw form is more honest.
+//      when not part of a larger pattern - the raw form is more honest.
 
 namespace {
 
@@ -1159,7 +1159,7 @@ struct IdiomRewrite {
 }
 
 // ============================================================================
-// PassManager — fixpoint driver with per-block dirty tracking
+// PassManager - fixpoint driver with per-block dirty tracking
 // ============================================================================
 //
 // Iteration 0 sweeps all blocks. After each iteration, the union of blocks

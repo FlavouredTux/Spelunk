@@ -69,8 +69,8 @@ function applyLocalRenames(text: string, pairs: Record<string, string>): string 
 
 // Heuristic: spot binaries that have been packed / obfuscated /
 // protected (Themida, VMProtect, …). Static analysis is
-// effectively useless on these — the real code only exists in
-// memory at runtime — so we surface a one-line banner before the
+// effectively useless on these - the real code only exists in
+// memory at runtime - so we surface a one-line banner before the
 // user spends ten clicks discovering nothing decodes.
 //
 // Returns a human-readable reason or null when the binary looks
@@ -88,26 +88,26 @@ function detectPackedBinary(info: BinaryInfo): string | null {
   const entrySec = sectionAt(entryNum);
   if (entrySec && !entrySec.flags.includes("x")) {
     const where = entrySec.name || "(unnamed section)";
-    return `entry point lives in '${where}' which isn't marked executable — likely packed or protected (VMProtect, Themida, …); decompilation will mostly fail`;
+    return `entry point lives in '${where}' which isn't marked executable - likely packed or protected (VMProtect, Themida, …); decompilation will mostly fail`;
   }
 
   // Secondary: a "code-shaped" section (named .text / __text / CODE)
   // that's large enough to hold real code but lacks the exec flag.
   // Catches binaries where the entry point WAS rerouted to a tiny
-  // stub section with x — some packers do exactly this.
+  // stub section with x - some packers do exactly this.
   const CODE_NAMES = new Set([".text", "__text", "CODE"]);
   for (const s of info.sections) {
     const sz = parseInt(s.size, 16);
     if (!Number.isFinite(sz) || sz < 0x40000) continue;
     if (!CODE_NAMES.has(s.name)) continue;
     if (!s.flags.includes("x")) {
-      return `'${s.name}' is ${(sz >>> 20).toString()} MB but not marked executable — this binary may be packed or protected`;
+      return `'${s.name}' is ${(sz >>> 20).toString()} MB but not marked executable - this binary may be packed or protected`;
     }
-    // Tertiary: section has exec but lacks read — Byfron/Themida strip
+    // Tertiary: section has exec but lacks read - Byfron/Themida strip
     // all memory-protection flags from .text except CNT_CODE. A real
     // compiler always emits MEM_READ alongside MEM_EXECUTE.
     if (s.flags.includes("x") && !s.flags.includes("r")) {
-      return `'${s.name}' is marked executable but not readable — packer stripped section flags (Byfron, Themida); decompilation will mostly fail`;
+      return `'${s.name}' is marked executable but not readable - packer stripped section flags (Byfron, Themida); decompilation will mostly fail`;
     }
   }
 
@@ -118,7 +118,7 @@ function detectPackedBinary(info: BinaryInfo): string | null {
     const mainCode = info.sections.find((s) =>
       CODE_NAMES.has(s.name) && parseInt(s.size, 16) > 0x40000);
     if (mainCode && entrySec.name !== mainCode.name) {
-      return `entry point is in '${entrySec.name || "(unnamed)"}', not '${mainCode.name}' — likely packed; decompilation will mostly fail`;
+      return `entry point is in '${entrySec.name || "(unnamed)"}', not '${mainCode.name}' - likely packed; decompilation will mostly fail`;
     }
   }
 
@@ -226,7 +226,7 @@ export default function App() {
   const updateSettings = useCallback((s: AppSettings) => {
     setSettings(s);
     saveSettings(s);
-    // Pseudo-C output depends on `--labels` — toggling it would serve
+    // Pseudo-C output depends on `--labels` - toggling it would serve
     // stale text from the renderer cache otherwise.
     clearRendererCaches();
   }, []);
@@ -278,7 +278,7 @@ export default function App() {
   const [hexOpen, setHexOpen] = useState(false);
   // Optional starting vaddr for the next HexView open. Set when the
   // palette falls through with an address that doesn't map to a
-  // function — HexView's auto-jump logic picks it up on mount.
+  // function - HexView's auto-jump logic picks it up on mount.
   const [hexInitialVaddr, setHexInitialVaddr] = useState<number | null>(null);
   const [symbolsOpen, setSymbolsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
@@ -292,12 +292,12 @@ export default function App() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   // Toast for transient actions (bookmarked, exported, …).
   const [toast, setToast] = useState<string | null>(null);
-  // Undo stack — snapshots of the annotations object before each write.
+  // Undo stack - snapshots of the annotations object before each write.
   // Capped to keep memory bounded on long editing sessions.
   const undoStackRef = useRef<Annotations[]>([]);
-  // Lazy xrefs latch — stays false until the first consumer panel is
+  // Lazy xrefs latch - stays false until the first consumer panel is
   // opened, then true forever (per-binary). Kept as a ref so flipping
-  // it doesn't trigger a re-render — the effect that watches xrefsOpen
+  // it doesn't trigger a re-render - the effect that watches xrefsOpen
   // / callGraphOpen / aiOpen reads it directly.
   const xrefsRequestedRef = useRef(false);
   // Keyboard handler needs a stable hook-into for undo, but the actual
@@ -315,7 +315,7 @@ export default function App() {
   const [releaseUpdate, setReleaseUpdate] = useState<ReleaseUpdateStatus | null>(null);
 
   // Apply per-function local renames on top of the cached emitter output.
-  // Pure string substitution — fast even on multi-MB pseudo-C bodies.
+  // Pure string substitution - fast even on multi-MB pseudo-C bodies.
   // Declared early because the keyboard-handler effect (~line 873) lists
   // `code` in its dep array; declaring the memo lower would put it in
   // the temporal dead zone on first render. All deps (rawCode, current,
@@ -330,7 +330,7 @@ export default function App() {
   }, [rawCode, current, fetchView, annotations.localRenames]);
 
   // Strings are only consumed by StringsView and the payload can be hundreds
-  // In-flight async analyses — shown in the status bar so huge binaries
+  // In-flight async analyses - shown in the status bar so huge binaries
   // don't look frozen while xrefs/arities/etc. churn in the background.
   const [pending, setPending] = useState<Set<string>>(new Set());
   const track = useCallback(<T,>(tag: string, p: Promise<T>): Promise<T> => {
@@ -376,7 +376,7 @@ export default function App() {
 
   // Byte-patch dialog. Opened from a right-click on an asm-view
   // instruction line. `origBytes` is the bytes string we display
-  // (post-existing-patch — i.e. what the disasm currently shows).
+  // (post-existing-patch - i.e. what the disasm currently shows).
   const [patching, setPatching] =
     useState<{ vaddr: number; origBytes: string; disasm: string; mode?: "asm" | "hex" } | null>(null);
 
@@ -460,7 +460,7 @@ export default function App() {
 
   // Apply theme + font from settings whenever they change. The exported
   // C / mono bindings are mutable so existing component imports keep
-  // working without prop-drilling — we just bump a render counter on
+  // working without prop-drilling - we just bump a render counter on
   // App so children re-paint with the new values.
   const [themeRev, setThemeRev] = useState(0);
   useEffect(() => {
@@ -494,7 +494,7 @@ export default function App() {
     resumedRef.current = true;
     openRecent(path)
       .then(() => openBinaryAt(path))
-      .catch(() => { /* binary moved or missing — leave welcome screen up */ });
+      .catch(() => { /* binary moved or missing - leave welcome screen up */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -535,11 +535,11 @@ export default function App() {
     const fileName = info.path.split(/[\\/]/).pop() || info.path;
     const fnName   = current ? displayName(current, annotations) : null;
     // Per-view unicode glyph + label. Each glyph is loosely meaningful:
-    //   ❯  pseudo-C  — chevron, like a code prompt
-    //   ▸  asm       — small play triangle, evokes execution
-    //   ◆  cfg       — diamond, the canonical CFG-node shape
-    //   λ  ir        — lambda, the IR / functional-form convention
-    //   φ  ssa       — phi-node, the defining feature of SSA
+    //   ❯  pseudo-C  - chevron, like a code prompt
+    //   ▸  asm       - small play triangle, evokes execution
+    //   ◆  cfg       - diamond, the canonical CFG-node shape
+    //   λ  ir        - lambda, the IR / functional-form convention
+    //   φ  ssa       - phi-node, the defining feature of SSA
     const viewBadge: Record<typeof view, { glyph: string; label: string; key: string }> = {
       pseudo:    { glyph: "❯", label: "pseudo-C",     key: "view_pseudo" },
       asm:       { glyph: "▸", label: "asm",          key: "view_asm"    },
@@ -569,7 +569,7 @@ export default function App() {
       startTimestamp: discordSessionStart.current.ts,
       largeImageKey:  "ember_logo",
       largeImageText: "Ember · from-scratch x86-64 decompiler",
-      // Small overlay corner-icon on the large image — Discord just
+      // Small overlay corner-icon on the large image - Discord just
       // hides this slot when the asset isn't uploaded, so always
       // sending it means the moment you upload view_pseudo / view_asm
       // / view_cfg / view_ir / view_ssa, the badge appears with no
@@ -655,15 +655,15 @@ export default function App() {
       setCurrent(null);
       setHistory([]);
       setHistIdx(-1);
-      // Staged load — each ember CLI invocation re-parses the binary
+      // Staged load - each ember CLI invocation re-parses the binary
       // from scratch, so firing four of them in parallel on a 200 MB
       // PE quadruples the parse cost and thrashes the OS file cache.
       // Order:
-      //   1. header (synchronous)            — UI shell
-      //   2. annotations + functions parallel — sidecar is tiny;
+      //   1. header (synchronous)            - UI shell
+      //   2. annotations + functions parallel - sidecar is tiny;
       //                                         functions gates the sidebar
-      //   3. arities (after functions)       — fills the FunctionHeader
-      //   4. xrefs (lazy)                    — only spawned when the user
+      //   3. arities (after functions)       - fills the FunctionHeader
+      //   4. xrefs (lazy)                    - only spawned when the user
       //                                         opens xrefs / callgraph /
       //                                         AI, where it's actually used
       const header = await loadHeader();
@@ -717,7 +717,7 @@ export default function App() {
     catch (e: any) { setError(e?.message ?? String(e)); }
   }, [openBinaryAt]);
 
-  // Navigate to a function — pushes history (unless we're in back/forward)
+  // Navigate to a function - pushes history (unless we're in back/forward)
   const navigateTo = useCallback((fn: FunctionInfo) => {
     setCurrent(fn);
     if (info) {
@@ -763,7 +763,7 @@ export default function App() {
     });
   }, [info, settings.binaryState, patchSettings]);
 
-  // Bookmark the current function — toggles on if not already saved.
+  // Bookmark the current function - toggles on if not already saved.
   // Bookmarks live per-binary in settings so they survive across
   // sessions and don't leak between unrelated targets.
   const currentBookmarks: Bookmark[] = useMemo(() => {
@@ -925,9 +925,9 @@ export default function App() {
         if (info) { e.preventDefault(); setPluginsPanelOpen((o) => !o); }
         return;
       }
-      // Ctrl+H — hex view; Ctrl+Shift+S — symbols & sections;
-      // Ctrl+B — bookmarks panel; Ctrl+I — identification panel;
-      // bare "b" — toggle bookmark on current.
+      // Ctrl+H - hex view; Ctrl+Shift+S - symbols & sections;
+      // Ctrl+B - bookmarks panel; Ctrl+I - identification panel;
+      // bare "b" - toggle bookmark on current.
       if (mod && !e.shiftKey && (e.key === "h" || e.key === "H")) {
         if (info) { e.preventDefault(); setHexOpen((o) => !o); }
         return;
@@ -1073,7 +1073,7 @@ export default function App() {
 
   const onXref = useCallback((addr: number) => {
     if (!info) return;
-    // fnByAddr unions defined + imports — `info.functions` alone misses
+    // fnByAddr unions defined + imports - `info.functions` alone misses
     // calls to library symbols like `printf` that the user still wants
     // to jump to (the import row in the sidebar shows its PLT/GOT info).
     const match = fnByAddr.get(addr);
@@ -1096,7 +1096,7 @@ export default function App() {
     // Renames / notes / signatures / fields / patches flow into the CLI
     // via --annotations, so cached pseudo-C is stale after them. Local
     // renames are UI-only (post-processed in the renderer), so the
-    // emitter output is still valid — `uiOnly` skips the cache nuke
+    // emitter output is still valid - `uiOnly` skips the cache nuke
     // and the otherwise-mandatory ember CLI re-spawn for the function
     // currently on screen, which used to make every "apply" pill click
     // wait for a full lift+SSA+cleanup pipeline run.
@@ -1114,7 +1114,7 @@ export default function App() {
   }, [info, annotations]);
 
   // Restore the previous annotations snapshot. The current state is
-  // pushed onto a redo stack — but we keep this minimal (undo only)
+  // pushed onto a redo stack - but we keep this minimal (undo only)
   // since rename / note mutations are quick to redo by hand.
   const undoLast = useCallback(() => {
     const prev = undoStackRef.current.pop();
@@ -1163,7 +1163,7 @@ export default function App() {
 
   // Import annotations from a user-chosen JSON file, merging into the
   // current set. Strategy: per-map union, with imported values winning
-  // on collisions — the user is explicitly pulling in someone else's
+  // on collisions - the user is explicitly pulling in someone else's
   // work, so their renames override. A replace-instead-of-merge flow
   // can be added later if the use case shows up.
   const handleImport = useCallback(async () => {
@@ -1544,7 +1544,7 @@ export default function App() {
               display: "flex", alignItems: "center", gap: 6,
               ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
             }}
-            title="Agent harness — swarm intel, disputes, promote"
+            title="Agent harness - swarm intel, disputes, promote"
           >
             <span style={{ color: C.accent }}>◈</span>
             <span>agentic</span>
@@ -1843,7 +1843,7 @@ export default function App() {
           onSelect={(f) => navigateTo(f)}
           onJumpAddress={(v) => {
             // Palette accepts hex addresses that don't match a function
-            // start — open the hex view at the typed vaddr instead of
+            // start - open the hex view at the typed vaddr instead of
             // silently doing nothing.
             jumpToAddress(v);
           }}

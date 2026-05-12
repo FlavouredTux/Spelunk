@@ -1,6 +1,6 @@
 // Drives the Linux perf_event_open backend end-to-end against the
 // `dbg_target` fixture. Exercises the same shape as dbg_smoke_test.cpp
-// but through BackendKind::Perf — HW execute breakpoint, HW data
+// but through BackendKind::Perf - HW execute breakpoint, HW data
 // watchpoint, and the cached-register-from-sample read path.
 //
 // Skip semantics: perf_event_open(PERF_TYPE_BREAKPOINT) is gated by
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     if (!t_r) {
         if (is_perf_denial(t_r.error())) {
             std::fprintf(stderr,
-                "SKIP: perf backend denied (%s) — set "
+                "SKIP: perf backend denied (%s) - set "
                 "/proc/sys/kernel/perf_event_paranoid <= 1 or run as root\n",
                 t_r.error().message.c_str());
             return 77;

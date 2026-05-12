@@ -15,7 +15,7 @@ The fixture exercises every parser path our loader depends on:
 Two functions are emitted:
 
   main  (RVA 0x1000): `sub rsp, 0x28; call [GetTickCount]; add rsp, 0x28; ret`
-  add42 (RVA 0x1010): `lea eax, [rcx + 0x2a]; ret`   — Win64: arg0 in rcx
+  add42 (RVA 0x1010): `lea eax, [rcx + 0x2a]; ret`   - Win64: arg0 in rcx
 
 The binary is not actually runnable (it isn't signed, the PE checksum is
 zero, and there's no DOS stub payload), but it passes every structural
@@ -194,7 +194,7 @@ def main() -> int:
 
     rdata_virt_size = len(rdata)
 
-    # Now we know every RVA — build the main function bytes. The call
+    # Now we know every RVA - build the main function bytes. The call
     # displacement encodes the absolute difference between (RIP after the
     # call instruction) and the IAT slot.
     iat_slot_rva = iat_rva           # first (and only) IAT entry
@@ -246,7 +246,7 @@ def main() -> int:
     # ---- Headers --------------------------------------------------------
     # DOS header with only MZ magic + e_lfanew at 0x3C. We point e_lfanew
     # at 0x40 so the PE sig sits immediately after the DOS header (no DOS
-    # stub — Ember doesn't execute the stub and Windows ignores an empty
+    # stub - Ember doesn't execute the stub and Windows ignores an empty
     # one for our purposes).
     dos = bytearray(b"\x00" * 0x40)
     dos[0:2] = b"MZ"

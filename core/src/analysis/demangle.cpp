@@ -15,12 +15,12 @@ namespace {
 // Recursive-descent parser for a conservative subset of the Itanium ABI
 // mangling grammar. We build output strings in place and maintain the
 // substitution list as the spec requires. On any construct we don't
-// understand we set `failed` and unwind — the top-level returns nullopt
+// understand we set `failed` and unwind - the top-level returns nullopt
 // and the display path falls back to the mangled name unchanged.
 struct Dem {
     std::string_view in;
     std::size_t      pos = 0;
-    // Substitution table — each entry is a previously-parsed type or nested
+    // Substitution table - each entry is a previously-parsed type or nested
     // name, in encounter order. S_ = subs[0], S0_ = subs[1], ...
     std::vector<std::string> subs;
     // Active template-argument list, if we're currently inside one.
@@ -30,7 +30,7 @@ struct Dem {
     // Set when the encoding's name is a ctor / dtor. Itanium 5.1.5 encodes
     // the return type of templated functions at the start of the bare-
     // function-type, but ctors and dtors have no return type even when
-    // templated — without this flag, parse_encoding silently drops the
+    // templated - without this flag, parse_encoding silently drops the
     // first real argument as if it were the return.
     bool is_ctor_dtor = false;
     bool failed = false;
@@ -40,7 +40,7 @@ struct Dem {
     // hostile / corrupt symbol table). Itanium permits arbitrary
     // nesting; without a cap, parse_type → parse_type recursion can
     // exhaust the 8 MB Linux stack and crash the whole process. Real
-    // symbols never approach this depth — clang's own mangler caps
+    // symbols never approach this depth - clang's own mangler caps
     // around 256 in practice. Bail past the cap by setting `failed`
     // (the caller treats failure as "leave the symbol mangled" rather
     // than crashing).
@@ -184,15 +184,15 @@ std::string parse_ctor_dtor(Dem& d, std::string_view enclosing) {
     const char a = d.in[d.pos];
     const char b = d.in[d.pos + 1];
     d.pos += 2;
-    // The ctor/dtor name is the bare class identifier — without the
+    // The ctor/dtor name is the bare class identifier - without the
     // class's own template args, which show up only in the qualifier.
     // For `basic_string<char, …>::basic_string<Alloc>(…)` the ctor's
     // mangled `Cn` resolves to "basic_string", with the ctor's *own*
     // template args (`<Alloc>`) tacked on by the surrounding nested-name
     // parser via the `I…E` that follows. Without stripping the class
     // template args here the ctor ends up named
-    // `basic_string<char, …><Alloc>` — two template arg lists glued
-    // together — and the reader has no way to distinguish which
+    // `basic_string<char, …><Alloc>` - two template arg lists glued
+    // together - and the reader has no way to distinguish which
     // belongs to the class vs the ctor.
     auto strip_template = [](std::string_view s) -> std::string_view {
         if (s.empty() || s.back() != '>') return s;
@@ -217,9 +217,9 @@ std::string parse_ctor_dtor(Dem& d, std::string_view enclosing) {
     return {};
 }
 
-// Last component of a nested-name — pulls the "this" class for ctor/dtor.
+// Last component of a nested-name - pulls the "this" class for ctor/dtor.
 // The naive `rfind("::")` lands on a `::` inside the template args (think
-// `…basic_string<char, std::char_traits<char>, std::allocator<char>>` —
+// `…basic_string<char, std::char_traits<char>, std::allocator<char>>` -
 // the last `::` is inside `std::char_traits<…>`). We track angle-bracket
 // depth so the split happens between the qualifier and the class name,
 // not in the middle of a template argument list.
@@ -239,7 +239,7 @@ std::string last_component(std::string_view nested) {
     return std::string(nested.substr(last + 2));
 }
 
-// <builtin-type> — one letter (or 'D' + one letter for a few cases).
+// <builtin-type> - one letter (or 'D' + one letter for a few cases).
 std::optional<std::string> parse_builtin(Dem& d) {
     if (d.eof()) return std::nullopt;
     const char c = d.peek();
@@ -368,7 +368,7 @@ void parse_template_args(Dem& d, std::string& out) {
             if (!d.match('E')) { d.fail(); return; }
             out += num.empty() ? t : num;
         } else if (d.peek() == 'J') {
-            // Pack: J args E — just join the inner types comma-separated.
+            // Pack: J args E - just join the inner types comma-separated.
             ++d.pos;
             bool first_pack = true;
             while (!d.eof() && d.peek() != 'E') {
@@ -391,10 +391,10 @@ void parse_template_args(Dem& d, std::string& out) {
     out += '>';
 }
 
-// Trivial expression / literal handling — just enough for X ... E within
+// Trivial expression / literal handling - just enough for X ... E within
 // template args. A lot of real-world templates use simple integer literals.
 void parse_expression_or_literal(Dem& d, std::string& out) {
-    // Most common: L<type><value>E — integer literal.
+    // Most common: L<type><value>E - integer literal.
     if (d.peek() == 'L') {
         ++d.pos;
         std::string t;
@@ -439,7 +439,7 @@ void parse_unqualified_into(Dem& d, std::string& out,
 // table.
 void parse_nested(Dem& d, std::string& out, std::string* cv_suffix) {
     if (!d.match('N')) { d.fail(); return; }
-    // CV qualifiers on the implicit `this` — 'r' restrict, 'V' volatile,
+    // CV qualifiers on the implicit `this` - 'r' restrict, 'V' volatile,
     // 'K' const. They apply to the function type, rendered as a suffix on
     // the complete declaration (`foo() const`, not `foo const()`).
     std::string cv;
@@ -485,7 +485,7 @@ void parse_nested(Dem& d, std::string& out, std::string* cv_suffix) {
         // For
         //   _ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEC1IS3_EEPKcRKS3_
         // S3_ is supposed to resolve to std::allocator<char> (the ctor's
-        // template arg) but resolved to the templated basic_string — which
+        // template arg) but resolved to the templated basic_string - which
         // produced the garbled `std::string::allocator<char>><std::string>`
         // we shipped in earlier C++ stdlib renderings.
         d.subs.push_back(assembled);
@@ -514,7 +514,7 @@ void parse_nested(Dem& d, std::string& out, std::string* cv_suffix) {
 //          | K<type> | V<type> | A <number> _ <type>
 //          | <class-enum-type> | <substitution> | <template-param>
 //          | M <class> <type>      (pointer-to-member, partial support)
-//          | F ... E               (function type — rare in params; skip)
+//          | F ... E               (function type - rare in params; skip)
 void parse_type(Dem& d, std::string& out) {
     if (d.eof()) { d.fail(); return; }
     if (d.depth >= Dem::kMaxDepth) { d.fail(); return; }
@@ -582,7 +582,7 @@ void parse_type(Dem& d, std::string& out) {
         return;
     }
     if (c == 'F') {
-        // Function type: F <return> <args>* E — render as ret(args) for
+        // Function type: F <return> <args>* E - render as ret(args) for
         // function-pointer params. Common enough to support minimally.
         ++d.pos;
         std::string ret_t;
@@ -677,7 +677,7 @@ void parse_type(Dem& d, std::string& out) {
 // <name> ::= <nested-name> | <unscoped-name> | <local-name> | <substitution>
 void parse_name(Dem& d, std::string& out, std::string* cv_suffix) {
     if (d.peek() == 'N') { parse_nested(d, out, cv_suffix); return; }
-    if (d.peek() == 'Z') { d.fail(); return; }  // local-name — not supported
+    if (d.peek() == 'Z') { d.fail(); return; }  // local-name - not supported
     if (d.peek() == 'S') {
         auto s = parse_substitution(d);
         if (d.failed || !s) { d.fail(); return; }
@@ -1001,7 +1001,7 @@ stdlib_alias(std::string name, const std::vector<std::string>& args) {
 }
 
 // Collapse the verbose libstdc++ template forms into their canonical
-// typedef names. Hex-Rays does the same — without this, every C++ string
+// typedef names. Hex-Rays does the same - without this, every C++ string
 // or stream operation in a decompile drowns the reader in
 // `std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>`
 // where the source code only ever wrote `std::string`. A small fixed
@@ -1037,7 +1037,7 @@ std::string simplify_stdlib_templates(std::string s) {
         {"std::basic_streambuf<char, std::char_traits<char>>",  "std::streambuf"},
         {"std::basic_ios<char, std::char_traits<char> >", "std::ios"},
         {"std::basic_ios<char, std::char_traits<char>>",  "std::ios"},
-        // Destructor / leaf-class-name variants (no `std::` prefix) —
+        // Destructor / leaf-class-name variants (no `std::` prefix) -
         // the demangler renders ctor / dtor names as `~basic_X<…>` with
         // template args of the parent class, and those don't pass the
         // `std::`-prefixed alias above. Matching the bare leaf form
@@ -1064,13 +1064,13 @@ std::string simplify_stdlib_templates(std::string s) {
         // it to its visible cousin `std::allocator<char>`.
         {"std::__new_allocator<char>", "std::allocator<char>"},
         {"__new_allocator<char>",      "allocator<char>"},
-        // Bare-class form for ctor/dtor names — `~__new_allocator` /
+        // Bare-class form for ctor/dtor names - `~__new_allocator` /
         // `__new_allocator()` shows up after our strip-template-args
         // step on dtors of templated allocator classes.
         {"__new_allocator", "allocator"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char> >", "std::stringstream"},
         {"std::basic_stringstream<char, std::char_traits<char>, std::allocator<char>>",  "std::stringstream"},
-        // Container default-allocator collapse — `vector<T, allocator<T>>`
+        // Container default-allocator collapse - `vector<T, allocator<T>>`
         // → `vector<T>` when the allocator's parameter literally matches.
         // We do this generically below, but pin a couple of common ones for
         // shorter chains the generic pass would also handle.
@@ -1120,7 +1120,7 @@ std::string strip_signature_suffix(std::string_view s) {
             if (depth == 0) {
                 // If what remains ends in `operator` (with no trailing char),
                 // the `()` we'd strip is actually part of the call-operator's
-                // own name — e.g. `operator()`. Restore.
+                // own name - e.g. `operator()`. Restore.
                 std::string_view head = s.substr(0, i);
                 if (head.ends_with("operator")) return std::string(s);
                 return std::string(head);

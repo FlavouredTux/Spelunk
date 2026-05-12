@@ -23,7 +23,7 @@ struct Args;
 
 // Read cached fingerprint TSV for `binary_path`, or compute and store it.
 // Loads `binary_path` only on cache miss. Exits the process on load failure
-// (this is run_diff's hot path — it has nothing to fall back to).
+// (this is run_diff's hot path - it has nothing to fall back to).
 [[nodiscard]] std::string fingerprints_cached_or_compute(
     const std::filesystem::path& binary_path,
     const std::filesystem::path& cache_dir,

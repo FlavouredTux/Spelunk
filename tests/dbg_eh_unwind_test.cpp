@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
     CHECK(!eh_frames->empty(), "eh frames non-empty");
     CHECK(eh_frames->front().pc == bp_va, "eh frame 0 == bp_va");
 
-    // The .eh_frame trace must reach into main — i.e. produce at
+    // The .eh_frame trace must reach into main - i.e. produce at
     // least 2 frames. RBP-walk must NOT outrun it (the whole point
     // of CFI is to be at least as good).
     CHECK(eh_frames->size() >= 2, "eh frames >= 2");

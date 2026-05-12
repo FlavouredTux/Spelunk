@@ -38,7 +38,7 @@ struct IrFunction;  // <ember/ir/ir.hpp>
 // Pre-seed the function's `value_types` from each Call to a known import:
 //
 //   - The post-call value of RAX (the next Clobber's dst, after SSA) is
-//     refined to the import's return type — `infer_local_types` then
+//     refined to the import's return type - `infer_local_types` then
 //     propagates that forward through the body. So `void* p = fopen(...)`
 //     keeps its `void*` typing through every subsequent fread/fclose.
 //

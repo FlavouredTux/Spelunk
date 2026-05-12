@@ -7,7 +7,7 @@
 // kernel-supplied `task_for_pid` gateway gives us a port that
 // represents the tracee's address space, registers, threads, and
 // exception delivery. ptrace plays no role here beyond the optional
-// PT_TRACE_ME signal-routing variant — every primitive uses
+// PT_TRACE_ME signal-routing variant - every primitive uses
 // mach_vm_* / thread_get_state / mach_msg.
 
 #include <cstddef>
@@ -60,7 +60,7 @@ struct ThreadState {
 
 class MachOTarget final : public Target {
 public:
-    // task_port and exc_port are mach_port_name_t — u32 in our task's
+    // task_port and exc_port are mach_port_name_t - u32 in our task's
     // port-name space. We pass them as u32 to keep this header free
     // of <mach/mach.h>; the impl translates back at call sites.
     MachOTarget(ProcessId pid_v, u32 task_port_v, u32 exc_port_v) noexcept

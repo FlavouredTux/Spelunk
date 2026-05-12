@@ -37,7 +37,7 @@ load_binary_from_args(const ember::cli::Args& args) {
         if (!rr) return std::unexpected(std::move(rr).error());
         return std::unique_ptr<ember::Binary>(std::move(*rr));
     }
-    // --raw-bytes is the one-region shortcut for runtime captures —
+    // --raw-bytes is the one-region shortcut for runtime captures -
     // splice a memory dump into a single rwx region at --base-va. No
     // PE container, no manifest. base_va parsed as 0x-prefixed or
     // bare hex; bases parsed as hex regardless of prefix to match the

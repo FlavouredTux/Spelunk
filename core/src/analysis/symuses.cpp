@@ -23,7 +23,7 @@ namespace {
     return r == Reg::Rsp || r == Reg::Rbp;
 }
 
-// Map a Reg to a canonical 64-bit GP index 0..15 (rax..r15) — collapses
+// Map a Reg to a canonical 64-bit GP index 0..15 (rax..r15) - collapses
 // 8/16/32-bit subregister forms to their parent. -1 for non-GP regs.
 // Used by the taint walker to track 16 GPs as a u16 bitmask.
 [[nodiscard]] int gp64_index(Reg r) noexcept {
@@ -52,7 +52,7 @@ namespace {
 // True when the register form spans the full 64- or 32-bit width
 // (32-bit writes zero-extend the upper half, so they overwrite the
 // taint just as a 64-bit write would). 8- and 16-bit writes preserve
-// upper bits — taint survives.
+// upper bits - taint survives.
 [[nodiscard]] bool is_full_width(Reg r) noexcept {
     const auto v = static_cast<unsigned>(r);
     return (v >= static_cast<unsigned>(Reg::Eax) &&
@@ -134,7 +134,7 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
 
     // ---- Direct path: data_xrefs hits already keyed by entry VA ----
     // Catches the GCC/Clang shape `lea reg, [rip+entry_va]`. Sober's
-    // base+offset shape produces no entries here — handled below.
+    // base+offset shape produces no entries here - handled below.
     for (const auto& [target, bucket] : xrefs) {
         auto it = by_va.find(target);
         if (it == by_va.end()) continue;
@@ -148,21 +148,21 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
     }
 
     // ---- Scope path: per-function instruction scan ----
-    // Functions that have access to the table base — either by direct
+    // Functions that have access to the table base - either by direct
     // rip-rel reference, or by reading a slot whose value is the base
     // (= the imm64-stored / R_*_RELATIVE shapes that --refs-to-loose
     // already surfaces). Sober's libloader stashes the base in a
     // struct field (`mov rax, [rsi+0x288]`) so the strict path returns
     // zero hits and we miss every consumer. Each scope fn is then
     // re-decoded looking for displacement / immediate operands whose
-    // value is an exact entry offset within the table — the shape
+    // value is an exact entry offset within the table - the shape
     // obfuscated loaders use to compute entry VAs from a pre-loaded
     // base register. Weak filter (exact-offset match) only; false
     // positives are bounded by the rarity of random constants landing
     // exactly on a packed-table boundary.
     std::unordered_set<addr_t>          scope_fns;
     // Per-fn list of base-load callsite VAs (each instruction at which
-    // the function obtained the base — directly or via a slot read).
+    // the function obtained the base - directly or via a slot read).
     // Surfaced through SymUseRow::base_load_sites for diagnostics.
     std::unordered_map<addr_t, std::vector<addr_t>> base_loads_by_fn;
 
@@ -183,7 +183,7 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
 
     // imm64-stored slots: scan every readable section for a qword
     // matching table_va; functions that read the slot RIP-relative
-    // are scope candidates. Pointer-aligned only — without that guard
+    // are scope candidates. Pointer-aligned only - without that guard
     // a single legitimate slot produces a cluster of byte-shifted
     // false positives at the same location.
     const bool        is_64       = arch_pointer_bits(b.arch()) == 64;
@@ -216,7 +216,7 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
 
     // Relocated slots (ELF only): the qword is zero on disk but the
     // dynamic linker writes table_va in at load time. The on-disk
-    // scan above misses these — the relocation table knows the
+    // scan above misses these - the relocation table knows the
     // post-load value.
     if (const auto* elf = dynamic_cast<const ElfBinary*>(&b)) {
         const auto reloc_map = elf->relocated_qwords();
@@ -318,7 +318,7 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
                 }
 
                 if (opts.no_taint) {
-                    // Diagnostic mode: weak-filter only — emit any
+                    // Diagnostic mode: weak-filter only - emit any
                     // operand IMM / mem.disp matching an exact entry
                     // offset. Same shape as the pre-taint behaviour.
                     bool hit = false;
@@ -431,7 +431,7 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
             if (l.callsite != r.callsite) return l.callsite < r.callsite;
             return l.string_va < r.string_va;
         });
-        // De-dupe identical (callsite, string_va) pairs — a single
+        // De-dupe identical (callsite, string_va) pairs - a single
         // instruction with two equivalent operand slots referencing
         // the same entry.
         row.sites.erase(std::unique(row.sites.begin(), row.sites.end(),

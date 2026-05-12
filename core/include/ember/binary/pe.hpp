@@ -45,7 +45,7 @@ public:
         return image_base_;
     }
 
-    // VA span — derived from the highest section's RVA + size. PE
+    // VA span - derived from the highest section's RVA + size. PE
     // optional header carries SizeOfImage but it's not surfaced here;
     // walking sections gives the same number in practice.
     [[nodiscard]] addr_t mapped_size() const noexcept override {
@@ -57,7 +57,7 @@ public:
         return hi - image_base_;
     }
 
-    // Optional header data directory entries. Fields carry RVAs — callers
+    // Optional header data directory entries. Fields carry RVAs - callers
     // add image_base() to get absolute VAs. Index with the standard
     // IMAGE_DIRECTORY_ENTRY_* constants (EXPORT=0, IMPORT=1, EXCEPTION=3,
     // etc.). Size zero → directory absent.
@@ -95,7 +95,7 @@ public:
 
     // Per-procedure stack-local hints harvested from S_BPREL32 /
     // S_REGREL32 records. The vector entries carry raw PDB
-    // (frame_offset, register) — the consumer (frame analysis) maps
+    // (frame_offset, register) - the consumer (frame analysis) maps
     // them to entry-rsp-relative offsets using the analysis-derived
     // frame size. Rendered type strings are pre-resolved against
     // the PDB's TPI stream so callers don't need access to it.
@@ -155,7 +155,7 @@ private:
     [[nodiscard]] Result<void>
     parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_name);
     // Walks IMAGE_DIRECTORY_ENTRY_TLS (data dir 9). The TLS callback
-    // array is the first userland code that runs in any PE — packers,
+    // array is the first userland code that runs in any PE - packers,
     // anti-cheats, and obfuscators install hooks here long before
     // `main`. Without listing them, the entry-point view is misleading.
     // Synthesizes `tls_callback_<N>` Symbol entries; size gets filled in

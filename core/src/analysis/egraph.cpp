@@ -218,7 +218,7 @@ bool EGraph::merge(ClassId a, ClassId b) {
     if (classes_[a].rank < classes_[b].rank) std::swap(a, b);
     classes_[b].parent = a;
     if (classes_[a].rank == classes_[b].rank) classes_[a].rank++;
-    // Move b's nodes and use_list into a. We don't dedupe — rebuild() does.
+    // Move b's nodes and use_list into a. We don't dedupe - rebuild() does.
     auto& ca = classes_[a];
     auto& cb = classes_[b];
     ca.nodes.insert(ca.nodes.end(), cb.nodes.begin(), cb.nodes.end());
@@ -451,7 +451,7 @@ u64 EGraph::hash_class_(ClassId c, std::size_t depth) const {
     //   1. Pre-mark this class with a stable cycle-break sentinel so
     //      recursion through cycles converges.
     //   2. For each ENode in the class, compute hash_node_ recursively.
-    //   3. Sort the node-hashes, fold them with mix64 — a multiset hash
+    //   3. Sort the node-hashes, fold them with mix64 - a multiset hash
     //      of the class's ENode contents. ClassId-independent.
     constexpr u64 kCycleSentinel = 0xFEEDFACEDEADC0DEULL;
     hash_memo_[c] = kCycleSentinel;

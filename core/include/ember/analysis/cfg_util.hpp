@@ -9,7 +9,7 @@
 
 namespace ember {
 
-// Reverse-post-order of the IR CFG starting at `fn.start`. Iterative DFS —
+// Reverse-post-order of the IR CFG starting at `fn.start`. Iterative DFS -
 // safe for deep pathological CFGs where the recursive lambda version would
 // blow the stack. Deterministic given stable block_at / successors order.
 [[nodiscard]] std::vector<addr_t> compute_rpo(const IrFunction& fn);

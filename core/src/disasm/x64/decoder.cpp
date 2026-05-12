@@ -144,7 +144,7 @@ constexpr std::array<OpcodeEntry, 256> build_primary() noexcept {
     t[0x90] = op(Mnemonic::Nop);
     // 0x91..0x97 = xchg <reg>, rAX. Compilers emit `48 92` (xchg rdx, rax)
     // routinely as a tail fixup when a small struct is returned in rdx:rax
-    // pair but the assigning code wrote rax:rdx — the xchg flips them so
+    // pair but the assigning code wrote rax:rdx - the xchg flips them so
     // the SysV ABI sees them in the right order. Without this we lose the
     // assignments to rdx, the cleanup pipeline DCEs them as dead, and any
     // string_view-returning function decompiles to empty switch arms.
@@ -212,7 +212,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x05] = op(Mnemonic::Syscall);
     t[0x0B] = op(Mnemonic::Ud2);
     t[0x1F] = op(Mnemonic::Nop, OpSpec::Ev, OpSpec::None, OpSpec::None, true);
-    // System-instruction zero-operand opcodes — anti-debug pipelines lean
+    // System-instruction zero-operand opcodes - anti-debug pipelines lean
     // on rdtsc / cpuid heavily, and a single missing entry at any of these
     // aborts linear disassembly mid-function (the next byte is consumed as
     // a fresh opcode and decode error cascades). All take no explicit
@@ -249,7 +249,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     t[0x5F] = op(Mnemonic::Maxps,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xC6] = op(Mnemonic::Shufps, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);
 
-    // CMovCC: 0x0F 4x — Gv, Ev. Indexed in condition order (o/no/b/ae/…).
+    // CMovCC: 0x0F 4x - Gv, Ev. Indexed in condition order (o/no/b/ae/…).
     constexpr Mnemonic cmovs[16] = {
         Mnemonic::Cmovo,  Mnemonic::Cmovno, Mnemonic::Cmovb,  Mnemonic::Cmovae,
         Mnemonic::Cmove,  Mnemonic::Cmovne, Mnemonic::Cmovbe, Mnemonic::Cmova,
@@ -270,7 +270,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
         t[0x80 + i] = op(jccs[i], OpSpec::Jz);
     }
 
-    // SetCC: 0x0F 9x — Eb (byte destination).
+    // SetCC: 0x0F 9x - Eb (byte destination).
     constexpr Mnemonic setccs[16] = {
         Mnemonic::Seto,  Mnemonic::Setno, Mnemonic::Setb,  Mnemonic::Setae,
         Mnemonic::Sete,  Mnemonic::Setne, Mnemonic::Setbe, Mnemonic::Seta,
@@ -389,7 +389,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0x68] = op(Mnemonic::Punpckhbw,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x69] = op(Mnemonic::Punpckhwd,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x6A] = op(Mnemonic::Punpckhdq,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
-    // Saturating arith / pavg / pmin/max — all (Vx, Wx) shape.
+    // Saturating arith / pavg / pmin/max - all (Vx, Wx) shape.
     t[0xD8] = op(Mnemonic::Psubusb,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xD9] = op(Mnemonic::Psubusw,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xDC] = op(Mnemonic::Paddusb,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
@@ -416,7 +416,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0xF1] = op(Mnemonic::Psllw,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xF2] = op(Mnemonic::Pslld,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xF3] = op(Mnemonic::Psllq,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
-    // 0x71/72/73 are opcode-extension groups — the ModR/M reg field
+    // 0x71/72/73 are opcode-extension groups - the ModR/M reg field
     // selects the actual psllX/psrlX/psraX variant.
     t[0x71] = grp(Grp_71_66);
     t[0x72] = grp(Grp_72_66);
@@ -1042,9 +1042,9 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
 
         // Mandatory-prefix dispatch: 0x66 / 0xF3 / 0xF2 before 0x0F select
         // SSE secondary tables. Consuming the prefix for dispatch means we
-        // shouldn't also interpret it as opsize/rep — clear the bit.
+        // shouldn't also interpret it as opsize/rep - clear the bit.
         // Either a real mnemonic OR a group entry (mnemonic=Invalid,
-        // group!=0 — opcode-extension dispatch) counts as "the 66 table
+        // group!=0 - opcode-extension dispatch) counts as "the 66 table
         // owns this opcode".
         const auto has_entry = [](const OpcodeEntry& e) {
             return e.mnemonic != Mnemonic::Invalid || e.group != 0;

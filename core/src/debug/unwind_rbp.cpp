@@ -29,7 +29,7 @@ unwind_rbp(Target& t, ThreadId tid, std::size_t max_frames) {
         std::memcpy(&ret_addr,  buf + 8, 8);
 
         if (ret_addr == 0) break;
-        // Cycle / non-progressing chain — bail rather than spin forever.
+        // Cycle / non-progressing chain - bail rather than spin forever.
         if (saved_rbp <= rbp) {
             out.push_back({ret_addr, saved_rbp, 0});
             break;

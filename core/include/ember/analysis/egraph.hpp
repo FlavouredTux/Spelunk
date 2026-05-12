@@ -17,7 +17,7 @@ namespace ember::egraph {
 // Used by L3 of TEEF Max. Two functions in the
 // same compiler-equivalence orbit have e-graphs that, after saturation
 // with our compiler-mimicking ruleset, hash to overlapping multisets
-// of canonical-form e-class hashes — so MinHash overlap on those
+// of canonical-form e-class hashes - so MinHash overlap on those
 // hashes recovers cross-compiler / cross-flag matches that the
 // single-point cleanup-canonical hash (L2) misses.
 //
@@ -26,7 +26,7 @@ namespace ember::egraph {
 //     ops (Phi/Branch/Call/Load/Store/Clobber) collapse into Opaque
 //     carrying a stable id, so they participate in hash-cons but never
 //     unify with each other.
-//   - Type tag is part of the node identity — Add/i32 doesn't unify
+//   - Type tag is part of the node identity - Add/i32 doesn't unify
 //     with Add/i64. Matches what real compilers do.
 //   - Children are ClassIds (after find()), not NodeIds. Hash-cons keys
 //     become invalid after merge() and need rebuild() before lookup.
@@ -89,7 +89,7 @@ struct ENode {
 // Public-facing pattern surface for the rewrite engine. Patterns are
 // trees of `Pat::*` factory results; placeholders (`Pat::var(name)`)
 // match any e-class and bind it to `name`. Limited expressiveness on
-// purpose — only what the 6-rule prototype actually needs.
+// purpose - only what the 6-rule prototype actually needs.
 struct Pat {
     enum class Kind : u8 { Var, Const, Op };
     Kind                            kind = Kind::Var;

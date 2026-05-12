@@ -1,7 +1,7 @@
 // Memory read/write for the perf backend. Identical mechanism to
 // ptrace_mem.cpp: /proc/<pid>/mem opened once, lazily, used for every
 // access. The perf backend never had a ptrace tracer to begin with, so
-// the access path is exactly the same — short reads at unmapped pages
+// the access path is exactly the same - short reads at unmapped pages
 // surface as a partial returned count, not an error.
 
 #include "perf_target.hpp"

@@ -21,7 +21,7 @@ constexpr std::size_t kPaddingRun  = 4;            // NUL run that ends the tabl
 }
 
 // Built-in keyword list. Order = display order. A symbol can land in
-// multiple buckets — `dl_iterate_phdr` is loader and anti-tamper, etc.
+// multiple buckets - `dl_iterate_phdr` is loader and anti-tamper, etc.
 struct CategorySpec {
     std::string_view              name;
     std::span<const std::string_view> keywords;
@@ -90,7 +90,7 @@ Result<SymtableWalk> walk_symtable(const Binary& b, addr_t va) {
             break;
         }
         // Termination check #1: 4+ NULs in a row at the read cursor.
-        // Only counts as padding once the first byte is NUL — a lone
+        // Only counts as padding once the first byte is NUL - a lone
         // empty string is still a valid entry.
         if (bytes[pos] == std::byte{0}) {
             std::size_t run = 0;
@@ -112,7 +112,7 @@ Result<SymtableWalk> walk_symtable(const Binary& b, addr_t va) {
         const std::size_t start = pos;
         while (pos < bytes.size() && bytes[pos] != std::byte{0}) {
             if (!is_printable(bytes[pos])) {
-                // Mid-string corruption — stop before the bad byte.
+                // Mid-string corruption - stop before the bad byte.
                 w.terminated_by = SymtableTermination::NonPrintable;
                 pos = start;
                 goto done;
@@ -120,7 +120,7 @@ Result<SymtableWalk> walk_symtable(const Binary& b, addr_t va) {
             ++pos;
         }
         if (pos >= bytes.size()) {
-            // Last string lacks a NUL terminator — treat as walked off
+            // Last string lacks a NUL terminator - treat as walked off
             // readable memory, drop the unterminated tail.
             w.terminated_by = SymtableTermination::SegmentEnd;
             pos = start;

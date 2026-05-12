@@ -7,7 +7,7 @@ import type { BinaryInfo, FunctionInfo, Annotations } from "../types";
 // supplies a glob pattern with a single `*` and a template that uses
 // `*` to interpolate the captured part. Matches are computed against
 // each function's currently-displayed name (existing rename if any,
-// else the discovered name) — so iterating "rename log_* -> Logger_*"
+// else the discovered name) - so iterating "rename log_* -> Logger_*"
 // then "Logger_* -> NetLogger_*" works the way you'd expect.
 //
 // Rule that mirrors the CLI: any address that already carries a
@@ -40,14 +40,14 @@ export function BulkRenameDialog(props: {
   const compiled = useMemo(() => {
     const star = pattern.indexOf("*");
     if (star < 0) {
-      // Exact match — empty capture. Useful for "rename main -> entry".
+      // Exact match - empty capture. Useful for "rename main -> entry".
       return { match: (name: string) => name === pattern ? "" : null };
     }
     const prefix = pattern.slice(0, star);
     const suffix = pattern.slice(star + 1);
     const tail   = pattern.indexOf("*", star + 1);
     if (tail >= 0) {
-      // Multi-star pattern — fall back to "no match" since the CLI
+      // Multi-star pattern - fall back to "no match" since the CLI
       // also rejects this form, and explaining the error is clearer
       // than silently doing something half-right.
       return { match: () => null };
@@ -206,7 +206,7 @@ export function BulkRenameDialog(props: {
               fontSize: 12, color: C.textFaint,
             }}>
               {pattern.includes("*")
-                ? "no matches — try a different prefix"
+                ? "no matches - try a different prefix"
                 : "type a pattern with `*` (e.g. sub_*)"}
             </div>
           )}
@@ -242,7 +242,7 @@ export function BulkRenameDialog(props: {
           }}>
             {buckets.rename.length > 0
               ? `${buckets.rename.length} rename${buckets.rename.length === 1 ? "" : "s"} ready · undo with Ctrl+Z`
-              : "preview only — apply enabled when matches arrive"}
+              : "preview only - apply enabled when matches arrive"}
           </span>
           <div style={{ flex: 1 }} />
           <button
@@ -318,7 +318,7 @@ function PreviewSection(props: {
           fontFamily: serif, fontStyle: "italic",
           fontSize: 10, color: C.textFaint,
         }}>
-          (more rows hidden — apply will process all of them)
+          (more rows hidden - apply will process all of them)
         </div>
       )}
     </div>

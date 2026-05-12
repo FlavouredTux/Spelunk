@@ -13,7 +13,7 @@ type LoadState =
   | { kind: "error"; pluginId: string; panelId: string; message: string };
 
 // Find the function whose extent covers `ip` so a row that only carries
-// a raw VA still jumps somewhere useful. Linear — functions list is
+// a raw VA still jumps somewhere useful. Linear - functions list is
 // small enough that this isn't a hot path.
 function resolveFunctionAt(info: BinaryInfo, ip: number): FunctionInfo | null {
   for (const f of info.functions) {

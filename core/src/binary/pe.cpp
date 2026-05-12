@@ -83,7 +83,7 @@ constexpr std::size_t kExportDirSize        = 40;
 
 // Section names live in an 8-byte slot, NUL-padded on the right. Strings
 // longer than 8 chars use a "/N" convention pointing into the COFF string
-// table — COFF-object-only and rare in EXE/DLL images; we accept the
+// table - COFF-object-only and rare in EXE/DLL images; we accept the
 // short form and pass the "/N" literal through unmodified for v1.
 //
 // Some packers in the wild leave
@@ -172,7 +172,7 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
     const u16 opt_magic = read_le_at<u16>(opt->data() + kOptMagicOff);
     if (opt_magic == kOptMagicPe32) {
         return std::unexpected(Error::unsupported(
-            "pe: PE32 (32-bit) not supported — PE32+ only"));
+            "pe: PE32 (32-bit) not supported - PE32+ only"));
     }
     if (opt_magic != kOptMagicPe32Plus) {
         return std::unexpected(Error::invalid_format(std::format(
@@ -225,7 +225,7 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
                                                  | kScnCntUninit)) != 0;
 
         // File-backed bytes: min(VirtualSize, SizeOfRawData). SizeOfRawData
-        // is rounded up to FileAlignment, so it can be larger than VS —
+        // is rounded up to FileAlignment, so it can be larger than VS -
         // bytes past VS inside the raw-data slot are padding, not valid.
         // Uninitialized-data sections (.bss) usually have raw_size == 0;
         // their Section.data stays empty and the default bytes_at() walks
@@ -239,7 +239,7 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
             }
             // A slice() failure here is either a short-read header (file
             // truncated) or a lying raw_ptr/raw_size; both are recoverable
-            // by leaving Section.data empty — downstream will treat the
+            // by leaving Section.data empty - downstream will treat the
             // range as zero-init, same as .bss.
         }
 
@@ -258,7 +258,7 @@ Result<void> PeBinary::parse() {
     // Data-directory array follows the fixed optional-header fields. Cap
     // the count at whatever fits inside the optional-header slice so a
     // malicious NumberOfRvaAndSizes can't read past it. The PE spec caps
-    // this at 16 in practice but the field is u32 — trust the header size,
+    // this at 16 in practice but the field is u32 - trust the header size,
     // not the count.
     const std::size_t dd_capacity =
         (hdrs->opt_size > kOptDataDirOff)
@@ -402,7 +402,7 @@ collect_imports(const Binary& bin,
         // Walk INT and IAT in lockstep. INT gives us the hint/name; IAT
         // is the slot the loader overwrites with the resolved pointer.
         // If OriginalFirstThunk is zero (bound imports, older linkers),
-        // fall back to FirstThunk for name lookup — the loader will
+        // fall back to FirstThunk for name lookup - the loader will
         // have overwritten it at runtime, but on the static image the
         // name entries are still intact.
         const u32 int_rva = (oft_rva != 0) ? oft_rva : iat_rva;
@@ -444,11 +444,11 @@ collect_imports(const Binary& bin,
 //   u32 rvaIAT;         // we treat this exactly like a regular IAT
 //   u32 rvaINT;         // hint/name table, identical encoding to IMPORT
 //   u32 rvaBoundIAT;    // pre-bound IAT (if linker bound at build time)
-//   u32 rvaUnloadIAT;   // for FUnloadDelayLoadedDLL — we ignore
+//   u32 rvaUnloadIAT;   // for FUnloadDelayLoadedDLL - we ignore
 //   u32 dwTimeStamp;
 // Walks identically to collect_imports once we've extracted INT/IAT RVAs.
 // Older (non-x64) images had grAttrs == 0 with absolute VAs in every
-// field — we reject those rather than try to guess the image base from
+// field - we reject those rather than try to guess the image base from
 // addresses that may have been written under a different load address.
 Result<void>
 collect_delay_imports(const Binary& bin,
@@ -477,7 +477,7 @@ collect_delay_imports(const Binary& bin,
         // Pre-x64 layout: ignore the slice rather than misread VAs as RVAs.
         if ((attrs & kDelayAttrRvaBased) == 0) continue;
         // Some linkers ship descriptors with no INT (rvaINT == 0); for the
-        // statically-recorded names we *need* the INT, so skip — the IAT
+        // statically-recorded names we *need* the INT, so skip - the IAT
         // alone is just patched function pointers at runtime.
         if (int_rva == 0 || iat_rva == 0) continue;
 
@@ -530,7 +530,7 @@ collect_exports(const Binary& bin,
     const u32 ent_rva      = read_le_at<u32>(edir.data() + 0x20);
     const u32 eot_rva      = read_le_at<u32>(edir.data() + 0x24);
 
-    // Forwarder exports point *into* the export data directory itself —
+    // Forwarder exports point *into* the export data directory itself -
     // the RVA there is the "DLL.Symbol" redirect string, not a function
     // address. Skip them instead of emitting a garbage Symbol at a
     // string VA. Widen to u64 for the upper-bound check: a hostile PE
@@ -611,7 +611,7 @@ namespace ember {
 // a 14 MB section costs ~300 ms. The opcode we're after is a fixed
 // 6-byte sequence `FF 25 disp32`, so byte-pattern-scan for `FF 25`
 // first and only fully decode the rare hits. Random byte distribution
-// puts the candidate density at ~1/65k — three orders of magnitude
+// puts the candidate density at ~1/65k - three orders of magnitude
 // fewer decode calls than the naive walk.
 void PeBinary::scan_iat_thunks(
     const std::unordered_map<addr_t, std::string>& got_to_name) {
@@ -655,7 +655,7 @@ void PeBinary::scan_iat_thunks(
                                static_cast<addr_t>(op.mem.disp);
             auto it = got_to_name.find(got);
             if (it == got_to_name.end()) continue;
-            // First thunk wins for a given name — MSVC can emit
+            // First thunk wins for a given name - MSVC can emit
             // duplicate __imp_ thunks when a function is called from
             // multiple TUs with LTCG off.
             stub_by_name.try_emplace(it->second, ip);
@@ -675,7 +675,7 @@ void PeBinary::scan_iat_thunks(
     }
 }
 
-// Every non-leaf function on x64 carries a RUNTIME_FUNCTION in .pdata —
+// Every non-leaf function on x64 carries a RUNTIME_FUNCTION in .pdata -
 // this is PE's analogue of Mach-O LC_FUNCTION_STARTS. We (a) set size on
 // every existing function symbol whose addr matches a .pdata begin, and
 // (b) synthesize `sub_<hex>` entries for starts with no matching symbol.
@@ -743,7 +743,7 @@ void PeBinary::parse_codeview_pdb_filename() {
         const auto cv = bytes_at_rva(raw_rva);
         if (cv.size() < raw_sz) continue;
 
-        // Match RSDS first (PDB v7); legacy NB10 (PDB v2) we ignore — the
+        // Match RSDS first (PDB v7); legacy NB10 (PDB v2) we ignore - the
         // current parser doesn't grok the older container format anyway.
         if (cv.size() < 4) continue;
         if (cv[0] != std::byte{'R'} || cv[1] != std::byte{'S'} ||
@@ -785,7 +785,7 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
 
     // Stash identity + path for the consumer-side mismatch check
     // (subcommands.cpp compares against the CodeView record). We do
-    // NOT refuse the PDB here even on mismatch — the user may have
+    // NOT refuse the PDB here even on mismatch - the user may have
     // explicitly pointed --pdb at it, and a hard refusal at the
     // loader hides the warning we'd otherwise print.
     pdb_guid_           = rdr->info.guid;
@@ -793,7 +793,7 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
     attached_pdb_path_  = path;
 
     // Resolve every (segment, offset) pair to an absolute VA. Keep
-    // existing names — imports, exports, TLS callbacks all win on a
+    // existing names - imports, exports, TLS callbacks all win on a
     // collision because they carry richer metadata (got_addr, is_import,
     // size). The PDB walk only contributes a name + address, which is
     // best-effort fallback information.
@@ -813,7 +813,7 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
     auto absorb_symbol = [&](addr_t va, std::string name, SymbolKind kind) {
         if (va == 0 || name.empty()) return false;
         if (auto it = by_addr.find(va); it != by_addr.end()) {
-            // Already named — only fill in a name on a synthesized
+            // Already named - only fill in a name on a synthesized
             // `sub_<hex>` entry so the PDB upgrade is visible.
             Symbol& existing = symbols_[it->second];
             if (existing.name.starts_with("sub_")) {
@@ -875,7 +875,7 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
                 params.push_back(std::move(p));
             }
         } else if (expected > 0) {
-            // No arg list (or unparseable) — fall back to N untyped
+            // No arg list (or unparseable) - fall back to N untyped
             // slots so we at least carry the right arity.
             params.reserve(expected);
             for (u16 i = 0; i < expected; ++i) {

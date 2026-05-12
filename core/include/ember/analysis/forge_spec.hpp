@@ -89,7 +89,7 @@ struct ForgeSpec {
 // Compute the minimum struct-field map and branch-decision sequence
 // that a single representative call chain from `entry_va` to
 // `target_va` requires. Intra-procedural and chosen path is the
-// shortest CFG path through each function on the chain — by design
+// shortest CFG path through each function on the chain - by design
 // this is one *witness* for reachability, not the meet of all
 // possible reaching paths. Loops are unrolled at most once. Live-in
 // arg regs are interpreted as parameters using the binary's ABI.

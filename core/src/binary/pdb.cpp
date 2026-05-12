@@ -15,7 +15,7 @@ namespace ember::pdb {
 
 namespace {
 
-// PDB v7 superblock magic — exactly 32 bytes.
+// PDB v7 superblock magic - exactly 32 bytes.
 constexpr std::array<u8, 32> kV7Magic{
     'M','i','c','r','o','s','o','f','t',' ','C','/','C','+','+',' ',
     'M','S','F',' ','7','.','0','0','\r','\n',0x1A,'D','S',0,0,0,
@@ -149,7 +149,7 @@ constexpr u16 kLfUQuadword = 0x800A;   // u64
             // call site downstream consumes the result as an integer
             // (array sizes, struct offsets, bitfield widths). Rather
             // than silently feeding the raw bit pattern as if it were
-            // an int, reject — callers handle "not a usable integer
+            // an int, reject - callers handle "not a usable integer
             // literal" already and skip the record cleanly.
             return false;
         }
@@ -174,7 +174,7 @@ std::string read_cstr_advance(std::span<const std::byte> body,
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// MSF (Multi-Stream File) container — same as before. Only the prologue
+// MSF (Multi-Stream File) container - same as before. Only the prologue
 // has been factored out from the legacy load_publics path; logic
 // unchanged so existing tests still parse the synthetic MSF the test
 // builds.
@@ -314,9 +314,9 @@ namespace {
 //   u32 Signature
 //   u32 Age
 //   GUID Guid (16 bytes; mixed-endian Microsoft format, but we keep
-//              raw bytes — comparing against the PE's CodeView record
+//              raw bytes - comparing against the PE's CodeView record
 //              compares the same raw 16 bytes).
-// Trailing data (named-stream table, feature flags) we ignore — the
+// Trailing data (named-stream table, feature flags) we ignore - the
 // only consumer is GUID/age matching against the PE binary.
 // ---------------------------------------------------------------------------
 [[nodiscard]] Result<PdbInfo>
@@ -335,19 +335,19 @@ parse_pdb_info(std::span<const std::byte> stream) {
 
 // ---------------------------------------------------------------------------
 // DBI header layout (the v7 form, "NewDBI"). We read enough of it to
-// locate (a) the symbol-record stream — the legacy publics-only path —
-// and (b) the module list — the per-compile-unit symbol streams that
+// locate (a) the symbol-record stream - the legacy publics-only path -
+// and (b) the module list - the per-compile-unit symbol streams that
 // carry S_GPROC32 with type indices.
 //
 // Header lives at +0..+64 of the DBI stream. Variable-size data
 // follows in the order:
-//   ModInfoSize bytes — array of ModInfo records
+//   ModInfoSize bytes - array of ModInfo records
 //   SectionContributionSize bytes
 //   SectionMapSize bytes
 //   SourceInfoSize bytes
 //   TypeServerMapSize bytes
 //   ECSize bytes
-//   OptionalDbgHeader (DbgHeaderSize bytes — array of u16 stream indices)
+//   OptionalDbgHeader (DbgHeaderSize bytes - array of u16 stream indices)
 // ---------------------------------------------------------------------------
 struct DbiHeader {
     u16 sym_record_stream      = 0xFFFF;
@@ -361,7 +361,7 @@ struct DbiHeader {
     u32 ec_size                = 0;
     u32 optional_dbg_size      = 0;
     u16 machine                = 0;
-    u32 mod_info_offset        = 64;     // always — variable data starts after fixed header
+    u32 mod_info_offset        = 64;     // always - variable data starts after fixed header
 };
 
 [[nodiscard]] Result<DbiHeader>
@@ -386,7 +386,7 @@ parse_dbi_header(std::span<const std::byte> dbi) {
     h.section_map_size      = read_le_at<u32>(dbi.data() + 32);
     h.source_info_size      = read_le_at<u32>(dbi.data() + 36);
     h.type_server_map_size  = read_le_at<u32>(dbi.data() + 40);
-    // skip MFCTypeServerIndex (u32) at +44 — unused
+    // skip MFCTypeServerIndex (u32) at +44 - unused
     h.ec_size               = read_le_at<u32>(dbi.data() + 48);
     h.optional_dbg_size     = read_le_at<u16>(dbi.data() + 52);
     // Flags at +54 (u16), Machine at +56 (u16), Padding at +60 (u32).
@@ -396,7 +396,7 @@ parse_dbi_header(std::span<const std::byte> dbi) {
 
 // One module's location info: which stream holds its symbol records,
 // how many bytes of that stream to walk. Module name is informational
-// — we keep it for diagnostics but don't surface it.
+// - we keep it for diagnostics but don't surface it.
 struct ModuleEntry {
     u16         sym_stream    = 0xFFFF;
     u32         sym_byte_size = 0;
@@ -429,17 +429,17 @@ parse_dbi_modules(std::span<const std::byte> dbi, const DbiHeader& h) {
         e.sym_byte_size = read_le_at<u32>(block.data() + pos + 36);
 
         // Two strings starting at +64. Read first (module name), skip
-        // second (obj file name) — but track length so we can advance.
+        // second (obj file name) - but track length so we can advance.
         std::size_t sp = pos + 64;
         e.module_name = read_cstr_advance(block, sp);
         // skip obj file name
         const std::size_t before_obj = sp;
         (void)before_obj;
         read_cstr_advance(block, sp);
-        // Align the cursor up to 4 bytes — ModInfo records are 4-byte
+        // Align the cursor up to 4 bytes - ModInfo records are 4-byte
         // aligned in the stream.
         sp = align_up_4(sp);
-        if (sp <= pos) break;       // defensive — corrupt layout
+        if (sp <= pos) break;       // defensive - corrupt layout
         mods.push_back(std::move(e));
         pos = sp;
     }
@@ -613,7 +613,7 @@ void walk_module_stream(std::span<const std::byte> stream, u32 sym_byte_size,
     if (sym_byte_size < 4 || sym_byte_size > stream.size()) return;
     const u32 sig = read_le_at<u32>(stream.data());
     // Signatures: 1 = C7, 2 = C11, 3 = C13_NEW (rare), 4 = C13.
-    // Refuse anything we don't recognize — bailing is safer than
+    // Refuse anything we don't recognize - bailing is safer than
     // misparsing the body.
     if (sig != 4 && sig != 2 && sig != 1) return;
     walk_symbol_records(stream.subspan(4, sym_byte_size - 4), b);
@@ -621,10 +621,10 @@ void walk_module_stream(std::span<const std::byte> stream, u32 sym_byte_size,
 
 // ---------------------------------------------------------------------------
 // TPI stream parser. The fixed 56-byte header tells us:
-//   TypeIndexBegin / TypeIndexEnd — the [begin, end) range our records
+//   TypeIndexBegin / TypeIndexEnd - the [begin, end) range our records
 //   cover. Indices below ti_begin_ refer to primitive types and don't
 //   live in this stream.
-//   TypeRecordBytes — bytes of records following the header.
+//   TypeRecordBytes - bytes of records following the header.
 // ---------------------------------------------------------------------------
 
 [[nodiscard]] TypeRecord parse_pointer(std::span<const std::byte> body) {
@@ -740,7 +740,7 @@ void walk_module_stream(std::span<const std::byte> stream, u32 sym_byte_size,
         if (body.size() < 12) return t;
         t.base_type = read_le_at<u32>(body.data() + 8);
         pos = 12;
-        // Enum then has its name (no size leaf — enums get their size
+        // Enum then has its name (no size leaf - enums get their size
         // from the underlying type).
         t.name = read_cstr_advance(body, pos);
     } else if (kind == kLfUnion) {
@@ -816,7 +816,7 @@ Result<TpiTable> TpiTable::parse(std::span<const std::byte> tpi_stream) {
             type_record_bytes, header_size, tpi_stream.size())));
     }
     if (t.ti_end_ == t.ti_begin_) {
-        // No types — empty table is valid.
+        // No types - empty table is valid.
         return t;
     }
 
@@ -843,7 +843,7 @@ Result<TpiTable> TpiTable::parse(std::span<const std::byte> tpi_stream) {
             case kLfAlias:    t.records_[slot] = parse_alias(body);    break;
             case kLfFieldList:
                 // Field lists are referenced by aggregate records but
-                // we don't mine them yet — record presence so the
+                // we don't mine them yet - record presence so the
                 // aggregate's field_list -> nullptr lookup doesn't
                 // confuse callers.
                 break;
@@ -880,7 +880,7 @@ std::string render_primitive(u32 ti) {
     const u32 mode = (ti >> 8) & 0x7u;
     auto name_for = [&]() -> std::string {
         switch (sub) {
-            case 0x00: return "void_t";    // T_NOTYPE / T_ABS — rare
+            case 0x00: return "void_t";    // T_NOTYPE / T_ABS - rare
             case 0x03: return "void";
             case 0x08: return "HRESULT";
             // Signed-char aliases: 0x10 = signed char, 0x70 = char (rchar).
@@ -918,7 +918,7 @@ std::string render_primitive(u32 ti) {
     auto base = name_for();
     if (mode != 0) {
         // Any non-zero mode = pointer-flavored variant. We don't
-        // distinguish near/far/huge here — Ember decompiles 64-bit
+        // distinguish near/far/huge here - Ember decompiles 64-bit
         // binaries; the size is implicit.
         base += "*";
     }
@@ -928,7 +928,7 @@ std::string render_primitive(u32 ti) {
 }  // namespace
 
 std::string TpiTable::render_type(u32 type_index, int depth) const {
-    if (depth > 8) return "?";   // recursion guard — pathological PDBs only
+    if (depth > 8) return "?";   // recursion guard - pathological PDBs only
     if (type_index < ti_begin_) return render_primitive(type_index);
 
     const TypeRecord* r = lookup(type_index);
@@ -960,7 +960,7 @@ std::string TpiTable::render_type(u32 type_index, int depth) const {
 
         case TypeRecord::Kind::Array: {
             const std::string elem = render_type(r->base_type, depth + 1);
-            // Approximate count from byte size / element size — too
+            // Approximate count from byte size / element size - too
             // expensive to chase down sizeof through arbitrary types,
             // so we just print the byte size as a comment.
             return std::format("{}[/* {} bytes */]", elem, r->array_size_bytes);
@@ -978,7 +978,7 @@ std::string TpiTable::render_type(u32 type_index, int depth) const {
         case TypeRecord::Kind::Structure:
         case TypeRecord::Kind::Union: {
             if (!r->name.empty()) {
-                // Use plain `Foo` rather than `struct Foo` — easier on
+                // Use plain `Foo` rather than `struct Foo` - easier on
                 // the eyes in pseudo-C output, and matches what
                 // FunctionSig.params already look like for user-typed
                 // signatures.
@@ -1002,7 +1002,7 @@ std::string TpiTable::render_type(u32 type_index, int depth) const {
                 : r->name;
 
         case TypeRecord::Kind::ArgList:
-            // ArgList isn't a real "type" — caller mishandled if it
+            // ArgList isn't a real "type" - caller mishandled if it
             // ever asks for one.
             return "(arglist)";
     }
@@ -1012,7 +1012,7 @@ std::string TpiTable::render_type(u32 type_index, int depth) const {
 namespace {
 
 // One-shot record walker that pulls every relevant symbol out of the
-// global symbol record stream (the legacy path) — same as before, but
+// global symbol record stream (the legacy path) - same as before, but
 // now lives inside walk_symbol_records so the publics-only test
 // fixture continues to work.
 void walk_global_symbol_stream(std::span<const std::byte> stream,
@@ -1082,7 +1082,7 @@ load_pdb_from_buffer(std::vector<std::byte> data) {
     auto dbi_hdr = parse_dbi_header(*dbi);
     if (!dbi_hdr) return std::unexpected(std::move(dbi_hdr).error());
 
-    // The legacy path — global symbol-record stream — is still the most
+    // The legacy path - global symbol-record stream - is still the most
     // reliable source of S_PUB32. Walk it first so even a corrupt
     // module list doesn't lose the public names.
     if (dbi_hdr->sym_record_stream != 0xFFFF &&
@@ -1090,7 +1090,7 @@ load_pdb_from_buffer(std::vector<std::byte> data) {
         if (auto sr = msf->read_stream(dbi_hdr->sym_record_stream); sr) {
             walk_global_symbol_stream(*sr, rdr.publics);
             // The publics stream (PSI) doesn't typically also carry
-            // S_GDATA32 records — those live in module streams — but if
+            // S_GDATA32 records - those live in module streams - but if
             // a producer chose to put them here we still want them.
             SymbolBuckets b{};
             b.data = &rdr.globals;
@@ -1134,7 +1134,7 @@ load_pdb(const std::filesystem::path& path) {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy entry — kept for the existing pdb_test.cpp fixture and any
+// Legacy entry - kept for the existing pdb_test.cpp fixture and any
 // callers that only need names. Implemented in terms of the orchestrator
 // so there's a single parsing path.
 // ---------------------------------------------------------------------------

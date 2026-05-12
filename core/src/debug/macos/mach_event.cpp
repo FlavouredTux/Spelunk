@@ -7,7 +7,7 @@
 // code, translate to our Event variant, and stash the reply header
 // in the per-thread state so cont()/step() can resume the tracee
 // by sending back a KERN_SUCCESS reply (or a larger msgh_id-101 for
-// "we did NOT handle it, send to next handler" — unused here).
+// "we did NOT handle it, send to next handler" - unused here).
 //
 // Step on x86-64 is done by setting the TF (single-step) bit in
 // RFLAGS via thread_set_state, then sending the resume reply. The
@@ -218,7 +218,7 @@ Result<void> MachOTarget::cont() {
 Result<void> MachOTarget::interrupt() {
     // task_suspend bumps the kernel suspend count; threads stop on
     // the next user-mode instruction. We don't synthesize an
-    // EvStopped here — the next wait_event sees the suspended
+    // EvStopped here - the next wait_event sees the suspended
     // threads via the standard message path (kernel doesn't deliver
     // a Mach exception for plain task_suspend, so callers should be
     // aware: an interrupt() on Mach is NOT symmetric with the Linux
@@ -261,7 +261,7 @@ Result<Event> MachOTarget::wait_event() {
         const auto fault_va = static_cast<addr_t>(msg.code[1]);
         const ThreadId tid  = static_cast<ThreadId>(tid_port);
 
-        // We don't need the task port reference — release it.
+        // We don't need the task port reference - release it.
         ::mach_port_deallocate(::mach_task_self(), msg.task.name);
 
         ThreadState& ts = thread_state(tid);
@@ -314,7 +314,7 @@ Result<Event> MachOTarget::wait_event() {
 
             // Fresh int3 hit. Mach delivers the exception with RIP
             // already pointing AT the bp address (unlike ptrace which
-            // points one past). subcode tells us — EXC_I386_SGL means
+            // points one past). subcode tells us - EXC_I386_SGL means
             // single-step (no rewind), EXC_I386_BPT means int3 (RIP
             // is already correct on macOS, no -1 dance needed).
             if (sub_code == EXC_I386_SGL) {
@@ -333,7 +333,7 @@ Result<Event> MachOTarget::wait_event() {
                 ts.parked_at_bp = bp->info.id;
                 return Event{EvBreakpointHit{tid, bp->info.id, fault_va}};
             }
-            // Not a debugger-placed breakpoint — try the int3
+            // Not a debugger-placed breakpoint - try the int3
             // resolver callback if one is registered.
             if (const auto& resolver = int3_resolver()) {
                 auto resolution = resolver(pc);

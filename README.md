@@ -137,7 +137,7 @@ Limits, not bug reports:
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
 - PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics, DOL function discovery, and code-pointer xrefs.
 - Itanium demangle is comprehensive; MSVC demangle is partial.
-- C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`) uses a fixed alias table; uncommon container/allocator instantiations stay long.
+- C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`, `std::vector<T, std::allocator<T>>` → `std::vector<T>`) is balanced-template aware while preserving custom allocators.
 
 ---
 

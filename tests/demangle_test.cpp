@@ -6,6 +6,10 @@
 #include <string>
 #include <string_view>
 
+namespace ember {
+std::string simplify_stdlib_templates(std::string s);
+}
+
 namespace {
 
 int fails = 0;
@@ -39,6 +43,17 @@ void check_msvc_full(std::string_view mangled, std::string_view expected) {
     if (got != expected) {
         std::fprintf(stderr, "FAIL msvc full: %.*s\n  got:      %s\n  expected: %.*s\n",
                      static_cast<int>(mangled.size()), mangled.data(),
+                     got.c_str(),
+                     static_cast<int>(expected.size()), expected.data());
+        ++fails;
+    }
+}
+
+void check_simplify(std::string_view input, std::string_view expected) {
+    const std::string got = ember::simplify_stdlib_templates(std::string(input));
+    if (got != expected) {
+        std::fprintf(stderr, "FAIL simplify:\n  in:       %.*s\n  got:      %s\n  expected: %.*s\n",
+                     static_cast<int>(input.size()), input.data(),
                      got.c_str(),
                      static_cast<int>(expected.size()), expected.data());
         ++fails;
@@ -99,8 +114,32 @@ int main() {
     check_base("_ZNK3foo3barEv",              "foo::bar");
     check_base("_ZN3std6stringC1EPKc",        "std::string::string");
     check_base("_ZNSt6vectorIiSaIiEE9push_backEOi",
-               "std::vector<int, std::allocator<int>>::push_back");
+               "std::vector<int>::push_back");
     check_base("plain_name", "plain_name");
+
+    // Balanced stdlib simplification keeps user-visible template args and
+    // drops default allocator / comparator plumbing even when nested.
+    check_simplify(
+        "std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>",
+        "std::string");
+    check_simplify(
+        "std::vector<int, std::allocator<int>>",
+        "std::vector<int>");
+    check_simplify(
+        "std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>>>",
+        "std::vector<std::string>");
+    check_simplify(
+        "std::map<std::string, int, std::less<std::string>, std::allocator<std::pair<const std::string, int>>>",
+        "std::map<std::string, int>");
+    check_simplify(
+        "std::unordered_map<std::string, long, std::hash<std::string>, std::equal_to<std::string>, std::allocator<std::pair<std::string const, long>>>",
+        "std::unordered_map<std::string, long>");
+    check_simplify(
+        "std::unique_ptr<Foo, std::default_delete<Foo>>",
+        "std::unique_ptr<Foo>");
+    check_simplify(
+        "std::vector<int, CustomAlloc<int>>",
+        "std::vector<int, CustomAlloc<int>>");
 
     // ---- MSVC demangler ----------------------------------------------
     // RTTI type descriptors: ".?AV<name>@@" / ".?AU<name>@@".

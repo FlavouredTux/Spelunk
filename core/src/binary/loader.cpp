@@ -39,8 +39,7 @@ const Binary::LookupCaches& Binary::caches() const {
         if (s.is_import) {
             if (s.got_addr != 0) c.import_by_got.emplace(s.got_addr, &s);
             if (s.addr != 0)     c.imports_by_addr.push_back(&s);
-        } else if (s.size != 0 &&
-                   (s.kind == SymbolKind::Function || s.kind == SymbolKind::Object)) {
+        } else if (s.kind == SymbolKind::Function || s.kind == SymbolKind::Object) {
             c.defined_objects_by_addr.push_back(&s);
         }
     }
@@ -96,9 +95,46 @@ const Symbol* Binary::defined_object_at(addr_t vaddr) const noexcept {
     // this preserves the (name, size)-sorted preference of the original
     // linear scan over symbols().
     const addr_t group_addr = (*it)->addr;
-    for (; it != c.defined_objects_by_addr.end() && (*it)->addr == group_addr; ++it) {
-        const Symbol* s = *it;
-        if (vaddr >= s->addr && vaddr < s->addr + s->size) return s;
+    auto group_end = it;
+    while (group_end != c.defined_objects_by_addr.end() && (*group_end)->addr == group_addr) {
+        ++group_end;
+    }
+
+    for (auto cur = it; cur != group_end; ++cur) {
+        const Symbol* s = *cur;
+        if (s->size != 0 && vaddr >= s->addr && vaddr < s->addr + s->size) return s;
+    }
+
+    // Zero-sized symbols still carry useful names. Treat exact matches as
+    // authoritative, and for unsized data objects infer a conservative extent
+    // up to the next symbol or the end of the containing non-exec section.
+    for (auto cur = it; cur != group_end; ++cur) {
+        const Symbol* s = *cur;
+        if (s->size == 0 && vaddr == s->addr) return s;
+    }
+
+    auto containing_data_section = [this](addr_t a) -> const Section* {
+        for (const auto& sec : sections()) {
+            if (sec.flags.executable) continue;
+            if (a >= sec.vaddr && a < sec.vaddr + sec.size) return &sec;
+        }
+        return nullptr;
+    };
+
+    const Section* sec = containing_data_section(group_addr);
+    if (!sec || vaddr < sec->vaddr || vaddr >= sec->vaddr + sec->size) return nullptr;
+
+    addr_t upper = sec->vaddr + sec->size;
+    if (group_end != c.defined_objects_by_addr.end()) {
+        const addr_t next_addr = (*group_end)->addr;
+        if (next_addr > group_addr && next_addr < upper) upper = next_addr;
+    }
+
+    if (vaddr < upper) {
+        for (auto cur = it; cur != group_end; ++cur) {
+            const Symbol* s = *cur;
+            if (s->kind == SymbolKind::Object && s->size == 0) return s;
+        }
     }
     return nullptr;
 }

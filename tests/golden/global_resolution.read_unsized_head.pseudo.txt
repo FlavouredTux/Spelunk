@@ -1,0 +1,4 @@
+// read_unsized_head
+u64 read_unsized_head(void) {
+  return g_unsized;
+}

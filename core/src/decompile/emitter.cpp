@@ -325,7 +325,12 @@ struct Emitter {
     named_address_for_imm(addr_t target) const {
         if (!binary) return std::nullopt;
         auto resolved = resolve_address_name(*binary, target);
-        if (!resolved || resolved->addr != resolved->base) return std::nullopt;
+        if (!resolved) return std::nullopt;
+        if (resolved->addr != resolved->base &&
+            resolved->kind != ResolvedNameKind::Object &&
+            resolved->kind != ResolvedNameKind::Got) {
+            return std::nullopt;
+        }
         return format_address_expr(*resolved);
     }
 
@@ -2650,8 +2655,13 @@ struct Emitter {
         const unsigned t_bytes = type_bits(t) / 8;
         const i64 off = static_cast<i64>(a) - static_cast<i64>(s->addr);
 
-        if (off == 0 && s->size == t_bytes) {
+        if (off == 0 && (s->size == 0 || s->size == t_bytes)) {
             return s->name;
+        }
+        if (s->size == 0 && t_bytes != 0 && off > 0 &&
+            (off % static_cast<i64>(t_bytes)) == 0) {
+            return std::format("{}[{}]", s->name,
+                               off / static_cast<i64>(t_bytes));
         }
         if (off == 0) {
             return std::format("*({}*)&{}", c_type_name(t), s->name);

@@ -1,0 +1,4 @@
+// addr_unsized_tail
+u64 addr_unsized_tail(void) {
+  return &g_unsized + 0x8 /* 0x404018 */;
+}

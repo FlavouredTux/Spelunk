@@ -11,10 +11,10 @@ const GROUPS: Group[] = [
   {
     title: "Navigation",
     rows: [
-      { keys: "⌃P",          label: "jump to function (palette)" },
-      { keys: "Alt+← / ⌃[",  label: "back" },
-      { keys: "Alt+→ / ⌃]",  label: "forward" },
-      { keys: "⌃F",          label: "search in current view" },
+      { keys: "G / Ctrl+L / Ctrl+P", label: "jump to function or address" },
+      { keys: "Alt+Left / Ctrl+[",   label: "back" },
+      { keys: "Alt+Right / Ctrl+]",  label: "forward" },
+      { keys: "Ctrl+F",              label: "search in current view" },
     ],
   },
   {

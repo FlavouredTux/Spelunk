@@ -5,6 +5,7 @@ import type { FunctionInfo, Annotations } from "../types";
 
 export function CommandPalette(props: {
   functions: FunctionInfo[];
+  recent?: FunctionInfo[];
   annotations?: Annotations;
   onSelect: (fn: FunctionInfo) => void;
   // Optional handler for "fall through" hex addresses that don't match
@@ -34,7 +35,22 @@ export function CommandPalette(props: {
 
   const results = useMemo(() => {
     const needle = q.toLowerCase().trim();
-    if (!needle) return props.functions.slice(0, 200);
+    if (!needle) {
+      const seen = new Set<string>();
+      const out: FunctionInfo[] = [];
+      for (const f of props.recent ?? []) {
+        if (seen.has(f.addr)) continue;
+        seen.add(f.addr);
+        out.push(f);
+      }
+      for (const f of props.functions) {
+        if (seen.has(f.addr)) continue;
+        seen.add(f.addr);
+        out.push(f);
+        if (out.length >= 200) break;
+      }
+      return out;
+    }
 
     // Simple fuzzy score: prefer name prefix, then substring, then demangled, then addr.
     const scored = props.functions
@@ -58,7 +74,7 @@ export function CommandPalette(props: {
       .slice(0, 200)
       .map((x) => x.f);
     return scored;
-  }, [q, props.functions]);
+  }, [q, props.functions, props.recent]);
 
   // Show the synthetic "jump to address" row when the input parses as
   // a hex value AND the user has supplied the goto handler. We always
@@ -217,6 +233,7 @@ export function CommandPalette(props: {
             const dem = demangle(f.name);
             const dn = displayName(f, props.annotations);
             const isRenamed = dn !== dem && dn !== f.name;
+            const isRecent = !q.trim() && !!props.recent?.some((r) => r.addr === f.addr);
             return (
               <button
                 key={f.addr + "-" + i}
@@ -248,6 +265,12 @@ export function CommandPalette(props: {
                   fontWeight: active ? 600 : (isRenamed ? 500 : 400),
                   color: active ? C.text : C.textWarm,
                 }}>{dn}</span>
+                {isRecent && (
+                  <span style={{
+                    fontFamily: mono, fontSize: 9,
+                    color: active ? C.accent : C.textFaint,
+                  }}>recent</span>
+                )}
                 {isRenamed && (
                   <span style={{ color: C.accent, fontSize: 9, fontFamily: mono }}>•</span>
                 )}

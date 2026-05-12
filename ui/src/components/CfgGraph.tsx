@@ -751,10 +751,6 @@ export function CfgGraph(props: {
     () => buildRenderEdges(parsed.blocks, layout),
     [parsed.blocks, layout],
   );
-  const visibleNodes = useMemo(
-    () => collectVisibleNodes(parsed.blocks, layout, viewRect),
-    [parsed.blocks, layout, viewRect],
-  );
 
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef   = useRef<SVGGElement>(null);
@@ -768,6 +764,10 @@ export function CfgGraph(props: {
   // Visible world-rect in graph coords. Updated at the tail of each pan/zoom
   // gesture via rAF — used to cull offscreen nodes/edges.
   const [viewRect, setViewRect] = useState({ x: -1e9, y: -1e9, w: 3e9, h: 3e9 });
+  const visibleNodes = useMemo(
+    () => collectVisibleNodes(parsed.blocks, layout, viewRect),
+    [parsed.blocks, layout, viewRect],
+  );
 
   // Hover / focus / search — drives node and edge emphasis. `focusedId`
   // is sticky (set on click); `hoverId` is transient (mouseenter). When

@@ -1,0 +1,4 @@
+// read_after
+u64 read_after(void) {
+  return g_after;
+}

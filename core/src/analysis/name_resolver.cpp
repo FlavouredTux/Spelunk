@@ -59,6 +59,9 @@ std::string format_address_comment(const ResolvedName& r) {
 std::string format_address_expr(const ResolvedName& r) {
     switch (r.kind) {
         case ResolvedNameKind::Object:
+            if (r.addr != r.base) {
+                return std::format("&{} + {:#x}", r.name, r.addr - r.base);
+            }
             return "&" + format_address_comment(r);
         case ResolvedNameKind::Function:
         case ResolvedNameKind::Import:

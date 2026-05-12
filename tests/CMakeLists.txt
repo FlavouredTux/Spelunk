@@ -282,6 +282,7 @@ ember_build_fixture(arith_idiom OPT "-O2")
 # std::vector<T> for the looks_like_vector predicate to fire on.
 ember_build_fixture(vector_like)
 ember_build_fixture(struct_fields)
+ember_build_fixture(global_resolution)
 # -O0 so dbg_marker stays a real function (no inlining, no tail-call
 # fold) and gets a stable symbol address the smoke test can set a
 # software breakpoint at. Built once non-PIE (dbg_target) and once
@@ -977,6 +978,31 @@ ember_golden_test(
     FIXTURE struct_fields
     ARGS    "-p|-s|inspect_packet|--annotations|${_fixture_dir}/struct_fields.ann"
     GOLDEN  struct_fields.inspect_packet.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    global_resolution_unsized_head_pseudo
+    FIXTURE global_resolution
+    ARGS    "-p|-s|read_unsized_head"
+    GOLDEN  global_resolution.read_unsized_head.pseudo.txt
+)
+ember_golden_test(
+    NAME    global_resolution_unsized_tail_pseudo
+    FIXTURE global_resolution
+    ARGS    "-p|-s|read_unsized_tail"
+    GOLDEN  global_resolution.read_unsized_tail.pseudo.txt
+)
+ember_golden_test(
+    NAME    global_resolution_after_pseudo
+    FIXTURE global_resolution
+    ARGS    "-p|-s|read_after"
+    GOLDEN  global_resolution.read_after.pseudo.txt
+)
+ember_golden_test(
+    NAME    global_resolution_addr_tail_pseudo
+    FIXTURE global_resolution
+    ARGS    "-p|-s|addr_unsized_tail"
+    GOLDEN  global_resolution.addr_unsized_tail.pseudo.txt
 )
 
 ember_golden_test(

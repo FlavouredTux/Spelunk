@@ -405,6 +405,22 @@ export default function App() {
     return [...info.functions, ...imports];
   }, [info]);
 
+  const recentFunctions = useMemo(() => {
+    if (!info) return [];
+    const out: FunctionInfo[] = [];
+    const seen = new Set<number>();
+    for (let i = history.length - 1; i >= 0; --i) {
+      const addr = history[i];
+      if (seen.has(addr)) continue;
+      const fn = fnByAddr.get(addr);
+      if (!fn) continue;
+      seen.add(addr);
+      out.push(fn);
+      if (out.length >= 12) break;
+    }
+    return out;
+  }, [history, info, fnByAddr]);
+
   const fnAddrByName = useMemo(() => {
     const m = new Map<string, number>();
     if (!info) return m;
@@ -722,12 +738,17 @@ export default function App() {
       return;
     }
     setHistory((h) => {
-      if (histIdx >= 0 && h[histIdx] === fn.addrNum) return h;
-      const truncated = h.slice(0, histIdx + 1);
-      return [...truncated, fn.addrNum];
+      const curIdx = histIdx >= 0 ? histIdx : h.length - 1;
+      if (curIdx >= 0 && h[curIdx] === fn.addrNum) {
+        setHistIdx(curIdx);
+        return h;
+      }
+      const truncated = h.slice(0, curIdx + 1);
+      const next = [...truncated, fn.addrNum].slice(-250);
+      setHistIdx(next.length - 1);
+      return next;
     });
-    setHistIdx((i) => (history[i] === fn.addrNum ? i : i + 1));
-  }, [history, histIdx, info, settings.binaryState, patchSettings]);
+  }, [histIdx, info, settings.binaryState, patchSettings]);
 
   // Bookmark the current function — toggles on if not already saved.
   // Bookmarks live per-binary in settings so they survive across
@@ -782,6 +803,33 @@ export default function App() {
     setCurrent(fn);
   }, [histIdx, history, info, fnByAddr]);
 
+  const findContainingFunction = useCallback((vaddr: number): FunctionInfo | null => {
+    if (!info) return null;
+    const exact = fnByAddr.get(vaddr);
+    if (exact) return exact;
+    let best: FunctionInfo | null = null;
+    for (const fn of info.functions) {
+      if (!Number.isFinite(fn.addrNum) || fn.size <= 0) continue;
+      if (vaddr < fn.addrNum || vaddr >= fn.addrNum + fn.size) continue;
+      if (!best || fn.addrNum > best.addrNum) best = fn;
+    }
+    return best;
+  }, [info, fnByAddr]);
+
+  const jumpToAddress = useCallback((vaddr: number) => {
+    const fn = findContainingFunction(vaddr);
+    if (fn) {
+      navigateTo(fn);
+      if (vaddr !== fn.addrNum) {
+        setView("asm");
+        setToast(`jumped to containing function ${fn.addr}`);
+      }
+      return;
+    }
+    setHexInitialVaddr(vaddr);
+    setHexOpen(true);
+  }, [findContainingFunction, navigateTo]);
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -824,6 +872,14 @@ export default function App() {
       if (mod && !e.shiftKey && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         setPaletteOpen(true);
+        return;
+      }
+      if ((mod && !e.shiftKey && (e.key === "l" || e.key === "L")) ||
+          (!inInput && !mod && !e.altKey && !e.shiftKey && (e.key === "g" || e.key === "G"))) {
+        if (info) {
+          e.preventDefault();
+          setPaletteOpen(true);
+        }
         return;
       }
       if (mod && (e.key === "f" || e.key === "F")) {
@@ -1282,11 +1338,12 @@ export default function App() {
               histIdx={histIdx}
               fnByAddr={fnByAddr}
               annotations={annotations}
-              onPick={(addr) => {
+              onPick={(idx) => {
+                const addr = history[idx];
                 const fn = fnByAddr.get(addr);
                 if (!fn) return;
                 navigatingRef.current = true;
-                setHistIdx(history.indexOf(addr));
+                setHistIdx(idx);
                 setCurrent(fn);
               }}
             />
@@ -1505,7 +1562,7 @@ export default function App() {
               display: "flex", alignItems: "center", gap: 6,
               ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
             }}
-            title="Jump to function (Ctrl+P)"
+            title="Jump to function or address (G / Ctrl+L / Ctrl+P)"
           >
             <span>jump</span>
             <span style={{ color: C.textFaint }}>⌃P</span>
@@ -1741,14 +1798,14 @@ export default function App() {
       {paletteOpen && (
         <CommandPalette
           functions={paletteFunctions}
+          recent={recentFunctions}
           annotations={annotations}
           onSelect={(f) => navigateTo(f)}
           onJumpAddress={(v) => {
             // Palette accepts hex addresses that don't match a function
             // start — open the hex view at the typed vaddr instead of
             // silently doing nothing.
-            setHexInitialVaddr(v);
-            setHexOpen(true);
+            jumpToAddress(v);
           }}
           onClose={() => setPaletteOpen(false)}
         />
@@ -2229,7 +2286,7 @@ function NavHistoryDropdown(props: {
   histIdx: number;
   fnByAddr: Map<number, FunctionInfo>;
   annotations: Annotations;
-  onPick: (addr: number) => void;
+  onPick: (idx: number) => void;
 }) {
   const fmtAddr = useFmtAddr();
   const [open, setOpen] = useState(false);
@@ -2293,7 +2350,7 @@ function NavHistoryDropdown(props: {
             return (
               <button
                 key={`${addr}-${i}`}
-                onClick={() => { props.onPick(addr); setOpen(false); }}
+                onClick={() => { props.onPick(i); setOpen(false); }}
                 disabled={!fn}
                 style={{
                   width: "100%",
@@ -2369,9 +2426,7 @@ function FunctionHeader(props: {
   current: FunctionInfo | null;
   annotations: Annotations;
   arities: Arities;
-  onRename: (fn: FunctionInfo) => void;
-  onAddNote: (fn: FunctionInfo) => void;
-  onEditSignature: (fn: FunctionInfo) => void;
+  code: string;
   view: ViewKind;
   onToast: (msg: string) => void;
 }) {

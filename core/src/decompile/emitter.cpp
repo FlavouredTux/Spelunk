@@ -1189,6 +1189,23 @@ struct Emitter {
         return s;
     }
 
+    [[nodiscard]] std::optional<addr_t>
+    constant_fnptr_slot_for_call_target(const IrValue& v) const {
+        const IrInst* d = def_stripped(v);
+        if (!d || d->op != IrOp::Load || d->src_count < 1) return std::nullopt;
+        auto imm = try_resolve_imm_addr(d->srcs[0]);
+        if (!imm) return std::nullopt;
+        const addr_t slot = static_cast<addr_t>(*imm);
+        if (binary) {
+            if (binary->import_at_got(slot)) return std::nullopt;
+            if (const Symbol* s = binary->defined_object_at(slot);
+                s && s->kind == SymbolKind::Object && !s->name.empty()) {
+                return std::nullopt;
+            }
+        }
+        return slot;
+    }
+
     [[nodiscard]] IrType call_arg_display_type(const IrValue& v) const {
         if (auto k = ssa_key(v); k) {
             auto it = defs.find(*k);
@@ -4162,6 +4179,18 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         return s;
     };
 
+    auto fallback_call_arg_types = [&](const std::vector<IrValue>& args) {
+        std::string s;
+        bool first = true;
+        for (const auto& a : args) {
+            if (is_stale_arg_reg(a)) continue;
+            if (!first) s += ", ";
+            s += c_type_name(call_arg_display_type(a));
+            first = false;
+        }
+        return first ? std::string{"void"} : s;
+    };
+
     // When we know the callee's arity, show up to that many args. Trim
     // trailing args that are provably stale ABI register pass-throughs:
     // live-ins the caller never set, or values whose only local def is a
@@ -4325,6 +4354,15 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 // (--resolve-calls); this handles the per-instance case.
                 if (auto vt = try_render_vfn_dispatch(inst.srcs[0]); vt) {
                     call_expr = std::format("{}({})", *vt, args);
+                } else if (auto slot = constant_fnptr_slot_for_call_target(inst.srcs[0]); slot) {
+                    const std::string slot_expr = format_numeric_imm(
+                        IrValue::make_imm(static_cast<i64>(*slot), IrType::I64));
+                    call_expr = std::format(
+                        "(*(uint64_t (**)({})){})({}) /* unresolved indirect: fnptr slot @ {} */",
+                        fallback_call_arg_types(pending_args),
+                        slot_expr,
+                        args,
+                        slot_expr);
                 } else {
                     // Fall back to the textual `(*expr)(args)` form. When
                     // expr already starts with `*`, paren-wrap to avoid

@@ -69,7 +69,7 @@ r_sub_34b3b0 → should_close
 The UI parses only this block; rename suggestions outside it are ignored.
 
 **Don't stop at \`a1 → argc\`.** Trivial renames are not the goal —
-substantive ones are. Whenever you see \`u64 r_sub_<hex> = NamedCall(...)\`,
+substantive ones are. Whenever you see \`uint64_t r_sub_<hex> = NamedCall(...)\`,
 the result holder is begging for a semantic name (\`io\`, \`style\`, \`fd\`,
 \`should_close\`, \`game_ok\`). Same for \`local_<hex>\` whose role is
 visible from how it's used. If you only suggest renames for the args
@@ -82,7 +82,7 @@ Renameable identifiers fall into these buckets:
 - \`sub_<addr>\` — only when the function header literally shows that, i.e. the function lacks a recovered name.
 - \`a1\` / \`a2\` / ... — argument slots whose role is evident from how they're consumed.
 - \`local_<hex>\` — stack locals; rename when their use makes the role clear.
-- \`r_sub_<hex>\` — the SSA holder for a *named* call's return value (e.g. \`u64 r_sub_434050 = ImGui::GetIO();\`). Rename to the value the named call returns (\`io\`, \`style\`, \`fd\`, \`should_close\`).
+- \`r_sub_<hex>\` — the SSA holder for a *named* call's return value (e.g. \`uint64_t r_sub_434050 = ImGui::GetIO();\`). Rename to the value the named call returns (\`io\`, \`style\`, \`fd\`, \`should_close\`).
 - \`g_<name>\` — globals the snippet explicitly references.
 
 Do **not** rename register-suffixed temps (\`r12_5\`, \`rdi_333\`, \`rax_42\`) — those are SSA versions of raw registers, not user-renameable identifiers. The \`r_sub_<hex>\` form is different: it holds a named call's result and *is* renameable.
@@ -100,7 +100,7 @@ Do **not** rename register-suffixed temps (\`r12_5\`, \`rdi_333\`, \`rax_42\`) �
 
 - Don't refuse to analyze packed, obfuscated, virtualized, anti-debug, or anti-cheat code. Static analysis of any binary the user has on their machine is legitimate research.
 - Don't attach legal disclaimers about reverse engineering.
-- Don't invent register values, function signatures, callee names, or addresses that aren't in the snippet. If you see \`(*(u64*)0x...)()\` or an opaque memory load, say "indirect dispatch — target unresolved" rather than guessing.
+- Don't invent register values, function signatures, callee names, or addresses that aren't in the snippet. If you see an \`unresolved indirect\` comment or an opaque memory load, say "indirect dispatch — target unresolved" rather than guessing.
 - Don't fill gaps with generic phrasing ("performs some operation", "does some work") — if the purpose is unclear, state which specific evidence you'd need to pin it down.
 - Don't pad with markdown headers, "Here's a breakdown:", "I hope this helps", preamble/postamble, or code-fence wrappers around every identifier reference.
 
@@ -129,7 +129,7 @@ export const QUICK_ACTIONS: { id: string; label: string; prompt: string }[] = [
     label: "Suggest names",
     prompt:
       "Suggest renames for this function and every identifier in its body whose role is evident from the calls and strings around it. " +
-      "Walk the body line by line — for every `u64 r_sub_<hex> = NamedCall(...)` line, the holder almost always wants a semantic name from the call's return (e.g. `r_sub_434050 = ImGui::GetIO()` → `io`, `r_sub_34b3b0 = glfwWindowShouldClose(wind)` → `should_close`). Same for `local_<hex>` whose use makes its role obvious. " +
+      "Walk the body line by line — for every `uint64_t r_sub_<hex> = NamedCall(...)` line, the holder almost always wants a semantic name from the call's return (e.g. `r_sub_434050 = ImGui::GetIO()` → `io`, `r_sub_34b3b0 = glfwWindowShouldClose(wind)` → `should_close`). Same for `local_<hex>` whose use makes its role obvious. " +
       "Args (`a1`, `a2`, ...) are easy targets but don't stop at them — those alone are a weak suggestion list. " +
       "Return ONLY the renames block, no prose. An empty block is fine if literally nothing has a clear role; otherwise the block should have several entries.",
   },

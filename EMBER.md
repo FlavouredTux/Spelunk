@@ -185,10 +185,10 @@ vtables / callback lists / Lua C-API style runtime tables.
 - `NAME /* 0x... */` in an immediate expression is a named constant
   supplied by annotations. Use `[const]` for hashes, magic values,
   protocol IDs, or resolver constants that make the pseudo-C readable.
-- `(*(u64*)(0x...))(...)` is an unresolved indirect call. Means: vtable
-  / function-pointer table the static analyzer couldn't bottom out.
-  Either run `--resolve-calls`, supply a `--trace edges.tsv`, or accept
-  it as a known limit.
+- `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */` is
+  an unresolved indirect call. Means: vtable / function-pointer table
+  the static analyzer couldn't bottom out. Either run `--resolve-calls`,
+  supply a `--trace edges.tsv`, or accept it as a known limit.
 - `/* observed targets: a, b, c */` after a call expression: trace
   evidence of what the fn pointer dynamically resolved to.
 
@@ -308,7 +308,8 @@ arbitrarily promote the higher one.
 Stop trying these things; they're known limits, not bugs:
 
 - **Indirect calls without IAT, constant vtable, runtime trace, or
-  receiver-type fact.** They render as `(*(u64*)(0x...))(...)`.
+  receiver-type fact.** They render as typed unresolved function-pointer
+  slot calls with an evidence comment.
   Workaround: feed `--trace edges.tsv` if you can collect runtime
   evidence; otherwise note the call site and move on.
 - **Function pointers installed by `.init_array` ctors at runtime**

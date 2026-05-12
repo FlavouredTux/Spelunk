@@ -1,0 +1,4 @@
+// via_absolute
+uint64_t via_absolute(void) {
+  return (*(uint64_t (**)(void))0x602010)() /* unresolved indirect: fnptr slot @ 0x602010 */;
+}

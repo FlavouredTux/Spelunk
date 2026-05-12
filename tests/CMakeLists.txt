@@ -828,6 +828,13 @@ ember_golden_test(
 )
 
 ember_golden_test(
+    NAME    indirect_tail_absolute_pseudo
+    FIXTURE indirect_tail
+    ARGS    "-p|-s|via_absolute"
+    GOLDEN  indirect_tail.via_absolute.pseudo.txt
+)
+
+ember_golden_test(
     NAME    indirect_trace_call_fp_pseudo
     FIXTURE indirect_trace
     ARGS    "--trace|${_fixture_dir}/indirect_trace.trace|--resolve-calls|-p|-s|call_fp"

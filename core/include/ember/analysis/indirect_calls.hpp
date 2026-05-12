@@ -22,7 +22,8 @@ namespace ember {
 //
 // Result keys are call-site instruction VAs; values are resolved target
 // VAs. Consumed by `EmitOptions::call_resolutions` so the pseudo-C
-// emitter renders `(*(u64*)(...))(this)` as a named function call.
+// emitter renders an unresolved function-pointer-slot call as a named
+// function call.
 //
 // Only fires when the receiver/vtable resolves to a CONSTANT — runtime
 // receiver-typed dispatch needs IPA (Phase 3) and is intentionally

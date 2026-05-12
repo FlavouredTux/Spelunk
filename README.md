@@ -25,11 +25,11 @@ fail:
 **`ember -p -s multi_exit gotos`** — the recovery
 
 ```c
-u64 multi_exit(u64 a1, u64 a2) {
+uint64_t multi_exit(uint64_t a1, uint64_t a2) {
   if (!a1) return -1;
   if (!a2) return -1;
-  u64 r_strlen   = strlen(a1);
-  u64 r_strlen_2 = strlen(a2);
+  uint64_t r_strlen   = strlen(a1);
+  uint64_t r_strlen_2 = strlen(a2);
   if (r_strlen != r_strlen_2) return -1;
   return 0;
 }
@@ -39,7 +39,7 @@ u64 multi_exit(u64 a1, u64 a2) {
 </tr>
 </table>
 
-<sub>The right column was reconstructed from a stripped binary. Ember has never seen the source — it walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded the spilled parameters, and rendered <code>-1</code> as signed even though it lives in a <code>u64</code>-typed slot.</sub>
+<sub>The right column was reconstructed from a stripped binary. Ember has never seen the source — it walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded the spilled parameters, and rendered <code>-1</code> as signed even though it lives in a <code>uint64_t</code>-typed slot.</sub>
 
 ---
 
@@ -52,7 +52,7 @@ What ember refuses to link, vendor, or import:
 - **No LLVM.** Own IR, own SSA, own cleanup, own structurer.
 - **No vendored dependencies.** A C++23 compiler and the standard library. That's it.
 - **No DWARF — even when it's right there.** The debugger sets breakpoints against ember's own pseudo-C output. There is no source on disk; ember invents one.
-- **No pretending.** When the analyzer can't bottom something out, the output says so out loud — `(*(u64*)(0x...))(...)`, not a fabricated symbol.
+- **No pretending.** When the analyzer can't bottom something out, the output says so out loud — `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */`, not a fabricated symbol.
 
 The whole pipeline fits in your head.
 
@@ -99,12 +99,12 @@ When static analysis can't bottom out an indirect call, hand ember a TSV of obse
 
 ```c
 // ember -p -s call_fp ./target
-u32 call_fp(u32 (*fn)(u32), u32 x) {
-  return (*(u64*)(0x602010))(x) + 1;
+uint32_t call_fp(uint32_t (*fn)(uint32_t), uint32_t x) {
+  return (*(uint64_t (**)(uint32_t))0x602010)(x) /* unresolved indirect: fnptr slot @ 0x602010 */ + 1;
 }
 
 // ember -p -s call_fp --trace edges.tsv ./target
-u32 call_fp(u32 (*fn)(u32), u32 x) {
+uint32_t call_fp(uint32_t (*fn)(uint32_t), uint32_t x) {
   return plus7(x) /* observed targets: plus7, minus3 */ + 1;
 }
 ```
@@ -132,7 +132,7 @@ The first observed target names the expression; the rest stay attached as a comm
 
 Limits, not bug reports:
 
-- Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as `(*(u64*)(0x...))(...)`. By design — see *By omission*.
+- Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as typed unresolved function-pointer-slot calls with an evidence comment. By design — see *By omission*.
 - Switch cases whose default falls outside the bounds check can misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
 - PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics, DOL function discovery, and code-pointer xrefs.

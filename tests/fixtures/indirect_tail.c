@@ -9,6 +9,8 @@
  *                  -O2 emits `mov rax, [rdi+ofs]; jmp rax`.
  *   - via_global:  call through a single named global fn-pointer;
  *                  -O2 emits `jmp qword ptr [rip+gfp]`.
+ *   - via_absolute: call through an anonymous absolute fn-pointer slot;
+ *                   locks in the unresolved-indirect witness fallback.
  *
  * `noinline` keeps the helpers from being inlined into main; the tail
  * shape only manifests when each function exists as a real callee. */
@@ -38,8 +40,15 @@ int via_global(int x) {
     return g_fp(x);
 }
 
+__attribute__((noinline))
+int via_absolute(int x) {
+    volatile op_t* slot = (volatile op_t*)0x602010;
+    return (*slot)(x);
+}
+
 int main(int argc, char** argv) {
     (void)argv;
     struct Handler h = { 0, 0 };
-    return via_table(argc, argc) + via_member(&h, argc) + via_global(argc);
+    return via_table(argc, argc) + via_member(&h, argc) +
+           via_global(argc) + via_absolute(argc);
 }

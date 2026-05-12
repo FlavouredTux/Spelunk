@@ -144,7 +144,7 @@ Limits, not bug reports:
 <details>
 <summary><b>Build &amp; run</b></summary>
 
-C++23 (gcc 15+ or recent Clang) and CMake 3.28+:
+C++23 (gcc 16+ or recent Clang) and CMake 3.28+:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -330,7 +330,7 @@ Goldens live in `tests/golden/`. Accept an intentional shift in the same commit 
 UPDATE_GOLDEN=1 ctest --test-dir build -V
 ```
 
-CI runs in a `gcc:15` container so layout / signature output stays toolchain-stable. A separate Apple Clang + libc++ job builds `core/` (the CLI is gcc-only because it leans on `<print>`).
+CI runs in a `gcc:16` container so layout / signature output stays toolchain-stable. A separate Apple Clang + libc++ job builds `core/` (the CLI is gcc-only because it leans on `<print>`).
 
 </details>
 

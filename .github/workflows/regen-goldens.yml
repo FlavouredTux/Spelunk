@@ -14,7 +14,7 @@ on:
 jobs:
   regen:
     runs-on: ubuntu-24.04
-    container: gcc:15
+    container: gcc:16
     steps:
       - uses: actions/checkout@v4
 

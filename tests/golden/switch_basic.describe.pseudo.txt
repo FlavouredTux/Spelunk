@@ -1,8 +1,4 @@
 // describe
-u64 describe(u64 a1) {
-  u32 t0 = (u32)a1;
-  if (t0 > 5) {
-    return -1;
-  }
-  return (u32)(a1 + 0x64);
+u32 describe(u64 a1) {
+  return (u32)a1 >= 6 ? -1 : (u32)(a1 + 0x64);
 }

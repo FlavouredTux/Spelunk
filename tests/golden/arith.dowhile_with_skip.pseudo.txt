@@ -1,5 +1,5 @@
 // dowhile_with_skip
-u64 dowhile_with_skip(u64 a1, u64 a2) {
+u32 dowhile_with_skip(u64 a1, u32 a2) {
   u32 local_10;
   u32 local_c;
   local_c = 0;
@@ -10,6 +10,6 @@ u64 dowhile_with_skip(u64 a1, u64 a2) {
     if (t19) {
       local_10 += t19;
     }
-  } while ((i64)local_c < (i64)(u32)a2);
+  } while ((i64)local_c < (i64)a2);
   return local_10;
 }

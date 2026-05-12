@@ -1,5 +1,5 @@
 // uses_buffer
-u64 uses_buffer(char* a1) {
+u32 uses_buffer(char* a1) {
   char local_58[72];
   return stpcpy(&local_58, a1) - (u32)&local_58;
 }

@@ -1,5 +1,4 @@
 // sse_memclr
-void sse_memclr(void) {
-  rep.stosq(&big_dst /* 0x404040 */, 0, 0x200);
-  return;
+void* sse_memclr(u64 a1, u64 a2) {
+  return memset(&big_dst /* 0x404040 */, 0, 0x1000);
 }

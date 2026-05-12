@@ -10,9 +10,9 @@ jobs:
   build-test:
     runs-on: ubuntu-24.04
     # Container pins the compiler + glibc so goldens match the local
-    # dev toolchain (gcc 15.x). Without this, CI sat on Ubuntu 24.04's
+    # dev toolchain (gcc 16.x). Without this, CI sat on Ubuntu 24.04's
     # gcc-14 and every commit's tests failed on layout/sig drift.
-    container: gcc:15
+    container: gcc:16
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +29,17 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '26' }
+
+      - name: Build UI and agent
+        run: |
+          npm ci --prefix agent
+          npm run typecheck --prefix agent
+          npm run build --prefix agent
+          npm ci --prefix ui
+          npm run build --prefix ui
 
   # clang + libc++ on Linux. The point is catching libc++-specific
   # header drift (transitive include leaks, missing <format>/<print>

@@ -14,7 +14,7 @@
 # (ASM output would drift across compilers).
 
 # Toolchain-independent unit tests run anywhere. Compiled-fixture golden
-# tests are pinned to the gcc:15 toolchain (see ci.yml) so they only
+# tests are pinned to the gcc:16 toolchain (see ci.yml) so they only
 # wire up on Linux.
 add_executable(ember_demangle_test demangle_test.cpp)
 target_link_libraries(ember_demangle_test PRIVATE ember::core ember::flags)
@@ -212,7 +212,7 @@ ember_build_fixture(mem_forward OPT "-O0")
 # Goldens for `imports` record absolute addresses, function sizes, and
 # data-xref offsets — every one of which shifts on a gcc point-release
 # even when imports.c is unchanged. We've burned multiple commits
-# regenerating against successive gcc-15.x versions; pinning a prebuilt
+# regenerating against successive GCC point releases; pinning a prebuilt
 # binary against the canonical toolchain is the only stable answer.
 # Source still lives at imports.c — kept for traceability and so the
 # binary can be rebuilt with `gcc -O2 -g -fno-stack-protector -no-pie

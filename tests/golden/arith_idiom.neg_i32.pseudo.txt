@@ -1,4 +1,4 @@
 // neg_i32
-u64 neg_i32(u64 a1) {
-  return -(u32)a1;
+u32 neg_i32(u32 a1) {
+  return -a1;
 }

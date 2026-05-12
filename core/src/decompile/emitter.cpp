@@ -1439,6 +1439,62 @@ struct Emitter {
         self_arity = need;
     }
 
+    // If an unannotated live-in argument is only ever consumed through the
+    // same truncation, surface that in the header. This turns common
+    // compiler shapes like `trunc i32 rdi; test eax,eax` into `u32 a1`
+    // rather than keeping a `u64 a1` header and sprinkling `(u32)a1`
+    // through every condition/return. We deliberately require every visible
+    // use to be a Trunc to the same width; a single direct 64-bit use means
+    // the wider type is intentional and the cast should stay in the body.
+    void infer_narrow_arg_types_from_uses() {
+        const auto int_args = int_arg_regs(abi);
+        const u8 limit = std::min<u8>(self_arity, static_cast<u8>(int_args.size()));
+        for (u8 slot = 0; slot < limit; ++slot) {
+            IrValue arg = IrValue::make_reg(int_args[slot], IrType::I64);
+            arg.version = 0;
+
+            // Refined local inference already found a stronger type such as
+            // `char*` / `u32*`; don't overwrite pointer evidence with an
+            // integer-width guess from an incidental cast.
+            if (c_type_name_for(arg) != "u64") continue;
+
+            std::optional<IrType> narrowed;
+            bool saw_use = false;
+            bool all_narrow = true;
+            for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+                const auto& bb = fn->blocks[bi];
+                for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                    if (hidden.contains({bi, ii})) continue;
+                    const auto& inst = bb.insts[ii];
+                    if (is_call_arg_barrier(inst) ||
+                        inst.op == IrOp::Clobber ||
+                        inst.op == IrOp::Phi) {
+                        continue;
+                    }
+                    for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si) {
+                        if (!same_ssa(inst.srcs[si], arg)) continue;
+                        saw_use = true;
+                        if (inst.op != IrOp::Trunc || si != 0) {
+                            all_narrow = false;
+                            break;
+                        }
+                        if (!narrowed) {
+                            narrowed = inst.dst.type;
+                        } else if (*narrowed != inst.dst.type) {
+                            all_narrow = false;
+                            break;
+                        }
+                    }
+                    if (!all_narrow) break;
+                }
+                if (!all_narrow) break;
+            }
+            if (saw_use && all_narrow && narrowed) {
+                record_self_arg_type(slot, *narrowed);
+            }
+        }
+    }
+
     [[nodiscard]] bool is_void_call_result(const IrValue& v) const {
         if (v.kind != IrValueKind::Reg) return false;
         if (canonical_reg(v.reg) != int_return_reg(abi)) return false;
@@ -3569,6 +3625,15 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             if (src.type == d.dst.type) {
                 return expr(src, depth, min_prec);
             }
+            // If the header already narrowed this live-in arg to the cast's
+            // destination type, repeating `(u32)a1` at every use just leaks
+            // ABI width back into otherwise source-like output.
+            if (auto slot = trace_to_self_arg_slot(src);
+                slot && *slot < self_arg_type_overrides.size() &&
+                self_arg_type_overrides[*slot] &&
+                *self_arg_type_overrides[*slot] == d.dst.type) {
+                return expr(src, depth, min_prec);
+            }
             // A generated source-level parameter name is already a semantic
             // value, not an architectural register width. When a call
             // argument was packed as zext(trunc(param)), render the param
@@ -4395,6 +4460,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     if (!has_user_sig) e.bump_arity_from_call_sites();
     if (!has_user_sig) e.bump_arity_from_body_reads();
+    if (!has_user_sig) e.infer_narrow_arg_types_from_uses();
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
     if (!has_user_sig) e.infer_charp_args();
@@ -4453,13 +4519,6 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
         }
         if (!s.body) return "void";
-        bool narrow_return_from_indirect_evidence = false;
-        for (const auto& a : e.self_funcptr_arity) {
-            if (a) {
-                narrow_return_from_indirect_evidence = true;
-                break;
-            }
-        }
         std::vector<IrValue> candidates;
         std::function<void(const Region&)> walk = [&](const Region& r) {
             if (r.kind == RegionKind::Return &&
@@ -4467,12 +4526,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 if (e.is_void_call_result(r.condition)) return;
                 if (e.is_unbound_clobber_result(r.condition)) return;
                 IrValue v = r.condition;
-                if (narrow_return_from_indirect_evidence) {
-                    if (const IrInst* d = e.def_of(v); d && d->src_count >= 1
-                            && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
-                            && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
-                        v = d->srcs[0];
-                    }
+                if (const IrInst* d = e.def_of(v); d && d->src_count >= 1
+                        && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
+                        && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
+                    // ABI return registers are often wider than the
+                    // source-level value. Prefer the narrowed producer for
+                    // return-type inference so `return zext(i32)` becomes a
+                    // `u32` function instead of a `u64` function with casts.
+                    v = d->srcs[0];
                 }
                 candidates.push_back(v);
             }

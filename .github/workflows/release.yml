@@ -45,7 +45,7 @@ jobs:
         if: matrix.target == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc-14 g++-14 python3
+          sudo apt-get install -y cmake ninja-build gcc-16 g++-16 python3
 
       - name: macOS toolchain
         if: matrix.target == 'mac'
@@ -58,8 +58,8 @@ jobs:
       - name: Configure (linux)
         if: matrix.target == 'linux'
         env:
-          CC:  gcc-14
-          CXX: g++-14
+          CC:  gcc-16
+          CXX: g++-16
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Configure (mac)
@@ -77,7 +77,7 @@ jobs:
       # Golden tests live in ci.yml and have their own drift to chase.
 
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with: { node-version: '26' }
 
       - name: Install UI deps
         working-directory: ui

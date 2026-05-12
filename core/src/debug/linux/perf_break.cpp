@@ -94,6 +94,11 @@ install_perf_event(PerfTarget& t, addr_t addr, u32 bp_type, u8 len_bytes) {
                 "/proc/sys/kernel/perf_event_paranoid to 1 (or below), "
                 "or grant CAP_PERFMON to ember"));
         }
+        if (errno == EINVAL) {
+            return std::unexpected(Error::unsupported(
+                "debugger: perf_event_open rejected HW breakpoint/watchpoint "
+                "configuration on this kernel or container host"));
+        }
         return std::unexpected(errno_io("perf_event_open"));
     }
     const int fd = static_cast<int>(fd_l);

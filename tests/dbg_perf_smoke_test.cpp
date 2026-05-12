@@ -58,6 +58,13 @@ bool is_perf_denial(const ember::Error& e) {
     return e.kind_name() == std::string_view("unsupported");
 }
 
+template <typename TargetPtr>
+int skip_perf(TargetPtr& t, const char* what, const ember::Error& e) {
+    std::fprintf(stderr, "SKIP: %s (%s)\n", what, e.message.c_str());
+    (void)t->kill();
+    return 77;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -102,20 +109,27 @@ int main(int argc, char** argv) {
     auto bp_r = t->set_breakpoint(bp_va);
     if (!bp_r) {
         if (is_perf_denial(bp_r.error())) {
-            std::fprintf(stderr,
-                "SKIP: HW breakpoint allocation denied (%s)\n",
-                bp_r.error().message.c_str());
-            (void)t->kill();
-            return 77;
+            return skip_perf(t, "HW breakpoint allocation unavailable",
+                             bp_r.error());
         }
         std::fprintf(stderr, "FAIL: set_breakpoint: %s\n",
                      bp_r.error().message.c_str());
+        (void)t->kill();
         return 1;
     }
     const auto bp_id = *bp_r;
 
     auto wp_r = t->set_watchpoint(slot_va, 8, ember::debug::WatchMode::Write);
-    CHECK(wp_r.has_value(), "set_watchpoint");
+    if (!wp_r) {
+        if (is_perf_denial(wp_r.error())) {
+            return skip_perf(t, "HW watchpoint allocation unavailable",
+                             wp_r.error());
+        }
+        std::fprintf(stderr, "FAIL: set_watchpoint: %s\n",
+                     wp_r.error().message.c_str());
+        (void)t->kill();
+        return 1;
+    }
     const auto wp_id = *wp_r;
 
     // step() must report unsupported.

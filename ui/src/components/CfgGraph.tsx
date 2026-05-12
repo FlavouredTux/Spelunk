@@ -186,6 +186,28 @@ type Layout = {
   bounds: { x: number; y: number; w: number; h: number };
 };
 
+type VisibleNode = {
+  block: CfgBlock;
+  pos: Position;
+};
+
+type RenderEdge = {
+  key: string;
+  from: string;
+  to: string;
+  label: string;
+  path: string;
+  bounds: Rect;
+  color: string;
+  marker: string;
+  strokeWidth: number;
+  dash?: string;
+  opacity: number;
+  labelText?: string;
+  labelX: number;
+  labelY: number;
+};
+
 function layoutCfg(blocks: CfgBlock[], entryId: string): Layout {
   const byId = new Map(blocks.map((b) => [b.id, b]));
   const positions = new Map<string, Position>();
@@ -551,36 +573,12 @@ function rectsIntersect(a: Rect, b: Rect) {
   return a.x < b.x + b.w && a.x + a.w > b.x &&
          a.y < b.y + b.h && a.y + a.h > b.y;
 }
-function segmentInRect(x1: number, y1: number, x2: number, y2: number, r: Rect) {
-  const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
-  const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
-  return rectsIntersect({ x: minX, y: minY, w: maxX - minX, h: maxY - minY }, r);
-}
 
-// Edges rendered as a single memoized group — only rebuilt if layout/data
-// or the visible rect changes. Each edge gets a tiny midpoint label
-// (T/F, case N, etc.) when the LOD is high enough to read it; without
-// labels users have to chase colours through the legend.
-const Edges = memo(function Edges(props: {
-  blocks: CfgBlock[];
-  layout: Layout;
-  viewRect: Rect;
-  showLabels: boolean;
-  // When set, any edge incident on this block is rendered in full
-  // colour at 1.6× width; every other edge fades. Drives the hover /
-  // focus highlighting that lets the user trace control flow into and
-  // out of one block at a glance.
-  emphasizeBlock?: string | null;
-}) {
-  const { blocks, layout, viewRect, showLabels, emphasizeBlock } = props;
-  const paths: React.ReactElement[] = [];
-  const labels: React.ReactElement[] = [];
+function buildRenderEdges(blocks: CfgBlock[], layout: Layout): RenderEdge[] {
+  const out: RenderEdge[] = [];
   for (const b of blocks) {
     const sp = layout.positions.get(b.id);
     if (!sp) continue;
-    // Group successors by destination so back-to-back edges to the same
-    // block (e.g. switch with multiple cases hitting one handler) don't
-    // overlap-stack their midpoint labels.
     const seen = new Set<string>();
     for (let i = 0; i < b.succs.length; i++) {
       const s = b.succs[i];
@@ -591,7 +589,6 @@ const Edges = memo(function Edges(props: {
       const y1 = sp.y + sp.height;
       const x2 = ep.x + NODE_W / 2;
       const y2 = ep.y;
-      if (!segmentInRect(x1, y1, x2, y2, viewRect)) continue;
       const isBack = (layout.ranks.get(s.target) ?? 0) <= (layout.ranks.get(b.id) ?? 0);
       const isFall = s.label === "" || s.label === "fallthrough";
       const color =
@@ -607,71 +604,122 @@ const Edges = memo(function Edges(props: {
         color === C.violet      ? "url(#arrow-indirect)" :
         color === C.accent      ? "url(#arrow-taken)"    :
         "url(#arrow-uncond)";
-      const d = isBack
+      const path = isBack
         ? backEdgePath(x1, y1, x2, y2)
         : forwardEdgePath(x1, y1, x2, y2);
-      const incident = !!emphasizeBlock &&
-        (emphasizeBlock === b.id || emphasizeBlock === s.target);
-      const dimmed = !!emphasizeBlock && !incident;
-      const baseOpacity = isFall ? 0.55 : 0.9;
-      paths.push(
-        <path
-          key={b.id + "-" + i}
-          d={d}
-          stroke={color}
-          strokeWidth={(isFall ? 1.1 : 1.4) * (incident ? 1.7 : 1)}
-          strokeDasharray={isFall ? "4 3" : undefined}
-          fill="none"
-          markerEnd={marker}
-          opacity={dimmed ? 0.18 : (incident ? 1 : baseOpacity)}
-        />
-      );
+      const labelText =
+        s.label && !seen.has(s.target)
+          ? s.label === "fallthrough" ? "F"
+          : s.label === "taken"       ? "T"
+          : s.label === "tail-call"   ? "tail"
+          : s.label.startsWith("case ") ? s.label.slice(5)
+          : s.label
+          : undefined;
+      if (labelText) seen.add(s.target);
+      const labelX = isBack ? Math.max(x1, x2) + NODE_W / 2 + 60
+                            : (x1 + x2) / 2;
+      const labelY = isBack ? (y1 + y2) / 2
+                            : y1 + (y2 - y1) * 0.55;
+      const minX = Math.min(x1, x2, labelX) - NODE_W / 2 - 70;
+      const maxX = Math.max(x1, x2, labelX) + NODE_W / 2 + 70;
+      const minY = Math.min(y1, y2, labelY) - 40;
+      const maxY = Math.max(y1, y2, labelY) + 40;
+      out.push({
+        key: b.id + "-" + i,
+        from: b.id,
+        to: s.target,
+        label: s.label,
+        path,
+        bounds: { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
+        color,
+        marker,
+        strokeWidth: isFall ? 1.1 : 1.4,
+        dash: isFall ? "4 3" : undefined,
+        opacity: isFall ? 0.55 : 0.9,
+        labelText,
+        labelX,
+        labelY,
+      });
+    }
+  }
+  return out;
+}
 
-      // Inline midpoint label. Skip if we've already labelled an edge
-      // to this destination from this block (avoids label pile-up in
-      // switches), and skip the implicit blank label on unconditional
-      // jumps where the edge colour alone is unambiguous.
-      if (showLabels && s.label && !seen.has(s.target)) {
-        seen.add(s.target);
-        const short =
-          s.label === "fallthrough" ? "F" :
-          s.label === "taken"       ? "T" :
-          s.label === "tail-call"   ? "tail" :
-          s.label.startsWith("case ") ? s.label.slice(5) :
-          s.label;
-        // Midpoint along a forward edge sits at ~60% down the curve
-        // visually; for back-edges we rest the label on the right rail.
-        const lx = isBack ? Math.max(x1, x2) + NODE_W / 2 + 60
-                          : (x1 + x2) / 2;
-        const ly = isBack ? (y1 + y2) / 2
-                          : y1 + (y2 - y1) * 0.55;
-        labels.push(
-          <g key={b.id + "-" + i + "-l"} transform={`translate(${lx}, ${ly})`}>
-            <rect
-              x={-(short.length * 3 + 4)}
-              y={-7}
-              width={short.length * 6 + 8}
-              height={13}
-              rx={2}
-              fill={C.bg}
-              stroke={color}
-              strokeWidth={0.8}
-              opacity={0.95}
-            />
-            <text
-              x={0}
-              y={3}
-              fontFamily={mono}
-              fontSize={9}
-              fontWeight={600}
-              fill={color}
-              textAnchor="middle"
-            >
-              {short}
-            </text>
-          </g>
-        );
-      }
+function collectVisibleNodes(blocks: CfgBlock[], layout: Layout, viewRect: Rect): VisibleNode[] {
+  const out: VisibleNode[] = [];
+  for (const block of blocks) {
+    const pos = layout.positions.get(block.id);
+    if (!pos) continue;
+    if (!rectsIntersect({ x: pos.x, y: pos.y, w: NODE_W, h: pos.height }, viewRect)) {
+      continue;
+    }
+    out.push({ block, pos });
+  }
+  return out;
+}
+
+// Edges rendered as a single memoized group — only rebuilt if layout/data
+// or the visible rect changes. Each edge gets a tiny midpoint label
+// (T/F, case N, etc.) when the LOD is high enough to read it; without
+// labels users have to chase colours through the legend.
+const Edges = memo(function Edges(props: {
+  edges: RenderEdge[];
+  viewRect: Rect;
+  showLabels: boolean;
+  // When set, any edge incident on this block is rendered in full
+  // colour at 1.6× width; every other edge fades. Drives the hover /
+  // focus highlighting that lets the user trace control flow into and
+  // out of one block at a glance.
+  emphasizeBlock?: string | null;
+}) {
+  const { edges, viewRect, showLabels, emphasizeBlock } = props;
+  const paths: React.ReactElement[] = [];
+  const labels: React.ReactElement[] = [];
+  for (const edge of edges) {
+    if (!rectsIntersect(edge.bounds, viewRect)) continue;
+    const incident = !!emphasizeBlock &&
+      (emphasizeBlock === edge.from || emphasizeBlock === edge.to);
+    const dimmed = !!emphasizeBlock && !incident;
+    paths.push(
+      <path
+        key={edge.key}
+        d={edge.path}
+        stroke={edge.color}
+        strokeWidth={edge.strokeWidth * (incident ? 1.7 : 1)}
+        strokeDasharray={edge.dash}
+        fill="none"
+        markerEnd={edge.marker}
+        opacity={dimmed ? 0.18 : (incident ? 1 : edge.opacity)}
+      />
+    );
+
+    if (showLabels && edge.labelText) {
+      labels.push(
+        <g key={edge.key + "-l"} transform={`translate(${edge.labelX}, ${edge.labelY})`}>
+          <rect
+            x={-(edge.labelText.length * 3 + 4)}
+            y={-7}
+            width={edge.labelText.length * 6 + 8}
+            height={13}
+            rx={2}
+            fill={C.bg}
+            stroke={edge.color}
+            strokeWidth={0.8}
+            opacity={0.95}
+          />
+          <text
+            x={0}
+            y={3}
+            fontFamily={mono}
+            fontSize={9}
+            fontWeight={600}
+            fill={edge.color}
+            textAnchor="middle"
+          >
+            {edge.labelText}
+          </text>
+        </g>
+      );
     }
   }
   return <g>{paths}{labels}</g>;
@@ -699,6 +747,14 @@ export function CfgGraph(props: {
     };
     return layoutCfg(parsed.blocks, parsed.entry);
   }, [parsed]);
+  const renderEdges = useMemo(
+    () => buildRenderEdges(parsed.blocks, layout),
+    [parsed.blocks, layout],
+  );
+  const visibleNodes = useMemo(
+    () => collectVisibleNodes(parsed.blocks, layout, viewRect),
+    [parsed.blocks, layout, viewRect],
+  );
 
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef   = useRef<SVGGElement>(null);
@@ -785,7 +841,16 @@ export function CfgGraph(props: {
     requestAnimationFrame(() => {
       scheduledUpdate.current = false;
       const r = computeViewRect();
-      if (r) setViewRect(r);
+      if (r) {
+        setViewRect((cur) =>
+          Math.abs(cur.x - r.x) < 0.5 &&
+          Math.abs(cur.y - r.y) < 0.5 &&
+          Math.abs(cur.w - r.w) < 0.5 &&
+          Math.abs(cur.h - r.h) < 0.5
+            ? cur
+            : r
+        );
+      }
     });
   };
 
@@ -865,13 +930,21 @@ export function CfgGraph(props: {
 
   // Display-scale throttle during zoom to avoid setState on every wheel tick.
   const displayScaleTimer = useRef<number | null>(null);
+  const pendingDisplayScale = useRef(1);
   const scheduleDisplayScale = (scale: number) => {
+    pendingDisplayScale.current = scale;
     if (displayScaleTimer.current != null) return;
     displayScaleTimer.current = window.setTimeout(() => {
-      setDisplayScale(scale);
+      setDisplayScale(pendingDisplayScale.current);
       displayScaleTimer.current = null;
     }, 60);
   };
+
+  useEffect(() => () => {
+    if (displayScaleTimer.current != null) {
+      window.clearTimeout(displayScaleTimer.current);
+    }
+  }, []);
 
   const onWheel: React.WheelEventHandler<SVGSVGElement> = (e) => {
     const rect = svgRef.current!.getBoundingClientRect();
@@ -922,6 +995,10 @@ export function CfgGraph(props: {
     scheduleViewUpdate();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const onNodeClick = useCallback((id: string) => {
+    setFocusedId((cur) => (cur === id ? null : id));
+    zoomToBlock(id);
+  }, [zoomToBlock]);
   const onMouseMove: React.MouseEventHandler<SVGSVGElement> = (e) => {
     const d = dragRef.current;
     if (!d) return;
@@ -1047,17 +1124,12 @@ export function CfgGraph(props: {
             ? "cfg-dragging" : undefined}
         >
           <Edges
-            blocks={parsed.blocks}
-            layout={layout}
+            edges={renderEdges}
             viewRect={viewRect}
             showLabels={lod === "full"}
             emphasizeBlock={emphasizeId}
           />
-          {parsed.blocks.map((b) => {
-            const p = layout.positions.get(b.id);
-            if (!p) return null;
-            if (!rectsIntersect(
-              { x: p.x, y: p.y, w: NODE_W, h: p.height }, viewRect)) return null;
+          {visibleNodes.map(({ block: b, pos: p }) => {
             const isEmph = emphasizeId === b.id;
             const isNeighbour = !!neighbours &&
               (neighbours.preds.has(b.id) || neighbours.succs.has(b.id));
@@ -1078,10 +1150,7 @@ export function CfgGraph(props: {
                 fnAddrByName={props.fnAddrByName}
                 onXref={props.onXref}
                 onHover={setHoverId}
-                onClick={(id) => {
-                  setFocusedId((cur) => (cur === id ? null : id));
-                  zoomToBlock(id);
-                }}
+                onClick={onNodeClick}
               />
             );
           })}

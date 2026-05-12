@@ -13,6 +13,8 @@ const { z } = require("zod");
 const MAX_TOOL_OUTPUT = 24000;
 const MAX_FUNCTION_ROWS = 80;
 const MAX_STRING_ROWS = 80;
+const MAX_BATCH_FUNCTIONS = 8;
+const MAX_CALLEE_BODIES = 8;
 
 function clip(text, max = MAX_TOOL_OUTPUT) {
   text = String(text ?? "");
@@ -76,6 +78,16 @@ function parseStringRows(tsv) {
     });
   }
   return rows;
+}
+
+function parseAddrLines(text) {
+  const out = [];
+  for (const line of String(text || "").split("\n")) {
+    const m = line.trim().match(/^(?:0x|sub_)?([0-9a-f]+)\b/i);
+    if (!m) continue;
+    out.push("0x" + m[1].toLowerCase());
+  }
+  return [...new Set(out)];
 }
 
 class EmberServeSession {
@@ -242,6 +254,12 @@ function makeTools(getCtx) {
     return found.addr;
   }
 
+  async function resolveAnyAddr(target) {
+    const direct = parseTargetAddr(target);
+    if (direct != null) return hex(direct);
+    return await resolveAddr(target);
+  }
+
   const tools = [
     {
       name: "find_function",
@@ -275,6 +293,102 @@ function makeTools(getCtx) {
       },
     },
     {
+      name: "get_functions",
+      description:
+        "Batch-fetch pseudo-C for up to 8 functions by name, sub_<addr>, or hex address. Use when a question depends on several helpers.",
+      zod: { targets: z.array(z.string()).min(1).max(MAX_BATCH_FUNCTIONS).describe("function names, sub_<hex>, or addresses") },
+      jsonSchema: {
+        type: "object",
+        properties: {
+          targets: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: MAX_BATCH_FUNCTIONS,
+            description: "function names, sub_<hex>, or addresses",
+          },
+        },
+        required: ["targets"],
+      },
+      exec: async ({ targets }) => {
+        const wanted = Array.from(new Set((targets || []).map((t) => String(t)).filter(Boolean))).slice(0, MAX_BATCH_FUNCTIONS);
+        const chunks = [];
+        for (const target of wanted) {
+          const addr = await resolveAddr(target);
+          chunks.push(`### ${target} (${addr})\n${await call("decompile", { fn: addr })}`);
+        }
+        return clip(chunks.join("\n\n"));
+      },
+    },
+    {
+      name: "get_function_with_callees",
+      description:
+        "Fetch one function plus direct callee addresses and pseudo-C bodies for up to 8 direct callees. Use for 'what does this do?' when helpers matter.",
+      zod: {
+        target: z.string().describe("function name, sub_<hex>, or address"),
+        depth: z.number().int().min(0).max(1).optional().describe("0 for only the target, 1 to include direct callees"),
+      },
+      jsonSchema: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "function name, sub_<hex>, or address" },
+          depth: { type: "integer", minimum: 0, maximum: 1, description: "0 for only target, 1 for direct callees" },
+        },
+        required: ["target"],
+      },
+      exec: async ({ target, depth = 1 }) => {
+        const addr = await resolveAddr(target);
+        const chunks = [`### target ${target} (${addr})\n${await call("decompile", { fn: addr })}`];
+        if (Number(depth) > 0) {
+          const callees = parseAddrLines(await call("callees", { fn: addr }));
+          chunks.push(`### direct callees\n${callees.length ? callees.join("\n") : "(none)"}`);
+          for (const callee of callees.slice(0, MAX_CALLEE_BODIES)) {
+            chunks.push(`### callee ${callee}\n${await call("decompile", { fn: callee })}`);
+          }
+          if (callees.length > MAX_CALLEE_BODIES) {
+            chunks.push(`[+${callees.length - MAX_CALLEE_BODIES} more callees omitted; call get_functions on specific ones]`);
+          }
+        }
+        return clip(chunks.join("\n\n"));
+      },
+    },
+    {
+      name: "describe_address",
+      description:
+        "Describe an address: section, permissions, exact/nearest symbol, containing function, entry/format/arch, and whether file bytes exist.",
+      zod: { target: z.string().describe("0x address, sub_<hex>, decimal address, or function name") },
+      jsonSchema: {
+        type: "object",
+        properties: { target: { type: "string", description: "address or function name" } },
+        required: ["target"],
+      },
+      exec: async ({ target }) => {
+        const addr = await resolveAnyAddr(target);
+        return clip(await call("describe_address", { addr }));
+      },
+    },
+    {
+      name: "get_data",
+      description:
+        "Read file-backed bytes at an address with section/symbol context and a hex+ASCII dump. Use for globals, vtables, string/storage checks, and raw constants.",
+      zod: {
+        addr: z.string().describe("0x address, sub_<hex>, decimal address, or function name"),
+        size: z.number().int().min(1).max(4096).optional().describe("bytes to read, default 128, max 4096"),
+      },
+      jsonSchema: {
+        type: "object",
+        properties: {
+          addr: { type: "string", description: "address or function name" },
+          size: { type: "integer", minimum: 1, maximum: 4096, description: "bytes to read, default 128" },
+        },
+        required: ["addr"],
+      },
+      exec: async ({ addr, size = 128 }) => {
+        const resolved = await resolveAnyAddr(addr);
+        return clip(await call("get_data", { addr: resolved, size: String(size || 128) }));
+      },
+    },
+    {
       name: "list_callers",
       description:
         "List incoming references/callers for a function or data address. Use for 'who uses this?' questions and to infer helper purpose from call sites.",
@@ -290,6 +404,21 @@ function makeTools(getCtx) {
       },
     },
     {
+      name: "list_data_xrefs",
+      description:
+        "List code references to a data/function address with loose constant-pool and raw-region retargeting. Use for 'who reads/writes this address?' and vtable/global tracking.",
+      zod: { addr: z.string().describe("0x address, sub_<hex>, decimal address, or function name") },
+      jsonSchema: {
+        type: "object",
+        properties: { addr: { type: "string", description: "address or function name" } },
+        required: ["addr"],
+      },
+      exec: async ({ addr }) => {
+        const resolved = await resolveAnyAddr(addr);
+        return clip(await call("refs_to_loose", { addr: resolved }));
+      },
+    },
+    {
       name: "list_callees",
       description:
         "List direct/tail/known-indirect callees for a function. Use to map what a function delegates to before naming it.",
@@ -302,6 +431,27 @@ function makeTools(getCtx) {
       exec: async ({ target }) => {
         const addr = await resolveAddr(target);
         return clip(await call("callees", { fn: addr }));
+      },
+    },
+    {
+      name: "get_disasm",
+      description:
+        "Fetch disassembly at a function/address. Use when pseudo-C lost instruction-level detail such as lock/rep prefixes, segment overrides, or exact immediates.",
+      zod: {
+        target: z.string().describe("function name, sub_<hex>, or address"),
+        count: z.number().int().min(1).max(128).optional().describe("instruction count, default 32"),
+      },
+      jsonSchema: {
+        type: "object",
+        properties: {
+          target: { type: "string", description: "function name, sub_<hex>, or address" },
+          count: { type: "integer", minimum: 1, maximum: 128, description: "instruction count, default 32" },
+        },
+        required: ["target"],
+      },
+      exec: async ({ target, count = 32 }) => {
+        const addr = await resolveAnyAddr(target);
+        return clip(await call("disasm_at", { addr, count: String(count || 32) }));
       },
     },
     {

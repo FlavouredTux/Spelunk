@@ -4490,6 +4490,119 @@ Args derive_args(const Args& base) {
     return a;
 }
 
+[[nodiscard]] std::string serve_describe_address(const Binary& b, addr_t va) {
+    const Section* sec = nullptr;
+    for (const auto& s : b.sections()) {
+        if (va >= s.vaddr && va - s.vaddr < s.size) {
+            sec = &s;
+            break;
+        }
+    }
+
+    const Symbol* exact = nullptr;
+    const Symbol* nearest = nullptr;
+    for (const auto& sym : b.symbols()) {
+        if (sym.addr == 0 || sym.is_import) continue;
+        if (sym.addr == va) exact = &sym;
+        if (sym.addr <= va && (!nearest || sym.addr > nearest->addr)) {
+            nearest = &sym;
+        }
+    }
+
+    auto fn = containing_function(b, va);
+    std::string out = "{";
+    out += std::format("\"addr\":\"{:#x}\"", va);
+    out += std::format(",\"format\":\"{}\",\"arch\":\"{}\"",
+                       format_name(b.format()), arch_name(b.arch()));
+    out += std::format(",\"entry\":\"{:#x}\"", b.entry_point());
+    if (sec) {
+        out += std::format(
+            ",\"section\":{{\"name\":\"{}\",\"vaddr\":\"{:#x}\",\"size\":\"{:#x}\","
+            "\"file_offset\":\"{:#x}\",\"flags\":\"{}{}{}{}\"}}",
+            json_escape(sec->name), sec->vaddr, sec->size, sec->file_offset,
+            sec->flags.readable ? "r" : "-",
+            sec->flags.writable ? "w" : "-",
+            sec->flags.executable ? "x" : "-",
+            sec->flags.allocated ? "a" : "-");
+    } else {
+        out += ",\"section\":null";
+    }
+    if (exact) {
+        out += std::format(",\"symbol\":{{\"name\":\"{}\",\"addr\":\"{:#x}\",\"size\":\"{:#x}\"}}",
+                           json_escape(exact->name), exact->addr, exact->size);
+    } else {
+        out += ",\"symbol\":null";
+    }
+    if (nearest) {
+        out += std::format(
+            ",\"nearest_symbol\":{{\"name\":\"{}\",\"addr\":\"{:#x}\",\"offset\":\"{:#x}\"}}",
+            json_escape(nearest->name), nearest->addr,
+            static_cast<addr_t>(va - nearest->addr));
+    } else {
+        out += ",\"nearest_symbol\":null";
+    }
+    if (fn) {
+        out += std::format(",\"containing_function\":{{\"entry\":\"{:#x}\",\"size\":\"{:#x}\",\"name\":\"{}\",\"offset\":\"{:#x}\"}}",
+                           fn->entry, fn->size, json_escape(fn->name),
+                           static_cast<addr_t>(fn->offset_within));
+    } else {
+        out += ",\"containing_function\":null";
+    }
+    out += std::format(",\"has_file_bytes\":{}", b.bytes_at(va).empty() ? "false" : "true");
+    out += "}\n";
+    return out;
+}
+
+[[nodiscard]] std::string serve_get_data(const Binary& b, addr_t va,
+                                         std::size_t size) {
+    size = std::clamp<std::size_t>(size, 1, 4096);
+    const auto bytes = b.bytes_at(va);
+    if (bytes.empty()) {
+        return std::format("error: no file-backed bytes at {:#x}\n", va);
+    }
+    const std::size_t n = std::min<std::size_t>(size, bytes.size());
+    std::string out;
+    out += serve_describe_address(b, va);
+    out += "hex\n";
+    for (std::size_t row = 0; row < n; row += 16) {
+        const std::size_t cnt = std::min<std::size_t>(16, n - row);
+        std::format_to(std::back_inserter(out), "{:#018x}  ", va + row);
+        for (std::size_t i = 0; i < 16; ++i) {
+            if (i < cnt) {
+                const unsigned v = std::to_integer<unsigned>(bytes[row + i]);
+                std::format_to(std::back_inserter(out), "{:02x} ", v);
+            } else {
+                out += "   ";
+            }
+            if (i == 7) out.push_back(' ');
+        }
+        out += " |";
+        for (std::size_t i = 0; i < cnt; ++i) {
+            const unsigned v = std::to_integer<unsigned>(bytes[row + i]);
+            out.push_back((v >= 0x20 && v < 0x7f) ? static_cast<char>(v) : '.');
+        }
+        out += "|\n";
+    }
+    if (n < size) {
+        out += std::format("[truncated at end of mapped bytes; requested {}, emitted {}]\n",
+                           size, n);
+    }
+    return out;
+}
+
+[[nodiscard]] std::optional<std::size_t> serve_parse_size(std::string_view s) {
+    if (s.empty()) return std::nullopt;
+    if (s.starts_with("0x") || s.starts_with("0X")) {
+        auto parsed = parse_cli_addr(s);
+        if (!parsed) return std::nullopt;
+        return static_cast<std::size_t>(*parsed);
+    }
+    std::size_t v = 0;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), v, 10);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) return std::nullopt;
+    return v;
+}
+
 }  // namespace
 
 int run_serve(const Args& base, const Binary& b) {
@@ -4572,6 +4685,39 @@ int run_serve(const Args& base, const Binary& b) {
                 Args a = derive_args(base);
                 a.refs_to = req->params["addr"];
                 std::string body = capture_stdout([&]{ run_refs_to(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "refs_to_loose") {
+                Args a = derive_args(base);
+                a.refs_to_loose = req->params["addr"];
+                std::string body = capture_stdout([&]{ run_refs_to_loose(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "describe_address") {
+                auto va = parse_cli_addr(req->params["addr"]);
+                if (!va) { write_err("describe_address: bad addr"); continue; }
+                write_ok(serve_describe_address(b, *va));
+                continue;
+            }
+            if (req->method == "get_data") {
+                auto va = parse_cli_addr(req->params["addr"]);
+                if (!va) { write_err("get_data: bad addr"); continue; }
+                std::size_t size = 128;
+                if (auto it = req->params.find("size"); it != req->params.end() && !it->second.empty()) {
+                    auto parsed = serve_parse_size(it->second);
+                    if (!parsed) { write_err("get_data: bad size"); continue; }
+                    size = *parsed;
+                }
+                write_ok(serve_get_data(b, *va, size));
+                continue;
+            }
+            if (req->method == "disasm_at") {
+                Args a = derive_args(base);
+                a.disasm_at = req->params["addr"];
+                a.disasm_count = req->params["count"];
+                std::string body = capture_stdout([&]{ run_disasm_at(a, b); });
                 write_ok(body);
                 continue;
             }

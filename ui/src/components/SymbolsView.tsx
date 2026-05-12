@@ -4,6 +4,39 @@ import { displayName, demangle, formatSize } from "../api";
 import type { BinaryInfo, FunctionInfo, Annotations } from "../types";
 
 type Tab = "imports" | "exports" | "sections" | "memmap" | "all";
+type SectionScope = "all" | "exec" | "text";
+type FunctionScope = "all" | "code" | "renamed" | "notes";
+
+function isTextSection(s: BinaryInfo["sections"][number]): boolean {
+  const name = s.name.toLowerCase();
+  return name === ".text" || name === "text" || name.endsWith(",__text") || name.includes("__text");
+}
+
+function isExecutableSection(s: BinaryInfo["sections"][number]): boolean {
+  const flags = s.flags.toLowerCase();
+  return isTextSection(s) || flags.includes("x") || flags.includes("exec") || flags.includes("code");
+}
+
+function matchesSectionScope(s: BinaryInfo["sections"][number], scope: SectionScope): boolean {
+  if (scope === "text") return isTextSection(s);
+  if (scope === "exec") return isExecutableSection(s);
+  return true;
+}
+
+function sectionRanges(sections: BinaryInfo["sections"]): Array<{ start: number; end: number }> {
+  return sections
+    .filter(isExecutableSection)
+    .map((s) => {
+      const start = parseInt(s.vaddr, 16);
+      const size = parseInt(s.size, 16);
+      return { start, end: start + size };
+    })
+    .filter((r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start);
+}
+
+function isInRanges(addr: number, ranges: Array<{ start: number; end: number }>): boolean {
+  return ranges.some((r) => addr >= r.start && addr < r.end);
+}
 
 export function SymbolsView(props: {
   info: BinaryInfo;
@@ -14,6 +47,8 @@ export function SymbolsView(props: {
   const { info, annotations, onSelect, onClose } = props;
   const [tab, setTab] = useState<Tab>("imports");
   const [q, setQ] = useState("");
+  const [sectionScope, setSectionScope] = useState<SectionScope>("all");
+  const [functionScope, setFunctionScope] = useState<FunctionScope>("all");
   const deferredQ = useDeferredValue(q);
 
   useEffect(() => {
@@ -31,11 +66,18 @@ export function SymbolsView(props: {
   // defined functions in the summary.
   const exports = useMemo(() => info.functions, [info]);
   const imports = useMemo(() => info.imports.filter((f) => f.name), [info.imports]);
+  const codeRanges = useMemo(() => sectionRanges(info.sections), [info.sections]);
 
-  const filterFunctions = (pool: FunctionInfo[]): FunctionInfo[] => {
+  const filterFunctions = (pool: FunctionInfo[], applyScope: boolean): FunctionInfo[] => {
     const needle = deferredQ.trim().toLowerCase();
-    if (!needle) return pool;
-    return pool.filter((f) => {
+    const scoped = !applyScope || functionScope === "all" ? pool : pool.filter((f) => {
+      if (functionScope === "code") return isInRanges(f.addrNum, codeRanges);
+      if (functionScope === "renamed") return !!annotations.renames[f.addr];
+      if (functionScope === "notes") return !!annotations.notes[f.addr];
+      return true;
+    });
+    if (!needle) return scoped;
+    return scoped.filter((f) => {
       const dn = displayName(f, annotations).toLowerCase();
       return f.name.toLowerCase().includes(needle) ||
              dn.includes(needle) ||
@@ -43,22 +85,36 @@ export function SymbolsView(props: {
     });
   };
   const filteredImports = useMemo(
-    () => filterFunctions(imports),
+    () => filterFunctions(imports, false),
     [imports, deferredQ, annotations],
   );
   const filteredExports = useMemo(
-    () => filterFunctions(exports),
-    [exports, deferredQ, annotations],
+    () => filterFunctions(exports, true),
+    [exports, deferredQ, annotations, functionScope, codeRanges],
   );
+  const functionScopeCounts = useMemo<Record<FunctionScope, number>>(() => ({
+    all: exports.length,
+    code: exports.filter((f) => isInRanges(f.addrNum, codeRanges)).length,
+    renamed: exports.filter((f) => !!annotations.renames[f.addr]).length,
+    notes: exports.filter((f) => !!annotations.notes[f.addr]).length,
+  }), [exports, codeRanges, annotations]);
 
+  const scopedSections = useMemo(() => {
+    return info.sections.filter((s) => matchesSectionScope(s, sectionScope));
+  }, [info.sections, sectionScope]);
+  const sectionScopeCounts = useMemo<Record<SectionScope, number>>(() => ({
+    all: info.sections.length,
+    exec: info.sections.filter(isExecutableSection).length,
+    text: info.sections.filter(isTextSection).length,
+  }), [info.sections]);
   const filteredSections = useMemo(() => {
     const needle = deferredQ.trim().toLowerCase();
-    if (!needle) return info.sections;
-    return info.sections.filter((s) =>
+    if (!needle) return scopedSections;
+    return scopedSections.filter((s) =>
       s.name.toLowerCase().includes(needle) ||
       s.flags.toLowerCase().includes(needle) ||
       s.vaddr.includes(needle));
-  }, [info.sections, deferredQ]);
+  }, [scopedSections, deferredQ]);
 
   return (
     <div
@@ -156,26 +212,178 @@ export function SymbolsView(props: {
         </div>
         <div style={{ flex: 1, overflow: "hidden" }}>
           {(tab === "sections") && (
-            <div style={{ height: "100%", overflowY: "auto" }}>
-              <SectionsList sections={filteredSections} />
+            <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              <SectionScopeBar
+                value={sectionScope}
+                counts={sectionScopeCounts}
+                onChange={setSectionScope}
+              />
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                <SectionsList sections={filteredSections} />
+              </div>
             </div>
           )}
           {(tab === "memmap") && (
-            <div style={{ height: "100%", overflowY: "auto" }}>
-              <MemoryMap sections={filteredSections} />
+            <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              <SectionScopeBar
+                value={sectionScope}
+                counts={sectionScopeCounts}
+                onChange={setSectionScope}
+              />
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                <MemoryMap sections={filteredSections} />
+              </div>
             </div>
           )}
           {(tab === "imports" || tab === "exports" || tab === "all") && (
-            <FunctionList
-              imports={tab === "exports" ? [] : filteredImports}
-              exports={tab === "imports" ? [] : filteredExports}
-              annotations={annotations}
-              onSelect={(f) => { onSelect(f); onClose(); }}
-              showHeaders={tab === "all"}
-            />
+            <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              {tab !== "imports" && (
+                <FunctionScopeBar
+                  value={functionScope}
+                  counts={functionScopeCounts}
+                  onChange={setFunctionScope}
+                />
+              )}
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <FunctionList
+                  imports={tab === "exports" || (tab === "all" && functionScope !== "all") ? [] : filteredImports}
+                  exports={tab === "imports" ? [] : filteredExports}
+                  annotations={annotations}
+                  onSelect={(f) => { onSelect(f); onClose(); }}
+                  showHeaders={tab === "all"}
+                />
+              </div>
+            </div>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function FunctionScopeBar(props: {
+  value: FunctionScope;
+  counts: Record<FunctionScope, number>;
+  onChange: (v: FunctionScope) => void;
+}) {
+  const options: Array<{ id: FunctionScope; label: string; title: string }> = [
+    { id: "all",     label: "all",   title: "Show every defined function" },
+    { id: "code",    label: "code",  title: "Show functions inside executable sections" },
+    { id: "renamed", label: "named", title: "Show functions with user renames" },
+    { id: "notes",   label: "notes", title: "Show functions with notes" },
+  ];
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "8px 18px",
+      background: C.bgAlt,
+      borderBottom: `1px solid ${C.border}`,
+      flexShrink: 0,
+    }}>
+      <span style={{
+        fontFamily: mono,
+        fontSize: 9,
+        letterSpacing: 1,
+        textTransform: "uppercase",
+        color: C.textFaint,
+        marginRight: 3,
+      }}>
+        functions
+      </span>
+      {options.map((opt) => {
+        const active = props.value === opt.id;
+        return (
+          <button
+            key={opt.id}
+            title={opt.title}
+            onClick={() => props.onChange(opt.id)}
+            aria-pressed={active}
+            style={{
+              padding: "4px 8px",
+              fontFamily: mono,
+              fontSize: 10,
+              color: active ? "#fff" : C.textMuted,
+              background: active ? C.accent : C.bgMuted,
+              border: `1px solid ${active ? C.accent : C.border}`,
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            {opt.label}
+            <span style={{
+              marginLeft: 6,
+              color: active ? "rgba(255,255,255,0.72)" : C.textFaint,
+            }}>
+              {props.counts[opt.id]}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SectionScopeBar(props: {
+  value: SectionScope;
+  counts: Record<SectionScope, number>;
+  onChange: (v: SectionScope) => void;
+}) {
+  const options: Array<{ id: SectionScope; label: string; title: string }> = [
+    { id: "all",  label: "all",  title: "Show every section" },
+    { id: "exec", label: "code", title: "Show executable sections" },
+    { id: "text", label: ".text", title: "Show text/code section names only" },
+  ];
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "8px 18px",
+      background: C.bgAlt,
+      borderBottom: `1px solid ${C.border}`,
+      flexShrink: 0,
+    }}>
+      <span style={{
+        fontFamily: mono,
+        fontSize: 9,
+        letterSpacing: 1,
+        textTransform: "uppercase",
+        color: C.textFaint,
+        marginRight: 3,
+      }}>
+        sections
+      </span>
+      {options.map((opt) => {
+        const active = props.value === opt.id;
+        return (
+          <button
+            key={opt.id}
+            title={opt.title}
+            onClick={() => props.onChange(opt.id)}
+            aria-pressed={active}
+            style={{
+              padding: "4px 8px",
+              fontFamily: mono,
+              fontSize: 10,
+              color: active ? "#fff" : C.textMuted,
+              background: active ? C.accent : C.bgMuted,
+              border: `1px solid ${active ? C.accent : C.border}`,
+              borderRadius: 4,
+              cursor: "pointer",
+            }}
+          >
+            {opt.label}
+            <span style={{
+              marginLeft: 6,
+              color: active ? "rgba(255,255,255,0.72)" : C.textFaint,
+            }}>
+              {props.counts[opt.id]}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -3,6 +3,6 @@ uint32_t scalar_entry(uint32_t* a1) {
   if (!(uint64_t)a1) {
     return 0;
   }
-  uint32_t t9 = (uint32_t)a1[4];
-  return a1[0] * 3 + ((t9 << 2 | t9 >> 0x1e) & -4) + (uint32_t)a1[3];
+  uint32_t t9 = (uint32_t)a1->field_4;
+  return a1->field_0 * 3 + ((t9 << 2 | t9 >> 0x1e) & -4) + (uint32_t)a1->field_6;
 }

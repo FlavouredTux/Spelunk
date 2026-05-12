@@ -983,10 +983,13 @@ struct Emitter {
             for (const auto& inst : bb.insts) {
                 if (inst.op == IrOp::Load && inst.src_count >= 1 &&
                     inst.segment == Reg::None) {
-                    record_struct_access(inst.srcs[0]);
+                    record_struct_access(inst.srcs[0], inst.dst.type);
                 } else if (inst.op == IrOp::Store && inst.src_count >= 1 &&
                            inst.segment == Reg::None) {
-                    record_struct_access(inst.srcs[0]);
+                    const IrType store_type = inst.src_count >= 2
+                        ? inst.srcs[1].type
+                        : IrType::I64;
+                    record_struct_access(inst.srcs[0], store_type);
                 }
             }
         }
@@ -2818,12 +2821,37 @@ struct Emitter {
     // distinct offsets we treat it as a struct pointer and render accesses
     // as `base->field_<offset>` instead of `*(T*)(base + off)`.
     std::map<SsaKey, std::set<i64>> struct_offsets;
+    std::map<SsaKey, std::map<i64, std::set<unsigned>>> struct_access_widths;
 
     [[nodiscard]] bool is_struct_pointer(const IrValue& base) const {
         auto k = ssa_key(base);
         if (!k) return false;
         auto it = struct_offsets.find(*k);
         return it != struct_offsets.end() && it->second.size() >= 2;
+    }
+
+    [[nodiscard]] bool is_strong_struct_pointer(const IrValue& base) const {
+        auto k = ssa_key(base);
+        if (!k || !is_struct_pointer(base)) return false;
+        const auto wit = struct_access_widths.find(*k);
+        if (wit == struct_access_widths.end()) return false;
+
+        std::set<unsigned> widths;
+        for (const auto& [off, ws] : wit->second) {
+            (void)off;
+            widths.insert(ws.begin(), ws.end());
+        }
+        if (widths.size() >= 2) return true;
+
+        const auto oit = struct_offsets.find(*k);
+        if (oit == struct_offsets.end() || oit->second.size() < 2) return false;
+        if (widths.size() != 1 || *widths.begin() == 0) return false;
+
+        const i64 stride = static_cast<i64>(*widths.begin());
+        for (i64 off : oit->second) {
+            if (off < 0 || (off % stride) != 0) return true;
+        }
+        return false;
     }
 
     [[nodiscard]] const std::string*
@@ -2862,7 +2890,7 @@ struct Emitter {
         return offs.contains(0) && offs.contains(8) && offs.contains(16);
     }
 
-    void record_struct_access(const IrValue& addr) {
+    void record_struct_access(const IrValue& addr, IrType t) {
         auto bo = try_base_plus_offset(addr);
         if (!bo) return;
         // Skip stack-relative and global bases — those have richer rendering
@@ -2870,6 +2898,10 @@ struct Emitter {
         if (stack_offset(bo->first).has_value()) return;
         if (auto k = ssa_key(bo->first); k) {
             struct_offsets[*k].insert(bo->second);
+            const unsigned bytes = type_bits(t) / 8;
+            if (bytes != 0) {
+                struct_access_widths[*k][bo->second].insert(bytes);
+            }
         }
     }
 
@@ -3071,6 +3103,26 @@ struct Emitter {
                         return std::format("{}->{}", base_expr, *field);
                     }
                 }
+            }
+            // Strong struct evidence beats array syntax. Mixed-width or
+            // non-stride offset sets usually mean a record layout, not
+            // argv-style indexing.
+            if (auto bo = try_base_plus_offset(addr);
+                bo && is_strong_struct_pointer(bo->first)) {
+                const IrValue& base = bo->first;
+                const i64 off = bo->second;
+                const std::string base_expr =
+                    expr(base, depth + 1, std::to_underlying(Prec::Unary));
+                if (off < 0) {
+                    return std::format("*({}*)({} - {:#x})",
+                                       c_type_name(t), base_expr,
+                                       static_cast<u64>(-off));
+                }
+                if (const std::string* field = annotated_field_name(base, off); field) {
+                    return std::format("{}->{}", base_expr, *field);
+                }
+                return std::format("{}->field_{:x}", base_expr,
+                                   static_cast<u64>(off));
             }
             // Array-indexing form takes priority over the struct-field
             // rendering when both apply — u64 stride-8 accesses usually mean

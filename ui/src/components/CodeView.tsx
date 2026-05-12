@@ -52,7 +52,8 @@ export function CodeView(props: {
   // Right-click on an asm instruction → opens patch dialog. Caller
   // passes the parsed virtual address and the current bytes (already
   // reflecting any in-flight patches via the CLI temp-file routing).
-  onPatchInsn?: (vaddr: number, origBytes: string, disasm: string) => void;
+  onPatchInsn?: (vaddr: number, origBytes: string, disasm: string, mode?: "asm" | "hex") => void;
+  onPatchBytes?: (vaddr: number, origBytes: string, bytesHex: string, comment?: string) => void;
   // Pixel font size for the main code body. Driven from app settings
   // so the user can dial it up on a 4K display without DevTools.
   fontSize?: number;
@@ -61,6 +62,13 @@ export function CodeView(props: {
 
   const [fnCtx, setFnCtx] = useState<{ x: number; y: number; fn: FunctionInfo } | null>(null);
   const [localCtx, setLocalCtx] = useState<{ x: number; y: number; name: string } | null>(null);
+  const [patchCtx, setPatchCtx] = useState<{
+    x: number;
+    y: number;
+    vaddr: number;
+    origBytes: string;
+    disasm: string;
+  } | null>(null);
 
   const handleLocalContext = useMemo(() => {
     if (!props.onRenameLocal) return undefined;
@@ -256,14 +264,20 @@ export function CodeView(props: {
             // expensive regex only runs on the lines the user actually
             // interacts with (the onContextMenu handler captures `line`
             // by closure).
-            const onLineContext = props.onPatchInsn
+            const onLineContext = props.onPatchInsn || props.onPatchBytes
               ? (ev: React.MouseEvent) => {
                   const m = ASM_INSN_RE.exec(line);
                   if (!m) return;       // not an asm line — let default menu show
                   ev.preventDefault();
                   const vaddr = parseInt(m[1], 16);
                   if (!Number.isFinite(vaddr)) return;
-                  props.onPatchInsn!(vaddr, m[2].trim(), m[3].trim());
+                  setPatchCtx({
+                    x: ev.clientX,
+                    y: ev.clientY,
+                    vaddr,
+                    origBytes: m[2].trim(),
+                    disasm: m[3].trim(),
+                  });
                 }
               : undefined;
             // Function-block decoration: top rule above each `// fn-name`
@@ -366,8 +380,49 @@ export function CodeView(props: {
           onClose={() => setLocalCtx(null)}
         />
       )}
+      {patchCtx && (
+        <ContextMenu
+          x={patchCtx.x}
+          y={patchCtx.y}
+          items={buildPatchMenu(patchCtx, props.onPatchInsn, props.onPatchBytes)}
+          onClose={() => setPatchCtx(null)}
+        />
+      )}
     </div>
   );
+}
+
+function nopBytesLike(origBytes: string): string {
+  const len = origBytes.replace(/\s+/g, "").length / 2;
+  return "90".repeat(Math.max(0, len)).toUpperCase();
+}
+
+function buildPatchMenu(
+  ctx: { vaddr: number; origBytes: string; disasm: string },
+  onPatchInsn?: (vaddr: number, origBytes: string, disasm: string, mode?: "asm" | "hex") => void,
+  onPatchBytes?: (vaddr: number, origBytes: string, bytesHex: string, comment?: string) => void,
+): MenuItem[] {
+  const addr = `0x${ctx.vaddr.toString(16)}`;
+  const original = ctx.origBytes.replace(/\s+/g, " ").trim().toUpperCase();
+  const items: MenuItem[] = [
+    { kind: "header", label: ctx.disasm, meta: `${addr}  -  ${original}` },
+  ];
+  if (onPatchInsn) {
+    items.push(
+      { kind: "item", label: "Patch assembly...", hint: "asm", onClick: () =>
+        onPatchInsn(ctx.vaddr, ctx.origBytes, ctx.disasm, "asm") },
+      { kind: "item", label: "Patch bytes...", hint: "hex", onClick: () =>
+        onPatchInsn(ctx.vaddr, ctx.origBytes, ctx.disasm, "hex") },
+    );
+  }
+  if (onPatchBytes) {
+    items.push(
+      { kind: "sep" },
+      { kind: "item", label: "NOP instruction", hint: "90", onClick: () =>
+        onPatchBytes(ctx.vaddr, ctx.origBytes, nopBytesLike(ctx.origBytes), "NOP instruction") },
+    );
+  }
+  return items;
 }
 
 // One indent-guide column: a 2-char-wide span carrying a 1px inset

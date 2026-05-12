@@ -60,6 +60,7 @@ export function SettingsPanel(props: {
   settings: AppSettings;
   onChange: (s: AppSettings) => void;
   binaryPath?: string | null;
+  binaryBase?: string | null;
   onAnnotationsApplied?: (a: Annotations) => void;
   onReplayTutorial?: () => void;
   onClose: () => void;
@@ -167,15 +168,29 @@ export function SettingsPanel(props: {
             </Row>
           </Section>
 
-          <Section title="Address rebasing">
+          <Section title="Addresses">
             <Row
-              label="Display base address"
-              hint="Subtract the binary's image base and add this value. 0x0 = show RVAs (addresses from 0). Set to the image base (e.g. 0x400000) to keep original VAs. Takes effect immediately."
+              label="Display base"
+              hint="Use 0x0 for RVAs. Use the image base to keep original virtual addresses."
             >
-              <HexInput
-                value={props.settings.rebaseAddr}
-                onChange={(v) => set("rebaseAddr", v)}
-              />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <HexInput
+                  value={props.settings.rebaseAddr}
+                  onChange={(v) => set("rebaseAddr", v)}
+                />
+                <PresetButton
+                  label="RVA"
+                  active={props.settings.rebaseAddr.toLowerCase() === "0x0"}
+                  onClick={() => set("rebaseAddr", "0x0")}
+                />
+                {props.binaryBase && (
+                  <PresetButton
+                    label="image"
+                    active={props.settings.rebaseAddr.toLowerCase() === props.binaryBase.toLowerCase()}
+                    onClick={() => set("rebaseAddr", props.binaryBase ?? "0x0")}
+                  />
+                )}
+              </div>
             </Row>
           </Section>
 
@@ -756,6 +771,27 @@ function HexInput(props: { value: string; onChange: (v: string) => void }) {
         padding: "5px 8px",
       }}
     />
+  );
+}
+
+function PresetButton(props: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={props.onClick}
+      aria-pressed={props.active}
+      style={{
+        padding: "5px 8px",
+        fontFamily: mono,
+        fontSize: 10,
+        color: props.active ? "#fff" : C.textMuted,
+        background: props.active ? C.accent : C.bgMuted,
+        border: `1px solid ${props.active ? C.accent : C.border}`,
+        borderRadius: 4,
+        cursor: "pointer",
+      }}
+    >
+      {props.label}
+    </button>
   );
 }
 

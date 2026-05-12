@@ -378,7 +378,7 @@ export default function App() {
   // instruction line. `origBytes` is the bytes string we display
   // (post-existing-patch — i.e. what the disasm currently shows).
   const [patching, setPatching] =
-    useState<{ vaddr: number; origBytes: string; disasm: string } | null>(null);
+    useState<{ vaddr: number; origBytes: string; disasm: string; mode?: "asm" | "hex" } | null>(null);
 
   const fnByAddr = useMemo(() => {
     const m = new Map<number, FunctionInfo>();
@@ -750,6 +750,19 @@ export default function App() {
     });
   }, [histIdx, info, settings.binaryState, patchSettings]);
 
+  const rememberCurrentFunction = useCallback((fn: FunctionInfo) => {
+    if (!info) return;
+    patchSettings({
+      binaryState: {
+        ...settings.binaryState,
+        [info.path]: {
+          ...(settings.binaryState[info.path] || {}),
+          lastFunctionAddr: fn.addr,
+        },
+      },
+    });
+  }, [info, settings.binaryState, patchSettings]);
+
   // Bookmark the current function — toggles on if not already saved.
   // Bookmarks live per-binary in settings so they survive across
   // sessions and don't leak between unrelated targets.
@@ -791,7 +804,8 @@ export default function App() {
     navigatingRef.current = true;
     setHistIdx((i) => i - 1);
     setCurrent(fn);
-  }, [histIdx, history, info, fnByAddr]);
+    rememberCurrentFunction(fn);
+  }, [histIdx, history, info, fnByAddr, rememberCurrentFunction]);
 
   const navForward = useCallback(() => {
     if (histIdx >= history.length - 1 || !info) return;
@@ -801,7 +815,8 @@ export default function App() {
     navigatingRef.current = true;
     setHistIdx((i) => i + 1);
     setCurrent(fn);
-  }, [histIdx, history, info, fnByAddr]);
+    rememberCurrentFunction(fn);
+  }, [histIdx, history, info, fnByAddr, rememberCurrentFunction]);
 
   const findContainingFunction = useCallback((vaddr: number): FunctionInfo | null => {
     if (!info) return null;
@@ -935,6 +950,8 @@ export default function App() {
       }
       if (mod && (e.key === "[" || e.key === "{")) { e.preventDefault(); navBack(); return; }
       if (mod && (e.key === "]" || e.key === "}")) { e.preventDefault(); navForward(); return; }
+      if (!mod && e.altKey && e.key === "ArrowLeft") { e.preventDefault(); navBack(); return; }
+      if (!mod && e.altKey && e.key === "ArrowRight") { e.preventDefault(); navForward(); return; }
 
       // Cheat-sheet. `?` is Shift+/ on US layouts; gate on !inInput so
       // it doesn't fire mid-typing. The Shortcuts modal handles its own
@@ -1017,6 +1034,20 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [info, paletteOpen, searchOpen, editing, callGraphOpen, stringsOpen, notesOpen, patchesOpen, pluginsPanelOpen, diffOpen, emberApplyOpen, patching, shortcutsOpen, hexOpen, symbolsOpen, bookmarksOpen, identifyOpen, bulkRenameOpen, navBack, navForward, current, toggleBookmark, settings.codeFontSize, patchSettings, code, view]);
+
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 3) {
+        e.preventDefault();
+        navBack();
+      } else if (e.button === 4) {
+        e.preventDefault();
+        navForward();
+      }
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    return () => window.removeEventListener("mousedown", onMouseDown);
+  }, [navBack, navForward]);
 
   // Load raw CLI text whenever the (function, view) pair changes. This
   // effect deliberately does NOT depend on `annotations.localRenames`:
@@ -1345,6 +1376,7 @@ export default function App() {
                 navigatingRef.current = true;
                 setHistIdx(idx);
                 setCurrent(fn);
+                rememberCurrentFunction(fn);
               }}
             />
           )}
@@ -1635,6 +1667,7 @@ export default function App() {
         <Sidebar
           info={info}
           annotations={annotations}
+          bookmarks={currentBookmarks}
           functionsLoading={functionsLoading}
           currentAddr={current?.addrNum ?? null}
           width={settings.sidebarWidth}
@@ -1720,6 +1753,7 @@ export default function App() {
               navigatingRef.current = true;
               setHistIdx(idx);
               setCurrent(fn);
+              rememberCurrentFunction(fn);
             }}
           />
           {current
@@ -1764,8 +1798,14 @@ export default function App() {
               onAddNote={(fn) => setEditing({ fn, mode: "note" })}
               onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
               onRenameLocal={view === "pseudo" ? renameLocalFromCode : undefined}
-              onPatchInsn={view === "asm" ? (vaddr, origBytes, disasm) =>
-                setPatching({ vaddr, origBytes, disasm }) : undefined}
+              onPatchInsn={view === "asm" ? (vaddr, origBytes, disasm, mode) =>
+                setPatching({ vaddr, origBytes, disasm, mode }) : undefined}
+              onPatchBytes={view === "asm" ? (vaddr, origBytes, bytesHex, comment) => {
+                const addrHex = `0x${vaddr.toString(16)}`;
+                const existing = annotations.patches?.[addrHex];
+                const orig = existing?.orig ?? origBytes.replace(/\s+/g, "").toUpperCase();
+                savePatch(addrHex, bytesHex, { orig, comment });
+              } : undefined}
             />
           )}
         </div>
@@ -1815,6 +1855,7 @@ export default function App() {
           settings={settings}
           onChange={updateSettings}
           binaryPath={info?.path ?? null}
+          binaryBase={info?.base ?? null}
           onAnnotationsApplied={(a) => {
             clearRendererCaches();
             setAnnotations(a);
@@ -1999,6 +2040,7 @@ export default function App() {
           vaddr={patching.vaddr}
           origBytes={patching.origBytes}
           disasm={patching.disasm}
+          initialMode={patching.mode}
           asmEnabled={info.arch === "x86_64"}
           asmDisabledReason={info.arch === "x86_64"
             ? undefined

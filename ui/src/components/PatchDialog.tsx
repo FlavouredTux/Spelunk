@@ -15,6 +15,7 @@ export function PatchDialog(props: {
   vaddr:    number;
   origBytes: string;
   disasm:   string;
+  initialMode?: Mode;
   asmEnabled?: boolean;
   asmDisabledReason?: string;
   onSave:   (vaddrHex: string, bytesHex: string) => void;
@@ -25,7 +26,9 @@ export function PatchDialog(props: {
   const origLen  = stripped.length / 2;
   const asmEnabled = props.asmEnabled ?? true;
 
-  const [mode,    setMode]    = useState<Mode>(asmEnabled ? "asm" : "hex");
+  const [mode,    setMode]    = useState<Mode>(
+    props.initialMode === "hex" || !asmEnabled ? "hex" : "asm",
+  );
   const [hexDraft, setHexDraft] = useState(stripped);
   const [asmDraft, setAsmDraft] = useState("");
   const inputHexRef = useRef<HTMLInputElement>(null);

@@ -6,10 +6,35 @@ import type { BinaryInfo, FunctionInfo, ViewKind, Annotations } from "../types";
 import { ContextMenu, ToastPill, type MenuItem } from "./ContextMenu";
 import { SkelSidebarRow } from "./Skeleton";
 
+type FunctionScope = "all" | "code" | "renamed" | "notes" | "bookmarks";
+
+function isCodeSection(s: BinaryInfo["sections"][number]): boolean {
+  const name = s.name.toLowerCase();
+  const flags = s.flags.toLowerCase();
+  return name === ".text" || name === "text" || name.includes("__text") ||
+         flags.includes("x") || flags.includes("exec") || flags.includes("code");
+}
+
+function buildCodeRanges(info: BinaryInfo): Array<{ start: number; end: number }> {
+  return info.sections
+    .filter(isCodeSection)
+    .map((s) => {
+      const start = parseInt(s.vaddr, 16);
+      const size = parseInt(s.size, 16);
+      return { start, end: start + size };
+    })
+    .filter((r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start);
+}
+
+function inRanges(addr: number, ranges: Array<{ start: number; end: number }>): boolean {
+  return ranges.some((r) => addr >= r.start && addr < r.end);
+}
+
 export function Sidebar(props: {
   info: BinaryInfo;
   currentAddr: number | null;
   annotations: Annotations;
+  bookmarks?: { addr: string }[];
   // True while the background --functions query is still running. The
   // sidebar can already render imports + the "defined" tab shell while
   // we wait, so a spinner in the count badge is enough.
@@ -32,8 +57,14 @@ export function Sidebar(props: {
   const deferredQ = useDeferredValue(q);
   const [showImports, setShowImports] = useState(false);
   const [sortBy, setSortBy] = useState<"addr" | "size">("addr");
+  const [scope, setScope] = useState<FunctionScope>("all");
   const [ctx, setCtx] = useState<{ x: number; y: number; fn: FunctionInfo } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const codeRanges = useMemo(() => buildCodeRanges(info), [info]);
+  const bookmarkAddrs = useMemo(
+    () => new Set((props.bookmarks ?? []).map((b) => b.addr.toLowerCase())),
+    [props.bookmarks],
+  );
 
   const copy = async (text: string, label: string) => {
     try {
@@ -47,7 +78,14 @@ export function Sidebar(props: {
   const list = useMemo(() => {
     const pool = showImports ? info.imports : info.functions;
     const needle = deferredQ.trim().toLowerCase();
-    const filtered = !needle ? pool : pool.filter((f) => {
+    const scoped = showImports || scope === "all" ? pool : pool.filter((f) => {
+      if (scope === "code") return inRanges(f.addrNum, codeRanges);
+      if (scope === "renamed") return !!annotations.renames[f.addr];
+      if (scope === "notes") return !!annotations.notes[f.addr];
+      if (scope === "bookmarks") return bookmarkAddrs.has(f.addr.toLowerCase());
+      return true;
+    });
+    const filtered = !needle ? scoped : scoped.filter((f) => {
       const rn = annotations.renames[f.addr];
       return (
         f.name.toLowerCase().includes(needle) ||
@@ -64,7 +102,15 @@ export function Sidebar(props: {
     // checks in VirtualList. Sort biggest first: the large functions are
     // almost always the ones worth opening.
     return [...filtered].sort((a, b) => b.size - a.size);
-  }, [deferredQ, info, showImports, sortBy, annotations]);
+  }, [deferredQ, info, showImports, sortBy, scope, codeRanges, annotations, bookmarkAddrs]);
+
+  const scopeCounts = useMemo<Record<FunctionScope, number>>(() => ({
+    all: info.functions.length,
+    code: info.functions.filter((f) => inRanges(f.addrNum, codeRanges)).length,
+    renamed: info.functions.filter((f) => !!annotations.renames[f.addr]).length,
+    notes: info.functions.filter((f) => !!annotations.notes[f.addr]).length,
+    bookmarks: info.functions.filter((f) => bookmarkAddrs.has(f.addr.toLowerCase())).length,
+  }), [info.functions, codeRanges, annotations, bookmarkAddrs]);
 
   const buildMenu = (fn: FunctionInfo): MenuItem[] => {
     const hasRename = !!annotations.renames[fn.addr];
@@ -284,33 +330,40 @@ export function Sidebar(props: {
 
       {/* Sort toggle — disabled when viewing imports (they have no real size). */}
       {!showImports && (
-        <div style={{
-          padding: "2px 14px 6px",
-          display: "flex", justifyContent: "flex-end", gap: 6,
-          fontFamily: sans, fontSize: 11,
-        }}>
-          <span style={{ color: C.textFaint, alignSelf: "center" }}>sort</span>
-          {([
-            { k: "addr", label: "addr" },
-            { k: "size", label: "size" },
-          ] as const).map((s) => {
-            const active = sortBy === s.k;
-            return (
-              <button
-                key={s.k}
-                onClick={() => setSortBy(s.k)}
-                style={{
-                  padding: "2px 8px",
-                  background: active ? C.bgMuted : "transparent",
-                  border: `1px solid ${active ? C.border : "transparent"}`,
-                  borderRadius: 3,
-                  color: active ? C.text : C.textMuted,
-                  fontWeight: active ? 600 : 400,
-                }}
-              >{s.label}</button>
-            );
-          })}
-        </div>
+        <>
+          <FunctionScopeBar
+            value={scope}
+            counts={scopeCounts}
+            onChange={setScope}
+          />
+          <div style={{
+            padding: "2px 14px 6px",
+            display: "flex", justifyContent: "flex-end", gap: 6,
+            fontFamily: sans, fontSize: 11,
+          }}>
+            <span style={{ color: C.textFaint, alignSelf: "center" }}>sort</span>
+            {([
+              { k: "addr", label: "addr" },
+              { k: "size", label: "size" },
+            ] as const).map((s) => {
+              const active = sortBy === s.k;
+              return (
+                <button
+                  key={s.k}
+                  onClick={() => setSortBy(s.k)}
+                  style={{
+                    padding: "2px 8px",
+                    background: active ? C.bgMuted : "transparent",
+                    border: `1px solid ${active ? C.border : "transparent"}`,
+                    borderRadius: 3,
+                    color: active ? C.text : C.textMuted,
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >{s.label}</button>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {functionsLoading && !showImports && info.functions.length === 0 ? (
@@ -343,6 +396,53 @@ export function Sidebar(props: {
         />
       )}
       {toast && <ToastPill message={toast} onDone={() => setToast(null)} />}
+    </div>
+  );
+}
+
+function FunctionScopeBar(props: {
+  value: FunctionScope;
+  counts: Record<FunctionScope, number>;
+  onChange: (v: FunctionScope) => void;
+}) {
+  const options: Array<{ id: FunctionScope; label: string; title: string }> = [
+    { id: "all",       label: "all",     title: "Show every defined function" },
+    { id: "code",      label: "code",    title: "Show functions inside executable sections" },
+    { id: "renamed",   label: "named",   title: "Show functions with user renames" },
+    { id: "notes",     label: "notes",   title: "Show functions with notes" },
+    { id: "bookmarks", label: "marked",  title: "Show bookmarked functions" },
+  ];
+  return (
+    <div style={{
+      padding: "6px 14px 4px",
+      display: "flex",
+      gap: 4,
+      flexWrap: "wrap",
+    }}>
+      {options.map((opt) => {
+        const active = props.value === opt.id;
+        return (
+          <button
+            key={opt.id}
+            title={opt.title}
+            onClick={() => props.onChange(opt.id)}
+            aria-pressed={active}
+            style={{
+              padding: "3px 7px",
+              background: active ? C.bgMuted : "transparent",
+              border: `1px solid ${active ? C.border : "transparent"}`,
+              borderRadius: 3,
+              color: active ? C.text : C.textMuted,
+              fontFamily: sans,
+              fontSize: 11,
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            {opt.label}
+            <span style={{ marginLeft: 5, color: C.textFaint }}>{props.counts[opt.id]}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

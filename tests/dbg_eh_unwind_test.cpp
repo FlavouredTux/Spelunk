@@ -15,6 +15,8 @@
 #include <ember/debug/target.hpp>
 #include <ember/debug/unwind.hpp>
 
+#include "dbg_test_util.hpp"
+
 #define CHECK(cond, msg)                                                   \
     do {                                                                   \
         if (!(cond)) {                                                     \
@@ -64,7 +66,13 @@ int main(int argc, char** argv) {
     opts.program       = argv[1];
     opts.stop_at_entry = true;
     auto t_r = ember::debug::launch(opts);
-    CHECK(t_r.has_value(), "launch");
+    if (!t_r) {
+        if (ember_dbg_unavailable(t_r.error())) {
+            return ember_dbg_skip("ptrace launch unavailable", t_r.error());
+        }
+        std::fprintf(stderr, "FAIL: launch: %s\n", t_r.error().message.c_str());
+        return 1;
+    }
     auto t = std::move(*t_r);
 
     const ember::addr_t slide = compute_slide(*t, **bin, argv[1]);

@@ -315,6 +315,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
              COMMAND ember_dbg_smoke_test "${EMBER_FIXTURE_dbg_target_PATH}")
     add_test(NAME dbg_smoke_pie
              COMMAND ember_dbg_smoke_test "${EMBER_FIXTURE_dbg_target_pie_PATH}")
+    set_tests_properties(dbg_smoke dbg_smoke_pie
+        PROPERTIES SKIP_RETURN_CODE 77)
 
     # Same fixture run through the perf_event_open backend. Skips at
     # runtime (exit 77) when the kernel denies perf_event_open due to
@@ -336,6 +338,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_dependencies(ember_dbg_eh_unwind_test ember_fixture_dbg_target_ofp)
     add_test(NAME dbg_eh_unwind
              COMMAND ember_dbg_eh_unwind_test "${EMBER_FIXTURE_dbg_target_ofp_PATH}")
+    set_tests_properties(dbg_eh_unwind PROPERTIES SKIP_RETURN_CODE 77)
 
     # Persisted breakpoints/watchpoints across exec(2). Parent arms a
     # write-watch on `marker`, execve's into the child, expects the
@@ -349,6 +352,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
              COMMAND ember_dbg_exec_persist_test
                      "${EMBER_FIXTURE_dbg_exec_parent_PATH}"
                      "${EMBER_FIXTURE_dbg_exec_child_PATH}")
+    set_tests_properties(dbg_exec_persist PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Register one golden test. ARGS is a |-separated list (translated to ';' by

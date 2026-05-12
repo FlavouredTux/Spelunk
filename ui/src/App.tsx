@@ -27,13 +27,14 @@ import { ErrorView } from "./components/ErrorView";
 import { Shortcuts } from "./components/Shortcuts";
 import { HexView } from "./components/HexView";
 import { SymbolsView } from "./components/SymbolsView";
+import { BinaryOverview } from "./components/BinaryOverview";
 import { BookmarksPanel } from "./components/BookmarksPanel";
 import { IdentifyPanel } from "./components/IdentifyPanel";
 import { BulkRenameDialog } from "./components/BulkRenameDialog";
 import type { Bookmark } from "./components/BookmarksPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { Breadcrumb } from "./components/Breadcrumb";
-import { SkelCode, SkelFunctionHeader, SkelXrefs } from "./components/Skeleton";
+import { SkelCode } from "./components/Skeleton";
 import { RebaseProvider, makeRebaseFn, useFmtAddr } from "./RebaseContext";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
@@ -283,6 +284,7 @@ export default function App() {
   const [identifyHits, setIdentifyHits] = useState<IdentifyResult[]>([]);
   const [identifyLoading, setIdentifyLoading] = useState(false);
   const [bulkRenameOpen, setBulkRenameOpen] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
   // Dirty indicator: pulses when annotations are mid-flight to disk so
   // the user can see saves are happening. "saved" sticks for ~1.5s
   // after each successful write so single edits also flash.
@@ -702,6 +704,7 @@ export default function App() {
       // this one's address space.
       clearRendererCaches();
       setCurrent(null);
+      setOverviewOpen(true);
       setHistory([]);
       setHistIdx(-1);
       // Staged load - each ember CLI invocation re-parses the binary
@@ -768,6 +771,7 @@ export default function App() {
 
   // Navigate to a function - pushes history (unless we're in back/forward)
   const navigateTo = useCallback((fn: FunctionInfo) => {
+    setOverviewOpen(false);
     setCurrent(fn);
     if (info) {
       // Stash the last-visited function for this binary so the next
@@ -852,6 +856,7 @@ export default function App() {
     if (!fn) return;
     navigatingRef.current = true;
     setHistIdx((i) => i - 1);
+    setOverviewOpen(false);
     setCurrent(fn);
     rememberCurrentFunction(fn);
   }, [histIdx, history, info, fnByAddr, rememberCurrentFunction]);
@@ -863,6 +868,7 @@ export default function App() {
     if (!fn) return;
     navigatingRef.current = true;
     setHistIdx((i) => i + 1);
+    setOverviewOpen(false);
     setCurrent(fn);
     rememberCurrentFunction(fn);
   }, [histIdx, history, info, fnByAddr, rememberCurrentFunction]);
@@ -890,6 +896,7 @@ export default function App() {
       }
       return;
     }
+    setOverviewOpen(false);
     setHexInitialVaddr(vaddr);
     setHexOpen(true);
   }, [findContainingFunction, navigateTo]);
@@ -1422,6 +1429,7 @@ export default function App() {
                 if (!fn) return;
                 navigatingRef.current = true;
                 setHistIdx(idx);
+                setOverviewOpen(false);
                 setCurrent(fn);
                 rememberCurrentFunction(fn);
               }}
@@ -1434,6 +1442,23 @@ export default function App() {
           <SavePip state={saveState} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, overflowX: "auto", overflowY: "hidden" }}>
+          <button
+            onClick={() => setOverviewOpen(true)}
+            style={{
+              padding: "6px 12px",
+              fontFamily: sans, fontSize: 12,
+              color: overviewOpen ? C.text : C.textMuted,
+              background: overviewOpen ? C.accentDim : C.bgMuted,
+              border: `1px solid ${overviewOpen ? C.accent : C.border}`,
+              borderRadius: 4,
+              display: "flex", alignItems: "center", gap: 6,
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+            title="Binary overview"
+            aria-label="Open binary overview"
+          >
+            <span>overview</span>
+          </button>
           <button
             onClick={() => setHexOpen(true)}
             style={{
@@ -1717,7 +1742,7 @@ export default function App() {
           displayNames={displayNames}
           bookmarks={currentBookmarks}
           functionsLoading={functionsLoading}
-          currentAddr={current?.addrNum ?? null}
+          currentAddr={overviewOpen ? null : current?.addrNum ?? null}
           width={settings.sidebarWidth}
           onSelect={(f) => navigateTo(f)}
           onOpen={(f, v) => { navigateTo(f); setView(v); }}
@@ -1800,12 +1825,18 @@ export default function App() {
               if (!fn) return;
               navigatingRef.current = true;
               setHistIdx(idx);
+              setOverviewOpen(false);
               setCurrent(fn);
               rememberCurrentFunction(fn);
             }}
           />
-          {current
-            ? <FunctionHeader
+          {error ? (
+            <ErrorView message={error} currentView={view} onSwitchView={setView} />
+          ) : !current ? (
+            <SkelCode lines={28} />
+          ) : (
+            <>
+              <FunctionHeader
                 current={current}
                 annotations={annotations}
                 arities={arities}
@@ -1813,48 +1844,44 @@ export default function App() {
                 view={view}
                 onToast={setToast}
               />
-            : <SkelFunctionHeader />
-          }
-          <Tabs view={view} setView={setView} onIdentify={() => setIdentifyOpen(true)} />
-          {error ? (
-            <ErrorView message={error} currentView={view} onSwitchView={setView} />
-          ) : !current ? (
-            <SkelCode lines={28} />
-          ) : loading && !code ? (
-            <SkelCode lines={28} />
-          ) : view === "cfg" ? (
-            <CfgGraph
-              text={code}
-              onXref={onXref}
-              fnAddrByName={fnAddrByName}
-              mode={cfgMode}
-              onModeChange={setCfgMode}
-            />
-          ) : (
-            <CodeView
-              text={code}
-              fontSize={settings.codeFontSize}
-              onXref={onXref}
-              search={searchOpen ? searchQuery : ""}
-              searchActive={searchOpen}
-              onSearchChange={setSearchQuery}
-              onSearchClose={() => setSearchOpen(false)}
-              fnByAddr={fnByAddr}
-              fnAddrByName={fnAddrByName}
-              annotations={annotations}
-              onRename={(fn) => setEditing({ fn, mode: "rename" })}
-              onAddNote={(fn) => setEditing({ fn, mode: "note" })}
-              onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
-              onRenameLocal={view === "pseudo" ? renameLocalFromCode : undefined}
-              onPatchInsn={view === "asm" ? (vaddr, origBytes, disasm, mode) =>
-                setPatching({ vaddr, origBytes, disasm, mode }) : undefined}
-              onPatchBytes={view === "asm" ? (vaddr, origBytes, bytesHex, comment) => {
-                const addrHex = `0x${vaddr.toString(16)}`;
-                const existing = annotations.patches?.[addrHex];
-                const orig = existing?.orig ?? origBytes.replace(/\s+/g, "").toUpperCase();
-                savePatch(addrHex, bytesHex, { orig, comment });
-              } : undefined}
-            />
+              <Tabs view={view} setView={setView} onIdentify={() => setIdentifyOpen(true)} />
+              {loading && !code ? (
+                <SkelCode lines={28} />
+              ) : view === "cfg" ? (
+                <CfgGraph
+                  text={code}
+                  onXref={onXref}
+                  fnAddrByName={fnAddrByName}
+                  mode={cfgMode}
+                  onModeChange={setCfgMode}
+                />
+              ) : (
+                <CodeView
+                  text={code}
+                  fontSize={settings.codeFontSize}
+                  onXref={onXref}
+                  search={searchOpen ? searchQuery : ""}
+                  searchActive={searchOpen}
+                  onSearchChange={setSearchQuery}
+                  onSearchClose={() => setSearchOpen(false)}
+                  fnByAddr={fnByAddr}
+                  fnAddrByName={fnAddrByName}
+                  annotations={annotations}
+                  onRename={(fn) => setEditing({ fn, mode: "rename" })}
+                  onAddNote={(fn) => setEditing({ fn, mode: "note" })}
+                  onEditSignature={(fn) => setEditing({ fn, mode: "signature" })}
+                  onRenameLocal={view === "pseudo" ? renameLocalFromCode : undefined}
+                  onPatchInsn={view === "asm" ? (vaddr, origBytes, disasm, mode) =>
+                    setPatching({ vaddr, origBytes, disasm, mode }) : undefined}
+                  onPatchBytes={view === "asm" ? (vaddr, origBytes, bytesHex, comment) => {
+                    const addrHex = `0x${vaddr.toString(16)}`;
+                    const existing = annotations.patches?.[addrHex];
+                    const orig = existing?.orig ?? origBytes.replace(/\s+/g, "").toUpperCase();
+                    savePatch(addrHex, bytesHex, { orig, comment });
+                  } : undefined}
+                />
+              )}
+            </>
           )}
         </div>
         {xrefsOpen && (
@@ -1882,6 +1909,23 @@ export default function App() {
       </div>
 
       <StatusBar current={current} view={view} lines={lines} loading={loading} pending={pending} />
+
+      {overviewOpen && info && (
+        <BinaryOverview
+          info={info}
+          annotations={annotations}
+          displayBase={settings.rebaseAddr}
+          onSetDisplayBase={(base) => patchSettings({ rebaseAddr: base })}
+          onJumpAddress={jumpToAddress}
+          onSelectFunction={navigateTo}
+          onOpenSymbols={() => { setOverviewOpen(false); setSymbolsOpen(true); }}
+          onOpenStrings={() => { setOverviewOpen(false); setStringsOpen(true); }}
+          onOpenIdentify={() => { setOverviewOpen(false); setIdentifyOpen(true); }}
+          onOpenGraph={() => { setOverviewOpen(false); setCallGraphOpen(true); }}
+          onOpenAI={() => { setOverviewOpen(false); setAiOpen(true); }}
+          onClose={() => setOverviewOpen(false)}
+        />
+      )}
 
       {paletteOpen && (
         <CommandPalette

@@ -1853,7 +1853,8 @@ async function openrouterAgenticLoop({
 }) {
   const is9r = cfg.provider === "9router";
   let totalChars = 0;
-  for (let iter = 0; ; iter++) {
+  const maxToolRounds = 6;
+  for (let iter = 0; iter < maxToolRounds; iter++) {
     const body = JSON.stringify({
       model:       chosenModel,
       messages,
@@ -1936,6 +1937,7 @@ async function openrouterAgenticLoop({
       });
     }
   }
+  throw new Error(`AI tool loop exceeded ${maxToolRounds} rounds; ask a narrower question or inspect the tool trail above.`);
 }
 
 ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
@@ -1988,6 +1990,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
           : m;
         send("ember:ai:error", friendly);
       } finally {
+        try { tools?.dispose?.(); } catch {}
         AI_INFLIGHT.delete(id);
       }
     })();
@@ -2118,6 +2121,7 @@ ipcMain.handle("ember:ai:chat", async (e, { messages, model, temperature }) => {
         }
         send("ember:ai:error", friendly);
       } finally {
+        try { emberTools?.dispose?.(); } catch {}
         AI_INFLIGHT.delete(id);
       }
     })();

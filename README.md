@@ -160,6 +160,25 @@ cd ui && npm install && npm run dev
 
 Set `EMBER_BIN` if the CLI isn't at `../build/cli/ember`.
 
+Python wrapper:
+
+```sh
+python -m pip install -e .
+```
+
+```python
+from emberpy import Ember
+
+e = Ember("tests/fixtures/gotos")
+fn = e.function("multi_exit")
+print(fn.pseudo())
+print(e.functions())
+```
+
+The wrapper shells out to the ember CLI. Pass `ember_bin="path/to/ember"`
+or set `EMBER_BIN` when the executable is not on `PATH` or under
+`./build/cli/ember`. Full surface in [docs/python.md](docs/python.md).
+
 </details>
 
 <details>

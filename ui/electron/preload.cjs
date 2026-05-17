@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld("ember", {
   debug: {
     diagnostics:    () => ipcRenderer.invoke("ember:debug:diagnostics"),
   },
+  appVersion:       () => ipcRenderer.invoke("ember:appVersion"),
+  // Opens a github.com/FlavouredTux/Ember URL in the user's browser.
+  // Main process enforces an allowlist; returns false if rejected.
+  openExternal:     (url) => ipcRenderer.invoke("ember:openExternal", url),
 
   loadAnnotations:   (bp) => ipcRenderer.invoke("ember:loadAnnotations", bp),
   saveAnnotations:   (bp, data) => ipcRenderer.invoke("ember:saveAnnotations", bp, data),

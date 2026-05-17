@@ -1,5 +1,5 @@
 import { C, sans, mono, serif } from "../theme";
-import { demangle, formatSize } from "../api";
+import { demangle, formatSize, openFeedback } from "../api";
 import { useFmtAddr } from "../RebaseContext";
 import type { FunctionInfo, ViewKind } from "../types";
 
@@ -15,6 +15,7 @@ export function StatusBar(props: {
   const pendingList = pending && pending.size > 0
     ? Array.from(pending).sort().join(", ")
     : null;
+  const onFeedback = () => { void openFeedback({ view }); };
   return (
     <div
       style={{
@@ -57,6 +58,7 @@ export function StatusBar(props: {
             <span style={{ fontFamily: serif, fontStyle: "italic" }}>
               viewing <span style={{ color: C.text }}>{view}</span>
             </span>
+            <FeedbackLink onClick={onFeedback} />
           </span>
         </>
       ) : (
@@ -69,8 +71,34 @@ export function StatusBar(props: {
               loading {pendingList}…
             </span>
           )}
+          <span style={{ marginLeft: pendingList ? 18 : "auto" }}>
+            <FeedbackLink onClick={onFeedback} />
+          </span>
         </>
       )}
     </div>
+  );
+}
+
+function FeedbackLink(props: { onClick: () => void }) {
+  return (
+    <button
+      onClick={props.onClick}
+      title="Send feedback or report a bug (opens GitHub)"
+      style={{
+        padding: "2px 8px",
+        fontFamily: sans,
+        fontSize: 11,
+        color: C.textMuted,
+        background: "transparent",
+        border: `1px solid ${C.border}`,
+        borderRadius: 3,
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.color = C.accent; e.currentTarget.style.borderColor = "rgba(217,119,87,0.30)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.borderColor = C.border; }}
+    >
+      feedback
+    </button>
   );
 }

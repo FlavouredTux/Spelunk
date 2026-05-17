@@ -166,6 +166,15 @@ export function SettingsPanel(props: {
                 onChange={(v) => set("resumeOnLaunch", v)}
               />
             </Row>
+            <Row
+              label="Ember pet"
+              hint="Ambient mascot overlay. Drag it around in the main window; turn this off for a quieter workspace."
+            >
+              <Toggle
+                value={props.settings.emberPetEnabled}
+                onChange={(v) => set("emberPetEnabled", v)}
+              />
+            </Row>
           </Section>
 
           <Section title="Addresses">

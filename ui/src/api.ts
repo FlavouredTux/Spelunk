@@ -113,6 +113,32 @@ export async function openRecent(path: string): Promise<string> {
   return await window.ember.openRecent(path);
 }
 
+// Opens the in-app feedback issue form on github.com. The fields listed
+// here must match field IDs in `.github/ISSUE_TEMPLATE/feedback.yml`;
+// GitHub silently drops unknown keys, so a stale field name fails open
+// rather than throwing. Body content stays user-editable in the browser
+// — nothing is auto-submitted.
+export async function openFeedback(opts: {
+  view?: string;
+}): Promise<void> {
+  const version = await window.ember.appVersion().catch(() => "");
+  const platform = navigator.platform || "";
+  const ua = navigator.userAgent || "";
+  const arch = /x86_64|x64|win64|amd64/i.test(ua) ? "x64"
+    : /aarch64|arm64/i.test(ua) ? "arm64"
+    : /i[3-6]86|x86/i.test(ua) ? "x86"
+    : "";
+  const os = arch ? `${platform} ${arch}`.trim() : platform;
+  const params = new URLSearchParams({
+    template: "feedback.yml",
+    "ember_version": version,
+    "os": os,
+    "view": opts.view ?? "",
+  });
+  const url = `https://github.com/FlavouredTux/Ember/issues/new?${params.toString()}`;
+  await window.ember.openExternal(url);
+}
+
 // Read raw bytes from the currently-loaded binary at a file offset.
 // Returns a Uint8Array (base64-decoded from the IPC payload).
 export async function readBytes(offset: number, length: number): Promise<{

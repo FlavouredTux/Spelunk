@@ -244,6 +244,8 @@ declare global {
       debug?: {
         diagnostics: () => Promise<Record<string, unknown>>;
       };
+      appVersion:       () => Promise<string>;
+      openExternal:     (url: string) => Promise<boolean>;
 
       loadAnnotations:   (bp: string) => Promise<Annotations>;
       saveAnnotations:   (bp: string, data: Annotations) => Promise<boolean>;

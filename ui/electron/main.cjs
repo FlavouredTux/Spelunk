@@ -462,6 +462,22 @@ ipcMain.handle("ember:pick", async () => {
 
 ipcMain.handle("ember:debug:diagnostics", async () => collectMainDiagnostics());
 
+ipcMain.handle("ember:appVersion", async () => app.getVersion());
+
+// Renderer-driven external open. Allowlisted to the project's own
+// GitHub surface so a compromised renderer can't pivot this into a
+// generic browser-open primitive (phishing, file://, etc).
+ipcMain.handle("ember:openExternal", async (_e, url) => {
+  if (typeof url !== "string") return false;
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== "https:") return false;
+  if (u.host !== "github.com") return false;
+  if (!u.pathname.startsWith("/FlavouredTux/Ember/")) return false;
+  await shell.openExternal(u.toString());
+  return true;
+});
+
 // Generic file picker for callers that need a path other than the
 // primary binary - e.g. the diff view's "old binary" selector and the
 // .ember script applier. Doesn't touch state.binary or recents.

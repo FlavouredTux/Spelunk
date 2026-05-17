@@ -31,6 +31,7 @@ export type PerBinaryState = {
 };
 
 export type ThemeMode = "warm" | "dark" | "light";
+export type EmberPetPosition = { x: number; y: number };
 
 export type AppSettings = {
   // CFG view's default body mode. The graph itself has a per-tab
@@ -86,6 +87,10 @@ export type AppSettings = {
   // Resume the last binary on launch. Off by default for first-run users
   // since they may want to choose. Becomes default-on after first open.
   resumeOnLaunch: boolean;
+  // Small ambient Ember mascot. Pure UI chrome; can be dragged around
+  // and disabled for users who prefer a quieter workspace.
+  emberPetEnabled: boolean;
+  emberPetPosition: EmberPetPosition | null;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -105,14 +110,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
   binaryState:    {},
   rebaseAddr:     "0x0",
   resumeOnLaunch: true,
+  emberPetEnabled: true,
+  emberPetPosition: null,
 };
 
 function normalizeSettings(s: AppSettings): AppSettings {
+  const pos = s.emberPetPosition;
+  const emberPetPosition = pos &&
+    Number.isFinite(Number(pos.x)) &&
+    Number.isFinite(Number(pos.y))
+      ? { x: Number(pos.x), y: Number(pos.y) }
+      : null;
   return {
     ...s,
     codeFontSize: clampNumber(s.codeFontSize, DEFAULT_SETTINGS.codeFontSize, 9, 24),
     sidebarWidth: clampNumber(s.sidebarWidth, DEFAULT_SETTINGS.sidebarWidth, 240, 520),
     xrefsWidth: clampNumber(s.xrefsWidth, DEFAULT_SETTINGS.xrefsWidth, 220, 520),
+    emberPetEnabled: s.emberPetEnabled !== false,
+    emberPetPosition,
   };
 }
 

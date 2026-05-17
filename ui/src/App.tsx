@@ -31,6 +31,7 @@ import { BinaryOverview } from "./components/BinaryOverview";
 import { BookmarksPanel } from "./components/BookmarksPanel";
 import { IdentifyPanel } from "./components/IdentifyPanel";
 import { BulkRenameDialog } from "./components/BulkRenameDialog";
+import { EmberPet } from "./components/EmberPet";
 import type { Bookmark } from "./components/BookmarksPanel";
 import { ResizeHandle } from "./components/ResizeHandle";
 import { Breadcrumb } from "./components/Breadcrumb";
@@ -235,6 +236,9 @@ export default function App() {
       return next;
     });
   }, []);
+  const saveEmberPetPosition = useCallback((position: NonNullable<AppSettings["emberPetPosition"]>) => {
+    patchSettings({ emberPetPosition: position });
+  }, [patchSettings]);
   // CFG view sub-mode. Initialized from the user's setting; the toggle
   // in the graph's bottom-right corner overrides for the current
   // session without touching the saved default.
@@ -264,7 +268,7 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [xrefsOpen, setXrefsOpen] = useState(true);
+  const [xrefsOpen, setXrefsOpen] = useState(false);
   const [callGraphOpen, setCallGraphOpen] = useState(false);
   const [stringsOpen, setStringsOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -2202,6 +2206,12 @@ export default function App() {
             setToast(`renamed ${count} function${count === 1 ? "" : "s"}`);
           }}
           onClose={() => setBulkRenameOpen(false)}
+        />
+      )}
+      {settings.emberPetEnabled && (
+        <EmberPet
+          position={settings.emberPetPosition}
+          onPositionChange={saveEmberPetPosition}
         />
       )}
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}

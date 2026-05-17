@@ -197,6 +197,11 @@ function makeGlobalCSS(): string {
     75%      { transform: translate(-1.0px, -1.0px); }
   }
   .neural-jitter { animation: neural-jitter 0.6s linear infinite; transform-origin: center; transform-box: fill-box; }
+  .ember-pet-button:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 1px ${C.accent}, 0 0 0 3px ${C.accentDim};
+    border-radius: 12px;
+  }
   .ember-skel {
     background: linear-gradient(90deg, ${C.bgMuted} 0%, ${C.bgDark} 50%, ${C.bgMuted} 100%);
     background-size: 220% 100%;

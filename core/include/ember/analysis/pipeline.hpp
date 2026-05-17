@@ -66,6 +66,10 @@ format_struct(const Binary& b, const FuncWindow& w,
               EmitOptions options = {});
 
 struct CallEdge { addr_t caller = 0; addr_t callee = 0; };
+enum class CallGraphMode : u8 {
+    FullCfg,  // exact historical path: build a CFG per function
+    Fast,     // linear x86-64 edge scan for whole-program xrefs/fingerprints
+};
 // `scope`, when non-empty, restricts edge construction to callers in
 // the set - the work list is intersected with `scope` before lifting,
 // so a single-function CLI invocation pays only for its function
@@ -73,7 +77,8 @@ struct CallEdge { addr_t caller = 0; addr_t callee = 0; };
 // (the back-compat default). Edges to callees outside `scope` are
 // still emitted; only the *caller* side is filtered.
 std::vector<CallEdge> compute_call_graph(const Binary& b,
-                                         std::span<const addr_t> scope = {});
+                                         std::span<const addr_t> scope = {},
+                                         CallGraphMode mode = CallGraphMode::FullCfg);
 std::vector<addr_t>   compute_callees(const Binary& b, addr_t fn);
 std::vector<addr_t>   compute_callers(const Binary& b, addr_t fn);
 

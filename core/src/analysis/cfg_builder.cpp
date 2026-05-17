@@ -905,6 +905,11 @@ void CfgBuilder::ensure_known_entries_() const {
     }
 }
 
+void CfgBuilder::seed_known_entries(std::unordered_set<addr_t> entries) const {
+    known_entries_ = std::move(entries);
+    known_entries_init_ = true;
+}
+
 bool CfgBuilder::is_function_entry(addr_t target) const noexcept {
     ensure_known_entries_();
     if (known_entries_.contains(target)) return true;
@@ -973,10 +978,12 @@ CfgBuilder::build(addr_t entry, std::string name) const {
     // emitted past a noreturn call - there's no branch leading into them
     // from entry. The exception tables know the true function length,
     // so use them to extend fn.end when they report more than we walked.
-    ensure_unwind_ranges_();
-    if (auto it = unwind_ranges_.find(entry); it != unwind_ranges_.end()) {
-        const addr_t fde_end = entry + it->second;
-        if (fde_end > fn.end) fn.end = fde_end;
+    if (extend_unwind_ranges_) {
+        ensure_unwind_ranges_();
+        if (auto it = unwind_ranges_.find(entry); it != unwind_ranges_.end()) {
+            const addr_t fde_end = entry + it->second;
+            if (fde_end > fn.end) fn.end = fde_end;
+        }
     }
 
     return fn;

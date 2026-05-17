@@ -39,7 +39,7 @@ uint64_t multi_exit(uint64_t a1, uint64_t a2) {
 </tr>
 </table>
 
-<sub>The right column was reconstructed from a stripped binary. Ember has never seen the source - it walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded the spilled parameters, and rendered <code>-1</code> as signed even though it lives in a <code>uint64_t</code>-typed slot.</sub>
+<sub>The right column was reconstructed from a stripped binary - ember has never seen the source. It walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded spilled parameters, and rendered the constant as signed even though it sits in a <code>uint64_t</code> slot.</sub>
 
 ---
 
@@ -58,7 +58,7 @@ The whole pipeline fits in your head.
 
 ---
 
-## The pipeline, in nine arrows
+## The pipeline, in nine stages
 
 ```
 binary → loader → decoder → CFG → IR lift → SSA → cleanup → structure → pseudo-C
@@ -206,6 +206,7 @@ ember [options] <binary>
       --validate NAME    where does NAME live + similar lookalikes
       --collisions       names / fingerprints bound to >1 address
       --vtables          runtime pointer-dense vtables from data/RELRO
+      --vtable-at VA     narrow vtable view around a vptr/typeinfo/slot VA
 
       --ipa              run IPA before pseudo-C (typed sigs across calls)
       --resolve-calls    resolve indirect calls (IAT + constant vtables)
@@ -254,6 +255,7 @@ ember --regions ./scrape/regions.txt -p
 
 # Loaded Android / PIE dump: find RELRO vtables and explain one dispatch slot
 ember --regions ./scrape/regions.txt --vtables
+ember --regions ./scrape/regions.txt --vtable-at 0xVTABLE_OR_SLOT --limit 24
 ember --regions ./scrape/regions.txt --explain-vcall 0xOBJECT:0x40
 
 # Snapshot an object as pointer-sized fields
@@ -302,7 +304,7 @@ Section-keyed, one directive per line, no expressions or control flow. Anything 
 <details>
 <summary><b>Agent harness</b></summary>
 
-`agent/` is a TypeScript multi-agent driver. Workers run a single role - namer / mapper / typer / tiebreaker - as an LLM tool-use loop, write claims into a shared per-binary intel database (append-only JSONL with retraction + dispute detection), and the orchestrator promotes high-confidence claims into the same `.ember` file `--apply` consumes. Provider-neutral over assistant / OpenAI / OpenRouter, prompt-cache-aware on both assistant-direct (`cache_control: ephemeral`) and DeepSeek-via-OpenRouter (auto-prefix caching reported in `usage.prompt_tokens_details.cached_tokens`), per-worker USD budget cap.
+`agent/` is a TypeScript multi-agent driver. Workers run a single role - namer / mapper / typer / tiebreaker - as an LLM tool-use loop, write claims into a shared per-binary intel database (append-only JSONL with retraction + dispute detection), and the orchestrator promotes high-confidence claims into the same `.ember` file `--apply` consumes. Provider-neutral across assistant, OpenAI, and OpenRouter; prompt-cache-aware on both assistant-direct and DeepSeek-via-OpenRouter; per-worker USD budget cap.
 
 ```sh
 # 20 namer workers in parallel against a stripped binary
@@ -343,15 +345,15 @@ core/             C++23 library - everything except the CLI shim
   ir/             IR + lifters + SSA + cleanup passes + type lattice
   structure/      region builder
   decompile/      pseudo-C emitter
-  debug/          ptrace + Mach backends, .eh_frame + RBP-walk unwinders
+  debug/          ptrace + perf + Mach backends, .eh_frame + RBP-walk unwinders
   script/         declarative .ember parser + applier
   common/         annotations, on-disk cache
 cli/              command-line driver
 ui/               Electron + React + TypeScript frontend
 agent/            TypeScript multi-agent LLM harness
 tests/            golden-output CTest suite
-docs/             scripting, debugger, raw-input, plugin platform,
-                  agent harness, TEEF Max
+docs/             Python wrapper, scripting, debugger, raw-input,
+                  plugin platform, agent harness, TEEF Max
 ```
 
 </details>

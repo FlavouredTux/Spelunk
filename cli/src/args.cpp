@@ -64,10 +64,12 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--show-provenance", &Args::show_provenance},
     {"",   "--list-annotations", &Args::list_annotations},
     {"",   "--json",      &Args::json},
+    {"",   "--quick",     &Args::quick},
     {"-q", "--quiet",     &Args::quiet},
     {"",   "--dry-run",   &Args::dry_run},
     {"",   "--debug",     &Args::debug},
     {"",   "--serve",     &Args::serve},
+    {"",   "--daemon",    &Args::serve},
     {"",   "--show-empty", &Args::symuses_show_empty},
     {"",   "--no-taint",  &Args::symuses_no_taint},
     {"",   "--verbose",   &Args::verbose},
@@ -90,13 +92,24 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--filter",      &Args::category_filter},
     {"",   "--refs-to",     &Args::refs_to},
     {"",   "--refs-to-loose", &Args::refs_to_loose},
+    {"",   "--access",      &Args::refs_access},
+    {"",   "--timeout",     &Args::timeout},
+    {"",   "--state-map",   &Args::state_map},
+    {"",   "--branch-on",   &Args::branch_on},
+    {"",   "--guard-map",   &Args::guard_map},
+    {"",   "--state-lifetime", &Args::state_lifetime},
+    {"",   "--side-effects", &Args::side_effects},
+    {"",   "--object-roles", &Args::object_roles},
+    {"",   "--explain-address", &Args::explain_address},
     {"",   "--explain-vcall", &Args::explain_vcall},
+    {"",   "--vtable-at",    &Args::vtable_at},
     {"",   "--dump-object", &Args::dump_object},
     {"",   "--size",        &Args::object_size},
     {"",   "--callees",      &Args::callees},
     {"",   "--containing-fn", &Args::containing_fn},
     {"",   "--validate",    &Args::validate_name},
     {"",   "--callees-class", &Args::callees_class},
+    {"",   "--patch-plan",  &Args::patch_plan},
     {"",   "--disasm-at",   &Args::disasm_at},
     {"",   "--count",       &Args::disasm_count},
     {"",   "--disasm-window", &Args::disasm_window},
@@ -304,6 +317,19 @@ Result<Args> parse_args(int argc, char** argv) {
             } else {
                 return std::unexpected(Error::invalid_format(
                     "--min-uses: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--limit") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--limit requires a value"));
+            }
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.vtable_limit = *v;
+            } else {
+                return std::unexpected(Error::invalid_format(
+                    "--limit: bad integer"));
             }
             continue;
         }

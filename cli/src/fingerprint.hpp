@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <ember/analysis/pipeline.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember { class Binary; }
 
@@ -16,10 +17,15 @@ struct Args;
 // Cache tag for fingerprint TSVs. Includes the fingerprint schema version
 // so schema bumps orphan old entries without nuking unrelated caches.
 [[nodiscard]] std::string fingerprints_cache_tag();
+[[nodiscard]] std::string fingerprints_cache_tag(u64 min_fn_bytes,
+                                                 u64 max_fn_bytes);
+[[nodiscard]] std::string fingerprints_cache_tag(const Args& args);
 
 // Walk the call graph of `b`, fingerprint every function, return the
 // canonical TSV: <addr>\t<hash>\t<blocks>\t<insts>\t<calls>\t<dup-count>\t<name>.
-[[nodiscard]] std::string build_fingerprints_output(const Binary& b);
+[[nodiscard]] std::string build_fingerprints_output(const Binary& b,
+                                                    u64 min_fn_bytes = 0,
+                                                    u64 max_fn_bytes = 0);
 
 // Read cached fingerprint TSV for `binary_path`, or compute and store it.
 // Loads `binary_path` only on cache miss. Exits the process on load failure

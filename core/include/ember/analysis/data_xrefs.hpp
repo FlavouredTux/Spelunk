@@ -56,4 +56,10 @@ struct DataXref {
 [[nodiscard]] std::map<addr_t, std::vector<DataXref>>
 compute_data_xrefs(const Binary& b);
 
+// Single-target variant for quick refs probes. Same classifier as
+// compute_data_xrefs(), but only retains rows whose resolved target is
+// `target`, avoiding the full target->bucket map and final whole-map sort.
+[[nodiscard]] std::vector<DataXref>
+compute_data_xrefs_to(const Binary& b, addr_t target);
+
 }  // namespace ember

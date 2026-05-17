@@ -23,12 +23,16 @@
 #include <utility>
 #include <vector>
 
+#include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/common/threads.hpp>
+#include <ember/common/timing.hpp>
+#include <ember/disasm/decoder.hpp>
+#include <ember/ir/lifter.hpp>
 
 #include "args.hpp"
 #include "util.hpp"
@@ -36,10 +40,24 @@
 namespace ember::cli {
 
 std::string fingerprints_cache_tag() {
-    return std::format("fingerprints-{}-o3-fns2", kFingerprintSchema);
+    return fingerprints_cache_tag(0, 0);
 }
 
-std::string build_fingerprints_output(const Binary& b) {
+std::string fingerprints_cache_tag(u64 min_fn_bytes, u64 max_fn_bytes) {
+    std::string tag = std::format("fingerprints-{}-o3-fns3-fastcg", kFingerprintSchema);
+    if (min_fn_bytes) tag += std::format("-min{}", min_fn_bytes);
+    if (max_fn_bytes) tag += std::format("-max{}", max_fn_bytes);
+    return tag;
+}
+
+std::string fingerprints_cache_tag(const Args& args) {
+    return fingerprints_cache_tag(args.min_fn_bytes, args.max_fn_bytes);
+}
+
+std::string build_fingerprints_output(const Binary& b,
+                                      u64 min_fn_bytes,
+                                      u64 max_fn_bytes) {
+    ScopedTimer total_timer("fingerprints.total");
     const bool show = progress_enabled();
     // Build a one-shot addr -> name map; previously this was an O(n²) linear
     // rescan per function which took minutes on large stripped binaries.
@@ -48,20 +66,29 @@ std::string build_fingerprints_output(const Binary& b) {
         std::fflush(stderr);
     }
     std::unordered_map<addr_t, std::string> name_by_addr;
-    for (const auto& s : b.symbols()) {
-        if (s.is_import) continue;
-        if (s.kind != SymbolKind::Function) continue;
-        if (s.addr == 0 || s.name.empty()) continue;
-        name_by_addr.try_emplace(s.addr, s.name);
+    std::unordered_map<addr_t, u64> size_by_addr;
+    {
+        ScopedTimer t("fingerprints.collect_names");
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.addr == 0 || s.name.empty()) continue;
+            name_by_addr.try_emplace(s.addr, s.name);
+            if (s.size != 0) size_by_addr.try_emplace(s.addr, s.size);
+        }
     }
 
     if (show) {
         std::println(stderr, "ember: {} named functions; walking call graph "
-                             "(this is the slow first step on big binaries)...",
+                             "(one cold pass on big binaries)...",
                              name_by_addr.size());
         std::fflush(stderr);
     }
-    const auto edges = compute_call_graph(b);
+    std::vector<CallEdge> edges;
+    {
+        ScopedTimer t("fingerprints.call_graph");
+        edges = compute_call_graph(b, {}, CallGraphMode::Fast);
+    }
     if (show) {
         std::println(stderr, "ember: {} call edges discovered", edges.size());
         std::fflush(stderr);
@@ -77,12 +104,23 @@ std::string build_fingerprints_output(const Binary& b) {
     // Zero-sized discovered `sub_*` entries are deliberately non-fingerprintable:
     // they are usually interior prologue-shaped addresses inside a real symbol.
     std::unordered_set<addr_t> zero_sized_discovered_subs;
-    for (const auto& fn : enumerate_functions(b, EnumerateMode::Auto)) {
-        if (fn.kind == DiscoveredFunction::Kind::Sub && fn.size == 0) {
-            zero_sized_discovered_subs.insert(fn.addr);
-            continue;
+    // Full/Auto enumeration already includes a call-graph pass. We just
+    // ran that above to seed `edges`, so use the loader/prologue/RTTI-only
+    // discovery pass here and let `edges` contribute discovered callees.
+    // This avoids doing two whole-program CFG walks before fingerprinting
+    // on large stripped binaries.
+    {
+        ScopedTimer t("fingerprints.enumerate_cheap");
+        for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+            if (fn.kind == DiscoveredFunction::Kind::Sub && fn.size == 0) {
+                zero_sized_discovered_subs.insert(fn.addr);
+                continue;
+            }
+            if (!b.import_at_plt(fn.addr)) {
+                fns.insert(fn.addr);
+                if (fn.size != 0) size_by_addr.try_emplace(fn.addr, fn.size);
+            }
         }
-        if (!b.import_at_plt(fn.addr)) fns.insert(fn.addr);
     }
     for (addr_t a : zero_sized_discovered_subs) {
         if (!name_by_addr.contains(a)) fns.erase(a);
@@ -101,13 +139,42 @@ std::string build_fingerprints_output(const Binary& b) {
     // `fns` is a std::set<addr_t>: iteration is sorted by address, so the
     // produced TSV (and disk-cached output) stays deterministic regardless
     // of how the per-function work is scheduled across worker threads.
-    std::vector<addr_t> addrs(fns.begin(), fns.end());
+    std::size_t filtered_small = 0;
+    std::size_t filtered_large = 0;
+    std::vector<addr_t> addrs;
+    addrs.reserve(fns.size());
+    for (addr_t a : fns) {
+        const auto sit = size_by_addr.find(a);
+        const u64 size = sit != size_by_addr.end() ? sit->second : 0;
+        if (min_fn_bytes != 0 && size != 0 && size < min_fn_bytes) {
+            ++filtered_small;
+            continue;
+        }
+        if (max_fn_bytes != 0 && size != 0 && size > max_fn_bytes) {
+            ++filtered_large;
+            continue;
+        }
+        addrs.push_back(a);
+    }
+    std::unordered_set<addr_t> known_entries(fns.begin(), fns.end());
     const auto total = addrs.size();
     std::vector<Row> rows(total);
 
     const auto tick = std::max<std::size_t>(1, total / 40);
     const std::size_t worker_count = std::min<std::size_t>(
         static_cast<std::size_t>(thread_pool_size(8)), total);
+    if (timing_enabled()) {
+        std::fprintf(stderr, "[timing] fingerprints.functions: %zu\n", total);
+        if (min_fn_bytes != 0) {
+            std::fprintf(stderr, "[timing] fingerprints.filtered_small: %zu\n",
+                         filtered_small);
+        }
+        if (max_fn_bytes != 0) {
+            std::fprintf(stderr, "[timing] fingerprints.filtered_large: %zu\n",
+                         filtered_large);
+        }
+        std::fprintf(stderr, "[timing] fingerprints.threads: %zu\n", worker_count);
+    }
 
     if (show) {
         std::println(stderr,
@@ -116,9 +183,10 @@ std::string build_fingerprints_output(const Binary& b) {
         std::fflush(stderr);
     }
 
-    auto fingerprint_one = [&](std::size_t i) {
+    auto fingerprint_one = [&](std::size_t i, const CfgBuilder& cfg,
+                               const Lifter& lifter) {
         const addr_t a = addrs[i];
-        const auto fp = compute_fingerprint(b, a);
+        const auto fp = compute_fingerprint_with(b, cfg, lifter, a);
         if (fp.hash == 0) return;
         std::string name;
         if (auto it = name_by_addr.find(a); it != name_by_addr.end()) {
@@ -130,41 +198,57 @@ std::string build_fingerprints_output(const Binary& b) {
                       std::move(name), true};
     };
 
-    if (worker_count <= 1) {
-        std::size_t done = 0;
-        for (std::size_t i = 0; i < total; ++i) {
-            fingerprint_one(i);
-            ++done;
-            if (show && (done % tick == 0 || done == total)) {
-                std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
-                std::fflush(stderr);
-            }
-        }
-    } else {
-        std::atomic<std::size_t> next{0};
-        std::atomic<std::size_t> done{0};
-        std::mutex log_mu;
-
-        auto worker = [&]() {
-            while (true) {
-                const std::size_t i =
-                    next.fetch_add(1, std::memory_order_relaxed);
-                if (i >= total) break;
-                fingerprint_one(i);
-                const std::size_t d =
-                    done.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (show && (d % tick == 0 || d == total)) {
-                    std::lock_guard lk(log_mu);
-                    std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
-                    std::fflush(stderr);
+    {
+        ScopedTimer compute_timer("fingerprints.compute");
+        if (worker_count <= 1) {
+            auto dec_r = make_decoder(b);
+            auto lifter_r = make_lifter(b);
+            if (!dec_r || !lifter_r) {
+                rows.clear();
+            } else {
+                const CfgBuilder cfg(b, **dec_r, false);
+                cfg.seed_known_entries(known_entries);
+                std::size_t done = 0;
+                for (std::size_t i = 0; i < total; ++i) {
+                    fingerprint_one(i, cfg, **lifter_r);
+                    ++done;
+                    if (show && (done % tick == 0 || done == total)) {
+                        std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
+                        std::fflush(stderr);
+                    }
                 }
             }
-        };
+        } else {
+            std::atomic<std::size_t> next{0};
+            std::atomic<std::size_t> done{0};
+            std::mutex log_mu;
 
-        std::vector<std::thread> threads;
-        threads.reserve(worker_count);
-        for (std::size_t i = 0; i < worker_count; ++i) threads.emplace_back(worker);
-        for (auto& t : threads) t.join();
+            auto worker = [&]() {
+                auto dec_r = make_decoder(b);
+                auto lifter_r = make_lifter(b);
+                if (!dec_r || !lifter_r) return;
+                const CfgBuilder cfg(b, **dec_r, false);
+                cfg.seed_known_entries(known_entries);
+                while (true) {
+                    const std::size_t i =
+                        next.fetch_add(1, std::memory_order_relaxed);
+                    if (i >= total) break;
+                    fingerprint_one(i, cfg, **lifter_r);
+                    const std::size_t d =
+                        done.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (show && (d % tick == 0 || d == total)) {
+                        std::lock_guard lk(log_mu);
+                        std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
+                        std::fflush(stderr);
+                    }
+                }
+            };
+
+            std::vector<std::thread> threads;
+            threads.reserve(worker_count);
+            for (std::size_t i = 0; i < worker_count; ++i) threads.emplace_back(worker);
+            for (auto& thread : threads) thread.join();
+        }
     }
     if (show) std::fputc('\n', stderr);
 
@@ -182,10 +266,13 @@ std::string build_fingerprints_output(const Binary& b) {
     for (const auto& r : rows) ++hash_count[r.hash];
 
     std::string out;
-    for (const auto& r : rows) {
-        out += std::format("{:x}\t{:016x}\t{}\t{}\t{}\t{}\t{}\n",
-                           r.addr, r.hash, r.blocks, r.insts, r.calls,
-                           hash_count[r.hash], r.name);
+    {
+        ScopedTimer format_timer("fingerprints.format");
+        for (const auto& r : rows) {
+            out += std::format("{:x}\t{:016x}\t{}\t{}\t{}\t{}\t{}\n",
+                               r.addr, r.hash, r.blocks, r.insts, r.calls,
+                               hash_count[r.hash], r.name);
+        }
     }
     return out;
 }
@@ -224,7 +311,7 @@ std::string fingerprints_tsv_for(const Args& args, const Binary& b) {
     const auto dir = args.cache_dir.empty()
         ? cache::default_dir()
         : std::filesystem::path(args.cache_dir);
-    const std::string tag = fingerprints_cache_tag();
+    const std::string tag = fingerprints_cache_tag(args);
     if (!args.no_cache) {
         if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             if (auto hit = cache::read(dir, *k, tag); hit) {
@@ -232,7 +319,7 @@ std::string fingerprints_tsv_for(const Args& args, const Binary& b) {
             }
         }
     }
-    std::string out = build_fingerprints_output(b);
+    std::string out = build_fingerprints_output(b, args.min_fn_bytes, args.max_fn_bytes);
     if (!args.no_cache) {
         if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             if (auto rv = cache::write(dir, *k, tag, out); !rv) {

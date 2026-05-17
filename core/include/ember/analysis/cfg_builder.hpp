@@ -14,8 +14,10 @@ namespace ember {
 
 class CfgBuilder {
 public:
-    CfgBuilder(const Binary& binary, const Decoder& decoder) noexcept
-        : binary_(binary), decoder_(decoder) {}
+    CfgBuilder(const Binary& binary, const Decoder& decoder,
+               bool extend_unwind_ranges = true) noexcept
+        : binary_(binary), decoder_(decoder),
+          extend_unwind_ranges_(extend_unwind_ranges) {}
 
     [[nodiscard]] Result<Function>
     build(addr_t entry, std::string name = {}) const;
@@ -25,6 +27,12 @@ public:
     // tail-call jmps; exposed because external callers occasionally
     // need the same predicate.
     [[nodiscard]] bool is_function_entry(addr_t target) const noexcept;
+
+    // Whole-program callers that already paid for function discovery can seed
+    // this table once per worker and avoid CfgBuilder re-enumerating it on the
+    // first build() call. `entries` should contain real function starts; PLT
+    // imports are still checked through Binary::import_at_plt().
+    void seed_known_entries(std::unordered_set<addr_t> entries) const;
 
 private:
     // Populated on first build() call. Maps function entry VA to the
@@ -42,6 +50,7 @@ private:
 
     const Binary&   binary_;
     const Decoder&  decoder_;
+    bool extend_unwind_ranges_ = true;
     mutable std::unordered_map<addr_t, u64> unwind_ranges_;
     mutable bool unwind_ranges_init_ = false;
     mutable std::unordered_set<addr_t> known_entries_;

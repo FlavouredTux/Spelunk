@@ -27,6 +27,7 @@ struct Args {
                                     // rows / sites to symbols falling in the named categorize_symtable buckets
     ember::u64  symresolve_max_callsites = 5;  // --max-callsites N: cap top_callsites column (0 = unlimited)
     ember::u64  symuses_min_uses    = 1;   // --min-uses N: drop --symuses rows below N uses
+    ember::u64  vtable_limit        = 16;  // --limit N: slot cap for --vtable-at (0 = all)
     bool        symuses_show_empty  = false;  // --show-empty: emit --symuses rows with 0 post-filter uses
     bool        symuses_no_taint    = false;  // --no-taint: drop the register-taint walker; emit every
                                               // matching IMM in candidate fns. Diagnostic only - useful
@@ -37,13 +38,24 @@ struct Args {
                                     // imm64 scanning. Surfaces functions whose body holds the
                                      // target as a literal — the fn-ptr-only case where direct
                                      // E8/E9 callers are absent (Roblox-style mov reg,imm64;call reg).
+    std::string refs_access;        // --access read|write|lea|code-ptr|all: filter refs/data-xrefs
+    std::string timeout;            // --timeout 10s: soft budget for quick refs probes
+    std::string state_map;          // --state-map VA: mutation/read map for one state/global address
+    std::string branch_on;          // --branch-on VA: reads of VA that feed nearby branches
+    std::string guard_map;          // --guard-map FN/VA: conditional branches and nearby guard conditions
+    std::string state_lifetime;     // --state-lifetime VA: writers/readers/branches story for one state/global
+    std::string side_effects;       // --side-effects FN/VA: writes, calls, and return behavior for one function
+    std::string object_roles;       // --object-roles FN/VA: infer direct this+offset field roles in one function
+    std::string explain_address;    // --explain-address VA: fast address orientation summary
     std::string explain_vcall;      // --explain-vcall OBJ:OFF: resolve *( *(OBJ) + OFF )
+    std::string vtable_at;          // --vtable-at VA: print the runtime vtable containing/near VA
     std::string dump_object;        // --dump-object ADDR: dump pointer-sized fields with classification
     std::string object_size;        // --size N: byte size for --dump-object
     std::string callees;            // --callees VA: print direct call targets of the function at VA
     std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
     std::string validate_name;      // --validate NAME: report all addrs bound to NAME + byte-similar lookalikes
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
+    std::string patch_plan;         // --patch-plan VA: hook/trampoline safety plan for a code address
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at / --disasm-window
     std::string disasm_window;      // --disasm-window VA1,VA2,... - batch disassembly. Same per-VA
@@ -89,6 +101,7 @@ struct Args {
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely
     bool dry_run = false;           // --dry-run: with --apply, don't write the result; print TSV to stdout
     bool no_cache = false;          // disable the disk cache entirely
+    bool quick = false;             // --quick: bounded/partial refs probe; avoid full xrefs build
     bool full_analysis = false;     // force pass-2 CFG walk on packed binaries
                                     // (default: skip it - it just produces
                                     // garbage chasing indirect-jmp imm32s

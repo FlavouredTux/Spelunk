@@ -78,6 +78,8 @@
 #include <ember/binary/pe.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
+#include <ember/disasm/decoder.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/common/timing.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/decoder.hpp>
@@ -99,7 +101,7 @@ namespace ember::cli {
 
 namespace {
 
-constexpr std::string_view kXrefsCacheTag = "xrefs-v3";
+constexpr std::string_view kXrefsCacheTag = "xrefs-v5";
 constexpr std::string_view kAritiesCacheTag = "arities-v3";
 constexpr std::string_view kFunctionsCacheTag = "functions-v5";
 constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v5";
@@ -1615,8 +1617,11 @@ int run_orbit_dump(const Args& args, const Binary& b) {
 }
 
 int run_fingerprints(const Args& args, const Binary& b) {
-    const int rc = run_cached(args, fingerprints_cache_tag(),
-                              [&] { return build_fingerprints_output(b); });
+    const int rc = run_cached(args, fingerprints_cache_tag(args),
+                              [&] {
+                                  return build_fingerprints_output(
+                                      b, args.min_fn_bytes, args.max_fn_bytes);
+                              });
     // Mirror the output to --fingerprint-out PATH so the fingerprints can
     // travel between machines / repo checkouts where the disk cache
     // doesn't apply.
@@ -1626,7 +1631,7 @@ int run_fingerprints(const Args& args, const Binary& b) {
             : std::filesystem::path(args.cache_dir);
         auto k = cache::key_for(args.binary, cache_scope_tag(args));
         if (k) {
-            if (auto hit = cache::read(dir, *k, fingerprints_cache_tag()); hit) {
+            if (auto hit = cache::read(dir, *k, fingerprints_cache_tag(args)); hit) {
                 std::ofstream f(args.fp_out, std::ios::binary | std::ios::trunc);
                 if (f) f.write(hit->data(), static_cast<std::streamsize>(hit->size()));
             }
@@ -1649,6 +1654,15 @@ int run_rtti(const Args& args, const Binary& b) {
 }
 
 int run_vtables(const Args& args, const Binary& b) {
+    if (!args.vtable_at.empty()) {
+        auto va = parse_cli_addr(args.vtable_at);
+        if (!va) {
+            std::println(stderr, "ember: --vtable-at: bad address '{}'", args.vtable_at);
+            return 2;
+        }
+        std::print("{}", build_vtable_at_output(b, *va, args.vtable_limit));
+        return 0;
+    }
     return run_cached(args, "vtables-v1", [&] { return build_vtables_output(b); });
 }
 
@@ -1838,6 +1852,132 @@ struct RefRow {
     std::optional<u64>       fn_offset;
 };
 
+struct RefsServeCache {
+    std::optional<std::string> xrefs_tsv;
+    std::optional<std::unordered_map<addr_t, std::vector<addr_t>>> direct_callers;
+    std::optional<std::map<addr_t, std::vector<DataXref>>> data_xrefs;
+    std::unordered_map<u64, std::vector<addr_t>> pointer_slots_by_value;
+    std::optional<std::map<addr_t, u64>> relocated_qwords;
+};
+
+[[nodiscard]] bool refs_access_allows(const Args& args, DataXrefKind k) noexcept {
+    if (args.refs_access.empty() || args.refs_access == "all") return true;
+    if (args.refs_access == "read") return k == DataXrefKind::Read;
+    if (args.refs_access == "write") return k == DataXrefKind::Write;
+    if (args.refs_access == "lea") return k == DataXrefKind::Lea;
+    if (args.refs_access == "code-ptr") return k == DataXrefKind::CodePtr;
+    return true;
+}
+
+[[nodiscard]] bool refs_access_needs_call_edges(const Args& args) noexcept {
+    return args.refs_access.empty() || args.refs_access == "all" ||
+           args.refs_access == "call" || args.refs_access == "direct";
+}
+
+[[nodiscard]] std::vector<addr_t>
+compute_callers_to_fast(const Binary& b, addr_t want) {
+    ScopedTimer total_timer("callers_to_fast.total");
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return {};
+    const Decoder& dec = **dec_r;
+
+    struct WorkItem {
+        addr_t addr;
+        u64 size;
+    };
+    std::vector<WorkItem> work;
+    std::unordered_set<addr_t> seen;
+    for (const auto& s : b.symbols()) {
+        if (s.is_import) continue;
+        if (s.kind != SymbolKind::Function) continue;
+        if (s.size == 0) continue;
+        if (!seen.insert(s.addr).second) continue;
+        work.push_back({s.addr, s.size});
+    }
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr)) continue;
+        if (fn.size == 0) continue;
+        if (!seen.insert(fn.addr).second) continue;
+        work.push_back({fn.addr, fn.size});
+    }
+
+    std::unordered_set<addr_t> known_entries;
+    known_entries.reserve(work.size());
+    for (const auto& w : work) known_entries.insert(w.addr);
+
+    std::vector<addr_t> out;
+    for (const auto& w : work) {
+        auto span = b.bytes_at(w.addr);
+        if (span.empty()) continue;
+        const std::size_t limit = std::min<std::size_t>(
+            span.size(), static_cast<std::size_t>(w.size));
+        addr_t ip = w.addr;
+        std::size_t off = 0;
+        bool emitted = false;
+        while (off < limit && !emitted) {
+            if (b.is_data_in_code(ip)) {
+                ++ip;
+                ++off;
+                continue;
+            }
+            auto remaining = span.subspan(off, limit - off);
+            auto decoded = dec.decode(remaining, ip);
+            if (!decoded) {
+                ++ip;
+                ++off;
+                continue;
+            }
+            const Instruction& insn = *decoded;
+            if (is_call(insn.mnemonic)) {
+                if (auto target = branch_target(insn); target && *target == want) {
+                    out.push_back(w.addr);
+                    emitted = true;
+                }
+            } else if (is_unconditional_jmp(insn.mnemonic)) {
+                if (auto target = branch_target(insn); target && *target == want &&
+                    (known_entries.contains(*target) || b.import_at_plt(*target) != nullptr)) {
+                    out.push_back(w.addr);
+                    emitted = true;
+                }
+            }
+            ip  += insn.length;
+            off += insn.length;
+        }
+    }
+    std::ranges::sort(out);
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+[[nodiscard]] std::unordered_map<addr_t, std::vector<addr_t>>
+parse_xrefs_callers_index(std::string_view xrefs_tsv) {
+    std::unordered_map<addr_t, std::vector<addr_t>> out;
+    std::size_t pos = 0;
+    while (pos < xrefs_tsv.size()) {
+        std::size_t nl = xrefs_tsv.find('\n', pos);
+        if (nl == std::string_view::npos) nl = xrefs_tsv.size();
+        std::string_view line = xrefs_tsv.substr(pos, nl - pos);
+        pos = nl + 1;
+        const std::size_t arrow = line.find(" -> ");
+        if (arrow == std::string_view::npos) continue;
+        std::string_view from_s = line.substr(0, arrow);
+        std::string_view to_s = line.substr(arrow + 4);
+        if (from_s.starts_with("0x") || from_s.starts_with("0X")) from_s.remove_prefix(2);
+        if (to_s.starts_with("0x") || to_s.starts_with("0X")) to_s.remove_prefix(2);
+        u64 from = 0;
+        u64 to = 0;
+        auto frc = std::from_chars(from_s.data(), from_s.data() + from_s.size(), from, 16);
+        auto trc = std::from_chars(to_s.data(), to_s.data() + to_s.size(), to, 16);
+        if (frc.ec != std::errc{} || trc.ec != std::errc{}) continue;
+        out[static_cast<addr_t>(to)].push_back(static_cast<addr_t>(from));
+    }
+    for (auto& [_, callers] : out) {
+        std::ranges::sort(callers);
+        callers.erase(std::unique(callers.begin(), callers.end()), callers.end());
+    }
+    return out;
+}
+
 [[nodiscard]] std::string_view section_name_containing(const Binary& b,
                                                        addr_t va) noexcept {
     for (const auto& s : b.sections()) {
@@ -1926,6 +2066,139 @@ format_ref_rows_tsv(std::span<const RefRow> rows,
     }
     out += "]\n";
     return out;
+}
+
+[[nodiscard]] std::optional<addr_t>
+cli_rip_relative_target(const Instruction& insn) noexcept {
+    const addr_t end = insn.address + insn.length;
+    for (std::size_t i = 0; i < insn.num_operands; ++i) {
+        const Operand& op = insn.operands[i];
+        if (op.kind != Operand::Kind::Memory) continue;
+        const Mem& m = op.mem;
+        if (m.base == Reg::Rip && m.index == Reg::None) {
+            return end + static_cast<u64>(m.disp);
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool is_short_relative_branch(const Instruction& insn) noexcept {
+    if (!branch_target(insn)) return false;
+    return insn.num_operands > 0 && insn.operands[0].rel.size == 1;
+}
+
+[[nodiscard]] bool is_rel32_call_or_jump(const Instruction& insn) noexcept {
+    if (!branch_target(insn)) return false;
+    if (!is_call(insn.mnemonic) && !is_unconditional_jmp(insn.mnemonic) &&
+        !is_conditional_branch(insn.mnemonic)) return false;
+    return insn.num_operands > 0 && insn.operands[0].rel.size == 4;
+}
+
+struct DisasmProbe {
+    std::vector<Instruction> insns;
+    addr_t first_bb_end = 0;
+    std::size_t steal_len = 0;
+    bool needs_relocation = false;
+    bool safe_abs_trampoline = true;
+};
+
+[[nodiscard]] Result<DisasmProbe>
+decode_disasm_probe(const Binary& b, addr_t start, std::size_t count) {
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const Decoder& dec = **dec_r;
+    auto bytes = b.bytes_at(start);
+    if (bytes.empty()) {
+        return std::unexpected(Error::invalid_format(
+            std::format("no bytes mapped at {:#x}", start)));
+    }
+    DisasmProbe p;
+    addr_t ip = start;
+    std::size_t off = 0;
+    while (off < bytes.size() && p.insns.size() < count) {
+        auto decoded = dec.decode(bytes.subspan(off), ip);
+        if (!decoded) break;
+        const Instruction insn = *decoded;
+        p.needs_relocation = p.needs_relocation ||
+            cli_rip_relative_target(insn).has_value() ||
+            branch_target(insn).has_value();
+        p.steal_len += insn.length;
+        p.insns.push_back(insn);
+        ip += insn.length;
+        off += insn.length;
+        if (p.first_bb_end == 0 && ends_basic_block(insn.mnemonic)) {
+            p.first_bb_end = ip;
+            break;
+        }
+        if (p.steal_len >= 14) break;
+    }
+    if (p.first_bb_end == 0) p.first_bb_end = ip;
+    p.safe_abs_trampoline = p.steal_len >= 14 && !p.needs_relocation;
+    return p;
+}
+
+[[nodiscard]] std::string disasm_probe_json(const Binary& b, addr_t start,
+                                            std::size_t count) {
+    auto rv = decode_disasm_probe(b, start, count);
+    if (!rv) return std::format("{{\"error\":\"{}\"}}\n", json_escape(rv.error().message));
+    const auto& p = *rv;
+    std::string out = std::format(
+        "{{\"va\":\"{:#x}\",\"recommended_steal_len\":{},"
+        "\"needs_relocation\":{},\"first_basic_block_end\":\"{:#x}\","
+        "\"safe_absolute_jump_trampoline\":{},\"instructions\":[",
+        start, p.steal_len, p.needs_relocation ? "true" : "false",
+        p.first_bb_end, p.safe_abs_trampoline ? "true" : "false");
+    for (std::size_t i = 0; i < p.insns.size(); ++i) {
+        if (i) out += ',';
+        const auto& insn = p.insns[i];
+        std::string bytes;
+        for (u8 j = 0; j < insn.length; ++j) {
+            if (j) bytes.push_back(' ');
+            std::format_to(std::back_inserter(bytes), "{:02x}",
+                           std::to_integer<unsigned>(insn.raw_bytes[j]));
+        }
+        out += std::format(
+            "{{\"va\":\"{:#x}\",\"bytes\":\"{}\",\"mnemonic\":\"{}\","
+            "\"operands\":[",
+            insn.address, bytes, mnemonic_name(insn.mnemonic));
+        for (std::size_t oi = 0; oi < insn.num_operands; ++oi) {
+            if (oi) out += ',';
+            out += std::format("\"{}\"",
+                               json_escape(format_operand(insn, insn.operands[oi])));
+        }
+        out += std::format(
+            "],\"text\":\"{}\"",
+            json_escape(format_instruction(insn)));
+        if (auto target = branch_target(insn); target) {
+            out += std::format(",\"branch_target\":\"{:#x}\"", *target);
+        }
+        if (auto rip = cli_rip_relative_target(insn); rip) {
+            out += std::format(",\"rip_relative_target\":\"{:#x}\"", *rip);
+        }
+        out += ",\"hazards\":{\"rip_relative\":";
+        out += cli_rip_relative_target(insn) ? "true" : "false";
+        out += ",\"short_branch\":";
+        out += is_short_relative_branch(insn) ? "true" : "false";
+        out += ",\"rel32_branch_or_call\":";
+        out += is_rel32_call_or_jump(insn) ? "true" : "false";
+        out += "}}";
+    }
+    out += "]}\n";
+    return out;
+}
+
+[[nodiscard]] std::string disasm_probe_summary(const Binary& b, addr_t start,
+                                               std::size_t count) {
+    auto rv = decode_disasm_probe(b, start, count);
+    if (!rv) return {};
+    const auto& p = *rv;
+    return std::format(
+        "; trampoline: steal_len={} needs_relocation={} first_bb_end={:#x} "
+        "safe_absolute_jump={}\n",
+        p.steal_len,
+        p.needs_relocation ? "yes" : "no",
+        p.first_bb_end,
+        p.safe_abs_trampoline ? "yes" : "no");
 }
 
 [[nodiscard]] bool address_is_mapped(const Binary& b, addr_t va) noexcept {
@@ -2104,44 +2377,15 @@ classify_object_fields(const Binary& b, addr_t obj, addr_t size) {
 // run_refs_to_loose use this; loose mode appends extra `imm64-stored`
 // / `relocated` rows on top.
 [[nodiscard]] std::vector<RefRow>
-gather_refs_to_rows(const Args& args, const Binary& b, addr_t va) {
+gather_refs_to_rows(const Args& args, const Binary& b, addr_t va,
+                    RefsServeCache* serve_cache = nullptr) {
+    ScopedTimer total_timer("refs_to.gather");
     std::vector<RefRow> out;
-    std::string xrefs_tsv;
-    const auto dir = args.cache_dir.empty()
-        ? cache::default_dir()
-        : std::filesystem::path(args.cache_dir);
-    std::string key;
-    if (!args.no_cache) {
-        auto k = cache::key_for(args.binary, cache_scope_tag(args));
-        if (k) key = std::move(*k);
-    }
-    if (!key.empty()) {
-        if (auto hit = cache::read(dir, key, kXrefsCacheTag); hit) {
-            xrefs_tsv = std::move(*hit);
-        }
-    }
-    if (xrefs_tsv.empty()) {
-        std::println(stderr, "ember: --refs-to: building xrefs cache (one-time)...");
-        std::fflush(stderr);
-        xrefs_tsv = build_xrefs_output(b);
-        if (!key.empty()) {
-            (void)cache::write(dir, key, kXrefsCacheTag, xrefs_tsv);
-        }
-    }
-    const std::string needle = std::format("-> {:#x}\n", va);
-    std::size_t pos = 0;
-    while ((pos = xrefs_tsv.find(needle, pos)) != std::string::npos) {
-        std::size_t ls = pos;
-        while (ls > 0 && xrefs_tsv[ls - 1] != '\n') --ls;
-        // Cached TSV rows are `<from> -> <to>\n`; pull from for the
-        // structured form. The original line had no extra context.
-        std::string_view fs(xrefs_tsv.data() + ls, pos - ls);
-        if (fs.starts_with("0x") || fs.starts_with("0X")) fs.remove_prefix(2);
-        u64 from = 0;
-        auto rc = std::from_chars(fs.data(), fs.data() + fs.size(), from, 16);
-        if (rc.ec == std::errc{}) {
+    (void)serve_cache;
+    if (refs_access_needs_call_edges(args)) {
+        for (addr_t from : compute_callers_to_fast(b, va)) {
             RefRow row;
-            row.from_pc = static_cast<addr_t>(from);
+            row.from_pc = from;
             row.target  = va;
             row.kind    = "direct";
             if (auto cf = containing_function(b, row.from_pc); cf) {
@@ -2150,23 +2394,24 @@ gather_refs_to_rows(const Args& args, const Binary& b, addr_t va) {
             }
             out.push_back(std::move(row));
         }
-        pos += needle.size();
     }
-    const auto dx = compute_data_xrefs(b);
-    if (auto it = dx.find(va); it != dx.end()) {
-        for (const auto& r : it->second) {
+
+    for (const auto& r : compute_data_xrefs_to(b, va)) {
+        if (args.refs_access.empty()) {
             if (r.kind != DataXrefKind::CodePtr &&
                 r.kind != DataXrefKind::Lea) continue;
-            RefRow row;
-            row.from_pc = r.from_pc;
-            row.target  = va;
-            row.kind    = (r.kind == DataXrefKind::CodePtr) ? "code-ptr" : "lea";
-            if (auto cf = containing_function(b, r.from_pc); cf) {
-                row.fn_name   = cf->name;
-                row.fn_offset = cf->offset_within;
-            }
-            out.push_back(std::move(row));
+        } else if (!refs_access_allows(args, r.kind)) {
+            continue;
         }
+        RefRow row;
+        row.from_pc = r.from_pc;
+        row.target  = va;
+        row.kind    = std::string(data_xref_kind_name(r.kind));
+        if (auto cf = containing_function(b, r.from_pc); cf) {
+            row.fn_name   = cf->name;
+            row.fn_offset = cf->offset_within;
+        }
+        out.push_back(std::move(row));
     }
     return out;
 }
@@ -2499,7 +2744,8 @@ int run_refs_to(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
-int run_refs_to_loose(const Args& args, const Binary& b) {
+int run_refs_to_loose_impl(const Args& args, const Binary& b,
+                           RefsServeCache* serve_cache) {
     // Heavier sibling of --refs-to. Beyond the cached call-graph
     // xrefs and CodePtr/Lea events surfaced by compose_refs_to_output,
     // this also walks every readable section for the literal target
@@ -2534,7 +2780,7 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     const bool raw_data_first = b.format() == Format::RawRegions;
     if (!raw_data_first) {
         for (addr_t target_va : search_targets) {
-            auto more = gather_refs_to_rows(args, b, target_va);
+            auto more = gather_refs_to_rows(args, b, target_va, serve_cache);
             retarget_ref_rows(more, *va);
             rows.insert(rows.end(),
                         std::make_move_iterator(more.begin()),
@@ -2557,28 +2803,42 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     // 8 bytes of the next slot. Function-pointer tables are
     // pointer-aligned by linker convention; the rare unaligned case
     // is not worth the noise.
-    for (const auto& s : b.sections()) {
-        if (!s.flags.readable) continue;
-        if (s.data.empty()) continue;
-        const std::byte* p = s.data.data();
-        const std::size_t n = s.data.size();
-        if (n < needle_size) continue;
-        const auto sec_base = static_cast<addr_t>(s.vaddr);
-        // Step the cursor up to the first aligned slot VA inside this
-        // section, then advance by `needle_size` from there.
-        const std::size_t first_aligned =
-            (needle_size - (sec_base % needle_size)) % needle_size;
-        for (std::size_t i = first_aligned; i + needle_size <= n;
-             i += needle_size) {
-            const u64 v = is_64
-                ? read_le_at<u64>(p + i)
-                : static_cast<u64>(read_le_at<u32>(p + i));
-            for (addr_t target_va : search_targets) {
+    for (addr_t target_va : search_targets) {
+        if (serve_cache) {
+            if (auto it = serve_cache->pointer_slots_by_value.find(static_cast<u64>(target_va));
+                it != serve_cache->pointer_slots_by_value.end()) {
+                slot_addrs.insert(slot_addrs.end(), it->second.begin(), it->second.end());
+                continue;
+            }
+        }
+        std::vector<addr_t> target_slots;
+        for (const auto& s : b.sections()) {
+            if (!s.flags.readable) continue;
+            if (s.data.empty()) continue;
+            const std::byte* p = s.data.data();
+            const std::size_t n = s.data.size();
+            if (n < needle_size) continue;
+            const auto sec_base = static_cast<addr_t>(s.vaddr);
+            // Step the cursor up to the first aligned slot VA inside this
+            // section, then advance by `needle_size` from there.
+            const std::size_t first_aligned =
+                (needle_size - (sec_base % needle_size)) % needle_size;
+            for (std::size_t i = first_aligned; i + needle_size <= n;
+                 i += needle_size) {
+                const u64 v = is_64
+                    ? read_le_at<u64>(p + i)
+                    : static_cast<u64>(read_le_at<u32>(p + i));
                 if (v == static_cast<u64>(target_va)) {
-                    slot_addrs.push_back(sec_base + static_cast<addr_t>(i));
-                    break;
+                    target_slots.push_back(sec_base + static_cast<addr_t>(i));
                 }
             }
+        }
+        if (serve_cache) {
+            auto [it, _] = serve_cache->pointer_slots_by_value.emplace(
+                static_cast<u64>(target_va), std::move(target_slots));
+            slot_addrs.insert(slot_addrs.end(), it->second.begin(), it->second.end());
+        } else {
+            slot_addrs.insert(slot_addrs.end(), target_slots.begin(), target_slots.end());
         }
     }
 
@@ -2599,8 +2859,21 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
         }
     }
 
-    const auto dx = raw_data_first ? std::map<addr_t, std::vector<DataXref>>{}
-                                   : compute_data_xrefs(b);
+    std::optional<std::map<addr_t, std::vector<DataXref>>> local_data_xrefs;
+    const auto& dx = [&]() -> const std::map<addr_t, std::vector<DataXref>>& {
+        if (raw_data_first) {
+            local_data_xrefs = std::map<addr_t, std::vector<DataXref>>{};
+            return *local_data_xrefs;
+        }
+        if (serve_cache) {
+            if (!serve_cache->data_xrefs) {
+                serve_cache->data_xrefs = compute_data_xrefs(b);
+            }
+            return *serve_cache->data_xrefs;
+        }
+        local_data_xrefs = compute_data_xrefs(b);
+        return *local_data_xrefs;
+    }();
 
     auto emit_slot_readers = [&](addr_t slot, std::string_view tag) {
         if (auto it = dx.find(slot); it != dx.end()) {
@@ -2633,7 +2906,17 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     // get an empty map.
     std::size_t reloc_slot_count = 0;
     if (const auto* elf = dynamic_cast<const ElfBinary*>(&b)) {
-        const auto reloc_map = elf->relocated_qwords();
+        std::optional<std::map<addr_t, u64>> local_relocated_qwords;
+        const auto& reloc_map = [&]() -> const std::map<addr_t, u64>& {
+            if (serve_cache) {
+                if (!serve_cache->relocated_qwords) {
+                    serve_cache->relocated_qwords = elf->relocated_qwords();
+                }
+                return *serve_cache->relocated_qwords;
+            }
+            local_relocated_qwords = elf->relocated_qwords();
+            return *local_relocated_qwords;
+        }();
         for (const auto& [slot, addend] : reloc_map) {
             if (std::ranges::find(search_targets, addend) == search_targets.end()) continue;
             ++reloc_slot_count;
@@ -2652,6 +2935,1000 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
                      slot_addrs.size() == 1 ? "" : "s",
                      reloc_slot_count,
                      reloc_slot_count == 1 ? "" : "s");
+    }
+    return EXIT_SUCCESS;
+}
+
+int run_refs_to_loose(const Args& args, const Binary& b) {
+    return run_refs_to_loose_impl(args, b, nullptr);
+}
+
+[[nodiscard]] std::string state_site_disasm(const Binary& b, addr_t site) {
+    auto r = format_disasm_range(b, site, site + 15);
+    if (!r) return {};
+    std::string_view s(*r);
+    if (const auto nl = s.find('\n'); nl != std::string_view::npos) {
+        s = s.substr(0, nl);
+    }
+    return std::string(s);
+}
+
+[[nodiscard]] std::string state_site_shape(DataXrefKind kind,
+                                           std::string_view disasm) {
+    if (kind == DataXrefKind::Write) {
+        if (disasm.find(", 0x1") != std::string_view::npos ||
+            disasm.find(", 1") != std::string_view::npos) return "set";
+        if (disasm.find(", 0x0") != std::string_view::npos) return "clear";
+        if (disasm.find("lock ") != std::string_view::npos) return "atomic-write";
+        if (disasm.find(" inc ") != std::string_view::npos ||
+            disasm.find(" dec ") != std::string_view::npos ||
+            disasm.find(" add ") != std::string_view::npos ||
+            disasm.find(" sub ") != std::string_view::npos ||
+            disasm.find(" xor ") != std::string_view::npos ||
+            disasm.find(" or ") != std::string_view::npos ||
+            disasm.find(" and ") != std::string_view::npos) return "read-modify-write";
+        return "store";
+    }
+    if (kind == DataXrefKind::Read) {
+        if (disasm.find(" cmp ") != std::string_view::npos ||
+            disasm.find(" test ") != std::string_view::npos) return "branch-input";
+        return "load";
+    }
+    if (kind == DataXrefKind::Lea) return "address-taken";
+    if (kind == DataXrefKind::CodePtr) return "code-pointer";
+    return "unknown";
+}
+
+struct StateFnIndex {
+    std::vector<DiscoveredFunction> fns;
+
+    explicit StateFnIndex(const Binary& b)
+        : fns(enumerate_functions(b, EnumerateMode::Cheap)) {}
+
+    [[nodiscard]] std::optional<ContainingFn>
+    find(const Binary& b, addr_t addr) const {
+        if (fns.empty()) return std::nullopt;
+        auto it = std::upper_bound(fns.begin(), fns.end(), addr,
+            [](addr_t a, const DiscoveredFunction& d) { return a < d.addr; });
+        if (it == fns.begin()) return std::nullopt;
+        --it;
+        if (it->size != 0 && addr >= it->addr + it->size) return std::nullopt;
+        if (it->size == 0) {
+            addr_t implied_end = 0;
+            auto nxt = it; ++nxt;
+            if (nxt != fns.end()) implied_end = nxt->addr;
+            if (implied_end != 0 && addr >= implied_end) return std::nullopt;
+            if (implied_end == 0) {
+                for (const auto& s : b.sections()) {
+                    if (it->addr >= s.vaddr && it->addr < s.vaddr + s.size) {
+                        if (addr >= s.vaddr + s.size) return std::nullopt;
+                        break;
+                    }
+                }
+            }
+        }
+        if (b.bytes_at(it->addr).empty()) return std::nullopt;
+        return ContainingFn{it->addr, it->size, it->name, addr - it->addr};
+    }
+};
+
+int run_state_map(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("state_map.total");
+    auto va = parse_cli_addr(args.state_map);
+    if (!va) {
+        std::println(stderr, "ember: --state-map: bad address '{}'", args.state_map);
+        return EXIT_FAILURE;
+    }
+
+    struct Site {
+        DataXref xref;
+        std::string fn;
+        u64 fn_off = 0;
+        std::string disasm;
+        std::string shape;
+    };
+
+    std::vector<Site> sites;
+    const auto xrefs = compute_data_xrefs_to(b, *va);
+    {
+        ScopedTimer t("state_map.decorate_sites");
+        StateFnIndex fn_index(b);
+        for (const auto& xr : xrefs) {
+            Site s;
+            s.xref = xr;
+            if (auto cf = fn_index.find(b, xr.from_pc); cf) {
+                s.fn = cf->name;
+                s.fn_off = cf->offset_within;
+            }
+            s.disasm = state_site_disasm(b, xr.from_pc);
+            s.shape = state_site_shape(xr.kind, s.disasm);
+            sites.push_back(std::move(s));
+        }
+    }
+
+    auto count_kind = [&](DataXrefKind k) {
+        return std::ranges::count_if(sites, [&](const Site& s) {
+            return s.xref.kind == k;
+        });
+    };
+    const auto reads = count_kind(DataXrefKind::Read);
+    const auto writes = count_kind(DataXrefKind::Write);
+    const auto leas = count_kind(DataXrefKind::Lea);
+    const auto codeptrs = count_kind(DataXrefKind::CodePtr);
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"state\":\"{:#x}\",\"summary\":{{\"reads\":{},\"writes\":{},"
+            "\"lea\":{},\"code_ptr\":{}}},\"sites\":[",
+            *va, reads, writes, leas, codeptrs);
+        for (std::size_t i = 0; i < sites.size(); ++i) {
+            if (i) out += ',';
+            const auto& s = sites[i];
+            out += std::format(
+                "{{\"site\":\"{:#x}\",\"target\":\"{:#x}\",\"kind\":\"{}\","
+                "\"shape\":\"{}\"",
+                s.xref.from_pc, s.xref.to_addr, data_xref_kind_name(s.xref.kind),
+                json_escape(s.shape));
+            if (!s.fn.empty()) {
+                out += std::format(",\"fn\":\"{}\",\"fn_offset\":\"{:#x}\"",
+                                   json_escape(s.fn), s.fn_off);
+            }
+            if (!s.disasm.empty()) {
+                out += std::format(",\"disasm\":\"{}\"", json_escape(s.disasm));
+            }
+            out += "}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("state\t{:#x}\treads={}\twrites={}\tlea={}\tcode-ptr={}",
+                 *va, reads, writes, leas, codeptrs);
+    for (const auto& s : sites) {
+        std::string fn = s.fn.empty() ? "-" : std::format("{}+{:#x}", s.fn, s.fn_off);
+        std::println("{}\t{:#x}\t{}\t{}\t{}",
+                     data_xref_kind_name(s.xref.kind), s.xref.from_pc,
+                     s.shape, fn, s.disasm);
+    }
+    return EXIT_SUCCESS;
+}
+
+struct BranchOnSite {
+    DataXref xref;
+    std::string fn;
+    u64 fn_off = 0;
+    std::string read_text;
+    addr_t branch_site = 0;
+    std::string branch_text;
+    std::optional<addr_t> taken;
+    addr_t fallthrough = 0;
+    std::size_t distance = 0;
+};
+
+[[nodiscard]] std::optional<addr_t>
+cli_memory_operand_target(const Instruction& insn, const Operand& op) noexcept {
+    if (op.kind != Operand::Kind::Memory) return std::nullopt;
+    const Mem& m = op.mem;
+    if (m.base == Reg::Rip && m.index == Reg::None) {
+        return insn.address + insn.length + static_cast<u64>(m.disp);
+    }
+    if (m.base == Reg::None && m.index == Reg::None && m.has_disp) {
+        return static_cast<addr_t>(m.disp);
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool instruction_directly_tests_target(const Instruction& insn,
+                                                     addr_t target) noexcept {
+    if (insn.mnemonic != Mnemonic::Cmp && insn.mnemonic != Mnemonic::Test) {
+        return false;
+    }
+    for (std::size_t i = 0; i < insn.num_operands; ++i) {
+        if (auto mt = cli_memory_operand_target(insn, insn.operands[i]);
+            mt && *mt == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<BranchOnSite>
+analyze_branch_on_site(const Binary& b, const Decoder& dec,
+                       const StateFnIndex& fn_index, const DataXref& xr) {
+    if (xr.kind != DataXrefKind::Read) return std::nullopt;
+    auto bytes = b.bytes_at(xr.from_pc);
+    if (bytes.empty()) return std::nullopt;
+
+    BranchOnSite row;
+    row.xref = xr;
+    if (auto cf = fn_index.find(b, xr.from_pc); cf) {
+        row.fn = cf->name;
+        row.fn_off = cf->offset_within;
+    }
+
+    addr_t ip = xr.from_pc;
+    std::size_t off = 0;
+    constexpr std::size_t kMaxBranchWindow = 8;
+    for (std::size_t i = 0; i < kMaxBranchWindow && off < bytes.size(); ++i) {
+        auto decoded = dec.decode(bytes.subspan(off), ip);
+        if (!decoded) break;
+        const Instruction insn = *decoded;
+        if (i == 0) {
+            if (!instruction_directly_tests_target(insn, xr.to_addr)) {
+                return std::nullopt;
+            }
+            row.read_text = format_instruction(insn);
+        }
+        if (is_conditional_branch(insn.mnemonic)) {
+            row.branch_site = insn.address;
+            row.branch_text = format_instruction(insn);
+            row.taken = branch_target(insn);
+            row.fallthrough = insn.address + insn.length;
+            row.distance = i;
+            return row;
+        }
+        if (i > 0 && ends_basic_block(insn.mnemonic)) break;
+        ip += insn.length;
+        off += insn.length;
+    }
+    return std::nullopt;
+}
+
+int run_branch_on(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("branch_on.total");
+    auto va = parse_cli_addr(args.branch_on);
+    if (!va) {
+        std::println(stderr, "ember: --branch-on: bad address '{}'", args.branch_on);
+        return EXIT_FAILURE;
+    }
+
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return report(dec_r.error());
+    const Decoder& dec = **dec_r;
+
+    std::vector<BranchOnSite> rows;
+    const auto xrefs = compute_data_xrefs_to(b, *va);
+    StateFnIndex fn_index(b);
+    for (const auto& xr : xrefs) {
+        if (auto row = analyze_branch_on_site(b, dec, fn_index, xr); row) {
+            rows.push_back(std::move(*row));
+        }
+    }
+
+    if (args.json) {
+        std::string out = std::format("{{\"state\":\"{:#x}\",\"branches\":[", *va);
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (i) out += ',';
+            const auto& r = rows[i];
+            out += std::format(
+                "{{\"site\":\"{:#x}\",\"target\":\"{:#x}\",\"read\":\"{}\","
+                "\"branch_site\":\"{:#x}\",\"branch\":\"{}\","
+                "\"fallthrough\":\"{:#x}\",\"distance\":{}",
+                r.xref.from_pc, r.xref.to_addr, json_escape(r.read_text),
+                r.branch_site, json_escape(r.branch_text), r.fallthrough,
+                r.distance);
+            if (r.taken) out += std::format(",\"taken\":\"{:#x}\"", *r.taken);
+            else         out += ",\"taken\":null";
+            if (!r.fn.empty()) {
+                out += std::format(",\"fn\":\"{}\",\"fn_offset\":\"{:#x}\"",
+                                   json_escape(r.fn), r.fn_off);
+            }
+            out += "}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("branch-on\t{:#x}\tbranches={}", *va, rows.size());
+    for (const auto& r : rows) {
+        const std::string fn = r.fn.empty()
+            ? "-"
+            : std::format("{}+{:#x}", r.fn, r.fn_off);
+        const std::string taken = r.taken ? std::format("{:#x}", *r.taken) : "-";
+        std::println("{:#x}\t{}\t{}\t{:#x}\t{}\t{}\t{:#x}",
+                     r.xref.from_pc, fn, r.read_text, r.branch_site,
+                     r.branch_text, taken, r.fallthrough);
+    }
+    return EXIT_SUCCESS;
+}
+
+struct GuardMapRow {
+    addr_t condition_site = 0;
+    std::string condition_text;
+    std::optional<addr_t> memory_target;
+    std::string memory_section;
+    addr_t branch_site = 0;
+    std::string branch_text;
+    std::optional<addr_t> taken;
+    addr_t fallthrough = 0;
+    std::size_t distance = 0;
+};
+
+[[nodiscard]] std::optional<addr_t>
+first_memory_target(const Binary& b, const Instruction& insn) noexcept {
+    for (std::size_t i = 0; i < insn.num_operands; ++i) {
+        auto target = cli_memory_operand_target(insn, insn.operands[i]);
+        if (!target) continue;
+        if (address_is_mapped(b, *target)) return target;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::vector<GuardMapRow>
+compute_guard_map(const Binary& b, addr_t start, u64 size) {
+    std::vector<GuardMapRow> rows;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return rows;
+    const Decoder& dec = **dec_r;
+
+    auto bytes = b.bytes_at(start);
+    if (bytes.empty()) return rows;
+    if (size != 0) {
+        bytes = bytes.first(std::min<std::size_t>(bytes.size(), static_cast<std::size_t>(size)));
+    } else {
+        bytes = bytes.first(std::min<std::size_t>(bytes.size(), 4096));
+    }
+
+    std::vector<Instruction> recent_conditions;
+    recent_conditions.reserve(6);
+    addr_t ip = start;
+    std::size_t off = 0;
+    while (off < bytes.size()) {
+        auto decoded = dec.decode(bytes.subspan(off), ip);
+        if (!decoded) {
+            ++off;
+            ++ip;
+            recent_conditions.clear();
+            continue;
+        }
+        const Instruction insn = *decoded;
+        if (insn.mnemonic == Mnemonic::Cmp || insn.mnemonic == Mnemonic::Test) {
+            recent_conditions.push_back(insn);
+            if (recent_conditions.size() > 6) {
+                recent_conditions.erase(recent_conditions.begin());
+            }
+        }
+        if (is_conditional_branch(insn.mnemonic)) {
+            GuardMapRow row;
+            row.branch_site = insn.address;
+            row.branch_text = format_instruction(insn);
+            row.taken = branch_target(insn);
+            row.fallthrough = insn.address + insn.length;
+            if (!recent_conditions.empty()) {
+                const auto& cond = recent_conditions.back();
+                row.condition_site = cond.address;
+                row.condition_text = format_instruction(cond);
+                row.distance = insn.address >= cond.address
+                    ? static_cast<std::size_t>(insn.address - cond.address)
+                    : 0;
+                row.memory_target = first_memory_target(b, cond);
+                if (row.memory_target) {
+                    row.memory_section = std::string(section_name_containing(b, *row.memory_target));
+                }
+            }
+            rows.push_back(std::move(row));
+            recent_conditions.clear();
+        }
+        if (ends_basic_block(insn.mnemonic) && !is_conditional_branch(insn.mnemonic)) {
+            recent_conditions.clear();
+        }
+        off += insn.length;
+        ip += insn.length;
+    }
+    return rows;
+}
+
+int run_guard_map(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("guard_map.total");
+    const Annotations ann = load_annotations_quiet(args);
+    auto win = resolve_function(b, args.guard_map, &ann);
+    if (!win) {
+        std::println(stderr, "ember: --guard-map: could not resolve '{}'", args.guard_map);
+        return EXIT_FAILURE;
+    }
+    const auto rows = compute_guard_map(b, win->start, win->size);
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"function\":{{\"entry\":\"{:#x}\",\"size\":\"{:#x}\","
+            "\"name\":\"{}\"}},\"guards\":[",
+            win->start, win->size, json_escape(win->label));
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (i) out += ',';
+            const auto& r = rows[i];
+            out += std::format(
+                "{{\"branch_site\":\"{:#x}\",\"branch\":\"{}\","
+                "\"fallthrough\":\"{:#x}\",\"distance\":{}",
+                r.branch_site, json_escape(r.branch_text), r.fallthrough,
+                r.distance);
+            if (r.taken) out += std::format(",\"taken\":\"{:#x}\"", *r.taken);
+            else         out += ",\"taken\":null";
+            if (r.condition_site != 0) {
+                out += std::format(",\"condition_site\":\"{:#x}\",\"condition\":\"{}\"",
+                                   r.condition_site, json_escape(r.condition_text));
+            } else {
+                out += ",\"condition_site\":null,\"condition\":null";
+            }
+            if (r.memory_target) {
+                out += std::format(",\"memory_target\":\"{:#x}\"", *r.memory_target);
+                if (!r.memory_section.empty()) {
+                    out += std::format(",\"memory_section\":\"{}\"",
+                                       json_escape(r.memory_section));
+                }
+            } else {
+                out += ",\"memory_target\":null";
+            }
+            out += "}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("guard-map\t{:#x}\t{}\tguards={}", win->start, win->label, rows.size());
+    for (const auto& r : rows) {
+        const std::string taken = r.taken ? std::format("{:#x}", *r.taken) : "-";
+        const std::string cond = r.condition_text.empty() ? "-" : r.condition_text;
+        const std::string target = r.memory_target ? std::format("{:#x}", *r.memory_target) : "-";
+        const std::string section = r.memory_section.empty() ? "-" : r.memory_section;
+        std::println("{:#x}\t{}\t{:#x}\t{}\t{}\t{:#x}\t{}\t{}",
+                     r.condition_site, cond, r.branch_site, r.branch_text,
+                     taken, r.fallthrough, target, section);
+    }
+    return EXIT_SUCCESS;
+}
+
+struct StateLifetimeSite {
+    DataXref xref;
+    std::string fn;
+    u64 fn_off = 0;
+    std::string disasm;
+    std::string shape;
+};
+
+int run_state_lifetime(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("state_lifetime.total");
+    auto va = parse_cli_addr(args.state_lifetime);
+    if (!va) {
+        std::println(stderr, "ember: --state-lifetime: bad address '{}'",
+                     args.state_lifetime);
+        return EXIT_FAILURE;
+    }
+
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return report(dec_r.error());
+    const Decoder& dec = **dec_r;
+
+    std::vector<StateLifetimeSite> sites;
+    std::vector<BranchOnSite> branches;
+    const auto xrefs = compute_data_xrefs_to(b, *va);
+    StateFnIndex fn_index(b);
+    for (const auto& xr : xrefs) {
+        StateLifetimeSite s;
+        s.xref = xr;
+        if (auto cf = fn_index.find(b, xr.from_pc); cf) {
+            s.fn = cf->name;
+            s.fn_off = cf->offset_within;
+        }
+        s.disasm = state_site_disasm(b, xr.from_pc);
+        s.shape = state_site_shape(xr.kind, s.disasm);
+        sites.push_back(std::move(s));
+        if (auto br = analyze_branch_on_site(b, dec, fn_index, xr); br) {
+            branches.push_back(std::move(*br));
+        }
+    }
+
+    auto count_kind = [&](DataXrefKind k) {
+        return std::ranges::count_if(sites, [&](const StateLifetimeSite& s) {
+            return s.xref.kind == k;
+        });
+    };
+    const auto reads = count_kind(DataXrefKind::Read);
+    const auto writes = count_kind(DataXrefKind::Write);
+    const auto leas = count_kind(DataXrefKind::Lea);
+    const auto codeptrs = count_kind(DataXrefKind::CodePtr);
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"state\":\"{:#x}\",\"summary\":{{\"reads\":{},\"writes\":{},"
+            "\"lea\":{},\"code_ptr\":{},\"branches\":{}}},\"sites\":[",
+            *va, reads, writes, leas, codeptrs, branches.size());
+        for (std::size_t i = 0; i < sites.size(); ++i) {
+            if (i) out += ',';
+            const auto& s = sites[i];
+            out += std::format(
+                "{{\"site\":\"{:#x}\",\"kind\":\"{}\",\"shape\":\"{}\"",
+                s.xref.from_pc, data_xref_kind_name(s.xref.kind),
+                json_escape(s.shape));
+            if (!s.fn.empty()) {
+                out += std::format(",\"fn\":\"{}\",\"fn_offset\":\"{:#x}\"",
+                                   json_escape(s.fn), s.fn_off);
+            }
+            if (!s.disasm.empty()) {
+                out += std::format(",\"disasm\":\"{}\"", json_escape(s.disasm));
+            }
+            out += "}";
+        }
+        out += "],\"branches\":[";
+        for (std::size_t i = 0; i < branches.size(); ++i) {
+            if (i) out += ',';
+            const auto& r = branches[i];
+            out += std::format(
+                "{{\"site\":\"{:#x}\",\"read\":\"{}\",\"branch_site\":\"{:#x}\","
+                "\"branch\":\"{}\",\"fallthrough\":\"{:#x}\"",
+                r.xref.from_pc, json_escape(r.read_text), r.branch_site,
+                json_escape(r.branch_text), r.fallthrough);
+            if (r.taken) out += std::format(",\"taken\":\"{:#x}\"", *r.taken);
+            else         out += ",\"taken\":null";
+            if (!r.fn.empty()) {
+                out += std::format(",\"fn\":\"{}\",\"fn_offset\":\"{:#x}\"",
+                                   json_escape(r.fn), r.fn_off);
+            }
+            out += "}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("state-lifetime\t{:#x}\treads={}\twrites={}\tbranches={}\tlea={}\tcode-ptr={}",
+                 *va, reads, writes, branches.size(), leas, codeptrs);
+    std::println("writers");
+    for (const auto& s : sites) {
+        if (s.xref.kind != DataXrefKind::Write) continue;
+        const std::string fn = s.fn.empty() ? "-" : std::format("{}+{:#x}", s.fn, s.fn_off);
+        std::println("{:#x}\t{}\t{}\t{}", s.xref.from_pc, s.shape, fn, s.disasm);
+    }
+    std::println("branch-gates");
+    for (const auto& r : branches) {
+        const std::string fn = r.fn.empty() ? "-" : std::format("{}+{:#x}", r.fn, r.fn_off);
+        const std::string taken = r.taken ? std::format("{:#x}", *r.taken) : "-";
+        std::println("{:#x}\t{}\t{}\t{:#x}\t{}\t{}\t{:#x}",
+                     r.xref.from_pc, fn, r.read_text, r.branch_site,
+                     r.branch_text, taken, r.fallthrough);
+    }
+    std::println("readers");
+    for (const auto& s : sites) {
+        if (s.xref.kind != DataXrefKind::Read) continue;
+        const std::string fn = s.fn.empty() ? "-" : std::format("{}+{:#x}", s.fn, s.fn_off);
+        std::println("{:#x}\t{}\t{}\t{}", s.xref.from_pc, s.shape, fn, s.disasm);
+    }
+    if (leas || codeptrs) {
+        std::println("address-taken");
+        for (const auto& s : sites) {
+            if (s.xref.kind != DataXrefKind::Lea && s.xref.kind != DataXrefKind::CodePtr) continue;
+            const std::string fn = s.fn.empty() ? "-" : std::format("{}+{:#x}", s.fn, s.fn_off);
+            std::println("{:#x}\t{}\t{}\t{}", s.xref.from_pc,
+                         data_xref_kind_name(s.xref.kind), fn, s.disasm);
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
+struct SideEffectWrite {
+    addr_t site = 0;
+    addr_t target = 0;
+    std::string section;
+    std::string shape;
+    std::string text;
+};
+
+struct SideEffectScan {
+    std::vector<SideEffectWrite> writes;
+    bool returns = false;
+};
+
+[[nodiscard]] bool instruction_writes_memory(const Instruction& insn,
+                                             std::size_t op_idx) noexcept {
+    if (op_idx != 0) return false;
+    if (insn.mnemonic == Mnemonic::Cmp || insn.mnemonic == Mnemonic::Test ||
+        insn.mnemonic == Mnemonic::Lea || insn.mnemonic == Mnemonic::Call ||
+        insn.mnemonic == Mnemonic::Jmp) {
+        return false;
+    }
+    return insn.operands[op_idx].kind == Operand::Kind::Memory;
+}
+
+[[nodiscard]] SideEffectScan
+scan_side_effects(const Binary& b, addr_t start, u64 size) {
+    SideEffectScan scan;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return scan;
+    const Decoder& dec = **dec_r;
+
+    auto bytes = b.bytes_at(start);
+    if (bytes.empty()) return scan;
+    if (size != 0) {
+        bytes = bytes.first(std::min<std::size_t>(bytes.size(), static_cast<std::size_t>(size)));
+    } else {
+        bytes = bytes.first(std::min<std::size_t>(bytes.size(), 4096));
+    }
+
+    addr_t ip = start;
+    std::size_t off = 0;
+    while (off < bytes.size()) {
+        auto decoded = dec.decode(bytes.subspan(off), ip);
+        if (!decoded) {
+            ++off;
+            ++ip;
+            continue;
+        }
+        const Instruction insn = *decoded;
+        if (insn.mnemonic == Mnemonic::Ret || insn.mnemonic == Mnemonic::A64Ret) {
+            scan.returns = true;
+        }
+        for (std::size_t i = 0; i < insn.num_operands; ++i) {
+            if (!instruction_writes_memory(insn, i)) continue;
+            auto target = cli_memory_operand_target(insn, insn.operands[i]);
+            if (!target || !address_is_mapped(b, *target)) continue;
+            SideEffectWrite w;
+            w.site = insn.address;
+            w.target = *target;
+            w.section = std::string(section_name_containing(b, *target));
+            w.text = format_instruction(insn);
+            w.shape = state_site_shape(DataXrefKind::Write, w.text);
+            scan.writes.push_back(std::move(w));
+        }
+        off += insn.length;
+        ip += insn.length;
+    }
+    std::ranges::sort(scan.writes, {}, [](const SideEffectWrite& w) {
+        return std::pair{w.site, w.target};
+    });
+    scan.writes.erase(std::unique(scan.writes.begin(), scan.writes.end(),
+        [](const SideEffectWrite& lhs, const SideEffectWrite& rhs) {
+            return lhs.site == rhs.site && lhs.target == rhs.target;
+        }), scan.writes.end());
+    return scan;
+}
+
+int run_side_effects(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("side_effects.total");
+    const Annotations ann = load_annotations_quiet(args);
+    auto win = resolve_function(b, args.side_effects, &ann);
+    if (!win) {
+        std::println(stderr, "ember: --side-effects: could not resolve '{}'",
+                     args.side_effects);
+        return EXIT_FAILURE;
+    }
+    const auto scan = scan_side_effects(b, win->start, win->size);
+    const auto calls = compute_classified_callees(b, win->start);
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"function\":{{\"entry\":\"{:#x}\",\"size\":\"{:#x}\","
+            "\"name\":\"{}\"}},\"summary\":{{\"writes\":{},\"calls\":{},"
+            "\"returns\":{}}},\"writes\":[",
+            win->start, win->size, json_escape(win->label),
+            scan.writes.size(), calls.size(), scan.returns ? "true" : "false");
+        for (std::size_t i = 0; i < scan.writes.size(); ++i) {
+            if (i) out += ',';
+            const auto& w = scan.writes[i];
+            out += std::format(
+                "{{\"site\":\"{:#x}\",\"target\":\"{:#x}\",\"section\":\"{}\","
+                "\"shape\":\"{}\",\"instruction\":\"{}\"}}",
+                w.site, w.target, json_escape(w.section), json_escape(w.shape),
+                json_escape(w.text));
+        }
+        out += "],\"calls\":[";
+        for (std::size_t i = 0; i < calls.size(); ++i) {
+            if (i) out += ',';
+            out += std::format("{{\"target\":\"{:#x}\",\"kind\":\"{}\"}}",
+                               calls[i].target, callee_kind_name(calls[i].kind));
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("side-effects\t{:#x}\t{}\twrites={}\tcalls={}\treturns={}",
+                 win->start, win->label, scan.writes.size(), calls.size(),
+                 scan.returns ? "yes" : "no");
+    std::println("writes");
+    for (const auto& w : scan.writes) {
+        const std::string section = w.section.empty() ? "-" : w.section;
+        std::println("{:#x}\t{:#x}\t{}\t{}\t{}",
+                     w.site, w.target, section, w.shape, w.text);
+    }
+    std::println("calls");
+    for (const auto& c : calls) {
+        std::println("{:#x}\t{}", c.target, callee_kind_name(c.kind));
+    }
+    return EXIT_SUCCESS;
+}
+
+struct ObjectFieldUse {
+    i64 offset = 0;
+    addr_t site = 0;
+    std::string role;
+    std::string text;
+};
+
+struct ObjectFieldSummary {
+    i64 offset = 0;
+    bool read = false;
+    bool write = false;
+    bool branch_gate = false;
+    bool call_target = false;
+    bool address_taken = false;
+    std::vector<ObjectFieldUse> uses;
+};
+
+[[nodiscard]] std::string signed_hex(i64 v) {
+    if (v < 0) return std::format("-{:#x}", static_cast<u64>(-v));
+    return std::format("+{:#x}", static_cast<u64>(v));
+}
+
+[[nodiscard]] Reg inferred_this_reg(const Binary& b) noexcept {
+    const Abi abi = abi_for(b.format(), b.arch(), b.endian());
+    auto regs = int_arg_regs(abi);
+    if (!regs.empty()) return regs.front();
+    if (b.arch() == Arch::X86_64) return b.format() == Format::Pe ? Reg::Rcx : Reg::Rdi;
+    if (b.arch() == Arch::Arm64) return Reg::X0;
+    return Reg::None;
+}
+
+[[nodiscard]] bool mem_uses_base(const Operand& op, Reg base) noexcept {
+    return op.kind == Operand::Kind::Memory &&
+           op.mem.base == base &&
+           op.mem.index == Reg::None;
+}
+
+[[nodiscard]] std::string object_role_for_operand(const Instruction& insn,
+                                                  std::size_t op_idx) {
+    if (insn.mnemonic == Mnemonic::Call || insn.mnemonic == Mnemonic::Jmp) {
+        return "call-target";
+    }
+    if (insn.mnemonic == Mnemonic::Cmp || insn.mnemonic == Mnemonic::Test) {
+        return "branch-gate";
+    }
+    if (insn.mnemonic == Mnemonic::Lea) return "address-taken";
+    if (instruction_writes_memory(insn, op_idx)) return "write";
+    return "read";
+}
+
+[[nodiscard]] std::map<i64, ObjectFieldSummary>
+scan_object_roles(const Binary& b, addr_t start, u64 size, Reg this_reg) {
+    std::map<i64, ObjectFieldSummary> fields;
+    if (this_reg == Reg::None) return fields;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return fields;
+    const Decoder& dec = **dec_r;
+
+    auto bytes = b.bytes_at(start);
+    if (bytes.empty()) return fields;
+    if (size != 0) {
+        bytes = bytes.first(std::min<std::size_t>(bytes.size(), static_cast<std::size_t>(size)));
+    } else {
+        bytes = bytes.first(std::min<std::size_t>(bytes.size(), 4096));
+    }
+
+    addr_t ip = start;
+    std::size_t off = 0;
+    while (off < bytes.size()) {
+        auto decoded = dec.decode(bytes.subspan(off), ip);
+        if (!decoded) {
+            ++off;
+            ++ip;
+            continue;
+        }
+        const Instruction insn = *decoded;
+        for (std::size_t i = 0; i < insn.num_operands; ++i) {
+            const Operand& op = insn.operands[i];
+            if (!mem_uses_base(op, this_reg)) continue;
+            const i64 field_off = op.mem.disp;
+            std::string role = object_role_for_operand(insn, i);
+            auto& f = fields[field_off];
+            f.offset = field_off;
+            if (role == "read") f.read = true;
+            else if (role == "write") f.write = true;
+            else if (role == "branch-gate") f.branch_gate = true;
+            else if (role == "call-target") f.call_target = true;
+            else if (role == "address-taken") f.address_taken = true;
+            f.uses.push_back(ObjectFieldUse{
+                .offset = field_off,
+                .site = insn.address,
+                .role = std::move(role),
+                .text = format_instruction(insn),
+            });
+        }
+        off += insn.length;
+        ip += insn.length;
+    }
+    return fields;
+}
+
+[[nodiscard]] std::string object_roles_csv(const ObjectFieldSummary& f) {
+    std::string out;
+    auto add = [&](std::string_view s) {
+        if (!out.empty()) out.push_back(',');
+        out += s;
+    };
+    if (f.read) add("read");
+    if (f.write) add("write");
+    if (f.branch_gate) add("branch-gate");
+    if (f.call_target) add("call-target");
+    if (f.address_taken) add("address-taken");
+    if (out.empty()) out = "unknown";
+    return out;
+}
+
+int run_object_roles(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("object_roles.total");
+    const Annotations ann = load_annotations_quiet(args);
+    auto win = resolve_function(b, args.object_roles, &ann);
+    if (!win) {
+        std::println(stderr, "ember: --object-roles: could not resolve '{}'",
+                     args.object_roles);
+        return EXIT_FAILURE;
+    }
+    const Reg this_reg = inferred_this_reg(b);
+    const auto fields = scan_object_roles(b, win->start, win->size, this_reg);
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"function\":{{\"entry\":\"{:#x}\",\"size\":\"{:#x}\","
+            "\"name\":\"{}\"}},\"this_reg\":\"{}\",\"fields\":[",
+            win->start, win->size, json_escape(win->label),
+            json_escape(std::string(reg_name(this_reg))));
+        bool first_field = true;
+        for (const auto& [_, f] : fields) {
+            if (!first_field) out += ',';
+            first_field = false;
+            out += std::format("{{\"offset\":\"{}\",\"roles\":\"{}\",\"uses\":[",
+                               signed_hex(f.offset), object_roles_csv(f));
+            for (std::size_t i = 0; i < f.uses.size(); ++i) {
+                if (i) out += ',';
+                const auto& u = f.uses[i];
+                out += std::format(
+                    "{{\"site\":\"{:#x}\",\"role\":\"{}\",\"instruction\":\"{}\"}}",
+                    u.site, json_escape(u.role), json_escape(u.text));
+            }
+            out += "]}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("object-roles\t{:#x}\t{}\tthis-reg={}\tfields={}",
+                 win->start, win->label, reg_name(this_reg), fields.size());
+    std::println("fields");
+    for (const auto& [_, f] : fields) {
+        std::println("{}\t{}\tuses={}", signed_hex(f.offset),
+                     object_roles_csv(f), f.uses.size());
+        for (const auto& u : f.uses) {
+            std::println("{:#x}\t{}\t{}", u.site, u.role, u.text);
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
+[[nodiscard]] std::string pointer_classification(const Binary& b, addr_t v) {
+    if (v == 0) return "null";
+    if (addr_in_executable_section_cli(b, v)) return "code";
+    if (auto s = read_c_string(b, v); s) return "string";
+    if (address_is_mapped(b, v)) return "data";
+    return "unmapped";
+}
+
+int run_explain_address(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("explain_address.total");
+    auto va = parse_cli_addr(args.explain_address);
+    if (!va) {
+        std::println(stderr, "ember: --explain-address: bad address '{}'",
+                     args.explain_address);
+        return EXIT_FAILURE;
+    }
+
+    const bool mapped = address_is_mapped(b, *va);
+    const bool is_code = addr_in_executable_section_cli(b, *va);
+    const auto section = section_name_containing(b, *va);
+    const auto fn = containing_function(b, *va);
+    const auto ptr = is_code ? std::optional<addr_t>{} : read_pointer_value(b, *va);
+    const auto xrefs = compute_data_xrefs_to(b, *va);
+    const auto direct_callers = is_code ? compute_callers_to_fast(b, *va)
+                                        : std::vector<addr_t>{};
+    auto count_kind = [&](DataXrefKind k) {
+        return std::ranges::count_if(xrefs, [&](const DataXref& xr) {
+            return xr.kind == k;
+        });
+    };
+    const auto reads = count_kind(DataXrefKind::Read);
+    const auto writes = count_kind(DataXrefKind::Write);
+    const auto leas = count_kind(DataXrefKind::Lea);
+    const auto codeptrs = count_kind(DataXrefKind::CodePtr);
+
+    std::string kind = "unknown";
+    if (is_code) {
+        kind = fn && fn->entry == *va ? "function" : "code";
+    } else if (ptr) {
+        kind = "pointer";
+    } else if (mapped && (reads || writes || leas || codeptrs)) {
+        kind = "state";
+    } else if (mapped) {
+        kind = "data";
+    }
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"address\":\"{:#x}\",\"mapped\":{},\"kind\":\"{}\"",
+            *va, mapped ? "true" : "false", json_escape(kind));
+        if (!section.empty()) {
+            out += std::format(",\"section\":\"{}\"", json_escape(std::string(section)));
+        }
+        if (fn) {
+            out += std::format(
+                ",\"containing_function\":{{\"entry\":\"{:#x}\",\"size\":\"{:#x}\","
+                "\"name\":\"{}\",\"offset\":\"{:#x}\"}}",
+                fn->entry, fn->size, json_escape(fn->name), fn->offset_within);
+        } else {
+            out += ",\"containing_function\":null";
+        }
+        if (ptr) {
+            out += std::format(
+                ",\"pointer\":{{\"value\":\"{:#x}\",\"classification\":\"{}\"}}",
+                *ptr, pointer_classification(b, *ptr));
+        } else {
+            out += ",\"pointer\":null";
+        }
+        out += std::format(
+            ",\"state_summary\":{{\"reads\":{},\"writes\":{},\"lea\":{},\"code_ptr\":{}}}",
+            reads, writes, leas, codeptrs);
+        out += std::format(
+            ",\"refs_summary\":{{\"direct\":{},\"code_ptr\":{},\"lea\":{}}}",
+            direct_callers.size(), codeptrs, leas);
+        if (is_code) {
+            auto probe = decode_disasm_probe(b, *va, 8);
+            if (probe) {
+                out += std::format(
+                    ",\"patch_summary\":{{\"recommended_steal_len\":{},"
+                    "\"needs_relocation\":{},\"first_basic_block_end\":\"{:#x}\","
+                    "\"safe_absolute_jump_trampoline\":{}}}",
+                    probe->steal_len,
+                    probe->needs_relocation ? "true" : "false",
+                    probe->first_bb_end,
+                    probe->safe_abs_trampoline ? "true" : "false");
+            }
+        }
+        out += "}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("address\t{:#x}", *va);
+    std::println("mapped\t{}", mapped ? "yes" : "no");
+    if (!section.empty()) std::println("section\t{}", section);
+    std::println("kind\t{}", kind);
+    if (fn) {
+        std::println("function\t{:#x}\t{:#x}\t{}\t+{:#x}",
+                     fn->entry, fn->size, fn->name, fn->offset_within);
+    }
+    if (ptr) {
+        std::println("pointer\t{:#x}\t{}", *ptr, pointer_classification(b, *ptr));
+    }
+    std::println("state\treads={}\twrites={}\tlea={}\tcode-ptr={}",
+                 reads, writes, leas, codeptrs);
+    std::println("refs\tdirect={}\tcode-ptr={}\tlea={}",
+                 direct_callers.size(), codeptrs, leas);
+    if (is_code) {
+        auto probe = decode_disasm_probe(b, *va, 8);
+        if (probe) {
+            std::println("patch\tsteal_len={}\tneeds_relocation={}\tfirst_bb_end={:#x}\tsafe_abs_jump={}",
+                         probe->steal_len,
+                         probe->needs_relocation ? "yes" : "no",
+                         probe->first_bb_end,
+                         probe->safe_abs_trampoline ? "yes" : "no");
+        }
+        if (auto dis = format_disasm_range(b, *va, *va + 32); dis) {
+            std::string_view sv(*dis);
+            if (const auto nl = sv.find('\n'); nl != std::string_view::npos) {
+                sv = sv.substr(0, nl);
+            }
+            std::println("disasm\t{}", sv);
+        }
     }
     return EXIT_SUCCESS;
 }
@@ -3020,6 +4297,94 @@ int run_callees_class(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
+[[nodiscard]] std::string patch_strategy(const DisasmProbe& p) {
+    if (p.steal_len < 14) return "insufficient-bytes";
+    if (p.safe_abs_trampoline) return "absolute-jump-ok";
+    if (p.needs_relocation) return "copy-with-relocation";
+    return "manual-review";
+}
+
+int run_patch_plan(const Args& args, const Binary& b) {
+    auto va = parse_cli_addr(args.patch_plan);
+    if (!va) {
+        std::println(stderr, "ember: --patch-plan: bad address '{}'", args.patch_plan);
+        return EXIT_FAILURE;
+    }
+    if (!addr_in_executable_section_cli(b, *va)) {
+        std::println(stderr, "ember: --patch-plan: {:#x} is not in executable code", *va);
+        return EXIT_FAILURE;
+    }
+    auto probe = decode_disasm_probe(b, *va, 12);
+    if (!probe) return report(probe.error());
+    const auto& p = *probe;
+
+    auto hazard_json = [&](const Instruction& insn) {
+        std::string bytes;
+        for (u8 j = 0; j < insn.length; ++j) {
+            if (j) bytes.push_back(' ');
+            std::format_to(std::back_inserter(bytes), "{:02x}",
+                           std::to_integer<unsigned>(insn.raw_bytes[j]));
+        }
+        std::string out = std::format(
+            "{{\"va\":\"{:#x}\",\"bytes\":\"{}\",\"text\":\"{}\"",
+            insn.address, bytes, json_escape(format_instruction(insn)));
+        if (auto bt = branch_target(insn); bt) {
+            out += std::format(",\"branch_target\":\"{:#x}\"", *bt);
+        }
+        if (auto rt = cli_rip_relative_target(insn); rt) {
+            out += std::format(",\"rip_relative_target\":\"{:#x}\"", *rt);
+        }
+        out += std::format(
+            ",\"rip_relative\":{},\"short_branch\":{},\"rel32_branch_or_call\":{}}}",
+            cli_rip_relative_target(insn) ? "true" : "false",
+            is_short_relative_branch(insn) ? "true" : "false",
+            is_rel32_call_or_jump(insn) ? "true" : "false");
+        return out;
+    };
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"va\":\"{:#x}\",\"recommended_steal_len\":{},"
+            "\"needs_relocation\":{},\"first_basic_block_end\":\"{:#x}\","
+            "\"safe_absolute_jump_trampoline\":{},\"strategy\":\"{}\","
+            "\"instructions\":[",
+            *va, p.steal_len,
+            p.needs_relocation ? "true" : "false",
+            p.first_bb_end,
+            p.safe_abs_trampoline ? "true" : "false",
+            patch_strategy(p));
+        for (std::size_t i = 0; i < p.insns.size(); ++i) {
+            if (i) out += ',';
+            out += hazard_json(p.insns[i]);
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("patch-plan\t{:#x}", *va);
+    std::println("strategy\t{}", patch_strategy(p));
+    std::println("steal_len\t{}", p.steal_len);
+    std::println("needs_relocation\t{}", p.needs_relocation ? "yes" : "no");
+    std::println("first_basic_block_end\t{:#x}", p.first_bb_end);
+    std::println("safe_absolute_jump_trampoline\t{}",
+                 p.safe_abs_trampoline ? "yes" : "no");
+    std::println("instructions");
+    for (const auto& insn : p.insns) {
+        std::vector<std::string> hazards;
+        if (cli_rip_relative_target(insn)) hazards.emplace_back("rip-relative");
+        if (is_short_relative_branch(insn)) hazards.emplace_back("short-branch");
+        if (is_rel32_call_or_jump(insn)) hazards.emplace_back("rel32-branch-or-call");
+        std::string hz = hazards.empty() ? "-" : hazards.front();
+        for (std::size_t i = 1; i < hazards.size(); ++i) {
+            hz += ",";
+            hz += hazards[i];
+        }
+        std::println("{:#x}\t{}\t{}", insn.address, hz, format_instruction(insn));
+    }
+    return EXIT_SUCCESS;
+}
+
 int run_disasm_at(const Args& args, const Binary& b) {
     auto va = parse_cli_addr(args.disasm_at);
     if (!va) {
@@ -3029,6 +4394,11 @@ int run_disasm_at(const Args& args, const Binary& b) {
     std::size_t count = 32;
     if (!parse_disasm_count(args.disasm_count, count, "--disasm-at")) {
         return EXIT_FAILURE;
+    }
+    if (args.json) {
+        const std::string out = disasm_probe_json(b, static_cast<addr_t>(*va), count);
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
     }
     // 8 bytes/insn is the typical x86-64 average; ~15 bytes is the max.
     const addr_t end = static_cast<addr_t>(*va) +
@@ -3050,6 +4420,7 @@ int run_disasm_at(const Args& args, const Binary& b) {
                 static_cast<addr_t>(*va));
         }
     }
+    out += disasm_probe_summary(b, static_cast<addr_t>(*va), count);
     std::size_t line_start = 0;
     for (std::size_t i = 0; i <= rv->size(); ++i) {
         if (i == rv->size() || (*rv)[i] == '\n') {
@@ -3264,16 +4635,45 @@ struct CascadeFn {
     std::string name;
 };
 
+enum class CascadePolicy {
+    BottomUpV1,
+};
+
+struct CascadeFeatures {
+    u64 size = 0;
+    std::size_t known_callees = 0;
+    std::size_t total_callees = 0;
+    std::size_t caller_count = 0;
+    std::size_t unresolved_callee_count = 0;
+    double known_callee_ratio = 0.0;
+    bool is_leaf = false;
+};
+
 struct CascadeTarget {
     addr_t addr = 0;
-    u64    size = 0;
-    double ratio = 0.0;
-    std::size_t callees = 0;
-    std::size_t callers = 0;
-    std::size_t unresolved = 0;
+    CascadeFeatures features;
     double score = 0.0;
     std::vector<std::string> reasons;
 };
+
+[[nodiscard]] constexpr std::string_view cascade_policy_name(CascadePolicy policy) {
+    switch (policy) {
+    case CascadePolicy::BottomUpV1: return "bottom_up_v1";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] double score_cascade_target(const CascadeFeatures& f,
+                                          CascadePolicy policy = CascadePolicy::BottomUpV1) {
+    switch (policy) {
+    case CascadePolicy::BottomUpV1:
+        return f.known_callee_ratio * 100.0
+             + static_cast<double>(f.caller_count) * 5.0
+             + static_cast<double>(f.unresolved_callee_count) * 8.0
+             + std::log2(static_cast<double>(std::max<u64>(1, f.size)));
+    }
+    return 0.0;
+}
 
 [[nodiscard]] addr_t cascade_entry_for(const Binary& b, addr_t a) {
     if (auto cf = containing_function(b, a); cf) return cf->entry;
@@ -3425,6 +4825,7 @@ int run_cascade_plan(const Args& args, const Binary& b) {
 
     const std::string scope_label = args.cascade_scope.empty() ? "all" : args.cascade_scope;
     const auto include = select_cascade_scope(b, scope_label, fns, callees, callers);
+    constexpr CascadePolicy policy = CascadePolicy::BottomUpV1;
 
     std::vector<CascadeTarget> eligible;
     eligible.reserve(fns.size());
@@ -3449,17 +4850,19 @@ int run_cascade_plan(const Args& args, const Binary& b) {
         if (ratio < args.cascade_eligibility_ratio) continue;
 
         const std::size_t caller_count = callers.contains(f.addr) ? callers[f.addr].size() : 0;
+        CascadeFeatures features;
+        features.size = f.size;
+        features.known_callees = known;
+        features.total_callees = total;
+        features.caller_count = caller_count;
+        features.unresolved_callee_count = unresolved;
+        features.known_callee_ratio = ratio;
+        features.is_leaf = total == 0;
+
         CascadeTarget t;
         t.addr = f.addr;
-        t.size = f.size;
-        t.ratio = ratio;
-        t.callees = total;
-        t.callers = caller_count;
-        t.unresolved = unresolved;
-        t.score = ratio * 100.0
-                + static_cast<double>(caller_count) * 5.0
-                + static_cast<double>(unresolved) * 8.0
-                + std::log2(static_cast<double>(std::max<u64>(1, f.size)));
+        t.features = features;
+        t.score = score_cascade_target(features, policy);
         if (ratio >= 1.0) {
             t.reasons.push_back("all callees known");
         } else {
@@ -3472,13 +4875,16 @@ int run_cascade_plan(const Args& args, const Binary& b) {
         if (unresolved > 0) {
             t.reasons.push_back(std::format("{} unresolved callee{}", unresolved, unresolved == 1 ? "" : "s"));
         }
-        if (f.size > 0) t.reasons.push_back(std::format("{} bytes", f.size));
+        if (features.size > 0) t.reasons.push_back(std::format("{} bytes", features.size));
         eligible.push_back(std::move(t));
     }
 
     std::sort(eligible.begin(), eligible.end(), [](const auto& lhs, const auto& rhs) {
-        if (lhs.ratio != rhs.ratio) return lhs.ratio > rhs.ratio;
-        if (lhs.size != rhs.size) return lhs.size > rhs.size;
+        if (lhs.score != rhs.score) return lhs.score > rhs.score;
+        if (lhs.features.known_callee_ratio != rhs.features.known_callee_ratio) {
+            return lhs.features.known_callee_ratio > rhs.features.known_callee_ratio;
+        }
+        if (lhs.features.size != rhs.features.size) return lhs.features.size > rhs.features.size;
         return lhs.addr < rhs.addr;
     });
 
@@ -3488,16 +4894,22 @@ int run_cascade_plan(const Args& args, const Binary& b) {
     if (args.json) {
         std::string out;
         std::format_to(std::back_inserter(out),
-            "{{\"scope\":\"{}\",\"candidates\":{},\"eligible\":{},\"selected\":{},\"top\":[",
-            json_escape(scope_label), include.size(), eligible.size(), selected);
+            "{{\"scope\":\"{}\",\"policy\":\"{}\",\"candidates\":{},\"eligible\":{},\"selected\":{},\"top\":[",
+            json_escape(scope_label), cascade_policy_name(policy), include.size(), eligible.size(), selected);
         for (std::size_t i = 0; i < selected; ++i) {
             const auto& t = eligible[i];
+            const auto& f = t.features;
             if (i) out.push_back(',');
             std::format_to(std::back_inserter(out),
                 "{{\"addr\":\"{:#x}\",\"score\":{:.3f},\"ratio\":{:.3f},"
                 "\"callees\":{},\"callers\":{},\"unresolved_callees\":{},"
-                "\"size\":{},\"reasons\":[",
-                t.addr, t.score, t.ratio, t.callees, t.callers, t.unresolved, t.size);
+                "\"size\":{},\"features\":{{\"known_callee_ratio\":{:.3f},"
+                "\"known_callees\":{},\"total_callees\":{},\"caller_count\":{},"
+                "\"unresolved_callee_count\":{},\"size\":{},\"is_leaf\":{}}},\"reasons\":[",
+                t.addr, t.score, f.known_callee_ratio, f.total_callees, f.caller_count,
+                f.unresolved_callee_count, f.size, f.known_callee_ratio, f.known_callees,
+                f.total_callees, f.caller_count, f.unresolved_callee_count, f.size,
+                f.is_leaf ? "true" : "false");
             for (std::size_t j = 0; j < t.reasons.size(); ++j) {
                 if (j) out.push_back(',');
                 std::format_to(std::back_inserter(out), "\"{}\"", json_escape(t.reasons[j]));
@@ -3517,6 +4929,7 @@ int run_cascade_plan(const Args& args, const Binary& b) {
     }
     for (std::size_t i = 0; i < selected; ++i) {
         const auto& t = eligible[i];
+        const auto& f = t.features;
         std::string reasons;
         for (std::size_t j = 0; j < t.reasons.size(); ++j) {
             if (j) reasons += ", ";
@@ -3524,8 +4937,8 @@ int run_cascade_plan(const Args& args, const Binary& b) {
         }
         std::println("  {:>2}. {:#x} score={:.1f} known={:>3}% callers={} callees={} unresolved={} - {}",
                      i + 1, t.addr, t.score,
-                     static_cast<int>(std::lround(t.ratio * 100.0)),
-                     t.callers, t.callees, t.unresolved, reasons);
+                     static_cast<int>(std::lround(f.known_callee_ratio * 100.0)),
+                     f.caller_count, f.total_callees, f.unresolved_callee_count, reasons);
     }
     return EXIT_SUCCESS;
 }
@@ -4434,6 +5847,78 @@ struct Request {
 };
 
 [[nodiscard]] std::optional<Request> parse_request(std::string_view line) {
+    auto trim = [](std::string_view s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+        return s;
+    };
+    auto parse_json_string = [](std::string_view s, std::size_t& i) -> std::optional<std::string> {
+        if (i >= s.size() || s[i] != '"') return std::nullopt;
+        ++i;
+        std::string out;
+        while (i < s.size()) {
+            char c = s[i++];
+            if (c == '"') return out;
+            if (c != '\\') {
+                out.push_back(c);
+                continue;
+            }
+            if (i >= s.size()) return std::nullopt;
+            char e = s[i++];
+            switch (e) {
+                case '"': out.push_back('"'); break;
+                case '\\': out.push_back('\\'); break;
+                case '/': out.push_back('/'); break;
+                case 'b': out.push_back('\b'); break;
+                case 'f': out.push_back('\f'); break;
+                case 'n': out.push_back('\n'); break;
+                case 'r': out.push_back('\r'); break;
+                case 't': out.push_back('\t'); break;
+                default: out.push_back(e); break;
+            }
+        }
+        return std::nullopt;
+    };
+
+    line = trim(line);
+    if (!line.empty() && line.front() == '{') {
+        Request r;
+        std::size_t i = 1;
+        while (i < line.size()) {
+            while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+            if (i < line.size() && line[i] == '}') break;
+            auto key = parse_json_string(line, i);
+            if (!key) return std::nullopt;
+            while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+            if (i >= line.size() || line[i] != ':') return std::nullopt;
+            ++i;
+            while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+            std::string val;
+            if (i < line.size() && line[i] == '"') {
+                auto sv = parse_json_string(line, i);
+                if (!sv) return std::nullopt;
+                val = std::move(*sv);
+            } else {
+                std::size_t v = i;
+                while (i < line.size() && line[i] != ',' && line[i] != '}') ++i;
+                val = std::string(trim(line.substr(v, i - v)));
+            }
+            if (*key == "method" || *key == "tool" || *key == "op") {
+                r.method = std::move(val);
+            } else {
+                r.params.emplace(std::move(*key), std::move(val));
+            }
+            while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+            if (i < line.size() && line[i] == ',') {
+                ++i;
+                continue;
+            }
+            if (i < line.size() && line[i] == '}') break;
+        }
+        if (r.method.empty()) return std::nullopt;
+        return r;
+    }
+
     Request r;
     std::size_t i = 0;
     while (i < line.size() && line[i] != '\t' && line[i] != '\n') ++i;
@@ -4645,6 +6130,11 @@ int run_serve(const Args& base, const Binary& b) {
     // CFG, then we group into a per-caller TSV. Once-per-daemon.
     std::optional<std::string> callees_all_cache;
 
+    // Refs cache: refs_to/refs_to_loose are frequent agent probes.
+    // Keep the whole-binary xrefs and data-xrefs products hot inside
+    // the serve process, plus loose-mode literal-slot scans by target.
+    RefsServeCache refs_cache;
+
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;
@@ -4652,6 +6142,39 @@ int run_serve(const Args& base, const Binary& b) {
         if (!req) { write_err("malformed request"); continue; }
 
         try {
+            if (req->method == "help" || req->method == "methods") {
+                write_ok(
+                    "ember-serve v1 accepts one request per line.\n"
+                    "Forms:\n"
+                    "  tab:  refs_to\\taddr=0x401000\\taccess=write\\tquick=true\\tjson=true\n"
+                    "  json: {\"method\":\"refs_to\",\"addr\":\"0x401000\",\"access\":\"write\",\"quick\":true,\"json\":true}\n"
+                    "Methods:\n"
+                    "  ping\n"
+                    "  help\n"
+                    "  refs_to addr [access=read|write|lea|code-ptr|all] [quick=true] [json=true]\n"
+                    "  refs_to_loose addr [access=read|write|lea|code-ptr|all] [quick=true] [json=true]\n"
+                    "  state_map addr [json=true]\n"
+                    "  branch_on addr [json=true]\n"
+                    "  guard_map fn [json=true]\n"
+                    "  state_lifetime addr [json=true]\n"
+                    "  side_effects fn [json=true]\n"
+                    "  object_roles fn [json=true]\n"
+                    "  explain_address addr [json=true]\n"
+                    "  patch_plan addr [json=true]\n"
+                    "  disasm_at addr [count=N] [json=true]\n"
+                    "  decompile fn\n"
+                    "  callees fn\n"
+                    "  containing_fn addr\n"
+                    "  describe_address addr\n"
+                    "  get_data addr [size=N]\n"
+                    "  functions\n"
+                    "  strings\n"
+                    "  strings_in_range start end\n"
+                    "  annotations\n"
+                    "  callees_all\n"
+                    "  recognize\n");
+                continue;
+            }
             if (req->method == "ping") {
                 write_ok("pong");
                 continue;
@@ -4684,14 +6207,135 @@ int run_serve(const Args& base, const Binary& b) {
             if (req->method == "refs_to") {
                 Args a = derive_args(base);
                 a.refs_to = req->params["addr"];
-                std::string body = capture_stdout([&]{ run_refs_to(a, b); });
+                if (auto it = req->params.find("access"); it != req->params.end()) {
+                    a.refs_access = it->second;
+                }
+                if (auto it = req->params.find("quick"); it != req->params.end()) {
+                    a.quick = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{
+                    auto va = parse_cli_addr(a.refs_to);
+                    if (!va) {
+                        std::println(stderr, "ember: --refs-to: bad address '{}'", a.refs_to);
+                        return;
+                    }
+                    const auto rows = gather_refs_to_rows(a, b, *va, &refs_cache);
+                    const std::string out = a.json
+                        ? format_ref_rows_json(rows)
+                        : format_ref_rows_tsv(rows, &b, a.verbose);
+                    std::fwrite(out.data(), 1, out.size(), stdout);
+                });
                 write_ok(body);
                 continue;
             }
             if (req->method == "refs_to_loose") {
                 Args a = derive_args(base);
                 a.refs_to_loose = req->params["addr"];
-                std::string body = capture_stdout([&]{ run_refs_to_loose(a, b); });
+                if (auto it = req->params.find("access"); it != req->params.end()) {
+                    a.refs_access = it->second;
+                }
+                if (auto it = req->params.find("quick"); it != req->params.end()) {
+                    a.quick = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_refs_to_loose_impl(a, b, &refs_cache); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "state_map") {
+                Args a = derive_args(base);
+                a.state_map = req->params["addr"];
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_state_map(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "branch_on") {
+                Args a = derive_args(base);
+                a.branch_on = req->params["addr"];
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_branch_on(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "guard_map") {
+                Args a = derive_args(base);
+                if (auto it = req->params.find("fn"); it != req->params.end()) {
+                    a.guard_map = it->second;
+                } else {
+                    a.guard_map = req->params["addr"];
+                }
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_guard_map(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "state_lifetime") {
+                Args a = derive_args(base);
+                a.state_lifetime = req->params["addr"];
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_state_lifetime(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "side_effects") {
+                Args a = derive_args(base);
+                if (auto it = req->params.find("fn"); it != req->params.end()) {
+                    a.side_effects = it->second;
+                } else {
+                    a.side_effects = req->params["addr"];
+                }
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_side_effects(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "object_roles") {
+                Args a = derive_args(base);
+                if (auto it = req->params.find("fn"); it != req->params.end()) {
+                    a.object_roles = it->second;
+                } else {
+                    a.object_roles = req->params["addr"];
+                }
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_object_roles(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "explain_address") {
+                Args a = derive_args(base);
+                a.explain_address = req->params["addr"];
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_explain_address(a, b); });
+                write_ok(body);
+                continue;
+            }
+            if (req->method == "patch_plan") {
+                Args a = derive_args(base);
+                a.patch_plan = req->params["addr"];
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{ run_patch_plan(a, b); });
                 write_ok(body);
                 continue;
             }
@@ -4717,6 +6361,9 @@ int run_serve(const Args& base, const Binary& b) {
                 Args a = derive_args(base);
                 a.disasm_at = req->params["addr"];
                 a.disasm_count = req->params["count"];
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
                 std::string body = capture_stdout([&]{ run_disasm_at(a, b); });
                 write_ok(body);
                 continue;

@@ -7,6 +7,9 @@
 
 namespace ember {
 
+class CfgBuilder;
+class Lifter;
+
 // Schema token for the fingerprint algorithm. Folded into the hash itself
 // AND into cache tags so bumping it invalidates on-disk TSVs without
 // breaking unrelated cache entries (xrefs, strings, arities).
@@ -46,5 +49,12 @@ struct FunctionFingerprint {
 
 [[nodiscard]] FunctionFingerprint
 compute_fingerprint(const Binary& b, addr_t fn_start);
+
+// Same fingerprint algorithm, but reuses the caller's per-thread CFG builder
+// and lifter. Hot path for whole-binary fingerprint dumps: constructing those
+// objects per function is pure setup churn.
+[[nodiscard]] FunctionFingerprint
+compute_fingerprint_with(const Binary& b, const CfgBuilder& cfg,
+                         const Lifter& lifter, addr_t fn_start);
 
 }  // namespace ember

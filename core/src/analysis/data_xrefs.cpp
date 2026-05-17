@@ -7,6 +7,7 @@
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/timing.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
@@ -77,6 +78,16 @@ void add_xref(std::map<addr_t, std::vector<DataXref>>& out,
     bucket.push_back({from, target, kind});
 }
 
+void add_xref_to(std::vector<DataXref>& out,
+                 addr_t from, addr_t target, DataXrefKind kind) {
+    if (!out.empty() && out.back().from_pc == from &&
+        out.back().to_addr == target) {
+        if (kind == DataXrefKind::Write) out.back().kind = kind;
+        return;
+    }
+    out.push_back({from, target, kind});
+}
+
 void scan_pointer_slots(const Binary& b, const SectionTable& sects,
                         std::map<addr_t, std::vector<DataXref>>& out) {
     const u8 width = (b.arch() == Arch::Ppc64 || b.arch() == Arch::X86_64) ? 8 : 4;
@@ -91,6 +102,25 @@ void scan_pointer_slots(const Binary& b, const SectionTable& sects,
                 ? DataXrefKind::CodePtr
                 : DataXrefKind::Lea;
             add_xref(out, s.vaddr + static_cast<addr_t>(off), target, kind);
+        }
+    }
+}
+
+void scan_pointer_slots_to(const Binary& b, const SectionTable& sects,
+                           addr_t want, std::vector<DataXref>& out) {
+    const u8 width = (b.arch() == Arch::Ppc64 || b.arch() == Arch::X86_64) ? 8 : 4;
+    for (const auto& s : b.sections()) {
+        if (!s.flags.allocated || s.flags.executable || s.data.size() < width) continue;
+        for (std::size_t off = 0; off + width <= s.data.size(); off += width) {
+            addr_t target = 0;
+            if (!read_ptr_slot(s.data, off, width, b.endian(), target)) continue;
+            if (target != want) continue;
+            const auto cls = sects.classify(target);
+            if (cls == SectionTable::Class::Unmapped) continue;
+            const auto kind = cls == SectionTable::Class::Code
+                ? DataXrefKind::CodePtr
+                : DataXrefKind::Lea;
+            add_xref_to(out, s.vaddr + static_cast<addr_t>(off), target, kind);
         }
     }
 }
@@ -115,8 +145,111 @@ classify(const Instruction& insn, u8 mem_op_idx) noexcept {
 
 }  // namespace
 
+std::vector<DataXref>
+compute_data_xrefs_to(const Binary& b, addr_t want) {
+    ScopedTimer total_timer("data_xrefs_to.total");
+    std::vector<DataXref> out;
+    const SectionTable sects(b);
+
+    if (b.format() == Format::Dol || b.format() == Format::RawRegions ||
+        b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+        scan_pointer_slots_to(b, sects, want, out);
+    }
+
+    if (b.arch() != Arch::X86_64) {
+        std::ranges::sort(out, [](const DataXref& a, const DataXref& bb) noexcept {
+            if (a.from_pc != bb.from_pc) return a.from_pc < bb.from_pc;
+            return static_cast<u8>(a.kind) < static_cast<u8>(bb.kind);
+        });
+        return out;
+    }
+    X64Decoder dec;
+
+    struct WorkItem { addr_t addr; u64 size; };
+    std::vector<WorkItem> work;
+    std::unordered_set<addr_t> seen;
+    for (const auto& sym : b.symbols()) {
+        if (sym.is_import) continue;
+        if (sym.kind != SymbolKind::Function) continue;
+        if (sym.size == 0) continue;
+        if (!seen.insert(sym.addr).second) continue;
+        work.push_back({sym.addr, sym.size});
+    }
+    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+        if (b.import_at_plt(fn.addr) != nullptr) continue;
+        if (fn.size == 0) continue;
+        if (!seen.insert(fn.addr).second) continue;
+        work.push_back({fn.addr, fn.size});
+    }
+
+    for (const auto& w : work) {
+        auto span = b.bytes_at(w.addr);
+        if (span.empty()) continue;
+        const std::size_t limit = std::min<std::size_t>(
+            span.size(), static_cast<std::size_t>(w.size));
+
+        addr_t ip = w.addr;
+        std::size_t off = 0;
+        while (off < limit) {
+            auto remaining = span.subspan(off, limit - off);
+            auto decoded = dec.decode(remaining, ip);
+            if (!decoded) { ip += 1; off += 1; continue; }
+            const auto& insn = *decoded;
+
+            for (u8 j = 0; j < insn.num_operands; ++j) {
+                const Operand& op = insn.operands[j];
+
+                addr_t target = 0;
+                bool   is_immediate_addr = false;
+                if (op.kind == Operand::Kind::Memory && op.mem.has_disp) {
+                    if (op.mem.base == Reg::Rip && op.mem.index == Reg::None) {
+                        target = ip + insn.length +
+                                 static_cast<addr_t>(op.mem.disp);
+                    } else if (op.mem.base == Reg::None &&
+                               op.mem.index == Reg::None) {
+                        target = static_cast<addr_t>(op.mem.disp);
+                    } else {
+                        continue;
+                    }
+                } else if (op.kind == Operand::Kind::Immediate &&
+                           op.imm.size >= 4) {
+                    target = static_cast<addr_t>(op.imm.value);
+                    is_immediate_addr = true;
+                } else {
+                    continue;
+                }
+                if (target != want) continue;
+
+                const auto cls = sects.classify(target);
+                if (cls == SectionTable::Class::Unmapped) continue;
+
+                DataXrefKind k = classify(insn, j);
+                if (cls == SectionTable::Class::Code) {
+                    if (k == DataXrefKind::Lea || is_immediate_addr) {
+                        k = DataXrefKind::CodePtr;
+                    } else {
+                        continue;
+                    }
+                }
+
+                add_xref_to(out, ip, target, k);
+            }
+
+            ip  += insn.length;
+            off += insn.length;
+        }
+    }
+
+    std::ranges::sort(out, [](const DataXref& a, const DataXref& bb) noexcept {
+        if (a.from_pc != bb.from_pc) return a.from_pc < bb.from_pc;
+        return static_cast<u8>(a.kind) < static_cast<u8>(bb.kind);
+    });
+    return out;
+}
+
 std::map<addr_t, std::vector<DataXref>>
 compute_data_xrefs(const Binary& b) {
+    ScopedTimer total_timer("data_xrefs.total");
     std::map<addr_t, std::vector<DataXref>> out;
     const SectionTable sects(b);
 

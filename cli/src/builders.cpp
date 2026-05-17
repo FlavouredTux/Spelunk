@@ -1,7 +1,9 @@
 #include "builders.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <format>
+#include <limits>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -17,6 +19,7 @@
 #include <ember/analysis/vtables.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/timing.hpp>
 #include <ember/disasm/register.hpp>
 
 #include "util.hpp"
@@ -38,52 +41,38 @@ std::string build_strings_output(const Binary& b) {
 }
 
 std::string build_xrefs_output(const Binary& b) {
-    // Order edges so leaves come first and the rough `main`-ward
-    // hierarchy reads top-down. Topological sort (Kahn's algorithm) over
-    // the caller graph; cycles fall through in arbitrary order at the tail.
-    const auto edges = compute_call_graph(b);
-    std::unordered_map<addr_t, std::vector<addr_t>> succs;
-    std::unordered_map<addr_t, std::size_t> indeg;
-    std::set<addr_t> nodes;
-    for (const auto& e : edges) {
-        succs[e.caller].push_back(e.callee);
-        indeg[e.callee] += 1;
-        if (!indeg.contains(e.caller)) indeg[e.caller] += 0;
-        nodes.insert(e.caller);
-        nodes.insert(e.callee);
+    ScopedTimer total_timer("xrefs.total");
+    std::vector<CallEdge> edges;
+    {
+        ScopedTimer t("xrefs.call_graph");
+        edges = compute_call_graph(b, {}, CallGraphMode::Fast);
     }
-    // Kahn: nodes with zero in-degree (never called) emit first. Matches
-    // reader habit - main at top, helpers below.
-    std::vector<addr_t> order;
-    std::vector<addr_t> ready;
-    for (addr_t n : nodes) if (indeg[n] == 0) ready.push_back(n);
-    std::ranges::sort(ready);  // deterministic on ties
-    while (!ready.empty()) {
-        const auto v = ready.back();
-        ready.pop_back();
-        order.push_back(v);
-        auto it = succs.find(v);
-        if (it == succs.end()) continue;
-        for (addr_t w : it->second) {
-            if (--indeg[w] == 0) ready.push_back(w);
-        }
+    if (timing_enabled()) {
+        std::fprintf(stderr, "[timing] xrefs.edges: %zu\n", edges.size());
     }
-    // Append remaining nodes (those on cycles) in addr order.
-    std::set<addr_t> emitted(order.begin(), order.end());
-    for (addr_t n : nodes) if (!emitted.contains(n)) order.push_back(n);
 
-    // Group edges by caller in topo order, sort each group by callee for
-    // stability within a caller.
-    std::unordered_map<addr_t, std::vector<addr_t>> by_caller;
-    for (const auto& e : edges) by_caller[e.caller].push_back(e.callee);
-    for (auto& [_, v] : by_caller) std::ranges::sort(v);
+    // Keep --xrefs cheap: callers mostly need a stable edge list, not a
+    // graph-layout pass. The old topo-ish formatter built several maps and
+    // sets over the whole edge list after the scan had already done the
+    // useful work. Sorting pairs directly is dramatically lighter on large
+    // binaries and daemon/agent loops.
+    {
+        ScopedTimer t("xrefs.sort_dedupe");
+        std::ranges::sort(edges, {}, [](const CallEdge& e) {
+            return std::pair{e.caller, e.callee};
+        });
+        edges.erase(std::unique(edges.begin(), edges.end(),
+            [](const CallEdge& lhs, const CallEdge& rhs) {
+                return lhs.caller == rhs.caller && lhs.callee == rhs.callee;
+            }), edges.end());
+    }
 
     std::string out;
-    for (addr_t caller : order) {
-        auto it = by_caller.find(caller);
-        if (it == by_caller.end()) continue;
-        for (addr_t callee : it->second) {
-            out += std::format("{:#x} -> {:#x}\n", caller, callee);
+    {
+        ScopedTimer t("xrefs.format");
+        out.reserve(edges.size() * 32);
+        for (const auto& e : edges) {
+            out += std::format("{:#x} -> {:#x}\n", e.caller, e.callee);
         }
     }
     return out;
@@ -201,6 +190,76 @@ std::string build_vtables_output(const Binary& b) {
                                vt.vaddr + static_cast<addr_t>(i) * width,
                                vt.methods[i], i);
         }
+    }
+    return out;
+}
+
+std::string build_vtable_at_output(const Binary& b, addr_t va, u64 limit) {
+    const addr_t width = arch_pointer_bits(b.arch()) == 32 ? 4 : 8;
+    const auto vtables = discover_runtime_vtables(b);
+
+    const RuntimeVtable* best = nullptr;
+    std::size_t best_index = 0;
+    addr_t best_distance = std::numeric_limits<addr_t>::max();
+
+    for (const auto& vt : vtables) {
+        if (vt.methods.empty()) continue;
+        const addr_t begin = vt.vaddr;
+        const addr_t end = vt.vaddr + static_cast<addr_t>(vt.methods.size()) * width;
+
+        std::size_t index = 0;
+        addr_t distance = 0;
+        if (va >= begin && va < end) {
+            index = static_cast<std::size_t>((va - begin) / width);
+        } else {
+            const addr_t before = begin >= 2 * width ? begin - 2 * width : begin;
+            const addr_t after = end + 2 * width;
+            if (va < before || va > after) continue;
+            if (va < begin) {
+                distance = begin - va;
+                index = 0;
+            } else {
+                distance = va - end;
+                index = vt.methods.size() - 1;
+            }
+        }
+
+        if (!best || distance < best_distance) {
+            best = &vt;
+            best_index = index;
+            best_distance = distance;
+        }
+    }
+
+    if (!best) {
+        return std::format("(no runtime vtable containing/near {:#x})\n", va);
+    }
+
+    std::size_t first = 0;
+    std::size_t last = best->methods.size();
+    if (limit != 0 && best->methods.size() > limit) {
+        const std::size_t cap = static_cast<std::size_t>(limit);
+        const std::size_t half = cap / 2;
+        first = best_index > half ? best_index - half : 0;
+        last = std::min(best->methods.size(), first + cap);
+        if (last - first < cap && last == best->methods.size()) {
+            first = best->methods.size() > cap ? best->methods.size() - cap : 0;
+        }
+    }
+
+    std::string out;
+    out += std::format("vtable\t{:#x}\t{}\tquery={:#x}\tindex={}\n",
+                       best->vaddr, best->methods.size(), va, best_index);
+    if (first != 0) {
+        out += std::format("...\t{} slots before\n", first);
+    }
+    for (std::size_t i = first; i < last; ++i) {
+        out += std::format("slot\t{:#x}\t{:#x}\t{}\n",
+                           best->vaddr + static_cast<addr_t>(i) * width,
+                           best->methods[i], i);
+    }
+    if (last != best->methods.size()) {
+        out += std::format("...\t{} slots after\n", best->methods.size() - last);
     }
     return out;
 }

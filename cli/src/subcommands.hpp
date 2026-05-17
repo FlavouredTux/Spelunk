@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <print>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/common/error.hpp>
+#include <ember/common/timing.hpp>
 #include <ember/decompile/emit_options.hpp>
 
 #include "args.hpp"
@@ -55,6 +57,13 @@ int run_symresolve   (const Args& args, const Binary& b);
 int run_symuses      (const Args& args, const Binary& b);
 int run_refs_to      (const Args& args, const Binary& b);
 int run_refs_to_loose(const Args& args, const Binary& b);
+int run_state_map    (const Args& args, const Binary& b);
+int run_branch_on    (const Args& args, const Binary& b);
+int run_guard_map    (const Args& args, const Binary& b);
+int run_state_lifetime(const Args& args, const Binary& b);
+int run_side_effects (const Args& args, const Binary& b);
+int run_object_roles (const Args& args, const Binary& b);
+int run_explain_address(const Args& args, const Binary& b);
 int run_explain_vcall(const Args& args, const Binary& b);
 int run_dump_object  (const Args& args, const Binary& b);
 int run_containing_fn(const Args& args, const Binary& b);
@@ -62,6 +71,7 @@ int run_validate_name(const Args& args, const Binary& b);
 int run_collisions   (const Args& args, const Binary& b);
 int run_callees      (const Args& args, const Binary& b);
 int run_callees_class(const Args& args, const Binary& b);
+int run_patch_plan   (const Args& args, const Binary& b);
 int run_disasm_at    (const Args& args, const Binary& b);
 int run_disasm_window(const Args& args, const Binary& b);
 int run_list_syscalls(const Args& args, const Binary& b);
@@ -124,6 +134,7 @@ inline std::string cache_scope_tag(const Args& args) {
 
 template <class Compute>
 int run_cached(const Args& args, std::string_view tag, Compute compute) {
+    ScopedTimer total_timer("cache_command.total");
     const auto dir = args.cache_dir.empty()
         ? cache::default_dir()
         : std::filesystem::path(args.cache_dir);
@@ -140,14 +151,24 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
         }
     }
     if (cacheable) {
-        if (auto hit = cache::read(dir, key, tag); hit) {
+        std::optional<std::string> hit;
+        {
+            ScopedTimer t("cache.read");
+            hit = cache::read(dir, key, tag);
+        }
+        if (hit) {
             std::fwrite(hit->data(), 1, hit->size(), stdout);
             return EXIT_SUCCESS;
         }
     }
-    const std::string out = compute();
+    std::string out;
+    {
+        ScopedTimer t("cache.compute_miss");
+        out = compute();
+    }
     std::fwrite(out.data(), 1, out.size(), stdout);
     if (cacheable) {
+        ScopedTimer t("cache.write");
         if (auto rv = cache::write(dir, key, tag, out); !rv) {
             std::println(stderr, "ember: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);

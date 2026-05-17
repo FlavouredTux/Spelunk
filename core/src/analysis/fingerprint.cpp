@@ -224,20 +224,16 @@ void hash_inst(Hasher& h, const IrInst& inst, const Binary& b,
 
 }  // namespace
 
-FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
+FunctionFingerprint compute_fingerprint_with(const Binary& b, const CfgBuilder& cfg,
+                                             const Lifter& lifter, addr_t fn_start) {
     FunctionFingerprint out;
 
     // Run the same front half of the decompile pipeline but stop before
     // structuring. Fingerprinting cares about IR content, not structure.
-    auto dec_r = make_decoder(b);
-    if (!dec_r) return out;
-    const CfgBuilder  cfg(b, **dec_r);
     auto fn_r = cfg.build(fn_start, {});
     if (!fn_r) return out;
 
-    auto lifter_r = make_lifter(b);
-    if (!lifter_r) return out;
-    auto ir_r = (*lifter_r)->lift(*fn_r);
+    auto ir_r = lifter.lift(*fn_r);
     if (!ir_r) return out;
 
     const SsaBuilder ssa;
@@ -292,6 +288,16 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     out.insts  = insts;
     out.calls  = calls;
     return out;
+}
+
+FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
+    FunctionFingerprint out;
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return out;
+    const CfgBuilder cfg(b, **dec_r);
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return out;
+    return compute_fingerprint_with(b, cfg, **lifter_r, fn_start);
 }
 
 }  // namespace ember

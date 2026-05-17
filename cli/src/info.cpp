@@ -87,6 +87,8 @@ void help_view() {
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --show-provenance  emit `// confidence: ...` headers when annotation meta is set");
     std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns)");
+    std::println("                       includes trampoline steal/relocation metadata;");
+    std::println("                       --json emits bytes, operands, targets, hazards");
     std::println("      --count N        instruction count for --disasm-at / --disasm-window");
     std::println("      --disasm-window VAs  batch form: comma-separated VAs or @PATH for");
     std::println("                       one-per-line input. Each block prefixed `# <hex-va>`;");
@@ -137,10 +139,19 @@ void help_xrefs() {
     std::println("  -X, --xrefs          full call graph (all fn -> call targets)");
     std::println("      --data-xrefs     TSV <target>\\t<site>\\t<kind> for every rip-rel / abs");
     std::println("                       data-section reference (kind = read/write/lea)");
-    std::println("      --refs-to VA     callers of VA (cached)");
+    std::println("      --refs-to VA     target-only callers/code-ptr/lea for one VA");
+    std::println("                       --access read|write|lea|code-ptr|all filters data refs");
     std::println("      --refs-to-loose VA  superset: also scans constant-pool imm64s and");
     std::println("                       R_*_RELATIVE relocs whose addend == VA, recovering");
     std::println("                       fn-pointer-only dispatch shapes (Roblox-style)");
+    std::println("      --state-map VA   target-only read/write/lea map for one state/global");
+    std::println("      --branch-on VA   reads of one state/global that reach conditional branches");
+    std::println("      --guard-map FN   conditional branches and nearby guard conditions in one fn");
+    std::println("      --state-lifetime VA  writers/readers/branch-gates story for one state/global");
+    std::println("      --side-effects FN  writes, calls, and return behavior for one function");
+    std::println("      --object-roles FN  infer direct this+offset field roles in one function");
+    std::println("      --explain-address VA  fast orientation summary for code/data/pointer/state");
+    std::println("      --patch-plan VA  hook/trampoline safety plan for a code address");
     std::println("      --explain-vcall OBJ:OFF  resolve object vptr slot to target summary");
     std::println("      --dump-object ADDR --size N  classify pointer-sized object fields");
     std::println("      --verbose        with --refs-to/--refs-to-loose, append site disasm");
@@ -155,6 +166,7 @@ void help_ana() {
     std::println("      --eh             parse __eh_frame + LSDA; mark landing pads");
     std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
     std::println("      --vtables        dump runtime pointer-dense vtables from data/RELRO");
+    std::println("      --vtable-at VA [--limit N]  narrow runtime vtable view around VA");
     std::println("      --objc-names     Obj-C runtime methods as TSV (imp ± class selector sig)");
     std::println("      --objc-protocols Obj-C protocol method signatures");
     std::println("      --int3-resolve   classify embedded int3 bytes (handler / pad / dead)");
@@ -222,8 +234,8 @@ void help_dbg() {
     std::println("                       where SIGSEGV/SIGBUS/SIGFPE/SIGILL is recovered by the");
     std::println("                       tracee's own handler (silently forwarded back)");
     std::println("      -- ARG...        sentinel; remaining tokens are argv for the launched program");
-    std::println("      --serve          long-lived daemon: read JSON-line tool requests on stdin,");
-    std::println("                       reply on stdout. Binary loaded once across calls.");
+    std::println("      --serve, --daemon  long-lived daemon: read JSON-line tool requests on stdin,");
+    std::println("                       reply on stdout. Binary and hot refs caches stay loaded.");
 }
 
 void help_load() {

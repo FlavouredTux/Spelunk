@@ -136,6 +136,19 @@ namespace {
     return static_cast<bool>(second);
 }
 
+[[nodiscard]] bool strong_dense_x64_start(std::span<const std::byte> data,
+                                          addr_t base,
+                                          addr_t hit) noexcept {
+    if (hit < base) return false;
+    const auto off = static_cast<std::size_t>(hit - base);
+    if (off >= data.size()) return false;
+    // Most optimized x86-64 entries are at least 16-byte aligned. In
+    // dense-false-positive mode this one predicate removes the bulk of
+    // in-body prologue-shaped instruction tails while preserving the
+    // common compiler layout.
+    return (hit & 0xfu) == 0;
+}
+
 }  // namespace
 
 // Sweep one section's bytes for prologue patterns. Pure function - no
@@ -271,6 +284,17 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
             merged.insert(merged.end(),
                           std::make_move_iterator(v.begin()),
                           std::make_move_iterator(v.end()));
+        }
+        constexpr std::size_t kDenseMinHits = 65536;
+        constexpr std::size_t kDenseBytesPerHit = 256;
+        if (b.arch() == Arch::X86_64 &&
+            merged.size() >= kDenseMinHits &&
+            scope_size / std::max<std::size_t>(merged.size(), 1) < kDenseBytesPerHit) {
+            auto write = merged.begin();
+            for (addr_t hit : merged) {
+                if (strong_dense_x64_start(data, base, hit)) *write++ = hit;
+            }
+            merged.erase(write, merged.end());
         }
         per_section_hits.push_back(std::move(merged));
     }

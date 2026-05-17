@@ -204,6 +204,24 @@ function(ember_build_fixture name)
     set(EMBER_FIXTURE_${name}_PATH "${_out}" PARENT_SCOPE)
 endfunction()
 
+function(ember_build_stripped_fixture name source_name)
+    set(_src "${EMBER_FIXTURE_${source_name}_PATH}")
+    if(NOT _src)
+        message(FATAL_ERROR "ember_build_stripped_fixture: source fixture '${source_name}' is not defined")
+    endif()
+    set(_out "${_build_dir}/${name}")
+    add_custom_command(
+        OUTPUT "${_out}"
+        COMMAND ${CMAKE_COMMAND} -E copy "${_src}" "${_out}"
+        COMMAND ${CMAKE_STRIP} --strip-all "${_out}"
+        DEPENDS "${_src}"
+        COMMENT "Stripping fixture ${source_name} -> ${name}"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_${name} ALL DEPENDS "${_out}")
+    set(EMBER_FIXTURE_${name}_PATH "${_out}" PARENT_SCOPE)
+endfunction()
+
 # Need a C compiler for fixtures.
 enable_language(C)
 
@@ -276,6 +294,7 @@ ember_build_fixture(canary PROTECTOR "-fstack-protector-strong")
 ember_build_fixture(noreturn_import)
 # -O0 so the explicit gotos survive for the tail-duplication test.
 ember_build_fixture(gotos OPT "-O0")
+ember_build_stripped_fixture(gotos_stripped gotos)
 # -O0 so the `%` operator survives as a real IDIV (and the IR Mod op),
 # and the do-while body keeps its conditional structure intact.
 ember_build_fixture(arith OPT "-O0")
@@ -924,6 +943,18 @@ ember_golden_test(
     FIXTURE gotos
     ARGS    "-p|-s|shared_tail"
     GOLDEN  gotos.shared_tail.pseudo.txt
+)
+ember_golden_test(
+    NAME    gotos_stripped_cascade_plan_score_order
+    FIXTURE gotos_stripped
+    ARGS    "--cascade-plan|--cascade-scope|all|--per-round|7"
+    GOLDEN  gotos.stripped.cascade_plan.txt
+)
+ember_golden_test(
+    NAME    gotos_stripped_cascade_plan_json_features
+    FIXTURE gotos_stripped
+    ARGS    "--cascade-plan|--cascade-scope|all|--per-round|2|--json"
+    GOLDEN  gotos.stripped.cascade_plan.json.txt
 )
 
 # ---- arith (IR Mod op + do-while structurer) -------------------------------

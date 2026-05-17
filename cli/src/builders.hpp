@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include <ember/common/types.hpp>
+
 namespace ember { class Binary; }
 
 namespace ember::cli {
@@ -20,6 +22,8 @@ namespace ember::cli {
 [[nodiscard]] std::string build_objc_protocols_output(const Binary& b);
 [[nodiscard]] std::string build_rtti_output        (const Binary& b);
 [[nodiscard]] std::string build_vtables_output     (const Binary& b);
+[[nodiscard]] std::string build_vtable_at_output   (const Binary& b, ember::addr_t va,
+                                                    ember::u64 limit);
 [[nodiscard]] std::string build_int3_resolve_output(const Binary& b);
 
 }  // namespace ember::cli

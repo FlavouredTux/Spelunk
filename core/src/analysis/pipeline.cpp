@@ -824,7 +824,9 @@ format_struct(const Binary& b, const FuncWindow& w,
 }
 
 std::vector<CallEdge> compute_call_graph(const Binary& b,
-                                         std::span<const addr_t> scope) {
+                                         std::span<const addr_t> scope,
+                                         CallGraphMode mode) {
+    ScopedTimer total_timer("call_graph.total");
     auto dec_r = make_decoder(b);
     if (!dec_r) return {};
     const Decoder& dec = **dec_r;
@@ -833,6 +835,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     // index instead of skipping over imports / data symbols.
     struct WorkItem {
         addr_t      addr;
+        u64         size;
         std::string name;
     };
     // Always union named symbols with discovered functions. Earlier this
@@ -851,19 +854,68 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     auto in_scope = [&](addr_t a) noexcept {
         return scope_set.empty() || scope_set.contains(a);
     };
+    std::size_t raw_function_symbols = 0;
+    std::size_t raw_sized_function_symbols = 0;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
-        if (s.size == 0 || s.name.empty()) continue;
-        if (!in_scope(s.addr)) continue;
-        if (!seen.insert(s.addr).second) continue;
-        work.push_back({s.addr, s.name});
+        if (s.addr == 0 || s.name.empty()) continue;
+        ++raw_function_symbols;
+        if (s.size != 0) ++raw_sized_function_symbols;
     }
-    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
-        if (b.import_at_plt(fn.addr)) continue;
-        if (!in_scope(fn.addr)) continue;
-        if (!seen.insert(fn.addr).second) continue;
-        work.push_back({fn.addr, fn.name});
+    const bool distrust_huge_symbol_table =
+        mode == CallGraphMode::Fast &&
+        raw_function_symbols >= 100000;
+    {
+        ScopedTimer t("call_graph.worklist");
+        for (const auto& s : b.symbols()) {
+            if (s.is_import) continue;
+            if (s.kind != SymbolKind::Function) continue;
+            if (s.size == 0 || s.name.empty()) continue;
+            if (distrust_huge_symbol_table) continue;
+            if (!in_scope(s.addr)) continue;
+            if (!seen.insert(s.addr).second) continue;
+            work.push_back({s.addr, s.size, s.name});
+        }
+        if (distrust_huge_symbol_table && scope.empty()) {
+            for (addr_t a : discover_from_prologues(b)) {
+                if (b.import_at_plt(a)) continue;
+                if (!seen.insert(a).second) continue;
+                work.push_back({a, 0, std::format("sub_{:x}", a)});
+            }
+        } else {
+            for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+                if (b.import_at_plt(fn.addr)) continue;
+                if (!in_scope(fn.addr)) continue;
+                if (!seen.insert(fn.addr).second) continue;
+                work.push_back({fn.addr, fn.size, fn.name});
+            }
+        }
+        std::ranges::sort(work, {}, [](const WorkItem& w) { return w.addr; });
+        for (std::size_t i = 0; i < work.size(); ++i) {
+            auto& w = work[i];
+            addr_t section_end = 0;
+            for (const auto& s : b.sections()) {
+                if (!s.flags.executable) continue;
+                if (w.addr < s.vaddr) continue;
+                if (w.addr - s.vaddr < s.size) {
+                    section_end = s.vaddr + s.size;
+                    break;
+                }
+            }
+            addr_t next_entry = section_end;
+            for (std::size_t j = i + 1; j < work.size(); ++j) {
+                if (section_end != 0 && work[j].addr >= section_end) break;
+                if (work[j].addr > w.addr) {
+                    next_entry = work[j].addr;
+                    break;
+                }
+            }
+            if (next_entry > w.addr) {
+                const u64 gap = next_entry - w.addr;
+                if (w.size == 0 || w.size > gap) w.size = gap;
+            }
+        }
     }
     if (work.empty()) return {};
 
@@ -871,13 +923,71 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     // and isn't thread-safe; give each worker its own. The Binary +
     // Decoder are read-only and shared.
     const std::size_t total = work.size();
-    // Cap at 8 - beyond that the binary's I/O cache becomes the
-    // bottleneck and extra threads just bounce cache lines. Also cap
-    // by work size to avoid spawning idle threads for tiny binaries.
-    // EMBER_THREADS env can lower further when many ember processes
-    // are running concurrently.
+    // Cap at 8: local timings on a 104MB Blender binary showed no win
+    // from 16 workers (the CFG walk stayed ~4.35s), while higher caps
+    // risk oversubscribing cascades with many ember processes. EMBER_THREADS
+    // can still lower this when many passes run concurrently.
     const std::size_t worker_count =
         std::min<std::size_t>(static_cast<std::size_t>(thread_pool_size(8)), total);
+    if (timing_enabled()) {
+        std::fprintf(stderr, "[timing] call_graph.functions: %zu\n", total);
+        std::fprintf(stderr, "[timing] call_graph.threads: %zu\n", worker_count);
+    }
+    std::unordered_set<addr_t> known_entries;
+    known_entries.reserve(work.size());
+    for (const auto& w : work) known_entries.insert(w.addr);
+
+    const bool force_cfg_call_graph = mode == CallGraphMode::FullCfg ||
+        b.arch() != Arch::X86_64 || [] {
+        const char* s = std::getenv("EMBER_CFG_CALL_GRAPH");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+
+    auto scan_fast = [&](const WorkItem& w, std::vector<CallEdge>& sink) {
+        auto span = b.bytes_at(w.addr);
+        if (span.empty()) return;
+        const std::size_t limit = w.size != 0
+            ? std::min<std::size_t>(span.size(), static_cast<std::size_t>(w.size))
+            : span.size();
+        addr_t ip = w.addr;
+        std::size_t off = 0;
+        std::unordered_set<addr_t> seen_targets;
+        while (off < limit) {
+            if (b.is_data_in_code(ip)) {
+                ++ip;
+                ++off;
+                continue;
+            }
+            auto remaining = span.subspan(off, limit - off);
+            auto decoded = dec.decode(remaining, ip);
+            if (!decoded) {
+                const std::size_t skip = decode_failure_advance(b.arch(), remaining);
+                ip += skip;
+                off += skip;
+                continue;
+            }
+            const Instruction& insn = *decoded;
+            if (is_call(insn.mnemonic)) {
+                if (auto target = branch_target(insn); target) {
+                    if (seen_targets.insert(*target).second) {
+                        sink.push_back({w.addr, *target});
+                    }
+                }
+            } else if (is_unconditional_jmp(insn.mnemonic)) {
+                if (auto target = branch_target(insn); target) {
+                    if (known_entries.contains(*target) ||
+                        b.import_at_plt(*target) != nullptr) {
+                        if (seen_targets.insert(*target).second) {
+                            sink.push_back({w.addr, *target});
+                        }
+                    }
+                }
+            }
+            ip  += insn.length;
+            off += insn.length;
+        }
+    };
+
     if (worker_count <= 1) {
         // Fall back to the simple serial loop. Avoids the thread-spawn
         // overhead on small binaries where it dominates.
@@ -886,15 +996,25 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
         const bool show = total >= 500 && progress_enabled();
         const auto tick = std::max<std::size_t>(1, total / 20);
         std::size_t done = 0;
-        for (const auto& w : work) {
-            auto fn_r = builder.build(w.addr, w.name);
-            ++done;
-            if (show && (done % tick == 0 || done == total)) {
-                std::fprintf(stderr, "\r  call graph: [%zu/%zu]", done, total);
-                std::fflush(stderr);
+        {
+            ScopedTimer walk_timer(force_cfg_call_graph
+                ? "call_graph.cfg_walk"
+                : "call_graph.fast_scan");
+            for (const auto& w : work) {
+                if (force_cfg_call_graph) {
+                    auto fn_r = builder.build(w.addr, w.name);
+                    if (fn_r) {
+                        for (auto target : fn_r->call_targets) out.push_back({w.addr, target});
+                    }
+                } else {
+                    scan_fast(w, out);
+                }
+                ++done;
+                if (show && (done % tick == 0 || done == total)) {
+                    std::fprintf(stderr, "\r  call graph: [%zu/%zu]", done, total);
+                    std::fflush(stderr);
+                }
             }
-            if (!fn_r) continue;
-            for (auto t : fn_r->call_targets) out.push_back({w.addr, t});
         }
         if (show) std::fputc('\n', stderr);
         return out;
@@ -920,37 +1040,50 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
             const std::size_t i = next.fetch_add(1, std::memory_order_relaxed);
             if (i >= total) break;
             const auto& w = work[i];
-            auto fn_r = builder.build(w.addr, w.name);
+            if (force_cfg_call_graph) {
+                auto fn_r = builder.build(w.addr, w.name);
+                if (fn_r) {
+                    for (auto t : fn_r->call_targets) sink.push_back({w.addr, t});
+                }
+            } else {
+                scan_fast(w, sink);
+            }
             const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
             if (show && (d % tick == 0 || d == total)) {
                 std::lock_guard lk(log_mu);
                 std::fprintf(stderr, "\r  call graph: [%zu/%zu]", d, total);
                 std::fflush(stderr);
             }
-            if (!fn_r) continue;
-            for (auto t : fn_r->call_targets) sink.push_back({w.addr, t});
         }
     };
 
-    std::vector<std::thread> threads;
-    threads.reserve(worker_count);
-    for (std::size_t i = 0; i < worker_count; ++i) {
-        threads.emplace_back(worker, i);
+    {
+        ScopedTimer walk_timer(force_cfg_call_graph
+            ? "call_graph.cfg_walk"
+            : "call_graph.fast_scan");
+        std::vector<std::thread> threads;
+        threads.reserve(worker_count);
+        for (std::size_t i = 0; i < worker_count; ++i) {
+            threads.emplace_back(worker, i);
+        }
+        for (auto& thread : threads) thread.join();
     }
-    for (auto& t : threads) t.join();
     if (show) std::fputc('\n', stderr);
 
     // Merge per-thread buffers into the output. Order isn't observable
     // by callers - every consumer sorts/dedupes - so a simple
     // concatenation works.
-    std::size_t total_edges = 0;
-    for (const auto& v : per_thread) total_edges += v.size();
     std::vector<CallEdge> out;
-    out.reserve(total_edges);
-    for (auto& v : per_thread) {
-        out.insert(out.end(),
-                   std::make_move_iterator(v.begin()),
-                   std::make_move_iterator(v.end()));
+    {
+        ScopedTimer t("call_graph.merge");
+        std::size_t total_edges = 0;
+        for (const auto& v : per_thread) total_edges += v.size();
+        out.reserve(total_edges);
+        for (auto& v : per_thread) {
+            out.insert(out.end(),
+                       std::make_move_iterator(v.begin()),
+                       std::make_move_iterator(v.end()));
+        }
     }
     return out;
 }
@@ -1127,6 +1260,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // Pass 1: defined function symbols. These carry real sizes, so prefer
     // them when a later CFG-discovered entry lands on the same address.
     std::unordered_map<addr_t, std::size_t> index;
+    std::size_t symbol_added = 0;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
@@ -1136,6 +1270,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         index.emplace(s.addr, out.size());
         out.push_back({s.addr, s.size, s.name,
                        DiscoveredFunction::Kind::Symbol});
+        ++symbol_added;
     }
 
     constexpr std::size_t kDenseFdeThreshold = 4096;
@@ -1268,11 +1403,18 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
             }
         }
     }
+    const std::size_t before_prologues = out.size();
     if (fde_added < kDenseFdeThreshold) {
         for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
     }
+    const std::size_t prologue_added = out.size() - before_prologues;
     if (b.format() == Format::Dol || b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
         for (addr_t a : discover_code_pointers(b)) add_candidate(a, "sub", true);
+    }
+    if (timing_enabled()) {
+        std::fprintf(stderr,
+            "[timing] enumerate_functions.seed: symbols=%zu fde=%zu prologue=%zu total=%zu\n",
+            symbol_added, fde_added, prologue_added, out.size());
     }
 
     // Loader-only mode: on a packed binary the call-graph walker chases

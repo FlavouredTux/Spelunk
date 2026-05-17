@@ -99,7 +99,12 @@ zero-filled relocation targets:
 
 ```sh
 ember --regions module.regions --vtables
+ember --regions module.regions --vtable-at 0xVTABLE_OR_SLOT --limit 24
 ```
+
+Use `--vtable-at` for interactive work on large clients; it prints only
+the runtime vtable containing or immediately adjacent to the queried VA
+instead of dumping every pointer-dense table.
 
 `--refs-to-loose` also accepts a module-relative offset for raw-region
 captures. If the requested address is not mapped, Ember tries

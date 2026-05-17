@@ -22,8 +22,11 @@ A `.ember` annotation file persists everything you discover (renames,
 type signatures, struct field names, named constants, free-form notes).
 Every Ember command reads from it; `--apply` writes to it.
 
-You drive Ember through the CLI. Output is TSV, plain text, or pseudo-C -
-all designed to be parsed by another tool.
+You drive Ember through the CLI or the `emberpy` Python wrapper. CLI
+output is TSV, JSON, plain text, or pseudo-C - all designed to be parsed
+by another tool. The Python wrapper shells out to the same executable and
+adds function handles, structured helper methods, path explanation, and
+batch annotation writing.
 
 ---
 
@@ -110,8 +113,8 @@ tail.
 | `ember --functions <binary>` | TSV: addr / size / kind / name | enumerate everything |
 | `ember --functions --full-analysis <binary>` | same, deeper discovery | first pass missed obvious fns |
 | `ember --strings <binary>` | `addr\|text\|xref1,xref2,...` | find anchors |
-| `ember --xrefs <binary>` | `caller -> callee` per line | full call graph dump |
-| `ember --data-xrefs <binary>` | TSV: target / from-pc / kind | find every read/write/lea/code-ptr |
+| `ember --xrefs <binary>` | `caller -> callee` per line | full call graph dump; builds/reuses the broad xrefs cache |
+| `ember --data-xrefs <binary>` | TSV: target / from-pc / kind | whole-binary read/write/lea/code-ptr inventory; reuses the xrefs/cache work |
 
 ### Reading code
 | Command | Output | Use when |
@@ -119,7 +122,7 @@ tail.
 | `ember -d -s <fn> <binary>` | linear disasm with annotations | low-level |
 | `ember -c -s <fn> <binary>` | CFG dump with block edges | branch structure |
 | `ember -p -s <fn> <binary>` | pseudo-C | default for understanding |
-| `ember --disasm-at <VA> --count N <binary>` | N instructions from VA | inspect a specific spot |
+| `ember --disasm-at <VA> --count N <binary>` | N instructions from VA plus trampoline metadata (`steal_len`, relocation needed, first basic-block end, absolute-jump safety). `--json` emits tiny structured rows: VA, bytes, mnemonic, operands, branch target, RIP-relative target, hazards. | inspect a specific spot; check whether bytes are safe to steal |
 | `ember --disasm-window VA1,VA2,... --count N <binary>` | batch disasm; one block per VA, separated by `# <hex-va>` lines (or `--json` array). `@FILE` reads VAs one-per-line | sweep thousands of hits without per-call ember startup |
 
 ### Recognition
@@ -129,14 +132,23 @@ tail.
 | `ember --teef <library> > corpus.tsv` | corpus build | build a library fingerprint |
 | `ember --recognize --corpus c.tsv <binary>` | TSV: addr / current / suggested / conf | identify library functions |
 | `ember --rtti <binary>` | TSV: vtable / class info | C++ class hierarchy |
-| `ember --vtables <binary>` | runtime vtables + slots | loaded dumps / RELRO vtables without RTTI |
+| `ember --vtables <binary>` | runtime vtables + slots | full loaded-dump / RELRO vtable inventory |
+| `ember --vtable-at <VA> [--limit N] <binary>` | one runtime vtable around a vptr/typeinfo-adjacent/table-slot VA | narrow std::function / vtable work without dumping every table |
 | `ember --objc-names <binary>` | Mach-O ObjC method names | ObjC binaries |
 
 ### Lookups
 | Command | Output | Use when |
 |---|---|---|
-| `ember --refs-to <VA> <binary>` | callers of VA (incl. tail-jumps + code-ptr) | "who uses this?" |
-| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --refs-to <VA> <binary>` | target-only refs for one VA: direct callers plus code-ptr/lea address-taking by default. Add `--access read|write|lea|code-ptr|all` to ask for data-reference rows. | "who uses this?" / "who writes this global?" |
+| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. Accepts `--access` like `--refs-to`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --state-map <VA> [--json] <binary>` | target-only state/global map: read/write/lea/code-ptr counts plus per-site function, offset, shape (`set`, `clear`, `branch-input`, `load`, `read-modify-write`, etc.), and one disasm line | mutation map for flags, scheduler state, anti-cheat gates |
+| `ember --branch-on <VA> [--json] <binary>` | target-only branch-dependency probe: reads of one state/global that reach a nearby conditional branch, with read instruction, branch instruction, taken target, fallthrough, function, and offset | "which checks branch on this flag/global?" |
+| `ember --guard-map <FN-or-VA> [--json] <binary>` | function-level guard inventory: conditional branches, nearest `cmp/test`, direct memory/global used by that condition, taken target, and fallthrough | "what conditions gate this function?" |
+| `ember --state-lifetime <VA> [--json] <binary>` | target-only lifecycle story for one state/global: writers, branch gates, readers, address-taking, function offsets, shapes, and disasm | "who sets/checks/uses this state?" |
+| `ember --side-effects <FN-or-VA> [--json] <binary>` | function-level effect summary: direct mapped memory writes, write shape, section, classified callees, and return presence | "what does this function mutate/call?" |
+| `ember --object-roles <FN-or-VA> [--json] <binary>` | function-level object layout sketch: direct `[this+offset]` reads/writes, branch gates, address-taking, call-target slots, and use sites | "what fields does this method touch?" |
+| `ember --explain-address <VA> [--json] <binary>` | fast orientation summary: mapped section, kind (`function`, `code`, `state`, `pointer`, `data`), containing function, pointer classification, state/ref counts, and patch summary for code | first command for an unknown VA from a crash, trace, object, string, or agent hypothesis |
+| `ember --patch-plan <VA> [--json] <binary>` | hook/trampoline safety plan for code: recommended steal length, relocation requirement, first basic-block end, absolute-jump safety, strategy, and per-instruction hazards | before copying bytes into a trampoline or patch stub |
 | `ember --explain-vcall <OBJ>:<OFF> <binary>` | object / vptr / slot / target + disasm/pseudo summary | resolve `obj->vfn_N` in loaded memory |
 | `ember --dump-object <ADDR> --size <N> <binary>` | qword fields classified as vtable/code/string/ptr/null/raw | inspect runtime object snapshots |
 | `ember --refs-to <VA> --json <binary>` | same shape as above, just direct + CodePtr/Lea | machine-readable refs-to for pipelines that prefer structured rows |
@@ -171,6 +183,27 @@ next agent / tool can decide whether to verify.
   `--fingerprints`) cache to `~/.cache/ember/`. If you need the same
   broad fact twice, prefer the cached command over rebuilding your own
   scan. `--no-cache` is for freshness/debugging, not default agent use.
+- `--xrefs` is now cheap enough to use as the first broad pass on very
+  large Roblox-scale clients. On a 117 MB RobloxPlayer/libroblox image,
+  fixed xrefs measured around 2.7s total after the worklist/filtering
+  improvements (`call_graph.fast_scan` was sub-second; remaining cost
+  was mostly function discovery/worklist). Use `EMBER_TIMING=1` when
+  validating performance or deciding whether the bottleneck is xref
+  formatting, function discovery, or pseudo-C lifting.
+- `--data-xrefs` is also whole-binary inventory. Prefer
+  `--refs-to <VA> --access read|write|lea|all` for one target.
+- For stripped Roblox-style investigations, a good broad setup is:
+  ```sh
+  env EMBER_TIMING=1 ember --xrefs --no-cache <binary> > /tmp/ember-xrefs.out
+  ember --functions --json <binary> > /tmp/ember-functions.json
+  ember --data-xrefs <binary> > /tmp/ember-data-xrefs.tsv
+  ```
+  Then correlate locally with `rg`, TSV/JSON parsers, and targeted
+  `--pseudo -s sub_<addr>` reads. This is faster and less noisy than
+  running `--refs-to-loose` repeatedly while exploring a whole subsystem.
+- For repeated agent/UI probes, use `ember --serve` / `ember --daemon`
+  instead of spawning one CLI process per question. The daemon keeps the
+  binary and hot refs/disasm caches alive across requests.
 - `--ipa` runs whole-program type inference; `--resolve-calls` resolves
   indirect call sites; `--eh` parses exception metadata. They improve
   pseudo-C, but they are not the opening move. Use them for functions
@@ -180,6 +213,12 @@ next agent / tool can decide whether to verify.
 - `--refs-to-loose` is broader than `--refs-to`; use it when ordinary
   callers are empty but the target may live in a table, relocation slot,
   callback array, or runtime dump.
+- `--refs-to-loose` is not the first move when xrefs are already cached.
+  If a loose string lookup misses, use the cached `--xrefs`/`--data-xrefs`
+  output and `--containing-fn` around manually observed LEA sites before
+  assuming there are no references.
+- For one VA and a specific access question, start with
+  `--refs-to <VA> --access write` (or `read` / `lea` / `all`).
 - For many nearby addresses, use `--disasm-window` or `@FILE` batching.
   For one address, use `--disasm-at` or `--containing-fn`.
 
@@ -234,16 +273,20 @@ runtime-relocated pointers. This is the path that sees Android / PIE
 
 ```sh
 ember --regions module.regions --vtables
+ember --regions module.regions --vtable-at 0xVTABLE_OR_SLOT --limit 24
 ember --regions module.regions --explain-vcall 0xOBJECT:0x40
 ember --regions module.regions --dump-object 0xOBJECT --size 0x100
 ```
 
 `--vtables` finds pointer-dense tables in readable non-executable
-regions whose slots point into executable memory. `--explain-vcall`
-reads `*(OBJECT)` as the vptr and `*(vptr + OFF)` as the target, then
-prints section/name/disasm and a short pseudo-C summary when available.
-`--dump-object` walks pointer-sized fields and classifies each value as
-`vtable`, `code`, `string`, `ptr`, `null`, or `raw`.
+regions whose slots point into executable memory. Use `--vtable-at`
+for the normal interactive case: it prints only the vtable containing
+or immediately adjacent to the queried VA, capped by `--limit` slots
+(default 16, `0` means all). `--explain-vcall` reads `*(OBJECT)` as the
+vptr and `*(vptr + OFF)` as the target, then prints section/name/disasm
+and a short pseudo-C summary when available. `--dump-object` walks
+pointer-sized fields and classifies each value as `vtable`, `code`,
+`string`, `ptr`, `null`, or `raw`.
 
 Runtime facts can be supplied with `--trace`:
 
@@ -280,13 +323,275 @@ Plain two-column `from to` still records an observed indirect edge.
 0x401140 -> 0x405068
 0x402240 -> 0x405068
 0x97d8 -> 0x405068  (code-ptr)  ; sub_9780+0x58
+0x401106 -> 0x404028  (write)  ; sub_4010fd+0x9
 ```
 
 First two lines: direct call edges (caller fn entry → target). Third
 line: `code-ptr` - `sub_9780` takes the address of `0x405068` at
 instruction `0x97d8` (likely storing it into a dispatch table). Surface
 the table that lives at the destination of this `lea` to find indirect
-callers.
+callers. Filter access-specific rows with `--access`; for example,
+`ember --refs-to 0x404028 --access write <binary>` answers
+"who writes this VA?" with a target-only scan.
+
+### `--state-map` output
+
+Use this when a VA behaves like state: scheduler flags, anti-cheat gates,
+feature toggles, global counters, object fields, or "something flips this
+and later a branch/call changes behavior." It is target-only and built on
+the fast data-xref scanner.
+
+```
+ember --state-map 0x10627e1b0 <binary>
+ember --state-map 0x10627e1b0 --json <binary>
+```
+
+Human output starts with a summary, then one row per access site:
+
+```
+state	0x404028	reads=7	writes=1	lea=0	code-ptr=0
+read	0x4010f4	branch-input	__do_global_dtors_aux+0x4	...
+write	0x401106	set	sub_4010fd+0x9	...
+```
+
+Columns: `kind`, `site`, `shape`, `function+offset`, and one disasm
+line. Useful shapes include `set`, `clear`, `store`,
+`read-modify-write`, `atomic-write`, `branch-input`, `load`,
+`address-taken`, and `code-pointer`.
+
+Daemon form for agents:
+
+```
+{"method":"state_map","addr":"0x10627e1b0","json":true}
+```
+
+### `--branch-on` output
+
+Use this after `--state-map` when a global/state VA looks like a gate.
+It is target-only: Ember finds reads of the VA and decodes a tiny local
+window looking for the conditional branch fed by that read.
+
+```
+ember --branch-on 0x10627e1b0 <binary>
+ember --branch-on 0x10627e1b0 --json <binary>
+```
+
+Human rows are:
+
+```
+branch-on	0x404028	branches=1
+0x4010f4	__do_global_dtors_aux+0x4	cmp byte ptr [0x404028], 0x0	0x4010fb	jne 0x401108	0x401108	0x4010fd
+```
+
+Columns after the header are `read_site`, `function+offset`,
+`read_instruction`, `branch_site`, `branch_instruction`, `taken`, and
+`fallthrough`.
+
+Daemon form:
+
+```
+{"method":"branch_on","addr":"0x10627e1b0","json":true}
+```
+
+### `--guard-map` output
+
+Use this on a function when you want the local gate inventory: every
+conditional branch Ember can decode, the nearest preceding `cmp/test`,
+and any direct mapped memory/global used by that condition.
+
+```
+ember --guard-map 0x4010f0 <binary>
+ember --guard-map SomeFunction --json <binary>
+```
+
+Human rows are:
+
+```
+guard-map	0x4010f0	__do_global_dtors_aux	guards=1
+0x4010f4	cmp byte ptr [0x404028], 0x0	0x4010fb	jne 0x401110	0x401110	0x4010fd	0x404028	.bss
+```
+
+Columns after the header are `condition_site`, `condition_instruction`,
+`branch_site`, `branch_instruction`, `taken`, `fallthrough`,
+`memory_target`, and `memory_section`.
+
+Daemon form:
+
+```
+{"method":"guard_map","fn":"0x4010f0","json":true}
+```
+
+### `--state-lifetime` output
+
+Use this when a VA is probably state and you want the whole local story
+without asking five separate probes. It combines the target-only data
+xref scan with branch-gate detection.
+
+```
+ember --state-lifetime 0x10627e1b0 <binary>
+ember --state-lifetime 0x10627e1b0 --json <binary>
+```
+
+Human output is grouped:
+
+```
+state-lifetime	0x404028	reads=7	writes=1	branches=1	lea=0	code-ptr=0
+writers
+0x401106	set	sub_4010fd+0x9	mov byte ptr [0x404028], 0x1
+branch-gates
+0x4010f4	__do_global_dtors_aux+0x4	cmp byte ptr [0x404028], 0x0	0x4010fb	jne 0x401110	0x401110	0x4010fd
+readers
+...
+```
+
+Daemon form:
+
+```
+{"method":"state_lifetime","addr":"0x10627e1b0","json":true}
+```
+
+### `--side-effects` output
+
+Use this when naming an unknown function. It is a single-function scan:
+direct mapped memory writes, classified callees, and whether Ember saw a
+return instruction.
+
+```
+ember --side-effects 0x4010fd <binary>
+ember --side-effects SomeFunction --json <binary>
+```
+
+Human output:
+
+```
+side-effects	0x4010fd	sub_4010fd	writes=1	calls=1	returns=yes
+writes
+0x401106	0x404028	.bss	set	mov byte ptr [0x404028], 0x1
+calls
+0x401050	direct
+```
+
+Daemon form:
+
+```
+{"method":"side_effects","fn":"0x4010fd","json":true}
+```
+
+### `--object-roles` output
+
+Use this on a likely method to sketch object layout. Ember infers the
+first integer argument register as `this` (`rdi` on SysV x64, `rcx` on
+Win64, `x0` on AArch64) and reports direct `[this+offset]` memory uses.
+
+```
+ember --object-roles 0x100123abc <binary>
+ember --object-roles SomeMethod --json <binary>
+```
+
+Human output:
+
+```
+object-roles	0x100123abc	sub_100123abc	this-reg=rdi	fields=3
+fields
++0x10	read,branch-gate	uses=2
+0x100123ad0	read	mov rax, qword ptr [rdi+0x10]
+0x100123ad8	branch-gate	cmp qword ptr [rdi+0x10], 0x0
++0x30	call-target	uses=1
+0x100123b20	call-target	call qword ptr [rdi+0x30]
+```
+
+Daemon form:
+
+```
+{"method":"object_roles","fn":"0x100123abc","json":true}
+```
+
+### `--explain-address` output
+
+Use this as the front door for an unknown VA. It is target-only and
+combines the cheap orientation facts agents usually ask for one by one.
+
+```
+ember --explain-address 0x10627e1b0 <binary>
+ember --explain-address 0x10627e1b0 --json <binary>
+```
+
+For data/state addresses it reports section, pointer classification, and
+state/ref counts. For code addresses it reports the containing function
+and the same patch-safety summary used by `--disasm-at --json`:
+recommended steal length, relocation requirement, first basic-block end,
+and absolute-jump trampoline safety.
+
+Daemon form:
+
+```
+{"method":"explain_address","addr":"0x10627e1b0","json":true}
+```
+
+### `--patch-plan` output
+
+Use this before stealing bytes for a hook/trampoline. It is stricter and
+more direct than `--disasm-at`: the output is about whether copied bytes
+need relocation and whether an absolute jump trampoline is safe.
+
+```
+ember --patch-plan 0x100123abc <binary>
+ember --patch-plan 0x100123abc --json <binary>
+```
+
+Human output:
+
+```
+patch-plan	0x401020
+strategy	copy-with-relocation
+steal_len	19
+needs_relocation	yes
+first_basic_block_end	0x401033
+safe_absolute_jump_trampoline	no
+instructions
+0x401020	rip-relative	mov rax, qword ptr [0x404018]
+```
+
+Strategies: `absolute-jump-ok`, `copy-with-relocation`,
+`insufficient-bytes`, or `manual-review`. Hazards include
+`rip-relative`, `short-branch`, and `rel32-branch-or-call`.
+
+Daemon form:
+
+```
+{"method":"patch_plan","addr":"0x100123abc","json":true}
+```
+
+When driving agents or UI tools, prefer the daemon form (`ember --serve`
+or `ember --daemon`). The daemon loads the binary once and keeps hot
+serve-side refs/disasm products in memory, including loose pointer-slot
+scans by target and relocated qword maps. Repeated `refs_to`,
+`refs_to_loose`, `state_map`, `branch_on`, `guard_map`, `state_lifetime`, `side_effects`, `object_roles`, and `disasm_at` requests over the serve
+protocol avoid CLI startup.
+
+Serve protocol: one request per stdin line, framed responses on stdout
+as `ok <bytes>\n<body>\n` or `err <message>\n`. Ask `help` first if in
+doubt. Both forms are accepted:
+
+```
+refs_to	addr=0x401000	access=write	quick=true	json=true
+{"method":"refs_to","addr":"0x401000","access":"write","quick":true,"json":true}
+```
+
+JSON request aliases `tool` and `op` are accepted in place of `method`.
+Common daemon methods: `refs_to`, `refs_to_loose`, `state_map`, `branch_on`, `guard_map`, `state_lifetime`, `side_effects`, `object_roles`, `disasm_at`,
+`decompile`, `callees`, `containing_fn`, `describe_address`, `get_data`,
+`functions`, `strings`, `strings_in_range`, `annotations`,
+`callees_all`, and `recognize`.
+
+### `--disasm-at --json` output
+
+Use this for patch/trampoline probes. Each instruction includes raw
+bytes, operands, branch target, RIP-relative target, and hazard booleans
+for `rip_relative`, `short_branch`, and `rel32_branch_or_call`. The
+top-level fields summarize the prologue window:
+`recommended_steal_len`, `needs_relocation`, `first_basic_block_end`,
+and `safe_absolute_jump_trampoline`.
 
 ### `--identify`
 ```
@@ -478,6 +783,7 @@ ember --data-xrefs <binary> | awk '$3=="code-ptr"' \
 **"What does this runtime vcall actually target?"**
 ```sh
 ember --regions module.regions --vtables
+ember --regions module.regions --vtable-at 0xVTABLE_OR_SLOT --limit 24
 ember --regions module.regions --dump-object 0xOBJECT --size 0x100
 ember --regions module.regions --explain-vcall 0xOBJECT:0x40
 ```

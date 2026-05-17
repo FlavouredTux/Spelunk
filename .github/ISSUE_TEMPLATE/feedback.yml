@@ -1,0 +1,70 @@
+name: In-app feedback
+description: Submitted from the Ember UI's feedback button. Reports bugs, papercuts, and small suggestions tied to a specific app version.
+title: "[feedback] "
+labels: ["feedback", "from-app"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sending feedback from inside Ember. The version, OS, and
+        current view have been pre-filled below — feel free to edit or
+        clear anything you don't want to share. Do **not** paste private
+        binaries, paths, or annotation contents you wouldn't post publicly.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - bug
+        - papercut
+        - suggestion
+        - question
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One line describing what's wrong or what you'd like.
+      placeholder: e.g. "Section table doesn't sort when clicking 'name'"
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What happened, and what you expected instead. Steps to reproduce help most.
+      placeholder: |
+        1. Open a binary
+        2. Click ...
+        3. Expected ..., got ...
+    validations:
+      required: true
+
+  - type: input
+    id: ember_version
+    attributes:
+      label: Ember version
+      description: Pre-filled by the app.
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / arch
+      description: Pre-filled by the app.
+    validations:
+      required: false
+
+  - type: input
+    id: view
+    attributes:
+      label: Active view
+      description: Which Ember view was focused when you hit the button (pre-filled).
+    validations:
+      required: false

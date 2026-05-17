@@ -259,6 +259,18 @@ function buildScopeMessage(scope: string, binary: string): string {
     if (scope.startsWith("fn:")) {
         return `Target: ${binary}\nFunction: ${scope.slice(3)}\n\nProceed.`;
     }
+    if (scope.startsWith("consensus:")) {
+        // consensus:<addr>|<best>|<confidence>|<count>|<value1,value2,...>
+        const tail = scope.slice("consensus:".length);
+        const [addr, best, conf, count, values] = tail.split("|");
+        return `Target: ${binary}\nFunction: ${addr}\nConsensus escalation\n\n` +
+            `Prior low-confidence name claims agree around: ${values || best}. ` +
+            `Best prior claim: ${best} at confidence ${conf}; agreeing claims: ${count}. ` +
+            `Read intel_evidence("${addr}") first, then independently verify with ` +
+            `ember_decompile, ember_xrefs, ember_strings, ember_recognize. ` +
+            `If the consensus name is correct, file ONE name claim at confidence >=0.85. ` +
+            `If it is not verifiable, file a note explaining what is missing.`;
+    }
     if (scope.startsWith("dispute:")) {
         // dispute:<subject>|<predicate>  - points at exactly one
         // disputed claim. Tiebreaker workers each handle one assigned

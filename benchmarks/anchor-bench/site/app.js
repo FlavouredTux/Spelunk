@@ -29,10 +29,13 @@ function renderTable() {
       <td>${e.mode}</td>
       <td>${pct(e.accuracy)}${e.trials > 1 ? ` ± ${pct(e.accuracy_stddev ?? 0)}` : ""}</td>
       <td>${pct(e.name_accuracy ?? e.accuracy)}${e.trials > 1 ? ` ± ${pct(e.name_accuracy_stddev ?? 0)}` : ""}</td>
+      <td>${pct(e.high_conf_precision ?? 0)}</td>
       <td class="${e.utility >= 0 ? "score-pos" : "score-neg"}">${pct(e.utility)}${e.trials > 1 ? ` ± ${pct(e.utility_stddev ?? 0)}` : ""}</td>
       <td>${fmtCount(e.correct)}</td>
       <td>${fmtCount(e.wrong)}</td>
       <td>${fmtCount(e.hallucinated)}</td>
+      <td>${fmtCount(e.claims_filed ?? 0)}</td>
+      <td>${fmtCount(e.consensus_escalated ?? 0)}</td>
       <td>${money(e.cost_usd)}</td>
       <td>${seconds(e.latency_s)}</td>
     `;

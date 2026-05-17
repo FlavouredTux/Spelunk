@@ -330,7 +330,7 @@ async function cmdCascade(argv: string[]) {
     const f = parseFlags(argv);
     const binary = f.get("binary");
     if (!binary) {
-        console.error("usage: cascade --binary=B [--role=namer] [--scope=all|list:..|range:..|callers-of:..|callees-of:..|around:..] [--dry-run-plan] [--per-round=N] [--max-rounds=N] [--budget=N] [--threshold=N] [--eligibility-ratio=N] [--model=M]");
+        console.error("usage: cascade --binary=B [--role=namer] [--scope=all|list:..|range:..|callers-of:..|callees-of:..|around:..] [--dry-run-plan] [--per-round=N] [--max-rounds=N] [--budget=N] [--threshold=N] [--eligibility-ratio=N] [--max-low-conf-retries=N] [--model=M]");
         process.exit(2);
     }
     const role = (f.get("role") ?? "namer") as "namer" | "mapper" | "typer" | "tiebreaker";
@@ -380,6 +380,7 @@ async function cmdCascade(argv: string[]) {
         maxTurns:         intFlag("max-turns",       roleD.maxTurns          ?? 10),
         threshold:        numFlag("threshold",       cascD.threshold         ?? 0.85),
         eligibilityRatio: numFlag("eligibility-ratio", cascD.eligibilityRatio ?? 0.3),
+        maxLowConfRetries: intFlag("max-low-conf-retries", cascD.maxLowConfRetries ?? 2),
         emberBin: findEmberBin(),
         runsRoot: RUNS_ROOT,
         module: f.get("module") ?? undefined,
@@ -396,7 +397,12 @@ async function cmdCascade(argv: string[]) {
     // Per-round ASCII summary.
     for (const rd of r.rounds) {
         process.stderr.write(
-            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} ok=${rd.fulfilled} rej=${rd.rejected} new=${rd.new_names} model=${rd.model} cost=$${rd.cost_usd.toFixed(4)} ${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
+            `  round ${rd.round}: eligible=${rd.eligible} spawned=${rd.spawned} ` +
+            `ok=${rd.fulfilled} rej=${rd.rejected} claims=${rd.claims_filed} ` +
+            `names=${rd.name_claims} low_conf_names=${rd.low_conf_name_claims} ` +
+            `skipped=${rd.retry_skipped} consensus=${rd.consensus_escalated} ` +
+            `new=${rd.new_names} model=${rd.model} cost=$${rd.cost_usd.toFixed(4)} ` +
+            `${(rd.elapsed_ms/1000).toFixed(1)}s\n`,
         );
         for (const target of rd.targets?.slice(0, 6) ?? []) {
             process.stderr.write(

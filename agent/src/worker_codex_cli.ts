@@ -44,6 +44,8 @@ function buildPrompt(args: WorkerArgs, system: string, claimsPath: string): stri
     const agentId = args.agentId ?? `${args.role}-${args.runId}`;
     const scope = args.scope.startsWith("fn:")
         ? `Target function: ${args.scope.slice(3)} in ${args.binary}`
+        : args.scope.startsWith("consensus:")
+            ? `Consensus escalation: ${args.scope.slice("consensus:".length)} in ${args.binary}. Read prior intel evidence first, then verify independently before filing one final claim.`
         : args.scope.startsWith("dispute:")
             ? `Disputed claim scope: ${args.scope.slice("dispute:".length)} in ${args.binary}`
             : `Scope: ${args.scope} in ${args.binary}`;

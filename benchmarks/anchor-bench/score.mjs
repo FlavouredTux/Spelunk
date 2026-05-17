@@ -221,9 +221,140 @@ function finalizeSlice(slice) {
   return slice;
 }
 
+function blankCalibration() {
+  return {
+    name_targets: 0,
+    predicted_name_targets: 0,
+    coverage: 0,
+    high_conf_predictions: 0,
+    high_conf_correct: 0,
+    high_conf_wrong: 0,
+    high_conf_precision: 0,
+    low_conf_predictions: 0,
+    low_conf_correct: 0,
+    low_conf_wrong: 0,
+    low_conf_precision: 0,
+    disputed_predictions: 0,
+    abstain_targets: 0,
+    correct_abstentions: 0,
+    hallucinations: 0,
+    abstention_accuracy: 0,
+  };
+}
+
+function summarizeCalibration(results) {
+  const c = blankCalibration();
+  for (const r of results) {
+    const hasPrediction = r.confidence != null;
+    const threshold = Number(r.threshold ?? 0.85);
+    if (r.expected === "(abstain)") {
+      c.abstain_targets += 1;
+      if (r.status === "abstained") c.correct_abstentions += 1;
+      if (r.status === "hallucinated") c.hallucinations += 1;
+      continue;
+    }
+    c.name_targets += 1;
+    if (!hasPrediction) continue;
+    c.predicted_name_targets += 1;
+    if (r.disputed) {
+      c.disputed_predictions += 1;
+      continue;
+    }
+    if (r.confidence >= threshold) {
+      c.high_conf_predictions += 1;
+      if (r.status === "correct") c.high_conf_correct += 1;
+      if (r.status === "wrong") c.high_conf_wrong += 1;
+    } else {
+      c.low_conf_predictions += 1;
+      if (r.status === "correct") c.low_conf_correct += 1;
+      if (r.status === "wrong") c.low_conf_wrong += 1;
+    }
+  }
+  c.coverage = c.name_targets ? c.predicted_name_targets / c.name_targets : 0;
+  c.high_conf_precision = c.high_conf_predictions ? c.high_conf_correct / c.high_conf_predictions : 0;
+  c.low_conf_precision = c.low_conf_predictions ? c.low_conf_correct / c.low_conf_predictions : 0;
+  c.abstention_accuracy = c.abstain_targets ? c.correct_abstentions / c.abstain_targets : 0;
+  return c;
+}
+
 function writeJson(path, obj) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+function readRunLog(path) {
+  if (!path) return [];
+  let raw = "";
+  try { raw = readFileSync(pathFromRoot(path), "utf8"); }
+  catch { return []; }
+  const out = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch {}
+  }
+  return out;
+}
+
+function blankAgentMetrics() {
+  return {
+    cases: 0,
+    rounds: 0,
+    spawned: 0,
+    fulfilled: 0,
+    rejected: 0,
+    claims_filed: 0,
+    name_claims: 0,
+    promotable_name_claims: 0,
+    low_conf_name_claims: 0,
+    note_claims: 0,
+    other_claims: 0,
+    unpromoted_claims: 0,
+    retry_skipped: 0,
+    consensus_escalated: 0,
+    new_names: 0,
+    cost_usd: 0,
+    latency_s: 0,
+  };
+}
+
+function addRoundMetrics(out, rd) {
+  out.rounds += 1;
+  out.spawned += Number(rd.spawned ?? 0);
+  out.fulfilled += Number(rd.fulfilled ?? 0);
+  out.rejected += Number(rd.rejected ?? 0);
+  out.claims_filed += Number(rd.claims_filed ?? 0);
+  out.name_claims += Number(rd.name_claims ?? 0);
+  out.promotable_name_claims += Number(rd.promotable_name_claims ?? 0);
+  out.low_conf_name_claims += Number(rd.low_conf_name_claims ?? 0);
+  out.note_claims += Number(rd.note_claims ?? 0);
+  out.other_claims += Number(rd.other_claims ?? 0);
+  out.unpromoted_claims += Number(rd.unpromoted_claims ?? 0);
+  out.retry_skipped += Number(rd.retry_skipped ?? 0);
+  out.consensus_escalated += Number(rd.consensus_escalated ?? 0);
+  out.new_names += Number(rd.new_names ?? 0);
+  out.cost_usd += Number(rd.cost_usd ?? 0);
+  out.latency_s += Number(rd.elapsed_ms ?? 0) / 1000;
+}
+
+function summarizeRunLog(records, manifest) {
+  const ids = new Set((manifest.cases ?? []).map((c) => c.id));
+  const summary = blankAgentMetrics();
+  const byCase = {};
+  for (const rec of records) {
+    if (ids.size && !ids.has(rec.case)) continue;
+    const caseMetrics = blankAgentMetrics();
+    caseMetrics.cases = 1;
+    const rounds = Array.isArray(rec.result?.rounds) ? rec.result.rounds : [];
+    for (const rd of rounds) {
+      addRoundMetrics(summary, rd);
+      addRoundMetrics(caseMetrics, rd);
+    }
+    summary.cases += 1;
+    caseMetrics.cost_usd = Number(rec.result?.total_cost ?? caseMetrics.cost_usd);
+    byCase[rec.case] = caseMetrics;
+  }
+  return { ...summary, by_case: byCase };
 }
 
 function main() {
@@ -233,6 +364,9 @@ function main() {
 
   const manifest = loadJson(pathFromRoot(manifestPath));
   assertManifest(manifest);
+  const runLogPath = args.get("run-log") ?? null;
+  const runLog = readRunLog(runLogPath);
+  const agentMetrics = summarizeRunLog(runLog, manifest);
 
   const results = [];
   let total = 0;
@@ -276,6 +410,7 @@ function main() {
         predicted: prediction?.value ?? null,
         confidence: prediction?.confidence ?? null,
         disputed: prediction?.disputed ?? false,
+        threshold: Number(target.threshold ?? manifest.defaults?.threshold ?? 0.85),
         difficulty: target.difficulty ?? c.difficulty ?? null,
         tags: [...(c.tags ?? []), ...(target.tags ?? [])],
         weight: scored.weight,
@@ -318,6 +453,13 @@ function main() {
       accuracy: total ? (correct + abstained) / total : 0,
       name_accuracy: nameTargets ? correct / nameTargets : 0,
       utility: maxPoints ? points / maxPoints : 0,
+      cost_usd: agentMetrics.cost_usd,
+      latency_s: agentMetrics.latency_s,
+    },
+    calibration: summarizeCalibration(results),
+    agent: {
+      run_log: runLogPath ? pathFromRoot(runLogPath) : null,
+      ...agentMetrics,
     },
     slices: {
       difficulty: Object.fromEntries([...byDifficulty.entries()].map(([k, v]) => [k, finalizeSlice(v)])),
@@ -337,6 +479,10 @@ function main() {
 
   console.log(`Anchor Bench: ${manifest.name}`);
   console.log(`targets=${total} name_targets=${nameTargets} correct=${correct} wrong=${wrong} missing=${missing} disputed=${disputed} abstained=${abstained} hallucinated=${hallucinated} points=${points.toFixed(2)}/${maxPoints.toFixed(2)} accuracy=${(report.totals.accuracy * 100).toFixed(1)}% name_accuracy=${(report.totals.name_accuracy * 100).toFixed(1)}% utility=${(report.totals.utility * 100).toFixed(1)}%`);
+  if (agentMetrics.cases > 0) {
+    console.log(`agent cases=${agentMetrics.cases} rounds=${agentMetrics.rounds} spawned=${agentMetrics.spawned} ok=${agentMetrics.fulfilled} rej=${agentMetrics.rejected} claims=${agentMetrics.claims_filed} low_conf_names=${agentMetrics.low_conf_name_claims} retry_skipped=${agentMetrics.retry_skipped} consensus=${agentMetrics.consensus_escalated} cost=$${agentMetrics.cost_usd.toFixed(4)} latency=${agentMetrics.latency_s.toFixed(1)}s`);
+  }
+  console.log(`calibration coverage=${(report.calibration.coverage * 100).toFixed(1)}% high_conf_precision=${(report.calibration.high_conf_precision * 100).toFixed(1)}% low_conf_precision=${(report.calibration.low_conf_precision * 100).toFixed(1)}% abstention_accuracy=${(report.calibration.abstention_accuracy * 100).toFixed(1)}%`);
   for (const r of results) {
     console.log(`${r.status.padEnd(12)} ${r.case} ${r.address} expected=${r.expected} predicted=${r.predicted ?? "-"} weight=${r.weight}`);
   }

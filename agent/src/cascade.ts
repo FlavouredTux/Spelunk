@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -8,13 +8,13 @@ import { runassistantCodeWorker } from "./worker_assistant_code.js";
 import { isCodexCliModel, runCodexCliWorker } from "./worker_codex_cli.js";
 import { pickCodexHome, pickassistantHome } from "./cli_homes.js";
 import { promote } from "./promote.js";
-import { IntelLog, intelPathFor, newId } from "./intel/log.js";
+import { IntelLog, intelPathFor, newId, type Claim } from "./intel/log.js";
 
-// Pre-warm ember's xrefs + strings disk caches so worker daemons
+// Pre-warm ember's strings disk cache, and xrefs on smaller binaries, so worker daemons
 // pick up cached payloads on first access instead of N×workers
 // each rebuilding from scratch. Smoothness:
 //   - skip entirely when both caches already exist on disk
-//   - run the two warmups concurrently (different cache slots,
+//   - run enabled warmups concurrently (different cache slots,
 //     no contention) so cold-start is half as long
 //   - emit a heartbeat every 5s so the user sees progress
 // Cache layout: $XDG_CACHE_HOME/ember/<key>/<tag>, where <key> is
@@ -30,32 +30,49 @@ async function warmEmberCaches(binary: string, emberBin: string): Promise<void> 
 
     // Skip-fast check: ember's cache key is FNV1a-64 of (abspath|size|mtime|vN).
     // We don't reproduce that exactly; instead we look across all cache subdirs
-    // for files tagged xrefs / strings-v* whose mtime is newer than the binary's.
+    // for files tagged xrefs* / strings-v* whose mtime is newer than the binary's.
     // Cheap heuristic, false-positive-tolerant - if we skip when caches don't
     // actually cover this binary, ember will rebuild them on first call (correct,
     // just no smoothness). False negative (we re-warm when we shouldn't have to)
     // costs at most ~200ms on a warm system.
-    let likelyWarm = false;
+    let xrefsLikelyWarm = false;
+    let stringsLikelyWarm = false;
+    let binarySize = 0;
     try {
         const binStat = statSync(binary);
+        binarySize = binStat.size;
         for (const dir of readdirSync(cacheRoot)) {
             const slot = join(cacheRoot, dir);
             try {
-                const xref = join(slot, "xrefs");
-                if (!existsSync(xref)) continue;
-                const xs = statSync(xref);
-                if (xs.mtimeMs < binStat.mtimeMs) continue;
-                // strings-v2 is the current tag; older runs may have strings-v1.
                 const ents = readdirSync(slot);
-                if (!ents.some((n) => n.startsWith("strings"))) continue;
-                likelyWarm = true; break;
+                for (const ent of ents) {
+                    if (!ent.startsWith("xrefs") && !ent.startsWith("strings")) continue;
+                    const st = statSync(join(slot, ent));
+                    if (st.mtimeMs < binStat.mtimeMs) continue;
+                    if (ent.startsWith("xrefs")) xrefsLikelyWarm = true;
+                    if (ent.startsWith("strings")) stringsLikelyWarm = true;
+                }
+                if (xrefsLikelyWarm && stringsLikelyWarm) break;
             } catch { /* slot races; ignore */ }
         }
     } catch { /* no cacheRoot */ }
-    if (likelyWarm) {
+    if (xrefsLikelyWarm && stringsLikelyWarm) {
         process.stderr.write(`cascade: ember caches already warm for ${binary} (skip)\n`);
         return;
     }
+
+    const largeBinaryXrefCutoff = 96 * 1024 * 1024;
+    const warmXrefs = !xrefsLikelyWarm && (
+        binarySize < largeBinaryXrefCutoff || process.env.EMBER_WARM_XREFS === "1"
+    );
+    const warmStrings = !stringsLikelyWarm;
+    if (!warmXrefs && !xrefsLikelyWarm) {
+        process.stderr.write(
+            `cascade: deferring xrefs warmup for large binary ${binary} ` +
+            `(set EMBER_WARM_XREFS=1 to force)\n`,
+        );
+    }
+    if (!warmXrefs && !warmStrings) return;
 
     const t_warm = Date.now();
     process.stderr.write(`cascade: warming ember caches for ${binary}…\n`);
@@ -81,9 +98,12 @@ async function warmEmberCaches(binary: string, emberBin: string): Promise<void> 
         p.on("error", () => resolve());
     });
 
-    await Promise.all([run("--xrefs"), run("--strings")]);
+    const jobs: Promise<void>[] = [];
+    if (warmXrefs) jobs.push(run("--xrefs"));
+    if (warmStrings) jobs.push(run("--strings"));
+    await Promise.all(jobs);
     clearInterval(heartbeat);
-    process.stderr.write(`cascade: caches warm (${((Date.now() - t_warm) / 1000).toFixed(1)}s)\n`);
+    process.stderr.write(`cascade: selected caches warm (${((Date.now() - t_warm) / 1000).toFixed(1)}s)\n`);
 }
 
 // Belt-and-suspenders alongside PR_SET_PDEATHSIG on the C++ side.
@@ -159,6 +179,10 @@ export interface CascadeArgs {
     maxTurns: number;
     threshold: number;           // promotion + named-callee threshold
     eligibilityRatio: number;    // min named-callee fraction for eligibility
+    maxLowConfRetries?: number;  // skip targets with this many below-threshold
+                                 // name claims already in intel. Prevents
+                                 // repeated runs from hammering a target that
+                                 // keeps producing useful-but-unpromotable names.
     emberBin: string;
     runsRoot: string;
     module?: string;             // --module NAME scope filter; threads through to
@@ -176,6 +200,17 @@ export interface RoundStats {
     spawned: number;
     fulfilled: number;            // workers that returned cleanly
     rejected: number;             // workers that threw (provider 5xx, OOM, etc)
+    claims_filed: number;          // all accepted intel claims filed by this round's workers
+    name_claims: number;           // name claims, including low-confidence ones
+    promotable_name_claims: number;// name claims at/above threshold, before dispute filtering
+    low_conf_name_claims: number;  // useful naming signal below promotion threshold
+    note_claims: number;           // predicate=note claims filed this round
+    other_claims: number;          // type/tag/xref/signature/etc.
+    unpromoted_claims: number;     // claims below the promotion threshold
+    retry_skipped: number;         // planner candidates skipped due to retry policy
+    retry_skipped_targets: string[];
+    consensus_escalated: number;   // retry-saturated targets retried once due to low-conf agreement
+    consensus_targets: string[];
     new_names: number;            // names produced *this round*
     cumulative_named: number;     // running total across all rounds
     model: string;                // model actually used this round
@@ -199,14 +234,33 @@ export interface CascadePlanEntry {
     callers: number;
     unresolved_callees: number;
     size: number;
+    features?: CascadePlanFeatures;
     reasons: string[];
+}
+export interface CascadePlanFeatures {
+    known_callee_ratio: number;
+    known_callees: number;
+    total_callees: number;
+    caller_count: number;
+    unresolved_callee_count: number;
+    size: number;
+    is_leaf: boolean;
 }
 export interface CascadePlan {
     scope: string;
+    policy?: string;
     candidates: number;
     eligible: number;
     selected: number;
     top: CascadePlanEntry[];
+}
+
+export interface ConsensusCandidate {
+    subject: string;
+    value: string;
+    count: number;
+    best_confidence: number;
+    values: string[];
 }
 
 function highConfNames(intel: IntelLog, threshold: number): Set<string> {
@@ -220,9 +274,152 @@ function highConfNames(intel: IntelLog, threshold: number): Set<string> {
     return out;
 }
 
+export function summarizeRoundClaims(claims: Claim[], threshold: number) {
+    let nameClaims = 0;
+    let promotableNameClaims = 0;
+    let lowConfNameClaims = 0;
+    let noteClaims = 0;
+    let otherClaims = 0;
+    let unpromotedClaims = 0;
+
+    for (const c of claims) {
+        if (c.confidence < threshold) ++unpromotedClaims;
+        if (c.predicate === "name") {
+            ++nameClaims;
+            if (c.confidence >= threshold) ++promotableNameClaims;
+            else ++lowConfNameClaims;
+        } else if (c.predicate === "note") {
+            ++noteClaims;
+        } else {
+            ++otherClaims;
+        }
+    }
+
+    return {
+        claims_filed: claims.length,
+        name_claims: nameClaims,
+        promotable_name_claims: promotableNameClaims,
+        low_conf_name_claims: lowConfNameClaims,
+        note_claims: noteClaims,
+        other_claims: otherClaims,
+        unpromoted_claims: unpromotedClaims,
+    };
+}
+
+function claimsByAgents(intel: IntelLog, agentIds: Set<string>): Claim[] {
+    return intel.read().filter((e): e is Claim =>
+        e.kind === "claim" && agentIds.has(e.agent));
+}
+
+export function lowConfNameAttempts(intel: IntelLog, threshold: number): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const e of intel.read()) {
+        if (e.kind !== "claim") continue;
+        if (e.predicate !== "name") continue;
+        if (e.confidence >= threshold) continue;
+        out.set(e.subject, (out.get(e.subject) ?? 0) + 1);
+    }
+    return out;
+}
+
+function normalizeNameForConsensus(value: string): string {
+    return value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .replace(/_+/g, "_");
+}
+
+export function consensusNameCandidates(claims: Claim[], threshold: number): Map<string, ConsensusCandidate> {
+    const bySubject = new Map<string, Map<string, Claim[]>>();
+    for (const c of claims) {
+        if (c.predicate !== "name") continue;
+        if (c.confidence >= threshold) continue;
+        const key = normalizeNameForConsensus(c.value);
+        if (!key) continue;
+        let groups = bySubject.get(c.subject);
+        if (!groups) {
+            groups = new Map();
+            bySubject.set(c.subject, groups);
+        }
+        const arr = groups.get(key);
+        if (arr) arr.push(c); else groups.set(key, [c]);
+    }
+
+    const out = new Map<string, ConsensusCandidate>();
+    for (const [subject, groups] of bySubject) {
+        let best: Claim[] = [];
+        for (const arr of groups.values()) {
+            if (arr.length > best.length) {
+                best = arr;
+            } else if (arr.length === best.length && best.length > 0) {
+                const arrBest = Math.max(...arr.map((c) => c.confidence));
+                const curBest = Math.max(...best.map((c) => c.confidence));
+                if (arrBest > curBest) best = arr;
+            }
+        }
+        if (best.length < 2) continue;
+        const sorted = [...best].sort((a, b) => b.confidence - a.confidence);
+        out.set(subject, {
+            subject,
+            value: sorted[0].value,
+            count: best.length,
+            best_confidence: sorted[0].confidence,
+            values: [...new Set(best.map((c) => c.value))],
+        });
+    }
+    return out;
+}
+
+function consensusEscalatedTargets(intel: IntelLog): Set<string> {
+    const out = new Set<string>();
+    for (const e of intel.read()) {
+        if (e.kind !== "claim") continue;
+        // Only accepted consensus claims count as spent escalations.
+        // A provider 429 or worker crash has no claim in intel and must
+        // not permanently block the target from being escalated later.
+        if (e.agent.includes("-consensus-")) out.add(e.subject);
+    }
+    return out;
+}
+
+export function selectCascadeBatch(args: {
+    plan: CascadePlan;
+    perRound: number;
+    lowConfAttempts: Map<string, number>;
+    consensusCandidates?: Map<string, ConsensusCandidate>;
+    consensusEscalated?: Set<string>;
+    maxLowConfRetries: number;
+}): { batch: CascadePlanEntry[]; skipped: CascadePlanEntry[]; consensus: CascadePlanEntry[] } {
+    const batch: CascadePlanEntry[] = [];
+    const skipped: CascadePlanEntry[] = [];
+    const consensus: CascadePlanEntry[] = [];
+    for (const target of args.plan.top) {
+        const attempts = args.lowConfAttempts.get(target.addr) ?? 0;
+        if (attempts > 0 && attempts >= args.maxLowConfRetries) {
+            const hasConsensus = args.consensusCandidates?.has(target.addr) ?? false;
+            const alreadyEscalated = args.consensusEscalated?.has(target.addr) ?? false;
+            if (hasConsensus && !alreadyEscalated && batch.length < args.perRound) {
+                batch.push(target);
+                consensus.push(target);
+                continue;
+            }
+            skipped.push(target);
+            continue;
+        }
+        if (batch.length < args.perRound) batch.push(target);
+    }
+    return { batch, skipped, consensus };
+}
+
+function consensusScope(addr: string, c: ConsensusCandidate): string {
+    return `consensus:${addr}|${c.value}|${c.best_confidence.toFixed(2)}|${c.count}|${c.values.join(",")}`;
+}
+
 export function formatCascadePlan(plan: CascadePlan, limit = 12): string[] {
+    const policy = plan.policy ? ` policy=${plan.policy}` : "";
     const lines: string[] = [
-        `plan: scope=${plan.scope} candidates=${plan.candidates} eligible=${plan.eligible} selected=${plan.selected}`,
+        `plan: scope=${plan.scope}${policy} candidates=${plan.candidates} eligible=${plan.eligible} selected=${plan.selected}`,
     ];
     const rows = plan.top.slice(0, limit);
     if (rows.length === 0) {
@@ -299,6 +496,7 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
     const intel = new IntelLog(intelPathFor(args.binary));
     const rounds: RoundStats[] = [];
     let totalCost = 0;
+    const maxLowConfRetries = Math.max(0, args.maxLowConfRetries ?? 2);
     mkdirSync(args.runsRoot, { recursive: true });
 
     // Sweep orphan daemons before starting our own. A previously
@@ -325,11 +523,18 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         const t0 = Date.now();
 
         const namedFromIntel = highConfNames(intel, args.threshold);
+        const lowConfAttempts = lowConfNameAttempts(intel, args.threshold);
+        const intelClaims = intel.read().filter((e): e is Claim => e.kind === "claim");
+        const consensusCandidates = consensusNameCandidates(intelClaims, args.threshold);
+        const alreadyConsensusEscalated = consensusEscalatedTargets(intel);
+        const retrySaturated = [...lowConfAttempts.values()]
+            .filter((count) => count >= maxLowConfRetries).length;
+        const planLimit = args.perRound + Math.min(retrySaturated, Math.max(16, args.perRound * 4));
         const plan = runCppCascadePlan({
             binary: args.binary,
             emberBin: args.emberBin,
             scope: args.scope,
-            perRound: args.perRound,
+            perRound: planLimit,
             eligibilityRatio: args.eligibilityRatio,
             module: args.module,
         });
@@ -349,7 +554,23 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             };
         }
 
-        const batch = plan.top;
+        const { batch, skipped, consensus } = selectCascadeBatch({
+            plan,
+            perRound: args.perRound,
+            lowConfAttempts,
+            consensusCandidates,
+            consensusEscalated: alreadyConsensusEscalated,
+            maxLowConfRetries,
+        });
+        const consensusAddrs = new Set(consensus.map((t) => t.addr));
+
+        if (batch.length === 0) {
+            process.stderr.write(
+                `cascade: retry policy skipped all ${skipped.length} planned target(s); ` +
+                `raise --max-low-conf-retries to retry them\n`,
+            );
+            break;
+        }
 
         // Per-round model selection. If the user supplied a list, rotate
         // through it (round N uses models[N % len]). Useful for:
@@ -364,6 +585,20 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         for (const line of formatCascadePlan(plan, Math.min(args.perRound, 8))) {
             process.stderr.write(`${line}\n`);
         }
+        if (skipped.length > 0) {
+            const preview = skipped.slice(0, 6).map((t) => t.addr).join(", ");
+            process.stderr.write(
+                `cascade: retry policy skipped ${skipped.length} target(s) ` +
+                `with >=${maxLowConfRetries} low-conf name claim(s): ${preview}\n`,
+            );
+        }
+        if (consensus.length > 0) {
+            const preview = consensus.map((t) => {
+                const c = consensusCandidates.get(t.addr);
+                return c ? `${t.addr} (${c.value}, ${c.count} votes)` : t.addr;
+            }).join(", ");
+            process.stderr.write(`cascade: consensus escalation selected ${preview}\n`);
+        }
         process.stderr.write(
             `cascade: round ${round} spawning ${batch.length} worker(s), ` +
             `model=${roundModel ?? "(role default)"}, max_turns=${args.maxTurns}, ` +
@@ -375,10 +610,14 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         // the same intel JSONL via O_APPEND, which is atomic.
         const before = namedFromIntel.size;
         const ourDirs: string[] = [];
+        const ourAgentIds: string[] = [];
         const promises = batch.map((b) => {
             const runId = `r-cas${round}-${newId().slice(0, 4)}`;
             const runDir = join(args.runsRoot, runId);
             ourDirs.push(runDir);
+            const agentKind = consensusAddrs.has(b.addr) ? "consensus" : args.role;
+            const agentId = `cascade-${agentKind}-${round}-${runId.slice(2)}`;
+            ourAgentIds.push(agentId);
             mkdirSync(runDir, { recursive: true });
             // Per-worker auth-home pick. When the user has multiple
             // ChatGPT / assistant Max accounts (typical: 5-account ChatGPT
@@ -394,14 +633,16 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
             const wargs = {
                 role: args.role,
                 binary: args.binary,
-                scope: `fn:${b.addr}`,
+                scope: consensusAddrs.has(b.addr)
+                    ? consensusScope(b.addr, consensusCandidates.get(b.addr)!)
+                    : `fn:${b.addr}`,
                 model: roundModel,
                 budget: args.budget,
                 maxTurns: args.maxTurns,
                 runId,
                 runDir,
                 emberBin: args.emberBin,
-                agentId: `cascade-${args.role}-${round}-${runId.slice(2)}`,
+                agentId,
                 module: args.module,
                 cliHome,
             };
@@ -472,18 +713,27 @@ export async function cascade(args: CascadeArgs): Promise<CascadeResult> {
         }
 
         const after = highConfNames(intel, args.threshold).size;
+        const claimStats = summarizeRoundClaims(
+            claimsByAgents(intel, new Set(ourAgentIds)),
+            args.threshold,
+        );
         rounds.push({
             round,
             eligible: plan.eligible,
             spawned: batch.length,
             fulfilled,
             rejected,
+            ...claimStats,
+            retry_skipped: skipped.length,
+            retry_skipped_targets: skipped.map((t) => t.addr),
+            consensus_escalated: consensus.length,
+            consensus_targets: consensus.map((t) => t.addr),
             new_names: after - before,
             cumulative_named: after,
             model: roundModel ?? "(role default)",
             cost_usd: roundCost,
             elapsed_ms: Date.now() - t0,
-            targets: plan.top,
+            targets: batch,
         });
 
         // If a whole round produced no new high-conf names, the cascade

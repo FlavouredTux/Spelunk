@@ -53,6 +53,16 @@ node benchmarks/anchor-bench/run.mjs \
   --budget 0.08
 ```
 
+`run.mjs` writes a JSONL sidecar containing per-case agent execution
+metadata (`rounds`, spawned workers, claims, low-confidence names, retry
+skips, consensus escalations, cost, and latency). By default it lands under
+an isolated fresh cache root in `/tmp/anchor-bench-cache/...`, so stale
+intel from prior trials cannot contaminate scores. Override with
+`--cache-root PATH`, or pass `--reuse-cache` to intentionally use the
+caller-provided `XDG_CACHE_HOME`. Override the sidecar with `--run-log PATH`.
+`score.mjs --run-log PATH` folds those execution metrics into the JSON report
+without changing claim scoring.
+
 For single-pass trials, `run.mjs` waits 45 seconds before scoring by default
 because fanout workers can finish after the parent command returns. Override
 with `--settle-ms` when a model needs more or less time.
@@ -90,6 +100,7 @@ Generate report JSON and aggregate leaderboard data:
 ```sh
 node benchmarks/anchor-bench/score.mjs \
   --manifest benchmarks/anchor-bench/manifests/hard.v1.json \
+  --run-log /tmp/anchor-run.jsonl \
   --model x-ai/grok-4.1-fast \
   --mode cascade \
   --out /tmp/grok-anchor-report.json
@@ -150,6 +161,8 @@ For each target:
 correct behavior. `name_accuracy` is reported separately for named targets
 only. `utility` remains the primary leaderboard sort because it punishes
 confident wrong anchors and hallucinated names more heavily than misses.
+Reports also include calibration metrics: coverage on named targets,
+high-confidence precision, low-confidence precision, and abstention accuracy.
 Normalization lowercases names, removes leading underscores, drops common
 compiler suffixes, and compares alphanumeric tokens. The JSON report keeps
 the raw prediction so semantic review remains possible.

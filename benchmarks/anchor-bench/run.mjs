@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,7 +29,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  console.error("usage: run.mjs --manifest PATH --model MODEL [--mode cascade|single-pass] [--per-round N] [--max-rounds N] [--budget N] [--settle-ms N] [--dry-run]");
+  console.error("usage: run.mjs --manifest PATH --model MODEL [--mode cascade|single-pass] [--per-round N] [--max-rounds N] [--budget N] [--settle-ms N] [--cache-root PATH] [--reuse-cache] [--run-log PATH] [--dry-run]");
   process.exit(2);
 }
 
@@ -61,6 +61,26 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function safeName(s) {
+  return String(s ?? "unknown").replace(/[^a-zA-Z0-9_.-]+/g, "_");
+}
+
+function appendRunLog(path, record) {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, JSON.stringify(record) + "\n", "utf8");
+}
+
+function parseAgentJson(stdout) {
+  const t = String(stdout ?? "").trim();
+  if (!t) return null;
+  try { return JSON.parse(t); } catch {}
+  const start = t.lastIndexOf("\n{");
+  if (start >= 0) {
+    try { return JSON.parse(t.slice(start + 1)); } catch {}
+  }
+  return null;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const manifestPath = args.get("manifest");
@@ -88,11 +108,25 @@ function main() {
     throw new Error(`unsupported mode: ${mode}`);
   }
 
+  const cacheRoot = args.has("cache-root")
+    ? pathFromRoot(args.get("cache-root"))
+    : (args.get("reuse-cache") === "true" && process.env.XDG_CACHE_HOME
+        ? process.env.XDG_CACHE_HOME
+        : resolve("/tmp", "anchor-bench-cache",
+            `${safeName(manifest.name)}.${safeName(mode)}.${safeName(model)}.${Date.now()}`));
+
   const env = {
     ...process.env,
     EMBER_BIN: ember,
-    XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? "/tmp/anchor-bench-cache",
+    XDG_CACHE_HOME: cacheRoot,
   };
+  const runLog = pathFromRoot(args.get("run-log") ??
+    resolve(env.XDG_CACHE_HOME, "anchor-bench", "runs",
+      `${safeName(manifest.name)}.${safeName(mode)}.${safeName(model)}.${Date.now()}.jsonl`));
+  if (!dryRun) {
+    console.log(`cache-root: ${cacheRoot}`);
+    console.log(`run-log: ${runLog}`);
+  }
 
   let ran = 0;
   for (const c of manifest.cases ?? []) {
@@ -100,7 +134,7 @@ function main() {
     const binary = pathFromRoot(c.binary);
     console.log(`\n== ${c.id} (${mode}) ==`);
     if (mode === "cascade") {
-      run(process.execPath, [
+      const r = run(process.execPath, [
         agent,
         "cascade",
         `--binary=${binary}`,
@@ -110,7 +144,23 @@ function main() {
         `--budget=${budget}`,
         `--threshold=${threshold}`,
         `--eligibility-ratio=${eligibilityRatio}`,
-      ], { env, dryRun });
+        ...(args.has("max-low-conf-retries") ? [`--max-low-conf-retries=${args.get("max-low-conf-retries")}`] : []),
+      ], { env, dryRun, capture: !dryRun });
+      if (!dryRun) {
+        if (r.stderr) process.stderr.write(r.stderr);
+        if (r.stdout) process.stdout.write(r.stdout);
+        const result = parseAgentJson(r.stdout);
+        appendRunLog(runLog, {
+          benchmark: manifest.name,
+          manifest: pathFromRoot(manifestPath),
+          generated_at: new Date().toISOString(),
+          case: c.id,
+          binary: c.binary,
+          mode,
+          model,
+          result,
+        });
+      }
     } else {
       const pick = "list:" + (c.targets ?? []).map((t) => t.address).join(",");
       run(process.execPath, [
@@ -134,6 +184,9 @@ function main() {
     run(process.execPath, [
       pathFromRoot("benchmarks/anchor-bench/score.mjs"),
       `--manifest=${pathFromRoot(manifestPath)}`,
+      `--model=${model}`,
+      `--mode=${mode}`,
+      `--run-log=${runLog}`,
     ], { env });
   }
 }

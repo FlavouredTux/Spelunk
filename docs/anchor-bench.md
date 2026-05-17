@@ -60,6 +60,16 @@ hardness bands that a real held-out split should contain.
 - `hallucinated`: high-confidence names on targets marked `expect: "abstain"`.
 - `cost`: reported by the agent run and retained in cascade output.
 - `latency`: reported per cascade round.
+- `agent`: optional execution telemetry loaded from a `run.mjs` JSONL
+  sidecar, including spawned workers, rejections, claims filed,
+  low-confidence name claims, retry-skipped targets, consensus escalations,
+  cost, and latency.
+- `calibration`: confidence-quality metrics, including named-target coverage,
+  high-confidence precision, low-confidence precision, and abstention accuracy.
+
+Live `run.mjs` trials use a fresh isolated cache root by default. Use
+`--cache-root PATH` for a known location, or `--reuse-cache` only when you
+intentionally want a warm/stale intel database.
 
 Hard splits should include negative targets, no-string targets, deep anchor
 chains, C++ virtual methods, multiple optimization levels, and private

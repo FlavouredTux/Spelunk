@@ -174,9 +174,12 @@ struct Args {
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
+    bool dmp_anchors = false;       // --dmp-anchors: Roblox DataModelPatch anchor strings + xref fns
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool vtables = false;           // dump runtime pointer-dense vtables from loaded data/RELRO
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them
+    bool ppc_coverage = false;       // --ppc-coverage: rank unsupported PPC words in executable sections
+    ember::u64 ppc_coverage_limit = 25; // --coverage-limit N: rows for --ppc-coverage (0 = all)
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool cascade_plan = false;      // --cascade-plan: deterministic anchor-cascade target planner
     ember::u64 cascade_per_round = 12; // --per-round N: number of cascade targets to select

@@ -1,5 +1,5 @@
 // multi_exit
-uint64_t multi_exit(uint64_t a1, uint64_t a2) {
+uint64_t multi_exit(char* a1, char* a2) {
   if (!a1) {
     return -1;
   }

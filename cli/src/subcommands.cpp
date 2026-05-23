@@ -83,6 +83,7 @@
 #include <ember/common/timing.hpp>
 #include <ember/decompile/emitter.hpp>
 #include <ember/disasm/decoder.hpp>
+#include <ember/disasm/ppc_decoder.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
@@ -1649,6 +1650,259 @@ int run_objc_protos(const Args& args, const Binary& b) {
                       [&] { return build_objc_protocols_output(b); });
 }
 
+namespace {
+
+[[nodiscard]] std::string lower_ascii_copy(std::string_view s) {
+    std::string out(s);
+    for (char& c : out) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
+[[nodiscard]] std::string_view dmp_anchor_kind(std::string_view text) {
+    const std::string t = lower_ascii_copy(text);
+    struct Needle { std::string_view s; std::string_view kind; };
+    for (const Needle n : {
+        Needle{"datamodelpatch", "dmp"},
+        Needle{"data model patch", "dmp"},
+        Needle{"datamodel", "datamodel"},
+        Needle{"data model", "datamodel"},
+        Needle{"datamodelpatch", "datamodel"},
+        Needle{"scriptcontext", "scriptcontext"},
+        Needle{"task scheduler", "scheduler"},
+        Needle{"taskscheduler", "scheduler"},
+        Needle{"jobscheduler", "scheduler"},
+    }) {
+        if (t.find(n.s) != std::string::npos) return n.kind;
+    }
+    return {};
+}
+
+struct DmpAnchorRow {
+    addr_t string_addr = 0;
+    addr_t site = 0;
+    addr_t fn = 0;
+    u64    fn_off = 0;
+    std::string fn_name;
+    std::string kind;
+    std::string text;
+};
+
+[[nodiscard]] bool dmp_string_byte(unsigned char c) noexcept {
+    if (c == '\t' || c == '\n' || c == '\r') return true;
+    return c >= 0x20 && c <= 0x7e;
+}
+
+[[nodiscard]] bool dmp_skip_string_section(std::string_view name) noexcept {
+    if (name.find("__LINKEDIT") != std::string_view::npos ||
+        name.find("__unwind") != std::string_view::npos ||
+        name.find("__eh_frame") != std::string_view::npos) {
+        return true;
+    }
+    for (const std::string_view skip : {
+        std::string_view{"__text"},
+        std::string_view{"__stubs"},
+        std::string_view{"__stub_helper"},
+        std::string_view{".text"},
+        std::string_view{".plt"},
+        std::string_view{".init"},
+        std::string_view{".fini"},
+    }) {
+        if (name == skip) return true;
+        if (name.ends_with(std::string{","} + std::string{skip})) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool dmp_candidate_string_section(std::string_view name) noexcept {
+    for (const std::string_view part : {
+        std::string_view{"__cstring"},
+        std::string_view{"__objc_methname"},
+        std::string_view{"__objc_classname"},
+        std::string_view{"__objc_methtype"},
+        std::string_view{"__cfstring"},
+        std::string_view{".rodata"},
+        std::string_view{"rdata"},
+    }) {
+        if (name.find(part) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+struct DmpAnchorString {
+    addr_t addr = 0;
+    std::string kind;
+    std::string text;
+};
+
+struct DmpAnchorXref {
+    addr_t from_pc = 0;
+    addr_t to_addr = 0;
+};
+
+[[nodiscard]] std::vector<DmpAnchorString>
+scan_dmp_anchor_strings(const Binary& b) {
+    constexpr std::size_t kMinLen = 4;
+    constexpr std::size_t kMaxLen = 1024;
+    std::vector<DmpAnchorString> out;
+
+    for (const auto& sec : b.sections()) {
+        if (sec.data.empty() || !sec.flags.readable) continue;
+        if (dmp_skip_string_section(sec.name)) continue;
+        if (!dmp_candidate_string_section(sec.name)) continue;
+
+        const auto* data = reinterpret_cast<const unsigned char*>(sec.data.data());
+        std::size_t i = 0;
+        while (i < sec.data.size()) {
+            while (i < sec.data.size() && !dmp_string_byte(data[i])) ++i;
+            if (i >= sec.data.size()) break;
+
+            const std::size_t start = i;
+            std::string s;
+            while (i < sec.data.size() && dmp_string_byte(data[i]) &&
+                   s.size() < kMaxLen) {
+                s.push_back(static_cast<char>(data[i]));
+                ++i;
+            }
+            const bool terminated = i < sec.data.size() && data[i] == 0;
+            if (terminated && s.size() >= kMinLen) {
+                if (std::string_view kind = dmp_anchor_kind(s); !kind.empty()) {
+                    out.push_back({
+                        sec.vaddr + static_cast<addr_t>(start),
+                        std::string(kind),
+                        std::move(s),
+                    });
+                }
+            }
+            if (i < sec.data.size()) ++i;
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] std::map<addr_t, std::vector<DmpAnchorXref>>
+scan_dmp_anchor_xrefs_fast(const Binary& b,
+                           const std::vector<DmpAnchorString>& anchors) {
+    std::map<addr_t, std::vector<DmpAnchorXref>> out;
+    if (anchors.empty() || b.arch() != Arch::X86_64) return out;
+
+    std::unordered_map<addr_t, bool> wanted;
+    wanted.reserve(anchors.size());
+    for (const auto& a : anchors) wanted.emplace(a.addr, true);
+
+    auto extra_imm_len = [](u8 opcode) -> std::size_t {
+        if (opcode == 0x80 || opcode == 0x83 || opcode == 0xf6) return 1;
+        if (opcode == 0x81 || opcode == 0xf7) return 4;
+        return 0;
+    };
+
+    for (const auto& sec : b.sections()) {
+        if (!sec.flags.executable || sec.data.size() < 7) continue;
+        const auto* bytes = reinterpret_cast<const u8*>(sec.data.data());
+        for (std::size_t off = 0; off + 6 < sec.data.size(); ++off) {
+            std::size_t op = off;
+            if (bytes[op] >= 0x40 && bytes[op] <= 0x4f) ++op;
+            if (op + 5 >= sec.data.size()) continue;
+
+            const u8 opcode = bytes[op];
+            if (opcode != 0x8d && opcode != 0x8b && opcode != 0x89 &&
+                opcode != 0x39 && opcode != 0x3b && opcode != 0x85 &&
+                opcode != 0x80 && opcode != 0x81 && opcode != 0x83 &&
+                opcode != 0xf6 && opcode != 0xf7) {
+                continue;
+            }
+
+            const u8 modrm = bytes[op + 1];
+            if ((modrm & 0xc7u) != 0x05u) continue;  // mod=00, r/m=101 => RIP+disp32
+            const std::size_t inst_len = (op - off) + 2 + 4 + extra_imm_len(opcode);
+            if (off + inst_len > sec.data.size()) continue;
+
+            const i32 disp = read_le_at<i32>(
+                reinterpret_cast<const std::byte*>(bytes + op + 2));
+            const addr_t ip = sec.vaddr + static_cast<addr_t>(off);
+            const addr_t target = static_cast<addr_t>(
+                static_cast<i64>(ip + inst_len) + static_cast<i64>(disp));
+            if (!wanted.contains(target)) continue;
+            out[target].push_back({ip, target});
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+int run_dmp_anchors(const Args& args, const Binary& b) {
+    ScopedTimer timer("dmp_anchors.total");
+    std::vector<DmpAnchorRow> rows;
+    std::map<addr_t, std::size_t> score_by_fn;
+
+    const auto anchors = scan_dmp_anchor_strings(b);
+    const auto xref_map = args.full_analysis
+        ? scan_dmp_anchor_xrefs_fast(b, anchors)
+        : std::map<addr_t, std::vector<DmpAnchorXref>>{};
+    for (const auto& s : anchors) {
+        auto xit = xref_map.find(s.addr);
+        if (xit == xref_map.end() || xit->second.empty()) {
+            rows.push_back({s.addr, 0, 0, 0, {}, s.kind, s.text});
+            continue;
+        }
+        for (const auto& xr : xit->second) {
+            DmpAnchorRow row;
+            row.string_addr = s.addr;
+            row.site = xr.from_pc;
+            row.kind = s.kind;
+            row.text = s.text;
+            if (auto cf = containing_function(b, xr.from_pc); cf) {
+                row.fn = cf->entry;
+                row.fn_off = cf->offset_within;
+                row.fn_name = std::move(cf->name);
+                ++score_by_fn[row.fn];
+            }
+            rows.push_back(std::move(row));
+        }
+    }
+
+    std::ranges::sort(rows, [&](const DmpAnchorRow& a, const DmpAnchorRow& bb) {
+        const std::size_t as = a.fn == 0 ? 0 : score_by_fn[a.fn];
+        const std::size_t bs = bb.fn == 0 ? 0 : score_by_fn[bb.fn];
+        if (as != bs) return as > bs;
+        if (a.fn != bb.fn) return a.fn < bb.fn;
+        if (a.site != bb.site) return a.site < bb.site;
+        return a.string_addr < bb.string_addr;
+    });
+
+    std::string out;
+    if (args.json) {
+        out += "{\"rows\":[";
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const auto& r = rows[i];
+            if (i) out += ',';
+            out += std::format(
+                "{{\"string\":\"{:#x}\",\"site\":\"{:#x}\",\"fn\":\"{:#x}\","
+                "\"fn_offset\":\"{:#x}\",\"score\":{},\"kind\":\"{}\","
+                "\"fn_name\":\"{}\",\"text\":\"{}\"}}",
+                r.string_addr, r.site, r.fn, r.fn_off,
+                r.fn == 0 ? 0 : score_by_fn[r.fn],
+                json_escape(r.kind), json_escape(r.fn_name),
+                json_escape(r.text));
+        }
+        out += "]}\n";
+    } else {
+        out += "score\tfn\tfn_off\tsite\tstring\tkind\tname\ttext\n";
+        for (const auto& r : rows) {
+            out += std::format("{}\t{:#x}\t{:#x}\t{:#x}\t{:#x}\t{}\t{}\t{}\n",
+                               r.fn == 0 ? 0 : score_by_fn[r.fn],
+                               r.fn, r.fn_off, r.site, r.string_addr,
+                               r.kind, r.fn_name, escape_for_line(r.text));
+        }
+    }
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    std::println(stderr, "ember: --dmp-anchors: {} anchor row{}", rows.size(),
+                 rows.size() == 1 ? "" : "s");
+    return EXIT_SUCCESS;
+}
+
 int run_rtti(const Args& args, const Binary& b) {
     return run_cached(args, "rtti", [&] { return build_rtti_output(b); });
 }
@@ -1668,6 +1922,126 @@ int run_vtables(const Args& args, const Binary& b) {
 
 int run_int3_resolve(const Args& args, const Binary& b) {
     return run_cached(args, "int3-resolve", [&] { return build_int3_resolve_output(b); });
+}
+
+int run_ppc_coverage(const Args& args, const Binary& b) {
+    if (b.arch() != Arch::Ppc32 && b.arch() != Arch::Ppc64) {
+        std::println(stderr, "ember: --ppc-coverage: binary arch is {}, expected ppc32/ppc64",
+                     arch_name(b.arch()));
+        return EXIT_FAILURE;
+    }
+
+    struct Hit {
+        u32 word = 0;
+        std::size_t count = 0;
+        std::vector<addr_t> samples;
+        std::string error;
+    };
+
+    auto word_at = [&](const std::byte* p) noexcept -> u32 {
+        return b.endian() == Endian::Big ? read_be_at<u32>(p) : read_le_at<u32>(p);
+    };
+
+    auto shape_for = [](u32 word) {
+        const u32 op = word >> 26;
+        const u32 xo = (word >> 1) & 0x3ffu;
+        const u32 fp_xo = (word >> 1) & 0x1fu;
+        if (op == 19 || op == 31) return std::format("op={} xo={}", op, xo);
+        if (op == 59 || op == 63) return std::format("op={} xo={} fp_xo={}", op, xo, fp_xo);
+        if (op == 58 || op == 62) return std::format("op={} ds_xo={}", op, word & 0x3u);
+        return std::format("op={}", op);
+    };
+
+    PpcDecoder dec(b.endian());
+    std::unordered_map<u32, Hit> unsupported;
+    std::size_t executable_sections = 0;
+    std::size_t total_words = 0;
+    std::size_t padding_words = 0;
+    std::size_t decoded_words = 0;
+    std::size_t unsupported_words = 0;
+
+    for (const auto& sec : b.sections()) {
+        if (!sec.flags.executable || sec.data.size() < 4) continue;
+        ++executable_sections;
+        const auto data = sec.data;
+        const std::size_t n = data.size() & ~std::size_t{3};
+        for (std::size_t off = 0; off < n; off += 4) {
+            const addr_t va = sec.vaddr + static_cast<addr_t>(off);
+            auto rv = dec.decode(data.subspan(off, 4), va);
+            ++total_words;
+            if (rv) {
+                ++decoded_words;
+                continue;
+            }
+            ++unsupported_words;
+            const u32 word = word_at(data.data() + off);
+            if (word == 0) {
+                ++padding_words;
+                continue;
+            }
+            auto& h = unsupported[word];
+            h.word = word;
+            ++h.count;
+            if (h.samples.size() < 4) h.samples.push_back(va);
+            if (h.error.empty()) h.error = rv.error().message;
+        }
+    }
+
+    std::vector<const Hit*> rows;
+    rows.reserve(unsupported.size());
+    for (const auto& [_, h] : unsupported) rows.push_back(&h);
+    std::sort(rows.begin(), rows.end(), [](const Hit* lhs, const Hit* rhs) {
+        if (lhs->count != rhs->count) return lhs->count > rhs->count;
+        return lhs->word < rhs->word;
+    });
+    if (args.ppc_coverage_limit != 0 &&
+        rows.size() > static_cast<std::size_t>(args.ppc_coverage_limit)) {
+        rows.resize(static_cast<std::size_t>(args.ppc_coverage_limit));
+    }
+
+    const double coverage = total_words == 0
+        ? 100.0
+        : (100.0 * static_cast<double>(decoded_words) / static_cast<double>(total_words));
+
+    if (args.json) {
+        std::string out = std::format(
+            "{{\"arch\":\"{}\",\"endian\":\"{}\",\"executable_sections\":{},"
+            "\"total_words\":{},\"decoded_words\":{},\"unsupported_words\":{},"
+            "\"padding_words\":{},\"coverage\":{:.3f},\"unsupported\":[",
+            arch_name(b.arch()), endian_name(b.endian()), executable_sections,
+            total_words, decoded_words, unsupported_words, padding_words, coverage);
+        bool first = true;
+        for (const Hit* h : rows) {
+            if (!first) out += ',';
+            first = false;
+            out += std::format("{{\"word\":\"0x{:08x}\",\"count\":{},\"shape\":\"{}\","
+                               "\"error\":\"{}\",\"samples\":[",
+                               h->word, h->count, json_escape(shape_for(h->word)),
+                               json_escape(h->error));
+            for (std::size_t i = 0; i < h->samples.size(); ++i) {
+                if (i) out += ',';
+                out += std::format("\"{:#x}\"", h->samples[i]);
+            }
+            out += "]}";
+        }
+        out += "]}\n";
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    std::println("; ppc coverage: decoded {}/{} words ({:.1f}%), unsupported {} (padding {}) across {} executable section(s)",
+                 decoded_words, total_words, coverage, unsupported_words, padding_words, executable_sections);
+    std::println("count\tword\tshape\tsamples\terror");
+    for (const Hit* h : rows) {
+        std::string samples;
+        for (std::size_t i = 0; i < h->samples.size(); ++i) {
+            if (i) samples += ",";
+            samples += std::format("{:#x}", h->samples[i]);
+        }
+        std::println("{}\t0x{:08x}\t{}\t{}\t{}",
+                     h->count, h->word, shape_for(h->word), samples, h->error);
+    }
+    return EXIT_SUCCESS;
 }
 
 int run_arities(const Args& args, const Binary& b) {

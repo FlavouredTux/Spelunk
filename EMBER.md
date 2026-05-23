@@ -12,11 +12,15 @@ treat as reference.
 Ember loads a binary (ELF / Mach-O / PE / Microsoft minidump / raw region
 scrape), discovers functions, lifts x86-64 (and partial AArch64 / PPC64)
 to its own SSA IR, structures the CFG into `if` / `while` / `for` /
-`switch` / `goto`, and emits readable pseudo-C. It runs library-function
-recognition (TEEF Max), YARA-like crypto/protocol identification, full
-xref + data-xref maps, and a ptrace/Mach debugger that breakpoints
-against the pseudo-C view. There is no DWARF dependency; Ember invents a
-source view from the binary itself.
+`switch` / `goto`, and emits readable pseudo-C. The Mach-O loader handles
+thin/universal 64-bit slices, `LC_MAIN` / `LC_UNIXTHREAD` entry discovery,
+`LC_FUNCTION_STARTS`, dyld bind streams, dyld export tries, chained
+fixups, ObjC method metadata, ObjC ivars, ObjC block literals, imported
+ObjC classrefs, and basic Swift nominal type descriptors. Ember runs
+library-function recognition (TEEF Max), YARA-like crypto/protocol
+identification, full xref + data-xref maps, and a ptrace/Mach debugger
+that breakpoints against the pseudo-C view. There is no DWARF dependency;
+Ember invents a source view from the binary itself.
 
 A `.ember` annotation file persists everything you discover (renames,
 type signatures, struct field names, named constants, free-form notes).
@@ -113,6 +117,7 @@ tail.
 | `ember --functions <binary>` | TSV: addr / size / kind / name | enumerate everything |
 | `ember --functions --full-analysis <binary>` | same, deeper discovery | first pass missed obvious fns |
 | `ember --strings <binary>` | `addr\|text\|xref1,xref2,...` | find anchors |
+| `ember --dmp-anchors <binary>` | DataModelPatch/DataModel/ScriptContext/TaskScheduler anchor strings | Roblox DataModelPatch triage |
 | `ember --xrefs <binary>` | `caller -> callee` per line | full call graph dump; builds/reuses the broad xrefs cache |
 | `ember --data-xrefs <binary>` | TSV: target / from-pc / kind | whole-binary read/write/lea/code-ptr inventory; reuses the xrefs/cache work |
 
@@ -134,7 +139,58 @@ tail.
 | `ember --rtti <binary>` | TSV: vtable / class info | C++ class hierarchy |
 | `ember --vtables <binary>` | runtime vtables + slots | full loaded-dump / RELRO vtable inventory |
 | `ember --vtable-at <VA> [--limit N] <binary>` | one runtime vtable around a vptr/typeinfo-adjacent/table-slot VA | narrow std::function / vtable work without dumping every table |
-| `ember --objc-names <binary>` | Mach-O ObjC method names | ObjC binaries |
+| `ember --objc-names <binary>` | Mach-O ObjC method names, including relative method lists | ObjC binaries |
+| `ember --dmp-anchors <binary>` | Roblox DataModelPatch anchors; add `--full-analysis` for slower xref/function attribution | DMP / datamodel patch hunts |
+
+### Mach-O notes
+- **Entries and functions.** Ember prefers `LC_MAIN`, falls back to
+  `LC_UNIXTHREAD` (`x86_64` RIP or `arm64` PC), and uses
+  `LC_FUNCTION_STARTS` plus executable-section attributes to seed code
+  discovery. When metadata is sparse, the prologue sweep now covers
+  AArch64/Apple Silicon function starts too: optional entry HINT/PAC/BTI,
+  framed `stp x29, x30, [sp, #-imm]!`, and frameless `sub sp, sp, #imm`
+  starts are validated on 4-byte boundaries. `N_SECT` symbols in
+  executable sections become functions; data-section symbols become
+  objects.
+- **Imports and fixups.** Classic dyld bind, lazy-bind, and weak-bind
+  streams feed imports. `LC_DYLD_CHAINED_FIXUPS` is parsed through the
+  chained starts tables, including multi-start pages and arm64e bind /
+  rebase pointer formats (`USERLAND` and `USERLAND24`). Chained import
+  formats 1/2/3 are decoded, including `dyld_chained_import_addend64`
+  name offsets. If an import only appears in chained fixups, Ember
+  synthesizes an import symbol for it.
+- **Exports.** `LC_DYLD_EXPORTS_TRIE` and the export trie embedded in
+  `LC_DYLD_INFO[_ONLY]` are decoded. Exported function/object names are
+  added as symbols even when `LC_SYMTAB` is sparse, so `--functions` and
+  `-s exported_name` can resolve dyld-visible symbols that are not present
+  as normal nlist entries.
+- **Stubs.** x86-64 and arm64 import stubs resolve through their bound
+  slots, so pseudo-C can print calls like `getpid()` instead of anonymous
+  branch targets.
+- **ObjC.** `__objc_classlist` / `__objc_nlclslist` metadata names methods
+  for pseudo-C and `--objc-names`; category metadata is read from both
+  `__objc_catlist` and `__objc_nlcatlist`. Both classic and relative method
+  lists are supported, including preoptimized selector references.
+  Category target classes can be recovered through dyld import/GOT symbols,
+  and `__objc_superrefs` is treated like classrefs. `class_ro_t.baseIvars`
+  metadata is also decoded, so common ObjC field accesses through runtime
+  ivar-offset slots render as `self->fieldName` instead of
+  `a1 + *(uint64_t*)(0x...)`. Imported classrefs are recovered from
+  bind/GOT metadata even when the slot is zero on disk, so class messages
+  can render as `[NSString stringWithUTF8String:x]`, `[WKWebView alloc]`,
+  or `[obj setCookie:cookie completionHandler:block]` instead of raw
+  `objc_msgSend(...)` calls. Return-value bindings for ObjC messages are
+  selector-derived (`r_websiteDataStore`, `r_httpCookieStore`, `r_name`)
+  rather than generic `r_objc_msgSend_N` names when selector metadata is
+  available.
+- **ObjC blocks.** Readable data/const sections are scanned for block
+  literal layouts. Pseudo-C names block literal arguments as
+  `__block_literal_<addr>`, links them to `__block_invoke_<addr>`, and uses
+  descriptor signatures such as `v8@?0` to type and size block invoke
+  headers.
+- **Swift.** `__swift5_types` entries are followed to nominal type
+  descriptors and exposed as object symbols named `swift_type_<Name>`.
+  This is descriptor naming, not a full Swift demangler.
 
 ### Lookups
 | Command | Output | Use when |
@@ -194,6 +250,7 @@ next agent / tool can decide whether to verify.
   `--refs-to <VA> --access read|write|lea|all` for one target.
 - For stripped Roblox-style investigations, a good broad setup is:
   ```sh
+  ember --dmp-anchors <binary> > /tmp/ember-dmp-anchors.tsv
   env EMBER_TIMING=1 ember --xrefs --no-cache <binary> > /tmp/ember-xrefs.out
   ember --functions --json <binary> > /tmp/ember-functions.json
   ember --data-xrefs <binary> > /tmp/ember-data-xrefs.tsv
@@ -210,6 +267,10 @@ next agent / tool can decide whether to verify.
   you are actively naming, typing, or explaining.
 - `--full-analysis` is for missed functions and suspicious gaps in the
   function list. Do not add it to every inventory command by habit.
+- `--dmp-anchors` is optimized for fast Roblox DataModelPatch triage. By
+  default it only emits anchor-string rows so it stays responsive on
+  RobloxPlayer-scale Mach-O files. Add `--full-analysis` when you want the
+  slower xref/function attribution pass for those anchors.
 - `--refs-to-loose` is broader than `--refs-to`; use it when ordinary
   callers are empty but the target may live in a table, relocation slot,
   callback array, or runtime dump.
@@ -306,6 +367,18 @@ Plain two-column `from to` still records an observed indirect edge.
 - `sub_<hex>` is an unnamed function. Rename via the agent loop.
 - `field_<hex>` is an unnamed struct field at offset hex from a
   parameter pointer. Name via `[field]` in `.ember`.
+- In Mach-O ObjC methods, `self->ivarName` may come directly from ObjC
+  `baseIvars` metadata and runtime ivar-offset slots. This is stronger
+  than a generic struct-field guess because it is tied to the current
+  method's class metadata.
+- ObjC runtime calls may render as bracket syntax, e.g.
+  `[NSString stringWithUTF8String:x]` or `[obj setValue:v forKey:k]`.
+  Their downstream return temporaries may be named after the selector,
+  such as `r_websiteDataStore`, `r_httpCookieStore`, or `r_value`.
+  Block callback literals render as
+  `__block_literal_<addr> /* invoke: __block_invoke_<addr>, sig: ... */`;
+  decompiling the invoke address uses the recovered block signature for
+  its header when available.
 - `NAME /* 0x... */` in an immediate expression is a named constant
   supplied by annotations. Use `[const]` for hashes, magic values,
   protocol IDs, or resolver constants that make the pseudo-C readable.

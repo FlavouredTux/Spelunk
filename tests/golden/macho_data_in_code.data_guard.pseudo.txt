@@ -1,0 +1,3 @@
+// data_guard
+void data_guard(void) {
+}

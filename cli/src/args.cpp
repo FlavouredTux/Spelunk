@@ -49,9 +49,11 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--eh",        &Args::eh},
     {"",   "--objc-names", &Args::objc_names},
     {"",   "--objc-protocols", &Args::objc_protos},
+    {"",   "--dmp-anchors", &Args::dmp_anchors},
     {"",   "--rtti",     &Args::rtti},
     {"",   "--vtables",  &Args::vtables},
     {"",   "--int3-resolve", &Args::int3_resolve},
+    {"",   "--ppc-coverage", &Args::ppc_coverage},
     {"",   "--cfg-pseudo", &Args::cfg_pseudo},
     {"",   "--cascade-plan", &Args::cascade_plan},
     {"",   "--functions", &Args::functions},
@@ -395,6 +397,19 @@ Result<Args> parse_args(int argc, char** argv) {
             } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-ir-insts: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--coverage-limit") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--coverage-limit requires a value"));
+            }
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.ppc_coverage_limit = *v;
+            } else {
+                return std::unexpected(Error::invalid_format(
+                    "--coverage-limit: bad integer"));
             }
             continue;
         }

@@ -2,7 +2,7 @@
 extern uint64_t g_count;
 extern FILE* stdout;
 
-char* use_imports(char* a1, uint64_t a2) {
+char* use_imports(char* a1, char* a2) {
   if (a1) {
     uint64_t r_strlen = strlen(a1);
     g_count += r_strlen;

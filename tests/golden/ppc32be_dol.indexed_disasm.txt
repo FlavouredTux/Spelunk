@@ -1,3 +1,4 @@
+; trampoline: steal_len=16 needs_relocation=no first_bb_end=0x80003170 safe_absolute_jump=yes
 0x0000000080003160  94 21 ff f0                     stwu r1, dword ptr [r1 - 0x10]
 0x0000000080003164  38 80 00 00                     addi r4, 0x0
 0x0000000080003168  7c a3 20 ae                     lbzx r5, byte ptr [r3 + r4]

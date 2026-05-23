@@ -236,9 +236,11 @@ int main(int argc, char** argv) {
     if (args.identify)           return run_identify(args, b);
     if (args.objc_names)         return run_objc_names(args, b);
     if (args.objc_protos)        return run_objc_protos(args, b);
+    if (args.dmp_anchors)        return run_dmp_anchors(args, b);
     if (args.rtti)               return run_rtti(args, b);
     if (args.vtables)            return run_vtables(args, b);
     if (args.int3_resolve)       return run_int3_resolve(args, b);
+    if (args.ppc_coverage)       return run_ppc_coverage(args, b);
     if (args.arities)            return run_arities(args, b);
     if (args.functions)          return run_functions(args, b);
 

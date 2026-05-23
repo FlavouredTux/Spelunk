@@ -1,0 +1,4 @@
+// -[Tiny ping]
+void -[Tiny ping](Tiny* self, SEL _cmd) {
+  return 7;
+}

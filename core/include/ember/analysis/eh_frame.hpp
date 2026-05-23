@@ -48,6 +48,11 @@ struct FdeExtent {
 // function (rare on x86-64) and are left to the caller to dedupe.
 [[nodiscard]] std::vector<FdeExtent> enumerate_fde_extents(const Binary& b);
 
+// Walk Apple compact-unwind metadata in Mach-O __TEXT,__unwind_info and
+// return the function ranges described by its second-level pages. Empty for
+// non-Mach-O binaries or malformed/absent compact-unwind sections.
+[[nodiscard]] std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b);
+
 // Convenience lookup. Returns nullopt if no landing pad is registered for
 // `call_site` or if the map is empty.
 [[nodiscard]] inline std::optional<LandingPad>

@@ -367,6 +367,15 @@ void set_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs) {
     ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
 }
 
+void set_unsigned_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs) {
+    lhs = ctx.match_size(lhs, IrType::I64);
+    rhs = ctx.match_size(rhs, IrType::I64);
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, lhs, rhs));
+    ctx.emit_set_flag(Flag::Sf, ctx.emit_cmp(IrOp::CmpUlt, lhs, rhs));
+    ctx.emit_set_flag(Flag::Cf, ctx.flag_val(Flag::Sf));
+    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+}
+
 [[nodiscard]] IrValue branch_predicate(LiftCtx& ctx, Mnemonic mn) {
     const IrValue zf = ctx.flag_val(Flag::Zf);
     const IrValue sf = ctx.flag_val(Flag::Sf);
@@ -443,6 +452,14 @@ void lift_dst_intrinsic(LiftCtx& ctx, std::string_view name) {
     ctx.emit(std::move(i));
 }
 
+void lift_sign_extend_from(LiftCtx& ctx, IrType narrow) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), narrow);
+    IrValue out = ctx.match_size(src, ctx.ppc_reg_type(), true);
+    store_lvalue(insn.operands[0], out, ctx);
+}
+
 void lift_instruction(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
 
@@ -514,6 +531,18 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Sub: binop(IrOp::Sub); break;
         case Mnemonic::Mul: binop(IrOp::Mul); break;
         case Mnemonic::Mulhw: lift_dst_intrinsic(ctx, "ppc.mulhw"); break;
+        case Mnemonic::Mulhwu: lift_dst_intrinsic(ctx, "ppc.mulhwu"); break;
+        case Mnemonic::Addc: lift_dst_intrinsic(ctx, "ppc.addc"); break;
+        case Mnemonic::Adde: lift_dst_intrinsic(ctx, "ppc.adde"); break;
+        case Mnemonic::Addze: lift_dst_intrinsic(ctx, "ppc.addze"); break;
+        case Mnemonic::Subfc: lift_dst_intrinsic(ctx, "ppc.subfc"); break;
+        case Mnemonic::Subfze: lift_dst_intrinsic(ctx, "ppc.subfze"); break;
+        case Mnemonic::Subfe: lift_dst_intrinsic(ctx, "ppc.subfe"); break;
+        case Mnemonic::Divw: lift_dst_intrinsic(ctx, "ppc.divw"); break;
+        case Mnemonic::Divwu: lift_dst_intrinsic(ctx, "ppc.divwu"); break;
+        case Mnemonic::Andc: lift_dst_intrinsic(ctx, "ppc.andc"); break;
+        case Mnemonic::Nor: lift_dst_intrinsic(ctx, "ppc.nor"); break;
+        case Mnemonic::Orc: lift_dst_intrinsic(ctx, "ppc.orc"); break;
         case Mnemonic::And: binop(IrOp::And); break;
         case Mnemonic::Or:  binop(IrOp::Or);  break;
         case Mnemonic::Xor: binop(IrOp::Xor); break;
@@ -522,6 +551,15 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Shl: binop(IrOp::Shl); break;
         case Mnemonic::Shr: binop(IrOp::Lshr); break;
         case Mnemonic::Sar: binop(IrOp::Ashr); break;
+        case Mnemonic::Extsb:
+            lift_sign_extend_from(ctx, IrType::I8);
+            break;
+        case Mnemonic::Extsh:
+            lift_sign_extend_from(ctx, IrType::I16);
+            break;
+        case Mnemonic::Cntlzw:
+            lift_dst_intrinsic(ctx, "ppc.cntlzw");
+            break;
         case Mnemonic::Rlwinm:
             if (insn.num_operands == 5) {
                 const u32 sh = static_cast<u32>(insn.operands[2].imm.value) & 31u;
@@ -545,17 +583,65 @@ void lift_instruction(LiftCtx& ctx) {
                 store_lvalue(insn.operands[0], ctx.match_size(out, ctx.ppc_reg_type()), ctx);
             }
             break;
+        case Mnemonic::Rlwimi:
+            lift_dst_intrinsic(ctx, "ppc.rlwimi");
+            break;
         case Mnemonic::Cmp:
             if (insn.num_operands == 2) {
                 set_compare_flags(ctx, materialize_rvalue(insn.operands[0], ctx),
                                   materialize_rvalue(insn.operands[1], ctx));
             }
             break;
+        case Mnemonic::Cmpl:
+            if (insn.num_operands == 2) {
+                set_unsigned_compare_flags(ctx, materialize_rvalue(insn.operands[0], ctx),
+                                           materialize_rvalue(insn.operands[1], ctx));
+            }
+            break;
         case Mnemonic::Mfcr:
             lift_dst_intrinsic(ctx, "ppc.mfcr");
             break;
+        case Mnemonic::Mtcrf:
+            lift_intrinsic(ctx, "ppc.mtcrf");
+            break;
+        case Mnemonic::Mfspr:
+            lift_dst_intrinsic(ctx, "ppc.mfspr");
+            break;
+        case Mnemonic::Mtspr:
+            lift_intrinsic(ctx, "ppc.mtspr");
+            break;
+        case Mnemonic::Mfmsr:
+            lift_dst_intrinsic(ctx, "ppc.mfmsr");
+            break;
+        case Mnemonic::Mtmsr:
+            lift_intrinsic(ctx, "ppc.mtmsr");
+            break;
+        case Mnemonic::Mftb:
+            lift_dst_intrinsic(ctx, "ppc.mftb");
+            break;
+        case Mnemonic::Crand:
+            lift_intrinsic(ctx, "ppc.crand");
+            break;
+        case Mnemonic::Crandc:
+            lift_intrinsic(ctx, "ppc.crandc");
+            break;
+        case Mnemonic::Creqv:
+            lift_intrinsic(ctx, "ppc.creqv");
+            break;
+        case Mnemonic::Crnand:
+            lift_intrinsic(ctx, "ppc.crnand");
+            break;
+        case Mnemonic::Crnor:
+            lift_intrinsic(ctx, "ppc.crnor");
+            break;
         case Mnemonic::Cror:
             lift_intrinsic(ctx, "ppc.cror");
+            break;
+        case Mnemonic::Crorc:
+            lift_intrinsic(ctx, "ppc.crorc");
+            break;
+        case Mnemonic::Crxor:
+            lift_intrinsic(ctx, "ppc.crxor");
             break;
         case Mnemonic::Ld:
         case Mnemonic::Ldu:
@@ -575,6 +661,7 @@ void lift_instruction(LiftCtx& ctx) {
             load_int(IrType::I32, false);
             break;
         case Mnemonic::Lwzu:
+        case Mnemonic::Lwzux:
             load_int(IrType::I32, false, true);
             break;
         case Mnemonic::Lbz:
@@ -582,6 +669,7 @@ void lift_instruction(LiftCtx& ctx) {
             load_int(IrType::I8, false);
             break;
         case Mnemonic::Lbzu:
+        case Mnemonic::Lbzux:
             load_int(IrType::I8, false, true);
             break;
         case Mnemonic::Lhz:
@@ -589,6 +677,7 @@ void lift_instruction(LiftCtx& ctx) {
             load_int(IrType::I16, false);
             break;
         case Mnemonic::Lhzu:
+        case Mnemonic::Lhzux:
             load_int(IrType::I16, false, true);
             break;
         case Mnemonic::Lha:
@@ -596,13 +685,28 @@ void lift_instruction(LiftCtx& ctx) {
             load_int(IrType::I16, true);
             break;
         case Mnemonic::Lhau:
+        case Mnemonic::Lhaux:
             load_int(IrType::I16, true, true);
             break;
         case Mnemonic::Lfs:
+        case Mnemonic::Lfsx:
             lift_fp_mov(ctx, IrType::F32);
             break;
+        case Mnemonic::Lfsu:
+            lift_dst_intrinsic(ctx, "ppc.lfsu");
+            break;
         case Mnemonic::Lfd:
+        case Mnemonic::Lfdx:
             lift_fp_mov(ctx, IrType::F64);
+            break;
+        case Mnemonic::Lfdu:
+            lift_dst_intrinsic(ctx, "ppc.lfdu");
+            break;
+        case Mnemonic::Lfsux:
+            lift_dst_intrinsic(ctx, "ppc.lfsux");
+            break;
+        case Mnemonic::Lfdux:
+            lift_dst_intrinsic(ctx, "ppc.lfdux");
             break;
         case Mnemonic::Fadds:
             lift_fp_binop(ctx, IrOp::Add, IrType::F32);
@@ -615,6 +719,30 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         case Mnemonic::Fdivs:
             lift_fp_binop(ctx, IrOp::Div, IrType::F32);
+            break;
+        case Mnemonic::Fmadds:
+            lift_dst_intrinsic(ctx, "ppc.fmadds");
+            break;
+        case Mnemonic::Fmsubs:
+            lift_dst_intrinsic(ctx, "ppc.fmsubs");
+            break;
+        case Mnemonic::Fnmadds:
+            lift_dst_intrinsic(ctx, "ppc.fnmadds");
+            break;
+        case Mnemonic::Fnmsubs:
+            lift_dst_intrinsic(ctx, "ppc.fnmsubs");
+            break;
+        case Mnemonic::Fmadd:
+            lift_dst_intrinsic(ctx, "ppc.fmadd");
+            break;
+        case Mnemonic::Fmsub:
+            lift_dst_intrinsic(ctx, "ppc.fmsub");
+            break;
+        case Mnemonic::Fnmadd:
+            lift_dst_intrinsic(ctx, "ppc.fnmadd");
+            break;
+        case Mnemonic::Fnmsub:
+            lift_dst_intrinsic(ctx, "ppc.fnmsub");
             break;
         case Mnemonic::Fadd:
             lift_fp_binop(ctx, IrOp::Add, IrType::F64);
@@ -635,6 +763,15 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Fneg:
             lift_fp_unop(ctx, IrOp::Neg, IrType::F64);
             break;
+        case Mnemonic::Frsp:
+            lift_dst_intrinsic(ctx, "ppc.frsp");
+            break;
+        case Mnemonic::Fctiw:
+            lift_dst_intrinsic(ctx, "ppc.fctiw");
+            break;
+        case Mnemonic::Fctiwz:
+            lift_dst_intrinsic(ctx, "ppc.fctiwz");
+            break;
         case Mnemonic::Fcmpu:
         case Mnemonic::Fcmpo:
             lift_fp_cmp(ctx, IrType::F64);
@@ -654,6 +791,7 @@ void lift_instruction(LiftCtx& ctx) {
             store_int(IrType::I32, false);
             break;
         case Mnemonic::Stwu:
+        case Mnemonic::Stwux:
             store_int(IrType::I32, true);
             break;
         case Mnemonic::Stb:
@@ -661,6 +799,7 @@ void lift_instruction(LiftCtx& ctx) {
             store_int(IrType::I8, false);
             break;
         case Mnemonic::Stbu:
+        case Mnemonic::Stbux:
             store_int(IrType::I8, true);
             break;
         case Mnemonic::Sth:
@@ -668,13 +807,47 @@ void lift_instruction(LiftCtx& ctx) {
             store_int(IrType::I16, false);
             break;
         case Mnemonic::Sthu:
+        case Mnemonic::Sthux:
             store_int(IrType::I16, true);
             break;
+        case Mnemonic::Lmw:
+            lift_dst_intrinsic(ctx, "ppc.lmw");
+            break;
+        case Mnemonic::Stmw:
+            lift_intrinsic(ctx, "ppc.stmw");
+            break;
         case Mnemonic::Stfs:
+        case Mnemonic::Stfsx:
             lift_fp_store(ctx, IrType::F32);
             break;
+        case Mnemonic::Stfsu:
+            lift_intrinsic(ctx, "ppc.stfsu");
+            break;
         case Mnemonic::Stfd:
+        case Mnemonic::Stfdx:
             lift_fp_store(ctx, IrType::F64);
+            break;
+        case Mnemonic::Stfdu:
+            lift_intrinsic(ctx, "ppc.stfdu");
+            break;
+        case Mnemonic::Stfsux:
+            lift_intrinsic(ctx, "ppc.stfsux");
+            break;
+        case Mnemonic::Stfdux:
+            lift_intrinsic(ctx, "ppc.stfdux");
+            break;
+        case Mnemonic::PsqL:
+        case Mnemonic::PsqLu:
+            lift_dst_intrinsic(ctx, insn.mnemonic == Mnemonic::PsqL ? "ppc.psq_l" : "ppc.psq_lu");
+            break;
+        case Mnemonic::PsqSt:
+            lift_intrinsic(ctx, "ppc.psq_st");
+            break;
+        case Mnemonic::PsqStu:
+            lift_intrinsic(ctx, "ppc.psq_stu");
+            break;
+        case Mnemonic::PsOp4:
+            lift_intrinsic(ctx, "ppc.ps.op4");
             break;
         case Mnemonic::Call:
             lift_call(ctx);
@@ -695,12 +868,51 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Bdz:
             lift_cond_branch(ctx);
             break;
+        case Mnemonic::Bclr:
+            lift_intrinsic(ctx, "ppc.bclr");
+            break;
+        case Mnemonic::Bc:
+            lift_intrinsic(ctx, "ppc.bc");
+            break;
         case Mnemonic::Nop: {
             IrInst i;
             i.op = IrOp::Nop;
             ctx.emit(std::move(i));
             break;
         }
+        case Mnemonic::Isync:
+            lift_intrinsic(ctx, "ppc.isync");
+            break;
+        case Mnemonic::Sync:
+            lift_intrinsic(ctx, "ppc.sync");
+            break;
+        case Mnemonic::Rfi:
+            lift_intrinsic(ctx, "ppc.rfi");
+            break;
+        case Mnemonic::Sc:
+            lift_intrinsic(ctx, "ppc.sc");
+            break;
+        case Mnemonic::Twi:
+            lift_intrinsic(ctx, "ppc.twi");
+            break;
+        case Mnemonic::Dcbf:
+            lift_intrinsic(ctx, "ppc.dcbf");
+            break;
+        case Mnemonic::Dcbst:
+            lift_intrinsic(ctx, "ppc.dcbst");
+            break;
+        case Mnemonic::Dcbi:
+            lift_intrinsic(ctx, "ppc.dcbi");
+            break;
+        case Mnemonic::Dcbz:
+            lift_intrinsic(ctx, "ppc.dcbz");
+            break;
+        case Mnemonic::Icbi:
+            lift_intrinsic(ctx, "ppc.icbi");
+            break;
+        case Mnemonic::FpOp:
+            lift_intrinsic(ctx, "ppc.fp.op");
+            break;
         default:
             lift_intrinsic(ctx, mnemonic_name(insn.mnemonic));
             break;

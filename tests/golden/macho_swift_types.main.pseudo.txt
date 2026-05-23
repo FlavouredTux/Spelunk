@@ -1,0 +1,6 @@
+// main
+extern uint64_t swift_type_Widget;
+
+uint64_t main(void) {
+  return &swift_type_Widget /* 0x100001010 */;
+}

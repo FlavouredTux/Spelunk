@@ -1,0 +1,5 @@
+// main
+uint64_t main(void) {
+  getpid();
+  return 0;
+}

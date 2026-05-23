@@ -1169,6 +1169,41 @@ void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
     fns = std::move(out);
 }
 
+void filter_entries_inside_unwind_extents(std::vector<DiscoveredFunction>& fns,
+                                          std::vector<FdeExtent> extents) {
+    if (fns.empty() || extents.empty()) return;
+    std::erase_if(extents, [](const FdeExtent& e) {
+        return e.pc_begin == 0 || e.pc_range == 0;
+    });
+    if (extents.empty()) return;
+    std::ranges::sort(extents, {}, &FdeExtent::pc_begin);
+
+    std::vector<FdeExtent> merged;
+    merged.reserve(extents.size());
+    for (const auto& e : extents) {
+        if (!merged.empty() && merged.back().pc_begin == e.pc_begin) {
+            merged.back().pc_range = std::max(merged.back().pc_range, e.pc_range);
+        } else {
+            merged.push_back(e);
+        }
+    }
+
+    auto covered_by_other_start = [&](addr_t a) {
+        auto it = std::ranges::upper_bound(
+            merged, a, {}, [](const FdeExtent& e) { return e.pc_begin; });
+        if (it == merged.begin()) return false;
+        --it;
+        if (a == it->pc_begin) return false;
+        const u64 off = static_cast<u64>(a - it->pc_begin);
+        return off < it->pc_range;
+    };
+
+    std::erase_if(fns, [&](const DiscoveredFunction& fn) {
+        return fn.kind == DiscoveredFunction::Kind::Sub &&
+               covered_by_other_start(fn.addr);
+    });
+}
+
 // Some defined symbols and all CFG-discovered `sub_*` entries have no reliable
 // extent in the loader metadata. Downstream tools (fingerprints, xrefs, size
 // filters) still need a usable estimate. Derive an upper-bound size from the
@@ -1281,10 +1316,16 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // sequence inside a function body is only a guess. Large Android C++
     // libraries in particular can have hundreds of thousands of FDEs; once
     // that metadata is dense, the prologue sweep mostly adds false positives.
-    std::size_t fde_added = 0;
-    const auto fde_extents = enumerate_fde_extents(b);
-    if (fde_extents.size() >= kDenseFdeThreshold) {
-        for (const auto& fde : fde_extents) {
+    std::size_t unwind_added = 0;
+    auto unwind_extents = enumerate_fde_extents(b);
+    {
+        auto compact = enumerate_compact_unwind_extents(b);
+        unwind_extents.insert(unwind_extents.end(),
+                              std::make_move_iterator(compact.begin()),
+                              std::make_move_iterator(compact.end()));
+    }
+    if (unwind_extents.size() >= kDenseFdeThreshold) {
+        for (const auto& fde : unwind_extents) {
             if (fde.pc_begin == 0 || fde.pc_range == 0) continue;
             if (!in_scope(fde.pc_begin)) continue;
             if (b.import_at_plt(fde.pc_begin) != nullptr) continue;
@@ -1293,7 +1334,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
             out.push_back({fde.pc_begin, fde.pc_range,
                            std::format("sub_{:x}", fde.pc_begin),
                            DiscoveredFunction::Kind::Sub});
-            ++fde_added;
+            ++unwind_added;
         }
     }
 
@@ -1404,7 +1445,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         }
     }
     const std::size_t before_prologues = out.size();
-    if (fde_added < kDenseFdeThreshold) {
+    if (unwind_extents.size() < kDenseFdeThreshold) {
         for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
     }
     const std::size_t prologue_added = out.size() - before_prologues;
@@ -1413,8 +1454,8 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     }
     if (timing_enabled()) {
         std::fprintf(stderr,
-            "[timing] enumerate_functions.seed: symbols=%zu fde=%zu prologue=%zu total=%zu\n",
-            symbol_added, fde_added, prologue_added, out.size());
+            "[timing] enumerate_functions.seed: symbols=%zu unwind_extents=%zu unwind_added=%zu prologue=%zu total=%zu\n",
+            symbol_added, unwind_extents.size(), unwind_added, prologue_added, out.size());
     }
 
     // Loader-only mode: on a packed binary the call-graph walker chases
@@ -1432,6 +1473,9 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // pass, so the answers we get from Pass 1 + 1.5 are sufficient.
     if (mode == EnumerateMode::Cheap ||
         (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
+        if (unwind_extents.size() >= kDenseFdeThreshold) {
+            filter_entries_inside_unwind_extents(out, unwind_extents);
+        }
         filter_shadowed_entries(out, b);
         fill_unknown_sizes(out, b);
         return out;
@@ -1444,6 +1488,9 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         add_candidate(e.callee, "sub");
     }
 
+    if (unwind_extents.size() >= kDenseFdeThreshold) {
+        filter_entries_inside_unwind_extents(out, unwind_extents);
+    }
     filter_shadowed_entries(out, b);
     fill_unknown_sizes(out, b);
     return out;

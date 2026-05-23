@@ -13,12 +13,13 @@ struct Section;
 // (executable flag or canonical text-section name).
 [[nodiscard]] bool addr_in_code_section(const Binary& b, addr_t a) noexcept;
 
-// Linear-sweep `.text` for x64 function prologue byte patterns. Each
-// candidate is validated by decoding two instructions; the address is
-// rejected if either fails, and skipped if it falls inside a section
-// flagged as encrypted (high entropy). Designed to recover stripped
-// commercial binaries where `.pdata` is missing or zeroed and only
-// the entry-point function is in the symbol table.
+// Linear-sweep `.text`/code sections for architecture-specific function
+// prologue patterns. Each candidate is validated by decoding nearby
+// instructions; the address is rejected if validation fails, and skipped
+// if it falls inside a section flagged as encrypted (high entropy).
+// Designed to recover stripped commercial binaries where stronger
+// metadata is missing or zeroed and only the entry-point function is in
+// the symbol table.
 //
 // `lo`/`hi`: when `hi > lo`, the per-section sweep clips its byte
 // range to the intersection of the section and [lo, hi). On a

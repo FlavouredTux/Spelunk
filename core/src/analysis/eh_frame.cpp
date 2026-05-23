@@ -1,5 +1,6 @@
 #include <ember/analysis/eh_frame.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -368,6 +369,106 @@ std::vector<FdeExtent> enumerate_fde_extents(const Binary& b) {
             }
         }
         top.pos = payload_end;
+    }
+    return out;
+}
+
+std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
+    std::vector<FdeExtent> out;
+    if (b.format() != Format::MachO) return out;
+
+    std::span<const std::byte> bytes;
+    for (const auto& s : b.sections()) {
+        const std::string_view n = s.name;
+        if (n == "__unwind_info" || n == "__TEXT,__unwind_info" ||
+            n.ends_with(",__unwind_info")) {
+            bytes = s.data;
+            break;
+        }
+    }
+    if (bytes.size() < 28) return out;
+
+    auto rd16 = [&](std::size_t off) -> std::optional<u16> {
+        if (off + 2 > bytes.size()) return std::nullopt;
+        u16 v = 0;
+        std::memcpy(&v, bytes.data() + off, 2);
+        return v;
+    };
+    auto rd32 = [&](std::size_t off) -> std::optional<u32> {
+        if (off + 4 > bytes.size()) return std::nullopt;
+        u32 v = 0;
+        std::memcpy(&v, bytes.data() + off, 4);
+        return v;
+    };
+
+    auto version = rd32(0);
+    if (!version || *version != 1) return out;
+    auto idx_off = rd32(20);
+    auto idx_cnt = rd32(24);
+    if (!idx_off || !idx_cnt || *idx_cnt < 2) return out;
+
+    struct FirstIdx { u32 fn_off, pages_off, lsda_idx_off; };
+    std::vector<FirstIdx> first;
+    first.reserve(*idx_cnt);
+    for (u32 i = 0; i < *idx_cnt; ++i) {
+        const std::size_t p = *idx_off + static_cast<std::size_t>(i) * 12u;
+        auto a = rd32(p), bp = rd32(p + 4), c = rd32(p + 8);
+        if (!a || !bp || !c) return out;
+        first.push_back({*a, *bp, *c});
+    }
+
+    const u64 text_base = mach_text_base(b);
+    if (text_base == 0) return out;
+
+    constexpr u32 UNWIND_SECOND_LEVEL_REGULAR    = 2;
+    constexpr u32 UNWIND_SECOND_LEVEL_COMPRESSED = 3;
+    constexpr u32 kMaxPageEntries = 65535;
+    std::vector<u32> starts;
+
+    for (std::size_t i = 0; i + 1 < first.size(); ++i) {
+        const u32 page_off = first[i].pages_off;
+        if (page_off == 0 || page_off + 4 > bytes.size()) continue;
+        const u32 group_begin = first[i].fn_off;
+        const u32 group_end   = first[i + 1].fn_off;
+        auto kind = rd32(page_off);
+        if (!kind) continue;
+
+        if (*kind == UNWIND_SECOND_LEVEL_REGULAR) {
+            auto entry_off = rd16(page_off + 4);
+            auto entry_cnt = rd16(page_off + 6);
+            if (!entry_off || !entry_cnt || *entry_cnt > kMaxPageEntries) continue;
+            const std::size_t table = static_cast<std::size_t>(page_off) + *entry_off;
+            if (table + static_cast<std::size_t>(*entry_cnt) * 8u > bytes.size()) continue;
+            for (u32 k = 0; k < *entry_cnt; ++k) {
+                auto fn = rd32(table + static_cast<std::size_t>(k) * 8u);
+                if (!fn) break;
+                if (*fn >= group_begin && *fn < group_end) starts.push_back(*fn);
+            }
+        } else if (*kind == UNWIND_SECOND_LEVEL_COMPRESSED) {
+            auto entry_off = rd16(page_off + 4);
+            auto entry_cnt = rd16(page_off + 6);
+            if (!entry_off || !entry_cnt || *entry_cnt > kMaxPageEntries) continue;
+            const std::size_t table = static_cast<std::size_t>(page_off) + *entry_off;
+            if (table + static_cast<std::size_t>(*entry_cnt) * 4u > bytes.size()) continue;
+            for (u32 k = 0; k < *entry_cnt; ++k) {
+                auto packed = rd32(table + static_cast<std::size_t>(k) * 4u);
+                if (!packed) break;
+                const u32 delta = *packed & 0x00FF'FFFFu;
+                const u32 fn = group_begin + delta;
+                if (fn >= group_begin && fn < group_end) starts.push_back(fn);
+            }
+        }
+    }
+
+    std::ranges::sort(starts);
+    starts.erase(std::ranges::unique(starts).begin(), starts.end());
+    out.reserve(starts.size());
+    for (std::size_t i = 0; i < starts.size(); ++i) {
+        const u32 begin = starts[i];
+        const u32 end = (i + 1 < starts.size()) ? starts[i + 1] : begin;
+        if (end <= begin) continue;
+        out.push_back({static_cast<addr_t>(text_base + begin),
+                       static_cast<u64>(end - begin)});
     }
     return out;
 }

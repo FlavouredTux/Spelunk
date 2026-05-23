@@ -1,3 +1,4 @@
 ; warning: 0x402000 is in non-executable section .rodata; bytes may be data
+; trampoline: steal_len=5 needs_relocation=yes first_bb_end=0x402005 safe_absolute_jump=no
 0x0000000000402000  00 61 6c                        add byte ptr [rcx + 0x6c], ah
 0x0000000000402003  70 68                           jo 0x40206d

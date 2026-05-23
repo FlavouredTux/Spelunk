@@ -1,7 +1,7 @@
 // shared_tail
 extern uint32_t g_log;
 
-uint32_t shared_tail(uint64_t a1) {
+uint32_t shared_tail(char* a1) {
   uint32_t local_c;
   local_c = 0;
   if (a1) {

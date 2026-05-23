@@ -1,0 +1,6 @@
+// read_answer
+extern uint32_t g_answer;
+
+uint32_t read_answer(void) {
+  return g_answer;
+}

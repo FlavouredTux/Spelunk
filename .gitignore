@@ -37,4 +37,5 @@ Testing/
 nohup.out
 *.log
 ROADMAP.md
+.pi/ember-artifacts/
 crackme_test/

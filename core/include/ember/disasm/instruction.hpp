@@ -19,29 +19,39 @@ enum class Mnemonic : u16 {
     Addi, Addis,
     Ld, Ldu, Lwa, Std, Stdu, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha,
     Lwzu, Lbzu, Lhzu, Lhau, Stwu, Stbu, Sthu,
+    Lmw, Stmw,
     Lwzx, Stwx, Lbzx, Stbx, Lhzx, Sthx, Lhax,
-    Lfs, Lfd, Stfs, Stfd,
+    Lwzux, Stwux, Lbzux, Stbux, Lhzux, Sthux, Lhaux,
+    Lfs, Lfsu, Lfd, Lfdu, Stfs, Stfsu, Stfd, Stfdu,
+    Lfsx, Lfsux, Lfdx, Lfdux, Stfsx, Stfsux, Stfdx, Stfdux,
+    PsqL, PsqLu, PsqSt, PsqStu, PsOp4,
     Fadds, Fsubs, Fmuls, Fdivs,
+    Fmadds, Fmsubs, Fnmadds, Fnmsubs,
     Fadd, Fsub, Fmul, Fdiv,
-    Fcmpu, Fcmpo, Fabs, Fmr, Fneg,
-    Mulli, Rlwinm,
+    Fmadd, Fmsub, Fnmadd, Fnmsub,
+    Fcmpu, Fcmpo, Fabs, Fmr, Fneg, Frsp, Fctiw, Fctiwz, FpOp,
+    Mulli, Rlwinm, Rlwimi,
 
     Add, Sub, Adc, Sbb, Inc, Dec, Neg,
-    Mul, Imul, Div, Idiv,
+    Addc, Adde, Subfc,
+    Mul, Imul, Div, Idiv, Divw, Divwu,
 
-    And, Or, Xor, Not,
+    And, Or, Orc, Xor, Not,
     Shl, Shr, Sar, Rol, Ror, Rcl, Rcr,
-    Cror, Mfcr, Mulhw,
+    Extsb, Extsh, Cntlzw,
+    Crand, Crandc, Creqv, Crnand, Crnor, Cror, Crorc, Crxor,
+    Mfcr, Mtcrf, Mfspr, Mtspr, Mfmsr, Mtmsr, Mftb, Mulhw, Mulhwu, Addze, Subfze, Andc, Nor, Subfe,
 
-    Cmp, Cmn, Test,
+    Cmp, Cmpl, Cmn, Test,
 
     Jmp, Call, Ret, Leave,
 
     Jo, Jno, Jb, Jae, Je, Jne, Jbe, Ja,
     Js, Jns, Jp, Jnp, Jl, Jge, Jle, Jg,
-    Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz,
+    Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz, Bc, Bclr,
 
-    Nop, Hlt, Int, Int3, Syscall, Ud2,
+    Nop, Hlt, Int, Int3, Syscall, Ud2, Isync, Sync, Rfi, Sc, Twi,
+    Dcbf, Dcbst, Dcbi, Dcbz, Icbi,
     Cdq, Cqo, Cwde, Cdqe,
     Endbr64, Endbr32,
     // System-instruction zero-operand mnemonics. Common in anti-debug:
@@ -334,6 +344,7 @@ struct Instruction {
         case Mnemonic::Jl:  case Mnemonic::Jge: case Mnemonic::Jle: case Mnemonic::Jg:
         case Mnemonic::Beq: case Mnemonic::Bne: case Mnemonic::Blt: case Mnemonic::Bge:
         case Mnemonic::Bgt: case Mnemonic::Ble: case Mnemonic::Bdnz: case Mnemonic::Bdz:
+        case Mnemonic::Bc: case Mnemonic::Bclr:
         case Mnemonic::A64Bcc:
         case Mnemonic::A64Cbz: case Mnemonic::A64Cbnz:
         case Mnemonic::A64Tbz: case Mnemonic::A64Tbnz:

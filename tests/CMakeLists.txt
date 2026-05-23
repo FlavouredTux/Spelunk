@@ -61,6 +61,10 @@ add_executable(ember_x64_decoder_test x64_decoder_test.cpp)
 target_link_libraries(ember_x64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME x64_decoder_unit COMMAND ember_x64_decoder_test)
 
+add_executable(ember_ppc_decoder_test ppc_decoder_test.cpp)
+target_link_libraries(ember_ppc_decoder_test PRIVATE ember::core ember::flags)
+add_test(NAME ppc_decoder_unit COMMAND ember_ppc_decoder_test)
+
 # Unit tests for the e-graph saturation engine that backs TEEF v6's L3
 # orbit-class fingerprint. Self-contained: builds e-graphs from synthetic
 # terms, no IR involved.
@@ -1238,6 +1242,101 @@ if(Python3_Interpreter_FOUND)
     add_custom_target(ember_fixture_macho_tiny ALL DEPENDS "${_macho_tiny}")
     set(EMBER_FIXTURE_macho_tiny_PATH "${_macho_tiny}")
 
+    set(_macho_unixthread "${_build_dir}/macho_unixthread")
+    add_custom_command(
+        OUTPUT "${_macho_unixthread}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_tiny.py"
+                --unixthread
+                "${_macho_unixthread}"
+        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
+        COMMENT "Generating Mach-O fixture macho_unixthread"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_unixthread ALL DEPENDS "${_macho_unixthread}")
+    set(EMBER_FIXTURE_macho_unixthread_PATH "${_macho_unixthread}")
+
+    set(_macho_fat_tiny "${_build_dir}/macho_fat_tiny")
+    add_custom_command(
+        OUTPUT "${_macho_fat_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_tiny.py"
+                --fat
+                "${_macho_fat_tiny}"
+        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
+        COMMENT "Generating Universal Mach-O fixture macho_fat_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_fat_tiny ALL DEPENDS "${_macho_fat_tiny}")
+    set(EMBER_FIXTURE_macho_fat_tiny_PATH "${_macho_fat_tiny}")
+
+    set(_macho_exports_trie "${_build_dir}/macho_exports_trie")
+    add_custom_command(
+        OUTPUT "${_macho_exports_trie}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_tiny.py"
+                --exports-trie
+                "${_macho_exports_trie}"
+        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
+        COMMENT "Generating Mach-O fixture macho_exports_trie"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_exports_trie ALL DEPENDS "${_macho_exports_trie}")
+    set(EMBER_FIXTURE_macho_exports_trie_PATH "${_macho_exports_trie}")
+
+    set(_macho_data_in_code "${_build_dir}/macho_data_in_code")
+    add_custom_command(
+        OUTPUT "${_macho_data_in_code}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_tiny.py"
+                --data-in-code
+                "${_macho_data_in_code}"
+        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
+        COMMENT "Generating Mach-O fixture macho_data_in_code"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_data_in_code ALL DEPENDS "${_macho_data_in_code}")
+    set(EMBER_FIXTURE_macho_data_in_code_PATH "${_macho_data_in_code}")
+
+    set(_macho_arm64e_import "${_build_dir}/macho_arm64e_import")
+    add_custom_command(
+        OUTPUT "${_macho_arm64e_import}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_arm64e_import.py"
+                "${_macho_arm64e_import}"
+        DEPENDS "${_fixture_dir}/make_macho_arm64e_import.py"
+        COMMENT "Generating Mach-O fixture macho_arm64e_import"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_arm64e_import ALL DEPENDS "${_macho_arm64e_import}")
+    set(EMBER_FIXTURE_macho_arm64e_import_PATH "${_macho_arm64e_import}")
+
+    set(_macho_objc_relative "${_build_dir}/macho_objc_relative")
+    add_custom_command(
+        OUTPUT "${_macho_objc_relative}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_objc_relative.py"
+                "${_macho_objc_relative}"
+        DEPENDS "${_fixture_dir}/make_macho_objc_relative.py"
+        COMMENT "Generating Mach-O fixture macho_objc_relative"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_objc_relative ALL DEPENDS "${_macho_objc_relative}")
+    set(EMBER_FIXTURE_macho_objc_relative_PATH "${_macho_objc_relative}")
+
+    set(_macho_swift_types "${_build_dir}/macho_swift_types")
+    add_custom_command(
+        OUTPUT "${_macho_swift_types}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_macho_swift_types.py"
+                "${_macho_swift_types}"
+        DEPENDS "${_fixture_dir}/make_macho_swift_types.py"
+        COMMENT "Generating Mach-O fixture macho_swift_types"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_macho_swift_types ALL DEPENDS "${_macho_swift_types}")
+    set(EMBER_FIXTURE_macho_swift_types_PATH "${_macho_swift_types}")
+
     ember_golden_test(
         NAME    macho_tiny_main_pseudo
         FIXTURE macho_tiny
@@ -1249,6 +1348,78 @@ if(Python3_Interpreter_FOUND)
         FIXTURE macho_tiny
         ARGS    "-p|-s|add42"
         GOLDEN  macho_tiny.add42.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_tiny_read_answer_pseudo
+        FIXTURE macho_tiny
+        ARGS    "-p|-s|read_answer"
+        GOLDEN  macho_tiny.read_answer.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_unixthread_main_pseudo
+        FIXTURE macho_unixthread
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_tiny.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_fat_tiny_main_pseudo
+        FIXTURE macho_fat_tiny
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_tiny.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_exports_trie_exported_add42_pseudo
+        FIXTURE macho_exports_trie
+        ARGS    "-p|-s|exported_add42"
+        GOLDEN  macho_exports_trie.exported_add42.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_data_in_code_data_guard_pseudo
+        FIXTURE macho_data_in_code
+        ARGS    "-p|-s|data_guard"
+        GOLDEN  macho_data_in_code.data_guard.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_data_in_code_xrefs
+        FIXTURE macho_data_in_code
+        ARGS    "--xrefs"
+        GOLDEN  macho_data_in_code.xrefs.txt
+    )
+    ember_golden_test(
+        NAME    macho_arm64e_import_main_pseudo
+        FIXTURE macho_arm64e_import
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_arm64e_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_arm64e_import_read_rebased_pseudo
+        FIXTURE macho_arm64e_import
+        ARGS    "-p|-s|read_rebased"
+        GOLDEN  macho_arm64e_import.read_rebased.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_ping_pseudo
+        FIXTURE macho_objc_relative
+        ARGS    "-p|-s|-[Tiny ping]"
+        GOLDEN  macho_objc_relative.ping.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_count_pseudo
+        FIXTURE macho_objc_relative
+        ARGS    "-p|-s|-[Tiny count]"
+        GOLDEN  macho_objc_relative.count.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_objc_names
+        FIXTURE macho_objc_relative
+        ARGS    "--objc-names"
+        GOLDEN  macho_objc_relative.objc_names.txt
+    )
+    ember_golden_test(
+        NAME    macho_swift_types_main_pseudo
+        FIXTURE macho_swift_types
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_swift_types.main.pseudo.txt
     )
 
     # ---- ppc64_tiny (hand-built ELF64, both endian modes) -----------------

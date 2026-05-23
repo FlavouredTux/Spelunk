@@ -1,0 +1,4 @@
+// -[Tiny count]
+int -[Tiny count](Tiny* self, SEL _cmd) {
+  return self->count;
+}

@@ -14,7 +14,9 @@
 #include <ember/binary/format.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/disasm/arm64_decoder.hpp>
 #include <ember/disasm/ppc_decoder.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {
@@ -101,6 +103,58 @@ namespace {
     return op == 37 && rt == 1 && ra == 1 && imm < 0;
 }
 
+[[nodiscard]] bool is_arm64_entry_hint(u32 w) noexcept {
+    // NOP/BTI/PACIASP/PACIBSP and related architectural hints all share
+    // the D50320xx HINT encoding. Only use this as an optional prefix;
+    // a HINT alone is far too common to seed a function.
+    return (w & 0xfffff01fu) == 0xd503201fu;
+}
+
+[[nodiscard]] bool is_arm64_frame_stp(u32 w) noexcept {
+    const u32 opc = (w >> 30) & 0x3u;
+    const u32 op = (w >> 27) & 0x7u;
+    const u32 v = (w >> 26) & 0x1u;
+    const u32 mode = (w >> 23) & 0x7u;
+    const u32 l = (w >> 22) & 0x1u;
+    const i32 imm7 = static_cast<i32>((w >> 15) & 0x7fu);
+    const i32 simm7 = (imm7 & 0x40) ? (imm7 - 0x80) : imm7;
+    const u32 rt2 = (w >> 10) & 0x1fu;
+    const u32 rn = (w >> 5) & 0x1fu;
+    const u32 rt = w & 0x1fu;
+    return opc == 0b10 && op == 0b101 && v == 0 && mode == 0b011 &&
+           l == 0 && rt == 29 && rt2 == 30 && rn == 31 && simm7 < 0;
+}
+
+[[nodiscard]] bool is_arm64_sp_sub(const Instruction& insn) noexcept {
+    if (insn.mnemonic != Mnemonic::A64Sub || insn.num_operands < 3) return false;
+    const auto& rd = insn.operands[0];
+    const auto& rn = insn.operands[1];
+    const auto& imm = insn.operands[2];
+    return rd.kind == Operand::Kind::Register && rd.reg == Reg::Xsp &&
+           rn.kind == Operand::Kind::Register && rn.reg == Reg::Xsp &&
+           imm.kind == Operand::Kind::Immediate && imm.imm.value > 0;
+}
+
+[[nodiscard]] bool is_arm64_fp_setup(const Instruction& insn) noexcept {
+    if (insn.mnemonic == Mnemonic::A64Mov && insn.num_operands >= 2) {
+        const auto& rd = insn.operands[0];
+        const auto& rn = insn.operands[1];
+        return rd.kind == Operand::Kind::Register && rd.reg == Reg::X29 &&
+               rn.kind == Operand::Kind::Register && rn.reg == Reg::Xsp;
+    }
+    if (insn.mnemonic != Mnemonic::A64Add || insn.num_operands < 3) return false;
+    const auto& rd = insn.operands[0];
+    const auto& rn = insn.operands[1];
+    const auto& imm = insn.operands[2];
+    return rd.kind == Operand::Kind::Register && rd.reg == Reg::X29 &&
+           rn.kind == Operand::Kind::Register && rn.reg == Reg::Xsp &&
+           imm.kind == Operand::Kind::Immediate && imm.imm.value == 0;
+}
+
+[[nodiscard]] bool is_valid_arm64_body_insn(const Instruction& insn) noexcept {
+    return insn.length == 4 && insn.mnemonic != Mnemonic::A64Udf;
+}
+
 [[nodiscard]] bool is_stack_alloc_after_frame_setup(std::span<const std::byte> data,
                                                     std::size_t off) noexcept {
     if (off < 4) return false;
@@ -134,6 +188,41 @@ namespace {
     if (!first || first->length != 4 || first->length >= bytes.size()) return false;
     auto second = dec.decode(bytes.subspan(4), addr + 4);
     return static_cast<bool>(second);
+}
+
+[[nodiscard]] bool looks_like_arm64_prologue(const Arm64Decoder& dec,
+                                             std::span<const std::byte> bytes,
+                                             addr_t addr) noexcept {
+    if (bytes.size() < 12) return false;
+    const u32 first_raw = read_le_at<u32>(bytes.data());
+    std::size_t off = 0;
+    if (is_arm64_entry_hint(first_raw)) {
+        off = 4;
+        if (bytes.size() < 16) return false;
+    }
+
+    const u32 prologue_raw = read_le_at<u32>(bytes.data() + off);
+    auto first = dec.decode(bytes.subspan(off), addr + static_cast<addr_t>(off));
+    if (!first || !is_valid_arm64_body_insn(*first)) return false;
+
+    if (is_arm64_frame_stp(prologue_raw)) {
+        if (off + 8 > bytes.size()) return false;
+        auto second = dec.decode(bytes.subspan(off + 4),
+                                 addr + static_cast<addr_t>(off + 4));
+        if (!second || !is_valid_arm64_body_insn(*second)) return false;
+        if (!is_arm64_fp_setup(*second)) return false;
+
+        if (off + 12 > bytes.size()) return true;
+        auto third = dec.decode(bytes.subspan(off + 8),
+                                addr + static_cast<addr_t>(off + 8));
+        return third && is_valid_arm64_body_insn(*third);
+    }
+
+    if (!is_arm64_sp_sub(*first)) return false;
+    if (off + 8 > bytes.size()) return false;
+    auto second = dec.decode(bytes.subspan(off + 4),
+                             addr + static_cast<addr_t>(off + 4));
+    return second && is_valid_arm64_body_insn(*second);
 }
 
 [[nodiscard]] bool strong_dense_x64_start(std::span<const std::byte> data,
@@ -171,6 +260,22 @@ sweep_section_chunk(std::span<const std::byte> data, addr_t base,
         // at that third instruction.
         if (is_stack_alloc_after_frame_setup(data, off)) continue;
         if (!validates_as_function_start(dec, cand, base + off)) continue;
+        hits.push_back(base + off);
+    }
+    return hits;
+}
+
+[[nodiscard]] static std::vector<addr_t>
+sweep_arm64_section(std::span<const std::byte> data, addr_t base,
+                    std::size_t off_begin, std::size_t off_end,
+                    const Arm64Decoder& dec) {
+    std::vector<addr_t> hits;
+    if (off_end > data.size()) off_end = data.size();
+    off_begin = (off_begin + 3u) & ~std::size_t{3};
+    for (std::size_t off = off_begin; off + 12 <= off_end; off += 4) {
+        if (((base + static_cast<addr_t>(off)) & 0x3u) != 0) continue;
+        const auto cand = data.subspan(off);
+        if (!looks_like_arm64_prologue(dec, cand, base + off)) continue;
         hits.push_back(base + off);
     }
     return hits;
@@ -236,6 +341,12 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
             PpcDecoder dec(b.endian());
             per_section_hits.push_back(
                 sweep_ppc_section(data, base, scope_off_lo, scope_off_hi, dec, b.endian()));
+            continue;
+        }
+        if (b.arch() == Arch::Arm64) {
+            Arm64Decoder dec;
+            per_section_hits.push_back(
+                sweep_arm64_section(data, base, scope_off_lo, scope_off_hi, dec));
             continue;
         }
 

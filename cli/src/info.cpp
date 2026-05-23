@@ -94,6 +94,8 @@ void help_view() {
     std::println("                       one-per-line input. Each block prefixed `# <hex-va>`;");
     std::println("                       --json returns an array of [addr, disasm] objects.");
     std::println("      --arities        dump inferred arity per function (addr N)");
+    std::println("      --ppc-coverage   rank unsupported PPC instruction words in executable sections");
+    std::println("                       --coverage-limit N caps rows (default 25, 0 = all); --json supported");
 }
 
 void help_syms() {
@@ -169,6 +171,7 @@ void help_ana() {
     std::println("      --vtable-at VA [--limit N]  narrow runtime vtable view around VA");
     std::println("      --objc-names     Obj-C runtime methods as TSV (imp ± class selector sig)");
     std::println("      --objc-protocols Obj-C protocol method signatures");
+    std::println("      --dmp-anchors    Roblox DataModelPatch anchor strings (--full-analysis adds xrefs)");
     std::println("      --int3-resolve   classify embedded int3 bytes (handler / pad / dead)");
     std::println("      --identify       YARA-like crypto/protocol identifier");
     std::println("      --identify-threshold T  confidence floor (default 0.4)");

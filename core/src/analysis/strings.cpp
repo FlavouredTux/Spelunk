@@ -18,6 +18,7 @@
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/demangle.hpp>
+#include <ember/common/timing.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -119,23 +120,23 @@ void scan_section(const Section& sec, std::vector<StringEntry>& out,
     }
 }
 
-}  // namespace
-
-std::vector<StringEntry> scan_strings(const Binary& b) {
-    return scan_strings(b, {});
-}
-
-std::vector<StringEntry> scan_strings(const Binary& b,
-                                      const StringScanOptions& options) {
+std::vector<StringEntry>
+scan_strings_impl(const Binary &b, const StringScanOptions &options,
+                  std::span<const DiscoveredFunction> discovered_functions,
+                  bool have_discovered_functions) {
+    ScopedTimer timer("strings.scan_strings");
     std::vector<StringEntry> results;
-    for (const auto& sec : b.sections()) {
+    for (const auto &sec : b.sections()) {
         scan_section(sec, results, options);
     }
-    if (results.empty()) return results;
-    if (!options.collect_xrefs) return results;
+    if (results.empty())
+        return results;
+    if (!options.collect_xrefs)
+        return results;
 
     // Build a lookup: address → index in results.
-    std::map<addr_t, std::size_t> by_addr;
+    std::unordered_map<addr_t, std::size_t> by_addr;
+    by_addr.reserve(results.size());
     for (std::size_t i = 0; i < results.size(); ++i) {
         by_addr.emplace(results[i].addr, i);
     }
@@ -144,9 +145,10 @@ std::vector<StringEntry> scan_strings(const Binary& b,
     // *contains* the address - since lea/mov/call immediates always target the
     // string start, we only match exact starts (simpler and avoids false hits
     // into the middle of a string).
-    auto match = [&](addr_t a) -> StringEntry* {
+    auto match = [&](addr_t a) -> StringEntry * {
         auto it = by_addr.find(a);
-        if (it == by_addr.end()) return nullptr;
+        if (it == by_addr.end())
+            return nullptr;
         return &results[it->second];
     };
 
@@ -159,7 +161,8 @@ std::vector<StringEntry> scan_strings(const Binary& b,
     // callers). Better than the prior silent miscount where each
     // discovered fn's bytes failed to decode and advanced one byte at a
     // time forever.
-    if (b.arch() != Arch::X86_64) return results;
+    if (b.arch() != Arch::X86_64)
+        return results;
 
     // Walk every defined function + every discovered function (deduped
     // by address), decode linearly, collect xrefs. Earlier this walked
@@ -167,81 +170,120 @@ std::vector<StringEntry> scan_strings(const Binary& b,
     // 95%+ of code and produced an empty xrefs column for strings only
     // referenced from anonymous fns. Same union-with-discovered fix as
     // compute_call_graph and compute_data_xrefs.
-    struct WorkItem { addr_t addr; u64 size; };
+    struct WorkItem {
+        addr_t addr;
+        u64 size;
+    };
     std::vector<WorkItem> work;
     std::unordered_set<addr_t> seen;
-    for (const auto& sym : b.symbols()) {
-        if (sym.is_import) continue;
-        if (sym.kind != SymbolKind::Function) continue;
-        if (sym.size == 0) continue;
-        if (!seen.insert(sym.addr).second) continue;
-        work.push_back({sym.addr, sym.size});
-    }
-    for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
-        if (b.import_at_plt(fn.addr) != nullptr) continue;
-        if (fn.size == 0) continue;
-        if (!seen.insert(fn.addr).second) continue;
+    auto add_discovered_function = [&](const DiscoveredFunction &fn) {
+        if (b.import_at_plt(fn.addr) != nullptr)
+            return;
+        if (fn.size == 0)
+            return;
+        if (!seen.insert(fn.addr).second)
+            return;
         work.push_back({fn.addr, fn.size});
+    };
+    if (have_discovered_functions) {
+        seen.reserve(discovered_functions.size());
+        work.reserve(discovered_functions.size());
+        for (const auto &fn : discovered_functions) {
+            add_discovered_function(fn);
+        }
+    } else {
+        seen.reserve(b.symbols().size());
+        work.reserve(b.symbols().size());
+        for (const auto &sym : b.symbols()) {
+            if (sym.is_import)
+                continue;
+            if (sym.kind != SymbolKind::Function)
+                continue;
+            if (sym.size == 0)
+                continue;
+            if (!seen.insert(sym.addr).second)
+                continue;
+            work.push_back({sym.addr, sym.size});
+        }
+        for (const auto &fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+            add_discovered_function(fn);
+        }
     }
 
     X64Decoder dec;
-    for (const auto& w : work) {
-        auto span = b.bytes_at(w.addr);
-        if (span.empty()) continue;
-        const std::size_t limit = std::min<std::size_t>(
-            span.size(), static_cast<std::size_t>(w.size));
+    {
+        ScopedTimer xref_timer("strings.scan_xrefs");
+        for (const auto &w : work) {
+            auto span = b.bytes_at(w.addr);
+            if (span.empty())
+                continue;
+            const std::size_t limit =
+                std::min<std::size_t>(span.size(), static_cast<std::size_t>(w.size));
 
-        addr_t ip = w.addr;
-        std::size_t off = 0;
-        while (off < limit) {
-            auto remaining = span.subspan(off, limit - off);
-            auto decoded = dec.decode(remaining, ip);
-            if (!decoded) { ip += 1; off += 1; continue; }
-            const auto& insn = *decoded;
+            addr_t ip = w.addr;
+            std::size_t off = 0;
+            while (off < limit) {
+                auto remaining = span.subspan(off, limit - off);
+                auto decoded = dec.decode(remaining, ip);
+                if (!decoded) {
+                    ip += 1;
+                    off += 1;
+                    continue;
+                }
+                const auto &insn = *decoded;
 
-            for (u8 j = 0; j < insn.num_operands; ++j) {
-                const Operand& op = insn.operands[j];
-                addr_t candidate = 0;
-                bool have = false;
-                if (op.kind == Operand::Kind::Relative) {
-                    candidate = op.rel.target;
-                    have = true;
-                } else if (op.kind == Operand::Kind::Memory && op.mem.has_disp) {
-                    // rip-relative: disp is offset from next instruction.
-                    if (op.mem.base == Reg::Rip && op.mem.index == Reg::None) {
-                        candidate = ip + insn.length +
-                                    static_cast<addr_t>(op.mem.disp);
+                for (u8 j = 0; j < insn.num_operands; ++j) {
+                    const Operand &op = insn.operands[j];
+                    addr_t candidate = 0;
+                    bool have = false;
+                    if (op.kind == Operand::Kind::Relative) {
+                        candidate = op.rel.target;
                         have = true;
-                    } else if (op.mem.base == Reg::None &&
-                               op.mem.index == Reg::None) {
-                        candidate = static_cast<addr_t>(op.mem.disp);
+                    } else if (op.kind == Operand::Kind::Memory && op.mem.has_disp) {
+                        // rip-relative: disp is offset from next instruction.
+                        if (op.mem.base == Reg::Rip && op.mem.index == Reg::None) {
+                            candidate = ip + insn.length + static_cast<addr_t>(op.mem.disp);
+                            have = true;
+                        } else if (op.mem.base == Reg::None && op.mem.index == Reg::None) {
+                            candidate = static_cast<addr_t>(op.mem.disp);
+                            have = true;
+                        }
+                    } else if (op.kind == Operand::Kind::Immediate && op.imm.size >= 4) {
+                        candidate = static_cast<addr_t>(op.imm.value);
                         have = true;
                     }
-                } else if (op.kind == Operand::Kind::Immediate &&
-                           op.imm.size >= 4) {
-                    candidate = static_cast<addr_t>(op.imm.value);
-                    have = true;
-                }
-                if (!have) continue;
-                if (auto* e = match(candidate)) {
-                    if (e->xrefs.empty() || e->xrefs.back() != ip) {
-                        e->xrefs.push_back(ip);
+                    if (!have)
+                        continue;
+                    if (auto *e = match(candidate)) {
+                        if (e->xrefs.empty() || e->xrefs.back() != ip) {
+                            e->xrefs.push_back(ip);
+                        }
                     }
                 }
+
+                ip += insn.length;
+                off += insn.length;
             }
-
-            ip  += insn.length;
-            off += insn.length;
         }
     }
 
     // Dedupe xrefs.
-    for (auto& e : results) {
+    for (auto &e : results) {
         std::sort(e.xrefs.begin(), e.xrefs.end());
         e.xrefs.erase(std::unique(e.xrefs.begin(), e.xrefs.end()), e.xrefs.end());
     }
 
     return results;
+}
+
+}  // namespace
+
+std::vector<StringEntry> scan_strings(const Binary& b) {
+    return scan_strings(b, {});
+}
+
+std::vector<StringEntry> scan_strings(const Binary &b, const StringScanOptions &options) {
+    return scan_strings_impl(b, options, {}, false);
 }
 
 namespace {
@@ -1405,39 +1447,64 @@ void infer_reflection_member_names(
     EnclosingFunction enclosing_function,
     std::vector<StringNameCandidate>& out,
     std::set<std::pair<addr_t, std::string>>& seen) {
-    struct ReferencedString {
+    struct DescriptorRef {
+        const StringEntry* entry = nullptr;
+        addr_t             xref = 0;
+        ReflectionDescriptorNameParts parts;
+    };
+    struct MemberRef {
         const StringEntry* entry = nullptr;
         addr_t             xref = 0;
     };
+    struct FunctionRefs {
+        std::vector<DescriptorRef> descriptors;
+        std::vector<MemberRef>     members;
+    };
 
-    std::map<addr_t, std::vector<ReferencedString>> by_function;
+    std::map<addr_t, FunctionRefs> by_function;
     for (const auto& s : strings) {
         if (s.xrefs.empty()) continue;
+        const auto parts = parse_reflection_descriptor_name_parts(s.text);
+        const bool member = !parts && looks_like_reflection_member_name(s.text);
+        if (!parts && !member) continue;
+
         for (addr_t xr : s.xrefs) {
             if (auto fn = enclosing_function(xr)) {
-                by_function[*fn].push_back({&s, xr});
+                auto& refs = by_function[*fn];
+                if (parts) {
+                    refs.descriptors.push_back({&s, xr, *parts});
+                } else {
+                    refs.members.push_back({&s, xr});
+                }
             }
         }
     }
 
-    for (const auto& [fn, refs] : by_function) {
-        for (const auto& desc_ref : refs) {
+    for (auto& [fn, refs] : by_function) {
+        if (refs.descriptors.empty() || refs.members.empty()) continue;
+        std::sort(refs.members.begin(), refs.members.end(),
+                  [](const MemberRef& a, const MemberRef& b) {
+                      if (a.xref != b.xref) return a.xref < b.xref;
+                      return a.entry->text.size() < b.entry->text.size();
+                  });
+
+        for (const auto& desc_ref : refs.descriptors) {
             if (!desc_ref.entry) continue;
-            const auto parts =
-                parse_reflection_descriptor_name_parts(desc_ref.entry->text);
-            if (!parts) continue;
 
             const StringEntry* best = nullptr;
             addr_t best_dist = std::numeric_limits<addr_t>::max();
             bool best_precedes_descriptor = false;
-            for (const auto& candidate_ref : refs) {
-                if (!candidate_ref.entry || candidate_ref.entry == desc_ref.entry) continue;
-                const auto member = std::string_view{candidate_ref.entry->text};
-                if (!looks_like_reflection_member_name(member)) continue;
+            const addr_t lo = desc_ref.xref > 256 ? desc_ref.xref - 256 : 0;
+            const addr_t hi = desc_ref.xref + 256;
+            auto it = std::lower_bound(
+                refs.members.begin(), refs.members.end(), lo,
+                [](const MemberRef& ref, addr_t needle) { return ref.xref < needle; });
+            for (; it != refs.members.end() && it->xref <= hi; ++it) {
+                const auto& candidate_ref = *it;
+                if (!candidate_ref.entry) continue;
                 const addr_t dist = candidate_ref.xref > desc_ref.xref
                     ? candidate_ref.xref - desc_ref.xref
                     : desc_ref.xref - candidate_ref.xref;
-                if (dist > 256) continue;
                 const bool precedes_descriptor = candidate_ref.xref <= desc_ref.xref;
                 if (best && precedes_descriptor != best_precedes_descriptor) {
                     if (!precedes_descriptor) continue;
@@ -1460,7 +1527,7 @@ void infer_reflection_member_names(
 
             if (!best) continue;
             auto name = reflection_descriptor_candidate_name(
-                *parts, std::string_view{best->text});
+                desc_ref.parts, std::string_view{best->text});
             if (!name || name->empty()) continue;
             if (seen.emplace(fn, *name).second) {
                 out.push_back({
@@ -1585,74 +1652,100 @@ void infer_assertion_function_names(const Binary& b,
 }  // namespace
 
 std::vector<StringNameCandidate>
-infer_function_names_from_strings(const Binary& b,
-                                  StringNameInferenceOptions options) {
+infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions options) {
+    ScopedTimer timer("strings.infer_names");
     std::vector<StringNameCandidate> out;
     std::set<std::pair<addr_t, std::string>> seen;
-    auto fns = enumerate_functions(b, EnumerateMode::Cheap);
+    std::vector<DiscoveredFunction> fns;
+    {
+        ScopedTimer phase("strings.enumerate_functions");
+        fns = enumerate_functions(b, EnumerateMode::Cheap);
+    }
     auto enclosing_function = [&](addr_t addr) -> std::optional<addr_t> {
-        auto it = std::upper_bound(fns.begin(), fns.end(), addr,
-            [](addr_t a, const DiscoveredFunction& d) { return a < d.addr; });
-        if (it == fns.begin()) return std::nullopt;
+        auto it =
+            std::upper_bound(fns.begin(), fns.end(), addr,
+                             [](addr_t a, const DiscoveredFunction &d) { return a < d.addr; });
+        if (it == fns.begin())
+            return std::nullopt;
         --it;
-        if (it->size != 0 && addr >= it->addr + it->size) return std::nullopt;
+        if (it->size != 0 && addr >= it->addr + it->size)
+            return std::nullopt;
         if (it->size == 0) {
             auto next = it;
             ++next;
-            if (next != fns.end() && addr >= next->addr) return std::nullopt;
+            if (next != fns.end() && addr >= next->addr)
+                return std::nullopt;
         }
-        if (b.bytes_at(it->addr).empty()) return std::nullopt;
+        if (b.bytes_at(it->addr).empty())
+            return std::nullopt;
         return it->addr;
     };
-    const auto strings = scan_strings(b);
+    std::vector<StringEntry> strings;
     {
+        ScopedTimer phase("strings.scan");
+        strings = scan_strings_impl(b, {}, fns, true);
+    }
+    {
+        ScopedTimer phase("strings.graphics_proc_loader");
         struct ProcVotes {
             std::set<std::string> gl;
             std::set<std::string> vk;
         };
         std::map<addr_t, ProcVotes> proc_votes;
-        for (const auto& s : strings) {
+        for (const auto &s : strings) {
             if (!s.xrefs.empty() && is_graphics_api_ident(s.text)) {
                 for (addr_t xr : s.xrefs) {
                     if (auto fn = enclosing_function(xr)) {
-                        auto& votes = proc_votes[*fn];
-                        if (s.text.starts_with("gl")) votes.gl.insert(s.text);
-                        else if (s.text.starts_with("vk")) votes.vk.insert(s.text);
+                        auto &votes = proc_votes[*fn];
+                        if (s.text.starts_with("gl"))
+                            votes.gl.insert(s.text);
+                        else if (s.text.starts_with("vk"))
+                            votes.vk.insert(s.text);
                     }
                 }
             }
         }
-        for (const auto& [fn, votes] : proc_votes) {
-            if (votes.gl.size() >= 12 &&
-                seen.emplace(fn, "graphics_gl_proc_loader").second) {
+        for (const auto &[fn, votes] : proc_votes) {
+            if (votes.gl.size() >= 12 && seen.emplace(fn, "graphics_gl_proc_loader").second) {
                 out.push_back({fn, "graphics_gl_proc_loader",
                                std::format("{} OpenGL proc names", votes.gl.size())});
-            } else if (votes.vk.size() >= 8 &&
-                       seen.emplace(fn, "graphics_vk_proc_loader").second) {
+            } else if (votes.vk.size() >= 8 && seen.emplace(fn, "graphics_vk_proc_loader").second) {
                 out.push_back({fn, "graphics_vk_proc_loader",
                                std::format("{} Vulkan proc names", votes.vk.size())});
             }
         }
     }
-    infer_lua_registration_names(b, strings, out, seen);
-    infer_reflection_member_names(strings, enclosing_function, out, seen);
-    for (const auto& s : strings) {
-        if (s.xrefs.empty()) continue;
-        auto name = candidate_name_from_string(s.text);
-        if (!name || name->empty()) continue;
-        std::set<addr_t> referencing_fns;
-        for (addr_t xr : s.xrefs) {
-            if (auto fn = enclosing_function(xr)) referencing_fns.insert(*fn);
-        }
-        for (addr_t fn : referencing_fns) {
-            if (seen.emplace(fn, *name).second) {
-                out.push_back({fn, *name, s.text});
+    {
+        ScopedTimer phase("strings.lua_registration");
+        infer_lua_registration_names(b, strings, out, seen);
+    }
+    {
+        ScopedTimer phase("strings.reflection_members");
+        infer_reflection_member_names(strings, enclosing_function, out, seen);
+    }
+    {
+        ScopedTimer phase("strings.generic_candidates");
+        for (const auto &s : strings) {
+            if (s.xrefs.empty())
+                continue;
+            auto name = candidate_name_from_string(s.text);
+            if (!name || name->empty())
+                continue;
+            std::set<addr_t> referencing_fns;
+            for (addr_t xr : s.xrefs) {
+                if (auto fn = enclosing_function(xr))
+                    referencing_fns.insert(*fn);
+            }
+            for (addr_t fn : referencing_fns) {
+                if (seen.emplace(fn, *name).second) {
+                    out.push_back({fn, *name, s.text});
+                }
             }
         }
     }
     if (options.assertion_names &&
-        (options.max_assertion_functions == 0 ||
-         fns.size() <= options.max_assertion_functions)) {
+        (options.max_assertion_functions == 0 || fns.size() <= options.max_assertion_functions)) {
+        ScopedTimer phase("strings.assertion_names");
         infer_assertion_function_names(b, fns, out, seen);
     }
     return out;

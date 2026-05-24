@@ -1290,6 +1290,36 @@ luau_anchor_name_from_string(std::string_view text) {
     return std::nullopt;
 }
 
+[[nodiscard]] bool looks_like_engine_feature_anchor(std::string_view text) noexcept {
+    if (text.size() < 9 || text.size() > 96) return false;
+    if (text == "Workspace") return false;
+    if (!has_uppercase_transition(text)) return false;
+    for (char c : text) {
+        if (!is_ident_char(c)) return false;
+    }
+    for (const std::string_view prefix : {
+             std::string_view{"Workspace"},
+             std::string_view{"SimWorkspace"},
+             std::string_view{"SAuthWorkspace"},
+             std::string_view{"SupportWorkspace"},
+             std::string_view{"RemoveWorkspace"},
+             std::string_view{"HighlightsPerWorkspace"},
+         }) {
+        if (text.starts_with(prefix)) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<std::string>
+engine_feature_anchor_name(std::string_view text) {
+    if (!looks_like_engine_feature_anchor(text)) return std::nullopt;
+    auto snake = camel_tail_to_snake(text);
+    if (snake.empty()) return std::nullopt;
+    auto name = sanitize_name(std::string{"feature_"} + snake);
+    if (name.empty()) return std::nullopt;
+    return name;
+}
+
 [[nodiscard]] std::optional<std::string>
 graphics_phrase_name_from_string(std::string_view text) {
     const auto lower = lower_ascii_copy(text);
@@ -1825,6 +1855,57 @@ void infer_luau_metadata_anchors(
     }
 }
 
+template <class EnclosingFunction>
+void infer_engine_feature_anchors(
+    std::span<const StringEntry> strings,
+    EnclosingFunction enclosing_function,
+    const std::map<addr_t, std::size_t>& function_sizes,
+    std::vector<StringNameCandidate>& out,
+    std::set<std::pair<addr_t, std::string>>& seen) {
+    std::map<std::string, std::set<addr_t>> functions_by_anchor;
+    std::map<std::string, std::string> source_by_name;
+    for (const auto& s : strings) {
+        if (s.xrefs.empty()) continue;
+        auto name = engine_feature_anchor_name(s.text);
+        if (!name) continue;
+        auto& functions = functions_by_anchor[*name];
+        source_by_name.emplace(*name, s.text);
+        for (addr_t xr : s.xrefs) {
+            if (auto fn = enclosing_function(xr)) functions.insert(*fn);
+        }
+    }
+
+    std::map<addr_t, std::string> anchor_by_function;
+    std::set<addr_t> ambiguous_functions;
+    for (const auto& [name, functions] : functions_by_anchor) {
+        std::set<addr_t> candidates = functions;
+        if (candidates.size() > 1) {
+            std::erase_if(candidates, [&](addr_t fn) {
+                const auto it = function_sizes.find(fn);
+                return it != function_sizes.end() && it->second > 512;
+            });
+        }
+        if (candidates.size() != 1) continue;
+        const addr_t fn = *candidates.begin();
+        if (ambiguous_functions.contains(fn)) continue;
+        auto [it, inserted] = anchor_by_function.emplace(fn, name);
+        if (!inserted && it->second != name) {
+            anchor_by_function.erase(it);
+            ambiguous_functions.insert(fn);
+        }
+    }
+
+    for (const auto& [fn, name] : anchor_by_function) {
+        if (ambiguous_functions.contains(fn)) continue;
+        auto source_it = source_by_name.find(name);
+        const std::string source =
+            source_it == source_by_name.end() ? name : source_it->second;
+        if (seen.emplace(fn, name).second) {
+            out.push_back({fn, name, source});
+        }
+    }
+}
+
 [[nodiscard]] std::map<SsaKey, const IrInst*>
 index_defs(const IrFunction& fn) {
     std::map<SsaKey, const IrInst*> out;
@@ -2044,6 +2125,11 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
     {
         ScopedTimer phase("strings.luau_metadata_anchors");
         infer_luau_metadata_anchors(strings, luau_enclosing_function, out, seen);
+    }
+    {
+        ScopedTimer phase("strings.engine_feature_anchors");
+        infer_engine_feature_anchors(strings, luau_enclosing_function,
+                                     function_sizes, out, seen);
     }
     {
         ScopedTimer phase("strings.role_identifier_anchors");

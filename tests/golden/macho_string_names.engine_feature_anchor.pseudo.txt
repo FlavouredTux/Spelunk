@@ -1,0 +1,4 @@
+// feature_workspace_task_queue
+uint64_t feature_workspace_task_queue(void) {
+  return 0x88;
+}

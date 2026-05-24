@@ -1,0 +1,4 @@
+// graphics_gl_bind_buffer
+uint64_t graphics_gl_bind_buffer(void) {
+  return 0x21;
+}

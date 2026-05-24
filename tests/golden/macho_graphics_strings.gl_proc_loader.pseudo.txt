@@ -1,0 +1,4 @@
+// graphics_gl_proc_loader
+uint64_t graphics_gl_proc_loader(void) {
+  return 0x27;
+}

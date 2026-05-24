@@ -1,0 +1,6 @@
+// main
+uint64_t main(void) {
+  [0x1234 doubleValue];
+  [0x5678 doubleValue];
+  return 0;
+}

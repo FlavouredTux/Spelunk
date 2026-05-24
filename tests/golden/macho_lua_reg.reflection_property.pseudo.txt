@@ -1,0 +1,4 @@
+// reflection_ScriptHost_actionLevel_property
+uint64_t reflection_ScriptHost_actionLevel_property(void) {
+  return 0x99;
+}

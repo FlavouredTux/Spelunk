@@ -1,0 +1,4 @@
+// dsym_named_hidden
+uint64_t dsym_named_hidden(void) {
+  return 0x63;
+}

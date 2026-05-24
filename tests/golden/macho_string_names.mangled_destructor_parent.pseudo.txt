@@ -1,0 +1,4 @@
+// Core::Player::dtor_Player
+uint64_t Core::Player::dtor_Player(void) {
+  return 0x82;
+}

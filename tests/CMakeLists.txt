@@ -293,9 +293,75 @@ ember_build_fixture(symuses_noise
 ember_build_fixture(dead_store OPT "-O0")
 ember_build_fixture(fp_scalar)
 ember_build_fixture(printf_noise)
+ember_build_fixture(low_byte_flag)
 # Stack-protector on so the canary prologue/epilogue actually get emitted.
 ember_build_fixture(canary PROTECTOR "-fstack-protector-strong")
 ember_build_fixture(noreturn_import)
+ember_build_fixture(assert_name OPT "-O0")
+ember_build_stripped_fixture(assert_name_stripped assert_name)
+ember_build_fixture(mangled_string_name OPT "-O0")
+ember_build_stripped_fixture(mangled_string_name_stripped mangled_string_name)
+ember_build_fixture(surface_inventory OPT "-O0")
+set(_surface_app_root "${_build_dir}/SurfaceInventory.app")
+set(_surface_app_exe "${_surface_app_root}/Contents/MacOS/surface_inventory")
+set(_surface_app_vmprotect "${_surface_app_root}/Contents/MacOS/libVMProtectSDK.dylib")
+set(_surface_app_mimalloc "${_surface_app_root}/Contents/MacOS/libmimalloc.3.dylib")
+set(_surface_app_metal "${_surface_app_root}/Contents/Resources/default.metallib")
+set(_surface_app_glsl "${_surface_app_root}/Contents/Resources/shaders/shaders_glsl3.pack")
+set(_surface_app_cert "${_surface_app_root}/Contents/Resources/ssl/cacert.pem")
+set(_surface_app_locale "${_surface_app_root}/Contents/Resources/en.lproj/Localizable.strings")
+add_custom_command(
+    OUTPUT "${_surface_app_exe}"
+           "${_surface_app_vmprotect}"
+           "${_surface_app_mimalloc}"
+           "${_surface_app_metal}"
+           "${_surface_app_glsl}"
+           "${_surface_app_cert}"
+           "${_surface_app_locale}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${_surface_app_root}/Contents/MacOS"
+            "${_surface_app_root}/Contents/Resources/shaders"
+            "${_surface_app_root}/Contents/Resources/ssl"
+            "${_surface_app_root}/Contents/Resources/en.lproj"
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${EMBER_FIXTURE_surface_inventory_PATH}" "${_surface_app_exe}"
+    COMMAND ${CMAKE_COMMAND} -E touch
+            "${_surface_app_vmprotect}"
+            "${_surface_app_mimalloc}"
+            "${_surface_app_metal}"
+            "${_surface_app_glsl}"
+            "${_surface_app_cert}"
+            "${_surface_app_locale}"
+    DEPENDS "${EMBER_FIXTURE_surface_inventory_PATH}"
+    COMMENT "Staging surface inventory app bundle"
+    VERBATIM
+)
+add_custom_target(ember_fixture_surface_inventory_app ALL
+    DEPENDS "${_surface_app_exe}"
+            "${_surface_app_vmprotect}"
+            "${_surface_app_mimalloc}"
+            "${_surface_app_metal}"
+            "${_surface_app_glsl}"
+            "${_surface_app_cert}"
+            "${_surface_app_locale}")
+set(EMBER_FIXTURE_surface_inventory_app_PATH "${_surface_app_exe}")
+set(_surface_text_app_root "${_build_dir}/SurfaceTextOnly.app")
+set(_surface_text_app_exe "${_surface_text_app_root}/Contents/MacOS/not_binary")
+set(_surface_text_app_metal "${_surface_text_app_root}/Contents/Resources/default.metallib")
+add_custom_command(
+    OUTPUT "${_surface_text_app_exe}" "${_surface_text_app_metal}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${_surface_text_app_root}/Contents/MacOS"
+            "${_surface_text_app_root}/Contents/Resources"
+    COMMAND ${CMAKE_COMMAND} -E touch
+            "${_surface_text_app_exe}"
+            "${_surface_text_app_metal}"
+    COMMENT "Staging text-only surface app bundle"
+    VERBATIM
+)
+add_custom_target(ember_fixture_surface_text_app ALL
+    DEPENDS "${_surface_text_app_exe}" "${_surface_text_app_metal}")
+set(EMBER_FIXTURE_surface_text_app_PATH "${_surface_text_app_exe}")
 # -O0 so the explicit gotos survive for the tail-duplication test.
 ember_build_fixture(gotos OPT "-O0")
 ember_build_stripped_fixture(gotos_stripped gotos)
@@ -914,6 +980,12 @@ ember_golden_test(
     ARGS    "-p|-s|main"
     GOLDEN  printf_noise.main.pseudo.txt
 )
+ember_golden_test(
+    NAME    low_byte_flag_merge_pseudo
+    FIXTURE low_byte_flag
+    ARGS    "-p|-s|low_byte_flag_merge"
+    GOLDEN  low_byte_flag.low_byte_flag_merge.pseudo.txt
+)
 
 # Stack-canary prologue+check suppression (-fstack-protector-strong).
 ember_golden_test(
@@ -927,6 +999,72 @@ ember_golden_test(
     FIXTURE noreturn_import
     ARGS    "-p|-s|assert_fail_path"
     GOLDEN  noreturn_import.assert_fail_path.pseudo.txt
+)
+ember_golden_test(
+    NAME    assert_name_stripped_infer_pseudo
+    FIXTURE assert_name_stripped
+    ARGS    "--infer-string-names|-p|-s|recovered_assert_name"
+    GOLDEN  assert_name.recovered_assert_name.pseudo.txt
+)
+ember_golden_test(
+    NAME    mangled_string_name_stripped_infer_pseudo
+    FIXTURE mangled_string_name_stripped
+    ARGS    "--infer-string-names|-p|-s|Example::Worker::run"
+    GOLDEN  mangled_string_name.recovered.pseudo.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_summary
+    FIXTURE surface_inventory
+    ARGS    "-q|--no-cache|--surfaces"
+    GOLDEN  surface_inventory.surfaces.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_luau_evidence
+    FIXTURE surface_inventory
+    ARGS    "-q|--no-cache|--surfaces|--surface|luau|--surface-row-type|evidence"
+    GOLDEN  surface_inventory.luau_evidence.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_json
+    FIXTURE surface_inventory
+    ARGS    "-q|--no-cache|--surfaces|--json"
+    GOLDEN  surface_inventory.surfaces.json.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_bundle_summary
+    FIXTURE surface_inventory_app
+    ARGS    "-q|--no-cache|--surfaces"
+    GOLDEN  surface_inventory.bundle.surfaces.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_bundle_anti_tamper
+    FIXTURE surface_inventory_app
+    ARGS    "-q|--no-cache|--surfaces|--surface|anti_tamper|--surface-kind|bundle_file|--surface-row-type|evidence"
+    GOLDEN  surface_inventory.bundle.anti_tamper.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_bundle_shader_category
+    FIXTURE surface_inventory_app
+    ARGS    "-q|--no-cache|--surfaces|--surface|graphics_rendering|--surface-kind|bundle_file|--surface-category|artifact_shader|--surface-row-type|evidence"
+    GOLDEN  surface_inventory.bundle.shader.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_bundle_category_rows
+    FIXTURE surface_inventory_app
+    ARGS    "-q|--no-cache|--surfaces|--surface-row-type|category"
+    GOLDEN  surface_inventory.bundle.categories.txt
+)
+ember_golden_test(
+    NAME    surface_inventory_bundle_artifact_rows
+    FIXTURE surface_inventory_app
+    ARGS    "-q|--no-cache|--surfaces|--surface-row-type|artifact|--surface-category|artifact_shader"
+    GOLDEN  surface_inventory.bundle.artifacts.txt
+)
+ember_golden_test(
+    NAME    surface_bundle_artifacts_without_binary_load
+    FIXTURE surface_text_app
+    ARGS    "-q|--no-cache|--surfaces|--surface|graphics_rendering|--surface-kind|bundle_file|--surface-row-type|evidence"
+    GOLDEN  surface_text_app.bundle.graphics.txt
 )
 
 # Trivial-tail goto inlining: goto fail; ... fail: cleanup; return -1;
@@ -1229,113 +1367,108 @@ ember_golden_test(
 # against regressions even on Linux CI.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
-    set(_macho_tiny "${_build_dir}/macho_tiny")
-    add_custom_command(
-        OUTPUT "${_macho_tiny}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_tiny.py"
-                "${_macho_tiny}"
-        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
-        COMMENT "Generating Mach-O fixture macho_tiny"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_tiny ALL DEPENDS "${_macho_tiny}")
-    set(EMBER_FIXTURE_macho_tiny_PATH "${_macho_tiny}")
+    function(ember_build_python_macho_fixture name script)
+        set(_out "${_build_dir}/${name}")
+        set(_script "${_fixture_dir}/${script}")
+        add_custom_command(
+            OUTPUT "${_out}"
+            COMMAND ${Python3_EXECUTABLE}
+                    "${_script}"
+                    ${ARGN}
+                    "${_out}"
+            DEPENDS "${_script}"
+            COMMENT "Generating Mach-O fixture ${name}"
+            VERBATIM
+        )
+        add_custom_target(ember_fixture_${name} ALL DEPENDS "${_out}")
+        set(EMBER_FIXTURE_${name}_PATH "${_out}" PARENT_SCOPE)
+    endfunction()
 
-    set(_macho_unixthread "${_build_dir}/macho_unixthread")
+    ember_build_python_macho_fixture(macho_tiny make_macho_tiny.py)
+    ember_build_python_macho_fixture(macho_unixthread make_macho_tiny.py
+        --unixthread)
+    ember_build_python_macho_fixture(macho_fat_tiny make_macho_tiny.py --fat)
+    ember_build_python_macho_fixture(macho_exports_trie make_macho_tiny.py
+        --exports-trie)
+    ember_build_python_macho_fixture(macho_data_in_code make_macho_tiny.py
+        --data-in-code)
+    ember_build_python_macho_fixture(macho_x64_import make_macho_x64_import.py)
+    ember_build_python_macho_fixture(
+        macho_x64_dysymtab_import make_macho_x64_import.py --dysymtab)
+    ember_build_python_macho_fixture(
+        macho_x64_direct_import make_macho_x64_import.py --dysymtab-direct)
+    ember_build_python_macho_fixture(
+        macho_x64_weak_bind_import make_macho_x64_import.py --weak-bind)
+    ember_build_python_macho_fixture(
+        macho_x64_stack_guard make_macho_x64_import.py --stack-guard)
+    ember_build_python_macho_fixture(
+        macho_arm64e_import make_macho_arm64e_import.py)
+    ember_build_python_macho_fixture(
+        macho_arm64e_auth_rebase make_macho_arm64e_import.py --auth-rebase)
+    ember_build_python_macho_fixture(
+        macho_arm64e_import_addend make_macho_arm64e_import.py
+        --import-addend)
+    ember_build_python_macho_fixture(
+        macho_arm64e_import_addend64 make_macho_arm64e_import.py
+        --import-addend64)
+    ember_build_python_macho_fixture(
+        macho_compact_unwind make_macho_compact_unwind.py)
+    ember_build_python_macho_fixture(
+        macho_blocks make_macho_blocks.py)
+    ember_build_python_macho_fixture(
+        macho_dsym_primary make_macho_dsym_pair.py)
+    ember_build_python_macho_fixture(
+        macho_dsym_symbols make_macho_dsym_pair.py --dsym)
+    set(_macho_dsym_bundle_file
+        "${_build_dir}/macho_dsym_primary.dSYM/Contents/Resources/DWARF/macho_dsym_primary")
     add_custom_command(
-        OUTPUT "${_macho_unixthread}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_tiny.py"
-                --unixthread
-                "${_macho_unixthread}"
-        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
-        COMMENT "Generating Mach-O fixture macho_unixthread"
+        OUTPUT "${_macho_dsym_bundle_file}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${_build_dir}/macho_dsym_primary.dSYM/Contents/Resources/DWARF"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${EMBER_FIXTURE_macho_dsym_symbols_PATH}"
+                "${_macho_dsym_bundle_file}"
+        DEPENDS ember_fixture_macho_dsym_symbols
+        COMMENT "Staging Mach-O dSYM bundle macho_dsym_primary.dSYM"
         VERBATIM
     )
-    add_custom_target(ember_fixture_macho_unixthread ALL DEPENDS "${_macho_unixthread}")
-    set(EMBER_FIXTURE_macho_unixthread_PATH "${_macho_unixthread}")
-
-    set(_macho_fat_tiny "${_build_dir}/macho_fat_tiny")
-    add_custom_command(
-        OUTPUT "${_macho_fat_tiny}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_tiny.py"
-                --fat
-                "${_macho_fat_tiny}"
-        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
-        COMMENT "Generating Universal Mach-O fixture macho_fat_tiny"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_fat_tiny ALL DEPENDS "${_macho_fat_tiny}")
-    set(EMBER_FIXTURE_macho_fat_tiny_PATH "${_macho_fat_tiny}")
-
-    set(_macho_exports_trie "${_build_dir}/macho_exports_trie")
-    add_custom_command(
-        OUTPUT "${_macho_exports_trie}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_tiny.py"
-                --exports-trie
-                "${_macho_exports_trie}"
-        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
-        COMMENT "Generating Mach-O fixture macho_exports_trie"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_exports_trie ALL DEPENDS "${_macho_exports_trie}")
-    set(EMBER_FIXTURE_macho_exports_trie_PATH "${_macho_exports_trie}")
-
-    set(_macho_data_in_code "${_build_dir}/macho_data_in_code")
-    add_custom_command(
-        OUTPUT "${_macho_data_in_code}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_tiny.py"
-                --data-in-code
-                "${_macho_data_in_code}"
-        DEPENDS "${_fixture_dir}/make_macho_tiny.py"
-        COMMENT "Generating Mach-O fixture macho_data_in_code"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_data_in_code ALL DEPENDS "${_macho_data_in_code}")
-    set(EMBER_FIXTURE_macho_data_in_code_PATH "${_macho_data_in_code}")
-
-    set(_macho_arm64e_import "${_build_dir}/macho_arm64e_import")
-    add_custom_command(
-        OUTPUT "${_macho_arm64e_import}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_arm64e_import.py"
-                "${_macho_arm64e_import}"
-        DEPENDS "${_fixture_dir}/make_macho_arm64e_import.py"
-        COMMENT "Generating Mach-O fixture macho_arm64e_import"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_arm64e_import ALL DEPENDS "${_macho_arm64e_import}")
-    set(EMBER_FIXTURE_macho_arm64e_import_PATH "${_macho_arm64e_import}")
-
-    set(_macho_objc_relative "${_build_dir}/macho_objc_relative")
-    add_custom_command(
-        OUTPUT "${_macho_objc_relative}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_objc_relative.py"
-                "${_macho_objc_relative}"
-        DEPENDS "${_fixture_dir}/make_macho_objc_relative.py"
-        COMMENT "Generating Mach-O fixture macho_objc_relative"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_objc_relative ALL DEPENDS "${_macho_objc_relative}")
-    set(EMBER_FIXTURE_macho_objc_relative_PATH "${_macho_objc_relative}")
-
-    set(_macho_swift_types "${_build_dir}/macho_swift_types")
-    add_custom_command(
-        OUTPUT "${_macho_swift_types}"
-        COMMAND ${Python3_EXECUTABLE}
-                "${_fixture_dir}/make_macho_swift_types.py"
-                "${_macho_swift_types}"
-        DEPENDS "${_fixture_dir}/make_macho_swift_types.py"
-        COMMENT "Generating Mach-O fixture macho_swift_types"
-        VERBATIM
-    )
-    add_custom_target(ember_fixture_macho_swift_types ALL DEPENDS "${_macho_swift_types}")
-    set(EMBER_FIXTURE_macho_swift_types_PATH "${_macho_swift_types}")
+    add_custom_target(ember_fixture_macho_dsym_bundle ALL
+        DEPENDS "${_macho_dsym_bundle_file}")
+    ember_build_python_macho_fixture(
+        macho_objc_relative make_macho_objc_relative.py)
+    ember_build_python_macho_fixture(
+        macho_string_names make_macho_string_names.py)
+    ember_build_python_macho_fixture(
+        macho_lua_reg make_macho_lua_reg.py)
+    ember_build_python_macho_fixture(
+        macho_graphics_strings make_macho_graphics_strings.py)
+    ember_build_python_macho_fixture(
+        macho_assert_rtn make_macho_assert_rtn.py)
+    ember_build_python_macho_fixture(macho_objc_stret make_macho_objc_stret.py)
+    ember_build_python_macho_fixture(
+        macho_objc_stack_arg make_macho_objc_stack_arg.py)
+    ember_build_python_macho_fixture(macho_objc_fpret make_macho_objc_fpret.py)
+    ember_build_python_macho_fixture(macho_objc_super make_macho_objc_super.py)
+    ember_build_python_macho_fixture(macho_cpp_rtti make_macho_cpp_rtti.py)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_rtti make_macho_cpp_rtti.py --metadata)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_local_rtti make_macho_cpp_rtti.py --metadata-local)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_nested_local_rtti make_macho_cpp_rtti.py --metadata-nested-local)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_nested_free_rtti make_macho_cpp_rtti.py --metadata-nested-free)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_dtor_rtti make_macho_cpp_rtti.py --metadata-dtor)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_ctor_rtti make_macho_cpp_rtti.py --metadata-ctor)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_operator_rtti make_macho_cpp_rtti.py --metadata-operator)
+    ember_build_python_macho_fixture(
+        macho_cpp_metadata_long_rtti make_macho_cpp_rtti.py --metadata-long)
+    ember_build_python_macho_fixture(
+        macho_cpp_shared_ptr_rtti make_macho_cpp_rtti.py --shared-ptr)
+    ember_build_python_macho_fixture(macho_swift_types make_macho_swift_types.py)
 
     ember_golden_test(
         NAME    macho_tiny_main_pseudo
@@ -1386,6 +1519,36 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  macho_data_in_code.xrefs.txt
     )
     ember_golden_test(
+        NAME    macho_x64_import_main_pseudo
+        FIXTURE macho_x64_import
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_x64_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_x64_dysymtab_import_main_pseudo
+        FIXTURE macho_x64_dysymtab_import
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_x64_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_x64_direct_import_main_pseudo
+        FIXTURE macho_x64_direct_import
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_x64_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_x64_weak_bind_import_main_pseudo
+        FIXTURE macho_x64_weak_bind_import
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_x64_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_x64_stack_guard_main_pseudo
+        FIXTURE macho_x64_stack_guard
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_x64_stack_guard.main.pseudo.txt
+    )
+    ember_golden_test(
         NAME    macho_arm64e_import_main_pseudo
         FIXTURE macho_arm64e_import
         ARGS    "-p|-s|main"
@@ -1396,6 +1559,60 @@ if(Python3_Interpreter_FOUND)
         FIXTURE macho_arm64e_import
         ARGS    "-p|-s|read_rebased"
         GOLDEN  macho_arm64e_import.read_rebased.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_arm64e_auth_rebase_read_rebased_pseudo
+        FIXTURE macho_arm64e_auth_rebase
+        ARGS    "-p|-s|read_rebased"
+        GOLDEN  macho_arm64e_import.read_rebased.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_arm64e_import_addend64_main_pseudo
+        FIXTURE macho_arm64e_import_addend64
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_arm64e_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_arm64e_import_addend_main_pseudo
+        FIXTURE macho_arm64e_import_addend
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_arm64e_import.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_compact_unwind_functions
+        FIXTURE macho_compact_unwind
+        ARGS    "--functions"
+        GOLDEN  macho_compact_unwind.functions.txt
+    )
+    ember_golden_test(
+        NAME    macho_blocks_functions
+        FIXTURE macho_blocks
+        ARGS    "--functions|__block_invoke"
+        GOLDEN  macho_blocks.functions.txt
+    )
+    ember_golden_test(
+        NAME    macho_blocks_inferred_functions
+        FIXTURE macho_blocks
+        ARGS    "__BINARY__|--no-cache|--infer-string-names|--functions|SampleWorker"
+        GOLDEN  macho_blocks.inferred.functions.txt
+    )
+    ember_golden_test(
+        NAME    macho_blocks_invoke_pseudo
+        FIXTURE macho_blocks
+        ARGS    "-p|-s|__block_invoke_100001006"
+        GOLDEN  macho_blocks.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_dsym_overlay_hidden_pseudo
+        FIXTURE macho_dsym_primary
+        ARGS    "-p|-s|dsym_named_hidden|--dsym|${EMBER_FIXTURE_macho_dsym_symbols_PATH}|-q"
+        GOLDEN  macho_dsym_overlay.hidden.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_dsym_auto_hidden_pseudo
+        FIXTURE macho_dsym_primary
+        ARGS    "-p|-s|dsym_named_hidden|-q"
+        GOLDEN  macho_dsym_overlay.hidden.pseudo.txt
     )
     ember_golden_test(
         NAME    macho_objc_relative_ping_pseudo
@@ -1416,10 +1633,430 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  macho_objc_relative.objc_names.txt
     )
     ember_golden_test(
+        NAME    macho_objc_relative_stack_block_functions
+        FIXTURE macho_objc_relative
+        ARGS    "--no-cache|--functions|Tiny_withCallback"
+        GOLDEN  macho_objc_relative.stack_block.functions.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_block_capture_ivar_pseudo
+        FIXTURE macho_objc_relative
+        ARGS    "--no-cache|-p|-s|Tiny_withCallback_consumeBlock__block_invoke"
+        GOLDEN  macho_objc_relative.block_capture_ivar.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_objc_protocols
+        FIXTURE macho_objc_relative
+        ARGS    "--objc-protocols"
+        GOLDEN  macho_objc_relative.objc_protocols.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_objc_surfaces
+        FIXTURE macho_objc_relative
+        ARGS    "--objc-surfaces"
+        GOLDEN  macho_objc_relative.objc_surfaces.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_recovered_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::recoverName"
+        GOLDEN  macho_string_names.recovered.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_pretty_function_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|recoverCachedValue"
+        GOLDEN  macho_string_names.pretty_function.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_operator_function_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Example::Box::operator_eq"
+        GOLDEN  macho_string_names.operator_function.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_destructor_function_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Example::Box::dtor_Box"
+        GOLDEN  macho_string_names.destructor_function.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_clang_closure_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::recoverClosureValue"
+        GOLDEN  macho_string_names.clang_closure.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_shared_ptr_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::recoverSharedStateFromControlBlock"
+        GOLDEN  macho_string_names.shared_ptr_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_callable_traits_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::recoverCallableTraitFromVeryLongCompilerMetadataArtifactNameThatSurvivesBinaryStripping"
+        GOLDEN  macho_string_names.callable_traits_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_local_static_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|recoverFileLocalCompilerArtifact"
+        GOLDEN  macho_string_names.local_static_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_anon_namespace_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|_GLOBAL__N_1::recoverAnonymousNamespaceThing"
+        GOLDEN  macho_string_names.anon_namespace_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_free_function_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|recoverFreeFunctionArtifact"
+        GOLDEN  macho_string_names.free_function_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_nested_free_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|recoverNestedFreeFunctionArtifact"
+        GOLDEN  macho_string_names.nested_free_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_mangled_destructor_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::dtor_Player"
+        GOLDEN  macho_string_names.mangled_destructor_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_mangled_constructor_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::ctor_Player"
+        GOLDEN  macho_string_names.mangled_constructor_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_mangled_operator_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Example::Gadget::operator_eq"
+        GOLDEN  macho_string_names.mangled_operator_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_compiler_artifact_surface
+        FIXTURE macho_string_names
+        ARGS    "-q|--no-cache|--surfaces|--surface|compiler_artifacts|--surface-row-type|evidence"
+        GOLDEN  macho_string_names.compiler_artifacts.surface.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_log_categories
+        FIXTURE macho_string_names
+        ARGS    "--no-cache|--log-categories"
+        GOLDEN  macho_string_names.log_categories.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reg_inferred_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|lua_cfunc_tick"
+        GOLDEN  macho_lua_reg.inferred.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_mangled_prefix_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|Engine::ScriptHost::resume"
+        GOLDEN  macho_lua_reg.mangled_prefix.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_mangled_const_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|Engine::ScriptHost::inspect"
+        GOLDEN  macho_lua_reg.mangled_const.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_mangled_local_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|Engine::ScriptHost::dispatch"
+        GOLDEN  macho_lua_reg.mangled_local.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_bound_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|reflection_ScriptHost_performAction_bound_func_argc_2"
+        GOLDEN  macho_lua_reg.reflection_bound.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_event_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|reflection_ScriptHost_actionSignal_event"
+        GOLDEN  macho_lua_reg.reflection_event.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_property_pseudo
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--infer-string-names|-p|-s|reflection_ScriptHost_actionLevel_property"
+        GOLDEN  macho_lua_reg.reflection_property.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_descriptor_surface
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--no-cache|--surfaces|--surface|reflection_metadata|--surface-row-type|evidence|--surface-category|reflection_bound_function"
+        GOLDEN  macho_lua_reg.reflection_descriptor.surface.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_owner_surface
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--no-cache|--surfaces|--surface|reflection_metadata|--surface-row-type|owner"
+        GOLDEN  macho_lua_reg.reflection_owner.surface.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_owner_filter_surface
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--no-cache|--surfaces|--surface|reflection_metadata|--surface-row-type|owner|--surface-owner|ScriptHost"
+        GOLDEN  macho_lua_reg.reflection_owner.surface.txt
+    )
+    ember_golden_test(
+        NAME    macho_lua_reflection_descriptor_row_surface
+        FIXTURE macho_lua_reg
+        ARGS    "-q|--no-cache|--surfaces|--surface|reflection_metadata|--surface-row-type|descriptor|--surface-owner|ScriptHost"
+        GOLDEN  macho_lua_reg.reflection_descriptor_row.surface.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_gl_pseudo
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--infer-string-names|-p|-s|graphics_gl_bind_buffer"
+        GOLDEN  macho_graphics_strings.gl.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_vk_pseudo
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--infer-string-names|-p|-s|graphics_vk_create_swapchain_khr"
+        GOLDEN  macho_graphics_strings.vk.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_glsl_pseudo
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--infer-string-names|-p|-s|graphics_glsl_shader_source"
+        GOLDEN  macho_graphics_strings.glsl.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_shader_pack_pseudo
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--infer-string-names|-p|-s|graphics_shader_pack_load"
+        GOLDEN  macho_graphics_strings.shader_pack.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_gl_proc_loader_pseudo
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--infer-string-names|-p|-s|graphics_gl_proc_loader"
+        GOLDEN  macho_graphics_strings.gl_proc_loader.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_inventory
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics"
+        GOLDEN  macho_graphics_strings.graphics.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_inventory_json
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--json"
+        GOLDEN  macho_graphics_strings.graphics.json.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_api_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-api|glBindBuffer"
+        GOLDEN  macho_graphics_strings.graphics.api_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_backend_domain_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-backend|opengl|--graphics-domain|buffer"
+        GOLDEN  macho_graphics_strings.graphics.backend_domain_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_extension_family_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-api|glFramebufferTexture2D"
+        GOLDEN  macho_graphics_strings.graphics.extension_family_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_extension_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-extension|ARB"
+        GOLDEN  macho_graphics_strings.graphics.extension_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_row_type_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-row-type|extension"
+        GOLDEN  macho_graphics_strings.graphics.row_type_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_category_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-category|proc_resolver"
+        GOLDEN  macho_graphics_strings.graphics.category_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_constant_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-category|constant_name"
+        GOLDEN  macho_graphics_strings.graphics.constant_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_extension_name_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-category|extension_name"
+        GOLDEN  macho_graphics_strings.graphics.extension_name_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_role_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-role|proc_loader"
+        GOLDEN  macho_graphics_strings.graphics.role_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_vulkan_role_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-backend|vulkan|--graphics-role|proc_loader"
+        GOLDEN  macho_graphics_strings.graphics.vulkan_role_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_sdl_role_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-backend|sdl|--graphics-role|proc_loader"
+        GOLDEN  macho_graphics_strings.graphics.sdl_role_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_graphics_function_filter
+        FIXTURE macho_graphics_strings
+        ARGS    "-q|--no-cache|--graphics|--graphics-function|0x100001054"
+        GOLDEN  macho_graphics_strings.graphics.function_filter.txt
+    )
+    ember_golden_test(
+        NAME    macho_assert_rtn_recovered_pseudo
+        FIXTURE macho_assert_rtn
+        ARGS    "-q|--infer-string-names|-p|-s|MacPlayer::recoverFromAssert"
+        GOLDEN  macho_assert_rtn.recovered.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_stret_main_pseudo
+        FIXTURE macho_objc_stret
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_objc_stret.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_stack_arg_main_pseudo
+        FIXTURE macho_objc_stack_arg
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_objc_stack_arg.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_fpret_main_pseudo
+        FIXTURE macho_objc_fpret
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_objc_fpret.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_super_main_pseudo
+        FIXTURE macho_objc_super
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_objc_super.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_rtti_vfn0_pseudo
+        FIXTURE macho_cpp_rtti
+        ARGS    "-p|-s|Core::Player::vfn_0"
+        GOLDEN  macho_cpp_rtti.vfn0.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_rtti_vfn1_pseudo
+        FIXTURE macho_cpp_rtti
+        ARGS    "-p|-s|Core::Player::vfn_1"
+        GOLDEN  macho_cpp_rtti.vfn1.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_rtti_vfn0_pseudo
+        FIXTURE macho_cpp_metadata_rtti
+        ARGS    "-p|-s|Example::Worker::run::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_rtti.vfn0.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_rtti_dump
+        FIXTURE macho_cpp_metadata_rtti
+        ARGS    "--no-cache|--rtti"
+        GOLDEN  macho_cpp_metadata_rtti.rtti.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_local_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_local_rtti
+        ARGS    "-p|-s|recoverFileLocalCompilerArtifact::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_local_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_nested_local_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_nested_local_rtti
+        ARGS    "-p|-s|Example::Worker::run::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_nested_local_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_nested_free_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_nested_free_rtti
+        ARGS    "-p|-s|recoverNestedFreeFunctionArtifact::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_nested_free_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_dtor_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_dtor_rtti
+        ARGS    "-p|-s|Core::Player::dtor_Player::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_dtor_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_ctor_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_ctor_rtti
+        ARGS    "-p|-s|Core::Player::ctor_Player::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_ctor_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_operator_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_operator_rtti
+        ARGS    "-p|-s|Example::Gadget::operator_eq::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_operator_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_long_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_long_rtti
+        ARGS    "-p|-s|Core::Player::recoverCallableTraitFromVeryLongCompilerMetadataArtifactNameThatSurvivesRttiVtableFunctionNameRecoveryAndKeepsGoingPastTheOldOneHundredSixtyCharacterLimitForStrippedBuilds::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_long_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_shared_ptr_rtti_functions
+        FIXTURE macho_cpp_shared_ptr_rtti
+        ARGS    "--functions|on_zero_shared"
+        GOLDEN  macho_cpp_shared_ptr_rtti.functions.txt
+    )
+    ember_golden_test(
         NAME    macho_swift_types_main_pseudo
         FIXTURE macho_swift_types
         ARGS    "-p|-s|main"
         GOLDEN  macho_swift_types.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_swift_types_field_name_pseudo
+        FIXTURE macho_swift_types
+        ARGS    "-p|-s|field_name"
+        GOLDEN  macho_swift_types.field_name.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_swift_types_accessor_pseudo
+        FIXTURE macho_swift_types
+        ARGS    "-p|-s|swift_type_Widget_accessor"
+        GOLDEN  macho_swift_types.accessor.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_swift_types_field_symbol_validate
+        FIXTURE macho_swift_types
+        ARGS    "--validate|swift_field_Widget_title"
+        GOLDEN  macho_swift_types.field_symbol.validate.txt
     )
 
     # ---- ppc64_tiny (hand-built ELF64, both endian modes) -----------------

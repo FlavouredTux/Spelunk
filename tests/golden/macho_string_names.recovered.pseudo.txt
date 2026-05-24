@@ -1,0 +1,4 @@
+// Core::Player::recoverName
+uint64_t Core::Player::recoverName(void) {
+  return 0x4d;
+}

@@ -6,10 +6,6 @@
 #include <string>
 #include <string_view>
 
-namespace ember {
-std::string simplify_stdlib_templates(std::string s);
-}
-
 namespace {
 
 int fails = 0;
@@ -93,6 +89,15 @@ int main() {
     check("_ZN5boost6system6detail10hash_valueERKNS1_10error_codeE",
           "boost::system::detail::hash_value(const boost::system::detail::error_code&)");
 
+#if defined(__has_include)
+#if __has_include(<cxxabi.h>)
+    // Fallback through __cxa_demangle covers deep but valid Itanium
+    // template payloads that Ember's conservative parser may not handle.
+    check("_ZN3RBX10Reflection13BoundFuncDescINS_19AnimationControllerEFNSt3__110shared_ptrINS_14AnimationTrackEEENS4_INS_9AnimationEEEELb0ELi1EEE",
+          "RBX::Reflection::BoundFuncDesc<RBX::AnimationController, std::__1::shared_ptr<RBX::AnimationTrack> (std::__1::shared_ptr<RBX::Animation>), false, 1>");
+#endif
+#endif
+
     // Not mangled → returned unchanged.
     check("not_mangled", "not_mangled");
     check("main",         "main");
@@ -134,6 +139,12 @@ int main() {
     check_simplify(
         "std::unordered_map<std::string, long, std::hash<std::string>, std::equal_to<std::string>, std::allocator<std::pair<std::string const, long>>>",
         "std::unordered_map<std::string, long>");
+    check_simplify(
+        "std::unordered_map<std::string, long, std::hash<std::string >, std::equal_to<std::string >, std::allocator<std::pair<std::string const, long> > >",
+        "std::unordered_map<std::string, long>");
+    check_simplify(
+        "std::shared_ptr<std::vector<std::shared_ptr<RBX::Wire>, std::allocator<std::shared_ptr<RBX::Wire>> > const>",
+        "std::shared_ptr<std::vector<std::shared_ptr<RBX::Wire>> const>");
     check_simplify(
         "std::unique_ptr<Foo, std::default_delete<Foo>>",
         "std::unique_ptr<Foo>");

@@ -1,0 +1,4 @@
+// graphics_shader_pack_load
+uint64_t graphics_shader_pack_load(void) {
+  return 0x24;
+}

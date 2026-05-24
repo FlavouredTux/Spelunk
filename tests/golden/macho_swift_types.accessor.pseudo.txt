@@ -1,0 +1,4 @@
+// swift_type_Widget_accessor
+uint64_t swift_type_Widget_accessor(void) {
+  return 0x2a;
+}

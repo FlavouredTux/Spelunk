@@ -31,6 +31,14 @@ struct ObjcProtocol {
     std::vector<ObjcMethod>  optional_class;
 };
 
+// One class/category protocol conformance recovered from class_ro_t.baseProtocols
+// or category_t.protocols.
+struct ObjcProtocolConformance {
+    std::string cls;                     // class being extended/declared
+    std::string source;                  // "class" or "category:<Class(Cat)>"
+    std::vector<std::string> protocols;  // formal protocol names
+};
+
 // One Objective-C ivar recovered from class_ro_t.baseIvars. `offset_slot`
 // is the address of the runtime ivar-offset word in __DATA,__objc_ivar;
 // `offset` is the value currently stored there.
@@ -103,6 +111,11 @@ decode_objc_type_parts(std::string_view encoding);
 // required + optional method signatures. Empty when the binary has no
 // ObjC protocol metadata.
 [[nodiscard]] std::vector<ObjcProtocol> parse_objc_protocols(const Binary& b);
+
+// Walks class/category protocol lists and returns which runtime surfaces each
+// class declares conformance to. Empty when no conformance metadata is present.
+[[nodiscard]] std::vector<ObjcProtocolConformance>
+parse_objc_protocol_conformances(const Binary& b);
 
 // Walks __objc_selrefs to find selector-reference pointers at specific
 // addresses, so the emitter can resolve `mov rsi, [rip + selref_offset]`

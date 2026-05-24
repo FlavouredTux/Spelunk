@@ -1,0 +1,4 @@
+// Core::Player::recoverCallableTraitFromVeryLongCompilerMetadataArtifactNameThatSurvivesBinaryStripping
+uint64_t Core::Player::recoverCallableTraitFromVeryLongCompilerMetadataArtifactNameThatSurvivesBinaryStripping(void) {
+  return 0x7c;
+}

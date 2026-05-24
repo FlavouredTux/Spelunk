@@ -1,0 +1,15 @@
+api	sdl	SDL_GL_CreateContext	variants=SDL_GL_CreateContext	extensions=	domains=graphics_bridge	categories=api_proc_name	strings=1	symbols=0	xrefs=1	functions=1	string_addrs=0x10000152c	xref_addrs=0x10000111f	function_addrs=0x100001054	symbol_names=
+api	sdl	SDL_GL_SetAttribute	variants=SDL_GL_SetAttribute	extensions=	domains=graphics_bridge	categories=api_proc_name	strings=1	symbols=0	xrefs=1	functions=1	string_addrs=0x100001541	xref_addrs=0x100001126	function_addrs=0x100001054	symbol_names=
+api	sdl	SDL_Vulkan_CreateSurface	variants=SDL_Vulkan_CreateSurface	extensions=	domains=graphics_bridge	categories=api_proc_name,api_symbol	strings=1	symbols=1	xrefs=2	functions=1	string_addrs=0x100001513	xref_addrs=0x100001118,0x100001511	function_addrs=0x100001054	symbol_names=SDL_Vulkan_CreateSurface
+api	sdl	SDL_Vulkan_GetInstanceExtensions	variants=SDL_Vulkan_GetInstanceExtensions	extensions=	domains=graphics_bridge	categories=api_proc_name	strings=1	symbols=0	xrefs=1	functions=1	string_addrs=0x1000014f2	xref_addrs=0x100001111	function_addrs=0x100001054	symbol_names=
+function	sdl	proc_loader	0x100001054	strings=4	symbols=0	api_names=4	extensions=	categories=api_proc_name,backend_marker,proc_resolver	domains=backend,graphics_bridge	SDL_Vulkan_GetInstanceExtensions || SDL_Vulkan_CreateSurface || SDL_GL_CreateContext || SDL_GL_SetAttribute
+string	sdl	api_proc_name	graphics_bridge	0x1000014f2	api=SDL_Vulkan_GetInstanceExtensions	xrefs=0x100001111	functions=0x100001054	canonical=SDL_Vulkan_GetInstanceExtensions	ext=-	SDL_Vulkan_GetInstanceExtensions
+string	sdl	backend_marker	backend	0x1000014f2	api=-	xrefs=0x100001111	functions=0x100001054	SDL_Vulkan_GetInstanceExtensions
+string	sdl	proc_resolver	graphics_bridge	0x1000014f2	api=-	xrefs=0x100001111	functions=0x100001054	SDL_Vulkan_GetInstanceExtensions
+string	sdl	api_proc_name	graphics_bridge	0x100001513	api=SDL_Vulkan_CreateSurface	xrefs=0x100001118,0x100001511	functions=0x100001054	canonical=SDL_Vulkan_CreateSurface	ext=-	SDL_Vulkan_CreateSurface
+string	sdl	backend_marker	backend	0x100001513	api=-	xrefs=0x100001118,0x100001511	functions=0x100001054	SDL_Vulkan_CreateSurface
+string	sdl	proc_resolver	graphics_bridge	0x100001513	api=-	xrefs=0x100001118,0x100001511	functions=0x100001054	SDL_Vulkan_CreateSurface
+string	sdl	api_proc_name	graphics_bridge	0x10000152c	api=SDL_GL_CreateContext	xrefs=0x10000111f	functions=0x100001054	canonical=SDL_GL_CreateContext	ext=-	SDL_GL_CreateContext
+string	sdl	backend_marker	backend	0x10000152c	api=-	xrefs=0x10000111f	functions=0x100001054	SDL_GL_CreateContext
+string	sdl	api_proc_name	graphics_bridge	0x100001541	api=SDL_GL_SetAttribute	xrefs=0x100001126	functions=0x100001054	canonical=SDL_GL_SetAttribute	ext=-	SDL_GL_SetAttribute
+string	sdl	backend_marker	backend	0x100001541	api=-	xrefs=0x100001126	functions=0x100001054	SDL_GL_SetAttribute

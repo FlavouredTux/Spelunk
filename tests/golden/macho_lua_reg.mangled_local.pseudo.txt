@@ -1,0 +1,4 @@
+// Engine::ScriptHost::dispatch
+uint64_t Engine::ScriptHost::dispatch(void) {
+  return 0x66;
+}

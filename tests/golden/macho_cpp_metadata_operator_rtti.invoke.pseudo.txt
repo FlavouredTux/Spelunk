@@ -1,0 +1,4 @@
+// Example::Gadget::operator_eq::lambda_0::invoke
+uint64_t Example::Gadget::operator_eq::lambda_0::invoke(void) {
+  return 0x10;
+}

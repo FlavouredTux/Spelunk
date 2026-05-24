@@ -1,0 +1,3 @@
+api	opengl	glFramebufferTexture2D	variants=glFramebufferTexture2DEXT	extensions=EXT	domains=framebuffer	categories=api_proc_name	strings=1	symbols=0	xrefs=1	functions=1	string_addrs=0x100001380	xref_addrs=0x10000108c	function_addrs=0x100001054	symbol_names=
+extension	opengl	EXT	apis=1	variants=1	strings=1	symbols=0	xrefs=1	functions=1	domains=framebuffer	categories=api_proc_name	api_names=glFramebufferTexture2D	variant_names=glFramebufferTexture2DEXT	string_addrs=0x100001380	xref_addrs=0x10000108c	function_addrs=0x100001054	symbol_names=
+string	opengl	api_proc_name	framebuffer	0x100001380	api=glFramebufferTexture2DEXT	xrefs=0x10000108c	functions=0x100001054	canonical=glFramebufferTexture2D	ext=EXT	glFramebufferTexture2DEXT

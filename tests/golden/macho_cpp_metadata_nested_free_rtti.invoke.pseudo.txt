@@ -1,0 +1,4 @@
+// recoverNestedFreeFunctionArtifact::lambda_0::invoke
+uint64_t recoverNestedFreeFunctionArtifact::lambda_0::invoke(void) {
+  return 0x10;
+}

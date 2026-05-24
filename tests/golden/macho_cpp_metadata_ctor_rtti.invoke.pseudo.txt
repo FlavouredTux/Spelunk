@@ -1,0 +1,4 @@
+// Core::Player::ctor_Player::lambda_0::invoke
+uint64_t Core::Player::ctor_Player::lambda_0::invoke(void) {
+  return 0x10;
+}

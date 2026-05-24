@@ -1,0 +1,4 @@
+// graphics_glsl_shader_source
+uint64_t graphics_glsl_shader_source(void) {
+  return 0x23;
+}

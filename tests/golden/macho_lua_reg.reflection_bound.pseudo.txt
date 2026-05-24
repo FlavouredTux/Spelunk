@@ -1,0 +1,4 @@
+// reflection_ScriptHost_performAction_bound_func_argc_2
+uint64_t reflection_ScriptHost_performAction_bound_func_argc_2(void) {
+  return 0x77;
+}

@@ -1,0 +1,4 @@
+// __block_invoke_100001006
+unsigned long long __block_invoke_100001006(void* block) {
+  return block->capture_1;
+}

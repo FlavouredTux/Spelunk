@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <charconv>
 #include <cstddef>
 #include <cstdio>
@@ -535,6 +536,34 @@ resolve_function(const Binary& b, std::string_view symbol,
             // fallback uses the terminator scan, same shape as the
             // sub_<hex> case.
             return window_from_addr(a, 0, std::string(lookup));
+        }
+    }
+
+    if (!symbol.empty()) {
+        std::vector<DiscoveredFunction> hits;
+        for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
+            if (fn.name == lookup) hits.push_back(fn);
+            if (hits.size() > 5) break;
+        }
+        if (hits.size() > 1) {
+            std::fprintf(stderr,
+                "ember: discovered name '%.*s' is ambiguous - matches %zu addresses:",
+                static_cast<int>(lookup.size()), lookup.data(), hits.size());
+            const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
+            for (std::size_t i = 0; i < shown; ++i) {
+                std::fprintf(stderr, " %#llx",
+                    static_cast<unsigned long long>(hits[i].addr));
+            }
+            if (hits.size() > shown) {
+                std::fprintf(stderr, " ... (+%zu more)",
+                    hits.size() - shown);
+            }
+            std::fprintf(stderr, "; pass the VA (0x…) to pick one\n");
+            return std::nullopt;
+        }
+        if (hits.size() == 1) {
+            return window_from_addr(hits.front().addr, hits.front().size,
+                                    hits.front().name);
         }
     }
 
@@ -1283,7 +1312,360 @@ void fill_unknown_sizes(std::vector<DiscoveredFunction>& fns, const Binary& b) {
     return out;
 }
 
+[[nodiscard]] std::string objc_name_token(std::string_view s,
+                                          std::string_view fallback) {
+    std::string out;
+    out.reserve(s.size());
+    bool last_us = false;
+    for (char ch : s) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        if (std::isalnum(c)) {
+            out.push_back(ch);
+            last_us = false;
+        } else if (!last_us && !out.empty()) {
+            out.push_back('_');
+            last_us = true;
+        }
+    }
+    while (!out.empty() && out.back() == '_') out.pop_back();
+    if (out.empty()) out = std::string(fallback);
+    if (!std::isalpha(static_cast<unsigned char>(out.front())) &&
+        out.front() != '_') {
+        out.insert(out.begin(), '_');
+    }
+    return out;
+}
+
+[[nodiscard]] std::string objc_method_context_name(const ObjcMethod& m) {
+    std::string cls = objc_name_token(m.cls, "ObjC");
+    std::string sel = objc_name_token(m.selector, "method");
+    return std::format("{}_{}", cls, sel);
+}
+
+[[nodiscard]] std::string lower_first_ascii(std::string s) {
+    if (!s.empty()) {
+        s.front() = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(s.front())));
+    }
+    return s;
+}
+
+[[nodiscard]] std::vector<std::string>
+objc_selector_arg_names_local(std::string_view selector) {
+    std::vector<std::string> names;
+    std::size_t start = 0;
+    while (start < selector.size()) {
+        const std::size_t colon = selector.find(':', start);
+        if (colon == std::string_view::npos) break;
+        std::string piece(selector.substr(start, colon - start));
+        if (names.empty()) {
+            if (piece.starts_with("set") && piece.size() > 3) {
+                piece = lower_first_ascii(piece.substr(3));
+            } else if (piece.starts_with("with") && piece.size() > 4) {
+                piece = lower_first_ascii(piece.substr(4));
+            } else if (auto with = piece.rfind("With");
+                       with != std::string::npos && with + 4 < piece.size()) {
+                piece = lower_first_ascii(piece.substr(with + 4));
+            }
+        }
+        names.push_back(objc_name_token(piece, std::format("arg{}", names.size())));
+        start = colon + 1;
+    }
+    return names;
+}
+
+[[nodiscard]] std::optional<std::string>
+objc_method_capture_name_for_reg(Reg r, const ObjcMethod& m) {
+    switch (canonical_reg(r)) {
+        case Reg::Rdi:
+            return "self";
+        case Reg::Rdx: {
+            const auto names = objc_selector_arg_names_local(m.selector);
+            if (!names.empty()) return names[0];
+            break;
+        }
+        case Reg::Rcx: {
+            const auto names = objc_selector_arg_names_local(m.selector);
+            if (names.size() > 1) return names[1];
+            break;
+        }
+        case Reg::R8: {
+            const auto names = objc_selector_arg_names_local(m.selector);
+            if (names.size() > 2) return names[2];
+            break;
+        }
+        case Reg::R9: {
+            const auto names = objc_selector_arg_names_local(m.selector);
+            if (names.size() > 3) return names[3];
+            break;
+        }
+        default:
+            break;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::string objc_selector_result_name(std::string_view selector) {
+    const std::size_t colon = selector.find(':');
+    if (colon != std::string_view::npos) selector = selector.substr(0, colon);
+    return objc_name_token(selector, "result");
+}
+
+[[nodiscard]] std::optional<std::string>
+call_target_name(const Binary& b, const Instruction& insn) {
+    std::optional<addr_t> target = branch_target(insn);
+    if (!target) {
+        if (auto slot = rip_relative_target(insn); slot) {
+            auto bytes = b.bytes_at(*slot);
+            if (bytes.size() >= 8) {
+                u64 ptr = 0;
+                std::memcpy(&ptr, bytes.data(), 8);
+                if (ptr != 0) target = static_cast<addr_t>(ptr);
+            }
+        }
+    }
+    if (!target) return std::nullopt;
+    auto resolved = resolve_address_name(b, *target);
+    if (!resolved) return std::nullopt;
+    return resolved->name;
+}
+
+[[nodiscard]] std::vector<ObjcStackBlockInvoke>
+discover_objc_stack_block_invokes_impl(const Binary& b) {
+    if (b.format() != Format::MachO || b.arch() != Arch::X86_64) return {};
+
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return {};
+    const Decoder& dec = **dec_r;
+
+    const auto methods = parse_objc_methods(b);
+    if (methods.empty()) return {};
+    const auto selrefs = parse_objc_selrefs(b);
+
+    std::vector<addr_t> method_starts;
+    method_starts.reserve(methods.size());
+    for (const auto& m : methods) {
+        if (m.imp != 0 && addr_in_code_section(b, m.imp)) {
+            method_starts.push_back(m.imp);
+        }
+    }
+    std::ranges::sort(method_starts);
+    method_starts.erase(std::unique(method_starts.begin(), method_starts.end()),
+                        method_starts.end());
+
+    struct Found {
+        addr_t invoke = 0;
+        std::string selector;
+        std::size_t insn_index = 0;
+        Reg base = Reg::None;
+        Reg index = Reg::None;
+        i64 block_disp = 0;
+        std::map<u64, std::string> captures;
+        std::string self_class;
+    };
+
+    std::vector<ObjcStackBlockInvoke> out;
+    std::unordered_set<addr_t> seen;
+    for (const auto& m : methods) {
+        if (m.imp == 0 || !addr_in_code_section(b, m.imp)) continue;
+        auto bytes = b.bytes_at(m.imp);
+        if (bytes.empty()) continue;
+
+        const std::string method_ctx = objc_method_context_name(m);
+        std::map<Reg, addr_t> code_ptr_reg;
+        std::map<Reg, std::string> selector_reg;
+        std::map<Reg, std::string> value_reg;
+        std::vector<Found> found;
+        std::string last_selector;
+        std::size_t last_selector_index = 0;
+        std::size_t insn_index = 0;
+        std::size_t off = 0;
+        std::size_t method_limit = 4096;
+        auto next = std::ranges::upper_bound(method_starts, m.imp);
+        if (next != method_starts.end() && *next > m.imp) {
+            method_limit = static_cast<std::size_t>(*next - m.imp);
+        }
+        const std::size_t limit = std::min<std::size_t>(bytes.size(), method_limit);
+
+        auto set_selector = [&](std::string selector) {
+            if (selector.empty()) return;
+            last_selector = std::move(selector);
+            last_selector_index = insn_index;
+            for (auto& f : found) {
+                if (insn_index > f.insn_index + 96) continue;
+                f.selector = last_selector;
+            }
+        };
+
+        while (off < limit) {
+            auto insn_r = dec.decode(bytes.subspan(off, limit - off),
+                                     m.imp + static_cast<addr_t>(off));
+            if (!insn_r || insn_r->length == 0) {
+                off += decode_failure_advance(b.arch(), bytes.subspan(off, limit - off));
+                ++insn_index;
+                continue;
+            }
+            const Instruction& insn = *insn_r;
+
+            if (insn.mnemonic == Mnemonic::Mov && insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register) {
+                const Reg dst = canonical_reg(insn.operands[0].reg);
+                const auto& src = insn.operands[1];
+                bool selector_armed = false;
+                if (src.kind == Operand::Kind::Memory &&
+                    src.mem.base == Reg::Rip && src.mem.index == Reg::None &&
+                    src.mem.has_disp) {
+                    const addr_t slot = insn.address + insn.length +
+                                        static_cast<addr_t>(src.mem.disp);
+                    if (auto it = selrefs.find(slot); it != selrefs.end()) {
+                        selector_reg[dst] = it->second;
+                        if (dst == Reg::Rsi) set_selector(it->second);
+                        selector_armed = true;
+                    }
+                } else if (src.kind == Operand::Kind::Register) {
+                    const Reg src_r = canonical_reg(src.reg);
+                    if (auto it = selector_reg.find(src_r); it != selector_reg.end()) {
+                        selector_reg[dst] = it->second;
+                        if (dst == Reg::Rsi) set_selector(it->second);
+                        selector_armed = true;
+                    }
+                }
+                if (!selector_armed) selector_reg.erase(dst);
+            }
+
+            if (insn.mnemonic == Mnemonic::Lea && insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register &&
+                insn.operands[1].kind == Operand::Kind::Memory) {
+                const Reg dst = canonical_reg(insn.operands[0].reg);
+                const Mem& mem = insn.operands[1].mem;
+                if (mem.base == Reg::Rip && mem.index == Reg::None && mem.has_disp) {
+                    const addr_t target = insn.address + insn.length +
+                                          static_cast<addr_t>(mem.disp);
+                    if (target != m.imp && addr_in_code_section(b, target)) {
+                        code_ptr_reg[dst] = target;
+                    } else {
+                        code_ptr_reg.erase(dst);
+                    }
+                } else {
+                    code_ptr_reg.erase(dst);
+                }
+            } else if (insn.mnemonic == Mnemonic::Mov && insn.num_operands == 2 &&
+                       insn.operands[0].kind == Operand::Kind::Memory &&
+                       insn.operands[1].kind == Operand::Kind::Register) {
+                const Mem& dst = insn.operands[0].mem;
+                const Reg src = canonical_reg(insn.operands[1].reg);
+                if (dst.base != Reg::Rip && dst.index == Reg::None &&
+                    dst.has_disp && dst.disp == 0x10) {
+                    if (auto it = code_ptr_reg.find(src); it != code_ptr_reg.end()) {
+                        Found f;
+                        f.invoke = it->second;
+                        f.selector = last_selector;
+                        f.insn_index = insn_index;
+                        f.base = canonical_reg(dst.base);
+                        f.index = canonical_reg(dst.index);
+                        f.block_disp = dst.disp - 0x10;
+                        f.self_class = m.cls;
+                        found.push_back(std::move(f));
+                    }
+                } else if (dst.base != Reg::Rip && dst.has_disp && dst.disp >= 0x20 &&
+                           ((dst.disp - 0x20) % 8) == 0 &&
+                           !code_ptr_reg.contains(src)) {
+                    const Reg dst_base = canonical_reg(dst.base);
+                    const Reg dst_index = canonical_reg(dst.index);
+                    for (auto it = found.rbegin(); it != found.rend(); ++it) {
+                        if (insn_index > it->insn_index + 96) continue;
+                        if (it->base != dst_base || it->index != dst_index) continue;
+                        const i64 field_off = dst.disp - it->block_disp;
+                        if (field_off < 0x20 || (field_off % 8) != 0) continue;
+                        if (auto name = objc_method_capture_name_for_reg(src, m); name) {
+                            const u64 capture_idx =
+                                static_cast<u64>((field_off - 0x20) / 8);
+                            it->captures.emplace(capture_idx, *name);
+                        } else if (auto name_it = value_reg.find(src);
+                                   name_it != value_reg.end() &&
+                                   !name_it->second.empty()) {
+                            const u64 capture_idx =
+                                static_cast<u64>((field_off - 0x20) / 8);
+                            it->captures.emplace(capture_idx, name_it->second);
+                        }
+                        break;
+                    }
+                }
+            } else if (insn.mnemonic == Mnemonic::Mov && insn.num_operands == 2 &&
+                       insn.operands[0].kind == Operand::Kind::Register) {
+                const Reg dst = canonical_reg(insn.operands[0].reg);
+                const auto& src = insn.operands[1];
+                if (src.kind == Operand::Kind::Register) {
+                    const Reg src_r = canonical_reg(src.reg);
+                    if (auto it = code_ptr_reg.find(src_r); it != code_ptr_reg.end()) {
+                        code_ptr_reg[dst] = it->second;
+                    } else {
+                        code_ptr_reg.erase(dst);
+                    }
+                    if (auto it = value_reg.find(src_r); it != value_reg.end()) {
+                        value_reg[dst] = it->second;
+                    } else {
+                        value_reg.erase(dst);
+                    }
+                } else {
+                    code_ptr_reg.erase(dst);
+                    value_reg.erase(dst);
+                }
+            }
+
+            if (is_call(insn.mnemonic)) {
+                const auto name = call_target_name(b, insn);
+                const bool retain_autoreleased =
+                    name && name->find("objc_retainAutoreleasedReturnValue") !=
+                                std::string::npos;
+                if (retain_autoreleased) {
+                    if (auto it = value_reg.find(Reg::Rdi); it != value_reg.end()) {
+                        value_reg[Reg::Rax] = it->second;
+                    } else {
+                        value_reg.erase(Reg::Rax);
+                    }
+                } else if (!last_selector.empty() &&
+                           insn_index <= last_selector_index + 8) {
+                    value_reg[Reg::Rax] = objc_selector_result_name(last_selector);
+                } else {
+                    value_reg.erase(Reg::Rax);
+                }
+                value_reg.erase(Reg::Rcx);
+                value_reg.erase(Reg::Rdx);
+                value_reg.erase(Reg::Rsi);
+                value_reg.erase(Reg::R8);
+                value_reg.erase(Reg::R9);
+            }
+
+            off += insn.length;
+            ++insn_index;
+            if (is_return_like(insn.mnemonic)) break;
+        }
+
+        for (const auto& f : found) {
+            if (f.invoke == 0 || !seen.insert(f.invoke).second) continue;
+            const std::string callback =
+                f.selector.empty() ? std::string{} :
+                    "_" + objc_name_token(f.selector, "callback");
+            out.push_back({
+                f.invoke,
+                std::format("{}{}__block_invoke", method_ctx, callback),
+                f.captures,
+                f.self_class
+            });
+        }
+    }
+
+    std::ranges::sort(out, {}, &ObjcStackBlockInvoke::invoke);
+    return out;
+}
+
 }  // namespace
+
+std::vector<ObjcStackBlockInvoke>
+discover_objc_stack_block_invokes(const Binary& b) {
+    return discover_objc_stack_block_invokes_impl(b);
+}
 
 std::vector<DiscoveredFunction>
 enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
@@ -1318,23 +1700,34 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // that metadata is dense, the prologue sweep mostly adds false positives.
     std::size_t unwind_added = 0;
     auto unwind_extents = enumerate_fde_extents(b);
+    std::vector<FdeExtent> compact_unwind_extents;
     {
-        auto compact = enumerate_compact_unwind_extents(b);
+        compact_unwind_extents = enumerate_compact_unwind_extents(b);
         unwind_extents.insert(unwind_extents.end(),
-                              std::make_move_iterator(compact.begin()),
-                              std::make_move_iterator(compact.end()));
+                              compact_unwind_extents.begin(),
+                              compact_unwind_extents.end());
     }
+    auto add_unwind_extent = [&](const FdeExtent& fde) {
+        if (fde.pc_begin == 0 || fde.pc_range == 0) return;
+        if (!in_scope(fde.pc_begin)) return;
+        if (b.import_at_plt(fde.pc_begin) != nullptr) return;
+        if (index.count(fde.pc_begin)) return;
+        index.emplace(fde.pc_begin, out.size());
+        out.push_back({fde.pc_begin, fde.pc_range,
+                       std::format("sub_{:x}", fde.pc_begin),
+                       DiscoveredFunction::Kind::Sub});
+        ++unwind_added;
+    };
     if (unwind_extents.size() >= kDenseFdeThreshold) {
         for (const auto& fde : unwind_extents) {
-            if (fde.pc_begin == 0 || fde.pc_range == 0) continue;
-            if (!in_scope(fde.pc_begin)) continue;
-            if (b.import_at_plt(fde.pc_begin) != nullptr) continue;
-            if (index.count(fde.pc_begin)) continue;
-            index.emplace(fde.pc_begin, out.size());
-            out.push_back({fde.pc_begin, fde.pc_range,
-                           std::format("sub_{:x}", fde.pc_begin),
-                           DiscoveredFunction::Kind::Sub});
-            ++unwind_added;
+            add_unwind_extent(fde);
+        }
+    } else {
+        // Compact-unwind entries are linker-authored function starts, not
+        // byte-pattern guesses. Even small Mach-O binaries can rely on them
+        // when LC_FUNCTION_STARTS is stripped or sparse.
+        for (const auto& fde : compact_unwind_extents) {
+            add_unwind_extent(fde);
         }
     }
 
@@ -1392,7 +1785,13 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
                              const std::string* explicit_name = nullptr) {
         if (!in_scope(a)) return;
         if (b.import_at_plt(a) != nullptr) return;
-        if (index.count(a)) return;
+        if (auto existing = index.find(a); existing != index.end()) {
+            if (explicit_name && !explicit_name->empty()) {
+                auto& fn = out[existing->second];
+                if (fn.name.starts_with("sub_")) fn.name = *explicit_name;
+            }
+            return;
+        }
         const Section* sec = section_for(a);
         if (!sec) return;
         if (!ppc_candidate_decodes(a)) return;
@@ -1444,6 +1843,22 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
             }
         }
     }
+    if (b.format() == Format::MachO) {
+        for (const auto& blk : parse_objc_blocks(b)) {
+            if (blk.invoke == 0) continue;
+            if (!in_scope(blk.invoke)) continue;
+            if (!addr_in_code_section(b, blk.invoke)) continue;
+            const std::string name = std::format("__block_invoke_{:x}",
+                                                 static_cast<u64>(blk.invoke));
+            add_candidate(blk.invoke, "sub", true, &name);
+        }
+        for (const auto& blk : discover_objc_stack_block_invokes(b)) {
+            if (blk.invoke == 0) continue;
+            if (!in_scope(blk.invoke)) continue;
+            if (!addr_in_code_section(b, blk.invoke)) continue;
+            add_candidate(blk.invoke, "sub", true, &blk.name);
+        }
+    }
     const std::size_t before_prologues = out.size();
     if (unwind_extents.size() < kDenseFdeThreshold) {
         for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
@@ -1468,10 +1883,16 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // `Cheap` callers (resolve_containing_function on per-function CLI
     // invocations) bail here unconditionally - they only need a
     // best-effort "is this a function entry?" answer, and the call-
-    // graph walk costs minutes on big DLLs. Sidebar-driven UI
-    // workflows always pass exact entries from a prior `--functions`
-    // pass, so the answers we get from Pass 1 + 1.5 are sufficient.
+    // graph walk costs minutes on big DLLs. Auto mode also bails when
+    // symbols/unwind already provide a dense authoritative function map:
+    // on modern Mach-O/C++ apps this avoids decoding hundreds of
+    // thousands of CFGs just to rediscover call targets for `--functions`.
+    const bool dense_authoritative_starts =
+        mode == EnumerateMode::Auto &&
+        (symbol_added >= kDenseFdeThreshold ||
+         unwind_extents.size() >= kDenseFdeThreshold);
     if (mode == EnumerateMode::Cheap ||
+        dense_authoritative_starts ||
         (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
         if (unwind_extents.size() >= kDenseFdeThreshold) {
             filter_entries_inside_unwind_extents(out, unwind_extents);
@@ -1881,15 +2302,25 @@ validate_name(const Binary& b, std::string_view name,
     if (name.empty()) return out;
 
     const auto matches = b.find_all_by_name(name);
-    out.bound.reserve(matches.size());
-    out.fps.reserve(matches.size());
-    out.offsets.reserve(matches.size());
 
     // The bound-address path always needs an "enclosing function entry"
     // lookup - a wrong rename can pin a name mid-function, and the
     // fingerprint we report has to be the enclosing fn's, not 0. That
     // table comes from enumerate_functions regardless of caching.
     const auto fns = enumerate_functions(b);
+    std::vector<addr_t> bound_addrs;
+    bound_addrs.reserve(matches.size() + 1);
+    for (const Symbol* s : matches) bound_addrs.push_back(s->addr);
+    for (const auto& fn : fns) {
+        if (fn.name == name &&
+            std::find(bound_addrs.begin(), bound_addrs.end(), fn.addr) == bound_addrs.end()) {
+            bound_addrs.push_back(fn.addr);
+        }
+    }
+    out.bound.reserve(bound_addrs.size());
+    out.fps.reserve(bound_addrs.size());
+    out.offsets.reserve(bound_addrs.size());
+
     auto enclosing_entry = [&](addr_t addr) -> std::optional<addr_t> {
         auto it = std::upper_bound(fns.begin(), fns.end(), addr,
             [](addr_t a, const DiscoveredFunction& d) { return a < d.addr; });
@@ -1919,12 +2350,12 @@ validate_name(const Binary& b, std::string_view name,
 
     FunctionFingerprint anchor{};
     bool anchor_set = false;
-    for (const Symbol* s : matches) {
-        out.bound.push_back(s->addr);
+    for (addr_t bound_addr : bound_addrs) {
+        out.bound.push_back(bound_addr);
         u64 off = 0;
         FunctionFingerprint fp{};
-        if (auto entry = enclosing_entry(s->addr); entry) {
-            off = s->addr - *entry;
+        if (auto entry = enclosing_entry(bound_addr); entry) {
+            off = bound_addr - *entry;
             fp = fingerprint_at(*entry);
         }
         out.fps.push_back(fp);

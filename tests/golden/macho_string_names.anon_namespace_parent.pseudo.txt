@@ -1,0 +1,4 @@
+// _GLOBAL__N_1::recoverAnonymousNamespaceThing
+uint64_t _GLOBAL__N_1::recoverAnonymousNamespaceThing(void) {
+  return 0x7f;
+}

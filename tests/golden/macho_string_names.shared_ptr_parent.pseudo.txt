@@ -1,0 +1,4 @@
+// Core::Player::recoverSharedStateFromControlBlock
+uint64_t Core::Player::recoverSharedStateFromControlBlock(void) {
+  return 0x7b;
+}

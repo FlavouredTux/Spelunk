@@ -1,0 +1,4 @@
+// reflection_ScriptHost_actionSignal_event
+uint64_t reflection_ScriptHost_actionSignal_event(void) {
+  return 0x88;
+}

@@ -1,0 +1,4 @@
+// Core::Player::recoverClosureValue
+uint64_t Core::Player::recoverClosureValue(void) {
+  return 0x7a;
+}

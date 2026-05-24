@@ -1,0 +1,4 @@
+// Core::Player::ctor_Player
+uint64_t Core::Player::ctor_Player(void) {
+  return 0x83;
+}

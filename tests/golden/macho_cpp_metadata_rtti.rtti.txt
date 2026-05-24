@@ -1,0 +1,10 @@
+class	0	100002008	9	Example::Worker::run	NSt3__110__function6__funcIZN7Example6Worker3runEvE3$_0NS_9allocatorIS4_EEFvvEEE
+vfn	100001006	0	Example::Worker::run::lambda_0::dtor
+vfn	10000100c	1	Example::Worker::run::lambda_0::deleting_dtor
+vfn	100001012	2	Example::Worker::run::lambda_0::clone
+vfn	100001018	3	Example::Worker::run::lambda_0::clone_into
+vfn	10000101e	4	Example::Worker::run::lambda_0::destroy
+vfn	100001024	5	Example::Worker::run::lambda_0::destroy_deallocate
+vfn	10000102a	6	Example::Worker::run::lambda_0::invoke
+vfn	100001030	7	Example::Worker::run::lambda_0::target_type
+vfn	100001036	8	Example::Worker::run::lambda_0::target

@@ -1,0 +1,5 @@
+// MacPlayer::recoverFromAssert
+void MacPlayer::recoverFromAssert(void) {
+  __assert_rtn("MacPlayer::recoverFromAssert", "MacPlayer.mm", 0xc, "player != nil");
+  __unreachable();
+}

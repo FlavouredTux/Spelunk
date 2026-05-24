@@ -1,0 +1,4 @@
+// recoverNestedFreeFunctionArtifact
+uint64_t recoverNestedFreeFunctionArtifact(void) {
+  return 0x81;
+}

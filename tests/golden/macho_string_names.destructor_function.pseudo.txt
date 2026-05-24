@@ -1,0 +1,4 @@
+// Example::Box::dtor_Box
+uint64_t Example::Box::dtor_Box(void) {
+  return 0x6f;
+}

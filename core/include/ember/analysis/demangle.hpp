@@ -33,6 +33,10 @@ demangle_itanium(std::string_view mangled);
 // otherwise return the input as-is. Useful wherever we display symbol names.
 [[nodiscard]] std::string pretty_symbol(std::string_view name);
 
+// Collapse common standard-library template plumbing in an already
+// demangled name, e.g. vector allocators and basic_string aliases.
+[[nodiscard]] std::string simplify_stdlib_templates(std::string s);
+
 // Strip the trailing (arg-list) and CV/ref suffix from a demangled name,
 // leaving just the qualified identifier. `foo::bar(int) const` → `foo::bar`.
 // No-op on anything that doesn't look like a demangled signature.

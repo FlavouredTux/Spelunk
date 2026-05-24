@@ -1,0 +1,2 @@
+evidence	graphics_rendering	bundle_file	artifact_shader	0x0	xrefs=	functions=	Contents/Resources/default.metallib
+evidence	graphics_rendering	bundle_file	artifact_shader	0x0	xrefs=	functions=	Contents/Resources/shaders/shaders_glsl3.pack

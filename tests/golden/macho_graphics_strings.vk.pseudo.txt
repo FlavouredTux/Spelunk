@@ -1,0 +1,4 @@
+// graphics_vk_create_swapchain_khr
+uint64_t graphics_vk_create_swapchain_khr(void) {
+  return 0x22;
+}

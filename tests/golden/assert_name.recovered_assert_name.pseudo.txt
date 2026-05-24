@@ -1,0 +1,5 @@
+// recovered_assert_name
+void recovered_assert_name(uint32_t a1) {
+  __assert_fail("x is impossible", "assert_name.c", 4, "recovered_assert_name");
+  __unreachable();
+}

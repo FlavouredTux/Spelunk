@@ -1,0 +1,4 @@
+// recoverFileLocalCompilerArtifact
+uint64_t recoverFileLocalCompilerArtifact(void) {
+  return 0x7e;
+}

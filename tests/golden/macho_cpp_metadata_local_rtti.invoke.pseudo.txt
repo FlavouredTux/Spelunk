@@ -1,0 +1,4 @@
+// recoverFileLocalCompilerArtifact::lambda_0::invoke
+uint64_t recoverFileLocalCompilerArtifact::lambda_0::invoke(void) {
+  return 0x10;
+}

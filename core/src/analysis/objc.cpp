@@ -23,6 +23,14 @@ constexpr u32 kRwMeta                 = 0x1u;  // class_ro_t flags bit: is metac
 constexpr u32 kBlockHasCopyDispose    = 1u << 25;
 constexpr u32 kBlockHasSignature      = 1u << 30;
 
+constexpr addr_t kCategoryNameOffset               = 0;
+constexpr addr_t kCategoryClassOffset              = 8;
+constexpr addr_t kCategoryInstanceMethodsOffset    = 16;
+constexpr addr_t kCategoryClassMethodsOffset       = 24;
+constexpr addr_t kCategoryProtocolsOffset          = 32;
+constexpr addr_t kCategoryInstancePropertiesOffset = 40;
+constexpr addr_t kCategoryClassPropertiesOffset    = 48;
+
 [[nodiscard]] std::optional<u64> load_u64(const Binary& b, addr_t va) {
     auto bytes = b.bytes_at(va);
     if (bytes.size() < 8) return std::nullopt;
@@ -63,22 +71,15 @@ constexpr u32 kBlockHasSignature      = 1u << 30;
 // Locate a Mach-O section by suffix ("__objc_classlist", "__objc_selrefs",
 // etc.). Mach-O section names are stored as __SEGMENT,__sect; Ember's loader
 // strips the segment prefix in most cases but some builds preserve it.
+[[nodiscard]] bool section_name_matches(std::string_view actual,
+                                        std::string_view wanted) noexcept {
+    return actual == wanted || actual.ends_with(wanted);
+}
+
 [[nodiscard]] std::span<const std::byte>
 find_section(const Binary& b, std::string_view name, u64& out_vaddr) {
     for (const auto& s : b.sections()) {
-        const std::string_view sn = s.name;
-        if (sn == name ||
-            sn.ends_with(std::string{","} + std::string{name}) ||
-            sn.ends_with(std::string{"__"} + std::string{name.substr(2)})) {
-            out_vaddr = s.vaddr;
-            return s.data;
-        }
-    }
-    // Case-insensitive trailing match for names like "__DATA,__objc_classlist".
-    for (const auto& s : b.sections()) {
-        const std::string_view sn = s.name;
-        if (sn.size() >= name.size() &&
-            sn.substr(sn.size() - name.size()) == name) {
+        if (section_name_matches(s.name, name)) {
             out_vaddr = s.vaddr;
             return s.data;
         }
@@ -212,6 +213,7 @@ struct ClassRo {
     u32    flags;
     addr_t name_va;
     addr_t methods_va;
+    addr_t protocols_va;
     addr_t ivars_va;
     addr_t properties_va;
 };
@@ -221,6 +223,7 @@ read_class_ro(const Binary& b, addr_t ro_va) {
     auto flags    = load_u32(b, ro_va + 0);
     auto name_p   = load_u64(b, ro_va + 24);
     auto methods  = load_u64(b, ro_va + 32);
+    auto protos   = load_u64(b, ro_va + 40);
     auto ivars    = load_u64(b, ro_va + 48);
     auto props    = load_u64(b, ro_va + 64);
     if (!flags || !name_p) return std::nullopt;
@@ -228,6 +231,7 @@ read_class_ro(const Binary& b, addr_t ro_va) {
     r.flags      = *flags;
     r.name_va    = static_cast<addr_t>(*name_p);
     r.methods_va = methods ? static_cast<addr_t>(*methods) : addr_t{0};
+    r.protocols_va = protos ? static_cast<addr_t>(*protos) : addr_t{0};
     r.ivars_va   = ivars ? static_cast<addr_t>(*ivars) : addr_t{0};
     r.properties_va = props ? static_cast<addr_t>(*props) : addr_t{0};
     return r;
@@ -439,6 +443,49 @@ category_target_class_name(const Binary& b, addr_t cls_slot, addr_t cls_p) {
     return class_name_from_import_slot(b, cls_slot);
 }
 
+struct ObjcCategory {
+    addr_t va = 0;
+    addr_t name_va = 0;
+    addr_t class_va = 0;
+    addr_t instance_methods_va = 0;
+    addr_t class_methods_va = 0;
+    addr_t protocols_va = 0;
+    addr_t instance_properties_va = 0;
+    addr_t class_properties_va = 0;
+};
+
+[[nodiscard]] std::optional<ObjcCategory>
+read_category(const Binary& b, addr_t cat_va) {
+    auto name_p   = load_u64(b, cat_va + kCategoryNameOffset);
+    auto cls_p    = load_u64(b, cat_va + kCategoryClassOffset);
+    auto imeth_p  = load_u64(b, cat_va + kCategoryInstanceMethodsOffset);
+    auto cmeth_p  = load_u64(b, cat_va + kCategoryClassMethodsOffset);
+    auto protos_p = load_u64(b, cat_va + kCategoryProtocolsOffset);
+    auto iprops_p = load_u64(b, cat_va + kCategoryInstancePropertiesOffset);
+    auto cprops_p = load_u64(b, cat_va + kCategoryClassPropertiesOffset);
+    if (!name_p) return std::nullopt;
+
+    ObjcCategory cat;
+    cat.va = cat_va;
+    cat.name_va = static_cast<addr_t>(*name_p);
+    cat.class_va = cls_p ? static_cast<addr_t>(*cls_p) : addr_t{0};
+    cat.instance_methods_va = imeth_p ? static_cast<addr_t>(*imeth_p) : addr_t{0};
+    cat.class_methods_va = cmeth_p ? static_cast<addr_t>(*cmeth_p) : addr_t{0};
+    cat.protocols_va = protos_p ? static_cast<addr_t>(*protos_p) : addr_t{0};
+    cat.instance_properties_va = iprops_p ? static_cast<addr_t>(*iprops_p) : addr_t{0};
+    cat.class_properties_va = cprops_p ? static_cast<addr_t>(*cprops_p) : addr_t{0};
+    return cat;
+}
+
+[[nodiscard]] std::string
+category_display_class_name(const Binary& b, const ObjcCategory& cat) {
+    std::string cat_name = read_cstring(b, cat.name_va);
+    std::string target_cls = category_target_class_name(
+        b, cat.va + kCategoryClassOffset, cat.class_va);
+    if (target_cls.empty()) target_cls = "?";
+    return cat_name.empty() ? target_cls : target_cls + "(" + cat_name + ")";
+}
+
 // ---- ObjC type encoding decoder --------------------------------------------
 
 // Spec reference: Apple's "Type Encodings" documentation. Input is a
@@ -636,6 +683,24 @@ read_protocol(const Binary& b, addr_t proto_va) {
     return p;
 }
 
+std::vector<std::string> read_protocol_list_names(const Binary& b,
+                                                  addr_t list_va) {
+    std::vector<std::string> out;
+    if (list_va == 0) return out;
+    auto cnt = load_u64(b, list_va);
+    if (!cnt || *cnt > 100'000) return out;
+    std::set<std::string> seen;
+    for (u64 i = 0; i < *cnt; ++i) {
+        auto proto_p = load_u64(b, list_va + 8 + i * 8);
+        if (!proto_p || !*proto_p) continue;
+        std::string name = read_protocol_name_from_ptr(
+            b, static_cast<addr_t>(*proto_p));
+        if (name.empty()) continue;
+        if (seen.insert(name).second) out.push_back(std::move(name));
+    }
+    return out;
+}
+
 }  // namespace
 
 std::string decode_objc_type(std::string_view encoding) {
@@ -663,6 +728,47 @@ std::vector<ObjcProtocol> parse_objc_protocols(const Binary& b) {
     return out;
 }
 
+std::vector<ObjcProtocolConformance>
+parse_objc_protocol_conformances(const Binary& b) {
+    std::vector<ObjcProtocolConformance> out;
+    for_each_unique_ptr_in_sections(
+        b, {"__objc_classlist", "__objc_nlclslist"},
+        [&](addr_t, addr_t cls_p) {
+            auto ro = read_class_ro_from_class(b, cls_p);
+            if (!ro) return;
+            std::string cls_name = read_cstring(b, ro->name_va);
+            if (cls_name.empty()) return;
+            auto protos = read_protocol_list_names(b, ro->protocols_va);
+            if (protos.empty()) return;
+            ObjcProtocolConformance c;
+            c.cls = std::move(cls_name);
+            c.source = "class";
+            c.protocols = std::move(protos);
+            out.push_back(std::move(c));
+        });
+
+    for_each_unique_ptr_in_sections(
+        b, {"__objc_catlist", "__objc_nlcatlist"},
+        [&](addr_t, addr_t cat_p) {
+            auto cat = read_category(b, cat_p);
+            if (!cat) return;
+            auto protos = read_protocol_list_names(b, cat->protocols_va);
+            if (protos.empty()) return;
+            std::string display = category_display_class_name(b, *cat);
+            if (display.empty()) return;
+            std::string cls = display;
+            if (const std::size_t p = cls.find('('); p != std::string::npos) {
+                cls.resize(p);
+            }
+            ObjcProtocolConformance c;
+            c.cls = std::move(cls);
+            c.source = "category:" + display;
+            c.protocols = std::move(protos);
+            out.push_back(std::move(c));
+        });
+    return out;
+}
+
 std::vector<ObjcMethod> parse_objc_methods(const Binary& b) {
     std::vector<ObjcMethod> out;
     for_each_unique_ptr_in_sections(
@@ -682,28 +788,15 @@ std::vector<ObjcMethod> parse_objc_methods(const Binary& b) {
     for_each_unique_ptr_in_sections(
         b, {"__objc_catlist", "__objc_nlcatlist"},
         [&](addr_t, addr_t cat_p) {
-            auto name_p   = load_u64(b, static_cast<addr_t>(cat_p + 0));
-            auto cls_p    = load_u64(b, static_cast<addr_t>(cat_p + 8));
-            auto imeth_p  = load_u64(b, static_cast<addr_t>(cat_p + 16));
-            auto cmeth_p  = load_u64(b, static_cast<addr_t>(cat_p + 24));
-            if (!name_p) return;
-            std::string cat_name = read_cstring(b, static_cast<addr_t>(*name_p));
+            auto cat = read_category(b, cat_p);
+            if (!cat) return;
             // Category target class name - the method list belongs to it,
             // tagged with `(CategoryName)` so the reader can tell it apart
             // from the base class's own methods.
-            std::string target_cls = category_target_class_name(
-                b, static_cast<addr_t>(cat_p + 8),
-                cls_p ? static_cast<addr_t>(*cls_p) : addr_t{0});
-            if (target_cls.empty()) target_cls = "?";
-            const std::string tagged = cat_name.empty()
-                ? target_cls
-                : target_cls + "(" + cat_name + ")";
-            if (imeth_p && *imeth_p)
-                read_method_list(b, static_cast<addr_t>(*imeth_p),
-                                 tagged, false, out);
-            if (cmeth_p && *cmeth_p)
-                read_method_list(b, static_cast<addr_t>(*cmeth_p),
-                                 tagged, true,  out);
+            const std::string tagged = category_display_class_name(b, *cat);
+            if (tagged.empty()) return;
+            read_method_list(b, cat->instance_methods_va, tagged, false, out);
+            read_method_list(b, cat->class_methods_va, tagged, true, out);
         });
     return out;
 }
@@ -737,25 +830,12 @@ std::vector<ObjcProperty> parse_objc_properties(const Binary& b) {
     for_each_unique_ptr_in_sections(
         b, {"__objc_catlist", "__objc_nlcatlist"},
         [&](addr_t, addr_t cat_p) {
-            auto name_p   = load_u64(b, static_cast<addr_t>(cat_p + 0));
-            auto cls_p    = load_u64(b, static_cast<addr_t>(cat_p + 8));
-            auto iprops_p = load_u64(b, static_cast<addr_t>(cat_p + 40));
-            auto cprops_p = load_u64(b, static_cast<addr_t>(cat_p + 48));
-            if (!name_p) return;
-            std::string cat_name = read_cstring(b, static_cast<addr_t>(*name_p));
-            std::string target_cls = category_target_class_name(
-                b, static_cast<addr_t>(cat_p + 8),
-                cls_p ? static_cast<addr_t>(*cls_p) : addr_t{0});
-            if (target_cls.empty()) target_cls = "?";
-            const std::string tagged = cat_name.empty()
-                ? target_cls
-                : target_cls + "(" + cat_name + ")";
-            if (iprops_p && *iprops_p) {
-                read_property_list(b, static_cast<addr_t>(*iprops_p), tagged, out);
-            }
-            if (cprops_p && *cprops_p) {
-                read_property_list(b, static_cast<addr_t>(*cprops_p), tagged, out);
-            }
+            auto cat = read_category(b, cat_p);
+            if (!cat) return;
+            const std::string tagged = category_display_class_name(b, *cat);
+            if (tagged.empty()) return;
+            read_property_list(b, cat->instance_properties_va, tagged, out);
+            read_property_list(b, cat->class_properties_va, tagged, out);
         });
     return out;
 }
@@ -812,29 +892,9 @@ std::map<addr_t, std::string> parse_objc_classrefs(const Binary& b) {
                 // loader can expose an import symbol at the classref slot;
                 // use that so class messages render as `[NSString class]`
                 // instead of a raw `*(u64*)(slot)`.
-                if (const Symbol* imp = b.import_at_got(slot); imp) {
-                    std::string cls_name = objc_class_name_from_symbol(imp->name);
-                    if (!cls_name.empty()) {
-                        out.emplace(slot, std::move(cls_name));
-                        return;
-                    }
-                }
-                for (const auto& sym : b.symbols()) {
-                    if (!sym.is_import || sym.got_addr != slot) continue;
-                    std::string cls_name = objc_class_name_from_symbol(sym.name);
-                    if (!cls_name.empty()) {
-                        out.emplace(slot, std::move(cls_name));
-                        break;
-                    }
-                }
-                if (out.contains(slot)) return;
-                for (const auto& sym : b.symbols()) {
-                    if (sym.addr != slot) continue;
-                    std::string cls_name = objc_class_name_from_symbol(sym.name);
-                    if (!cls_name.empty()) {
-                        out.emplace(slot, std::move(cls_name));
-                        break;
-                    }
+                if (std::string cls_name = class_name_from_import_slot(b, slot);
+                    !cls_name.empty()) {
+                    out.emplace(slot, std::move(cls_name));
                 }
                 return;
             }

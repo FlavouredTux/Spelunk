@@ -1,0 +1,5 @@
+// Core::Player::vfn_0
+// alias: Player::vfn_0
+uint64_t Core::Player::vfn_0(void) {
+  return 7;
+}

@@ -1,0 +1,4 @@
+// recoverCachedValue
+uint64_t recoverCachedValue(void) {
+  return 0x58;
+}

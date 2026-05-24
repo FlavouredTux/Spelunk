@@ -1,0 +1,4 @@
+// Engine::ScriptHost::inspect
+uint64_t Engine::ScriptHost::inspect(void) {
+  return 0x55;
+}

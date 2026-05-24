@@ -1,0 +1,4 @@
+Tiny	class	TinyDelegate	required	-	tinyDidPing:	missing	void (id)
+Tiny	class	TinyDelegate	required	+	makeTiny	missing	id ()
+Tiny	class	TinyDelegate	optional	-	tinyMaybePing:	missing	void (id)
+Tiny	class	TinyDelegate	optional	+	protocolVersion	missing	int ()

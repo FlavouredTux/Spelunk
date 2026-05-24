@@ -1,0 +1,1 @@
+evidence	anti_tamper	bundle_file	artifact_library	0x0	xrefs=	functions=	Contents/MacOS/libVMProtectSDK.dylib

@@ -1,0 +1,4 @@
+// lua_cfunc_tick
+uint64_t lua_cfunc_tick(void) {
+  return 0x33;
+}

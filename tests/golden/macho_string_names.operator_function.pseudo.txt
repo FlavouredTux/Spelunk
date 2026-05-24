@@ -1,0 +1,4 @@
+// Example::Box::operator_eq
+uint64_t Example::Box::operator_eq(void) {
+  return 0x63;
+}

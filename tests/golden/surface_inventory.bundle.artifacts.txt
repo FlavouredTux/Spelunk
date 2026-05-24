@@ -1,0 +1,2 @@
+artifact	Contents/Resources/default.metallib	matches=1	subsystems=graphics_rendering	categories=artifact_shader
+artifact	Contents/Resources/shaders/shaders_glsl3.pack	matches=1	subsystems=graphics_rendering	categories=artifact_shader

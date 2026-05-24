@@ -1,0 +1,9 @@
+function	opengl	proc_resolver	0x10000103a	strings=1	symbols=0	api_names=0	extensions=	categories=backend_marker,proc_resolver	domains=backend,loader	SDL_GL_GetProcAddress("glBindBuffer") SDL_WINDOW_OPENGL SDL_GL_CONTEXT_PROFILE_CORE
+function	sdl	proc_resolver	0x10000103a	strings=1	symbols=0	api_names=1	extensions=	categories=api_call_expr,backend_marker,constant_name,proc_resolver	domains=backend,graphics_bridge	SDL_GL_GetProcAddress || SDL_WINDOW_OPENGL || SDL_GL_CONTEXT_PROFILE_CORE || SDL_GL_GetProcAddress("glBindBuffer") SDL_WINDOW_OPENGL SDL_GL_CONTEXT_PROFILE_CORE
+function	opengl	proc_loader	0x100001054	strings=18	symbols=0	api_names=15	extensions=ARB,EXT,KHR	categories=api_proc_name,backend_marker,proc_resolver	domains=backend,buffer,debug,framebuffer,loader,program,shader,texture,uniform,vertex_input	glActiveTexture || glBindBuffer || glBindBufferARB || glBufferData
+function	sdl	proc_loader	0x100001054	strings=4	symbols=0	api_names=4	extensions=	categories=api_proc_name,backend_marker,proc_resolver	domains=backend,graphics_bridge	SDL_Vulkan_GetInstanceExtensions || SDL_Vulkan_CreateSurface || SDL_GL_CreateContext || SDL_GL_SetAttribute
+string	opengl	proc_resolver	loader	0x10000126a	api=-	xrefs=0x10000103a	functions=0x10000103a	SDL_GL_GetProcAddress("glBindBuffer") SDL_WINDOW_OPENGL SDL_GL_CONTEXT_PROFILE_CORE
+string	sdl	proc_resolver	graphics_bridge	0x10000126a	api=-	xrefs=0x10000103a	functions=0x10000103a	SDL_GL_GetProcAddress("glBindBuffer") SDL_WINDOW_OPENGL SDL_GL_CONTEXT_PROFILE_CORE
+string	opengl	proc_resolver	loader	0x100001406	api=-	xrefs=0x1000010bd	functions=0x100001054	eglGetProcAddress
+string	sdl	proc_resolver	graphics_bridge	0x1000014f2	api=-	xrefs=0x100001111	functions=0x100001054	SDL_Vulkan_GetInstanceExtensions
+string	sdl	proc_resolver	graphics_bridge	0x100001513	api=-	xrefs=0x100001118,0x100001511	functions=0x100001054	SDL_Vulkan_CreateSurface

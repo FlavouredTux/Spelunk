@@ -1,0 +1,4 @@
+// Engine::ScriptHost::resume
+uint64_t Engine::ScriptHost::resume(void) {
+  return 0x44;
+}

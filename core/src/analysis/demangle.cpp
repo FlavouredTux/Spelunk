@@ -3,10 +3,21 @@
 
 #include <cctype>
 #include <cstddef>
+#include <cstdlib>
 #include <format>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if defined(__has_include)
+#if __has_include(<cxxabi.h>)
+#include <cxxabi.h>
+#define EMBER_HAS_CXXABI 1
+#endif
+#endif
+#ifndef EMBER_HAS_CXXABI
+#define EMBER_HAS_CXXABI 0
+#endif
 
 namespace ember {
 
@@ -755,6 +766,28 @@ std::string parse_encoding(Dem& d) {
 
 }  // namespace
 
+std::optional<std::string> demangle_itanium_system(std::string_view mangled) {
+#if EMBER_HAS_CXXABI
+    std::string owned(mangled);
+    int status = -1;
+    char* demangled = abi::__cxa_demangle(owned.c_str(), nullptr, nullptr, &status);
+    if (status == 0 && demangled != nullptr) {
+        std::string out(demangled);
+        std::free(demangled);
+        if (out.find('\t') != std::string::npos ||
+            out.find('\n') != std::string::npos ||
+            out.find("$_") != std::string::npos) {
+            return std::nullopt;
+        }
+        return out;
+    }
+    std::free(demangled);
+#else
+    (void)mangled;
+#endif
+    return std::nullopt;
+}
+
 std::optional<std::string> demangle_itanium(std::string_view mangled) {
     if (mangled.size() < 2) return std::nullopt;
     std::size_t start = 0;
@@ -767,14 +800,22 @@ std::optional<std::string> demangle_itanium(std::string_view mangled) {
     d.pos = start;
 
     std::string result = parse_encoding(d);
-    if (d.failed || result.empty()) return std::nullopt;
+    if (d.failed || result.empty()) return demangle_itanium_system(mangled);
     return result;
 }
 
 [[nodiscard]] std::string trim_copy(std::string_view s) {
     while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
     while (!s.empty() && s.back() == ' ') s.remove_suffix(1);
-    return std::string(s);
+    std::string out(s);
+    for (std::size_t i = 1; i < out.size();) {
+        if (out[i - 1] == ' ' && out[i] == '>') {
+            out.erase(i - 1, 1);
+            continue;
+        }
+        ++i;
+    }
+    return out;
 }
 
 [[nodiscard]] std::vector<std::string> split_template_args(std::string_view s) {

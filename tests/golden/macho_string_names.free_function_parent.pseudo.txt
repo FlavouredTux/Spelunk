@@ -1,0 +1,4 @@
+// recoverFreeFunctionArtifact
+uint64_t recoverFreeFunctionArtifact(void) {
+  return 0x80;
+}

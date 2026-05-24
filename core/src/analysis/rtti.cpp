@@ -1,8 +1,11 @@
 #include <ember/analysis/rtti.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <cctype>
 #include <cstring>
 #include <format>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -54,6 +57,360 @@ namespace {
     }
 }
 
+[[nodiscard]] bool useful_embedded_function_name(std::string_view name) noexcept {
+    if (name.size() < 4 || name.size() > 192) return false;
+    if (name.starts_with("std::") || name.starts_with("__cxxabiv1::")) return false;
+    if (name.contains("::") || name.starts_with("-[") || name.starts_with("+[")) {
+        return true;
+    }
+    bool has_alpha = false;
+    for (char c : name) {
+        const auto u = static_cast<unsigned char>(c);
+        if (std::isalpha(u)) has_alpha = true;
+        if (!(std::isalnum(u) || c == '_' || c == '-' || c == '+' ||
+              c == ' ' || c == '[' || c == ']')) {
+            return false;
+        }
+    }
+    return has_alpha;
+}
+
+struct OperatorSuffixMatch {
+    std::string_view token;
+    std::size_t length = 0;
+};
+
+[[nodiscard]] std::optional<OperatorSuffixMatch>
+operator_suffix_match(std::string_view text, std::size_t pos) {
+    struct OpName {
+        std::string_view spelling;
+        std::string_view token;
+    };
+    for (const auto& op : {
+        OpName{"()", "call"},
+        OpName{"[]", "index"},
+        OpName{"<=>", "cmp"},
+        OpName{"==", "eq"},
+        OpName{"!=", "ne"},
+        OpName{"<=", "le"},
+        OpName{">=", "ge"},
+        OpName{"->*", "ptr_member"},
+        OpName{"->", "arrow"},
+        OpName{"&&", "logical_and"},
+        OpName{"||", "logical_or"},
+        OpName{"++", "inc"},
+        OpName{"--", "dec"},
+        OpName{"+=", "plus_assign"},
+        OpName{"-=", "minus_assign"},
+        OpName{"*=", "mul_assign"},
+        OpName{"/=", "div_assign"},
+        OpName{"%=", "mod_assign"},
+        OpName{"&=", "and_assign"},
+        OpName{"|=", "or_assign"},
+        OpName{"^=", "xor_assign"},
+        OpName{"<<=", "shl_assign"},
+        OpName{">>=", "shr_assign"},
+        OpName{"<<", "shl"},
+        OpName{">>", "shr"},
+        OpName{"+", "plus"},
+        OpName{"-", "minus"},
+        OpName{"*", "mul"},
+        OpName{"/", "div"},
+        OpName{"%", "mod"},
+        OpName{"&", "and"},
+        OpName{"|", "or"},
+        OpName{"^", "xor"},
+        OpName{"~", "bit_not"},
+        OpName{"!", "not"},
+        OpName{"=", "assign"},
+        OpName{"<", "lt"},
+        OpName{">", "gt"},
+        OpName{",", "comma"},
+    }) {
+        if (text.substr(pos).starts_with(op.spelling)) {
+            return OperatorSuffixMatch{op.token, op.spelling.size()};
+        }
+    }
+    if (text.substr(pos).starts_with(" new[]")) {
+        return OperatorSuffixMatch{"new_array", 6};
+    }
+    if (text.substr(pos).starts_with(" delete[]")) {
+        return OperatorSuffixMatch{"delete_array", 9};
+    }
+    if (text.substr(pos).starts_with(" new")) {
+        return OperatorSuffixMatch{"new", 4};
+    }
+    if (text.substr(pos).starts_with(" delete")) {
+        return OperatorSuffixMatch{"delete", 7};
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::string normalize_operator_name(std::string_view name) {
+    constexpr std::string_view needle = "operator";
+    for (std::size_t pos = name.find(needle);
+         pos != std::string_view::npos;
+         pos = name.find(needle, pos + needle.size())) {
+        const bool boundary_before =
+            pos == 0 ||
+            (pos >= 2 && name[pos - 1] == ':' && name[pos - 2] == ':');
+        if (!boundary_before) continue;
+        auto match = operator_suffix_match(name, pos + needle.size());
+        if (!match) continue;
+        std::string out{name.substr(0, pos)};
+        out += "operator_";
+        out += match->token;
+        out += name.substr(pos + needle.size() + match->length);
+        return out;
+    }
+    return std::string{name};
+}
+
+[[nodiscard]] std::string normalize_embedded_function_name(std::string name) {
+    name = normalize_operator_name(name);
+    const auto dtor = name.rfind("::~");
+    if (dtor == std::string::npos) return name;
+    const std::string_view leaf{name.data() + dtor + 3,
+                                name.size() - dtor - 3};
+    if (dtor == 0 || leaf.empty()) return name;
+    return std::string{name.substr(0, dtor)} + "::dtor_" +
+           std::string{leaf};
+}
+
+[[nodiscard]] std::optional<std::string>
+itanium_nested_special_function_prefix(std::string_view text) {
+    std::size_t start = 0;
+    if (text.starts_with("ZZN") || text.starts_with("ZZNK")) start = 1;
+    if (!text.substr(start).starts_with("ZN")) return std::nullopt;
+    std::size_t pos = start + 2;
+    while (pos < text.size() &&
+           (text[pos] == 'K' || text[pos] == 'V' ||
+            text[pos] == 'r' || text[pos] == 'R' || text[pos] == 'O')) {
+        ++pos;
+    }
+
+    bool saw_special = false;
+    std::vector<std::string> parts;
+    while (pos < text.size() && text[pos] != 'E') {
+        if (pos + 1 < text.size() && text[pos] == 'C' &&
+            (text[pos + 1] == '1' || text[pos + 1] == '2' ||
+             text[pos + 1] == '3')) {
+            if (!parts.empty()) {
+                parts.push_back("ctor_" + parts.back());
+                saw_special = true;
+            }
+            pos += 2;
+            continue;
+        }
+        if (pos + 1 < text.size() && text[pos] == 'D' &&
+            (text[pos + 1] == '0' || text[pos + 1] == '1' ||
+             text[pos + 1] == '2')) {
+            if (!parts.empty()) {
+                parts.push_back("dtor_" + parts.back());
+                saw_special = true;
+            }
+            pos += 2;
+            continue;
+        }
+        if (!std::isdigit(static_cast<unsigned char>(text[pos]))) return std::nullopt;
+        std::size_t len = 0;
+        while (pos < text.size() &&
+               std::isdigit(static_cast<unsigned char>(text[pos]))) {
+            len = len * 10 + static_cast<std::size_t>(text[pos] - '0');
+            ++pos;
+            if (len > 256) return std::nullopt;
+        }
+        if (len == 0 || pos + len > text.size()) return std::nullopt;
+        auto comp = text.substr(pos, len);
+        pos += len;
+        if (comp.empty() || comp.front() == '$') continue;
+        for (char c : comp) {
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) {
+                return std::nullopt;
+            }
+        }
+        parts.emplace_back(comp);
+    }
+    if (!saw_special || pos >= text.size() || text[pos] != 'E') return std::nullopt;
+    if (parts.size() < 2 || parts.front() == "std" ||
+        parts.front() == "__cxxabiv1") {
+        return std::nullopt;
+    }
+
+    std::string out;
+    for (const auto& p : parts) {
+        if (out.empty()) out = p;
+        else out += "::" + p;
+    }
+    if (!useful_embedded_function_name(out)) return std::nullopt;
+    return out;
+}
+
+[[nodiscard]] bool is_itanium_type_start(char c) noexcept {
+    const auto u = static_cast<unsigned char>(c);
+    return std::isalpha(u) || c == 'P' || c == 'R' || c == 'O' ||
+           c == 'K' || c == 'V' || c == 'N' || c == 'S' ||
+           c == 'I' || c == 'E';
+}
+
+[[nodiscard]] std::optional<std::string>
+itanium_local_or_free_function_prefix(std::string_view text) {
+    std::size_t pos = std::string_view::npos;
+    if (text.starts_with("ZL")) {
+        pos = 2;
+    } else if (text.starts_with("ZZL")) {
+        pos = 3;
+    } else if (text.size() >= 2 &&
+               text[0] == 'Z' &&
+               std::isdigit(static_cast<unsigned char>(text[1]))) {
+        pos = 1;
+    } else if (text.size() >= 3 &&
+               text[0] == 'Z' && text[1] == 'Z' &&
+               std::isdigit(static_cast<unsigned char>(text[2]))) {
+        pos = 2;
+    }
+    if (pos == std::string_view::npos) return std::nullopt;
+
+    std::size_t len = 0;
+    while (pos < text.size() &&
+           std::isdigit(static_cast<unsigned char>(text[pos]))) {
+        len = len * 10 + static_cast<std::size_t>(text[pos] - '0');
+        ++pos;
+        if (len > 256) return std::nullopt;
+    }
+    if (len == 0 || pos + len > text.size()) return std::nullopt;
+    std::string name{text.substr(pos, len)};
+    pos += len;
+
+    // After the source name comes the bare function type (`v`, `i`, `P...`,
+    // etc.) or the local-name delimiter `E`.
+    if (pos < text.size() && text[pos] != 'E' && !is_itanium_type_start(text[pos])) {
+        return std::nullopt;
+    }
+    if (!useful_embedded_function_name(name)) return std::nullopt;
+    return name;
+}
+
+struct EmbeddedCallableName {
+    std::string function;
+    std::optional<unsigned> lambda_ordinal;
+};
+
+[[nodiscard]] bool is_libcxx_function_func_type(std::string_view text) noexcept {
+    return text.starts_with("NSt3__110__function6__funcI");
+}
+
+[[nodiscard]] std::optional<unsigned>
+lambda_ordinal_from_type_encoding(std::string_view text) {
+    for (std::size_t i = 0; i + 2 < text.size(); ++i) {
+        if (text[i] != '$' || text[i + 1] != '_') continue;
+        std::size_t j = i + 2;
+        unsigned value = 0;
+        bool any = false;
+        while (j < text.size() &&
+               std::isdigit(static_cast<unsigned char>(text[j]))) {
+            any = true;
+            value = value * 10u + static_cast<unsigned>(text[j] - '0');
+            ++j;
+        }
+        if (any) return value;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::string_view libcxx_function_slot_name(std::size_t slot) noexcept {
+    // libc++ std::__1::__function::__func vtable, after the Itanium
+    // offset/typeinfo header: complete dtor, deleting dtor, two clone
+    // forms, two destroy forms, operator(), target_type(), target().
+    switch (slot) {
+        case 0: return "dtor";
+        case 1: return "deleting_dtor";
+        case 2: return "clone";
+        case 3: return "clone_into";
+        case 4: return "destroy";
+        case 5: return "destroy_deallocate";
+        case 6: return "invoke";
+        case 7: return "target_type";
+        case 8: return "target";
+        default: return {};
+    }
+}
+
+[[nodiscard]] std::string_view
+libcxx_shared_ptr_pointer_slot_name(std::size_t slot) noexcept {
+    // libc++ `std::__1::__shared_ptr_pointer<T, D, A>` control blocks sit
+    // behind shared_ptr/weak_ptr instances. Their vtable slots are stable
+    // enough to name from the ABI/library layout: destructors, shared-count
+    // disposal, weak-count disposal, then deleter lookup.
+    switch (slot) {
+        case 0: return "dtor";
+        case 1: return "deleting_dtor";
+        case 2: return "on_zero_shared";
+        case 3: return "on_zero_shared_weak";
+        case 4: return "get_deleter";
+        default: return {};
+    }
+}
+
+[[nodiscard]] std::optional<std::string>
+embedded_function_name_from_type_encoding(std::string_view text);
+
+[[nodiscard]] std::optional<EmbeddedCallableName>
+embedded_callable_from_type_encoding(std::string_view text) {
+    for (std::size_t i = 0; i + 2 < text.size(); ++i) {
+        if (text[i] != 'Z') continue;
+        const char next = text[i + 1];
+        const bool nested = next == 'N';
+        const bool local = next == 'L';
+        const bool free_function = next >= '0' && next <= '9';
+        const bool local_nested =
+            next == 'Z' && i + 2 < text.size() &&
+            (text[i + 2] == 'N' || text[i + 2] == 'L' ||
+             std::isdigit(static_cast<unsigned char>(text[i + 2])));
+        if (!nested && !local && !free_function && !local_nested) continue;
+
+        std::string mangled = "_";
+        mangled += text.substr(i);
+        auto demangled = demangle_itanium(mangled);
+        if (!demangled) {
+            if (auto fallback = itanium_local_or_free_function_prefix(text.substr(i))) {
+                EmbeddedCallableName out;
+                out.function = std::move(*fallback);
+                out.lambda_ordinal = lambda_ordinal_from_type_encoding(text);
+                return out;
+            }
+            continue;
+        }
+        auto base = strip_signature_suffix(*demangled);
+        if (auto special = itanium_nested_special_function_prefix(text.substr(i))) {
+            base = std::move(*special);
+        } else {
+            base = normalize_embedded_function_name(std::move(base));
+        }
+        if (!useful_embedded_function_name(base)) {
+            if (auto fallback = itanium_local_or_free_function_prefix(text.substr(i))) {
+                EmbeddedCallableName out;
+                out.function = std::move(*fallback);
+                out.lambda_ordinal = lambda_ordinal_from_type_encoding(text);
+                return out;
+            }
+            continue;
+        }
+        EmbeddedCallableName out;
+        out.function = std::move(base);
+        out.lambda_ordinal = lambda_ordinal_from_type_encoding(text);
+        return out;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string>
+embedded_function_name_from_type_encoding(std::string_view text) {
+    auto c = embedded_callable_from_type_encoding(text);
+    if (!c) return std::nullopt;
+    return c->function;
+}
+
 [[nodiscard]] std::optional<std::string>
 try_demangle_typeinfo(std::string_view name) {
     if (!looks_like_typeinfo_name(name)) return std::nullopt;
@@ -63,7 +420,7 @@ try_demangle_typeinfo(std::string_view name) {
     std::string mangled = "_Z";
     mangled.append(name);
     auto r = demangle_itanium(mangled);
-    if (!r) return std::nullopt;
+    if (!r) return embedded_function_name_from_type_encoding(name);
     // Strip the parenthesized arg list the demangler inserts - RTTI names
     // aren't functions, they're types.
     std::string s = *r;
@@ -72,6 +429,22 @@ try_demangle_typeinfo(std::string_view name) {
     // Conservative sanity: empty / exactly the input back = no real parse.
     if (s.empty() || s == name) return std::nullopt;
     return s;
+}
+
+[[nodiscard]] std::optional<std::string_view>
+vtable_typeinfo_payload(std::string_view symbol) {
+    if (symbol.starts_with("__Z")) {
+        symbol.remove_prefix(1); // Mach-O's C symbol prefix before `_Z...`.
+    }
+    if (!symbol.starts_with("_ZTV")) return std::nullopt;
+    return symbol.substr(4);
+}
+
+[[nodiscard]] std::optional<std::string>
+try_demangle_vtable_symbol(std::string_view symbol) {
+    const auto payload = vtable_typeinfo_payload(symbol);
+    if (!payload) return std::nullopt;
+    return try_demangle_typeinfo(*payload);
 }
 
 // `code_sections` holds [start, end) ranges of executable sections so a
@@ -122,6 +495,35 @@ struct ConstSection {
     addr_t                     vaddr;
 };
 
+struct AddressRanges {
+    std::vector<std::pair<addr_t, addr_t>> ranges;
+
+    void add(addr_t lo, addr_t hi) {
+        if (hi > lo) ranges.emplace_back(lo, hi);
+    }
+
+    void finish() {
+        std::ranges::sort(ranges);
+        std::vector<std::pair<addr_t, addr_t>> merged;
+        for (auto [lo, hi] : ranges) {
+            if (merged.empty() || lo > merged.back().second) {
+                merged.emplace_back(lo, hi);
+            } else if (hi > merged.back().second) {
+                merged.back().second = hi;
+            }
+        }
+        ranges = std::move(merged);
+    }
+
+    [[nodiscard]] bool contains(addr_t a) const {
+        const auto it = std::ranges::upper_bound(
+            ranges, a, {}, [](const auto& r) { return r.first; });
+        if (it == ranges.begin()) return false;
+        const auto& r = *std::prev(it);
+        return a >= r.first && a < r.second;
+    }
+};
+
 [[nodiscard]] std::vector<ConstSection>
 collect_const_sections(const Binary& b) {
     std::vector<ConstSection> out;
@@ -139,6 +541,58 @@ collect_const_sections(const Binary& b) {
     return out;
 }
 
+[[nodiscard]] bool section_name_contains(std::string_view name,
+                                         std::string_view needle) noexcept {
+    return name.find(needle) != std::string_view::npos;
+}
+
+[[nodiscard]] AddressRanges collect_typeinfo_name_ranges(const Binary& b) {
+    AddressRanges out;
+    for (const auto& s : b.sections()) {
+        if (s.data.empty()) continue;
+        const std::string_view n = s.name;
+        const bool string_like =
+            section_name_contains(n, "__cstring") ||
+            section_name_contains(n, ".rodata") ||
+            section_name_contains(n, ".rdata") ||
+            section_name_contains(n, "__const") ||
+            section_name_contains(n, ".data.rel.ro");
+        if (!string_like) continue;
+        out.add(static_cast<addr_t>(s.vaddr),
+                static_cast<addr_t>(s.vaddr + s.data.size()));
+    }
+    out.finish();
+    return out;
+}
+
+[[nodiscard]] std::vector<addr_t>
+read_vtable_methods_from_symbol(const Binary& b, const CodeRanges& code,
+                                addr_t vtable_object) {
+    std::vector<addr_t> out;
+    if (vtable_object == 0) return out;
+
+    addr_t slot_va = vtable_object + 16;
+    constexpr std::size_t kMaxVtableSlots   = 4096;
+    constexpr std::size_t kMaxTrailingZeros = 8;
+    std::size_t trailing_zeros = 0;
+    for (std::size_t i = 0; i < kMaxVtableSlots; ++i, slot_va += 8) {
+        auto span = b.bytes_at(slot_va);
+        if (span.size() < 8) break;
+        u64 raw = 0;
+        std::memcpy(&raw, span.data(), 8);
+        const addr_t target = static_cast<addr_t>(raw);
+        if (target == 0 || !code.contains(target)) {
+            out.push_back(0);
+            if (++trailing_zeros >= kMaxTrailingZeros) break;
+            continue;
+        }
+        trailing_zeros = 0;
+        out.push_back(target);
+    }
+    while (!out.empty() && out.back() == 0) out.pop_back();
+    return out;
+}
+
 }  // namespace
 
 std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
@@ -146,6 +600,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
     const auto consts = collect_const_sections(b);
     if (consts.empty()) return out;
     const auto code = collect_code_ranges(b);
+    const auto name_ranges = collect_typeinfo_name_ranges(b);
 
     // Pass 1: find typeinfo structs. A typeinfo is a u64 pair
     // (vptr, name_ptr) at 8-byte alignment where the second u64 points
@@ -158,6 +613,7 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
             std::memcpy(&vptr,   sec.bytes.data() + i * 8,       8);
             std::memcpy(&name_p, sec.bytes.data() + (i + 1) * 8, 8);
             if (vptr == 0 || name_p == 0) continue;
+            if (!name_ranges.contains(static_cast<addr_t>(name_p))) continue;
             std::string name = read_cstring(b, static_cast<addr_t>(name_p));
             if (name.empty()) continue;
             auto demangled = try_demangle_typeinfo(name);
@@ -258,6 +714,43 @@ std::vector<RttiClass> parse_itanium_rtti(const Binary& b) {
         }
     }
 
+    // Pass 3: named Itanium vtable symbols (`_ZTV*`). These may arrive from
+    // an unstripped Mach-O, export info, or an external dSYM. They still give
+    // us strong virtual-method names when the raw typeinfo walk cannot tie
+    // the vtable back to a class.
+    for (const auto& sym : b.symbols()) {
+        if (sym.is_import || sym.addr == 0) continue;
+        if (sym.kind != SymbolKind::Object && sym.kind != SymbolKind::Unknown) continue;
+        auto payload = vtable_typeinfo_payload(sym.name);
+        if (!payload) continue;
+        auto demangled = try_demangle_vtable_symbol(sym.name);
+        if (!demangled) continue;
+
+        const addr_t typeinfo_slot = sym.addr + 8;
+        auto methods = read_vtable_methods_from_symbol(b, code, sym.addr);
+        if (methods.empty()) continue;
+
+        RttiClass* cls = nullptr;
+        for (auto& candidate : out) {
+            if (candidate.vtable == typeinfo_slot ||
+                (candidate.vtable == 0 && candidate.demangled_name == *demangled)) {
+                cls = &candidate;
+                break;
+            }
+        }
+        if (!cls) {
+            RttiClass c;
+            c.mangled_name = std::string(*payload);
+            c.demangled_name = std::move(*demangled);
+            c.vtable = typeinfo_slot;
+            c.methods = std::move(methods);
+            out.push_back(std::move(c));
+            continue;
+        }
+        if (cls->vtable == 0) cls->vtable = typeinfo_slot;
+        if (cls->methods.empty()) cls->methods = std::move(methods);
+    }
+
     return out;
 }
 
@@ -277,11 +770,38 @@ rtti_method_names(std::span<const RttiClass> classes) {
     std::map<addr_t, std::string> out;
     for (const auto& c : classes) {
         if (c.demangled_name.empty()) continue;
+        const auto embedded = embedded_callable_from_type_encoding(c.mangled_name);
+        std::string label_base = embedded ? embedded->function : c.demangled_name;
+        const bool libcxx_func = is_libcxx_function_func_type(c.mangled_name) &&
+                                 c.methods.size() >= 9;
+        const bool libcxx_shared_ptr_pointer =
+            c.mangled_name.find("__shared_ptr_pointer") != std::string_view::npos ||
+            label_base.find("__shared_ptr_pointer<") != std::string::npos;
+        std::string slot_prefix = "vfn";
+        if (embedded && embedded->lambda_ordinal) {
+            label_base += std::format("::lambda_{}", *embedded->lambda_ordinal);
+        } else if (embedded) {
+            slot_prefix = "metadata_vfn";
+        }
         for (std::size_t i = 0; i < c.methods.size(); ++i) {
             const addr_t a = c.methods[i];
             if (a == 0) continue;
+            if (libcxx_func) {
+                std::string_view slot = libcxx_function_slot_name(i);
+                if (!slot.empty()) {
+                    out[a] = std::format("{}::{}", label_base, slot);
+                    continue;
+                }
+            }
+            if (libcxx_shared_ptr_pointer) {
+                std::string_view slot = libcxx_shared_ptr_pointer_slot_name(i);
+                if (!slot.empty()) {
+                    out[a] = std::format("{}::{}", label_base, slot);
+                    continue;
+                }
+            }
             if (fanin[a] > kMaxFanin) continue;
-            out.emplace(a, std::format("{}::vfn_{}", c.demangled_name, i));
+            out.emplace(a, std::format("{}::{}_{:d}", label_base, slot_prefix, i));
         }
     }
     return out;

@@ -1,0 +1,4 @@
+// Example::Gadget::operator_eq
+uint64_t Example::Gadget::operator_eq(void) {
+  return 0x84;
+}

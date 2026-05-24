@@ -97,6 +97,19 @@ struct DiscoveredFunction {
     Kind        kind = Kind::Sub;
 };
 
+// Stack block literals synthesized inside Obj-C methods do not appear in
+// __block_literal metadata. This is the recovered surface for their invoke
+// functions plus capture names inferred from the parent method's stores.
+struct ObjcStackBlockInvoke {
+    addr_t                invoke = 0;
+    std::string           name;
+    std::map<u64, std::string> captures;
+    std::string           captured_self_class;
+};
+
+[[nodiscard]] std::vector<ObjcStackBlockInvoke>
+discover_objc_stack_block_invokes(const Binary& b);
+
 [[nodiscard]] constexpr std::string_view
 discovered_kind_name(DiscoveredFunction::Kind k) noexcept {
     switch (k) {

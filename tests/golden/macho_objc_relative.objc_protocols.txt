@@ -1,0 +1,4 @@
+TinyDelegate	-!	tinyDidPing:	void (id)
+TinyDelegate	+!	makeTiny	id ()
+TinyDelegate	-?	tinyMaybePing:	void (id)
+TinyDelegate	+?	protocolVersion	int ()

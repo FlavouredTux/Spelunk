@@ -1,3 +1,13 @@
+// Electron's Linux file chooser can route through xdg-desktop-portal.
+// On some non-Flatpak/Wayland sessions the portal denies the dialog with:
+// "Key file does not have key 'instance-id' in group 'Instance'". Ember is
+// not sandboxed, so prefer the normal GTK chooser unless explicitly opted in.
+if (process.platform === "linux" &&
+    process.env.EMBER_USE_PORTAL_FILE_PICKER !== "1" &&
+    process.env.GTK_USE_PORTAL === undefined) {
+  process.env.GTK_USE_PORTAL = "0";
+}
+
 const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell, screen } = require("electron");
 
 if (process.platform === "linux") {

@@ -108,8 +108,8 @@ constexpr std::string_view kXrefsCacheTag = "xrefs-v5";
 constexpr std::string_view kAritiesCacheTag = "arities-v3";
 constexpr std::string_view kFunctionsCacheTag = "functions-v6";
 constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v6";
-constexpr std::string_view kFunctionsInferredCacheTag = "functions_inferred-v2";
-constexpr std::string_view kFunctionsFullInferredCacheTag = "functions_full_inferred-v2";
+constexpr std::string_view kFunctionsInferredCacheTag = "functions_inferred-v3";
+constexpr std::string_view kFunctionsFullInferredCacheTag = "functions_full_inferred-v3";
 
 [[nodiscard]] std::vector<std::string>
 collect_bundle_artifacts(const std::filesystem::path& binary_path) {

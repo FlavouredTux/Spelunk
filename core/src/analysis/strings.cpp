@@ -1169,6 +1169,127 @@ graphics_api_name_from_string(std::string_view text) {
     return out;
 }
 
+[[nodiscard]] std::string remove_camel_word_copy(std::string_view text,
+                                                 std::string_view word) {
+    std::string out{text};
+    std::size_t pos = 0;
+    while ((pos = out.find(word, pos)) != std::string::npos) {
+        out.erase(pos, word.size());
+    }
+    return out;
+}
+
+[[nodiscard]] std::optional<std::string>
+sanitize_luau_anchor(std::string_view prefix, std::string_view tail) {
+    auto snake = camel_tail_to_snake(tail);
+    while (!snake.empty() && snake.front() == '_') snake.erase(snake.begin());
+    while (!snake.empty() && snake.back() == '_') snake.pop_back();
+    if (snake.empty()) return std::nullopt;
+    auto name = sanitize_name(std::string{prefix} + snake);
+    if (name.empty()) return std::nullopt;
+    return name;
+}
+
+[[nodiscard]] bool looks_like_luau_opcode_token(std::string_view text) noexcept {
+    if (text.empty() || text.size() > 40) return false;
+    bool alpha = false;
+    bool upper = false;
+    for (char c : text) {
+        const auto u = static_cast<unsigned char>(c);
+        if (std::isalpha(u)) {
+            alpha = true;
+            if (!std::isupper(u)) return false;
+            upper = true;
+        } else if (!(std::isdigit(u) || c == '_')) {
+            return false;
+        }
+    }
+    if (!alpha || !upper) return false;
+    for (const std::string_view needle : {
+             std::string_view{"FASTCALL"},
+             std::string_view{"NAMECALL"},
+             std::string_view{"DUPCLOSURE"},
+             std::string_view{"FORGPREP"},
+             std::string_view{"FORGLOOP"},
+             std::string_view{"JUMPIF"},
+             std::string_view{"GETIMPORT"},
+             std::string_view{"BYTECODE"},
+         }) {
+        if (text.find(needle) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<std::string>
+luau_anchor_name_from_string(std::string_view text) {
+    if (text.starts_with("luau-telemetry.")) {
+        const auto tail = text.substr(std::string_view{"luau-telemetry."}.size());
+        if (tail.size() < 3 || tail.size() > 96) return std::nullopt;
+        for (char c : tail) {
+            const auto u = static_cast<unsigned char>(c);
+            if (!(std::isalnum(u) || c == '-' || c == '.' || c == '_')) {
+                return std::nullopt;
+            }
+        }
+        return sanitize_luau_anchor("luau_telemetry_", tail);
+    }
+
+    if (looks_like_luau_opcode_token(text)) {
+        return sanitize_luau_anchor("luau_opcode_", text);
+    }
+
+    const auto lower = lower_ascii_copy(text);
+    auto has = [&](std::string_view needle) {
+        return lower.find(needle) != std::string::npos;
+    };
+
+    if (has("unexpected opcode in short circuit")) {
+        return sanitize_name("luau_unexpected_opcode_short_circuit");
+    }
+    if (has("unexpected opcode")) {
+        return sanitize_name("luau_unexpected_opcode");
+    }
+    if (has("unhandled opcode")) {
+        return sanitize_name("luau_unhandled_opcode");
+    }
+    if (has("bytecode auth check")) {
+        return sanitize_name("luau_bytecode_auth_check");
+    }
+    if (lower == "invalid bytecode.") {
+        return sanitize_name("luau_invalid_bytecode");
+    }
+    if (has("additional luau stack reservation has failed")) {
+        return sanitize_name("luau_stack_reservation_failed");
+    }
+    if (text.starts_with("Debugger is out of Luau stack space in ")) {
+        auto tail = text.substr(std::string_view{"Debugger is out of Luau stack space in "}.size());
+        if (tail.starts_with("a ")) tail.remove_prefix(2);
+        if (tail.starts_with("an ")) tail.remove_prefix(3);
+        return sanitize_luau_anchor("luau_debugger_stack_", tail);
+    }
+
+    if (text == "LuauTelemetry") {
+        return sanitize_name("luau_telemetry");
+    }
+    if (text.starts_with("Luau") && text.find("Telemetry") != std::string_view::npos) {
+        auto tail = std::string_view{text}.substr(4);
+        const auto stripped = remove_camel_word_copy(tail, "Telemetry");
+        return sanitize_luau_anchor("luau_telemetry_", stripped);
+    }
+    if (text.starts_with("LuaApps") || text.starts_with("LuaShell") ||
+        text.starts_with("LuaErrors")) {
+        return sanitize_luau_anchor("luau_telemetry_", text);
+    }
+    if (text.find("LuauHeap") != std::string_view::npos) {
+        return sanitize_luau_anchor("luau_heap_", text);
+    }
+    if (text.find("LuaBytecode") != std::string_view::npos ||
+        text.find("Bytecode") != std::string_view::npos) {
+        return sanitize_luau_anchor("luau_bytecode_", text);
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] std::optional<std::string>
 graphics_phrase_name_from_string(std::string_view text) {
     const auto lower = lower_ascii_copy(text);
@@ -1631,6 +1752,79 @@ void infer_role_identifier_anchors(
     }
 }
 
+[[nodiscard]] std::optional<std::string>
+collapse_luau_anchor_family(const std::set<std::string>& names) {
+    if (names.empty()) return std::nullopt;
+
+    bool all_lua_apps = true;
+    bool all_heap_profiler = true;
+    bool all_bytecode = true;
+    bool all_caps = true;
+    for (const auto& name : names) {
+        all_lua_apps &= name.starts_with("luau_telemetry_lua_apps_") ||
+                        name == "luau_telemetry_lua_shell_errors";
+        all_heap_profiler &= name.find("heap_profiler") != std::string::npos;
+        all_bytecode &= name.starts_with("luau_bytecode_");
+        all_caps &= name.starts_with("luau_telemetry_caps_");
+    }
+
+    if (all_lua_apps) return std::string{"luau_telemetry_lua_apps_metrics"};
+    if (all_heap_profiler) return std::string{"luau_telemetry_heap_profiler"};
+    if (all_bytecode) return std::string{"luau_bytecode_metrics"};
+    if (all_caps) return std::string{"luau_telemetry_caps_use"};
+    return std::nullopt;
+}
+
+template <class EnclosingFunction>
+void infer_luau_metadata_anchors(
+    std::span<const StringEntry> strings,
+    EnclosingFunction enclosing_function,
+    std::vector<StringNameCandidate>& out,
+    std::set<std::pair<addr_t, std::string>>& seen) {
+    struct AnchorRefs {
+        std::set<addr_t> functions;
+        std::string      source;
+    };
+
+    std::map<std::string, AnchorRefs> refs_by_name;
+    for (const auto& s : strings) {
+        if (s.xrefs.empty()) continue;
+        auto name = luau_anchor_name_from_string(s.text);
+        if (!name) continue;
+        auto& refs = refs_by_name[*name];
+        if (refs.source.empty()) refs.source = s.text;
+        for (addr_t xr : s.xrefs) {
+            if (auto fn = enclosing_function(xr)) refs.functions.insert(*fn);
+        }
+    }
+
+    std::map<addr_t, std::set<std::string>> names_by_function;
+    std::map<std::string, std::string> source_by_name;
+    for (const auto& [name, refs] : refs_by_name) {
+        if (refs.functions.size() != 1) continue;
+        const addr_t fn = *refs.functions.begin();
+        names_by_function[fn].insert(name);
+        source_by_name.emplace(name, refs.source);
+    }
+
+    for (const auto& [fn, names] : names_by_function) {
+        std::string name;
+        std::string source;
+        if (names.size() == 1) {
+            name = *names.begin();
+            source = source_by_name[name];
+        } else if (auto collapsed = collapse_luau_anchor_family(names)) {
+            name = *collapsed;
+            source = std::format("{} Luau anchors", names.size());
+        } else {
+            continue;
+        }
+        if (seen.emplace(fn, name).second) {
+            out.push_back({fn, std::move(name), std::move(source)});
+        }
+    }
+}
+
 [[nodiscard]] std::map<SsaKey, const IrInst*>
 index_defs(const IrFunction& fn) {
     std::map<SsaKey, const IrInst*> out;
@@ -1751,6 +1945,8 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
         ScopedTimer phase("strings.enumerate_functions");
         fns = enumerate_functions(b, EnumerateMode::Cheap);
     }
+    std::map<addr_t, std::size_t> function_sizes;
+    for (const auto& fn : fns) function_sizes.emplace(fn.addr, fn.size);
     auto enclosing_function = [&](addr_t addr) -> std::optional<addr_t> {
         auto it =
             std::upper_bound(fns.begin(), fns.end(), addr,
@@ -1769,6 +1965,13 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
         if (b.bytes_at(it->addr).empty())
             return std::nullopt;
         return it->addr;
+    };
+    auto luau_enclosing_function = [&](addr_t addr) -> std::optional<addr_t> {
+        auto fn = enclosing_function(addr);
+        if (!fn) return std::nullopt;
+        const auto it = function_sizes.find(*fn);
+        if (it != function_sizes.end() && it->second > 1024 * 1024) return std::nullopt;
+        return fn;
     };
     std::vector<StringEntry> strings;
     {
@@ -1837,6 +2040,10 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
         (options.max_assertion_functions == 0 || fns.size() <= options.max_assertion_functions)) {
         ScopedTimer phase("strings.assertion_names");
         infer_assertion_function_names(b, fns, out, seen);
+    }
+    {
+        ScopedTimer phase("strings.luau_metadata_anchors");
+        infer_luau_metadata_anchors(strings, luau_enclosing_function, out, seen);
     }
     {
         ScopedTimer phase("strings.role_identifier_anchors");

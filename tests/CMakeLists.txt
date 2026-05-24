@@ -1766,6 +1766,12 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  macho_string_names.role_identifier_anchor.pseudo.txt
     )
     ember_golden_test(
+        NAME    macho_string_names_luau_telemetry_anchor_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|luau_telemetry_bad_synchronize_call"
+        GOLDEN  macho_string_names.luau_telemetry_anchor.pseudo.txt
+    )
+    ember_golden_test(
         NAME    macho_string_names_compiler_artifact_surface
         FIXTURE macho_string_names
         ARGS    "-q|--no-cache|--surfaces|--surface|compiler_artifacts|--surface-row-type|evidence"

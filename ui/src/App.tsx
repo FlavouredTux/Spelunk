@@ -39,7 +39,7 @@ import { SkelCode } from "./components/Skeleton";
 import { RebaseProvider, makeRebaseFn, useFmtAddr } from "./RebaseContext";
 import {
   loadHeader, loadFunctions, loadFunction, pickBinary, openRecent,
-  loadXrefs, loadStrings, loadArities, loadAnnotations, saveAnnotations, getRecents,
+  loadXrefs, loadStrings, loadAnnotations, saveAnnotations, getRecents,
   exportAnnotations, importAnnotations, importCorpusRenames, loadIdentifications,
   checkForReleaseUpdate, downloadAndInstallReleaseUpdate,
   clearRendererCaches,
@@ -718,8 +718,7 @@ export default function App() {
       //   1. header (synchronous)            - UI shell
       //   2. annotations + functions parallel - sidecar is tiny;
       //                                         functions gates the sidebar
-      //   3. arities (after functions)       - fills the FunctionHeader
-      //   4. xrefs (lazy)                    - only spawned when the user
+      //   3. xrefs (lazy)                    - only spawned when the user
       //                                         opens xrefs / callgraph /
       //                                         AI, where it's actually used
       const header = await loadHeader();
@@ -755,10 +754,6 @@ export default function App() {
           }
           return start;
         });
-        // Now that functions is in, fire arities. Sequencing avoids a
-        // third concurrent ember process competing with the function
-        // loader for binary parse + file-cache pages.
-        track("arities", loadArities().then(setArities).catch(() => {}));
       }).catch(() => {}).finally(() => setFunctionsLoading(false)));
     } catch (e: any) {
       setError(e?.message ?? String(e));

@@ -25,7 +25,8 @@ namespace {
 
 }  // namespace
 
-void print_info(const Binary& b, std::string_view path) {
+void print_info(const Binary& b, std::string_view path,
+                std::size_t row_limit, bool verbose) {
     std::println("file    {}", path);
     std::println("format  {}", format_name(b.format()));
     std::println("arch    {}", arch_name(b.arch()));
@@ -51,19 +52,33 @@ void print_info(const Binary& b, std::string_view path) {
     std::println("");
     std::println("defined symbols ({})", n_defined);
     std::println("  {:>18} {:>8}  {:<8}  {}", "addr", "size", "kind", "name");
+    std::size_t emitted_defined = 0;
     for (const auto& s : syms) {
         if (s.is_import) continue;
+        if (!verbose && row_limit != 0 && emitted_defined >= row_limit) continue;
         std::println("  {:>#18x} {:>#8x}  {:<8}  {}",
                      s.addr, s.size, symbol_kind_name(s.kind), s.name);
+        ++emitted_defined;
+    }
+    if (!verbose && row_limit != 0 && emitted_defined < n_defined) {
+        std::println("  ... {} more defined symbol(s); pass --verbose or --row-limit 0 for all",
+                     n_defined - emitted_defined);
     }
 
     std::println("");
     std::println("imports ({})", n_imports);
     std::println("  {:>10}  {:>12}  {:<8}  {}", "plt", "got", "kind", "name");
+    std::size_t emitted_imports = 0;
     for (const auto& s : syms) {
         if (!s.is_import) continue;
+        if (!verbose && row_limit != 0 && emitted_imports >= row_limit) continue;
         std::println("  {:>#10x}  {:>#12x}  {:<8}  {}",
                      s.addr, s.got_addr, symbol_kind_name(s.kind), s.name);
+        ++emitted_imports;
+    }
+    if (!verbose && row_limit != 0 && emitted_imports < n_imports) {
+        std::println("  ... {} more import(s); pass --verbose or --row-limit 0 for all",
+                     n_imports - emitted_imports);
     }
 }
 
@@ -94,6 +109,7 @@ void help_view() {
     std::println("                       one-per-line input. Each block prefixed `# <hex-va>`;");
     std::println("                       --json returns an array of [addr, disasm] objects.");
     std::println("      --arities        dump inferred arity per function (addr N)");
+    std::println("      --row-limit N    cap broad list/info rows (0 = all)");
     std::println("      --ppc-coverage   rank unsupported PPC instruction words in executable sections");
     std::println("                       --coverage-limit N caps rows (default 25, 0 = all); --json supported");
 }
@@ -102,10 +118,29 @@ void help_syms() {
     std::println("Symbols, strings, packed string tables, callees, refs:");
     std::println("      --functions [P]  list every discovered fn (TSV); P is a substring filter.");
     std::println("                       Prefer --functions=P to avoid binary-vs-pattern ordering.");
+    std::println("                       --row-limit N caps emitted rows for UI/agent use.");
     std::println("      --collisions     every name / fingerprint bound to >1 address (TSV/JSON)");
     std::println("      --validate NAME  every addr bound to NAME + byte-similar lookalikes");
     std::println("      --containing-fn VA  entry/size/name/offset of the function covering VA");
     std::println("      --strings        printable strings (addr | text | xrefs)");
+    std::println("      --surfaces       app/subsystem inventory (Luau, network, media,");
+    std::println("                       web auth, storage, analytics, crash/update, etc.);");
+    std::println("                       Mach-O .app inputs also classify shipped bundle files");
+    std::println("                       filters: --surface NAME, --surface-kind NAME,");
+    std::println("                       --surface-category NAME, --surface-owner NAME,");
+    std::println("                       --surface-row-type summary/category/owner/descriptor/artifact/function/evidence/all,");
+    std::println("                       --surface-function VA; reflection_descriptor rows included");
+    std::println("                       for C++ reflection metadata; --json supported");
+    std::println("      --graphics       graphics backend/API/proc-loader inventory with domains");
+    std::println("                       (OpenGL/Vulkan/SDL/Metal/GLSL/SPIR-V); --json supported");
+    std::println("                       filters: --graphics-backend NAME, --graphics-domain NAME,");
+    std::println("                       --graphics-api NAME (case-insensitive substring),");
+    std::println("                       --graphics-extension NAME (ARB/EXT/KHR/etc.),");
+    std::println("                       --graphics-category NAME (api_proc_name/constant_name/etc.),");
+    std::println("                       --graphics-role NAME, --graphics-row-type NAME");
+    std::println("                       (summary/api/extension/function/symbol/string),");
+    std::println("                       --graphics-function VA");
+    std::println("      --log-categories cluster bracketed log categories by referencing functions");
     std::println("      --symtable VA    walk a packed NUL-terminated string table at VA. TSV");
     std::println("                       <va>\\t<offset>\\t<len>\\t<string>; stops on 4+ NUL run,");
     std::println("                       non-printable byte, segment end, or 1 MB cap. Emits a");
@@ -171,6 +206,7 @@ void help_ana() {
     std::println("      --vtable-at VA [--limit N]  narrow runtime vtable view around VA");
     std::println("      --objc-names     Obj-C runtime methods as TSV (imp ± class selector sig)");
     std::println("      --objc-protocols Obj-C protocol method signatures");
+    std::println("      --objc-surfaces  Obj-C class/category protocol implementation surface");
     std::println("      --dmp-anchors    Roblox DataModelPatch anchor strings (--full-analysis adds xrefs)");
     std::println("      --int3-resolve   classify embedded int3 bytes (handler / pad / dead)");
     std::println("      --identify       YARA-like crypto/protocol identifier");
@@ -244,6 +280,8 @@ void help_dbg() {
 void help_load() {
     std::println("Loading non-default inputs / non-default function-entry hints:");
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
+    std::println("      --dsym PATH      overlay symbols from a Mach-O dSYM file or .dSYM bundle");
+    std::println("      --infer-string-names  synthesize names from strong log/string anchors");
     std::println("      --no-pdb         skip PDB sidecar discovery / ingestion entirely");
     std::println("      --regions PATH   load via a raw-region manifest (Scylla-style scrape)");
     std::println("                       - see docs/raw-input.md for the manifest format");

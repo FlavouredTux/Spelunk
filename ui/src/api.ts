@@ -203,7 +203,7 @@ export async function loadHeader(): Promise<BinaryInfo> {
   return memoOnce<BinaryInfo>(
     async () => {
       const path = (await window.ember.binary()) ?? "";
-      const rawSummary = await window.ember.run([]);
+      const rawSummary = await window.ember.run(["--row-limit", "2000"]);
       const info = await parseSummary(rawSummary, path);
       info.functions = [];
       return info;
@@ -366,7 +366,7 @@ export async function loadArities(): Promise<Arities> {
 }
 
 async function loadAritiesImpl(): Promise<Arities> {
-  const raw = await window.ember.run(["--arities"]);
+  const raw = await window.ember.run(["--arities", "--row-limit", "2000"]);
   const out: Arities = {};
   await forEachLineChunked(raw, (line) => {
     const m = /^(0x[0-9a-f]+)\s+(\d+)$/.exec(line.trim());

@@ -397,7 +397,7 @@ function makePluginHost(opts) {
   }
 
   async function loadSummary(binaryPath) {
-    const raw = await runEmber([binaryPath]);
+    const raw = await runEmber(["--row-limit", "2000", binaryPath]);
     return parseSummary(raw, binaryPath);
   }
 
@@ -448,7 +448,7 @@ function makePluginHost(opts) {
   }
 
   async function loadArities(binaryPath) {
-    const raw = await runEmber(["--arities", binaryPath]);
+    const raw = await runEmber(["--arities", "--row-limit", "2000", binaryPath]);
     const out = {};
     for (const line of raw.split("\n")) {
       const m = /^(0x[0-9a-f]+)\s+(\d+)$/.exec(line.trim());

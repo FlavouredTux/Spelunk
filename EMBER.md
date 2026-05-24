@@ -140,6 +140,7 @@ tail.
 | `ember --vtables <binary>` | runtime vtables + slots | full loaded-dump / RELRO vtable inventory |
 | `ember --vtable-at <VA> [--limit N] <binary>` | one runtime vtable around a vptr/typeinfo-adjacent/table-slot VA | narrow std::function / vtable work without dumping every table |
 | `ember --objc-names <binary>` | Mach-O ObjC method names, including relative method lists | ObjC binaries |
+| `ember --infer-string-names <binary>` | synthesize conservative names from strong log/string anchors | stripped functions with `Class::method` / ObjC bracket strings |
 | `ember --dmp-anchors <binary>` | Roblox DataModelPatch anchors; add `--full-analysis` for slower xref/function attribution | DMP / datamodel patch hunts |
 
 ### Mach-O notes
@@ -155,18 +156,31 @@ tail.
 - **Imports and fixups.** Classic dyld bind, lazy-bind, and weak-bind
   streams feed imports. `LC_DYLD_CHAINED_FIXUPS` is parsed through the
   chained starts tables, including multi-start pages and arm64e bind /
-  rebase pointer formats (`USERLAND` and `USERLAND24`). Chained import
-  formats 1/2/3 are decoded, including `dyld_chained_import_addend64`
-  name offsets. If an import only appears in chained fixups, Ember
-  synthesizes an import symbol for it.
+  rebase pointer formats (`USERLAND` and `USERLAND24`), authenticated
+  arm64e rebases, and 64-bit pointer formats used by non-arm64e slices.
+  Chained import formats 1/2/3 are decoded, including addend and
+  `dyld_chained_import_addend64` name offsets. If an import only appears
+  in chained fixups, Ember synthesizes an import symbol for it. Older or
+  hand-linked files that rely on `LC_DYSYMTAB` indirect-symbol tables for
+  lazy/non-lazy pointer names are also recovered, so sparse dyld bind
+  streams do not force calls back to `sub_<stub>(...)`.
 - **Exports.** `LC_DYLD_EXPORTS_TRIE` and the export trie embedded in
   `LC_DYLD_INFO[_ONLY]` are decoded. Exported function/object names are
   added as symbols even when `LC_SYMTAB` is sparse, so `--functions` and
   `-s exported_name` can resolve dyld-visible symbols that are not present
   as normal nlist entries.
-- **Stubs.** x86-64 and arm64 import stubs resolve through their bound
-  slots, so pseudo-C can print calls like `getpid()` instead of anonymous
-  branch targets.
+- **dSYM / external names.** `--dsym PATH` overlays defined function/object
+  names from a Mach-O dSYM file or `.dSYM` bundle by linked-image offset.
+  Ember also auto-discovers the conventional sibling
+  `<binary>.dSYM/Contents/Resources/DWARF/<binary>` bundle when present.
+  Primary binary names win, except synthetic `sub_<hex>` placeholders may be
+  upgraded to the recovered dSYM name.
+- **Stubs and stack guards.** x86-64 `jmp qword [rip+slot]` stubs and
+  arm64 `ADRP; LDR; BR` stubs resolve through their bound slots, so
+  pseudo-C can print calls like `puts()` or `getpid()` instead of
+  anonymous branch targets. Mach-O `___stack_chk_guard` imports are
+  treated as canary infrastructure rather than user globals when the
+  function epilogue matches the guard pattern.
 - **ObjC.** `__objc_classlist` / `__objc_nlclslist` metadata names methods
   for pseudo-C and `--objc-names`; category metadata is read from both
   `__objc_catlist` and `__objc_nlcatlist`. Both classic and relative method
@@ -182,7 +196,18 @@ tail.
   `objc_msgSend(...)` calls. Return-value bindings for ObjC messages are
   selector-derived (`r_websiteDataStore`, `r_httpCookieStore`, `r_name`)
   rather than generic `r_objc_msgSend_N` names when selector metadata is
-  available.
+  available. Runtime helpers with fixed arity trim stale ABI registers;
+  void ARC helpers do not leak fake return values into later calls.
+  Property helpers such as `objc_getProperty`,
+  `objc_setProperty_atomic_copy`, and `objc_setProperty_nonatomic` render
+  with the useful arguments only. `objc_storeStrong(&self->ivar, value)`
+  can use ivar metadata for the address expression.
+- **ObjC message variants.** `objc_msgSend`, `_stret`, `_fpret`,
+  `_fp2ret`, `objc_msgSendSuper`, and `objc_msgSendSuper2` all use the
+  same selector/classref machinery where applicable. Super sends render as
+  `[super selector]`; structure-return sends can bind the destination
+  local; stack-passed selector arguments are surfaced as `/* stack arg */`
+  placeholders instead of silently disappearing.
 - **ObjC blocks.** Readable data/const sections are scanned for block
   literal layouts. Pseudo-C names block literal arguments as
   `__block_literal_<addr>`, links them to `__block_invoke_<addr>`, and uses
@@ -190,7 +215,15 @@ tail.
   headers.
 - **Swift.** `__swift5_types` entries are followed to nominal type
   descriptors and exposed as object symbols named `swift_type_<Name>`.
-  This is descriptor naming, not a full Swift demangler.
+  `__swift5_fieldmd` records can expose field-name string symbols such as
+  `swift_field_Widget_title`. This is descriptor naming, not a full Swift
+  demangler.
+- **String/log name inference.** `--infer-string-names` scans string xrefs
+  and promotes only strong function-like anchors: C++/namespace tokens such
+  as `Core::Player::recoverName`, ObjC bracket strings such as
+  `-[Class selector:]`, and simple prefix anchors like `recover_name: ...`.
+  It upgrades anonymous functions only; existing real symbols and annotations
+  remain authoritative.
 
 ### Lookups
 | Command | Output | Use when |
@@ -258,6 +291,18 @@ next agent / tool can decide whether to verify.
   Then correlate locally with `rg`, TSV/JSON parsers, and targeted
   `--pseudo -s sub_<addr>` reads. This is faster and less noisy than
   running `--refs-to-loose` repeatedly while exploring a whole subsystem.
+- For macOS app bundles, point Ember at the real executable inside the
+  bundle, usually `Foo.app/Contents/MacOS/Foo`. On stripped ObjC-heavy
+  clients, start with:
+  ```sh
+  ember --objc-names <binary> > /tmp/ember-objc.tsv
+  ember --infer-string-names --functions <binary> > /tmp/ember-functions.named.tsv
+  ember --functions --json <binary> > /tmp/ember-functions.json
+  ember --strings <binary> > /tmp/ember-strings.tsv
+  ember -p -s '-[Class selector:]' <binary>
+  ```
+  Prefer selector/class/string anchors first. Add `--xrefs` or
+  `--data-xrefs` after you have a concrete address family to chase.
 - For repeated agent/UI probes, use `ember --serve` / `ember --daemon`
   instead of spawning one CLI process per question. The daemon keeps the
   binary and hot refs/disasm caches alive across requests.
@@ -375,6 +420,14 @@ Plain two-column `from to` still records an observed indirect edge.
   `[NSString stringWithUTF8String:x]` or `[obj setValue:v forKey:k]`.
   Their downstream return temporaries may be named after the selector,
   such as `r_websiteDataStore`, `r_httpCookieStore`, or `r_value`.
+  `[super ...]` means the receiver came through an ObjC super-send helper.
+  `_stret` calls may appear as an assignment to a local aggregate, while
+  stack-passed ObjC selector arguments appear as `/* stack arg */` when
+  the register ABI no longer carries the value.
+  ARC calls such as `objc_release`, `objc_storeStrong`, and
+  `objc_unsafeClaimAutoreleasedReturnValue` are ownership operations; do
+  not infer application-level dataflow from a stale return value after a
+  void ARC helper.
   Block callback literals render as
   `__block_literal_<addr> /* invoke: __block_invoke_<addr>, sig: ... */`;
   decompiling the invoke address uses the recovered block signature for
@@ -677,7 +730,7 @@ constants matched, pattern offset, etc.).
 
 ### `--recognize`
 ```
-40229c    sub_40229c    SHA256_Update    1.00    behav-exact    
+40229c    sub_40229c    SHA256_Update    1.00    behav-exact
 ```
 Columns: `addr`, `current_name`, `suggested_name`, `confidence`, `via`,
 optional `[alts]`. `via` distinguishes match paths: `behav-exact` >

@@ -28,6 +28,8 @@ struct Args {
     ember::u64  symresolve_max_callsites = 5;  // --max-callsites N: cap top_callsites column (0 = unlimited)
     ember::u64  symuses_min_uses    = 1;   // --min-uses N: drop --symuses rows below N uses
     ember::u64  vtable_limit        = 16;  // --limit N: slot cap for --vtable-at (0 = all)
+    ember::u64  row_limit           = 0;   // --row-limit N: cap broad list/info output (0 = all)
+    bool        row_limit_set       = false;
     bool        symuses_show_empty  = false;  // --show-empty: emit --symuses rows with 0 post-filter uses
     bool        symuses_no_taint    = false;  // --no-taint: drop the register-taint walker; emit every
                                               // matching IMM in candidate fns. Diagnostic only - useful
@@ -98,7 +100,9 @@ struct Args {
     std::string annotate_evidence;  // --evidence TEXT: short reason; survives in the meta record
     std::string annotate_source;    // --source TAG: who's claiming. Defaults to `cli`.
     std::string pdb_path;           // --pdb PATH: explicit PDB file (skips auto-discovery)
+    std::string dsym_path;          // --dsym PATH: explicit Mach-O dSYM file/bundle symbol overlay
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely
+    bool infer_string_names = false; // --infer-string-names: derive names from strong log/string anchors
     bool dry_run = false;           // --dry-run: with --apply, don't write the result; print TSV to stdout
     bool no_cache = false;          // disable the disk cache entirely
     bool quick = false;             // --quick: bounded/partial refs probe; avoid full xrefs build
@@ -116,6 +120,23 @@ struct Args {
     bool pseudo = false;
     bool xrefs  = false;
     bool strings = false;
+    bool surfaces = false;          // --surfaces: app/subsystem surface inventory
+    std::string surface;            // --surface NAME: luau/network_transport/etc.
+    std::string surface_kind;       // --surface-kind NAME: string/symbol/objc_method/rtti_class/log_category/reflection_descriptor
+    std::string surface_category;   // --surface-category NAME: rendering/protection/artifact_shader/etc.
+    std::string surface_owner;      // --surface-owner NAME: reflection descriptor owner/class filter
+    std::string surface_row_type;   // --surface-row-type NAME: summary/category/owner/descriptor/artifact/function/evidence/all
+    std::string surface_function;   // --surface-function VA: evidence scoped to a function
+    bool graphics = false;          // --graphics: graphics backend/API/proc-loader inventory
+    std::string graphics_backend;   // --graphics-backend NAME: opengl/vulkan/sdl/metal/glsl/spirv
+    std::string graphics_domain;    // --graphics-domain NAME: buffer/shader/window/etc.
+    std::string graphics_api;       // --graphics-api NAME: substring match for API/proc names
+    std::string graphics_extension; // --graphics-extension NAME: ARB/EXT/KHR/etc.
+    std::string graphics_category;  // --graphics-category NAME: api_proc_name/api_call_expr/etc.
+    std::string graphics_role;      // --graphics-role NAME: proc_loader/proc_resolver/api_user/etc.
+    std::string graphics_row_type;  // --graphics-row-type NAME: summary/api/extension/function/symbol/string
+    std::string graphics_function;  // --graphics-function VA: evidence scoped to a function
+    bool log_categories = false;
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
     bool teef = false;              // dump TEEF (Tree-Edit Equivalence Fingerprint) per function
@@ -174,6 +195,7 @@ struct Args {
     bool eh     = false;            // parse __eh_frame + LSDA and annotate landing pads
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
+    bool objc_surfaces = false;     // dump ObjC protocol/delegate implementation surfaces
     bool dmp_anchors = false;       // --dmp-anchors: Roblox DataModelPatch anchor strings + xref fns
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool vtables = false;           // dump runtime pointer-dense vtables from loaded data/RELRO

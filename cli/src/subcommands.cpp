@@ -48,6 +48,7 @@
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/data_xrefs.hpp>
+#include <ember/analysis/arity.hpp>
 #include <ember/binary/elf.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/analysis/eh_frame.hpp>
@@ -106,6 +107,120 @@ constexpr std::string_view kXrefsCacheTag = "xrefs-v5";
 constexpr std::string_view kAritiesCacheTag = "arities-v3";
 constexpr std::string_view kFunctionsCacheTag = "functions-v5";
 constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v5";
+
+[[nodiscard]] std::vector<std::string>
+collect_bundle_artifacts(const std::filesystem::path& binary_path) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    auto path = std::filesystem::weakly_canonical(binary_path, ec);
+    if (ec) {
+        ec.clear();
+        path = binary_path;
+    }
+
+    std::filesystem::path app_root;
+    for (auto cur = path.parent_path(); !cur.empty(); cur = cur.parent_path()) {
+        if (cur.extension() == ".app") {
+            app_root = cur;
+            break;
+        }
+        if (cur == cur.root_path()) break;
+    }
+    if (app_root.empty()) return out;
+
+    constexpr std::size_t kMaxArtifacts = 4096;
+    auto opts = std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::recursive_directory_iterator it(app_root, opts, ec);
+    std::filesystem::recursive_directory_iterator end;
+    if (ec) return out;
+    for (; it != end && out.size() < kMaxArtifacts; it.increment(ec)) {
+        if (ec) break;
+        std::error_code file_ec;
+        if (!it->is_regular_file(file_ec) || file_ec) continue;
+        auto rel = std::filesystem::relative(it->path(), app_root, file_ec);
+        if (file_ec) {
+            file_ec.clear();
+            rel = it->path().filename();
+        }
+        out.push_back(rel.generic_string());
+    }
+    std::ranges::sort(out);
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+[[nodiscard]] u64 hash_artifacts(const std::vector<std::string>& artifacts) {
+    std::string manifest;
+    for (const auto& artifact : artifacts) {
+        manifest += artifact;
+        manifest.push_back('\n');
+    }
+    return fnv1a_64(manifest);
+}
+
+[[nodiscard]] bool equals_ascii_ci(std::string_view lhs, std::string_view rhs) {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        const auto l = static_cast<unsigned char>(lhs[i]);
+        const auto r = static_cast<unsigned char>(rhs[i]);
+        if (std::tolower(l) != std::tolower(r)) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool surface_filter_is_artifacts_only(const SurfaceOutputFilter& filter) {
+    if (filter.function) return false;
+    if (!filter.owner.empty()) return false;
+    if (equals_ascii_ci(filter.row_type, "artifact") &&
+        (filter.kind.empty() || equals_ascii_ci(filter.kind, "bundle_file"))) {
+        return true;
+    }
+    return equals_ascii_ci(filter.kind, "bundle_file") &&
+           (equals_ascii_ci(filter.row_type, "evidence") ||
+            equals_ascii_ci(filter.row_type, "category") ||
+            equals_ascii_ci(filter.row_type, "artifact") ||
+            equals_ascii_ci(filter.row_type, "all"));
+}
+
+[[nodiscard]] std::string surface_cache_tag(const Args& args,
+                                            const SurfaceOutputFilter& filter) {
+    std::string tag = args.json ? "surfaces-json-v2" : "surfaces-v2";
+    if (!filter.subsystem.empty()) tag += "|surface=" + filter.subsystem;
+    if (!filter.kind.empty()) tag += "|kind=" + filter.kind;
+    if (!filter.category.empty()) tag += "|category=" + filter.category;
+    if (!filter.owner.empty()) tag += "|owner=" + filter.owner;
+    if (!filter.row_type.empty()) tag += "|row_type=" + filter.row_type;
+    if (!filter.function_raw.empty()) tag += "|function=" + filter.function_raw;
+    if (!filter.artifacts.empty()) {
+        tag += std::format("|bundle={}:{:016x}", filter.artifacts.size(),
+                           hash_artifacts(filter.artifacts));
+    }
+    return tag;
+}
+
+[[nodiscard]] std::optional<SurfaceOutputFilter>
+make_surface_filter(const Args& args, bool include_artifacts) {
+    SurfaceOutputFilter filter{
+        .subsystem = args.surface,
+        .kind = args.surface_kind,
+        .category = args.surface_category,
+        .owner = args.surface_owner,
+        .row_type = args.surface_row_type,
+        .function_raw = args.surface_function,
+        .function = std::nullopt,
+        .artifacts = include_artifacts ? collect_bundle_artifacts(args.binary)
+                                       : std::vector<std::string>{},
+    };
+    if (!filter.function_raw.empty()) {
+        filter.function = parse_cli_addr(filter.function_raw);
+        if (!filter.function) {
+            std::println(stderr, "ember: --surface-function: bad address '{}'",
+                         filter.function_raw);
+            return std::nullopt;
+        }
+    }
+    return filter;
+}
 
 // Quiet sibling of load_annotations_for(): resolves and reads the
 // annotations file using the same precedence chain (explicit > sidecar
@@ -422,6 +537,69 @@ int run_strings(const Args& args, const Binary& b) {
     // sections (Mach-O __cstring lives in __TEXT). Old "strings" cache
     // entries from before that change are now orphaned.
     return run_cached(args, "strings-v2", [&] { return build_strings_output(b); });
+}
+
+bool surfaces_artifacts_only_requested(const Args& args) {
+    if (!args.surfaces) return false;
+    const auto filter = make_surface_filter(args, /*include_artifacts=*/false);
+    return filter && surface_filter_is_artifacts_only(*filter);
+}
+
+int run_surface_artifacts(const Args& args) {
+    auto filter = make_surface_filter(args, /*include_artifacts=*/true);
+    if (!filter) return 2;
+    const auto tag = surface_cache_tag(args, *filter);
+    return run_cached(args, tag, [&] {
+        return build_surface_artifacts_output(filter->artifacts, args.json, *filter);
+    });
+}
+
+int run_surfaces(const Args& args, const Binary& b) {
+    auto filter = make_surface_filter(args, /*include_artifacts=*/true);
+    if (!filter) return 2;
+    const auto tag = surface_cache_tag(args, *filter);
+    return run_cached(args, tag, [&] {
+        return build_surfaces_output(b, args.json, *filter);
+    });
+}
+
+int run_graphics(const Args& args, const Binary& b) {
+    GraphicsOutputFilter filter{
+        .backend = args.graphics_backend,
+        .domain = args.graphics_domain,
+        .api = args.graphics_api,
+        .extension = args.graphics_extension,
+        .category = args.graphics_category,
+        .role = args.graphics_role,
+        .row_type = args.graphics_row_type,
+        .function_raw = args.graphics_function,
+        .function = std::nullopt,
+    };
+    if (!filter.function_raw.empty()) {
+        filter.function = parse_cli_addr(filter.function_raw);
+        if (!filter.function) {
+            std::println(stderr, "ember: --graphics-function: bad address '{}'",
+                         filter.function_raw);
+            return 2;
+        }
+    }
+    std::string tag = args.json ? "graphics-json-v13" : "graphics-v13";
+    if (!filter.backend.empty()) tag += "|backend=" + filter.backend;
+    if (!filter.domain.empty()) tag += "|domain=" + filter.domain;
+    if (!filter.api.empty()) tag += "|api=" + filter.api;
+    if (!filter.extension.empty()) tag += "|extension=" + filter.extension;
+    if (!filter.category.empty()) tag += "|category=" + filter.category;
+    if (!filter.role.empty()) tag += "|role=" + filter.role;
+    if (!filter.row_type.empty()) tag += "|row_type=" + filter.row_type;
+    if (!filter.function_raw.empty()) tag += "|function=" + filter.function_raw;
+    return run_cached(args, tag, [&] {
+        return build_graphics_output(b, args.json, filter);
+    });
+}
+
+int run_log_categories(const Args& args, const Binary& b) {
+    return run_cached(args, "log-categories-v1",
+                      [&] { return build_log_categories_output(b); });
 }
 
 namespace {
@@ -1650,6 +1828,11 @@ int run_objc_protos(const Args& args, const Binary& b) {
                       [&] { return build_objc_protocols_output(b); });
 }
 
+int run_objc_surfaces(const Args& args, const Binary& b) {
+    return run_cached(args, "objc-surfaces",
+                      [&] { return build_objc_surfaces_output(b); });
+}
+
 namespace {
 
 [[nodiscard]] std::string lower_ascii_copy(std::string_view s) {
@@ -2045,6 +2228,18 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
 }
 
 int run_arities(const Args& args, const Binary& b) {
+    if (args.row_limit_set) {
+        std::string out;
+        std::size_t emitted = 0;
+        for (const auto& fn : enumerate_functions(b, EnumerateMode::Auto)) {
+            if (b.import_at_plt(fn.addr)) continue;
+            if (args.row_limit != 0 && emitted >= args.row_limit) break;
+            out += std::format("{:#x} {}\n", fn.addr, infer_arity(b, fn.addr));
+            ++emitted;
+        }
+        std::print("{}", out);
+        return EXIT_SUCCESS;
+    }
     return run_cached(args, kAritiesCacheTag, [&] { return build_arities_output(b); });
 }
 
@@ -2120,7 +2315,8 @@ int run_functions(const Args& args, const Binary& b) {
     };
     const bool any_rename = !ann_for_print.renames.empty();
 
-    if (!args.json && args.functions_pattern.empty() && !scope.active && !any_rename) {
+    if (!args.json && args.functions_pattern.empty() && !scope.active && !any_rename &&
+        !args.row_limit_set) {
         std::fwrite(tsv.data(), 1, tsv.size(), stdout);
         return EXIT_SUCCESS;
     }
@@ -2130,6 +2326,7 @@ int run_functions(const Args& args, const Binary& b) {
 
     if (args.json) std::fputs("[", stdout);
     bool first = true;
+    std::size_t emitted = 0;
 
     std::size_t pos = 0;
     while (pos < tsv.size()) {
@@ -2203,6 +2400,8 @@ int run_functions(const Args& args, const Binary& b) {
             std::fwrite(line.data(), 1, line.size(), stdout);
             std::fputc('\n', stdout);
         }
+        ++emitted;
+        if (args.row_limit_set && args.row_limit != 0 && emitted >= args.row_limit) break;
         pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
     }
     if (args.json) std::fputs("]\n", stdout);
@@ -6172,7 +6371,11 @@ int run_emit(const Args& args, const Binary& b) {
     if (args.disasm) {
         return run_disasm(b, args.symbol, ann_ptr);
     }
-    print_info(b, args.binary);
+    constexpr std::size_t kDefaultInfoRowLimit = 2000;
+    const std::size_t info_limit = args.row_limit_set
+        ? static_cast<std::size_t>(args.row_limit)
+        : kDefaultInfoRowLimit;
+    print_info(b, args.binary, info_limit, args.verbose);
     return EXIT_SUCCESS;
 }
 
@@ -6504,6 +6707,12 @@ int run_serve(const Args& base, const Binary& b) {
     // CFG, then we group into a per-caller TSV. Once-per-daemon.
     std::optional<std::string> callees_all_cache;
 
+    // Exact output cache for list-style function requests. Keyed by the
+    // raw request line so row_limit/json/pattern/full_analysis variants
+    // stay independent while repeat UI refreshes become pipe-only.
+    std::unordered_map<std::string, std::string> functions_cache;
+    functions_cache.reserve(8);
+
     // Refs cache: refs_to/refs_to_loose are frequent agent probes.
     // Keep the whole-binary xrefs and data-xrefs products hot inside
     // the serve process, plus loose-mode literal-slot scans by target.
@@ -6525,6 +6734,7 @@ int run_serve(const Args& base, const Binary& b) {
                     "Methods:\n"
                     "  ping\n"
                     "  help\n"
+                    "  info [row_limit=N] [verbose=true]\n"
                     "  refs_to addr [access=read|write|lea|code-ptr|all] [quick=true] [json=true]\n"
                     "  refs_to_loose addr [access=read|write|lea|code-ptr|all] [quick=true] [json=true]\n"
                     "  state_map addr [json=true]\n"
@@ -6541,7 +6751,7 @@ int run_serve(const Args& base, const Binary& b) {
                     "  containing_fn addr\n"
                     "  describe_address addr\n"
                     "  get_data addr [size=N]\n"
-                    "  functions\n"
+                    "  functions [pattern=S] [row_limit=N] [json=true] [full_analysis=true]\n"
                     "  strings\n"
                     "  strings_in_range start end\n"
                     "  annotations\n"
@@ -6551,6 +6761,24 @@ int run_serve(const Args& base, const Binary& b) {
             }
             if (req->method == "ping") {
                 write_ok("pong");
+                continue;
+            }
+            if (req->method == "info") {
+                std::size_t row_limit = 2000;
+                bool verbose = false;
+                if (auto it = req->params.find("row_limit");
+                    it != req->params.end() && !it->second.empty()) {
+                    auto parsed = serve_parse_size(it->second);
+                    if (!parsed) { write_err("info: bad row_limit"); continue; }
+                    row_limit = *parsed;
+                }
+                if (auto it = req->params.find("verbose"); it != req->params.end()) {
+                    verbose = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                std::string body = capture_stdout([&]{
+                    print_info(b, base.binary, row_limit, verbose);
+                });
+                write_ok(body);
                 continue;
             }
             if (req->method == "decompile") {
@@ -6750,9 +6978,31 @@ int run_serve(const Args& base, const Binary& b) {
                 continue;
             }
             if (req->method == "functions") {
+                if (auto it = functions_cache.find(line); it != functions_cache.end()) {
+                    write_ok(it->second);
+                    continue;
+                }
                 Args a = derive_args(base);
                 a.functions = true;
+                if (auto it = req->params.find("pattern"); it != req->params.end()) {
+                    a.functions_pattern = it->second;
+                }
+                if (auto it = req->params.find("json"); it != req->params.end()) {
+                    a.json = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                if (auto it = req->params.find("full_analysis"); it != req->params.end()) {
+                    a.full_analysis = it->second == "1" || it->second == "true" || it->second == "yes";
+                }
+                if (auto it = req->params.find("row_limit");
+                    it != req->params.end() && !it->second.empty()) {
+                    auto parsed = serve_parse_size(it->second);
+                    if (!parsed) { write_err("functions: bad row_limit"); continue; }
+                    a.row_limit = *parsed;
+                    a.row_limit_set = true;
+                }
                 std::string body = capture_stdout([&]{ run_functions(a, b); });
+                if (functions_cache.size() > 16) functions_cache.clear();
+                functions_cache.emplace(line, body);
                 write_ok(body);
                 continue;
             }

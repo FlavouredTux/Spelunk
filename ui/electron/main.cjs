@@ -224,6 +224,149 @@ function runEmber(args) {
   });
 }
 
+let EMBER_DAEMON = null;
+
+function daemonCanHandle(args) {
+  if (!Array.isArray(args)) return false;
+  const isInfo = args.length === 0 || args[0] === "--row-limit";
+  const isFunctions = args[0] === "--functions";
+  if (!isInfo && !isFunctions) return false;
+  for (let i = isFunctions ? 1 : 0; i < args.length; ++i) {
+    const a = args[i];
+    if (a === "--full-analysis" || a === "--json") continue;
+    if (a === "--row-limit") { ++i; continue; }
+    if (typeof a === "string" && a.startsWith("--functions=")) continue;
+    return false;
+  }
+  return true;
+}
+
+function daemonRequestFor(args) {
+  const isFunctions = args[0] === "--functions";
+  const parts = [isFunctions ? "functions" : "info"];
+  for (let i = isFunctions ? 1 : 0; i < args.length; ++i) {
+    const a = args[i];
+    if (a === "--full-analysis") {
+      parts.push("full_analysis=true");
+    } else if (a === "--json") {
+      parts.push("json=true");
+    } else if (a === "--row-limit" && i + 1 < args.length) {
+      parts.push(`row_limit=${String(args[++i])}`);
+    } else if (typeof a === "string" && a.startsWith("--functions=")) {
+      parts.push(`pattern=${a.slice("--functions=".length)}`);
+    }
+  }
+  return parts.join("\t") + "\n";
+}
+
+function killDaemon(d) {
+  try { d?.proc?.kill(); } catch {}
+}
+
+function ensureEmberDaemon(key, effective, annPath) {
+  if (EMBER_DAEMON?.key === key && EMBER_DAEMON.proc && !EMBER_DAEMON.dead) {
+    return EMBER_DAEMON;
+  }
+  killDaemon(EMBER_DAEMON);
+
+  const args = ["--serve"];
+  if (annPath) args.push("--annotations", annPath);
+  args.push(effective);
+  const proc = spawn(EMBER_BIN, args, { cwd: path.dirname(EMBER_BIN) });
+  const d = {
+    key,
+    proc,
+    buf: Buffer.alloc(0),
+    waiters: [],
+    queue: Promise.resolve(),
+    ready: null,
+    dead: false,
+  };
+  d.ready = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("ember daemon did not become ready")), 30_000);
+    d.waiters.push({
+      type: "ready",
+      resolve: () => { clearTimeout(timer); resolve(); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+  });
+  proc.stdout.on("data", (chunk) => daemonOnData(d, chunk));
+  proc.stderr.setEncoding("utf8");
+  proc.stderr.on("data", (s) => {
+    if (process.env.EMBER_DAEMON_DEBUG === "1") {
+      console.warn(`[ember:daemon:stderr] ${String(s).trimEnd()}`);
+    }
+  });
+  proc.on("error", (e) => {
+    d.dead = true;
+    for (const w of d.waiters.splice(0)) w.reject(e);
+  });
+  proc.on("close", (code, signal) => {
+    d.dead = true;
+    const e = new Error(`ember daemon exited ${code ?? signal ?? "unknown"}`);
+    for (const w of d.waiters.splice(0)) w.reject(e);
+    if (EMBER_DAEMON === d) EMBER_DAEMON = null;
+  });
+  EMBER_DAEMON = d;
+  return d;
+}
+
+function daemonOnData(d, chunk) {
+  d.buf = Buffer.concat([d.buf, chunk]);
+  while (d.waiters.length > 0) {
+    const w = d.waiters[0];
+    const nl = d.buf.indexOf(0x0a);
+    if (nl < 0) return;
+    const header = d.buf.subarray(0, nl).toString("utf8");
+    if (w.type === "ready") {
+      if (!header.startsWith("ready ")) {
+        w.reject(new Error(`bad daemon ready frame: ${header}`));
+      } else {
+        d.buf = d.buf.subarray(nl + 1);
+        w.resolve();
+      }
+      d.waiters.shift();
+      continue;
+    }
+    if (header.startsWith("err ")) {
+      d.buf = d.buf.subarray(nl + 1);
+      d.waiters.shift();
+      w.reject(new Error(header.slice(4)));
+      continue;
+    }
+    const m = /^ok (\d+)$/.exec(header);
+    if (!m) {
+      d.buf = d.buf.subarray(nl + 1);
+      d.waiters.shift();
+      w.reject(new Error(`bad daemon frame: ${header}`));
+      continue;
+    }
+    const n = Number(m[1]);
+    if (d.buf.length < nl + 1 + n + 1) return;
+    const body = d.buf.subarray(nl + 1, nl + 1 + n).toString("utf8");
+    d.buf = d.buf.subarray(nl + 1 + n + 1);
+    d.waiters.shift();
+    w.resolve(body);
+  }
+}
+
+async function runEmberDaemon(key, effective, annPath, args) {
+  const d = ensureEmberDaemon(key, effective, annPath);
+  await d.ready;
+  const request = () => new Promise((resolve, reject) => {
+    d.waiters.push({ type: "response", resolve, reject });
+    d.proc.stdin.write(daemonRequestFor(args), "utf8", (err) => {
+      if (err) {
+        const idx = d.waiters.findIndex((w) => w.resolve === resolve);
+        if (idx >= 0) d.waiters.splice(idx, 1);
+        reject(err);
+      }
+    });
+  });
+  d.queue = d.queue.catch(() => {}).then(request);
+  return d.queue;
+}
+
 function runCapture(bin, args, cwd = process.cwd()) {
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { cwd });
@@ -870,6 +1013,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
   // CLI mtime keeps dev UI sessions from serving old pseudo-C after a
   // local rebuild.
   const key = `${effective}|${binMtime}|${annMtime}|${cliMtime}|${args.join("\x00")}`;
+  const daemonKey = `${effective}|${binMtime}|${annMtime}|${cliMtime}`;
 
   if (RUN_CACHE.has(key)) {
     const v = RUN_CACHE.get(key);
@@ -881,7 +1025,14 @@ ipcMain.handle("ember:run", async (_e, args) => {
 
   const extra = annPath ? ["--annotations", annPath] : [];
   const t0 = Date.now();
-  const p = runEmber([...args, ...extra, effective])
+  const useDaemon = daemonCanHandle(args);
+  const p = (useDaemon
+      ? runEmberDaemon(daemonKey, effective, annPath, args)
+          .catch((e) => {
+            console.warn(`[ember:daemon] falling back to spawn: ${e?.message || e}`);
+            return runEmber([...args, ...extra, effective]);
+          })
+      : runEmber([...args, ...extra, effective]))
     .then((out) => {
       lruTouch(RUN_CACHE, key, out);
       const dt = Date.now() - t0;
@@ -895,7 +1046,7 @@ ipcMain.handle("ember:run", async (_e, args) => {
         const argSummary = args.join(" ").slice(0, 80);
         const sizeKB = Math.round(out.length / 1024);
         console.warn(
-          `[ember:run] slow: ${dt}ms  args=[${argSummary}]  out=${sizeKB}KB`
+          `[ember:run${useDaemon ? ":daemon" : ""}] slow: ${dt}ms  args=[${argSummary}]  out=${sizeKB}KB`
         );
       }
       return out;
@@ -2222,6 +2373,8 @@ let discordClient = null;       // current Client instance, null when disconnect
 let discordReady   = false;     // true once login() resolves
 let discordLoginP  = null;      // in-flight login promise (deduped)
 let discordLastActivity = null; // last successful payload, replayed on reconnect
+let discordDisabledUntil = 0;   // backoff after "Discord is not running"
+let discordQueuedLogAt = 0;
 
 function discordIsConfigured() {
   return DISCORD_CLIENT_ID && DISCORD_CLIENT_ID.length > 0;
@@ -2231,6 +2384,8 @@ async function discordEnsureConnected() {
   if (!discordIsConfigured()) return null;
   if (discordReady && discordClient) return discordClient;
   if (discordLoginP) return discordLoginP;
+  const now = Date.now();
+  if (now < discordDisabledUntil) return null;
 
   discordLoginP = (async () => {
     try {
@@ -2255,7 +2410,8 @@ async function discordEnsureConnected() {
       }
       return c;
     } catch (e) {
-      console.log(`[discord] login failed: ${e?.message || e}`);
+      discordDisabledUntil = Date.now() + 60_000;
+      console.log(`[discord] login failed: ${e?.message || e}; retrying in 60s`);
       discordReady = false;
       discordClient = null;
       return null;
@@ -2301,6 +2457,7 @@ ipcMain.handle("ember:discord:setActivity", async (_e, payload) => {
     return false;
   }
   if (!payload) {
+    if (!discordLastActivity && !discordReady) return true;
     console.log("[discord] clearing activity");
     discordLastActivity = null;
     if (discordReady && discordClient?.user) {
@@ -2333,7 +2490,11 @@ ipcMain.handle("ember:discord:setActivity", async (_e, payload) => {
   discordLastActivity = activity;
   const c = await discordEnsureConnected();
   if (!c || !c.user) {
-    console.log("[discord] setActivity: not connected, payload queued");
+    const now = Date.now();
+    if (now - discordQueuedLogAt > 60_000) {
+      console.log("[discord] setActivity: not connected, payload queued");
+      discordQueuedLogAt = now;
+    }
     return false;
   }
   try {
@@ -2813,4 +2974,8 @@ if (!gotLock) {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  killDaemon(EMBER_DAEMON);
 });

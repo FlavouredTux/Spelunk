@@ -37,6 +37,9 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"-X", "--xrefs",     &Args::xrefs},
     {"",   "--data-xrefs", &Args::data_xrefs},
     {"",   "--strings",   &Args::strings},
+    {"",   "--surfaces",  &Args::surfaces},
+    {"",   "--graphics",  &Args::graphics},
+    {"",   "--log-categories", &Args::log_categories},
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
     {"",   "--teef",     &Args::teef},
@@ -49,6 +52,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--eh",        &Args::eh},
     {"",   "--objc-names", &Args::objc_names},
     {"",   "--objc-protocols", &Args::objc_protos},
+    {"",   "--objc-surfaces", &Args::objc_surfaces},
     {"",   "--dmp-anchors", &Args::dmp_anchors},
     {"",   "--rtti",     &Args::rtti},
     {"",   "--vtables",  &Args::vtables},
@@ -60,6 +64,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--no-pdb",    &Args::no_pdb},
+    {"",   "--infer-string-names", &Args::infer_string_names},
     {"",   "--full-analysis", &Args::full_analysis},
     {"",   "--dump-types", &Args::dump_types},
     {"",   "--labels",    &Args::labels},
@@ -129,10 +134,25 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--apply-patches", &Args::apply_patches},
     {"",   "--apply",       &Args::apply_ember},
     {"",   "--pdb",         &Args::pdb_path},
+    {"",   "--dsym",        &Args::dsym_path},
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
     {"",   "--raw-bytes",   &Args::raw_bytes_path},
     {"",   "--base-va",     &Args::raw_base_va},
+    {"",   "--surface", &Args::surface},
+    {"",   "--surface-kind", &Args::surface_kind},
+    {"",   "--surface-category", &Args::surface_category},
+    {"",   "--surface-owner", &Args::surface_owner},
+    {"",   "--surface-row-type", &Args::surface_row_type},
+    {"",   "--surface-function", &Args::surface_function},
+    {"",   "--graphics-backend", &Args::graphics_backend},
+    {"",   "--graphics-domain", &Args::graphics_domain},
+    {"",   "--graphics-api", &Args::graphics_api},
+    {"",   "--graphics-extension", &Args::graphics_extension},
+    {"",   "--graphics-category", &Args::graphics_category},
+    {"",   "--graphics-role", &Args::graphics_role},
+    {"",   "--graphics-row-type", &Args::graphics_row_type},
+    {"",   "--graphics-function", &Args::graphics_function},
     {"",   "--attach-pid",  &Args::attach_pid},
     {"",   "--debug-backend", &Args::debug_backend},
     {"",   "--module",      &Args::module_filter},
@@ -332,6 +352,20 @@ Result<Args> parse_args(int argc, char** argv) {
             } else {
                 return std::unexpected(Error::invalid_format(
                     "--limit: bad integer"));
+            }
+            continue;
+        }
+        if (s == "--row-limit") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    "--row-limit requires a value"));
+            }
+            if (auto v = parse_u64_strict(argv[i]); v) {
+                a.row_limit = *v;
+                a.row_limit_set = true;
+            } else {
+                return std::unexpected(Error::invalid_format(
+                    "--row-limit: bad integer"));
             }
             continue;
         }

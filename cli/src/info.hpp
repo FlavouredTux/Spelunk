@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 
 namespace ember { class Binary; }
@@ -8,7 +9,8 @@ namespace ember::cli {
 
 // Default action when no subcommand is given: dump the file format /
 // arch / sections / symbols summary to stdout.
-void print_info(const Binary& b, std::string_view path);
+void print_info(const Binary& b, std::string_view path,
+                std::size_t row_limit, bool verbose);
 
 // `ember --help` / -h. Short topical overview.
 void print_help();

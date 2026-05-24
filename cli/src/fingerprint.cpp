@@ -119,6 +119,13 @@ std::string build_fingerprints_output(const Binary& b,
             if (!b.import_at_plt(fn.addr)) {
                 fns.insert(fn.addr);
                 if (fn.size != 0) size_by_addr.try_emplace(fn.addr, fn.size);
+                if (!fn.name.empty()) {
+                    auto [it, inserted] = name_by_addr.try_emplace(fn.addr, fn.name);
+                    if (!inserted && it->second.starts_with("sub_") &&
+                        !fn.name.starts_with("sub_")) {
+                        it->second = fn.name;
+                    }
+                }
             }
         }
     }

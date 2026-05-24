@@ -1,9 +1,12 @@
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <print>
+#include <string>
 #include <utility>
 
 #include <ember/binary/binary.hpp>
+#include <ember/analysis/strings.hpp>
 #include <ember/binary/raw_regions.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/timing.hpp>
@@ -70,6 +73,86 @@ load_binary_from_args(const ember::cli::Args& args) {
     return ember::load_binary(args.binary, opts);
 }
 
+[[nodiscard]] std::filesystem::path
+resolve_dsym_bundle_path(const std::filesystem::path& p,
+                         const std::filesystem::path& primary) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(p, ec) || ec) return p;
+
+    const auto dwarf_dir = p / "Contents" / "Resources" / "DWARF";
+    if (!std::filesystem::is_directory(dwarf_dir, ec) || ec) return p;
+
+    const auto by_primary_name = dwarf_dir / primary.filename();
+    if (std::filesystem::exists(by_primary_name, ec) && !ec) return by_primary_name;
+
+    std::filesystem::path only;
+    for (const auto& entry : std::filesystem::directory_iterator(dwarf_dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file(ec) || ec) continue;
+        if (!only.empty()) return p;
+        only = entry.path();
+    }
+    return only.empty() ? p : only;
+}
+
+[[nodiscard]] std::filesystem::path
+resolve_dsym_path(const ember::cli::Args& args) {
+    return resolve_dsym_bundle_path(args.dsym_path, args.binary);
+}
+
+[[nodiscard]] std::filesystem::path
+auto_dsym_path(const ember::cli::Args& args) {
+    const std::filesystem::path primary(args.binary);
+    std::error_code ec;
+    for (const auto& candidate : {
+        std::filesystem::path(args.binary + ".dSYM"),
+        primary.parent_path() / (primary.filename().string() + ".dSYM"),
+        primary.parent_path() / (primary.stem().string() + ".dSYM"),
+    }) {
+        if (candidate.empty()) continue;
+        if (std::filesystem::is_directory(candidate, ec) && !ec) {
+            const auto resolved = resolve_dsym_bundle_path(candidate, primary);
+            if (std::filesystem::is_regular_file(resolved, ec) && !ec) return resolved;
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] int apply_dsym_overlay(const ember::cli::Args& args,
+                                     ember::Binary& primary) {
+    const bool explicit_dsym = !args.dsym_path.empty();
+    const auto path = explicit_dsym ? resolve_dsym_path(args) : auto_dsym_path(args);
+    if (path.empty()) return EXIT_SUCCESS;
+    auto loaded = ember::load_binary(path);
+    if (!loaded) {
+        std::println(stderr, "ember: {} {}: {}: {}",
+                     explicit_dsym ? "--dsym" : "auto-dSYM",
+                     path.string(), loaded.error().kind_name(),
+                     loaded.error().message);
+        return explicit_dsym ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+    const std::size_t added = primary.overlay_symbols_from(**loaded);
+    if (!args.quiet) {
+        std::println(stderr, "ember: dSYM symbols: {} ({})",
+                     added, path.string());
+    }
+    return EXIT_SUCCESS;
+}
+
+[[nodiscard]] int apply_string_name_inference(const ember::cli::Args& args,
+                                              ember::Binary& b) {
+    if (!args.infer_string_names) return EXIT_SUCCESS;
+    const auto candidates = ember::infer_function_names_from_strings(b);
+    std::size_t added = 0;
+    for (const auto& c : candidates) {
+        if (b.add_inferred_function_name(c.function, c.name)) ++added;
+    }
+    if (!args.quiet) {
+        std::println(stderr, "ember: string-inferred names: {}", added);
+    }
+    return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -101,6 +184,9 @@ int main(int argc, char** argv) {
     // only to consult the section table for vaddr→file-offset
     // translation, then writes a patched copy. No analysis runs.
     if (!args.apply_patches.empty()) return run_apply_patches(args);
+    if (surfaces_artifacts_only_requested(args)) {
+        return run_surface_artifacts(args);
+    }
 
     // Aux-binary loading happens once, up front, so both the no-primary
     // (--attach-pid) and primary-loaded paths share the same setup.
@@ -160,6 +246,12 @@ int main(int argc, char** argv) {
         return load_binary_from_args(args);
     }();
     if (!bin) return report(bin.error());
+    if (const int rc = apply_dsym_overlay(args, **bin); rc != EXIT_SUCCESS) {
+        return rc;
+    }
+    if (const int rc = apply_string_name_inference(args, **bin); rc != EXIT_SUCCESS) {
+        return rc;
+    }
 
     // --force-fn-start: synthesize Function symbols at each user-
     // specified VA so resolve_containing_function returns a window AT
@@ -229,6 +321,9 @@ int main(int argc, char** argv) {
     if (!args.annotate_addr.empty()) return run_annotate(args, b);
     if (args.list_annotations)       return run_list_annotations(args, b);
     if (args.strings)            return run_strings(args, b);
+    if (args.surfaces)           return run_surfaces(args, b);
+    if (args.graphics)           return run_graphics(args, b);
+    if (args.log_categories)     return run_log_categories(args, b);
     if (args.fingerprints)       return run_fingerprints(args, b);
     if (args.teef)               return run_teef(args, b);
     if (args.orbit_dump)         return run_orbit_dump(args, b);
@@ -236,6 +331,7 @@ int main(int argc, char** argv) {
     if (args.identify)           return run_identify(args, b);
     if (args.objc_names)         return run_objc_names(args, b);
     if (args.objc_protos)        return run_objc_protos(args, b);
+    if (args.objc_surfaces)      return run_objc_surfaces(args, b);
     if (args.dmp_anchors)        return run_dmp_anchors(args, b);
     if (args.rtti)               return run_rtti(args, b);
     if (args.vtables)            return run_vtables(args, b);

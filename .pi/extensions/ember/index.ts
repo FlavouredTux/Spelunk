@@ -31,13 +31,6 @@ interface EmberRunDetails {
 	fullOutputPath?: string;
 }
 
-interface GoalState {
-	text: string;
-	done: boolean;
-	evidence?: string;
-	updatedAt: number;
-}
-
 function stripAt(path: string): string {
 	return path.startsWith("@") ? path.slice(1) : path;
 }
@@ -132,8 +125,9 @@ async function formatOutput(text: string, opts?: { cwd?: string; hint?: string; 
 			? await writeArtifact(opts.cwd, opts.hint ?? "ember", text)
 			: join(await mkdtemp(join(tmpdir(), "pi-ember-")), "output.txt");
 		if (!opts?.cwd) {
-			await withFileMutationQueue(fullOutputPath, async () => {
-				await writeFile(fullOutputPath, text, "utf8");
+			const path = fullOutputPath;
+			await withFileMutationQueue(path, async () => {
+				await writeFile(path, text, "utf8");
 			});
 		}
 		result += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`;
@@ -207,46 +201,9 @@ const LookupKind = StringEnum([
 
 const AccessKind = StringEnum(["read", "write", "lea", "code-ptr", "all"] as const);
 
-function goalLine(goal: GoalState): string {
-	const box = goal.done ? "[x]" : "[ ]";
-	return `${box} ${goal.text}${goal.evidence ? ` — ${goal.evidence}` : ""}`;
-}
-
-function updateGoalUi(ctx: ExtensionContext, goal: GoalState | undefined): void {
-	if (!ctx.hasUI) return;
-	if (!goal) {
-		ctx.ui.setStatus("goal", undefined);
-		ctx.ui.setWidget("goal", undefined);
-		return;
-	}
-	ctx.ui.setStatus("goal", `goal: ${goal.done ? "done" : "open"}`);
-	ctx.ui.setWidget("goal", [goalLine(goal)]);
-}
-
-function restoreGoal(ctx: ExtensionContext): GoalState | undefined {
-	let goal: GoalState | undefined;
-	for (const entry of ctx.sessionManager.getBranch()) {
-		const e = entry as any;
-		if (e.type === "custom" && e.customType === "goal-state") {
-			goal = e.data?.goal;
-		}
-	}
-	return goal;
-}
-
 export default function (pi: ExtensionAPI) {
-	let goal: GoalState | undefined;
-
-	function setGoal(next: GoalState | undefined, ctx?: ExtensionContext): void {
-		goal = next;
-		pi.appendEntry("goal-state", { goal: next });
-		if (ctx) updateGoalUi(ctx, goal);
-	}
-
 	pi.on("session_start", (_event, ctx) => {
-		goal = restoreGoal(ctx);
 		if (ctx.hasUI) ctx.ui.setStatus("ember", `ember: ${emberBin(ctx.cwd)}`);
-		updateGoalUi(ctx, goal);
 	});
 
 	pi.on("before_agent_start", (event) => {
@@ -254,17 +211,8 @@ export default function (pi: ExtensionAPI) {
 		if (existsSync(resolve(event.systemPromptOptions.cwd, "EMBER.md"))) {
 			extra += "\n\nEmber extension: use ember_inventory for first contact, ember_code for targeted pseudo-C/disasm, ember_lookup for xrefs/state/vtable/address probes, and ember_annotate only for evidence-backed conclusions.";
 		}
-		if (goal && !goal.done) {
-			extra += `\n\nActive /goal checkbox: [ ] ${goal.text}\nYou must not stop while this goal is unchecked. Keep working until the goal is satisfied, then call goal_complete with concise evidence before giving the final answer.`;
-		}
 		if (!extra) return;
 		return { systemPrompt: event.systemPrompt + extra };
-	});
-
-	pi.on("agent_end", (_event, ctx) => {
-		if (!goal || goal.done) return;
-		updateGoalUi(ctx, goal);
-		pi.sendUserMessage(`The active /goal is still unchecked: ${goal.text}\nContinue working. When it is genuinely complete, call goal_complete with evidence.`, { deliverAs: "followUp" });
 	});
 
 	pi.registerTool({
@@ -278,25 +226,28 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			input: Type.String({ description: "Binary path, minidump path, or regions manifest path." }),
 			inputKind: Type.Optional(InputKind),
-			sections: Type.Optional(Type.Boolean({ description: "Run plain ember header/sections/import summary first.", default: true })),
+			sections: Type.Optional(Type.Boolean({ description: "Run plain ember header/sections/import summary first.", default: false })),
 			functions: Type.Optional(Type.Boolean({ description: "Include --functions." })),
 			strings: Type.Optional(Type.Boolean({ description: "Include --strings." })),
 			identify: Type.Optional(Type.Boolean({ description: "Include --identify crypto/protocol scan." })),
 			json: Type.Optional(Type.Boolean({ description: "Request --json for commands that support it." })),
+			rowLimit: Type.Optional(Type.Number({ description: "Cap broad list rows with --row-limit. Use 0 for all rows.", default: 2000 })),
 			timeoutMs: Type.Optional(Type.Number({ description: "Command timeout in milliseconds." })),
 		}),
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const batches: string[] = [];
 			const baseInput = inputArgs(params.input, params.inputKind);
-			const sections = params.sections ?? true;
+			const sections = params.sections ?? false;
 			const selected = sections || params.functions || params.strings || params.identify;
 			const jobs: string[][] = [];
-			if (!selected || sections) jobs.push([...baseInput]);
-			if (params.functions) jobs.push(["--functions", ...(params.json ? ["--json"] : []), ...baseInput]);
+			const rowLimitArgs = params.rowLimit === undefined ? ["--row-limit", "2000"] : ["--row-limit", String(params.rowLimit)];
+			if (!selected) jobs.push(["--functions", ...rowLimitArgs, ...(params.json ? ["--json"] : []), ...baseInput]);
+			if (sections) jobs.push([...rowLimitArgs, ...baseInput]);
+			if (params.functions) jobs.push(["--functions", ...rowLimitArgs, ...(params.json ? ["--json"] : []), ...baseInput]);
 			if (params.strings) jobs.push(["--strings", ...(params.json ? ["--json"] : []), ...baseInput]);
 			if (params.identify) jobs.push(["--identify", ...(params.json ? ["--json"] : []), ...baseInput]);
 			for (const args of jobs) {
-				onUpdate?.({ content: [{ type: "text", text: `Running ember ${args[0] ?? params.input}...` }] });
+				onUpdate?.({ content: [{ type: "text", text: `Running ember ${args[0] ?? params.input}...` }], details: { args } });
 				const result = await runEmber(pi, ctx, args, signal, params.timeoutMs);
 				batches.push(result.content[0]?.text ?? "");
 			}
@@ -633,57 +584,6 @@ export default function (pi: ExtensionAPI) {
 		},
 		renderCall(args, theme) {
 			return new Text(theme.fg("toolTitle", theme.bold("ember python ")) + theme.fg("accent", args.input ?? "snippet"), 0, 0);
-		},
-	});
-
-	pi.registerTool({
-		name: "goal_complete",
-		label: "Complete Goal",
-		description: "Check off the active /goal when the requested outcome is genuinely complete. Requires concise evidence.",
-		promptSnippet: "Mark the active /goal checkbox complete with evidence.",
-		promptGuidelines: [
-			"Use goal_complete only when the active /goal is genuinely satisfied; include evidence of what changed, ran, or was verified.",
-		],
-		parameters: Type.Object({
-			evidence: Type.String({ description: "Concise evidence that the active goal is complete." }),
-		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
-			if (!goal) {
-				return { content: [{ type: "text", text: "No active /goal." }], details: { goal: undefined } };
-			}
-			setGoal({ ...goal, done: true, evidence: params.evidence, updatedAt: Date.now() }, ctx);
-			return { content: [{ type: "text", text: `Goal complete: ${goalLine(goal)}` }], details: { goal } };
-		},
-		renderCall(args, theme) {
-			return new Text(theme.fg("toolTitle", theme.bold("goal complete ")) + theme.fg("dim", args.evidence ?? ""), 0, 0);
-		},
-	});
-
-	pi.registerCommand("goal", {
-		description: "Set, show, complete, or clear the active must-finish checkbox",
-		handler: async (args, ctx) => {
-			const text = args.trim();
-			if (!text) {
-				ctx.ui.notify(goal ? goalLine(goal) : "No active /goal.", "info");
-				updateGoalUi(ctx, goal);
-				return;
-			}
-			if (text === "clear") {
-				setGoal(undefined, ctx);
-				ctx.ui.notify("Cleared /goal.", "info");
-				return;
-			}
-			if (text === "done") {
-				if (!goal) {
-					ctx.ui.notify("No active /goal.", "warning");
-					return;
-				}
-				setGoal({ ...goal, done: true, evidence: "marked done by user", updatedAt: Date.now() }, ctx);
-				ctx.ui.notify(`Completed /goal: ${goal.text}`, "info");
-				return;
-			}
-			setGoal({ text, done: false, updatedAt: Date.now() }, ctx);
-			ctx.ui.notify(`Set /goal: ${text}`, "info");
 		},
 	});
 

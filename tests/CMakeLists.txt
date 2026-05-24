@@ -1670,6 +1670,17 @@ if(Python3_Interpreter_FOUND)
         ARGS    "-q|--infer-string-names|-p|-s|recoverCachedValue"
         GOLDEN  macho_string_names.pretty_function.pseudo.txt
     )
+    add_test(
+        NAME macho_string_names_inferred_functions_cache
+        COMMAND ${CMAKE_COMMAND}
+            -DEMBER=$<TARGET_FILE:ember_cli>
+            -DBINARY=${EMBER_FIXTURE_macho_string_names_PATH}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/run_functions_infer_cache.cmake
+    )
+    set_tests_properties(macho_string_names_inferred_functions_cache PROPERTIES
+        DEPENDS ember_cli
+        LABELS golden
+    )
     ember_golden_test(
         NAME    macho_string_names_operator_function_pseudo
         FIXTURE macho_string_names

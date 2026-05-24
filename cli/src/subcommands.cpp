@@ -105,8 +105,10 @@ namespace {
 
 constexpr std::string_view kXrefsCacheTag = "xrefs-v5";
 constexpr std::string_view kAritiesCacheTag = "arities-v3";
-constexpr std::string_view kFunctionsCacheTag = "functions-v5";
-constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v5";
+constexpr std::string_view kFunctionsCacheTag = "functions-v6";
+constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v6";
+constexpr std::string_view kFunctionsInferredCacheTag = "functions_inferred-v1";
+constexpr std::string_view kFunctionsFullInferredCacheTag = "functions_full_inferred-v1";
 
 [[nodiscard]] std::vector<std::string>
 collect_bundle_artifacts(const std::filesystem::path& binary_path) {
@@ -2266,8 +2268,8 @@ int run_functions(const Args& args, const Binary& b) {
     // would let a fast --functions run poison the cache for a later
     // --full-analysis user.
     const std::string_view fns_tag = args.full_analysis
-        ? kFunctionsFullCacheTag
-        : kFunctionsCacheTag;
+        ? (args.infer_string_names ? kFunctionsFullInferredCacheTag : kFunctionsFullCacheTag)
+        : (args.infer_string_names ? kFunctionsInferredCacheTag : kFunctionsCacheTag);
     if (cacheable) {
         if (auto hit = cache::read(dir, key, fns_tag); hit) {
             tsv.assign(hit->data(), hit->size());

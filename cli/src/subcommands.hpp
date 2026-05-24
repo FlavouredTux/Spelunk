@@ -56,6 +56,8 @@ int run_vtables     (const Args& args, const Binary& b);
 int run_int3_resolve(const Args& args, const Binary& b);
 int run_ppc_coverage(const Args& args, const Binary& b);
 int run_arities     (const Args& args, const Binary& b);
+[[nodiscard]] std::string_view functions_cache_tag(const Args& args);
+[[nodiscard]] std::optional<int> run_functions_cache_only(const Args& args);
 int run_functions   (const Args& args, const Binary& b);
 
 // Direct-output runners (cache logic varies, so they handle it locally).

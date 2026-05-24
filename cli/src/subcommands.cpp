@@ -264,6 +264,101 @@ make_surface_filter(const Args& args, bool include_artifacts) {
 
 }  // namespace
 
+std::string_view functions_cache_tag(const Args& args) {
+    return args.full_analysis
+               ? (args.infer_string_names ? kFunctionsFullInferredCacheTag : kFunctionsFullCacheTag)
+               : (args.infer_string_names ? kFunctionsInferredCacheTag : kFunctionsCacheTag);
+}
+
+std::optional<int> run_functions_cache_only(const Args& args) {
+    if (!args.functions || args.no_cache || args.json || !args.module_filter.empty()) {
+        return std::nullopt;
+    }
+
+    const auto dir =
+        args.cache_dir.empty() ? cache::default_dir() : std::filesystem::path(args.cache_dir);
+    auto key = cache::key_for(args.binary, cache_scope_tag(args));
+    if (!key)
+        return std::nullopt;
+    auto hit = cache::read(dir, *key, functions_cache_tag(args));
+    if (!hit)
+        return std::nullopt;
+
+    const Annotations ann = load_annotations_quiet(args);
+    if (ann.renames.empty() && args.functions_pattern.empty() &&
+        (!args.row_limit_set || args.row_limit == 0)) {
+        std::fwrite(hit->data(), 1, hit->size(), stdout);
+        return EXIT_SUCCESS;
+    }
+
+    auto parse_addr = [](std::string_view s) -> std::optional<addr_t> {
+        if (s.starts_with("0x") || s.starts_with("0X"))
+            s.remove_prefix(2);
+        addr_t v = 0;
+        for (char c : s) {
+            const int d = (c >= '0' && c <= '9')   ? c - '0'
+                          : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                          : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                                                   : -1;
+            if (d < 0)
+                return std::nullopt;
+            v = (v << 4) | static_cast<addr_t>(d);
+        }
+        return v;
+    };
+
+    std::string needle = args.functions_pattern;
+    for (auto& c : needle)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    std::size_t pos = 0;
+    std::size_t emitted = 0;
+    while (pos < hit->size()) {
+        const auto nl = hit->find('\n', pos);
+        const std::size_t line_end = (nl == std::string::npos) ? hit->size() : nl;
+        std::string_view line(hit->data() + pos, line_end - pos);
+        std::size_t tabs = 0, name_start = 0, addr_end = 0;
+        for (std::size_t i = 0; i < line.size() && tabs < 3; ++i) {
+            if (line[i] == '\t') {
+                if (tabs == 0)
+                    addr_end = i;
+                if (++tabs == 3)
+                    name_start = i + 1;
+            }
+        }
+        const auto row_addr = parse_addr(line.substr(0, addr_end));
+        const std::string* rn = row_addr ? [&]() -> const std::string* {
+            auto it = ann.renames.find(*row_addr);
+            return it == ann.renames.end() ? nullptr : &it->second;
+        }()
+            : nullptr;
+        const std::string_view discovered_name = line.substr(name_start);
+        const std::string_view effective_name = rn ? std::string_view{*rn} : discovered_name;
+        if (!needle.empty()) {
+            std::string name_lc(effective_name);
+            for (auto& c : name_lc)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (name_lc.find(needle) == std::string::npos) {
+                pos = (nl == std::string::npos) ? hit->size() : nl + 1;
+                continue;
+            }
+        }
+        if (rn) {
+            std::fwrite(line.data(), 1, name_start, stdout);
+            std::fwrite(effective_name.data(), 1, effective_name.size(), stdout);
+            std::fputc('\n', stdout);
+        } else {
+            std::fwrite(line.data(), 1, line.size(), stdout);
+            std::fputc('\n', stdout);
+        }
+        ++emitted;
+        if (args.row_limit_set && args.row_limit != 0 && emitted >= args.row_limit)
+            break;
+        pos = (nl == std::string::npos) ? hit->size() : nl + 1;
+    }
+    return EXIT_SUCCESS;
+}
+
 // ---------------------------------------------------------------------------
 // One-shot helpers
 // ---------------------------------------------------------------------------
@@ -2246,20 +2341,21 @@ int run_arities(const Args& args, const Binary& b) {
 }
 
 int run_functions(const Args& args, const Binary& b) {
+    ScopedTimer total_timer("functions.total");
     // Full TSV is cacheable independent of the pattern - build once,
     // filter at print time so the cache works across grep sessions.
     std::string tsv;
-    const auto dir = args.cache_dir.empty()
-        ? cache::default_dir()
-        : std::filesystem::path(args.cache_dir);
+    const auto dir =
+        args.cache_dir.empty() ? cache::default_dir() : std::filesystem::path(args.cache_dir);
     std::string key;
     bool cacheable = !args.no_cache;
     if (cacheable) {
         auto k = cache::key_for(args.binary, cache_scope_tag(args));
-        if (k) key = std::move(*k);
+        if (k)
+            key = std::move(*k);
         else {
-            std::println(stderr, "ember: warning: {}: {} (caching disabled)",
-                         k.error().kind_name(), k.error().message);
+            std::println(stderr, "ember: warning: {}: {} (caching disabled)", k.error().kind_name(),
+                         k.error().message);
             cacheable = false;
         }
     }
@@ -2267,20 +2363,21 @@ int run_functions(const Args& args, const Binary& b) {
     // superset (and on packed binaries, a polluted one). Sharing one tag
     // would let a fast --functions run poison the cache for a later
     // --full-analysis user.
-    const std::string_view fns_tag = args.full_analysis
-        ? (args.infer_string_names ? kFunctionsFullInferredCacheTag : kFunctionsFullCacheTag)
-        : (args.infer_string_names ? kFunctionsInferredCacheTag : kFunctionsCacheTag);
+    const std::string_view fns_tag = functions_cache_tag(args);
     if (cacheable) {
+        ScopedTimer phase("functions.cache_read");
         if (auto hit = cache::read(dir, key, fns_tag); hit) {
             tsv.assign(hit->data(), hit->size());
         }
     }
     if (tsv.empty()) {
+        ScopedTimer phase("functions.cache_miss");
         tsv = build_functions_output(b, args.full_analysis);
         if (cacheable) {
+            ScopedTimer write_phase("functions.cache_write");
             if (auto rv = cache::write(dir, key, fns_tag, tsv); !rv) {
-                std::println(stderr, "ember: warning: {}: {}",
-                             rv.error().kind_name(), rv.error().message);
+                std::println(stderr, "ember: warning: {}: {}", rv.error().kind_name(),
+                             rv.error().message);
             }
         }
     }
@@ -2288,17 +2385,20 @@ int run_functions(const Args& args, const Binary& b) {
     // the cache stays a single full-binary blob - different scope
     // requests reuse the same cached payload.
     const ModuleScope scope = resolve_module_scope(b, args.module_filter);
-    if (!args.module_filter.empty() && !scope.active) return EXIT_FAILURE;
+    if (!args.module_filter.empty() && !scope.active)
+        return EXIT_FAILURE;
 
     auto parse_addr = [](std::string_view s) -> std::optional<addr_t> {
-        if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
+        if (s.starts_with("0x") || s.starts_with("0X"))
+            s.remove_prefix(2);
         addr_t v = 0;
         for (char c : s) {
-            const int d = (c >= '0' && c <= '9') ? c - '0'
-                        : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                        : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                        : -1;
-            if (d < 0) return std::nullopt;
+            const int d = (c >= '0' && c <= '9')   ? c - '0'
+                          : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                          : (c >= 'A' && c <= 'F') ? c - 'A' + 10
+                                                   : -1;
+            if (d < 0)
+                return std::nullopt;
             v = (v << 4) | static_cast<addr_t>(d);
         }
         return v;
@@ -2319,31 +2419,38 @@ int run_functions(const Args& args, const Binary& b) {
 
     if (!args.json && args.functions_pattern.empty() && !scope.active && !any_rename &&
         !args.row_limit_set) {
+        ScopedTimer phase("functions.emit_raw");
         std::fwrite(tsv.data(), 1, tsv.size(), stdout);
         return EXIT_SUCCESS;
     }
 
     std::string needle = args.functions_pattern;
-    for (auto& c : needle) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (auto& c : needle)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    if (args.json) std::fputs("[", stdout);
+    if (args.json)
+        std::fputs("[", stdout);
     bool first = true;
     std::size_t emitted = 0;
 
+    ScopedTimer filter_phase("functions.filter_emit");
     std::size_t pos = 0;
     while (pos < tsv.size()) {
         const auto nl = tsv.find('\n', pos);
         const std::size_t end = (nl == std::string::npos) ? tsv.size() : nl;
         std::string_view line(tsv.data() + pos, end - pos);
         // Columns: addr\tsize\tkind\tname.
-        std::size_t tabs = 0, name_start = 0, addr_end = 0,
-                    size_end = 0, kind_end = 0;
+        std::size_t tabs = 0, name_start = 0, addr_end = 0, size_end = 0, kind_end = 0;
         for (std::size_t i = 0; i < line.size() && tabs < 3; ++i) {
             if (line[i] == '\t') {
-                if (tabs == 0)      addr_end = i;
-                else if (tabs == 1) size_end = i;
-                else if (tabs == 2) kind_end = i;
-                if (++tabs == 3)    name_start = i + 1;
+                if (tabs == 0)
+                    addr_end = i;
+                else if (tabs == 1)
+                    size_end = i;
+                else if (tabs == 2)
+                    kind_end = i;
+                if (++tabs == 3)
+                    name_start = i + 1;
             }
         }
         const std::string_view addr_s = line.substr(0, addr_end);
@@ -2360,24 +2467,25 @@ int run_functions(const Args& args, const Binary& b) {
         // file when needed.
         const std::string_view discovered_name = line.substr(name_start);
         const std::string* rn = row_addr ? rename_for(*row_addr) : nullptr;
-        const std::string_view effective_name =
-            rn ? std::string_view{*rn} : discovered_name;
+        const std::string_view effective_name = rn ? std::string_view{*rn} : discovered_name;
         if (!needle.empty()) {
             std::string name_lc(effective_name);
-            for (auto& c : name_lc) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            for (auto& c : name_lc)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             if (name_lc.find(needle) == std::string::npos) {
                 pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
                 continue;
             }
         }
         if (args.json) {
-            if (!first) std::fputs(",", stdout);
+            if (!first)
+                std::fputs(",", stdout);
             first = false;
             const std::string_view size_s = line.substr(addr_end + 1, size_end - addr_end - 1);
             const std::string_view kind_s = line.substr(size_end + 1, kind_end - size_end - 1);
-            std::string row = std::format(
-                "{{\"addr\":\"{}\",\"size\":\"{}\",\"kind\":\"{}\",\"name\":\"{}\"",
-                addr_s, size_s, kind_s, json_escape(effective_name));
+            std::string row =
+                std::format("{{\"addr\":\"{}\",\"size\":\"{}\",\"kind\":\"{}\",\"name\":\"{}\"",
+                            addr_s, size_s, kind_s, json_escape(effective_name));
             if (row_addr) {
                 if (const auto* m = ann_for_print.meta_for_rename(*row_addr); m) {
                     if (m->confidence > 0.0f) {
@@ -2403,10 +2511,12 @@ int run_functions(const Args& args, const Binary& b) {
             std::fputc('\n', stdout);
         }
         ++emitted;
-        if (args.row_limit_set && args.row_limit != 0 && emitted >= args.row_limit) break;
+        if (args.row_limit_set && args.row_limit != 0 && emitted >= args.row_limit)
+            break;
         pos = (nl == std::string::npos) ? tsv.size() : nl + 1;
     }
-    if (args.json) std::fputs("]\n", stdout);
+    if (args.json)
+        std::fputs("]\n", stdout);
     return EXIT_SUCCESS;
 }
 

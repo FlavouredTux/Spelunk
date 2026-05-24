@@ -33,3 +33,20 @@ if(NOT _infer_out MATCHES "recoverCachedValue")
         "inferred --functions reused the plain cache or missed the name.\n"
         "--- stderr ---\n${_infer_err}\n--- stdout ---\n${_infer_out}")
 endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env EMBER_TIMING=1
+            "${EMBER}" --cache-dir "${_test_cache}" "${BINARY}"
+            --infer-string-names --functions --row-limit 1
+    OUTPUT_VARIABLE _hot_out
+    ERROR_VARIABLE  _hot_err
+    RESULT_VARIABLE _hot_rc
+)
+if(NOT _hot_rc EQUAL 0)
+    message(FATAL_ERROR "hot inferred --functions exited with ${_hot_rc}:\n${_hot_err}")
+endif()
+if(_hot_err MATCHES "load_binary")
+    message(FATAL_ERROR
+        "hot inferred --functions did not use the pre-load cache path.\n"
+        "--- stderr ---\n${_hot_err}\n--- stdout ---\n${_hot_out}")
+endif()

@@ -1536,11 +1536,20 @@ std::string build_arities_output(const Binary& b) {
 // are estimated from the gap to the next function (or section boundary) so
 // downstream tools still work with sparse or stripped symbol metadata.
 std::string build_functions_output(const Binary& b, bool full_analysis) {
+    ScopedTimer timer("functions.build_output");
     std::string out;
     const auto mode = full_analysis ? EnumerateMode::Full : EnumerateMode::Auto;
-    for (const auto& fn : enumerate_functions(b, mode)) {
-        out += std::format("{:#018x}\t{:#x}\t{}\t{}\n",
-                           fn.addr, fn.size, discovered_kind_name(fn.kind), fn.name);
+    std::vector<DiscoveredFunction> fns;
+    {
+        ScopedTimer phase("functions.enumerate");
+        fns = enumerate_functions(b, mode);
+    }
+    {
+        ScopedTimer phase("functions.format");
+        for (const auto& fn : fns) {
+            out += std::format("{:#018x}\t{:#x}\t{}\t{}\n", fn.addr, fn.size,
+                               discovered_kind_name(fn.kind), fn.name);
+        }
     }
     return out;
 }

@@ -153,6 +153,15 @@ auto_dsym_path(const ember::cli::Args& args) {
     return EXIT_SUCCESS;
 }
 
+[[nodiscard]] bool inferred_functions_cache_available(const ember::cli::Args& args) {
+    if (!args.infer_string_names || !args.functions || args.no_cache) return false;
+    const auto dir = args.cache_dir.empty() ? ember::cache::default_dir()
+                                            : std::filesystem::path(args.cache_dir);
+    auto key = ember::cache::key_for(args.binary, ember::cli::cache_scope_tag(args));
+    if (!key) return false;
+    return ember::cache::read(dir, *key, ember::cli::functions_cache_tag(args)).has_value();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -186,6 +195,9 @@ int main(int argc, char** argv) {
     if (!args.apply_patches.empty()) return run_apply_patches(args);
     if (surfaces_artifacts_only_requested(args)) {
         return run_surface_artifacts(args);
+    }
+    if (auto cached_functions = run_functions_cache_only(args)) {
+        return *cached_functions;
     }
 
     // Aux-binary loading happens once, up front, so both the no-primary
@@ -249,8 +261,10 @@ int main(int argc, char** argv) {
     if (const int rc = apply_dsym_overlay(args, **bin); rc != EXIT_SUCCESS) {
         return rc;
     }
-    if (const int rc = apply_string_name_inference(args, **bin); rc != EXIT_SUCCESS) {
-        return rc;
+    if (!inferred_functions_cache_available(args)) {
+        if (const int rc = apply_string_name_inference(args, **bin); rc != EXIT_SUCCESS) {
+            return rc;
+        }
     }
 
     // --force-fn-start: synthesize Function symbols at each user-

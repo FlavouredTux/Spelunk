@@ -207,7 +207,14 @@ bool import_returns_void(std::string_view n) noexcept {
         "OutputDebugStringA", "OutputDebugStringW",
         "DeleteFileA", "DeleteFileW",
         "free", "abort",
+        "objc_autoreleasePoolPop", "objc_destroyWeak", "objc_end_catch",
+        "objc_release", "objc_setAssociatedObject",
+        "objc_setProperty_atomic", "objc_setProperty_atomic_copy",
+        "objc_setProperty_nonatomic", "objc_setProperty_nonatomic_copy",
+        "objc_storeStrong",
+        "objc_unsafeClaimAutoreleasedReturnValue",
         "__stack_chk_fail",
+        "__assert_fail", "__assert_rtn",
     };
     for (auto name : kTable) {
         if (name == n) return true;

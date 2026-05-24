@@ -3,9 +3,13 @@
 #include <array>
 #include <cstddef>
 #include <span>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
+#include <ember/analysis/import_sigs.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -91,6 +95,14 @@ follow_trivial_wrapper(const Binary& b, addr_t target) noexcept {
     return -1;
 }
 
+[[nodiscard]] std::string clean_import_name_local(std::string_view name) {
+    auto at = name.find('@');
+    std::string bare(at == std::string_view::npos ? name : name.substr(0, at));
+    if (bare.starts_with("__imp_")) bare.erase(0, 6);
+    if (bare.starts_with('_') && !bare.starts_with("__")) bare.erase(0, 1);
+    return bare;
+}
+
 enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 
 [[nodiscard]] DstRole dst_role(Mnemonic m) noexcept {
@@ -172,6 +184,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
 
     X64Decoder dec;
     std::size_t visits = 0;
+    TypeArena import_types;
 
     while (!work.empty() && visits < kMaxVisits) {
         const auto wi = work.back();
@@ -226,6 +239,22 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
                 } else if (op.kind == Operand::Kind::Memory) {
                     if (op.mem.base  != Reg::None) touch(op.mem.base,  true, false);
                     if (op.mem.index != Reg::None) touch(op.mem.index, true, false);
+                }
+            }
+
+            if (insn.mnemonic == Mnemonic::Call &&
+                insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Relative) {
+                const Symbol* s = b.import_at_plt(insn.operands[0].rel.target);
+                if (s) {
+                    if (auto spec = lookup_import_sig(
+                            clean_import_name_local(s->name), import_types); spec) {
+                        const std::size_t n =
+                            std::min<std::size_t>(spec->params.size(), args.size());
+                        for (std::size_t i = 0; i < n; ++i) {
+                            if (!written[i]) live_in[i] = true;
+                        }
+                    }
                 }
             }
 

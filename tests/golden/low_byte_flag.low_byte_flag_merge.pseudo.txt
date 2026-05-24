@@ -1,0 +1,12 @@
+// low_byte_flag_merge
+extern uint8_t g_flag;
+extern uint64_t g_sink;
+
+uint64_t low_byte_flag_merge(uint64_t a1) {
+  if (g_flag & 1) {
+    g_sink = 7;
+    return 7;
+  }
+  g_sink = 3;
+  return 3;
+}

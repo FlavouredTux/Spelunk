@@ -21,6 +21,7 @@
 #include <ember/analysis/name_resolver.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
+#include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -59,6 +60,62 @@ namespace {
 [[nodiscard]] bool line_semantically_empty(std::string_view line) noexcept {
     line = trim_line_view(line);
     return line.empty() || is_bb_label_line(line);
+}
+
+[[nodiscard]] bool c_ident_char(char c) noexcept {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+[[nodiscard]] bool text_contains_identifier(std::string_view text,
+                                            std::string_view name) noexcept {
+    if (name.empty()) return false;
+    std::size_t pos = 0;
+    while ((pos = text.find(name, pos)) != std::string_view::npos) {
+        const bool left_ok = pos == 0 || !c_ident_char(text[pos - 1]);
+        const std::size_t end = pos + name.size();
+        const bool right_ok = end >= text.size() || !c_ident_char(text[end]);
+        if (left_ok && right_ok) return true;
+        pos = end;
+    }
+    return false;
+}
+
+[[nodiscard]] bool text_contains_identifier_in_code(std::string_view text,
+                                                    std::string_view name) noexcept {
+    bool in_block_comment = false;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) end = text.size();
+        std::string_view line = text.substr(start, end - start);
+        if (const std::size_t comment = line.find("//");
+            comment != std::string_view::npos) {
+            line = line.substr(0, comment);
+        }
+        std::string code;
+        code.reserve(line.size());
+        for (std::size_t i = 0; i < line.size(); ) {
+            if (in_block_comment) {
+                const std::size_t close = line.find("*/", i);
+                if (close == std::string_view::npos) break;
+                in_block_comment = false;
+                i = close + 2;
+                continue;
+            }
+            const std::size_t open = line.find("/*", i);
+            if (open == std::string_view::npos) {
+                code.append(line.substr(i));
+                break;
+            }
+            code.append(line.substr(i, open - i));
+            in_block_comment = true;
+            i = open + 2;
+        }
+        if (text_contains_identifier(code, name)) return true;
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+    return false;
 }
 
 [[nodiscard]] bool line_starts_empty_if(std::string_view line) noexcept {
@@ -102,6 +159,8 @@ objc_selector_arg_names(std::string_view selector) {
         if (names.empty()) {
             if (piece.starts_with("set") && piece.size() > 3) {
                 piece = lower_first_ascii(piece.substr(3));
+            } else if (piece.starts_with("with") && piece.size() > 4) {
+                piece = lower_first_ascii(piece.substr(4));
             } else if (auto with = piece.rfind("With");
                        with != std::string::npos && with + 4 < piece.size()) {
                 piece = lower_first_ascii(piece.substr(with + 4));
@@ -129,6 +188,97 @@ objc_selector_arg_names(std::string_view selector) {
 
 [[nodiscard]] bool line_is_close_brace(std::string_view line) noexcept {
     return trim_line_view(line) == "}";
+}
+
+[[nodiscard]] bool line_is_else_open(std::string_view line) noexcept {
+    return trim_line_view(line) == "} else {";
+}
+
+[[nodiscard]] std::string strip_outer_parens(std::string_view s) {
+    s = trim_line_view(s);
+    if (s.size() < 2 || s.front() != '(' || s.back() != ')') {
+        return std::string(s);
+    }
+    int depth = 0;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '(') {
+            ++depth;
+        } else if (s[i] == ')') {
+            --depth;
+            if (depth == 0 && i + 1 != s.size()) return std::string(s);
+        }
+        if (depth < 0) return std::string(s);
+    }
+    return std::string(trim_line_view(s.substr(1, s.size() - 2)));
+}
+
+[[nodiscard]] std::string invert_condition_text(std::string_view cond) {
+    cond = trim_line_view(cond);
+    if (cond.starts_with("!") &&
+        (cond.size() == 1 || cond[1] != '=')) {
+        return strip_outer_parens(cond.substr(1));
+    }
+    return std::format("!({})", cond);
+}
+
+[[nodiscard]] std::optional<std::string>
+inverted_if_line(std::string_view line) {
+    const std::string_view trimmed = trim_line_view(line);
+    if (!trimmed.starts_with("if (") || !trimmed.ends_with("{")) {
+        return std::nullopt;
+    }
+    const std::size_t open = line.find("if (");
+    if (open == std::string_view::npos) return std::nullopt;
+    const std::size_t close = line.rfind(") {");
+    if (close == std::string_view::npos || close < open + 4) {
+        return std::nullopt;
+    }
+    const std::string_view indent = line.substr(0, open);
+    const std::string cond = invert_condition_text(
+        line.substr(open + 4, close - (open + 4)));
+    return std::format("{}if ({}) {{", indent, cond);
+}
+
+[[nodiscard]] std::string collapse_empty_then_else_blocks(std::string_view text) {
+    std::vector<std::string_view> lines;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) end = text.size();
+        lines.push_back(text.substr(start, end - start));
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (auto inverted = inverted_if_line(lines[i]); inverted) {
+            std::size_t j = i + 1;
+            while (j < lines.size() && line_semantically_empty(lines[j])) {
+                ++j;
+            }
+            if (j < lines.size() && line_is_else_open(lines[j])) {
+                out += *inverted;
+                out += '\n';
+                i = j;
+                continue;
+            }
+            if (j + 1 < lines.size() &&
+                line_is_close_brace(lines[j]) &&
+                line_is_else_open(lines[j + 1])) {
+                out += *inverted;
+                out += '\n';
+                i = j + 1;
+                continue;
+            }
+        }
+        if (!lines[i].empty() || i + 1 < lines.size()) {
+            out += lines[i];
+            out += '\n';
+        }
+    }
+    return out;
 }
 
 [[nodiscard]] std::string strip_label_only_if_blocks(std::string_view text) {
@@ -257,6 +407,10 @@ struct Emitter {
     // arg name (a1, a2, ...) directly: -O0 spill-arg-then-reload becomes
     // a single use of the parameter, the way the user wrote it.
     std::map<i64, IrValue>                           init_only_slot_value;
+    // Stack slots written exactly once, regardless of the value's origin.
+    // Used to recognise phi merges where one path still has the just-stored
+    // value and another path reloads the same slot.
+    std::map<i64, IrValue>                           single_write_slot_value;
     mutable std::map<u64, std::optional<std::string>> string_cache;
     // Call sites whose return value flows straight into a Return(rax). The
     // Call statement is suppressed and its rendered expression is stashed in
@@ -275,6 +429,11 @@ struct Emitter {
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
     std::map<SsaKey, std::string>                    call_return_names;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
+    // ARC claim helpers consume an autoreleased return purely for ownership
+    // bookkeeping. When the claimed value has no real uses, render the
+    // producer call as the statement and suppress the helper.
+    std::set<std::pair<std::size_t, std::size_t>>    arc_claim_producer_positions;
+    std::set<std::pair<std::size_t, std::size_t>>    suppressed_call_positions;
     // Bound-call positions whose binding name reuses a phi merge-value
     // name (e.g. `v0`). Such call statements skip the type prefix because
     // the merge declaration is already emitted at the function head.
@@ -412,7 +571,9 @@ struct Emitter {
         IrValue cur = v;
         for (int step = 0; step < 8; ++step) {
             if (cur.kind == IrValueKind::Imm) {
-                return try_string_at(static_cast<u64>(cur.imm));
+                const auto addr = static_cast<u64>(cur.imm);
+                if (auto s = try_decode_cfstring(addr); s) return s;
+                return try_string_at(addr);
             }
             const IrInst* d = def_of(cur);
             if (!d) return std::nullopt;
@@ -434,6 +595,35 @@ struct Emitter {
         auto fmt = resolve_string_value(args[format_index]);
         if (!fmt) return static_cast<u8>(format_index + 1);
         return static_cast<u8>(format_index + 1 + count_printf_specifiers(*fmt));
+    }
+
+    [[nodiscard]] static bool is_generic_sub_name(std::string_view name) noexcept {
+        if (!name.starts_with("sub_") || name.size() <= 4) return false;
+        for (char c : name.substr(4)) {
+            if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] std::optional<u8>
+    printf_like_arity_from_literal_args(const std::vector<IrValue>& args) const {
+        const std::size_t limit = std::min<std::size_t>(args.size(), 6);
+        for (std::size_t i = 0; i < limit; ++i) {
+            auto fmt = resolve_string_value(args[i]);
+            if (!fmt) continue;
+            const u8 specs = count_printf_specifiers(*fmt);
+            if (specs > 0) {
+                return static_cast<u8>(i + 1u + specs);
+            }
+            // Stripped logging helpers often take metadata first, then a
+            // literal format string. If the format has no conversions, any
+            // trailing live-in registers are almost certainly stale ABI noise.
+            if (i >= 2 && i + 1 < args.size() &&
+                fmt->find("FLog::") != std::string::npos) {
+                return static_cast<u8>(i + 1u);
+            }
+        }
+        return std::nullopt;
     }
 
     // Receiver-shape virtual-method dispatch: if the call target traces
@@ -625,6 +815,57 @@ struct Emitter {
             // same expression (common for `rax = phi(rax_v1, t17)` where
             // t17 traces back to the same call's return), emit that.
             if (d->op == IrOp::Phi && depth < kMaxExprDepth && !d->phi_operands.empty()) {
+                std::optional<u8> common_self_arg;
+                bool all_self_arg_aliases = true;
+                for (const auto& op : d->phi_operands) {
+                    auto opk = ssa_key(op);
+                    if (opk && *opk == k) continue;  // self-reference
+                    auto slot = trace_to_self_arg_slot(op, depth + 1);
+                    if (!slot) { all_self_arg_aliases = false; break; }
+                    if (!common_self_arg) common_self_arg = *slot;
+                    else if (*common_self_arg != *slot) {
+                        all_self_arg_aliases = false;
+                        break;
+                    }
+                }
+                if (all_self_arg_aliases && common_self_arg) {
+                    const std::size_t slot = *common_self_arg;
+                    if (slot < self_arg_names.size() && !self_arg_names[slot].empty()) {
+                        return self_arg_names[slot];
+                    }
+                    return std::format("a{}", slot + 1);
+                }
+
+                std::optional<i64> common_slot;
+                bool all_slot_aliases = true;
+                for (const auto& op : d->phi_operands) {
+                    auto opk = ssa_key(op);
+                    if (opk && *opk == k) continue;  // self-reference
+                    auto off = single_write_slot_alias_for_value(op);
+                    if (!off) { all_slot_aliases = false; break; }
+                    if (!common_slot) common_slot = *off;
+                    else if (*common_slot != *off) {
+                        all_slot_aliases = false;
+                        break;
+                    }
+                }
+                if (all_slot_aliases && common_slot) return stack_name(*common_slot);
+
+                std::optional<IrValue> common_root;
+                bool all_same_root = true;
+                for (const auto& op : d->phi_operands) {
+                    auto opk = ssa_key(op);
+                    if (opk && *opk == k) continue;  // self-reference
+                    auto root = alias_root_for_value(op);
+                    if (!root) { all_same_root = false; break; }
+                    if (!common_root) common_root = *root;
+                    else if (!same_value_key(*common_root, *root)) {
+                        all_same_root = false;
+                        break;
+                    }
+                }
+                if (all_same_root && common_root) return expr(*common_root, depth + 1);
+
                 std::string unified;
                 bool all_match = true;
                 for (const auto& op : d->phi_operands) {
@@ -722,6 +963,58 @@ struct Emitter {
         return out;
     }
 
+    [[nodiscard]] bool same_value_key(const IrValue& a,
+                                      const IrValue& b) const noexcept {
+        auto ak = ssa_key(a);
+        auto bk = ssa_key(b);
+        return ak && bk && *ak == *bk;
+    }
+
+    [[nodiscard]] std::optional<i64>
+    single_write_slot_alias_for_value(const IrValue& v) const {
+        if (const IrInst* d = def_stripped(v);
+            d && d->op == IrOp::Load && d->segment == Reg::None &&
+            d->src_count >= 1) {
+            if (auto off = stack_offset(d->srcs[0]); off) return off;
+        }
+        for (const auto& [off, stored] : single_write_slot_value) {
+            if (same_value_key(v, stored)) return off;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<IrValue>
+    alias_root_for_value(const IrValue& v, int depth = 0) const {
+        if (depth > 12) return std::nullopt;
+        const IrInst* d = def_stripped(v);
+        if (!d) return v;
+        if (d->op == IrOp::Assign && d->src_count >= 1) {
+            return alias_root_for_value(d->srcs[0], depth + 1);
+        }
+        if (d->op == IrOp::Load && d->segment == Reg::None && d->src_count >= 1) {
+            if (auto off = stack_offset(d->srcs[0]); off) {
+                if (auto it = single_write_slot_value.find(*off);
+                    it != single_write_slot_value.end()) {
+                    return alias_root_for_value(it->second, depth + 1);
+                }
+            }
+        }
+        if (d->op == IrOp::Phi && !d->phi_operands.empty()) {
+            auto self_key = ssa_key(v);
+            std::optional<IrValue> common;
+            for (const auto& op : d->phi_operands) {
+                auto opk = ssa_key(op);
+                if (self_key && opk && *self_key == *opk) continue;
+                auto root = alias_root_for_value(op, depth + 1);
+                if (!root) return std::nullopt;
+                if (!common) common = *root;
+                else if (!same_value_key(*common, *root)) return std::nullopt;
+            }
+            return common;
+        }
+        return v;
+    }
+
     // An arg reg is "stale" if the caller never deliberately set it before the
     // call: either it's still the function's live-in (version 0) and no user
     // signature claims it, or its most recent def is a Clobber from a prior
@@ -733,7 +1026,8 @@ struct Emitter {
     // `u64 wrap(u64 a1) { return add7(a1); }` decompiles to `add7()`
     // because is_stale_arg_reg treats `a1` as uninitialised live-in
     // when the caller has no annotation file pinning the signature.
-    [[nodiscard]] bool is_stale_arg_reg(const IrValue& a) const {
+    [[nodiscard]] bool is_stale_arg_reg(const IrValue& a, int depth = 0) const {
+        if (depth > 8) return false;
         if (a.kind != IrValueKind::Reg) return false;
         if (a.version == 0) {
             if (annotations && fn) {
@@ -759,6 +1053,19 @@ struct Emitter {
                 return false;
             }
             return true;
+        }
+        if (const IrInst* d = def_stripped(a);
+            d && d->op == IrOp::Phi && !d->phi_operands.empty()) {
+            bool saw_operand = false;
+            const auto self = ssa_key(a);
+            for (const auto& op : d->phi_operands) {
+                if (auto ok = ssa_key(op); self && ok && *ok == *self) {
+                    continue;
+                }
+                saw_operand = true;
+                if (!is_stale_arg_reg(op, depth + 1)) return false;
+            }
+            return saw_operand;
         }
         return false;
     }
@@ -796,16 +1103,32 @@ struct Emitter {
                name == "objc_msgSend_stret";
     }
 
+    [[nodiscard]] static bool is_objc_super_msgsend_name(std::string_view name) noexcept {
+        return name == "objc_msgSendSuper" ||
+               name == "objc_msgSendSuper2" ||
+               name == "objc_msgSendSuper2_stret";
+    }
+
+    [[nodiscard]] static bool is_objc_stret_msgsend_name(std::string_view name) noexcept {
+        return name == "objc_msgSend_stret" ||
+               name == "objc_msgSendSuper2_stret";
+    }
+
     [[nodiscard]] static std::optional<u8>
     objc_runtime_fixed_arity(std::string_view name) noexcept {
         static const std::pair<std::string_view, unsigned> kTable[] = {
             {"objc_alloc", 1},
             {"objc_allocWithZone", 1},
+            {"objc_autoreleasePoolPop", 1},
+            {"objc_autoreleasePoolPush", 0},
             {"objc_autorelease", 1},
             {"objc_autoreleaseReturnValue", 1},
+            {"objc_begin_catch", 1},
             {"objc_claimAutoreleasedReturnValue", 1},
             {"objc_copyWeak", 2},
             {"objc_destroyWeak", 1},
+            {"objc_end_catch", 0},
+            {"objc_getProperty", 4},
             {"objc_initWeak", 2},
             {"objc_enumerationMutation", 1},
             {"objc_loadWeak", 1},
@@ -816,10 +1139,17 @@ struct Emitter {
             {"objc_retainAutorelease", 1},
             {"objc_retainAutoreleaseReturnValue", 1},
             {"objc_retainAutoreleasedReturnValue", 1},
+            {"objc_retainBlock", 1},
+            {"objc_setAssociatedObject", 4},
+            {"objc_setProperty_atomic", 4},
+            {"objc_setProperty_atomic_copy", 4},
+            {"objc_setProperty_nonatomic", 4},
+            {"objc_setProperty_nonatomic_copy", 4},
             {"objc_storeStrong", 2},
             {"objc_storeWeak", 2},
             {"objc_sync_enter", 1},
             {"objc_sync_exit", 1},
+            {"objc_unsafeClaimAutoreleasedReturnValue", 1},
         };
         for (const auto& [n, arity] : kTable) {
             if (n == name) return static_cast<u8>(arity);
@@ -833,6 +1163,42 @@ struct Emitter {
             if (c == ':' && n < kMaxAbiIntArgs) ++n;
         }
         return n;
+    }
+
+    [[nodiscard]] static bool objc_selector_takes_format_varargs(
+        std::string_view selector) noexcept {
+        return selector == "stringWithFormat:" ||
+               selector == "localizedStringWithFormat:" ||
+               selector == "initWithFormat:" ||
+               selector == "appendFormat:";
+    }
+
+    [[nodiscard]] static u8 count_objc_format_specifiers(std::string_view fmt) noexcept {
+        u8 count = 0;
+        for (std::size_t i = 0; i < fmt.size(); ) {
+            if (fmt[i] != '%') { ++i; continue; }
+            ++i;
+            if (i >= fmt.size()) break;
+            if (fmt[i] == '%') { ++i; continue; }
+            while (i < fmt.size()) {
+                const char c = fmt[i];
+                if (c == '*') {
+                    if (count < 255) ++count;
+                    ++i;
+                    continue;
+                }
+                const bool is_conv =
+                    c == '@' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+                if (is_conv && c != 'l' && c != 'h' && c != 'L' && c != 'z' &&
+                    c != 'j' && c != 't' && c != 'q') {
+                    if (count < 255) ++count;
+                    ++i;
+                    break;
+                }
+                ++i;
+            }
+        }
+        return count;
     }
 
     [[nodiscard]] std::optional<std::string>
@@ -865,8 +1231,7 @@ struct Emitter {
                     const std::vector<IrValue>& args) const {
         if (auto fixed = objc_runtime_fixed_arity(name)) return fixed;
         if (!is_objc_msgsend_name(name)) return std::nullopt;
-        const bool stret = name == "objc_msgSend_stret" ||
-                           name == "objc_msgSendSuper2_stret";
+        const bool stret = is_objc_stret_msgsend_name(name);
         const std::size_t sel_index = stret ? 2u : 1u;
         if (args.size() <= sel_index) {
             return static_cast<u8>(stret ? 3 : 2);
@@ -874,9 +1239,16 @@ struct Emitter {
         auto sel = objc_selector_for_rendered_value(args[sel_index]);
         if (!sel) return std::nullopt;
         const u8 base = static_cast<u8>(stret ? 3 : 2);
-        return static_cast<u8>(std::min<unsigned>(
-            kMaxAbiIntArgs,
-            static_cast<unsigned>(base + selector_argument_count(*sel))));
+        unsigned arity = static_cast<unsigned>(base + selector_argument_count(*sel));
+        if (objc_selector_takes_format_varargs(*sel)) {
+            const std::size_t fmt_index = static_cast<std::size_t>(base);
+            if (fmt_index < args.size()) {
+                if (auto fmt = resolve_string_value(args[fmt_index]); fmt) {
+                    arity += count_objc_format_specifiers(*fmt);
+                }
+            }
+        }
+        return static_cast<u8>(std::min<unsigned>(kMaxAbiIntArgs, arity));
     }
 
     [[nodiscard]] static std::string simplify_objc_class_receiver(std::string s) {
@@ -900,33 +1272,194 @@ struct Emitter {
         return pieces;
     }
 
+    [[nodiscard]] static std::string objc_stret_assignment_target(std::string s) {
+        s = strip_outer_parens(s);
+        s = std::string(trim_line_view(s));
+        if (s.starts_with("&")) {
+            return std::string(trim_line_view(s.substr(1)));
+        }
+        return std::format("*({})", s);
+    }
+
+    [[nodiscard]] static std::string objc_address_arg_text(std::string s) {
+        s = strip_outer_parens(s);
+        s = std::string(trim_line_view(s));
+        if (s.empty() || s.starts_with("&")) return s;
+        return std::format("&{}", s);
+    }
+
+    [[nodiscard]] std::string objc_address_arg(const IrValue& v) const {
+        if (auto off = stack_offset(v); off) {
+            return std::format("&{}", stack_name(*off));
+        }
+        if (auto ivar = try_render_objc_ivar_access(v); ivar) {
+            return std::format("&{}", *ivar);
+        }
+        return objc_address_arg_text(
+            expr(v, 0, std::to_underlying(Prec::Unary)));
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    try_render_objc_self_ivar_at_offset(const IrValue& receiver,
+                                        const IrValue& offset) const {
+        if (!fn) return std::nullopt;
+        auto ctx = objc_receiver_context(receiver);
+        if (!ctx || ctx->cls.empty() || ctx->display.empty()) return std::nullopt;
+        auto off = resolve_imm(offset);
+        if (!off || *off < 0) return std::nullopt;
+        auto it = objc_ivar_by_class_offset.find(
+            {ctx->cls, static_cast<u64>(*off)});
+        if (it == objc_ivar_by_class_offset.end()) return std::nullopt;
+        const ObjcIvar& iv = *it->second;
+        if (iv.cls != ctx->cls) return std::nullopt;
+        if (!objc_ivar_name_is_safe(iv.name)) return std::nullopt;
+        return std::format("{}->{}", ctx->display, objc_ivar_display_name(iv));
+    }
+
+    [[nodiscard]] static bool is_objc_property_setter_runtime(
+        std::string_view name) noexcept {
+        return name == "objc_setProperty_atomic" ||
+               name == "objc_setProperty_atomic_copy" ||
+               name == "objc_setProperty_nonatomic" ||
+               name == "objc_setProperty_nonatomic_copy";
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    render_objc_property_runtime_call(std::string_view name,
+                                      const std::vector<IrValue>& args) const {
+        if (name == "objc_getProperty" && args.size() >= 4) {
+            if (auto ivar = try_render_objc_self_ivar_at_offset(args[0], args[2])) {
+                return ivar;
+            }
+        }
+        if (is_objc_property_setter_runtime(name) && args.size() >= 4) {
+            if (auto ivar = try_render_objc_self_ivar_at_offset(args[0], args[3])) {
+                return std::format("{}(&{}, {})",
+                                   name, *ivar,
+                                   expr(args[2], 0, std::to_underlying(Prec::Unary)));
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    render_objc_address_runtime_call(std::string_view name,
+                                     const std::vector<IrValue>& args) const {
+        auto arg = [&](std::size_t i) {
+            return expr(args[i], 0, std::to_underlying(Prec::Unary));
+        };
+        auto addr_arg = [&](std::size_t i) {
+            return objc_address_arg(args[i]);
+        };
+        if ((name == "objc_storeStrong" || name == "objc_storeWeak" ||
+             name == "objc_initWeak") && args.size() >= 2) {
+            return std::format("{}({}, {})", name, addr_arg(0), arg(1));
+        }
+        if ((name == "objc_copyWeak" || name == "objc_moveWeak") &&
+            args.size() >= 2) {
+            return std::format("{}({}, {})", name, addr_arg(0), addr_arg(1));
+        }
+        if ((name == "objc_destroyWeak" || name == "objc_loadWeak" ||
+             name == "objc_loadWeakRetained") && !args.empty()) {
+            return std::format("{}({})", name, addr_arg(0));
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool objc_selector_arg_is_usable(const IrValue& v) const {
+        return !is_stale_arg_reg(v);
+    }
+
+    [[nodiscard]] bool objc_selector_arg_looks_like_stack_gap(
+        const IrValue& v) const {
+        return is_stale_arg_reg(v) || renders_raw_arch_reg_name(v);
+    }
+
+    [[nodiscard]] static bool objc_selector_piece_likely_stack_aggregate(
+        std::string_view piece) noexcept {
+        return piece.ends_with("Frame") || piece.ends_with("Rect") ||
+               piece.ends_with("Range") || piece.ends_with("Size") ||
+               piece.ends_with("Point");
+    }
+
     [[nodiscard]] std::optional<std::string>
     render_objc_message_call(std::string_view name,
                              const std::vector<IrValue>& args) const {
-        if (name != "objc_msgSend") return std::nullopt;
-        if (args.size() < 2) return std::nullopt;
-        auto selector = objc_selector_for_rendered_value(args[1]);
+        const bool stret = is_objc_stret_msgsend_name(name);
+        if (!is_objc_msgsend_name(name)) return std::nullopt;
+        const bool super = is_objc_super_msgsend_name(name);
+        const std::size_t out_index = 0;
+        const std::size_t recv_index = stret ? 1u : 0u;
+        const std::size_t sel_index = stret ? 2u : 1u;
+        const std::size_t arg_base = stret ? 3u : 2u;
+        if (args.size() <= sel_index) return std::nullopt;
+        auto selector = objc_selector_for_rendered_value(args[sel_index]);
         if (!selector) return std::nullopt;
-        std::string receiver = simplify_objc_class_receiver(
-            expr(args[0], 0, std::to_underlying(Prec::Postfix)));
+        std::string receiver = super
+            ? std::string{"super"}
+            : simplify_objc_class_receiver(
+                  expr(args[recv_index], 0, std::to_underlying(Prec::Postfix)));
         if (receiver.empty()) return std::nullopt;
         const u8 selector_args = selector_argument_count(*selector);
-        if (args.size() < static_cast<std::size_t>(2 + selector_args)) {
+        if (args.size() < static_cast<std::size_t>(arg_base + selector_args)) {
             return std::nullopt;
         }
-        if (selector_args == 0) {
-            return std::format("[{} {}]", receiver, *selector);
-        }
-        auto pieces = objc_selector_pieces(*selector);
-        if (pieces.size() != selector_args) return std::nullopt;
         std::string out = std::format("[{} ", receiver);
-        for (std::size_t i = 0; i < pieces.size(); ++i) {
-            if (i > 0) out += " ";
-            out += pieces[i];
-            out += ":";
-            out += expr(args[2 + i]);
+        if (selector_args == 0) {
+            out += *selector;
+        } else {
+            auto pieces = objc_selector_pieces(*selector);
+            if (pieces.size() != selector_args) return std::nullopt;
+            const bool first_arg_is_stack_aggregate =
+                selector_args >= 2 &&
+                objc_selector_piece_likely_stack_aggregate(pieces[0]) &&
+                objc_selector_arg_is_usable(args[arg_base]) &&
+                objc_selector_arg_looks_like_stack_gap(args[arg_base + 1]);
+            for (std::size_t i = 0; i < pieces.size(); ++i) {
+                if (i > 0) out += " ";
+                out += pieces[i];
+                out += ":";
+                if (first_arg_is_stack_aggregate) {
+                    if (i == 0) {
+                        out += "/* stack arg */";
+                        continue;
+                    }
+                    const std::size_t shifted = arg_base + i - 1;
+                    if (!objc_selector_arg_is_usable(args[shifted])) {
+                        return std::nullopt;
+                    }
+                    out += expr(args[shifted]);
+                    continue;
+                }
+                if (!objc_selector_arg_is_usable(args[arg_base + i])) {
+                    return std::nullopt;
+                }
+                out += expr(args[arg_base + i]);
+            }
+        }
+        if (objc_selector_takes_format_varargs(*selector)) {
+            const std::size_t fmt_index = arg_base;
+            if (fmt_index < args.size()) {
+                if (auto fmt = resolve_string_value(args[fmt_index]); fmt) {
+                    const std::size_t n_extra = count_objc_format_specifiers(*fmt);
+                    for (std::size_t i = 0; i < n_extra &&
+                         fmt_index + 1 + i < args.size(); ++i) {
+                        if (!objc_selector_arg_is_usable(args[fmt_index + 1 + i])) {
+                            return std::nullopt;
+                        }
+                        out += ", ";
+                        out += expr(args[fmt_index + 1 + i]);
+                    }
+                }
+            }
         }
         out += "]";
+        if (stret) {
+            const std::string target = objc_stret_assignment_target(
+                expr(args[out_index], 0, std::to_underlying(Prec::Unary)));
+            if (target.empty()) return std::nullopt;
+            out = std::format("{} = {}", target, out);
+        }
         return out;
     }
 
@@ -934,6 +1467,12 @@ struct Emitter {
     render_objc_runtime_call(std::string_view name,
                              const std::vector<IrValue>& args) const {
         if (auto msg = render_objc_message_call(name, args)) return msg;
+        if (auto prop = render_objc_property_runtime_call(name, args)) {
+            return prop;
+        }
+        if (auto addr_call = render_objc_address_runtime_call(name, args)) {
+            return addr_call;
+        }
         if ((name == "objc_alloc" || name == "objc_allocWithZone") &&
             !args.empty()) {
             std::string receiver = simplify_objc_class_receiver(
@@ -946,20 +1485,16 @@ struct Emitter {
     [[nodiscard]] std::optional<std::string>
     objc_return_base_for_call(const IrInst& call_inst,
                               const std::vector<IrValue>& args) const {
-        std::string name;
+        std::string name = call_import_name(call_inst).value_or("");
         if (call_inst.op == IrOp::Call) {
-            if (auto n = import_name_for_direct_call(call_inst.target1)) name = *n;
-            else name = function_display_name(call_inst.target1);
-        } else if (call_inst.op == IrOp::CallIndirect && call_inst.src_count >= 1) {
-            if (auto n = import_name_for_indirect_call(call_inst.srcs[0])) name = *n;
+            if (name.empty()) name = function_display_name(call_inst.target1);
         }
         if (name.empty()) return std::nullopt;
         if (name == "objc_alloc" || name == "objc_allocWithZone") {
             return std::string{"alloc"};
         }
         if (!is_objc_msgsend_name(name)) return std::nullopt;
-        const bool stret = name == "objc_msgSend_stret" ||
-                           name == "objc_msgSendSuper2_stret";
+        const bool stret = is_objc_stret_msgsend_name(name);
         const std::size_t sel_index = stret ? 2u : 1u;
         if (args.size() <= sel_index) return std::nullopt;
         auto selector = objc_selector_for_rendered_value(args[sel_index]);
@@ -970,6 +1505,22 @@ struct Emitter {
             : std::string_view{*selector}.substr(0, colon);
         if (base.empty()) return std::nullopt;
         return sanitize_ident(base, "msg");
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    call_import_name(const IrInst& inst) const {
+        if (inst.op == IrOp::Call) {
+            return import_name_for_direct_call(inst.target1);
+        }
+        if (inst.op == IrOp::CallIndirect && inst.src_count >= 1) {
+            return import_name_for_indirect_call(inst.srcs[0]);
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool call_inst_returns_void(const IrInst& inst) const {
+        auto name = call_import_name(inst);
+        return name && import_returns_void(*name);
     }
 
     [[nodiscard]] static bool is_call_arg_barrier(const IrInst& inst) noexcept {
@@ -1207,6 +1758,7 @@ struct Emitter {
         for (const auto& [off, count] : slot_write_count) {
             if (count != 1) continue;
             const IrValue& v = slot_first_write_value[off];
+            single_write_slot_value.emplace(off, v);
             // Forward live-in args (rdi/rsi/...) and SSA temps directly:
             // both have a single dominating def that survives unchanged
             // from the store to any later load. Skip clobbers (call-
@@ -1271,6 +1823,7 @@ struct Emitter {
     // stronger role than `aN`, e.g. a live-in register used as a function
     // pointer call target.
     std::array<std::string, kMaxAbiIntArgs> self_arg_names = {};
+    std::array<std::string, kMaxAbiIntArgs> self_arg_type_names = {};
     std::array<std::optional<IrType>, kMaxAbiIntArgs> self_arg_type_overrides = {};
     std::array<std::optional<u8>, kMaxAbiIntArgs> self_funcptr_arity = {};
     std::array<std::optional<IrType>, kMaxAbiIntArgs> self_funcptr_return_type = {};
@@ -1288,15 +1841,38 @@ struct Emitter {
     std::map<addr_t, const ObjcMethod*> objc_by_imp;
     const ObjcMethod* current_objc_method = nullptr;
     std::map<addr_t, const ObjcIvar*> objc_ivar_by_slot;
+    std::map<std::pair<std::string, u64>, const ObjcIvar*> objc_ivar_by_class_offset;
     std::map<std::pair<std::string, std::string>, const ObjcProperty*> objc_property_by_ivar;
     std::map<addr_t, const ObjcBlock*> objc_block_by_literal;
     std::map<addr_t, const ObjcBlock*> objc_block_by_invoke;
+    std::map<addr_t, const ObjcStackBlockInvoke*> objc_stack_block_by_invoke;
+    std::map<u64, std::string> objc_block_capture_names;
+    std::string objc_block_self_class;
+    bool current_return_is_void = false;
 
     // Mach-O __DATA,__cfstring section bounds. When set, any Imm that falls
     // inside this range is decoded as a Core Foundation string literal via
     // the standard 32-byte CFString-in-cfstring layout.
     addr_t cfstring_lo = 0;
     addr_t cfstring_hi = 0;
+
+    static void append_utf8(std::string& out, u32 cp) {
+        if (cp <= 0x7f) {
+            out.push_back(static_cast<char>(cp));
+        } else if (cp <= 0x7ff) {
+            out.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        } else if (cp <= 0xffff) {
+            out.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        } else {
+            out.push_back(static_cast<char>(0xf0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        }
+    }
 
     [[nodiscard]] std::optional<std::string>
     try_decode_cfstring(u64 addr) const {
@@ -1307,12 +1883,53 @@ struct Emitter {
         // u64 length. Offsets: data at +16, length at +24.
         auto bytes = binary->bytes_at(static_cast<addr_t>(addr));
         if (bytes.size() < 32) return std::nullopt;
+        u32 flags = 0;
         u64 data_ptr = 0, length = 0;
+        std::memcpy(&flags,    bytes.data() + 8,  4);
         std::memcpy(&data_ptr, bytes.data() + 16, 8);
         std::memcpy(&length,   bytes.data() + 24, 8);
         if (data_ptr == 0 || length == 0 || length > 1'000'000) return std::nullopt;
         auto strb = binary->bytes_at(static_cast<addr_t>(data_ptr));
         if (strb.size() < length) return std::nullopt;
+        const bool maybe_utf16 = length * 2 <= strb.size() && [&] {
+            bool saw_wide_marker = false;
+            for (u64 i = 0; i < length; ++i) {
+                const auto hi = static_cast<unsigned char>(strb[i * 2 + 1]);
+                if (hi == 0 || (hi >= 0xd8 && hi <= 0xdf)) {
+                    saw_wide_marker = true;
+                    continue;
+                }
+                return false;
+            }
+            return saw_wide_marker;
+        }();
+        if (maybe_utf16) {
+            std::string s;
+            for (u64 i = 0; i < length; ++i) {
+                u16 w1 = static_cast<u16>(
+                    static_cast<unsigned char>(strb[i * 2]) |
+                    (static_cast<u16>(static_cast<unsigned char>(strb[i * 2 + 1])) << 8));
+                if (w1 >= 0xd800 && w1 <= 0xdbff) {
+                    if (i + 1 >= length) return std::nullopt;
+                    ++i;
+                    const u16 w2 = static_cast<u16>(
+                        static_cast<unsigned char>(strb[i * 2]) |
+                        (static_cast<u16>(static_cast<unsigned char>(strb[i * 2 + 1])) << 8));
+                    if (w2 < 0xdc00 || w2 > 0xdfff) return std::nullopt;
+                    append_utf8(s, 0x10000u +
+                        (((static_cast<u32>(w1) - 0xd800u) << 10) |
+                         (static_cast<u32>(w2) - 0xdc00u)));
+                    continue;
+                }
+                if (w1 >= 0xdc00 && w1 <= 0xdfff) return std::nullopt;
+                if (w1 < 0x20 && w1 != '\t' && w1 != '\n' && w1 != '\r') {
+                    return std::nullopt;
+                }
+                append_utf8(s, w1);
+            }
+            (void)flags;
+            return s;
+        }
         std::string s;
         s.reserve(static_cast<std::size_t>(length));
         for (u64 i = 0; i < length; ++i) {
@@ -1901,14 +2518,8 @@ struct Emitter {
             --ii;
             const IrInst& prev = bb.insts[ii];
             if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
-            if (prev.op == IrOp::Call) {
-                if (auto name = import_name_for_direct_call(prev.target1)) {
-                    return import_returns_void(*name);
-                }
-            } else if (prev.op == IrOp::CallIndirect && prev.src_count >= 1) {
-                if (auto name = import_name_for_indirect_call(prev.srcs[0])) {
-                    return import_returns_void(*name);
-                }
+            if (auto name = call_import_name(prev)) {
+                return import_returns_void(*name);
             }
             return false;
         }
@@ -2112,6 +2723,8 @@ struct Emitter {
                 if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
                 if (fold_call_positions.contains({bi, ii})) continue;
                 if (inline_call_positions.contains({bi, ii})) continue;
+                if (arc_claim_producer_positions.contains({bi, ii})) continue;
+                if (call_inst_returns_void(inst)) continue;
 
                 // The return-register clobber for this call is the next inst
                 // (Clobbers
@@ -2195,6 +2808,45 @@ struct Emitter {
             return std::nullopt;
         }
         return std::nullopt;
+    }
+
+    void analyze_arc_claim_folds() {
+        if (!fn) return;
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            std::vector<IrValue> args;
+            args.reserve(kMaxAbiIntArgs);
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                const auto& inst = bb.insts[ii];
+                if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
+                    args.clear();
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        args.push_back(inst.srcs[i]);
+                    }
+                    continue;
+                }
+                if (inst.op == IrOp::Intrinsic &&
+                    (inst.name == "call.args.2" || inst.name == "call.args.3")) {
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        args.push_back(inst.srcs[i]);
+                    }
+                    continue;
+                }
+                if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
+                auto name = call_import_name(inst);
+                if (name && *name == "objc_unsafeClaimAutoreleasedReturnValue" &&
+                    !args.empty()) {
+                    if (auto key = ssa_key(args[0]);
+                        key && count_uses_with_call_args(*key) == 1) {
+                        if (auto producer = call_position_for_return_key(*key); producer) {
+                            arc_claim_producer_positions.insert(*producer);
+                            suppressed_call_positions.insert({bi, ii});
+                        }
+                    }
+                }
+                args.clear();
+            }
+        }
     }
 
     [[nodiscard]] std::optional<u8>
@@ -2291,13 +2943,11 @@ struct Emitter {
     // reads as `r_get` instead of `r_stdistreamget` - the qualified prefix
     // is already visible at the call site.
     [[nodiscard]] std::string callee_display_short(const IrInst& call_inst) const {
-        std::string raw;
+        std::string raw = call_import_name(call_inst).value_or("");
         if (call_inst.op == IrOp::Call) {
-            if (auto n = import_name_for_direct_call(call_inst.target1)) raw = *n;
-            else raw = std::format("sub_{:x}", call_inst.target1);
+            if (raw.empty()) raw = std::format("sub_{:x}", call_inst.target1);
         } else if (call_inst.op == IrOp::CallIndirect && call_inst.src_count >= 1) {
-            if (auto n = import_name_for_indirect_call(call_inst.srcs[0])) raw = *n;
-            else raw = "ind";
+            if (raw.empty()) raw = "ind";
         } else {
             raw = "call";
         }
@@ -2412,11 +3062,33 @@ struct Emitter {
         }
     }
 
-    [[nodiscard]] static bool is_canary_load(const IrInst& inst) noexcept {
+    [[nodiscard]] bool is_stack_chk_guard_got_load(const IrInst& inst) const {
+        if (!binary) return false;
+        if (inst.op != IrOp::Load || inst.segment != Reg::None ||
+            inst.src_count < 1 || inst.srcs[0].kind != IrValueKind::Imm) {
+            return false;
+        }
+        const auto slot = static_cast<addr_t>(inst.srcs[0].imm);
+        const Symbol* s = binary->import_at_got(slot);
+        return s && clean_import_name(s->name) == "__stack_chk_guard";
+    }
+
+    [[nodiscard]] bool is_canary_load(const IrInst& inst) const {
+        if (is_stack_chk_guard_got_load(inst)) return true;
         return inst.op == IrOp::Load && inst.segment == Reg::Fs &&
                inst.src_count >= 1 &&
                inst.srcs[0].kind == IrValueKind::Imm &&
                inst.srcs[0].imm == 0x28;
+    }
+
+    [[nodiscard]] bool is_canary_value_load(const IrInst& inst) const {
+        if (is_canary_load(inst)) return true;
+        if (inst.op != IrOp::Load || inst.segment != Reg::None ||
+            inst.src_count < 1) {
+            return false;
+        }
+        const IrInst* ptr = def_through_assigns(inst.srcs[0]);
+        return ptr && is_stack_chk_guard_got_load(*ptr);
     }
 
     // Walk Assigns back to a real producer and return its def (or null).
@@ -2429,8 +3101,20 @@ struct Emitter {
     }
 
     [[nodiscard]] bool traces_to_canary_load(const IrValue& v) const {
-        if (const IrInst* d = def_through_assigns(v); d) return is_canary_load(*d);
+        if (const IrInst* d = def_through_assigns(v); d) return is_canary_value_load(*d);
         return false;
+    }
+
+    [[nodiscard]] bool renders_stack_chk_guard_load(const IrInst& inst) const {
+        if (inst.op != IrOp::Load || inst.src_count < 1) return false;
+        return format_mem(inst.srcs[0], inst.dst.type, inst.segment)
+            .find("__stack_chk_guard") != std::string::npos;
+    }
+
+    [[nodiscard]] bool renders_stack_chk_guard_value(const IrValue& v) const {
+        if (traces_to_canary_load(v)) return true;
+        const IrInst* d = def_through_assigns(v);
+        return d && renders_stack_chk_guard_load(*d);
     }
 
     [[nodiscard]] bool is_abi_noise(const IrInst& inst) const {
@@ -2484,9 +3168,15 @@ struct Emitter {
             return d && d->op == IrOp::Load && d->src_count >= 1 &&
                    stack_offset(d->srcs[0]).has_value() && d->segment == Reg::None;
         };
-        auto is_fs28 = [&](const IrInst* d) { return d && is_canary_load(*d); };
-        return (is_stack_load(a) && is_fs28(b)) ||
-               (is_stack_load(b) && is_fs28(a));
+        auto is_guard = [&](const IrInst* d) {
+            return d && (is_canary_value_load(*d) ||
+                         renders_stack_chk_guard_load(*d));
+        };
+        const bool ag = is_guard(a);
+        const bool bg = is_guard(b);
+        return (is_stack_load(a) && bg) ||
+               (is_stack_load(b) && ag) ||
+               (ag && bg);
     }
 
     // Chase a branch condition back until we hit a Sub/Xor/CmpEq/CmpNe between
@@ -2821,6 +3511,10 @@ struct Emitter {
         if (!k || emitted_bindings.contains(*k)) return;
         const IrInst* d = def_of(v);
         if (!d) return;
+        if (renders_stack_chk_guard_value(v)) {
+            emitted_bindings.insert(*k);
+            return;
+        }
 
         // If the regular expression renderer can produce anything better
         // than the raw SSA fallback name, use that at the use site instead
@@ -2874,6 +3568,83 @@ struct Emitter {
         for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
             emit_materializations_for_value(inst.srcs[i], 0, out, ind);
         }
+    }
+
+    void emit_raw_temp_binding(u32 temp, std::string& out,
+                               std::string_view ind) const {
+        const SsaKey key{u8{2}, temp, 0};
+        if (emitted_bindings.contains(key)) return;
+        auto it = defs.find(key);
+        if (it == defs.end()) return;
+        const IrInst* d = it->second;
+        if (!d || d->dst.kind != IrValueKind::Temp || d->dst.temp != temp) return;
+        if (d->op == IrOp::Phi || d->op == IrOp::Clobber) return;
+        if (d->op != IrOp::Assign && d->op != IrOp::Load &&
+            d->op != IrOp::Intrinsic && !inlinable_op(d->op)) {
+            return;
+        }
+
+        for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
+            emit_materializations_for_value(d->srcs[i], 0, out, ind);
+        }
+
+        std::string rhs;
+        if (d->op == IrOp::Intrinsic) {
+            std::string args;
+            for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(d->srcs[i]);
+            }
+            rhs = std::format("{}({})", d->name, args);
+        } else if (d->op == IrOp::Load) {
+            if (d->src_count < 1) return;
+            rhs = format_mem(d->srcs[0], d->dst.type, d->segment);
+        } else if (d->op == IrOp::Assign) {
+            if (d->src_count < 1) return;
+            rhs = expr(d->srcs[0]);
+        } else {
+            rhs = expand(*d, 0);
+        }
+        if (rhs.empty()) return;
+        out += std::format("{}{} t{} = {};\n",
+                           ind, c_type_name_for(d->dst), temp, rhs);
+        emitted_bindings.insert(key);
+    }
+
+    void emit_materializations_for_raw_temps(std::string_view rendered,
+                                             std::string& out,
+                                             std::string_view ind) const {
+        for (std::size_t i = 0; i + 1 < rendered.size(); ++i) {
+            if (rendered[i] != 't' ||
+                (i > 0 && c_ident_char(rendered[i - 1])) ||
+                !std::isdigit(static_cast<unsigned char>(rendered[i + 1]))) {
+                continue;
+            }
+            std::size_t j = i + 1;
+            u32 temp = 0;
+            while (j < rendered.size() &&
+                   std::isdigit(static_cast<unsigned char>(rendered[j]))) {
+                temp = temp * 10u + static_cast<u32>(rendered[j] - '0');
+                ++j;
+            }
+            if (j < rendered.size() && c_ident_char(rendered[j])) {
+                i = j;
+                continue;
+            }
+            emit_raw_temp_binding(temp, out, ind);
+            i = j;
+        }
+    }
+
+    void emit_materializations_for_rendered_value(const IrValue& v,
+                                                  std::string_view rendered,
+                                                  std::string& out,
+                                                  std::string_view ind) const {
+        if (const auto fallback = fallback_ssa_name(v);
+            fallback && text_contains_identifier(rendered, *fallback)) {
+            emit_materializations_for_value(v, 0, out, ind);
+        }
+        emit_materializations_for_raw_temps(rendered, out, ind);
     }
 
     // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.
@@ -3211,6 +3982,45 @@ struct Emitter {
         return static_cast<addr_t>(*imm);
     }
 
+    struct ObjcReceiverContext {
+        std::string cls;
+        std::string display;
+    };
+
+    [[nodiscard]] std::optional<u64>
+    objc_block_capture_index_loaded_by(const IrValue& v) const {
+        const IrInst* d = def_stripped(v);
+        if (!d || d->op != IrOp::Load || d->src_count < 1) return std::nullopt;
+        auto bo = try_base_plus_offset(d->srcs[0]);
+        if (!bo) return std::nullopt;
+        const i64 off = bo->second;
+        if (off < 0x20 || (off % 8) != 0) return std::nullopt;
+        auto slot = trace_to_self_arg_slot(bo->first);
+        if (!slot || *slot != 0) return std::nullopt;
+        return static_cast<u64>((off - 0x20) / 8);
+    }
+
+    [[nodiscard]] std::optional<ObjcReceiverContext>
+    objc_receiver_context(const IrValue& receiver, int depth = 0) const {
+        if (current_objc_method) {
+            auto self_slot = trace_to_self_arg_slot(receiver);
+            if (self_slot && *self_slot == 0) {
+                return ObjcReceiverContext{current_objc_method->cls, "self"};
+            }
+        }
+        auto cap = objc_block_capture_index_loaded_by(receiver);
+        if (cap && !objc_block_self_class.empty()) {
+            auto it = objc_block_capture_names.find(*cap);
+            if (it != objc_block_capture_names.end() && it->second == "self") {
+                return ObjcReceiverContext{
+                    objc_block_self_class,
+                    expr(receiver, depth + 1, std::to_underlying(Prec::Unary))
+                };
+            }
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::string objc_ivar_display_name(const ObjcIvar& iv) const {
         auto find_prop = [&](std::string_view ivar_name) -> const ObjcProperty* {
             auto it = objc_property_by_ivar.find({iv.cls, std::string(ivar_name)});
@@ -3238,17 +4048,24 @@ struct Emitter {
     [[nodiscard]] std::optional<std::string>
     try_render_objc_ivar_addr_pair(const IrValue& maybe_self,
                                    const IrValue& maybe_slot) const {
-        if (!current_objc_method || !fn) return std::nullopt;
-        auto self_slot = trace_to_self_arg_slot(maybe_self);
-        if (!self_slot || *self_slot != 0) return std::nullopt;
+        if (!fn) return std::nullopt;
+        auto ctx = objc_receiver_context(maybe_self);
+        if (!ctx || ctx->cls.empty() || ctx->display.empty()) return std::nullopt;
         auto slot = objc_ivar_slot_loaded_by(maybe_slot);
-        if (!slot) return std::nullopt;
-        auto it = objc_ivar_by_slot.find(*slot);
-        if (it == objc_ivar_by_slot.end()) return std::nullopt;
-        const ObjcIvar& iv = *it->second;
-        if (iv.cls != current_objc_method->cls) return std::nullopt;
+        const ObjcIvar* ivar = nullptr;
+        if (slot) {
+            auto it = objc_ivar_by_slot.find(*slot);
+            if (it != objc_ivar_by_slot.end()) ivar = it->second;
+        } else if (auto off = resolve_imm(maybe_slot); off && *off >= 0) {
+            auto it = objc_ivar_by_class_offset.find(
+                {ctx->cls, static_cast<u64>(*off)});
+            if (it != objc_ivar_by_class_offset.end()) ivar = it->second;
+        }
+        if (!ivar) return std::nullopt;
+        const ObjcIvar& iv = *ivar;
+        if (iv.cls != ctx->cls) return std::nullopt;
         if (!objc_ivar_name_is_safe(iv.name)) return std::nullopt;
-        return std::format("self->{}", objc_ivar_display_name(iv));
+        return std::format("{}->{}", ctx->display, objc_ivar_display_name(iv));
     }
 
     [[nodiscard]] std::optional<std::string>
@@ -3288,6 +4105,220 @@ struct Emitter {
             if (o != 0 && o != 8 && o != 16) return false;
         }
         return offs.contains(0) && offs.contains(8) && offs.contains(16);
+    }
+
+    [[nodiscard]] bool looks_like_objc_block_capture_base(const IrValue& base) const {
+        auto slot = trace_to_self_arg_slot(base);
+        if (!slot || *slot != 0) return false;
+
+        if (self_arg_names[0] == "block") return true;
+        if (fn && objc_block_by_invoke.contains(fn->start)) return true;
+        if (current_objc_method || objc_block_by_invoke.empty()) return false;
+
+        auto k = ssa_key(base);
+        if (!k) return false;
+        auto it = struct_offsets.find(*k);
+        if (it == struct_offsets.end()) return false;
+
+        bool has_capture_offset = false;
+        for (i64 off : it->second) {
+            if (off > 0 && off < 0x20) return false;
+            if (off >= 0x20 && (off % 8) == 0) has_capture_offset = true;
+        }
+        return has_capture_offset;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    try_render_objc_block_capture_access(const IrValue& addr, IrType t,
+                                         int depth = 0) const {
+        auto bo = try_base_plus_offset(addr);
+        if (!bo) return std::nullopt;
+        const IrValue& base = bo->first;
+        const i64 off = bo->second;
+        if (off < 0x20 || (off % 8) != 0) return std::nullopt;
+        if (!looks_like_objc_block_capture_base(base)) return std::nullopt;
+
+        const std::string base_expr =
+            expr(base, depth + 1, std::to_underlying(Prec::Unary));
+        const u64 capture_idx = static_cast<u64>((off - 0x20) / 8);
+        const std::string capture_name = [&] {
+            auto it = objc_block_capture_names.find(capture_idx);
+            if (it != objc_block_capture_names.end() && objc_ivar_name_is_safe(it->second)) {
+                return it->second;
+            }
+            return std::format("capture_{}", capture_idx);
+        }();
+        if (t == IrType::I64) {
+            return std::format("{}->{}", base_expr, capture_name);
+        }
+        return std::format("*({}*)&{}->{}",
+                           c_type_name(t), base_expr, capture_name);
+    }
+
+    [[nodiscard]] bool first_arg_has_block_capture_accesses() const {
+        if (!fn) return false;
+        bool has_capture_offset = false;
+        bool has_small_positive_offset = false;
+        auto check_addr = [&](const IrValue& addr) {
+            auto bo = try_base_plus_offset(addr);
+            if (!bo) return;
+            auto slot = trace_to_self_arg_slot(bo->first);
+            if (!slot || *slot != 0) return;
+            const i64 off = bo->second;
+            if (off > 0 && off < 0x20) has_small_positive_offset = true;
+            if (off >= 0x20 && (off % 8) == 0) has_capture_offset = true;
+        };
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.segment != Reg::None) continue;
+                if ((inst.op == IrOp::Load || inst.op == IrOp::Store) &&
+                    inst.src_count >= 1) {
+                    check_addr(inst.srcs[0]);
+                }
+            }
+        }
+        return has_capture_offset && !has_small_positive_offset;
+    }
+
+    void promote_block_like_first_arg() {
+        if (!binary || binary->format() != Format::MachO) return;
+        if (current_objc_method) return;
+        if (self_arg_names[0] == "block") {
+            self_arg_type_names[0] = "void*";
+            return;
+        }
+        if (!self_arg_names[0].empty()) return;
+
+        const auto int_args = int_arg_regs(abi);
+        if (int_args.empty()) return;
+        IrValue first = IrValue::make_reg(int_args[0], IrType::I64);
+        first.version = 0;
+        if (!looks_like_objc_block_capture_base(first) &&
+            !first_arg_has_block_capture_accesses()) return;
+
+        self_arg_names[0] = "block";
+        self_arg_type_names[0] = "void*";
+        if (self_arity == 0) self_arity = 1;
+    }
+
+    [[nodiscard]] static std::optional<std::string>
+    objc_class_from_bracket_name(std::string_view s) {
+        const std::size_t open = s.find('[');
+        if (open == std::string_view::npos || open == 0) return std::nullopt;
+        if (s[open - 1] != '-' && s[open - 1] != '+') return std::nullopt;
+        const std::size_t space = s.find(' ', open + 1);
+        if (space == std::string_view::npos || space <= open + 1) return std::nullopt;
+        std::string cls(s.substr(open + 1, space - open - 1));
+        return objc_ivar_name_is_safe(cls) ? std::optional<std::string>{std::move(cls)}
+                                          : std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    objc_class_from_block_literal_captures(addr_t literal, u64 size) const {
+        if (!binary || literal == 0 || size < 0x28 || size > 0x4000) {
+            return std::nullopt;
+        }
+        for (u64 off = 0x20; off + 8 <= size; off += 8) {
+            auto bytes = binary->bytes_at(static_cast<addr_t>(literal + off));
+            if (bytes.size() < 8) break;
+            u64 ptr = 0;
+            std::memcpy(&ptr, bytes.data(), 8);
+            if (ptr < 0x100) continue;
+            auto s = try_string_at(ptr);
+            if (!s) continue;
+            if (auto cls = objc_class_from_bracket_name(*s); cls) return cls;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    objc_class_from_block_function_name() const {
+        if (!fn) return std::nullopt;
+        if (auto cls = objc_class_from_bracket_name(fn->name); cls) return cls;
+        for (const auto& [key, iv] : objc_ivar_by_class_offset) {
+            (void)iv;
+            const std::string& cls = key.first;
+            if (cls.empty()) continue;
+            if (fn->name == cls || fn->name.starts_with(cls + "_")) {
+                return cls;
+            }
+        }
+        auto next = objc_by_imp.upper_bound(fn->start);
+        if (next != objc_by_imp.begin()) {
+            auto prev = std::prev(next);
+            if (prev->second && fn->start > prev->first &&
+                fn->start - prev->first <= 0x8000 &&
+                !prev->second->cls.empty()) {
+                return prev->second->cls;
+            }
+        }
+        return std::nullopt;
+    }
+
+    void infer_objc_block_capture_names() {
+        if (!fn || current_objc_method) return;
+        const bool is_known_block = objc_block_by_invoke.contains(fn->start) ||
+                                    objc_stack_block_by_invoke.contains(fn->start) ||
+                                    first_arg_has_block_capture_accesses();
+        if (!is_known_block) return;
+
+        if (auto it = objc_stack_block_by_invoke.find(fn->start);
+            it != objc_stack_block_by_invoke.end()) {
+            for (const auto& [idx, name] : it->second->captures) {
+                if (objc_ivar_name_is_safe(name)) {
+                    objc_block_capture_names.emplace(idx, name);
+                }
+            }
+            if (!it->second->captured_self_class.empty()) {
+                objc_block_self_class = it->second->captured_self_class;
+            }
+        }
+
+        if (auto it = objc_block_by_invoke.find(fn->start);
+            it != objc_block_by_invoke.end()) {
+            if (auto cls = objc_class_from_block_literal_captures(
+                    it->second->literal, it->second->size); cls) {
+                objc_block_self_class = *cls;
+            }
+        }
+        if (objc_block_self_class.empty()) {
+            if (auto cls = objc_class_from_block_function_name(); cls) {
+                objc_block_self_class = *cls;
+            }
+        }
+        if (objc_block_self_class.empty()) return;
+
+        bool capture0_is_referenced = false;
+        bool capture0_is_objc_receiver = false;
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                if ((inst.op != IrOp::Load && inst.op != IrOp::Store) ||
+                    inst.src_count < 1 || inst.segment != Reg::None) {
+                    continue;
+                }
+                if (inst.op == IrOp::Load) {
+                    auto load_addr = try_base_plus_offset(inst.srcs[0]);
+                    if (load_addr && load_addr->second == 0x20) {
+                        auto slot = trace_to_self_arg_slot(load_addr->first);
+                        if (slot && *slot == 0) capture0_is_referenced = true;
+                    }
+                }
+                const IrInst* d = def_stripped(inst.srcs[0]);
+                if (!d || d->op != IrOp::Add || d->src_count < 2) continue;
+                auto cap = objc_block_capture_index_loaded_by(d->srcs[0]);
+                if (!cap || *cap != 0) continue;
+                capture0_is_referenced = true;
+                if (objc_ivar_slot_loaded_by(d->srcs[1]) ||
+                    (resolve_imm(d->srcs[1]) && *resolve_imm(d->srcs[1]) >= 0)) {
+                    capture0_is_objc_receiver = true;
+                    break;
+                }
+            }
+            if (capture0_is_objc_receiver) break;
+        }
+        if (capture0_is_referenced || capture0_is_objc_receiver) {
+            objc_block_capture_names.emplace(0, "self");
+        }
     }
 
     void record_struct_access(const IrValue& addr, IrType t) {
@@ -3492,6 +4523,9 @@ struct Emitter {
             }
             if (auto ivar = try_render_objc_ivar_access(addr, depth)) {
                 return *ivar;
+            }
+            if (auto capture = try_render_objc_block_capture_access(addr, t, depth)) {
+                return *capture;
             }
             // User-supplied struct field names beat array heuristics. This
             // lets annotations turn ambiguous fixed-stride accesses like
@@ -3901,6 +4935,105 @@ struct Emitter {
         return std::nullopt;
     }
 
+    [[nodiscard]] std::optional<IrValue>
+    match_low_byte_setcc_merge(const IrValue& v, int depth = 0) const {
+        if (depth > 8) return std::nullopt;
+        const IrInst* d = def_stripped(v);
+        if (!d) return std::nullopt;
+        if ((d->op == IrOp::Trunc || d->op == IrOp::ZExt ||
+             d->op == IrOp::SExt) && d->src_count >= 1) {
+            if (d->srcs[0].type == IrType::I1) return d->srcs[0];
+            return match_low_byte_setcc_merge(d->srcs[0], depth + 1);
+        }
+        if (d->op != IrOp::Or || d->src_count < 2) return std::nullopt;
+        auto is_low_byte_clear = [&](const IrValue& x) {
+            const IrInst* xd = def_stripped(x);
+            if (!xd || xd->op != IrOp::And || xd->src_count < 2) return false;
+            auto is_mask = [](const IrValue& m) {
+                return m.kind == IrValueKind::Imm &&
+                       static_cast<u64>(m.imm) == 0xffffffffffffff00ull;
+            };
+            return is_mask(xd->srcs[0]) || is_mask(xd->srcs[1]);
+        };
+        auto bool_cast_src = [&](const IrValue& x) -> std::optional<IrValue> {
+            const IrInst* xd = def_stripped(x);
+            if (!xd) return std::nullopt;
+            if ((xd->op == IrOp::ZExt || xd->op == IrOp::SExt ||
+                 xd->op == IrOp::Trunc || xd->op == IrOp::Assign) &&
+                xd->src_count >= 1) {
+                if (xd->srcs[0].type == IrType::I1 ||
+                    xd->srcs[0].type == IrType::I8) {
+                    return xd->srcs[0];
+                }
+            }
+            if (x.type == IrType::I1 || x.type == IrType::I8) return x;
+            return std::nullopt;
+        };
+        if (is_low_byte_clear(d->srcs[0])) return bool_cast_src(d->srcs[1]);
+        if (is_low_byte_clear(d->srcs[1])) return bool_cast_src(d->srcs[0]);
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    render_bool_byte_value(const IrValue& v, int depth, bool negate,
+                           int min_prec) const {
+        if (depth > 8) return std::nullopt;
+        if (auto b = match_low_byte_setcc_merge(v); b) {
+            return render_bool_operand(*b, depth + 1, negate, min_prec);
+        }
+        const IrInst* d = def_stripped(v);
+        if (!d) return std::nullopt;
+        if ((d->op == IrOp::Trunc || d->op == IrOp::ZExt ||
+             d->op == IrOp::SExt || d->op == IrOp::Assign) &&
+            d->src_count >= 1) {
+            return render_bool_byte_value(d->srcs[0], depth + 1, negate, min_prec);
+        }
+        if (d->op == IrOp::And && d->src_count >= 2) {
+            const IrValue* masked = nullptr;
+            if (d->srcs[0].kind == IrValueKind::Imm && d->srcs[0].imm == 1) {
+                masked = &d->srcs[1];
+            } else if (d->srcs[1].kind == IrValueKind::Imm && d->srcs[1].imm == 1) {
+                masked = &d->srcs[0];
+            }
+            if (masked) {
+                IrValue core = *masked;
+                if (auto merged = match_low_byte_setcc_merge(core); merged) {
+                    core = *merged;
+                }
+                if (core.type == IrType::I1) {
+                    return render_bool_operand(core, depth + 1, negate, min_prec);
+                }
+                std::string inner = expr(core, depth + 1,
+                                         std::to_underlying(Prec::BitAnd) + 1);
+                std::string bit = inner + " & 1";
+                if (negate) {
+                    return wrap_if_lt("!(" + bit + ")", Prec::Unary, min_prec);
+                }
+                return wrap_if_lt(std::move(bit), Prec::BitAnd, min_prec);
+            }
+        }
+        if ((d->op == IrOp::Or || d->op == IrOp::And) && d->src_count >= 2) {
+            auto left = render_bool_byte_value(d->srcs[0], depth + 1, negate,
+                                               std::to_underlying(negate
+                                                   ? (d->op == IrOp::Or ? Prec::LogAnd : Prec::LogOr)
+                                                   : (d->op == IrOp::Or ? Prec::LogOr : Prec::LogAnd)) + 1);
+            auto right = render_bool_byte_value(d->srcs[1], depth + 1, negate,
+                                                std::to_underlying(negate
+                                                    ? (d->op == IrOp::Or ? Prec::LogAnd : Prec::LogOr)
+                                                    : (d->op == IrOp::Or ? Prec::LogOr : Prec::LogAnd)) + 1);
+            if (!left || !right) return std::nullopt;
+            const bool or_op = d->op == IrOp::Or;
+            const Prec own = negate
+                ? (or_op ? Prec::LogAnd : Prec::LogOr)
+                : (or_op ? Prec::LogOr : Prec::LogAnd);
+            const std::string op = negate
+                ? (or_op ? " && " : " || ")
+                : (or_op ? " || " : " && ");
+            return wrap_if_lt(*left + op + *right, own, min_prec);
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::string render_cmp(std::string_view op, const IrValue& a,
                                          const IrValue& b, int depth,
                                          bool signed_cmp,
@@ -3918,6 +5051,11 @@ struct Emitter {
             if (a.kind == IrValueKind::Imm && a.imm == 0) nonzero = &b;
             else if (b.kind == IrValueKind::Imm && b.imm == 0) nonzero = &a;
             if (nonzero) {
+                if (auto byte_bool = render_bool_byte_value(
+                        *nonzero, depth + 1, op == "==", min_prec);
+                    byte_bool) {
+                    return *byte_bool;
+                }
                 // Strip surrounding cast chain to find a `xor(y, 1)` core.
                 IrValue core = *nonzero;
                 for (int hop = 0; hop < 6; ++hop) {
@@ -3976,9 +5114,13 @@ struct Emitter {
         const int lp = cast_l ? std::to_underlying(Prec::Unary) : p;
         const int rp = cast_r ? std::to_underlying(Prec::Unary) : p + 1;
         auto cmp_expr = [&](const IrValue& v, int prec) {
-            return v.kind == IrValueKind::Imm
-                ? format_numeric_imm(v)
-                : expr(v, depth + 1, prec);
+            if (v.kind == IrValueKind::Imm) return format_numeric_imm(v);
+            if (const IrInst* d = def_stripped(v);
+                d && (d->op == IrOp::ZExt || d->op == IrOp::SExt ||
+                      d->op == IrOp::Trunc)) {
+                return expand(*d, depth + 1, prec);
+            }
+            return expr(v, depth + 1, prec);
         };
         std::string left  = cmp_expr(a, lp);
         std::string right = cmp_expr(b, rp);
@@ -4096,6 +5238,151 @@ struct Emitter {
         return expr(v, 0, 0);
     }
 };
+
+struct EmitterMetadataStorage {
+    std::map<addr_t, std::string> local_selrefs;
+    std::map<addr_t, std::string> local_classrefs;
+    std::vector<ObjcMethod>       local_objc_methods;
+    std::vector<ObjcIvar>         local_objc_ivars;
+    std::vector<ObjcProperty>     local_objc_properties;
+    std::vector<ObjcBlock>        local_objc_blocks;
+    std::vector<ObjcStackBlockInvoke> local_objc_stack_blocks;
+    std::map<addr_t, std::string> local_rtti_methods;
+};
+
+struct SignatureContext {
+    bool has_user_sig = false;
+    bool has_metadata_sig = false;
+};
+
+void setup_emitter_metadata(Emitter& e,
+                            const StructuredFunction& sf,
+                            const Binary* binary,
+                            EmitterMetadataStorage& storage) {
+    if (binary && binary->format() == Format::MachO) {
+        if (!e.options.objc_selrefs) {
+            storage.local_selrefs = parse_objc_selrefs(*binary);
+            if (!storage.local_selrefs.empty()) {
+                e.options.objc_selrefs = &storage.local_selrefs;
+            }
+        }
+        if (!e.options.objc_classrefs) {
+            storage.local_classrefs = parse_objc_classrefs(*binary);
+            if (!storage.local_classrefs.empty()) {
+                e.options.objc_classrefs = &storage.local_classrefs;
+            }
+        }
+
+        storage.local_objc_methods = parse_objc_methods(*binary);
+        for (const auto& m : storage.local_objc_methods) {
+            if (m.imp != 0) e.objc_by_imp.emplace(m.imp, &m);
+        }
+        if (auto it = e.objc_by_imp.find(sf.ir->start);
+            it != e.objc_by_imp.end()) {
+            e.current_objc_method = it->second;
+        }
+
+        storage.local_objc_ivars = parse_objc_ivars(*binary);
+        for (const auto& iv : storage.local_objc_ivars) {
+            if (iv.offset_slot != 0) e.objc_ivar_by_slot.emplace(iv.offset_slot, &iv);
+            e.objc_ivar_by_class_offset.emplace(std::pair{iv.cls, iv.offset}, &iv);
+        }
+
+        storage.local_objc_properties = parse_objc_properties(*binary);
+        for (const auto& prop : storage.local_objc_properties) {
+            if (!prop.ivar_name.empty()) {
+                e.objc_property_by_ivar.emplace(
+                    std::pair{prop.cls, prop.ivar_name}, &prop);
+            }
+        }
+
+        storage.local_objc_blocks = parse_objc_blocks(*binary);
+        for (const auto& blk : storage.local_objc_blocks) {
+            if (blk.literal != 0) e.objc_block_by_literal.emplace(blk.literal, &blk);
+            if (blk.invoke != 0) e.objc_block_by_invoke.emplace(blk.invoke, &blk);
+        }
+        storage.local_objc_stack_blocks = discover_objc_stack_block_invokes(*binary);
+        for (const auto& blk : storage.local_objc_stack_blocks) {
+            if (blk.invoke != 0) e.objc_stack_block_by_invoke.emplace(blk.invoke, &blk);
+        }
+
+        if (!e.options.rtti_methods) {
+            storage.local_rtti_methods = rtti_method_names(parse_itanium_rtti(*binary));
+            if (!storage.local_rtti_methods.empty()) {
+                e.options.rtti_methods = &storage.local_rtti_methods;
+            }
+        }
+
+        for (const auto& s : binary->sections()) {
+            const std::string_view n = s.name;
+            if (n == "__cfstring" || n.ends_with(",__cfstring")) {
+                e.cfstring_lo = static_cast<addr_t>(s.vaddr);
+                e.cfstring_hi = static_cast<addr_t>(s.vaddr + s.size);
+                break;
+            }
+        }
+    } else if (binary && binary->format() == Format::Pe) {
+        if (!e.options.rtti_methods) {
+            storage.local_rtti_methods = rtti_method_names(parse_msvc_rtti(*binary));
+            if (!storage.local_rtti_methods.empty()) {
+                e.options.rtti_methods = &storage.local_rtti_methods;
+            }
+        }
+    }
+}
+
+SignatureContext setup_signature_context(Emitter& e,
+                                         const StructuredFunction& sf,
+                                         const Binary* binary,
+                                         const Annotations* annotations) {
+    SignatureContext ctx;
+    if (annotations) {
+        if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
+            e.self_arity = static_cast<u8>(
+                std::min(sig->params.size(), int_arg_regs(e.abi).size()));
+            ctx.has_user_sig = true;
+        }
+    }
+    if (!ctx.has_user_sig && e.current_objc_method) {
+        const auto selector_names = objc_selector_arg_names(e.current_objc_method->selector);
+        e.self_arg_names[0] = "self";
+        if (e.self_arg_names.size() > 1) e.self_arg_names[1] = "_cmd";
+        for (std::size_t i = 0;
+             i < selector_names.size() && i + 2 < e.self_arg_names.size(); ++i) {
+            e.self_arg_names[i + 2] = selector_names[i];
+        }
+        const u8 selector_arity = static_cast<u8>(std::min<std::size_t>(
+            int_arg_regs(e.abi).size(), selector_names.size() + 2));
+        if (!e.current_objc_method->type_encoding.empty()) {
+            const auto parts = decode_objc_type_parts(e.current_objc_method->type_encoding);
+            if (parts.size() > 1) {
+                e.self_arity = static_cast<u8>(std::min<std::size_t>(
+                    int_arg_regs(e.abi).size(), parts.size() - 1));
+            }
+        }
+        if (e.self_arity < selector_arity) e.self_arity = selector_arity;
+    }
+    if (!ctx.has_user_sig) {
+        if (auto it = e.objc_block_by_invoke.find(sf.ir->start);
+            it != e.objc_block_by_invoke.end() && !it->second->signature.empty()) {
+            const auto parts = decode_objc_type_parts(it->second->signature);
+            if (parts.size() > 1) {
+                e.self_arity = static_cast<u8>(std::min<std::size_t>(
+                    int_arg_regs(e.abi).size(), parts.size() - 1));
+                e.self_arg_names[0] = "block";
+                for (std::size_t i = 2;
+                     i < parts.size() && i - 1 < e.self_arg_names.size(); ++i) {
+                    e.self_arg_names[i - 1] = std::format("arg{}", i - 2);
+                }
+                ctx.has_metadata_sig = true;
+            }
+        }
+    }
+    if (e.self_arity == 0) {
+        e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
+    }
+    return ctx;
+}
 
 std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
     // Recognize compiler flag-based compare idioms and emit direct C comparisons.
@@ -4467,6 +5754,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
         }
 
         case IrOp::Load: {
+            if (is_canary_value_load(inst) || renders_stack_chk_guard_load(inst)) return "";
             if (use_count(inst.dst) == 0) return "";
             if (use_count(inst.dst) == 1) return "";  // will be inlined
             // A multi-use load that should_inline accepts (stack-slot
@@ -4519,6 +5807,11 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // are flag-set instructions - those will inline the
                 // expression when they themselves render.
                 if (is_flag_feeder_temp(inst.dst)) return "";
+                // Low-byte boolean merges (`x & ~0xff | bool`) are usually
+                // compiler plumbing before a byte test. Rendering the carrier
+                // temp as `tN = ...` leaves dead-looking noise after the
+                // condition itself has simplified.
+                if (match_low_byte_setcc_merge(inst.dst)) return "";
                 return std::format("{} t{} = {};",
                                    c_type_name_for(inst.dst),
                                    inst.dst.temp,
@@ -4532,6 +5825,7 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
                                 std::pair<std::size_t, std::size_t> pos,
                                 const std::string& call_expr,
                                 bool result_is_void) const {
+    if (suppressed_call_positions.contains(pos)) return;
     if (fold_call_positions.contains(pos)) {
         auto k = fold_call_ssa_key.find(pos);
         if (k != fold_call_ssa_key.end()) {
@@ -4557,6 +5851,10 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
     if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
         if (options.line_map) {
             options.line_map->hits.push_back({out.size(), src});
+        }
+        if (result_is_void) {
+            out += std::format("{}{};\n", ind, call_expr);
+            return;
         }
         const std::string& name = call_return_names.at(bk->second);
         if (merge_bound_calls.contains(pos)) {
@@ -4639,11 +5937,13 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     // Fallback for callees with no known arity: drop args that look stale
     // (live-in regs the caller never set, or regs whose most recent def is
     // a Clobber from an earlier call).
-    auto format_call_args_fallback = [&](const std::vector<IrValue>& args) {
+    auto format_call_args_fallback = [&](const std::vector<IrValue>& args,
+                                         std::vector<IrValue>* used = nullptr) {
         std::string s;
         bool first = true;
         for (const auto& a : args) {
             if (is_stale_arg_reg(a)) continue;
+            if (used) used->push_back(a);
             if (!first) s += ", ";
             s += expr(a);
             first = false;
@@ -4672,7 +5972,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     // admitting the trailing values were not real caller-provided args.
     auto format_call_args_with_arity = [&](const std::vector<IrValue>& args,
                                            u8 arity,
-                                           bool trim_raw_arch_regs = true) {
+                                           bool trim_raw_arch_regs = true,
+                                           std::vector<IrValue>* used = nullptr) {
         std::size_t limit = std::min<std::size_t>(arity, args.size());
         while (limit > 0 &&
                (is_stale_arg_reg(args[limit - 1]) ||
@@ -4682,6 +5983,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         }
         std::string s;
         for (std::size_t i = 0; i < limit; ++i) {
+            if (used) used->push_back(args[i]);
             if (i > 0) s += ", ";
             s += expr(args[i]);
         }
@@ -4725,9 +6027,6 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         }
 
         if (inst.op == IrOp::Call) {
-            for (const auto& a : pending_args) {
-                emit_materializations_for_value(a, 0, out, ind);
-            }
             auto import_name = import_name_for_direct_call(inst.target1);
             // Arity sources: imports → user sig at PLT / baked-in libc table;
             // printf/scanf family → parse format string to count args;
@@ -4748,17 +6047,25 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 const std::string direct_name = function_display_name(inst.target1);
                 arity = objc_call_arity(direct_name, pending_args);
                 objc_sized = arity.has_value();
+                if (!arity && is_generic_sub_name(direct_name)) {
+                    arity = printf_like_arity_from_literal_args(pending_args);
+                }
                 if (!arity) arity = cached_arity(inst.target1);
             }
+            std::vector<IrValue> used_args;
             const std::string args = arity
-                ? format_call_args_with_arity(pending_args, *arity, !objc_sized)
-                : format_call_args_fallback(pending_args);
+                ? format_call_args_with_arity(pending_args, *arity, !objc_sized,
+                                              &used_args)
+                : format_call_args_fallback(pending_args, &used_args);
             const std::string callee = import_name
                 ? *import_name
                 : function_display_name(inst.target1);
             const std::string call_expr =
                 render_objc_runtime_call(callee, pending_args)
                     .value_or(std::format("{}({})", callee, args));
+            for (const auto& a : used_args) {
+                emit_materializations_for_value(a, 0, out, ind);
+            }
             pending_args.clear();
             have_pending = false;
             emit_call_binding(out, ind, std::pair{it->second, ii}, call_expr,
@@ -4773,10 +6080,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 continue;
             }
             emit_materializations_for_value(inst.srcs[0], 0, out, ind);
-            for (const auto& a : pending_args) {
-                emit_materializations_for_value(a, 0, out, ind);
-            }
             std::string call_expr;
+            std::vector<IrValue> used_args;
             if (auto name = import_name_for_indirect_call(inst.srcs[0]); name) {
                 // No PLT address here, so user-sig lookup can't key off one.
                 auto arity = objc_call_arity(*name, pending_args);
@@ -4788,8 +6093,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                 }
                 const std::string args = arity
-                    ? format_call_args_with_arity(pending_args, *arity, !objc_sized)
-                    : format_call_args_fallback(pending_args);
+                    ? format_call_args_with_arity(pending_args, *arity, !objc_sized,
+                                                  &used_args)
+                    : format_call_args_fallback(pending_args, &used_args);
                 call_expr = render_objc_runtime_call(*name, pending_args)
                     .value_or(std::format("{}({})", *name, args));
             } else if (options.call_resolutions && inst.source_addr != 0) {
@@ -4819,18 +6125,23 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                         }
                     }
                     if (!arity && !direct_import) {
-                        arity = cached_arity(target);
+                        if (is_generic_sub_name(fname)) {
+                            arity = printf_like_arity_from_literal_args(pending_args);
+                        }
+                        if (!arity) arity = cached_arity(target);
                     }
                     const std::string args = arity
-                        ? format_call_args_with_arity(pending_args, *arity, !objc_sized)
-                        : format_call_args_fallback(pending_args);
+                        ? format_call_args_with_arity(pending_args, *arity, !objc_sized,
+                                                      &used_args)
+                        : format_call_args_fallback(pending_args, &used_args);
                     call_expr = std::format("{}({}){}",
                                             fname, args,
                                             observed_targets_comment(inst.source_addr));
                 }
             }
             if (call_expr.empty()) {
-                const std::string args = format_call_args_fallback(pending_args);
+                const std::string args = format_call_args_fallback(pending_args,
+                                                                   &used_args);
                 // Virtual-method-dispatch shape recognition: when the
                 // call target traces back as `Load(Add(Load(<recv>), K))`
                 // - i.e., load vptr from receiver, add slot offset,
@@ -4869,6 +6180,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                 }
             }
+            for (const auto& a : used_args) {
+                emit_materializations_for_value(a, 0, out, ind);
+            }
             pending_args.clear();
             have_pending = false;
             const auto resolved_name = import_name_for_indirect_call(inst.srcs[0]);
@@ -4878,9 +6192,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             continue;
         }
 
-        emit_materializations_for_inst(inst, out, ind);
         const std::string stmt = format_stmt(inst);
         if (!stmt.empty()) {
+            emit_materializations_for_inst(inst, out, ind);
             flush_args_as_intrinsics();
             if (options.line_map) {
                 // Record where the statement starts so `byte_offset`
@@ -4940,7 +6254,21 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                         break;
                     }
                 }
+                if (current_return_is_void) {
+                    if (auto k = ssa_key(rv); k) {
+                        auto f = fold_return_expr.find(*k);
+                        if (f != fold_return_expr.end()) {
+                            out += std::format("{}{};\n", ind, f->second);
+                        }
+                    }
+                    out += std::format("{}return;\n", ind);
+                    break;
+                }
                 if (is_void_call_result(rv)) {
+                    out += std::format("{}return;\n", ind);
+                    break;
+                }
+                if (renders_stack_chk_guard_value(rv)) {
                     out += std::format("{}return;\n", ind);
                     break;
                 }
@@ -4954,7 +6282,12 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                         break;
                     }
                 }
-                out += std::format("{}return {};\n", ind, expr(rv));
+                const std::string rendered_rv = expr(rv);
+                if (rendered_rv.find("__stack_chk_guard") != std::string::npos) {
+                    out += std::format("{}return;\n", ind);
+                    break;
+                }
+                out += std::format("{}return {};\n", ind, rendered_rv);
             } else {
                 out += std::format("{}return;\n", ind);
             }
@@ -4962,7 +6295,9 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
         }
         case BlockKind::Conditional: {
             if (term && term->op == IrOp::CondBranch && term->src_count > 0) {
-                out += std::format("{}if ({})\n", ind, expr(term->srcs[0]));
+                const std::string cond = expr(term->srcs[0]);
+                emit_materializations_for_rendered_value(term->srcs[0], cond, out, ind);
+                out += std::format("{}if ({})\n", ind, cond);
             } else {
                 out += std::format("{}if (?)\n", ind);
             }
@@ -5016,129 +6351,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.abi         = binary
         ? abi_for(binary->format(), binary->arch(), binary->endian())
         : Abi::SysVAmd64;
-    // Opportunistic selref lookup for Mach-O binaries when the caller
-    // didn't supply one - cheap enough to parse per emit (one section
-    // walk, a few hundred cstring reads on typical Cocoa-linked code).
-    std::map<addr_t, std::string> local_selrefs;
-    std::map<addr_t, std::string> local_classrefs;
-    if (binary && binary->format() == Format::MachO) {
-        if (!e.options.objc_selrefs) {
-            local_selrefs = parse_objc_selrefs(*binary);
-            if (!local_selrefs.empty()) e.options.objc_selrefs = &local_selrefs;
-        }
-        if (!e.options.objc_classrefs) {
-            local_classrefs = parse_objc_classrefs(*binary);
-            if (!local_classrefs.empty()) e.options.objc_classrefs = &local_classrefs;
-        }
-    }
-    // Same deal for the classlist method table: parse once per emit, then
-    // render any call target whose IMP matches as `-[Class selector]`.
-    // Storage lives on the Emitter so pointers into it stay stable.
-    std::vector<ObjcMethod> local_objc_methods;
-    std::vector<ObjcIvar> local_objc_ivars;
-    std::vector<ObjcProperty> local_objc_properties;
-    std::vector<ObjcBlock> local_objc_blocks;
-    std::map<addr_t, std::string> local_rtti_methods;
-    if (binary && binary->format() == Format::MachO) {
-        local_objc_methods = parse_objc_methods(*binary);
-        for (const auto& m : local_objc_methods) {
-            if (m.imp != 0) e.objc_by_imp.emplace(m.imp, &m);
-        }
-        if (auto it = e.objc_by_imp.find(sf.ir->start);
-            it != e.objc_by_imp.end()) {
-            e.current_objc_method = it->second;
-        }
-        local_objc_ivars = parse_objc_ivars(*binary);
-        for (const auto& iv : local_objc_ivars) {
-            if (iv.offset_slot != 0) e.objc_ivar_by_slot.emplace(iv.offset_slot, &iv);
-        }
-        local_objc_properties = parse_objc_properties(*binary);
-        for (const auto& prop : local_objc_properties) {
-            if (!prop.ivar_name.empty()) {
-                e.objc_property_by_ivar.emplace(
-                    std::pair{prop.cls, prop.ivar_name}, &prop);
-            }
-        }
-        local_objc_blocks = parse_objc_blocks(*binary);
-        for (const auto& blk : local_objc_blocks) {
-            if (blk.literal != 0) e.objc_block_by_literal.emplace(blk.literal, &blk);
-            if (blk.invoke != 0) e.objc_block_by_invoke.emplace(blk.invoke, &blk);
-        }
-        // Itanium RTTI: names virtual methods on stripped C++ binaries.
-        if (!e.options.rtti_methods) {
-            local_rtti_methods = rtti_method_names(parse_itanium_rtti(*binary));
-            if (!local_rtti_methods.empty()) {
-                e.options.rtti_methods = &local_rtti_methods;
-            }
-        }
-        // Cache the __cfstring section bounds for constant-NSString
-        // decoding in format_imm.
-        for (const auto& s : binary->sections()) {
-            const std::string_view n = s.name;
-            if (n == "__cfstring" || n.ends_with(",__cfstring")) {
-                e.cfstring_lo = static_cast<addr_t>(s.vaddr);
-                e.cfstring_hi = static_cast<addr_t>(s.vaddr + s.size);
-                break;
-            }
-        }
-    } else if (binary && binary->format() == Format::Pe) {
-        // MSVC RTTI on PE: same rtti_method_names API the Mach-O path
-        // uses, so the emitter's `options.rtti_methods` consumer stays
-        // format-agnostic. Itanium RTTI calls would emit nothing on
-        // a PE since the typeinfo structure layout differs, so skip it.
-        if (!e.options.rtti_methods) {
-            local_rtti_methods = rtti_method_names(parse_msvc_rtti(*binary));
-            if (!local_rtti_methods.empty()) {
-                e.options.rtti_methods = &local_rtti_methods;
-            }
-        }
-    }
-    bool has_user_sig = false;
-    bool has_metadata_sig = false;
-    if (annotations) {
-        if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
-            e.self_arity = static_cast<u8>(std::min(sig->params.size(), int_arg_regs(e.abi).size()));
-            has_user_sig = true;
-        }
-    }
-    if (!has_user_sig && e.current_objc_method) {
-        const auto selector_names = objc_selector_arg_names(e.current_objc_method->selector);
-        e.self_arg_names[0] = "self";
-        if (e.self_arg_names.size() > 1) e.self_arg_names[1] = "_cmd";
-        for (std::size_t i = 0; i < selector_names.size() && i + 2 < e.self_arg_names.size(); ++i) {
-            e.self_arg_names[i + 2] = selector_names[i];
-        }
-        const u8 selector_arity = static_cast<u8>(std::min<std::size_t>(
-            int_arg_regs(e.abi).size(), selector_names.size() + 2));
-        if (!e.current_objc_method->type_encoding.empty()) {
-            const auto parts = decode_objc_type_parts(e.current_objc_method->type_encoding);
-            if (parts.size() > 1) {
-                e.self_arity = static_cast<u8>(std::min<std::size_t>(
-                    int_arg_regs(e.abi).size(), parts.size() - 1));
-            }
-        }
-        if (e.self_arity < selector_arity) e.self_arity = selector_arity;
-    }
-    if (!has_user_sig) {
-        if (auto it = e.objc_block_by_invoke.find(sf.ir->start);
-            it != e.objc_block_by_invoke.end() && !it->second->signature.empty()) {
-            const auto parts = decode_objc_type_parts(it->second->signature);
-            if (parts.size() > 1) {
-                e.self_arity = static_cast<u8>(std::min<std::size_t>(
-                    int_arg_regs(e.abi).size(), parts.size() - 1));
-                e.self_arg_names[0] = "block";
-                for (std::size_t i = 2; i < parts.size() && i - 1 < e.self_arg_names.size(); ++i) {
-                    e.self_arg_names[i - 1] = std::format("arg{}", i - 2);
-                }
-                has_metadata_sig = true;
-            }
-        }
-    }
-    if (e.self_arity == 0) {
-        e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
-    }
+
+    EmitterMetadataStorage metadata;
+    setup_emitter_metadata(e, sf, binary, metadata);
+    const SignatureContext sig_ctx =
+        setup_signature_context(e, sf, binary, annotations);
     e.analyze(*sf.ir);
     e.name_merge_values();
+    e.infer_objc_block_capture_names();
     e.frame_layout = compute_frame_layout(*sf.ir, binary);
     if (sf.body) {
         e.suppress_canary_regions(*sf.body);
@@ -5148,12 +6368,16 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         e.collect_for_updates(*sf.body);
         e.collect_goto_targets(*sf.body);
     }
-    if (!has_user_sig && !has_metadata_sig) e.bump_arity_from_call_sites();
-    if (!has_user_sig && !has_metadata_sig) e.bump_arity_from_body_reads();
-    if (!has_user_sig && !has_metadata_sig) e.infer_narrow_arg_types_from_uses();
+    e.analyze_arc_claim_folds();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_call_sites();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
+        e.infer_narrow_arg_types_from_uses();
+    }
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
-    if (!has_user_sig && !has_metadata_sig) e.infer_charp_args();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
+    if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
 
     std::string out;
@@ -5215,6 +6439,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 r.condition.kind != IrValueKind::None) {
                 if (e.is_void_call_result(r.condition)) return;
                 if (e.is_unbound_clobber_result(r.condition)) return;
+                if (e.renders_stack_chk_guard_value(r.condition)) return;
                 IrValue v = r.condition;
                 if (const IrInst* d = e.def_of(v); d && d->src_count >= 1
                         && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
@@ -5310,6 +6535,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             const std::string ret = sig->return_type.empty()
                 ? inferred_return_type(e, sf)
                 : Emitter::normalize_c_type_alias(sig->return_type);
+            e.current_return_is_void = ret == "void";
             header = std::format("{} {}({}) {{\n", ret, display_name(), params);
         }
     }
@@ -5345,6 +6571,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                         params += std::format(", {} {}", parts[i], name);
                     }
                 }
+                e.current_return_is_void = ret_ty == "void";
                 header = std::format("{} {}({}) {{\n",
                                      ret_ty, display_name(), params);
             }
@@ -5368,8 +6595,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                         params += std::format("{} {}", block_param_type(parts[i]), name);
                     }
                 }
+                const std::string ret = block_param_type(parts[0]);
+                e.current_return_is_void = ret == "void";
                 header = std::format("{} {}({}) {{\n",
-                                     block_param_type(parts[0]),
+                                     ret,
                                      display_name(),
                                      params);
             }
@@ -5414,6 +6643,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                     e.self_arg_type_overrides[i]) {
                     t = c_type_name(*e.self_arg_type_overrides[i]);
                 }
+                if (i < e.self_arg_type_names.size() &&
+                    !e.self_arg_type_names[i].empty()) {
+                    t = e.self_arg_type_names[i];
+                }
                 const std::string name =
                     (i < e.self_arg_names.size() && !e.self_arg_names[i].empty())
                         ? e.self_arg_names[i]
@@ -5445,9 +6678,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 }
             }
         }
+        const std::string ret = inferred_return_type(e, sf);
+        e.current_return_is_void = ret == "void";
         header = std::format("{} {}({}) {{\n",
-                             inferred_return_type(e, sf),
-                             display_name(), params);
+                             ret, display_name(), params);
     }
     // When the header name is a long RTTI `Class::vfn_N` - especially for
     // templates - advertise a shorter alias the user can type with `-s`.
@@ -5547,7 +6781,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (!e.global_decls.empty()) out += "\n";
     out += header;
     for (const auto& [k, name] : e.merge_value_names) {
-        if (body_buf.find(name) == std::string::npos) continue;
+        if (!text_contains_identifier_in_code(body_buf, name)) continue;
         auto dit = e.defs.find(k);
         if (dit == e.defs.end()) continue;
         out += std::format("  {} {};\n", e.c_type_name_for(dit->second->dst), name);
@@ -5566,7 +6800,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     };
     for (const auto& [_, slot] : e.frame_layout.slots) {
         if (slot.name.empty()) continue;
-        if (body_buf.find(slot.name) == std::string::npos) continue;
+        if (!text_contains_identifier_in_code(body_buf, slot.name)) continue;
         // char* type propagation overrides the access-width-derived type
         // when an inferred libc-char* call observed `&local_X` flowing in.
         const bool charp = slot.type_override.empty() &&
@@ -5626,9 +6860,6 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
             if (!buf.empty()) lines.push_back(std::move(buf));
         }
-        auto ident_char = [](char c) {
-            return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
-        };
         auto is_decl = [&](const std::string& line, std::string& name) {
             std::size_t i = 0;
             while (i < line.size() && line[i] == ' ') ++i;
@@ -5636,6 +6867,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             const std::size_t type_start = i;
             while (i < line.size() && line[i] != ' ') ++i;
             if (i == type_start || i >= line.size()) return false;
+            const std::string_view type_word{
+                line.data() + type_start, i - type_start};
+            if (type_word == "return" || type_word == "if" ||
+                type_word == "for" || type_word == "while" ||
+                type_word == "switch" || type_word == "goto" ||
+                type_word == "break" || type_word == "continue") {
+                return false;
+            }
             while (i < line.size() && line[i] == ' ') ++i;
             // Identifier token.
             const std::size_t name_start = i;
@@ -5643,10 +6882,16 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             const char c0 = line[i];
             if (!(std::isalpha(static_cast<unsigned char>(c0)) || c0 == '_')) return false;
             ++i;
-            while (i < line.size() && ident_char(line[i])) ++i;
+            while (i < line.size() && c_ident_char(line[i])) ++i;
             const std::size_t name_end = i;
             while (i < line.size() && line[i] == ' ') ++i;
-            if (i >= line.size() || line[i] != '=') return false;
+            if (i < line.size() && line[i] == '[') {
+                ++i;
+                while (i < line.size() && line[i] != ']') ++i;
+                if (i < line.size() && line[i] == ']') ++i;
+                while (i < line.size() && line[i] == ' ') ++i;
+            }
+            if (i >= line.size() || (line[i] != '=' && line[i] != ';')) return false;
             name = line.substr(name_start, name_end - name_start);
             return true;
         };
@@ -5654,33 +6899,36 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                           std::size_t skip_idx) {
             for (std::size_t li = 0; li < lines.size(); ++li) {
                 if (li == skip_idx) continue;
-                std::size_t pos = 0;
-                const std::string& l = lines[li];
-                while ((pos = l.find(name, pos)) != std::string::npos) {
-                    const bool left_ok  = pos == 0 ||
-                        !(std::isalnum(static_cast<unsigned char>(l[pos-1])) || l[pos-1] == '_');
-                    const std::size_t end = pos + name.size();
-                    const bool right_ok = end >= l.size() ||
-                        !(std::isalnum(static_cast<unsigned char>(l[end])) || l[end] == '_');
-                    if (left_ok && right_ok) return true;
-                    pos = end;
-                }
+                if (text_contains_identifier_in_code(lines[li], name)) return true;
             }
             return false;
         };
 
+        for (int pass = 0; pass < 4; ++pass) {
+            bool changed = false;
+            std::vector<std::string> kept;
+            kept.reserve(lines.size());
+            for (std::size_t li = 0; li < lines.size(); ++li) {
+                std::string name;
+                if (is_decl(lines[li], name) &&
+                    !name_appears_elsewhere(name, li)) {
+                    changed = true;
+                    continue;  // dead declaration
+                }
+                kept.push_back(std::move(lines[li]));
+            }
+            lines = std::move(kept);
+            if (!changed) break;
+        }
+
         std::string cleaned;
         cleaned.reserve(out.size());
-        for (std::size_t li = 0; li < lines.size(); ++li) {
-            std::string name;
-            if (is_decl(lines[li], name) &&
-                !name_appears_elsewhere(name, li)) {
-                continue;  // dead declaration
-            }
-            cleaned += lines[li];
+        for (const auto& line : lines) {
+            cleaned += line;
             cleaned += '\n';
         }
         out = std::move(cleaned);
+        out = collapse_empty_then_else_blocks(out);
     }
 
     return out;
@@ -5709,119 +6957,17 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
         ? abi_for(binary->format(), binary->arch(), binary->endian())
         : Abi::SysVAmd64;
 
-    std::map<addr_t, std::string> local_selrefs;
-    std::map<addr_t, std::string> local_classrefs;
-    std::vector<ObjcMethod>       local_objc_methods;
-    std::vector<ObjcIvar>         local_objc_ivars;
-    std::vector<ObjcProperty>     local_objc_properties;
-    std::vector<ObjcBlock>        local_objc_blocks;
-    std::map<addr_t, std::string> local_rtti_methods;
-    if (binary && binary->format() == Format::MachO) {
-        if (!e.options.objc_selrefs) {
-            local_selrefs = parse_objc_selrefs(*binary);
-            if (!local_selrefs.empty()) e.options.objc_selrefs = &local_selrefs;
-        }
-        if (!e.options.objc_classrefs) {
-            local_classrefs = parse_objc_classrefs(*binary);
-            if (!local_classrefs.empty()) e.options.objc_classrefs = &local_classrefs;
-        }
-        local_objc_methods = parse_objc_methods(*binary);
-        for (const auto& m : local_objc_methods) {
-            if (m.imp != 0) e.objc_by_imp.emplace(m.imp, &m);
-        }
-        if (auto it = e.objc_by_imp.find(sf.ir->start);
-            it != e.objc_by_imp.end()) {
-            e.current_objc_method = it->second;
-        }
-        local_objc_ivars = parse_objc_ivars(*binary);
-        for (const auto& iv : local_objc_ivars) {
-            if (iv.offset_slot != 0) e.objc_ivar_by_slot.emplace(iv.offset_slot, &iv);
-        }
-        local_objc_properties = parse_objc_properties(*binary);
-        for (const auto& prop : local_objc_properties) {
-            if (!prop.ivar_name.empty()) {
-                e.objc_property_by_ivar.emplace(
-                    std::pair{prop.cls, prop.ivar_name}, &prop);
-            }
-        }
-        local_objc_blocks = parse_objc_blocks(*binary);
-        for (const auto& blk : local_objc_blocks) {
-            if (blk.literal != 0) e.objc_block_by_literal.emplace(blk.literal, &blk);
-            if (blk.invoke != 0) e.objc_block_by_invoke.emplace(blk.invoke, &blk);
-        }
-        if (!e.options.rtti_methods) {
-            local_rtti_methods = rtti_method_names(parse_itanium_rtti(*binary));
-            if (!local_rtti_methods.empty()) {
-                e.options.rtti_methods = &local_rtti_methods;
-            }
-        }
-        for (const auto& s : binary->sections()) {
-            const std::string_view n = s.name;
-            if (n == "__cfstring" || n.ends_with(",__cfstring")) {
-                e.cfstring_lo = static_cast<addr_t>(s.vaddr);
-                e.cfstring_hi = static_cast<addr_t>(s.vaddr + s.size);
-                break;
-            }
-        }
-    } else if (binary && binary->format() == Format::Pe) {
-        if (!e.options.rtti_methods) {
-            local_rtti_methods = rtti_method_names(parse_msvc_rtti(*binary));
-            if (!local_rtti_methods.empty()) {
-                e.options.rtti_methods = &local_rtti_methods;
-            }
-        }
-    }
-
-    bool has_user_sig = false;
-    bool has_metadata_sig = false;
-    if (annotations) {
-        if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
-            e.self_arity = static_cast<u8>(std::min(sig->params.size(), int_arg_regs(e.abi).size()));
-            has_user_sig = true;
-        }
-    }
-    if (!has_user_sig && e.current_objc_method) {
-        const auto selector_names = objc_selector_arg_names(e.current_objc_method->selector);
-        e.self_arg_names[0] = "self";
-        if (e.self_arg_names.size() > 1) e.self_arg_names[1] = "_cmd";
-        for (std::size_t i = 0; i < selector_names.size() && i + 2 < e.self_arg_names.size(); ++i) {
-            e.self_arg_names[i + 2] = selector_names[i];
-        }
-        const u8 selector_arity = static_cast<u8>(std::min<std::size_t>(
-            int_arg_regs(e.abi).size(), selector_names.size() + 2));
-        if (!e.current_objc_method->type_encoding.empty()) {
-            const auto parts = decode_objc_type_parts(e.current_objc_method->type_encoding);
-            if (parts.size() > 1) {
-                e.self_arity = static_cast<u8>(std::min<std::size_t>(
-                    int_arg_regs(e.abi).size(), parts.size() - 1));
-            }
-        }
-        if (e.self_arity < selector_arity) e.self_arity = selector_arity;
-    }
-    if (!has_user_sig) {
-        if (auto it = e.objc_block_by_invoke.find(sf.ir->start);
-            it != e.objc_block_by_invoke.end() && !it->second->signature.empty()) {
-            const auto parts = decode_objc_type_parts(it->second->signature);
-            if (parts.size() > 1) {
-                e.self_arity = static_cast<u8>(std::min<std::size_t>(
-                    int_arg_regs(e.abi).size(), parts.size() - 1));
-                e.self_arg_names[0] = "block";
-                for (std::size_t i = 2; i < parts.size() && i - 1 < e.self_arg_names.size(); ++i) {
-                    e.self_arg_names[i - 1] = std::format("arg{}", i - 2);
-                }
-                has_metadata_sig = true;
-            }
-        }
-    }
-    if (e.self_arity == 0) {
-        e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
-    }
+    EmitterMetadataStorage metadata;
+    setup_emitter_metadata(e, sf, binary, metadata);
+    const SignatureContext sig_ctx =
+        setup_signature_context(e, sf, binary, annotations);
     e.analyze(*sf.ir);
     e.name_merge_values();
-    if (!has_user_sig && !has_metadata_sig) e.bump_arity_from_body_reads();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
-    if (!has_user_sig && !has_metadata_sig) e.infer_charp_args();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
+    if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
 
     // Output mirrors format_cfg's framing - same `bb_<addr>` headers,

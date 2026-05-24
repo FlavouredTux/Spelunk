@@ -26,6 +26,10 @@ def align(v, a):
     return (v + a - 1) & ~(a - 1)
 
 
+def align8(v):
+    return align(v, 8)
+
+
 def uleb128(v):
     out = bytearray()
     while True:
@@ -125,9 +129,7 @@ def main() -> int:
     seg_data += struct.pack("<IIIIII", 0, 0, 0, 0, 0, 0)
 
     # __LINKEDIT segment holding symtab + strtab.
-    link_file_off = data_file_off + len(data)
-    # Align linkedit to 8.
-    link_file_off = (link_file_off + 7) & ~7
+    link_file_off = align8(data_file_off + len(data))
 
     # nlist_64: n_strx(4), n_type(1), n_sect(1), n_desc(2), n_value(8) = 16
     # Symbols: _main → entry, _add42 → add42, _read_answer → read_answer,
@@ -200,12 +202,9 @@ def main() -> int:
     # Align everything to 8.
     sym_off = link_file_off
     str_off = sym_off + len(nlist)
-    fn_starts_off = str_off + len(strtab)
-    fn_starts_off = (fn_starts_off + 7) & ~7
-    data_in_code_off = fn_starts_off + len(fn_starts)
-    data_in_code_off = (data_in_code_off + 7) & ~7
-    exports_off = data_in_code_off + len(data_in_code)
-    exports_off = (exports_off + 7) & ~7
+    fn_starts_off = align8(str_off + len(strtab))
+    data_in_code_off = align8(fn_starts_off + len(fn_starts))
+    exports_off = align8(data_in_code_off + len(data_in_code))
     link_filesize = exports_off + len(exports) - link_file_off
 
     seg_link = bytearray()

@@ -9,6 +9,10 @@ The fixture has:
 There is intentionally no undefined nlist row for _getpid. The only import
 name lives in LC_DYLD_CHAINED_FIXUPS as an ARM64E_USERLAND24 bind, so the
 loader must synthesize the import and then connect the arm64 stub to it.
+With --import-addend or --import-addend64, the chained imports table uses
+DYLD_CHAINED_IMPORT_ADDEND or DYLD_CHAINED_IMPORT_ADDEND64 to exercise the
+alternate name-offset encodings. With --auth-rebase, the chained rebase
+pointer uses the authenticated arm64e rebase layout.
 """
 
 import struct
@@ -17,6 +21,10 @@ import sys
 
 PAGE = 0x1000
 BASE = 0x100000000
+
+
+def align8(v):
+    return (v + 7) & ~7
 
 
 def enc_bl(pc, target):
@@ -56,10 +64,24 @@ def cstr_table(names):
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: make_macho_arm64e_import.py <output-path>", file=sys.stderr)
+    args = sys.argv[1:]
+    mode = "plain"
+    if args and args[0] == "--auth-rebase":
+        mode = "auth-rebase"
+        args = args[1:]
+    elif args and args[0] == "--import-addend":
+        mode = "import-addend"
+        args = args[1:]
+    elif args and args[0] == "--import-addend64":
+        mode = "import-addend64"
+        args = args[1:]
+    if len(args) != 1:
+        print("usage: make_macho_arm64e_import.py "
+              "[--auth-rebase|--import-addend|--import-addend64] "
+              "<output-path>",
+              file=sys.stderr)
         return 2
-    out_path = sys.argv[1]
+    out_path = args[0]
 
     text_file_off = PAGE
     data_file_off = PAGE * 2
@@ -135,10 +157,27 @@ def main() -> int:
                           24, PAGE, 12, 0, 0, 1)  # ARM64E_USERLAND24
     starts += struct.pack("<H", 0)
     imports_off = starts_off + len(starts)
-    symbols_off = imports_off + 4
+    import_entry_size = 16 if mode == "import-addend64" else (
+        8 if mode == "import-addend" else 4)
+    imports_format = 3 if mode == "import-addend64" else (
+        2 if mode == "import-addend" else 1)
+    symbols_off = imports_off + import_entry_size
     symbols = b"_getpid\0"
-    import_entry = struct.pack("<I", 0)  # lib_ordinal=0, weak=0, name_offset=0
-    chain += struct.pack("<IIIIIII", 0, starts_off, imports_off, symbols_off, 1, 1, 0)
+    if mode == "import-addend64":
+        # dyld_chained_import_addend64:
+        #   lib_ordinal:16, weak_import:1, reserved:15, name_offset:32
+        #   addend:64
+        import_entry = struct.pack("<QQ", 0, 0)
+    elif mode == "import-addend":
+        # dyld_chained_import_addend:
+        #   lib_ordinal:8, weak_import:1, name_offset:23
+        #   addend:32
+        import_entry = struct.pack("<II", 0, 0)
+    else:
+        import_entry = struct.pack("<I", 0)  # lib_ordinal=0, weak=0, name_offset=0
+    chain += struct.pack(
+        "<IIIIIII", 0, starts_off, imports_off, symbols_off, 1,
+        imports_format, 0)
     chain += b"\0" * (starts_off - len(chain))
     chain += starts
     chain += import_entry
@@ -147,13 +186,16 @@ def main() -> int:
     # The bound pointer in __DATA,__la_symbol_ptr links to the rebase pointer
     # in the same chain. The second pointer is rebased to _g_target.
     data = struct.pack("<Q", (1 << 62) | (1 << 51))
-    data += struct.pack("<Q", target_vmaddr - BASE)
+    if mode == "auth-rebase":
+        data += struct.pack("<Q", (1 << 63) | (target_vmaddr - BASE))
+    else:
+        data += struct.pack("<Q", target_vmaddr - BASE)
     data += struct.pack("<I", 0xCAFEBABE)
 
-    link_file_off = (data_file_off + len(data) + 7) & ~7
+    link_file_off = align8(data_file_off + len(data))
     sym_off = link_file_off
     str_off = sym_off + len(nlist)
-    chain_off = (str_off + len(strtab) + 7) & ~7
+    chain_off = align8(str_off + len(strtab))
     link_filesize = chain_off + len(chain) - link_file_off
 
     seg_link = bytearray()

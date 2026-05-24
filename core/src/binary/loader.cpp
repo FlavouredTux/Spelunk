@@ -161,6 +161,72 @@ void Binary::add_synthetic_function_start(addr_t va) {
     invalidate_caches();
 }
 
+bool Binary::add_inferred_function_name(addr_t va, std::string_view name) {
+    if (va == 0 || name.empty()) return false;
+    if (bytes_at(va).empty()) return false;
+    auto is_placeholder = [](std::string_view n) noexcept {
+        return n.empty() || n.starts_with("sub_");
+    };
+    auto& syms = mutable_symbols();
+    for (auto& s : syms) {
+        if (s.is_import || s.addr != va || s.kind != SymbolKind::Function) continue;
+        if (!is_placeholder(s.name)) return false;
+        s.name = std::string{name};
+        invalidate_caches();
+        return true;
+    }
+    Symbol s;
+    s.name = std::string{name};
+    s.addr = va;
+    s.kind = SymbolKind::Function;
+    syms.push_back(std::move(s));
+    invalidate_caches();
+    return true;
+}
+
+std::size_t Binary::overlay_symbols_from(const Binary& overlay) {
+    const addr_t dst_base = preferred_load_base();
+    const addr_t src_base = overlay.preferred_load_base();
+    if (dst_base == 0 && src_base != 0) return 0;
+
+    auto& syms = mutable_symbols();
+    std::size_t added = 0;
+    auto is_placeholder = [](std::string_view name) noexcept {
+        return name.starts_with("sub_");
+    };
+
+    for (const auto& src : overlay.symbols()) {
+        if (src.is_import || src.addr == 0 || src.name.empty()) continue;
+        if (src.kind != SymbolKind::Function && src.kind != SymbolKind::Object) continue;
+        if (src_base != 0 && src.addr < src_base) continue;
+        const addr_t offset = src_base == 0 ? src.addr : src.addr - src_base;
+        const addr_t dst_addr = dst_base + offset;
+        if (dst_addr == 0 || bytes_at(dst_addr).empty()) continue;
+
+        bool inserted = false;
+        for (auto& dst : syms) {
+            if (dst.is_import || dst.addr != dst_addr || dst.kind != src.kind) continue;
+            if (dst.name.empty() || is_placeholder(dst.name)) {
+                dst.name = src.name;
+                if (dst.size == 0) dst.size = src.size;
+                ++added;
+            }
+            inserted = true;
+            break;
+        }
+        if (inserted) continue;
+
+        Symbol s = src;
+        s.addr = dst_addr;
+        s.is_import = false;
+        syms.push_back(std::move(s));
+        ++added;
+    }
+
+    if (added != 0) invalidate_caches();
+    return added;
+}
+
 std::vector<const Symbol*>
 Binary::find_all_by_name(std::string_view name) const {
     // Linear scan rather than a cached multimap: collision checks are

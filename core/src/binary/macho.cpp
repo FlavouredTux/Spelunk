@@ -43,7 +43,9 @@ constexpr u32 ARM_THREAD_STATE64  = 0x06u;
 
 // Fixed command sizes we dereference directly.
 constexpr u32 SEGMENT_COMMAND_64_SIZE    = 72u;
+constexpr u32 SECTION_64_SIZE            = 80u;
 constexpr u32 SYMTAB_COMMAND_SIZE        = 24u;
+constexpr u32 DYSYMTAB_COMMAND_SIZE      = 80u;
 constexpr u32 DYLD_INFO_COMMAND_SIZE     = 48u;
 constexpr u32 ENTRY_POINT_COMMAND_SIZE   = 24u;
 constexpr u32 LINKEDIT_DATA_COMMAND_SIZE = 16u;
@@ -54,10 +56,15 @@ constexpr u32 VM_PROT_WRITE       = 0x2u;
 constexpr u32 VM_PROT_EXECUTE     = 0x4u;
 
 // Section types (flags & SECTION_TYPE).
-constexpr u32 SECTION_TYPE_MASK         = 0x000000FFu;
-constexpr u32 S_SYMBOL_STUBS            = 0x08u;
-constexpr u32 S_ATTR_SOME_INSTRUCTIONS  = 0x00000400u;
-constexpr u32 S_ATTR_PURE_INSTRUCTIONS  = 0x80000000u;
+constexpr u32 SECTION_TYPE_MASK          = 0x000000FFu;
+constexpr u32 S_NON_LAZY_SYMBOL_POINTERS = 0x06u;
+constexpr u32 S_LAZY_SYMBOL_POINTERS     = 0x07u;
+constexpr u32 S_SYMBOL_STUBS             = 0x08u;
+constexpr u32 S_ATTR_SOME_INSTRUCTIONS   = 0x00000400u;
+constexpr u32 S_ATTR_PURE_INSTRUCTIONS   = 0x80000000u;
+
+constexpr u32 INDIRECT_SYMBOL_LOCAL     = 0x80000000u;
+constexpr u32 INDIRECT_SYMBOL_ABS       = 0x40000000u;
 
 // dyld_chained_starts_in_segment::pointer_format.
 constexpr u16 DYLD_CHAINED_PTR_ARM64E            = 1u;
@@ -537,10 +544,10 @@ void walk_chained_fixup_start(std::span<std::byte>     image,
 }
 
 // Layout we produce the same as parse_bind_stream: (slot_vaddr, name).
-// Scope: handles the x86_64 / arm64 macOS pointer formats (DYLD_CHAINED_
-// PTR_64 = 6 and PTR_ARM64E = 2 with bind bit set). Unknown pointer
-// formats are skipped cleanly; the loader falls back to whatever symbols
-// the nlist table alone yielded.
+// Handles 64-bit chained pointers and arm64e userland/kernel/firmware
+// formats, including authenticated arm64e rebases. Unknown pointer formats
+// are skipped cleanly; the loader falls back to whatever symbols the nlist
+// table alone yielded.
 void parse_chained_fixups(
     std::span<const std::byte> data,
     std::span<const SegInfo> segs,
@@ -581,9 +588,10 @@ void parse_chained_fixups(
     if (!starts_off || !imports_off || !symbols_off || !imports_count || !imports_fmt)
         return;
 
-    // Resolve each ordinal to its symbol name. Only imports_format == 1
-    // (DYLD_CHAINED_IMPORT) is handled; formats 2/3 add a 32/64-bit addend
-    // but have the same name_offset semantics up to an entry-size delta.
+    // Resolve each ordinal to its symbol name. Formats 1/2 share the
+    // 23-bit name_offset field; format 3 stores a 32-bit name_offset in the
+    // high half of the first word. Addends are ignored because rendering only
+    // needs the imported-symbol name for the bound slot.
     const std::size_t entry_size =
         (*imports_fmt == 1) ? 4 : (*imports_fmt == 2) ? 8 : 16;
     if (*imports_fmt < 1 || *imports_fmt > 3) return;
@@ -733,6 +741,18 @@ read_u32_at(std::span<const LoadSegment> segs, addr_t vaddr) {
     return 0;
 }
 
+[[nodiscard]] u16
+read_u16_at(std::span<const LoadSegment> segs, addr_t vaddr) {
+    for (const auto& seg : segs) {
+        if (vaddr < seg.vaddr) continue;
+        const u64 off = vaddr - seg.vaddr;
+        if (off + 2 > seg.filesz) continue;
+        if (seg.data.empty()) continue;
+        return read_le_at<u16>(seg.data.data() + static_cast<std::size_t>(off));
+    }
+    return 0;
+}
+
 [[nodiscard]] i32
 read_i32_at(std::span<const LoadSegment> segs, addr_t vaddr) {
     return static_cast<i32>(read_u32_at(segs, vaddr));
@@ -771,16 +791,12 @@ find_section_suffix(std::span<const Section> sections, std::string_view suffix) 
     for (const auto& s : sections) {
         const std::string_view n = s.name;
         if (n == suffix) return &s;
-        if (n.size() >= suffix.size() &&
-            n.substr(n.size() - suffix.size()) == suffix) {
-            return &s;
-        }
+        if (n.ends_with(suffix)) return &s;
     }
     return nullptr;
 }
 
-[[nodiscard]] std::string swift_symbol_name(std::string_view name) {
-    std::string out = "swift_type_";
+void append_swift_symbol_piece(std::string& out, std::string_view name) {
     for (char c : name) {
         const bool ok = (c >= 'A' && c <= 'Z') ||
                         (c >= 'a' && c <= 'z') ||
@@ -788,6 +804,26 @@ find_section_suffix(std::span<const Section> sections, std::string_view suffix) 
                         c == '_';
         out.push_back(ok ? c : '_');
     }
+}
+
+[[nodiscard]] std::string swift_symbol_name(std::string_view name) {
+    std::string out = "swift_type_";
+    append_swift_symbol_piece(out, name);
+    return out;
+}
+
+[[nodiscard]] std::string swift_accessor_symbol_name(std::string_view name) {
+    std::string out = swift_symbol_name(name);
+    out += "_accessor";
+    return out;
+}
+
+[[nodiscard]] std::string swift_field_symbol_name(std::string_view type_name,
+                                                  std::string_view field_name) {
+    std::string out = "swift_field_";
+    append_swift_symbol_piece(out, type_name);
+    out.push_back('_');
+    append_swift_symbol_piece(out, field_name);
     return out;
 }
 
@@ -847,6 +883,22 @@ Result<void> MachOBinary::parse() {
     }
 
     std::vector<SegInfo> seg_info;
+    auto for_each_segment_section = [&](auto&& fn) {
+        for (const auto& lc : lcs) {
+            if (lc.cmd != LC_SEGMENT_64) continue;
+            if (lc.size < SEGMENT_COMMAND_64_SIZE) continue;
+            auto lcb = r.slice(lc.off, lc.size);
+            if (!lcb) continue;
+            const std::byte* const p = lcb->data();
+            const u32 nsects = read_le_at<u32>(p + 64);
+            for (u32 s = 0; s < nsects; ++s) {
+                const std::size_t so = SEGMENT_COMMAND_64_SIZE +
+                    static_cast<std::size_t>(s) * SECTION_64_SIZE;
+                if (so + SECTION_64_SIZE > lc.size) break;
+                fn(lc, p + so);
+            }
+        }
+    };
 
     // ---- Pass 1: LC_SEGMENT_64 ---------------------------------------------
     for (const auto& lc : lcs) {
@@ -883,11 +935,11 @@ Result<void> MachOBinary::parse() {
             segments_.push_back(std::move(seg));
         }
 
-        // Parse sections contiguously after the segment_command_64 header (72 bytes).
-        const std::size_t sect_table = SEGMENT_COMMAND_64_SIZE;
+        // Parse sections contiguously after the segment_command_64 header.
         for (u32 s = 0; s < nsects; ++s) {
-            const std::size_t so = sect_table + static_cast<std::size_t>(s) * 80;
-            if (so + 80 > lc.size) break;
+            const std::size_t so = SEGMENT_COMMAND_64_SIZE +
+                static_cast<std::size_t>(s) * SECTION_64_SIZE;
+            if (so + SECTION_64_SIZE > lc.size) break;
             const std::byte* const sp = p + so;
             const std::string sectname = read_fixed_cstr(sp + 0, 16);
             // const std::string segn_s   = read_fixed_cstr(sp + 16, 16);
@@ -919,6 +971,7 @@ Result<void> MachOBinary::parse() {
     // ---- Pass 2: LC_SYMTAB / LC_DYSYMTAB / LC_DYLD_INFO_ONLY / LC_MAIN ------
     std::span<const std::byte> symtab_bytes;
     std::span<const std::byte> strtab_bytes;
+    std::span<const std::byte> indirect_sym_bytes;
     u32 nsyms = 0;
 
     std::span<const std::byte> bind_bytes;
@@ -952,12 +1005,18 @@ Result<void> MachOBinary::parse() {
                 strtab_bytes = *s;
             break;
         }
-        case LC_DYSYMTAB:
-            // The indirect symbol table would be useful for tying __stubs
-            // directly to symbol indices, but the bind-opcode + stubs-scan
-            // pipeline already covers every real import, so leave it for
-            // later if it becomes necessary.
+        case LC_DYSYMTAB: {
+            if (lc.size < DYSYMTAB_COMMAND_SIZE) break;
+            const u32 indirectsymoff = read_le_at<u32>(p + 56);
+            const u32 nindirectsyms  = read_le_at<u32>(p + 60);
+            if (nindirectsyms > 0) {
+                if (auto s = r.slice(indirectsymoff,
+                                     static_cast<std::size_t>(nindirectsyms) * 4); s) {
+                    indirect_sym_bytes = *s;
+                }
+            }
             break;
+        }
         case LC_DYLD_INFO:
         case LC_DYLD_INFO_ONLY: {
             if (lc.size < DYLD_INFO_COMMAND_SIZE) break;
@@ -1136,6 +1195,39 @@ Result<void> MachOBinary::parse() {
         parse_chained_fixups(chained_fixups_bytes, seg_info, buffer_, binds);
     }
 
+    // Older or hand-linked Mach-O files can name lazy/non-lazy pointer slots
+    // through LC_DYSYMTAB's indirect symbol table even when dyld bind opcodes
+    // are sparse. Recover those slot -> import-name edges so the existing
+    // __stubs scan can still render calls as `puts(...)` instead of
+    // `sub_<stub>(...)`.
+    if (!indirect_sym_bytes.empty() && !sym_index_to_symbols.empty()) {
+        for_each_segment_section([&](const auto&, const std::byte* sp) {
+            const u64 addr    = read_le_at<u64>(sp + 32);
+            const u64 size    = read_le_at<u64>(sp + 40);
+            const u32 flags   = read_le_at<u32>(sp + 64);
+            const u32 first   = read_le_at<u32>(sp + 68);
+            const u32 stype   = flags & SECTION_TYPE_MASK;
+            if (stype != S_LAZY_SYMBOL_POINTERS &&
+                stype != S_NON_LAZY_SYMBOL_POINTERS) {
+                return;
+            }
+            const u64 count = size / 8u;
+            for (u64 i = 0; i < count; ++i) {
+                const u64 indirect_index = static_cast<u64>(first) + i;
+                if ((indirect_index + 1u) * 4u > indirect_sym_bytes.size()) break;
+                const u32 raw = read_le_at<u32>(
+                    indirect_sym_bytes.data() + indirect_index * 4u);
+                if ((raw & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) != 0) continue;
+                if (raw >= sym_index_to_symbols.size()) continue;
+                const std::size_t sym_idx = sym_index_to_symbols[raw];
+                if (sym_idx == std::size_t(-1) || sym_idx >= symbols_.size()) continue;
+                const auto& sym = symbols_[sym_idx];
+                if (sym.name.empty()) continue;
+                binds.push_back({static_cast<addr_t>(addr + i * 8u), sym.name});
+            }
+        });
+    }
+
     // LC_DATA_IN_CODE: list of (file_offset, length, kind) marking embedded
     // data inside __TEXT. Convert each file offset into a VA using the
     // segment map so the CFG walker can steer around them.
@@ -1201,39 +1293,27 @@ Result<void> MachOBinary::parse() {
     if (arch_ == Arch::Arm64 && !slot_to_name.empty()) {
         std::unordered_map<std::string, addr_t> import_stub_addr;
 
-        for (const auto& lc : lcs) {
-            if (lc.cmd != LC_SEGMENT_64) continue;
-            if (lc.size < SEGMENT_COMMAND_64_SIZE) continue;
-            auto lcb = r.slice(lc.off, lc.size);
-            if (!lcb) continue;
-            const std::byte* const p = lcb->data();
-            const u32 nsects = read_le_at<u32>(p + 64);
-            for (u32 s = 0; s < nsects; ++s) {
-                const std::size_t so = SEGMENT_COMMAND_64_SIZE +
-                    static_cast<std::size_t>(s) * 80;
-                if (so + 80 > lc.size) break;
-                const std::byte* const sp = p + so;
-                const u64 addr    = read_le_at<u64>(sp + 32);
-                const u64 size    = read_le_at<u64>(sp + 40);
-                const u32 offset  = read_le_at<u32>(sp + 48);
-                const u32 flags   = read_le_at<u32>(sp + 64);
-                const u32 stype   = flags & SECTION_TYPE_MASK;
-                if (stype != S_SYMBOL_STUBS) continue;
-                if (offset == 0 || size < 12) continue;
-                auto data = r.slice(offset, size);
-                if (!data) continue;
+        for_each_segment_section([&](const auto&, const std::byte* sp) {
+            const u64 addr    = read_le_at<u64>(sp + 32);
+            const u64 size    = read_le_at<u64>(sp + 40);
+            const u32 offset  = read_le_at<u32>(sp + 48);
+            const u32 flags   = read_le_at<u32>(sp + 64);
+            const u32 stype   = flags & SECTION_TYPE_MASK;
+            if (stype != S_SYMBOL_STUBS) return;
+            if (offset == 0 || size < 12) return;
+            auto data = r.slice(offset, size);
+            if (!data) return;
 
-                for (std::size_t off = 0; off + 12 <= data->size(); off += 4) {
-                    const addr_t ip = static_cast<addr_t>(addr + off);
-                    auto slot = decode_arm64_stub_slot(*data, off, ip);
-                    if (!slot) continue;
-                    auto it = slot_to_name.find(*slot);
-                    if (it != slot_to_name.end()) {
-                        import_stub_addr.try_emplace(it->second, ip);
-                    }
+            for (std::size_t off = 0; off + 12 <= data->size(); off += 4) {
+                const addr_t ip = static_cast<addr_t>(addr + off);
+                auto slot = decode_arm64_stub_slot(*data, off, ip);
+                if (!slot) continue;
+                auto it = slot_to_name.find(*slot);
+                if (it != slot_to_name.end()) {
+                    import_stub_addr.try_emplace(it->second, ip);
                 }
             }
-        }
+        });
 
         for (auto& sym : symbols_) {
             if (!sym.is_import || sym.addr != 0) continue;
@@ -1254,54 +1334,42 @@ Result<void> MachOBinary::parse() {
         std::unordered_map<std::string, addr_t> import_stub_addr;
         const X64Decoder dec;
 
-        for (const auto& lc : lcs) {
-            if (lc.cmd != LC_SEGMENT_64) continue;
-            if (lc.size < SEGMENT_COMMAND_64_SIZE) continue;
-            auto lcb = r.slice(lc.off, lc.size);
-            if (!lcb) continue;
-            const std::byte* const p = lcb->data();
-            const u32 nsects = read_le_at<u32>(p + 64);
-            for (u32 s = 0; s < nsects; ++s) {
-                const std::size_t so = SEGMENT_COMMAND_64_SIZE +
-                    static_cast<std::size_t>(s) * 80;
-                if (so + 80 > lc.size) break;
-                const std::byte* const sp = p + so;
-                const u64 addr    = read_le_at<u64>(sp + 32);
-                const u64 size    = read_le_at<u64>(sp + 40);
-                const u32 offset  = read_le_at<u32>(sp + 48);
-                const u32 flags   = read_le_at<u32>(sp + 64);
-                const u32 stype   = flags & SECTION_TYPE_MASK;
-                if (stype != S_SYMBOL_STUBS) continue;
-                if (offset == 0 || size == 0) continue;
-                auto data = r.slice(offset, size);
-                if (!data) continue;
+        for_each_segment_section([&](const auto&, const std::byte* sp) {
+            const u64 addr    = read_le_at<u64>(sp + 32);
+            const u64 size    = read_le_at<u64>(sp + 40);
+            const u32 offset  = read_le_at<u32>(sp + 48);
+            const u32 flags   = read_le_at<u32>(sp + 64);
+            const u32 stype   = flags & SECTION_TYPE_MASK;
+            if (stype != S_SYMBOL_STUBS) return;
+            if (offset == 0 || size == 0) return;
+            auto data = r.slice(offset, size);
+            if (!data) return;
 
-                addr_t ip = static_cast<addr_t>(addr);
-                std::size_t off = 0;
-                while (off < data->size()) {
-                    auto remaining = data->subspan(off);
-                    auto decoded = dec.decode(remaining, ip);
-                    if (!decoded) { ip += 1; off += 1; continue; }
-                    const Instruction& insn = *decoded;
-                    if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1) {
-                        const Operand& op = insn.operands[0];
-                        if (op.kind == Operand::Kind::Memory &&
-                            op.mem.base == Reg::Rip &&
-                            op.mem.index == Reg::None &&
-                            op.mem.has_disp) {
-                            const addr_t slot = ip + insn.length +
-                                                static_cast<addr_t>(op.mem.disp);
-                            auto it = slot_to_name.find(slot);
-                            if (it != slot_to_name.end()) {
-                                import_stub_addr.try_emplace(it->second, ip);
-                            }
+            addr_t ip = static_cast<addr_t>(addr);
+            std::size_t off = 0;
+            while (off < data->size()) {
+                auto remaining = data->subspan(off);
+                auto decoded = dec.decode(remaining, ip);
+                if (!decoded) { ip += 1; off += 1; continue; }
+                const Instruction& insn = *decoded;
+                if (insn.mnemonic == Mnemonic::Jmp && insn.num_operands == 1) {
+                    const Operand& op = insn.operands[0];
+                    if (op.kind == Operand::Kind::Memory &&
+                        op.mem.base == Reg::Rip &&
+                        op.mem.index == Reg::None &&
+                        op.mem.has_disp) {
+                        const addr_t slot = ip + insn.length +
+                                            static_cast<addr_t>(op.mem.disp);
+                        auto it = slot_to_name.find(slot);
+                        if (it != slot_to_name.end()) {
+                            import_stub_addr.try_emplace(it->second, ip);
                         }
                     }
-                    ip  += insn.length;
-                    off += insn.length;
                 }
+                ip  += insn.length;
+                off += insn.length;
             }
-        }
+        });
 
         for (auto& sym : symbols_) {
             if (!sym.is_import || sym.addr != 0) continue;
@@ -1410,14 +1478,7 @@ Result<void> MachOBinary::parse() {
     // which makes the decompile output show Objective-C method names where
     // `sub_<hex>` would otherwise appear.
     {
-        const Section* classlist = nullptr;
-        for (const auto& s : sections_) {
-            // Section names are "__SEG,__NAME"; match on the suffix.
-            if (s.name.size() >= 17 &&
-                s.name.substr(s.name.size() - 16) == "__objc_classlist") {
-                classlist = &s; break;
-            }
-        }
+        const Section* classlist = find_section_suffix(sections_, "__objc_classlist");
         if (classlist && classlist->size >= 8) {
             const std::size_t n_classes = static_cast<std::size_t>(classlist->size / 8);
             auto also_scan_ro = [&](addr_t ro_ptr, std::string_view cls_name, bool meta) {
@@ -1528,6 +1589,54 @@ Result<void> MachOBinary::parse() {
             s.addr = desc_va;
             s.kind = SymbolKind::Object;
             symbols_.push_back(std::move(s));
+
+            const i32 access_delta = read_i32_at(segments_, desc_va + 12);
+            if (access_delta != 0) {
+                const addr_t access_va = static_cast<addr_t>(
+                    static_cast<i64>(desc_va + 12) +
+                    static_cast<i64>(access_delta));
+                if (!bytes_at(access_va).empty()) {
+                    const bool already_named = std::ranges::any_of(symbols_,
+                        [&](const Symbol& existing) {
+                            return !existing.is_import &&
+                                   existing.kind == SymbolKind::Function &&
+                                   existing.addr == access_va;
+                        });
+                    if (!already_named) {
+                        Symbol access;
+                        access.name = swift_accessor_symbol_name(type_name);
+                        access.addr = access_va;
+                        access.kind = SymbolKind::Function;
+                        symbols_.push_back(std::move(access));
+                    }
+                }
+            }
+
+            const i32 fields_delta = read_i32_at(segments_, desc_va + 16);
+            if (fields_delta == 0) continue;
+            const addr_t fields_va = static_cast<addr_t>(
+                static_cast<i64>(desc_va + 16) + static_cast<i64>(fields_delta));
+            const u16 record_size = read_u16_at(segments_, fields_va + 10);
+            const u32 field_count = read_u32_at(segments_, fields_va + 12);
+            if (record_size < 12 || field_count > 10000) continue;
+
+            for (u32 f = 0; f < field_count; ++f) {
+                const addr_t record_va = fields_va + 16 +
+                    static_cast<addr_t>(f) * record_size;
+                const i32 field_name_delta = read_i32_at(segments_, record_va + 8);
+                if (field_name_delta == 0) continue;
+                const addr_t field_name_va = static_cast<addr_t>(
+                    static_cast<i64>(record_va + 8) +
+                    static_cast<i64>(field_name_delta));
+                std::string field_name = read_cstring_at(segments_, field_name_va);
+                if (field_name.empty()) continue;
+
+                Symbol field;
+                field.name = swift_field_symbol_name(type_name, field_name);
+                field.addr = field_name_va;
+                field.kind = SymbolKind::Object;
+                symbols_.push_back(std::move(field));
+            }
         }
     }
 

@@ -1,7 +1,6 @@
 // sub_1800011c0
 uint64_t sub_1800011c0(uint64_t a1) {
-  uint32_t t0 = (uint32_t)a1;
-  if (t0 > 5) {
+  if ((uint32_t)a1 > 5) {
     return -1;
   }
   switch (rcx) {

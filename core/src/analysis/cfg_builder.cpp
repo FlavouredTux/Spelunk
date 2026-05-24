@@ -63,6 +63,7 @@ struct WalkState {
            name == "__assert" ||
            name == "__assert2" ||
            name == "__assert_fail" ||
+           name == "__assert_rtn" ||
            name == "abort" ||
            name == "exit" ||
            name == "_exit" ||
@@ -879,6 +880,9 @@ void CfgBuilder::ensure_unwind_ranges_() const {
         if (!inserted && len > it->second) it->second = len;
     };
     for (const auto& e : enumerate_fde_extents(binary_)) {
+        note(e.pc_begin, e.pc_range);
+    }
+    for (const auto& e : enumerate_compact_unwind_extents(binary_)) {
         note(e.pc_begin, e.pc_range);
     }
     for (const auto& e : parse_pe_pdata(binary_)) {

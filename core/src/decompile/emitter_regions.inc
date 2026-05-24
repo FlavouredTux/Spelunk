@@ -39,8 +39,8 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
     emitted_bindings = bindings_before_body;
     if (rendered_region_empty(body)) return;
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    emit_materializations_for_value(r.condition, 0, out, ind);
     const std::string cond = render_condition(r.condition, r.invert);
+    emit_materializations_for_rendered_value(r.condition, cond, out, ind);
     out += std::format("{}if ({}) {{\n", ind, cond);
     out += body;
     emitted_bindings.insert(bindings_after_body.begin(), bindings_after_body.end());
@@ -70,8 +70,8 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         std::swap(bindings_after_then, bindings_after_else);
         std::swap(then_empty, else_empty);
     }
-    emit_materializations_for_value(r.condition, 0, out, ind);
     const std::string cond = render_condition(r.condition, invert_effective);
+    emit_materializations_for_rendered_value(r.condition, cond, out, ind);
     // Early-return collapse: when the then arm always exits (last statement
     // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
     // if, so we can drop the `else` wrapper and let the else body run at
@@ -132,8 +132,8 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     const auto bindings_after_header = emitted_bindings;
     emitted_bindings = bindings_before_header;
     if (header_buf.empty()) {
-        emit_materializations_for_value(r.condition, 0, out, ind);
         const std::string cond = render_condition(r.condition, r.invert);
+        emit_materializations_for_rendered_value(r.condition, cond, out, ind);
         out += std::format("{}while ({}) {{\n", ind, cond);
         for (std::size_t i = 1; i < r.children.size(); ++i) {
             emit_region(*r.children[i], depth + 1, out);
@@ -145,7 +145,7 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     out += std::format("{}for (;;) {{\n", ind);
     out += header_buf;
     emitted_bindings.insert(bindings_after_header.begin(), bindings_after_header.end());
-    emit_materializations_for_value(r.condition, 0, out, inner_ind);
+    emit_materializations_for_rendered_value(r.condition, break_cond, out, inner_ind);
     out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
     for (std::size_t i = 1; i < r.children.size(); ++i) {
         emit_region(*r.children[i], depth + 1, out);
@@ -162,6 +162,9 @@ void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out)
     out += std::format("{}do {{\n", ind);
     for (const auto& c : r.children) emit_region(*c, depth + 1, out);
     const std::string cond = render_condition(r.condition, r.invert);
+    emit_materializations_for_rendered_value(
+        r.condition, cond, out,
+        std::string(static_cast<std::size_t>(depth + 1) * 2u, ' '));
     out += std::format("{}}} while ({});\n", ind, cond);
 }
 
@@ -173,8 +176,8 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
     const std::string update = r.has_update
         ? render_update_inst(r.update_block, r.update_inst)
         : std::string{};
-    emit_materializations_for_value(r.condition, 0, out, ind);
     const std::string cond = render_condition(r.condition, r.invert);
+    emit_materializations_for_rendered_value(r.condition, cond, out, ind);
     if (update.empty()) {
         out += std::format("{}while ({}) {{\n", ind, cond);
     } else {
@@ -198,11 +201,25 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
             return;
         }
     }
+    if (current_return_is_void) {
+        if (auto k = ssa_key(r.condition); k) {
+            auto f = fold_return_expr.find(*k);
+            if (f != fold_return_expr.end()) {
+                out += std::format("{}{};\n", ind, f->second);
+            }
+        }
+        out += std::format("{}return;\n", ind);
+        return;
+    }
     if (is_void_call_result(r.condition)) {
         out += std::format("{}return;\n", ind);
         return;
     }
     if (is_unbound_clobber_result(r.condition)) {
+        out += std::format("{}return;\n", ind);
+        return;
+    }
+    if (renders_stack_chk_guard_value(r.condition)) {
         out += std::format("{}return;\n", ind);
         return;
     }
@@ -224,6 +241,10 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         v = d->srcs[0];
     }
     emit_materializations_for_value(v, 0, out, ind);
+    if (renders_stack_chk_guard_value(v)) {
+        out += std::format("{}return;\n", ind);
+        return;
+    }
     out += std::format("{}return {};\n", ind, expr(v));
 }
 

@@ -1,0 +1,5 @@
+// main
+uint64_t main(char* a1) {
+  puts(a1);
+  return 0;
+}

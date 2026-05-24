@@ -423,7 +423,7 @@ std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
     constexpr u32 UNWIND_SECOND_LEVEL_REGULAR    = 2;
     constexpr u32 UNWIND_SECOND_LEVEL_COMPRESSED = 3;
     constexpr u32 kMaxPageEntries = 65535;
-    std::vector<u32> starts;
+    std::vector<std::pair<u32, u32>> ranges;
 
     for (std::size_t i = 0; i + 1 < first.size(); ++i) {
         const u32 page_off = first[i].pages_off;
@@ -442,7 +442,9 @@ std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
             for (u32 k = 0; k < *entry_cnt; ++k) {
                 auto fn = rd32(table + static_cast<std::size_t>(k) * 8u);
                 if (!fn) break;
-                if (*fn >= group_begin && *fn < group_end) starts.push_back(*fn);
+                if (*fn >= group_begin && *fn < group_end) {
+                    ranges.emplace_back(*fn, group_end);
+                }
             }
         } else if (*kind == UNWIND_SECOND_LEVEL_COMPRESSED) {
             auto entry_off = rd16(page_off + 4);
@@ -455,17 +457,22 @@ std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
                 if (!packed) break;
                 const u32 delta = *packed & 0x00FF'FFFFu;
                 const u32 fn = group_begin + delta;
-                if (fn >= group_begin && fn < group_end) starts.push_back(fn);
+                if (fn >= group_begin && fn < group_end) {
+                    ranges.emplace_back(fn, group_end);
+                }
             }
         }
     }
 
-    std::ranges::sort(starts);
-    starts.erase(std::ranges::unique(starts).begin(), starts.end());
-    out.reserve(starts.size());
-    for (std::size_t i = 0; i < starts.size(); ++i) {
-        const u32 begin = starts[i];
-        const u32 end = (i + 1 < starts.size()) ? starts[i + 1] : begin;
+    std::ranges::sort(ranges);
+    ranges.erase(std::ranges::unique(ranges).begin(), ranges.end());
+    out.reserve(ranges.size());
+    for (std::size_t i = 0; i < ranges.size(); ++i) {
+        const u32 begin = ranges[i].first;
+        u32 end = ranges[i].second;
+        if (i + 1 < ranges.size() && ranges[i + 1].first < end) {
+            end = ranges[i + 1].first;
+        }
         if (end <= begin) continue;
         out.push_back({static_cast<addr_t>(text_base + begin),
                        static_cast<u64>(end - begin)});

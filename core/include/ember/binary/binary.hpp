@@ -123,6 +123,18 @@ public:
     // expose its mutable symbol table via `mutable_symbols()`.
     void add_synthetic_function_start(addr_t va);
 
+    // Add or upgrade a non-import Function symbol at `va` using a recovered
+    // name. Existing real names win; synthetic `sub_<hex>` placeholders are
+    // replaced. Returns true when the symbol table changed.
+    bool add_inferred_function_name(addr_t va, std::string_view name);
+
+    // Merge defined Function/Object symbols from a separate symbol-bearing
+    // binary by linked-image offset. This covers split-debug companions such
+    // as Mach-O dSYM files: a symbol at (overlay.base + X) names the primary
+    // image address (primary.base + X). Existing primary names win unless the
+    // current name is a synthetic `sub_<hex>` placeholder.
+    std::size_t overlay_symbols_from(const Binary& overlay);
+
 protected:
     // Mutable view of the derived class's symbol storage. Used only
     // by the small number of base-class methods that need to push

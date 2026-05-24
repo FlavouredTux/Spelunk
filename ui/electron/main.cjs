@@ -7,6 +7,16 @@ if (process.platform === "linux" &&
     process.env.GTK_USE_PORTAL === undefined) {
   process.env.GTK_USE_PORTAL = "0";
 }
+if (process.platform === "linux" &&
+    process.env.EMBER_USE_PORTAL_FILE_PICKER !== "1" &&
+    process.env.GIO_USE_PORTALS === undefined) {
+  process.env.GIO_USE_PORTALS = "0";
+}
+if (process.platform === "linux" &&
+    process.env.EMBER_USE_PORTAL_FILE_PICKER !== "1" &&
+    process.env.GDK_DEBUG === undefined) {
+  process.env.GDK_DEBUG = "no-portals";
+}
 
 const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell, screen } = require("electron");
 

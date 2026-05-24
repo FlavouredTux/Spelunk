@@ -620,14 +620,93 @@ function recentsPath() {
   return path.join(app.getPath("userData"), "recents.json");
 }
 
+function spawnText(cmd, args) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => { stdout += c.toString(); });
+    child.stderr.on("data", (c) => { stderr += c.toString(); });
+    child.on("error", (error) => resolve({ ok: false, stdout, stderr, error }));
+    child.on("close", (code) => resolve({ ok: code === 0, stdout, stderr, code }));
+  });
+}
+
+async function externalOpenDialog(opts) {
+  if (process.platform !== "linux") return null;
+  const title = typeof opts?.title === "string" ? opts.title : "Select file";
+  const multi = !!opts?.multiSelections;
+  const pickers = [
+    {
+      cmd: "zenity",
+      args: [
+        "--file-selection",
+        "--title", title,
+        ...(multi ? ["--multiple", "--separator=\n"] : []),
+      ],
+    },
+    {
+      cmd: "kdialog",
+      args: multi
+        ? ["--multiple", "--separate-output", "--getopenfilename", process.cwd()]
+        : ["--getopenfilename", process.cwd()],
+    },
+    {
+      cmd: "yad",
+      args: [
+        "--file-selection",
+        "--title", title,
+        ...(multi ? ["--multiple", "--separator=\n"] : []),
+      ],
+    },
+  ];
+
+  let sawPicker = false;
+  for (const picker of pickers) {
+    const r = await spawnText(picker.cmd, picker.args);
+    if (r.error) continue;
+    sawPicker = true;
+    const picked = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (picked.length > 0) return picked;
+    return null;
+  }
+  return sawPicker ? null : undefined;
+}
+
+async function pickOpenFiles(opts) {
+  const dialogOpts = {
+    title: typeof opts?.title === "string" ? opts.title : "Select file",
+    properties: opts?.multiSelections ? ["openFile", "multiSelections"] : ["openFile"],
+    filters: Array.isArray(opts?.filters) ? opts.filters : [
+      { name: "All files", extensions: ["*"] },
+    ],
+  };
+  if (process.platform === "linux" && process.env.EMBER_NATIVE_FILE_PICKER !== "1") {
+    const picked = await externalOpenDialog({
+      title: dialogOpts.title,
+      multiSelections: !!opts?.multiSelections,
+    });
+    if (picked !== undefined) return picked;
+  }
+  try {
+    const r = await dialog.showOpenDialog(dialogOpts);
+    if (!r.canceled && r.filePaths.length > 0) return r.filePaths;
+  } catch (e) {
+    console.warn(`[electron] native file picker failed: ${e?.message || e}`);
+  }
+  return await externalOpenDialog({
+    title: dialogOpts.title,
+    multiSelections: !!opts?.multiSelections,
+  });
+}
+
 ipcMain.handle("ember:pick", async () => {
-  const r = await dialog.showOpenDialog({
+  const picked = await pickOpenFiles({
     title: "Open binary",
-    properties: ["openFile"],
     filters: [{ name: "Executables", extensions: ["*"] }],
   });
-  if (r.canceled || r.filePaths.length === 0) return null;
-  state.binary = r.filePaths[0];
+  if (!picked || picked.length === 0) return null;
+  state.binary = picked[0];
   await addRecent(state.binary);
   return state.binary;
 });
@@ -655,15 +734,14 @@ ipcMain.handle("ember:openExternal", async (_e, url) => {
 // .ember script applier. Doesn't touch state.binary or recents.
 ipcMain.handle("ember:pickFile", async (_e, opts) => {
   const o = opts && typeof opts === "object" ? opts : {};
-  const r = await dialog.showOpenDialog({
+  const picked = await pickOpenFiles({
     title: typeof o.title === "string" ? o.title : "Select file",
-    properties: ["openFile"],
     filters: Array.isArray(o.filters) ? o.filters : [
       { name: "All files", extensions: ["*"] },
     ],
   });
-  if (r.canceled || r.filePaths.length === 0) return null;
-  return r.filePaths[0];
+  if (!picked || picked.length === 0) return null;
+  return picked[0];
 });
 
 ipcMain.handle("ember:setBinary", async (_e, p) => {
@@ -1422,16 +1500,15 @@ ipcMain.handle("ember:exportAnnotations", async (_e, bp, data) => {
 // decides the merge strategy (replace vs merge) so this stays a dumb
 // reader. Unknown fields pass through; missing fields default to empty.
 ipcMain.handle("ember:importAnnotations", async () => {
-  const r = await dialog.showOpenDialog({
+  const picked = await pickOpenFiles({
     title: "Import annotations",
     filters: [
       { name: "Ember annotations", extensions: ["json", "ember", "ann", "db"] },
       { name: "All files", extensions: ["*"] },
     ],
-    properties: ["openFile"],
   });
-  if (r.canceled || r.filePaths.length === 0) return null;
-  const raw = await fs.readFile(r.filePaths[0], "utf8");
+  if (!picked || picked.length === 0) return null;
+  const raw = await fs.readFile(picked[0], "utf8");
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -1439,7 +1516,7 @@ ipcMain.handle("ember:importAnnotations", async () => {
     parsed = parseAnnText(raw);
   }
   return {
-    path:         r.filePaths[0],
+    path:         picked[0],
     renames:      parsed.renames      || {},
     notes:        parsed.notes        || {},
     signatures:   parsed.signatures   || {},
@@ -1460,16 +1537,16 @@ ipcMain.handle("ember:importCorpusRenames", async (_e, opts) => {
   const maxFnSize = Number.isFinite(Number(o.maxFnSize)) ? Math.max(0, Math.floor(Number(o.maxFnSize))) : 200000;
   const l0Prefilter = o.l0Prefilter !== false;
 
-  const picked = await dialog.showOpenDialog({
+  const picked = await pickOpenFiles({
     title: "Import renames from TEEF corpus",
     defaultPath: defaultCorpusPath(),
     filters: [
       { name: "TEEF corpora", extensions: ["teef", "tsv"] },
       { name: "All files", extensions: ["*"] },
     ],
-    properties: ["openFile", "multiSelections"],
+    multiSelections: true,
   });
-  if (picked.canceled || picked.filePaths.length === 0) return null;
+  if (!picked || picked.length === 0) return null;
 
   const annPath = await writeCliAnnotations(state.binary);
   const effective = await materializePatchedBinary(state.binary);
@@ -1478,7 +1555,7 @@ ipcMain.handle("ember:importCorpusRenames", async (_e, opts) => {
   if (minFnSize > 0) args.push("--min-fn-size", String(minFnSize));
   if (maxFnSize > 0) args.push("--max-fn-size", String(maxFnSize));
   args.push("--recognize-threshold", String(threshold));
-  for (const p of picked.filePaths) args.push("--corpus", p);
+  for (const p of picked) args.push("--corpus", p);
   if (annPath) args.push("--annotations", annPath);
   args.push(effective);
 

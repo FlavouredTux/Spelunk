@@ -15,6 +15,17 @@ const child = spawn(electron, process.argv.slice(2), {
   stdio: ["inherit", "inherit", "pipe"],
 });
 
+let forwardingSignal = null;
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.once(sig, () => {
+    forwardingSignal = sig;
+    if (!child.killed) child.kill(sig);
+    setTimeout(() => {
+      if (!child.killed) child.kill("SIGKILL");
+    }, 1500).unref();
+  });
+}
+
 let pending = "";
 function isNoisyPortalLine(line) {
   return line.includes("Failed to read portal settings") ||
@@ -35,9 +46,7 @@ child.on("close", (code, signal) => {
   if (pending && !isNoisyPortalLine(pending)) {
     process.stderr.write(pending);
   }
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
-  }
+  if (forwardingSignal) process.exit(128 + (forwardingSignal === "SIGINT" ? 2 : 15));
+  if (signal) process.exit(128 + (signal === "SIGINT" ? 2 : 15));
   process.exit(code ?? 0);
 });

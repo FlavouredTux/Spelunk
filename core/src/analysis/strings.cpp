@@ -1030,6 +1030,58 @@ reflection_bound_descriptor_name(std::string_view text) {
     return alpha;
 }
 
+[[nodiscard]] bool has_uppercase_transition(std::string_view text) noexcept {
+    bool lower = false;
+    bool upper = false;
+    for (char c : text) {
+        const auto u = static_cast<unsigned char>(c);
+        lower |= std::islower(u);
+        upper |= std::isupper(u);
+    }
+    return lower && upper;
+}
+
+[[nodiscard]] bool has_role_identifier_suffix(std::string_view text) noexcept {
+    for (const std::string_view suffix : {
+             std::string_view{"Callback"},
+             std::string_view{"Callbacks"},
+             std::string_view{"Job"},
+             std::string_view{"Jobs"},
+             std::string_view{"Telemetry"},
+             std::string_view{"Report"},
+             std::string_view{"Reporter"},
+             std::string_view{"Event"},
+             std::string_view{"Events"},
+             std::string_view{"Protocol"},
+         }) {
+        if (text.ends_with(suffix)) return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool looks_like_role_identifier_anchor(std::string_view text) noexcept {
+    if (text.size() < 8 || text.size() > 80) return false;
+    if (!std::isupper(static_cast<unsigned char>(text.front()))) return false;
+    if (!has_uppercase_transition(text)) return false;
+    if (!has_role_identifier_suffix(text)) return false;
+    if (text.starts_with("NSt") || text.starts_with("ZN") ||
+        text.starts_with("ZZ") || text.starts_with("T_")) {
+        return false;
+    }
+    for (char c : text) {
+        if (!is_ident_char(c)) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] std::optional<std::string>
+role_identifier_anchor_name(std::string_view text) {
+    if (!looks_like_role_identifier_anchor(text)) return std::nullopt;
+    auto name = sanitize_name(std::string{"string_anchor_"} + std::string{text});
+    if (name.empty()) return std::nullopt;
+    return name;
+}
+
 [[nodiscard]] std::string camel_tail_to_snake(std::string_view text) {
     std::string out;
     out.reserve(text.size() + 8);
@@ -1541,6 +1593,44 @@ void infer_reflection_member_names(
     }
 }
 
+template <class EnclosingFunction>
+void infer_role_identifier_anchors(
+    std::span<const StringEntry> strings,
+    EnclosingFunction enclosing_function,
+    std::vector<StringNameCandidate>& out,
+    std::set<std::pair<addr_t, std::string>>& seen) {
+    std::map<std::string, std::set<addr_t>> functions_by_anchor;
+    for (const auto& s : strings) {
+        if (s.xrefs.empty()) continue;
+        auto name = role_identifier_anchor_name(s.text);
+        if (!name) continue;
+        auto& functions = functions_by_anchor[*name];
+        for (addr_t xr : s.xrefs) {
+            if (auto fn = enclosing_function(xr)) functions.insert(*fn);
+        }
+    }
+
+    std::map<addr_t, std::string> anchor_by_function;
+    std::set<addr_t> ambiguous_functions;
+    for (const auto& [name, functions] : functions_by_anchor) {
+        if (functions.size() != 1) continue;
+        const addr_t fn = *functions.begin();
+        if (ambiguous_functions.contains(fn)) continue;
+        auto [it, inserted] = anchor_by_function.emplace(fn, name);
+        if (!inserted && it->second != name) {
+            anchor_by_function.erase(it);
+            ambiguous_functions.insert(fn);
+        }
+    }
+
+    for (const auto& [fn, name] : anchor_by_function) {
+        if (ambiguous_functions.contains(fn)) continue;
+        if (seen.emplace(fn, name).second) {
+            out.push_back({fn, name, name.substr(std::string_view{"string_anchor_"}.size())});
+        }
+    }
+}
+
 [[nodiscard]] std::map<SsaKey, const IrInst*>
 index_defs(const IrFunction& fn) {
     std::map<SsaKey, const IrInst*> out;
@@ -1747,6 +1837,10 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
         (options.max_assertion_functions == 0 || fns.size() <= options.max_assertion_functions)) {
         ScopedTimer phase("strings.assertion_names");
         infer_assertion_function_names(b, fns, out, seen);
+    }
+    {
+        ScopedTimer phase("strings.role_identifier_anchors");
+        infer_role_identifier_anchors(strings, enclosing_function, out, seen);
     }
     return out;
 }

@@ -1760,6 +1760,12 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  macho_string_names.mangled_conversion_parent.pseudo.txt
     )
     ember_golden_test(
+        NAME    macho_string_names_role_identifier_anchor_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|string_anchor_SchedulerHeartbeatJob"
+        GOLDEN  macho_string_names.role_identifier_anchor.pseudo.txt
+    )
+    ember_golden_test(
         NAME    macho_string_names_compiler_artifact_surface
         FIXTURE macho_string_names
         ARGS    "-q|--no-cache|--surfaces|--surface|compiler_artifacts|--surface-row-type|evidence"

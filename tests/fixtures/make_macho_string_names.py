@@ -53,6 +53,7 @@ def main() -> int:
     mangled_ctor_va = mangled_dtor_va + 13
     mangled_operator_va = mangled_ctor_va + 13
     mangled_conversion_va = mangled_operator_va + 13
+    role_anchor_va = mangled_conversion_va + 13
 
     log = b"[FLog::MacLuaApp] Core::Player::recoverName failed\0"
     pretty = b"static int recoverCachedValue(int token)\0"
@@ -106,6 +107,7 @@ def main() -> int:
         b"NSt3__110__function6__funcIZNK7Example4GatecvPN4Core6PlayerEEvE3$_0"
         b"NS_9allocatorIS6_EEFvvEEE\0"
     )
+    role_anchor = b"SchedulerHeartbeatJob\0"
     # main: return 1
     main_code = bytes.fromhex("b801000000c3")
     # hidden: lea rdi, [rip + log]; mov eax, 77; ret
@@ -125,11 +127,13 @@ def main() -> int:
     mangled_ctor_len = 7 + 5 + 1
     mangled_operator_len = 7 + 5 + 1
     mangled_conversion_len = 7 + 5 + 1
+    role_anchor_len = 7 + 5 + 1
     string_off = align(
         len(main_code) + hidden_len + pretty_len + oper_len + dtor_len +
         closure_len + emplace_len + weak_result_len + exception_len +
         local_len + anon_len + free_len + free_nested_len + mangled_dtor_len +
-        mangled_ctor_len + mangled_operator_len + mangled_conversion_len,
+        mangled_ctor_len + mangled_operator_len + mangled_conversion_len +
+        role_anchor_len,
         8)
     string_va = text_vmaddr + string_off
     pretty_string_va = string_va + len(log)
@@ -147,6 +151,7 @@ def main() -> int:
     mangled_ctor_string_va = mangled_dtor_string_va + len(mangled_dtor)
     mangled_operator_string_va = mangled_ctor_string_va + len(mangled_ctor)
     mangled_conversion_string_va = mangled_operator_string_va + len(mangled_operator)
+    role_anchor_string_va = mangled_conversion_string_va + len(mangled_conversion)
     lea_next = hidden_va + 7
     disp = string_va - lea_next
     hidden_code = b"\x48\x8d\x3d" + struct.pack("<i", disp) + bytes.fromhex("b84d000000c3")
@@ -231,19 +236,25 @@ def main() -> int:
         b"\x48\x8d\x3d" + struct.pack("<i", mangled_conversion_disp) +
         bytes.fromhex("b885000000c3")
     )
+    role_anchor_lea_next = role_anchor_va + 7
+    role_anchor_disp = role_anchor_string_va - role_anchor_lea_next
+    role_anchor_code = (
+        b"\x48\x8d\x3d" + struct.pack("<i", role_anchor_disp) +
+        bytes.fromhex("b886000000c3")
+    )
     code = (
         main_code + hidden_code + pretty_code + oper_code + dtor_code +
         closure_code + emplace_code + weak_result_code + exception_code +
         local_code + anon_code + free_code + free_nested_code +
         mangled_dtor_code + mangled_ctor_code + mangled_operator_code +
-        mangled_conversion_code
+        mangled_conversion_code + role_anchor_code
     )
     cstring_size = (
         len(log) + len(pretty) + len(oper) + len(dtor) + len(closure) +
         len(emplace) + len(weak_result) + len(exception_meta) +
         len(local_static) + len(anon_static) + len(free_function) +
         len(free_nested) + len(mangled_dtor) + len(mangled_ctor) +
-        len(mangled_operator) + len(mangled_conversion)
+        len(mangled_operator) + len(mangled_conversion) + len(role_anchor)
     )
     text_filesize = string_off + cstring_size
 
@@ -286,6 +297,7 @@ def main() -> int:
         uleb128(mangled_ctor_va - mangled_dtor_va) +
         uleb128(mangled_operator_va - mangled_ctor_va) +
         uleb128(mangled_conversion_va - mangled_operator_va) +
+        uleb128(role_anchor_va - mangled_conversion_va) +
         b"\0"
     )
     sym_off = link_file_off
@@ -327,6 +339,7 @@ def main() -> int:
     out += mangled_ctor
     out += mangled_operator
     out += mangled_conversion
+    out += role_anchor
     out += b"\0" * (sym_off - len(out))
     out += nlist
     out += strtab

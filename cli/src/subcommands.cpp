@@ -6836,7 +6836,10 @@ int run_serve(const Args& base, const Binary& b) {
     auto ensure_cached_function_windows = [&]() -> bool {
         if (cached_function_windows) return true;
         auto cache_it = functions_cache.find("functions");
-        if (cache_it == functions_cache.end()) return false;
+        if (cache_it == functions_cache.end()) {
+            cache_it = functions_cache.emplace(
+                "functions", build_functions_output(b, false)).first;
+        }
 
         const std::string& tsv = cache_it->second;
         const auto row_count = static_cast<std::size_t>(std::count(tsv.begin(), tsv.end(), '\n'));

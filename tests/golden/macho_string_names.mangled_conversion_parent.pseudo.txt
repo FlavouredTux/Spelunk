@@ -1,0 +1,4 @@
+// Example::Gate::operator_Core_Player_ptr
+uint64_t Example::Gate::operator_Core_Player_ptr(void) {
+  return 0x85;
+}

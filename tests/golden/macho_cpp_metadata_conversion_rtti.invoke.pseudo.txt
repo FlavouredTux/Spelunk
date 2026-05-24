@@ -1,0 +1,4 @@
+// Example::Gate::operator_Core_Player_ptr::lambda_0::invoke
+uint64_t Example::Gate::operator_Core_Player_ptr::lambda_0::invoke(void) {
+  return 0x10;
+}

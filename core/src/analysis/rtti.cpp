@@ -80,53 +80,27 @@ struct OperatorSuffixMatch {
     std::size_t length = 0;
 };
 
-[[nodiscard]] std::optional<OperatorSuffixMatch>
-operator_suffix_match(std::string_view text, std::size_t pos) {
+[[nodiscard]] std::optional<OperatorSuffixMatch> operator_suffix_match(std::string_view text,
+                                                                       std::size_t pos) {
     struct OpName {
         std::string_view spelling;
         std::string_view token;
     };
-    for (const auto& op : {
-        OpName{"()", "call"},
-        OpName{"[]", "index"},
-        OpName{"<=>", "cmp"},
-        OpName{"==", "eq"},
-        OpName{"!=", "ne"},
-        OpName{"<=", "le"},
-        OpName{">=", "ge"},
-        OpName{"->*", "ptr_member"},
-        OpName{"->", "arrow"},
-        OpName{"&&", "logical_and"},
-        OpName{"||", "logical_or"},
-        OpName{"++", "inc"},
-        OpName{"--", "dec"},
-        OpName{"+=", "plus_assign"},
-        OpName{"-=", "minus_assign"},
-        OpName{"*=", "mul_assign"},
-        OpName{"/=", "div_assign"},
-        OpName{"%=", "mod_assign"},
-        OpName{"&=", "and_assign"},
-        OpName{"|=", "or_assign"},
-        OpName{"^=", "xor_assign"},
-        OpName{"<<=", "shl_assign"},
-        OpName{">>=", "shr_assign"},
-        OpName{"<<", "shl"},
-        OpName{">>", "shr"},
-        OpName{"+", "plus"},
-        OpName{"-", "minus"},
-        OpName{"*", "mul"},
-        OpName{"/", "div"},
-        OpName{"%", "mod"},
-        OpName{"&", "and"},
-        OpName{"|", "or"},
-        OpName{"^", "xor"},
-        OpName{"~", "bit_not"},
-        OpName{"!", "not"},
-        OpName{"=", "assign"},
-        OpName{"<", "lt"},
-        OpName{">", "gt"},
-        OpName{",", "comma"},
-    }) {
+    for (const auto &op : {
+             OpName{"()", "call"},        OpName{"[]", "index"},       OpName{"<=>", "cmp"},
+             OpName{"==", "eq"},          OpName{"!=", "ne"},          OpName{"<=", "le"},
+             OpName{">=", "ge"},          OpName{"->*", "ptr_member"}, OpName{"->", "arrow"},
+             OpName{"&&", "logical_and"}, OpName{"||", "logical_or"},  OpName{"++", "inc"},
+             OpName{"--", "dec"},         OpName{"+=", "plus_assign"}, OpName{"-=", "minus_assign"},
+             OpName{"*=", "mul_assign"},  OpName{"/=", "div_assign"},  OpName{"%=", "mod_assign"},
+             OpName{"&=", "and_assign"},  OpName{"|=", "or_assign"},   OpName{"^=", "xor_assign"},
+             OpName{"<<=", "shl_assign"}, OpName{">>=", "shr_assign"}, OpName{"<<", "shl"},
+             OpName{">>", "shr"},         OpName{"+", "plus"},         OpName{"-", "minus"},
+             OpName{"*", "mul"},          OpName{"/", "div"},          OpName{"%", "mod"},
+             OpName{"&", "and"},          OpName{"|", "or"},           OpName{"^", "xor"},
+             OpName{"~", "bit_not"},      OpName{"!", "not"},          OpName{"=", "assign"},
+             OpName{"<", "lt"},           OpName{">", "gt"},           OpName{",", "comma"},
+         }) {
         if (text.substr(pos).starts_with(op.spelling)) {
             return OperatorSuffixMatch{op.token, op.spelling.size()};
         }
@@ -146,21 +120,85 @@ operator_suffix_match(std::string_view text, std::size_t pos) {
     return std::nullopt;
 }
 
+[[nodiscard]] std::string_view trim_ascii(std::string_view s) noexcept {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.remove_prefix(1);
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+        s.remove_suffix(1);
+    }
+    return s;
+}
+
+[[nodiscard]] std::string flat_demangled_type_token(std::string_view type) {
+    type = trim_ascii(type);
+    std::string out;
+    out.reserve(type.size() + 8);
+    auto underscore = [&] {
+        if (!out.empty() && out.back() != '_')
+            out.push_back('_');
+    };
+    auto append_word = [&](std::string_view word) {
+        if (word.empty())
+            return;
+        if (!out.empty() && out.back() != '_')
+            out.push_back('_');
+        out.append(word);
+    };
+    for (std::size_t i = 0; i < type.size(); ++i) {
+        const char c = type[i];
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+            out.push_back(c);
+        } else if (c == ':' && i + 1 < type.size() && type[i + 1] == ':') {
+            underscore();
+            ++i;
+        } else if (c == '*') {
+            append_word("ptr");
+        } else if (c == '&') {
+            if (i + 1 < type.size() && type[i + 1] == '&') {
+                append_word("rref");
+                ++i;
+            } else {
+                append_word("ref");
+            }
+        } else if (c == '[') {
+            append_word("array");
+            while (i + 1 < type.size() && type[i + 1] != ']')
+                ++i;
+        } else {
+            underscore();
+        }
+    }
+    while (!out.empty() && out.front() == '_')
+        out.erase(out.begin());
+    while (!out.empty() && out.back() == '_')
+        out.pop_back();
+    return out;
+}
+
 [[nodiscard]] std::string normalize_operator_name(std::string_view name) {
     constexpr std::string_view needle = "operator";
-    for (std::size_t pos = name.find(needle);
-         pos != std::string_view::npos;
+    for (std::size_t pos = name.find(needle); pos != std::string_view::npos;
          pos = name.find(needle, pos + needle.size())) {
         const bool boundary_before =
-            pos == 0 ||
-            (pos >= 2 && name[pos - 1] == ':' && name[pos - 2] == ':');
-        if (!boundary_before) continue;
+            pos == 0 || (pos >= 2 && name[pos - 1] == ':' && name[pos - 2] == ':');
+        if (!boundary_before)
+            continue;
         auto match = operator_suffix_match(name, pos + needle.size());
-        if (!match) continue;
         std::string out{name.substr(0, pos)};
         out += "operator_";
-        out += match->token;
-        out += name.substr(pos + needle.size() + match->length);
+        if (match) {
+            out += match->token;
+            out += name.substr(pos + needle.size() + match->length);
+            return out;
+        }
+        const auto target = trim_ascii(name.substr(pos + needle.size()));
+        if (target.empty())
+            continue;
+        auto token = flat_demangled_type_token(target);
+        if (token.empty())
+            continue;
+        out += token;
         return out;
     }
     return std::string{name};

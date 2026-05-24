@@ -1465,6 +1465,8 @@ if(Python3_Interpreter_FOUND)
     ember_build_python_macho_fixture(
         macho_cpp_metadata_operator_rtti make_macho_cpp_rtti.py --metadata-operator)
     ember_build_python_macho_fixture(
+        macho_cpp_metadata_conversion_rtti make_macho_cpp_rtti.py --metadata-conversion)
+    ember_build_python_macho_fixture(
         macho_cpp_metadata_long_rtti make_macho_cpp_rtti.py --metadata-long)
     ember_build_python_macho_fixture(
         macho_cpp_shared_ptr_rtti make_macho_cpp_rtti.py --shared-ptr)
@@ -1739,6 +1741,12 @@ if(Python3_Interpreter_FOUND)
         FIXTURE macho_string_names
         ARGS    "-q|--infer-string-names|-p|-s|Example::Gadget::operator_eq"
         GOLDEN  macho_string_names.mangled_operator_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_mangled_conversion_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Example::Gate::operator_Core_Player_ptr"
+        GOLDEN  macho_string_names.mangled_conversion_parent.pseudo.txt
     )
     ember_golden_test(
         NAME    macho_string_names_compiler_artifact_surface
@@ -2021,6 +2029,12 @@ if(Python3_Interpreter_FOUND)
         FIXTURE macho_cpp_metadata_operator_rtti
         ARGS    "-p|-s|Example::Gadget::operator_eq::lambda_0::invoke"
         GOLDEN  macho_cpp_metadata_operator_rtti.invoke.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_cpp_metadata_conversion_rtti_invoke_pseudo
+        FIXTURE macho_cpp_metadata_conversion_rtti
+        ARGS    "-p|-s|Example::Gate::operator_Core_Player_ptr::lambda_0::invoke"
+        GOLDEN  macho_cpp_metadata_conversion_rtti.invoke.pseudo.txt
     )
     ember_golden_test(
         NAME    macho_cpp_metadata_long_rtti_invoke_pseudo

@@ -49,6 +49,9 @@ def main() -> int:
     if args and args[0] == "--metadata-operator":
         mode = "metadata-operator"
         args = args[1:]
+    if args and args[0] == "--metadata-conversion":
+        mode = "metadata-conversion"
+        args = args[1:]
     if args and args[0] == "--metadata-long":
         mode = "metadata-long"
         args = args[1:]
@@ -57,7 +60,7 @@ def main() -> int:
         args = args[1:]
     if len(args) != 1:
         print(
-            "usage: make_macho_cpp_rtti.py [--metadata|--metadata-local|--metadata-nested-local|--metadata-nested-free|--metadata-dtor|--metadata-ctor|--metadata-operator|--metadata-long|--shared-ptr] <output-path>",
+            "usage: make_macho_cpp_rtti.py [--metadata|--metadata-local|--metadata-nested-local|--metadata-nested-free|--metadata-dtor|--metadata-ctor|--metadata-operator|--metadata-conversion|--metadata-long|--shared-ptr] <output-path>",
             file=sys.stderr,
         )
         return 2
@@ -70,12 +73,12 @@ def main() -> int:
     text_vmaddr = BASE + PAGE
     const_vmaddr = BASE + PAGE * 2
     main_va = text_vmaddr
-    method_count = 9 if mode in ("metadata", "metadata-local", "metadata-nested-local", "metadata-nested-free", "metadata-dtor", "metadata-ctor", "metadata-operator", "metadata-long") else 5 if mode == "shared-ptr" else 2
+    method_count = 9 if mode in ("metadata", "metadata-local", "metadata-nested-local", "metadata-nested-free", "metadata-dtor", "metadata-ctor", "metadata-operator", "metadata-conversion", "metadata-long") else 5 if mode == "shared-ptr" else 2
     method_vas = [text_vmaddr + 6 + i * 6 for i in range(method_count)]
 
     code = bytearray()
     code += bytes.fromhex("b801000000c3")  # main: return 1
-    if mode in ("metadata", "metadata-local", "metadata-nested-local", "metadata-nested-free", "metadata-dtor", "metadata-ctor", "metadata-operator", "metadata-long"):
+    if mode in ("metadata", "metadata-local", "metadata-nested-local", "metadata-nested-free", "metadata-dtor", "metadata-ctor", "metadata-operator", "metadata-conversion", "metadata-long"):
         returns = [10 + i for i in range(method_count)]
     elif mode == "shared-ptr":
         returns = [20 + i for i in range(method_count)]
@@ -138,6 +141,8 @@ def main() -> int:
         vtable_symbol = "__ZTVNSt3__110__function6__funcIZN4Core6PlayerC1EvE3$_0NS_9allocatorIS3_EEFvvEEE"
     elif mode == "metadata-operator":
         vtable_symbol = "__ZTVNSt3__110__function6__funcIZNK7Example6GadgeteqERKS0_E3$_0NS_9allocatorIS3_EEFvvEEE"
+    elif mode == "metadata-conversion":
+        vtable_symbol = "__ZTVNSt3__110__function6__funcIZNK7Example4GatecvPN4Core6PlayerEEvE3$_0NS_9allocatorIS6_EEFvvEEE"
     elif mode == "metadata-long":
         long_name = (
             "recoverCallableTraitFromVeryLongCompilerMetadataArtifactName"

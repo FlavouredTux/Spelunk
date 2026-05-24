@@ -1,0 +1,4 @@
+// feature_network_job_use_parallel_for
+uint64_t feature_network_job_use_parallel_for(void) {
+  return 0x89;
+}

@@ -56,6 +56,7 @@ def main() -> int:
     role_anchor_va = mangled_conversion_va + 13
     luau_telemetry_va = role_anchor_va + 13
     feature_anchor_va = luau_telemetry_va + 13
+    feature_network_va = feature_anchor_va + 13
 
     log = b"[FLog::MacLuaApp] Core::Player::recoverName failed\0"
     pretty = b"static int recoverCachedValue(int token)\0"
@@ -112,6 +113,7 @@ def main() -> int:
     role_anchor = b"SchedulerHeartbeatJob\0"
     luau_telemetry = b"luau-telemetry.bad-synchronize-call\0"
     feature_anchor = b"WorkspaceTaskQueue\0"
+    feature_network = b"NetworkJobUseParallelFor\0"
     # main: return 1
     main_code = bytes.fromhex("b801000000c3")
     # hidden: lea rdi, [rip + log]; mov eax, 77; ret
@@ -134,12 +136,14 @@ def main() -> int:
     role_anchor_len = 7 + 5 + 1
     luau_telemetry_len = 7 + 5 + 1
     feature_anchor_len = 7 + 5 + 1
+    feature_network_len = 7 + 5 + 1
     string_off = align(
         len(main_code) + hidden_len + pretty_len + oper_len + dtor_len +
         closure_len + emplace_len + weak_result_len + exception_len +
         local_len + anon_len + free_len + free_nested_len + mangled_dtor_len +
         mangled_ctor_len + mangled_operator_len + mangled_conversion_len +
-        role_anchor_len + luau_telemetry_len + feature_anchor_len,
+        role_anchor_len + luau_telemetry_len + feature_anchor_len +
+        feature_network_len,
         8)
     string_va = text_vmaddr + string_off
     pretty_string_va = string_va + len(log)
@@ -160,6 +164,7 @@ def main() -> int:
     role_anchor_string_va = mangled_conversion_string_va + len(mangled_conversion)
     luau_telemetry_string_va = role_anchor_string_va + len(role_anchor)
     feature_anchor_string_va = luau_telemetry_string_va + len(luau_telemetry)
+    feature_network_string_va = feature_anchor_string_va + len(feature_anchor)
     lea_next = hidden_va + 7
     disp = string_va - lea_next
     hidden_code = b"\x48\x8d\x3d" + struct.pack("<i", disp) + bytes.fromhex("b84d000000c3")
@@ -262,13 +267,19 @@ def main() -> int:
         b"\x48\x8d\x3d" + struct.pack("<i", feature_anchor_disp) +
         bytes.fromhex("b888000000c3")
     )
+    feature_network_lea_next = feature_network_va + 7
+    feature_network_disp = feature_network_string_va - feature_network_lea_next
+    feature_network_code = (
+        b"\x48\x8d\x3d" + struct.pack("<i", feature_network_disp) +
+        bytes.fromhex("b889000000c3")
+    )
     code = (
         main_code + hidden_code + pretty_code + oper_code + dtor_code +
         closure_code + emplace_code + weak_result_code + exception_code +
         local_code + anon_code + free_code + free_nested_code +
         mangled_dtor_code + mangled_ctor_code + mangled_operator_code +
         mangled_conversion_code + role_anchor_code + luau_telemetry_code +
-        feature_anchor_code
+        feature_anchor_code + feature_network_code
     )
     cstring_size = (
         len(log) + len(pretty) + len(oper) + len(dtor) + len(closure) +
@@ -276,7 +287,7 @@ def main() -> int:
         len(local_static) + len(anon_static) + len(free_function) +
         len(free_nested) + len(mangled_dtor) + len(mangled_ctor) +
         len(mangled_operator) + len(mangled_conversion) + len(role_anchor) +
-        len(luau_telemetry) + len(feature_anchor)
+        len(luau_telemetry) + len(feature_anchor) + len(feature_network)
     )
     text_filesize = string_off + cstring_size
 
@@ -322,6 +333,7 @@ def main() -> int:
         uleb128(role_anchor_va - mangled_conversion_va) +
         uleb128(luau_telemetry_va - role_anchor_va) +
         uleb128(feature_anchor_va - luau_telemetry_va) +
+        uleb128(feature_network_va - feature_anchor_va) +
         b"\0"
     )
     sym_off = link_file_off
@@ -366,6 +378,7 @@ def main() -> int:
     out += role_anchor
     out += luau_telemetry
     out += feature_anchor
+    out += feature_network
     out += b"\0" * (sym_off - len(out))
     out += nlist
     out += strtab

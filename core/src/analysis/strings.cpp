@@ -1297,17 +1297,85 @@ luau_anchor_name_from_string(std::string_view text) {
     for (char c : text) {
         if (!is_ident_char(c)) return false;
     }
+    std::string_view suffix;
+    bool has_prefix = false;
     for (const std::string_view prefix : {
-             std::string_view{"Workspace"},
-             std::string_view{"SimWorkspace"},
-             std::string_view{"SAuthWorkspace"},
-             std::string_view{"SupportWorkspace"},
-             std::string_view{"RemoveWorkspace"},
+             std::string_view{"MarketplaceService"},
              std::string_view{"HighlightsPerWorkspace"},
+             std::string_view{"ExperienceService"},
+             std::string_view{"ContentProvider"},
+             std::string_view{"RemoveWorkspace"},
+             std::string_view{"SupportWorkspace"},
+             std::string_view{"TaskScheduler"},
+             std::string_view{"ScriptContext"},
+             std::string_view{"VoiceChat"},
+             std::string_view{"SAuthWorkspace"},
+             std::string_view{"SimWorkspace"},
+             std::string_view{"Marketplace"},
+             std::string_view{"DataModel"},
+             std::string_view{"Replicator"},
+             std::string_view{"RunService"},
+             std::string_view{"Streaming"},
+             std::string_view{"Workspace"},
+             std::string_view{"Teleport"},
+             std::string_view{"Network"},
+             std::string_view{"Physics"},
+             std::string_view{"Security"},
+             std::string_view{"Avatar"},
+             std::string_view{"Voice"},
+             std::string_view{"Chat"},
          }) {
-        if (text.starts_with(prefix)) return true;
+        if (text.starts_with(prefix)) {
+            suffix = text.substr(prefix.size());
+            has_prefix = true;
+            break;
+        }
     }
-    return false;
+    if (!has_prefix || suffix.empty()) return false;
+    if (suffix == "Mode" || suffix == "Queue" || suffix == "Stats" ||
+        suffix == "Time") {
+        return false;
+    }
+    bool has_feature_term = false;
+    for (const std::string_view term : {
+             std::string_view{"Allow"},
+             std::string_view{"Annotation"},
+             std::string_view{"Counter"},
+             std::string_view{"Default"},
+             std::string_view{"Disable"},
+             std::string_view{"Enable"},
+             std::string_view{"Enabled"},
+             std::string_view{"Error"},
+             std::string_view{"Fast"},
+             std::string_view{"Fix"},
+             std::string_view{"Flag"},
+             std::string_view{"Limit"},
+             std::string_view{"Max"},
+             std::string_view{"Min"},
+             std::string_view{"Mode"},
+             std::string_view{"Percent"},
+             std::string_view{"Percentage"},
+             std::string_view{"Queue"},
+             std::string_view{"Rate"},
+             std::string_view{"Report"},
+             std::string_view{"Retry"},
+             std::string_view{"Rollout"},
+             std::string_view{"Slow"},
+             std::string_view{"Stats"},
+             std::string_view{"Telemetry"},
+             std::string_view{"Threshold"},
+             std::string_view{"Throttle"},
+             std::string_view{"Time"},
+             std::string_view{"Timeout"},
+             std::string_view{"Use"},
+         }) {
+        if (suffix.find(term) != std::string_view::npos) {
+            has_feature_term = true;
+            break;
+        }
+    }
+    if (has_feature_term) return true;
+    return text.starts_with("RemoveWorkspace") && suffix.size() >= 4;
 }
 
 [[nodiscard]] std::optional<std::string>

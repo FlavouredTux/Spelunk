@@ -230,7 +230,11 @@ function daemonCanHandle(args) {
   if (!Array.isArray(args)) return false;
   const isInfo = args.length === 0 || args[0] === "--row-limit";
   const isFunctions = args[0] === "--functions";
-  if (!isInfo && !isFunctions) return false;
+  const isPseudo = args[0] === "-p" && args[1] === "-s" && typeof args[2] === "string";
+  if (!isInfo && !isFunctions && !isPseudo) return false;
+  if (isPseudo) {
+    return args.length === 3 || (args.length === 4 && args[3] === "--labels");
+  }
   for (let i = isFunctions ? 1 : 0; i < args.length; ++i) {
     const a = args[i];
     if (a === "--full-analysis" || a === "--json") continue;
@@ -242,6 +246,11 @@ function daemonCanHandle(args) {
 }
 
 function daemonRequestFor(args) {
+  if (args[0] === "-p" && args[1] === "-s") {
+    const parts = ["decompile", `fn=${String(args[2])}`];
+    if (args.includes("--labels")) parts.push("labels=true");
+    return parts.join("\t") + "\n";
+  }
   const isFunctions = args[0] === "--functions";
   const parts = [isFunctions ? "functions" : "info"];
   for (let i = isFunctions ? 1 : 0; i < args.length; ++i) {

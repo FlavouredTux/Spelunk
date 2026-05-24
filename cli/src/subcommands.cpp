@@ -43,6 +43,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <system_error>
 #include <vector>
 
@@ -6253,22 +6254,27 @@ int run_ir(const Binary& b, std::string_view symbol,
     return EXIT_SUCCESS;
 }
 
-int run_struct(const Binary& b, std::string_view symbol, bool pseudo,
-               const Annotations* annotations, EmitOptions opts) {
-    auto win = resolve_function(b, symbol, annotations);
-    if (!win) return EXIT_FAILURE;
+int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
+                      const Annotations* annotations, EmitOptions opts) {
     // Vtable back-trace: resolve indirect call sites in this function
     // once, up-front. Per-function so we only pay the RTTI parse + CFG
     // build for the one function the user is viewing.
     std::map<addr_t, addr_t> call_res;
     if (pseudo && !opts.call_resolutions) {
-        call_res = compute_call_resolutions(b, win->start);
+        call_res = compute_call_resolutions(b, win.start, opts.known_function_entries);
         if (!call_res.empty()) opts.call_resolutions = &call_res;
     }
-    auto out = format_struct(b, *win, pseudo, annotations, opts);
+    auto out = format_struct(b, win, pseudo, annotations, opts);
     if (!out) return report(out.error());
     std::print("{}", *out);
     return EXIT_SUCCESS;
+}
+
+int run_struct(const Binary& b, std::string_view symbol, bool pseudo,
+               const Annotations* annotations, EmitOptions opts) {
+    auto win = resolve_function(b, symbol, annotations);
+    if (!win) return EXIT_FAILURE;
+    return run_struct_window(b, *win, pseudo, annotations, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -6825,6 +6831,54 @@ int run_serve(const Args& base, const Binary& b) {
     std::unordered_map<std::string, std::string> functions_cache;
     functions_cache.reserve(8);
 
+    std::optional<std::unordered_map<addr_t, FuncWindow>> cached_function_windows;
+    std::optional<std::unordered_set<addr_t>> cached_function_entries;
+    auto ensure_cached_function_windows = [&]() -> bool {
+        if (cached_function_windows) return true;
+        auto cache_it = functions_cache.find("functions");
+        if (cache_it == functions_cache.end()) return false;
+
+        const std::string& tsv = cache_it->second;
+        const auto row_count = static_cast<std::size_t>(std::count(tsv.begin(), tsv.end(), '\n'));
+        cached_function_windows.emplace();
+        cached_function_entries.emplace();
+        cached_function_windows->reserve(row_count);
+        cached_function_entries->reserve(row_count);
+
+        std::size_t pos = 0;
+        while (pos < tsv.size()) {
+            const auto line_end = tsv.find('\n', pos);
+            const std::size_t end = line_end == std::string::npos ? tsv.size() : line_end;
+            std::string_view row(tsv.data() + pos, end - pos);
+            const auto tab1 = row.find('\t');
+            const auto tab2 = tab1 == std::string_view::npos ? tab1 : row.find('\t', tab1 + 1);
+            const auto tab3 = tab2 == std::string_view::npos ? tab2 : row.find('\t', tab2 + 1);
+            if (tab1 != std::string_view::npos && tab2 != std::string_view::npos &&
+                tab3 != std::string_view::npos) {
+                if (auto addr = parse_cli_addr(row.substr(0, tab1))) {
+                    const auto size =
+                        parse_cli_addr(row.substr(tab1 + 1, tab2 - tab1 - 1)).value_or(0);
+                    cached_function_entries->insert(*addr);
+                    cached_function_windows->try_emplace(
+                        *addr, FuncWindow{
+                                   .start = *addr,
+                                   .size = static_cast<u64>(size),
+                                   .label = std::string(row.substr(tab3 + 1)),
+                               });
+                }
+            }
+            pos = line_end == std::string::npos ? tsv.size() : line_end + 1;
+        }
+        return true;
+    };
+
+    auto cached_function_window = [&](addr_t addr) -> std::optional<FuncWindow> {
+        if (!ensure_cached_function_windows()) return std::nullopt;
+        auto it = cached_function_windows->find(addr);
+        if (it != cached_function_windows->end()) return it->second;
+        return std::nullopt;
+    };
+
     // Refs cache: refs_to/refs_to_loose are frequent agent probes.
     // Keep the whole-binary xrefs and data-xrefs products hot inside
     // the serve process, plus loose-mode literal-slot scans by target.
@@ -6858,7 +6912,7 @@ int run_serve(const Args& base, const Binary& b) {
                     "  explain_address addr [json=true]\n"
                     "  patch_plan addr [json=true]\n"
                     "  disasm_at addr [count=N] [json=true]\n"
-                    "  decompile fn\n"
+                    "  decompile fn [labels=true]\n"
                     "  callees fn\n"
                     "  containing_fn addr\n"
                     "  describe_address addr\n"
@@ -6895,19 +6949,49 @@ int run_serve(const Args& base, const Binary& b) {
             }
             if (req->method == "decompile") {
                 const std::string& sym = req->params["fn"];
-                if (auto it = decompile_cache.find(sym); it != decompile_cache.end()) {
+                const bool labels = req->params["labels"] == "1" ||
+                                    req->params["labels"] == "true" ||
+                                    req->params["labels"] == "yes";
+                const std::string cache_key =
+                    labels ? (std::string{sym} + "\tlabels=1") : std::string{sym};
+                if (auto it = decompile_cache.find(cache_key); it != decompile_cache.end()) {
                     write_ok(it->second);
                     continue;
                 }
                 Args a = derive_args(base);
                 a.symbol = sym;
                 a.pseudo = true;
-                std::string body = capture_stdout([&]{ run_emit(a, b); });
+                a.labels = labels;
+                std::string body = capture_stdout([&]{
+                    if (b.format() == Format::MachO) {
+                        if (auto va = parse_cli_addr(sym)) {
+                            bool ann_loaded = false;
+                            Annotations annotations = load_annotations_for(a, ann_loaded);
+                            EmitOptions opts;
+                            opts.show_bb_labels = labels;
+                            opts.show_provenance = a.show_provenance;
+                            if (ensure_cached_function_windows() && cached_function_entries) {
+                                opts.known_function_entries = &*cached_function_entries;
+                            }
+                            std::map<addr_t, std::string> selrefs = parse_objc_selrefs(b);
+                            if (!selrefs.empty()) opts.objc_selrefs = &selrefs;
+                            auto win = cached_function_window(*va).value_or(FuncWindow{
+                                .start = *va,
+                                .size = 0,
+                                .label = std::format("sub_{:x}", *va),
+                            });
+                            run_struct_window(b, win, true,
+                                              ann_loaded ? &annotations : nullptr, opts);
+                            return;
+                        }
+                    }
+                    run_emit(a, b);
+                });
                 // Soft cap to avoid runaway memory on huge cascades. 1024
                 // entries × typical 2KB pseudo-C ≈ 2MB; outliers (5000-line
                 // fns) push that up but the worker dies before it matters.
                 if (decompile_cache.size() > 1024) decompile_cache.clear();
-                decompile_cache.emplace(sym, body);
+                decompile_cache.emplace(cache_key, body);
                 write_ok(body);
                 continue;
             }
@@ -7113,8 +7197,16 @@ int run_serve(const Args& base, const Binary& b) {
                     a.row_limit_set = true;
                 }
                 std::string body = capture_stdout([&]{ run_functions(a, b); });
-                if (functions_cache.size() > 16) functions_cache.clear();
+                if (functions_cache.size() > 16) {
+                    functions_cache.clear();
+                    cached_function_windows.reset();
+                    cached_function_entries.reset();
+                }
                 functions_cache.emplace(line, body);
+                if (line == "functions") {
+                    cached_function_windows.reset();
+                    cached_function_entries.reset();
+                }
                 write_ok(body);
                 continue;
             }

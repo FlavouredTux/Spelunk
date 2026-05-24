@@ -803,6 +803,9 @@ format_struct(const Binary& b, const FuncWindow& w,
     if (!dec_r) return std::unexpected(dec_r.error());
     const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
+    if (options.known_function_entries) {
+        builder.seed_known_entries(*options.known_function_entries);
+    }
 
     auto fn_r = [&] {
         ScopedTimer t("  cfg_build");
@@ -1951,11 +1954,15 @@ namespace {
 }  // namespace
 
 std::vector<ClassifiedCallee>
-compute_classified_callees(const Binary& b, addr_t fn) {
+compute_classified_callees(const Binary& b, addr_t fn,
+                           const std::unordered_set<addr_t>* known_entries) {
     auto dec_r = make_decoder(b);
     if (!dec_r) return {};
     const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
+    if (known_entries) {
+        builder.seed_known_entries(*known_entries);
+    }
 
     std::string name;
     for (const auto& s : b.symbols()) {
@@ -2284,9 +2291,10 @@ containing_function(const Binary& b, addr_t addr) {
 }
 
 std::map<addr_t, addr_t>
-compute_call_resolutions(const Binary& b, addr_t fn) {
+compute_call_resolutions(const Binary& b, addr_t fn,
+                         const std::unordered_set<addr_t>* known_entries) {
     std::map<addr_t, addr_t> out;
-    for (const auto& e : compute_classified_callees(b, fn)) {
+    for (const auto& e : compute_classified_callees(b, fn, known_entries)) {
         // First writer wins when two edges share a site - the
         // classifier already sorts by (target, kind, site), but a given
         // `call` instruction is only classified once in practice.

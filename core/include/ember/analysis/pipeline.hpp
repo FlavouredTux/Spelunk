@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include <ember/analysis/fingerprint.hpp>
@@ -297,7 +298,8 @@ collect_collisions(const Binary& b,
 // intentionally out of scope - a register redef on a join path would
 // produce misleading resolutions without flow analysis.
 [[nodiscard]] std::vector<ClassifiedCallee>
-compute_classified_callees(const Binary& b, addr_t fn);
+compute_classified_callees(const Binary& b, addr_t fn,
+                           const std::unordered_set<addr_t>* known_entries = nullptr);
 
 // Per-call-site resolution of the function at `fn`. Returns the subset
 // of classified-callee edges keyed by call-site VA, so a renderer can
@@ -305,6 +307,7 @@ compute_classified_callees(const Binary& b, addr_t fn);
 // in O(log n). Missing entries mean the edge was genuinely opaque -
 // callers should NOT assume every CallIndirect has a resolution.
 [[nodiscard]] std::map<addr_t /*site*/, addr_t /*target*/>
-compute_call_resolutions(const Binary& b, addr_t fn);
+compute_call_resolutions(const Binary& b, addr_t fn,
+                         const std::unordered_set<addr_t>* known_entries = nullptr);
 
 }  // namespace ember

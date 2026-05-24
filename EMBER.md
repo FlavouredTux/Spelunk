@@ -140,7 +140,7 @@ tail.
 | `ember --vtables <binary>` | runtime vtables + slots | full loaded-dump / RELRO vtable inventory |
 | `ember --vtable-at <VA> [--limit N] <binary>` | one runtime vtable around a vptr/typeinfo-adjacent/table-slot VA | narrow std::function / vtable work without dumping every table |
 | `ember --objc-names <binary>` | Mach-O ObjC method names, including relative method lists | ObjC binaries |
-| `ember --infer-string-names <binary>` | synthesize conservative names from strong log/string anchors | stripped functions with `Class::method` / ObjC bracket strings |
+| `ember --infer-string-names <binary>` | synthesize conservative names from strong log/string anchors, compiler metadata, VM/graphics strings, and engine feature/config anchors | stripped functions with recoverable string evidence |
 | `ember --dmp-anchors <binary>` | Roblox DataModelPatch anchors; add `--full-analysis` for slower xref/function attribution | DMP / datamodel patch hunts |
 
 ### Mach-O notes
@@ -222,8 +222,21 @@ tail.
   and promotes only strong function-like anchors: C++/namespace tokens such
   as `Core::Player::recoverName`, ObjC bracket strings such as
   `-[Class selector:]`, and simple prefix anchors like `recover_name: ...`.
-  It upgrades anonymous functions only; existing real symbols and annotations
-  remain authoritative.
+  It also mines compiler metadata that survives stripping (`std::function`
+  closures, shared-ptr emplacement, callable traits, local/static lambdas,
+  selected RTTI-like artifacts), VM telemetry/opcode/debugger/bytecode
+  anchors, graphics backend strings, role identifiers such as scheduler/job
+  names, and engine feature/config anchors.
+- **Feature/config anchors.** CamelCase strings with subsystem prefixes such
+  as `ContentProvider`, `Network`, `Replicator`, `Streaming`, `VoiceChat`,
+  `Teleport`, `Physics`, `Avatar`, `TaskScheduler`, `ScriptContext`,
+  `DataModel`, `Workspace`, and related service names can become
+  `feature_<snake_case>` function names when the suffix contains a feature,
+  telemetry, rollout, limit, timeout, report, stats, queue, threshold, or
+  similar config term. The pass requires a unique enclosing function, prefers
+  tiny accessor/reporting stubs when a string is also referenced by a large
+  collector, and skips ambiguous functions. It upgrades anonymous functions
+  only; existing real symbols and annotations remain authoritative.
 
 ### Lookups
 | Command | Output | Use when |

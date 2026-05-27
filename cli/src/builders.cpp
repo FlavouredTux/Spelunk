@@ -413,7 +413,7 @@ split_top_level_template_args(std::string_view text) {
 [[nodiscard]] std::string_view trim_to_reflection_mangle(std::string_view type) {
     std::size_t start = std::string_view::npos;
     for (const auto prefix : {
-        std::string_view{"N3RBX10Reflection"},
+        std::string_view{"N6Engine10Reflection"},
         std::string_view{"N6Engine10Reflection"},
     }) {
         const auto p = type.find(prefix);
@@ -467,12 +467,12 @@ demangled_descriptor_signature(std::string_view type) {
 }
 
 [[nodiscard]] bool looks_like_bad_descriptor_signature(std::string_view sig) {
-    return sig.find("RBX<") != std::string_view::npos ||
-           sig.find("RBX::basic_string") != std::string_view::npos ||
-           sig.find("RBX::allocator") != std::string_view::npos ||
-           sig.find("RBX::hash") != std::string_view::npos ||
-           sig.find("RBX::equal_to") != std::string_view::npos ||
-           sig.find("RBX::pair") != std::string_view::npos;
+    return sig.find("Engine<") != std::string_view::npos ||
+           sig.find("Engine::basic_string") != std::string_view::npos ||
+           sig.find("Engine::allocator") != std::string_view::npos ||
+           sig.find("Engine::hash") != std::string_view::npos ||
+           sig.find("Engine::equal_to") != std::string_view::npos ||
+           sig.find("Engine::pair") != std::string_view::npos;
 }
 
 struct DescriptorTypeParser {
@@ -675,8 +675,8 @@ struct DescriptorTypeParser {
     DescriptorTypeParser parser;
     parser.in = type;
     parser.pos = start;
-    if (type.find("N3RBX") != std::string_view::npos) {
-        parser.primary_namespace = "RBX";
+    if (type.find("N6Engine") != std::string_view::npos) {
+        parser.primary_namespace = "Engine";
     } else if (type.find("N6Engine") != std::string_view::npos) {
         parser.primary_namespace = "Engine";
     }

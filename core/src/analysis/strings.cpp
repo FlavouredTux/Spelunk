@@ -1180,7 +1180,7 @@ graphics_api_name_from_string(std::string_view text) {
 }
 
 [[nodiscard]] std::optional<std::string>
-sanitize_luau_anchor(std::string_view prefix, std::string_view tail) {
+sanitize_script_vm_anchor(std::string_view prefix, std::string_view tail) {
     auto snake = camel_tail_to_snake(tail);
     while (!snake.empty() && snake.front() == '_') snake.erase(snake.begin());
     while (!snake.empty() && snake.back() == '_') snake.pop_back();
@@ -1190,7 +1190,7 @@ sanitize_luau_anchor(std::string_view prefix, std::string_view tail) {
     return name;
 }
 
-[[nodiscard]] bool looks_like_luau_opcode_token(std::string_view text) noexcept {
+[[nodiscard]] bool looks_like_script_vm_opcode_token(std::string_view text) noexcept {
     if (text.empty() || text.size() > 40) return false;
     bool alpha = false;
     bool upper = false;
@@ -1221,9 +1221,9 @@ sanitize_luau_anchor(std::string_view prefix, std::string_view tail) {
 }
 
 [[nodiscard]] std::optional<std::string>
-luau_anchor_name_from_string(std::string_view text) {
-    if (text.starts_with("luau-telemetry.")) {
-        const auto tail = text.substr(std::string_view{"luau-telemetry."}.size());
+script_vm_anchor_name_from_string(std::string_view text) {
+    if (text.starts_with("script_vm-telemetry.")) {
+        const auto tail = text.substr(std::string_view{"script_vm-telemetry."}.size());
         if (tail.size() < 3 || tail.size() > 96) return std::nullopt;
         for (char c : tail) {
             const auto u = static_cast<unsigned char>(c);
@@ -1231,11 +1231,11 @@ luau_anchor_name_from_string(std::string_view text) {
                 return std::nullopt;
             }
         }
-        return sanitize_luau_anchor("luau_telemetry_", tail);
+        return sanitize_script_vm_anchor("script_vm_telemetry_", tail);
     }
 
-    if (looks_like_luau_opcode_token(text)) {
-        return sanitize_luau_anchor("luau_opcode_", text);
+    if (looks_like_script_vm_opcode_token(text)) {
+        return sanitize_script_vm_anchor("script_vm_opcode_", text);
     }
 
     const auto lower = lower_ascii_copy(text);
@@ -1244,55 +1244,55 @@ luau_anchor_name_from_string(std::string_view text) {
     };
 
     if (has("unexpected opcode in short circuit")) {
-        return sanitize_name("luau_unexpected_opcode_short_circuit");
+        return sanitize_name("script_vm_unexpected_opcode_short_circuit");
     }
     if (has("unexpected opcode")) {
-        return sanitize_name("luau_unexpected_opcode");
+        return sanitize_name("script_vm_unexpected_opcode");
     }
     if (has("unhandled opcode")) {
-        return sanitize_name("luau_unhandled_opcode");
+        return sanitize_name("script_vm_unhandled_opcode");
     }
     if (has("bytecode auth check")) {
-        return sanitize_name("luau_bytecode_auth_check");
+        return sanitize_name("script_vm_bytecode_auth_check");
     }
     if (lower == "invalid bytecode.") {
-        return sanitize_name("luau_invalid_bytecode");
+        return sanitize_name("script_vm_invalid_bytecode");
     }
-    if (has("additional luau stack reservation has failed")) {
-        return sanitize_name("luau_stack_reservation_failed");
+    if (has("additional script_vm stack reservation has failed")) {
+        return sanitize_name("script_vm_stack_reservation_failed");
     }
-    if (text.starts_with("Debugger is out of Luau stack space in ")) {
-        auto tail = text.substr(std::string_view{"Debugger is out of Luau stack space in "}.size());
+    if (text.starts_with("Debugger is out of ScriptVM stack space in ")) {
+        auto tail = text.substr(std::string_view{"Debugger is out of ScriptVM stack space in "}.size());
         if (tail.starts_with("a ")) tail.remove_prefix(2);
         if (tail.starts_with("an ")) tail.remove_prefix(3);
-        return sanitize_luau_anchor("luau_debugger_stack_", tail);
+        return sanitize_script_vm_anchor("script_vm_debugger_stack_", tail);
     }
 
-    if (text == "LuauTelemetry") {
-        return sanitize_name("luau_telemetry");
+    if (text == "ScriptVMTelemetry") {
+        return sanitize_name("script_vm_telemetry");
     }
-    if (text.starts_with("Luau") && text.find("Telemetry") != std::string_view::npos) {
+    if (text.starts_with("ScriptVM") && text.find("Telemetry") != std::string_view::npos) {
         auto tail = std::string_view{text}.substr(4);
         const auto stripped = remove_camel_word_copy(tail, "Telemetry");
-        return sanitize_luau_anchor("luau_telemetry_", stripped);
+        return sanitize_script_vm_anchor("script_vm_telemetry_", stripped);
     }
     if (text.starts_with("LuaApps") || text.starts_with("LuaShell") ||
         text.starts_with("LuaErrors")) {
-        return sanitize_luau_anchor("luau_telemetry_", text);
+        return sanitize_script_vm_anchor("script_vm_telemetry_", text);
     }
-    if (text.find("LuauHeap") != std::string_view::npos) {
-        return sanitize_luau_anchor("luau_heap_", text);
+    if (text.find("ScriptVMHeap") != std::string_view::npos) {
+        return sanitize_script_vm_anchor("script_vm_heap_", text);
     }
     if (text.find("LuaBytecode") != std::string_view::npos ||
         text.find("Bytecode") != std::string_view::npos) {
-        return sanitize_luau_anchor("luau_bytecode_", text);
+        return sanitize_script_vm_anchor("script_vm_bytecode_", text);
     }
     return std::nullopt;
 }
 
 [[nodiscard]] bool looks_like_engine_feature_anchor(std::string_view text) noexcept {
     if (text.size() < 9 || text.size() > 96) return false;
-    if (text == "Workspace") return false;
+    if (text == "SceneGraph") return false;
     if (!has_uppercase_transition(text)) return false;
     for (char c : text) {
         if (!is_ident_char(c)) return false;
@@ -1301,21 +1301,21 @@ luau_anchor_name_from_string(std::string_view text) {
     bool has_prefix = false;
     for (const std::string_view prefix : {
              std::string_view{"MarketplaceService"},
-             std::string_view{"HighlightsPerWorkspace"},
+             std::string_view{"HighlightsPerSceneGraph"},
              std::string_view{"ExperienceService"},
              std::string_view{"ContentProvider"},
-             std::string_view{"RemoveWorkspace"},
-             std::string_view{"SupportWorkspace"},
-             std::string_view{"TaskScheduler"},
-             std::string_view{"ScriptContext"},
+             std::string_view{"RemoveSceneGraph"},
+             std::string_view{"SupportSceneGraph"},
+             std::string_view{"JobScheduler"},
+             std::string_view{"ScriptHost"},
              std::string_view{"VoiceChat"},
-             std::string_view{"SAuthWorkspace"},
-             std::string_view{"SimWorkspace"},
+             std::string_view{"SAuthSceneGraph"},
+             std::string_view{"SimSceneGraph"},
              std::string_view{"Marketplace"},
              std::string_view{"Replicator"},
              std::string_view{"RunService"},
              std::string_view{"Streaming"},
-             std::string_view{"Workspace"},
+             std::string_view{"SceneGraph"},
              std::string_view{"Teleport"},
              std::string_view{"Network"},
              std::string_view{"Physics"},
@@ -1374,7 +1374,7 @@ luau_anchor_name_from_string(std::string_view text) {
         }
     }
     if (has_feature_term) return true;
-    return text.starts_with("RemoveWorkspace") && suffix.size() >= 4;
+    return text.starts_with("RemoveSceneGraph") && suffix.size() >= 4;
 }
 
 [[nodiscard]] std::optional<std::string>
@@ -1850,7 +1850,7 @@ void infer_role_identifier_anchors(
 }
 
 [[nodiscard]] std::optional<std::string>
-collapse_luau_anchor_family(const std::set<std::string>& names) {
+collapse_script_vm_anchor_family(const std::set<std::string>& names) {
     if (names.empty()) return std::nullopt;
 
     bool all_lua_apps = true;
@@ -1858,22 +1858,22 @@ collapse_luau_anchor_family(const std::set<std::string>& names) {
     bool all_bytecode = true;
     bool all_caps = true;
     for (const auto& name : names) {
-        all_lua_apps &= name.starts_with("luau_telemetry_lua_apps_") ||
-                        name == "luau_telemetry_lua_shell_errors";
+        all_lua_apps &= name.starts_with("script_vm_telemetry_lua_apps_") ||
+                        name == "script_vm_telemetry_lua_shell_errors";
         all_heap_profiler &= name.find("heap_profiler") != std::string::npos;
-        all_bytecode &= name.starts_with("luau_bytecode_");
-        all_caps &= name.starts_with("luau_telemetry_caps_");
+        all_bytecode &= name.starts_with("script_vm_bytecode_");
+        all_caps &= name.starts_with("script_vm_telemetry_caps_");
     }
 
-    if (all_lua_apps) return std::string{"luau_telemetry_lua_apps_metrics"};
-    if (all_heap_profiler) return std::string{"luau_telemetry_heap_profiler"};
-    if (all_bytecode) return std::string{"luau_bytecode_metrics"};
-    if (all_caps) return std::string{"luau_telemetry_caps_use"};
+    if (all_lua_apps) return std::string{"script_vm_telemetry_lua_apps_metrics"};
+    if (all_heap_profiler) return std::string{"script_vm_telemetry_heap_profiler"};
+    if (all_bytecode) return std::string{"script_vm_bytecode_metrics"};
+    if (all_caps) return std::string{"script_vm_telemetry_caps_use"};
     return std::nullopt;
 }
 
 template <class EnclosingFunction>
-void infer_luau_metadata_anchors(
+void infer_script_vm_metadata_anchors(
     std::span<const StringEntry> strings,
     EnclosingFunction enclosing_function,
     std::vector<StringNameCandidate>& out,
@@ -1886,7 +1886,7 @@ void infer_luau_metadata_anchors(
     std::map<std::string, AnchorRefs> refs_by_name;
     for (const auto& s : strings) {
         if (s.xrefs.empty()) continue;
-        auto name = luau_anchor_name_from_string(s.text);
+        auto name = script_vm_anchor_name_from_string(s.text);
         if (!name) continue;
         auto& refs = refs_by_name[*name];
         if (refs.source.empty()) refs.source = s.text;
@@ -1910,9 +1910,9 @@ void infer_luau_metadata_anchors(
         if (names.size() == 1) {
             name = *names.begin();
             source = source_by_name[name];
-        } else if (auto collapsed = collapse_luau_anchor_family(names)) {
+        } else if (auto collapsed = collapse_script_vm_anchor_family(names)) {
             name = *collapsed;
-            source = std::format("{} Luau anchors", names.size());
+            source = std::format("{} ScriptVM anchors", names.size());
         } else {
             continue;
         }
@@ -2114,7 +2114,7 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
             return std::nullopt;
         return it->addr;
     };
-    auto luau_enclosing_function = [&](addr_t addr) -> std::optional<addr_t> {
+    auto script_vm_enclosing_function = [&](addr_t addr) -> std::optional<addr_t> {
         auto fn = enclosing_function(addr);
         if (!fn) return std::nullopt;
         const auto it = function_sizes.find(*fn);
@@ -2190,12 +2190,12 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
         infer_assertion_function_names(b, fns, out, seen);
     }
     {
-        ScopedTimer phase("strings.luau_metadata_anchors");
-        infer_luau_metadata_anchors(strings, luau_enclosing_function, out, seen);
+        ScopedTimer phase("strings.script_metadata_anchors");
+        infer_script_vm_metadata_anchors(strings, script_vm_enclosing_function, out, seen);
     }
     {
         ScopedTimer phase("strings.engine_feature_anchors");
-        infer_engine_feature_anchors(strings, luau_enclosing_function,
+        infer_engine_feature_anchors(strings, script_vm_enclosing_function,
                                      function_sizes, out, seen);
     }
     {

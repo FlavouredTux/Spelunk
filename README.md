@@ -291,7 +291,7 @@ do_thing:a1+0x18   = flags         # by ABI slot when no signature param exists
 "[HttpClient] %s" -> HttpClient_$1
 
 [pattern-rename]
-sub_4* -> roblox_sub_*
+sub_4* -> sample_sub_*
 
 [delete]
 log_handler = all                  # drop rename + note + signature

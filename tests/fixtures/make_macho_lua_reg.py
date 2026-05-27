@@ -60,7 +60,7 @@ def main() -> int:
     reflect_metadata = b"N6Engine10Reflection13BoundFuncDescIN6Engine10ScriptHostEFviiELb0ELi2EEE\0"
     reflect_event_member = b"actionSignal\0"
     reflect_event = (
-        b"N6Engine10Reflection9EventDescIN6Engine10ScriptHostEFviEN3rbx6signalIiEEMS2_FviEEE\0"
+        b"N6Engine10Reflection9EventDescIN6Engine10ScriptHostEFviEN6Engine6signalIiEEMS2_FviEEE\0"
     )
     reflect_property_member = b"actionLevel\0"
     reflect_property = b"N6Engine10Reflection14PropDescriptorIN6Engine10ScriptHostEiEE\0"

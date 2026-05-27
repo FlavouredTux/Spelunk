@@ -227,8 +227,8 @@ tail.
   names, and engine feature/config anchors.
 - **Feature/config anchors.** CamelCase strings with subsystem prefixes such
   as `ContentProvider`, `Network`, `Replicator`, `Streaming`, `VoiceChat`,
-  `Teleport`, `Physics`, `Avatar`, `TaskScheduler`, `ScriptContext`,
-  `Workspace`, and related service names can become
+  `Teleport`, `Physics`, `Avatar`, `JobScheduler`, `ScriptHost`,
+  `SceneGraph`, and related service names can become
   `feature_<snake_case>` function names when the suffix contains a feature,
   telemetry, rollout, limit, timeout, report, stats, queue, threshold, or
   similar config term. The pass requires a unique enclosing function, prefers
@@ -777,7 +777,7 @@ parse_packet:a2+0x18  = dst_buf     # ABI slot when no signature param
 "error: %d at %s"  -> err_$2
 
 [pattern-rename]
-sub_4* -> roblox_sub_*              # glob match, * captures, * in template
+sub_4* -> sample_sub_*              # glob match, * captures, * in template
 log_*  -> Logger_*
 
 [delete]

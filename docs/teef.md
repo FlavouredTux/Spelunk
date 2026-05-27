@@ -268,7 +268,7 @@ is misbehaving.
 Recognize-time scan is the bulk of `--recognize` cost on big
 corpora. Worst case before optimization was an O(N) full jaccard
 scan per query fn - minutes on a 100K-fn corpus, 11+ minutes on the
-4-library combo with libroblox queries. Now there's an L2 MinHash
+4-library combo with library-under-test queries. Now there's an L2 MinHash
 inverted index built at load time (`whole_minhash_[k] : slot_value →
 [entry_idx]` for k ∈ [0,8)). At query time we look up each of the 8
 slots, count per-entry hits, and only score entries with ≥ 2 slot

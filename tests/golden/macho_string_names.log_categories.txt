@@ -1,2 +1,2 @@
 FLog::Lifetime	1	10000102d	[FLog::Lifetime] Example::Box::~Box() destroyed
-FLog::MacLuaApp	1	100001006	[FLog::MacLuaApp] Core::Player::recoverName failed
+FLog::MacScriptApp	1	100001006	[FLog::MacScriptApp] Core::Player::recoverName failed

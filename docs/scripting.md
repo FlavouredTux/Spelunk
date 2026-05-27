@@ -51,7 +51,7 @@ do_thing:a1+0x18   = flags        # ABI arg slot, 1-based
 31337      = protocol_magic
 
 [pattern-rename]
-sub_4* -> roblox_sub_*            # `*` in template = matched part
+sub_4* -> sample_sub_*            # `*` in template = matched part
 log_*  -> Logger_*
 
 [from-strings]

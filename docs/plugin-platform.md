@@ -114,7 +114,7 @@ Ship domain datasets and matching rules, versioned independently from code.
 Examples:
 
 - `ember.engine.unreal`
-- `ember.game.roblox`
+- `ember.game.platform`
 - `ember.net.source2`
 
 Contents:
@@ -245,7 +245,7 @@ plugins/
     knowledge/
     ui/
     tests/
-  roblox/
+  platform/
     plugin.json
     main.js
     knowledge/
@@ -706,7 +706,7 @@ Strong early ecosystem targets:
 - `ember.engine.unreal`
 - `ember.engine.unity-native`
 - `ember.engine.source`
-- `ember.game.roblox`
+- `ember.game.platform`
 - `ember.net.common`
 - `ember.diff.build-lineage`
 - `ember.assets.pak`

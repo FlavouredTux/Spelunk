@@ -1,0 +1,4 @@
+// script_vm_telemetry_bad_synchronize_call
+uint64_t script_vm_telemetry_bad_synchronize_call(void) {
+  return 0x87;
+}

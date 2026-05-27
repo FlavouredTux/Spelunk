@@ -183,7 +183,7 @@ int main() {
             "0xDEADBEEF = resolver_hash\n"
             "\n"
             "[pattern-rename]\n"
-            "sub_4* -> roblox_sub_*\n"
+            "sub_4* -> sample_sub_*\n"
             "\n"
             "[from-strings]\n"
             "\"[HttpClient] %s\" -> HttpClient_$1\n";
@@ -215,7 +215,7 @@ int main() {
                 check_eq(static_cast<int>(ds[6].kind),
                          static_cast<int>(Directive::Kind::PatternRename), "parse: d6 pattern");
                 check_eq_str(ds[6].lhs, "sub_4*",         "parse: d6 lhs glob");
-                check_eq_str(ds[6].rhs, "roblox_sub_*",   "parse: d6 rhs template");
+                check_eq_str(ds[6].rhs, "sample_sub_*",   "parse: d6 rhs template");
                 check_eq(static_cast<int>(ds[7].kind),
                          static_cast<int>(Directive::Kind::FromStrings), "parse: d7 from-strings");
                 check_eq_str(ds[7].lhs, "[HttpClient] %s", "parse: d7 unquoted lhs");

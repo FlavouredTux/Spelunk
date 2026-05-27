@@ -49,7 +49,7 @@ namespace script {
 //     31337      = protocol_magic
 //
 //   [pattern-rename]
-//     sub_4* -> roblox_sub_*                 # `*` in template = matched part
+//     sub_4* -> sample_sub_*                 # `*` in template = matched part
 //
 //   [from-strings]
 //     "[HttpClient] %s" -> HttpClient_$1     # captured %s/%d/%* → $1, $2, …

@@ -2,12 +2,12 @@
 
 __attribute__((noinline))
 void scripting_surface(void) {
-    puts("[FLog::MacLuaApp] ScriptContext Luau heap report lua_State ModuleScript");
+    puts("[FLog::MacScriptApp] ScriptHost ScriptVM heap report lua_State ModuleScript");
 }
 
 __attribute__((noinline))
 void network_surface(void) {
-    puts("[DFLog::RbxTransportTls] SSL_CTX_set_min_proto_version failed for QUIC transport");
+    puts("[DFLog::NetTransportTls] SSL_CTX_set_min_proto_version failed for QUIC transport");
 }
 
 __attribute__((noinline))
@@ -32,7 +32,7 @@ void media_surface(void) {
 
 __attribute__((noinline))
 void commerce_surface(void) {
-    puts("Marketplace purchase Robux price receipt UserNotifications Contacts localization");
+    puts("Marketplace purchase Credits price receipt UserNotifications Contacts localization");
 }
 
 __attribute__((noinline))

@@ -54,11 +54,11 @@ def main() -> int:
     mangled_operator_va = mangled_ctor_va + 13
     mangled_conversion_va = mangled_operator_va + 13
     role_anchor_va = mangled_conversion_va + 13
-    luau_telemetry_va = role_anchor_va + 13
-    feature_anchor_va = luau_telemetry_va + 13
+    script_vm_telemetry_va = role_anchor_va + 13
+    feature_anchor_va = script_vm_telemetry_va + 13
     feature_network_va = feature_anchor_va + 13
 
-    log = b"[FLog::MacLuaApp] Core::Player::recoverName failed\0"
+    log = b"[FLog::MacScriptApp] Core::Player::recoverName failed\0"
     pretty = b"static int recoverCachedValue(int token)\0"
     oper = b"bool Example::Box::operator==(const Example::Box&) const\0"
     dtor = b"[FLog::Lifetime] Example::Box::~Box() destroyed\0"
@@ -111,8 +111,8 @@ def main() -> int:
         b"NS_9allocatorIS6_EEFvvEEE\0"
     )
     role_anchor = b"SchedulerHeartbeatJob\0"
-    luau_telemetry = b"luau-telemetry.bad-synchronize-call\0"
-    feature_anchor = b"WorkspaceTaskQueue\0"
+    script_vm_telemetry = b"script_vm-telemetry.bad-synchronize-call\0"
+    feature_anchor = b"SceneGraphTaskQueue\0"
     feature_network = b"NetworkJobUseParallelFor\0"
     # main: return 1
     main_code = bytes.fromhex("b801000000c3")
@@ -134,7 +134,7 @@ def main() -> int:
     mangled_operator_len = 7 + 5 + 1
     mangled_conversion_len = 7 + 5 + 1
     role_anchor_len = 7 + 5 + 1
-    luau_telemetry_len = 7 + 5 + 1
+    script_vm_telemetry_len = 7 + 5 + 1
     feature_anchor_len = 7 + 5 + 1
     feature_network_len = 7 + 5 + 1
     string_off = align(
@@ -142,7 +142,7 @@ def main() -> int:
         closure_len + emplace_len + weak_result_len + exception_len +
         local_len + anon_len + free_len + free_nested_len + mangled_dtor_len +
         mangled_ctor_len + mangled_operator_len + mangled_conversion_len +
-        role_anchor_len + luau_telemetry_len + feature_anchor_len +
+        role_anchor_len + script_vm_telemetry_len + feature_anchor_len +
         feature_network_len,
         8)
     string_va = text_vmaddr + string_off
@@ -162,8 +162,8 @@ def main() -> int:
     mangled_operator_string_va = mangled_ctor_string_va + len(mangled_ctor)
     mangled_conversion_string_va = mangled_operator_string_va + len(mangled_operator)
     role_anchor_string_va = mangled_conversion_string_va + len(mangled_conversion)
-    luau_telemetry_string_va = role_anchor_string_va + len(role_anchor)
-    feature_anchor_string_va = luau_telemetry_string_va + len(luau_telemetry)
+    script_vm_telemetry_string_va = role_anchor_string_va + len(role_anchor)
+    feature_anchor_string_va = script_vm_telemetry_string_va + len(script_vm_telemetry)
     feature_network_string_va = feature_anchor_string_va + len(feature_anchor)
     lea_next = hidden_va + 7
     disp = string_va - lea_next
@@ -255,10 +255,10 @@ def main() -> int:
         b"\x48\x8d\x3d" + struct.pack("<i", role_anchor_disp) +
         bytes.fromhex("b886000000c3")
     )
-    luau_telemetry_lea_next = luau_telemetry_va + 7
-    luau_telemetry_disp = luau_telemetry_string_va - luau_telemetry_lea_next
-    luau_telemetry_code = (
-        b"\x48\x8d\x3d" + struct.pack("<i", luau_telemetry_disp) +
+    script_vm_telemetry_lea_next = script_vm_telemetry_va + 7
+    script_vm_telemetry_disp = script_vm_telemetry_string_va - script_vm_telemetry_lea_next
+    script_vm_telemetry_code = (
+        b"\x48\x8d\x3d" + struct.pack("<i", script_vm_telemetry_disp) +
         bytes.fromhex("b887000000c3")
     )
     feature_anchor_lea_next = feature_anchor_va + 7
@@ -278,7 +278,7 @@ def main() -> int:
         closure_code + emplace_code + weak_result_code + exception_code +
         local_code + anon_code + free_code + free_nested_code +
         mangled_dtor_code + mangled_ctor_code + mangled_operator_code +
-        mangled_conversion_code + role_anchor_code + luau_telemetry_code +
+        mangled_conversion_code + role_anchor_code + script_vm_telemetry_code +
         feature_anchor_code + feature_network_code
     )
     cstring_size = (
@@ -287,7 +287,7 @@ def main() -> int:
         len(local_static) + len(anon_static) + len(free_function) +
         len(free_nested) + len(mangled_dtor) + len(mangled_ctor) +
         len(mangled_operator) + len(mangled_conversion) + len(role_anchor) +
-        len(luau_telemetry) + len(feature_anchor) + len(feature_network)
+        len(script_vm_telemetry) + len(feature_anchor) + len(feature_network)
     )
     text_filesize = string_off + cstring_size
 
@@ -331,8 +331,8 @@ def main() -> int:
         uleb128(mangled_operator_va - mangled_ctor_va) +
         uleb128(mangled_conversion_va - mangled_operator_va) +
         uleb128(role_anchor_va - mangled_conversion_va) +
-        uleb128(luau_telemetry_va - role_anchor_va) +
-        uleb128(feature_anchor_va - luau_telemetry_va) +
+        uleb128(script_vm_telemetry_va - role_anchor_va) +
+        uleb128(feature_anchor_va - script_vm_telemetry_va) +
         uleb128(feature_network_va - feature_anchor_va) +
         b"\0"
     )
@@ -376,7 +376,7 @@ def main() -> int:
     out += mangled_operator
     out += mangled_conversion
     out += role_anchor
-    out += luau_telemetry
+    out += script_vm_telemetry
     out += feature_anchor
     out += feature_network
     out += b"\0" * (sym_off - len(out))

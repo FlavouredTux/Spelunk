@@ -37,10 +37,10 @@ struct ReflectionDescriptor {
 
 const std::vector<SurfaceRule>& rules() {
     static const std::vector<SurfaceRule> kRules = {
-        {"luau", "vm_scripting", {
-            "luau", "lua_state", "lua_debug", "luaapp", "scriptcontext",
+        {"script_vm", "vm_scripting", {
+            "script_vm", "lua_state", "lua_debug", "luaapp", "scripthost",
             "modulescript", "luasource", "sharedtable", "weakthreadref",
-            "parallel luau", "luauheap", "lua callback"}},
+            "parallel script_vm", "scriptvmheap", "lua callback"}},
         {"webview_auth", "web_auth", {
             "wkwebview", "webview", "webkit", "cookie", "authcookie",
             "securitycookie", "httpcookiestore", "nshttpcookiestorage",
@@ -89,7 +89,7 @@ const std::vector<SurfaceRule>& rules() {
             "heapprofile", "memory budget"}},
         {"storage_cache", "storage", {
             "sqlite", "storage", "datastore", "memorystore", "cache",
-            "database", "assetcache", "flagcache", "rbxstorage"}},
+            "database", "assetcache", "flagcache", "blobstorage"}},
         {"security_qos", "security", {
             "security", "clientqos", "qos", "heartbeat", "devicecheck",
             "vmprotect", "sandbox", "permission", "authenticationchallenge",
@@ -103,7 +103,7 @@ const std::vector<SurfaceRule>& rules() {
             "generated model", "generation job", "inference", "machine learning",
             "coreml.framework"}},
         {"commerce_payments", "commerce", {
-            "robux", "purchase", "marketplace", "payment", "product",
+            "credits", "purchase", "marketplace", "payment", "product",
             "price", "currency", "checkout", "receipt", "transaction"}},
         {"notifications_contacts", "notifications", {
             "notification", "usernotifications", "contacts", "addressbook",
@@ -111,7 +111,7 @@ const std::vector<SurfaceRule>& rules() {
             "usernotifications.framework", "contacts.framework"}},
         {"physics_world", "physics", {
             "physics", "collision", "rigidbody", "rigid body",
-            "humanoid", "assembly", "joint", "solver", "worldroot"}},
+            "character", "assembly", "joint", "solver", "worldroot"}},
         {"resources_localization", "resources", {
             "localizable", "localization", ".lproj", "locale", "translation",
             "resource bundle", "assets.car", "mainmenu.nib", "cacert.pem",
@@ -121,7 +121,7 @@ const std::vector<SurfaceRule>& rules() {
             "servicemanagement.framework", "launch at startup", "login item", "helper tool", "openurl",
             "switchtosettings"}},
         {"avatar_content", "content", {
-            "avatar", "animation", "humanoid", "marketplace", "purchase",
+            "avatar", "animation", "character", "marketplace", "purchase",
             "currency", "mesh", "texture", "asset", "csg", "teleport",
             "photo2avatar"}},
         {"app_shell", "mac_app", {
@@ -300,7 +300,7 @@ parse_reflection_descriptor(std::string_view text) {
     if (ends_with_ci(lower, ".car")) return "artifact_asset_catalog";
     if (lower.find("/scripts/") != std::string::npos ||
         ends_with_ci(lower, ".lua") ||
-        ends_with_ci(lower, ".luau")) {
+        ends_with_ci(lower, ".script_vm")) {
         return "artifact_script";
     }
     if (lower.find("luapackages") != std::string::npos) {
@@ -329,8 +329,8 @@ parse_reflection_descriptor(std::string_view text) {
         ends_with_ci(lower, ".mesh") ||
         ends_with_ci(lower, ".fbx") ||
         ends_with_ci(lower, ".obj") ||
-        ends_with_ci(lower, ".rbxm") ||
-        ends_with_ci(lower, ".rbxmx")) {
+        ends_with_ci(lower, ".model") ||
+        ends_with_ci(lower, ".modelx")) {
         return "artifact_model";
     }
     if (lower.find("/fonts/") != std::string::npos ||
@@ -370,7 +370,7 @@ void add_artifact_category_rules(std::vector<const SurfaceRule*>& matches,
         const bool hit =
             (category == "artifact_shader" && rule.subsystem == "graphics_rendering") ||
             ((category == "artifact_script" || category == "artifact_lua_package") &&
-                rule.subsystem == "luau") ||
+                rule.subsystem == "script_vm") ||
             (category == "artifact_certificate" &&
                 (rule.subsystem == "network_transport" ||
                  rule.subsystem == "crypto_tls" ||

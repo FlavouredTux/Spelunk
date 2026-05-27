@@ -1019,10 +1019,10 @@ ember_golden_test(
     GOLDEN  surface_inventory.surfaces.txt
 )
 ember_golden_test(
-    NAME    surface_inventory_luau_evidence
+    NAME    surface_inventory_script_vm_evidence
     FIXTURE surface_inventory
-    ARGS    "-q|--no-cache|--surfaces|--surface|luau|--surface-row-type|evidence"
-    GOLDEN  surface_inventory.luau_evidence.txt
+    ARGS    "-q|--no-cache|--surfaces|--surface|script_vm|--surface-row-type|evidence"
+    GOLDEN  surface_inventory.script_vm_evidence.txt
 )
 ember_golden_test(
     NAME    surface_inventory_json
@@ -1766,15 +1766,15 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  macho_string_names.role_identifier_anchor.pseudo.txt
     )
     ember_golden_test(
-        NAME    macho_string_names_luau_telemetry_anchor_pseudo
+        NAME    macho_string_names_script_vm_telemetry_anchor_pseudo
         FIXTURE macho_string_names
-        ARGS    "-q|--infer-string-names|-p|-s|luau_telemetry_bad_synchronize_call"
-        GOLDEN  macho_string_names.luau_telemetry_anchor.pseudo.txt
+        ARGS    "-q|--infer-string-names|-p|-s|script_vm_telemetry_bad_synchronize_call"
+        GOLDEN  macho_string_names.script_vm_telemetry_anchor.pseudo.txt
     )
     ember_golden_test(
         NAME    macho_string_names_engine_feature_anchor_pseudo
         FIXTURE macho_string_names
-        ARGS    "-q|--infer-string-names|-p|-s|feature_workspace_task_queue"
+        ARGS    "-q|--infer-string-names|-p|-s|feature_scene_graph_task_queue"
         GOLDEN  macho_string_names.engine_feature_anchor.pseudo.txt
     )
     ember_golden_test(

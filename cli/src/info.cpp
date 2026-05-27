@@ -123,7 +123,7 @@ void help_syms() {
     std::println("      --validate NAME  every addr bound to NAME + byte-similar lookalikes");
     std::println("      --containing-fn VA  entry/size/name/offset of the function covering VA");
     std::println("      --strings        printable strings (addr | text | xrefs)");
-    std::println("      --surfaces       app/subsystem inventory (Luau, network, media,");
+    std::println("      --surfaces       app/subsystem inventory (ScriptVM, network, media,");
     std::println("                       web auth, storage, analytics, crash/update, etc.);");
     std::println("                       Mach-O .app inputs also classify shipped bundle files");
     std::println("                       filters: --surface NAME, --surface-kind NAME,");

@@ -1,2 +1,0 @@
-evidence	luau	log_category	log_category	0x0	xrefs=	functions=0x401126	FLog::MacLuaApp
-evidence	luau	string	vm_scripting	0x402008	xrefs=0x40112a	functions=0x401126	[FLog::MacLuaApp] ScriptContext Luau heap report lua_State ModuleScript

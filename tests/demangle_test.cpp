@@ -93,8 +93,8 @@ int main() {
 #if __has_include(<cxxabi.h>)
     // Fallback through __cxa_demangle covers deep but valid Itanium
     // template payloads that Ember's conservative parser may not handle.
-    check("_ZN3RBX10Reflection13BoundFuncDescINS_19AnimationControllerEFNSt3__110shared_ptrINS_14AnimationTrackEEENS4_INS_9AnimationEEEELb0ELi1EEE",
-          "RBX::Reflection::BoundFuncDesc<RBX::AnimationController, std::__1::shared_ptr<RBX::AnimationTrack> (std::__1::shared_ptr<RBX::Animation>), false, 1>");
+    check("_ZN6Engine10Reflection13BoundFuncDescINS_19AnimationControllerEFNSt3__110shared_ptrINS_14AnimationTrackEEENS4_INS_9AnimationEEEELb0ELi1EEE",
+          "Engine::Reflection::BoundFuncDesc<Engine::AnimationController, std::__1::shared_ptr<Engine::AnimationTrack> (std::__1::shared_ptr<Engine::Animation>), false, 1>");
 #endif
 #endif
 
@@ -143,8 +143,8 @@ int main() {
         "std::unordered_map<std::string, long, std::hash<std::string >, std::equal_to<std::string >, std::allocator<std::pair<std::string const, long> > >",
         "std::unordered_map<std::string, long>");
     check_simplify(
-        "std::shared_ptr<std::vector<std::shared_ptr<RBX::Wire>, std::allocator<std::shared_ptr<RBX::Wire>> > const>",
-        "std::shared_ptr<std::vector<std::shared_ptr<RBX::Wire>> const>");
+        "std::shared_ptr<std::vector<std::shared_ptr<Engine::Wire>, std::allocator<std::shared_ptr<Engine::Wire>> > const>",
+        "std::shared_ptr<std::vector<std::shared_ptr<Engine::Wire>> const>");
     check_simplify(
         "std::unique_ptr<Foo, std::default_delete<Foo>>",
         "std::unique_ptr<Foo>");

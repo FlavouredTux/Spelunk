@@ -121,7 +121,7 @@ struct Args {
     bool xrefs  = false;
     bool strings = false;
     bool surfaces = false;          // --surfaces: app/subsystem surface inventory
-    std::string surface;            // --surface NAME: luau/network_transport/etc.
+    std::string surface;            // --surface NAME: script_vm/network_transport/etc.
     std::string surface_kind;       // --surface-kind NAME: string/symbol/objc_method/rtti_class/log_category/reflection_descriptor
     std::string surface_category;   // --surface-category NAME: rendering/protection/artifact_shader/etc.
     std::string surface_owner;      // --surface-owner NAME: reflection descriptor owner/class filter

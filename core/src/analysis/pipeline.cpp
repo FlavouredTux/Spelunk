@@ -887,13 +887,11 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
         return scope_set.empty() || scope_set.contains(a);
     };
     std::size_t raw_function_symbols = 0;
-    std::size_t raw_sized_function_symbols = 0;
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
         if (s.addr == 0 || s.name.empty()) continue;
         ++raw_function_symbols;
-        if (s.size != 0) ++raw_sized_function_symbols;
     }
     const bool distrust_huge_symbol_table =
         mode == CallGraphMode::Fast &&

@@ -117,7 +117,6 @@ tail.
 | `ember --functions <binary>` | TSV: addr / size / kind / name | enumerate everything |
 | `ember --functions --full-analysis <binary>` | same, deeper discovery | first pass missed obvious fns |
 | `ember --strings <binary>` | `addr\|text\|xref1,xref2,...` | find anchors |
-| `ember --dmp-anchors <binary>` | DataModelPatch/DataModel/ScriptContext/TaskScheduler anchor strings | Roblox DataModelPatch triage |
 | `ember --xrefs <binary>` | `caller -> callee` per line | full call graph dump; builds/reuses the broad xrefs cache |
 | `ember --data-xrefs <binary>` | TSV: target / from-pc / kind | whole-binary read/write/lea/code-ptr inventory; reuses the xrefs/cache work |
 
@@ -141,7 +140,6 @@ tail.
 | `ember --vtable-at <VA> [--limit N] <binary>` | one runtime vtable around a vptr/typeinfo-adjacent/table-slot VA | narrow std::function / vtable work without dumping every table |
 | `ember --objc-names <binary>` | Mach-O ObjC method names, including relative method lists | ObjC binaries |
 | `ember --infer-string-names <binary>` | synthesize conservative names from strong log/string anchors, compiler metadata, VM/graphics strings, and engine feature/config anchors | stripped functions with recoverable string evidence |
-| `ember --dmp-anchors <binary>` | Roblox DataModelPatch anchors; add `--full-analysis` for slower xref/function attribution | DMP / datamodel patch hunts |
 
 ### Mach-O notes
 - **Entries and functions.** Ember prefers `LC_MAIN`, falls back to
@@ -230,7 +228,7 @@ tail.
 - **Feature/config anchors.** CamelCase strings with subsystem prefixes such
   as `ContentProvider`, `Network`, `Replicator`, `Streaming`, `VoiceChat`,
   `Teleport`, `Physics`, `Avatar`, `TaskScheduler`, `ScriptContext`,
-  `DataModel`, `Workspace`, and related service names can become
+  `Workspace`, and related service names can become
   `feature_<snake_case>` function names when the suffix contains a feature,
   telemetry, rollout, limit, timeout, report, stats, queue, threshold, or
   similar config term. The pass requires a unique enclosing function, prefers
@@ -242,7 +240,7 @@ tail.
 | Command | Output | Use when |
 |---|---|---|
 | `ember --refs-to <VA> <binary>` | target-only refs for one VA: direct callers plus code-ptr/lea address-taking by default. Add `--access read|write|lea|code-ptr|all` to ask for data-reference rows. | "who uses this?" / "who writes this global?" |
-| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. Accepts `--access` like `--refs-to`. | fn-pointer-only callees (Roblox-style obfuscation, runtime dispatch tables) where direct callers don't exist |
+| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. Accepts `--access` like `--refs-to`. | fn-pointer-only callees and runtime dispatch tables where direct callers don't exist |
 | `ember --state-map <VA> [--json] <binary>` | target-only state/global map: read/write/lea/code-ptr counts plus per-site function, offset, shape (`set`, `clear`, `branch-input`, `load`, `read-modify-write`, etc.), and one disasm line | mutation map for flags, scheduler state, anti-cheat gates |
 | `ember --branch-on <VA> [--json] <binary>` | target-only branch-dependency probe: reads of one state/global that reach a nearby conditional branch, with read instruction, branch instruction, taken target, fallthrough, function, and offset | "which checks branch on this flag/global?" |
 | `ember --guard-map <FN-or-VA> [--json] <binary>` | function-level guard inventory: conditional branches, nearest `cmp/test`, direct memory/global used by that condition, taken target, and fallthrough | "what conditions gate this function?" |
@@ -286,17 +284,16 @@ next agent / tool can decide whether to verify.
   broad fact twice, prefer the cached command over rebuilding your own
   scan. `--no-cache` is for freshness/debugging, not default agent use.
 - `--xrefs` is now cheap enough to use as the first broad pass on very
-  large Roblox-scale clients. On a 117 MB RobloxPlayer/libroblox image,
-  fixed xrefs measured around 2.7s total after the worklist/filtering
-  improvements (`call_graph.fast_scan` was sub-second; remaining cost
-  was mostly function discovery/worklist). Use `EMBER_TIMING=1` when
-  validating performance or deciding whether the bottleneck is xref
-  formatting, function discovery, or pseudo-C lifting.
+  large stripped clients. On a roughly 100 MB image, fixed xrefs measured
+  around 2.7s total after the worklist/filtering improvements
+  (`call_graph.fast_scan` was sub-second; remaining cost was mostly
+  function discovery/worklist). Use `EMBER_TIMING=1` when validating
+  performance or deciding whether the bottleneck is xref formatting,
+  function discovery, or pseudo-C lifting.
 - `--data-xrefs` is also whole-binary inventory. Prefer
   `--refs-to <VA> --access read|write|lea|all` for one target.
-- For stripped Roblox-style investigations, a good broad setup is:
+- For stripped-client investigations, a good broad setup is:
   ```sh
-  ember --dmp-anchors <binary> > /tmp/ember-dmp-anchors.tsv
   env EMBER_TIMING=1 ember --xrefs --no-cache <binary> > /tmp/ember-xrefs.out
   ember --functions --json <binary> > /tmp/ember-functions.json
   ember --data-xrefs <binary> > /tmp/ember-data-xrefs.tsv
@@ -325,10 +322,6 @@ next agent / tool can decide whether to verify.
   you are actively naming, typing, or explaining.
 - `--full-analysis` is for missed functions and suspicious gaps in the
   function list. Do not add it to every inventory command by habit.
-- `--dmp-anchors` is optimized for fast Roblox DataModelPatch triage. By
-  default it only emits anchor-string rows so it stays responsive on
-  RobloxPlayer-scale Mach-O files. Add `--full-analysis` when you want the
-  slower xref/function attribution pass for those anchors.
 - `--refs-to-loose` is broader than `--refs-to`; use it when ordinary
   callers are empty but the target may live in a table, relocation slot,
   callback array, or runtime dump.

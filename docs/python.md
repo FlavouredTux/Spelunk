@@ -35,7 +35,7 @@ helpers such as `disasm(count=...)`, `callees()`, and `investigate()`:
 ```python
 from emberpy import Ember
 
-e = Ember("macos_ref/RobloxPlayer.app/Contents/MacOS/RobloxPlayer")
+e = Ember("samples/app.bin")
 fn = e.function(0x1041EA0D0)
 
 print(fn.pseudo())

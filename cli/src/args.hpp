@@ -38,8 +38,8 @@ struct Args {
     std::string refs_to;            // --refs-to VA: print callers of VA
     std::string refs_to_loose;      // --refs-to-loose VA: extend --refs-to with constant-pool /
                                     // imm64 scanning. Surfaces functions whose body holds the
-                                     // target as a literal — the fn-ptr-only case where direct
-                                     // E8/E9 callers are absent (Roblox-style mov reg,imm64;call reg).
+                                    // target as a literal - the fn-ptr-only case where direct
+                                     // E8/E9 callers are absent.
     std::string refs_access;        // --access read|write|lea|code-ptr|all: filter refs/data-xrefs
     std::string timeout;            // --timeout 10s: soft budget for quick refs probes
     std::string state_map;          // --state-map VA: mutation/read map for one state/global address
@@ -196,7 +196,6 @@ struct Args {
     bool objc_names = false;        // dump ObjC runtime -[Class sel] => IMP as TSV
     bool objc_protos = false;       // dump ObjC protocol signatures
     bool objc_surfaces = false;     // dump ObjC protocol/delegate implementation surfaces
-    bool dmp_anchors = false;       // --dmp-anchors: Roblox DataModelPatch anchor strings + xref fns
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool vtables = false;           // dump runtime pointer-dense vtables from loaded data/RELRO
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them

@@ -53,7 +53,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--objc-names", &Args::objc_names},
     {"",   "--objc-protocols", &Args::objc_protos},
     {"",   "--objc-surfaces", &Args::objc_surfaces},
-    {"",   "--dmp-anchors", &Args::dmp_anchors},
     {"",   "--rtti",     &Args::rtti},
     {"",   "--vtables",  &Args::vtables},
     {"",   "--int3-resolve", &Args::int3_resolve},

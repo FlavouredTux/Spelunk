@@ -1744,7 +1744,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // Cache the encrypted-section verdict by Section pointer - without
     // this cache, `section_looks_encrypted(*sec)` runs the O(n) entropy
     // sweep over the whole section once per discovered prologue
-    // (~24 k hits on a 14 MB Roblox-shaped DLL = ~336 GB of byte
+    // (~24 k hits on a 14 MB stripped DLL = ~336 GB of byte
     // processing). Dominates cold open by two orders of magnitude.
     const auto& sections = b.sections();
     std::unordered_map<const Section*, bool> encrypted_cache;

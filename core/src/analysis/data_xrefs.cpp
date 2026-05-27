@@ -278,7 +278,7 @@ compute_data_xrefs(const Binary& b) {
 
     // Build the work list: every named-symbol function + every discovered
     // function (deduped by address). Earlier this was symbol-only, which
-    // on a 109 MB stripped binary (Roblox client) walked < 5% of code and
+    // on a 109 MB stripped binary walked < 5% of code and
     // produced ~2k xrefs instead of the hundreds of thousands actually
     // present. Same union-with-discovered fix that compute_call_graph
     // needed.

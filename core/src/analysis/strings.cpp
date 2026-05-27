@@ -1312,7 +1312,6 @@ luau_anchor_name_from_string(std::string_view text) {
              std::string_view{"SAuthWorkspace"},
              std::string_view{"SimWorkspace"},
              std::string_view{"Marketplace"},
-             std::string_view{"DataModel"},
              std::string_view{"Replicator"},
              std::string_view{"RunService"},
              std::string_view{"Streaming"},

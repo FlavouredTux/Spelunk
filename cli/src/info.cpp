@@ -180,7 +180,7 @@ void help_xrefs() {
     std::println("                       --access read|write|lea|code-ptr|all filters data refs");
     std::println("      --refs-to-loose VA  superset: also scans constant-pool imm64s and");
     std::println("                       R_*_RELATIVE relocs whose addend == VA, recovering");
-    std::println("                       fn-pointer-only dispatch shapes (Roblox-style)");
+    std::println("                       fn-pointer-only dispatch shapes");
     std::println("      --state-map VA   target-only read/write/lea map for one state/global");
     std::println("      --branch-on VA   reads of one state/global that reach conditional branches");
     std::println("      --guard-map FN   conditional branches and nearby guard conditions in one fn");
@@ -207,7 +207,6 @@ void help_ana() {
     std::println("      --objc-names     Obj-C runtime methods as TSV (imp ± class selector sig)");
     std::println("      --objc-protocols Obj-C protocol method signatures");
     std::println("      --objc-surfaces  Obj-C class/category protocol implementation surface");
-    std::println("      --dmp-anchors    Roblox DataModelPatch anchor strings (--full-analysis adds xrefs)");
     std::println("      --int3-resolve   classify embedded int3 bytes (handler / pad / dead)");
     std::println("      --identify       YARA-like crypto/protocol identifier");
     std::println("      --identify-threshold T  confidence floor (default 0.4)");

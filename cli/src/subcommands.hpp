@@ -50,7 +50,6 @@ int run_identify    (const Args& args, const Binary& b);
 int run_objc_names  (const Args& args, const Binary& b);
 int run_objc_protos (const Args& args, const Binary& b);
 int run_objc_surfaces(const Args& args, const Binary& b);
-int run_dmp_anchors (const Args& args, const Binary& b);
 int run_rtti        (const Args& args, const Binary& b);
 int run_vtables     (const Args& args, const Binary& b);
 int run_int3_resolve(const Args& args, const Binary& b);

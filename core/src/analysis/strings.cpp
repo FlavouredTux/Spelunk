@@ -1035,8 +1035,8 @@ reflection_bound_descriptor_name(std::string_view text) {
     bool upper = false;
     for (char c : text) {
         const auto u = static_cast<unsigned char>(c);
-        lower |= std::islower(u);
-        upper |= std::isupper(u);
+        lower = lower || std::islower(u) != 0;
+        upper = upper || std::isupper(u) != 0;
     }
     return lower && upper;
 }

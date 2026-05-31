@@ -1,7 +1,4 @@
 // describe
-uint64_t describe(uint64_t a1) {
-  if ((uint32_t)a1 > 5) {
-    return -1;
-  }
-  return (uint32_t)(a1 + 0x64);
+uint32_t describe(uint64_t a1) {
+  return (uint32_t)a1 >= 6 ? -1 : (uint32_t)(a1 + 0x64);
 }

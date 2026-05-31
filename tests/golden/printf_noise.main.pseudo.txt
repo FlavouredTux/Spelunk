@@ -1,13 +1,16 @@
 // main
 extern uint32_t g_count;
 extern FILE* stderr;
+extern FILE* stdout;
 
 uint32_t main(uint32_t a1, uint64_t* a2) {
-  one_arg(a2[0]);
+  uint64_t r_strlen = strlen(a2[0]);
+  printf("len=%zu\\n", r_strlen);
   if ((int64_t)a1 > 1) {
     fprintf(stderr, "a=%s b=%s\\n", a2[0], a2[1]);
   }
-  no_args();
+  fwrite("hello\\n", 1, 6, stdout);
+  puts("ready");
   printf("%*d\\n", (uint32_t)a1, (uint64_t)g_count);
   return g_count;
 }

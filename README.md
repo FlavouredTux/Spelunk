@@ -1,12 +1,14 @@
 # Ember
 
-> *Take a binary. Hand back the program.*
+Ember is a small reverse-engineering toolkit for loading binaries, lifting
+machine code into its own IR, and rendering a pseudo-C view without relying on
+LLVM, Capstone, Zydis, SLEIGH, or debug info.
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-**`gotos.c`** - the source
+**`gotos.c`** - original source
 
 ```c
 int multi_exit(const char* s, const char* t) {
@@ -22,7 +24,7 @@ fail:
 </td>
 <td width="50%" valign="top">
 
-**`ember -p -s multi_exit gotos`** - the recovery
+**`ember -p -s multi_exit gotos`** - recovered from a stripped binary
 
 ```c
 uint64_t multi_exit(uint64_t a1, uint64_t a2) {
@@ -39,63 +41,81 @@ uint64_t multi_exit(uint64_t a1, uint64_t a2) {
 </tr>
 </table>
 
-<sub>The right column was reconstructed from a stripped binary - ember has never seen the source. It walked SSA, collapsed the <code>goto&nbsp;fail</code> ladder into early returns, forwarded spilled parameters, and rendered the constant as signed even though it sits in a <code>uint64_t</code> slot.</sub>
+<sub>The recovered output comes from the stripped executable. Ember builds SSA,
+collapses the shared failure block into early returns, forwards spilled
+parameters, and prints the signed constant even though the storage slot is
+represented as <code>uint64_t</code>.</sub>
 
 ---
 
-## By omission
+## Design
 
-What ember refuses to link, vendor, or import:
+Ember keeps the analysis stack local to the project:
 
-- **No Capstone.** Own x86-64 decoder. AArch64, PPC32, and PPC64 have decoders too.
-- **No Zydis. No Ghidra SLEIGH.** Same reason.
-- **No LLVM.** Own IR, own SSA, own cleanup, own structurer.
-- **No vendored dependencies.** A C++23 compiler and the standard library. That's it.
-- **No DWARF - even when it's right there.** The debugger sets breakpoints against ember's own pseudo-C output. There is no source on disk; ember invents one.
-- **No pretending.** When the analyzer can't bottom something out, the output says so out loud - `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */`, not a fabricated symbol.
+- Custom x86-64 decoder, with AArch64, PPC32, and PPC64 decoders in tree.
+- Custom IR, SSA construction, cleanup passes, structurer, and pseudo-C emitter.
+- No vendored runtime dependencies; the C++ core builds against the standard library.
+- The debugger uses Ember's own pseudo-C line map instead of source or DWARF.
+- Unresolved analysis stays explicit, for example
+  `(*(uint64_t (**)(...))0x...)(...) /* unresolved indirect: ... */`.
 
-The whole pipeline fits in your head.
+The goal is to keep the pipeline inspectable and easy to change.
 
 ---
 
-## The pipeline, in nine stages
+## Pipeline
 
 ```
 binary → loader → decoder → CFG → IR lift → SSA → cleanup → structure → pseudo-C
 ```
 
-Loader handles ELF, DOL, Mach-O, PE, Microsoft minidump, and raw-region scrapes from packed targets. Cleanup is const-fold, copy-prop, GVN, store→load forward, dead-store elimination, plus a type lattice that propagates through phis. Structurer recovers `if`, `while`, `for`, `switch`, and as a last resort `goto`. Per-function latency is a few milliseconds.
+The loader handles ELF, DOL, Mach-O, PE, Microsoft minidump, and raw-region
+scrapes from packed targets. Cleanup includes constant folding, copy
+propagation, GVN, store-to-load forwarding, dead-store elimination, and a small
+type lattice that propagates through phis. The structurer recovers `if`,
+`while`, `for`, and `switch`, falling back to `goto` when the control flow is
+not clean enough to structure.
 
 ---
 
-## Three things you don't expect
+## Features
 
-### The debugger speaks pseudo-C
+### Pseudo-C debugger
 
 ```sh
 ember --debug ./target
 (ember-dbg) b sub_4000b0:42
 ```
 
-That breakpoint resolves through ember's own emitter. Line 42 does not exist in any file on disk - it exists in the decompiled view ember just generated, and the asm address it maps to is exactly where execution stops. ptrace on Linux, Mach on macOS. `code` shows the pseudo-C around the current PC; `bt` walks `.eh_frame` with an RBP fallback; `aux` lets you side-load a Binary as a symbol oracle for runtime-mmap'd Mach-O / PE blobs.
+The breakpoint resolves through Ember's generated pseudo-C line map. The line
+does not need to exist in a source file. Linux uses ptrace; macOS uses Mach.
+`code` shows the pseudo-C around the current PC, `bt` walks `.eh_frame` with an
+RBP fallback, and `aux` side-loads another binary as a symbol source for
+runtime-mapped Mach-O or PE blobs.
 
-### It recognizes library functions across compilers
+### Cross-binary function recognition
 
 ```sh
 ember --teef libcrypto.so.3 > corpus.tsv
 ember --recognize --corpus corpus.tsv ./stripped-target
 ```
 
-Three signals stacked: a CFG-shape pre-filter, a post-cleanup IR canonical with MinHash for partial overlap, and a behavioural signature that runs K=64 random inputs through an abstract IR interpreter and hashes the I/O multiset. The behavioural pass catches what canonicalization can't - pointer-vs-index lowering, intrinsic-vs-open-coded (bswap, popcnt, …), induction-variable strength reduction, gcc ↔ clang divergence.
+Function matching combines a CFG-shape pre-filter, a post-cleanup IR canonical
+with MinHash for partial overlap, and a behavioural signature. The behavioural
+pass runs 64 random inputs through an abstract IR interpreter and hashes the
+input/output multiset, which helps with compiler differences such as
+pointer-vs-index lowering, open-coded intrinsics, and induction-variable
+strength reduction.
 
 > **100% precision, 34.4% recall** on the cross-config probe2 matrix
 > (6 compiler configurations × 30 algorithms, 30 directed pairs).
 > Real cross-binary: `sha256sum` corpus → `md5sum` recovers every named
 > gnulib helper at confidence 1.0, zero false positives.
 
-### It listens to runtime evidence
+### Runtime evidence
 
-When static analysis can't bottom out an indirect call, hand ember a TSV of observed edges. Compare the same wrapper without and with `--trace`:
+When static analysis cannot resolve an indirect call, pass Ember a TSV of
+observed edges. The same wrapper without and with `--trace`:
 
 ```c
 // ember -p -s call_fp ./target
@@ -109,11 +129,12 @@ uint32_t call_fp(uint32_t (*fn)(uint32_t), uint32_t x) {
 }
 ```
 
-The first observed target names the expression; the rest stay attached as a comment so dynamic evidence is never silently lost.
+The first observed target names the expression; the other observed targets stay
+attached as a comment.
 
 ---
 
-## Receipts
+## Support matrix
 
 |                       | x86-64                | AArch64           | PPC32 / PPC64 |
 |---                    |---                    |---                |---            |
@@ -128,11 +149,13 @@ The first observed target names the expression; the rest stay attached as a comm
 
 ---
 
-## Honest cracks
+## Limitations
 
-Limits, not bug reports:
+Known limits:
 
-- Indirect calls without IAT, constant vtable, trace observation, or receiver-type fact still render as typed unresolved function-pointer-slot calls with an evidence comment. By design - see *By omission*.
+- Indirect calls without IAT, constant vtable, trace observation, or
+  receiver-type evidence still render as typed unresolved function-pointer-slot
+  calls with an evidence comment.
 - Switch cases whose default falls outside the bounds check can misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
 - PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics, DOL function discovery, and code-pointer xrefs.

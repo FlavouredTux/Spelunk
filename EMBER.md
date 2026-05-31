@@ -22,6 +22,11 @@ identification, full xref + data-xref maps, and a ptrace/Mach debugger
 that breakpoints against the pseudo-C view. There is no DWARF dependency;
 Ember invents a source view from the binary itself.
 
+The PE/Windows path is first-class for x86-64: PE32+ headers, sections,
+imports, delay imports, exports, TLS callbacks, `.pdata`/UNWIND_INFO
+function ranges, PDB sidecars, MSVC RTTI/vtables, Win64 ABI lifting, and
+DIR64 base relocations all feed naming, discovery, xrefs, and pseudo-C.
+
 A `.ember` annotation file persists everything you discover (renames,
 type signatures, struct field names, named constants, free-form notes).
 Every Ember command reads from it; `--apply` writes to it.
@@ -31,6 +36,17 @@ output is TSV, JSON, plain text, or pseudo-C - all designed to be parsed
 by another tool. The Python wrapper shells out to the same executable and
 adds function handles, structured helper methods, path explanation, and
 batch annotation writing.
+
+On this workstation, the current global CLI is the release build at
+`build/release-local/cli/ember`, exposed through `~/.local/bin/ember`.
+If CMake's `release` preset complains about the existing `build/` cache,
+use the clean local release directory:
+
+```sh
+cmake -S . -B build/release-local -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/release-local --target ember_cli -j 6
+ln -sfn "$PWD/build/release-local/cli/ember" ~/.local/bin/ember
+```
 
 ---
 
@@ -135,7 +151,7 @@ tail.
 | `ember --identify <binary>` | TSV: addr / name / category / confidence | crypto / hashes / protocols |
 | `ember --teef <library> > corpus.tsv` | corpus build | build a library fingerprint |
 | `ember --recognize --corpus c.tsv <binary>` | TSV: addr / current / suggested / conf | identify library functions |
-| `ember --rtti <binary>` | TSV: vtable / class info | C++ class hierarchy |
+| `ember --rtti <binary>` | TSV: vtable / class info from Itanium or MSVC RTTI | C++ class hierarchy |
 | `ember --vtables <binary>` | runtime vtables + slots | full loaded-dump / RELRO vtable inventory |
 | `ember --vtable-at <VA> [--limit N] <binary>` | one runtime vtable around a vptr/typeinfo-adjacent/table-slot VA | narrow std::function / vtable work without dumping every table |
 | `ember --objc-names <binary>` | Mach-O ObjC method names, including relative method lists | ObjC binaries |
@@ -236,11 +252,40 @@ tail.
   collector, and skips ambiguous functions. It upgrades anonymous functions
   only; existing real symbols and annotations remain authoritative.
 
+### PE / Windows notes
+- **Format and ABI.** Ember supports PE32+ x86-64 images and Microsoft
+  minidumps. PE and minidump x86-64 code is lifted with the Win64 ABI:
+  integer/pointer args are `rcx`, `rdx`, `r8`, `r9`; stack args are read
+  after the 32-byte shadow space; caller-saved clobbers follow Win64 rules.
+- **Imports, exports, and thunks.** Regular imports, delay imports, named
+  exports, and ordinal exports become symbols. x64 `jmp qword [rip+slot]`
+  IAT thunks are connected back to import slots so calls can render as
+  imported API names instead of anonymous stubs.
+- **Function starts and prologues.** `.pdata` `RUNTIME_FUNCTION` entries
+  seed stripped function discovery and sizes. PE `UNWIND_INFO` prologue
+  ranges are fed to the emitter for pseudo-C/struct output so Win64 save /
+  shadow-space setup does not dominate the recovered body.
+- **PDBs.** CodeView RSDS debug records expose the expected PDB filename.
+  When a matching sidecar is loaded, public/procedure/object symbols,
+  procedure signatures, and stack-local hints are merged into annotations
+  and frame/type recovery.
+- **MSVC RTTI.** `--rtti` dumps MSVC class/vtable rows for PE. Internally,
+  MSVC RTTI also seeds function discovery, vtable indirect-call resolution,
+  and pseudo-C method labels such as `Class::vfn_3`. The parser validates
+  x64 Complete Object Locators via `pSelf`, reads TypeDescriptor names,
+  demangles what the current MSVC demangler understands, and walks vtable
+  IMP slots only while they point into executable ranges.
+- **Relocations and pointer tables.** PE DIR64 base relocations are exposed
+  as relocated qword slots, alongside ELF `R_*_RELATIVE` slots. This matters
+  for absolute Windows jump tables, vtables, and function-pointer tables:
+  `--refs-to-loose`, symbol-use recovery, and daemon refs caches can use the
+  relocation directory instead of relying only on raw qword scans.
+
 ### Lookups
 | Command | Output | Use when |
 |---|---|---|
 | `ember --refs-to <VA> <binary>` | target-only refs for one VA: direct callers plus code-ptr/lea address-taking by default. Add `--access read|write|lea|code-ptr|all` to ask for data-reference rows. | "who uses this?" / "who writes this global?" |
-| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and an ELF R_*_RELATIVE addend scan (`relocated` rows — `.data.rel.ro` slots the dynamic linker patches at startup, which read zero on disk). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. Accepts `--access` like `--refs-to`. | fn-pointer-only callees and runtime dispatch tables where direct callers don't exist |
+| `ember --refs-to-loose <VA> [--json] <binary>` | superset of `--refs-to`. Direct E8/E9 + CodePtr/Lea (mov reg,imm64 + lea rip+disp pointing at VA), plus a pointer-aligned literal-qword scan over every readable section (`imm64-stored` rows) and relocation metadata (`relocated` rows: ELF `R_*_RELATIVE` addends and PE DIR64 base-relocation slots). `--json` emits structured rows: `{from, target, kind, slot?, fn?, fn_offset?}`. Accepts `--access` like `--refs-to`. | fn-pointer-only callees and runtime dispatch tables where direct callers don't exist |
 | `ember --state-map <VA> [--json] <binary>` | target-only state/global map: read/write/lea/code-ptr counts plus per-site function, offset, shape (`set`, `clear`, `branch-input`, `load`, `read-modify-write`, etc.), and one disasm line | mutation map for flags, scheduler state, anti-cheat gates |
 | `ember --branch-on <VA> [--json] <binary>` | target-only branch-dependency probe: reads of one state/global that reach a nearby conditional branch, with read instruction, branch instruction, taken target, fallthrough, function, and offset | "which checks branch on this flag/global?" |
 | `ember --guard-map <FN-or-VA> [--json] <binary>` | function-level guard inventory: conditional branches, nearest `cmp/test`, direct memory/global used by that condition, taken target, and fallthrough | "what conditions gate this function?" |

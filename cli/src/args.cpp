@@ -76,6 +76,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--debug",     &Args::debug},
     {"",   "--serve",     &Args::serve},
     {"",   "--daemon",    &Args::serve},
+    {"",   "--ui",        &Args::ui},
     {"",   "--show-empty", &Args::symuses_show_empty},
     {"",   "--no-taint",  &Args::symuses_no_taint},
     {"",   "--verbose",   &Args::verbose},
@@ -603,7 +604,7 @@ Result<Args> parse_args(int argc, char** argv) {
     const bool attach_only = a.debug && !a.attach_pid.empty();
     if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types
         && a.regions_manifest.empty() && a.raw_bytes_path.empty()
-        && !attach_only) {
+        && !attach_only && !a.ui) {
         return std::unexpected(Error::invalid_format("no binary specified"));
     }
     if (!a.raw_bytes_path.empty() && a.raw_base_va.empty()) {

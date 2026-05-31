@@ -113,6 +113,12 @@ public:
         return it == pdb_locals_.end() ? nullptr : &it->second;
     }
 
+    // IMAGE_DIRECTORY_ENTRY_BASERELOC DIR64 slots: slot-VA -> preferred
+    // absolute target VA stored in that qword before the Windows loader
+    // applies the ASLR delta. This mirrors ElfBinary::relocated_qwords()
+    // for consumers that need pointer-slot evidence beyond raw qword scans.
+    [[nodiscard]] std::map<addr_t, addr_t> relocated_qwords() const override;
+
     // GUID + age of the most-recently-attached PDB. The PE binary's
     // CodeView record carries the same fields; mismatch means the PDB
     // belongs to a different build of the binary. Both empty when no

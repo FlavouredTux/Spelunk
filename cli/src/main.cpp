@@ -1,9 +1,19 @@
 #include <cstdlib>
+#include <cerrno>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <print>
 #include <string>
 #include <utility>
+#include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <ember/binary/binary.hpp>
 #include <ember/analysis/strings.hpp>
@@ -162,6 +172,67 @@ auto_dsym_path(const ember::cli::Args& args) {
     return ember::cache::read(dir, *key, ember::cli::functions_cache_tag(args)).has_value();
 }
 
+[[nodiscard]] int run_ui(const ember::cli::Args& args) {
+    std::vector<std::string> argv_storage;
+    if (const char* override_bin = std::getenv("EMBER_UI_BIN");
+        override_bin && override_bin[0] != '\0') {
+        argv_storage.emplace_back(override_bin);
+    } else if (std::filesystem::is_regular_file("ui/electron/launch.cjs")) {
+        argv_storage.emplace_back("node");
+        argv_storage.emplace_back("ui/electron/launch.cjs");
+    } else {
+        argv_storage.emplace_back("ember-ui");
+    }
+    if (!args.binary.empty()) argv_storage.emplace_back(args.binary);
+
+    std::vector<char*> argv;
+    argv.reserve(argv_storage.size() + 1);
+    for (auto& s : argv_storage) argv.push_back(s.data());
+    argv.push_back(nullptr);
+
+#if defined(_WIN32)
+    const intptr_t rc = ::_spawnvp(_P_WAIT, argv_storage.front().c_str(), argv.data());
+    if (rc == -1) {
+        std::println(stderr,
+            "ember: --ui: failed to launch '{}': {}",
+            argv_storage.front(), std::strerror(errno));
+        std::println(stderr,
+            "ember: --ui: install/link the UI package or set EMBER_UI_BIN");
+        return EXIT_FAILURE;
+    }
+    return static_cast<int>(rc);
+#else
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        std::println(stderr, "ember: --ui: fork failed: {}", std::strerror(errno));
+        return EXIT_FAILURE;
+    }
+    if (pid == 0) {
+        if (argv_storage.front().find('/') != std::string::npos) {
+            ::execv(argv_storage.front().c_str(), argv.data());
+        } else {
+            ::execvp(argv_storage.front().c_str(), argv.data());
+        }
+        std::println(stderr,
+            "ember: --ui: failed to launch '{}': {}",
+            argv_storage.front(), std::strerror(errno));
+        std::println(stderr,
+            "ember: --ui: install/link the UI package or set EMBER_UI_BIN");
+        _exit(127);
+    }
+
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        std::println(stderr, "ember: --ui: waitpid failed: {}", std::strerror(errno));
+        return EXIT_FAILURE;
+    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return EXIT_FAILURE;
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -182,6 +253,7 @@ int main(int argc, char** argv) {
         else                         print_help_topic(args.help_topic);
         return EXIT_SUCCESS;
     }
+    if (args.ui)          { return run_ui(args);                         }
     if (args.dump_types)  { return run_dump_types();                       }
 
     if (!args.diff_path.empty() ||

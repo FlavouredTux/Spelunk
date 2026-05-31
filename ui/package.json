@@ -4,6 +4,9 @@
   "version": "1.2.2",
   "type": "module",
   "main": "electron/main.cjs",
+  "bin": {
+    "ember-ui": "./electron/launch.cjs"
+  },
   "homepage": "https://github.com/FlavouredTux/Ember",
   "author": {
     "name": "FlavouredTux",

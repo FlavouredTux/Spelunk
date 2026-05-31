@@ -121,19 +121,20 @@ function createWindow() {
     win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
   });
 
-  // `app.isPackaged` is the only reliable dev/prod signal - a packaged
-  // Electron app does NOT set NODE_ENV, so gating on it means the
-  // installer tries to load the Vite dev server URL, loadURL fails
-  // silently, `ready-to-show` never fires, and the window stays hidden
-  // forever. Users see the process launch and nothing appear.
-  if (!app.isPackaged) {
-    const devUrl = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
-    win.loadURL(devUrl);
+  // Packaged apps and globally-linked source installs should load the
+  // built renderer. Package-script dev runs opt into Vite with
+  // VITE_DEV_SERVER_URL, set by electron/launch.cjs when invoked as
+  // `node electron/launch.cjs .`.
+  const builtIndex = path.join(__dirname, "..", "dist", "index.html");
+  if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
+    win.loadURL(process.env.VITE_DEV_SERVER_URL);
     if (process.env.EMBER_OPEN_DEVTOOLS === "1") {
       win.webContents.openDevTools({ mode: "detach" });
     }
+  } else if (app.isPackaged || fsSync.existsSync(builtIndex)) {
+    win.loadFile(builtIndex);
   } else {
-    win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+    win.loadURL("http://localhost:5173");
   }
 
   // Belt and braces: if the renderer fails to load for any reason,

@@ -201,7 +201,7 @@ void help_ana() {
     std::println("      --ipa            interprocedural char*-arg propagation (run before -p/--struct)");
     std::println("      --resolve-calls  global indirect-call resolver (vtable dispatch -> named call)");
     std::println("      --eh             parse __eh_frame + LSDA; mark landing pads");
-    std::println("      --rtti           dump Itanium C++ RTTI: classes + vtables + IMPs");
+    std::println("      --rtti           dump C++ RTTI: Itanium/MSVC classes + vtables + IMPs");
     std::println("      --vtables        dump runtime pointer-dense vtables from data/RELRO");
     std::println("      --vtable-at VA [--limit N]  narrow runtime vtable view around VA");
     std::println("      --objc-names     Obj-C runtime methods as TSV (imp ± class selector sig)");
@@ -259,7 +259,10 @@ void help_ann() {
 }
 
 void help_dbg() {
-    std::println("Interactive modes (debugger + agent daemon):");
+    std::println("Interactive modes (UI + debugger + agent daemon):");
+    std::println("      --ui             open the Electron UI, optionally loading <binary>.");
+    std::println("                       Equivalent to `ember-ui <binary>` when that command");
+    std::println("                       is installed; uses EMBER_UI_BIN when set.");
     std::println("      --debug          launch under the built-in REPL debugger (uses ember's");
     std::println("                       pseudo-C as the source view; no DWARF). Linux ptrace");
     std::println("                       backend by default; macOS uses Mach.");
@@ -314,6 +317,7 @@ void help_cache() {
 
 void print_help() {
     std::println("usage: ember [view-flag] [-s NAME] <binary>");
+    std::println("       ember --ui [binary]");
     std::println("       ember --help <topic>");
     std::println("");
     std::println("View pipeline:");
@@ -329,12 +333,12 @@ void print_help() {
     std::println("  teef     fingerprints, teef, recognize, diff, orbit-dump,");
     std::println("           corpus, size caps");
     std::println("  ann      annotate, apply, list-annotations, dry-run, .ember scripts");
-    std::println("  dbg      --debug, attach, backends, aux-bin, --serve");
+    std::println("  dbg      --ui, --debug, attach, backends, aux-bin, --serve");
     std::println("  load     pdb, regions, raw-bytes, base-va, force-fn-start, module");
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
     std::println("");
-    std::println("Common:  --json  -q/--quiet  -h/--help");
+    std::println("Common:  --ui  --json  -q/--quiet  -h/--help");
     std::println("");
     std::println("Get topic detail:  ember --help <topic>   (or --help=<topic>)");
 }

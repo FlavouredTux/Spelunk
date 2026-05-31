@@ -9,7 +9,6 @@
 #include <ember/analysis/fn_table.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/arch.hpp>
-#include <ember/binary/elf.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/disasm/instruction.hpp>
@@ -214,18 +213,14 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
         }
     }
 
-    // Relocated slots (ELF only): the qword is zero on disk but the
-    // dynamic linker writes table_va in at load time. The on-disk
-    // scan above misses these - the relocation table knows the
-    // post-load value.
-    if (const auto* elf = dynamic_cast<const ElfBinary*>(&b)) {
-        const auto reloc_map = elf->relocated_qwords();
-        for (const auto& [slot, addend] : reloc_map) {
-            if (addend != table_va) continue;
-            ++out.scope_relocated_slots;
-            if (auto it = xrefs.find(slot); it != xrefs.end()) {
-                for (const auto& x : it->second) admit_xref(x);
-            }
+    // Relocated slots: the loader patches these qwords at load time
+    // using format metadata, so raw file-byte scans can miss them.
+    const auto reloc_map = b.relocated_qwords();
+    for (const auto& [slot, addend] : reloc_map) {
+        if (addend != table_va) continue;
+        ++out.scope_relocated_slots;
+        if (auto it = xrefs.find(slot); it != xrefs.end()) {
+            for (const auto& x : it->second) admit_xref(x);
         }
     }
     out.scope_fn_count = scope_fns.size();

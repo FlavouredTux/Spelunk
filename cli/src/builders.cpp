@@ -17,6 +17,7 @@
 #include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/demangle.hpp>
 #include <ember/analysis/graphics.hpp>
+#include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
@@ -1651,10 +1652,30 @@ std::string build_objc_surfaces_output(const Binary& b) {
     return out;
 }
 
-// Itanium C++ RTTI: one row per (class, vfn_idx, imp_addr); meta row per
-// class with vtable address + method count.
+// C++ RTTI: one row per (class, vfn_idx, imp_addr); meta row per class
+// with vtable address + method count. Mach-O/ELF use Itanium ABI RTTI;
+// PE uses MSVC RTTI.
 std::string build_rtti_output(const Binary& b) {
     std::string out;
+    if (b.format() == Format::Pe) {
+        const auto classes = parse_msvc_rtti(b);
+        const auto method_names = rtti_method_names(classes);
+        for (const auto& c : classes) {
+            out += std::format("class\t{:x}\t{:x}\t{}\t{}\t{}\n",
+                               c.type_descriptor, c.vtable, c.methods.size(),
+                               c.pretty_name, c.decorated_name);
+            for (std::size_t i = 0; i < c.methods.size(); ++i) {
+                auto it = method_names.find(c.methods[i]);
+                const std::string name = it != method_names.end()
+                    ? it->second
+                    : std::format("{}::vfn_{}", c.pretty_name, i);
+                out += std::format("vfn\t{:x}\t{}\t{}\n",
+                                   c.methods[i], i, name);
+            }
+        }
+        return out;
+    }
+
     const auto classes = parse_itanium_rtti(b);
     const auto method_names = rtti_method_names(classes);
     for (const auto& c : classes) {

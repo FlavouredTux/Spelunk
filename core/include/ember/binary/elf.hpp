@@ -55,7 +55,7 @@ public:
     // Covers R_X86_64_RELATIVE, R_AARCH64_RELATIVE, R_PPC64_RELATIVE.
     // Empty for non-x86_64 / non-arm64 / non-ppc64 ELF (no other archs
     // are decoded yet) and for binaries without a `.rela.*` section.
-    [[nodiscard]] std::map<addr_t, addr_t> relocated_qwords() const;
+    [[nodiscard]] std::map<addr_t, addr_t> relocated_qwords() const override;
 
     // Lowest PT_LOAD vaddr - 0 for PIE/ET_DYN, the linker's preferred
     // base (typically 0x400000 on x86-64 sysv) for non-PIE.

@@ -60,6 +60,7 @@ constexpr u32 kScnMemWrite   = 0x80000000;
 // these by convention; we only read the ones we use.
 constexpr std::size_t kDdExport      = 0;
 constexpr std::size_t kDdImport      = 1;
+constexpr std::size_t kDdBaseReloc   = 5;
 constexpr std::size_t kDdDebug       = 6;
 constexpr std::size_t kDdTls         = 9;
 constexpr std::size_t kDdDelayImport = 13;
@@ -70,6 +71,9 @@ constexpr std::size_t kDelayImportDescSize  = 32;
 constexpr u32         kDelayAttrRvaBased    = 0x1;
 constexpr u64         kOrdinalFlagBit       = 0x8000'0000'0000'0000ULL;
 constexpr std::size_t kExportDirSize        = 40;
+constexpr std::size_t kBaseRelocBlockSize   = 8;
+constexpr u16         kRelocTypeAbsolute    = 0;
+constexpr u16         kRelocTypeDir64       = 10;
 
 [[nodiscard]] Arch arch_from_machine(u16 m) noexcept {
     switch (m) {
@@ -366,6 +370,54 @@ PeBinary::parse_delay_imports(std::unordered_map<addr_t, std::string>& got_to_na
 
 Result<void> PeBinary::parse_exports() {
     return pe::collect_exports(*this, image_base_, data_dirs_, symbols_);
+}
+
+std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
+    std::map<addr_t, addr_t> out;
+    if (arch_ != Arch::X86_64) return out;
+    if (data_dirs_.size() <= kDdBaseReloc) return out;
+    const auto& dd = data_dirs_[kDdBaseReloc];
+    if (dd.size == 0 || dd.virtual_address == 0) return out;
+    if (!rva_is_mapped(dd.virtual_address, kBaseRelocBlockSize)) return out;
+
+    u32 cur = dd.virtual_address;
+    const u64 end = static_cast<u64>(dd.virtual_address) + dd.size;
+    while (static_cast<u64>(cur) + kBaseRelocBlockSize <= end) {
+        const auto block = bytes_at_rva(cur);
+        if (block.size() < kBaseRelocBlockSize) break;
+
+        const u32 page_rva   = read_le_at<u32>(block.data() + 0);
+        const u32 block_size = read_le_at<u32>(block.data() + 4);
+        if (page_rva == 0 && block_size == 0) break;
+        if (block_size < kBaseRelocBlockSize) break;
+        if ((block_size & 1u) != 0) break;
+        if (static_cast<u64>(cur) + block_size > end) break;
+
+        const auto bytes = bytes_at_rva(cur);
+        if (bytes.size() < block_size) break;
+
+        const std::size_t count = (block_size - kBaseRelocBlockSize) / 2;
+        for (std::size_t i = 0; i < count; ++i) {
+            const u16 raw = read_le_at<u16>(
+                bytes.data() + kBaseRelocBlockSize + i * 2);
+            const u16 type = static_cast<u16>(raw >> 12);
+            const u16 off  = static_cast<u16>(raw & 0x0fffu);
+            if (type == kRelocTypeAbsolute) continue;
+            if (type != kRelocTypeDir64) continue;
+
+            const u32 slot_rva = page_rva + off;
+            const auto slot = bytes_at_rva(slot_rva);
+            if (slot.size() < 8) continue;
+            const u64 target = read_le_at<u64>(slot.data());
+            if (target == 0) continue;
+            out[image_base_ + static_cast<addr_t>(slot_rva)] =
+                static_cast<addr_t>(target);
+        }
+
+        cur += block_size;
+    }
+
+    return out;
 }
 
 }  // namespace ember

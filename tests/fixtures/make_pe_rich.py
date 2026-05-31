@@ -6,6 +6,7 @@ Coverage:
   - delay imports
   - TLS callback directory + callback array
   - export directory
+  - base relocation directory for absolute x64 qword pointers
   - .pdata function discovery for entry, export, and TLS callback
   - Win64 call with stack-passed arguments beyond rcx/rdx/r8/r9
   - trivial call/ret Win64 wrapper for arity/signature recovery
@@ -49,6 +50,7 @@ def main() -> int:
     rva_text = 0x1000
     rva_rdata = 0x2000
     rva_pdata = 0x3000
+    rva_reloc = 0x4000
 
     entry_rva = rva_text + 0x000
     tls_callback_rva = rva_text + 0x040
@@ -353,21 +355,37 @@ def main() -> int:
         pdata.append(0)
     pdata += b"\x01\x00\x00\x00"  # tiny non-zero unwind blob
 
+    # ---- base relocations -----------------------------------------------
+    # The MSVC-style switch jump table stores absolute VAs in .rdata. A real
+    # ASLR-capable PE carries DIR64 fixups for these qwords; expose them here
+    # so --refs-to-loose can find relocated Windows pointer slots.
+    reloc_entries = []
+    jump_table_rva = layout["msvc_jump_table"]
+    for i in range(3):
+        reloc_entries.append((10 << 12) | ((jump_table_rva + i * 8) - rva_rdata))
+    reloc_entries.append(0)  # IMAGE_REL_BASED_ABSOLUTE pad to 4-byte alignment
+    reloc = bytearray()
+    reloc += struct.pack("<II", rva_rdata, 8 + len(reloc_entries) * 2)
+    reloc += b"".join(struct.pack("<H", e) for e in reloc_entries)
+
     text_virt_size = len(text.rstrip(b"\x90"))
     if text_virt_size == 0:
         text_virt_size = len(text)
     rdata_virt_size = len(rdata)
     pdata_virt_size = len(pdata)
+    reloc_virt_size = len(reloc)
 
     foff_text = FILE_ALIGN
     foff_rdata = foff_text + align(text_virt_size, FILE_ALIGN)
     foff_pdata = foff_rdata + align(rdata_virt_size, FILE_ALIGN)
+    foff_reloc = foff_pdata + align(pdata_virt_size, FILE_ALIGN)
 
     text_raw_size = align(text_virt_size, FILE_ALIGN)
     rdata_raw_size = align(rdata_virt_size, FILE_ALIGN)
     pdata_raw_size = align(pdata_virt_size, FILE_ALIGN)
-    file_end = foff_pdata + pdata_raw_size
-    size_of_image = align(rva_pdata + pdata_virt_size, SECTION_ALIGN)
+    reloc_raw_size = align(reloc_virt_size, FILE_ALIGN)
+    file_end = foff_reloc + reloc_raw_size
+    size_of_image = align(rva_reloc + reloc_virt_size, SECTION_ALIGN)
     size_of_headers = FILE_ALIGN
 
     dos = bytearray(b"\x00" * 0x40)
@@ -376,7 +394,7 @@ def main() -> int:
 
     coff = struct.pack("<HHIIIHH",
                        MACHINE_AMD64,
-                       3,
+                       4,
                        0, 0, 0,
                        240,
                        IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE)
@@ -384,7 +402,7 @@ def main() -> int:
     opt = bytearray()
     opt += struct.pack("<H", 0x20B)
     opt += struct.pack("<BB", 14, 0)
-    opt += struct.pack("<III", text_raw_size, rdata_raw_size + pdata_raw_size, 0)
+    opt += struct.pack("<III", text_raw_size, rdata_raw_size + pdata_raw_size + reloc_raw_size, 0)
     opt += struct.pack("<I", entry_rva)
     opt += struct.pack("<I", rva_text)
     opt += struct.pack("<Q", IMAGE_BASE)
@@ -399,6 +417,7 @@ def main() -> int:
     data_dirs[0] = (export_dir_rva, 40)
     data_dirs[1] = (rva_rdata + import_desc_off, 40)
     data_dirs[3] = (rva_pdata, pdata_virt_size)
+    data_dirs[5] = (rva_reloc, reloc_virt_size)
     data_dirs[9] = (tls_dir_rva, 40)
     data_dirs[13] = (delay_desc_rva, 64)
     for va, sz in data_dirs:
@@ -417,6 +436,8 @@ def main() -> int:
                            SCN_CNT_INITIALIZED | SCN_MEM_READ)
     sec_tab += section_hdr(b".pdata", pdata_virt_size, rva_pdata, pdata_raw_size, foff_pdata,
                            SCN_CNT_INITIALIZED | SCN_MEM_READ)
+    sec_tab += section_hdr(b".reloc", reloc_virt_size, rva_reloc, reloc_raw_size, foff_reloc,
+                           SCN_CNT_INITIALIZED | SCN_MEM_READ)
 
     out = bytearray(file_end)
     out[0:0x40] = dos
@@ -427,6 +448,7 @@ def main() -> int:
     out[foff_text:foff_text + text_virt_size] = text[:text_virt_size]
     out[foff_rdata:foff_rdata + rdata_virt_size] = rdata
     out[foff_pdata:foff_pdata + pdata_virt_size] = pdata
+    out[foff_reloc:foff_reloc + reloc_virt_size] = reloc
 
     with open(out_path, "wb") as f:
         f.write(out)

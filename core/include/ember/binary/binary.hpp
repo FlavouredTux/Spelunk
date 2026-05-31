@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -54,6 +55,13 @@ public:
     [[nodiscard]] virtual std::span<const Symbol>  symbols() const noexcept  = 0;
 
     [[nodiscard]] virtual std::span<const std::byte> image() const noexcept = 0;
+
+    // Loader-patched pointer slots known from format metadata, returned as
+    // slot-VA -> absolute target VA. ELF models R_*_RELATIVE addends; PE
+    // models DIR64 base relocations. Other formats return no evidence.
+    [[nodiscard]] virtual std::map<addr_t, addr_t> relocated_qwords() const {
+        return {};
+    }
 
     // True when `addr` lives inside a region the linker flagged as
     // non-code data embedded in __TEXT (LC_DATA_IN_CODE on Mach-O, or

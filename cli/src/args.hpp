@@ -213,6 +213,7 @@ struct Args {
     bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
     bool debug  = false;            // --debug: launch the binary under the built-in REPL debugger
     bool serve  = false;            // --serve: read JSON-line tool requests on stdin, reply on stdout. Long-lived daemon for agent fanout.
+    bool ui     = false;            // --ui: open the Electron UI, optionally with the positional binary loaded.
     std::string attach_pid;         // --attach-pid PID: attach to an existing process instead of launching
     std::string debug_backend;      // --debug-backend: "ptrace" (default), "perf", or "auto"
                                     //   ptrace = classic Linux ptrace backend; full features

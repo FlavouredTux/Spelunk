@@ -50,7 +50,6 @@
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/arity.hpp>
-#include <ember/binary/elf.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/forge_spec.hpp>
@@ -3331,30 +3330,25 @@ int run_refs_to_loose_impl(const Args& args, const Binary& b,
         for (addr_t slot : slot_addrs) emit_slot_readers(slot, "imm64-stored");
     }
 
-    // Relocation-driven slots: a `.data.rel.ro` qword whose static
-    // on-disk value is zero but whose dynamic-linker addend is the
-    // target VA. The static qword scan above misses these because
-    // it only matches against the file bytes; the relocation table
-    // knows the *post-load* value. ELF-only path; non-ELF binaries
-    // get an empty map.
+    // Relocation-driven slots: loader-patched qwords whose post-load
+    // target is known from format metadata. This catches ELF RELATIVE
+    // slots and PE DIR64 base-relocation slots.
     std::size_t reloc_slot_count = 0;
-    if (const auto* elf = dynamic_cast<const ElfBinary*>(&b)) {
-        std::optional<std::map<addr_t, u64>> local_relocated_qwords;
-        const auto& reloc_map = [&]() -> const std::map<addr_t, u64>& {
-            if (serve_cache) {
-                if (!serve_cache->relocated_qwords) {
-                    serve_cache->relocated_qwords = elf->relocated_qwords();
-                }
-                return *serve_cache->relocated_qwords;
+    std::optional<std::map<addr_t, u64>> local_relocated_qwords;
+    const auto& reloc_map = [&]() -> const std::map<addr_t, u64>& {
+        if (serve_cache) {
+            if (!serve_cache->relocated_qwords) {
+                serve_cache->relocated_qwords = b.relocated_qwords();
             }
-            local_relocated_qwords = elf->relocated_qwords();
-            return *local_relocated_qwords;
-        }();
-        for (const auto& [slot, addend] : reloc_map) {
-            if (std::ranges::find(search_targets, addend) == search_targets.end()) continue;
-            ++reloc_slot_count;
-            emit_slot_readers(slot, "relocated");
+            return *serve_cache->relocated_qwords;
         }
+        local_relocated_qwords = b.relocated_qwords();
+        return *local_relocated_qwords;
+    }();
+    for (const auto& [slot, addend] : reloc_map) {
+        if (std::ranges::find(search_targets, addend) == search_targets.end()) continue;
+        ++reloc_slot_count;
+        emit_slot_readers(slot, "relocated");
     }
 
     const std::string out = args.json

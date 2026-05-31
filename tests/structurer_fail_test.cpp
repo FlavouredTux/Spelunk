@@ -51,6 +51,59 @@ ember::IrInst make_branch(ember::addr_t pc, ember::addr_t target) {
     return bi;
 }
 
+ember::IrInst make_phi(ember::IrValue dst, std::initializer_list<ember::IrValue> ops) {
+    ember::IrInst pi;
+    pi.op  = ember::IrOp::Phi;
+    pi.dst = dst;
+    for (ember::IrValue op : ops) pi.phi_operands.push_back(op);
+    return pi;
+}
+
+ember::IrInst make_add(ember::IrValue dst, ember::IrValue a, ember::IrValue b) {
+    ember::IrInst ai;
+    ai.op        = ember::IrOp::Add;
+    ai.dst       = dst;
+    ai.srcs[0]   = a;
+    ai.srcs[1]   = b;
+    ai.src_count = 2;
+    return ai;
+}
+
+ember::IrInst make_mul(ember::IrValue dst, ember::IrValue a, ember::IrValue b) {
+    ember::IrInst mi;
+    mi.op        = ember::IrOp::Mul;
+    mi.dst       = dst;
+    mi.srcs[0]   = a;
+    mi.srcs[1]   = b;
+    mi.src_count = 2;
+    return mi;
+}
+
+ember::IrInst make_load(ember::IrValue dst, ember::IrValue addr) {
+    ember::IrInst li;
+    li.op        = ember::IrOp::Load;
+    li.dst       = dst;
+    li.srcs[0]   = addr;
+    li.src_count = 1;
+    return li;
+}
+
+ember::IrInst make_assign(ember::IrValue dst, ember::IrValue src) {
+    ember::IrInst ai;
+    ai.op        = ember::IrOp::Assign;
+    ai.dst       = dst;
+    ai.srcs[0]   = src;
+    ai.src_count = 1;
+    return ai;
+}
+
+ember::IrInst make_ret_value(ember::addr_t pc, ember::IrValue value) {
+    ember::IrInst ri = make_ret(pc);
+    ri.srcs[0] = value;
+    ri.src_count = 1;
+    return ri;
+}
+
 // ----------------------------------------------------------------------------
 // Test 1: a disconnected block carrying a Call surfaces as STRUCTURER_FAIL
 // instead of vanishing silently.
@@ -196,11 +249,327 @@ int test_infinite_loop_body_recovered() {
     return 0;
 }
 
+// ----------------------------------------------------------------------------
+// Test 3: phi merge values get role names instead of anonymous vN names.
+
+int test_phi_merge_names_are_mined() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402000;
+
+    IrValue rax1 = IrValue::make_reg(Reg::Rax, IrType::I64);
+    rax1.version = 1;
+    IrValue rax2 = IrValue::make_reg(Reg::Rax, IrType::I64);
+    rax2.version = 2;
+    IrValue rdx1 = IrValue::make_reg(Reg::Rdx, IrType::I64);
+    rdx1.version = 1;
+    IrValue t0 = IrValue::make_temp(0, IrType::I64);
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end   = kStart + 0x10;
+    fn.name  = "phi_result_web";
+    fn.next_temp_id = 1;
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end   = kStart + 0x10;
+    bb.kind  = BlockKind::Return;
+    bb.insts.push_back(make_phi(rax1, {IrValue::make_reg(Reg::Rax, IrType::I64), rax2}));
+    bb.insts.push_back(make_phi(rdx1, {rax1}));
+    bb.insts.push_back(make_assign(rax2, IrValue::make_imm(40, IrType::I64)));
+    bb.insts.push_back(make_add(t0, rdx1, IrValue::make_imm(1, IrType::I64)));
+    bb.insts.push_back(make_ret_value(kStart + 3, t0));
+    fn.block_at[bb.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = t0;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(body);
+
+    PseudoCEmitter em;
+    auto pc_r = em.emit(sf, /*binary=*/nullptr,
+                        /*annotations=*/nullptr, EmitOptions{});
+    check(pc_r.has_value(), "pseudo-c emit returned a phi result-web body");
+    if (!pc_r) return 1;
+
+    check(pc_r->find("uint64_t result;") != std::string::npos,
+          "return-register phi web is named result");
+    check(pc_r->find("result = 0x28;") != std::string::npos,
+          "phi incoming assignment reuses result name");
+    check(pc_r->find("return result + 1;") != std::string::npos,
+          "connected phi web reuses result at the use site");
+    check(pc_r->find("v0") == std::string::npos &&
+          pc_r->find("v1") == std::string::npos,
+          "phi result-web output does not leak anonymous vN names");
+    check(pc_r->find("uint64_t result;\n  uint64_t result;") == std::string::npos,
+          "connected phi web emits one result declaration");
+
+    return 0;
+}
+
+int test_phi_induction_name_is_mined() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402100;
+
+    IrValue eax1 = IrValue::make_reg(Reg::Eax, IrType::I32);
+    eax1.version = 1;
+    IrValue eax2 = IrValue::make_reg(Reg::Eax, IrType::I32);
+    eax2.version = 2;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end   = kStart + 0x10;
+    fn.name  = "phi_induction";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end   = kStart + 0x10;
+    bb.kind  = BlockKind::Return;
+    bb.insts.push_back(make_phi(eax1, {IrValue::make_reg(Reg::Eax, IrType::I32), eax2}));
+    bb.insts.push_back(make_add(eax2, eax1, IrValue::make_imm(1, IrType::I32)));
+    bb.insts.push_back(make_ret_value(kStart + 2, eax1));
+    fn.block_at[bb.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = eax1;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(body);
+
+    PseudoCEmitter em;
+    auto pc_r = em.emit(sf, /*binary=*/nullptr,
+                        /*annotations=*/nullptr, EmitOptions{});
+    check(pc_r.has_value(), "pseudo-c emit returned a phi induction body");
+    if (!pc_r) return 1;
+
+    check(pc_r->find("uint32_t i;") != std::string::npos,
+          "unit-step phi is named i");
+    check(pc_r->find("i++;") != std::string::npos,
+          "unit-step phi update renders as a source-style increment");
+    check(pc_r->find("return i;") != std::string::npos,
+          "unit-step phi name is used in return");
+    check(pc_r->find("v0") == std::string::npos,
+          "phi induction output does not leak anonymous vN names");
+
+    return 0;
+}
+
+int test_phi_livein_initializer_is_mined() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402200;
+
+    IrValue rdi1 = IrValue::make_reg(Reg::Rdi, IrType::I64);
+    rdi1.version = 1;
+    IrValue rdi2 = IrValue::make_reg(Reg::Rdi, IrType::I64);
+    rdi2.version = 2;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end   = kStart + 0x10;
+    fn.name  = "phi_livein_init";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end   = kStart + 0x10;
+    bb.kind  = BlockKind::Return;
+    bb.insts.push_back(make_phi(rdi1, {IrValue::make_reg(Reg::Rdi, IrType::I64), rdi2}));
+    bb.insts.push_back(make_add(rdi2, rdi1, IrValue::make_imm(1, IrType::I64)));
+    bb.insts.push_back(make_ret_value(kStart + 2, rdi1));
+    fn.block_at[bb.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = rdi1;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(body);
+
+    PseudoCEmitter em;
+    auto pc_r = em.emit(sf, /*binary=*/nullptr,
+                        /*annotations=*/nullptr, EmitOptions{});
+    check(pc_r.has_value(), "pseudo-c emit returned a phi live-in init body");
+    if (!pc_r) return 1;
+
+    check(pc_r->find("(uint64_t a1)") != std::string::npos,
+          "phi initializer live-in bumps the function arity");
+    check(pc_r->find("uint64_t i = a1;") != std::string::npos,
+          "phi live-in operand initializes the mined local");
+    check(pc_r->find("i++;") != std::string::npos,
+          "phi live-in update renders as a source-style increment");
+    check(pc_r->find("return i;") != std::string::npos,
+          "phi live-in local is used at return");
+    check(pc_r->find("rdi") == std::string::npos,
+          "phi live-in output does not leak the raw argument register");
+
+    return 0;
+}
+
+int test_phi_accumulator_name_is_mined() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402300;
+
+    IrValue rdi1 = IrValue::make_reg(Reg::Rdi, IrType::I64);
+    rdi1.version = 1;
+    IrValue rdi2 = IrValue::make_reg(Reg::Rdi, IrType::I64);
+    rdi2.version = 2;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end   = kStart + 0x10;
+    fn.name  = "phi_accumulator";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end   = kStart + 0x10;
+    bb.kind  = BlockKind::Return;
+    bb.insts.push_back(make_phi(rdi1, {IrValue::make_reg(Reg::Rdi, IrType::I64), rdi2}));
+    bb.insts.push_back(make_add(rdi2, rdi1, IrValue::make_imm(5, IrType::I64)));
+    bb.insts.push_back(make_ret_value(kStart + 2, rdi1));
+    fn.block_at[bb.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = rdi1;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(body);
+
+    PseudoCEmitter em;
+    auto pc_r = em.emit(sf, /*binary=*/nullptr,
+                        /*annotations=*/nullptr, EmitOptions{});
+    check(pc_r.has_value(), "pseudo-c emit returned a phi accumulator body");
+    if (!pc_r) return 1;
+
+    check(pc_r->find("uint64_t acc = a1;") != std::string::npos,
+          "non-unit phi add is named as an accumulator");
+    check(pc_r->find("acc += 5;") != std::string::npos,
+          "non-unit phi add renders as a compound accumulator update");
+    check(pc_r->find("return acc;") != std::string::npos,
+          "accumulator name is used at return");
+    check(pc_r->find("uint64_t i") == std::string::npos,
+          "non-unit accumulator is not mislabeled as induction i");
+
+    return 0;
+}
+
+int test_phi_index_name_is_mined() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402400;
+
+    IrValue eax1 = IrValue::make_reg(Reg::Eax, IrType::I32);
+    eax1.version = 1;
+    IrValue eax2 = IrValue::make_reg(Reg::Eax, IrType::I32);
+    eax2.version = 2;
+    IrValue scale = IrValue::make_temp(0, IrType::I64);
+    IrValue addr = IrValue::make_temp(1, IrType::I64);
+    IrValue val = IrValue::make_temp(2, IrType::I64);
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end   = kStart + 0x10;
+    fn.name  = "phi_indexed_load";
+    fn.next_temp_id = 3;
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end   = kStart + 0x10;
+    bb.kind  = BlockKind::Return;
+    bb.insts.push_back(make_phi(eax1, {IrValue::make_reg(Reg::Eax, IrType::I32), eax2}));
+    bb.insts.push_back(make_add(eax2, eax1, IrValue::make_imm(1, IrType::I32)));
+    bb.insts.push_back(make_mul(scale, eax1, IrValue::make_imm(8, IrType::I64)));
+    bb.insts.push_back(make_add(addr, IrValue::make_reg(Reg::Rdi, IrType::I64), scale));
+    bb.insts.push_back(make_load(val, addr));
+    bb.insts.push_back(make_ret_value(kStart + 5, val));
+    fn.block_at[bb.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = val;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(body);
+
+    PseudoCEmitter em;
+    auto pc_r = em.emit(sf, /*binary=*/nullptr,
+                        /*annotations=*/nullptr, EmitOptions{});
+    check(pc_r.has_value(), "pseudo-c emit returned a phi indexed-load body");
+    if (!pc_r) return 1;
+
+    check(pc_r->find("uint32_t idx") != std::string::npos,
+          "unit-step memory-index phi is named idx");
+    check(pc_r->find("idx++;") != std::string::npos,
+          "indexed phi update renders as an increment");
+    check(pc_r->find("return a1[idx];") != std::string::npos,
+          "indexed phi name is used in array-like memory access");
+    check(pc_r->find("uint32_t i;") == std::string::npos,
+          "memory-index phi is not mislabeled as generic induction i");
+
+    return 0;
+}
+
 }  // namespace
 
 int main() {
     int rc = 0;
     rc |= test_dropped_block_diagnostic();
     rc |= test_infinite_loop_body_recovered();
+    rc |= test_phi_merge_names_are_mined();
+    rc |= test_phi_induction_name_is_mined();
+    rc |= test_phi_livein_initializer_is_mined();
+    rc |= test_phi_accumulator_name_is_mined();
+    rc |= test_phi_index_name_is_mined();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

@@ -1775,6 +1775,18 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  macho_string_names.mangled_conversion_parent.pseudo.txt
     )
     ember_golden_test(
+        NAME    macho_string_names_bind_adapter_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::recoverBindCompilerBug"
+        GOLDEN  macho_string_names.bind_adapter_parent.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_string_names_async_state_parent_pseudo
+        FIXTURE macho_string_names
+        ARGS    "-q|--infer-string-names|-p|-s|Core::Player::recoverAsyncCompilerBug"
+        GOLDEN  macho_string_names.async_state_parent.pseudo.txt
+    )
+    ember_golden_test(
         NAME    macho_string_names_role_identifier_anchor_pseudo
         FIXTURE macho_string_names
         ARGS    "-q|--infer-string-names|-p|-s|string_anchor_SchedulerHeartbeatJob"

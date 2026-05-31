@@ -23,6 +23,7 @@
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
+#include <ember/analysis/ssa_cleanup.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/abi.hpp>
@@ -439,6 +440,7 @@ struct Emitter {
     // the merge declaration is already emitted at the function head.
     std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
+    std::map<std::string, SsaMergeLocal>             merge_locals;
     // Block addresses referenced by some `RegionKind::Goto` in the
     // structured tree. emit_block prepends a C `bb_<addr>:` label at
     // these blocks so the gotos resolve. Without this the structurer's
@@ -1798,22 +1800,117 @@ struct Emitter {
         }
     }
 
-    void name_merge_values() {
-        std::set<std::string> used;
-        u32 n = 0;
-        for (const auto& bb : fn->blocks) {
-            for (const auto& inst : bb.insts) {
-                if (inst.op != IrOp::Phi) continue;
-                auto k = ssa_key(inst.dst);
-                if (!k || use_count_by_key(*k) == 0) continue;
-                std::string name;
-                do {
-                    name = std::format("v{}", n++);
-                } while (used.contains(name));
-                used.insert(name);
-                merge_value_names.emplace(*k, std::move(name));
+    [[nodiscard]] bool phi_value_feeds_step(const SsaKey& k,
+                                            bool* non_unit_accum = nullptr) const {
+        if (non_unit_accum) *non_unit_accum = false;
+        auto uses_it = visible_user_positions.find(k);
+        if (uses_it == visible_user_positions.end()) return false;
+        bool unit_step = false;
+        for (const auto& [bi, ii] : uses_it->second) {
+            if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) continue;
+            const IrInst& inst = fn->blocks[bi].insts[ii];
+            if (inst.src_count < 2) continue;
+            if (inst.op != IrOp::Add && inst.op != IrOp::Sub) continue;
+            const auto lhs = ssa_key(inst.srcs[0]);
+            const auto rhs = ssa_key(inst.srcs[1]);
+            const bool lhs_is_phi = lhs && *lhs == k;
+            const bool rhs_is_phi = rhs && *rhs == k;
+            if (!lhs_is_phi && !rhs_is_phi) continue;
+            const IrValue& other = lhs_is_phi ? inst.srcs[1] : inst.srcs[0];
+            if (other.kind == IrValueKind::Imm && (other.imm == 1 || other.imm == -1)) {
+                unit_step = true;
+            } else if (non_unit_accum) {
+                *non_unit_accum = true;
             }
         }
+        return unit_step;
+    }
+
+    [[nodiscard]] bool value_flows_to_memory_address(const SsaKey& k,
+                                                     std::set<SsaKey>& seen,
+                                                     int depth = 0) const {
+        if (depth > 6 || !seen.insert(k).second) return false;
+        auto uses_it = visible_user_positions.find(k);
+        if (uses_it == visible_user_positions.end()) return false;
+        for (const auto& [bi, ii] : uses_it->second) {
+            if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) continue;
+            const IrInst& inst = fn->blocks[bi].insts[ii];
+            if ((inst.op == IrOp::Load || inst.op == IrOp::Store) &&
+                inst.src_count >= 1 && ssa_key(inst.srcs[0]) == k) {
+                return true;
+            }
+            const bool address_arith =
+                inst.op == IrOp::Add || inst.op == IrOp::Sub ||
+                inst.op == IrOp::Mul || inst.op == IrOp::Shl ||
+                inst.op == IrOp::ZExt || inst.op == IrOp::SExt;
+            if (!address_arith) continue;
+            auto dk = ssa_key(inst.dst);
+            if (!dk) continue;
+            if (value_flows_to_memory_address(*dk, seen, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool phi_value_feeds_indexing(const SsaKey& k) const {
+        std::set<SsaKey> seen;
+        return value_flows_to_memory_address(k, seen);
+    }
+
+    [[nodiscard]] SsaMergeLocalRole merge_role_for_phi(const IrInst& inst) const {
+        auto k = ssa_key(inst.dst);
+        bool accumulator = false;
+        const bool unit_step = k && phi_value_feeds_step(*k, &accumulator);
+        if (unit_step && k && phi_value_feeds_indexing(*k)) {
+            return SsaMergeLocalRole::Index;
+        }
+        if (unit_step) return SsaMergeLocalRole::Induction;
+        if (inst.dst.kind == IrValueKind::Reg &&
+            canonical_reg(inst.dst.reg) == int_return_reg(abi)) {
+            return SsaMergeLocalRole::Result;
+        }
+        const std::string type_name = c_type_name_for(inst.dst);
+        if (type_name == "char*") return SsaMergeLocalRole::String;
+        if (!type_name.empty() && type_name.ends_with("*")) return SsaMergeLocalRole::Pointer;
+        if (inst.dst.type == IrType::I1) return SsaMergeLocalRole::Flag;
+        if (accumulator) return SsaMergeLocalRole::Accumulator;
+        return SsaMergeLocalRole::Value;
+    }
+
+    [[nodiscard]] std::optional<IrValue>
+    merge_initializer_candidate(const IrValue& op) const {
+        if (op.kind == IrValueKind::Imm) return op;
+        if (trace_to_self_arg_slot(op)) return op;
+        return std::nullopt;
+    }
+
+    void name_merge_values() {
+        SsaMergeLocalRecoveryCallbacks callbacks;
+        callbacks.use_count = [&](const SsaKey& k) { return use_count_by_key(k); };
+        callbacks.def_of = [&](const IrValue& v) { return def_of(v); };
+        callbacks.type_name = [&](const IrValue& v) { return c_type_name_for(v); };
+        callbacks.role_for_phi = [&](const IrInst& inst) {
+            return merge_role_for_phi(inst);
+        };
+        callbacks.initializer_candidate = [&](const IrValue& v) {
+            return merge_initializer_candidate(v);
+        };
+        auto recovered = recover_ssa_merge_locals(*fn, callbacks);
+        merge_value_names = std::move(recovered.value_names);
+        merge_locals = std::move(recovered.locals);
+    }
+
+    void bump_arity_from_merge_initializers() {
+        const auto int_args = int_arg_regs(abi);
+        u8 need = self_arity;
+        for (const auto& [_, local] : merge_locals) {
+            if (!local.initializer) continue;
+            if (auto slot = trace_to_self_arg_slot(*local.initializer); slot) {
+                if (*slot < int_args.size() && *slot + 1 > need) {
+                    need = static_cast<u8>(*slot + 1);
+                }
+            }
+        }
+        self_arity = need;
     }
 
     // Self-arg slots (a1..aN) known to flow into a libc char* parameter.
@@ -3499,6 +3596,85 @@ struct Emitter {
         if (v.kind != IrValueKind::Reg || v.version == 0) return false;
         const std::string raw = std::format("{}_{}", reg_name(v.reg), v.version);
         return expr(v, 1, 0) == raw;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    merge_assignment_name_for(const IrInst& inst) const {
+        if (inst.op == IrOp::Phi || inst.op == IrOp::Clobber ||
+            inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
+            inst.op == IrOp::Store || is_terminator(inst.op)) {
+            return std::nullopt;
+        }
+        auto k = ssa_key(inst.dst);
+        if (!k) return std::nullopt;
+        auto it = merge_value_names.find(*k);
+        if (it == merge_value_names.end()) return std::nullopt;
+        return it->second;
+    }
+
+    [[nodiscard]] std::string
+    format_merge_assignment(const IrInst& inst, std::string_view name) const {
+        if (inst.src_count >= 2) {
+            const bool commutative =
+                inst.op == IrOp::Add || inst.op == IrOp::Mul ||
+                inst.op == IrOp::And || inst.op == IrOp::Or ||
+                inst.op == IrOp::Xor;
+            std::string_view op_text;
+            switch (inst.op) {
+                case IrOp::Add:  op_text = "+"; break;
+                case IrOp::Sub:  op_text = "-"; break;
+                case IrOp::Mul:  op_text = "*"; break;
+                case IrOp::And:  op_text = "&"; break;
+                case IrOp::Or:   op_text = "|"; break;
+                case IrOp::Xor:  op_text = "^"; break;
+                case IrOp::Shl:  op_text = "<<"; break;
+                case IrOp::Lshr: op_text = ">>"; break;
+                case IrOp::Ashr: op_text = ">>"; break;
+                default: break;
+            }
+            auto is_same_merge_local = [&](const IrValue& v) {
+                auto k = ssa_key(v);
+                if (!k) return false;
+                auto it = merge_value_names.find(*k);
+                return it != merge_value_names.end() && it->second == name;
+            };
+            const IrValue* delta = nullptr;
+            if (!op_text.empty() && is_same_merge_local(inst.srcs[0])) {
+                delta = &inst.srcs[1];
+            } else if (!op_text.empty() && commutative &&
+                       is_same_merge_local(inst.srcs[1])) {
+                delta = &inst.srcs[0];
+            }
+            if (delta) {
+                if ((inst.op == IrOp::Add || inst.op == IrOp::Sub) &&
+                    delta->kind == IrValueKind::Imm && delta->imm == 1 &&
+                    !is_float_type(inst.dst.type)) {
+                    const char* sym = (inst.op == IrOp::Add) ? "++" : "--";
+                    return std::format("{}{};", name, sym);
+                }
+                return std::format("{} {}= {};", name, op_text, expr(*delta));
+            }
+        }
+
+        std::string rhs;
+        if (inst.op == IrOp::Assign) {
+            if (inst.src_count < 1) return "";
+            rhs = expr(inst.srcs[0]);
+        } else if (inst.op == IrOp::Load) {
+            if (inst.src_count < 1) return "";
+            rhs = format_mem(inst.srcs[0], inst.dst.type, inst.segment);
+        } else if (inst.op == IrOp::Intrinsic) {
+            std::string args;
+            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(inst.srcs[i]);
+            }
+            rhs = std::format("{}({})", inst.name, args);
+        } else if (inlinable_op(inst.op)) {
+            rhs = expand(inst, 0);
+        }
+        if (rhs.empty()) return "";
+        return std::format("{} = {};", name, rhs);
     }
 
     void emit_materializations_for_value(const IrValue& v,
@@ -5710,6 +5886,9 @@ std::string Emitter::format_store(const IrInst& inst) const {
 }
 
 std::string Emitter::format_stmt(const IrInst& inst) const {
+    if (auto name = merge_assignment_name_for(inst)) {
+        return format_merge_assignment(inst, *name);
+    }
     switch (inst.op) {
         case IrOp::Store:
             return format_store(inst);
@@ -6371,6 +6550,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.analyze_arc_claim_folds();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_call_sites();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_narrow_arg_types_from_uses();
     }
@@ -6780,11 +6960,18 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     if (!e.global_decls.empty()) out += "\n";
     out += header;
-    for (const auto& [k, name] : e.merge_value_names) {
+    for (const auto& [name, local] : e.merge_locals) {
         if (!text_contains_identifier_in_code(body_buf, name)) continue;
-        auto dit = e.defs.find(k);
-        if (dit == e.defs.end()) continue;
-        out += std::format("  {} {};\n", e.c_type_name_for(dit->second->dst), name);
+        if (local.initializer) {
+            out += std::format("  {} {} = {};\n",
+                               e.c_type_name_for(local.type_value),
+                               name,
+                               e.expr(*local.initializer));
+        } else {
+            out += std::format("  {} {};\n",
+                               e.c_type_name_for(local.type_value),
+                               name);
+        }
     }
     // Slot extent → array recovery: if a slot's footprint (the gap to the
     // next slot above it in the frame) is bigger than its observed access
@@ -6964,6 +7151,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     e.analyze(*sf.ir);
     e.name_merge_values();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
@@ -6979,10 +7167,17 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
                                     ? std::string("<unknown>") : sf.ir->name);
     out += std::format("//   per-block pseudo-C ({} blocks)\n",
                        sf.ir->blocks.size());
-    for (const auto& [k, name] : e.merge_value_names) {
-        auto dit = e.defs.find(k);
-        if (dit == e.defs.end()) continue;
-        out += std::format("//   {} {};\n", e.c_type_name_for(dit->second->dst), name);
+    for (const auto& [name, local] : e.merge_locals) {
+        if (local.initializer) {
+            out += std::format("//   {} {} = {};\n",
+                               e.c_type_name_for(local.type_value),
+                               name,
+                               e.expr(*local.initializer));
+        } else {
+            out += std::format("//   {} {};\n",
+                               e.c_type_name_for(local.type_value),
+                               name);
+        }
     }
 
     const auto rpo = compute_rpo(*sf.ir);

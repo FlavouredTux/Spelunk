@@ -1,0 +1,4 @@
+// Core::Player::recoverAsyncCompilerBug
+uint64_t Core::Player::recoverAsyncCompilerBug(void) {
+  return 0x8b;
+}

@@ -1,0 +1,4 @@
+// Core::Player::recoverBindCompilerBug
+uint64_t Core::Player::recoverBindCompilerBug(void) {
+  return 0x8a;
+}

@@ -2095,6 +2095,15 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
     }
     std::map<addr_t, std::size_t> function_sizes;
     for (const auto& fn : fns) function_sizes.emplace(fn.addr, fn.size);
+    auto is_executable_section_addr = [&](addr_t addr) {
+        for (const auto& sec : b.sections()) {
+            if (!sec.flags.executable || sec.data.empty()) continue;
+            if (addr < sec.vaddr) continue;
+            const auto off = addr - sec.vaddr;
+            if (off < sec.data.size()) return true;
+        }
+        return false;
+    };
     auto enclosing_function = [&](addr_t addr) -> std::optional<addr_t> {
         auto it =
             std::upper_bound(fns.begin(), fns.end(), addr,
@@ -2110,6 +2119,8 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
             if (next != fns.end() && addr >= next->addr)
                 return std::nullopt;
         }
+        if (!is_executable_section_addr(addr))
+            return std::nullopt;
         if (b.bytes_at(it->addr).empty())
             return std::nullopt;
         return it->addr;

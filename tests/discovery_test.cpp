@@ -201,13 +201,13 @@ void test_arm64_prologue_discovery() {
     auto hits = ember::discover_from_prologues(b);
     std::ranges::sort(hits);
 
-    check(std::ranges::find(hits, 0x100000000) != hits.end(),
+    check(std::ranges::find(hits, ember::addr_t{0x100000000}) != hits.end(),
           "arm64 hint plus framed function start discovered");
-    check(std::ranges::find(hits, 0x100000040) != hits.end(),
+    check(std::ranges::find(hits, ember::addr_t{0x100000040}) != hits.end(),
           "arm64 frameless sub-sp function start discovered");
-    check(std::ranges::find(hits, 0x100000061) == hits.end(),
+    check(std::ranges::find(hits, ember::addr_t{0x100000061}) == hits.end(),
           "arm64 unaligned prologue-shaped bytes are ignored");
-    check(std::ranges::find(hits, 0x100001000) == hits.end(),
+    check(std::ranges::find(hits, ember::addr_t{0x100001000}) == hits.end(),
           "arm64 prologue-shaped bytes in data are ignored");
 }
 

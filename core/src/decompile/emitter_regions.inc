@@ -205,6 +205,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         if (auto k = ssa_key(r.condition); k) {
             auto f = fold_return_expr.find(*k);
             if (f != fold_return_expr.end()) {
+                emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
                 out += std::format("{}{};\n", ind, f->second);
             }
         }
@@ -226,6 +227,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     if (auto k = ssa_key(r.condition); k) {
         auto f = fold_return_expr.find(*k);
         if (f != fold_return_expr.end()) {
+            emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
             out += std::format("{}return {};\n", ind, f->second);
             return;
         }
@@ -240,12 +242,13 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
             && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
         v = d->srcs[0];
     }
-    emit_materializations_for_value(v, 0, out, ind);
+    std::string rendered = expr(v);
+    emit_materializations_for_rendered_value(v, rendered, out, ind);
     if (renders_stack_chk_guard_value(v)) {
         out += std::format("{}return;\n", ind);
         return;
     }
-    out += std::format("{}return {};\n", ind, expr(v));
+    out += std::format("{}return {};\n", ind, rendered);
 }
 
 void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) const {

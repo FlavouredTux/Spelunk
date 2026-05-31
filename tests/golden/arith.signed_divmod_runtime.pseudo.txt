@@ -1,0 +1,8 @@
+// signed_divmod_runtime
+uint32_t signed_divmod_runtime(uint32_t a1, uint32_t a2, uint64_t a3) {
+  uint32_t t1 = a1;
+  uint32_t t3 = a2;
+  int64_t t15 = (uint64_t)t1;
+  int64_t t16 = (uint64_t)t3;
+  return (uint32_t)(t15 % t16) + (uint32_t)(t15 / t16);
+}

@@ -42,6 +42,12 @@ struct LiftCtx {
     IrValue last_fp_cmp_a = {};
     IrValue last_fp_cmp_b = {};
 
+    // Set by CDQ/CQO until the next write to RAX/RDX. Lets the immediately
+    // following IDIV use `sext(rax/eax)` as its dividend instead of rebuilding
+    // the literal high:low pair, which keeps signed `/` and `%` readable.
+    bool   last_signext_dividend_valid = false;
+    IrType last_signext_dividend_type  = IrType::I64;
+
     [[nodiscard]] u32 new_temp_id() noexcept { return fn->next_temp_id++; }
 
     [[nodiscard]] IrValue temp(IrType t) noexcept {
@@ -219,6 +225,9 @@ struct LiftCtx {
         const Reg canon = canonical_reg(r);
         const unsigned bytes = reg_size(r);
         const IrType natural_t = type_for_bits(bytes * 8);
+        if (canon == Reg::Rax || canon == Reg::Rdx) {
+            last_signext_dividend_valid = false;
+        }
 
         if (canon == r) {
             // Own canonical - direct assign at natural width. No partial-
@@ -719,12 +728,18 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
         const IrType wide = type_for_bits(bits * 2);
         IrOp ext = signed_div ? IrOp::SExt : IrOp::ZExt;
         IrValue lo = ctx.read_reg(lo_a);
-        IrValue hi = ctx.read_reg(hi_a);
-        IrValue lo_w = ctx.emit_convert(IrOp::ZExt, lo, wide);
-        IrValue hi_w = ctx.emit_convert(ext,        hi, wide);
-        IrValue hi_shift = ctx.emit_binop(IrOp::Shl, hi_w,
-                                           ctx.imm(static_cast<i64>(bits), wide));
-        IrValue dividend = ctx.emit_binop(IrOp::Or, hi_shift, lo_w);
+        IrValue dividend;
+        if (signed_div && ctx.last_signext_dividend_valid &&
+            ctx.last_signext_dividend_type == t) {
+            dividend = ctx.emit_convert(IrOp::SExt, lo, wide);
+        } else {
+            IrValue hi = ctx.read_reg(hi_a);
+            IrValue lo_w = ctx.emit_convert(IrOp::ZExt, lo, wide);
+            IrValue hi_w = ctx.emit_convert(ext,        hi, wide);
+            IrValue hi_shift = ctx.emit_binop(IrOp::Shl, hi_w,
+                                               ctx.imm(static_cast<i64>(bits), wide));
+            dividend = ctx.emit_binop(IrOp::Or, hi_shift, lo_w);
+        }
         IrValue dw = ctx.emit_convert(ext, divisor, wide);
         IrValue q  = ctx.emit_binop(IrOp::Div, dividend, dw);
         IrValue r  = ctx.emit_binop(IrOp::Mod, dividend, dw);
@@ -742,9 +757,9 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
     // intrinsics, so the wrong-arithmetic class of bug from folding
     // `Div(rax, b)` against a sign-extended i64 imm goes away too.
     //
-    // `xor edx, edx; div r64` and `cdq; idiv r64` both still render
+    // `xor edx, edx; div r64` and `cqo; idiv r64` both still render
     // correctly - the reader sees the constant 0 (or the sign-extended
-    // rax) flowing into the high arg.
+    // RAX high half) flowing into the high arg.
     IrValue rax = ctx.read_reg(Reg::Rax);
     IrValue rdx = ctx.read_reg(Reg::Rdx);
 
@@ -772,6 +787,29 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
 
     ctx.write_reg(lo_dst, q);
     ctx.write_reg(hi_dst, r);
+}
+
+// CDQ / CQO: sign-extend the implicit low dividend register into the high
+// half consumed by IDIV. Model it as a select so signed `/` and `%` can fold
+// through real RDX/EDX dataflow instead of an opaque side-effect intrinsic.
+void lift_sign_extend_dividend_high(LiftCtx& ctx, IrType t) {
+    const Reg lo = t == IrType::I64 ? Reg::Rax : Reg::Eax;
+    const Reg hi = t == IrType::I64 ? Reg::Rdx : Reg::Edx;
+    IrValue v = ctx.read_reg(lo);
+    IrValue neg = ctx.emit_cmp(IrOp::CmpSlt, v, ctx.imm(0, t));
+
+    IrInst sel;
+    sel.op        = IrOp::Select;
+    sel.dst       = ctx.temp(t);
+    sel.srcs[0]   = neg;
+    sel.srcs[1]   = ctx.imm(-1, t);
+    sel.srcs[2]   = ctx.imm(0, t);
+    sel.src_count = 3;
+    IrValue high = sel.dst;
+    ctx.emit(std::move(sel));
+    ctx.write_reg(hi, high);
+    ctx.last_signext_dividend_valid = true;
+    ctx.last_signext_dividend_type = t;
 }
 
 // ADC dst, src: dst = dst + src + CF. Update CF/OF/ZF/SF.
@@ -1753,8 +1791,10 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         }
         case Mnemonic::Cdq:
+            lift_sign_extend_dividend_high(ctx, IrType::I32);
+            break;
         case Mnemonic::Cqo:
-            lift_intrinsic(ctx, mnemonic_name(insn.mnemonic));
+            lift_sign_extend_dividend_high(ctx, IrType::I64);
             break;
 
         // SetCC: nice lift reusing Jcc predicate logic.

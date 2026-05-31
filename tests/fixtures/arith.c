@@ -8,6 +8,11 @@ unsigned divmod_runtime(unsigned a, unsigned b) {
     return a % b;
 }
 
+int signed_divmod_runtime(int a, int b);
+int signed_divmod_runtime(int a, int b) {
+    return (a / b) + (a % b);
+}
+
 // do-while loop body with an inner `if ... continue` arm. The structurer
 // has to recognise this as `do { ... if (skip) continue; ... } while (cond)`
 // rather than falling back to goto-soup. The internal `continue` keeps
@@ -30,5 +35,6 @@ int main(int argc, char** argv) {
     (void)argv;
     int sample[1] = { argc };
     return (int)divmod_runtime((unsigned)argc, (unsigned)argc + 1u)
+         + signed_divmod_runtime(argc, argc + 1)
          + dowhile_with_skip(sample, 1);
 }

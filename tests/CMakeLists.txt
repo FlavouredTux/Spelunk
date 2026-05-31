@@ -1122,6 +1122,13 @@ ember_golden_test(
 )
 
 ember_golden_test(
+    NAME    arith_signed_divmod_runtime_pseudo
+    FIXTURE arith
+    ARGS    "-p|-s|signed_divmod_runtime"
+    GOLDEN  arith.signed_divmod_runtime.pseudo.txt
+)
+
+ember_golden_test(
     NAME    arith_dowhile_with_skip_pseudo
     FIXTURE arith
     ARGS    "-p|-s|dowhile_with_skip"

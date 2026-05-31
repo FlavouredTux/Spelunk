@@ -1931,7 +1931,7 @@ int run_objc_surfaces(const Args& args, const Binary& b) {
 }
 
 int run_rtti(const Args& args, const Binary& b) {
-    return run_cached(args, "rtti", [&] { return build_rtti_output(b); });
+    return run_cached(args, "rtti-v2", [&] { return build_rtti_output(b); });
 }
 
 int run_vtables(const Args& args, const Binary& b) {

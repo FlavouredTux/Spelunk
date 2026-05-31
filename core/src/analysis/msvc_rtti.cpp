@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <optional>
 #include <vector>
 
 #include <ember/analysis/msvc_demangle.hpp>
@@ -17,6 +18,8 @@ namespace {
 
 constexpr std::size_t kColSize = 24;
 constexpr u32         kColSignatureX64 = 1;
+constexpr std::size_t kClassHierarchyDescriptorSize = 16;
+constexpr std::size_t kBaseClassDescriptorSize = 24;
 
 struct CodeRanges {
     std::vector<std::pair<addr_t, addr_t>> ranges;
@@ -111,30 +114,105 @@ collect_rdata_sections(const Binary& b) {
     return {};
 }
 
+[[nodiscard]] bool is_msvc_decorated_type_name(std::string_view s) {
+    return s.size() >= 4 && s[0] == '.' && s[1] == '?';
+}
+
+struct TypeDescriptorInfo {
+    addr_t      va = 0;
+    std::string decorated_name;
+    std::string pretty_name;
+};
+
+[[nodiscard]] std::optional<TypeDescriptorInfo>
+read_type_descriptor(const PeBinary& pe, addr_t td_va) {
+    const std::string decorated = read_decorated_name(pe, td_va + 16);
+    if (!is_msvc_decorated_type_name(decorated)) return std::nullopt;
+    return TypeDescriptorInfo{
+        .va = td_va,
+        .decorated_name = decorated,
+        .pretty_name = pretty_from_decorated(decorated),
+    };
+}
+
+struct ColInfo {
+    addr_t type_descriptor = 0;
+    addr_t class_hierarchy = 0;
+};
+
 // Validate a COL candidate at the given VA on a PE image. Returns the
-// type-descriptor VA on success (non-zero) or 0 if the candidate doesn't
-// look like a real COL.
-[[nodiscard]] addr_t
+// type-descriptor and class-hierarchy descriptor VAs on success, or
+// std::nullopt if the candidate doesn't look like a real COL.
+[[nodiscard]] std::optional<ColInfo>
 validate_col(const PeBinary& pe, addr_t col_va) {
     auto span = pe.bytes_at(col_va);
-    if (span.size() < kColSize) return 0;
+    if (span.size() < kColSize) return std::nullopt;
 
     const u32 signature   = read_le_at<u32>(span.data() + 0);
     const u32 p_td_rva    = read_le_at<u32>(span.data() + 12);
     const u32 p_chd_rva   = read_le_at<u32>(span.data() + 16);
     const u32 p_self_rva  = read_le_at<u32>(span.data() + 20);
 
-    if (signature != kColSignatureX64) return 0;
-    if (p_td_rva == 0 || p_chd_rva == 0 || p_self_rva == 0) return 0;
+    if (signature != kColSignatureX64) return std::nullopt;
+    if (p_td_rva == 0 || p_chd_rva == 0 || p_self_rva == 0) return std::nullopt;
 
     // pSelf on x64 is the RVA of this COL itself. Use it as a strong
     // integrity check: a randomly-aligned byte run won't carry the
     // right self-reference. Tolerate the RVA being off by the image
     // base quirk - the recorded value is *always* an RVA.
     const addr_t self_abs = pe.image_base() + static_cast<addr_t>(p_self_rva);
-    if (self_abs != col_va) return 0;
+    if (self_abs != col_va) return std::nullopt;
 
-    return pe.image_base() + static_cast<addr_t>(p_td_rva);
+    return ColInfo{
+        .type_descriptor = pe.image_base() + static_cast<addr_t>(p_td_rva),
+        .class_hierarchy = pe.image_base() + static_cast<addr_t>(p_chd_rva),
+    };
+}
+
+[[nodiscard]] std::vector<MsvcRttiBaseClass>
+parse_base_classes(const PeBinary& pe, addr_t chd_va, std::string_view self_decorated) {
+    std::vector<MsvcRttiBaseClass> out;
+    auto chd = pe.bytes_at(chd_va);
+    if (chd.size() < kClassHierarchyDescriptorSize) return out;
+
+    const u32 num_bases = read_le_at<u32>(chd.data() + 8);
+    const u32 array_rva = read_le_at<u32>(chd.data() + 12);
+    if (num_bases == 0 || array_rva == 0) return out;
+
+    constexpr u32 kMaxBaseClasses = 1024;
+    const u32 capped_count = std::min(num_bases, kMaxBaseClasses);
+    const addr_t array_va = pe.image_base() + static_cast<addr_t>(array_rva);
+    auto array = pe.bytes_at(array_va);
+    if (array.size() < static_cast<std::size_t>(capped_count) * 4) return out;
+
+    out.reserve(capped_count > 0 ? capped_count - 1 : 0);
+    for (u32 i = 0; i < capped_count; ++i) {
+        const u32 bcd_rva = read_le_at<u32>(array.data() + i * 4);
+        if (bcd_rva == 0) continue;
+        const addr_t bcd_va = pe.image_base() + static_cast<addr_t>(bcd_rva);
+        auto bcd = pe.bytes_at(bcd_va);
+        if (bcd.size() < kBaseClassDescriptorSize) continue;
+
+        const u32 td_rva = read_le_at<u32>(bcd.data() + 0);
+        if (td_rva == 0) continue;
+        auto td = read_type_descriptor(pe, pe.image_base() + static_cast<addr_t>(td_rva));
+        if (!td) continue;
+        // MSVC includes the class itself as base[0]. It is useful for
+        // validation, but redundant in user-facing base rows.
+        if (td->decorated_name == self_decorated) continue;
+
+        MsvcRttiBaseClass base;
+        base.descriptor      = bcd_va;
+        base.type_descriptor = td->va;
+        base.decorated_name  = std::move(td->decorated_name);
+        base.pretty_name     = std::move(td->pretty_name);
+        base.mdisp           = read_le_at<i32>(bcd.data() + 8);
+        base.pdisp           = read_le_at<i32>(bcd.data() + 12);
+        base.vdisp           = read_le_at<i32>(bcd.data() + 16);
+        base.attributes      = read_le_at<u32>(bcd.data() + 20);
+        out.push_back(std::move(base));
+    }
+    return out;
 }
 
 }  // namespace
@@ -171,26 +249,20 @@ std::vector<MsvcRttiClass> parse_msvc_rtti(const Binary& b) {
             if (col_ptr == 0 || first_imp == 0) continue;
             if (!code.contains(static_cast<addr_t>(first_imp))) continue;
 
-            const addr_t td_va = validate_col(*pe, static_cast<addr_t>(col_ptr));
-            if (td_va == 0) continue;
+            const auto col = validate_col(*pe, static_cast<addr_t>(col_ptr));
+            if (!col) continue;
 
-            // TypeDescriptor: { u64 pVFTable; u64 spare; char name[]; }
-            // The decorated name begins at offset 16.
-            const std::string decorated = read_decorated_name(*pe, td_va + 16);
-            if (decorated.empty()) continue;
-            // Every real MSVC type descriptor name starts with ".?" -
-            // filter out random ASCII C strings that happen to sit
-            // where a TD would be.
-            if (decorated.size() < 4 || decorated[0] != '.' || decorated[1] != '?') {
-                continue;
-            }
+            auto td = read_type_descriptor(*pe, col->type_descriptor);
+            if (!td) continue;
 
             MsvcRttiClass cls;
             cls.col             = static_cast<addr_t>(col_ptr);
-            cls.type_descriptor = td_va;
+            cls.type_descriptor = td->va;
+            cls.class_hierarchy = col->class_hierarchy;
             cls.vtable          = static_cast<addr_t>(sec.vaddr + (k + 1) * 8);
-            cls.decorated_name  = decorated;
-            cls.pretty_name     = pretty_from_decorated(decorated);
+            cls.decorated_name  = std::move(td->decorated_name);
+            cls.pretty_name     = std::move(td->pretty_name);
+            cls.bases = parse_base_classes(*pe, cls.class_hierarchy, cls.decorated_name);
 
             // Walk IMP slots starting at k+1. Stop when a slot stops
             // pointing into code, mirroring the Itanium walker's

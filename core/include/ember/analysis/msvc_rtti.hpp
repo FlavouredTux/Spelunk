@@ -10,6 +10,17 @@
 
 namespace ember {
 
+struct MsvcRttiBaseClass {
+    std::string decorated_name;
+    std::string pretty_name;
+    addr_t      descriptor      = 0;
+    addr_t      type_descriptor = 0;
+    i32         mdisp           = 0;
+    i32         pdisp           = 0;
+    i32         vdisp           = 0;
+    u32         attributes      = 0;
+};
+
 // One C++ class recovered from Microsoft Visual C++ RTTI in a PE binary.
 // Parallels `RttiClass` for Itanium but carries MSVC-specific pointers:
 // `col` is the RTTICompleteObjectLocator VA, `type_descriptor` is the
@@ -20,8 +31,10 @@ struct MsvcRttiClass {
     std::string          pretty_name;     // e.g. "MyClass"
     addr_t               col             = 0;
     addr_t               type_descriptor = 0;
+    addr_t               class_hierarchy = 0;
     addr_t               vtable          = 0;
     std::vector<addr_t>  methods;
+    std::vector<MsvcRttiBaseClass> bases;
 };
 
 // Walks PE `.rdata`-like sections looking for vtable + COL pairs. Returns

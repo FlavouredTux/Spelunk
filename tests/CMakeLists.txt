@@ -52,6 +52,10 @@ add_executable(ember_pe_reloc_test pe_reloc_test.cpp)
 target_link_libraries(ember_pe_reloc_test PRIVATE ember::core ember::flags)
 add_test(NAME pe_reloc_unit COMMAND ember_pe_reloc_test)
 
+add_executable(ember_msvc_rtti_test msvc_rtti_test.cpp)
+target_link_libraries(ember_msvc_rtti_test PRIVATE ember::core ember::flags)
+add_test(NAME msvc_rtti_unit COMMAND ember_msvc_rtti_test)
+
 # Unit test for the AArch64 decoder. Hand-encoded 4-byte instructions
 # cover ALU immediate / shifted-register, move-wide, branches (B/BL/Bcc/
 # CBZ/RET), loads/stores (immediate offset + LDP), and aliases (MOV/MUL/

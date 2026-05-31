@@ -1664,6 +1664,13 @@ std::string build_rtti_output(const Binary& b) {
             out += std::format("class\t{:x}\t{:x}\t{}\t{}\t{}\n",
                                c.type_descriptor, c.vtable, c.methods.size(),
                                c.pretty_name, c.decorated_name);
+            for (const auto& base : c.bases) {
+                out += std::format("base\t{:x}\t{:x}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                                   base.type_descriptor, base.descriptor,
+                                   base.pretty_name, base.decorated_name,
+                                   base.mdisp, base.pdisp, base.vdisp,
+                                   base.attributes);
+            }
             for (std::size_t i = 0; i < c.methods.size(); ++i) {
                 auto it = method_names.find(c.methods[i]);
                 const std::string name = it != method_names.end()

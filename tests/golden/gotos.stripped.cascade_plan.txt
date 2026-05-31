@@ -4,5 +4,5 @@ plan: scope=all candidates=10 eligible=7 selected=7
    3. 0x401156 score=112.3 known=100% callers=2 callees=1 unresolved=0 - all callees known, 2 callers, 5 bytes
    4. 0x4010b0 score=112.0 known=100% callers=1 callees=0 unresolved=0 - all callees known, 1 caller, 125 bytes
    5. 0x40115b score=106.4 known=100% callers=0 callees=1 unresolved=0 - all callees known, 83 bytes
-   6. 0x401004 score=104.5 known=100% callers=0 callees=0 unresolved=0 - all callees known, 23 bytes
-   7. 0x4012c4 score=103.2 known=100% callers=0 callees=0 unresolved=0 - all callees known, 9 bytes
+   6. 0x401000 score=104.5 known=100% callers=0 callees=0 unresolved=0 - all callees known, 23 bytes
+   7. 0x4012ac score=103.2 known=100% callers=0 callees=0 unresolved=0 - all callees known, 9 bytes

@@ -1,4 +1,5 @@
 #include "args.hpp"
+#include "util.hpp"
 
 #include <array>
 #include <charconv>
@@ -249,11 +250,12 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--identify-threshold requires a value"));
             }
-            try { a.identify_threshold = std::stof(argv[i]); }
-            catch (...) {
+            auto value = parse_cli_double(argv[i]);
+            if (!value || *value < 0.0 || *value > 1.0) {
                 return std::unexpected(Error::invalid_format(
-                    "--identify-threshold: bad float"));
+                    "--identify-threshold: expected a finite value in 0..1"));
             }
+            a.identify_threshold = static_cast<float>(*value);
             continue;
         }
 
@@ -300,11 +302,12 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--recognize-threshold requires a value"));
             }
-            try { a.recognize_threshold = std::stof(argv[i]); }
-            catch (...) {
+            auto value = parse_cli_double(argv[i]);
+            if (!value || *value < 0.0 || *value > 1.0) {
                 return std::unexpected(Error::invalid_format(
-                    "--recognize-threshold: bad float"));
+                    "--recognize-threshold: expected a finite value in 0..1"));
             }
+            a.recognize_threshold = static_cast<float>(*value);
             continue;
         }
         // `--min-fn-size N` - drop fns smaller than N bytes before
@@ -475,12 +478,12 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format(
                     "--eligibility-ratio requires a value"));
             }
-            try {
-                a.cascade_eligibility_ratio = std::stod(argv[i]);
-            } catch (...) {
+            auto value = parse_cli_double(argv[i]);
+            if (!value) {
                 return std::unexpected(Error::invalid_format(
                     "--eligibility-ratio: bad float"));
             }
+            a.cascade_eligibility_ratio = *value;
             if (a.cascade_eligibility_ratio < 0.0 || a.cascade_eligibility_ratio > 1.0) {
                 return std::unexpected(Error::invalid_format(
                     "--eligibility-ratio: expected 0..1"));

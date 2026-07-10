@@ -276,26 +276,14 @@ int main(int argc, char** argv) {
         std::optional<ember::addr_t> manual_base;
         if (auto at = tok.find('@'); at != std::string::npos) {
             path = tok.substr(0, at);
-            std::string_view va_tok = std::string_view(tok).substr(at + 1);
-            if (va_tok.starts_with("0x") || va_tok.starts_with("0X")) {
-                va_tok.remove_prefix(2);
-            }
-            ember::addr_t v = 0;
-            bool ok = !va_tok.empty();
-            for (char c : va_tok) {
-                const int d = (c >= '0' && c <= '9') ? c - '0'
-                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                    : -1;
-                if (d < 0) { ok = false; break; }
-                v = (v << 4) | static_cast<ember::addr_t>(d);
-            }
-            if (!ok) {
+            const std::string_view va_tok = std::string_view(tok).substr(at + 1);
+            auto parsed = ember::cli::parse_cli_addr(va_tok);
+            if (!parsed) {
                 std::println(stderr,
                     "ember: --aux-binary: bad hex base after '@' in '{}'", tok);
                 return EXIT_FAILURE;
             }
-            manual_base = v;
+            manual_base = *parsed;
         }
         auto loaded = ember::load_binary(path);
         if (!loaded) {
@@ -334,27 +322,12 @@ int main(int argc, char** argv) {
     // the VA instead of rebinding to the closest-below symbol. Common
     // when obfuscators merge functions or stash a real entry mid-body.
     for (const auto& tok : args.force_fn_starts) {
-        std::string_view va_tok = tok;
-        if (va_tok.starts_with("0x") || va_tok.starts_with("0X")) {
-            va_tok.remove_prefix(2);
-        } else if (va_tok.starts_with("sub_")) {
-            va_tok.remove_prefix(4);
-        }
-        ember::addr_t va = 0;
-        bool ok = !va_tok.empty();
-        for (char c : va_tok) {
-            const int d = (c >= '0' && c <= '9') ? c - '0'
-                : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                : -1;
-            if (d < 0) { ok = false; break; }
-            va = (va << 4) | static_cast<ember::addr_t>(d);
-        }
-        if (!ok) {
+        auto va = ember::cli::parse_cli_addr(tok);
+        if (!va) {
             std::println(stderr, "ember: --force-fn-start: bad hex VA '{}'", tok);
             return EXIT_FAILURE;
         }
-        (*bin)->add_synthetic_function_start(va);
+        (*bin)->add_synthetic_function_start(*va);
     }
     const ember::Binary& b = **bin;
 

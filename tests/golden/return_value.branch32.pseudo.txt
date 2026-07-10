@@ -1,7 +1,7 @@
 // branch32
-uint32_t branch32(uint64_t a1) {
-  if ((uint32_t)a1 > 5) {
+uint32_t branch32(uint32_t a1) {
+  if (a1 > 5) {
     return -1;
   }
-  return (uint32_t)(a1 + 0x64);
+  return (uint32_t)((uint32_t)a1 + 0x64);
 }

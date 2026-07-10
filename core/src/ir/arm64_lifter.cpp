@@ -384,6 +384,46 @@ void lift_shift_imm(LiftCtx& ctx, IrOp op) {
     ctx.write_reg(insn.operands[0].reg, r);
 }
 
+void lift_variable_shift(LiftCtx& ctx, Mnemonic mnemonic) {
+    const auto& I = *ctx.insn;
+    if (I.num_operands < 3 ||
+        I.operands[0].kind != Operand::Kind::Register) return;
+    IrValue value = ctx.materialize_op(I.operands[1]);
+    IrValue count = ctx.materialize_op(I.operands[2]);
+    if (count.type != value.type) {
+        count = type_bits(count.type) < type_bits(value.type)
+            ? ctx.emit_convert(IrOp::ZExt, count, value.type)
+            : ctx.emit_convert(IrOp::Trunc, count, value.type);
+    }
+    const i64 mask_value = static_cast<i64>(type_bits(value.type) - 1u);
+    const IrValue mask = ctx.imm(mask_value, value.type);
+    count = ctx.emit_binop(IrOp::And, count, mask);
+
+    IrValue result;
+    switch (mnemonic) {
+        case Mnemonic::A64Lslv:
+            result = ctx.emit_binop(IrOp::Shl, value, count);
+            break;
+        case Mnemonic::A64Lsrv:
+            result = ctx.emit_binop(IrOp::Lshr, value, count);
+            break;
+        case Mnemonic::A64Asrv:
+            result = ctx.emit_binop(IrOp::Ashr, value, count);
+            break;
+        case Mnemonic::A64Rorv: {
+            const IrValue lo = ctx.emit_binop(IrOp::Lshr, value, count);
+            IrValue inverse = ctx.emit_unop(IrOp::Neg, count);
+            inverse = ctx.emit_binop(IrOp::And, inverse, mask);
+            const IrValue hi = ctx.emit_binop(IrOp::Shl, value, inverse);
+            result = ctx.emit_binop(IrOp::Or, lo, hi);
+            break;
+        }
+        default:
+            return;
+    }
+    ctx.write_reg(I.operands[0].reg, result);
+}
+
 void lift_extend(LiftCtx& ctx, unsigned src_bits, bool sign) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 2) return;
@@ -683,12 +723,7 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::A64Ror: lift_intrinsic(ctx, "ror"); break;
         case Mnemonic::A64Lslv: case Mnemonic::A64Lsrv:
         case Mnemonic::A64Asrv: case Mnemonic::A64Rorv: {
-            // Variable-shift register form.
-            IrOp op = (insn.mnemonic == Mnemonic::A64Lslv) ? IrOp::Shl :
-                      (insn.mnemonic == Mnemonic::A64Lsrv) ? IrOp::Lshr :
-                      (insn.mnemonic == Mnemonic::A64Asrv) ? IrOp::Ashr :
-                                                              IrOp::Lshr;
-            lift_arith(ctx, op, false, false);
+            lift_variable_shift(ctx, insn.mnemonic);
             break;
         }
         case Mnemonic::A64Mul: {

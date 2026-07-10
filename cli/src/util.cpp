@@ -1,6 +1,7 @@
 #include "util.hpp"
 
 #include <charconv>
+#include <cmath>
 #include <format>
 #include <system_error>
 
@@ -20,6 +21,18 @@ std::optional<addr_t> parse_cli_addr(std::string_view s) {
     auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
     if (r.ec != std::errc{}) return std::nullopt;
     return static_cast<addr_t>(v);
+}
+
+std::optional<double> parse_cli_double(std::string_view s) {
+    if (s.empty()) return std::nullopt;
+    double value = 0.0;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), value,
+                                   std::chars_format::general);
+    if (r.ec != std::errc{} || r.ptr != s.data() + s.size() ||
+        !std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 std::string json_escape(std::string_view s) {

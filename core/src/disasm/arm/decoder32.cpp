@@ -289,8 +289,11 @@ void decode_extra_ls(u32 raw, Instruction& in) noexcept {
         m.disp = p ? (u ? off : -off) : 0;
         m.has_disp = true;
     } else {
-        m.index = arm_gpr(bits(raw, 3, 0));
-        m.scale = 1;
+        if (p) {
+            m.index = arm_gpr(bits(raw, 3, 0));
+            m.scale = 1;
+            m.subtract_index = !u;
+        }
     }
 
     Mnemonic mn = Mnemonic::A32Undef;
@@ -333,14 +336,15 @@ void decode_single_ls(u32 raw, Instruction& in) noexcept {
         const ArmShift st  = static_cast<ArmShift>(bits(raw, 6, 5));
         const unsigned amt = bits(raw, 11, 7);
         m.index = arm_gpr(rm);
-        // Mem can represent only addition with a power-of-two scale. Do not
-        // silently turn subtracting or non-LSL offsets into a different EA.
-        if (!u || st != ArmShift::Lsl || amt >= 8) {
+        // Mem represents an optionally-subtracted, power-of-two LSL index.
+        // Other barrel shifts still require richer address metadata.
+        if (st != ArmShift::Lsl || amt >= 8) {
             in.mnemonic = Mnemonic::A32Undef;
             set_ops(in, {imm_op(static_cast<i64>(raw))});
             return;
         }
         m.scale = static_cast<u8>(1u << amt);
+        m.subtract_index = !u;
     }
 
     // ldr into PC is an indirect branch / return.

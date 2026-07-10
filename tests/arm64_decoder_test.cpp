@@ -188,6 +188,31 @@ void test_lifter_regressions() {
     }
     check_eq(store_pos < sp_write_pos, true,
              "post-index: memory access precedes base writeback");
+
+    ir = lift_one(0x9ac22c20);  // rorv x0, x1, x2
+    unsigned masked_counts = 0;
+    bool saw_lshr = false, saw_rotate_shl = false, saw_rotate_or = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        if (i.op == IrOp::And && i.src_count == 2 &&
+            i.srcs[1].kind == IrValueKind::Imm && i.srcs[1].imm == 63) {
+            ++masked_counts;
+        }
+        saw_lshr |= i.op == IrOp::Lshr;
+        saw_rotate_shl |= i.op == IrOp::Shl;
+        saw_rotate_or |= i.op == IrOp::Or;
+    }
+    check_eq(masked_counts >= 2 && saw_lshr && saw_rotate_shl && saw_rotate_or,
+             true, "rorv: masked rotate rather than plain right shift");
+
+    ir = lift_one(0x1ac52083);  // lslv w3, w4, w5
+    bool saw_w_mask = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        saw_w_mask |= i.op == IrOp::And && i.dst.type == IrType::I32 &&
+                      i.src_count == 2 &&
+                      i.srcs[1].kind == IrValueKind::Imm &&
+                      i.srcs[1].imm == 31;
+    }
+    check_eq(saw_w_mask, true, "lslv w: variable count is masked to 5 bits");
 }
 
 void test_branches() {

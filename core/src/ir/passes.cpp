@@ -651,12 +651,28 @@ struct AddressForm {
 
 [[nodiscard]] bool definitely_no_alias(AddressForm a, std::size_t a_size,
                                        AddressForm b, std::size_t b_size) noexcept {
-    if (a.cls == AddressClass::Unknown || a.cls != b.cls) return false;
-    const u64 ao = static_cast<u64>(a.offset) ^ (u64{1} << 63);
-    const u64 bo = static_cast<u64>(b.offset) ^ (u64{1} << 63);
+    if (a.cls == AddressClass::Unknown || b.cls == AddressClass::Unknown)
+        return false;
+    // Fixed image addresses and frame-relative stack slots belong to
+    // disjoint storage classes for the purposes of local memory SSA.
+    if (a.cls != b.cls) return true;
+    // Stack displacements are signed offsets; absolute addresses are raw
+    // u64 bit patterns. Applying the signed-order bias to an absolute VA
+    // would make adjacent ranges across 0x7fff.../0x8000... appear vastly
+    // separated and could enable unsound forwarding/DSE.
+    const u64 order_bias = a.cls == AddressClass::Stack ? (u64{1} << 63) : 0;
+    const u64 ao = static_cast<u64>(a.offset) ^ order_bias;
+    const u64 bo = static_cast<u64>(b.offset) ^ order_bias;
     const u64 distance = ao >= bo ? ao - bo : bo - ao;
     const std::size_t earlier_size = ao <= bo ? a_size : b_size;
     return distance >= earlier_size;
+}
+
+[[nodiscard]] bool same_address(const IrValue& a, AddressForm af,
+                                const IrValue& b, AddressForm bf) noexcept {
+    if (same_ssa_value(a, b)) return true;
+    return af.cls != AddressClass::Unknown && af.cls == bf.cls &&
+           af.offset == bf.offset;
 }
 
 [[nodiscard]] std::size_t memory_width(IrType type) noexcept {
@@ -706,31 +722,45 @@ struct AddressForm {
         struct StoreInfo {
             std::size_t index = 0;
             IrType type = IrType::I64;
+            IrValue address_value;
             AddressForm address;
             std::size_t width = 0;
         };
-        SsaMap<StoreInfo> last_store;
+        std::vector<StoreInfo> last_stores;
         const auto& defs = am.defs(fn);
         for (std::size_t i = 0; i < bb.insts.size(); ++i) {
             auto& inst = bb.insts[i];
             switch (inst.op) {
                 case IrOp::Store: {
                     if (inst.src_count < 2) break;
-                    auto k = ssa_key(inst.srcs[0]);
-                    if (!k) { last_store.clear(); break; }
                     const IrType new_ty = inst.srcs[1].type;
-                    auto it = last_store.find(*k);
-                    if (it != last_store.end() && it->second.type == new_ty) {
-                        auto& prior = bb.insts[it->second.index];
-                        prior.op        = IrOp::Nop;
-                        prior.src_count = 0;
-                        prior.srcs      = {};
-                        prior.segment   = Reg::None;
-                        ++count;
+                    const IrValue new_value = inst.srcs[0];
+                    const AddressForm new_addr =
+                        resolve_address_form(fn, defs, new_value);
+                    const std::size_t new_width = memory_width(new_ty);
+                    for (auto it = last_stores.begin(); it != last_stores.end();) {
+                        if (definitely_no_alias(it->address, it->width,
+                                                new_addr, new_width)) {
+                            ++it;
+                            continue;
+                        }
+                        if (it->type == new_ty &&
+                            same_address(it->address_value, it->address,
+                                         new_value, new_addr)) {
+                            auto& prior = bb.insts[it->index];
+                            prior.op        = IrOp::Nop;
+                            prior.src_count = 0;
+                            prior.srcs      = {};
+                            prior.segment   = Reg::None;
+                            ++count;
+                        }
+                        // An intervening may-alias store makes the old
+                        // candidate unsuitable for later local DSE even when
+                        // the two pointer SSA values differ at compile time.
+                        it = last_stores.erase(it);
                     }
-                    last_store[*k] = {i, new_ty,
-                        resolve_address_form(fn, defs, inst.srcs[0]),
-                        memory_width(new_ty)};
+                    last_stores.push_back(
+                        {i, new_ty, new_value, new_addr, new_width});
                     break;
                 }
                 case IrOp::Load: {
@@ -738,17 +768,17 @@ struct AddressForm {
                     const AddressForm load_addr =
                         resolve_address_form(fn, defs, inst.srcs[0]);
                     const std::size_t load_width = memory_width(inst.dst.type);
-                    for (auto it = last_store.begin(); it != last_store.end();) {
-                        if (definitely_no_alias(it->second.address, it->second.width,
+                    for (auto it = last_stores.begin(); it != last_stores.end();) {
+                        if (definitely_no_alias(it->address, it->width,
                                                 load_addr, load_width)) ++it;
-                        else it = last_store.erase(it);
+                        else it = last_stores.erase(it);
                     }
                     break;
                 }
                 case IrOp::Call:
                 case IrOp::CallIndirect:
                 case IrOp::Intrinsic:
-                    last_store.clear();
+                    last_stores.clear();
                     break;
                 default:
                     break;
@@ -772,37 +802,43 @@ struct AddressForm {
         const std::size_t before = count;
         struct StoredValue {
             IrValue value;
+            IrValue address_value;
             AddressForm address;
             std::size_t width = 0;
         };
-        SsaMap<StoredValue> stored;
+        std::vector<StoredValue> stored;
         const auto& defs = am.defs(fn);
         for (auto& inst : bb.insts) {
             switch (inst.op) {
                 case IrOp::Store: {
                     if (inst.src_count < 2) break;
-                    auto k = ssa_key(inst.srcs[0]);
-                    if (!k) { stored.clear(); break; }
+                    const IrValue new_value = inst.srcs[0];
                     const AddressForm new_addr =
-                        resolve_address_form(fn, defs, inst.srcs[0]);
+                        resolve_address_form(fn, defs, new_value);
                     const std::size_t new_width = memory_width(inst.srcs[1].type);
                     for (auto it = stored.begin(); it != stored.end();) {
-                        if (definitely_no_alias(it->second.address, it->second.width,
+                        if (definitely_no_alias(it->address, it->width,
                                                 new_addr, new_width)) ++it;
                         else it = stored.erase(it);
                     }
-                    stored[*k] = {inst.srcs[1], new_addr, new_width};
+                    stored.push_back({inst.srcs[1], new_value, new_addr, new_width});
                     break;
                 }
                 case IrOp::Load: {
                     if (inst.src_count >= 1) {
-                        auto k = ssa_key(inst.srcs[0]);
-                        if (!k) break;
-                        auto it = stored.find(*k);
-                        if (it == stored.end()) break;
-                        if (it->second.value.type != inst.dst.type) break;
+                        const IrValue load_value = inst.srcs[0];
+                        const AddressForm load_addr =
+                            resolve_address_form(fn, defs, load_value);
+                        auto it = std::find_if(stored.rbegin(), stored.rend(),
+                            [&](const StoredValue& candidate) {
+                                return same_address(candidate.address_value,
+                                                    candidate.address,
+                                                    load_value, load_addr);
+                            });
+                        if (it == stored.rend()) break;
+                        if (it->value.type != inst.dst.type) break;
                         inst.op        = IrOp::Assign;
-                        inst.srcs[0]   = it->second.value;
+                        inst.srcs[0]   = it->value;
                         inst.src_count = 1;
                         inst.segment   = Reg::None;
                         ++count;

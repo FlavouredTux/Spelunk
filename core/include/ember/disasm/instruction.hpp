@@ -317,6 +317,7 @@ struct Mem {
     u8   size     = 0;
     u8   address_size = 8;
     bool has_disp = false;
+    bool subtract_index = false;
     Writeback writeback = Writeback::None;
 };
 

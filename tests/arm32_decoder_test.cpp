@@ -134,9 +134,20 @@ void test_loads_stores() {
     check_eq(i.operands[1].mem.base, Reg::Asp, "str: base sp");
     check_eq(i.operands[1].mem.disp, std::int64_t{-8}, "str: neg disp");
 
-    i = must_decode(0xE7110002);  // ldr r0, [r1, -r2] (not representable by Mem)
-    check_eq(i.mnemonic, Mnemonic::A32Undef,
-             "negative register offset is not misdecoded as addition");
+    i = must_decode(0xE7110002);  // ldr r0, [r1, -r2]
+    check_eq(i.mnemonic, Mnemonic::A32Ldr,
+             "negative register offset: mnemonic");
+    check_eq(i.operands[1].mem.subtract_index, true,
+             "negative register offset: subtraction preserved");
+    check_eq(format_instruction(i),
+             std::string{"ldr r0, dword ptr [r1 - r2]"},
+             "negative register offset: formatting");
+
+    i = must_decode(0xE11100B2);  // ldrh r0, [r1, -r2]
+    check_eq(i.mnemonic, Mnemonic::A32Ldrh,
+             "extra load/store negative register offset: mnemonic");
+    check_eq(i.operands[1].mem.subtract_index, true,
+             "extra load/store negative register offset: subtraction preserved");
 }
 
 void test_block_transfer() {
@@ -217,6 +228,14 @@ void test_lifter_regressions() {
         plain_store |= inst.op == IrOp::Store;
     }
     check_eq(guarded && !plain_store, true, "strne: guarded side effect");
+
+    ir = lift_one(0xE11100B2);  // ldrh r0, [r1, -r2]
+    bool saw_ea_sub = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_ea_sub |= inst.op == IrOp::Sub && inst.dst.type == IrType::I32;
+    }
+    check_eq(saw_ea_sub, true,
+             "negative register offset: effective address subtracts index");
 }
 
 void test_system() {

@@ -1390,6 +1390,20 @@ ember_expect_fail_test(
     ERR_SUBSTR "bad --count"
 )
 
+add_test(
+    NAME disasm_at_json_unmapped_fails
+    COMMAND ${CMAKE_COMMAND}
+        -DEMBER=$<TARGET_FILE:ember_cli>
+        -DBINARY=${EMBER_FIXTURE_return_value_PATH}
+        "-DARGS=--disasm-at|0x999999|--json"
+        "-DOUT_SUBSTR=\"error\":"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_cli_json_expect_fail.cmake
+)
+set_tests_properties(disasm_at_json_unmapped_fails PROPERTIES
+    DEPENDS ember_cli
+    LABELS golden
+)
+
 ember_expect_fail_test(
     NAME       disasm_window_zero_count_rejected
     FIXTURE    return_value
@@ -1409,6 +1423,27 @@ ember_expect_fail_test(
     FIXTURE    return_value
     ARGS       "--min-fn-size|12wat|--functions"
     ERR_SUBSTR "--min-fn-size: bad integer"
+)
+
+ember_expect_fail_test(
+    NAME       identify_threshold_suffix_rejected
+    FIXTURE    return_value
+    ARGS       "--identify-threshold|0.5junk|--identify"
+    ERR_SUBSTR "--identify-threshold"
+)
+
+ember_expect_fail_test(
+    NAME       recognize_threshold_nan_rejected
+    FIXTURE    return_value
+    ARGS       "--recognize-threshold|nan|--recognize"
+    ERR_SUBSTR "--recognize-threshold"
+)
+
+ember_expect_fail_test(
+    NAME       eligibility_ratio_inf_rejected
+    FIXTURE    return_value
+    ARGS       "--eligibility-ratio|inf|--cascade-plan"
+    ERR_SUBSTR "--eligibility-ratio"
 )
 
 # ---- dead_store (DSE on global-address stores) ----------------------------

@@ -58,6 +58,9 @@ constexpr u32 VM_PROT_EXECUTE     = 0x4u;
 
 // Section types (flags & SECTION_TYPE).
 constexpr u32 SECTION_TYPE_MASK          = 0x000000FFu;
+constexpr u32 S_ZEROFILL                 = 0x01u;
+constexpr u32 S_GB_ZEROFILL              = 0x0cu;
+constexpr u32 S_THREAD_LOCAL_ZEROFILL    = 0x12u;
 constexpr u32 S_NON_LAZY_SYMBOL_POINTERS = 0x06u;
 constexpr u32 S_LAZY_SYMBOL_POINTERS     = 0x07u;
 constexpr u32 S_SYMBOL_STUBS             = 0x08u;
@@ -66,6 +69,12 @@ constexpr u32 S_ATTR_PURE_INSTRUCTIONS   = 0x80000000u;
 
 constexpr u32 INDIRECT_SYMBOL_LOCAL     = 0x80000000u;
 constexpr u32 INDIRECT_SYMBOL_ABS       = 0x40000000u;
+
+[[nodiscard]] constexpr bool section_is_zerofill(u32 flags) noexcept {
+    const u32 type = flags & SECTION_TYPE_MASK;
+    return type == S_ZEROFILL || type == S_GB_ZEROFILL ||
+           type == S_THREAD_LOCAL_ZEROFILL;
+}
 
 // dyld_chained_starts_in_segment::pointer_format.
 constexpr u16 DYLD_CHAINED_PTR_ARM64E            = 1u;
@@ -638,6 +647,10 @@ void parse_chained_fixups(
     // Walk starts_in_image → starts_in_segment → each page's chain.
     auto seg_count = rd32(*starts_off);
     if (!seg_count) return;
+    if (*starts_off > data.size() - 4u) return;
+    const std::size_t available_seg_offsets =
+        (data.size() - *starts_off - 4u) / 4u;
+    if (*seg_count > available_seg_offsets || *seg_count > segs.size()) return;
     for (u32 si = 0; si < *seg_count; ++si) {
         auto seg_info_off = rd32(*starts_off + 4 + si * 4);
         if (!seg_info_off || *seg_info_off == 0) continue;
@@ -930,9 +943,12 @@ Result<void> MachOBinary::parse() {
     // ---- Pass 1: LC_SEGMENT_64 ---------------------------------------------
     for (const auto& lc : lcs) {
         if (lc.cmd != LC_SEGMENT_64) continue;
-        if (lc.size < SEGMENT_COMMAND_64_SIZE) continue;
+        if (lc.size < SEGMENT_COMMAND_64_SIZE) {
+            return std::unexpected(Error::invalid_format(
+                "macho: LC_SEGMENT_64 is smaller than its fixed header"));
+        }
         auto lcb = r.slice(lc.off, lc.size);
-        if (!lcb) continue;
+        if (!lcb) return std::unexpected(std::move(lcb).error());
         const std::byte* const p = lcb->data();
 
         std::string segname = read_fixed_cstr(p + 8, 16);
@@ -942,6 +958,19 @@ Result<void> MachOBinary::parse() {
         const u64 filesize = read_le_at<u64>(p + 48);
         const u32 initprot = read_le_at<u32>(p + 60);
         const u32 nsects   = read_le_at<u32>(p + 64);
+        if (nsects > (lc.size - SEGMENT_COMMAND_64_SIZE) / SECTION_64_SIZE) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "macho: segment {} declares {} sections outside its command",
+                segname, nsects)));
+        }
+        if (vmsize > std::numeric_limits<u64>::max() - vmaddr) {
+            return std::unexpected(Error::invalid_format(
+                "macho: segment virtual range wraps"));
+        }
+        if (filesize > 0 && !r.slice(fileoff, filesize)) {
+            return std::unexpected(Error::truncated(std::format(
+                "macho: segment {} file range is outside the image", segname)));
+        }
 
         seg_info.push_back({static_cast<addr_t>(vmaddr), vmsize, fileoff, filesize, segname});
 
@@ -955,9 +984,9 @@ Result<void> MachOBinary::parse() {
             seg.writable   = (initprot & VM_PROT_WRITE)   != 0;
             seg.executable = (initprot & VM_PROT_EXECUTE) != 0;
             if (filesize > 0) {
-                if (auto bytes = r.slice(fileoff, filesize); bytes) {
-                    seg.data = *bytes;
-                }
+                auto bytes = r.slice(fileoff, filesize);
+                if (!bytes) return std::unexpected(std::move(bytes).error());
+                seg.data = *bytes;
             }
             segments_.push_back(std::move(seg));
         }
@@ -985,11 +1014,14 @@ Result<void> MachOBinary::parse() {
             out.flags.readable   = (initprot & VM_PROT_READ)    != 0;
             out.flags.writable   = (initprot & VM_PROT_WRITE)   != 0;
             out.flags.executable = executable;
-            // ZEROFILL / BSS-ish sections have offset=0; everything else has bytes.
-            const u32 stype = flags & SECTION_TYPE_MASK;
-            (void)stype;
-            if (offset != 0 && size > 0) {
-                if (auto data = r.slice(offset, size); data) out.data = *data;
+            if (size > 0 && !section_is_zerofill(flags)) {
+                auto data = r.slice(offset, size);
+                if (!data) {
+                    return std::unexpected(Error::truncated(std::format(
+                        "macho: section {} initialized range is outside the image",
+                        out.name)));
+                }
+                out.data = *data;
             }
             sections_.push_back(std::move(out));
         }
@@ -1025,11 +1057,15 @@ Result<void> MachOBinary::parse() {
             const u32 ns      = read_le_at<u32>(p + 12);
             const u32 stroff  = read_le_at<u32>(p + 16);
             const u32 strsize = read_le_at<u32>(p + 20);
+            auto syms = r.slice(symoff, static_cast<std::size_t>(ns) * 16u);
+            auto strs = r.slice(stroff, strsize);
+            if (!syms || !strs) {
+                return std::unexpected(Error::truncated(
+                    "macho: LC_SYMTAB tables are outside the image"));
+            }
             nsyms = ns;
-            if (auto s = r.slice(symoff, static_cast<std::size_t>(ns) * 16); s)
-                symtab_bytes = *s;
-            if (auto s = r.slice(stroff, strsize); s)
-                strtab_bytes = *s;
+            symtab_bytes = *syms;
+            strtab_bytes = *strs;
             break;
         }
         case LC_DYSYMTAB: {

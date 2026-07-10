@@ -265,7 +265,8 @@ struct LiftCtx {
         if (m.index != Reg::None) {
             IrValue idx = read_reg(m.index);
             if (m.scale > 1) idx = emit_binop(IrOp::Mul, idx, imm(m.scale));
-            base = emit_binop(IrOp::Add, base, idx);
+            base = emit_binop(m.subtract_index ? IrOp::Sub : IrOp::Add,
+                              base, idx);
         }
         if (m.disp != 0 || m.base == Reg::None) {
             base = emit_binop(IrOp::Add, base, imm(m.disp));

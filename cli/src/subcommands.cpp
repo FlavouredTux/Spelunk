@@ -2702,10 +2702,10 @@ decode_disasm_probe(const Binary& b, addr_t start, std::size_t count) {
     return p;
 }
 
-[[nodiscard]] std::string disasm_probe_json(const Binary& b, addr_t start,
-                                            std::size_t count) {
+[[nodiscard]] Result<std::string> disasm_probe_json(const Binary& b, addr_t start,
+                                                    std::size_t count) {
     auto rv = decode_disasm_probe(b, start, count);
-    if (!rv) return std::format("{{\"error\":\"{}\"}}\n", json_escape(rv.error().message));
+    if (!rv) return std::unexpected(std::move(rv).error());
     const auto& p = *rv;
     std::string out = std::format(
         "{{\"va\":\"{:#x}\",\"recommended_steal_len\":{},"
@@ -4956,8 +4956,14 @@ int run_disasm_at(const Args& args, const Binary& b) {
         return EXIT_FAILURE;
     }
     if (args.json) {
-        const std::string out = disasm_probe_json(b, static_cast<addr_t>(*va), count);
-        std::fwrite(out.data(), 1, out.size(), stdout);
+        auto out = disasm_probe_json(b, static_cast<addr_t>(*va), count);
+        if (!out) {
+            const std::string error = std::format(
+                "{{\"error\":\"{}\"}}\n", json_escape(out.error().message));
+            std::fwrite(error.data(), 1, error.size(), stdout);
+            return EXIT_FAILURE;
+        }
+        std::fwrite(out->data(), 1, out->size(), stdout);
         return EXIT_SUCCESS;
     }
     // 8 bytes/insn is the typical x86-64 average; ~15 bytes is the max.
@@ -5658,11 +5664,8 @@ json_number_field(std::string_view json, std::string_view key) {
 
 [[nodiscard]] double promote_threshold(const Args& args) {
     if (args.annotate_conf.empty()) return 0.85;
-    try {
-        const double v = std::stod(args.annotate_conf);
-        if (v >= 0.0 && v <= 1.0) return v;
-    } catch (...) {
-    }
+    auto value = parse_cli_double(args.annotate_conf);
+    if (value && *value >= 0.0 && *value <= 1.0) return *value;
     return -1.0;
 }
 

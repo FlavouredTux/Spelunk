@@ -1,4 +1,4 @@
 // read_rebased
 uint32_t read_rebased(void) {
-  return (uint32_t)*(uint64_t*)(0x100002008)[0];
+  return ((uint32_t*)*(uint64_t*)(0x100002008))[0];
 }

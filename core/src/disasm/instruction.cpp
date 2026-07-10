@@ -665,7 +665,8 @@ namespace {
             inside += reg_name(m.base);
         }
         if (m.index != Reg::None) {
-            if (!inside.empty()) inside += " + ";
+            if (!inside.empty()) inside += m.subtract_index ? " - " : " + ";
+            else if (m.subtract_index) inside += "-";
             inside += reg_name(m.index);
             if (m.scale != 1) {
                 inside += std::format("*{}", static_cast<unsigned>(m.scale));

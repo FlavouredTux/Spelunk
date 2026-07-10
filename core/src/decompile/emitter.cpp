@@ -4707,7 +4707,20 @@ struct Emitter {
         // an array slice. argv-style ptr-to-ptr accesses don't touch
         // exactly {0, 8, 16} so they continue rendering as `a[i]`.
         if (looks_like_vector(base)) return std::nullopt;
-        return std::format("{}[{}]", expr(base, depth + 1), off / stride);
+        std::string rendered_base = expr(base, depth + 1);
+        // A pointer loaded from memory still has an integer-width Load in
+        // IR, even when local type inference has proved that the assigned
+        // value is a pointer. Indexing the raw rendered load would produce
+        // invalid C (`*(uint64_t*)slot[0]`) and lose the pointee width.
+        // Reapply the refined pointer type at this expression boundary.
+        if (const IrInst* bd = def_stripped(base);
+            bd && bd->op == IrOp::Load && fn &&
+            fn->types.kind(fn->type_of(base)) == TypeKind::Ptr &&
+            rendered_base.starts_with("*(")) {
+            rendered_base = std::format("(({}){})",
+                                        c_type_name_for(base), rendered_base);
+        }
+        return std::format("{}[{}]", rendered_base, off / stride);
     }
 
     // Runtime-indexed array form: `*(T*)(base + idx * stride)` and the

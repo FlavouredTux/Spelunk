@@ -98,10 +98,73 @@ void test_dse_respects_may_alias_load() {
     check(stores == 2, "load through a may-alias pointer keeps the earlier store");
 }
 
+void test_dse_keeps_global_across_disjoint_stack_load() {
+    auto fn = base_function();
+    auto& insts = fn.blocks[0].insts;
+    const auto global = ember::IrValue::make_imm(0x404018, ember::IrType::I64);
+    const auto stack = ember::IrValue::make_reg(ember::Reg::Rsp,
+                                                ember::IrType::I64);
+    insts.push_back(store(global, 1));
+
+    const auto loaded = ember::IrValue::make_temp(0, ember::IrType::I64);
+    ember::IrInst load;
+    load.op = ember::IrOp::Load;
+    load.dst = loaded;
+    load.srcs[0] = stack;
+    load.src_count = 1;
+    insts.push_back(load);
+    insts.push_back(store(global, 2));
+
+    ember::IrInst ret;
+    ret.op = ember::IrOp::Return;
+    ret.srcs[0] = loaded;
+    ret.src_count = 1;
+    insts.push_back(ret);
+
+    auto result = ember::run_cleanup(fn);
+    check(result.has_value(), "cleanup succeeds for disjoint storage classes");
+    std::size_t stores = 0;
+    for (const auto& i : fn.blocks[0].insts) stores += i.op == ember::IrOp::Store;
+    check(stores == 1, "stack load does not block dead global-store removal");
+}
+
+void test_absolute_ranges_alias_across_sign_boundary() {
+    auto fn = base_function();
+    auto& insts = fn.blocks[0].insts;
+    const auto before = ember::IrValue::make_imm(
+        static_cast<ember::i64>(0x7ffffffffffffffcull), ember::IrType::I64);
+    const auto after = ember::IrValue::make_imm(
+        static_cast<ember::i64>(0x8000000000000000ull), ember::IrType::I64);
+    insts.push_back(store(before, 1));
+
+    const auto loaded = ember::IrValue::make_temp(0, ember::IrType::I64);
+    ember::IrInst load;
+    load.op = ember::IrOp::Load;
+    load.dst = loaded;
+    load.srcs[0] = after;
+    load.src_count = 1;
+    insts.push_back(load);
+    insts.push_back(store(before, 2));
+
+    ember::IrInst ret;
+    ret.op = ember::IrOp::Return;
+    ret.srcs[0] = loaded;
+    ret.src_count = 1;
+    insts.push_back(ret);
+
+    auto result = ember::run_cleanup(fn);
+    check(result.has_value(), "cleanup succeeds across absolute sign boundary");
+    std::size_t stores = 0;
+    for (const auto& i : fn.blocks[0].insts) stores += i.op == ember::IrOp::Store;
+    check(stores == 2, "overlapping absolute ranges keep the observed store");
+}
+
 }  // namespace
 
 int main() {
     test_forwarding_respects_may_alias_store();
     test_dse_respects_may_alias_load();
+    test_dse_keeps_global_across_disjoint_stack_load();
+    test_absolute_ranges_alias_across_sign_boundary();
     return fails == 0 ? 0 : 1;
 }

@@ -19,7 +19,7 @@ namespace {
 
 enum class OpSpec : u8 {
     None,
-    Eb, Ev, Ew, Ed, M,
+    Eb, Ev, Ew, Ed, Edq, M,
     Gb, Gv, Gw,
     Ib, Iw, Iz, Iv,
     Ibsext,
@@ -153,6 +153,10 @@ constexpr std::array<OpcodeEntry, 256> build_primary() noexcept {
     }
     t[0x98] = op(Mnemonic::Cwde);
     t[0x99] = op(Mnemonic::Cdq);
+    t[0x9C] = op(Mnemonic::Pushf);
+    t[0x9D] = op(Mnemonic::Popf);
+    t[0x9E] = op(Mnemonic::Sahf);
+    t[0x9F] = op(Mnemonic::Lahf);
 
     // String ops: no explicit operands (implicit rdi/rsi/rcx/rax, direction
     // flag). The "w"-sized (0x66-prefixed) variants aren't emitted; the -b
@@ -195,8 +199,15 @@ constexpr std::array<OpcodeEntry, 256> build_primary() noexcept {
     t[0xEB] = op(Mnemonic::Jmp,  OpSpec::Jb);
 
     t[0xF4] = op(Mnemonic::Hlt);
+    t[0xF5] = op(Mnemonic::Cmc);
     t[0xF6] = grp(Grp_3_Eb);
     t[0xF7] = grp(Grp_3_Ev);
+    t[0xF8] = op(Mnemonic::Clc);
+    t[0xF9] = op(Mnemonic::Stc);
+    t[0xFA] = op(Mnemonic::Cli);
+    t[0xFB] = op(Mnemonic::Sti);
+    t[0xFC] = op(Mnemonic::Cld);
+    t[0xFD] = op(Mnemonic::StdDir);
     t[0xFE] = grp(Grp_4);
     t[0xFF] = grp(Grp_5);
 
@@ -350,13 +361,13 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     t[0x62] = op(Mnemonic::Punpckldq,   OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x6C] = op(Mnemonic::Punpcklqdq,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x6D] = op(Mnemonic::Punpckhqdq,  OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
-    t[0x6E] = op(Mnemonic::Movd,        OpSpec::Vx, OpSpec::Ed, OpSpec::None, true);
+    t[0x6E] = op(Mnemonic::Movd,        OpSpec::Vx, OpSpec::Edq, OpSpec::None, true);
     t[0x6F] = op(Mnemonic::Movdqa,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x70] = op(Mnemonic::Pshufd,      OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);
     t[0x74] = op(Mnemonic::Pcmpeqb,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x75] = op(Mnemonic::Pcmpeqw,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x76] = op(Mnemonic::Pcmpeqd,     OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
-    t[0x7E] = op(Mnemonic::MovdStore,   OpSpec::Ed, OpSpec::Vx, OpSpec::None, true);
+    t[0x7E] = op(Mnemonic::MovdStore,   OpSpec::Edq, OpSpec::Vx, OpSpec::None, true);
     t[0x7F] = op(Mnemonic::MovdqaStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
     t[0xD4] = op(Mnemonic::Paddq,       OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0xD6] = op(Mnemonic::MovqStore,   OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
@@ -845,6 +856,8 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
         case OpSpec::Ev: return decode_modrm_rm(ctx, os, false);
         case OpSpec::Ew: return decode_modrm_rm(ctx, 2,  false);
         case OpSpec::Ed: return decode_modrm_rm(ctx, 4,  false);
+        case OpSpec::Edq:
+            return decode_modrm_rm(ctx, ctx.rex_w ? 8u : 4u, false);
         case OpSpec::M:  return decode_modrm_rm(ctx, os, true);
 
         case OpSpec::Ib: {
@@ -964,6 +977,10 @@ void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noe
         insn.mnemonic = Mnemonic::Cdqe;
     } else if (insn.mnemonic == Mnemonic::Cdq && ctx.opsize() == 8) {
         insn.mnemonic = Mnemonic::Cqo;
+    } else if (insn.mnemonic == Mnemonic::Movd && ctx.rex_w) {
+        insn.mnemonic = Mnemonic::MovqGpr;
+    } else if (insn.mnemonic == Mnemonic::MovdStore && ctx.rex_w) {
+        insn.mnemonic = Mnemonic::MovqGprStore;
     }
     // 64-bit promotion for the default-sized string ops (REX.W).
     if (ctx.opsize() == 8) {

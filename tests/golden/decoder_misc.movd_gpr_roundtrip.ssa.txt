@@ -1,0 +1,28 @@
+function movd_gpr_roundtrip @ 0x4012d0
+  blocks: 1
+
+bb_4012d0  (entry):
+  ; 0x4012d0
+  t0 = trunc i32 rdi
+  t1 = intrinsic "_mm_cvtsi32_si128"(t0)
+  xmm0_1 = t1
+  ; 0x4012d4
+  t2 = intrinsic "_mm_cvtsi128_si32"(xmm0_1)
+  t3 = zext i64 t2
+  rax_1 = t3
+  ; 0x4012d8
+  t4 = trunc i32 rax_1
+  t5 = add.carry i1 t4, 0x7
+  cf_1 = t5
+  t6 = add.overflow i1 t4, 0x7
+  of_1 = t6
+  t7 = add i32 t4, 0x7
+  t8 = cmp.eq i1 t7, 0x0
+  zf_1 = t8
+  t9 = cmp.slt i1 t7, 0x0
+  sf_1 = t9
+  t10 = zext i64 t7
+  rax_2 = t10
+  ; 0x4012db
+  return rax_2, xmm0_1
+

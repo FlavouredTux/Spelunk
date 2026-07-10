@@ -22,6 +22,7 @@ enum class Abi : u8 {
     Ppc64ElfV2Le,
     Ppc64ElfV1Be,
     Aapcs64,
+    AapcsArm32,
 };
 
 [[nodiscard]] constexpr Abi abi_for(Format f, Arch a, Endian e = Endian::Unknown) noexcept {
@@ -39,6 +40,13 @@ enum class Abi : u8 {
         // 64-bit longs and stack-passes parameters tightly; we don't
         // distinguish those at this level).
         return Abi::Aapcs64;
+    }
+    if (a == Arch::Arm) {
+        // AAPCS (arm-eabi): r0-r3 carry the first four integer/pointer args,
+        // r0 (r0:r1 for 64-bit) the return. Applies to ELF and PE (Windows
+        // on ARM) alike; the base-standard (soft-float-abi register use) is
+        // what we model - VFP argument passing is not distinguished here.
+        return Abi::AapcsArm32;
     }
     if ((f == Format::Elf || f == Format::Dol) && a == Arch::Ppc32) {
         return Abi::Ppc32Sysv;
@@ -60,6 +68,20 @@ enum class Abi : u8 {
 //   Win64: rax, rcx, rdx, r8-r11             (rsi, rdi are callee-saved)
 //   PPC32/PPC64: r0, r3-r12, lr, ctr         (r2/TOC intentionally preserved)
 [[nodiscard]] std::span<const Reg> caller_saved_int_regs(Abi a) noexcept;
+
+// Floating-point / vector argument registers in order.
+//   SysV / Win64: xmm0..xmm7
+//   AAPCS64:      v0..v7
+//   PPC:          not modelled (empty)
+[[nodiscard]] std::span<const Reg> fp_arg_regs(Abi a) noexcept;
+
+// True when argument registers are assigned by a single positional slot
+// shared across the integer and FP register files: the Nth argument uses
+// the Nth int reg if integer, else the Nth FP reg, and an int argument
+// still consumes (skips) the matching FP slot and vice versa. This is the
+// Win64 model. SysV / AAPCS64 instead draw int and FP args from two
+// independent sequences, so they return false.
+[[nodiscard]] bool abi_positional_arg_slots(Abi a) noexcept;
 
 [[nodiscard]] Reg int_return_reg(Abi a) noexcept;
 [[nodiscard]] Reg fp_return_reg(Abi a) noexcept;

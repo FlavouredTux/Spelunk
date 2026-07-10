@@ -77,6 +77,13 @@ struct Args {
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
     std::string raw_bytes_path;     // --raw-bytes PATH: load PATH as a single rwx region (no PE container)
     std::string raw_base_va;        // --base-va 0xVA: base virtual address for --raw-bytes
+    bool recover_imports = false;   // --recover-imports: rebuild the IAT (slot VA -> dll!func) for a
+                                    // capture with no import directory, by base-solving harvested
+                                    // module pointers against reference DLL export tables.
+    std::string recover_dll_dir;    // --dll-dir DIR: folder of reference DLLs (*.dll) to name against
+    std::vector<std::string> recover_dll_paths; // --dll PATH (repeatable): explicit reference DLL files
+    std::string recover_image_base; // --image-base 0xVA: own-image base for slot-RVA keys in --recover-imports
+                                    // output (defaults to PE image base / lowest mapped region)
     std::string module_filter;      // --module NAME: scope fn iteration to one loaded module
                                     // (minidumps, multi-module containers). Matched against
                                     // module Symbol basenames case-insensitively. Affects

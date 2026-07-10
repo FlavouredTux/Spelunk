@@ -390,6 +390,7 @@ int main(int argc, char** argv) {
     if (!args.object_roles.empty()) return run_object_roles(args, b);
     if (!args.explain_address.empty()) return run_explain_address(args, b);
     if (!args.explain_vcall.empty()) return run_explain_vcall(args, b);
+    if (args.recover_imports)    return run_recover_imports(args, b);
     if (!args.vtable_at.empty()) return run_vtables(args, b);
     if (!args.dump_object.empty()) return run_dump_object(args, b);
     if (!args.containing_fn.empty())  return run_containing_fn(args, b);

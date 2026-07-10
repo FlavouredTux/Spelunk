@@ -104,6 +104,42 @@ recover_ssa_merge_locals(const IrFunction& fn,
 
     std::set<std::string> used;
     for (const auto& [_, keys] : groups) {
+        std::set<SsaKey> group_keys(keys.begin(), keys.end());
+        bool saw_initializer_only_operand = false;
+        bool all_operands_same_initializer = true;
+        std::optional<IrValue> common_initializer;
+        for (const auto& k : keys) {
+            const auto phi_it = phi_defs.find(k);
+            const auto* phi = phi_it != phi_defs.end() ? phi_it->second : nullptr;
+            if (!phi) continue;
+            for (const auto& op : phi->phi_operands) {
+                if (auto ok = ssa_key(op); ok) {
+                    if (group_keys.contains(*ok)) continue;
+                    if (phi_defs.contains(*ok)) {
+                        all_operands_same_initializer = false;
+                        break;
+                    }
+                }
+                auto candidate = callbacks.initializer_candidate(op);
+                if (!candidate) {
+                    all_operands_same_initializer = false;
+                    break;
+                }
+                saw_initializer_only_operand = true;
+                if (!common_initializer) {
+                    common_initializer = *candidate;
+                } else if (!same_literal_or_livein_value(*common_initializer,
+                                                        *candidate)) {
+                    all_operands_same_initializer = false;
+                    break;
+                }
+            }
+            if (!all_operands_same_initializer) break;
+        }
+        if (saw_initializer_only_operand && all_operands_same_initializer) {
+            continue;
+        }
+
         const IrInst* best = nullptr;
         for (const auto& k : keys) {
             auto it = phi_defs.find(k);

@@ -46,6 +46,16 @@ public:
         }
         text_[0x48] = static_cast<std::byte>(0xc3u);
 
+        // A CET-enabled function:
+        //   endbr64; push rbp; mov rbp, rsp; ret
+        // Discovery must keep the start at ENDBR, not split at 0x401064.
+        const std::array<unsigned char, 9> cet_framed{
+            0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0xc3,
+        };
+        for (std::size_t i = 0; i < cet_framed.size(); ++i) {
+            text_[0x60 + i] = static_cast<std::byte>(cet_framed[i]);
+        }
+
         section_.name = ".text";
         section_.vaddr = kBase;
         section_.size = text_.size();
@@ -194,6 +204,10 @@ void test_stack_alloc_after_frame_setup_not_split() {
           "stack allocation after frame setup is not a new function");
     check(std::ranges::find(hits, 0x401040) != hits.end(),
           "frameless sub-rsp function is still discovered");
+    check(std::ranges::find(hits, 0x401060) != hits.end(),
+          "x64 endbr64-prefixed function start discovered at entry hint");
+    check(std::ranges::find(hits, 0x401064) == hits.end(),
+          "x64 endbr64-prefixed function is not split after entry hint");
 }
 
 void test_arm64_prologue_discovery() {

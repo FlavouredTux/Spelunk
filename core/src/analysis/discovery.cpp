@@ -49,7 +49,22 @@ namespace {
 // dozens more rare prologue shapes, but adding them costs more in
 // false positives (any random byte sequence has a fixed chance of
 // matching) than it gains in real coverage.
-[[nodiscard]] bool looks_like_prologue(std::span<const std::byte> bytes) noexcept {
+[[nodiscard]] bool is_x86_endbr(std::span<const std::byte> bytes) noexcept {
+    if (bytes.size() < 4) return false;
+    return static_cast<std::uint8_t>(bytes[0]) == 0xF3 &&
+           static_cast<std::uint8_t>(bytes[1]) == 0x0F &&
+           static_cast<std::uint8_t>(bytes[2]) == 0x1E &&
+           (static_cast<std::uint8_t>(bytes[3]) == 0xFA ||
+            static_cast<std::uint8_t>(bytes[3]) == 0xFB);
+}
+
+[[nodiscard]] bool has_x86_endbr_immediately_before(std::span<const std::byte> bytes,
+                                                    std::size_t off) noexcept {
+    if (off < 4) return false;
+    return is_x86_endbr(bytes.subspan(off - 4, 4));
+}
+
+[[nodiscard]] bool looks_like_plain_x64_prologue(std::span<const std::byte> bytes) noexcept {
     if (bytes.size() < 3) return false;
     const auto b0 = static_cast<std::uint8_t>(bytes[0]);
     const auto b1 = static_cast<std::uint8_t>(bytes[1]);
@@ -89,6 +104,13 @@ namespace {
     if (b0 == 0x48 && b1 == 0x8B && b2 == 0xC4) return true;
 
     return false;
+}
+
+[[nodiscard]] bool looks_like_prologue(std::span<const std::byte> bytes) noexcept {
+    if (is_x86_endbr(bytes)) {
+        return looks_like_plain_x64_prologue(bytes.subspan(4));
+    }
+    return looks_like_plain_x64_prologue(bytes);
 }
 
 [[nodiscard]] bool looks_like_ppc_prologue(std::span<const std::byte> bytes,
@@ -259,6 +281,10 @@ sweep_section_chunk(std::span<const std::byte> data, addr_t base,
         // `push rbp; mov rbp, rsp` frame setup. Do not split the function
         // at that third instruction.
         if (is_stack_alloc_after_frame_setup(data, off)) continue;
+        // CET-enabled x86-64 functions often begin with ENDBR64 before the
+        // real frame setup. Keep the function anchored at ENDBR, not at the
+        // first stack/prologue instruction four bytes later.
+        if (has_x86_endbr_immediately_before(data, off)) continue;
         if (!validates_as_function_start(dec, cand, base + off)) continue;
         hits.push_back(base + off);
     }

@@ -81,11 +81,16 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::V8,  Reg::V9,  Reg::V10, Reg::V11, Reg::V12, Reg::V13, Reg::V14, Reg::V15,
     Reg::V16, Reg::V17, Reg::V18, Reg::V19, Reg::V20, Reg::V21, Reg::V22, Reg::V23,
     Reg::V24, Reg::V25, Reg::V26, Reg::V27, Reg::V28, Reg::V29, Reg::V30, Reg::V31,
+    // ARM A32 GPRs: self-canonical (no sub-register views).
+    Reg::ArmR0,  Reg::ArmR1,  Reg::ArmR2,  Reg::ArmR3,
+    Reg::ArmR4,  Reg::ArmR5,  Reg::ArmR6,  Reg::ArmR7,
+    Reg::ArmR8,  Reg::ArmR9,  Reg::ArmR10, Reg::ArmR11, Reg::ArmR12,
+    Reg::Asp, Reg::Alr, Reg::Apc,
 };
 
 // Canonical form of the last entry must still map to itself; this catches
 // out-of-order sentinel moves where the table drifts off the end.
-static_assert(kCanonical.back() == Reg::V31,
+static_assert(kCanonical.back() == Reg::Apc,
               "kCanonical must be updated to match Reg enum");
 
 struct VarKey {

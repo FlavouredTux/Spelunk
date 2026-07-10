@@ -1,0 +1,4 @@
+// <entry>
+uint32_t _start(uint64_t a1) {
+  return a1 + 0x2a << 1;
+}

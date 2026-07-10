@@ -1,0 +1,6 @@
+// movd_extract_high_word
+uint32_t movd_extract_high_word(uint32_t a1) {
+  __m128i t1 = _mm_cvtsi32_si128(a1);
+  uint32_t t2 = _mm_extract_epi16(t1, 3);
+  return t2;
+}

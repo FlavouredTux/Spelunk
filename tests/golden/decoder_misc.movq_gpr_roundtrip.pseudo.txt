@@ -1,0 +1,6 @@
+// movq_gpr_roundtrip
+uint64_t movq_gpr_roundtrip(uint64_t a1) {
+  __m128i t0 = _mm_cvtsi64_si128(a1);
+  uint64_t t1 = _mm_cvtsi128_si64(t0);
+  return t1 + 9;
+}

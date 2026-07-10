@@ -1,0 +1,5 @@
+; disassembly of movq_gpr_roundtrip at 0x0000000000401300 (15 bytes)
+0x0000000000401300  66 48 0f 6e c7                  movq xmm0, rdi
+0x0000000000401305  66 48 0f 7e c0                  movq rax, xmm0
+0x000000000040130a  48 83 c0 09                     add rax, 0x9
+0x000000000040130e  c3                              ret

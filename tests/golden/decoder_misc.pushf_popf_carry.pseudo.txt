@@ -1,0 +1,6 @@
+// pushf_popf_carry
+uint32_t pushf_popf_carry(uint32_t a1) {
+  bool t4 = parity();
+  uint64_t t16 = 3 | (uint64_t)t4 << 2 | (uint64_t)zf << 6 | (uint64_t)sf << 7 | (uint64_t)of << 0xb;
+  return a1 + (uint32_t)((t16 & 1) != 0);
+}

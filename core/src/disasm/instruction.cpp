@@ -17,6 +17,8 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Xchg:     return "xchg";
         case Mnemonic::Push:     return "push";
         case Mnemonic::Pop:      return "pop";
+        case Mnemonic::Pushf:    return "pushf";
+        case Mnemonic::Popf:     return "popf";
         case Mnemonic::Addi:     return "addi";
         case Mnemonic::Addis:    return "addis";
         case Mnemonic::Ld:       return "ld";
@@ -196,6 +198,15 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Int3:     return "int3";
         case Mnemonic::Syscall:  return "syscall";
         case Mnemonic::Ud2:      return "ud2";
+        case Mnemonic::Lahf:     return "lahf";
+        case Mnemonic::Sahf:     return "sahf";
+        case Mnemonic::Cmc:      return "cmc";
+        case Mnemonic::Clc:      return "clc";
+        case Mnemonic::Stc:      return "stc";
+        case Mnemonic::Cli:      return "cli";
+        case Mnemonic::Sti:      return "sti";
+        case Mnemonic::Cld:      return "cld";
+        case Mnemonic::StdDir:   return "std";
         case Mnemonic::Isync:    return "isync";
         case Mnemonic::Sync:     return "sync";
         case Mnemonic::Rfi:      return "rfi";
@@ -279,12 +290,14 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Xadd:     return "xadd";
 
         case Mnemonic::Movd:         return "movd";
+        case Mnemonic::MovqGpr:      return "movq";
         case Mnemonic::Movdqa:       return "movdqa";
         case Mnemonic::MovdqaStore:  return "movdqa";
         case Mnemonic::Movdqu:       return "movdqu";
         case Mnemonic::MovdquStore:  return "movdqu";
         case Mnemonic::MovqXmm:      return "movq";
         case Mnemonic::MovdStore:    return "movd";
+        case Mnemonic::MovqGprStore: return "movq";
         case Mnemonic::Pxor:         return "pxor";
         case Mnemonic::Pand:         return "pand";
         case Mnemonic::Pandn:        return "pandn";
@@ -528,8 +541,89 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::A64Wfe:    return "wfe";
         case Mnemonic::A64Wfi:    return "wfi";
         case Mnemonic::A64Yield:  return "yield";
+
+        case Mnemonic::A32And:   return "and";
+        case Mnemonic::A32Eor:   return "eor";
+        case Mnemonic::A32Sub:   return "sub";
+        case Mnemonic::A32Rsb:   return "rsb";
+        case Mnemonic::A32Add:   return "add";
+        case Mnemonic::A32Adc:   return "adc";
+        case Mnemonic::A32Sbc:   return "sbc";
+        case Mnemonic::A32Rsc:   return "rsc";
+        case Mnemonic::A32Tst:   return "tst";
+        case Mnemonic::A32Teq:   return "teq";
+        case Mnemonic::A32Cmp:   return "cmp";
+        case Mnemonic::A32Cmn:   return "cmn";
+        case Mnemonic::A32Orr:   return "orr";
+        case Mnemonic::A32Mov:   return "mov";
+        case Mnemonic::A32Bic:   return "bic";
+        case Mnemonic::A32Mvn:   return "mvn";
+        case Mnemonic::A32Lsl:   return "lsl";
+        case Mnemonic::A32Lsr:   return "lsr";
+        case Mnemonic::A32Asr:   return "asr";
+        case Mnemonic::A32Ror:   return "ror";
+        case Mnemonic::A32Rrx:   return "rrx";
+        case Mnemonic::A32Movw:  return "movw";
+        case Mnemonic::A32Movt:  return "movt";
+        case Mnemonic::A32Mul:   return "mul";
+        case Mnemonic::A32Mla:   return "mla";
+        case Mnemonic::A32Mls:   return "mls";
+        case Mnemonic::A32Umull: return "umull";
+        case Mnemonic::A32Umlal: return "umlal";
+        case Mnemonic::A32Smull: return "smull";
+        case Mnemonic::A32Smlal: return "smlal";
+        case Mnemonic::A32Udiv:  return "udiv";
+        case Mnemonic::A32Sdiv:  return "sdiv";
+        case Mnemonic::A32Clz:   return "clz";
+        case Mnemonic::A32Sxtb:  return "sxtb";
+        case Mnemonic::A32Sxth:  return "sxth";
+        case Mnemonic::A32Uxtb:  return "uxtb";
+        case Mnemonic::A32Uxth:  return "uxth";
+        case Mnemonic::A32Rev:   return "rev";
+        case Mnemonic::A32Rev16: return "rev16";
+        case Mnemonic::A32Ldr:   return "ldr";
+        case Mnemonic::A32Str:   return "str";
+        case Mnemonic::A32Ldrb:  return "ldrb";
+        case Mnemonic::A32Strb:  return "strb";
+        case Mnemonic::A32Ldrh:  return "ldrh";
+        case Mnemonic::A32Strh:  return "strh";
+        case Mnemonic::A32Ldrsb: return "ldrsb";
+        case Mnemonic::A32Ldrsh: return "ldrsh";
+        case Mnemonic::A32Ldrd:  return "ldrd";
+        case Mnemonic::A32Strd:  return "strd";
+        case Mnemonic::A32Ldm:   return "ldm";
+        case Mnemonic::A32LdmPc: return "ldm";
+        case Mnemonic::A32Stm:   return "stm";
+        case Mnemonic::A32Push:  return "push";
+        case Mnemonic::A32Pop:   return "pop";
+        case Mnemonic::A32B:     return "b";
+        case Mnemonic::A32Bl:    return "bl";
+        case Mnemonic::A32Bx:    return "bx";
+        case Mnemonic::A32Blx:   return "blx";
+        case Mnemonic::A32Bcc:   return "b";
+        case Mnemonic::A32Ret:   return "ret";
+        case Mnemonic::A32Svc:   return "svc";
+        case Mnemonic::A32Bkpt:  return "bkpt";
+        case Mnemonic::A32Nop:   return "nop";
+        case Mnemonic::A32Udf:   return "udf";
+        case Mnemonic::A32Undef: return ".word";
     }
     return "???";
+}
+
+// ARM condition-code suffix (bits 31:28). AL/NV render empty - callers gate
+// on that via kArmCondAL.
+[[nodiscard]] std::string_view arm_cond_suffix(u8 cond) noexcept {
+    switch (cond & 0xf) {
+        case 0x0: return "eq"; case 0x1: return "ne";
+        case 0x2: return "cs"; case 0x3: return "cc";
+        case 0x4: return "mi"; case 0x5: return "pl";
+        case 0x6: return "vs"; case 0x7: return "vc";
+        case 0x8: return "hi"; case 0x9: return "ls";
+        case 0xa: return "ge"; case 0xb: return "lt";
+        case 0xc: return "gt"; case 0xd: return "le";
+        default:  return "";   // AL / NV
+    }
 }
 
 namespace {
@@ -608,8 +702,28 @@ std::string format_operand(const Instruction& insn, const Operand& op) {
     switch (op.kind) {
         case Operand::Kind::None:
             return "";
-        case Operand::Kind::Register:
-            return std::string(reg_name(op.reg));
+        case Operand::Kind::Register: {
+            std::string r(reg_name(op.reg));
+            // ARM barrel shift on the register operand.
+            if (op.arm_shift_reg != Reg::None) {
+                static constexpr std::string_view kShift[4] =
+                    {"lsl", "lsr", "asr", "ror"};
+                r += std::format(", {} {}",
+                                 kShift[static_cast<u8>(op.arm_shift)],
+                                 reg_name(op.arm_shift_reg));
+            } else if (!(op.arm_shift == ArmShift::Lsl && op.arm_shift_amt == 0)) {
+                static constexpr std::string_view kShift[4] =
+                    {"lsl", "lsr", "asr", "ror"};
+                if (op.arm_shift == ArmShift::Ror && op.arm_shift_amt == 0) {
+                    r += ", rrx";
+                } else {
+                    r += std::format(", {} #{}",
+                                     kShift[static_cast<u8>(op.arm_shift)],
+                                     op.arm_shift_amt);
+                }
+            }
+            return r;
+        }
         case Operand::Kind::Memory:
             return format_mem(op.mem, insn.mnemonic == Mnemonic::Lea, end_addr);
         case Operand::Kind::Immediate:
@@ -626,6 +740,48 @@ std::string format_instruction(const Instruction& insn) {
     if (insn.prefixes.rep)   s += "rep ";
     if (insn.prefixes.repne) s += "repne ";
     s += mnemonic_name(insn.mnemonic);
+    // ARM: append the S (flag-setting) suffix and the condition-code suffix.
+    // Both are inert for other architectures (arm_setflags defaults false,
+    // arm_cond defaults to AL).
+    if (insn.arm_cond != kArmCondAL && insn.arm_cond != 0xF) {
+        s += arm_cond_suffix(insn.arm_cond);
+    }
+    if (insn.arm_setflags) s += 's';
+    // ARM block transfers carry (base, reglist-bitmask, flags); render the
+    // list as `{r4, r5, lr}` rather than the raw operands.
+    const bool is_block_xfer =
+        insn.mnemonic == Mnemonic::A32Push || insn.mnemonic == Mnemonic::A32Pop ||
+        insn.mnemonic == Mnemonic::A32Ldm  || insn.mnemonic == Mnemonic::A32LdmPc ||
+        insn.mnemonic == Mnemonic::A32Stm ||
+        // A returning LDM (`pop {.., pc}` / `ldm rN, {.., pc}`) decodes to
+        // A32Ret but still carries the (base, reglist, flags) operand shape.
+        (insn.mnemonic == Mnemonic::A32Ret && insn.num_operands >= 2 &&
+         insn.operands[1].kind == Operand::Kind::Immediate);
+    if (is_block_xfer) {
+            const bool has_base = insn.mnemonic == Mnemonic::A32Ldm ||
+                                  insn.mnemonic == Mnemonic::A32LdmPc ||
+                                  insn.mnemonic == Mnemonic::A32Stm;
+            const u32 list = insn.num_operands >= 2
+                ? static_cast<u32>(insn.operands[1].imm.value) : 0;
+            s += ' ';
+            if (has_base && insn.num_operands >= 1) {
+                s += reg_name(insn.operands[0].reg);
+                s += ", ";
+            }
+            s += '{';
+            bool first = true;
+            for (unsigned r = 0; r < 16; ++r) {
+                if (!(list & (1u << r))) continue;
+                if (!first) s += ", ";
+                s += reg_name(r < 13 ? static_cast<Reg>(
+                                  static_cast<unsigned>(Reg::ArmR0) + r)
+                              : r == 13 ? Reg::Asp
+                              : r == 14 ? Reg::Alr : Reg::Apc);
+                first = false;
+            }
+            s += '}';
+            return s;
+    }
     if (insn.num_operands > 0) {
         s += ' ';
         for (std::size_t i = 0; i < insn.num_operands; ++i) {

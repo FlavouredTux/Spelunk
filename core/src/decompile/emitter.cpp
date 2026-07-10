@@ -714,38 +714,75 @@ struct Emitter {
         return std::nullopt;
     }
 
-    // Integer/pointer params consume the ABI's int-arg sequence in order;
-    // float/double params consume xmm0..xmm7 on both SysV and Win64.
-    // Given a declared signature and a canonical register, return the
-    // matching param's name (or null if nothing matches).
+    // Map a declared signature parameter to a canonical argument register.
+    // The register file an argument lands in depends on the ABI:
     //
-    // Win64 passes only 4 int args in regs (rcx, rdx, r8, r9); the 5th+
-    // sit on the stack - we can't name those from a register here, so
-    // they render as raw rsp-relative loads. That's a v1 limitation,
-    // consistent with how SysV 7th+ args already render.
+    //   SysV / AAPCS64: int and FP args draw from two independent sequences
+    //       (rdi,rsi,... and xmm0,xmm1,...), so each kind advances its own
+    //       counter and an int arg never consumes an FP slot.
+    //
+    //   Win64: argument slots are positional and shared - the Nth argument
+    //       occupies the Nth slot in whichever file matches its type, and
+    //       an int arg still skips the matching xmm slot (and vice versa).
+    //       So f(int, double, int) is rcx, xmm1, r8 - not rcx, xmm0, rdx.
+    //
+    // Win64 passes only 4 args in regs; the 5th+ sit on the stack and are
+    // named separately via incoming_stack_arg_name().
     [[nodiscard]] const std::string*
     abi_param_for(const FunctionSig& sig, Reg r) const noexcept {
-        static constexpr Reg kFpRegs[8] = {
-            Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3,
-            Reg::Xmm4, Reg::Xmm5, Reg::Xmm6, Reg::Xmm7,
-        };
-        const auto int_regs = int_arg_regs(abi);
+        const auto int_regs   = int_arg_regs(abi);
+        const auto fp_regs    = fp_arg_regs(abi);
+        const bool positional = abi_positional_arg_slots(abi);
         const Reg canon = canonical_reg(r);
         std::size_t int_idx = 0;
         std::size_t fp_idx  = 0;
+        std::size_t slot    = 0;
         for (const auto& p : sig.params) {
             const bool is_fp =
                 p.type.find("double") != std::string::npos ||
                 p.type.find("float")  != std::string::npos;
             if (is_fp) {
-                if (fp_idx < 8 && kFpRegs[fp_idx] == canon) return &p.name;
+                const std::size_t idx = positional ? slot : fp_idx;
+                if (idx < fp_regs.size() && fp_regs[idx] == canon) return &p.name;
                 ++fp_idx;
             } else {
-                if (int_idx < int_regs.size() && int_regs[int_idx] == canon) return &p.name;
+                const std::size_t idx = positional ? slot : int_idx;
+                if (idx < int_regs.size() && int_regs[idx] == canon) return &p.name;
                 ++int_idx;
             }
+            ++slot;
         }
         return nullptr;
+    }
+
+    // Resolve a stack offset to the name of an incoming stack-passed
+    // argument, if it is one. Only meaningful for positional-slot ABIs
+    // (Win64) where arguments past the register file spill to the caller's
+    // stack frame above the 32-byte register home area.
+    //
+    // stack_offset() is entry-RSP-relative (the return address sits at 0;
+    // the lifter already folds the prologue's RSP adjustment, which is why
+    // locals come out negative and caller slots positive). The home/stack
+    // slot for 0-based argument k therefore sits at 0x08 + k * 8:
+    //   k=0..3  -> register-arg home slots (named via the register path)
+    //   k>=4    -> genuine stack arguments (the 5th+ argument)
+    // Returns the annotated parameter name when the signature declares that
+    // slot, else a generic `aN`.
+    [[nodiscard]] std::optional<std::string>
+    incoming_stack_arg_name(i64 off) const {
+        if (!fn || !abi_positional_arg_slots(abi)) return std::nullopt;
+        if (off < 0x08 || (off - 0x08) % 8 != 0) return std::nullopt;
+        const std::size_t k = static_cast<std::size_t>((off - 0x08) / 8);
+        if (k < int_arg_regs(abi).size()) return std::nullopt;  // register-arg home
+
+        if (annotations) {
+            if (const FunctionSig* sig = annotations->signature_for(fn->start); sig) {
+                if (k < sig->params.size() && !sig->params[k].name.empty()) {
+                    return sig->params[k].name;
+                }
+            }
+        }
+        return std::format("a{}", k + 1);
     }
 
     // If `r` is an int-arg register for the current ABI and the current
@@ -782,6 +819,74 @@ struct Emitter {
     //          stashed a computed pointer into a callee-saved reg at prologue)
     //        - version 0 + arg-reg    → parameter name
     //   3. Raw register mnemonic.
+    [[nodiscard]] std::optional<IrValue>
+    preserved_call_arg_for_clobber(Reg r, u32 version) const {
+        if (!binary || !fn || version == 0) return std::nullopt;
+        const Reg canon = canonical_reg(r);
+        if (canon == int_return_reg(abi)) return std::nullopt;
+
+        const auto args_regs = int_arg_regs(abi);
+        std::optional<std::size_t> slot;
+        for (std::size_t i = 0; i < args_regs.size(); ++i) {
+            if (args_regs[i] == canon) {
+                slot = i;
+                break;
+            }
+        }
+        if (!slot) return std::nullopt;
+
+        IrValue v = IrValue::make_reg(canon, IrType::I64);
+        v.version = version;
+        auto key = ssa_key(v);
+        if (!key) return std::nullopt;
+        const IrInst* def = def_of(v);
+        if (!def || def->op != IrOp::Clobber) return std::nullopt;
+        auto pos_it = def_pos.find(*key);
+        if (pos_it == def_pos.end()) return std::nullopt;
+        const auto [bi, clobber_ii] = pos_it->second;
+        if (bi >= fn->blocks.size()) return std::nullopt;
+        const auto& bb = fn->blocks[bi];
+
+        std::optional<std::size_t> call_ii;
+        for (std::size_t ii = clobber_ii; ii > 0; ) {
+            --ii;
+            const IrInst& prev = bb.insts[ii];
+            if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
+            if (prev.op == IrOp::Call) {
+                if (binary->import_at_plt(prev.target1)) return std::nullopt;
+                call_ii = ii;
+            }
+            break;
+        }
+        if (!call_ii) return std::nullopt;
+
+        std::vector<IrValue> args;
+        args.reserve(kMaxAbiIntArgs);
+        for (std::size_t ii = 0; ii < *call_ii; ++ii) {
+            const IrInst& inst = bb.insts[ii];
+            if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
+                args.clear();
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    args.push_back(inst.srcs[i]);
+                }
+                continue;
+            }
+            if (inst.op == IrOp::Intrinsic &&
+                (inst.name == "call.args.2" || inst.name == "call.args.3")) {
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    args.push_back(inst.srcs[i]);
+                }
+                continue;
+            }
+            if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
+                args.clear();
+            }
+        }
+        if (*slot >= args.size()) return std::nullopt;
+        if (is_stale_arg_reg(args[*slot])) return std::nullopt;
+        return args[*slot];
+    }
+
     [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version, int depth = 0) const {
         Reg cur_reg = r;
         u32 cur_ver = version;
@@ -792,6 +897,9 @@ struct Emitter {
             }
             if (auto it = call_return_names.find(k); it != call_return_names.end()) {
                 return it->second;
+            }
+            if (auto arg = preserved_call_arg_for_clobber(cur_reg, cur_ver); arg) {
+                return expr(*arg, 0);
             }
             if (cur_ver == 0) {
                 if (auto n = arg_name_for_live_in(cur_reg)) return *n;
@@ -1879,7 +1987,12 @@ struct Emitter {
     [[nodiscard]] std::optional<IrValue>
     merge_initializer_candidate(const IrValue& op) const {
         if (op.kind == IrValueKind::Imm) return op;
-        if (trace_to_self_arg_slot(op)) return op;
+        if (auto slot = trace_to_self_arg_slot(op); slot) {
+            const auto args = int_arg_regs(abi);
+            if (*slot < args.size()) {
+                return IrValue::make_reg(args[*slot], IrType::I64);
+            }
+        }
         return std::nullopt;
     }
 
@@ -1904,6 +2017,15 @@ struct Emitter {
         u8 need = self_arity;
         for (const auto& [_, local] : merge_locals) {
             if (!local.initializer) continue;
+            bool has_visible_use = false;
+            for (const auto& k : local.keys) {
+                auto it = visible_uses.find(k);
+                if (it != visible_uses.end() && it->second > 0) {
+                    has_visible_use = true;
+                    break;
+                }
+            }
+            if (!has_visible_use) continue;
             if (auto slot = trace_to_self_arg_slot(*local.initializer); slot) {
                 if (*slot < int_args.size() && *slot + 1 > need) {
                     need = static_cast<u8>(*slot + 1);
@@ -3609,6 +3731,24 @@ struct Emitter {
         if (!k) return std::nullopt;
         auto it = merge_value_names.find(*k);
         if (it == merge_value_names.end()) return std::nullopt;
+        auto local_it = merge_locals.find(it->second);
+        if (local_it == merge_locals.end()) return std::nullopt;
+        bool has_non_return_reader = false;
+        for (const auto& local_key : local_it->second.keys) {
+            auto pos_it = visible_user_positions.find(local_key);
+            if (pos_it == visible_user_positions.end()) continue;
+            for (const auto& [bi, ii] : pos_it->second) {
+                if (!fn || bi >= fn->blocks.size()) continue;
+                const auto& bb = fn->blocks[bi];
+                if (ii >= bb.insts.size()) continue;
+                if (bb.insts[ii].op != IrOp::Return) {
+                    has_non_return_reader = true;
+                    break;
+                }
+            }
+            if (has_non_return_reader) break;
+        }
+        if (!has_non_return_reader) return std::nullopt;
         return it->second;
     }
 
@@ -3662,7 +3802,7 @@ struct Emitter {
             rhs = expr(inst.srcs[0]);
         } else if (inst.op == IrOp::Load) {
             if (inst.src_count < 1) return "";
-            rhs = format_mem(inst.srcs[0], inst.dst.type, inst.segment);
+            rhs = format_load_rhs(inst);
         } else if (inst.op == IrOp::Intrinsic) {
             std::string args;
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
@@ -3724,7 +3864,7 @@ struct Emitter {
             rhs = std::format("{}({})", d->name, args);
         } else if (d->op == IrOp::Load) {
             if (d->src_count < 1) return;
-            rhs = format_mem(d->srcs[0], d->dst.type, d->segment);
+            rhs = format_load_rhs(*d);
         } else if (d->op == IrOp::Assign) {
             if (d->src_count < 1) return;
             rhs = expr(d->srcs[0]);
@@ -3774,7 +3914,7 @@ struct Emitter {
             rhs = std::format("{}({})", d->name, args);
         } else if (d->op == IrOp::Load) {
             if (d->src_count < 1) return;
-            rhs = format_mem(d->srcs[0], d->dst.type, d->segment);
+            rhs = format_load_rhs(*d);
         } else if (d->op == IrOp::Assign) {
             if (d->src_count < 1) return;
             rhs = expr(d->srcs[0]);
@@ -4003,6 +4143,9 @@ struct Emitter {
                                    int min_prec = 0) const;
     [[nodiscard]] std::string expand(const IrInst& d, int depth,
                                      int min_prec = 0) const;
+    [[nodiscard]] std::string format_load_rhs(const IrInst& d,
+                                              int depth = 0,
+                                              int min_prec = 0) const;
 
     // Try to resolve an address IrValue to a concrete immediate address,
     // drilling through single-assign copies. Returns nullopt for any
@@ -4646,13 +4789,17 @@ struct Emitter {
                                           int depth = 0) const {
         if (seg == Reg::None) {
             if (auto off = stack_offset(addr); off) {
-                // Prefer the merged frame-layout name when one's been
-                // resolved (PDB-derived); fall back to the synthetic
-                // `local_<hex>` / `arg_<hex>` form otherwise.
-                if (auto it = frame_layout.slots.find(*off);
-                    it != frame_layout.slots.end() && !it->second.name.empty()) {
-                    return it->second.name;
-                }
+                // A real (PDB / user-supplied) frame-layout name wins over
+                // everything. A recovered incoming stack-argument name beats
+                // the synthetic `arg_<hex>` slot name. Otherwise fall back to
+                // the synthetic `local_<hex>` / `arg_<hex>` form.
+                auto it = frame_layout.slots.find(*off);
+                const bool has_name =
+                    it != frame_layout.slots.end() && !it->second.name.empty();
+                const bool synthetic = has_name && it->second.name == stack_name(*off);
+                if (has_name && !synthetic) return it->second.name;
+                if (auto arg = incoming_stack_arg_name(*off)) return *arg;
+                if (has_name) return it->second.name;
                 return stack_name(*off);
             }
             // Selref / classref loads: renders `*(u64*)(addr)` as its
@@ -5604,6 +5751,25 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
     return "";
 }
 
+std::string Emitter::format_load_rhs(const IrInst& d,
+                                     int depth,
+                                     int min_prec) const {
+    if (d.op != IrOp::Load || d.src_count < 1) return "";
+    // Init-only stack slot: forward to the live-in value the entry prologue
+    // stored. Keeping this in one helper prevents merge-local materializers
+    // from rendering the same load as a raw `local_X` while normal expr()
+    // rendering correctly says `a2`.
+    if (d.segment == Reg::None) {
+        if (auto off = stack_offset(d.srcs[0]); off) {
+            if (auto it = init_only_slot_value.find(*off);
+                it != init_only_slot_value.end()) {
+                return expr(it->second, depth, min_prec);
+            }
+        }
+    }
+    return format_mem(d.srcs[0], d.dst.type, d.segment, depth);
+}
+
 std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
     switch (d.op) {
         case IrOp::Assign:
@@ -5711,6 +5877,24 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                 if (auto k = ssa_key(src); k && inline_call_expr.contains(*k)) {
                     return expr(src, depth, min_prec);
                 }
+                if (d.dst.type == IrType::I8) {
+                    if (auto b = match_low_byte_setcc_merge(src); b) {
+                        std::string pred;
+                        if (auto s = try_simplify_flag(*b, depth + 1,
+                                                       /*negate=*/false,
+                                                       /*in_bool_ctx=*/false,
+                                                       std::to_underlying(Prec::Unary));
+                            s) {
+                            pred = *s;
+                        } else {
+                            pred = expr(*b, depth + 1, std::to_underlying(Prec::Unary));
+                        }
+                        return wrap_if_lt(std::format("({})({})",
+                                                      c_type_name(IrType::I8),
+                                                      pred),
+                                          Prec::Unary, min_prec);
+                    }
+                }
             }
             // `zext(trunc(x, T))` → `(T)x`. The trunc already produces the
             // observable value; widening back to a bigger type is redundant
@@ -5734,18 +5918,7 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         }
 
         case IrOp::Load: {
-            // Init-only stack slot: forward to the live-in value the entry
-            // prologue stored. Lets `local_28 = a2; ... use local_28 ...`
-            // collapse to the user-level `... use a2 ...` directly.
-            if (d.segment == Reg::None && d.src_count >= 1) {
-                if (auto off = stack_offset(d.srcs[0]); off) {
-                    if (auto it = init_only_slot_value.find(*off);
-                        it != init_only_slot_value.end()) {
-                        return expr(it->second, depth, min_prec);
-                    }
-                }
-            }
-            return format_mem(d.srcs[0], d.dst.type, d.segment, depth);
+            return format_load_rhs(d, depth, min_prec);
         }
 
         case IrOp::AddCarry:
@@ -5943,7 +6116,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             return std::format("{} t{} = {};",
                                c_type_name_for(inst.dst),
                                inst.dst.temp,
-                               format_mem(inst.srcs[0], inst.dst.type, inst.segment));
+                               format_load_rhs(inst));
         }
 
         case IrOp::Intrinsic: {
@@ -6414,12 +6587,14 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                 // local definition over one that doesn't.
                 std::size_t pick = 0;
                 if (term->src_count >= 2) {
-                    auto has_local_def = [&](const IrValue& v) {
+                    auto has_value_def = [&](const IrValue& v) {
                         auto k = ssa_key(v);
-                        return k && defs.find(*k) != defs.end();
+                        if (!k) return false;
+                        auto it = defs.find(*k);
+                        return it != defs.end() && it->second->op != IrOp::Clobber;
                     };
-                    if (!has_local_def(term->srcs[0]) &&
-                        has_local_def(term->srcs[1])) {
+                    if (!has_value_def(term->srcs[0]) &&
+                        has_value_def(term->srcs[1])) {
                         pick = 1;
                     }
                 }
@@ -6613,24 +6788,45 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
         }
         if (!s.body) return "void";
-        std::vector<IrValue> candidates;
+        struct ReturnTypeCandidate {
+            IrValue value;
+            bool    widened_from_narrow = false;
+        };
+
+        auto return_type_value = [&](IrValue v) {
+            ReturnTypeCandidate candidate{v};
+            for (int depth = 0; depth < 8; ++depth) {
+                const IrInst* d = e.def_of(v);
+                if (!d || d->src_count < 1) break;
+                if (d->op == IrOp::Assign) {
+                    v = d->srcs[0];
+                    candidate.value = v;
+                    continue;
+                }
+                if ((d->op == IrOp::ZExt || d->op == IrOp::SExt) &&
+                    type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
+                    v = d->srcs[0];
+                    candidate.value = v;
+                    candidate.widened_from_narrow = true;
+                }
+                break;
+            }
+            return candidate;
+        };
+
+        std::vector<ReturnTypeCandidate> candidates;
         std::function<void(const Region&)> walk = [&](const Region& r) {
             if (r.kind == RegionKind::Return &&
                 r.condition.kind != IrValueKind::None) {
                 if (e.is_void_call_result(r.condition)) return;
                 if (e.is_unbound_clobber_result(r.condition)) return;
                 if (e.renders_stack_chk_guard_value(r.condition)) return;
-                IrValue v = r.condition;
-                if (const IrInst* d = e.def_of(v); d && d->src_count >= 1
-                        && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
-                        && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
-                    // ABI return registers are often wider than the
-                    // source-level value. Prefer the narrowed producer for
-                    // return-type inference so `return zext(i32)` becomes a
-                    // `u32` function instead of a `u64` function with casts.
-                    v = d->srcs[0];
-                }
-                candidates.push_back(v);
+                // ABI return registers are often wider than the source-level
+                // value and usually appear behind an `Assign` to RAX. Prefer
+                // the narrowed producer for return-type inference so
+                // `return zext(i32)` becomes a `u32` function instead of a
+                // `u64` function with casts.
+                candidates.push_back(return_type_value(r.condition));
             }
             for (const auto& c : r.children) if (c) walk(*c);
         };
@@ -6647,15 +6843,26 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         const auto raw_name_for = [&](const IrValue& v) {
             return std::string(c_type_name(v.type));
         };
-        const IrValue* refined = nullptr;
-        for (const auto& v : candidates) {
-            if (e.c_type_name_for(v) != raw_name_for(v)) {
-                refined = &v;
+        const ReturnTypeCandidate* refined = nullptr;
+        for (const auto& c : candidates) {
+            if (e.c_type_name_for(c.value) != raw_name_for(c.value)) {
+                refined = &c;
                 break;
             }
         }
-        const IrValue& picked = refined ? *refined : candidates.front();
-        return e.c_type_name_for(picked);
+        const ReturnTypeCandidate* narrowed = nullptr;
+        if (!refined) {
+            for (const auto& c : candidates) {
+                if (c.widened_from_narrow) {
+                    narrowed = &c;
+                    break;
+                }
+            }
+        }
+        const ReturnTypeCandidate& picked =
+            refined ? *refined : (narrowed ? *narrowed : candidates.front());
+        const IrValue& picked_value = picked.value;
+        return e.c_type_name_for(picked_value);
     };
 
     // Pick a display name: user rename beats binary symbol beats the

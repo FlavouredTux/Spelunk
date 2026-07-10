@@ -1,0 +1,6 @@
+# Signature for the fp_pos fixture function. Declares a mixed int/fp
+# parameter list so the Win64 positional-slot mapping is exercised:
+# (int a, double b, int c) lands in (rcx, xmm1, r8), so `c` must resolve
+# to r8 - not rdx, which the old independent-counter mapping produced.
+rename 0x140001040 fp_pos
+sig 0x140001040 int|int|a|double|b|int|c

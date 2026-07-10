@@ -65,6 +65,10 @@ add_executable(ember_arm64_decoder_test arm64_decoder_test.cpp)
 target_link_libraries(ember_arm64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME arm64_decoder_unit COMMAND ember_arm64_decoder_test)
 
+add_executable(ember_arm32_decoder_test arm32_decoder_test.cpp)
+target_link_libraries(ember_arm32_decoder_test PRIVATE ember::core ember::flags)
+add_test(NAME arm32_decoder_unit COMMAND ember_arm32_decoder_test)
+
 add_executable(ember_x64_decoder_test x64_decoder_test.cpp)
 target_link_libraries(ember_x64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME x64_decoder_unit COMMAND ember_x64_decoder_test)
@@ -103,6 +107,10 @@ add_test(NAME resolve_function_unit COMMAND ember_resolve_function_test)
 add_executable(ember_raw_regions_test raw_regions_test.cpp)
 target_link_libraries(ember_raw_regions_test PRIVATE ember::core ember::flags)
 add_test(NAME raw_regions_unit COMMAND ember_raw_regions_test)
+
+add_executable(ember_recover_imports_test recover_imports_test.cpp)
+target_link_libraries(ember_recover_imports_test PRIVATE ember::core ember::flags)
+add_test(NAME recover_imports_unit COMMAND ember_recover_imports_test)
 
 add_executable(ember_discovery_test discovery_test.cpp)
 target_link_libraries(ember_discovery_test PRIVATE ember::core ember::flags)
@@ -579,6 +587,20 @@ ember_golden_test(
     GOLDEN  return_value.big.pseudo.txt
 )
 
+ember_golden_test(
+    NAME    return_value_branch32_pseudo
+    FIXTURE return_value
+    ARGS    "-p|-s|branch32"
+    GOLDEN  return_value.branch32.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    return_value_main_pseudo
+    FIXTURE return_value
+    ARGS    "-p|-s|main"
+    GOLDEN  return_value.main.pseudo.txt
+)
+
 # Signature + body-substitution: with the hand-written annotations file
 # below, `big` renders as `add_mix(a, b, c)` and rdi/rsi/rdx inside the
 # body become a/b/c. Locks in that --annotations flows all the way through
@@ -839,9 +861,11 @@ ember_golden_test(
 
 # ---- decoder_misc (coverage of formerly-unhandled opcodes) -----------------
 #
-# Every function here hits a decoder path that previously produced
-# `not_implemented`: setcc, cmovcc, bswap, rep movsq. If any of these
-# regresses, the function stops decompiling (or the golden diverges).
+# Every function here hits a decoder/lifter path that previously produced
+# `not_implemented` or wrong IR: setcc, cmovcc, bswap, rep movsq, rotates,
+# carry-flag control/rotates, LAHF/SAHF flag snapshots, PUSHFQ/POPFQ flag
+# save-restore, and scalar/XMM transfers. If any regresses, the function stops
+# decompiling or the golden diverges.
 
 ember_golden_test(
     NAME    decoder_misc_setswap_pseudo
@@ -862,6 +886,90 @@ ember_golden_test(
     FIXTURE decoder_misc
     ARGS    "-p|-s|sse_memclr"
     GOLDEN  decoder_misc.sse_memclr.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_rotate_mix_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|rotate_mix"
+    GOLDEN  decoder_misc.rotate_mix.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_carry_seed_add_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|carry_seed_add"
+    GOLDEN  decoder_misc.carry_seed_add.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_carry_rotate_one_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|carry_rotate_one"
+    GOLDEN  decoder_misc.carry_rotate_one.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_carry_rotate_mix_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|carry_rotate_mix"
+    GOLDEN  decoder_misc.carry_rotate_mix.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_lahf_snapshot_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|lahf_snapshot"
+    GOLDEN  decoder_misc.lahf_snapshot.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_sahf_parity_select_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|sahf_parity_select"
+    GOLDEN  decoder_misc.sahf_parity_select.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_pushf_popf_carry_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|pushf_popf_carry"
+    GOLDEN  decoder_misc.pushf_popf_carry.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_movd_gpr_roundtrip_ssa
+    FIXTURE decoder_misc
+    ARGS    "-i|--ssa|-s|movd_gpr_roundtrip"
+    GOLDEN  decoder_misc.movd_gpr_roundtrip.ssa.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_movd_extract_high_word_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|movd_extract_high_word"
+    GOLDEN  decoder_misc.movd_extract_high_word.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_movq_gpr_roundtrip_disasm
+    FIXTURE decoder_misc
+    ARGS    "-d|-s|movq_gpr_roundtrip"
+    GOLDEN  decoder_misc.movq_gpr_roundtrip.disasm.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_movq_gpr_roundtrip_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|movq_gpr_roundtrip"
+    GOLDEN  decoder_misc.movq_gpr_roundtrip.pseudo.txt
+)
+
+ember_golden_test(
+    NAME    decoder_misc_vector_word_roundtrip_pseudo
+    FIXTURE decoder_misc
+    ARGS    "-p|-s|vector_word_roundtrip"
+    GOLDEN  decoder_misc.vector_word_roundtrip.pseudo.txt
 )
 
 # ---- tail_call (jmp-to-function as return) --------------------------------
@@ -2484,6 +2592,45 @@ if(Python3_Interpreter_FOUND)
         GOLDEN  arm64_tiny.pseudo.txt
     )
 
+    # ---- arm32_tiny (hand-built ELF ARM / ARMv7) --------------------------
+    #
+    # Locks the A32 decoder + lifter + structurer + emitter pipeline on Linux
+    # without an ARM cross compiler. The function is
+    # `add r0, r0, #42; lsl r0, r0, #1; bx lr` - exercising ALU immediate,
+    # the barrel-shifter MOV alias, the AAPCS return register (r0), and the
+    # bx-lr return shape.
+    set(_arm32_tiny "${_build_dir}/arm32_tiny")
+    add_custom_command(
+        OUTPUT "${_arm32_tiny}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_arm32_tiny.py"
+                "${_arm32_tiny}"
+        DEPENDS "${_fixture_dir}/make_arm32_tiny.py"
+        COMMENT "Generating ELF ARM fixture arm32_tiny"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_arm32_tiny ALL DEPENDS "${_arm32_tiny}")
+    set(EMBER_FIXTURE_arm32_tiny_PATH "${_arm32_tiny}")
+
+    ember_golden_test(
+        NAME    arm32_tiny_disasm
+        FIXTURE arm32_tiny
+        ARGS    "-d"
+        GOLDEN  arm32_tiny.disasm.txt
+    )
+    ember_golden_test(
+        NAME    arm32_tiny_ssa
+        FIXTURE arm32_tiny
+        ARGS    "-i|--ssa"
+        GOLDEN  arm32_tiny.ssa.txt
+    )
+    ember_golden_test(
+        NAME    arm32_tiny_pseudo
+        FIXTURE arm32_tiny
+        ARGS    "-p"
+        GOLDEN  arm32_tiny.pseudo.txt
+    )
+
     # ---- pe_tiny (hand-built PE32+: DOS + NT + COFF + optional header +
     #               .text/.rdata/.pdata, one IAT import, one export,
     #               Win64 prologue, RUNTIME_FUNCTION table) ------------------
@@ -2593,6 +2740,83 @@ if(Python3_Interpreter_FOUND)
         FIXTURE pe_rich
         ARGS    "-p|-s|sub_1800011c0"
         GOLDEN  pe_rich.switch_msvc.pseudo.txt
+    )
+
+    # ---- pe_stackargs (hand-built PE32+: two functions with real
+    #                    UNWIND_INFO records) ----------------------------
+    #
+    # Exercises Win64 argument passing in the emitter:
+    #   - incoming stack-argument naming: stack_sum reads its 5th/6th args
+    #     from the caller's stack; they must render as `a5`/`a6`, not raw
+    #     `arg_<hex>` stack loads.
+    #   - positional fp/int arg mapping: fp_pos(int, double, int) places its
+    #     args in (rcx, xmm1, r8) under Win64's shared positional slots, so
+    #     the 3rd param resolves to r8 - the independent-counter mapping
+    #     used to misplace it at rdx.
+    set(_pe_stackargs "${_build_dir}/pe_stackargs")
+    add_custom_command(
+        OUTPUT "${_pe_stackargs}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_pe_stackargs.py"
+                "${_pe_stackargs}"
+        DEPENDS "${_fixture_dir}/make_pe_stackargs.py"
+        COMMENT "Generating PE fixture pe_stackargs"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_pe_stackargs ALL DEPENDS "${_pe_stackargs}")
+    set(EMBER_FIXTURE_pe_stackargs_PATH "${_pe_stackargs}")
+
+    ember_golden_test(
+        NAME    pe_stackargs_stack_sum_pseudo
+        FIXTURE pe_stackargs
+        ARGS    "-p|-s|sub_140001000"
+        GOLDEN  pe_stackargs.stack_sum.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    pe_stackargs_fp_pos_pseudo
+        FIXTURE pe_stackargs
+        ARGS    "-p|--annotations|${_fixture_dir}/pe_stackargs.anns|-s|fp_pos"
+        GOLDEN  pe_stackargs.fp_pos.pseudo.txt
+    )
+
+    # ---- recover-imports (IAT reconstruction) ------------------------
+    #
+    # Two fixtures: a reference DLL (refdll.dll) carrying a small export
+    # table, and a raw-region capture (iat_dump.regions) whose .rdata
+    # holds bare IAT pointers at a load base different from the DLL's
+    # preferred base. The test base-solves the harvested pointers back to
+    # dll!func names and emits the slot-RVA → name JSON contract.
+    set(_pe_refdll "${_build_dir}/refdll.dll")
+    add_custom_command(
+        OUTPUT "${_pe_refdll}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_pe_refdll.py"
+                "${_pe_refdll}"
+        DEPENDS "${_fixture_dir}/make_pe_refdll.py"
+        COMMENT "Generating PE fixture refdll.dll"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_pe_refdll ALL DEPENDS "${_pe_refdll}")
+    set(EMBER_FIXTURE_pe_refdll_PATH "${_pe_refdll}")
+
+    set(_iat_dump "${_build_dir}/iat_dump.regions")
+    add_custom_command(
+        OUTPUT "${_iat_dump}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_iat_dump.py"
+                "${_iat_dump}"
+        DEPENDS "${_fixture_dir}/make_iat_dump.py"
+        COMMENT "Generating raw-region fixture iat_dump.regions"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_iat_dump ALL DEPENDS "${_iat_dump}")
+    set(EMBER_FIXTURE_iat_dump_PATH "${_iat_dump}")
+
+    ember_golden_test(
+        NAME    recover_imports_json
+        FIXTURE iat_dump
+        ARGS    "--regions|__BINARY__|--recover-imports|--json|--dll|${_pe_refdll}|--image-base|0x140000000"
+        GOLDEN  recover_imports.json.txt
     )
 
     set(_pe32_bad "${_build_dir}/pe32_bad")

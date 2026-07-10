@@ -4,6 +4,7 @@
 
 #include <ember/binary/binary.hpp>
 #include <ember/extension/lifter_registry.hpp>
+#include <ember/ir/arm32_lifter.hpp>
 #include <ember/ir/arm64_lifter.hpp>
 #include <ember/ir/ppc_lifter.hpp>
 #include <ember/ir/x64_lifter.hpp>
@@ -23,6 +24,9 @@ make_lifter(const Binary& b) {
         case Arch::Arm64:
             return std::unique_ptr<Lifter>(std::make_unique<Arm64Lifter>(
                 abi == Abi::Unknown ? Abi::Aapcs64 : abi));
+        case Arch::Arm:
+            return std::unique_ptr<Lifter>(std::make_unique<Arm32Lifter>(
+                abi == Abi::Unknown ? Abi::AapcsArm32 : abi));
         default:
             break;
     }

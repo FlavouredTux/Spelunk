@@ -70,6 +70,16 @@ enum class Reg : u16 {
     V16, V17, V18, V19, V20, V21, V22, V23,
     V24, V25, V26, V27, V28, V29, V30, V31,
 
+    // ARM (A32 / ARMv7) core registers. R0..R12 are general-purpose; R13
+    // is the stack pointer (Asp), R14 the link register (Alr), R15 the
+    // program counter (Apc). Reads of Apc in ARM state see the address of
+    // the current instruction + 8 (the classic pipeline offset), which the
+    // lifter models where it matters. 32-bit, self-canonical - unlike x86
+    // and AArch64 there are no sub-register views.
+    ArmR0,  ArmR1,  ArmR2,  ArmR3,  ArmR4,  ArmR5,  ArmR6,  ArmR7,
+    ArmR8,  ArmR9,  ArmR10, ArmR11, ArmR12,
+    Asp, Alr, Apc,
+
     // Sentinel. Always last. Size tables (kCanonical in ir/ssa.cpp,
     // reg_name in disasm/register.cpp) static_assert against this so adding
     // a register without updating them is a compile error.
@@ -99,6 +109,8 @@ enum class Reg : u16 {
         v <= static_cast<unsigned>(Reg::Wzr)) return 4;
     if (v >= static_cast<unsigned>(Reg::V0) &&
         v <= static_cast<unsigned>(Reg::V31)) return 16;
+    if (v >= static_cast<unsigned>(Reg::ArmR0) &&
+        v <= static_cast<unsigned>(Reg::Apc)) return 4;
     return 0;
 }
 
@@ -126,6 +138,12 @@ enum class Reg : u16 {
     const auto v = static_cast<unsigned>(r);
     return v >= static_cast<unsigned>(Reg::V0) &&
            v <= static_cast<unsigned>(Reg::V31);
+}
+
+[[nodiscard]] constexpr bool is_arm32_gpr(Reg r) noexcept {
+    const auto v = static_cast<unsigned>(r);
+    return v >= static_cast<unsigned>(Reg::ArmR0) &&
+           v <= static_cast<unsigned>(Reg::Apc);
 }
 
 [[nodiscard]] std::string_view reg_name(Reg r) noexcept;

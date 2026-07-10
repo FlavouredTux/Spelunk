@@ -1,0 +1,4 @@
+// main
+uint32_t main(uint64_t a1) {
+  return branch32(a1) + (uint32_t)(a1 + a1 * 8 + 7);
+}

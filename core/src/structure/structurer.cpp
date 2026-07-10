@@ -922,15 +922,36 @@ public:
             if (v.reg == Reg::Xmm0 && v.version == 0) return false;
             return true;
         };
+        auto has_value_def = [&](const IrValue& v) {
+            auto k = ssa_key(v);
+            if (!k) return false;
+            auto it = defs_.find(*k);
+            return it != defs_.end() && it->second->op != IrOp::Clobber;
+        };
         for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
             if (it->op != IrOp::Return || it->src_count == 0) continue;
             const IrValue* best = nullptr;
+            bool best_has_value_def = false;
             for (u8 k = 0; k < it->src_count && k < it->srcs.size(); ++k) {
                 const IrValue& s = it->srcs[k];
                 if (s.kind == IrValueKind::None) continue;
-                if (!best) { best = &s; continue; }
-                if (!is_live_in_reg(s)) { best = &s; break; }
-                if (is_live_in_reg(*best) && !is_meaningful_fp_carrier(*best) &&
+                const bool s_has_value_def = has_value_def(s);
+                if (!best) {
+                    best = &s;
+                    best_has_value_def = s_has_value_def;
+                    continue;
+                }
+                // Return operands are ABI-ordered (integer/pointer first,
+                // XMM second). Keep that order when both carry real local
+                // values; only switch to a later source when the current best
+                // is just live-in/clobber noise and the later one is defined.
+                if (!best_has_value_def && s_has_value_def) {
+                    best = &s;
+                    best_has_value_def = true;
+                    continue;
+                }
+                if (!best_has_value_def && is_live_in_reg(*best) &&
+                    !is_meaningful_fp_carrier(*best) &&
                     is_meaningful_fp_carrier(s)) {
                     best = &s;
                 }

@@ -3,6 +3,7 @@
 #include <format>
 
 #include <ember/binary/binary.hpp>
+#include <ember/disasm/arm32_decoder.hpp>
 #include <ember/disasm/arm64_decoder.hpp>
 #include <ember/disasm/ppc_decoder.hpp>
 #include <ember/disasm/x64_decoder.hpp>
@@ -20,6 +21,8 @@ make_decoder(const Binary& b) {
             return std::unique_ptr<Decoder>(std::make_unique<PpcDecoder>(b.endian()));
         case Arch::Arm64:
             return std::unique_ptr<Decoder>(std::make_unique<Arm64Decoder>());
+        case Arch::Arm:
+            return std::unique_ptr<Decoder>(std::make_unique<Arm32Decoder>());
         default:
             break;
     }

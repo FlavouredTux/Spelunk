@@ -1,0 +1,4 @@
+// fp_pos
+int fp_pos(int a, double b, int c) {
+  return (uint32_t)a + (uint32_t)c;
+}

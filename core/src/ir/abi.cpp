@@ -38,6 +38,32 @@ constexpr Reg kAapcs64ArgRegs[8] = {
     Reg::X0, Reg::X1, Reg::X2, Reg::X3,
     Reg::X4, Reg::X5, Reg::X6, Reg::X7,
 };
+
+// xmm0..xmm7 carry the first eight FP/vector args on both SysV and Win64.
+// Win64 only assigns the first four positionally, but keeping all eight
+// here lets the positional-slot logic key off the slot index uniformly.
+constexpr Reg kX86FpArgRegs[8] = {
+    Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3,
+    Reg::Xmm4, Reg::Xmm5, Reg::Xmm6, Reg::Xmm7,
+};
+constexpr Reg kWin64FpArgRegs[4] = {
+    Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3,
+};
+constexpr Reg kAapcs64FpArgRegs[8] = {
+    Reg::V0, Reg::V1, Reg::V2, Reg::V3,
+    Reg::V4, Reg::V5, Reg::V6, Reg::V7,
+};
+// AAPCS (arm-eabi): r0..r3 carry the first four integer/pointer args and
+// r0 (r0:r1 for 64-bit) the integer return. r0..r3 and r12 (IP) are
+// caller-saved along with r14 (LR); r4..r11 are callee-saved.
+constexpr Reg kArm32ArgRegs[4] = {
+    Reg::ArmR0, Reg::ArmR1, Reg::ArmR2, Reg::ArmR3,
+};
+constexpr Reg kArm32CallerSaved[6] = {
+    Reg::ArmR0, Reg::ArmR1, Reg::ArmR2, Reg::ArmR3,
+    Reg::ArmR12, Reg::Alr,
+};
+
 constexpr Reg kAapcs64CallerSaved[18] = {
     Reg::X0,  Reg::X1,  Reg::X2,  Reg::X3,
     Reg::X4,  Reg::X5,  Reg::X6,  Reg::X7,
@@ -55,6 +81,7 @@ std::span<const Reg> int_arg_regs(Abi a) noexcept {
         case Abi::Ppc64ElfV1Be: return kPpcArgRegs;
         case Abi::Win64:        return kWin64ArgRegs;
         case Abi::Aapcs64:      return kAapcs64ArgRegs;
+        case Abi::AapcsArm32:   return kArm32ArgRegs;
         case Abi::SysVAmd64:
         case Abi::Unknown:
         default:         return kSysvArgRegs;
@@ -68,10 +95,29 @@ std::span<const Reg> caller_saved_int_regs(Abi a) noexcept {
         case Abi::Ppc64ElfV1Be: return kPpcCallerSaved;
         case Abi::Win64:        return kWin64CallerSaved;
         case Abi::Aapcs64:      return kAapcs64CallerSaved;
+        case Abi::AapcsArm32:   return kArm32CallerSaved;
         case Abi::SysVAmd64:
         case Abi::Unknown:
         default:         return kSysvCallerSaved;
     }
+}
+
+std::span<const Reg> fp_arg_regs(Abi a) noexcept {
+    switch (a) {
+        case Abi::Aapcs64:      return kAapcs64FpArgRegs;
+        case Abi::AapcsArm32:   // VFP arg passing not modelled.
+        case Abi::Ppc32Sysv:
+        case Abi::Ppc64ElfV2Le:
+        case Abi::Ppc64ElfV1Be: return {};
+        case Abi::Win64:        return kWin64FpArgRegs;
+        case Abi::SysVAmd64:
+        case Abi::Unknown:
+        default:                return kX86FpArgRegs;
+    }
+}
+
+bool abi_positional_arg_slots(Abi a) noexcept {
+    return a == Abi::Win64;
 }
 
 Reg int_return_reg(Abi a) noexcept {
@@ -80,6 +126,7 @@ Reg int_return_reg(Abi a) noexcept {
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be: return Reg::PpcR3;
         case Abi::Aapcs64:      return Reg::X0;
+        case Abi::AapcsArm32:   return Reg::ArmR0;
         case Abi::Win64:
         case Abi::SysVAmd64:
         case Abi::Unknown:

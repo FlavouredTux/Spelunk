@@ -290,6 +290,10 @@ void help_load() {
     std::println("      --raw-bytes PATH  load PATH as a single rwx region at --base-va; no PE");
     std::println("                       container, useful for runtime memory captures");
     std::println("      --base-va 0xVA   required with --raw-bytes; base virtual address");
+    std::println("      --recover-imports  rebuild the IAT (slot -> dll!func) for a capture with no");
+    std::println("                       import directory; needs --dll-dir DIR and/or --dll PATH");
+    std::println("                       reference DLLs. --json emits a slot-RVA->name manifest.");
+    std::println("                       --image-base 0xVA sets the RVA key base (default: image base)");
     std::println("      --force-fn-start 0xVA  repeatable; treat VA as a function entry. Use when");
     std::println("                       obfuscator-merged / mid-body real entries cause ember to");
     std::println("                       silently rebind to a closest-below symbol.");

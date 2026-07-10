@@ -272,16 +272,82 @@ std::set<addr_t> collect_entries(const Binary& b) {
     }
 }
 
+struct ReturnTypeValue {
+    IrValue value;
+    bool    widened_from_narrow = false;
+    bool    is_signed           = false;
+};
+
+[[nodiscard]] std::map<SsaKey, const IrInst*>
+build_defs(const IrFunction& fn) {
+    std::map<SsaKey, const IrInst*> out;
+    for (const auto& bb : fn.blocks) {
+        for (const auto& inst : bb.insts) {
+            if (auto k = ssa_key(inst.dst); k) out[*k] = &inst;
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] ReturnTypeValue
+return_type_value(const std::map<SsaKey, const IrInst*>& defs, IrValue v) {
+    ReturnTypeValue out{v};
+    for (int depth = 0; depth < 8; ++depth) {
+        auto k = ssa_key(v);
+        if (!k) break;
+        auto it = defs.find(*k);
+        if (it == defs.end()) break;
+
+        const IrInst* d = it->second;
+        if (d->src_count < 1) break;
+        if (d->op == IrOp::Assign) {
+            v = d->srcs[0];
+            out.value = v;
+            continue;
+        }
+        if ((d->op == IrOp::ZExt || d->op == IrOp::SExt) &&
+            type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
+            v = d->srcs[0];
+            out.value = v;
+            out.widened_from_narrow = true;
+            out.is_signed = d->op == IrOp::SExt;
+            continue;
+        }
+        break;
+    }
+    return out;
+}
+
+[[nodiscard]] TypeRef type_ref_for_ir(TypeArena& arena,
+                                      IrType type,
+                                      bool is_signed) {
+    switch (type) {
+        case IrType::I1:  return arena.int_t(1,  false, false);
+        case IrType::I8:  return arena.int_t(8,  true,  is_signed);
+        case IrType::I16: return arena.int_t(16, true,  is_signed);
+        case IrType::I32: return arena.int_t(32, true,  is_signed);
+        case IrType::I64: return arena.int_t(64, true,  is_signed);
+        default:          return arena.top();
+    }
+}
+
 // For one function, harvest typed return + per-arg-slot types from the
 // IR's value_types side table (populated by infer_local_types). Meets
 // the harvested types into `sig` via the shared `arena`.
 void harvest_typed_sig(const IrFunction& fn, Abi abi,
                        TypeArena& arena, InferredSig& sig) {
     // Return type: meet of every Return-instruction's operand type.
+    const auto defs = build_defs(fn);
     for (const auto& bb : fn.blocks) {
         for (const auto& inst : bb.insts) {
             if (inst.op != IrOp::Return || inst.src_count == 0) continue;
-            const TypeRef src_t = fn.type_of(inst.srcs[0]);
+            const ReturnTypeValue ret = return_type_value(defs, inst.srcs[0]);
+            TypeRef src_t = fn.type_of(ret.value);
+            if (src_t.is_top() && ret.widened_from_narrow) {
+                src_t = type_ref_for_ir(arena, ret.value.type, ret.is_signed);
+                sig.return_type = arena.meet(sig.return_type, src_t);
+                continue;
+            }
             if (src_t.is_top()) continue;
             const TypeRef dst_t = translate(fn.types, arena, src_t);
             sig.return_type = arena.meet(sig.return_type, dst_t);

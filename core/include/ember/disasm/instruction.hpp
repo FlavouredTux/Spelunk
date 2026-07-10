@@ -15,7 +15,7 @@ enum class Mnemonic : u16 {
     Invalid = 0,
 
     Mov, Movzx, Movsx, Movsxd, Lea, Xchg,
-    Push, Pop,
+    Push, Pop, Pushf, Popf,
     Addi, Addis,
     Ld, Ldu, Lwa, Std, Stdu, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha,
     Lwzu, Lbzu, Lhzu, Lhau, Stwu, Stbu, Sthu,
@@ -51,6 +51,7 @@ enum class Mnemonic : u16 {
     Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz, Bc, Bclr,
 
     Nop, Hlt, Int, Int3, Syscall, Ud2, Isync, Sync, Rfi, Sc, Twi,
+    Lahf, Sahf, Cmc, Clc, Stc, Cli, Sti, Cld, StdDir,
     Dcbf, Dcbst, Dcbi, Dcbz, Icbi,
     Cdq, Cqo, Cwde, Cdqe,
     Endbr64, Endbr32,
@@ -83,12 +84,14 @@ enum class Mnemonic : u16 {
 
     // ---- SSE (decoded to advance length; lifted as intrinsics) ------------
     Movd,        // 0x66 0x0F 6E - movd xmm, r/m32
+    MovqGpr,     // 0x66 REX.W 0x0F 6E - movq xmm, r/m64
     Movdqa,      // 0x66 0x0F 6F - movdqa xmm, xmm/m128
     MovdqaStore, // 0x66 0x0F 7F - movdqa xmm/m128, xmm
     Movdqu,      // 0xF3 0x0F 6F - movdqu xmm, xmm/m128
     MovdquStore, // 0xF3 0x0F 7F - movdqu xmm/m128, xmm
     MovqXmm,     // 0xF3 0x0F 7E - movq xmm, xmm/m64 (scalar)
     MovdStore,   // 0x66 0x0F 7E - movd r/m32, xmm
+    MovqGprStore, // 0x66 REX.W 0x0F 7E - movq r/m64, xmm
     Pxor,        // 0x66 0x0F EF - pxor xmm, xmm/m128
     Pand,        // 0x66 0x0F DB
     Pandn,       // 0x66 0x0F DF
@@ -265,7 +268,41 @@ enum class Mnemonic : u16 {
     A64Eret, A64Drps,
     A64Mrs, A64Msr,
     A64Dmb, A64Dsb, A64Isb, A64Sev, A64Wfe, A64Wfi, A64Yield,
+
+    // ---- ARM (A32 / ARMv7) -------------------------------------------------
+    // 32-bit fixed-length. The condition field and the S (flag-setting) bit
+    // live on the Instruction (`arm_cond` / `arm_setflags`), not the
+    // mnemonic - a predicated `addne` shares Mnemonic::A32Add with `add`, and
+    // `adds` is A32Add with arm_setflags set. Conditional branches are the
+    // exception: they decode to A32Bcc (vs the unconditional A32B) so the
+    // mnemonic-only CFG predicates classify them without inspecting arm_cond.
+    // The barrel shifter on a register operand rides on the Operand
+    // (`arm_shift` / `arm_shift_amt`); ARM has no standalone shift opcodes -
+    // LSL/LSR/ASR/ROR are MOV-with-shifted-operand aliases, decoded here to
+    // their own mnemonics for readability.
+    A32And, A32Eor, A32Sub, A32Rsb, A32Add, A32Adc, A32Sbc, A32Rsc,
+    A32Tst, A32Teq, A32Cmp, A32Cmn, A32Orr, A32Mov, A32Bic, A32Mvn,
+    A32Lsl, A32Lsr, A32Asr, A32Ror, A32Rrx,
+    A32Movw, A32Movt,
+    A32Mul, A32Mla, A32Mls, A32Umull, A32Umlal, A32Smull, A32Smlal,
+    A32Udiv, A32Sdiv,
+    A32Clz, A32Sxtb, A32Sxth, A32Uxtb, A32Uxth, A32Rev, A32Rev16,
+    A32Ldr, A32Str, A32Ldrb, A32Strb, A32Ldrh, A32Strh,
+    A32Ldrsb, A32Ldrsh, A32Ldrd, A32Strd,
+    A32Ldm, A32LdmPc, A32Stm, A32Push, A32Pop,
+    A32B, A32Bl, A32Bx, A32Blx, A32Bcc, A32Ret,
+    A32Svc, A32Bkpt, A32Nop, A32Udf, A32Undef,
 };
+
+// ARM condition field (bits 31:28). 0xE = AL (always) is the default carried
+// by every non-ARM instruction, so the predication logic in the formatter
+// and lifter is a no-op elsewhere. 0xF historically meant NV (never) but is
+// now the unconditional-encoding escape; we treat it like AL for display.
+inline constexpr u8 kArmCondAL = 0xE;
+
+// Barrel-shift type for a shifted register operand (bits 6:5 of the ARM
+// encoding). RRX is ROR with a zero immediate.
+enum class ArmShift : u8 { Lsl = 0, Lsr = 1, Asr = 2, Ror = 3 };
 
 [[nodiscard]] std::string_view mnemonic_name(Mnemonic m) noexcept;
 
@@ -300,6 +337,14 @@ struct Operand {
     Imm  imm  = {};
     Rel  rel  = {};
 
+    // ARM barrel shift applied to a Register operand: `Rm, <shift> #amt`
+    // or `Rm, <shift> Rs` when arm_shift_reg is set.
+    // arm_shift_amt == 0 with Lsl means "no shift", so this is inert for
+    // every other architecture and for unshifted ARM register operands.
+    ArmShift arm_shift     = ArmShift::Lsl;
+    u8       arm_shift_amt = 0;
+    Reg      arm_shift_reg = Reg::None;
+
     [[nodiscard]] static Operand make_reg(Reg r) noexcept {
         Operand o; o.kind = Kind::Register; o.reg = r; return o;
     }
@@ -331,6 +376,12 @@ struct Instruction {
     std::array<Operand, 5>   operands     = {};
     u8                       num_operands = 0;
     std::array<std::byte, 15> raw_bytes   = {};
+    // ARM predication. arm_cond is the 4-bit condition field (kArmCondAL for
+    // unconditional / all non-ARM instructions); arm_setflags is the S bit
+    // (adds/subs/movs...). Compare-class mnemonics set flags implicitly and
+    // leave arm_setflags false.
+    u8                       arm_cond     = kArmCondAL;
+    bool                     arm_setflags = false;
 };
 
 [[nodiscard]] std::string format_instruction(const Instruction& insn);
@@ -348,23 +399,28 @@ struct Instruction {
         case Mnemonic::A64Bcc:
         case Mnemonic::A64Cbz: case Mnemonic::A64Cbnz:
         case Mnemonic::A64Tbz: case Mnemonic::A64Tbnz:
+        case Mnemonic::A32Bcc:
             return true;
         default: return false;
     }
 }
 
 [[nodiscard]] constexpr bool is_unconditional_jmp(Mnemonic m) noexcept {
-    return m == Mnemonic::Jmp || m == Mnemonic::A64B || m == Mnemonic::A64Br;
+    return m == Mnemonic::Jmp || m == Mnemonic::A64B || m == Mnemonic::A64Br ||
+           m == Mnemonic::A32B || m == Mnemonic::A32Bx ||
+           m == Mnemonic::A32LdmPc;
 }
 
 [[nodiscard]] constexpr bool is_call(Mnemonic m) noexcept {
-    return m == Mnemonic::Call || m == Mnemonic::A64Bl || m == Mnemonic::A64Blr;
+    return m == Mnemonic::Call || m == Mnemonic::A64Bl || m == Mnemonic::A64Blr ||
+           m == Mnemonic::A32Bl || m == Mnemonic::A32Blx;
 }
 
 [[nodiscard]] constexpr bool is_return_like(Mnemonic m) noexcept {
     return m == Mnemonic::Ret || m == Mnemonic::Ud2 || m == Mnemonic::Hlt ||
            m == Mnemonic::A64Ret || m == Mnemonic::A64Brk ||
-           m == Mnemonic::A64Udf || m == Mnemonic::A64Eret;
+           m == Mnemonic::A64Udf || m == Mnemonic::A64Eret ||
+           m == Mnemonic::A32Ret || m == Mnemonic::A32Udf;
 }
 
 [[nodiscard]] constexpr bool ends_basic_block(Mnemonic m) noexcept {

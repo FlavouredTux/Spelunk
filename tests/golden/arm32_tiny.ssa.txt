@@ -1,0 +1,13 @@
+function <entry> @ 0x10054
+  blocks: 1
+
+bb_10054  (entry):
+  ; 0x10054
+  t0 = add i32 r0, 0x2a
+  r0_1 = t0
+  ; 0x10058
+  t1 = shl i32 r0_1, 0x1
+  r0_2 = t1
+  ; 0x1005c
+  return r0_2
+

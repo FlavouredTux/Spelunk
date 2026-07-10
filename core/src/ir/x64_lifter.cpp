@@ -42,6 +42,11 @@ struct LiftCtx {
     IrValue last_fp_cmp_a = {};
     IrValue last_fp_cmp_b = {};
 
+    // PF is not a first-class Flag in the IR. Most parity users derive it
+    // from `last_flag_src`; SAHF restores it directly from AH, so carry that
+    // one explicit i1 override until an instruction writes a fresh PF source.
+    IrValue last_pf_value = {};
+
     // Set by CDQ/CQO until the next write to RAX/RDX. Lets the immediately
     // following IDIV use `sext(rax/eax)` as its dividend instead of rebuilding
     // the literal high:low pair, which keeps signed `/` and `%` readable.
@@ -166,6 +171,7 @@ struct LiftCtx {
         // invalid for PF interpretation.
         last_fp_cmp_a = {};
         last_fp_cmp_b = {};
+        last_pf_value = {};
     }
 
     void clear_cf_of() {
@@ -569,6 +575,160 @@ void lift_shl(LiftCtx& ctx) { lift_shift(ctx, IrOp::Shl);  }
 void lift_shr(LiftCtx& ctx) { lift_shift(ctx, IrOp::Lshr); }
 void lift_sar(LiftCtx& ctx) { lift_shift(ctx, IrOp::Ashr); }
 
+// ROL/ROR are common in hashes, PRNGs, checksums, and crypto-ish mixers.
+// Preserve their value flow as rotate intrinsics instead of falling back to
+// a side-effect-only `/* x64.rol(...) */` comment. CF/OF are approximated for
+// downstream flag readers; ZF/SF are intentionally left untouched because
+// x86 rotates do not define them.
+void lift_rotate(LiftCtx& ctx, bool right) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+
+    IrValue a = materialize_rvalue(insn.operands[0], ctx);
+    IrValue cnt = materialize_rvalue(insn.operands[1], ctx);
+    if (a.kind == IrValueKind::None || cnt.kind == IrValueKind::None) return;
+    cnt = ctx.match_size(cnt, a.type, /*sign_ext=*/false);
+
+    const unsigned width = type_bits(a.type);
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = std::format("{}{}", right ? "rotr" : "rotl", width);
+    i.dst  = ctx.temp(a.type);
+    i.srcs[0]   = a;
+    i.srcs[1]   = cnt;
+    i.src_count = 2;
+    IrValue r = i.dst;
+    ctx.emit(std::move(i));
+
+    IrValue one_t  = ctx.imm(1, a.type);
+    IrValue zero_t = ctx.imm(0, a.type);
+    IrValue cf_bit;
+    if (right) {
+        IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+        cf_bit = ctx.emit_binop(IrOp::And,
+                                ctx.emit_binop(IrOp::Lshr, r, msb_shift),
+                                one_t);
+    } else {
+        cf_bit = ctx.emit_binop(IrOp::And, r, one_t);
+    }
+    IrValue cf_i1 = ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t);
+    ctx.emit_set_flag(Flag::Cf, cf_i1);
+
+    if (width > 1) {
+        IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+        IrValue msb_bit = ctx.emit_binop(IrOp::And,
+                                         ctx.emit_binop(IrOp::Lshr, r, msb_shift),
+                                         one_t);
+        IrValue msb_i1 = ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t);
+        if (right) {
+            IrValue next_shift = ctx.imm(static_cast<i64>(width - 2), a.type);
+            IrValue next_bit = ctx.emit_binop(IrOp::And,
+                                             ctx.emit_binop(IrOp::Lshr, r, next_shift),
+                                             one_t);
+            IrValue next_i1 = ctx.emit_cmp(IrOp::CmpNe, next_bit, zero_t);
+            ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Xor, msb_i1, next_i1));
+        } else {
+            ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Xor, msb_i1, cf_i1));
+        }
+    }
+
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
+// RCL/RCR are rotates through the carry flag. For count==1 we can lower them
+// exactly with ordinary IR; for wider counts preserve value flow with an
+// explicit carry-aware intrinsic instead of discarding the destination update.
+void lift_rotate_through_carry(LiftCtx& ctx, bool right) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+
+    IrValue a = materialize_rvalue(insn.operands[0], ctx);
+    IrValue cnt = materialize_rvalue(insn.operands[1], ctx);
+    if (a.kind == IrValueKind::None || cnt.kind == IrValueKind::None) return;
+    const bool count_is_one =
+        cnt.kind == IrValueKind::Imm && cnt.imm == 1;
+    cnt = ctx.match_size(cnt, a.type, /*sign_ext=*/false);
+
+    const unsigned width = type_bits(a.type);
+    IrValue one_t  = ctx.imm(1, a.type);
+    IrValue zero_t = ctx.imm(0, a.type);
+    IrValue cf_in  = ctx.flag_val(Flag::Cf);
+    IrValue r;
+
+    if (count_is_one) {
+        IrValue cf_w = ctx.emit_convert(IrOp::ZExt, cf_in, a.type);
+        if (right) {
+            IrValue hi_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+            IrValue hi = ctx.emit_binop(IrOp::Shl, cf_w, hi_shift);
+            r = ctx.emit_binop(IrOp::Or,
+                               ctx.emit_binop(IrOp::Lshr, a, one_t),
+                               hi);
+        } else {
+            r = ctx.emit_binop(IrOp::Or,
+                               ctx.emit_binop(IrOp::Shl, a, one_t),
+                               cf_w);
+        }
+    } else {
+        IrInst i;
+        i.op   = IrOp::Intrinsic;
+        i.name = std::format("{}{}", right ? "rcr" : "rcl", width);
+        i.dst  = ctx.temp(a.type);
+        i.srcs[0]   = a;
+        i.srcs[1]   = cnt;
+        i.srcs[2]   = cf_in;
+        i.src_count = 3;
+        r = i.dst;
+        ctx.emit(std::move(i));
+    }
+
+    IrValue cf_out;
+    if (count_is_one) {
+        IrValue cf_bit;
+        if (right) {
+            cf_bit = ctx.emit_binop(IrOp::And, a, one_t);
+        } else {
+            IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+            cf_bit = ctx.emit_binop(IrOp::And,
+                                    ctx.emit_binop(IrOp::Lshr, a, msb_shift),
+                                    one_t);
+        }
+        cf_out = ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t);
+    } else {
+        // The value intrinsic cannot expose a second result. Preserve the
+        // exact carry transition in a companion intrinsic, including the
+        // architectural effective-count-zero case where CF is unchanged.
+        IrInst c;
+        c.op = IrOp::Intrinsic;
+        c.name = std::format("{}_cf{}", right ? "rcr" : "rcl", width);
+        c.dst = ctx.temp(IrType::I1);
+        c.srcs[0] = a; c.srcs[1] = cnt; c.srcs[2] = cf_in; c.src_count = 3;
+        cf_out = c.dst;
+        ctx.emit(std::move(c));
+    }
+    ctx.emit_set_flag(Flag::Cf, cf_out);
+
+    // OF is architecturally defined only for a one-bit rotate.
+    if (width > 1 && count_is_one) {
+        IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
+        IrValue msb_bit = ctx.emit_binop(IrOp::And,
+                                         ctx.emit_binop(IrOp::Lshr, r, msb_shift),
+                                         one_t);
+        IrValue msb_i1 = ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t);
+        if (right) {
+            IrValue next_shift = ctx.imm(static_cast<i64>(width - 2), a.type);
+            IrValue next_bit = ctx.emit_binop(IrOp::And,
+                                             ctx.emit_binop(IrOp::Lshr, r, next_shift),
+                                             one_t);
+            IrValue next_i1 = ctx.emit_cmp(IrOp::CmpNe, next_bit, zero_t);
+            ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Xor, msb_i1, next_i1));
+        } else {
+            ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Xor, msb_i1, cf_out));
+        }
+    }
+
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
 // SHLD dst, src, count: dst = (dst << count) | (src >> (W - count))
 // SHRD dst, src, count: dst = (dst >> count) | (src << (W - count))
 // Lift as the equivalent shift+or expression so the reader sees the actual
@@ -949,6 +1109,8 @@ void lift_cmpxchg(LiftCtx& ctx) {
     // later Jp/Jnp doesn't lower against stale ucomi operands.
     ctx.last_fp_cmp_a = {};
     ctx.last_fp_cmp_b = {};
+    ctx.last_pf_value = {};
+    ctx.last_flag_src = {};
 
     // dst = eq ? src : dst (no-op, but lets later optimization see the cond)
     IrInst d;
@@ -985,6 +1147,8 @@ void lift_bit_scan(LiftCtx& ctx, std::string_view name) {
     // Integer flag-setter - clear any prior FP-compare context.
     ctx.last_fp_cmp_a = {};
     ctx.last_fp_cmp_b = {};
+    ctx.last_pf_value = {};
+    ctx.last_flag_src = {};
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -1009,6 +1173,8 @@ void lift_popcnt(LiftCtx& ctx) {
     ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, src, ctx.imm(0, t)));
     ctx.last_fp_cmp_a = {};
     ctx.last_fp_cmp_b = {};
+    ctx.last_pf_value = ctx.imm(0, IrType::I1);
+    ctx.last_flag_src = {};
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -1093,6 +1259,71 @@ void lift_pop(LiftCtx& ctx) {
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
     val = ctx.match_size(val, t, /*sign_ext=*/false);
     store_lvalue(insn.operands[0], val, ctx);
+}
+
+IrValue flag_to_i64_bit(LiftCtx& ctx, IrValue flag, unsigned shift) {
+    IrValue bit = ctx.emit_convert(IrOp::ZExt, flag, IrType::I64);
+    if (shift != 0) {
+        bit = ctx.emit_binop(IrOp::Shl, bit,
+                             ctx.imm(static_cast<i64>(shift), IrType::I64));
+    }
+    return bit;
+}
+
+IrValue bit_from_i64(LiftCtx& ctx, IrValue v, unsigned bit) {
+    IrValue masked = ctx.emit_binop(IrOp::And, v,
+                                    ctx.imm(static_cast<i64>(u64{1} << bit),
+                                            IrType::I64));
+    return ctx.emit_cmp(IrOp::CmpNe, masked, ctx.imm(0, IrType::I64));
+}
+
+IrValue build_rflags_value(LiftCtx& ctx) {
+    IrValue rflags = ctx.imm(0x2, IrType::I64);  // bit 1 is architecturally set
+    rflags = ctx.emit_binop(IrOp::Or, rflags,
+                            flag_to_i64_bit(ctx, ctx.flag_val(Flag::Cf), 0));
+    rflags = ctx.emit_binop(IrOp::Or, rflags,
+                            flag_to_i64_bit(ctx, jcc_predicate(Mnemonic::Jp, ctx), 2));
+    rflags = ctx.emit_binop(IrOp::Or, rflags,
+                            flag_to_i64_bit(ctx, ctx.flag_val(Flag::Zf), 6));
+    rflags = ctx.emit_binop(IrOp::Or, rflags,
+                            flag_to_i64_bit(ctx, ctx.flag_val(Flag::Sf), 7));
+    rflags = ctx.emit_binop(IrOp::Or, rflags,
+                            flag_to_i64_bit(ctx, ctx.flag_val(Flag::Of), 11));
+    return rflags;
+}
+
+void restore_rflags_value(LiftCtx& ctx, IrValue rflags) {
+    rflags = ctx.match_size(rflags, IrType::I64, /*sign_ext=*/false);
+    IrValue cf = bit_from_i64(ctx, rflags, 0);
+    IrValue pf = bit_from_i64(ctx, rflags, 2);
+    IrValue zf = bit_from_i64(ctx, rflags, 6);
+    IrValue sf = bit_from_i64(ctx, rflags, 7);
+    IrValue of = bit_from_i64(ctx, rflags, 11);
+
+    ctx.emit_set_flag(Flag::Cf, cf);
+    ctx.emit_set_flag(Flag::Zf, zf);
+    ctx.emit_set_flag(Flag::Sf, sf);
+    ctx.emit_set_flag(Flag::Of, of);
+    ctx.last_pf_value = pf;
+    ctx.last_flag_src = {};
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+}
+
+void lift_pushf(LiftCtx& ctx) {
+    IrValue rflags = build_rflags_value(ctx);
+    IrValue rsp = ctx.reg(Reg::Rsp);
+    IrValue new_rsp = ctx.emit_binop(IrOp::Sub, rsp, ctx.imm(8, IrType::I64));
+    ctx.emit_store(new_rsp, rflags);
+    ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
+}
+
+void lift_popf(LiftCtx& ctx) {
+    IrValue rsp = ctx.reg(Reg::Rsp);
+    IrValue rflags = ctx.emit_load(rsp, IrType::I64);
+    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(8, IrType::I64));
+    ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
+    restore_rflags_value(ctx, rflags);
 }
 
 void lift_leave(LiftCtx& ctx) {
@@ -1270,6 +1501,11 @@ IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx) {
         }
         case Mnemonic::Jp:
         case Mnemonic::Jnp: {
+            if (ctx.last_pf_value.kind != IrValueKind::None) {
+                return (mn == Mnemonic::Jp)
+                    ? ctx.last_pf_value
+                    : ctx.emit_unop(IrOp::Not, ctx.last_pf_value);
+            }
             // After a scalar-FP compare (ucomi*/comi*), PF means "unordered"
             // - at least one operand is NaN. Lower to a typed intrinsic so
             // the reader sees `if (unordered_fp_compare(a, b))`, the SSA
@@ -1352,6 +1588,67 @@ void lift_unreachable(LiftCtx& ctx) {
     IrInst i;
     i.op = IrOp::Unreachable;
     ctx.emit(std::move(i));
+}
+
+IrValue flag_to_i8_bit(LiftCtx& ctx, IrValue flag, unsigned shift) {
+    IrValue bit = ctx.emit_convert(IrOp::ZExt, flag, IrType::I8);
+    if (shift != 0) {
+        bit = ctx.emit_binop(IrOp::Shl, bit,
+                             ctx.imm(static_cast<i64>(shift), IrType::I8));
+    }
+    return bit;
+}
+
+IrValue bit_from_ah(LiftCtx& ctx, IrValue ah, unsigned bit) {
+    IrValue masked = ctx.emit_binop(IrOp::And, ah,
+                                    ctx.imm(static_cast<i64>(1u << bit), IrType::I8));
+    return ctx.emit_cmp(IrOp::CmpNe, masked, ctx.imm(0, IrType::I8));
+}
+
+void lift_lahf(LiftCtx& ctx) {
+    IrValue cf = flag_to_i8_bit(ctx, ctx.flag_val(Flag::Cf), 0);
+    IrValue pf = flag_to_i8_bit(ctx, jcc_predicate(Mnemonic::Jp, ctx), 2);
+    IrValue zf = flag_to_i8_bit(ctx, ctx.flag_val(Flag::Zf), 6);
+    IrValue sf = flag_to_i8_bit(ctx, ctx.flag_val(Flag::Sf), 7);
+
+    IrValue ah = ctx.imm(0x02, IrType::I8);
+    ah = ctx.emit_binop(IrOp::Or, ah, cf);
+    ah = ctx.emit_binop(IrOp::Or, ah, pf);
+    ah = ctx.emit_binop(IrOp::Or, ah, zf);
+    ah = ctx.emit_binop(IrOp::Or, ah, sf);
+    ctx.write_reg(Reg::Ah, ah);
+}
+
+void lift_sahf(LiftCtx& ctx) {
+    IrValue ah = ctx.read_reg(Reg::Ah);
+    IrValue cf = bit_from_ah(ctx, ah, 0);
+    IrValue pf = bit_from_ah(ctx, ah, 2);
+    IrValue zf = bit_from_ah(ctx, ah, 6);
+    IrValue sf = bit_from_ah(ctx, ah, 7);
+
+    ctx.emit_set_flag(Flag::Cf, cf);
+    ctx.emit_set_flag(Flag::Zf, zf);
+    ctx.emit_set_flag(Flag::Sf, sf);
+    ctx.last_pf_value = pf;
+    ctx.last_flag_src = {};
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+}
+
+void lift_carry_flag_op(LiftCtx& ctx, Mnemonic mn) {
+    switch (mn) {
+        case Mnemonic::Clc:
+            ctx.emit_set_flag(Flag::Cf, ctx.imm(0, IrType::I1));
+            break;
+        case Mnemonic::Stc:
+            ctx.emit_set_flag(Flag::Cf, ctx.imm(1, IrType::I1));
+            break;
+        case Mnemonic::Cmc:
+            ctx.emit_set_flag(Flag::Cf, ctx.emit_unop(IrOp::Not, ctx.flag_val(Flag::Cf)));
+            break;
+        default:
+            break;
+    }
 }
 
 void lift_intrinsic(LiftCtx& ctx, std::string_view name) {
@@ -1439,6 +1736,9 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
 // pin t = I128 at the call site below.
 [[nodiscard]] IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t) {
     if (op.kind == Operand::Kind::Register) {
+        if (!is_xmm(op.reg)) {
+            return ctx.match_size(ctx.read_reg(op.reg), t, /*sign_ext=*/false);
+        }
         return IrValue::make_reg(op.reg, t);
     }
     if (op.kind == Operand::Kind::Memory) {
@@ -1450,6 +1750,11 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
 
 void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
     if (op.kind == Operand::Kind::Register) {
+        if (!is_xmm(op.reg)) {
+            v = ctx.match_size(v, operand_type(op), /*sign_ext=*/false);
+            store_lvalue(op, v, ctx);
+            return;
+        }
         ctx.emit_assign(IrValue::make_reg(op.reg, t), v);
         return;
     }
@@ -1525,6 +1830,63 @@ void lift_simd_shift_imm(LiftCtx& ctx, std::string_view name, IrType t) {
     write_xmm(ctx, insn.operands[0], result, t);
 }
 
+// `pinsrw xmm, r/m16, imm8`: vector in/out, scalar lane source.
+// The generic XMM binop helper reads every operand as vector-shaped, which is
+// wrong for this GPR/memory source and pollutes the intrinsic arguments.
+void lift_pinsrw(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3 ||
+        insn.operands[2].kind != Operand::Kind::Immediate) {
+        return;
+    }
+
+    IrValue vec = read_xmm(ctx, insn.operands[0], IrType::I128);
+    IrValue lane = materialize_rvalue(insn.operands[1], ctx);
+    if (vec.kind == IrValueKind::None || lane.kind == IrValueKind::None) return;
+    lane = ctx.match_size(lane, IrType::I16, /*sign_ext=*/false);
+
+    const Imm& im = insn.operands[2].imm;
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = "_mm_insert_epi16";
+    i.dst  = ctx.temp(IrType::I128);
+    i.srcs[0]   = vec;
+    i.srcs[1]   = lane;
+    i.srcs[2]   = ctx.imm(im.value, type_for_bits(im.size * 8));
+    i.src_count = 3;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, IrType::I128);
+}
+
+// `pextrw r32/m16, xmm, imm8`: scalar result, vector source. Legacy SSE2
+// zero-extends the selected 16-bit lane into a 32-bit register destination;
+// the SSE4.1 memory form stores only the selected word. Lifting this as
+// vector out made return types become `__m128i`.
+void lift_pextrw(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3 ||
+        insn.operands[2].kind != Operand::Kind::Immediate) {
+        return;
+    }
+
+    IrValue src = read_xmm(ctx, insn.operands[1], IrType::I128);
+    if (src.kind == IrValueKind::None) return;
+
+    const Imm& im = insn.operands[2].imm;
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = "_mm_extract_epi16";
+    i.dst  = ctx.temp(IrType::I32);
+    i.srcs[0]   = src;
+    i.srcs[1]   = ctx.imm(im.value, type_for_bits(im.size * 8));
+    i.src_count = 2;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    result = ctx.match_size(result, operand_type(insn.operands[0]), /*sign_ext=*/false);
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
 // `movdqa xmm, xmm/m128` (and unaligned `movdqu`). Treated as a typed
 // load+store at the chosen SIMD width - the IR carries the dataflow, the
 // emitter prints `xmm0 = *(__m128i*)(rsi);` style.
@@ -1535,6 +1897,57 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
     IrValue v = read_xmm(ctx, insn.operands[1], t);
     if (v.kind == IrValueKind::None) return;
     write_xmm(ctx, insn.operands[0], v, t);
+}
+
+// `movd/movq xmm, r/m32|64`: copy a scalar into the low lane and zero the
+// rest of the XMM register. A plain scalar assignment leaves later lane
+// consumers thinking they are extracting from an integer, not a vector-shaped
+// value.
+void lift_gpr_scalar_to_xmm(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    if (src.kind == IrValueKind::None) return;
+    const IrType scalar_t = operand_type(insn.operands[1]) == IrType::I64
+        ? IrType::I64
+        : IrType::I32;
+    src = ctx.match_size(src, scalar_t, /*sign_ext=*/false);
+
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = scalar_t == IrType::I64 ? "_mm_cvtsi64_si128"
+                                     : "_mm_cvtsi32_si128";
+    i.dst  = ctx.temp(IrType::I128);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, IrType::I128);
+}
+
+// `movd/movq r/m32|64, xmm`: extract the low scalar from an XMM value. This
+// must pass through normal GPR store semantics so `eax` writes zero-extend
+// into `rax`.
+void lift_gpr_scalar_from_xmm(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = read_xmm(ctx, insn.operands[1], IrType::I128);
+    if (src.kind == IrValueKind::None) return;
+    const IrType scalar_t = operand_type(insn.operands[0]) == IrType::I64
+        ? IrType::I64
+        : IrType::I32;
+
+    IrInst i;
+    i.op   = IrOp::Intrinsic;
+    i.name = scalar_t == IrType::I64 ? "_mm_cvtsi128_si64"
+                                     : "_mm_cvtsi128_si32";
+    i.dst  = ctx.temp(scalar_t);
+    i.srcs[0]   = src;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    result = ctx.match_size(result, operand_type(insn.operands[0]), /*sign_ext=*/false);
+    store_lvalue(insn.operands[0], result, ctx);
 }
 
 // `ucomiss xmm0, xmm1` / `ucomisd xmm0, xmm1`: scalar FP compare that sets
@@ -1565,6 +1978,7 @@ void lift_ucomi(LiftCtx& ctx, IrType t) {
     ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq,  a, b));
     ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpUlt, a, b));
     ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+    ctx.last_pf_value = {};
     ctx.last_fp_cmp_a = a;
     ctx.last_fp_cmp_b = b;
 }
@@ -1721,6 +2135,10 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Shl:     lift_shl(ctx);     break;
         case Mnemonic::Shr:     lift_shr(ctx);     break;
         case Mnemonic::Sar:     lift_sar(ctx);     break;
+        case Mnemonic::Rol:     lift_rotate(ctx, /*right=*/false); break;
+        case Mnemonic::Ror:     lift_rotate(ctx, /*right=*/true);  break;
+        case Mnemonic::Rcl:     lift_rotate_through_carry(ctx, /*right=*/false); break;
+        case Mnemonic::Rcr:     lift_rotate_through_carry(ctx, /*right=*/true);  break;
         case Mnemonic::Imul:    lift_imul(ctx);    break;
         case Mnemonic::Mul:     lift_mul(ctx);     break;
         case Mnemonic::Div:     lift_div_one_op(ctx, /*signed_div=*/false); break;
@@ -1754,6 +2172,8 @@ void lift_instruction(LiftCtx& ctx) {
 
         case Mnemonic::Push:    lift_push(ctx);    break;
         case Mnemonic::Pop:     lift_pop(ctx);     break;
+        case Mnemonic::Pushf:   lift_pushf(ctx);   break;
+        case Mnemonic::Popf:    lift_popf(ctx);    break;
         case Mnemonic::Leave:   lift_leave(ctx);   break;
         case Mnemonic::Call:    lift_call(ctx);    break;
         case Mnemonic::Ret:     lift_ret(ctx);     break;
@@ -1767,6 +2187,17 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Syscall:
             lift_intrinsic(ctx, "syscall");
             break;
+        case Mnemonic::Lahf:    lift_lahf(ctx); break;
+        case Mnemonic::Sahf:    lift_sahf(ctx); break;
+        case Mnemonic::Clc:
+        case Mnemonic::Stc:
+        case Mnemonic::Cmc:
+            lift_carry_flag_op(ctx, insn.mnemonic);
+            break;
+        case Mnemonic::Cld:     lift_intrinsic(ctx, "x64.cld"); break;
+        case Mnemonic::StdDir:  lift_intrinsic(ctx, "x64.std"); break;
+        case Mnemonic::Cli:     lift_intrinsic(ctx, "x64.cli"); break;
+        case Mnemonic::Sti:     lift_intrinsic(ctx, "x64.sti"); break;
         case Mnemonic::Endbr64: lift_intrinsic(ctx, "endbr64"); break;
         case Mnemonic::Endbr32: lift_intrinsic(ctx, "endbr32"); break;
         case Mnemonic::Cpuid:   lift_intrinsic(ctx, "x64.cpuid");  break;
@@ -1936,8 +2367,8 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Pmulhuw: lift_simd_binop(ctx, "_mm_mulhi_epu16", IrType::I128); break;
         case Mnemonic::Pmuludq: lift_simd_binop(ctx, "_mm_mul_epu32",   IrType::I128); break;
         case Mnemonic::Pmaddwd: lift_simd_binop(ctx, "_mm_madd_epi16",  IrType::I128); break;
-        case Mnemonic::Pinsrw:  lift_simd_binop(ctx, "_mm_insert_epi16", IrType::I128); break;
-        case Mnemonic::Pextrw:  lift_simd_binop(ctx, "_mm_extract_epi16", IrType::I128); break;
+        case Mnemonic::Pinsrw:  lift_pinsrw(ctx); break;
+        case Mnemonic::Pextrw:  lift_pextrw(ctx); break;
 
         // Saturating arith.
         case Mnemonic::Psubusb: lift_simd_binop(ctx, "_mm_subs_epu8",  IrType::I128); break;
@@ -2031,11 +2462,11 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Movhps:      lift_simd_mov(ctx, IrType::F64,  false); break;
         case Mnemonic::Movlps:      lift_simd_mov(ctx, IrType::F64,  false); break;
 
-        // movd / movq: 32 / 64-bit transfer between xmm and gpr-or-mem. Model
-        // as a copy at the matching scalar width - the destination type
-        // tracks naturally.
-        case Mnemonic::Movd:        lift_simd_mov(ctx, IrType::I32, false); break;
-        case Mnemonic::MovdStore:   lift_simd_mov(ctx, IrType::I32, true);  break;
+        // movd / movq: scalar transfer between XMM low lane and gpr-or-mem.
+        case Mnemonic::Movd:
+        case Mnemonic::MovqGpr:     lift_gpr_scalar_to_xmm(ctx); break;
+        case Mnemonic::MovdStore:
+        case Mnemonic::MovqGprStore: lift_gpr_scalar_from_xmm(ctx); break;
         case Mnemonic::MovqXmm:     lift_simd_mov(ctx, IrType::I64, false); break;
         case Mnemonic::MovqStore:   lift_simd_mov(ctx, IrType::I64, true);  break;
 
@@ -2043,7 +2474,8 @@ void lift_instruction(LiftCtx& ctx) {
         // Single-source intrinsic to a gpr destination.
         case Mnemonic::Pmovmskb: {
             if (insn.num_operands == 2) {
-                IrValue src = read_xmm(ctx, insn.operands[1], IrType::F64);
+                IrValue src = read_xmm(ctx, insn.operands[1], IrType::I128);
+                if (src.kind == IrValueKind::None) break;
                 IrInst i;
                 i.op   = IrOp::Intrinsic;
                 i.name = "_mm_movemask_epi8";

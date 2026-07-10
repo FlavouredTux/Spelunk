@@ -14,6 +14,7 @@ add_library(ember_core STATIC
     src/disasm/x64/decoder.cpp
     src/disasm/ppc/decoder.cpp
     src/disasm/arm/decoder.cpp
+    src/disasm/arm/decoder32.cpp
     src/analysis/cfg_builder.cpp
     src/analysis/cfg_util.cpp
     src/analysis/arity.cpp
@@ -46,6 +47,7 @@ add_library(ember_core STATIC
     src/analysis/cfi.cpp
     src/analysis/objc.cpp
     src/analysis/pe_unwind.cpp
+    src/analysis/recover_imports.cpp
     src/analysis/int3_resolver.cpp
     src/analysis/packed.cpp
     src/analysis/discovery.cpp
@@ -65,6 +67,7 @@ add_library(ember_core STATIC
     src/ir/ppc_lifter.cpp
     src/ir/x64_lifter.cpp
     src/ir/arm64_lifter.cpp
+    src/ir/arm32_lifter.cpp
     src/ir/ssa.cpp
     src/ir/passes.cpp
     src/structure/structurer.cpp

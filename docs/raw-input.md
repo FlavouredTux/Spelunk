@@ -73,17 +73,66 @@ Raw input bypasses all the container-specific extras:
 
 - No symbol table - every discovered function reads as `sub_<hex>`
   unless you pair with `--annotations` or `--apply <script>`.
-- No imports / exports - runtime captures of a process *do* contain
-  the IAT bytes, but Ember can't recognise an IAT without the
-  IMAGE_DIRECTORY_ENTRY_IMPORT directory the PE loader normally
-  parses. Indirect calls through the captured IAT slots stay
-  unresolved.
+- No imports / exports *out of the box* - runtime captures of a
+  process *do* contain the IAT bytes, but Ember can't recognise an IAT
+  without the IMAGE_DIRECTORY_ENTRY_IMPORT directory the PE loader
+  normally parses. Indirect calls through the captured IAT slots stay
+  unresolved unless you reconstruct the table with `--recover-imports`
+  (below).
 - No PDATA-derived function starts - function discovery falls back
   to the prologue-sweep + vtable-harvest pipeline.
 
 For VMProtect / commercial-packer runtime analysis these
 limits are usually fine: the disk PE was a decoy anyway, and the
 captured bytes are what actually run.
+
+## `--recover-imports` (IAT reconstruction)
+
+A capture with no import directory still has the IAT *bytes*: the loader
+filled each slot with a resolved `loaded_module_base + export_rva`
+pointer. Given the actual DLLs the process imported, Ember can name those
+slots back to `dll!func`.
+
+```sh
+ember --regions capture.regions --recover-imports \
+      --dll-dir /mnt/win/System32 --image-base 0x140000000 --json
+```
+
+How it works:
+
+1. **Harvest.** Every 8-aligned qword in the capture's readable,
+   non-executable regions whose value sits in the Win64 module band
+   (`0x00007FF0_00000000`..`0x00008000_00000000`) and is *not* itself
+   mapped inside the capture (an import points at a DLL the dump doesn't
+   contain) is recorded as `(slot, target)`.
+2. **Cluster.** Targets are sorted and split on gaps larger than a DLL
+   image (16 MiB) - one cluster per loaded module.
+3. **Base-solve.** For each cluster, Ember tries 64 KiB-aligned bases
+   stepping down from the cluster's low pointer and picks the
+   `(reference DLL, base)` that lands the most pointers on a real export
+   RVA. The winning base also identifies *which* DLL the cluster is. A
+   wrong base scores ~0, so a simple majority is decisive.
+4. **Name.** Each slot becomes `target - base` → the export's name.
+
+The one hard requirement is the **reference DLLs**: a pointer into a DLL
+you don't have can't be named, because the export RVA→name table lives in
+the DLL, not the capture. Point `--dll-dir DIR` at a folder of real
+Windows system DLLs (ntdll, kernel32, kernelbase, user32, gdi32,
+advapi32, ws2_32, …), and/or pass individual files with repeatable
+`--dll PATH`. Export RVAs are stable across Win10/11 servicing updates,
+so build-exact copies aren't required - reasonable ntdll/kernel32
+matches are enough, and the per-cluster hit count (printed to stderr)
+tells you if you're off.
+
+Output:
+
+- `--json` emits the converter contract - a `{ "<slot-rva-hex>":
+  "dll!func", … }` object. The RVA key is `slot - image_base`; the base
+  is the PE image base, the lowest mapped region for a `--regions`
+  capture, or an explicit `--image-base 0xVA`.
+- Without `--json`, a TSV with columns `slot_va  rva  target  dll!func`.
+- A per-cluster summary (band hits, identified module, solved base) is
+  written to stderr so it never pollutes the machine-readable stdout.
 
 ## Loaded Android / PIE Dumps
 

@@ -1,0 +1,7 @@
+{
+  "0x2000": "refdll.dll!OpenThing",
+  "0x2008": "refdll.dll!ReadThing",
+  "0x2010": "refdll.dll!WriteThing",
+  "0x2018": "refdll.dll!CloseThing",
+  "0x2020": "refdll.dll!FlushThing"
+}

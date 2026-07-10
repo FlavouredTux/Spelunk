@@ -1,0 +1,4 @@
+// carry_seed_add
+uint32_t carry_seed_add(uint32_t a1) {
+  return a1 + 1;
+}

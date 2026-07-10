@@ -80,6 +80,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--show-empty", &Args::symuses_show_empty},
     {"",   "--no-taint",  &Args::symuses_no_taint},
     {"",   "--verbose",   &Args::verbose},
+    {"",   "--recover-imports", &Args::recover_imports},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
@@ -138,6 +139,8 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
     {"",   "--raw-bytes",   &Args::raw_bytes_path},
+    {"",   "--dll-dir",     &Args::recover_dll_dir},
+    {"",   "--image-base",  &Args::recover_image_base},
     {"",   "--base-va",     &Args::raw_base_va},
     {"",   "--surface", &Args::surface},
     {"",   "--surface-kind", &Args::surface_kind},
@@ -261,6 +264,13 @@ Result<Args> parse_args(int argc, char** argv) {
                 return std::unexpected(Error::invalid_format("--corpus requires a path"));
             }
             a.corpus_paths.emplace_back(argv[i]);
+            continue;
+        }
+        if (s == "--dll") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format("--dll requires a path"));
+            }
+            a.recover_dll_paths.emplace_back(argv[i]);
             continue;
         }
         if (s.starts_with("--corpus=")) {

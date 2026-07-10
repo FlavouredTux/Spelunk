@@ -582,6 +582,20 @@ collect_exports(const Binary& bin,
     const u32 ent_rva      = read_le_at<u32>(edir.data() + 0x20);
     const u32 eot_rva      = read_le_at<u32>(edir.data() + 0x24);
 
+    constexpr u32 kMaxExportSymbols = 1u << 20;
+    if (num_funcs > kMaxExportSymbols || num_names > kMaxExportSymbols) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "pe: export table count exceeds {} entries", kMaxExportSymbols)));
+    }
+    const auto eat = bytes_at_rva(bin, image_base, eat_rva);
+    const auto ent = bytes_at_rva(bin, image_base, ent_rva);
+    const auto eot = bytes_at_rva(bin, image_base, eot_rva);
+    if (num_funcs > eat.size() / 4 ||
+        num_names > ent.size() / 4 || num_names > eot.size() / 2) {
+        return std::unexpected(Error::truncated(
+            "pe: export address/name/ordinal table overruns mapped image"));
+    }
+
     // Forwarder exports point *into* the export data directory itself -
     // the RVA there is the "DLL.Symbol" redirect string, not a function
     // address. Skip them instead of emitting a garbage Symbol at a
@@ -599,16 +613,14 @@ collect_exports(const Binary& bin,
     // Named exports: walk ENT + EOT in parallel. EOT[i] is an index
     // into EAT (0-based, not ordinal-based).
     for (u32 i = 0; i < num_names; ++i) {
-        const auto name_rva_bytes = bytes_at_rva(bin, image_base, ent_rva + i * 4);
-        const auto ord_bytes      = bytes_at_rva(bin, image_base, eot_rva + i * 2);
-        if (name_rva_bytes.size() < 4 || ord_bytes.size() < 2) break;
-        const u32 name_rva = read_le_at<u32>(name_rva_bytes.data());
-        const u16 eat_idx  = read_le_at<u16>(ord_bytes.data());
+        const u32 name_rva = read_le_at<u32>(ent.data() +
+                                              static_cast<std::size_t>(i) * 4);
+        const u16 eat_idx  = read_le_at<u16>(eot.data() +
+                                              static_cast<std::size_t>(i) * 2);
         if (eat_idx >= num_funcs) continue;
 
-        const auto eat_bytes = bytes_at_rva(bin, image_base, eat_rva + eat_idx * 4);
-        if (eat_bytes.size() < 4) continue;
-        const u32 func_rva = read_le_at<u32>(eat_bytes.data());
+        const u32 func_rva = read_le_at<u32>(eat.data() +
+                                              static_cast<std::size_t>(eat_idx) * 4);
         if (func_rva == 0 || is_forwarder(func_rva)) continue;
 
         const auto name = cstr_at_rva(bin, image_base, name_rva);
@@ -627,20 +639,19 @@ collect_exports(const Binary& bin,
     // for the gaps. Keeps addresses resolvable even without a name.
     std::vector<bool> named(num_funcs, false);
     for (u32 i = 0; i < num_names; ++i) {
-        const auto ord_bytes = bytes_at_rva(bin, image_base, eot_rva + i * 2);
-        if (ord_bytes.size() < 2) break;
-        const u16 eat_idx = read_le_at<u16>(ord_bytes.data());
+        const u16 eat_idx = read_le_at<u16>(eot.data() +
+                                             static_cast<std::size_t>(i) * 2);
         if (eat_idx < num_funcs) named[eat_idx] = true;
     }
     for (u32 i = 0; i < num_funcs; ++i) {
         if (named[i]) continue;
-        const auto eat_bytes = bytes_at_rva(bin, image_base, eat_rva + i * 4);
-        if (eat_bytes.size() < 4) break;
-        const u32 func_rva = read_le_at<u32>(eat_bytes.data());
+        const u32 func_rva = read_le_at<u32>(eat.data() +
+                                              static_cast<std::size_t>(i) * 4);
         if (func_rva == 0 || is_forwarder(func_rva)) continue;
 
         Symbol sym;
-        sym.name      = std::format("Ordinal#{}", ordinal_base + i);
+        sym.name      = std::format("Ordinal#{}",
+                                    static_cast<u64>(ordinal_base) + i);
         sym.addr      = image_base + static_cast<addr_t>(func_rva);
         sym.kind      = SymbolKind::Function;
         sym.is_export = true;

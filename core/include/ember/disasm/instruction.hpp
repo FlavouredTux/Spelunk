@@ -307,13 +307,17 @@ enum class ArmShift : u8 { Lsl = 0, Lsr = 1, Asr = 2, Ror = 3 };
 [[nodiscard]] std::string_view mnemonic_name(Mnemonic m) noexcept;
 
 struct Mem {
+    enum class Writeback : u8 { None, PreIndex, PostIndex };
+
     Reg  segment  = Reg::None;
     Reg  base     = Reg::None;
     Reg  index    = Reg::None;
     u8   scale    = 1;
     i64  disp     = 0;
     u8   size     = 0;
+    u8   address_size = 8;
     bool has_disp = false;
+    Writeback writeback = Writeback::None;
 };
 
 struct Imm {

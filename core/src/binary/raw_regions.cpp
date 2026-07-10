@@ -27,7 +27,14 @@ namespace {
     return v;
 }
 
-[[nodiscard]] SectionFlags parse_flags(std::string_view tok) noexcept {
+[[nodiscard]] Result<SectionFlags> parse_flags(std::string_view tok) {
+    if (tok.size() != 3 ||
+        (tok[0] != 'r' && tok[0] != '-') ||
+        (tok[1] != 'w' && tok[1] != '-') ||
+        (tok[2] != 'x' && tok[2] != '-')) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "regions: bad flags '{}'; expected [r-][w-][x-]", tok)));
+    }
     SectionFlags f{};
     f.allocated = true;
     if (tok.size() >= 1 && tok[0] == 'r') f.readable   = true;
@@ -82,11 +89,26 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
             return std::unexpected(Error::invalid_format(std::format(
                 "regions: line {}: expected `vaddr size flags file`", lineno)));
         }
+        std::string extra;
+        if (toks >> extra) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "regions: line {}: unexpected extra field '{}'", lineno, extra)));
+        }
 
         auto va_r = parse_hex(tva);
         if (!va_r) return std::unexpected(std::move(va_r).error());
         auto sz_r = parse_hex(tsz);
         if (!sz_r) return std::unexpected(std::move(sz_r).error());
+        auto flags_r = parse_flags(tfl);
+        if (!flags_r) return std::unexpected(std::move(flags_r).error());
+        if (*sz_r == 0) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "regions: line {}: zero-sized region", lineno)));
+        }
+        if (*sz_r > std::numeric_limits<addr_t>::max() - *va_r) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "regions: line {}: virtual-address extent wraps", lineno)));
+        }
 
         // Cap a single region at 4 GiB and reject buffer-growth overflow.
         // Without this an attacker-controlled manifest size of UINT64_MAX
@@ -105,7 +127,12 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
             return std::unexpected(Error::io(std::format(
                 "regions: line {}: cannot open '{}'", lineno, file_path.string())));
         }
-        const auto disk_sz = static_cast<std::size_t>(rf.tellg());
+        const auto disk_end = rf.tellg();
+        if (disk_end < 0) {
+            return std::unexpected(Error::io(std::format(
+                "regions: line {}: cannot size '{}'", lineno, file_path.string())));
+        }
+        const auto disk_sz = static_cast<std::size_t>(disk_end);
         rf.seekg(0);
         // The manifest's declared size wins - pad with zeros if the file
         // is shorter (uninitialized BSS-like range), truncate if longer.
@@ -120,15 +147,28 @@ RawRegionsBinary::load_from_manifest(const std::filesystem::path& manifest) {
         if (take > 0) {
             rf.read(reinterpret_cast<char*>(out->buffer_.data() + file_off),
                     static_cast<std::streamsize>(take));
+            if (!rf) {
+                return std::unexpected(Error::io(std::format(
+                    "regions: line {}: short read from '{}'", lineno,
+                    file_path.string())));
+            }
         }
 
         out->ranges_.push_back({
-            *va_r, *sz_r, file_off, parse_flags(tfl)
+            *va_r, *sz_r, file_off, *flags_r
         });
     }
 
     std::sort(out->ranges_.begin(), out->ranges_.end(),
               [](const Range& a, const Range& b) { return a.vaddr < b.vaddr; });
+    for (std::size_t i = 1; i < out->ranges_.size(); ++i) {
+        const auto& prev = out->ranges_[i - 1];
+        const auto& cur = out->ranges_[i];
+        if (cur.vaddr < prev.vaddr + prev.size) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "regions: overlapping ranges at {:#x}", cur.vaddr)));
+        }
+    }
 
     out->sections_.reserve(out->ranges_.size());
     for (const auto& rg : out->ranges_) {
@@ -155,8 +195,17 @@ RawRegionsBinary::load_from_raw_bytes(const std::filesystem::path& file,
         return std::unexpected(Error::io(std::format(
             "raw-bytes: cannot open '{}'", file.string())));
     }
-    const auto sz = static_cast<std::size_t>(rf.tellg());
+    const auto disk_end = rf.tellg();
+    if (disk_end < 0) {
+        return std::unexpected(Error::io(std::format(
+            "raw-bytes: cannot size '{}'", file.string())));
+    }
+    const auto sz = static_cast<std::size_t>(disk_end);
     rf.seekg(0);
+    if (sz > std::numeric_limits<addr_t>::max() - base_va) {
+        return std::unexpected(Error::invalid_format(
+            "raw-bytes: virtual-address extent wraps"));
+    }
 
     auto out = std::unique_ptr<RawRegionsBinary>(new RawRegionsBinary());
     out->buffer_.resize(sz);

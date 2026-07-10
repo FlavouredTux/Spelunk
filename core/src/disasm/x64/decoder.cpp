@@ -707,6 +707,8 @@ decode_modrm_rm(Context& ctx, unsigned size, bool mem_only) noexcept {
     Mem m;
     m.size    = static_cast<u8>(size);
     m.segment = ctx.prefix.segment;
+    const unsigned address_size = ctx.prefix.addrsize ? 4u : 8u;
+    m.address_size = static_cast<u8>(address_size);
 
     if (rm == 4) {
         auto sib_r = ctx.read_u8();
@@ -719,26 +721,30 @@ decode_modrm_rm(Context& ctx, unsigned size, bool mem_only) noexcept {
         const u8 base_ext    = static_cast<u8>((ctx.rex_b ? 8u : 0u) | base_bits);
 
         if (!(index_bits == 4 && !ctx.rex_x)) {
-            m.index = gpr(index_ext, 8, /*rex_present=*/true);
+            m.index = gpr(index_ext, address_size, /*rex_present=*/true);
             m.scale = static_cast<u8>(1u << scale_bits);
         }
 
         if (mod == 0 && base_bits == 5) {
             auto d = ctx.read_le<u32>();
             if (!d) return std::unexpected(std::move(d).error());
-            m.disp = static_cast<i64>(static_cast<i32>(*d));
+            m.disp = ctx.prefix.addrsize
+                ? static_cast<i64>(*d)
+                : static_cast<i64>(static_cast<i32>(*d));
             m.has_disp = true;
         } else {
-            m.base = gpr(base_ext, 8, /*rex_present=*/true);
+            m.base = gpr(base_ext, address_size, /*rex_present=*/true);
         }
     } else if (mod == 0 && rm == 5) {
         auto d = ctx.read_le<u32>();
         if (!d) return std::unexpected(std::move(d).error());
-        m.base = Reg::Rip;
-        m.disp = static_cast<i64>(static_cast<i32>(*d));
+        m.base = ctx.prefix.addrsize ? Reg::None : Reg::Rip;
+        m.disp = ctx.prefix.addrsize
+            ? static_cast<i64>(*d)
+            : static_cast<i64>(static_cast<i32>(*d));
         m.has_disp = true;
     } else {
-        m.base = gpr(rm_ext, 8, /*rex_present=*/true);
+        m.base = gpr(rm_ext, address_size, /*rex_present=*/true);
     }
 
     if (mod == 1) {
@@ -887,7 +893,9 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
         }
 
         case OpSpec::Jb: return decode_rel(ctx, 1, insn_addr);
-        case OpSpec::Jz: return decode_rel(ctx, (os == 2) ? 2 : 4, insn_addr);
+        // Near branches in 64-bit mode always carry rel32. 0x66 does not
+        // shrink the displacement to rel16.
+        case OpSpec::Jz: return decode_rel(ctx, 4, insn_addr);
 
         case OpSpec::AL:  return Operand::make_reg(Reg::Al);
         case OpSpec::CL:  return Operand::make_reg(Reg::Cl);

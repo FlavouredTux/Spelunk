@@ -200,9 +200,29 @@ struct LiftCtx {
         emit_assign(IrValue::make_reg(canon, IrType::I64), widened);
     }
 
+    IrValue apply_shift(IrValue value, ArmShift shift, u8 amount) {
+        if (amount == 0) return value;
+        IrValue count = imm(amount, value.type);
+        switch (shift) {
+            case ArmShift::Lsl: return emit_binop(IrOp::Shl, value, count);
+            case ArmShift::Lsr: return emit_binop(IrOp::Lshr, value, count);
+            case ArmShift::Asr: return emit_binop(IrOp::Ashr, value, count);
+            case ArmShift::Ror: {
+                const unsigned width = type_bits(value.type);
+                IrValue lo = emit_binop(IrOp::Lshr, value, count);
+                IrValue hi = emit_binop(IrOp::Shl, value,
+                    imm(static_cast<i64>(width - amount), value.type));
+                return emit_binop(IrOp::Or, lo, hi);
+            }
+        }
+        return value;
+    }
+
     IrValue materialize_op(const Operand& op) {
         switch (op.kind) {
-            case Operand::Kind::Register: return read_reg(op.reg);
+            case Operand::Kind::Register:
+                return apply_shift(read_reg(op.reg), op.arm_shift,
+                                   op.arm_shift_amt);
             case Operand::Kind::Immediate: {
                 const IrType t = (op.imm.size >= 8) ? IrType::I64 : IrType::I32;
                 return imm(op.imm.value, t);
@@ -237,11 +257,24 @@ struct LiftCtx {
             }
             base = emit_binop(IrOp::Add, base, idx);
         }
-        if (m.disp != 0 || m.base == Reg::None) {
+        if (m.writeback != Mem::Writeback::PostIndex &&
+            (m.disp != 0 || m.base == Reg::None)) {
             base = emit_binop(IrOp::Add, base,
                               imm(m.disp, IrType::I64));
         }
         return base;
+    }
+
+    void apply_writeback(const Mem& m, IrValue access_ea) {
+        if (m.writeback == Mem::Writeback::None || m.base == Reg::None) return;
+        IrValue next = access_ea;
+        if (m.writeback == Mem::Writeback::PostIndex) {
+            IrValue old = read_reg(m.base);
+            if (old.type != IrType::I64)
+                old = emit_convert(IrOp::ZExt, old, IrType::I64);
+            next = emit_binop(IrOp::Add, old, imm(m.disp, IrType::I64));
+        }
+        write_reg(m.base, next);
     }
 };
 
@@ -255,9 +288,10 @@ void set_nzcv(LiftCtx& ctx, IrValue a, IrValue b, IrValue result, bool subtract)
     const IrType t = result.type;
     ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, result, ctx.imm(0, t)));
     ctx.emit_set_flag(Flag::Sf, ctx.emit_cmp(IrOp::CmpSlt, result, ctx.imm(0, t)));
-    ctx.emit_set_flag(Flag::Cf,
-        subtract ? ctx.emit_binop_i1(IrOp::SubBorrow, a, b)
-                  : ctx.emit_binop_i1(IrOp::AddCarry, a, b));
+    IrValue carry = subtract
+        ? ctx.emit_unop(IrOp::Not, ctx.emit_binop_i1(IrOp::SubBorrow, a, b))
+        : ctx.emit_binop_i1(IrOp::AddCarry, a, b);
+    ctx.emit_set_flag(Flag::Cf, carry);
     ctx.emit_set_flag(Flag::Of,
         subtract ? ctx.emit_binop_i1(IrOp::SubOverflow, a, b)
                   : ctx.emit_binop_i1(IrOp::AddOverflow, a, b));
@@ -332,7 +366,8 @@ void lift_movk(LiftCtx& ctx) {
     IrValue cur = ctx.read_reg(dst);
     const u64 shift = static_cast<u64>(insn.operands[2].imm.value & 0x3f);
     const u64 mask = u64{0xffff} << shift;
-    const u64 imm_v = static_cast<u64>(insn.operands[1].imm.value) << shift;
+    // The decoder already places imm16 at its architectural bit position.
+    const u64 imm_v = static_cast<u64>(insn.operands[1].imm.value);
     IrValue mask_v = ctx.imm(static_cast<i64>(~mask), cur.type);
     IrValue clear  = ctx.emit_binop(IrOp::And, cur, mask_v);
     IrValue merged = ctx.emit_binop(IrOp::Or, clear,
@@ -372,11 +407,15 @@ void lift_load(LiftCtx& ctx, unsigned access_bits, bool sign_extend) {
         return;
     }
     IrValue val = ctx.emit_load(ea, type_for_bits(access_bits));
-    if (val.type != IrType::I64) {
+    const IrType result_type = type_for_bits(
+        reg_size(insn.operands[0].reg) * 8);
+    if (val.type != result_type) {
         val = ctx.emit_convert(sign_extend ? IrOp::SExt : IrOp::ZExt,
-                                val, IrType::I64);
+                                val, result_type);
     }
     ctx.write_reg(insn.operands[0].reg, val);
+    if (insn.operands[1].kind == Operand::Kind::Memory)
+        ctx.apply_writeback(insn.operands[1].mem, ea);
 }
 
 void lift_store(LiftCtx& ctx, unsigned access_bits) {
@@ -388,11 +427,13 @@ void lift_store(LiftCtx& ctx, unsigned access_bits) {
         val = ctx.emit_convert(IrOp::Trunc, val, narrow);
     }
     if (insn.operands[1].kind == Operand::Kind::Memory) {
-        ctx.emit_store(ctx.compute_ea(insn.operands[1].mem), val);
+        IrValue ea = ctx.compute_ea(insn.operands[1].mem);
+        ctx.emit_store(ea, val);
+        ctx.apply_writeback(insn.operands[1].mem, ea);
     }
 }
 
-void lift_ldp(LiftCtx& ctx) {
+void lift_ldp(LiftCtx& ctx, bool sign_extend) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 3) return;
     if (insn.operands[2].kind != Operand::Kind::Memory) return;
@@ -403,8 +444,13 @@ void lift_ldp(LiftCtx& ctx) {
     IrValue offs  = ctx.imm(elem_bytes, IrType::I64);
     IrValue ea2   = ctx.emit_binop(IrOp::Add, ea, offs);
     IrValue second = ctx.emit_load(ea2, t);
+    if (sign_extend) {
+        first = ctx.emit_convert(IrOp::SExt, first, IrType::I64);
+        second = ctx.emit_convert(IrOp::SExt, second, IrType::I64);
+    }
     ctx.write_reg(insn.operands[0].reg, first);
     ctx.write_reg(insn.operands[1].reg, second);
+    ctx.apply_writeback(insn.operands[2].mem, ea);
 }
 
 void lift_stp(LiftCtx& ctx) {
@@ -422,6 +468,7 @@ void lift_stp(LiftCtx& ctx) {
     IrValue offs = ctx.imm(elem_bytes, IrType::I64);
     IrValue ea2  = ctx.emit_binop(IrOp::Add, ea, offs);
     ctx.emit_store(ea2, second);
+    ctx.apply_writeback(insn.operands[2].mem, ea);
 }
 
 [[nodiscard]] IrValue cond_predicate(LiftCtx& ctx, unsigned cond) {
@@ -463,6 +510,16 @@ void lift_csel(LiftCtx& ctx, IrOp transform_rhs, bool negate_rhs) {
 
 void lift_call(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
+    const auto args = int_arg_regs(ctx.abi);
+    for (std::size_t lo = 0, group = 1; lo < args.size(); lo += 3, ++group) {
+        IrInst barrier;
+        barrier.op = IrOp::Intrinsic;
+        barrier.name = std::format("call.args.{}", group);
+        for (std::size_t i = lo; i < args.size() && i < lo + 3; ++i) {
+            barrier.srcs[barrier.src_count++] = ctx.read_reg(args[i]);
+        }
+        ctx.emit(std::move(barrier));
+    }
     IrInst i;
     i.op = IrOp::Call;
     if (insn.num_operands >= 1 &&
@@ -475,6 +532,12 @@ void lift_call(LiftCtx& ctx) {
         i.src_count = 1;
     }
     ctx.emit(std::move(i));
+    for (Reg r : caller_saved_int_regs(ctx.abi)) {
+        IrInst clobber;
+        clobber.op = IrOp::Clobber;
+        clobber.dst = IrValue::make_reg(r, IrType::I64);
+        ctx.emit(std::move(clobber));
+    }
 }
 
 void lift_ret(LiftCtx& ctx) {
@@ -557,6 +620,15 @@ void lift_intrinsic(LiftCtx& ctx, std::string_view name) {
         if (v.kind != IrValueKind::None) i.srcs[i.src_count++] = v;
     }
     ctx.emit(std::move(i));
+}
+
+[[nodiscard]] unsigned access_bits(const Instruction& insn,
+                                   std::size_t operand_index) noexcept {
+    if (operand_index >= insn.num_operands) return 0;
+    const Operand& op = insn.operands[operand_index];
+    if (op.kind == Operand::Kind::Memory) return op.mem.size * 8u;
+    if (op.kind == Operand::Kind::Relative) return op.rel.size * 8u;
+    return 0;
 }
 
 void lift_instruction(LiftCtx& ctx) {
@@ -676,25 +748,26 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         }
 
-        case Mnemonic::A64Ldr:    lift_load(ctx, 64, false); break;
+        case Mnemonic::A64Ldr:    lift_load(ctx, access_bits(insn, 1), false); break;
         case Mnemonic::A64Ldrb:   lift_load(ctx, 8,  false); break;
         case Mnemonic::A64Ldrh:   lift_load(ctx, 16, false); break;
         case Mnemonic::A64Ldrsb:  lift_load(ctx, 8,  true);  break;
         case Mnemonic::A64Ldrsh:  lift_load(ctx, 16, true);  break;
         case Mnemonic::A64Ldrsw:  lift_load(ctx, 32, true);  break;
-        case Mnemonic::A64Ldur:   lift_load(ctx, 64, false); break;
+        case Mnemonic::A64Ldur:   lift_load(ctx, access_bits(insn, 1), false); break;
         case Mnemonic::A64Ldurb:  lift_load(ctx, 8,  false); break;
         case Mnemonic::A64Ldurh:  lift_load(ctx, 16, false); break;
         case Mnemonic::A64Ldursb: lift_load(ctx, 8,  true);  break;
         case Mnemonic::A64Ldursh: lift_load(ctx, 16, true);  break;
         case Mnemonic::A64Ldursw: lift_load(ctx, 32, true);  break;
-        case Mnemonic::A64Str:    lift_store(ctx, 64); break;
+        case Mnemonic::A64Str:    lift_store(ctx, access_bits(insn, 1)); break;
         case Mnemonic::A64Strb:   lift_store(ctx, 8);  break;
         case Mnemonic::A64Strh:   lift_store(ctx, 16); break;
-        case Mnemonic::A64Stur:   lift_store(ctx, 64); break;
+        case Mnemonic::A64Stur:   lift_store(ctx, access_bits(insn, 1)); break;
         case Mnemonic::A64Sturb:  lift_store(ctx, 8);  break;
         case Mnemonic::A64Sturh:  lift_store(ctx, 16); break;
-        case Mnemonic::A64Ldp: case Mnemonic::A64Ldpsw: lift_ldp(ctx); break;
+        case Mnemonic::A64Ldp:   lift_ldp(ctx, false); break;
+        case Mnemonic::A64Ldpsw: lift_ldp(ctx, true);  break;
         case Mnemonic::A64Stp:                          lift_stp(ctx); break;
 
         case Mnemonic::A64Csel:  lift_csel(ctx, IrOp::Nop, false); break;

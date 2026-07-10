@@ -79,6 +79,14 @@ using u32 = ember::u32;
     return Operand::make_reg(r);
 }
 
+[[nodiscard]] Operand make_shifted_reg(Reg r, ArmShift shift,
+                                       unsigned amount) noexcept {
+    Operand op = Operand::make_reg(r);
+    op.arm_shift = shift;
+    op.arm_shift_amt = static_cast<u8>(amount);
+    return op;
+}
+
 [[nodiscard]] Operand make_imm_u(u64 v, u8 size = 8) noexcept {
     Imm i;
     i.value = static_cast<i64>(v);
@@ -102,12 +110,15 @@ using u32 = ember::u32;
     return Operand::make_rel(r);
 }
 
-[[nodiscard]] Operand make_mem(Reg base, i64 disp, u8 size, bool has_disp = true) noexcept {
+[[nodiscard]] Operand make_mem(Reg base, i64 disp, u8 size,
+                               bool has_disp = true,
+                               Mem::Writeback writeback = Mem::Writeback::None) noexcept {
     Mem m;
     m.base = base;
     m.disp = disp;
     m.size = size;
     m.has_disp = has_disp;
+    m.writeback = writeback;
     return Operand::make_mem(m);
 }
 
@@ -267,6 +278,10 @@ void decode_dp_imm(u32 raw, addr_t addr, Instruction& insn) {
         case 0b101: {
             const unsigned opc = bits(raw, 30, 29);
             const unsigned hw  = bits(raw, 22, 21);
+            if (!sf && hw >= 2) {
+                insn.mnemonic = Mnemonic::Invalid;
+                return;
+            }
             const u64 imm16    = bits(raw, 20, 5);
             const Reg rd = gpr_of(Rd, sf, /*is_sp=*/false);
             switch (opc) {
@@ -484,14 +499,10 @@ void decode_branch_sys(u32 raw, addr_t addr, Instruction& insn) {
 void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
     // Load/store register pair: bits 29:27 = 101, bit 26 = V (0 = GPR, 1 = FP/SIMD),
     // bits 25:23 = 010 (post-index) / 011 (pre-index) / 010 (signed offset, with bit 24 = 1).
-    if (bits(raw, 29, 27) == 0b101 && bit(raw, 26) == 0 &&
-        bits(raw, 25, 24) == 0b00) {
-        const unsigned variant = bits(raw, 24, 23);    // 00 NoAlloc, 01 Post, 10 Off, 11 Pre
-        (void)variant;
-    }
     if (bits(raw, 29, 27) == 0b101 && bits(raw, 25, 23) <= 0b011 &&
         bit(raw, 26) == 0) {
         const unsigned opc = bits(raw, 31, 30);
+        const unsigned variant = bits(raw, 24, 23);
         const bool L  = bit(raw, 22);
         const i64 imm7 = sign_extend(bits(raw, 21, 15), 7);
         // opc encoding (ARM ARM C4.1.4):
@@ -525,14 +536,20 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
             insn.mnemonic = Mnemonic::A64Ldpsw;
             const unsigned scale = 2;
             set_ops(insn, make_reg(rt), make_reg(rt2),
-                          make_mem(rn, imm7 << scale, 4));
+                          make_mem(rn, imm7 << scale, 4, true,
+                              variant == 0b01 ? Mem::Writeback::PostIndex :
+                              variant == 0b11 ? Mem::Writeback::PreIndex :
+                                                Mem::Writeback::None));
             return;
         }
         const unsigned scale = (opc == 0b10) ? 3u : 2u;
         const u8 access_size = (opc == 0b10) ? 8u : 4u;
         insn.mnemonic = L ? Mnemonic::A64Ldp : Mnemonic::A64Stp;
         set_ops(insn, make_reg(rt), make_reg(rt2),
-                      make_mem(rn, imm7 << scale, access_size));
+                      make_mem(rn, imm7 << scale, access_size, true,
+                          variant == 0b01 ? Mem::Writeback::PostIndex :
+                          variant == 0b11 ? Mem::Writeback::PreIndex :
+                                            Mem::Writeback::None));
         return;
     }
 
@@ -626,18 +643,17 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
         if (V) {
             insn.mnemonic = (opc & 1) ? Mnemonic::A64Ldur : Mnemonic::A64Stur;
             set_ops(insn, make_reg(vreg_of(bits(raw, 4, 0))),
-                          make_mem(rn, imm9, access_size));
+                          make_mem(rn, imm9, access_size, true,
+                              op2 == 0b01 ? Mem::Writeback::PostIndex :
+                              op2 == 0b11 ? Mem::Writeback::PreIndex :
+                                            Mem::Writeback::None));
             return;
         }
         const bool is_64 = size == 0b11 || (opc & 0b10) != 0;
         const Reg rt = gpr_of(bits(raw, 4, 0), is_64, /*is_sp=*/false);
 
-        // op2: 00 unscaled (LDUR/STUR), 01 post-indexed, 11 pre-indexed.
-        // For v1 we emit the same mnemonic shape (LDUR/STUR/LDR/STR) and
-        // encode the address as a Mem with disp; pre/post is documented in
-        // a comment but not lifted as an actual reg-write side effect. Some
-        // dataflow accuracy is lost (the writeback is invisible), but the
-        // base+disp form is enough for CFG + linear sweep.
+        // op2: 00 unscaled, 01 post-indexed, 11 pre-indexed, 10
+        // unprivileged. Preserve writeback so the lifter can order it.
         Mnemonic m = Mnemonic::Invalid;
         if (opc == 0b00) {
             switch (size) {
@@ -659,10 +675,12 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
                 default:   m = Mnemonic::Invalid;   break;
             }
         }
-        (void)op2;
         if (m == Mnemonic::Invalid) { insn.mnemonic = Mnemonic::Invalid; return; }
         insn.mnemonic = m;
-        set_ops(insn, make_reg(rt), make_mem(rn, imm9, access_size));
+        set_ops(insn, make_reg(rt), make_mem(rn, imm9, access_size, true,
+            op2 == 0b01 ? Mem::Writeback::PostIndex :
+            op2 == 0b11 ? Mem::Writeback::PreIndex :
+                          Mem::Writeback::None));
         return;
     }
 
@@ -683,6 +701,11 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
         const Reg rd = gpr_of(Rd, sf, false);
         const Reg rn = gpr_of(Rn, sf, false);
         const Reg rm = gpr_of(Rm, sf, false);
+        const unsigned shift_raw = bits(raw, 23, 22);
+        const unsigned amount = bits(raw, 15, 10);
+        if (!sf && amount >= 32) { insn.mnemonic = Mnemonic::Invalid; return; }
+        const ArmShift shift = static_cast<ArmShift>(shift_raw);
+        const Operand shifted_rm = make_shifted_reg(rm, shift, amount);
         Mnemonic m = Mnemonic::Invalid;
         switch (opc) {
             case 0b00: m = N ? Mnemonic::A64Bic : Mnemonic::A64And; break;
@@ -691,19 +714,21 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
             case 0b11: m = N ? Mnemonic::A64Bics : Mnemonic::A64Ands; break;
         }
         // ORR with shift=0 + Rn=zr is a register-to-register MOV alias.
-        if (m == Mnemonic::A64Orr && Rn == 31 && bits(raw, 15, 10) == 0) {
+        if (m == Mnemonic::A64Orr && Rn == 31 &&
+            shift == ArmShift::Lsl && amount == 0) {
             insn.mnemonic = Mnemonic::A64Mov;
             set_ops(insn, make_reg(rd), make_reg(rm));
             return;
         }
         // ORN with Rn=zr is MVN alias.
-        if (m == Mnemonic::A64Orn && Rn == 31) {
+        if (m == Mnemonic::A64Orn && Rn == 31 &&
+            shift == ArmShift::Lsl && amount == 0) {
             insn.mnemonic = Mnemonic::A64Mvn;
             set_ops(insn, make_reg(rd), make_reg(rm));
             return;
         }
         insn.mnemonic = m;
-        set_ops(insn, make_reg(rd), make_reg(rn), make_reg(rm));
+        set_ops(insn, make_reg(rd), make_reg(rn), shifted_rm);
         return;
     }
 
@@ -714,9 +739,17 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
         const Reg rd = gpr_of(Rd, sf, false);
         const Reg rn = gpr_of(Rn, sf, false);
         const Reg rm = gpr_of(Rm, sf, false);
+        const unsigned shift_raw = bits(raw, 23, 22);
+        const unsigned amount = bits(raw, 15, 10);
+        if (shift_raw == 3 || (!sf && amount >= 32)) {
+            insn.mnemonic = Mnemonic::Invalid;
+            return;
+        }
+        const Operand shifted_rm = make_shifted_reg(
+            rm, static_cast<ArmShift>(shift_raw), amount);
         if (S && Rd == 31) {
             insn.mnemonic = op ? Mnemonic::Cmp : Mnemonic::Cmn;
-            set_ops(insn, make_reg(rn), make_reg(rm));
+            set_ops(insn, make_reg(rn), shifted_rm);
         } else {
             insn.mnemonic = op
                 ? (S ? Mnemonic::A64Subs : Mnemonic::A64Sub)
@@ -726,10 +759,10 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
                  insn.mnemonic == Mnemonic::A64Subs) && Rn == 31) {
                 insn.mnemonic = (insn.mnemonic == Mnemonic::A64Subs)
                     ? Mnemonic::A64Negs : Mnemonic::A64Neg;
-                set_ops(insn, make_reg(rd), make_reg(rm));
+                set_ops(insn, make_reg(rd), shifted_rm);
                 return;
             }
-            set_ops(insn, make_reg(rd), make_reg(rn), make_reg(rm));
+            set_ops(insn, make_reg(rd), make_reg(rn), shifted_rm);
         }
         return;
     }
@@ -751,9 +784,10 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
         // CSINC Rd, ZR, ZR, cond → CSET (and CSINV→CSETM, etc).
         if (Rn == 31 && Rm == 31 &&
             (m == Mnemonic::A64Csinc || m == Mnemonic::A64Csinv)) {
+            if (cond >= 0xe) { insn.mnemonic = Mnemonic::Invalid; return; }
             insn.mnemonic = (m == Mnemonic::A64Csinc)
                 ? Mnemonic::A64Cset : Mnemonic::A64Csetm;
-            set_ops(insn, make_reg(rd), make_imm_u(cond, 1));
+            set_ops(insn, make_reg(rd), make_imm_u(cond ^ 1u, 1));
             return;
         }
         insn.mnemonic = m;

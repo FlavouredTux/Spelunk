@@ -1,8 +1,10 @@
 #include <ember/binary/minidump.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <format>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -192,7 +194,8 @@ Result<void> MinidumpBinary::parse() {
 
     const u32 nstreams = *nstreams_r;
     const u32 dir_rva  = *dir_rva_r;
-    if (nstreams > (buffer_.size() - dir_rva) / kDirectoryEntrySize) {
+    if (dir_rva > buffer_.size() ||
+        nstreams > (buffer_.size() - dir_rva) / kDirectoryEntrySize) {
         return std::unexpected(Error::truncated(std::format(
             "minidump: directory of {} streams overruns file", nstreams)));
     }
@@ -202,7 +205,8 @@ Result<void> MinidumpBinary::parse() {
     struct Loc { u32 size = 0; u32 rva = 0; bool present = false; };
     Loc sysinfo, modules, mem_list, mem64_list, mem_info;
     for (u32 i = 0; i < nstreams; ++i) {
-        const std::size_t base = dir_rva + i * kDirectoryEntrySize;
+        const std::size_t base = static_cast<std::size_t>(dir_rva) +
+                                 static_cast<std::size_t>(i) * kDirectoryEntrySize;
         const u32 type = read_le_at<u32>(buffer_.data() + base);
         const u32 size = read_le_at<u32>(buffer_.data() + base + 4);
         const u32 rva  = read_le_at<u32>(buffer_.data() + base + 8);
@@ -215,6 +219,22 @@ Result<void> MinidumpBinary::parse() {
             case kThreadListStream:     break;  // not consumed (yet)
             default: break;
         }
+    }
+
+    auto validate_stream = [&](const Loc& loc, std::string_view name) -> Result<void> {
+        if (!loc.present) return {};
+        if (loc.rva > buffer_.size() || loc.size > buffer_.size() - loc.rva) {
+            return std::unexpected(Error::truncated(std::format(
+                "minidump: {} stream [{:#x}, +{:#x}) overruns file",
+                name, loc.rva, loc.size)));
+        }
+        return {};
+    };
+    for (const auto& [loc, name] : std::to_array<std::pair<const Loc*, std::string_view>>({
+             {&sysinfo, "system-info"}, {&modules, "module-list"},
+             {&mem_list, "memory-list"}, {&mem64_list, "memory64-list"},
+             {&mem_info, "memory-info"}})) {
+        if (auto rv = validate_stream(*loc, name); !rv) return rv;
     }
 
     // SystemInfoStream - sets arch. Absent → arch stays Unknown and the
@@ -231,7 +251,7 @@ Result<void> MinidumpBinary::parse() {
         const std::size_t base = mem64_list.rva;
         const u64 nranges  = read_le_at<u64>(buffer_.data() + base);
         const u64 base_rva = read_le_at<u64>(buffer_.data() + base + 8);
-        if (nranges > (buffer_.size() - base - 16) / 16) {
+        if (nranges > (mem64_list.size - 16) / 16) {
             return std::unexpected(Error::truncated(std::format(
                 "minidump: memory64 list claims {} ranges", nranges)));
         }
@@ -257,7 +277,7 @@ Result<void> MinidumpBinary::parse() {
         //   u32 Rva         /
         const std::size_t base = mem_list.rva;
         const u32 nranges = read_le_at<u32>(buffer_.data() + base);
-        if (nranges > (buffer_.size() - base - 4) / 16) {
+        if (nranges > (mem_list.size - 4) / 16) {
             return std::unexpected(Error::truncated(std::format(
                 "minidump: memory list claims {} ranges", nranges)));
         }
@@ -278,6 +298,21 @@ Result<void> MinidumpBinary::parse() {
 
     std::sort(ranges_.begin(), ranges_.end(),
               [](const Range& a, const Range& b) { return a.vaddr < b.vaddr; });
+    for (std::size_t i = 0; i < ranges_.size(); ++i) {
+        const auto& rg = ranges_[i];
+        if (rg.size > std::numeric_limits<addr_t>::max() - rg.vaddr) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "minidump: memory range [{:#x}, +{:#x}) wraps address space",
+                rg.vaddr, rg.size)));
+        }
+        if (i > 0) {
+            const auto& prev = ranges_[i - 1];
+            if (rg.vaddr < prev.vaddr + prev.size) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "minidump: overlapping memory ranges at {:#x}", rg.vaddr)));
+            }
+        }
+    }
 
     // Optional MemoryInfoListStream - refines per-range page protection.
     // Layout: u32 SizeOfHeader, u32 SizeOfEntry, u64 NumberOfEntries,
@@ -289,7 +324,7 @@ Result<void> MinidumpBinary::parse() {
         const u32 entry_sz  = read_le_at<u32>(buffer_.data() + base + 4);
         const u64 nentries  = read_le_at<u64>(buffer_.data() + base + 8);
         if (entry_sz >= 0x1C && header_sz <= mem_info.size &&
-            nentries <= (buffer_.size() - base - header_sz) / entry_sz) {
+            nentries <= (mem_info.size - header_sz) / entry_sz) {
             for (u64 i = 0; i < nentries; ++i) {
                 const std::size_t e = base + header_sz +
                                        static_cast<std::size_t>(i) * entry_sz;
@@ -344,7 +379,7 @@ Result<void> MinidumpBinary::parse() {
     if (modules.present && modules.size >= 4) {
         const std::size_t base = modules.rva;
         const u32 nmods = read_le_at<u32>(buffer_.data() + base);
-        if (nmods > (buffer_.size() - base - 4) / 108) {
+        if (nmods > (modules.size - 4) / 108) {
             return std::unexpected(Error::truncated(std::format(
                 "minidump: module list claims {} modules", nmods)));
         }
@@ -356,7 +391,8 @@ Result<void> MinidumpBinary::parse() {
             const u32 name_rva = read_le_at<u32>(buffer_.data() + e + 0x14);
 
             std::string name;
-            if (name_rva + 4 <= buffer_.size()) {
+            if (name_rva <= buffer_.size() &&
+                4 <= buffer_.size() - name_rva) {
                 const u32 name_bytes = read_le_at<u32>(buffer_.data() + name_rva);
                 const std::size_t s_off = name_rva + 4;
                 if (name_bytes <= buffer_.size() - s_off) {

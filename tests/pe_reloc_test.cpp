@@ -97,6 +97,12 @@ int main() {
     put16(b, reloc_off + 8, static_cast<u16>((10u << 12) | 0x18u));
     put16(b, reloc_off + 10, 0);
 
+    auto malformed_exports = b;
+    put32(malformed_exports, opt + 0x70, rdata_rva);
+    put32(malformed_exports, opt + 0x74, 40);
+    put32(malformed_exports, sec + 1 * 40 + 0x08, 0x200);
+    put32(malformed_exports, rdata_off + 0x14, 0xffffffff);
+
     auto pe = PeBinary::load_from_buffer(std::move(b));
     check(pe.has_value(), "synthetic PE should load");
 
@@ -105,5 +111,7 @@ int main() {
     const auto it = relocs.find(image_base + slot_rva);
     check(it != relocs.end(), "relocated slot VA missing");
     check(it->second == target, "relocated target VA mismatch");
+    check(!PeBinary::load_from_buffer(std::move(malformed_exports)),
+          "oversized export count must be rejected before allocation");
     return 0;
 }

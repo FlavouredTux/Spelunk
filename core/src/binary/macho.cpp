@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -231,12 +232,23 @@ void parse_bind_stream(
     std::string symbol_name;
     int seg_index = 0;
     u64 seg_offset = 0;
+    constexpr u64 kMaxBindActions = 1u << 20;
+    u64 bind_actions = 0;
 
-    auto commit = [&]() {
-        if (symbol_name.empty()) return;
-        if (seg_index < 0 || static_cast<std::size_t>(seg_index) >= segs.size()) return;
+    auto commit = [&]() -> bool {
+        if (++bind_actions > kMaxBindActions) return false;
+        if (symbol_name.empty()) return true;
+        if (seg_index < 0 || static_cast<std::size_t>(seg_index) >= segs.size()) return false;
         const auto& s = segs[static_cast<std::size_t>(seg_index)];
+        if (seg_offset > s.vmsize || 8 > s.vmsize - seg_offset) return false;
+        if (seg_offset > std::numeric_limits<addr_t>::max() - s.vmaddr) return false;
         out.push_back({static_cast<addr_t>(s.vmaddr + seg_offset), symbol_name});
+        return true;
+    };
+    auto advance = [&](u64 delta) -> bool {
+        if (delta > std::numeric_limits<u64>::max() - seg_offset) return false;
+        seg_offset += delta;
+        return true;
     };
 
     while (p < end) {
@@ -274,28 +286,25 @@ void parse_bind_stream(
             seg_offset = read_uleb128(p, end);
             break;
         case BIND_OPCODE_ADD_ADDR_ULEB:
-            seg_offset += read_uleb128(p, end);
+            if (!advance(read_uleb128(p, end))) return;
             break;
         case BIND_OPCODE_DO_BIND:
-            commit();
-            seg_offset += 8;
+            if (!commit() || !advance(8)) return;
             break;
         case BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB:
-            commit();
-            seg_offset += 8;
-            seg_offset += read_uleb128(p, end);
+            if (!commit() || !advance(8) ||
+                !advance(read_uleb128(p, end))) return;
             break;
         case BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED:
-            commit();
-            seg_offset += 8;
-            seg_offset += static_cast<u64>(imm) * 8u;
+            if (!commit() || !advance(8 + static_cast<u64>(imm) * 8u)) return;
             break;
         case BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB: {
             const u64 count = read_uleb128(p, end);
             const u64 skip  = read_uleb128(p, end);
+            if (count > kMaxBindActions - bind_actions ||
+                skip > std::numeric_limits<u64>::max() - 8) return;
             for (u64 j = 0; j < count; ++j) {
-                commit();
-                seg_offset += 8 + skip;
+                if (!commit() || !advance(8 + skip)) return;
             }
             break;
         }
@@ -864,6 +873,10 @@ Result<void> MachOBinary::parse() {
     const std::size_t cmd_start = 32;
     auto cmds_bytes = r.slice(cmd_start, sizeofcmds);
     if (!cmds_bytes) return std::unexpected(std::move(cmds_bytes).error());
+    if (ncmds > sizeofcmds / 8u) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "macho: {} load commands cannot fit in {} bytes", ncmds, sizeofcmds)));
+    }
 
     // Load commands are variable-length; collect (offset, cmd, cmdsize) triples.
     struct LCRef { std::size_t off; u32 cmd; u32 size; };
@@ -873,12 +886,26 @@ Result<void> MachOBinary::parse() {
         std::size_t p = 0;
         const std::size_t limit = cmds_bytes->size();
         for (u32 i = 0; i < ncmds; ++i) {
-            if (p + 8 > limit) break;
+            if (p > limit || 8 > limit - p) {
+                return std::unexpected(Error::truncated(std::format(
+                    "macho: load command {} header overruns command area", i)));
+            }
             const u32 cmd  = read_le_at<u32>(cmds_bytes->data() + p);
             const u32 size = read_le_at<u32>(cmds_bytes->data() + p + 4);
-            if (size < 8 || p + size > limit) break;
+            if (size < 8) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "macho: load command {} has invalid size {}", i, size)));
+            }
+            if (size > limit - p) {
+                return std::unexpected(Error::truncated(std::format(
+                    "macho: load command {} overruns command area", i)));
+            }
             lcs.push_back({cmd_start + p, cmd, size});
             p += size;
+        }
+        if (p != limit) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "macho: load commands consume {} of {} declared bytes", p, limit)));
         }
     }
 

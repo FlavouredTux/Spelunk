@@ -6,12 +6,15 @@
 // decodes to the right mnemonic + operand shape.
 #include <ember/disasm/arm64_decoder.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/ir/arm64_lifter.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
 #include <span>
 #include <string_view>
+#include <utility>
 
 using namespace ember;
 
@@ -88,6 +91,105 @@ void test_movz_movk() {
     check_eq(i.operands[2].imm.value, std::int64_t{16}, "movk: shift");
 }
 
+IrFunction lift_one(std::uint32_t raw) {
+    Function fn;
+    fn.start = 0x1000;
+    fn.end = 0x1004;
+    BasicBlock bb;
+    bb.start = fn.start;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.instructions.push_back(must_decode(raw));
+    fn.blocks.push_back(std::move(bb));
+    Arm64Lifter lifter(Abi::Aapcs64);
+    auto ir = lifter.lift(fn);
+    if (!ir) {
+        fail("arm64 lift failed");
+        return {};
+    }
+    return std::move(*ir);
+}
+
+void test_lifter_regressions() {
+    auto decoded = must_decode(0x8b020c20);  // add x0, x1, x2, lsl #3
+    check_eq(decoded.operands[2].arm_shift, ArmShift::Lsl,
+             "shifted add: shift kind");
+    check_eq(decoded.operands[2].arm_shift_amt, std::uint8_t{3},
+             "shifted add: shift amount");
+    auto ir = lift_one(0x8b020c20);
+    bool saw_shl = false, saw_add = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        saw_shl |= i.op == IrOp::Shl;
+        saw_add |= i.op == IrOp::Add;
+    }
+    check_eq(saw_shl && saw_add, true, "shifted add: shift survives lifting");
+
+    ir = lift_one(0xeb01001f);  // cmp x0, x1
+    bool saw_borrow = false, saw_invert = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        saw_borrow |= i.op == IrOp::SubBorrow;
+        saw_invert |= i.op == IrOp::Not && i.dst.type == IrType::I1;
+    }
+    check_eq(saw_borrow && saw_invert, true, "cmp: C flag is no-borrow");
+
+    ir = lift_one(0xb9000001);  // str w1, [x0]
+    bool store_i32 = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        store_i32 |= i.op == IrOp::Store && i.srcs[1].type == IrType::I32;
+    }
+    check_eq(store_i32, true, "str w: 32-bit memory store");
+
+    ir = lift_one(0xb9400001);  // ldr w1, [x0]
+    bool load_i32 = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        load_i32 |= i.op == IrOp::Load && i.dst.type == IrType::I32;
+    }
+    check_eq(load_i32, true, "ldr w: 32-bit memory load");
+
+    ir = lift_one(0x69420402);  // ldpsw x2, x1, [x0, #16]
+    unsigned sexts = 0;
+    for (const auto& i : ir.blocks[0].insts) {
+        sexts += i.op == IrOp::SExt && i.dst.type == IrType::I64;
+    }
+    check_eq(sexts >= 2, true, "ldpsw: both lanes sign-extend");
+
+    ir = lift_one(0xf2b579a0);  // movk x0, #0xabcd, lsl #16
+    bool correct_insert = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        if (i.op == IrOp::Or && i.src_count == 2 &&
+            i.srcs[1].kind == IrValueKind::Imm &&
+            static_cast<u64>(i.srcs[1].imm) == 0x00000000abcd0000ull) {
+            correct_insert = true;
+        }
+    }
+    check_eq(correct_insert, true, "movk: immediate is shifted once");
+
+    decoded = must_decode(0x9a9f17e0);  // cset x0, eq
+    check_eq(decoded.mnemonic, Mnemonic::A64Cset, "cset: alias mnemonic");
+    check_eq(decoded.operands[1].imm.value, std::int64_t{0},
+             "cset: alias condition is inverted from CSINC encoding");
+
+    ir = lift_one(0x94000001);  // bl +4
+    bool saw_args = false, saw_clobber = false;
+    for (const auto& i : ir.blocks[0].insts) {
+        saw_args |= i.op == IrOp::Intrinsic && i.name == "call.args.1";
+        saw_clobber |= i.op == IrOp::Clobber && i.dst.reg == Reg::X0;
+    }
+    check_eq(saw_args && saw_clobber, true, "bl: ABI barriers and clobbers");
+
+    ir = lift_one(0xf80107e0);  // str x0, [sp], #16
+    std::size_t store_pos = ir.blocks[0].insts.size();
+    std::size_t sp_write_pos = ir.blocks[0].insts.size();
+    for (std::size_t n = 0; n < ir.blocks[0].insts.size(); ++n) {
+        const auto& i = ir.blocks[0].insts[n];
+        if (i.op == IrOp::Store) store_pos = std::min(store_pos, n);
+        if (i.op == IrOp::Assign && i.dst.kind == IrValueKind::Reg &&
+            i.dst.reg == Reg::Xsp) sp_write_pos = std::min(sp_write_pos, n);
+    }
+    check_eq(store_pos < sp_write_pos, true,
+             "post-index: memory access precedes base writeback");
+}
+
 void test_branches() {
     // b 0x2000 from 0x1000: imm26 = (0x2000-0x1000)/4 = 0x400 = 1024
     // encoded: 00010100 00000000 00000100 00000000 -> 0x14000400
@@ -131,6 +233,22 @@ void test_loads_stores() {
     check_eq(i.operands[1].mem.base, Reg::Xsp, "ldr unsigned: base");
     check_eq(i.operands[1].mem.disp, std::int64_t{8}, "ldr unsigned: disp");
     check_eq(i.operands[1].mem.size, std::uint8_t{8}, "ldr unsigned: size");
+
+    i = must_decode(0xf80107e0);  // str x0, [sp], #16
+    check_eq(i.operands[1].mem.writeback, Mem::Writeback::PostIndex,
+             "str post-index: mode");
+    check_eq(i.operands[1].mem.disp, std::int64_t{16},
+             "str post-index: delta");
+
+    i = must_decode(0xf8410fe0);  // ldr x0, [sp, #16]!
+    check_eq(i.operands[1].mem.writeback, Mem::Writeback::PreIndex,
+             "ldr pre-index: mode");
+
+    i = must_decode(0xa9bf7bfd);  // stp x29, x30, [sp, #-16]!
+    check_eq(i.operands[2].mem.writeback, Mem::Writeback::PreIndex,
+             "stp pre-index: mode");
+    check_eq(i.operands[2].mem.disp, std::int64_t{-16},
+             "stp pre-index: delta");
 
     // str w1, [x0]   - unsigned offset, imm12=0
     i = must_decode(0xb9000001);
@@ -233,6 +351,7 @@ void test_reserved_encodings() {
 int main() {
     test_alu_imm();
     test_movz_movk();
+    test_lifter_regressions();
     test_branches();
     test_loads_stores();
     test_dp_reg();

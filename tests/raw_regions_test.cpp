@@ -7,7 +7,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
@@ -92,6 +94,26 @@ int main() {
         if (vtables.front().methods.size() != 2) fail("runtime vtable method count");
         if (vtables.front().methods[0] != code) fail("runtime vtable slot 0");
         if (vtables.front().methods[1] != code2) fail("runtime vtable slot 1");
+    }
+
+    auto expect_bad_manifest = [&](std::string_view name,
+                                   std::string_view contents) {
+        const fs::path path = dir / std::string(name);
+        write_file(path, contents.data(), contents.size());
+        if (ember::RawRegionsBinary::load_from_manifest(path)) {
+            fail(std::string("accepted malformed manifest: ").append(name).c_str());
+        }
+    };
+    expect_bad_manifest("overlap.txt",
+        "0x1000 0x2 r-- code.bin\n0x1001 0x2 r-- code.bin\n");
+    expect_bad_manifest("wrap.txt",
+        "0xffffffffffffffff 0x2 r-- code.bin\n");
+    expect_bad_manifest("zero.txt", "0x1000 0x0 r-- code.bin\n");
+    expect_bad_manifest("flags.txt", "0x1000 0x2 read code.bin\n");
+    expect_bad_manifest("extra.txt", "0x1000 0x2 r-- code.bin junk\n");
+    if (ember::RawRegionsBinary::load_from_raw_bytes(
+            dir / "code.bin", std::numeric_limits<ember::addr_t>::max())) {
+        fail("accepted wrapping raw-bytes extent");
     }
 
     fs::remove_all(dir);

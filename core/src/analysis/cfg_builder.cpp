@@ -3,6 +3,7 @@
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/pe_unwind.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/common/bytes.hpp>
 #include <ember/ir/ssa.hpp>  // canonical_reg
 
 #include <algorithm>
@@ -109,7 +110,7 @@ struct WalkState {
 find_exec_section_for(const Binary& b, addr_t a) noexcept {
     for (const auto& s : b.sections()) {
         if (!s.flags.executable) continue;
-        if (a >= s.vaddr && a < s.vaddr + s.size) return &s;
+        if (a >= s.vaddr && a - s.vaddr < s.size) return &s;
     }
     return nullptr;
 }
@@ -117,7 +118,8 @@ find_exec_section_for(const Binary& b, addr_t a) noexcept {
 [[nodiscard]] bool read_u64_at(const Binary& b, addr_t a, u64& out) noexcept {
     auto span = b.bytes_at(a);
     if (span.size() < 8) return false;
-    std::memcpy(&out, span.data(), 8);
+    out = b.endian() == Endian::Big
+        ? read_be_at<u64>(span.data()) : read_le_at<u64>(span.data());
     return true;
 }
 
@@ -136,15 +138,15 @@ find_exec_section_for(const Binary& b, addr_t a) noexcept {
         return true;
     }
     if (entry_bytes == 2) {
-        u16 raw;
-        std::memcpy(&raw, span.data(), 2);
+        const u16 raw = b.endian() == Endian::Big
+            ? read_be_at<u16>(span.data()) : read_le_at<u16>(span.data());
         out = is_signed ? static_cast<i64>(static_cast<i16>(raw))
                         : static_cast<i64>(raw);
         return true;
     }
     if (entry_bytes == 4) {
-        u32 raw;
-        std::memcpy(&raw, span.data(), 4);
+        const u32 raw = b.endian() == Endian::Big
+            ? read_be_at<u32>(span.data()) : read_le_at<u32>(span.data());
         out = is_signed ? static_cast<i64>(static_cast<i32>(raw))
                         : static_cast<i64>(raw);
         return true;

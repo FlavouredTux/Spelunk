@@ -327,6 +327,11 @@ struct LiftCtx {
         sum = has ? ctx.emit_binop(IrOp::Add, sum, d) : d;
     }
 
+    if (m.address_size == 4) {
+        IrValue low = ctx.emit_convert(IrOp::Trunc, sum, IrType::I32);
+        sum = ctx.emit_convert(IrOp::ZExt, low, IrType::I64);
+    }
+
     return sum;
 }
 
@@ -522,9 +527,6 @@ void lift_not(LiftCtx& ctx) {
 //   shr OF = MSB(original)
 //   sar OF = 0
 //
-// We deliberately don't gate on count==0 (which per Intel leaves flags
-// unchanged): that case is exceedingly rare in compiled code and adding a
-// Select on every shift would clutter every byte-extraction sequence.
 void lift_shift(LiftCtx& ctx, IrOp op) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
@@ -533,41 +535,71 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
     cnt = ctx.match_size(cnt, a.type, /*sign_ext=*/false);
 
     const unsigned width = type_bits(a.type);
+    const i64 count_mask = width == 64 ? 0x3f : 0x1f;
+    cnt = ctx.emit_binop(IrOp::And, cnt, ctx.imm(count_mask, a.type));
     IrValue width_imm = ctx.imm(static_cast<i64>(width), a.type);
     IrValue one_t     = ctx.imm(1, a.type);
     IrValue zero_t    = ctx.imm(0, a.type);
+    IrValue nonzero = ctx.emit_cmp(IrOp::CmpNe, cnt, zero_t);
+
+    auto select = [&](IrValue condition, IrValue yes, IrValue no) {
+        IrInst i;
+        i.op = IrOp::Select;
+        i.dst = ctx.temp(yes.type);
+        i.srcs[0] = condition;
+        i.srcs[1] = yes;
+        i.srcs[2] = no;
+        i.src_count = 3;
+        IrValue result = i.dst;
+        ctx.emit(std::move(i));
+        return result;
+    };
+    // Avoid constructing a width-sized shift in the flag expression when
+    // the effective count is zero. Architectural state is selected back to
+    // its old value in that case.
+    IrValue safe_cnt = select(nonzero, cnt, one_t);
 
     IrValue cf_bit;
     if (op == IrOp::Shl) {
-        IrValue shift = ctx.emit_binop(IrOp::Sub, width_imm, cnt);
+        IrValue shift = ctx.emit_binop(IrOp::Sub, width_imm, safe_cnt);
         IrValue out_bit = ctx.emit_binop(IrOp::Lshr, a, shift);
         cf_bit = ctx.emit_binop(IrOp::And, out_bit, one_t);
     } else {
-        IrValue shift = ctx.emit_binop(IrOp::Sub, cnt, one_t);
+        IrValue shift = ctx.emit_binop(IrOp::Sub, safe_cnt, one_t);
         IrValue out_bit = ctx.emit_binop(IrOp::Lshr, a, shift);
         cf_bit = ctx.emit_binop(IrOp::And, out_bit, one_t);
     }
-    ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t));
+    IrValue cf_new = ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t);
+    ctx.emit_set_flag(Flag::Cf,
+        select(nonzero, cf_new, ctx.flag_val(Flag::Cf)));
 
-    IrValue r = ctx.emit_binop(op, a, cnt);
+    IrValue shifted = ctx.emit_binop(op, a, safe_cnt);
+    IrValue r = select(nonzero, shifted, a);
 
+    IrValue of_new;
     if (op == IrOp::Shl) {
         IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
         IrValue msb = ctx.emit_binop(IrOp::Lshr, r, msb_shift);
         IrValue msb_bit = ctx.emit_binop(IrOp::And, msb, one_t);
         IrValue msb_i1  = ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t);
-        ctx.emit_set_flag(Flag::Of,
-            ctx.emit_binop_i1(IrOp::Xor, msb_i1, ctx.flag_val(Flag::Cf)));
+        of_new = ctx.emit_binop_i1(IrOp::Xor, msb_i1, cf_new);
     } else if (op == IrOp::Lshr) {
         IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
         IrValue msb = ctx.emit_binop(IrOp::Lshr, a, msb_shift);
         IrValue msb_bit = ctx.emit_binop(IrOp::And, msb, one_t);
-        ctx.emit_set_flag(Flag::Of, ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t));
+        of_new = ctx.emit_cmp(IrOp::CmpNe, msb_bit, zero_t);
     } else {
-        ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+        of_new = ctx.imm(0, IrType::I1);
     }
+    ctx.emit_set_flag(Flag::Of,
+        select(nonzero, of_new, ctx.flag_val(Flag::Of)));
 
-    ctx.set_zf_sf(r);
+    IrValue zf_new = ctx.emit_cmp(IrOp::CmpEq, shifted, zero_t);
+    IrValue sf_new = ctx.emit_cmp(IrOp::CmpSlt, shifted, zero_t);
+    ctx.emit_set_flag(Flag::Zf,
+        select(nonzero, zf_new, ctx.flag_val(Flag::Zf)));
+    ctx.emit_set_flag(Flag::Sf,
+        select(nonzero, sf_new, ctx.flag_val(Flag::Sf)));
     store_lvalue(insn.operands[0], r, ctx);
 }
 
@@ -1240,11 +1272,15 @@ void lift_push(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 1) return;
     IrValue val = materialize_rvalue(insn.operands[0], ctx);
-    if (val.type != IrType::I64) {
-        val = ctx.emit_convert(IrOp::SExt, val, IrType::I64);
+    const bool word = insn.prefixes.opsize;
+    const IrType stack_type = word ? IrType::I16 : IrType::I64;
+    const i64 stack_size = word ? 2 : 8;
+    if (val.type != stack_type) {
+        val = ctx.match_size(val, stack_type, /*sign_ext=*/true);
     }
     IrValue rsp = ctx.reg(Reg::Rsp);
-    IrValue new_rsp = ctx.emit_binop(IrOp::Sub, rsp, ctx.imm(8, IrType::I64));
+    IrValue new_rsp = ctx.emit_binop(IrOp::Sub, rsp,
+                                     ctx.imm(stack_size, IrType::I64));
     ctx.emit_store(new_rsp, val);
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
 }
@@ -1253,9 +1289,13 @@ void lift_pop(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 1) return;
     const IrType t = operand_type(insn.operands[0]);
+    const bool word = insn.prefixes.opsize;
+    const IrType stack_type = word ? IrType::I16 : IrType::I64;
+    const i64 stack_size = word ? 2 : 8;
     IrValue rsp = ctx.reg(Reg::Rsp);
-    IrValue val = ctx.emit_load(rsp, IrType::I64);
-    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(8, IrType::I64));
+    IrValue val = ctx.emit_load(rsp, stack_type);
+    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp,
+                                     ctx.imm(stack_size, IrType::I64));
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
     val = ctx.match_size(val, t, /*sign_ext=*/false);
     store_lvalue(insn.operands[0], val, ctx);

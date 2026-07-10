@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -590,6 +591,78 @@ struct GvnOp {
     return g;
 }
 
+enum class AddressClass : u8 { Unknown, Absolute, Stack };
+struct AddressForm {
+    AddressClass cls = AddressClass::Unknown;
+    i64 offset = 0;
+};
+
+[[nodiscard]] AddressForm resolve_address_form(
+    const IrFunction& fn, const SsaMap<DefLoc>& defs,
+    IrValue value, unsigned depth = 0) noexcept
+{
+    if (depth > 12) return {};
+    if (value.kind == IrValueKind::Imm)
+        return {AddressClass::Absolute, value.imm};
+    if (value.kind == IrValueKind::Reg && value.reg == Reg::Rsp &&
+        value.version == 0)
+        return {AddressClass::Stack, 0};
+    auto key = ssa_key(value);
+    if (!key) return {};
+    auto found = defs.find(*key);
+    if (found == defs.end()) return {};
+    const DefLoc loc = found->second;
+    if (loc.block >= fn.blocks.size() ||
+        loc.inst >= fn.blocks[loc.block].insts.size()) return {};
+    const IrInst& def = fn.blocks[loc.block].insts[loc.inst];
+    if (def.op == IrOp::Assign && def.src_count == 1)
+        return resolve_address_form(fn, defs, def.srcs[0], depth + 1);
+    if ((def.op == IrOp::Add || def.op == IrOp::Sub) && def.src_count == 2) {
+        AddressForm base = resolve_address_form(fn, defs, def.srcs[0], depth + 1);
+        if (base.cls != AddressClass::Unknown &&
+            def.srcs[1].kind == IrValueKind::Imm) {
+            const i64 delta = def.srcs[1].imm;
+            if ((def.op == IrOp::Add &&
+                 ((delta > 0 && base.offset > std::numeric_limits<i64>::max() - delta) ||
+                  (delta < 0 && base.offset < std::numeric_limits<i64>::min() - delta))) ||
+                (def.op == IrOp::Sub &&
+                 ((delta < 0 && base.offset > std::numeric_limits<i64>::max() + delta) ||
+                  (delta > 0 && base.offset < std::numeric_limits<i64>::min() + delta)))) {
+                return {};
+            }
+            base.offset = def.op == IrOp::Add
+                ? base.offset + delta : base.offset - delta;
+            return base;
+        }
+        if (def.op == IrOp::Add && def.srcs[0].kind == IrValueKind::Imm) {
+            AddressForm rhs = resolve_address_form(fn, defs, def.srcs[1], depth + 1);
+            if (rhs.cls != AddressClass::Unknown) {
+                const i64 delta = def.srcs[0].imm;
+                if ((delta > 0 && rhs.offset > std::numeric_limits<i64>::max() - delta) ||
+                    (delta < 0 && rhs.offset < std::numeric_limits<i64>::min() - delta))
+                    return {};
+                rhs.offset += delta;
+                return rhs;
+            }
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] bool definitely_no_alias(AddressForm a, std::size_t a_size,
+                                       AddressForm b, std::size_t b_size) noexcept {
+    if (a.cls == AddressClass::Unknown || a.cls != b.cls) return false;
+    const u64 ao = static_cast<u64>(a.offset) ^ (u64{1} << 63);
+    const u64 bo = static_cast<u64>(b.offset) ^ (u64{1} << 63);
+    const u64 distance = ao >= bo ? ao - bo : bo - ao;
+    const std::size_t earlier_size = ao <= bo ? a_size : b_size;
+    return distance >= earlier_size;
+}
+
+[[nodiscard]] std::size_t memory_width(IrType type) noexcept {
+    return std::max<std::size_t>(1, type_bits(type) / 8);
+}
+
 [[nodiscard]] std::size_t pass_local_gvn(
     IrFunction& fn, AnalysisManager& /*am*/,
     std::span<const u32> dirty, std::vector<u32>& touched)
@@ -624,13 +697,20 @@ struct GvnOp {
 // ============================================================================
 
 [[nodiscard]] std::size_t pass_dead_store_elim(
-    IrFunction& fn, AnalysisManager& /*am*/,
+    IrFunction& fn, AnalysisManager& am,
     std::span<const u32> dirty, std::vector<u32>& touched)
 {
     std::size_t count = 0;
     for_blocks(fn, dirty, [&](u32 bi, IrBlock& bb) {
         const std::size_t before = count;
-        SsaMap<std::pair<std::size_t, IrType>> last_store;
+        struct StoreInfo {
+            std::size_t index = 0;
+            IrType type = IrType::I64;
+            AddressForm address;
+            std::size_t width = 0;
+        };
+        SsaMap<StoreInfo> last_store;
+        const auto& defs = am.defs(fn);
         for (std::size_t i = 0; i < bb.insts.size(); ++i) {
             auto& inst = bb.insts[i];
             switch (inst.op) {
@@ -640,21 +720,28 @@ struct GvnOp {
                     if (!k) { last_store.clear(); break; }
                     const IrType new_ty = inst.srcs[1].type;
                     auto it = last_store.find(*k);
-                    if (it != last_store.end() && it->second.second == new_ty) {
-                        auto& prior = bb.insts[it->second.first];
+                    if (it != last_store.end() && it->second.type == new_ty) {
+                        auto& prior = bb.insts[it->second.index];
                         prior.op        = IrOp::Nop;
                         prior.src_count = 0;
                         prior.srcs      = {};
                         prior.segment   = Reg::None;
                         ++count;
                     }
-                    last_store[*k] = {i, new_ty};
+                    last_store[*k] = {i, new_ty,
+                        resolve_address_form(fn, defs, inst.srcs[0]),
+                        memory_width(new_ty)};
                     break;
                 }
                 case IrOp::Load: {
                     if (inst.src_count < 1) break;
-                    if (auto k = ssa_key(inst.srcs[0]); k) {
-                        last_store.erase(*k);
+                    const AddressForm load_addr =
+                        resolve_address_form(fn, defs, inst.srcs[0]);
+                    const std::size_t load_width = memory_width(inst.dst.type);
+                    for (auto it = last_store.begin(); it != last_store.end();) {
+                        if (definitely_no_alias(it->second.address, it->second.width,
+                                                load_addr, load_width)) ++it;
+                        else it = last_store.erase(it);
                     }
                     break;
                 }
@@ -677,20 +764,34 @@ struct GvnOp {
 // ============================================================================
 
 [[nodiscard]] std::size_t pass_memory_forward(
-    IrFunction& fn, AnalysisManager& /*am*/,
+    IrFunction& fn, AnalysisManager& am,
     std::span<const u32> dirty, std::vector<u32>& touched)
 {
     std::size_t count = 0;
     for_blocks(fn, dirty, [&](u32 bi, IrBlock& bb) {
         const std::size_t before = count;
-        SsaMap<IrValue> stored;
+        struct StoredValue {
+            IrValue value;
+            AddressForm address;
+            std::size_t width = 0;
+        };
+        SsaMap<StoredValue> stored;
+        const auto& defs = am.defs(fn);
         for (auto& inst : bb.insts) {
             switch (inst.op) {
                 case IrOp::Store: {
                     if (inst.src_count < 2) break;
                     auto k = ssa_key(inst.srcs[0]);
                     if (!k) { stored.clear(); break; }
-                    stored[*k] = inst.srcs[1];
+                    const AddressForm new_addr =
+                        resolve_address_form(fn, defs, inst.srcs[0]);
+                    const std::size_t new_width = memory_width(inst.srcs[1].type);
+                    for (auto it = stored.begin(); it != stored.end();) {
+                        if (definitely_no_alias(it->second.address, it->second.width,
+                                                new_addr, new_width)) ++it;
+                        else it = stored.erase(it);
+                    }
+                    stored[*k] = {inst.srcs[1], new_addr, new_width};
                     break;
                 }
                 case IrOp::Load: {
@@ -699,9 +800,9 @@ struct GvnOp {
                         if (!k) break;
                         auto it = stored.find(*k);
                         if (it == stored.end()) break;
-                        if (it->second.type != inst.dst.type) break;
+                        if (it->second.value.type != inst.dst.type) break;
                         inst.op        = IrOp::Assign;
-                        inst.srcs[0]   = it->second;
+                        inst.srcs[0]   = it->second.value;
                         inst.src_count = 1;
                         inst.segment   = Reg::None;
                         ++count;

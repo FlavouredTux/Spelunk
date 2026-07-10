@@ -112,6 +112,14 @@ add_executable(ember_recover_imports_test recover_imports_test.cpp)
 target_link_libraries(ember_recover_imports_test PRIVATE ember::core ember::flags)
 add_test(NAME recover_imports_unit COMMAND ember_recover_imports_test)
 
+add_executable(ember_ir_cleanup_test ir_cleanup_test.cpp)
+target_link_libraries(ember_ir_cleanup_test PRIVATE ember::core ember::flags)
+add_test(NAME ir_cleanup_unit COMMAND ember_ir_cleanup_test)
+
+add_executable(ember_loader_robustness_test loader_robustness_test.cpp)
+target_link_libraries(ember_loader_robustness_test PRIVATE ember::core ember::flags)
+add_test(NAME loader_robustness_unit COMMAND ember_loader_robustness_test)
+
 add_executable(ember_discovery_test discovery_test.cpp)
 target_link_libraries(ember_discovery_test PRIVATE ember::core ember::flags)
 add_test(NAME discovery_unit COMMAND ember_discovery_test)

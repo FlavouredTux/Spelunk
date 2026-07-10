@@ -671,7 +671,8 @@ namespace {
                 inside += std::format("*{}", static_cast<unsigned>(m.scale));
             }
         }
-        if (m.disp != 0 || inside.empty()) {
+        if (m.writeback != Mem::Writeback::PostIndex &&
+            (m.disp != 0 || inside.empty())) {
             if (!inside.empty()) {
                 if (m.disp < 0) {
                     const u64 abs_v = static_cast<u64>(0) - static_cast<u64>(m.disp);
@@ -692,6 +693,11 @@ namespace {
     }
 
     result += "]";
+    if (m.writeback == Mem::Writeback::PreIndex) {
+        result += "!";
+    } else if (m.writeback == Mem::Writeback::PostIndex) {
+        result += std::format(", #{}", m.disp);
+    }
     return result;
 }
 
@@ -714,7 +720,11 @@ std::string format_operand(const Instruction& insn, const Operand& op) {
             } else if (!(op.arm_shift == ArmShift::Lsl && op.arm_shift_amt == 0)) {
                 static constexpr std::string_view kShift[4] =
                     {"lsl", "lsr", "asr", "ror"};
-                if (op.arm_shift == ArmShift::Ror && op.arm_shift_amt == 0) {
+                const bool is_a32 =
+                    static_cast<u16>(insn.mnemonic) >=
+                    static_cast<u16>(Mnemonic::A32And);
+                if (is_a32 && op.arm_shift == ArmShift::Ror &&
+                    op.arm_shift_amt == 0) {
                     r += ", rrx";
                 } else {
                     r += std::format(", {} #{}",

@@ -100,17 +100,18 @@ read_top_level_scalars(const std::filesystem::path& path) {
     return out;
 }
 
-[[nodiscard]] Result<std::map<std::string, std::string>>
-read_module_scalars(const std::filesystem::path& path,
-                    std::string_view wanted_module) {
+using ScalarMap = std::map<std::string, std::string>;
+
+[[nodiscard]] Result<std::vector<ScalarMap>>
+read_modules_scalars(const std::filesystem::path& path) {
     std::ifstream in(path);
     if (!in) {
         return std::unexpected(Error::io(std::format(
             "dtk: cannot open config '{}'", path.string())));
     }
 
-    std::vector<std::map<std::string, std::string>> modules;
-    std::map<std::string, std::string> current;
+    std::vector<ScalarMap> modules;
+    ScalarMap current;
     bool in_modules = false;
     std::string line;
     std::size_t lineno = 0;
@@ -157,20 +158,29 @@ read_module_scalars(const std::filesystem::path& path,
     }
     finish_current();
 
-    auto module_name = [](const std::map<std::string, std::string>& values) {
-        if (const auto it = values.find("name"); it != values.end() && !it->second.empty()) {
-            return it->second;
-        }
-        const auto object = values.find("object");
-        if (object == values.end()) return std::string{};
-        std::string_view object_path = object->second;
-        if (const auto colon = object_path.find(':'); colon != std::string_view::npos) {
-            object_path = object_path.substr(0, colon);
-        }
-        return std::filesystem::path(object_path).stem().string();
-    };
+    return modules;
+}
 
-    for (auto& values : modules) {
+[[nodiscard]] std::string module_name(const ScalarMap& values) {
+    if (const auto it = values.find("name");
+        it != values.end() && !it->second.empty()) {
+        return it->second;
+    }
+    const auto object = values.find("object");
+    if (object == values.end()) return {};
+    std::string_view object_path = object->second;
+    if (const auto colon = object_path.find(':'); colon != std::string_view::npos) {
+        object_path = object_path.substr(0, colon);
+    }
+    return std::filesystem::path(object_path).stem().string();
+}
+
+[[nodiscard]] Result<ScalarMap>
+read_module_scalars(const std::filesystem::path& path,
+                    std::string_view wanted_module) {
+    auto modules = read_modules_scalars(path);
+    if (!modules) return std::unexpected(std::move(modules).error());
+    for (auto& values : *modules) {
         if (module_name(values) == wanted_module) return values;
     }
     return std::unexpected(Error::invalid_format(std::format(
@@ -349,6 +359,37 @@ resolve_dtk_project(const std::filesystem::path& input,
             out.symbols_path.string())));
     }
     return out;
+}
+
+Result<std::vector<DtkProject>>
+resolve_dtk_project_modules(const std::filesystem::path& input,
+                            std::string_view version) {
+    auto config = resolve_config_path(input, version);
+    if (!config) return std::unexpected(std::move(config).error());
+    auto values = read_modules_scalars(*config);
+    if (!values) return std::unexpected(std::move(values).error());
+
+    std::vector<DtkProject> projects;
+    projects.reserve(values->size());
+    for (const auto& module_values : *values) {
+        const std::string name = module_name(module_values);
+        if (name.empty()) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "dtk: config '{}' contains a module without a name or object",
+                config->string())));
+        }
+        if (std::ranges::any_of(projects, [&](const DtkProject& project) {
+                return project.module_name == name;
+            })) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "dtk: config '{}' contains duplicate module name '{}'",
+                config->string(), name)));
+        }
+        auto project = resolve_dtk_project(input, version, name);
+        if (!project) return std::unexpected(std::move(project).error());
+        projects.push_back(std::move(*project));
+    }
+    return projects;
 }
 
 }  // namespace ember

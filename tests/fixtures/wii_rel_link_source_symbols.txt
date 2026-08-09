@@ -1,0 +1,2 @@
+link_source_entry = .text:0x00000000; // type:function size:0x8 scope:global
+link_source_pointer = .data:0x00000000; // type:object size:0x4 scope:global

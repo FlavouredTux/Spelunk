@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
 
 #include <ember/common/bytes.hpp>
 
@@ -23,9 +24,6 @@ constexpr std::size_t kHeaderV3Size = 0x4c;
 constexpr std::size_t kSectionEntrySize = 8;
 constexpr std::size_t kImportEntrySize = 8;
 constexpr std::size_t kRelocEntrySize = 8;
-// Keep standalone modules near the normal Wii executable range so REL24
-// imports into main.dol remain representable in the synthetic image.
-constexpr addr_t kSyntheticBase = 0x80500000;
 constexpr addr_t kPpc32Max = std::numeric_limits<u32>::max();
 
 namespace rppc {
@@ -233,12 +231,66 @@ bool looks_like_rel_path(const std::filesystem::path& path,
 }
 
 Result<std::unique_ptr<RelBinary>>
-RelBinary::load_from_buffer(std::vector<std::byte> buffer) {
-    std::unique_ptr<RelBinary> self(new RelBinary(std::move(buffer)));
+RelBinary::load_from_buffer(std::vector<std::byte> buffer,
+                            addr_t synthetic_base) {
+    std::unique_ptr<RelBinary> self(
+        new RelBinary(std::move(buffer), synthetic_base));
     if (auto result = self->parse(); !result) {
         return std::unexpected(std::move(result).error());
     }
     return self;
+}
+
+std::optional<addr_t>
+RelBinary::section_address(u32 section, u32 offset) const noexcept {
+    if (section >= section_bases_.size() || section_bases_[section] == 0 ||
+        offset >= section_sizes_[section]) {
+        return std::nullopt;
+    }
+    return section_bases_[section] + offset;
+}
+
+void RelBinary::adopt_linked_binary(std::unique_ptr<Binary> binary,
+                                    std::string_view module_name) {
+    if (!binary) return;
+    Binary* linked = binary.get();
+    linked_binaries_.push_back(std::move(binary));
+
+    for (const auto& linked_section : linked->sections()) {
+        Section section = linked_section;
+        section.name = std::format("{}::{}", module_name, linked_section.name);
+        sections_.push_back(std::move(section));
+    }
+
+    auto needs_qualification = [&](const Symbol& symbol) {
+        if (symbol.name.empty() || symbol.name == "_prolog" ||
+            symbol.name == "_epilog" || symbol.name == "_unresolved" ||
+            symbol.name == "_start" || symbol.name.starts_with("sub_") ||
+            symbol.name.starts_with("rel") || symbol.name.starts_with("dol_")) {
+            return true;
+        }
+        return std::ranges::any_of(symbols_, [&](const Symbol& existing) {
+            return !existing.is_import && existing.name == symbol.name &&
+                   existing.addr != symbol.addr;
+        });
+    };
+    for (const auto& linked_symbol : linked->symbols()) {
+        if (linked_symbol.is_import) continue;
+        Symbol symbol = linked_symbol;
+        if (needs_qualification(symbol)) {
+            symbol.name = std::format("{}::{}", module_name, symbol.name);
+        }
+        symbols_.push_back(std::move(symbol));
+    }
+    for (const auto& linked_relocation : linked->relocations()) {
+        Relocation relocation = linked_relocation;
+        relocation.section_name = std::format(
+            "{}::{}", module_name, linked_relocation.section_name);
+        relocations_.push_back(std::move(relocation));
+    }
+
+    sort_and_dedupe_symbols();
+    invalidate_caches();
 }
 
 void RelBinary::add_known_function(std::string name, u8 section, u32 offset) {
@@ -322,7 +374,7 @@ Result<void> RelBinary::parse() {
     section_executable_.assign(section_count, false);
     sections_.reserve(section_count);
 
-    addr_t cursor = kSyntheticBase;
+    addr_t cursor = synthetic_base_;
     u64 total_bss_size = 0;
     bool saw_bss = false;
     bool named_text = false;
@@ -604,6 +656,9 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
             relocation.target = target;
             relocation.addend = addend;
             relocation.type = type;
+            relocation.source_section = source_section;
+            relocation.target_module = target_module;
+            relocation.target_section = target_section;
             relocation.width = width;
             relocation.pc_relative = type == rppc::REL24 || type == rppc::REL14 ||
                 type == rppc::REL14_BRTAKEN || type == rppc::REL14_BRNTAKEN;
@@ -615,78 +670,11 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
             relocation.section_name = source != sections_.end()
                 ? source->name : std::format("section{}", source_section);
 
-            bool applied = target_known && width != 0 &&
-                section_offsets_[source_section] != 0;
-            std::byte* patch = nullptr;
-            if (applied) {
-                const u64 patch_offset = static_cast<u64>(section_offsets_[source_section]) +
-                                         field_offset;
-                if (patch_offset > buffer_.size() || width > buffer_.size() - patch_offset) {
-                    return std::unexpected(Error::out_of_bounds(
-                        "rel: relocation patch extends past file"));
-                }
-                patch = buffer_.data() + patch_offset;
+            if (target_known) {
+                auto applied = apply_relocation(relocation, target);
+                if (!applied) return std::unexpected(std::move(applied).error());
+                relocation.applied = *applied;
             }
-
-            switch (type) {
-                case rppc::ADDR32:
-                case rppc::UADDR32:
-                    if (applied) write_be<u32>(patch, static_cast<u32>(target));
-                    break;
-                case rppc::ADDR16:
-                case rppc::ADDR16_LO:
-                    if (applied) write_be<u16>(patch, static_cast<u16>(target));
-                    break;
-                case rppc::ADDR16_HI:
-                    if (applied) write_be<u16>(patch, static_cast<u16>(target >> 16));
-                    break;
-                case rppc::ADDR16_HA:
-                    if (applied) {
-                        write_be<u16>(patch, static_cast<u16>((target + 0x8000u) >> 16));
-                    }
-                    break;
-                case rppc::ADDR24: {
-                    applied = applied && (target & 3u) == 0 && target <= 0x03fffffcu;
-                    if (applied) {
-                        const u32 word_value = read_be_at<u32>(patch);
-                        write_be<u32>(patch, (word_value & ~0x03fffffcu) |
-                                             (static_cast<u32>(target) & 0x03fffffcu));
-                    }
-                    break;
-                }
-                case rppc::REL24: {
-                    const addr_t instruction_site = section_bases_[source_section] + word_offset;
-                    const i64 delta_value = static_cast<i64>(target) -
-                                            static_cast<i64>(instruction_site);
-                    applied = applied && (delta_value & 3) == 0 &&
-                        delta_value >= -0x02000000LL && delta_value <= 0x01fffffcLL;
-                    if (applied) {
-                        const u32 word_value = read_be_at<u32>(patch);
-                        write_be<u32>(patch, (word_value & ~0x03fffffcu) |
-                            (static_cast<u32>(delta_value) & 0x03fffffcu));
-                    }
-                    break;
-                }
-                case rppc::REL14:
-                case rppc::REL14_BRTAKEN:
-                case rppc::REL14_BRNTAKEN: {
-                    const addr_t instruction_site = section_bases_[source_section] + word_offset;
-                    const i64 delta_value = static_cast<i64>(target) -
-                                            static_cast<i64>(instruction_site);
-                    applied = applied && (delta_value & 3) == 0 &&
-                        delta_value >= -0x8000LL && delta_value <= 0x7ffcLL;
-                    if (applied) {
-                        const u32 word_value = read_be_at<u32>(patch);
-                        write_be<u32>(patch, (word_value & ~0x0000fffcu) |
-                            (static_cast<u32>(delta_value) & 0x0000fffcu));
-                    }
-                    break;
-                }
-                default:
-                    applied = false;
-                    break;
-            }
-            relocation.applied = applied;
             relocations_.push_back(std::move(relocation));
         }
         if (!found_end) {
@@ -698,11 +686,117 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
     return {};
 }
 
+Result<bool> RelBinary::apply_relocation(Relocation& relocation,
+                                         addr_t target) {
+    const u32 source_section = relocation.source_section;
+    if (relocation.width == 0 || source_section >= section_bases_.size() ||
+        section_bases_[source_section] == 0 ||
+        section_offsets_[source_section] == 0 || target > kPpc32Max) {
+        return false;
+    }
+    if (relocation.site < section_bases_[source_section]) {
+        return std::unexpected(Error::invalid_format(
+            "rel: relocation site precedes its source section"));
+    }
+
+    const addr_t relative_site = relocation.site - section_bases_[source_section];
+    if (relative_site > std::numeric_limits<u32>::max()) {
+        return std::unexpected(Error::out_of_bounds(
+            "rel: relocation site offset exceeds PPC32"));
+    }
+    const u32 field_offset = static_cast<u32>(relative_site);
+    if (field_offset > section_sizes_[source_section] ||
+        relocation.width > section_sizes_[source_section] - field_offset) {
+        return std::unexpected(Error::out_of_bounds(
+            "rel: relocation patch exceeds its source section"));
+    }
+    const u64 patch_offset = static_cast<u64>(section_offsets_[source_section]) +
+                             field_offset;
+    if (patch_offset > buffer_.size() ||
+        relocation.width > buffer_.size() - patch_offset) {
+        return std::unexpected(Error::out_of_bounds(
+            "rel: relocation patch extends past file"));
+    }
+
+    std::byte* patch = buffer_.data() + patch_offset;
+    bool applied = true;
+    switch (relocation.type) {
+        case rppc::ADDR32:
+        case rppc::UADDR32:
+            write_be<u32>(patch, static_cast<u32>(target));
+            break;
+        case rppc::ADDR16:
+        case rppc::ADDR16_LO:
+            write_be<u16>(patch, static_cast<u16>(target));
+            break;
+        case rppc::ADDR16_HI:
+            write_be<u16>(patch, static_cast<u16>(target >> 16));
+            break;
+        case rppc::ADDR16_HA:
+            write_be<u16>(patch, static_cast<u16>((target + 0x8000u) >> 16));
+            break;
+        case rppc::ADDR24: {
+            applied = (target & 3u) == 0 && target <= 0x03fffffcu;
+            if (applied) {
+                const u32 word_value = read_be_at<u32>(patch);
+                write_be<u32>(patch, (word_value & ~0x03fffffcu) |
+                    (static_cast<u32>(target) & 0x03fffffcu));
+            }
+            break;
+        }
+        case rppc::REL24: {
+            const addr_t instruction_site = relocation.site & ~addr_t{3};
+            const i64 delta_value = static_cast<i64>(target) -
+                                    static_cast<i64>(instruction_site);
+            applied = (delta_value & 3) == 0 &&
+                delta_value >= -0x02000000LL && delta_value <= 0x01fffffcLL;
+            if (applied) {
+                const u32 word_value = read_be_at<u32>(patch);
+                write_be<u32>(patch, (word_value & ~0x03fffffcu) |
+                    (static_cast<u32>(delta_value) & 0x03fffffcu));
+            }
+            break;
+        }
+        case rppc::REL14:
+        case rppc::REL14_BRTAKEN:
+        case rppc::REL14_BRNTAKEN: {
+            const addr_t instruction_site = relocation.site & ~addr_t{3};
+            const i64 delta_value = static_cast<i64>(target) -
+                                    static_cast<i64>(instruction_site);
+            applied = (delta_value & 3) == 0 &&
+                delta_value >= -0x8000LL && delta_value <= 0x7ffcLL;
+            if (applied) {
+                const u32 word_value = read_be_at<u32>(patch);
+                write_be<u32>(patch, (word_value & ~0x0000fffcu) |
+                    (static_cast<u32>(delta_value) & 0x0000fffcu));
+            }
+            break;
+        }
+        default:
+            applied = false;
+            break;
+    }
+    relocation.target = target;
+    return applied;
+}
+
 void RelBinary::sort_and_dedupe_symbols() {
-    std::ranges::sort(symbols_, [](const Symbol& lhs, const Symbol& rhs) {
+    auto is_placeholder = [](std::string_view name) {
+        if (const auto scope = name.rfind("::"); scope != std::string_view::npos) {
+            name = name.substr(scope + 2);
+        }
+        return name.empty() || name == "_prolog" || name == "_epilog" ||
+               name == "_unresolved" || name == "_start" ||
+               name.starts_with("sub_") || name.starts_with("rel") ||
+               name.starts_with("dol_");
+    };
+    std::ranges::sort(symbols_, [&](const Symbol& lhs, const Symbol& rhs) {
         if (lhs.addr != rhs.addr) return lhs.addr < rhs.addr;
         if (lhs.is_import != rhs.is_import) return lhs.is_import < rhs.is_import;
         if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;
+        const bool lhs_placeholder = is_placeholder(lhs.name);
+        const bool rhs_placeholder = is_placeholder(rhs.name);
+        if (lhs_placeholder != rhs_placeholder) return !lhs_placeholder;
         return lhs.name < rhs.name;
     });
     auto unique = std::ranges::unique(symbols_, {}, [](const Symbol& symbol) {
@@ -811,6 +905,131 @@ RelBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
     sort_and_dedupe_symbols();
     invalidate_caches();
     return added;
+}
+
+Result<std::size_t>
+link_rel_modules(std::span<RelLinkModule> modules, const Binary* main_dol) {
+    std::unordered_map<u32, RelLinkModule*> by_id;
+    by_id.reserve(modules.size());
+    for (auto& module : modules) {
+        if (!module.binary) {
+            return std::unexpected(Error::invalid_format(
+                "rel link: context contains a null module"));
+        }
+        const u32 id = module.binary->module_id();
+        const auto [existing, inserted] = by_id.emplace(id, &module);
+        if (!inserted) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "rel link: duplicate module ID {} ('{}' and '{}')", id,
+                existing->second->name, module.name)));
+        }
+    }
+
+    auto is_placeholder = [](std::string_view name) {
+        return name.empty() || name == "_prolog" || name == "_epilog" ||
+               name == "_unresolved" || name == "_start" ||
+               name.starts_with("sub_") || name.starts_with("rel") ||
+               name.starts_with("dol_");
+    };
+    auto best_name_at = [&](const Binary& binary, addr_t target)
+        -> std::optional<std::string> {
+        const Symbol* best = nullptr;
+        for (const auto& symbol : binary.symbols()) {
+            if (symbol.is_import || symbol.addr != target ||
+                (symbol.kind != SymbolKind::Function &&
+                 symbol.kind != SymbolKind::Object)) {
+                continue;
+            }
+            if (!best || (is_placeholder(best->name) &&
+                          !is_placeholder(symbol.name))) {
+                best = &symbol;
+            }
+        }
+        if (best) return best->name;
+        if (const auto* containing = binary.defined_object_at(target)) {
+            const addr_t offset = target - containing->addr;
+            if (offset == 0) return containing->name;
+            return std::format("{}+{:#x}", containing->name, offset);
+        }
+        return std::nullopt;
+    };
+
+    std::size_t resolved = 0;
+    for (auto& source_module : modules) {
+        RelBinary& source = *source_module.binary;
+        bool symbols_changed = false;
+        for (auto& relocation : source.relocations_) {
+            if (relocation.target_module == source.module_id_) continue;
+
+            addr_t target = relocation.target;
+            std::optional<std::string> resolved_name;
+            if (relocation.target_module == 0) {
+                if (!main_dol || target == 0) continue;
+                resolved_name = best_name_at(*main_dol, target);
+                if (!resolved_name) continue;
+            } else {
+                const auto peer = by_id.find(relocation.target_module);
+                if (peer == by_id.end()) continue;
+                const auto address = peer->second->binary->section_address(
+                    relocation.target_section,
+                    static_cast<u32>(relocation.addend));
+                if (!address) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "rel link: module {} relocation at {:#x} targets invalid "
+                        "module {} section {} offset {:#x}",
+                        source.module_id(), relocation.site,
+                        relocation.target_module, relocation.target_section,
+                        relocation.addend)));
+                }
+                target = *address;
+                resolved_name = best_name_at(*peer->second->binary, target);
+                if (!resolved_name) {
+                    resolved_name = std::format("{}::rel{}_s{}_{:08x}",
+                        peer->second->name, relocation.target_module,
+                        relocation.target_section, relocation.addend);
+                }
+                auto applied = source.apply_relocation(relocation, target);
+                if (!applied) return std::unexpected(std::move(applied).error());
+                relocation.applied = *applied;
+            }
+
+            const std::string old_name = relocation.symbol_name;
+            relocation.target = target;
+            relocation.symbol_name = *resolved_name;
+            bool updated_import = false;
+            for (auto& symbol : source.symbols_) {
+                if (!symbol.is_import || symbol.name != old_name) continue;
+                symbol.name = *resolved_name;
+                symbol.addr = target;
+                updated_import = true;
+                symbols_changed = true;
+            }
+            if (!updated_import) {
+                const bool already_present = std::ranges::any_of(
+                    source.symbols_, [&](const Symbol& symbol) {
+                        return symbol.is_import && symbol.addr == target &&
+                               symbol.name == *resolved_name;
+                    });
+                if (!already_present) {
+                    Symbol symbol;
+                    symbol.name = *resolved_name;
+                    symbol.addr = target;
+                    symbol.kind = is_branch_relocation(
+                        static_cast<u8>(relocation.type))
+                        ? SymbolKind::Function : SymbolKind::Object;
+                    symbol.is_import = true;
+                    source.symbols_.push_back(std::move(symbol));
+                    symbols_changed = true;
+                }
+            }
+            ++resolved;
+        }
+        if (symbols_changed) {
+            source.sort_and_dedupe_symbols();
+            source.invalidate_caches();
+        }
+    }
+    return resolved;
 }
 
 }  // namespace ember

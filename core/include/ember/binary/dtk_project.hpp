@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <ember/common/error.hpp>
 
@@ -25,5 +26,11 @@ struct DtkProject {
 resolve_dtk_project(const std::filesystem::path& input,
                     std::string_view version = {},
                     std::string_view module = {});
+
+// Resolve every configured REL/module entry in config order. Each result uses
+// the same path rules and existence checks as selecting it with --dtk-module.
+[[nodiscard]] Result<std::vector<DtkProject>>
+resolve_dtk_project_modules(const std::filesystem::path& input,
+                            std::string_view version = {});
 
 }  // namespace ember

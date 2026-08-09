@@ -82,6 +82,12 @@ DTK projects can select either the main DOL or one of their configured RELs:
 ember --dtk ./spm --version EU0 --dtk-module relF -d -s func_80c458fc
 ```
 
+Selecting a REL also loads the configured main DOL as its symbol oracle and
+maps peer REL modules into a shared link context. Module IDs and
+section-relative relocation targets are resolved automatically, so cross-REL
+calls and globals use names from the peer symbol maps instead of raw
+`rel<ID>_s<section>_<offset>` coordinates.
+
 ---
 
 ## Features
@@ -166,9 +172,9 @@ Known limits:
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
 - PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics,
   DOL, Wii REL, and relocatable PPC32 ELF function discovery, core PPC32
-  relocations, and code-pointer xrefs. Standalone REL files resolve self and
-  `main.dol` references; cross-REL references remain explicit until the target
-  module is supplied.
+  relocations, and code-pointer xrefs. DTK project mode resolves configured
+  REL-to-REL and `main.dol` references; a standalone REL keeps unavailable
+  peer-module references explicit.
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`, `std::vector<T, std::allocator<T>>` → `std::vector<T>`) is balanced-template aware while preserving custom allocators.
 

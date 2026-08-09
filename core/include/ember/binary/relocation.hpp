@@ -15,6 +15,12 @@ struct Relocation {
     addr_t     target = 0;
     i64        addend = 0;
     u32        type = 0;
+    // Format-native module/section coordinates. ELF and fixed-image formats
+    // leave these zero; Wii REL uses them to resolve an initially unknown
+    // cross-module edge after the peer module has been loaded.
+    u32        source_section = 0;
+    u32        target_module = 0;
+    u32        target_section = 0;
     u8         width = 0;
     bool       pc_relative = false;
     bool       applied = false;

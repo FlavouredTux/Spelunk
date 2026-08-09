@@ -283,7 +283,7 @@ void help_load() {
     std::println("Loading non-default inputs / non-default function-entry hints:");
     std::println("      --dtk PROJECT    load the main object and exact symbols from a DTK project");
     std::println("      --version ID     select config/ID/config.yml (required for multi-version projects)");
-    std::println("      --dtk-module NAME load a named REL/module entry instead of main.dol");
+    std::println("      --dtk-module NAME load a named REL and link its configured peers");
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
     std::println("      --dsym PATH      overlay symbols from a Mach-O dSYM file or .dSYM bundle");
     std::println("      --infer-string-names  synthesize names from strong log/string anchors");

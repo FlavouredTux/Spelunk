@@ -1,0 +1,3 @@
+; disassembly of peer_entry at 0x0000000080520000 (4 bytes)
+;   xrefs from: link_source_entry
+0x0000000080520000  4e 80 00 20                     ret

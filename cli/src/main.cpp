@@ -2,7 +2,10 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <format>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <print>
 #include <string>
 #include <utility>
@@ -19,6 +22,7 @@
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/dtk_project.hpp>
 #include <ember/binary/raw_regions.hpp>
+#include <ember/binary/rel.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/timing.hpp>
 
@@ -73,6 +77,81 @@ load_binary_from_args(const ember::cli::Args& args) {
     if (!args.dtk_symbols_path.empty()) opts.dol_symbols_path = args.dtk_symbols_path;
     opts.no_pdb = args.no_pdb;
     return ember::load_binary(args.binary, opts);
+}
+
+[[nodiscard]] ember::Result<std::size_t>
+apply_dtk_rel_context(const ember::DtkProject& main_project,
+                      std::span<const ember::DtkProject> rel_projects,
+                      std::string_view selected_module,
+                      ember::Binary& primary) {
+    auto* selected = dynamic_cast<ember::RelBinary*>(&primary);
+    if (!selected) {
+        return std::unexpected(ember::Error::invalid_format(
+            "dtk: selected module did not load as a Wii REL"));
+    }
+
+    ember::LoadOptions main_options;
+    main_options.dol_symbols_path = main_project.symbols_path;
+    auto main_binary = ember::load_binary(main_project.object_path, main_options);
+    if (!main_binary) return std::unexpected(std::move(main_binary).error());
+
+    std::vector<std::unique_ptr<ember::Binary>> peer_storage;
+    std::vector<std::string> peer_names;
+    std::vector<ember::RelLinkModule> link_modules;
+    peer_storage.reserve(rel_projects.size());
+    peer_names.reserve(rel_projects.size());
+    link_modules.reserve(rel_projects.size());
+    link_modules.push_back({selected, selected_module});
+
+    constexpr ember::addr_t kContextAlignment = 0x10000;
+    const ember::addr_t selected_high = selected->preferred_load_base() +
+                                        selected->mapped_size();
+    if (selected_high < selected->preferred_load_base() ||
+        selected_high > std::numeric_limits<ember::u32>::max() -
+                        (kContextAlignment - 1)) {
+        return std::unexpected(ember::Error::invalid_format(
+            "dtk: selected REL leaves no room for peer modules"));
+    }
+    ember::addr_t cursor = (selected_high + kContextAlignment - 1) &
+                           ~(kContextAlignment - 1);
+
+    for (const auto& project : rel_projects) {
+        if (project.module_name == selected_module) continue;
+
+        ember::LoadOptions options;
+        options.dol_symbols_path = project.symbols_path;
+        options.rel_load_base = cursor;
+        auto loaded = ember::load_binary(project.object_path, options);
+        if (!loaded) return std::unexpected(std::move(loaded).error());
+        auto* peer = dynamic_cast<ember::RelBinary*>(loaded->get());
+        if (!peer) {
+            return std::unexpected(ember::Error::invalid_format(std::format(
+                "dtk: module '{}' did not load as a Wii REL",
+                project.module_name)));
+        }
+        const ember::addr_t high = peer->preferred_load_base() +
+                                   peer->mapped_size();
+        if (high < peer->preferred_load_base() ||
+            high > std::numeric_limits<ember::u32>::max() -
+                   (kContextAlignment - 1)) {
+            return std::unexpected(ember::Error::invalid_format(std::format(
+                "dtk: REL context exceeds PPC32 after module '{}'",
+                project.module_name)));
+        }
+        cursor = (high + kContextAlignment - 1) & ~(kContextAlignment - 1);
+        peer_storage.push_back(std::move(*loaded));
+        peer_names.push_back(project.module_name);
+        link_modules.push_back({peer, project.module_name});
+    }
+
+    auto linked = ember::link_rel_modules(link_modules, main_binary->get());
+    if (!linked) return std::unexpected(std::move(linked).error());
+
+    for (std::size_t index = 0; index < peer_storage.size(); ++index) {
+        selected->adopt_linked_binary(
+            std::move(peer_storage[index]), peer_names[index]);
+    }
+    return *linked;
 }
 
 [[nodiscard]] std::filesystem::path
@@ -243,6 +322,9 @@ int main(int argc, char** argv) {
         else                         print_help_topic(args.help_topic);
         return EXIT_SUCCESS;
     }
+    std::optional<ember::DtkProject> dtk_main_project;
+    std::vector<ember::DtkProject> dtk_rel_projects;
+    std::string selected_dtk_module;
     if (!args.dtk_project_path.empty()) {
         auto project = ember::resolve_dtk_project(
             args.dtk_project_path, args.dtk_version, args.dtk_module);
@@ -254,6 +336,21 @@ int main(int argc, char** argv) {
                          project->version.empty() ? "default" : project->version);
             std::println(stderr, "ember: object  {}", args.binary);
             std::println(stderr, "ember: symbols {}", args.dtk_symbols_path);
+        }
+        if (!args.dtk_module.empty()) {
+            // A REL context depends on the main DOL and every configured peer,
+            // while the legacy cache key hashes only the selected object.
+            // Bypass it until context-wide cache identities are available.
+            args.no_cache = true;
+            auto main_project = ember::resolve_dtk_project(
+                args.dtk_project_path, args.dtk_version);
+            if (!main_project) return report(main_project.error());
+            auto modules = ember::resolve_dtk_project_modules(
+                args.dtk_project_path, args.dtk_version);
+            if (!modules) return report(modules.error());
+            selected_dtk_module = project->module_name;
+            dtk_main_project = std::move(*main_project);
+            dtk_rel_projects = std::move(*modules);
         }
     }
 
@@ -324,6 +421,16 @@ int main(int argc, char** argv) {
         return load_binary_from_args(args);
     }();
     if (!bin) return report(bin.error());
+    if (dtk_main_project) {
+        auto linked = apply_dtk_rel_context(
+            *dtk_main_project, dtk_rel_projects, selected_dtk_module, **bin);
+        if (!linked) return report(linked.error());
+        if (!args.quiet) {
+            std::println(stderr,
+                "ember: REL context {} modules, {} external relocations resolved",
+                dtk_rel_projects.size(), *linked);
+        }
+    }
     if (const int rc = apply_dsym_overlay(args, **bin); rc != EXIT_SUCCESS) {
         return rc;
     }

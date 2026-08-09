@@ -220,6 +220,9 @@ struct LoadOptions {
     // Exact decomp-toolkit symbols for a DOL or REL. DOL entries contain
     // absolute VAs; REL entries contain section-relative offsets.
     std::filesystem::path dol_symbols_path;
+    // Standalone RELs default to a deterministic Wii-range address. A DTK
+    // multi-module context assigns distinct bases to its peer modules.
+    std::optional<addr_t>  rel_load_base;
     bool                  no_pdb = false;
 };
 

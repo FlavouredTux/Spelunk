@@ -110,6 +110,15 @@ void test_resolver_and_symbols() {
     }
     check(!ember::resolve_dtk_project(root, "EU0", "missing"),
           "an unknown DTK module is rejected");
+    auto modules = ember::resolve_dtk_project_modules(root, "EU0");
+    check(modules.has_value() && modules->size() == 1,
+          "all configured DTK modules resolve in config order");
+    if (modules && modules->size() == 1) {
+        check(modules->front().module_name == "test" &&
+                  modules->front().object_path ==
+                      fs::weakly_canonical(module_object_dir / "nlzss"),
+              "enumerated DTK module keeps its derived name and VFS path");
+    }
 
     auto dol = ember::DolBinary::load_from_buffer(dol_bytes);
     check(dol.has_value(), "synthetic DOL loads");

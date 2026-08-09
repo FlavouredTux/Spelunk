@@ -1684,6 +1684,30 @@ if(Python3_Interpreter_FOUND)
         COMMAND ember_rel_loader_test "${_wii_rel}"
                 "${_fixture_dir}/wii_rel_symbols.txt")
 
+    set(_wii_rel_link_source "${_build_dir}/wii_rel_link_source.rel")
+    set(_wii_rel_link_peer "${_build_dir}/wii_rel_link_peer.rel")
+    add_custom_command(
+        OUTPUT "${_wii_rel_link_source}" "${_wii_rel_link_peer}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_wii_rel_pair.py"
+                "${_wii_rel_link_source}" "${_wii_rel_link_peer}"
+        DEPENDS "${_fixture_dir}/make_wii_rel_pair.py"
+        COMMENT "Generating linked Wii REL pair fixtures"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_wii_rel_pair ALL
+        DEPENDS "${_wii_rel_link_source}" "${_wii_rel_link_peer}")
+
+    add_executable(ember_rel_link_test rel_link_test.cpp)
+    target_link_libraries(ember_rel_link_test PRIVATE ember::core ember::flags)
+    add_dependencies(ember_rel_link_test ember_fixture_wii_rel_pair)
+    add_test(NAME rel_link_unit
+        COMMAND ember_rel_link_test
+                "${_wii_rel_link_source}"
+                "${_wii_rel_link_peer}"
+                "${_fixture_dir}/wii_rel_link_source_symbols.txt"
+                "${_fixture_dir}/wii_rel_link_peer_symbols.txt")
+
     ember_golden_test(
         NAME    wii_rel_prolog_disasm
         FIXTURE wii_rel
@@ -2613,14 +2637,28 @@ if(Python3_Interpreter_FOUND)
     set(_dtk_symbols "${_dtk_project}/config/EU0/symbols.txt")
     set(_dtk_rel_object "${_dtk_project}/orig/EU0/files/rel/test/nlzss")
     set(_dtk_rel_symbols "${_dtk_project}/config/EU0/test/symbols.txt")
+    set(_dtk_link_source_object
+        "${_dtk_project}/orig/EU0/files/rel/link_source/nlzss")
+    set(_dtk_link_source_symbols
+        "${_dtk_project}/config/EU0/link_source/symbols.txt")
+    set(_dtk_link_peer_object
+        "${_dtk_project}/orig/EU0/files/rel/link_peer/nlzss")
+    set(_dtk_link_peer_symbols
+        "${_dtk_project}/config/EU0/link_peer/symbols.txt")
     add_custom_command(
         OUTPUT "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}"
                "${_dtk_rel_object}" "${_dtk_rel_symbols}"
+               "${_dtk_link_source_object}" "${_dtk_link_source_symbols}"
+               "${_dtk_link_peer_object}" "${_dtk_link_peer_symbols}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
                 "${_dtk_project}/orig/EU0/sys"
                 "${_dtk_project}/config/EU0"
                 "${_dtk_project}/orig/EU0/files/rel/test"
                 "${_dtk_project}/config/EU0/test"
+                "${_dtk_project}/orig/EU0/files/rel/link_source"
+                "${_dtk_project}/config/EU0/link_source"
+                "${_dtk_project}/orig/EU0/files/rel/link_peer"
+                "${_dtk_project}/config/EU0/link_peer"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_ppc32be_dol}" "${_dtk_object}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -2631,18 +2669,34 @@ if(Python3_Interpreter_FOUND)
                 "${_wii_rel}" "${_dtk_rel_object}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_fixture_dir}/wii_rel_symbols.txt" "${_dtk_rel_symbols}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_wii_rel_link_source}" "${_dtk_link_source_object}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fixture_dir}/wii_rel_link_source_symbols.txt"
+                "${_dtk_link_source_symbols}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_wii_rel_link_peer}" "${_dtk_link_peer_object}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fixture_dir}/wii_rel_link_peer_symbols.txt"
+                "${_dtk_link_peer_symbols}"
         DEPENDS
             "${_ppc32be_dol}"
             "${_wii_rel}"
+            "${_wii_rel_link_source}"
+            "${_wii_rel_link_peer}"
             "${_fixture_dir}/dtk_project/config/EU0/config.yml"
             "${_fixture_dir}/dtk_project/config/EU0/symbols.txt"
             "${_fixture_dir}/wii_rel_symbols.txt"
+            "${_fixture_dir}/wii_rel_link_source_symbols.txt"
+            "${_fixture_dir}/wii_rel_link_peer_symbols.txt"
         COMMENT "Staging DTK project fixture"
         VERBATIM
     )
     add_custom_target(ember_fixture_dtk_project ALL
         DEPENDS "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}"
-                "${_dtk_rel_object}" "${_dtk_rel_symbols}")
+                "${_dtk_rel_object}" "${_dtk_rel_symbols}"
+                "${_dtk_link_source_object}" "${_dtk_link_source_symbols}"
+                "${_dtk_link_peer_object}" "${_dtk_link_peer_symbols}")
     set(EMBER_FIXTURE_dtk_project_PATH "${_dtk_project}")
 
     ember_golden_test(
@@ -2704,6 +2758,18 @@ if(Python3_Interpreter_FOUND)
         FIXTURE dtk_project
         ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|test|-d|-s|fixture_prolog|-q"
         GOLDEN  dtk_rel.prolog.disasm.txt
+    )
+    ember_golden_test(
+        NAME    dtk_rel_cross_module_disasm
+        FIXTURE dtk_project
+        ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|link_source|-d|-s|link_source_entry|-q"
+        GOLDEN  dtk_rel_cross_module.disasm.txt
+    )
+    ember_golden_test(
+        NAME    dtk_rel_peer_function_disasm
+        FIXTURE dtk_project
+        ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|link_source|-d|-s|peer_entry|-q"
+        GOLDEN  dtk_rel_peer_function.disasm.txt
     )
 
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------

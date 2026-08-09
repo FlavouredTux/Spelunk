@@ -1,0 +1,2 @@
+peer_entry = .text:0x00000000; // type:function size:0x4 scope:global
+peer_value = .data:0x00000000; // type:object size:0x4 scope:global

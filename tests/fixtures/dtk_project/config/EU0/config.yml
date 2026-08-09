@@ -5,3 +5,7 @@ symbols: config/EU0/symbols.txt
 modules:
 - object: files/rel/test.bin:nlzss
   symbols: config/EU0/test/symbols.txt
+- object: files/rel/link_source.bin:nlzss
+  symbols: config/EU0/link_source/symbols.txt
+- object: files/rel/link_peer.bin:nlzss
+  symbols: config/EU0/link_peer/symbols.txt

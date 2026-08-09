@@ -23,6 +23,7 @@ struct DtkProject {
 // When a project root contains more than one version, `version` is required.
 [[nodiscard]] Result<DtkProject>
 resolve_dtk_project(const std::filesystem::path& input,
-                    std::string_view version = {});
+                    std::string_view version = {},
+                    std::string_view module = {});
 
 }  // namespace ember

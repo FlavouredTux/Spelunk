@@ -244,7 +244,8 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     if (!args.dtk_project_path.empty()) {
-        auto project = ember::resolve_dtk_project(args.dtk_project_path, args.dtk_version);
+        auto project = ember::resolve_dtk_project(
+            args.dtk_project_path, args.dtk_version, args.dtk_module);
         if (!project) return report(project.error());
         args.binary = project->object_path.string();
         args.dtk_symbols_path = project->symbols_path.string();

@@ -57,14 +57,22 @@ void test_resolver_and_symbols() {
         ("ember_dtk_project_test_" + std::to_string(unique));
     const fs::path config_dir = root / "config" / "EU0";
     const fs::path object_dir = root / "orig" / "EU0" / "sys";
+    const fs::path module_object_dir = root / "orig" / "EU0" /
+        "files" / "rel" / "test";
+    const fs::path module_config_dir = config_dir / "test";
     fs::create_directories(config_dir);
     fs::create_directories(object_dir);
+    fs::create_directories(module_object_dir);
+    fs::create_directories(module_config_dir);
 
     write_text(config_dir / "config.yml",
         "name: main\n"
         "object: sys/main.dol\n"
         "object_base: orig/EU0\n"
-        "symbols: config/EU0/symbols.txt\n");
+        "symbols: config/EU0/symbols.txt\n"
+        "modules:\n"
+        "- object: files/rel/test.bin:nlzss\n"
+        "  symbols: config/EU0/test/symbols.txt\n");
     write_text(config_dir / "symbols.txt",
         "marioReInit = .text:0x80003100; // type:function size:0x20 scope:global align:4\n"
         "mario_work = .data:0x80004000; // type:object size:0x8 scope:local align:4\n"
@@ -72,6 +80,8 @@ void test_resolver_and_symbols() {
         "__ArenaLo = absolute:0x81200000; // type:object scope:global\n");
     const auto dol_bytes = make_dol();
     write_bytes(object_dir / "main.dol", dol_bytes);
+    write_bytes(module_object_dir / "nlzss", dol_bytes);
+    write_text(module_config_dir / "symbols.txt", "test_fn = .text:0x0;\n");
 
     auto project = ember::resolve_dtk_project(root, "EU0");
     check(project.has_value(), "DTK project root resolves with an explicit version");
@@ -87,6 +97,19 @@ void test_resolver_and_symbols() {
     auto inferred = ember::resolve_dtk_project(root);
     check(inferred.has_value() && inferred->version == "EU0",
           "a single project version is inferred");
+
+    auto module = ember::resolve_dtk_project(root, "EU0", "test");
+    check(module.has_value(), "a named DTK REL/module entry resolves");
+    if (module) {
+        check(module->module_name == "test", "selected DTK module name is preserved");
+        check(module->object_path == fs::weakly_canonical(module_object_dir / "nlzss"),
+              "DTK VFS object syntax resolves to the extracted nested file");
+        check(module->symbols_path == fs::weakly_canonical(
+                  module_config_dir / "symbols.txt"),
+              "selected module uses its own symbols file");
+    }
+    check(!ember::resolve_dtk_project(root, "EU0", "missing"),
+          "an unknown DTK module is rejected");
 
     auto dol = ember::DolBinary::load_from_buffer(dol_bytes);
     check(dol.has_value(), "synthetic DOL loads");

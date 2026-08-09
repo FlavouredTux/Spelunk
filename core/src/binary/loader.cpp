@@ -14,6 +14,7 @@
 #include <ember/binary/macho.hpp>
 #include <ember/binary/minidump.hpp>
 #include <ember/binary/pe.hpp>
+#include <ember/binary/rel.hpp>
 #include <ember/common/bytes.hpp>
 #include <ember/extension/loader_registry.hpp>
 
@@ -483,6 +484,15 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
         }
         return std::unique_ptr<Binary>(std::move(*dol));
     }
+    if (looks_like_rel_path(path, *buffer)) {
+        auto rel = RelBinary::load_from_buffer(std::move(*buffer));
+        if (!rel) return std::unexpected(std::move(rel).error());
+        if (!opts.dol_symbols_path.empty()) {
+            auto loaded = (*rel)->attach_dtk_symbols_from_path(opts.dol_symbols_path);
+            if (!loaded) return std::unexpected(std::move(loaded).error());
+        }
+        return std::unique_ptr<Binary>(std::move(*rel));
+    }
     if (looks_like_macho_64(*buffer)) {
         auto m = MachOBinary::load_from_buffer(std::move(*buffer));
         if (!m) return std::unexpected(std::move(m).error());
@@ -551,7 +561,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
     }
 
     return std::unexpected(Error::unsupported(
-        "unrecognized binary format (only ELF, DOL, Mach-O 64-bit, and PE32+ supported)"));
+        "unrecognized binary format (only ELF, DOL, REL, Mach-O 64-bit, and PE32+ supported)"));
 }
 
 }  // namespace ember

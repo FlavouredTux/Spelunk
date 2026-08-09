@@ -2,3 +2,6 @@ name: main
 object: sys/main.dol
 object_base: orig/EU0
 symbols: config/EU0/symbols.txt
+modules:
+- object: files/rel/test.bin:nlzss
+  symbols: config/EU0/test/symbols.txt

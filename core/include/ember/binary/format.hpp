@@ -21,6 +21,9 @@ enum class Format {
     // DOL executable: header lists up to 7 text and 11 data segments with
     // physical/runtime addresses, no magic bytes.
     Dol,
+    // Nintendo GameCube/Wii relocatable module. Sections and compact import
+    // relocation streams are described by an OSModuleInfo header.
+    Rel,
 };
 
 [[nodiscard]] constexpr std::string_view format_name(Format f) noexcept {
@@ -32,6 +35,7 @@ enum class Format {
         case Format::Minidump:   return "minidump";
         case Format::RawRegions: return "raw-regions";
         case Format::Dol:        return "dol";
+        case Format::Rel:        return "rel";
     }
     return "unknown";
 }

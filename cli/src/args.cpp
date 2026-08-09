@@ -88,6 +88,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--dtk",         &Args::dtk_project_path},
     {"",   "--version",     &Args::dtk_version},
     {"",   "--dtk-version", &Args::dtk_version},
+    {"",   "--dtk-module",  &Args::dtk_module},
     {"-s", "--symbol",      &Args::symbol},
     {"",   "--annotations", &Args::annotations_path},
     {"",   "--export-annotations", &Args::export_annotations},
@@ -625,6 +626,10 @@ Result<Args> parse_args(int argc, char** argv) {
     if (a.dtk_project_path.empty() && !a.dtk_version.empty()) {
         return std::unexpected(Error::invalid_format(
             "--version requires --dtk <project>"));
+    }
+    if (a.dtk_project_path.empty() && !a.dtk_module.empty()) {
+        return std::unexpected(Error::invalid_format(
+            "--dtk-module requires --dtk <project>"));
     }
     if (!a.help && a.binary.empty() && a.dtk_project_path.empty()
         && !diffs_from_tsvs && !a.dump_types

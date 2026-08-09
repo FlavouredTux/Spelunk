@@ -12,6 +12,7 @@ struct Args {
     std::string binary;
     std::string dtk_project_path;   // --dtk PATH: project root or version config
     std::string dtk_version;        // --version ID: config/<ID>/config.yml
+    std::string dtk_module;         // --dtk-module NAME: select a REL/module entry
     std::string dtk_symbols_path;   // resolved internally from the DTK config
     std::string symbol;
     std::string annotations_path;   // --annotations PATH: explicit project file with renames/sigs/notes

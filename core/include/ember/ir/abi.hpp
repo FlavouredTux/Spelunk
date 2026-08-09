@@ -48,7 +48,8 @@ enum class Abi : u8 {
         // what we model - VFP argument passing is not distinguished here.
         return Abi::AapcsArm32;
     }
-    if ((f == Format::Elf || f == Format::Dol) && a == Arch::Ppc32) {
+    if ((f == Format::Elf || f == Format::Dol || f == Format::Rel) &&
+        a == Arch::Ppc32) {
         return Abi::Ppc32Sysv;
     }
     if (f == Format::Elf && a == Arch::Ppc64) {

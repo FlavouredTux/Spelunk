@@ -217,8 +217,8 @@ private:
 //              type information will not be available.
 struct LoadOptions {
     std::filesystem::path pdb_path;
-    // Exact decomp-toolkit symbols for a DOL. When set, these take
-    // precedence over heuristic adjacent .map discovery.
+    // Exact decomp-toolkit symbols for a DOL or REL. DOL entries contain
+    // absolute VAs; REL entries contain section-relative offsets.
     std::filesystem::path dol_symbols_path;
     bool                  no_pdb = false;
 };

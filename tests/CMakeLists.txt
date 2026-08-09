@@ -1663,6 +1663,34 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME elf_ppc_reloc_unit
         COMMAND ember_elf_ppc_reloc_test "${_ppc32_reloc}")
 
+    # ---- wii_rel (version-3 module with self, DOL, and cross-REL edges) -----
+    set(_wii_rel "${_build_dir}/wii_rel.rel")
+    add_custom_command(
+        OUTPUT "${_wii_rel}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_wii_rel.py"
+                "${_wii_rel}"
+        DEPENDS "${_fixture_dir}/make_wii_rel.py"
+        COMMENT "Generating Wii REL fixture wii_rel.rel"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_wii_rel ALL DEPENDS "${_wii_rel}")
+    set(EMBER_FIXTURE_wii_rel_PATH "${_wii_rel}")
+
+    add_executable(ember_rel_loader_test rel_loader_test.cpp)
+    target_link_libraries(ember_rel_loader_test PRIVATE ember::core ember::flags)
+    add_dependencies(ember_rel_loader_test ember_fixture_wii_rel)
+    add_test(NAME rel_loader_unit
+        COMMAND ember_rel_loader_test "${_wii_rel}"
+                "${_fixture_dir}/wii_rel_symbols.txt")
+
+    ember_golden_test(
+        NAME    wii_rel_prolog_disasm
+        FIXTURE wii_rel
+        ARGS    "-d|-s|_prolog"
+        GOLDEN  wii_rel.prolog.disasm.txt
+    )
+
     ember_golden_test(
         NAME    macho_tiny_main_pseudo
         FIXTURE macho_tiny
@@ -2583,26 +2611,38 @@ if(Python3_Interpreter_FOUND)
     set(_dtk_object "${_dtk_project}/orig/EU0/sys/main.dol")
     set(_dtk_config "${_dtk_project}/config/EU0/config.yml")
     set(_dtk_symbols "${_dtk_project}/config/EU0/symbols.txt")
+    set(_dtk_rel_object "${_dtk_project}/orig/EU0/files/rel/test/nlzss")
+    set(_dtk_rel_symbols "${_dtk_project}/config/EU0/test/symbols.txt")
     add_custom_command(
         OUTPUT "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}"
+               "${_dtk_rel_object}" "${_dtk_rel_symbols}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
                 "${_dtk_project}/orig/EU0/sys"
                 "${_dtk_project}/config/EU0"
+                "${_dtk_project}/orig/EU0/files/rel/test"
+                "${_dtk_project}/config/EU0/test"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_ppc32be_dol}" "${_dtk_object}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_fixture_dir}/dtk_project/config/EU0/config.yml" "${_dtk_config}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_fixture_dir}/dtk_project/config/EU0/symbols.txt" "${_dtk_symbols}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_wii_rel}" "${_dtk_rel_object}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fixture_dir}/wii_rel_symbols.txt" "${_dtk_rel_symbols}"
         DEPENDS
             "${_ppc32be_dol}"
+            "${_wii_rel}"
             "${_fixture_dir}/dtk_project/config/EU0/config.yml"
             "${_fixture_dir}/dtk_project/config/EU0/symbols.txt"
+            "${_fixture_dir}/wii_rel_symbols.txt"
         COMMENT "Staging DTK project fixture"
         VERBATIM
     )
     add_custom_target(ember_fixture_dtk_project ALL
-        DEPENDS "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}")
+        DEPENDS "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}"
+                "${_dtk_rel_object}" "${_dtk_rel_symbols}")
     set(EMBER_FIXTURE_dtk_project_PATH "${_dtk_project}")
 
     ember_golden_test(
@@ -2658,6 +2698,12 @@ if(Python3_Interpreter_FOUND)
         FIXTURE dtk_project
         ARGS    "--dtk|__BINARY__|--version|EU0|--no-cache|--functions|-q"
         GOLDEN  dtk_project.functions.txt
+    )
+    ember_golden_test(
+        NAME    dtk_rel_prolog_disasm
+        FIXTURE dtk_project
+        ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|test|-d|-s|fixture_prolog|-q"
+        GOLDEN  dtk_rel.prolog.disasm.txt
     )
 
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------

@@ -100,6 +100,84 @@ read_top_level_scalars(const std::filesystem::path& path) {
     return out;
 }
 
+[[nodiscard]] Result<std::map<std::string, std::string>>
+read_module_scalars(const std::filesystem::path& path,
+                    std::string_view wanted_module) {
+    std::ifstream in(path);
+    if (!in) {
+        return std::unexpected(Error::io(std::format(
+            "dtk: cannot open config '{}'", path.string())));
+    }
+
+    std::vector<std::map<std::string, std::string>> modules;
+    std::map<std::string, std::string> current;
+    bool in_modules = false;
+    std::string line;
+    std::size_t lineno = 0;
+    auto finish_current = [&] {
+        if (!current.empty()) modules.push_back(std::move(current));
+        current.clear();
+    };
+    while (std::getline(in, line)) {
+        ++lineno;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::string without_comment = strip_yaml_comment(line);
+        const std::string_view view = trim(without_comment);
+        if (view.empty()) continue;
+
+        const bool indented = !without_comment.empty() &&
+            std::isspace(static_cast<unsigned char>(without_comment.front()));
+        if (!indented && !(in_modules && view.starts_with('-'))) {
+            if (view == "modules:") {
+                in_modules = true;
+                continue;
+            }
+            if (in_modules) break;
+            continue;
+        }
+        if (!in_modules) continue;
+
+        std::string_view field = view;
+        if (field.starts_with('-')) {
+            finish_current();
+            field = trim(field.substr(1));
+            if (field.empty()) continue;
+        }
+        const auto colon = field.find(':');
+        if (colon == std::string_view::npos) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "dtk: {}:{}: expected a module key:value entry",
+                path.string(), lineno)));
+        }
+        const auto key = trim(field.substr(0, colon));
+        const auto value = trim(field.substr(colon + 1));
+        if (!key.empty() && !value.empty()) {
+            current[std::string(key)] = scalar_value(value);
+        }
+    }
+    finish_current();
+
+    auto module_name = [](const std::map<std::string, std::string>& values) {
+        if (const auto it = values.find("name"); it != values.end() && !it->second.empty()) {
+            return it->second;
+        }
+        const auto object = values.find("object");
+        if (object == values.end()) return std::string{};
+        std::string_view object_path = object->second;
+        if (const auto colon = object_path.find(':'); colon != std::string_view::npos) {
+            object_path = object_path.substr(0, colon);
+        }
+        return std::filesystem::path(object_path).stem().string();
+    };
+
+    for (auto& values : modules) {
+        if (module_name(values) == wanted_module) return values;
+    }
+    return std::unexpected(Error::invalid_format(std::format(
+        "dtk: module '{}' was not found in '{}'",
+        wanted_module, path.string())));
+}
+
 [[nodiscard]] std::filesystem::path
 absolute_normal(const std::filesystem::path& path) {
     std::error_code ec;
@@ -184,11 +262,25 @@ resolve_project_path(const std::filesystem::path& root,
     return absolute_normal(path.is_absolute() ? path : root / path);
 }
 
+[[nodiscard]] std::filesystem::path
+resolve_object_path(const std::filesystem::path& root,
+                    std::string_view value) {
+    const auto colon = value.find(':');
+    if (colon == std::string_view::npos) return resolve_project_path(root, value);
+
+    std::filesystem::path container(value.substr(0, colon));
+    container.replace_extension();
+    std::string nested(value.substr(colon + 1));
+    std::ranges::replace(nested, ':', '/');
+    return absolute_normal(root / container / nested);
+}
+
 }  // namespace
 
 Result<DtkProject>
 resolve_dtk_project(const std::filesystem::path& input,
-                    std::string_view version) {
+                    std::string_view version,
+                    std::string_view module) {
     if (input.empty()) {
         return std::unexpected(Error::invalid_format(
             "dtk: project path is empty"));
@@ -198,11 +290,19 @@ resolve_dtk_project(const std::filesystem::path& input,
 
     auto values = read_top_level_scalars(*config);
     if (!values) return std::unexpected(std::move(values).error());
-    const auto object_it = values->find("object");
-    if (object_it == values->end() || object_it->second.empty()) {
+    std::map<std::string, std::string> selected_values;
+    const std::map<std::string, std::string>* object_values = &*values;
+    if (!module.empty()) {
+        auto selected = read_module_scalars(*config, module);
+        if (!selected) return std::unexpected(std::move(selected).error());
+        selected_values = std::move(*selected);
+        object_values = &selected_values;
+    }
+    const auto object_it = object_values->find("object");
+    if (object_it == object_values->end() || object_it->second.empty()) {
         return std::unexpected(Error::invalid_format(std::format(
-            "dtk: config '{}' has no main-module 'object' path",
-            config->string())));
+            "dtk: config '{}' has no '{}' object path",
+            config->string(), module.empty() ? "main-module" : std::string(module))));
     }
 
     DtkProject out;
@@ -212,22 +312,24 @@ resolve_dtk_project(const std::filesystem::path& input,
     if (out.version.empty() && out.config_path.parent_path().parent_path().filename() == "config") {
         out.version = out.config_path.parent_path().filename().string();
     }
-    if (const auto it = values->find("name"); it != values->end()) {
+    if (const auto it = object_values->find("name"); it != object_values->end()) {
         out.module_name = it->second;
     }
-    if (out.module_name.empty()) out.module_name = "main";
+    if (out.module_name.empty()) out.module_name = module.empty() ? "main" : std::string(module);
 
     std::filesystem::path object_root = out.project_root;
     if (const auto it = values->find("object_base");
         it != values->end() && !it->second.empty() && it->second != "null" && it->second != "~") {
         object_root = resolve_project_path(out.project_root, it->second);
     }
-    const std::filesystem::path object_value(object_it->second);
-    out.object_path = absolute_normal(object_value.is_absolute()
-        ? object_value : object_root / object_value);
+    out.object_path = resolve_object_path(object_root, object_it->second);
 
-    if (const auto it = values->find("symbols"); it != values->end() && !it->second.empty()) {
+    if (const auto it = object_values->find("symbols");
+        it != object_values->end() && !it->second.empty()) {
         out.symbols_path = resolve_project_path(out.project_root, it->second);
+    } else if (!module.empty()) {
+        out.symbols_path = out.config_path.parent_path() /
+                           std::string(module) / "symbols.txt";
     } else {
         out.symbols_path = out.config_path.parent_path() / "symbols.txt";
     }
@@ -236,9 +338,10 @@ resolve_dtk_project(const std::filesystem::path& input,
     if (!std::filesystem::is_regular_file(out.object_path, ec) || ec) {
         const bool looks_vfs = object_it->second.find(':') != std::string::npos;
         return std::unexpected(Error::io(std::format(
-            "dtk: main object '{}' does not exist{}",
+            "dtk: {} object '{}' does not exist{}",
+            module.empty() ? "main" : std::string(module),
             out.object_path.string(),
-            looks_vfs ? " (DTK disc-image/VFS paths are not supported yet)" : "")));
+            looks_vfs ? " (extract the DTK disc-image/VFS object first)" : "")));
     }
     if (!std::filesystem::is_regular_file(out.symbols_path, ec) || ec) {
         return std::unexpected(Error::io(std::format(

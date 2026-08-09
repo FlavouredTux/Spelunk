@@ -138,7 +138,7 @@ attached as a comment.
 
 |                       | x86-64                | AArch64           | PPC32 / PPC64 |
 |---                    |---                    |---                |---            |
-| Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF32 / ELF64 / DOL |
+| Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF32 / ELF64 / PPC32 `.o` / DOL |
 | Decoder + IR lift     | full                  | partial           | partial       |
 | SSA + cleanup         | full                  | partial           | partial       |
 | Pseudo-C              | full                  | partial           | partial       |
@@ -158,7 +158,9 @@ Known limits:
   calls with an evidence comment.
 - Switch cases whose default falls outside the bounds check can misattribute.
 - AArch64 floating-point and Advanced SIMD are decoded shape-only and lift as `arm64.<op>(...)` intrinsics. SVE / SME unmapped.
-- PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics, DOL function discovery, and code-pointer xrefs.
+- PPC32/PPC64 lifting is intentionally small: scalar GPR/control-flow basics,
+  DOL and relocatable PPC32 ELF function discovery, core PPC32 relocations, and
+  code-pointer xrefs.
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`, `std::vector<T, std::allocator<T>>` → `std::vector<T>`) is balanced-template aware while preserving custom allocators.
 

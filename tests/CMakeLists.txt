@@ -1642,6 +1642,27 @@ if(Python3_Interpreter_FOUND)
         macho_cpp_shared_ptr_rtti make_macho_cpp_rtti.py --shared-ptr)
     ember_build_python_macho_fixture(macho_swift_types make_macho_swift_types.py)
 
+    # ---- ppc32_reloc (hand-built ELF32 ET_REL with code/data relocations) --
+    # Generated directly so this remains cross-toolchain-independent.
+    set(_ppc32_reloc "${_build_dir}/ppc32_reloc.o")
+    add_custom_command(
+        OUTPUT "${_ppc32_reloc}"
+        COMMAND ${Python3_EXECUTABLE}
+                "${_fixture_dir}/make_ppc32_reloc.py"
+                "${_ppc32_reloc}"
+        DEPENDS "${_fixture_dir}/make_ppc32_reloc.py"
+        COMMENT "Generating ELF PPC32 relocatable fixture ppc32_reloc.o"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_ppc32_reloc ALL DEPENDS "${_ppc32_reloc}")
+    set(EMBER_FIXTURE_ppc32_reloc_PATH "${_ppc32_reloc}")
+
+    add_executable(ember_elf_ppc_reloc_test elf_ppc_reloc_test.cpp)
+    target_link_libraries(ember_elf_ppc_reloc_test PRIVATE ember::core ember::flags)
+    add_dependencies(ember_elf_ppc_reloc_test ember_fixture_ppc32_reloc)
+    add_test(NAME elf_ppc_reloc_unit
+        COMMAND ember_elf_ppc_reloc_test "${_ppc32_reloc}")
+
     ember_golden_test(
         NAME    macho_tiny_main_pseudo
         FIXTURE macho_tiny

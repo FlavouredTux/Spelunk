@@ -12,6 +12,7 @@
 
 #include <ember/binary/arch.hpp>
 #include <ember/binary/format.hpp>
+#include <ember/binary/relocation.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/error.hpp>
@@ -55,6 +56,12 @@ public:
     [[nodiscard]] virtual std::span<const Symbol>  symbols() const noexcept  = 0;
 
     [[nodiscard]] virtual std::span<const std::byte> image() const noexcept = 0;
+
+    // Complete loader relocation evidence. Unlike relocated_qwords(), this
+    // keeps instruction relocations, widths, symbols, and addends and is
+    // therefore suitable for relocatable objects and target/candidate diffs.
+    [[nodiscard]] virtual std::span<const Relocation>
+    relocations() const noexcept { return {}; }
 
     // Loader-patched pointer slots known from format metadata, returned as
     // slot-VA -> absolute target VA. ELF models R_*_RELATIVE addends; PE

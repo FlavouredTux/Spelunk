@@ -41,6 +41,9 @@ public:
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
     [[nodiscard]] std::span<const Symbol>  symbols() const noexcept  override { return symbols_;  }
     [[nodiscard]] std::span<const std::byte> image() const noexcept  override { return buffer_;   }
+    [[nodiscard]] std::span<const Relocation> relocations() const noexcept override {
+        return relocations_;
+    }
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
@@ -65,7 +68,12 @@ public:
         for (const auto& seg : segments_) {
             if (!set || seg.vaddr < lo) { lo = seg.vaddr; set = true; }
         }
-        return set ? lo : 0;
+        if (set) return lo;
+        for (const auto& sec : sections_) {
+            if (!sec.flags.allocated || sec.size == 0) continue;
+            if (lo == 0 || sec.vaddr < lo) lo = sec.vaddr;
+        }
+        return lo;
     }
 
     // VA span of the binary's PT_LOAD segments. Used as a runtime
@@ -80,7 +88,13 @@ public:
                 if (seg.vaddr + seg.memsz > hi) hi = seg.vaddr + seg.memsz;
             }
         }
-        return set ? hi - lo : 0;
+        if (set) return hi - lo;
+        for (const auto& sec : sections_) {
+            if (!sec.flags.allocated || sec.size == 0) continue;
+            if (lo == 0 || sec.vaddr < lo) lo = sec.vaddr;
+            if (sec.vaddr + sec.size > hi) hi = sec.vaddr + sec.size;
+        }
+        return hi > lo ? hi - lo : 0;
     }
 
 protected:
@@ -118,6 +132,7 @@ private:
     // attachment needs symbols + sections.
     struct ParsedEhdr {
         bool is_64bit;
+        u16 e_type;
         u16 e_machine;
         u64 e_entry;
         u64 e_phoff, e_shoff;
@@ -134,6 +149,7 @@ private:
                   std::vector<std::string>& dynsym_names,
                   u16& dynsym_section,
                   bool& dynsym_section_seen);
+    [[nodiscard]] Result<void> parse_relocations(const ParsedEhdr& h);
     // Walks RELA sections and attaches GOT-slot addrs to matching imports.
     [[nodiscard]] Result<void>
     attach_got_addrs(const ParsedEhdr& h,
@@ -157,6 +173,15 @@ private:
     resolve_ppc64_descriptor_target(addr_t vaddr) const noexcept;
     void normalize_ppc64_descriptors() noexcept;
 
+    struct ParsedSymbol {
+        std::string name;
+        addr_t      addr = 0;
+        u64         size = 0;
+        SymbolKind  kind = SymbolKind::Unknown;
+        u16         section_index = 0;
+        bool        undefined = false;
+    };
+
     std::vector<std::byte>    buffer_;
     Arch                      arch_  = Arch::Unknown;
     Endian                    endian_ = Endian::Unknown;
@@ -164,6 +189,12 @@ private:
     std::vector<Section>      sections_;
     std::vector<Symbol>       symbols_;
     std::vector<LoadSegment>  segments_;
+    std::vector<Relocation>   relocations_;
+    std::vector<addr_t>       section_bases_;
+    std::unordered_map<u16, std::vector<ParsedSymbol>> symbol_tables_;
+    std::unordered_map<std::string, addr_t> external_symbol_addrs_;
+    addr_t                    next_external_addr_ = 0;
+    bool                      is_relocatable_ = false;
 };
 
 }  // namespace ember

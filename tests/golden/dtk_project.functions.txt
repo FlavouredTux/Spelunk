@@ -1,0 +1,3 @@
+0x0000000080003100	0x40	symbol	marioReInit
+0x0000000080003140	0x20	symbol	marioDispatch
+0x0000000080003160	0x24	symbol	marioIndexed

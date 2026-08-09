@@ -85,6 +85,9 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
+    {"",   "--dtk",         &Args::dtk_project_path},
+    {"",   "--version",     &Args::dtk_version},
+    {"",   "--dtk-version", &Args::dtk_version},
     {"-s", "--symbol",      &Args::symbol},
     {"",   "--annotations", &Args::annotations_path},
     {"",   "--export-annotations", &Args::export_annotations},
@@ -615,7 +618,16 @@ Result<Args> parse_args(int argc, char** argv) {
     // positional argument.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
     const bool attach_only = a.debug && !a.attach_pid.empty();
-    if (!a.help && a.binary.empty() && !diffs_from_tsvs && !a.dump_types
+    if (!a.dtk_project_path.empty() && !a.binary.empty()) {
+        return std::unexpected(Error::invalid_format(
+            "--dtk cannot be combined with a positional binary"));
+    }
+    if (a.dtk_project_path.empty() && !a.dtk_version.empty()) {
+        return std::unexpected(Error::invalid_format(
+            "--version requires --dtk <project>"));
+    }
+    if (!a.help && a.binary.empty() && a.dtk_project_path.empty()
+        && !diffs_from_tsvs && !a.dump_types
         && a.regions_manifest.empty() && a.raw_bytes_path.empty()
         && !attach_only && !a.ui) {
         return std::unexpected(Error::invalid_format("no binary specified"));

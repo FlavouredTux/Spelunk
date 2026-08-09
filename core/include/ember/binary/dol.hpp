@@ -17,6 +17,8 @@ public:
     load_from_buffer(std::vector<std::byte> buffer);
 
     [[nodiscard]] Result<std::size_t> attach_map_from_path(const std::filesystem::path& path);
+    [[nodiscard]] Result<std::size_t> attach_dtk_symbols_from_path(
+        const std::filesystem::path& path);
 
     [[nodiscard]] Format format() const noexcept override { return Format::Dol; }
     [[nodiscard]] Arch arch() const noexcept override { return Arch::Ppc32; }

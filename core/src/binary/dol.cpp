@@ -107,6 +107,43 @@ struct DolSeg {
     return out;
 }
 
+[[nodiscard]] std::string_view trim(std::string_view text) noexcept {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.remove_prefix(1);
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+[[nodiscard]] std::optional<u64> parse_integer(std::string_view text) noexcept {
+    text = trim(text);
+    int base = 10;
+    if (text.starts_with("0x") || text.starts_with("0X")) {
+        text.remove_prefix(2);
+        base = 16;
+    }
+    if (text.empty()) return std::nullopt;
+    u64 value = 0;
+    const auto [ptr, ec] = std::from_chars(
+        text.data(), text.data() + text.size(), value, base);
+    if (ec != std::errc{} || ptr != text.data() + text.size()) return std::nullopt;
+    return value;
+}
+
+[[nodiscard]] bool dtk_section_name_matches(std::string_view declared,
+                                            std::string_view actual) noexcept {
+    if (declared == actual) return true;
+    if ((declared == ".text" || declared == ".data") && actual.starts_with(declared)) {
+        const auto suffix = actual.substr(declared.size());
+        return !suffix.empty() && std::ranges::all_of(suffix, [](char c) {
+            return std::isdigit(static_cast<unsigned char>(c));
+        });
+    }
+    return false;
+}
+
 }  // namespace
 
 bool looks_like_dol_path(const std::filesystem::path& path,
@@ -186,6 +223,14 @@ Result<void> DolBinary::parse() {
     const u32 bss_addr = word_at(bytes, 0xd8);
     const u32 bss_size = word_at(bytes, 0xdc);
     if (bss_size != 0) {
+        Section bss;
+        bss.name = ".bss";
+        bss.vaddr = bss_addr;
+        bss.size = bss_size;
+        bss.flags.readable = true;
+        bss.flags.writable = true;
+        bss.flags.allocated = true;
+        sections_.push_back(std::move(bss));
         load_base_ = std::min<addr_t>(load_base_, bss_addr);
         max_end = std::max<addr_t>(max_end, static_cast<addr_t>(bss_addr) + bss_size);
     }
@@ -265,6 +310,119 @@ Result<std::size_t> DolBinary::attach_map_from_path(const std::filesystem::path&
             break;
         }
     }
+    sort_and_dedupe_symbols();
+    invalidate_caches();
+    return added;
+}
+
+Result<std::size_t>
+DolBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in) {
+        return std::unexpected(Error::io(std::format("cannot open '{}'", path.string())));
+    }
+
+    std::size_t added = 0;
+    std::size_t lineno = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        ++lineno;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        const auto slash = line.find("//");
+        const std::string_view attributes = slash == std::string::npos
+            ? std::string_view{} : trim(std::string_view(line).substr(slash + 2));
+        std::string_view declaration = trim(std::string_view(line).substr(0, slash));
+        if (declaration.empty() || declaration.starts_with('#')) continue;
+
+        const auto equal = declaration.find('=');
+        const auto colon = declaration.rfind(':');
+        if (equal == std::string_view::npos || colon == std::string_view::npos || colon < equal) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "dtk symbols: {}:{}: expected NAME = SECTION:ADDRESS",
+                path.string(), lineno)));
+        }
+
+        const std::string_view name = trim(declaration.substr(0, equal));
+        const std::string_view section_name = trim(
+            declaration.substr(equal + 1, colon - equal - 1));
+        std::string_view address_text = trim(declaration.substr(colon + 1));
+        if (address_text.ends_with(';')) address_text = trim(address_text.substr(0, address_text.size() - 1));
+        const auto address = parse_integer(address_text);
+        if (name.empty() || !address) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "dtk symbols: {}:{}: invalid name or address",
+                path.string(), lineno)));
+        }
+
+        std::optional<SymbolKind> declared_kind;
+        u64 declared_size = 0;
+        bool is_export = true;
+        for (const auto token : split_ws(attributes)) {
+            if (token.starts_with("type:")) {
+                const auto value = token.substr(5);
+                if (value == "function") declared_kind = SymbolKind::Function;
+                else if (value == "object") declared_kind = SymbolKind::Object;
+            } else if (token.starts_with("size:")) {
+                auto value = parse_integer(token.substr(5));
+                if (!value) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "dtk symbols: {}:{}: invalid size attribute",
+                        path.string(), lineno)));
+                }
+                declared_size = *value;
+            } else if (token == "scope:local") {
+                is_export = false;
+            }
+        }
+
+        const Section* containing = nullptr;
+        for (const auto& section : sections_) {
+            if (*address < section.vaddr || *address >= section.vaddr + section.size) continue;
+            if (dtk_section_name_matches(section_name, section.name)) {
+                containing = &section;
+                break;
+            }
+            if (!containing) containing = &section;
+            if (declared_kind &&
+                ((*declared_kind == SymbolKind::Function) == section.flags.executable)) {
+                containing = &section;
+            }
+        }
+        // DTK symbol files can contain absolute/special linker symbols that
+        // do not belong to the selected DOL image. They are not loadable
+        // symbols, so skip them without poisoning the rest of the file.
+        if (!containing) continue;
+
+        const SymbolKind kind = declared_kind.value_or(
+            containing->flags.executable ? SymbolKind::Function : SymbolKind::Object);
+        auto synthetic_start = std::ranges::find_if(symbols_, [&](const Symbol& symbol) {
+            return symbol.addr == *address && !symbol.is_import && symbol.name == "_start";
+        });
+        if (synthetic_start != symbols_.end()) {
+            synthetic_start->name = std::string(name);
+            synthetic_start->kind = kind;
+            synthetic_start->size = declared_size;
+            synthetic_start->is_export = is_export;
+            ++added;
+            continue;
+        }
+
+        const auto existing = std::ranges::find_if(symbols_, [&](const Symbol& symbol) {
+            return symbol.addr == *address && !symbol.is_import && symbol.name == name;
+        });
+        if (existing != symbols_.end()) continue;
+
+        Symbol symbol;
+        symbol.name = std::string(name);
+        symbol.addr = *address;
+        symbol.size = declared_size;
+        symbol.kind = kind;
+        symbol.is_export = is_export;
+        symbols_.push_back(std::move(symbol));
+        ++added;
+    }
+
     sort_and_dedupe_symbols();
     invalidate_caches();
     return added;

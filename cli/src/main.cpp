@@ -17,6 +17,7 @@
 
 #include <ember/binary/binary.hpp>
 #include <ember/analysis/strings.hpp>
+#include <ember/binary/dtk_project.hpp>
 #include <ember/binary/raw_regions.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/timing.hpp>
@@ -69,6 +70,7 @@ load_binary_from_args(const ember::cli::Args& args) {
     }
     ember::LoadOptions opts;
     if (!args.pdb_path.empty()) opts.pdb_path = args.pdb_path;
+    if (!args.dtk_symbols_path.empty()) opts.dol_symbols_path = args.dtk_symbols_path;
     opts.no_pdb = args.no_pdb;
     return ember::load_binary(args.binary, opts);
 }
@@ -234,15 +236,28 @@ int main(int argc, char** argv) {
         print_help();
         return EXIT_FAILURE;
     }
-    const auto& args = *args_r;
-
-    apply_quiet_env(args);
+    auto args = std::move(*args_r);
 
     if (args.help) {
         if (args.help_topic.empty()) print_help();
         else                         print_help_topic(args.help_topic);
         return EXIT_SUCCESS;
     }
+    if (!args.dtk_project_path.empty()) {
+        auto project = ember::resolve_dtk_project(args.dtk_project_path, args.dtk_version);
+        if (!project) return report(project.error());
+        args.binary = project->object_path.string();
+        args.dtk_symbols_path = project->symbols_path.string();
+        if (!args.quiet) {
+            std::println(stderr, "ember: DTK {} [{}]", project->module_name,
+                         project->version.empty() ? "default" : project->version);
+            std::println(stderr, "ember: object  {}", args.binary);
+            std::println(stderr, "ember: symbols {}", args.dtk_symbols_path);
+        }
+    }
+
+    apply_quiet_env(args);
+
     if (args.ui)          { return run_ui(args);                         }
     if (args.dump_types)  { return run_dump_types();                       }
 

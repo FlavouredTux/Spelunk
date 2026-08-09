@@ -281,6 +281,8 @@ void help_dbg() {
 
 void help_load() {
     std::println("Loading non-default inputs / non-default function-entry hints:");
+    std::println("      --dtk PROJECT    load the main object and exact symbols from a DTK project");
+    std::println("      --version ID     select config/ID/config.yml (required for multi-version projects)");
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
     std::println("      --dsym PATH      overlay symbols from a Mach-O dSYM file or .dSYM bundle");
     std::println("      --infer-string-names  synthesize names from strong log/string anchors");
@@ -321,6 +323,7 @@ void help_cache() {
 
 void print_help() {
     std::println("usage: ember [view-flag] [-s NAME] <binary>");
+    std::println("       ember [view-flag] --dtk <project> [--version ID] [-s NAME]");
     std::println("       ember --ui [binary]");
     std::println("       ember --help <topic>");
     std::println("");
@@ -338,7 +341,7 @@ void print_help() {
     std::println("           corpus, size caps");
     std::println("  ann      annotate, apply, list-annotations, dry-run, .ember scripts");
     std::println("  dbg      --ui, --debug, attach, backends, aux-bin, --serve");
-    std::println("  load     pdb, regions, raw-bytes, base-va, force-fn-start, module");
+    std::println("  load     DTK projects, pdb, regions, raw-bytes, base-va, force-fn-start, module");
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
     std::println("");

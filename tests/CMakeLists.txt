@@ -120,6 +120,10 @@ add_executable(ember_loader_robustness_test loader_robustness_test.cpp)
 target_link_libraries(ember_loader_robustness_test PRIVATE ember::core ember::flags)
 add_test(NAME loader_robustness_unit COMMAND ember_loader_robustness_test)
 
+add_executable(ember_dtk_project_test dtk_project_test.cpp)
+target_link_libraries(ember_dtk_project_test PRIVATE ember::core ember::flags)
+add_test(NAME dtk_project_unit COMMAND ember_dtk_project_test)
+
 add_executable(ember_discovery_test discovery_test.cpp)
 target_link_libraries(ember_discovery_test PRIVATE ember::core ember::flags)
 add_test(NAME discovery_unit COMMAND ember_discovery_test)
@@ -2554,6 +2558,32 @@ if(Python3_Interpreter_FOUND)
         DEPENDS "${_ppc32be_dol}" "${_ppc32be_dol_map}")
     set(EMBER_FIXTURE_ppc32be_dol_PATH "${_ppc32be_dol}")
 
+    set(_dtk_project "${_build_dir}/dtk_project")
+    set(_dtk_object "${_dtk_project}/orig/EU0/sys/main.dol")
+    set(_dtk_config "${_dtk_project}/config/EU0/config.yml")
+    set(_dtk_symbols "${_dtk_project}/config/EU0/symbols.txt")
+    add_custom_command(
+        OUTPUT "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${_dtk_project}/orig/EU0/sys"
+                "${_dtk_project}/config/EU0"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_ppc32be_dol}" "${_dtk_object}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fixture_dir}/dtk_project/config/EU0/config.yml" "${_dtk_config}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fixture_dir}/dtk_project/config/EU0/symbols.txt" "${_dtk_symbols}"
+        DEPENDS
+            "${_ppc32be_dol}"
+            "${_fixture_dir}/dtk_project/config/EU0/config.yml"
+            "${_fixture_dir}/dtk_project/config/EU0/symbols.txt"
+        COMMENT "Staging DTK project fixture"
+        VERBATIM
+    )
+    add_custom_target(ember_fixture_dtk_project ALL
+        DEPENDS "${_dtk_object}" "${_dtk_config}" "${_dtk_symbols}")
+    set(EMBER_FIXTURE_dtk_project_PATH "${_dtk_project}")
+
     ember_golden_test(
         NAME    ppc32be_dol_disasm
         FIXTURE ppc32be_dol
@@ -2595,6 +2625,18 @@ if(Python3_Interpreter_FOUND)
         FIXTURE ppc32be_dol
         ARGS    "-d|--disasm-at|0x80003160|--count|9"
         GOLDEN  ppc32be_dol.indexed_disasm.txt
+    )
+    ember_golden_test(
+        NAME    dtk_project_pseudo_by_name
+        FIXTURE dtk_project
+        ARGS    "--dtk|__BINARY__|--version|EU0|-p|-s|marioReInit|-q"
+        GOLDEN  dtk_project.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    dtk_project_functions
+        FIXTURE dtk_project
+        ARGS    "--dtk|__BINARY__|--version|EU0|--no-cache|--functions|-q"
+        GOLDEN  dtk_project.functions.txt
     )
 
     # ---- arm64_tiny (hand-built ELF AArch64) ------------------------------

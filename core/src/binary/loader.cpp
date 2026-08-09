@@ -466,6 +466,11 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
     if (looks_like_dol_path(path, *buffer)) {
         auto dol = DolBinary::load_from_buffer(std::move(*buffer));
         if (!dol) return std::unexpected(std::move(dol).error());
+        if (!opts.dol_symbols_path.empty()) {
+            auto loaded = (*dol)->attach_dtk_symbols_from_path(opts.dol_symbols_path);
+            if (!loaded) return std::unexpected(std::move(loaded).error());
+            return std::unique_ptr<Binary>(std::move(*dol));
+        }
         std::error_code ec;
         auto try_map = [&](const std::filesystem::path& p) -> bool {
             if (p.empty()) return false;

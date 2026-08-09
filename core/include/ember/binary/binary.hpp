@@ -198,7 +198,7 @@ private:
     mutable std::unordered_map<addr_t, u64> runtime_qwords_;
 };
 
-// Optional knobs for `load_binary`. Today only PE binaries care:
+// Optional knobs for `load_binary`.
 //
 //   pdb_path : when non-empty, the loader skips its sidecar
 //              auto-discovery (which scans the embedded CodeView name
@@ -210,6 +210,9 @@ private:
 //              type information will not be available.
 struct LoadOptions {
     std::filesystem::path pdb_path;
+    // Exact decomp-toolkit symbols for a DOL. When set, these take
+    // precedence over heuristic adjacent .map discovery.
+    std::filesystem::path dol_symbols_path;
     bool                  no_pdb = false;
 };
 

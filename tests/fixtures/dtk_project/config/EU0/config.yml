@@ -1,0 +1,4 @@
+name: main
+object: sys/main.dol
+object_base: orig/EU0
+symbols: config/EU0/symbols.txt

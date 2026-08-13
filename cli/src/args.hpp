@@ -65,17 +65,14 @@ struct Args {
     std::string disasm_at;          // --disasm-at VA: disasm window at VA
     std::string disasm_count;       // --count N: instructions for --disasm-at / --disasm-window
     std::string disasm_window;      // --disasm-window VA1,VA2,... - batch disassembly. Same per-VA
-                                    // shape as --disasm-at, but emits one block per VA so an agent
-                                    // can pipeline thousands of hits without per-call CLI startup.
+                                    // shape as --disasm-at, but emits one block per VA for efficient
+                                    // processing of thousands of hits without per-call CLI startup.
                                     // `@PATH` reads VAs (one per line) from a file.
     std::string list_syscalls;      // --list-syscalls VA: walk fn @ VA, report each syscall site (file_offset + nr if known)
     std::string forge_spec;         // --forge-spec ENTRY:VA - minimum struct/branch
                                     // shape required for control to reach VA from
                                     // ENTRY. ENTRY is a name, hex VA, or sub_<hex>;
                                     // VA is hex / sub_<hex>. JSON form under --json.
-    std::string cascade_scope;      // --cascade-scope all|list:..|range:..|callers-of:..
-                                    // |callees-of:..|around:.. for --cascade-plan
-    std::string intel_promote;      // --intel-promote PATH: fold agent intel JSONL into .ember script
     std::string apply_patches;      // --apply-patches FILE: vaddr_hex bytes_hex per line
     std::string output_path;        // -o / --output PATH: destination for --apply-patches
     std::string regions_manifest;   // --regions PATH: load via RawRegionsBinary instead of file magic
@@ -91,8 +88,7 @@ struct Args {
     std::string module_filter;      // --module NAME: scope fn iteration to one loaded module
                                     // (minidumps, multi-module containers). Matched against
                                     // module Symbol basenames case-insensitively. Affects
-                                    // --functions, --recognize, --serve's functions/recognize/
-                                    // callees_all/strings_in_range. Out-of-scope addresses are
+                                    // --functions and --recognize. Out-of-scope addresses are
                                     // skipped before fingerprinting - the actual bottleneck on
                                     // large dumps where most fns are wine-DLL noise.
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
@@ -194,8 +190,7 @@ struct Args {
     bool show_provenance = false;   // emit `// confidence: 0.9 (cli) - evidence`
                                     // header lines under -p when the resolved
                                     // annotation carries metadata. Default off
-                                    // because it clutters the listing for
-                                    // human readers; agent flows turn it on.
+                                    // because it clutters the normal listing.
     bool list_annotations = false;  // --list-annotations: dump every record in
                                     // the resolved annotations file (rename,
                                     // note, signature) with its meta. Sibling
@@ -213,9 +208,6 @@ struct Args {
     bool ppc_coverage = false;       // --ppc-coverage: rank unsupported PPC words in executable sections
     ember::u64 ppc_coverage_limit = 25; // --coverage-limit N: rows for --ppc-coverage (0 = all)
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
-    bool cascade_plan = false;      // --cascade-plan: deterministic anchor-cascade target planner
-    ember::u64 cascade_per_round = 12; // --per-round N: number of cascade targets to select
-    double cascade_eligibility_ratio = 0.3; // --eligibility-ratio R for --cascade-plan
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
     bool collisions = false;        // --collisions: dump every name/fingerprint group bound to >1 address
     std::string functions_pattern;  // optional substring filter for --functions (second positional)
@@ -223,8 +215,6 @@ struct Args {
     bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
     bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
     bool debug  = false;            // --debug: launch the binary under the built-in REPL debugger
-    bool serve  = false;            // --serve: read JSON-line tool requests on stdin, reply on stdout. Long-lived daemon for agent fanout.
-    bool ui     = false;            // --ui: open the Electron UI, optionally with the positional binary loaded.
     std::string attach_pid;         // --attach-pid PID: attach to an existing process instead of launching
     std::string debug_backend;      // --debug-backend: "ptrace" (default), "perf", or "auto"
                                     //   ptrace = classic Linux ptrace backend; full features

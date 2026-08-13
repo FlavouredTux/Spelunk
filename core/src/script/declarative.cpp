@@ -349,7 +349,7 @@ struct KvPair {
     return std::string_view::npos;
 }
 
-// Parse a `conf=0.9; src=agent:namer; ev=3-arg ...` block.
+// Parse a `conf=0.9; src=tool:review; ev=3-arg ...` block.
 // `;`-separated key=value pairs; `=` splits each at the first occurrence
 // so values can contain `=`. Whitespace around keys / values is trimmed.
 // Unknown keys are silently ignored. Confidence values outside [0,1]

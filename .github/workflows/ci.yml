@@ -49,17 +49,6 @@ jobs:
           fi
           exit "$rc"
 
-      - uses: actions/setup-node@v4
-        with: { node-version: '26' }
-
-      - name: Build UI and agent
-        run: |
-          npm ci --prefix agent
-          npm run typecheck --prefix agent
-          npm run build --prefix agent
-          npm ci --prefix ui
-          npm run build --prefix ui
-
   # clang + libc++ on Linux. The point is catching libc++-specific
   # header drift (transitive include leaks, missing <format>/<print>
   # explicit pulls) without waiting on the macos-14 runner, which is

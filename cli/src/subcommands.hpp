@@ -86,8 +86,6 @@ int run_disasm_at    (const Args& args, const Binary& b);
 int run_disasm_window(const Args& args, const Binary& b);
 int run_list_syscalls(const Args& args, const Binary& b);
 int run_forge_spec   (const Args& args, const Binary& b);
-int run_cascade_plan (const Args& args, const Binary& b);
-int run_intel_promote(const Args& args, const Binary& b);
 int run_annotate     (const Args& args, const Binary& b);
 int run_list_annotations(const Args& args, const Binary& b);
 
@@ -97,13 +95,6 @@ int run_list_annotations(const Args& args, const Binary& b);
 // the user, then dispatches to the requested view (or print_info if
 // nothing was requested). Returns the process exit code.
 int run_emit(const Args& args, const Binary& b);
-
-// --serve: long-lived daemon. Reads tab-delimited tool requests on
-// stdin, dispatches to the same code paths as the one-shot
-// subcommands, writes length-framed responses on stdout. Exits on
-// EOF. The binary is loaded once at startup and reused across every
-// request - wins back the wait4 dominance in agent-fanout strace.
-int run_serve(const Args& args, const Binary& b);
 
 // Lower-level handlers retained for callers that already have the
 // emit-options block built and just want to drive a single view.

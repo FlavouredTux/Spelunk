@@ -1,2 +1,0 @@
-plan: scope=range:0x401120-0x401122 candidates=1 eligible=1 selected=1
-   1. 0x40111d score=105.1 known=100% callers=0 callees=1 unresolved=0 - all callees known, 35 bytes

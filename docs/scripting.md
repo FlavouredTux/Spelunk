@@ -124,7 +124,7 @@ metadata suffix carrying confidence + source + evidence:
 
 ```ember
 [rename]
-0x401234 = do_thing ; conf=0.9 ; src=agent:namer ; ev=3-arg, called by 0x401120
+0x401234 = do_thing ; conf=0.9 ; src=tool:review ; ev=3-arg, called by 0x401120
 
 [note]
 0x401234 = entry point ; conf=0.7 ; src=cli
@@ -143,11 +143,11 @@ Recognised keys:
 
 - `conf=<float>` - 0..1, clamped on load.
 - `src=<tag>` - short identifier for who's claiming. By convention
-  `cli` (typed by hand), `agent:<role>` (worker in the agent harness),
+  `cli` (typed by hand), `tool:<name>` (external integration),
   `import` (derived from binary symbols).
 - `ev=<text>` - free-form reason. Ends at the next `;` in the
   suffix block, so embed `;` in evidence by replacing it with
-  `,` upstream (the agent harness does this in `metaSuffix`).
+  `,` upstream.
 
 Unknown keys are silently ignored - older ember reading a newer
 script keeps the rename/note/signature, just drops the metadata.
@@ -204,7 +204,7 @@ one-line `.ember` file and `--apply`-ing it:
 
 ```sh
 ember annotate 0x2f8908a --set-name cap_check_v2 \
-    --confidence 0.9 --source agent:namer \
+    --confidence 0.9 --source tool:review \
     --evidence "3-arg, called by 0x3f94380 with esi=immediate" \
     <binary>
 

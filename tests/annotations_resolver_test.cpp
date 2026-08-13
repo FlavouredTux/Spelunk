@@ -137,7 +137,7 @@ int main() {
         ember::AnnotationMeta rm;
         rm.confidence = 0.875f;
         rm.evidence   = "3-arg, called by 0x3f94380; pipe |, newline\n in ev";
-        rm.source     = "agent:namer";
+        rm.source     = "tool:review";
         a.rename_meta[0x401000] = rm;
         a.note_meta[0x401000]   = ember::AnnotationMeta{0.5f, "from doc-comment", "cli"};
 

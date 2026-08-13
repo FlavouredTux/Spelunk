@@ -59,7 +59,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--int3-resolve", &Args::int3_resolve},
     {"",   "--ppc-coverage", &Args::ppc_coverage},
     {"",   "--cfg-pseudo", &Args::cfg_pseudo},
-    {"",   "--cascade-plan", &Args::cascade_plan},
     {"",   "--functions", &Args::functions},
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
@@ -75,9 +74,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"-q", "--quiet",     &Args::quiet},
     {"",   "--dry-run",   &Args::dry_run},
     {"",   "--debug",     &Args::debug},
-    {"",   "--serve",     &Args::serve},
-    {"",   "--daemon",    &Args::serve},
-    {"",   "--ui",        &Args::ui},
     {"",   "--show-empty", &Args::symuses_show_empty},
     {"",   "--no-taint",  &Args::symuses_no_taint},
     {"",   "--verbose",   &Args::verbose},
@@ -128,8 +124,6 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--disasm-window", &Args::disasm_window},
     {"",   "--list-syscalls", &Args::list_syscalls},
     {"",   "--forge-spec",   &Args::forge_spec},
-    {"",   "--cascade-scope", &Args::cascade_scope},
-    {"",   "--intel-promote", &Args::intel_promote},
     {"",   "--annotate",     &Args::annotate_addr},
     {"",   "--set-name",     &Args::annotate_name},
     {"",   "--set-note",     &Args::annotate_note},
@@ -464,37 +458,6 @@ Result<Args> parse_args(int argc, char** argv) {
             }
             continue;
         }
-        if (s == "--per-round") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--per-round requires a value"));
-            }
-            if (auto v = parse_u64_strict(argv[i]); v && *v > 0) {
-                a.cascade_per_round = *v;
-            } else {
-                return std::unexpected(Error::invalid_format(
-                    "--per-round: bad integer"));
-            }
-            continue;
-        }
-        if (s == "--eligibility-ratio") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--eligibility-ratio requires a value"));
-            }
-            auto value = parse_cli_double(argv[i]);
-            if (!value) {
-                return std::unexpected(Error::invalid_format(
-                    "--eligibility-ratio: bad float"));
-            }
-            a.cascade_eligibility_ratio = *value;
-            if (a.cascade_eligibility_ratio < 0.0 || a.cascade_eligibility_ratio > 1.0) {
-                return std::unexpected(Error::invalid_format(
-                    "--eligibility-ratio: expected 0..1"));
-            }
-            continue;
-        }
-
         // `--aux-binary PATH[@HEX]` - repeatable. Each entry is a
         // secondary Binary the debugger loads as an extra symbol
         // oracle (e.g. a Mach-O blob in a Linux tracee). Optional
@@ -588,8 +551,7 @@ Result<Args> parse_args(int argc, char** argv) {
                     a.ssa    || a.opt || a.strct      || a.pseudo)) {
             // The natural shorthand for "decompile / disassemble this
             // function" is `ember -p BIN 0x4012a0` rather than
-            // `ember -p BIN -s 0x4012a0`. LLM-driven agents reach for
-            // the positional form first - accept it for the view modes
+            // `ember -p BIN -s 0x4012a0`. Accept it for the view modes
             // where -s is the only thing a second positional could be.
             a.symbol = s;
         } else {
@@ -634,7 +596,7 @@ Result<Args> parse_args(int argc, char** argv) {
     if (!a.help && a.binary.empty() && a.dtk_project_path.empty()
         && !diffs_from_tsvs && !a.dump_types
         && a.regions_manifest.empty() && a.raw_bytes_path.empty()
-        && !attach_only && !a.ui) {
+        && !attach_only) {
         return std::unexpected(Error::invalid_format("no binary specified"));
     }
     if (!a.raw_bytes_path.empty() && a.raw_base_va.empty()) {

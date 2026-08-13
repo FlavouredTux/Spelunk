@@ -191,14 +191,6 @@ cmake --build build -j
 ./build/cli/ember --help
 ```
 
-UI:
-
-```sh
-cd ui && npm install && npm run dev
-```
-
-Set `EMBER_BIN` if the CLI isn't at `../build/cli/ember`.
-
 Python wrapper:
 
 ```sh
@@ -341,36 +333,6 @@ Section-keyed, one directive per line, no expressions or control flow. Anything 
 </details>
 
 <details>
-<summary><b>Agent harness</b></summary>
-
-`agent/` is a TypeScript multi-agent driver. Workers run a single role - namer / mapper / typer / tiebreaker - as an LLM tool-use loop, write claims into a shared per-binary intel database (append-only JSONL with retraction + dispute detection), and the orchestrator promotes high-confidence claims into the same `.ember` file `--apply` consumes. Provider-neutral across assistant, OpenAI, and OpenRouter; prompt-cache-aware on both assistant-direct and DeepSeek-via-OpenRouter; per-worker USD budget cap.
-
-```sh
-# 20 namer workers in parallel against a stripped binary
-ember-agent fanout --binary=./target.elf --pick=unnamed --limit=20 \
-  --budget=0.04 --model=deepseek/deepseek-v4-flash
-
-# Anchor Cascade - bottom-up rounds, each one names fns whose callees
-# are mostly anchored, promotes ≥0.85 conf claims, re-renders pseudo-C
-# so the next round sees richer context.
-ember-agent cascade --binary=./target.elf --per-round=30 --max-rounds=5
-
-ember-agent intel ./target.elf disputes
-ember-agent promote ./target.elf --apply
-```
-
-Disputes - top-2 claims within 0.10 confidence from different agents with different values - surface for unbiased tiebreaker resolution. Full surface in [docs/agent.md](docs/agent.md).
-
-</details>
-
-<details>
-<summary><b>Plugin platform</b></summary>
-
-Target-specific reversing - games, engines, protocols, build-to-build knowledge carryover - is layered onto the Electron UI, not the C++ core. Plugins are `.cjs` bundles (`plugin.json` + `main.cjs`) loaded by the renderer's Node runtime; the surface they consume is the same `Annotations` API the `.ember` format drives. Design in [docs/plugin-platform.md](docs/plugin-platform.md).
-
-</details>
-
-<details>
 <summary><b>Layout</b></summary>
 
 ```
@@ -388,11 +350,9 @@ core/             C++23 library - everything except the CLI shim
   script/         declarative .ember parser + applier
   common/         annotations, on-disk cache
 cli/              command-line driver
-ui/               Electron + React + TypeScript frontend
-agent/            TypeScript multi-agent LLM harness
 tests/            golden-output CTest suite
 docs/             Python wrapper, scripting, debugger, raw-input,
-                  plugin platform, agent harness, TEEF Max
+                  TEEF Max
 ```
 
 </details>

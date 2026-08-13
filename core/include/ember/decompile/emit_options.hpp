@@ -36,8 +36,7 @@ struct EmitOptions {
     // Emit `// confidence: <conf> (<source>) - <evidence>` lines under
     // the function name when the resolved annotation file carries
     // metadata for this function. Off by default because it doubles
-    // the visible header for human readers; agent flows turn it on so
-    // a downstream agent reading the pseudo-C can decide whether to
+    // the visible header; consumers can turn it on to decide whether to
     // trust the rename or re-verify.
     bool show_provenance = false;
     // Interprocedural signature hints, keyed by function entry address.

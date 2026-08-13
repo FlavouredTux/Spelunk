@@ -5,8 +5,8 @@ document covers what we accept, what we don't, and why.
 
 ## What we accept
 
-- **Bug fixes and algorithm improvements** anywhere in `core/`, `cli/`,
-  or `ui/`. Open a PR; include a test if you're fixing user-visible
+- **Bug fixes and algorithm improvements** anywhere in `core/` or `cli/`.
+  Open a PR; include a test if you're fixing user-visible
   behavior.
 - **New analyses, decoders, lifters, structurer passes.** Same flow.
   See the style notes at the bottom of this file.

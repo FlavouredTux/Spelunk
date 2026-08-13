@@ -6755,7 +6755,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // Optional provenance preamble: when --show-provenance is set and
     // the resolved annotations carry metadata for this function, surface
     // confidence + source + evidence as a comment block right under the
-    // function name. Lets a downstream agent decide whether to trust
+    // function name. Lets downstream consumers decide whether to trust
     // the rename without re-deriving it. Off by default - these lines
     // double the visible header for human readers.
     if (annotations && options.show_provenance) {

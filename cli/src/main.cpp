@@ -1,6 +1,4 @@
 #include <cstdlib>
-#include <cerrno>
-#include <cstring>
 #include <filesystem>
 #include <format>
 #include <limits>
@@ -10,13 +8,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
 
 #include <ember/binary/binary.hpp>
 #include <ember/analysis/strings.hpp>
@@ -243,67 +234,6 @@ auto_dsym_path(const ember::cli::Args& args) {
     return ember::cache::read(dir, *key, ember::cli::functions_cache_tag(args)).has_value();
 }
 
-[[nodiscard]] int run_ui(const ember::cli::Args& args) {
-    std::vector<std::string> argv_storage;
-    if (const char* override_bin = std::getenv("EMBER_UI_BIN");
-        override_bin && override_bin[0] != '\0') {
-        argv_storage.emplace_back(override_bin);
-    } else if (std::filesystem::is_regular_file("ui/electron/launch.cjs")) {
-        argv_storage.emplace_back("node");
-        argv_storage.emplace_back("ui/electron/launch.cjs");
-    } else {
-        argv_storage.emplace_back("ember-ui");
-    }
-    if (!args.binary.empty()) argv_storage.emplace_back(args.binary);
-
-    std::vector<char*> argv;
-    argv.reserve(argv_storage.size() + 1);
-    for (auto& s : argv_storage) argv.push_back(s.data());
-    argv.push_back(nullptr);
-
-#if defined(_WIN32)
-    const intptr_t rc = ::_spawnvp(_P_WAIT, argv_storage.front().c_str(), argv.data());
-    if (rc == -1) {
-        std::println(stderr,
-            "ember: --ui: failed to launch '{}': {}",
-            argv_storage.front(), std::strerror(errno));
-        std::println(stderr,
-            "ember: --ui: install/link the UI package or set EMBER_UI_BIN");
-        return EXIT_FAILURE;
-    }
-    return static_cast<int>(rc);
-#else
-    const pid_t pid = ::fork();
-    if (pid < 0) {
-        std::println(stderr, "ember: --ui: fork failed: {}", std::strerror(errno));
-        return EXIT_FAILURE;
-    }
-    if (pid == 0) {
-        if (argv_storage.front().find('/') != std::string::npos) {
-            ::execv(argv_storage.front().c_str(), argv.data());
-        } else {
-            ::execvp(argv_storage.front().c_str(), argv.data());
-        }
-        std::println(stderr,
-            "ember: --ui: failed to launch '{}': {}",
-            argv_storage.front(), std::strerror(errno));
-        std::println(stderr,
-            "ember: --ui: install/link the UI package or set EMBER_UI_BIN");
-        _exit(127);
-    }
-
-    int status = 0;
-    while (::waitpid(pid, &status, 0) < 0) {
-        if (errno == EINTR) continue;
-        std::println(stderr, "ember: --ui: waitpid failed: {}", std::strerror(errno));
-        return EXIT_FAILURE;
-    }
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return EXIT_FAILURE;
-#endif
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -356,7 +286,6 @@ int main(int argc, char** argv) {
 
     apply_quiet_env(args);
 
-    if (args.ui)          { return run_ui(args);                         }
     if (args.dump_types)  { return run_dump_types();                       }
 
     if (!args.diff_path.empty() ||
@@ -459,8 +388,6 @@ int main(int argc, char** argv) {
     if (!args.apply_ember.empty())         return run_apply_ember(args, b);
 
     if (args.debug)                        return run_debug(args, &b, aux_specs);
-    if (args.serve)                        return run_serve(args, b);
-
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);
     if (!args.symtable.empty())  return run_symtable(args, b);
@@ -489,8 +416,6 @@ int main(int argc, char** argv) {
     if (!args.disasm_window.empty()) return run_disasm_window(args, b);
     if (!args.list_syscalls.empty()) return run_list_syscalls(args, b);
     if (!args.forge_spec.empty())    return run_forge_spec(args, b);
-    if (args.cascade_plan)           return run_cascade_plan(args, b);
-    if (!args.intel_promote.empty()) return run_intel_promote(args, b);
     if (!args.annotate_addr.empty()) return run_annotate(args, b);
     if (args.list_annotations)       return run_list_annotations(args, b);
     if (args.strings)            return run_strings(args, b);

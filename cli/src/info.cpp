@@ -87,7 +87,7 @@ namespace {
 // One topic = one detailed section. Splitting print_help out by topic
 // keeps the default `--help` legible (the surface ember exposes is
 // big enough that a single dump no longer fits a screen) and gives
-// LLM agents a stable token to ask about (`--help syms`).
+// scripts a stable token to ask about (`--help syms`).
 void help_view() {
     std::println("View pipeline (each implies the earlier stages - `-p` runs everything):");
     std::println("  -d, --disasm         linear disassembly of a function");
@@ -118,7 +118,7 @@ void help_syms() {
     std::println("Symbols, strings, packed string tables, callees, refs:");
     std::println("      --functions [P]  list every discovered fn (TSV); P is a substring filter.");
     std::println("                       Prefer --functions=P to avoid binary-vs-pattern ordering.");
-    std::println("                       --row-limit N caps emitted rows for UI/agent use.");
+    std::println("                       --row-limit N caps emitted rows for scripted use.");
     std::println("      --collisions     every name / fingerprint bound to >1 address (TSV/JSON)");
     std::println("      --validate NAME  every addr bound to NAME + byte-similar lookalikes");
     std::println("      --containing-fn VA  entry/size/name/offset of the function covering VA");
@@ -161,13 +161,6 @@ void help_syms() {
     std::println("      --refs-to VA     callers of VA (one-shot reverse xref)");
     std::println("      --callees VA     direct/tail/indirect_const callees of the fn at VA");
     std::println("      --callees-class NAME  JSON {{slot_N: [callees]}} for every vfn of an RTTI class");
-    std::println("      --cascade-plan   anchor-cascade target planner; use --cascade-scope,");
-    std::println("                       --per-round, and --eligibility-ratio");
-    std::println("                       scopes: all, list:VA,VA, range:A-B (body overlap),");
-    std::println("                       callers-of:VA, callees-of:VA, around:VA[:radius].");
-    std::println("                       --json for machine output.");
-    std::println("      --intel-promote PATH  fold agent intel JSONL into .ember script");
-    std::println("                       with -o OUT and optional --confidence threshold.");
     std::println("      --json           machine-readable output where supported");
 }
 
@@ -259,10 +252,7 @@ void help_ann() {
 }
 
 void help_dbg() {
-    std::println("Interactive modes (UI + debugger + agent daemon):");
-    std::println("      --ui             open the Electron UI, optionally loading <binary>.");
-    std::println("                       Equivalent to `ember-ui <binary>` when that command");
-    std::println("                       is installed; uses EMBER_UI_BIN when set.");
+    std::println("Interactive debugger:");
     std::println("      --debug          launch under the built-in REPL debugger (uses ember's");
     std::println("                       pseudo-C as the source view; no DWARF). Linux ptrace");
     std::println("                       backend by default; macOS uses Mach.");
@@ -275,8 +265,6 @@ void help_dbg() {
     std::println("                       where SIGSEGV/SIGBUS/SIGFPE/SIGILL is recovered by the");
     std::println("                       tracee's own handler (silently forwarded back)");
     std::println("      -- ARG...        sentinel; remaining tokens are argv for the launched program");
-    std::println("      --serve, --daemon  long-lived daemon: read JSON-line tool requests on stdin,");
-    std::println("                       reply on stdout. Binary and hot refs caches stay loaded.");
 }
 
 void help_load() {
@@ -301,8 +289,8 @@ void help_load() {
     std::println("                       obfuscator-merged / mid-body real entries cause ember to");
     std::println("                       silently rebind to a closest-below symbol.");
     std::println("      --module NAME    scope fn iteration to one loaded module (minidumps,");
-    std::println("                       multi-module containers). Affects --functions, --recognize,");
-    std::println("                       --serve fanout. Out-of-scope addresses skipped before lift.");
+    std::println("                       multi-module containers). Affects --functions and --recognize.");
+    std::println("                       Out-of-scope addresses are skipped before lifting.");
 }
 
 void help_patch() {
@@ -325,7 +313,6 @@ void help_cache() {
 void print_help() {
     std::println("usage: ember [view-flag] [-s NAME] <binary>");
     std::println("       ember [view-flag] --dtk <project> [--version ID] [-s NAME]");
-    std::println("       ember --ui [binary]");
     std::println("       ember --help <topic>");
     std::println("");
     std::println("View pipeline:");
@@ -341,12 +328,12 @@ void print_help() {
     std::println("  teef     fingerprints, teef, recognize, diff, orbit-dump,");
     std::println("           corpus, size caps");
     std::println("  ann      annotate, apply, list-annotations, dry-run, .ember scripts");
-    std::println("  dbg      --ui, --debug, attach, backends, aux-bin, --serve");
+    std::println("  dbg      --debug, attach, backends, aux-bin");
     std::println("  load     DTK projects, pdb, regions, raw-bytes, base-va, force-fn-start, module");
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
     std::println("");
-    std::println("Common:  --ui  --json  -q/--quiet  -h/--help");
+    std::println("Common:  --json  -q/--quiet  -h/--help");
     std::println("");
     std::println("Get topic detail:  ember --help <topic>   (or --help=<topic>)");
 }

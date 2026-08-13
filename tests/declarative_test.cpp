@@ -498,7 +498,7 @@ int main() {
     // Metadata suffix on rename / note / signature directives.
     //
     // Phase 4 added a `; conf=… ; src=… ; ev=…` tail consumed by both
-    // hand-written .ember files and `agent/src/promote.ts`. The suffix
+    // hand-written .ember files and external tooling. The suffix
     // must:
     //   - parse off the rhs cleanly (so the rename / note text is not
     //     polluted by the metadata),
@@ -509,7 +509,7 @@ int main() {
         const auto root = scratch_root();
         const auto p = write_text(root, "meta.ember",
             "[rename]\n"
-            "0x401000 = with_meta ; conf=0.85 ; src=agent:namer "
+            "0x401000 = with_meta ; conf=0.85 ; src=tool:review "
                 ";  ev=3-arg, called by 0x402000\n"
             "[note]\n"
             "0x401000 = brief note ; conf=0.5 ; src=cli\n"
@@ -538,7 +538,7 @@ int main() {
         if (const auto* m = ann.meta_for_rename(0x401000)) {
             check(m->confidence > 0.84f && m->confidence < 0.86f,
                   "rename meta confidence parsed");
-            check_eq_str(m->source, "agent:namer", "rename meta source parsed");
+            check_eq_str(m->source, "tool:review", "rename meta source parsed");
             check_eq_str(m->evidence, "3-arg, called by 0x402000",
                          "rename meta evidence parsed (extra whitespace ok)");
         } else {
@@ -587,7 +587,7 @@ int main() {
         const auto p = write_text(root, "persisted.cache",
             "# ember annotations\n"
             "rename 401000 cache_imported\n"
-            "meta rename 401000 conf=0.95|src=agent:from_other_binary"
+            "meta rename 401000 conf=0.95|src=tool:from_other_binary"
                 "|ev=copied across builds\n");
         ember::Annotations ann;
         auto rv = ember::script::apply_file(p, mb, ann);

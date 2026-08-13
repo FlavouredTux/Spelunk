@@ -993,32 +993,6 @@ ember_golden_test(
     GOLDEN  tail_call.wrap_strlen.pseudo.txt
 )
 
-ember_golden_test(
-    NAME    tail_call_cascade_plan
-    FIXTURE tail_call
-    ARGS    "--cascade-plan|--cascade-scope|list:0x401120|--per-round|3"
-    GOLDEN  tail_call.cascade_plan.txt
-)
-
-ember_golden_test(
-    NAME    tail_call_cascade_plan_range_overlap
-    FIXTURE tail_call
-    ARGS    "--cascade-plan|--cascade-scope|range:0x401120-0x401122|--per-round|3"
-    GOLDEN  tail_call.cascade_plan_range_overlap.txt
-)
-
-add_test(
-    NAME tail_call_intel_promote
-    COMMAND ${CMAKE_COMMAND}
-        -DEMBER=$<TARGET_FILE:ember_cli>
-        -DBINARY=${EMBER_FIXTURE_tail_call_PATH}
-        -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/tail_call_intel_promote
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_intel_promote.cmake
-)
-set_tests_properties(tail_call_intel_promote PROPERTIES
-    DEPENDS ember_cli
-    LABELS cli
-)
 
 # ---- indirect_tail (jmp [reg/mem] as return) ------------------------------
 #
@@ -1214,19 +1188,6 @@ ember_golden_test(
     ARGS    "-p|-s|shared_tail"
     GOLDEN  gotos.shared_tail.pseudo.txt
 )
-ember_golden_test(
-    NAME    gotos_stripped_cascade_plan_score_order
-    FIXTURE gotos_stripped
-    ARGS    "--cascade-plan|--cascade-scope|all|--per-round|7"
-    GOLDEN  gotos.stripped.cascade_plan.txt
-)
-ember_golden_test(
-    NAME    gotos_stripped_cascade_plan_json_features
-    FIXTURE gotos_stripped
-    ARGS    "--cascade-plan|--cascade-scope|all|--per-round|2|--json"
-    GOLDEN  gotos.stripped.cascade_plan.json.txt
-)
-
 # ---- arith (IR Mod op + do-while structurer) -------------------------------
 #
 # Two regressions land here. First: `IrOp::Mod` was added in adffa81 and
@@ -1441,13 +1402,6 @@ ember_expect_fail_test(
     FIXTURE    return_value
     ARGS       "--recognize-threshold|nan|--recognize"
     ERR_SUBSTR "--recognize-threshold"
-)
-
-ember_expect_fail_test(
-    NAME       eligibility_ratio_inf_rejected
-    FIXTURE    return_value
-    ARGS       "--eligibility-ratio|inf|--cascade-plan"
-    ERR_SUBSTR "--eligibility-ratio"
 )
 
 # ---- dead_store (DSE on global-address stores) ----------------------------

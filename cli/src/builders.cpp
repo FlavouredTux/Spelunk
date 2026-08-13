@@ -1469,7 +1469,7 @@ std::string build_xrefs_output(const Binary& b) {
     // graph-layout pass. The old topo-ish formatter built several maps and
     // sets over the whole edge list after the scan had already done the
     // useful work. Sorting pairs directly is dramatically lighter on large
-    // binaries and daemon/agent loops.
+    // binaries and repeated analysis loops.
     {
         ScopedTimer t("xrefs.sort_dedupe");
         std::ranges::sort(edges, {}, [](const CallEdge& e) {

@@ -155,7 +155,7 @@ class EmberWrapperTest(unittest.TestCase):
                         "name": "http_join",
                         "note": "joins URL bits",
                         "confidence": 0.9,
-                        "source": "agent:namer",
+                        "source": "tool:review",
                         "evidence": "called by 0x40; string refs",
                     }
                 ],

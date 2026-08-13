@@ -87,8 +87,8 @@ resolve_annotation_location(const std::filesystem::path& binary,
 // with no metadata, in which case `confidence == 0`, `evidence` and
 // `source` are empty, and `meta_for_*` returns nullptr.
 //
-// Source convention: `cli` (typed manually), `agent:<role>` (a worker
-// in agent/), `import` (derived from binary symbols), or any other
+// Source convention: `cli` (typed manually), `tool:<name>` (an external
+// integration), `import` (derived from binary symbols), or any other
 // short tag callers want to use. Confidence is 0..1; values >1 are
 // clamped on save.
 struct AnnotationMeta {

@@ -7,7 +7,7 @@ labels: bug
 
 **What you ran**
 
-The exact command line, or UI action.
+The exact command line.
 
 **What happened**
 

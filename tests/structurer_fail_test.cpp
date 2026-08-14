@@ -10,6 +10,7 @@
 
 #include <ember/decompile/emitter.hpp>
 #include <ember/analysis/import_sigs.hpp>
+#include <ember/analysis/type_infer_local.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/structure/region.hpp>
@@ -960,7 +961,7 @@ int test_ppc_known_float_call_binds_f1_result() {
 
     IrFunction fn;
     fn.start = kStart;
-    fn.end = kStart + 0x14;
+    fn.end = kStart + 0x18;
     fn.name = "ppc_float_call";
 
     IrBlock bb;
@@ -1473,6 +1474,64 @@ int test_ppc_gx_mixed_signature_layout() {
     return 0;
 }
 
+int test_memory_use_recovers_pointer_after_integer_seed_conflict() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x2300;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "seeded_pointer_local";
+    fn.next_temp_id = 4;
+
+    const IrValue pointer = IrValue::make_temp(0, IrType::I32);
+    const IrValue first = IrValue::make_temp(1, IrType::I16);
+    const IrValue second = IrValue::make_temp(2, IrType::I16);
+    const IrValue sum = IrValue::make_temp(3, IrType::I16);
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_load(
+        pointer, IrValue::make_imm(0x5000, IrType::I32)));
+    bb.insts.push_back(make_load(first, pointer));
+    bb.insts.push_back(make_load(second, pointer));
+    bb.insts.push_back(make_add(sum, first, second));
+    bb.insts.push_back(make_store(
+        IrValue::make_imm(0x6000, IrType::I32), sum));
+    bb.insts.push_back(make_ret(kStart + 0x14));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    // Model an ABI/signature pass that conservatively seeded the loaded word
+    // as an integer before its body use proved it was a pointer.
+    fn.value_types[value_type_key(pointer)] = fn.types.int_t(32);
+    infer_local_types(fn);
+    check(fn.type_of(pointer).is_bottom(),
+          "conflicting integer and pointer lattice evidence remains explicit");
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "seed-conflicted pointer local emits");
+    if (!pc) return 1;
+    const bool recovered = pc->find("uint16_t* t0 =") != std::string::npos;
+    if (!recovered) std::fprintf(stderr, "Pointer recovery output:\n%s\n", pc->c_str());
+    check(recovered, "visible dereferences recover the pointer declaration type");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1497,5 +1556,6 @@ int main() {
     rc |= test_ppc_small_aggregate_consumes_multiple_gprs();
     rc |= test_wii_sdk_prototype_groups();
     rc |= test_ppc_gx_mixed_signature_layout();
+    rc |= test_memory_use_recovers_pointer_after_integer_seed_conflict();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

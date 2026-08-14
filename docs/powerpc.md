@@ -167,6 +167,11 @@ compiler-generated bit idioms readable and available to cleanup passes.
 their dataflow to SSA and lets the emitter suppress matched callee-saved
 register save/restore traffic as ABI boilerplate.
 
+Pseudo-C pointer declarations also follow visible memory-address flow through
+register copies and constant field offsets. This preserves pointer-shaped Wii
+locals even when an earlier ABI-width integer hint conflicts with later body
+evidence; mixed-width field bases remain deliberately opaque `void*` values.
+
 ### Repeatable SPM pseudo-C benchmark
 
 The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a small, stable mix

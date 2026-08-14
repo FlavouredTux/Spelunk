@@ -2147,6 +2147,71 @@ struct Emitter {
         }
     }
 
+    // Local type inference deliberately treats conflicting Int/Ptr evidence
+    // as Bottom. That is sound for the lattice, but it used to make a value
+    // seeded as an ABI-width integer render as `uint32_t` even after the body
+    // proved it was dereferenced. Recover the stronger presentation type from
+    // visible address flow, including the register copies and constant-offset
+    // arithmetic common in PPC code.
+    [[nodiscard]] std::optional<std::string>
+    pointer_type_from_memory_uses(const IrValue& value) const {
+        if (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
+            abi != Abi::Ppc64ElfV2Le) {
+            return std::nullopt;
+        }
+        auto root = ssa_key(value);
+        if (!root || !fn) return std::nullopt;
+
+        std::set<SsaKey> seen;
+        std::set<IrType> pointees;
+        bool has_field_offset = false;
+        const auto visit = [&](auto&& self, const SsaKey& key, int depth) -> void {
+            if (depth > 12 || !seen.insert(key).second) return;
+            auto uses_it = visible_user_positions.find(key);
+            if (uses_it == visible_user_positions.end()) return;
+            for (const auto& [bi, ii] : uses_it->second) {
+                if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) {
+                    continue;
+                }
+                const IrInst& user = fn->blocks[bi].insts[ii];
+                if ((user.op == IrOp::Load || user.op == IrOp::Store) &&
+                    user.src_count >= 1 && ssa_key(user.srcs[0]) == key) {
+                    const IrType pointee = user.op == IrOp::Load
+                        ? user.dst.type
+                        : (user.src_count >= 2 ? user.srcs[1].type : IrType::I8);
+                    pointees.insert(pointee);
+                    continue;
+                }
+
+                bool forwards_address = false;
+                if (user.op == IrOp::Assign && user.src_count == 1 &&
+                    ssa_key(user.srcs[0]) == key) {
+                    forwards_address = true;
+                } else if ((user.op == IrOp::Add || user.op == IrOp::Sub) &&
+                           user.src_count == 2) {
+                    const auto lhs = ssa_key(user.srcs[0]);
+                    const auto rhs = ssa_key(user.srcs[1]);
+                    forwards_address =
+                        (lhs && *lhs == key && user.srcs[1].kind == IrValueKind::Imm) ||
+                        (user.op == IrOp::Add && rhs && *rhs == key &&
+                         user.srcs[0].kind == IrValueKind::Imm);
+                    if (forwards_address) {
+                        const IrValue& offset = lhs && *lhs == key
+                            ? user.srcs[1] : user.srcs[0];
+                        has_field_offset |= offset.imm != 0;
+                    }
+                }
+                if (forwards_address) {
+                    if (auto dst = ssa_key(user.dst); dst) self(self, *dst, depth + 1);
+                }
+            }
+        };
+        visit(visit, *root, 0);
+        if (pointees.empty()) return std::nullopt;
+        if (has_field_offset || pointees.size() != 1) return std::string("void*");
+        return std::format("{}*", c_type_name(*pointees.begin()));
+    }
+
     // Render the C type for an SSA value, consulting Phase 2 inference
     // results in `fn->value_types`. Falls back to the bit-width-only
     // `c_type_name(IrType)` when no refined type exists, which keeps
@@ -2154,10 +2219,9 @@ struct Emitter {
     [[nodiscard]] std::string c_type_name_for(const IrValue& v) const {
         if (!fn) return std::string(c_type_name(v.type));
         const TypeRef t = fn->type_of(v);
-        if (t.is_top()) return std::string(c_type_name(v.type));
-        const auto& node = fn->types.node(t);
-        switch (node.kind) {
-            case TypeKind::Ptr: {
+        if (!t.is_top()) {
+            const auto& node = fn->types.node(t);
+            if (node.kind == TypeKind::Ptr) {
                 const auto& pn = fn->types.node(node.p.pointee);
                 if (pn.kind == TypeKind::Int) {
                     if (pn.i.bits == 8) return "char*";
@@ -2165,6 +2229,13 @@ struct Emitter {
                 }
                 return "void*";
             }
+        }
+        if (auto pointer = pointer_type_from_memory_uses(v); pointer) {
+            return *pointer;
+        }
+        if (t.is_top()) return std::string(c_type_name(v.type));
+        const auto& node = fn->types.node(t);
+        switch (node.kind) {
             case TypeKind::Int:
                 if (node.i.sign_known && node.i.is_signed) {
                     return std::format("int{}_t", node.i.bits);

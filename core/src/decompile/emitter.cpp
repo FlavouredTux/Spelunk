@@ -4217,7 +4217,7 @@ struct Emitter {
             case IrOp::Add: case IrOp::Sub: case IrOp::Mul:
             case IrOp::Div: case IrOp::Mod:
             case IrOp::And: case IrOp::Or:  case IrOp::Xor:
-            case IrOp::Neg: case IrOp::Not:
+            case IrOp::Neg: case IrOp::Not: case IrOp::Clz:
             case IrOp::Shl: case IrOp::Lshr: case IrOp::Ashr:
             case IrOp::Select:
             case IrOp::CmpEq: case IrOp::CmpNe:
@@ -6506,6 +6506,9 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             std::string inner = expr(d.srcs[0], depth, std::to_underlying(Prec::Unary));
             return wrap_if_lt(std::string(op) + inner, Prec::Unary, min_prec);
         }
+        case IrOp::Clz:
+            return std::format("count_leading_zeros({})",
+                               expr(d.srcs[0], depth, 0));
 
         case IrOp::CmpEq:  return format_binop(d, "==", depth, min_prec, Prec::Eq,  true);
         case IrOp::CmpNe:  return format_binop(d, "!=", depth, min_prec, Prec::Eq,  true);

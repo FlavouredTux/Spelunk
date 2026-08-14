@@ -732,6 +732,35 @@ void test_wii_lifter_forms() {
     check_eq(saw_shl && saw_lshr && saw_i16_store, true,
              "sthbrx lifts byte reversal and halfword store");
 
+    ir = lift_one(xo_word(7, 8, 26));  // cntlzw r8, r7
+    bool saw_clz = false;
+    bool saw_cntlzw_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_clz |= inst.op == ember::IrOp::Clz &&
+                   inst.dst.type == ember::IrType::I32 && inst.src_count == 1 &&
+                   inst.srcs[0].reg == ember::Reg::PpcR7;
+        saw_cntlzw_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                                inst.name == "ppc.cntlzw";
+    }
+    check_eq(saw_clz && !saw_cntlzw_intrinsic, true,
+             "cntlzw lifts as generic leading-zero dataflow");
+
+    ir = lift_one(0x50C31F7E);  // rlwimi r3, r6, 3, 29, 31
+    bool saw_insert_mask = false;
+    bool saw_keep_mask = false;
+    bool saw_rlwimi_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        if (inst.op == ember::IrOp::And && inst.src_count == 2 &&
+            inst.srcs[1].kind == ember::IrValueKind::Imm) {
+            saw_insert_mask |= inst.srcs[1].imm == 7;
+            saw_keep_mask |= inst.srcs[1].imm == static_cast<std::int64_t>(~7u);
+        }
+        saw_rlwimi_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                                inst.name == "ppc.rlwimi";
+    }
+    check_eq(saw_insert_mask && saw_keep_mask && !saw_rlwimi_intrinsic, true,
+             "rlwimi lifts as rotate-and-masked-insert dataflow");
+
     ir = lift_one(0x7E0004A6);  // mfsr r16, 0
     bool saw_mfsr = false;
     for (const auto& inst : ir.blocks[0].insts) {

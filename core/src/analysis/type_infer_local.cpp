@@ -82,6 +82,7 @@ bool sweep(IrFunction& fn) {
                     break;
 
                 case IrOp::Lshr:
+                case IrOp::Clz:
                     if (inst.src_count >= 1) {
                         changed |= refine(fn, inst.srcs[0],
                                           a.int_t(static_cast<u8>(type_bits(inst.srcs[0].type)),

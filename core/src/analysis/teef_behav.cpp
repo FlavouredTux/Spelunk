@@ -1,6 +1,7 @@
 #include <ember/analysis/teef_behav.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -373,6 +374,9 @@ struct Trace {
     switch (inst.op) {
         case IrOp::Neg: r = static_cast<u64>(-static_cast<i64>(*a)); break;
         case IrOp::Not: r = ~*a; break;
+        case IrOp::Clz:
+            r = static_cast<u64>(std::countl_zero(static_cast<u32>(*a)));
+            break;
         default: return synth_dst(t, inst);
     }
     t.set(inst.dst, r);
@@ -730,7 +734,7 @@ struct Trace {
         case IrOp::And: case IrOp::Or:  case IrOp::Xor:
         case IrOp::Shl: case IrOp::Lshr: case IrOp::Ashr:
             return step_arith(t, inst);
-        case IrOp::Neg: case IrOp::Not:
+        case IrOp::Neg: case IrOp::Not: case IrOp::Clz:
             return step_unop(t, inst);
         case IrOp::CmpEq: case IrOp::CmpNe:
         case IrOp::CmpUlt: case IrOp::CmpUle:

@@ -818,7 +818,13 @@ void lift_instruction(LiftCtx& ctx) {
             lift_sign_extend_from(ctx, IrType::I16);
             break;
         case Mnemonic::Cntlzw:
-            lift_dst_intrinsic(ctx, "ppc.cntlzw");
+            if (insn.num_operands == 2) {
+                IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx),
+                                             IrType::I32);
+                IrValue out = ctx.emit_unop(IrOp::Clz, src, IrType::I32);
+                store_lvalue(insn.operands[0], ctx.match_size(out, ctx.ppc_reg_type()), ctx);
+                if (insn.ppc_record) set_record_result(ctx, out);
+            }
             break;
         case Mnemonic::Rlwinm:
             if (insn.num_operands == 5) {
@@ -845,7 +851,38 @@ void lift_instruction(LiftCtx& ctx) {
             }
             break;
         case Mnemonic::Rlwimi:
-            lift_dst_intrinsic(ctx, "ppc.rlwimi");
+            if (insn.num_operands == 5) {
+                const u32 sh = static_cast<u32>(insn.operands[2].imm.value) & 31u;
+                const u32 mb = static_cast<u32>(insn.operands[3].imm.value) & 31u;
+                const u32 me = static_cast<u32>(insn.operands[4].imm.value) & 31u;
+                const IrValue old = ctx.match_size(
+                    materialize_rvalue(insn.operands[0], ctx), IrType::I32);
+                const IrValue src = ctx.match_size(
+                    materialize_rvalue(insn.operands[1], ctx), IrType::I32);
+                IrValue rot = src;
+                if (sh != 0) {
+                    const IrValue left = ctx.emit_binop(
+                        IrOp::Shl, src, ctx.imm(sh, IrType::I32), IrType::I32);
+                    const IrValue right = ctx.emit_binop(
+                        IrOp::Lshr, src, ctx.imm(32u - sh, IrType::I32), IrType::I32);
+                    rot = ctx.emit_binop(IrOp::Or, left, right, IrType::I32);
+                }
+                const u32 mask = ppc_mask32(mb, me);
+                IrValue inserted = mask == 0xffffffffu
+                    ? rot
+                    : ctx.emit_binop(IrOp::And, rot,
+                                     ctx.imm(static_cast<i64>(mask), IrType::I32),
+                                     IrType::I32);
+                IrValue out = inserted;
+                if (mask != 0xffffffffu) {
+                    const IrValue kept = ctx.emit_binop(
+                        IrOp::And, old,
+                        ctx.imm(static_cast<i64>(~mask), IrType::I32), IrType::I32);
+                    out = ctx.emit_binop(IrOp::Or, kept, inserted, IrType::I32);
+                }
+                store_lvalue(insn.operands[0], ctx.match_size(out, ctx.ppc_reg_type()), ctx);
+                if (insn.ppc_record) set_record_result(ctx, out);
+            }
             break;
         case Mnemonic::Cmp:
             if (insn.num_operands == 2) {

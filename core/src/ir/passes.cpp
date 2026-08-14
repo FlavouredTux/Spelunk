@@ -1,6 +1,7 @@
 #include <ember/ir/passes.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cstddef>
 #include <limits>
@@ -157,6 +158,10 @@ try_fold(const IrInst& inst) noexcept {
         switch (inst.op) {
             case IrOp::Neg:   return IrValue::make_imm(mask_signed(-a.imm, dt), dt);
             case IrOp::Not:   return IrValue::make_imm(mask_signed(~a.imm, dt), dt);
+            case IrOp::Clz: {
+                const u32 value = static_cast<u32>(mask_unsigned(a.imm, IrType::I32));
+                return IrValue::make_imm(static_cast<i64>(std::countl_zero(value)), dt);
+            }
             case IrOp::ZExt:  return IrValue::make_imm(
                                   static_cast<i64>(mask_unsigned(a.imm, a.type)), dt);
             case IrOp::SExt:  return IrValue::make_imm(mask_signed(a.imm, a.type), dt);
@@ -559,7 +564,7 @@ struct GvnOp {
     switch (op) {
         case IrOp::Add: case IrOp::Sub: case IrOp::Mul:
         case IrOp::And: case IrOp::Or:  case IrOp::Xor:
-        case IrOp::Neg: case IrOp::Not:
+        case IrOp::Neg: case IrOp::Not: case IrOp::Clz:
         case IrOp::Shl: case IrOp::Lshr: case IrOp::Ashr:
         case IrOp::CmpEq: case IrOp::CmpNe:
         case IrOp::CmpUlt: case IrOp::CmpUle: case IrOp::CmpUgt: case IrOp::CmpUge:

@@ -160,6 +160,9 @@ Unquantized `psq_l`/`psq_st` operations using the conventional Wii GQR0 pair
 mode lift as ordinary `float2` loads and stores. Single-lane and quantized GQR
 forms keep explicit PPC helpers until their lane and scale semantics can be
 represented without guessing.
+`rlwimi` is expanded into rotate/mask/merge dataflow, while `cntlzw` becomes
+the architecture-neutral `count_leading_zeros(...)` operation. This keeps
+compiler-generated bit idioms readable and available to cleanup passes.
 
 ### Repeatable SPM pseudo-C benchmark
 

@@ -22,6 +22,7 @@ std::string_view op_name(IrOp op) noexcept {
         case IrOp::Xor:            return "xor";
         case IrOp::Neg:            return "neg";
         case IrOp::Not:            return "not";
+        case IrOp::Clz:            return "clz";
         case IrOp::Shl:            return "shl";
         case IrOp::Lshr:           return "lshr";
         case IrOp::Ashr:           return "ashr";
@@ -137,6 +138,7 @@ std::string format_ir_inst(const IrInst& inst) {
 
         case IrOp::Neg:
         case IrOp::Not:
+        case IrOp::Clz:
         case IrOp::ZExt:
         case IrOp::SExt:
         case IrOp::Trunc:

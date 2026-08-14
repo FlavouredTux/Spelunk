@@ -174,7 +174,7 @@ enum class IrOp : u16 {
 
     Add, Sub, Mul, Div, Mod,
     And, Or, Xor,
-    Neg, Not,
+    Neg, Not, Clz,
     Shl, Lshr, Ashr,
 
     // Ternary select: srcs[0] is an i1 condition, srcs[1] is the value when

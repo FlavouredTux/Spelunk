@@ -110,7 +110,7 @@ void help_view() {
     std::println("                       --json returns an array of [addr, disasm] objects.");
     std::println("      --arities        dump inferred arity per function (addr N)");
     std::println("      --row-limit N    cap broad list/info rows (0 = all)");
-    std::println("      --ppc-coverage   rank unsupported PPC instruction words in executable sections");
+    std::println("      --ppc-coverage   rank unsupported PPC words and opaque ppc.* lift fallbacks");
     std::println("                       --coverage-limit N caps rows (default 25, 0 = all); --json supported");
 }
 

@@ -95,7 +95,8 @@ Known scalar floating-point returns are recovered from `f1`, including common
 Wii SDK `PSVEC*`, MTX, GX, OS, DVD, controller, and CX routines; unknown calls
 stay conservative rather than treating every post-call FPR clobber as a result.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
-rules, annotation workflow, and binary-only limits.
+rules, annotation workflow, binary-only limits, and the `--ppc-coverage`
+decoder/semantic-gap report.
 
 ---
 

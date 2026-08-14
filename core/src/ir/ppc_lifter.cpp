@@ -254,6 +254,36 @@ void lift_fp_unop(LiftCtx& ctx, IrOp op, IrType t) {
     store_fp_lvalue(insn.operands[0], ctx.emit_unop(op, src, t), ctx, t);
 }
 
+void lift_fp_fused_op(LiftCtx& ctx, IrType t, bool subtract, bool negate) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 4) return;
+    // The decoder keeps the ISA's source order: FRA, FRC, FRB. PPC fused
+    // forms compute (FRA * FRC) +/- FRB, optionally negating the result.
+    IrValue lhs = materialize_fp_rvalue(insn.operands[1], ctx, t);
+    IrValue rhs = materialize_fp_rvalue(insn.operands[2], ctx, t);
+    IrValue addend = materialize_fp_rvalue(insn.operands[3], ctx, t);
+    if (lhs.kind == IrValueKind::None || rhs.kind == IrValueKind::None ||
+        addend.kind == IrValueKind::None) {
+        return;
+    }
+    IrValue product = ctx.emit_binop(IrOp::Mul, lhs, rhs, t);
+    IrValue result = ctx.emit_binop(subtract ? IrOp::Sub : IrOp::Add,
+                                    product, addend, t);
+    if (negate) result = ctx.emit_unop(IrOp::Neg, result, t);
+    store_fp_lvalue(insn.operands[0], result, ctx, t);
+}
+
+void lift_frsp(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, IrType::F64);
+    if (src.kind == IrValueKind::None) return;
+    // A C float cast communicates the architecturally visible round to
+    // single precision much better than an opaque ppc.frsp(...) call.
+    IrValue rounded = ctx.emit_unop(IrOp::Trunc, src, IrType::F32);
+    store_fp_lvalue(insn.operands[0], rounded, ctx, IrType::F32);
+}
+
 void set_cr_field(LiftCtx& ctx, u8 field, IrValue lt, IrValue gt,
                   IrValue eq, IrValue so) {
     ctx.emit_set_flag(ppc_cr_flag(field, 0), lt);
@@ -881,28 +911,28 @@ void lift_instruction(LiftCtx& ctx) {
             lift_fp_binop(ctx, IrOp::Div, IrType::F32);
             break;
         case Mnemonic::Fmadds:
-            lift_dst_intrinsic(ctx, "ppc.fmadds");
+            lift_fp_fused_op(ctx, IrType::F32, false, false);
             break;
         case Mnemonic::Fmsubs:
-            lift_dst_intrinsic(ctx, "ppc.fmsubs");
+            lift_fp_fused_op(ctx, IrType::F32, true, false);
             break;
         case Mnemonic::Fnmadds:
-            lift_dst_intrinsic(ctx, "ppc.fnmadds");
+            lift_fp_fused_op(ctx, IrType::F32, false, true);
             break;
         case Mnemonic::Fnmsubs:
-            lift_dst_intrinsic(ctx, "ppc.fnmsubs");
+            lift_fp_fused_op(ctx, IrType::F32, true, true);
             break;
         case Mnemonic::Fmadd:
-            lift_dst_intrinsic(ctx, "ppc.fmadd");
+            lift_fp_fused_op(ctx, IrType::F64, false, false);
             break;
         case Mnemonic::Fmsub:
-            lift_dst_intrinsic(ctx, "ppc.fmsub");
+            lift_fp_fused_op(ctx, IrType::F64, true, false);
             break;
         case Mnemonic::Fnmadd:
-            lift_dst_intrinsic(ctx, "ppc.fnmadd");
+            lift_fp_fused_op(ctx, IrType::F64, false, true);
             break;
         case Mnemonic::Fnmsub:
-            lift_dst_intrinsic(ctx, "ppc.fnmsub");
+            lift_fp_fused_op(ctx, IrType::F64, true, true);
             break;
         case Mnemonic::Fadd:
             lift_fp_binop(ctx, IrOp::Add, IrType::F64);
@@ -927,7 +957,7 @@ void lift_instruction(LiftCtx& ctx) {
             lift_fp_unop(ctx, IrOp::Neg, IrType::F64);
             break;
         case Mnemonic::Frsp:
-            lift_dst_intrinsic(ctx, "ppc.frsp");
+            lift_frsp(ctx);
             break;
         case Mnemonic::Fres:
             lift_dst_intrinsic(ctx, "ppc.fres");

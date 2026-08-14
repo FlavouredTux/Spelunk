@@ -131,6 +131,29 @@ can render as:
 update(*(float*)(r2 + constant), object, object + 0xbc);
 ```
 
+## Measuring decoder and lift coverage
+
+`--ppc-coverage` scans every four-byte word in executable sections. It reports
+hard decoder failures first, then ranks decoded instructions that still lift to
+an opaque `ppc.*` intrinsic:
+
+```sh
+ember --dtk ./spm --version EU0 --ppc-coverage --coverage-limit 20
+```
+
+Use `--json` for tooling and `--coverage-limit 0` for the complete ranking. The
+scan is deliberately conservative and includes embedded data in executable
+sections, so inspect the sample addresses before treating an unsupported word
+as a missing instruction.
+
+For the local SPM EU0 DOL used during development, the scan decoded
+785,390/787,040 words. The 14 nonzero unsupported words were embedded data, not
+real instructions. Semantic ranking identified scalar fused floating-point
+operations and `frsp` as the highest-value safe gaps: together they accounted
+for 4,860 opaque lift fallbacks. They now produce typed multiply/add/subtract/
+negate dataflow and an explicit `float` rounding cast, which lets pseudo-C show
+ordinary arithmetic instead of `ppc.fmadds(...)` or `ppc.frsp(...)`.
+
 ## Supplying an exact signature
 
 An annotation takes precedence over inferred arity, types, and interleaving.

@@ -2077,6 +2077,13 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
         std::string error;
     };
 
+    struct OpaqueHit {
+        std::string name;
+        std::string mnemonic;
+        std::size_t count = 0;
+        std::vector<addr_t> samples;
+    };
+
     auto word_at = [&](const std::byte* p) noexcept -> u32 {
         return b.endian() == Endian::Big ? read_be_at<u32>(p) : read_le_at<u32>(p);
     };
@@ -2092,12 +2099,16 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
     };
 
     PpcDecoder dec(b.endian());
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return report(lifter_r.error());
     std::unordered_map<u32, Hit> unsupported;
+    std::unordered_map<std::string, OpaqueHit> opaque;
     std::size_t executable_sections = 0;
     std::size_t total_words = 0;
     std::size_t padding_words = 0;
     std::size_t decoded_words = 0;
     std::size_t unsupported_words = 0;
+    std::size_t opaque_lift_words = 0;
 
     for (const auto& sec : b.sections()) {
         if (!sec.flags.executable || sec.data.size() < 4) continue;
@@ -2110,6 +2121,41 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
             ++total_words;
             if (rv) {
                 ++decoded_words;
+
+                // Decoder coverage alone can hide the more useful frontier:
+                // decoded instructions whose semantics still collapse to an
+                // opaque ppc.* intrinsic. Lift each word in a one-instruction
+                // return block and rank those fallbacks alongside hard decode
+                // failures. This intentionally scans executable-section data
+                // too, matching the conservative decoder metric above.
+                Function fn;
+                fn.start = va;
+                fn.end = va + 4;
+                BasicBlock bb;
+                bb.start = fn.start;
+                bb.end = fn.end;
+                bb.kind = BlockKind::Return;
+                bb.instructions.push_back(*rv);
+                fn.blocks.push_back(std::move(bb));
+                auto ir = (*lifter_r)->lift(fn);
+                if (!ir) return report(ir.error());
+
+                bool word_is_opaque = false;
+                for (const auto& ir_bb : ir->blocks) {
+                    for (const auto& inst : ir_bb.insts) {
+                        if (inst.op != IrOp::Intrinsic ||
+                            !std::string_view(inst.name).starts_with("ppc.")) {
+                            continue;
+                        }
+                        word_is_opaque = true;
+                        auto& h = opaque[inst.name];
+                        h.name = inst.name;
+                        h.mnemonic = mnemonic_name(rv->mnemonic);
+                        ++h.count;
+                        if (h.samples.size() < 4) h.samples.push_back(va);
+                    }
+                }
+                if (word_is_opaque) ++opaque_lift_words;
                 continue;
             }
             ++unsupported_words;
@@ -2138,6 +2184,19 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
         rows.resize(static_cast<std::size_t>(args.ppc_coverage_limit));
     }
 
+    std::vector<const OpaqueHit*> opaque_rows;
+    opaque_rows.reserve(opaque.size());
+    for (const auto& [_, h] : opaque) opaque_rows.push_back(&h);
+    std::sort(opaque_rows.begin(), opaque_rows.end(),
+              [](const OpaqueHit* lhs, const OpaqueHit* rhs) {
+                  if (lhs->count != rhs->count) return lhs->count > rhs->count;
+                  return lhs->name < rhs->name;
+              });
+    if (args.ppc_coverage_limit != 0 &&
+        opaque_rows.size() > static_cast<std::size_t>(args.ppc_coverage_limit)) {
+        opaque_rows.resize(static_cast<std::size_t>(args.ppc_coverage_limit));
+    }
+
     const double coverage = total_words == 0
         ? 100.0
         : (100.0 * static_cast<double>(decoded_words) / static_cast<double>(total_words));
@@ -2146,9 +2205,11 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
         std::string out = std::format(
             "{{\"arch\":\"{}\",\"endian\":\"{}\",\"executable_sections\":{},"
             "\"total_words\":{},\"decoded_words\":{},\"unsupported_words\":{},"
-            "\"padding_words\":{},\"coverage\":{:.3f},\"unsupported\":[",
+            "\"padding_words\":{},\"coverage\":{:.3f},"
+            "\"opaque_lift_words\":{},\"unsupported\":[",
             arch_name(b.arch()), endian_name(b.endian()), executable_sections,
-            total_words, decoded_words, unsupported_words, padding_words, coverage);
+            total_words, decoded_words, unsupported_words, padding_words, coverage,
+            opaque_lift_words);
         bool first = true;
         for (const Hit* h : rows) {
             if (!first) out += ',';
@@ -2157,6 +2218,20 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
                                "\"error\":\"{}\",\"samples\":[",
                                h->word, h->count, json_escape(shape_for(h->word)),
                                json_escape(h->error));
+            for (std::size_t i = 0; i < h->samples.size(); ++i) {
+                if (i) out += ',';
+                out += std::format("\"{:#x}\"", h->samples[i]);
+            }
+            out += "]}";
+        }
+        out += "],\"opaque_lifts\":[";
+        first = true;
+        for (const OpaqueHit* h : opaque_rows) {
+            if (!first) out += ',';
+            first = false;
+            out += std::format("{{\"name\":\"{}\",\"mnemonic\":\"{}\",\"count\":{},"
+                               "\"samples\":[",
+                               json_escape(h->name), json_escape(h->mnemonic), h->count);
             for (std::size_t i = 0; i < h->samples.size(); ++i) {
                 if (i) out += ',';
                 out += std::format("\"{:#x}\"", h->samples[i]);
@@ -2179,6 +2254,16 @@ int run_ppc_coverage(const Args& args, const Binary& b) {
         }
         std::println("{}\t0x{:08x}\t{}\t{}\t{}",
                      h->count, h->word, shape_for(h->word), samples, h->error);
+    }
+    std::println("; opaque lift fallbacks: {} decoded words", opaque_lift_words);
+    std::println("count\tintrinsic\tmnemonic\tsamples");
+    for (const OpaqueHit* h : opaque_rows) {
+        std::string samples;
+        for (std::size_t i = 0; i < h->samples.size(); ++i) {
+            if (i) samples += ",";
+            samples += std::format("{:#x}", h->samples[i]);
+        }
+        std::println("{}\t{}\t{}\t{}", h->count, h->name, h->mnemonic, samples);
     }
     return EXIT_SUCCESS;
 }

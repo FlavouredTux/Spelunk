@@ -718,6 +718,50 @@ void test_wii_lifter_forms() {
     }
     check_eq(saw_ps_madd, true, "ps_madd keeps all three sources in IR");
 
+    ir = lift_one(fp_a_word(59, 3, 4, 5, 6, 29));  // fmadds f3, f4, f6, f5
+    bool saw_fused_mul = false;
+    bool saw_fused_add = false;
+    bool saw_fused_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_fused_mul |= inst.op == ember::IrOp::Mul &&
+                         inst.dst.type == ember::IrType::F32 &&
+                         inst.srcs[0].reg == ember::Reg::PpcF4 &&
+                         inst.srcs[1].reg == ember::Reg::PpcF6;
+        saw_fused_add |= inst.op == ember::IrOp::Add &&
+                         inst.dst.type == ember::IrType::F32 &&
+                         inst.srcs[1].reg == ember::Reg::PpcF5;
+        saw_fused_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                               inst.name == "ppc.fmadds";
+    }
+    check_eq(saw_fused_mul && saw_fused_add && !saw_fused_intrinsic, true,
+             "fmadds lifts to typed multiply-add dataflow");
+
+    ir = lift_one(fp_a_word(59, 3, 4, 5, 6, 30));  // fnmsubs f3, f4, f6, f5
+    bool saw_fused_sub = false;
+    bool saw_fused_neg = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_fused_sub |= inst.op == ember::IrOp::Sub &&
+                         inst.dst.type == ember::IrType::F32;
+        saw_fused_neg |= inst.op == ember::IrOp::Neg &&
+                         inst.dst.type == ember::IrType::F32;
+    }
+    check_eq(saw_fused_sub && saw_fused_neg, true,
+             "fnmsubs lifts subtract and final negation");
+
+    ir = lift_one(fp_unary_word(3, 4, 12));  // frsp f3, f4
+    bool saw_frsp_round = false;
+    bool saw_frsp_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_frsp_round |= inst.op == ember::IrOp::Trunc &&
+                          inst.dst.type == ember::IrType::F32 &&
+                          inst.srcs[0].type == ember::IrType::F64 &&
+                          inst.srcs[0].reg == ember::Reg::PpcF4;
+        saw_frsp_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                              inst.name == "ppc.frsp";
+    }
+    check_eq(saw_frsp_round && !saw_frsp_intrinsic, true,
+             "frsp lifts as an explicit float rounding cast");
+
     ir = lift_one(fp_a_word(63, 3, 4, 5, 6, 23));
     bool saw_fsel = false;
     for (const auto& inst : ir.blocks[0].insts) {

@@ -205,7 +205,7 @@ struct Args {
     bool rtti   = false;            // dump Itanium RTTI classes + vtables
     bool vtables = false;           // dump runtime pointer-dense vtables from loaded data/RELRO
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them
-    bool ppc_coverage = false;       // --ppc-coverage: rank unsupported PPC words in executable sections
+    bool ppc_coverage = false;       // --ppc-coverage: rank decode and semantic PPC gaps
     ember::u64 ppc_coverage_limit = 25; // --coverage-limit N: rows for --ppc-coverage (0 = all)
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)

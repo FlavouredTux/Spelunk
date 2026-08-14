@@ -1495,6 +1495,13 @@ ember_golden_test(
 # against regressions even on Linux CI.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME ppc_quality_benchmark_unit
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tests/ppc_quality_benchmark_test.py"
+                "${CMAKE_SOURCE_DIR}/scripts/ppc_quality_benchmark.py"
+    )
+
     function(ember_build_python_macho_fixture name script)
         set(_out "${_build_dir}/${name}")
         set(_script "${_fixture_dir}/${script}")

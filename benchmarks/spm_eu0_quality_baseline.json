@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "target": {
+    "manifest": "spm_eu0_ppc.txt",
+    "version": "EU0"
+  },
+  "totals": {
+    "functions": 6,
+    "lines_of_pseudo_c": 579,
+    "raw_register_references": 150,
+    "versioned_ssa_references": 11,
+    "temporary_references": 184,
+    "opaque_ppc_intrinsics": 14,
+    "generic_parameters": 10,
+    "generic_field_references": 75,
+    "unresolved_symbol_calls": 10,
+    "structurer_failures": 0
+  }
+}

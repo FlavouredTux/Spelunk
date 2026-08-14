@@ -1,0 +1,12 @@
+# Stable SPM EU0 pseudo-C quality corpus. Keep source order deterministic.
+# ABI and the historically rough entry condition.
+func_8011f45c
+func_801976e8
+
+# Scalar floating-point dataflow, including fused operations.
+func_8001e69c
+func_800208a0
+
+# Signature-backed GX texture and mixed GPR/FPR calls.
+projShadowEnd
+msgWindow_disp

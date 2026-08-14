@@ -154,6 +154,34 @@ for 4,860 opaque lift fallbacks. They now produce typed multiply/add/subtract/
 negate dataflow and an explicit `float` rounding cast, which lets pseudo-C show
 ordinary arithmetic instead of `ppc.fmadds(...)` or `ppc.frsp(...)`.
 
+### Repeatable SPM pseudo-C benchmark
+
+The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a small, stable mix
+of ABI, control-flow, scalar-float, and GX call sites. Run it with:
+
+```sh
+python3 scripts/ppc_quality_benchmark.py \
+  --ember ./build/cli/ember \
+  --dtk /path/to/spm \
+  --version EU0
+```
+
+The report counts raw architectural registers and versioned SSA names,
+temporary identifiers, opaque `ppc.*` calls, generic parameters and fields,
+unresolved `func_`/`sub_` calls, and `STRUCTURER_FAIL` diagnostics. It also
+normalizes each lower-is-better metric per 1,000 lines. The checked-in
+`benchmarks/spm_eu0_quality_baseline.json` captures the current corpus and can
+be enforced later:
+
+```sh
+python3 scripts/ppc_quality_benchmark.py --dtk /path/to/spm \
+  --baseline benchmarks/spm_eu0_quality_baseline.json --fail-on-regression
+```
+
+The tool returns 2 when a corpus function cannot be decompiled and 1 when a
+requested baseline check regresses. It has no third-party Python dependencies,
+and its metric parser is covered by the normal CTest suite.
+
 ## Supplying an exact signature
 
 An annotation takes precedence over inferred arity, types, and interleaving.

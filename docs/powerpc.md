@@ -163,6 +163,9 @@ represented without guessing.
 `rlwimi` is expanded into rotate/mask/merge dataflow, while `cntlzw` becomes
 the architecture-neutral `count_leading_zeros(...)` operation. This keeps
 compiler-generated bit idioms readable and available to cleanup passes.
+`lmw` and `stmw` expand into ordinary 32-bit loads and stores. This exposes
+their dataflow to SSA and lets the emitter suppress matched callee-saved
+register save/restore traffic as ABI boilerplate.
 
 ### Repeatable SPM pseudo-C benchmark
 

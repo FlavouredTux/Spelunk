@@ -715,6 +715,35 @@ void lift_sign_extend_from(LiftCtx& ctx, IrType narrow) {
     store_lvalue(insn.operands[0], out, ctx);
 }
 
+void lift_multiple_word(LiftCtx& ctx, bool load) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2 ||
+        insn.operands[0].kind != Operand::Kind::Register ||
+        insn.operands[1].kind != Operand::Kind::Memory) {
+        return;
+    }
+    const Reg first = canonical_reg(insn.operands[0].reg);
+    if (first < Reg::PpcR0 || first > Reg::PpcR31) return;
+
+    const unsigned first_index = static_cast<unsigned>(first) -
+                                 static_cast<unsigned>(Reg::PpcR0);
+    const IrValue first_ea = compute_ea(insn.operands[1].mem, ctx);
+    for (unsigned index = first_index; index < 32; ++index) {
+        IrValue ea = first_ea;
+        const unsigned byte_offset = (index - first_index) * 4u;
+        if (byte_offset != 0) {
+            ea = ctx.emit_binop(IrOp::Add, first_ea,
+                                ctx.imm(byte_offset, first_ea.type), first_ea.type);
+        }
+        const Reg reg = static_cast<Reg>(static_cast<unsigned>(Reg::PpcR0) + index);
+        if (load) {
+            ctx.write_reg(reg, ctx.emit_load(ea, IrType::I32));
+        } else {
+            ctx.emit_store(ea, ctx.match_size(ctx.read_reg(reg), IrType::I32));
+        }
+    }
+}
+
 void lift_instruction(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
 
@@ -1146,10 +1175,10 @@ void lift_instruction(LiftCtx& ctx) {
             store_int(IrType::I16, true);
             break;
         case Mnemonic::Lmw:
-            lift_dst_intrinsic(ctx, "ppc.lmw");
+            lift_multiple_word(ctx, true);
             break;
         case Mnemonic::Stmw:
-            lift_intrinsic(ctx, "ppc.stmw");
+            lift_multiple_word(ctx, false);
             break;
         case Mnemonic::Stfs:
         case Mnemonic::Stfsx:

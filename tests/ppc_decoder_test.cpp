@@ -761,6 +761,39 @@ void test_wii_lifter_forms() {
     check_eq(saw_insert_mask && saw_keep_mask && !saw_rlwimi_intrinsic, true,
              "rlwimi lifts as rotate-and-masked-insert dataflow");
 
+    ir = lift_one(0xBB61000C);  // lmw r27, 0xc(r1)
+    unsigned lmw_loads = 0;
+    unsigned lmw_assigns = 0;
+    bool saw_lmw_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        lmw_loads += inst.op == ember::IrOp::Load &&
+                     inst.dst.type == ember::IrType::I32;
+        lmw_assigns += inst.op == ember::IrOp::Assign &&
+                       inst.dst.kind == ember::IrValueKind::Reg &&
+                       inst.dst.reg >= ember::Reg::PpcR27 &&
+                       inst.dst.reg <= ember::Reg::PpcR31;
+        saw_lmw_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                             inst.name == "ppc.lmw";
+    }
+    check_eq(lmw_loads == 5 && lmw_assigns == 5 && !saw_lmw_intrinsic, true,
+             "lmw expands into five typed register loads");
+
+    ir = lift_one(0xBF61000C);  // stmw r27, 0xc(r1)
+    unsigned stmw_stores = 0;
+    bool saw_stmw_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        stmw_stores += inst.op == ember::IrOp::Store &&
+                       inst.src_count == 2 &&
+                       inst.srcs[1].type == ember::IrType::I32 &&
+                       inst.srcs[1].kind == ember::IrValueKind::Reg &&
+                       inst.srcs[1].reg >= ember::Reg::PpcR27 &&
+                       inst.srcs[1].reg <= ember::Reg::PpcR31;
+        saw_stmw_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                              inst.name == "ppc.stmw";
+    }
+    check_eq(stmw_stores == 5 && !saw_stmw_intrinsic, true,
+             "stmw expands into five typed register stores");
+
     ir = lift_one(0x7E0004A6);  // mfsr r16, 0
     bool saw_mfsr = false;
     for (const auto& inst : ir.blocks[0].insts) {

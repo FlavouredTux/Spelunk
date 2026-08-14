@@ -2,12 +2,14 @@
 
 #include <array>
 #include <cstddef>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
 
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/disasm/instruction.hpp>
@@ -18,6 +20,83 @@
 namespace ember {
 
 namespace {
+
+[[nodiscard]] u8 infer_ppc_arity_from_ir(const Binary& b, addr_t target,
+                                         Abi abi) noexcept {
+    // PPC call instructions do not encode arity, and the old x86-only
+    // fallback consequently reported every Wii callee as taking zero
+    // arguments.  Reuse the lifted SSA here: a version-zero ABI argument
+    // register read by a real instruction is a live-in parameter.
+    //
+    // Deliberately ignore ABI bookkeeping.  call.args.* snapshots all eight
+    // registers whether or not the callee consumes them, Phi nodes merge the
+    // same conservative register set at joins, and Return reads r3/f1 even
+    // for a source-level void function.  Counting any of those would turn
+    // nearly every PPC function into an eight-argument value-returning one.
+    IrCache cache;
+    IrFunction* fn = lift_cached(cache, b, target);
+    if (!fn) return 0;
+
+    const auto args = int_arg_regs(abi);
+    std::array<bool, kMaxAbiIntArgs> live_in{};
+    std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
+    for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+        const auto& bb = fn->blocks[bi];
+        for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+            if (auto k = ssa_key(bb.insts[ii].dst); k) def_pos[*k] = {bi, ii};
+        }
+    }
+    auto is_save_helper_clobber = [&](const IrValue& v) {
+        auto key = ssa_key(v);
+        if (!key) return false;
+        auto pos = def_pos.find(*key);
+        if (pos == def_pos.end()) return false;
+        const auto [bi, clobber_ii] = pos->second;
+        const auto& bb = fn->blocks[bi];
+        if (bb.insts[clobber_ii].op != IrOp::Clobber) return false;
+        for (std::size_t ii = clobber_ii; ii > 0;) {
+            const IrInst& prev = bb.insts[--ii];
+            if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
+            if (prev.op != IrOp::Call) return false;
+            const Symbol* sym = b.defined_object_at(prev.target1);
+            if (!sym) return false;
+            return sym->name.starts_with("_savegpr_") ||
+                   sym->name.starts_with("_savefpr_") ||
+                   sym->name.starts_with("__save_gpr") ||
+                   sym->name.starts_with("__save_fpr");
+        }
+        return false;
+    };
+
+    for (const auto& bb : fn->blocks) {
+        for (const auto& inst : bb.insts) {
+            if (inst.op == IrOp::Clobber || inst.op == IrOp::Phi ||
+                inst.op == IrOp::Return ||
+                (inst.op == IrOp::Intrinsic &&
+                 (inst.name == "call.args.1" || inst.name == "call.args.2" ||
+                  inst.name == "call.args.3"))) {
+                continue;
+            }
+            for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si) {
+                const IrValue& src = inst.srcs[si];
+                if (src.kind != IrValueKind::Reg ||
+                    (src.version != 0 && !is_save_helper_clobber(src))) {
+                    continue;
+                }
+                const Reg canon = canonical_reg(src.reg);
+                for (u8 ai = 0; ai < args.size() && ai < live_in.size(); ++ai) {
+                    if (args[ai] == canon) live_in[ai] = true;
+                }
+            }
+        }
+    }
+
+    int highest = -1;
+    for (std::size_t i = 0; i < live_in.size(); ++i) {
+        if (live_in[i]) highest = static_cast<int>(i);
+    }
+    return static_cast<u8>(highest + 1);
+}
 
 [[nodiscard]] bool is_rsp_adjust(const Instruction& insn, Mnemonic mn) noexcept {
     if (insn.mnemonic != mn || insn.num_operands != 2) return false;
@@ -129,6 +208,9 @@ enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 }  // namespace
 
 u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
+    if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+        return infer_ppc_arity_from_ir(b, target, abi);
+    }
     if (b.arch() != Arch::X86_64) return 0;
     const auto args = int_arg_regs(abi);
     const u8 max_arity = static_cast<u8>(args.size());

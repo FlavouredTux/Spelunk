@@ -4,9 +4,55 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
     switch (r.kind) {
         case RegionKind::Empty:                                              return;
         case RegionKind::Block:        emit_block(r.block_start, depth, out); return;
-        case RegionKind::Seq:
+        case RegionKind::Seq: {
+            // Void-tail guard recovery.  A common PPC CFG shape is
+            //
+            //   if (body_condition) { ...large body... }
+            //   return;
+            //
+            // because both the entry guard and the body converge on one blr
+            // epilogue.  Preserve the semantics while recovering the much
+            // clearer source shape: `if (!body_condition) return; ...body`.
+            // This also prevents a single initial check from indenting an
+            // entire callback by another level.
+            if (current_return_is_void && r.children.size() >= 2) {
+                const Region* tail = r.children.back().get();
+                std::size_t guard_index = r.children.size() - 1;
+                std::string suffix;
+                const auto bindings_before_suffix = emitted_bindings;
+                while (guard_index > 0) {
+                    const Region* candidate = r.children[guard_index - 1].get();
+                    if (!candidate || (candidate->kind != RegionKind::Block &&
+                                       candidate->kind != RegionKind::Empty)) {
+                        break;
+                    }
+                    --guard_index;
+                    emit_region(*candidate, depth, suffix);
+                }
+                emitted_bindings = bindings_before_suffix;
+                const Region* guarded = guard_index > 0
+                    ? r.children[guard_index - 1].get() : nullptr;
+                if (rendered_region_empty(suffix) && guarded && tail &&
+                    guarded->kind == RegionKind::IfThen &&
+                    tail->kind == RegionKind::Return && !guarded->children.empty() &&
+                    guarded->children[0]) {
+                    for (std::size_t i = 0; i + 1 < guard_index; ++i) {
+                        emit_region(*r.children[i], depth, out);
+                    }
+                    const std::string cond =
+                        render_condition(guarded->condition, !guarded->invert);
+                    emit_materializations_for_rendered_value(
+                        guarded->condition, cond, out, ind);
+                    out += std::format("{}if ({}) {{\n", ind, cond);
+                    out += std::format("{}  return;\n", ind);
+                    out += std::format("{}}}\n", ind);
+                    emit_region(*guarded->children[0], depth, out);
+                    return;
+                }
+            }
             for (const auto& c : r.children) emit_region(*c, depth, out);
             return;
+        }
         case RegionKind::IfThen:       emit_region_if_then  (r, depth, out); return;
         case RegionKind::IfElse:       emit_region_if_else  (r, depth, out); return;
         case RegionKind::While:        emit_region_while    (r, depth, out); return;

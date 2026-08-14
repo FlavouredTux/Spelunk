@@ -77,6 +77,10 @@ add_executable(ember_ppc_decoder_test ppc_decoder_test.cpp)
 target_link_libraries(ember_ppc_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME ppc_decoder_unit COMMAND ember_ppc_decoder_test)
 
+add_executable(ember_arity_test arity_test.cpp)
+target_link_libraries(ember_arity_test PRIVATE ember::core ember::flags)
+add_test(NAME arity_unit COMMAND ember_arity_test)
+
 # Unit tests for the e-graph saturation engine that backs TEEF v6's L3
 # orbit-class fingerprint. Self-contained: builds e-graphs from synthetic
 # terms, no IR involved.

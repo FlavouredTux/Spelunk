@@ -831,7 +831,6 @@ struct Emitter {
     preserved_call_arg_for_clobber(Reg r, u32 version) const {
         if (!binary || !fn || version == 0) return std::nullopt;
         const Reg canon = canonical_reg(r);
-        if (canon == int_return_reg(abi)) return std::nullopt;
 
         const auto args_regs = int_arg_regs(abi);
         std::optional<std::size_t> slot;
@@ -856,6 +855,7 @@ struct Emitter {
         const auto& bb = fn->blocks[bi];
 
         std::optional<std::size_t> call_ii;
+        bool abi_helper = false;
         for (std::size_t ii = clobber_ii; ii > 0; ) {
             --ii;
             const IrInst& prev = bb.insts[ii];
@@ -863,10 +863,12 @@ struct Emitter {
             if (prev.op == IrOp::Call) {
                 if (binary->import_at_plt(prev.target1)) return std::nullopt;
                 call_ii = ii;
+                abi_helper = is_ppc_abi_helper_call(prev);
             }
             break;
         }
         if (!call_ii) return std::nullopt;
+        if (canon == int_return_reg(abi) && !abi_helper) return std::nullopt;
 
         std::vector<IrValue> args;
         args.reserve(kMaxAbiIntArgs);
@@ -1636,7 +1638,23 @@ struct Emitter {
         return std::nullopt;
     }
 
+    [[nodiscard]] bool is_ppc_abi_helper_call(const IrInst& inst) const {
+        if (!binary || inst.op != IrOp::Call ||
+            (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
+             abi != Abi::Ppc64ElfV2Le)) {
+            return false;
+        }
+        const Symbol* sym = binary->defined_object_at(inst.target1);
+        if (!sym) return false;
+        const std::string_view name = sym->name;
+        return name.starts_with("_savegpr_") || name.starts_with("_restgpr_") ||
+               name.starts_with("_savefpr_") || name.starts_with("_restfpr_") ||
+               name.starts_with("__save_gpr") || name.starts_with("__rest_gpr") ||
+               name.starts_with("__save_fpr") || name.starts_with("__rest_fpr");
+    }
+
     [[nodiscard]] bool call_inst_returns_void(const IrInst& inst) const {
+        if (is_ppc_abi_helper_call(inst)) return true;
         auto name = call_import_name(inst);
         return name && import_returns_void(*name);
     }
@@ -2267,6 +2285,10 @@ struct Emitter {
                 for (u8 i = 0; i < args.size(); ++i) if (args[i] == canon) return i;
                 return std::nullopt;
             }
+            if (auto preserved = preserved_call_arg_for_clobber(cur.reg, cur.version);
+                preserved) {
+                return trace_to_self_arg_slot(*preserved, depth + 1);
+            }
             const IrInst* d = def_of(cur);
             if (!d) return std::nullopt;
             if (d->op == IrOp::Assign && d->src_count == 1) {
@@ -2730,6 +2752,35 @@ struct Emitter {
         }
     }
 
+    // Metrowerks emits calls to _savegpr_N/_savefpr_N before it copies
+    // incoming parameters into callee-saved registers. SSA correctly models
+    // an ordinary call as clobbering r3-r10, but these compiler helpers are
+    // special: they preserve those registers. Carry any refined type learned
+    // on the post-helper SSA value (most importantly pointer evidence from a
+    // later load/store) back to the source-level parameter.
+    void infer_ppc_helper_preserved_arg_types() {
+        const auto consider = [&](const IrValue& v) {
+            if (v.kind != IrValueKind::Reg || v.version == 0) return;
+            auto original = preserved_call_arg_for_clobber(v.reg, v.version);
+            if (!original) return;
+            auto slot = trace_to_self_arg_slot(*original);
+            if (!slot || *slot >= self_arg_type_names.size()) return;
+            const std::string refined = c_type_name_for(v);
+            if (refined == c_type_name(v.type) || !refined.ends_with('*')) return;
+            auto& dst = self_arg_type_names[*slot];
+            if (dst.empty()) dst = refined;
+            else if (dst != refined) dst.clear();
+        };
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                consider(inst.dst);
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    consider(inst.srcs[i]);
+                }
+            }
+        }
+    }
+
     [[nodiscard]] bool is_void_call_result(const IrValue& v) const {
         if (v.kind != IrValueKind::Reg) return false;
         if (canonical_reg(v.reg) != int_return_reg(abi)) return false;
@@ -2775,6 +2826,59 @@ struct Emitter {
             return prev.op != IrOp::Call && prev.op != IrOp::CallIndirect;
         }
         return true;
+    }
+
+    // PPC has no distinct `return void` instruction: blr simply leaves
+    // whatever happens to be in r3.  At a shared epilogue SSA therefore
+    // creates a return-register Phi even for a void callback.  A large merge
+    // containing the entry r3 plus several unrelated post-call clobbers is
+    // strong evidence that the values are incidental ABI state, not a
+    // coherent source-level result.  Keep this deliberately narrow so small
+    // wrappers such as `return cond ? a1 : callee()` remain value-returning.
+    [[nodiscard]] bool has_incidental_ppc_return_merge() const {
+        if (!fn || (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
+                    abi != Abi::Ppc64ElfV2Le)) {
+            return false;
+        }
+        const Reg ret_reg = int_return_reg(abi);
+        for (const auto& bb : fn->blocks) {
+            for (const auto& inst : bb.insts) {
+                if (inst.op != IrOp::Return || inst.src_count == 0) continue;
+                const IrValue& rv = inst.srcs[0];
+                if (rv.kind != IrValueKind::Reg ||
+                    canonical_reg(rv.reg) != ret_reg) {
+                    continue;
+                }
+                const IrInst* phi = def_of(rv);
+                if (!phi || phi->op != IrOp::Phi || phi->phi_operands.size() < 6) {
+                    continue;
+                }
+                bool saw_live_in = false;
+                std::size_t clobbers = 0;
+                for (IrValue op : phi->phi_operands) {
+                    for (int depth = 0; depth < 6; ++depth) {
+                        if (op.kind == IrValueKind::Reg && op.version == 0 &&
+                            canonical_reg(op.reg) == ret_reg) {
+                            saw_live_in = true;
+                            break;
+                        }
+                        const IrInst* d = def_of(op);
+                        if (!d) break;
+                        if (d->op == IrOp::Clobber) {
+                            ++clobbers;
+                            break;
+                        }
+                        if (d->op == IrOp::Assign && d->src_count == 1) {
+                            op = d->srcs[0];
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                if (saw_live_in && clobbers >= 2) return true;
+            }
+        }
+        return false;
     }
 
     // Find Return regions whose value is the ABI integer return register
@@ -2948,6 +3052,7 @@ struct Emitter {
             for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
                 const auto& inst = bb.insts[ii];
                 if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
+                if (hidden.contains({bi, ii})) continue;
                 if (fold_call_positions.contains({bi, ii})) continue;
                 if (inline_call_positions.contains({bi, ii})) continue;
                 if (arc_claim_producer_positions.contains({bi, ii})) continue;
@@ -3229,7 +3334,10 @@ struct Emitter {
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
             const auto& bb = fn->blocks[bi];
             for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-                if (is_abi_noise(bb.insts[ii])) hidden.insert({bi, ii});
+                if (is_abi_noise(bb.insts[ii]) ||
+                    is_ppc_abi_helper_call(bb.insts[ii])) {
+                    hidden.insert({bi, ii});
+                }
             }
         }
         // Pass 2: propagate. A pure temp whose every use is in a hidden inst is itself dead.
@@ -6383,7 +6491,16 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
         const auto& inst = bb.insts[ii];
         // Skip ABI-noise prologue/epilogue insts detected during analysis.
-        if (hidden.contains({it->second, ii})) continue;
+        // A hidden PPC save/restore helper still terminates the preceding
+        // call.args pack; clear it so it cannot leak out as a stray marker or
+        // become the arguments of the next source-level call.
+        if (hidden.contains({it->second, ii})) {
+            if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
+                pending_args.clear();
+                have_pending = false;
+            }
+            continue;
+        }
         // Skip the for-loop update statement; it'll render in the for-header.
         if (for_update_positions.contains({it->second, ii})) continue;
         switch (inst.op) {
@@ -6767,6 +6884,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_narrow_arg_types_from_uses();
     }
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
+        e.infer_ppc_helper_preserved_arg_types();
+    }
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
@@ -6814,6 +6934,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // condition means the function yields a value. We use the condition's
     // IrType to pick an appropriate C type rather than always saying `u64`.
     auto inferred_return_type = [&](const Emitter&, const StructuredFunction& s) -> std::string {
+        if (e.has_incidental_ppc_return_merge()) return "void";
         // IPA wins outright when it has concrete evidence - the typed
         // return came from harvesting Return-operand types after Phase 2
         // local inference, which sees more than this lambda's
@@ -7397,6 +7518,9 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     e.name_merge_values();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
+        e.infer_ppc_helper_preserved_arg_types();
+    }
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();

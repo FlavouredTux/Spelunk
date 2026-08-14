@@ -9,6 +9,7 @@
 // block's address range.
 
 #include <ember/decompile/emitter.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/structure/region.hpp>
 #include <ember/structure/structurer.hpp>
@@ -16,10 +17,48 @@
 #include <cstdio>
 #include <format>
 #include <string>
+#include <vector>
 
 namespace {
 
 int fails = 0;
+
+class MockPpcBinary final : public ember::Binary {
+public:
+    MockPpcBinary() {
+        ember::Symbol symbol;
+        symbol.name = "ppc_void_callback";
+        symbol.addr = 0x1000;
+        symbol.size = 0x24;
+        symbol.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(symbol));
+    }
+    [[nodiscard]] ember::Format format() const noexcept override {
+        return ember::Format::Dol;
+    }
+    [[nodiscard]] ember::Arch arch() const noexcept override {
+        return ember::Arch::Ppc32;
+    }
+    [[nodiscard]] ember::Endian endian() const noexcept override {
+        return ember::Endian::Big;
+    }
+    [[nodiscard]] ember::addr_t entry_point() const noexcept override { return 0x1000; }
+    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+        return {};
+    }
+    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+        return symbols_;
+    }
+    [[nodiscard]] std::span<const std::byte> image() const noexcept override { return {}; }
+
+protected:
+    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+        return symbols_;
+    }
+
+private:
+    std::vector<ember::Symbol> symbols_;
+};
 
 void check(bool cond, const char* ctx) {
     if (!cond) {
@@ -560,6 +599,87 @@ int test_phi_index_name_is_mined() {
     return 0;
 }
 
+int test_ppc_void_return_merge_becomes_entry_guard() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1000;
+    constexpr addr_t kBody = 0x1010;
+    constexpr addr_t kExit = 0x1020;
+
+    IrValue r3_live = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    IrValue r3_1 = r3_live; r3_1.version = 1;
+    IrValue r3_2 = r3_live; r3_2.version = 2;
+    IrValue r3_phi = r3_live; r3_phi.version = 7;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kExit + 4;
+    fn.name = "ppc_void_callback";
+
+    IrBlock body_bb;
+    body_bb.start = kBody;
+    body_bb.end = kBody + 4;
+    body_bb.kind = BlockKind::Fallthrough;
+    body_bb.insts.push_back(make_call_imm(kBody, 0x2000));
+    fn.block_at[kBody] = fn.blocks.size();
+    fn.blocks.push_back(std::move(body_bb));
+
+    IrBlock exit_bb;
+    exit_bb.start = kExit;
+    exit_bb.end = kExit + 4;
+    exit_bb.kind = BlockKind::Return;
+    IrInst c1; c1.op = IrOp::Clobber; c1.dst = r3_1;
+    IrInst c2; c2.op = IrOp::Clobber; c2.dst = r3_2;
+    exit_bb.insts.push_back(c1);
+    exit_bb.insts.push_back(c2);
+    exit_bb.insts.push_back(make_phi(r3_phi, {
+        r3_live, r3_1, r3_2,
+        IrValue::make_imm(1, IrType::I32),
+        IrValue::make_imm(2, IrType::I32),
+        IrValue::make_imm(3, IrType::I32),
+    }));
+    exit_bb.insts.push_back(make_ret_value(kExit, r3_phi));
+    fn.block_at[kExit] = fn.blocks.size();
+    fn.blocks.push_back(std::move(exit_bb));
+
+    auto body_block = std::make_unique<Region>();
+    body_block->kind = RegionKind::Block;
+    body_block->block_start = kBody;
+    auto guarded = std::make_unique<Region>();
+    guarded->kind = RegionKind::IfThen;
+    guarded->condition = IrValue::make_imm(1, IrType::I1);
+    guarded->children.push_back(std::move(body_block));
+    auto exit_block = std::make_unique<Region>();
+    exit_block->kind = RegionKind::Block;
+    exit_block->block_start = kExit;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    tail->condition = r3_phi;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(guarded));
+    root->children.push_back(std::move(exit_block));
+    root->children.push_back(std::move(tail));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(root);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "PPC void-merge pseudo-C emits");
+    if (!pc) return 1;
+
+    check(pc->find("void ppc_void_callback(void)") != std::string::npos,
+          "incidental PPC r3 merge is inferred as void");
+    check(pc->find("if (!1) {\n    return;\n  }\n  sub_2000();") != std::string::npos,
+          "void tail if is recovered as an early entry guard");
+    check(pc->find("return r3") == std::string::npos,
+          "incidental PPC return-register value is not emitted");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -571,5 +691,6 @@ int main() {
     rc |= test_phi_livein_initializer_is_mined();
     rc |= test_phi_accumulator_name_is_mined();
     rc |= test_phi_index_name_is_mined();
+    rc |= test_ppc_void_return_merge_becomes_entry_guard();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

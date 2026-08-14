@@ -153,6 +153,9 @@ operations and `frsp` as the highest-value safe gaps: together they accounted
 for 4,860 opaque lift fallbacks. They now produce typed multiply/add/subtract/
 negate dataflow and an explicit `float` rounding cast, which lets pseudo-C show
 ordinary arithmetic instead of `ppc.fmadds(...)` or `ppc.frsp(...)`.
+The common Metrowerks `fctiwz; stfd; lwz` sequence is also folded into a signed
+integer cast, removing the temporary stack spill used only to move the
+converted payload from an FPR into a GPR.
 
 ### Repeatable SPM pseudo-C benchmark
 

@@ -63,6 +63,33 @@ ember::IrFunction lift_one(std::uint32_t raw) {
     return std::move(*ir);
 }
 
+ember::IrFunction lift_words(std::initializer_list<std::uint32_t> words) {
+    ember::Function fn;
+    fn.start = 0x80003100;
+    fn.end = fn.start + words.size() * 4;
+    ember::BasicBlock bb;
+    bb.start = fn.start;
+    bb.end = fn.end;
+    bb.kind = ember::BlockKind::Return;
+    ember::addr_t address = fn.start;
+    for (std::uint32_t raw : words) {
+        auto instruction = must_decode(raw);
+        instruction.address = address;
+        bb.instructions.push_back(std::move(instruction));
+        address += 4;
+    }
+    fn.blocks.push_back(std::move(bb));
+    ember::PpcLifter lifter(ember::Abi::Ppc32Sysv);
+    auto ir = lifter.lift(fn);
+    if (!ir) {
+        std::fprintf(stderr, "FAIL: multi-word PPC lift: %s\n",
+                     ir.error().message.c_str());
+        ++fails;
+        return {};
+    }
+    return std::move(*ir);
+}
+
 ember::IrFunction lift_conditional_pair(std::uint32_t first, std::uint32_t branch) {
     ember::Function fn;
     fn.start = 0x80003100;
@@ -761,6 +788,36 @@ void test_wii_lifter_forms() {
     }
     check_eq(saw_frsp_round && !saw_frsp_intrinsic, true,
              "frsp lifts as an explicit float rounding cast");
+
+    ir = lift_one(fp_unary_word(5, 6, 15));  // fctiwz f5, f6
+    bool saw_fctiwz_cast = false;
+    bool saw_fctiwz_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_fctiwz_cast |= inst.op == ember::IrOp::FpToInt &&
+                           inst.dst.type == ember::IrType::I32 &&
+                           inst.srcs[0].type == ember::IrType::F64 &&
+                           inst.srcs[0].reg == ember::Reg::PpcF6;
+        saw_fctiwz_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                                inst.name == "ppc.fctiwz";
+    }
+    check_eq(saw_fctiwz_cast && !saw_fctiwz_intrinsic, true,
+             "fctiwz lifts as an explicit signed integer cast");
+
+    // fctiwz f0,f1; stfd f0,8(r1); lwz r4,12(r1)
+    ir = lift_words({fp_unary_word(0, 1, 15), 0xD8010008, 0x8081000C});
+    bool saw_spill_store = false;
+    bool saw_spill_load = false;
+    bool saw_direct_gpr = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_spill_store |= inst.op == ember::IrOp::Store;
+        saw_spill_load |= inst.op == ember::IrOp::Load;
+        saw_direct_gpr |= inst.op == ember::IrOp::Assign &&
+                          inst.dst.kind == ember::IrValueKind::Reg &&
+                          inst.dst.reg == ember::Reg::PpcR4 &&
+                          inst.srcs[0].type == ember::IrType::I32;
+    }
+    check_eq(saw_direct_gpr && !saw_spill_store && !saw_spill_load, true,
+             "fctiwz stack extraction folds directly into the destination GPR");
 
     ir = lift_one(fp_a_word(63, 3, 4, 5, 6, 23));
     bool saw_fsel = false;

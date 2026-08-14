@@ -38,6 +38,7 @@ std::string_view op_name(IrOp op) noexcept {
         case IrOp::ZExt:           return "zext";
         case IrOp::SExt:           return "sext";
         case IrOp::Trunc:          return "trunc";
+        case IrOp::FpToInt:        return "fp.to_int";
         case IrOp::AddCarry:       return "add.carry";
         case IrOp::SubBorrow:      return "sub.borrow";
         case IrOp::AddOverflow:    return "add.overflow";
@@ -139,6 +140,7 @@ std::string format_ir_inst(const IrInst& inst) {
         case IrOp::ZExt:
         case IrOp::SExt:
         case IrOp::Trunc:
+        case IrOp::FpToInt:
             return std::format("{} = {} {} {}", format_ir_value(inst.dst),
                                op_name(inst.op), type_name(inst.dst.type),
                                format_ir_value(inst.srcs[0]));

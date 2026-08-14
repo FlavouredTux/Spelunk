@@ -564,7 +564,7 @@ struct GvnOp {
         case IrOp::CmpEq: case IrOp::CmpNe:
         case IrOp::CmpUlt: case IrOp::CmpUle: case IrOp::CmpUgt: case IrOp::CmpUge:
         case IrOp::CmpSlt: case IrOp::CmpSle: case IrOp::CmpSgt: case IrOp::CmpSge:
-        case IrOp::ZExt: case IrOp::SExt: case IrOp::Trunc:
+        case IrOp::ZExt: case IrOp::SExt: case IrOp::Trunc: case IrOp::FpToInt:
             return true;
         default:
             return false;

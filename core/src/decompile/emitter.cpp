@@ -1162,7 +1162,9 @@ struct Emitter {
         return args[*slot];
     }
 
-    [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version, int depth = 0) const {
+    [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version,
+                                              int depth = 0,
+                                              int min_prec = 0) const {
         Reg cur_reg = r;
         u32 cur_ver = version;
         for (int hop = 0; hop < 8; ++hop) {
@@ -1193,7 +1195,7 @@ struct Emitter {
                     cur_ver = src.version;
                     continue;
                 }
-                if (depth < kMaxExprDepth) return expr(src, depth + 1);
+                if (depth < kMaxExprDepth) return expr(src, depth + 1, min_prec);
                 break;
             }
             // Phi-merged reg: if every incoming operand renders to the
@@ -3742,6 +3744,7 @@ struct Emitter {
                 case IrOp::Trunc:
                 case IrOp::ZExt:
                 case IrOp::SExt:
+                case IrOp::FpToInt:
                     for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
                         if (!merge(single_call_return_key_in_expr(d->srcs[i],
                                                                   depth + 1))) {
@@ -4223,6 +4226,7 @@ struct Emitter {
             case IrOp::CmpUlt: case IrOp::CmpUle:
             case IrOp::CmpUgt: case IrOp::CmpUge:
             case IrOp::ZExt:  case IrOp::SExt:  case IrOp::Trunc:
+            case IrOp::FpToInt:
             case IrOp::AddCarry:    case IrOp::SubBorrow:
             case IrOp::AddOverflow: case IrOp::SubOverflow:
                 return true;
@@ -6401,12 +6405,13 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
                     const auto& src = d->srcs[0];
                     if (src.kind == IrValueKind::Imm) return expr(src, depth + 1, min_prec);
                     if (src.kind == IrValueKind::Reg && src.version == 0) {
-                        return render_reg_leaf(src.reg, src.version, depth + 1);
+                        return render_reg_leaf(src.reg, src.version, depth + 1,
+                                               min_prec);
                     }
                     break;
                 }
             }
-            return render_reg_leaf(v.reg, v.version, depth);
+            return render_reg_leaf(v.reg, v.version, depth, min_prec);
         }
         case IrValueKind::Flag:
             return std::string(flag_name(v.flag));
@@ -6590,6 +6595,13 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                 "({}){}",
                 c_type_name(d.dst.type),
                 expr(src, depth, std::to_underlying(Prec::Unary)));
+            return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
+        }
+
+        case IrOp::FpToInt: {
+            std::string casted = std::format(
+                "(int32_t){}",
+                expr(d.srcs[0], depth, std::to_underlying(Prec::Unary)));
             return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
         }
 

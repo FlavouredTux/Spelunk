@@ -740,6 +740,10 @@ struct Trace {
             return step_cmp(t, inst);
         case IrOp::ZExt: case IrOp::SExt: case IrOp::Trunc:
             return step_cast(t, inst);
+        case IrOp::FpToInt:
+            // Behavioural tracing is integer-only; retain deterministic
+            // dataflow without pretending the input bits are an integer cast.
+            return synth_dst(t, inst);
         case IrOp::Select:
             return step_select(t, inst);
         case IrOp::Load:

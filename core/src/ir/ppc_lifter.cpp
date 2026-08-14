@@ -284,6 +284,53 @@ void lift_frsp(LiftCtx& ctx) {
     store_fp_lvalue(insn.operands[0], rounded, ctx, IrType::F32);
 }
 
+[[nodiscard]] IrValue lift_fctiwz_value(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2 ||
+        insn.operands[0].kind != Operand::Kind::Register) {
+        return {};
+    }
+    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, IrType::F64);
+    if (src.kind == IrValueKind::None) return {};
+    IrValue converted = ctx.emit_unop(IrOp::FpToInt, src, IrType::I32);
+    // fctiwz carries an integer payload in an FPR until the conventional
+    // stfd/lwz spill extracts its low word. Keep that payload typed as I32 so
+    // standalone IR is useful even when the spill idiom is absent.
+    ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::I32), converted);
+    return converted;
+}
+
+[[nodiscard]] bool lift_fctiwz_spill(LiftCtx& ctx,
+                                     const Instruction& store,
+                                     const Instruction& load) {
+    const auto& convert = *ctx.insn;
+    if (convert.mnemonic != Mnemonic::Fctiwz || convert.num_operands != 2 ||
+        convert.operands[0].kind != Operand::Kind::Register ||
+        store.mnemonic != Mnemonic::Stfd || store.num_operands != 2 ||
+        store.operands[0].kind != Operand::Kind::Register ||
+        store.operands[0].reg != convert.operands[0].reg ||
+        store.operands[1].kind != Operand::Kind::Memory ||
+        load.mnemonic != Mnemonic::Lwz || load.num_operands != 2 ||
+        load.operands[0].kind != Operand::Kind::Register ||
+        load.operands[1].kind != Operand::Kind::Memory) {
+        return false;
+    }
+    const Mem& stored = store.operands[1].mem;
+    const Mem& loaded = load.operands[1].mem;
+    // Metrowerks extracts the big-endian low integer word at spill+4. Limit
+    // the fold to a plain r1-local slot so an observable memory store is never
+    // removed from an arbitrary caller-provided address.
+    if (stored.base != Reg::PpcR1 || loaded.base != Reg::PpcR1 ||
+        stored.index != Reg::None || loaded.index != Reg::None ||
+        !stored.has_disp || !loaded.has_disp || loaded.disp != stored.disp + 4) {
+        return false;
+    }
+    IrValue converted = lift_fctiwz_value(ctx);
+    if (converted.kind == IrValueKind::None) return false;
+    store_lvalue(load.operands[0], converted, ctx);
+    return true;
+}
+
 void set_cr_field(LiftCtx& ctx, u8 field, IrValue lt, IrValue gt,
                   IrValue eq, IrValue so) {
     ctx.emit_set_flag(ppc_cr_flag(field, 0), lt);
@@ -972,7 +1019,7 @@ void lift_instruction(LiftCtx& ctx) {
             lift_dst_intrinsic(ctx, "ppc.fctiw");
             break;
         case Mnemonic::Fctiwz:
-            lift_dst_intrinsic(ctx, "ppc.fctiwz");
+            (void)lift_fctiwz_value(ctx);
             break;
         case Mnemonic::Fcmpu:
         case Mnemonic::Fcmpo:
@@ -1330,8 +1377,14 @@ Result<IrFunction> PpcLifter::lift(const Function& fn) const {
         ctx.blk = &ir.blocks[i];
         ctx.abi = abi_;
 
-        for (const auto& insn : fn.blocks[i].instructions) {
-            ctx.insn = &insn;
+        const auto& instructions = fn.blocks[i].instructions;
+        for (std::size_t j = 0; j < instructions.size(); ++j) {
+            ctx.insn = &instructions[j];
+            if (j + 2 < instructions.size() &&
+                lift_fctiwz_spill(ctx, instructions[j + 1], instructions[j + 2])) {
+                j += 2;
+                continue;
+            }
             lift_instruction(ctx);
         }
 

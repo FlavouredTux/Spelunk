@@ -188,6 +188,7 @@ enum class IrOp : u16 {
     CmpSlt, CmpSle, CmpSgt, CmpSge,
 
     ZExt, SExt, Trunc,
+    FpToInt,  // floating-point to signed integer, truncating toward zero
 
     AddCarry, SubBorrow,
     AddOverflow, SubOverflow,

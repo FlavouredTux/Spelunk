@@ -11,6 +11,11 @@
 namespace ember {
 
 inline constexpr std::size_t kMaxAbiIntArgs = 8;
+inline constexpr std::size_t kMaxAbiFpArgs = 13;
+// Largest register-passed source argument set currently modelled. PPC64 can
+// carry eight integer/pointer arguments and thirteen floating-point arguments
+// in independent register sequences.
+inline constexpr std::size_t kMaxAbiArgs = kMaxAbiIntArgs + kMaxAbiFpArgs;
 
 // Which calling convention the lifter, arity inferencer, signature
 // inferencer, and emitter should assume for a binary.
@@ -73,8 +78,14 @@ enum class Abi : u8 {
 // Floating-point / vector argument registers in order.
 //   SysV / Win64: xmm0..xmm7
 //   AAPCS64:      v0..v7
-//   PPC:          not modelled (empty)
+//   PPC32 SysV:   f1..f8
+//   PPC64 ELF:    f1..f13
 [[nodiscard]] std::span<const Reg> fp_arg_regs(Abi a) noexcept;
+
+// Caller-saved floating-point registers. PPC calls may destroy f0..f13;
+// exposing that fact to SSA prevents a value left in f1 by an earlier call
+// from being mistaken for a later floating-point argument.
+[[nodiscard]] std::span<const Reg> caller_saved_fp_regs(Abi a) noexcept;
 
 // True when argument registers are assigned by a single positional slot
 // shared across the integer and FP register files: the Nth argument uses
@@ -85,6 +96,9 @@ enum class Abi : u8 {
 [[nodiscard]] bool abi_positional_arg_slots(Abi a) noexcept;
 
 [[nodiscard]] Reg int_return_reg(Abi a) noexcept;
+// Scalar floating-point return register. PPC SysV returns float/double in f1.
+// This is a candidate lane, not proof that every call returns a float; callers
+// must select it from a known signature or concrete dataflow evidence.
 [[nodiscard]] Reg fp_return_reg(Abi a) noexcept;
 
 }  // namespace ember

@@ -601,6 +601,35 @@ void test_cr_logical_forms() {
 }
 
 void test_wii_lifter_forms() {
+    check_eq(ember::fp_return_reg(ember::Abi::Ppc32Sysv),
+             ember::Reg::PpcF1,
+             "PPC32 SysV floating return lane is f1");
+    auto call_ir = lift_one(0x48000001);  // bl .
+    bool saw_fp_args = false;
+    bool saw_f0_clobber = false;
+    bool saw_f13_clobber = false;
+    bool saw_f1_return_source = false;
+    for (const auto& inst : call_ir.blocks[0].insts) {
+        saw_fp_args |= inst.op == ember::IrOp::Intrinsic &&
+                       inst.name == "call.fp_args.1" && inst.src_count == 3 &&
+                       inst.srcs[0].reg == ember::Reg::PpcF1 &&
+                       inst.srcs[2].reg == ember::Reg::PpcF3;
+        saw_f0_clobber |= inst.op == ember::IrOp::Clobber &&
+                          inst.dst.reg == ember::Reg::PpcF0;
+        saw_f13_clobber |= inst.op == ember::IrOp::Clobber &&
+                           inst.dst.reg == ember::Reg::PpcF13;
+        if (inst.op == ember::IrOp::Return) {
+            for (ember::u8 i = 0; i < inst.src_count; ++i) {
+                saw_f1_return_source |=
+                    inst.srcs[i].kind == ember::IrValueKind::Reg &&
+                    inst.srcs[i].reg == ember::Reg::PpcF1;
+            }
+        }
+    }
+    check_eq(saw_fp_args && saw_f0_clobber && saw_f13_clobber &&
+             saw_f1_return_source, true,
+             "PPC calls snapshot FP args, clobber FPRs, and preserve f1 returns");
+
     auto ir = lift_one(0xF3E10058);  // psq_st f31, 0x58(r1), 0, 0
     bool saw_psq_store_address = false;
     bool saw_spurious_psq_load = false;

@@ -6,5 +6,5 @@ bb_100054  (entry):
   t0 = add i32 0x0, 0x2a
   r3_1 = t0
   ; 0x100058
-  return r3_1
+  return r3_1, f1
 

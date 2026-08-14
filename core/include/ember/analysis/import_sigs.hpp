@@ -8,7 +8,8 @@
 
 namespace ember {
 
-// Known signature for a libc / POSIX / pthread / Win32 import. Used by
+// Known signature for a libc / POSIX / pthread / Win32 import or a small set
+// of platform SDK routines with stable public prototypes. Used by
 // IPA and the emitter's local pass to type call arguments and call
 // return values without touching the IR-level lattice (`infer_local_types`
 // then propagates the seeded types through the rest of the function).
@@ -35,10 +36,10 @@ lookup_import_sig(std::string_view name, TypeArena& arena);
 class Binary;     // <ember/binary/binary.hpp>
 struct IrFunction;  // <ember/ir/ir.hpp>
 
-// Pre-seed the function's `value_types` from each Call to a known import:
+// Pre-seed the function's `value_types` from each Call to a known routine:
 //
-//   - The post-call value of RAX (the next Clobber's dst, after SSA) is
-//     refined to the import's return type - `infer_local_types` then
+//   - The post-call ABI return lane (the next matching Clobber's dst, after
+//     SSA) is refined to the routine's return type - `infer_local_types` then
 //     propagates that forward through the body. So `void* p = fopen(...)`
 //     keeps its `void*` typing through every subsequent fread/fclose.
 //

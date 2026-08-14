@@ -9,12 +9,14 @@
 // block's address range.
 
 #include <ember/decompile/emitter.hpp>
+#include <ember/analysis/import_sigs.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/structure/region.hpp>
 #include <ember/structure/structurer.hpp>
 
 #include <cstdio>
+#include <array>
 #include <format>
 #include <string>
 #include <vector>
@@ -32,6 +34,48 @@ public:
         symbol.size = 0x24;
         symbol.kind = ember::SymbolKind::Function;
         symbols_.push_back(std::move(symbol));
+
+        // mixed_callee consumes f1, r3, f2, r4 in that first-use order.
+        put(0x100, 0xd02b0000);  // stfs f1,0(r11)
+        put(0x104, 0x906b0000);  // stw  r3,0(r11)
+        put(0x108, 0xd04b0004);  // stfs f2,4(r11)
+        put(0x10c, 0x908b0008);  // stw  r4,8(r11)
+        put(0x110, 0x4e800020);  // blr
+        ember::Symbol mixed;
+        mixed.name = "mixed_callee";
+        mixed.addr = 0x1100;
+        mixed.size = 0x14;
+        mixed.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(mixed));
+
+        ember::Symbol mag;
+        mag.name = "PSVecMag";
+        mag.addr = 0x1800;
+        mag.size = 0x44;
+        mag.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(mag));
+
+        ember::Symbol subtract;
+        subtract.name = "PSVECSubtract";
+        subtract.addr = 0x1900;
+        subtract.size = 0x24;
+        subtract.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(subtract));
+
+        ember::Symbol scale;
+        scale.name = "PSVECScale";
+        scale.addr = 0x1a00;
+        scale.size = 0x1c;
+        scale.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(scale));
+
+        section_.name = ".text";
+        section_.vaddr = 0x1000;
+        section_.size = text_.size();
+        section_.flags.readable = true;
+        section_.flags.executable = true;
+        section_.flags.allocated = true;
+        section_.data = text_;
     }
     [[nodiscard]] ember::Format format() const noexcept override {
         return ember::Format::Dol;
@@ -44,7 +88,7 @@ public:
     }
     [[nodiscard]] ember::addr_t entry_point() const noexcept override { return 0x1000; }
     [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
-        return {};
+        return std::span<const ember::Section>(&section_, 1);
     }
     [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
         return symbols_;
@@ -57,6 +101,15 @@ protected:
     }
 
 private:
+    void put(std::size_t off, ember::u32 word) {
+        text_[off + 0] = static_cast<std::byte>(word >> 24);
+        text_[off + 1] = static_cast<std::byte>(word >> 16);
+        text_[off + 2] = static_cast<std::byte>(word >> 8);
+        text_[off + 3] = static_cast<std::byte>(word);
+    }
+
+    std::array<std::byte, 0x120> text_{};
+    ember::Section section_{};
     std::vector<ember::Symbol> symbols_;
 };
 
@@ -79,6 +132,13 @@ ember::IrInst make_call_imm(ember::addr_t pc, ember::addr_t target) {
     ci.op          = ember::IrOp::Call;
     ci.source_addr = pc;
     ci.target1     = target;
+    return ci;
+}
+
+ember::IrInst make_clobber(ember::IrValue dst) {
+    ember::IrInst ci;
+    ci.op = ember::IrOp::Clobber;
+    ci.dst = dst;
     return ci;
 }
 
@@ -125,6 +185,15 @@ ember::IrInst make_load(ember::IrValue dst, ember::IrValue addr) {
     li.srcs[0]   = addr;
     li.src_count = 1;
     return li;
+}
+
+ember::IrInst make_store(ember::IrValue addr, ember::IrValue value) {
+    ember::IrInst si;
+    si.op        = ember::IrOp::Store;
+    si.srcs[0]   = addr;
+    si.srcs[1]   = value;
+    si.src_count = 2;
+    return si;
 }
 
 ember::IrInst make_assign(ember::IrValue dst, ember::IrValue src) {
@@ -680,6 +749,347 @@ int test_ppc_void_return_merge_becomes_entry_guard() {
     return 0;
 }
 
+int test_ppc_small_incidental_return_merge_is_void() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1200;
+    IrValue r3_1 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    r3_1.version = 1;
+    IrValue r3_phi = r3_1;
+    r3_phi.version = 3;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x10;
+    fn.name = "ppc_small_void_merge";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = kStart + 0x10;
+    bb.kind = BlockKind::Return;
+    IrInst clobber;
+    clobber.op = IrOp::Clobber;
+    clobber.dst = r3_1;
+    bb.insts.push_back(clobber);
+    bb.insts.push_back(make_store(IrValue::make_imm(0x3000, IrType::I32),
+                                  IrValue::make_imm(4, IrType::I32)));
+    IrInst phi = make_phi(r3_phi, {r3_1, IrValue::make_imm(4, IrType::I32)});
+    phi.phi_preds = {kStart, kStart};
+    bb.insts.push_back(std::move(phi));
+    bb.insts.push_back(make_ret_value(kStart + 0xc, r3_phi));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    tail->condition = r3_phi;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(root);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "small incidental PPC return merge emits");
+    if (!pc) return 1;
+    check(pc->find("void sub_1200(void)") != std::string::npos,
+          "small PPC clobber/side-effect merge is inferred as void");
+    check(pc->find("return result") == std::string::npos &&
+          pc->find("return 4") == std::string::npos,
+          "incidental small PPC return value is suppressed");
+    return 0;
+}
+
+int test_ppc_memory_base_live_in_is_pointer() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1300;
+    IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    IrValue r31 = IrValue::make_reg(Reg::PpcR31, IrType::I32);
+    r31.version = 1;
+    IrValue addr = IrValue::make_temp(0, IrType::I32);
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x10;
+    fn.name = "ppc_pointer_arg";
+    fn.next_temp_id = 1;
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = kStart + 0x10;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_assign(r31, r3));
+    bb.insts.push_back(make_add(addr, r31, IrValue::make_imm(0x28, IrType::I32)));
+    bb.insts.push_back(make_store(addr, IrValue::make_imm(7, IrType::I32)));
+    bb.insts.push_back(make_ret(kStart + 0xc));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(root);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "PPC pointer-shaped parameter emits");
+    if (!pc) return 1;
+    check(pc->find("void sub_1300(void* a1)") != std::string::npos,
+          "PPC live-in copied to a memory base is typed as void pointer");
+    return 0;
+}
+
+int test_ppc_mixed_call_arguments_follow_callee_layout() {
+    using namespace ember;
+
+    IrFunction fn;
+    fn.start = 0x1000;
+    fn.end = 0x1010;
+    fn.name = "mixed_caller";
+
+    IrBlock bb;
+    bb.start = 0x1000;
+    bb.end = 0x1010;
+    bb.kind = BlockKind::Return;
+
+    IrInst int_args;
+    int_args.op = IrOp::Intrinsic;
+    int_args.name = "call.args.1";
+    int_args.srcs[0] = IrValue::make_imm(11, IrType::I32);
+    int_args.srcs[1] = IrValue::make_imm(22, IrType::I32);
+    int_args.src_count = 2;
+    bb.insts.push_back(int_args);
+
+    IrInst fp_args;
+    fp_args.op = IrOp::Intrinsic;
+    fp_args.name = "call.fp_args.1";
+    fp_args.srcs[0] = IrValue::make_imm(
+        static_cast<i64>(0x3ff0000000000000ULL), IrType::F64);  // 1.0
+    fp_args.srcs[1] = IrValue::make_imm(
+        static_cast<i64>(0x4000000000000000ULL), IrType::F64);  // 2.0
+    fp_args.src_count = 2;
+    bb.insts.push_back(fp_args);
+    bb.insts.push_back(make_call_imm(0x1008, 0x1100));
+    IrInst ret;
+    ret.op = IrOp::Return;
+    bb.insts.push_back(ret);
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = 0x1000;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(root);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "mixed PPC call pseudo-C emits");
+    if (!pc) return 1;
+    const bool ordered =
+        pc->find("mixed_callee(1, 0xb, 2, 0x16)") != std::string::npos;
+    if (!ordered) std::fprintf(stderr, "mixed PPC output:\n%s\n", pc->c_str());
+    check(ordered, "mixed PPC call follows f1,r3,f2,r4 callee order");
+    return 0;
+}
+
+int test_ppc_known_float_call_binds_f1_result() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1400;
+    IrValue f1 = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    f1.version = 1;
+    IrValue f31 = IrValue::make_reg(Reg::PpcF31, IrType::F64);
+    f31.version = 1;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "ppc_float_call";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = kStart + 0x14;
+    bb.kind = BlockKind::Return;
+
+    IrInst args;
+    args.op = IrOp::Intrinsic;
+    args.name = "call.args.1";
+    args.srcs[0] = IrValue::make_imm(0x3000, IrType::I32);
+    args.src_count = 1;
+    bb.insts.push_back(args);
+    bb.insts.push_back(make_call_imm(kStart + 4, 0x1800));
+    bb.insts.push_back(make_clobber(f1));
+    bb.insts.push_back(make_assign(f31, f1));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x4000, IrType::I32), f31));
+    bb.insts.push_back(make_ret(kStart + 0x10));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(root);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "known PPC float-return call emits");
+    if (!pc) return 1;
+    const bool binds_float =
+        pc->find("float r_PSVecMag = PSVecMag(") != std::string::npos;
+    if (!binds_float) std::fprintf(stderr, "PPC float call output:\n%s\n", pc->c_str());
+    check(binds_float, "known PSVecMag result is bound from f1 as float");
+    check(pc->find("f1_1") == std::string::npos &&
+          pc->find("f31_1") == std::string::npos,
+          "known float call does not leak raw FPR SSA names");
+    return 0;
+}
+
+int test_ppc_annotated_float_call_selects_f1() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1500;
+    constexpr addr_t kTarget = 0x1600;
+    IrValue f1 = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    f1.version = 1;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x10;
+    fn.name = "ppc_annotated_float_call";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = kStart + 0x10;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_call_imm(kStart, kTarget));
+    bb.insts.push_back(make_clobber(f1));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x5000, IrType::I32), f1));
+    bb.insts.push_back(make_ret(kStart + 0xc));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+
+    StructuredFunction sf;
+    sf.ir = &fn;
+    sf.body = std::move(root);
+
+    Annotations ann;
+    FunctionSig sig;
+    sig.return_type = "float";
+    ann.signatures[kTarget] = std::move(sig);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &ann, EmitOptions{});
+    check(pc.has_value(), "annotated PPC float-return call emits");
+    if (!pc) return 1;
+    check(pc->find("float r_sub_1600 = sub_1600()") != std::string::npos,
+          "annotated float signature selects and types the f1 result lane");
+    check(pc->find("f1_1") == std::string::npos,
+          "annotated float call does not leak the f1 SSA name");
+    return 0;
+}
+
+int test_ppc_sdk_signature_seeds_mixed_lanes() {
+    using namespace ember;
+
+    IrFunction fn;
+    fn.start = 0x1700;
+    fn.end = 0x1720;
+    fn.name = "ppc_sdk_seed";
+
+    IrBlock bb;
+    bb.start = fn.start;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+
+    IrInst int_args;
+    int_args.op = IrOp::Intrinsic;
+    int_args.name = "call.args.1";
+    int_args.srcs[0] = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    int_args.srcs[1] = IrValue::make_reg(Reg::PpcR4, IrType::I32);
+    int_args.srcs[2] = IrValue::make_reg(Reg::PpcR5, IrType::I32);
+    int_args.src_count = 3;
+    bb.insts.push_back(int_args);
+
+    IrInst fp_args;
+    fp_args.op = IrOp::Intrinsic;
+    fp_args.name = "call.fp_args.1";
+    fp_args.srcs[0] = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    fp_args.src_count = 1;
+    bb.insts.push_back(fp_args);
+    bb.insts.push_back(make_call_imm(0x1708, 0x1a00));
+    bb.insts.push_back(make_ret(0x170c));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    MockPpcBinary binary;
+    seed_call_return_types(binary, fn);
+
+    const auto type_of = [&](Reg reg, IrType type) {
+        IrValue value = IrValue::make_reg(reg, type);
+        value.version = 0;
+        return fn.type_of(value);
+    };
+    check(fn.types.kind(type_of(Reg::PpcR3, IrType::I32)) == TypeKind::Ptr,
+          "PSVECScale first pointer seeds r3");
+    check(fn.types.kind(type_of(Reg::PpcR4, IrType::I32)) == TypeKind::Ptr,
+          "PSVECScale second pointer seeds r4");
+    check(fn.types.kind(type_of(Reg::PpcF1, IrType::F64)) == TypeKind::Float,
+          "PSVECScale scalar seeds f1");
+    check(type_of(Reg::PpcR5, IrType::I32).is_top(),
+          "PSVECScale floating scalar does not incorrectly seed r5");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -692,5 +1102,11 @@ int main() {
     rc |= test_phi_accumulator_name_is_mined();
     rc |= test_phi_index_name_is_mined();
     rc |= test_ppc_void_return_merge_becomes_entry_guard();
+    rc |= test_ppc_small_incidental_return_merge_is_void();
+    rc |= test_ppc_memory_base_live_in_is_pointer();
+    rc |= test_ppc_mixed_call_arguments_follow_callee_layout();
+    rc |= test_ppc_known_float_call_binds_f1_result();
+    rc |= test_ppc_annotated_float_call_selects_f1();
+    rc |= test_ppc_sdk_signature_seeds_mixed_lanes();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

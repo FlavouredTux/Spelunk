@@ -53,6 +53,22 @@ constexpr Reg kAapcs64FpArgRegs[8] = {
     Reg::V0, Reg::V1, Reg::V2, Reg::V3,
     Reg::V4, Reg::V5, Reg::V6, Reg::V7,
 };
+constexpr Reg kPpc32FpArgRegs[8] = {
+    Reg::PpcF1, Reg::PpcF2, Reg::PpcF3, Reg::PpcF4,
+    Reg::PpcF5, Reg::PpcF6, Reg::PpcF7, Reg::PpcF8,
+};
+constexpr Reg kPpc64FpArgRegs[13] = {
+    Reg::PpcF1, Reg::PpcF2,  Reg::PpcF3,  Reg::PpcF4,
+    Reg::PpcF5, Reg::PpcF6,  Reg::PpcF7,  Reg::PpcF8,
+    Reg::PpcF9, Reg::PpcF10, Reg::PpcF11, Reg::PpcF12,
+    Reg::PpcF13,
+};
+constexpr Reg kPpcCallerSavedFp[14] = {
+    Reg::PpcF0, Reg::PpcF1, Reg::PpcF2,  Reg::PpcF3,
+    Reg::PpcF4, Reg::PpcF5, Reg::PpcF6,  Reg::PpcF7,
+    Reg::PpcF8, Reg::PpcF9, Reg::PpcF10, Reg::PpcF11,
+    Reg::PpcF12, Reg::PpcF13,
+};
 // AAPCS (arm-eabi): r0..r3 carry the first four integer/pointer args and
 // r0 (r0:r1 for 64-bit) the integer return. r0..r3 and r12 (IP) are
 // caller-saved along with r14 (LR); r4..r11 are callee-saved.
@@ -106,13 +122,23 @@ std::span<const Reg> fp_arg_regs(Abi a) noexcept {
     switch (a) {
         case Abi::Aapcs64:      return kAapcs64FpArgRegs;
         case Abi::AapcsArm32:   // VFP arg passing not modelled.
-        case Abi::Ppc32Sysv:
+                                return {};
+        case Abi::Ppc32Sysv:    return kPpc32FpArgRegs;
         case Abi::Ppc64ElfV2Le:
-        case Abi::Ppc64ElfV1Be: return {};
+        case Abi::Ppc64ElfV1Be: return kPpc64FpArgRegs;
         case Abi::Win64:        return kWin64FpArgRegs;
         case Abi::SysVAmd64:
         case Abi::Unknown:
         default:                return kX86FpArgRegs;
+    }
+}
+
+std::span<const Reg> caller_saved_fp_regs(Abi a) noexcept {
+    switch (a) {
+        case Abi::Ppc32Sysv:
+        case Abi::Ppc64ElfV2Le:
+        case Abi::Ppc64ElfV1Be: return kPpcCallerSavedFp;
+        default:                return {};
     }
 }
 
@@ -145,6 +171,7 @@ Reg fp_return_reg(Abi a) noexcept {
         case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be:
+            return Reg::PpcF1;
         default:
             return Reg::None;
     }

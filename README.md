@@ -88,6 +88,15 @@ section-relative relocation targets are resolved automatically, so cross-REL
 calls and globals use names from the peer symbol maps instead of raw
 `rel<ID>_s<section>_<offset>` coordinates.
 
+PowerPC pseudo-C recovery models the integer and floating-point argument
+registers as independent ABI lanes. Mixed calls are interleaved from callee-use
+evidence or an explicit signature instead of treating every argument as a GPR.
+Known scalar floating-point returns are recovered from `f1`, including common
+Wii SDK `PSVEC*` routines; unknown calls stay conservative rather than treating
+every post-call FPR clobber as a result.
+See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
+rules, annotation workflow, and binary-only limits.
+
 ---
 
 ## Features
@@ -174,7 +183,9 @@ Known limits:
   DOL, Wii REL, and relocatable PPC32 ELF function discovery, core PPC32
   relocations, and code-pointer xrefs. DTK project mode resolves configured
   REL-to-REL and `main.dol` references; a standalone REL keeps unavailable
-  peer-module references explicit.
+  peer-module references explicit. Scalar mixed GPR/FPR arguments are recovered,
+  but aggregate classification and stack-passed PPC arguments are not yet
+  reconstructed. See [docs/powerpc.md](docs/powerpc.md).
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`, `std::vector<T, std::allocator<T>>` → `std::vector<T>`) is balanced-template aware while preserving custom allocators.
 

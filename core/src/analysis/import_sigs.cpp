@@ -23,6 +23,7 @@ inline TypeRef t_int32u (TypeArena& a) { return t_int(a, 32, false); }
 inline TypeRef t_int64s (TypeArena& a) { return t_int(a, 64, true);  }
 inline TypeRef t_size   (TypeArena& a) { return t_int(a, 64, false); }   // size_t (LP64)
 inline TypeRef t_ssize  (TypeArena& a) { return t_int(a, 64, true);  }   // ssize_t (LP64)
+inline TypeRef t_float32(TypeArena& a) { return a.float_t(32); }
 
 inline TypeRef t_charp (TypeArena& a) { return a.ptr_t(a.int_t(8)); }
 inline TypeRef t_voidp (TypeArena& a) { return a.ptr_t(a.top());    }
@@ -198,6 +199,27 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "ispunct") return m(t_int32s(a), {t_int32s(a)});
     if (name == "isxdigit")return m(t_int32s(a), {t_int32s(a)});
 
+    // ---- Nintendo Revolution SDK <revolution/mtx.h> ----------------------
+    // Keep vector structures opaque at this layer. Their pointer shape and
+    // scalar FP lanes are the ABI details needed by call recovery; named
+    // Vec3 fields can be supplied later by debug info or user annotations.
+    if (name == "PSVECAdd")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+    if (name == "PSVECSubtract")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+    if (name == "PSVECScale")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_float32(a)});
+    if (name == "PSVECNormalize")
+        return m(t_void(a), {t_voidp(a), t_voidp(a)});
+    if (name == "PSVecSquareMag" || name == "PSVecMag")
+        return m(t_float32(a), {t_voidp(a)});
+    if (name == "PSVECDotProduct" || name == "PSVECSquareDistance" ||
+        name == "PSVECDistance") {
+        return m(t_float32(a), {t_voidp(a), t_voidp(a)});
+    }
+    if (name == "PSVECCrossProduct")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+
     // Suppress unused-parameter warning in build configs where the SV
     // alias above is the only mention of <string_view>.
     (void)SV{};
@@ -225,8 +247,8 @@ namespace {
 
 namespace {
 
-// Index every SSA def in the function once, used by trace_to_arg_slot
-// to follow Assign/Phi chains back to a version-0 int-arg register.
+// Index every SSA def in the function once, used by trace_to_arg_reg
+// to follow Assign/Phi chains back to a version-0 ABI argument register.
 [[nodiscard]] std::map<u64, const IrInst*> index_defs(const IrFunction& fn) {
     std::map<u64, const IrInst*> out;
     for (const auto& bb : fn.blocks) {
@@ -238,7 +260,7 @@ namespace {
     return out;
 }
 
-// Trace `v` through Assign/Phi chains to a version-0 int-arg register.
+// Trace `v` through Assign/Phi chains to a version-0 argument register.
 // Returns the canonical Reg of that arg slot, or None if the value
 // doesn't unambiguously originate from one.
 [[nodiscard]] Reg trace_to_arg_reg(
@@ -295,53 +317,96 @@ void seed_call_return_types(const Binary& b, IrFunction& fn) {
     for (auto& bb : fn.blocks) {
         // Buffer the call.args.* packing intrinsics so we know which
         // IrValues feed the following Call (mirrors the IPA scan).
-        std::vector<IrValue> args;
-        args.reserve(6);
+        std::vector<IrValue> int_args;
+        std::vector<IrValue> fp_args;
+        int_args.reserve(kMaxAbiIntArgs);
+        fp_args.reserve(kMaxAbiFpArgs);
         for (std::size_t i = 0; i < bb.insts.size(); ++i) {
             const auto& inst = bb.insts[i];
             if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
-                args.clear();
+                int_args.clear();
                 for (u8 k = 0; k < inst.src_count && k < inst.srcs.size(); ++k)
-                    args.push_back(inst.srcs[k]);
+                    int_args.push_back(inst.srcs[k]);
                 continue;
             }
             if (inst.op == IrOp::Intrinsic &&
                 (inst.name == "call.args.2" || inst.name == "call.args.3")) {
                 for (u8 k = 0; k < inst.src_count && k < inst.srcs.size(); ++k)
-                    args.push_back(inst.srcs[k]);
+                    int_args.push_back(inst.srcs[k]);
+                continue;
+            }
+            if (inst.op == IrOp::Intrinsic && inst.name == "call.fp_args.1") {
+                fp_args.clear();
+                for (u8 k = 0; k < inst.src_count && k < inst.srcs.size(); ++k)
+                    fp_args.push_back(inst.srcs[k]);
+                continue;
+            }
+            if (inst.op == IrOp::Intrinsic &&
+                (inst.name == "call.fp_args.2" || inst.name == "call.fp_args.3" ||
+                 inst.name == "call.fp_args.4" || inst.name == "call.fp_args.5")) {
+                for (u8 k = 0; k < inst.src_count && k < inst.srcs.size(); ++k)
+                    fp_args.push_back(inst.srcs[k]);
                 continue;
             }
             if (inst.op != IrOp::Call) continue;
 
             const Symbol* s = b.import_at_plt(inst.target1);
-            if (!s) { args.clear(); continue; }
+            if (!s) {
+                const Symbol* defined = b.defined_object_at(inst.target1);
+                if (defined && defined->kind == SymbolKind::Function &&
+                    defined->addr == inst.target1) {
+                    s = defined;
+                }
+            }
+            if (!s) { int_args.clear(); fp_args.clear(); continue; }
             auto spec = lookup_import_sig(clean_import_name_local(s->name), fn.types);
-            if (!spec) { args.clear(); continue; }
+            if (!spec) { int_args.clear(); fp_args.clear(); continue; }
 
-            // Return type → post-call Rax via the immediate Clobber.
-            if (!spec->ret.is_top()) {
+            const Abi abi = abi_for(b.format(), b.arch(), b.endian());
+
+            // Return type → the matching post-call ABI lane via its
+            // immediate Clobber. Known scalar FP functions on PPC use f1;
+            // integer and pointer returns continue to use r3.
+            const TypeKind ret_kind = fn.types.kind(spec->ret);
+            const Reg ret_reg = ret_kind == TypeKind::Float
+                ? fp_return_reg(abi)
+                : int_return_reg(abi);
+            if (!spec->ret.is_top() && ret_kind != TypeKind::Void &&
+                ret_reg != Reg::None) {
                 for (std::size_t j = i + 1; j < bb.insts.size(); ++j) {
                     const auto& cl = bb.insts[j];
                     if (cl.op != IrOp::Clobber) break;
                     if (cl.dst.kind != IrValueKind::Reg) continue;
-                    if (canonical_reg(cl.dst.reg) != Reg::Rax) continue;
+                    if (canonical_reg(cl.dst.reg) != canonical_reg(ret_reg)) continue;
                     refine(cl.dst, spec->ret);
                     break;
                 }
             }
 
-            // Param types → version-0 reads of caller's arg regs that
-            // these args trace back to.
-            for (std::size_t k = 0; k < args.size() && k < spec->params.size(); ++k) {
-                if (spec->params[k].is_top()) continue;
-                Reg r = trace_to_arg_reg(defs, args[k]);
+            // Param types → version-0 reads of caller arg registers. Integer
+            // and FP banks advance independently on SysV/PPC and positionally
+            // on Win64, matching the emitter's signature layout.
+            std::size_t int_idx = 0;
+            std::size_t fp_idx = 0;
+            const bool positional = abi_positional_arg_slots(abi);
+            for (std::size_t k = 0; k < spec->params.size(); ++k) {
+                const TypeRef param = spec->params[k];
+                if (param.is_top()) continue;
+                const bool is_fp = fn.types.kind(param) == TypeKind::Float;
+                const std::size_t idx = positional ? k : (is_fp ? fp_idx : int_idx);
+                const auto& bank = is_fp ? fp_args : int_args;
+                if (is_fp) ++fp_idx;
+                else       ++int_idx;
+                if (idx >= bank.size()) continue;
+                Reg r = trace_to_arg_reg(defs, bank[idx]);
                 if (r == Reg::None) continue;
-                IrValue probe = IrValue::make_reg(r, IrType::I64);
+                IrValue probe = IrValue::make_reg(r, bank[idx].type);
                 probe.version = 0;
-                refine(probe, spec->params[k]);
+                refine(probe, param);
             }
 
-            args.clear();
+            int_args.clear();
+            fp_args.clear();
         }
     }
 }

@@ -1,6 +1,7 @@
 #include <ember/ir/ppc_lifter.hpp>
 
 #include <array>
+#include <format>
 #include <string_view>
 #include <utility>
 
@@ -295,22 +296,28 @@ void emit_call_clobbers(LiftCtx& ctx) {
         c.dst = ctx.reg(r);
         ctx.emit(std::move(c));
     }
+    for (Reg r : caller_saved_fp_regs(ctx.abi)) {
+        IrInst c;
+        c.op  = IrOp::Clobber;
+        c.dst = IrValue::make_reg(r, IrType::F64);
+        ctx.emit(std::move(c));
+    }
 }
 
 void emit_arg_barriers(LiftCtx& ctx) {
-    const auto args = int_arg_regs(ctx.abi);
-    auto fill = [&](std::string_view name, std::size_t lo) {
-        IrInst in;
-        in.op   = IrOp::Intrinsic;
-        in.name = std::string(name);
-        for (std::size_t i = 0; i < 3 && lo + i < args.size(); ++i) {
-            in.srcs[in.src_count++] = ctx.reg(args[lo + i]);
+    auto emit_bank = [&](std::span<const Reg> args, std::string_view prefix) {
+        for (std::size_t lo = 0, group = 1; lo < args.size(); lo += 3, ++group) {
+            IrInst in;
+            in.op   = IrOp::Intrinsic;
+            in.name = std::format("{}.{}", prefix, group);
+            for (std::size_t i = 0; i < 3 && lo + i < args.size(); ++i) {
+                in.srcs[in.src_count++] = ctx.reg(args[lo + i]);
+            }
+            ctx.emit(std::move(in));
         }
-        if (in.src_count > 0) ctx.emit(std::move(in));
     };
-    fill("call.args.1", 0);
-    fill("call.args.2", 3);
-    fill("call.args.3", 6);
+    emit_bank(int_arg_regs(ctx.abi), "call.args");
+    emit_bank(fp_arg_regs(ctx.abi), "call.fp_args");
 }
 
 void lift_call(LiftCtx& ctx) {

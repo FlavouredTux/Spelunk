@@ -27,6 +27,33 @@ public:
         put(0x40, 0x3860002a);
         put(0x44, 0x4e800020);
 
+        // mixed_args: the first-use order deliberately alternates the two
+        // independent PPC argument banks: f1, r3, f2, r4.
+        put(0x60, 0xd02b0000);  // stfs f1,0(r11)
+        put(0x64, 0x906b0000);  // stw  r3,0(r11)
+        put(0x68, 0xd04b0004);  // stfs f2,4(r11)
+        put(0x6c, 0x908b0008);  // stw  r4,8(r11)
+        put(0x70, 0x4e800020);  // blr
+
+        // call_then_f1: f1 after an ordinary call is a clobbered return lane,
+        // not a live-in floating argument.
+        put(0x80, 0x4bffffc1);  // bl no_args
+        put(0x84, 0xd02b0000);  // stfs f1,0(r11)
+        put(0x88, 0x4e800020);  // blr
+
+        // pointer_callee: r3 is used as a memory base.
+        put(0xa0, 0x80630000);  // lwz r3,0(r3)
+        put(0xa4, 0x4e800020);  // blr
+
+        // forwarded_pointer: source argument r4 becomes callee argument r3.
+        put(0xc0, 0x7c832378);  // mr r3,r4
+        put(0xc4, 0x4bffffdd);  // bl pointer_callee
+        put(0xc8, 0x4e800020);  // blr
+
+        // paired_pointer: Wii paired-single load uses r3 as its address.
+        put(0xe0, 0xe3e30000);  // psq_l f31,0(r3),0,0
+        put(0xe4, 0x4e800020);  // blr
+
         // Compiler helper target used by the first call above.
         put(0x100, 0x4e800020);
 
@@ -41,6 +68,11 @@ public:
         add_symbol("one_arg", kBase + 0x00, 0x10);
         add_symbol("two_args_after_save", kBase + 0x20, 0x0c);
         add_symbol("no_args", kBase + 0x40, 0x08);
+        add_symbol("mixed_args", kBase + 0x60, 0x14);
+        add_symbol("call_then_f1", kBase + 0x80, 0x0c);
+        add_symbol("pointer_callee", kBase + 0xa0, 0x08);
+        add_symbol("forwarded_pointer", kBase + 0xc0, 0x0c);
+        add_symbol("paired_pointer", kBase + 0xe0, 0x08);
         add_symbol("_savegpr_27", kBase + 0x100, 0x04);
     }
 
@@ -105,6 +137,20 @@ void check_eq(ember::u8 got, ember::u8 expected, const char* message) {
     ++failures;
 }
 
+void check_reg(const std::vector<ember::InferredArgument>& args,
+               std::size_t index, ember::Reg expected, const char* message) {
+    if (index < args.size() && args[index].reg == expected) return;
+    std::fprintf(stderr, "FAIL: %s\n", message);
+    ++failures;
+}
+
+void check_pointer(const std::vector<ember::InferredArgument>& args,
+                   std::size_t index, const char* message) {
+    if (index < args.size() && args[index].pointer_like) return;
+    std::fprintf(stderr, "FAIL: %s\n", message);
+    ++failures;
+}
+
 }  // namespace
 
 int main() {
@@ -115,5 +161,28 @@ int main() {
              "Metrowerks save helper preserves incoming r3/r4 parameters");
     check_eq(ember::infer_arity(binary, 0x80001040), 0,
              "implicit PPC return-register read is not a parameter");
+    const auto mixed = ember::infer_arguments(binary, 0x80001060);
+    check_eq(static_cast<ember::u8>(mixed.size()), 4,
+             "mixed PPC signature counts both register banks");
+    check_reg(mixed, 0, ember::Reg::PpcF1, "mixed arg 1 is f1");
+    check_reg(mixed, 1, ember::Reg::PpcR3, "mixed arg 2 is r3");
+    check_reg(mixed, 2, ember::Reg::PpcF2, "mixed arg 3 is f2");
+    check_reg(mixed, 3, ember::Reg::PpcR4, "mixed arg 4 is r4");
+    check_eq(ember::infer_arity(binary, 0x80001080), 0,
+             "post-call f1 clobber is not a live-in argument");
+    const auto pointer = ember::infer_arguments(binary, 0x800010a0);
+    check_eq(static_cast<ember::u8>(pointer.size()), 1,
+             "PPC memory-base parameter is recovered");
+    check_pointer(pointer, 0, "direct PPC memory-base parameter is pointer-like");
+    const auto forwarded = ember::infer_arguments(binary, 0x800010c0);
+    check_eq(static_cast<ember::u8>(forwarded.size()), 2,
+             "forwarded PPC second parameter preserves the ABI prefix");
+    check_pointer(forwarded, 1,
+                  "pointer evidence follows a PPC parameter through one direct call");
+    const auto paired = ember::infer_arguments(binary, 0x800010e0);
+    check_eq(static_cast<ember::u8>(paired.size()), 1,
+             "paired-single PPC address parameter is recovered");
+    check_pointer(paired, 0,
+                  "paired-single PPC memory address is pointer-like");
     return failures == 0 ? 0 : 1;
 }

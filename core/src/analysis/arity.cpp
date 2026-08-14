@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <limits>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,8 +23,10 @@ namespace ember {
 
 namespace {
 
-[[nodiscard]] u8 infer_ppc_arity_from_ir(const Binary& b, addr_t target,
-                                         Abi abi) noexcept {
+[[nodiscard]] std::vector<InferredArgument>
+infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
+                                 const Binary& b, addr_t target, Abi abi,
+                                 unsigned depth) noexcept {
     // PPC call instructions do not encode arity, and the old x86-only
     // fallback consequently reported every Wii callee as taking zero
     // arguments.  Reuse the lifted SSA here: a version-zero ABI argument
@@ -33,17 +37,31 @@ namespace {
     // same conservative register set at joins, and Return reads r3/f1 even
     // for a source-level void function.  Counting any of those would turn
     // nearly every PPC function into an eight-argument value-returning one.
-    IrCache cache;
+    if (!visiting.insert(target).second) return {};
     IrFunction* fn = lift_cached(cache, b, target);
-    if (!fn) return 0;
+    if (!fn) {
+        visiting.erase(target);
+        return {};
+    }
 
-    const auto args = int_arg_regs(abi);
-    std::array<bool, kMaxAbiIntArgs> live_in{};
+    const auto int_args = int_arg_regs(abi);
+    const auto fp_args = fp_arg_regs(abi);
+    struct Evidence {
+        bool live = false;
+        bool pointer_like = false;
+        std::size_t first_use = std::numeric_limits<std::size_t>::max();
+    };
+    std::array<Evidence, kMaxAbiIntArgs> int_evidence{};
+    std::array<Evidence, kMaxAbiFpArgs> fp_evidence{};
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
+    std::map<SsaKey, const IrInst*> defs;
     for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
         const auto& bb = fn->blocks[bi];
         for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-            if (auto k = ssa_key(bb.insts[ii].dst); k) def_pos[*k] = {bi, ii};
+            if (auto k = ssa_key(bb.insts[ii].dst); k) {
+                def_pos[*k] = {bi, ii};
+                defs[*k] = &bb.insts[ii];
+            }
         }
     }
     auto is_save_helper_clobber = [&](const IrValue& v) {
@@ -68,34 +86,206 @@ namespace {
         return false;
     };
 
+    auto candidate_for = [&](Reg r) -> std::optional<std::pair<bool, std::size_t>> {
+        const Reg canon = canonical_reg(r);
+        for (std::size_t i = 0; i < int_args.size(); ++i) {
+            if (int_args[i] == canon) return std::pair{false, i};
+        }
+        for (std::size_t i = 0; i < fp_args.size(); ++i) {
+            if (fp_args[i] == canon) return std::pair{true, i};
+        }
+        return std::nullopt;
+    };
+    auto trace_candidate = [&](auto&& self, const IrValue& value,
+                               int alias_depth) -> std::optional<std::pair<bool, std::size_t>> {
+        if (alias_depth > 10 || value.kind != IrValueKind::Reg) return std::nullopt;
+        if (value.version == 0 || is_save_helper_clobber(value)) {
+            return candidate_for(value.reg);
+        }
+        auto key = ssa_key(value);
+        if (!key) return std::nullopt;
+        auto it = defs.find(*key);
+        if (it == defs.end()) return std::nullopt;
+        const IrInst* def = it->second;
+        if (def->op == IrOp::Assign && def->src_count == 1) {
+            return self(self, def->srcs[0], alias_depth + 1);
+        }
+        return std::nullopt;
+    };
+
+    auto mark_evidence = [&](const IrValue& src, std::size_t order,
+                             bool pointer_like = false) {
+        auto candidate = trace_candidate(trace_candidate, src, 0);
+        if (!candidate) return;
+        const auto [is_fp, index] = *candidate;
+        Evidence& evidence = is_fp ? fp_evidence[index]
+                                   : int_evidence[index];
+        evidence.live = true;
+        evidence.pointer_like |= pointer_like;
+        evidence.first_use = std::min(evidence.first_use, order);
+    };
+
+    const auto mark_pointer_evidence = [&](auto&& self, const IrValue& value,
+                                           std::size_t use_order,
+                                           int pointer_depth) -> void {
+        if (pointer_depth > 8) return;
+        if (trace_candidate(trace_candidate, value, 0)) {
+            mark_evidence(value, use_order, true);
+            return;
+        }
+        auto key = ssa_key(value);
+        if (!key) return;
+        auto it = defs.find(*key);
+        if (it == defs.end()) return;
+        const IrInst* def = it->second;
+        if (def->op == IrOp::Assign && def->src_count == 1) {
+            self(self, def->srcs[0], use_order, pointer_depth + 1);
+            return;
+        }
+        if ((def->op == IrOp::Add || def->op == IrOp::Sub) &&
+            def->src_count == 2) {
+            // Base plus a constant displacement is unambiguous pointer
+            // arithmetic. Avoid guessing when both operands are dynamic;
+            // either one could be an integer index.
+            if (def->srcs[1].kind == IrValueKind::Imm) {
+                self(self, def->srcs[0], use_order, pointer_depth + 1);
+            } else if (def->op == IrOp::Add &&
+                       def->srcs[0].kind == IrValueKind::Imm) {
+                self(self, def->srcs[1], use_order, pointer_depth + 1);
+            }
+        }
+    };
+
+    std::size_t order = 0;
     for (const auto& bb : fn->blocks) {
+        std::vector<IrValue> pending_int;
+        std::vector<IrValue> pending_fp;
         for (const auto& inst : bb.insts) {
+            ++order;
+            if (inst.op == IrOp::Intrinsic &&
+                inst.name.starts_with("call.args.")) {
+                if (inst.name == "call.args.1") pending_int.clear();
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    pending_int.push_back(inst.srcs[i]);
+                }
+                continue;
+            }
+            if (inst.op == IrOp::Intrinsic &&
+                inst.name.starts_with("call.fp_args.")) {
+                if (inst.name == "call.fp_args.1") pending_fp.clear();
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    pending_fp.push_back(inst.srcs[i]);
+                }
+                continue;
+            }
+            if (inst.op == IrOp::Call) {
+                // One callee level is enough to recognize a parameter that
+                // this function only forwards. Going recursively through an
+                // entire call graph makes per-function pseudo-C needlessly
+                // expensive and does not resolve the fundamental ambiguity
+                // of unused parameters.
+                if (depth < 1) {
+                    const auto callee_layout = infer_ppc_arguments_from_ir_impl(
+                        cache, visiting, b, inst.target1, abi, depth + 1);
+                    for (const auto& arg : callee_layout) {
+                        const auto regs = is_ppc_fpr(arg.reg) ? fp_args : int_args;
+                        const auto& values = is_ppc_fpr(arg.reg) ? pending_fp
+                                                                 : pending_int;
+                        for (std::size_t i = 0; i < regs.size() && i < values.size(); ++i) {
+                            if (canonical_reg(regs[i]) == canonical_reg(arg.reg)) {
+                                mark_evidence(values[i], order, arg.pointer_like);
+                                break;
+                            }
+                        }
+                    }
+                }
+                pending_int.clear();
+                pending_fp.clear();
+                continue;
+            }
+            if (inst.op == IrOp::CallIndirect) {
+                pending_int.clear();
+                pending_fp.clear();
+                continue;
+            }
             if (inst.op == IrOp::Clobber || inst.op == IrOp::Phi ||
                 inst.op == IrOp::Return ||
                 (inst.op == IrOp::Intrinsic &&
-                 (inst.name == "call.args.1" || inst.name == "call.args.2" ||
-                  inst.name == "call.args.3"))) {
+                 (inst.name.starts_with("call.args.") ||
+                  inst.name.starts_with("call.fp_args.")))) {
                 continue;
+            }
+            if ((inst.op == IrOp::Load || inst.op == IrOp::Store) &&
+                inst.src_count >= 1) {
+                mark_pointer_evidence(mark_pointer_evidence, inst.srcs[0], order, 0);
+            }
+            if (inst.op == IrOp::Intrinsic &&
+                inst.name.starts_with("ppc.psq_l") && inst.src_count >= 1) {
+                mark_pointer_evidence(mark_pointer_evidence, inst.srcs[0], order, 0);
+            } else if (inst.op == IrOp::Intrinsic &&
+                       inst.name.starts_with("ppc.psq_st") && inst.src_count >= 2) {
+                mark_pointer_evidence(mark_pointer_evidence, inst.srcs[1], order, 0);
             }
             for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si) {
                 const IrValue& src = inst.srcs[si];
-                if (src.kind != IrValueKind::Reg ||
-                    (src.version != 0 && !is_save_helper_clobber(src))) {
-                    continue;
-                }
-                const Reg canon = canonical_reg(src.reg);
-                for (u8 ai = 0; ai < args.size() && ai < live_in.size(); ++ai) {
-                    if (args[ai] == canon) live_in[ai] = true;
-                }
+                mark_evidence(src, order);
             }
         }
     }
 
-    int highest = -1;
-    for (std::size_t i = 0; i < live_in.size(); ++i) {
-        if (live_in[i]) highest = static_cast<int>(i);
+    auto prefix_size = [](const auto& evidence, std::size_t limit) {
+        std::size_t size = 0;
+        for (std::size_t i = 0; i < limit; ++i) {
+            if (evidence[i].live) size = i + 1;
+        }
+        return size;
+    };
+    const std::size_t int_count = prefix_size(int_evidence, int_args.size());
+    const std::size_t fp_count = prefix_size(fp_evidence, fp_args.size());
+
+    auto lane_score = [](const auto& evidence, std::size_t begin,
+                         std::size_t count) {
+        std::size_t score = std::numeric_limits<std::size_t>::max();
+        for (std::size_t i = begin; i < count; ++i) {
+            score = std::min(score, evidence[i].first_use);
+        }
+        return score;
+    };
+
+    std::vector<InferredArgument> result;
+    result.reserve(int_count + fp_count);
+    std::size_t gi = 0;
+    std::size_t fi = 0;
+    while (gi < int_count || fi < fp_count) {
+        const auto gscore = gi < int_count
+            ? lane_score(int_evidence, gi, int_count)
+            : std::numeric_limits<std::size_t>::max();
+        const auto fscore = fi < fp_count
+            ? lane_score(fp_evidence, fi, fp_count)
+            : std::numeric_limits<std::size_t>::max();
+        if (gi < int_count && (fi >= fp_count || gscore <= fscore)) {
+            const std::size_t index = gi++;
+            result.push_back({int_args[index],
+                              abi == Abi::Ppc32Sysv ? IrType::I32 : IrType::I64,
+                              int_evidence[index].pointer_like});
+        } else {
+            // The PPC32 ABI transports scalar float values in the 64-bit FPR
+            // representation as well, so scalar instructions alone cannot
+            // reliably distinguish a source `float` from `double`. Keep the
+            // binary-only declaration conservative; explicit signatures can
+            // still pin a parameter to float.
+            result.push_back({fp_args[fi++], IrType::F64});
+        }
     }
-    return static_cast<u8>(highest + 1);
+    visiting.erase(target);
+    return result;
+}
+
+[[nodiscard]] std::vector<InferredArgument>
+infer_ppc_arguments_from_ir(const Binary& b, addr_t target, Abi abi) noexcept {
+    IrCache cache;
+    std::set<addr_t> visiting;
+    return infer_ppc_arguments_from_ir_impl(cache, visiting, b, target, abi, 0);
 }
 
 [[nodiscard]] bool is_rsp_adjust(const Instruction& insn, Mnemonic mn) noexcept {
@@ -209,7 +399,9 @@ enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 
 u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
-        return infer_ppc_arity_from_ir(b, target, abi);
+        return static_cast<u8>(std::min<std::size_t>(
+            infer_ppc_arguments_from_ir(b, target, abi).size(),
+            std::numeric_limits<u8>::max()));
     }
     if (b.arch() != Arch::X86_64) return 0;
     const auto args = int_arg_regs(abi);
@@ -372,6 +564,27 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
         if (live_in[i]) max_live_in = static_cast<int>(i);
     }
     return static_cast<u8>(max_live_in + 1);
+}
+
+std::vector<InferredArgument>
+infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept {
+    if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+        return infer_ppc_arguments_from_ir(b, target, abi);
+    }
+    const auto regs = int_arg_regs(abi);
+    const std::size_t count = std::min<std::size_t>(infer_arity(b, target, abi),
+                                                    regs.size());
+    std::vector<InferredArgument> result;
+    result.reserve(count);
+    const IrType type = (b.arch() == Arch::Arm) ? IrType::I32 : IrType::I64;
+    for (std::size_t i = 0; i < count; ++i) result.push_back({regs[i], type});
+    return result;
+}
+
+std::vector<InferredArgument>
+infer_arguments(const Binary& b, addr_t target) noexcept {
+    return infer_arguments(b, target,
+                           abi_for(b.format(), b.arch(), b.endian()));
 }
 
 u8 infer_arity(const Binary& b, addr_t target) noexcept {

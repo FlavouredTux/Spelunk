@@ -18,6 +18,7 @@
 #include <ember/analysis/cfg_util.hpp>
 #include <ember/analysis/demangle.hpp>
 #include <ember/analysis/frame.hpp>
+#include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/name_resolver.hpp>
 #include <ember/analysis/objc.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
@@ -350,6 +351,12 @@ enum class Prec : int {
     Primary = 15,   // ident, literal
 };
 
+enum class CallReturnLane : u8 {
+    Void,
+    Integer,
+    Floating,
+};
+
 [[nodiscard]] inline std::string
 wrap_if_lt(std::string s, Prec own, int min_prec) {
     if (std::to_underlying(own) < min_prec) return "(" + std::move(s) + ")";
@@ -373,11 +380,11 @@ struct Emitter {
     // will name these slots `local_<hex>` / `arg_<hex>` to match the
     // declarations we emit at function entry.
     StackFrameLayout                                 frame_layout;
-    // Number of int-register args for the function being emitted. Set once
-    // at the start of emit() from infer_arity() or the declared sig, and
-    // used to name raw rdi/rsi/... reads as a1/a2/... when no annotation
-    // overrides them.
+    // Number of recovered source arguments for the function being emitted.
+    // self_arg_layout preserves mixed PPC GPR/FPR order; self_arity remains
+    // the compact count used by the existing header/name passes.
     u8                                               self_arity = 0;
+    std::vector<InferredArgument>                    self_arg_layout;
     std::map<SsaKey, const IrInst*>                  defs;
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
     std::map<SsaKey, u32>                            uses;
@@ -514,6 +521,35 @@ struct Emitter {
         const u8 a = binary ? infer_arity(*binary, target) : u8{6};
         arity_cache.emplace(static_cast<u64>(target), a);
         return a;
+    }
+
+    mutable std::map<u64, std::vector<InferredArgument>> argument_layout_cache;
+
+    [[nodiscard]] const std::vector<InferredArgument>&
+    cached_argument_layout(addr_t target) const {
+        const u64 key = static_cast<u64>(target);
+        auto it = argument_layout_cache.find(key);
+        if (it != argument_layout_cache.end()) return it->second;
+        std::vector<InferredArgument> layout;
+        bool declared = false;
+        if (annotations) {
+            if (const FunctionSig* sig = annotations->signature_for(target); sig) {
+                layout = abi_layout_for(*sig);
+                declared = true;
+            }
+        }
+        if (!declared) {
+            TypeArena arena;
+            if (lookup_import_sig(function_display_name(target), arena)) {
+                layout = abi_layout_for_import(function_display_name(target));
+                declared = true;
+            }
+        }
+        if (!declared && binary) {
+            layout = infer_arguments(*binary, target, abi);
+        }
+        auto inserted = argument_layout_cache.emplace(key, std::move(layout));
+        return inserted.first->second;
     }
 
     // Drop ELF `@GLIBC_*` / `@@GLIBC_*` version suffix that clutters import
@@ -728,6 +764,16 @@ struct Emitter {
     //
     // Win64 passes only 4 args in regs; the 5th+ sit on the stack and are
     // named separately via incoming_stack_arg_name().
+    [[nodiscard]] static bool is_declared_fp_scalar(std::string_view type) noexcept {
+        if (type.find('*') != std::string_view::npos ||
+            type.find('&') != std::string_view::npos ||
+            type.find('[') != std::string_view::npos) {
+            return false;
+        }
+        return type.find("double") != std::string_view::npos ||
+               type.find("float") != std::string_view::npos;
+    }
+
     [[nodiscard]] const std::string*
     abi_param_for(const FunctionSig& sig, Reg r) const noexcept {
         const auto int_regs   = int_arg_regs(abi);
@@ -738,9 +784,7 @@ struct Emitter {
         std::size_t fp_idx  = 0;
         std::size_t slot    = 0;
         for (const auto& p : sig.params) {
-            const bool is_fp =
-                p.type.find("double") != std::string::npos ||
-                p.type.find("float")  != std::string::npos;
+            const bool is_fp = is_declared_fp_scalar(p.type);
             if (is_fp) {
                 const std::size_t idx = positional ? slot : fp_idx;
                 if (idx < fp_regs.size() && fp_regs[idx] == canon) return &p.name;
@@ -753,6 +797,69 @@ struct Emitter {
             ++slot;
         }
         return nullptr;
+    }
+
+    [[nodiscard]] std::vector<InferredArgument>
+    abi_layout_for(const FunctionSig& sig) const {
+        const auto int_regs = int_arg_regs(abi);
+        const auto fp_regs = fp_arg_regs(abi);
+        const bool positional = abi_positional_arg_slots(abi);
+        std::size_t int_idx = 0;
+        std::size_t fp_idx = 0;
+        std::size_t slot = 0;
+        std::vector<InferredArgument> result;
+        result.reserve(std::min<std::size_t>(sig.params.size(), kMaxAbiArgs));
+        for (const auto& param : sig.params) {
+            if (result.size() >= kMaxAbiArgs) break;
+            const bool is_fp = is_declared_fp_scalar(param.type);
+            const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
+            Reg reg = Reg::None;
+            if (is_fp) {
+                if (index < fp_regs.size()) reg = fp_regs[index];
+                ++fp_idx;
+            } else {
+                if (index < int_regs.size()) reg = int_regs[index];
+                ++int_idx;
+            }
+            result.push_back({reg, is_fp
+                ? (param.type.find("float") != std::string::npos
+                       ? IrType::F32 : IrType::F64)
+                : abi_word_type()});
+            ++slot;
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::vector<InferredArgument>
+    abi_layout_for_import(std::string_view name) const {
+        TypeArena arena;
+        auto spec = lookup_import_sig(name, arena);
+        if (!spec) return {};
+        const auto int_regs = int_arg_regs(abi);
+        const auto fp_regs = fp_arg_regs(abi);
+        const bool positional = abi_positional_arg_slots(abi);
+        std::size_t int_idx = 0;
+        std::size_t fp_idx = 0;
+        std::vector<InferredArgument> result;
+        result.reserve(std::min<std::size_t>(spec->params.size(), kMaxAbiArgs));
+        for (std::size_t slot = 0;
+             slot < spec->params.size() && result.size() < kMaxAbiArgs; ++slot) {
+            const TypeRef type = spec->params[slot];
+            const bool is_fp = arena.kind(type) == TypeKind::Float;
+            const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
+            Reg reg = Reg::None;
+            IrType ir_type = abi_word_type();
+            if (is_fp) {
+                if (index < fp_regs.size()) reg = fp_regs[index];
+                ir_type = arena.node(type).f.bits <= 32 ? IrType::F32 : IrType::F64;
+                ++fp_idx;
+            } else {
+                if (index < int_regs.size()) reg = int_regs[index];
+                ++int_idx;
+            }
+            result.push_back({reg, ir_type});
+        }
+        return result;
     }
 
     // Resolve a stack offset to the name of an incoming stack-passed
@@ -797,10 +904,9 @@ struct Emitter {
                 }
             }
         }
-        const auto int_args = int_arg_regs(abi);
         const Reg canon = canonical_reg(r);
-        for (u8 i = 0; i < int_args.size() && i < self_arity; ++i) {
-            if (int_args[i] == canon) {
+        for (u8 i = 0; i < self_arg_layout.size() && i < self_arity; ++i) {
+            if (canonical_reg(self_arg_layout[i].reg) == canon) {
                 if (i < self_arg_names.size() && !self_arg_names[i].empty()) {
                     return self_arg_names[i];
                 }
@@ -832,17 +938,29 @@ struct Emitter {
         if (!binary || !fn || version == 0) return std::nullopt;
         const Reg canon = canonical_reg(r);
 
-        const auto args_regs = int_arg_regs(abi);
+        const auto int_regs = int_arg_regs(abi);
+        const auto fp_regs = fp_arg_regs(abi);
         std::optional<std::size_t> slot;
-        for (std::size_t i = 0; i < args_regs.size(); ++i) {
-            if (args_regs[i] == canon) {
+        bool fp_bank = false;
+        for (std::size_t i = 0; i < int_regs.size(); ++i) {
+            if (int_regs[i] == canon) {
                 slot = i;
                 break;
             }
         }
+        if (!slot) {
+            for (std::size_t i = 0; i < fp_regs.size(); ++i) {
+                if (fp_regs[i] == canon) {
+                    slot = i;
+                    fp_bank = true;
+                    break;
+                }
+            }
+        }
         if (!slot) return std::nullopt;
 
-        IrValue v = IrValue::make_reg(canon, abi_word_type());
+        IrValue v = IrValue::make_reg(canon, fp_bank ? IrType::F64
+                                                     : abi_word_type());
         v.version = version;
         auto key = ssa_key(v);
         if (!key) return std::nullopt;
@@ -868,21 +986,22 @@ struct Emitter {
             break;
         }
         if (!call_ii) return std::nullopt;
-        if (canon == int_return_reg(abi) && !abi_helper) return std::nullopt;
+        const bool ppc_fp_return =
+            (abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
+             abi == Abi::Ppc64ElfV2Le) && canon == Reg::PpcF1;
+        if ((canon == int_return_reg(abi) || canon == fp_return_reg(abi) ||
+             ppc_fp_return) && !abi_helper) {
+            return std::nullopt;
+        }
 
         std::vector<IrValue> args;
-        args.reserve(kMaxAbiIntArgs);
+        args.reserve(fp_bank ? fp_regs.size() : int_regs.size());
+        const std::string_view prefix = fp_bank ? "call.fp_args."
+                                                : "call.args.";
         for (std::size_t ii = 0; ii < *call_ii; ++ii) {
             const IrInst& inst = bb.insts[ii];
-            if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
-                args.clear();
-                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                    args.push_back(inst.srcs[i]);
-                }
-                continue;
-            }
-            if (inst.op == IrOp::Intrinsic &&
-                (inst.name == "call.args.2" || inst.name == "call.args.3")) {
+            if (inst.op == IrOp::Intrinsic && inst.name.starts_with(prefix)) {
+                if (inst.name == std::string(prefix) + "1") args.clear();
                 for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
                     args.push_back(inst.srcs[i]);
                 }
@@ -1155,12 +1274,11 @@ struct Emitter {
                     if (abi_param_for(*sig, a.reg)) return false;
                 }
             }
-            // Fall back to inferred self-arity: if a is within the first
-            // `self_arity` int-arg regs, treat it as a forwarded param.
-            const auto int_args = int_arg_regs(abi);
+            // Fall back to the inferred mixed-register layout: a live-in FPR
+            // forwarded by a PPC wrapper is just as real as a GPR argument.
             const Reg canon = canonical_reg(a.reg);
-            for (u8 i = 0; i < int_args.size() && i < self_arity; ++i) {
-                if (int_args[i] == canon) return false;
+            for (u8 i = 0; i < self_arg_layout.size() && i < self_arity; ++i) {
+                if (canonical_reg(self_arg_layout[i].reg) == canon) return false;
             }
             return true;
         }
@@ -1190,8 +1308,9 @@ struct Emitter {
         return false;
     }
 
-    // Arity for an import by name - user signature at its PLT address beats
-    // the baked-in libc table, which beats Itanium-mangled-name parsing.
+    // Arity for a known routine by name - user signature at its address beats
+    // the typed built-in table, which beats the legacy name and mangling
+    // fallbacks. The typed table also carries stable platform SDK prototypes.
     // The mangled-name path lets C++ stdlib calls (`std::istream::get`,
     // `std::ofstream::write`, …) size correctly without hand-maintaining
     // a table for every member function.
@@ -1200,6 +1319,17 @@ struct Emitter {
         if (annotations) {
             if (const FunctionSig* sig = annotations->signature_for(plt_addr); sig) {
                 return static_cast<u8>(sig->params.size());
+            }
+        }
+        {
+            TypeArena arena;
+            if (auto spec = lookup_import_sig(name, arena); spec) {
+                // Variadic call width comes from the existing format-string
+                // parser. Returning only the fixed prototype prefix here
+                // would truncate printf/scanf payload arguments.
+                if (spec->variadic) return std::nullopt;
+                return static_cast<u8>(std::min<std::size_t>(
+                    spec->params.size(), std::numeric_limits<u8>::max()));
             }
         }
         if (auto a = libc_arity_by_name(name); a) return a;
@@ -1638,6 +1768,90 @@ struct Emitter {
         return std::nullopt;
     }
 
+    [[nodiscard]] const FunctionSig*
+    call_annotation_signature(const IrInst& inst) const noexcept {
+        if (!annotations) return nullptr;
+        if (inst.op == IrOp::Call) {
+            return annotations->signature_for(inst.target1);
+        }
+        if (inst.op == IrOp::CallIndirect && options.call_resolutions &&
+            inst.source_addr != 0) {
+            auto it = options.call_resolutions->find(inst.source_addr);
+            if (it != options.call_resolutions->end()) {
+                return annotations->signature_for(it->second);
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    call_known_name(const IrInst& inst) const {
+        if (auto imported = call_import_name(inst); imported) return imported;
+        if (inst.op == IrOp::Call) return function_display_name(inst.target1);
+        if (inst.op == IrOp::CallIndirect && options.call_resolutions &&
+            inst.source_addr != 0) {
+            auto it = options.call_resolutions->find(inst.source_addr);
+            if (it != options.call_resolutions->end()) {
+                return function_display_name(it->second);
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<CallReturnLane>
+    known_call_return_lane(const IrInst& inst) const {
+        if (const FunctionSig* sig = call_annotation_signature(inst); sig) {
+            const std::string normalized = normalize_c_type_alias(sig->return_type);
+            const std::string_view ret = trim_line_view(normalized);
+            if (ret == "void") return CallReturnLane::Void;
+            if (is_declared_fp_scalar(ret)) return CallReturnLane::Floating;
+            if (!ret.empty()) return CallReturnLane::Integer;
+        }
+        auto name = call_known_name(inst);
+        if (!name) return std::nullopt;
+        TypeArena arena;
+        auto spec = lookup_import_sig(*name, arena);
+        if (!spec || spec->ret.is_top() || spec->ret.is_bottom()) {
+            return std::nullopt;
+        }
+        switch (arena.kind(spec->ret)) {
+            case TypeKind::Void:  return CallReturnLane::Void;
+            case TypeKind::Float: return CallReturnLane::Floating;
+            default:              return CallReturnLane::Integer;
+        }
+    }
+
+    [[nodiscard]] Reg call_result_reg(const IrInst& inst) const {
+        const auto lane = known_call_return_lane(inst);
+        if (lane == CallReturnLane::Void) return Reg::None;
+        if (lane == CallReturnLane::Floating) return fp_return_reg(abi);
+        // Preserve the established behavior for an unknown call: its used
+        // integer lane is still a plausible return, while f1 requires proof.
+        return int_return_reg(abi);
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    known_call_return_c_type(const IrInst& inst) const {
+        if (const FunctionSig* sig = call_annotation_signature(inst); sig &&
+            !sig->return_type.empty()) {
+            return normalize_c_type_alias(sig->return_type);
+        }
+        auto name = call_known_name(inst);
+        if (!name) return std::nullopt;
+        TypeArena arena;
+        auto spec = lookup_import_sig(*name, arena);
+        if (!spec || spec->ret.is_top() || spec->ret.is_bottom()) {
+            return std::nullopt;
+        }
+        const TypeNode& ret = arena.node(spec->ret);
+        if (ret.kind == TypeKind::Void) return std::string{"void"};
+        if (ret.kind == TypeKind::Float) {
+            return ret.f.bits <= 32 ? std::string{"float"}
+                                    : std::string{"double"};
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] bool is_ppc_abi_helper_call(const IrInst& inst) const {
         if (!binary || inst.op != IrOp::Call ||
             (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
@@ -1655,15 +1869,17 @@ struct Emitter {
 
     [[nodiscard]] bool call_inst_returns_void(const IrInst& inst) const {
         if (is_ppc_abi_helper_call(inst)) return true;
+        if (auto lane = known_call_return_lane(inst); lane) {
+            return *lane == CallReturnLane::Void;
+        }
         auto name = call_import_name(inst);
         return name && import_returns_void(*name);
     }
 
     [[nodiscard]] static bool is_call_arg_barrier(const IrInst& inst) noexcept {
         return inst.op == IrOp::Intrinsic &&
-               (inst.name == "call.args.1" ||
-                inst.name == "call.args.2" ||
-                inst.name == "call.args.3");
+               (inst.name.starts_with("call.args.") ||
+                inst.name.starts_with("call.fp_args."));
     }
 
     [[nodiscard]] static bool is_callee_saved(Reg r) noexcept {
@@ -1962,7 +2178,8 @@ struct Emitter {
 
     [[nodiscard]] bool value_flows_to_memory_address(const SsaKey& k,
                                                      std::set<SsaKey>& seen,
-                                                     int depth = 0) const {
+                                                     int depth = 0,
+                                                     bool follow_assigns = false) const {
         if (depth > 6 || !seen.insert(k).second) return false;
         auto uses_it = visible_user_positions.find(k);
         if (uses_it == visible_user_positions.end()) return false;
@@ -1976,11 +2193,13 @@ struct Emitter {
             const bool address_arith =
                 inst.op == IrOp::Add || inst.op == IrOp::Sub ||
                 inst.op == IrOp::Mul || inst.op == IrOp::Shl ||
-                inst.op == IrOp::ZExt || inst.op == IrOp::SExt;
+                inst.op == IrOp::ZExt || inst.op == IrOp::SExt ||
+                (follow_assigns && inst.op == IrOp::Assign);
             if (!address_arith) continue;
             auto dk = ssa_key(inst.dst);
             if (!dk) continue;
-            if (value_flows_to_memory_address(*dk, seen, depth + 1)) return true;
+            if (value_flows_to_memory_address(*dk, seen, depth + 1,
+                                              follow_assigns)) return true;
         }
         return false;
     }
@@ -2014,9 +2233,10 @@ struct Emitter {
     merge_initializer_candidate(const IrValue& op) const {
         if (op.kind == IrValueKind::Imm) return op;
         if (auto slot = trace_to_self_arg_slot(op); slot) {
-            const auto args = int_arg_regs(abi);
-            if (*slot < args.size()) {
-                return IrValue::make_reg(args[*slot], abi_word_type());
+            if (*slot < self_arg_layout.size() &&
+                self_arg_layout[*slot].reg != Reg::None) {
+                return IrValue::make_reg(self_arg_layout[*slot].reg,
+                                         self_arg_layout[*slot].type);
             }
         }
         return std::nullopt;
@@ -2039,7 +2259,6 @@ struct Emitter {
     }
 
     void bump_arity_from_merge_initializers() {
-        const auto int_args = int_arg_regs(abi);
         u8 need = self_arity;
         for (const auto& [_, local] : merge_locals) {
             if (!local.initializer) continue;
@@ -2053,7 +2272,7 @@ struct Emitter {
             }
             if (!has_visible_use) continue;
             if (auto slot = trace_to_self_arg_slot(*local.initializer); slot) {
-                if (*slot < int_args.size() && *slot + 1 > need) {
+                if (*slot < self_arg_layout.size() && *slot + 1 > need) {
                     need = static_cast<u8>(*slot + 1);
                 }
             }
@@ -2063,16 +2282,16 @@ struct Emitter {
 
     // Self-arg slots (a1..aN) known to flow into a libc char* parameter.
     // Populated by infer_charp_args(); consumed by the header builder.
-    std::array<bool, kMaxAbiIntArgs> charp_arg = {};
+    std::array<bool, kMaxAbiArgs> charp_arg = {};
     // Generated display names for self-arg slots when the body reveals a
     // stronger role than `aN`, e.g. a live-in register used as a function
     // pointer call target.
-    std::array<std::string, kMaxAbiIntArgs> self_arg_names = {};
-    std::array<std::string, kMaxAbiIntArgs> self_arg_type_names = {};
-    std::array<std::optional<IrType>, kMaxAbiIntArgs> self_arg_type_overrides = {};
-    std::array<std::optional<u8>, kMaxAbiIntArgs> self_funcptr_arity = {};
-    std::array<std::optional<IrType>, kMaxAbiIntArgs> self_funcptr_return_type = {};
-    std::array<std::vector<IrType>, kMaxAbiIntArgs> self_funcptr_arg_types = {};
+    std::array<std::string, kMaxAbiArgs> self_arg_names = {};
+    std::array<std::string, kMaxAbiArgs> self_arg_type_names = {};
+    std::array<std::optional<IrType>, kMaxAbiArgs> self_arg_type_overrides = {};
+    std::array<std::optional<u8>, kMaxAbiArgs> self_funcptr_arity = {};
+    std::array<std::optional<IrType>, kMaxAbiArgs> self_funcptr_return_type = {};
+    std::array<std::vector<IrType>, kMaxAbiArgs> self_funcptr_arg_types = {};
     // Stack-slot offsets (per stack_offset()) whose address has been
     // observed flowing into a libc char* parameter. The local-decl
     // emitter renders these as `char <name>[N]` instead of the default
@@ -2247,12 +2466,11 @@ struct Emitter {
     }
 
     // Trace `v` back through Assign copies and trivial phis to a version-0
-    // int-arg register for the current ABI. Returns the 0-based slot, or
-    // nullopt if the value isn't live-in from a self arg.
+    // register in the current mixed argument layout. Returns the source-level
+    // slot, not the register-bank index.
     [[nodiscard]] std::optional<u8>
     trace_to_self_arg_slot(const IrValue& v, int depth = 0) const {
         if (depth > 8) return std::nullopt;
-        const auto args = int_arg_regs(abi);
         IrValue cur = v;
         for (int hop = 0; hop < 8; ++hop) {
             if (cur.kind == IrValueKind::Temp) {
@@ -2282,7 +2500,9 @@ struct Emitter {
             if (cur.kind != IrValueKind::Reg) return std::nullopt;
             const Reg canon = canonical_reg(cur.reg);
             if (cur.version == 0) {
-                for (u8 i = 0; i < args.size(); ++i) if (args[i] == canon) return i;
+                for (u8 i = 0; i < self_arg_layout.size(); ++i) {
+                    if (canonical_reg(self_arg_layout[i].reg) == canon) return i;
+                }
                 return std::nullopt;
             }
             if (auto preserved = preserved_call_arg_for_clobber(cur.reg, cur.version);
@@ -2607,19 +2827,18 @@ struct Emitter {
         }
     }
 
-    // Raise self_arity when the body reads a live-in int-arg register
+    // Raise self_arity when the body reads a live-in argument register
     // that the inferred arity didn't cover. Without this, raw register
     // names leak into the emitted C as e.g. `fputs(rdx, stdout)`. Call
     // only when the caller hasn't pinned an explicit signature.
     void bump_arity_from_body_reads() {
-        const auto int_args = int_arg_regs(abi);
         u8 need = self_arity;
         auto check = [&](const IrValue& v) {
             if (v.kind != IrValueKind::Reg) return;
             if (v.version != 0) return;
             const Reg canon = canonical_reg(v.reg);
-            for (u8 i = 0; i < int_args.size(); ++i) {
-                if (int_args[i] == canon) {
+            for (u8 i = 0; i < self_arg_layout.size(); ++i) {
+                if (canonical_reg(self_arg_layout[i].reg) == canon) {
                     if (i + 1 > need) need = static_cast<u8>(i + 1);
                     return;
                 }
@@ -2704,10 +2923,15 @@ struct Emitter {
     // use to be a Trunc to the same width; a single direct 64-bit use means
     // the wider type is intentional and the cast should stay in the body.
     void infer_narrow_arg_types_from_uses() {
-        const auto int_args = int_arg_regs(abi);
-        const u8 limit = std::min<u8>(self_arity, static_cast<u8>(int_args.size()));
+        const u8 limit = std::min<u8>(self_arity,
+            static_cast<u8>(self_arg_layout.size()));
         for (u8 slot = 0; slot < limit; ++slot) {
-            IrValue arg = IrValue::make_reg(int_args[slot], abi_word_type());
+            if (self_arg_layout[slot].reg == Reg::None ||
+                is_ppc_fpr(self_arg_layout[slot].reg)) {
+                continue;
+            }
+            IrValue arg = IrValue::make_reg(self_arg_layout[slot].reg,
+                                             self_arg_layout[slot].type);
             arg.version = 0;
 
             // Refined local inference already found a stronger type such as
@@ -2752,6 +2976,43 @@ struct Emitter {
         }
     }
 
+    // A live-in used as a load/store base is pointer-shaped even when local
+    // type inference cannot propagate the pointee type backwards through a
+    // register copy plus offset arithmetic. This is common in PPC prologues:
+    // r3 is copied into r31, then every field access is based on r31. Keep the
+    // inferred type deliberately opaque because mixed-width field accesses
+    // describe a struct, not an array of whichever width happened to appear
+    // first.
+    void infer_pointer_arg_types_from_memory_uses() {
+        if (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
+            abi != Abi::Ppc64ElfV2Le) {
+            return;
+        }
+        const u8 limit = std::min<u8>(self_arity,
+            static_cast<u8>(self_arg_layout.size()));
+        for (u8 slot = 0; slot < limit; ++slot) {
+            const auto& layout = self_arg_layout[slot];
+            if (layout.reg == Reg::None || is_ppc_fpr(layout.reg)) continue;
+
+            IrValue arg = IrValue::make_reg(layout.reg, layout.type);
+            arg.version = 0;
+            auto key = ssa_key(arg);
+            if (!key) continue;
+            std::set<SsaKey> seen;
+            if (!layout.pointer_like &&
+                !value_flows_to_memory_address(*key, seen, 0, true)) continue;
+
+            // Preserve stronger local/import evidence such as char* or
+            // uint32_t*. self_arg_type_names is reserved for the case where
+            // the normal lattice still sees only the ABI word type.
+            const std::string local = c_type_name_for(arg);
+            if (!local.empty() && local.ends_with('*')) continue;
+            if (self_arg_type_names[slot].empty()) {
+                self_arg_type_names[slot] = "void*";
+            }
+        }
+    }
+
     // Metrowerks emits calls to _savegpr_N/_savefpr_N before it copies
     // incoming parameters into callee-saved registers. SSA correctly models
     // an ordinary call as clobbering r3-r10, but these compiler helpers are
@@ -2783,7 +3044,6 @@ struct Emitter {
 
     [[nodiscard]] bool is_void_call_result(const IrValue& v) const {
         if (v.kind != IrValueKind::Reg) return false;
-        if (canonical_reg(v.reg) != int_return_reg(abi)) return false;
         const IrInst* def = def_of(v);
         if (!def || def->op != IrOp::Clobber) return false;
         auto k = ssa_key(v);
@@ -2796,8 +3056,8 @@ struct Emitter {
             --ii;
             const IrInst& prev = bb.insts[ii];
             if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
-            if (auto name = call_import_name(prev)) {
-                return import_returns_void(*name);
+            if (prev.op == IrOp::Call || prev.op == IrOp::CallIndirect) {
+                return call_inst_returns_void(prev);
             }
             return false;
         }
@@ -2829,12 +3089,16 @@ struct Emitter {
     }
 
     // PPC has no distinct `return void` instruction: blr simply leaves
-    // whatever happens to be in r3.  At a shared epilogue SSA therefore
-    // creates a return-register Phi even for a void callback.  A large merge
-    // containing the entry r3 plus several unrelated post-call clobbers is
-    // strong evidence that the values are incidental ABI state, not a
-    // coherent source-level result.  Keep this deliberately narrow so small
-    // wrappers such as `return cond ? a1 : callee()` remain value-returning.
+    // whatever happens to be in r3. At a shared epilogue SSA therefore
+    // creates a return-register Phi even for a void callback. Two narrow
+    // patterns are strong enough to suppress that incidental ABI state:
+    //
+    //   * a large merge of the entry r3 and several call clobbers; or
+    //   * a small merge of an unbound clobber/live-in with explicit values
+    //     that are already consumed by real side effects (usually a store).
+    //
+    // A normal `return cond ? a1 : callee()` has no side-effect use for its
+    // explicit return operand and remains value-returning.
     [[nodiscard]] bool has_incidental_ppc_return_merge() const {
         if (!fn || (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
                     abi != Abi::Ppc64ElfV2Le)) {
@@ -2850,32 +3114,91 @@ struct Emitter {
                     continue;
                 }
                 const IrInst* phi = def_of(rv);
-                if (!phi || phi->op != IrOp::Phi || phi->phi_operands.size() < 6) {
-                    continue;
-                }
+                if (!phi || phi->op != IrOp::Phi || phi->phi_operands.size() < 2) continue;
                 bool saw_live_in = false;
                 std::size_t clobbers = 0;
-                for (IrValue op : phi->phi_operands) {
+                bool saw_side_effect_value = false;
+                bool small_merge_is_incidental = true;
+                for (std::size_t op_index = 0;
+                     op_index < phi->phi_operands.size(); ++op_index) {
+                    IrValue op = phi->phi_operands[op_index];
+                    if (auto key = ssa_key(op); key) {
+                        auto uses_it = visible_uses.find(*key);
+                        if (uses_it != visible_uses.end() && uses_it->second > 0) {
+                            saw_side_effect_value = true;
+                        }
+                    }
+                    bool classified = false;
+                    if (op.kind == IrValueKind::Imm &&
+                        op_index < phi->phi_preds.size()) {
+                        auto pred_it = fn->block_at.find(phi->phi_preds[op_index]);
+                        if (pred_it != fn->block_at.end()) {
+                            const auto& pred = fn->blocks[pred_it->second];
+                            for (const auto& pred_inst : pred.insts) {
+                                if (pred_inst.op != IrOp::Store ||
+                                    pred_inst.src_count < 2) {
+                                    continue;
+                                }
+                                const IrValue& stored = pred_inst.srcs[1];
+                                if (stored.kind == IrValueKind::Imm &&
+                                    stored.imm == op.imm && stored.type == op.type) {
+                                    saw_side_effect_value = true;
+                                    classified = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     for (int depth = 0; depth < 6; ++depth) {
+                        if (classified) break;
                         if (op.kind == IrValueKind::Reg && op.version == 0 &&
                             canonical_reg(op.reg) == ret_reg) {
                             saw_live_in = true;
+                            classified = true;
                             break;
                         }
                         const IrInst* d = def_of(op);
                         if (!d) break;
                         if (d->op == IrOp::Clobber) {
-                            ++clobbers;
+                            auto key = ssa_key(op);
+                            const auto uses_it = key ? visible_uses.find(*key)
+                                                     : visible_uses.end();
+                            // bind_call_returns gives every unknown call a
+                            // provisional name, even if the trailing dead-
+                            // declaration pass later removes it. A real
+                            // non-Phi use is the stronger evidence that this
+                            // clobber is an intentional return value.
+                            if (!key || uses_it == visible_uses.end() ||
+                                uses_it->second == 0) {
+                                ++clobbers;
+                                classified = true;
+                            }
                             break;
                         }
                         if (d->op == IrOp::Assign && d->src_count == 1) {
+                            // The assigned register can feed a store while its
+                            // source is an immediate with no SSA key.
+                            if (auto key = ssa_key(op); key) {
+                                auto uses_it = visible_uses.find(*key);
+                                if (uses_it != visible_uses.end() && uses_it->second > 0) {
+                                    classified = true;
+                                    break;
+                                }
+                            }
                             op = d->srcs[0];
                             continue;
                         }
                         break;
                     }
+                    if (!classified) small_merge_is_incidental = false;
                 }
-                if (saw_live_in && clobbers >= 2) return true;
+                if (phi->phi_operands.size() >= 6 && saw_live_in && clobbers >= 2) {
+                    return true;
+                }
+                if (small_merge_is_incidental && clobbers + (saw_live_in ? 1u : 0u) > 0 &&
+                    saw_side_effect_value) {
+                    return true;
+                }
             }
         }
         return false;
@@ -2890,7 +3213,6 @@ struct Emitter {
         if (r.kind != RegionKind::Return) return;
         const IrValue& cond = r.condition;
         if (cond.kind != IrValueKind::Reg) return;
-        if (canonical_reg(cond.reg) != int_return_reg(abi)) return;
         auto cond_key = ssa_key(cond);
         if (!cond_key) return;
         const IrInst* def = def_of(cond);
@@ -2912,6 +3234,10 @@ struct Emitter {
             const IrInst& prev = bb.insts[ii];
             if (prev.op == IrOp::Clobber || prev.op == IrOp::Nop) continue;
             if (prev.op == IrOp::Call || prev.op == IrOp::CallIndirect) {
+                if (canonical_reg(cond.reg) !=
+                    canonical_reg(call_result_reg(prev))) {
+                    return;
+                }
                 fold_call_positions.insert({bi, ii});
                 fold_call_ssa_key.emplace(std::pair{bi, ii}, *cond_key);
             }
@@ -3046,7 +3372,6 @@ struct Emitter {
         }
 
         std::set<std::string> used;
-        const Reg ret_reg = int_return_reg(abi);
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
             const auto& bb = fn->blocks[bi];
             for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
@@ -3057,6 +3382,8 @@ struct Emitter {
                 if (inline_call_positions.contains({bi, ii})) continue;
                 if (arc_claim_producer_positions.contains({bi, ii})) continue;
                 if (call_inst_returns_void(inst)) continue;
+                const Reg ret_reg = call_result_reg(inst);
+                if (ret_reg == Reg::None) continue;
 
                 // The return-register clobber for this call is the next inst
                 // (Clobbers
@@ -3236,9 +3563,15 @@ struct Emitter {
             const IrInst* d = def_of(v);
             if (d && d->op == IrOp::Clobber &&
                 v.kind == IrValueKind::Reg &&
-                canonical_reg(v.reg) == int_return_reg(abi) &&
                 call_position_for_return_key(*k)) {
-                return *k;
+                auto pos = call_position_for_return_key(*k);
+                if (pos && pos->first < fn->blocks.size() &&
+                    pos->second < fn->blocks[pos->first].insts.size()) {
+                    const IrInst& call = fn->blocks[pos->first].insts[pos->second];
+                    if (canonical_reg(v.reg) == canonical_reg(call_result_reg(call))) {
+                        return *k;
+                    }
+                }
             }
             if (!d) return std::nullopt;
             switch (d->op) {
@@ -3277,7 +3610,7 @@ struct Emitter {
     [[nodiscard]] std::string callee_display_short(const IrInst& call_inst) const {
         std::string raw = call_import_name(call_inst).value_or("");
         if (call_inst.op == IrOp::Call) {
-            if (raw.empty()) raw = std::format("sub_{:x}", call_inst.target1);
+            if (raw.empty()) raw = function_display_name(call_inst.target1);
         } else if (call_inst.op == IrOp::CallIndirect && call_inst.src_count >= 1) {
             if (raw.empty()) raw = "ind";
         } else {
@@ -5791,7 +6124,8 @@ SignatureContext setup_signature_context(Emitter& e,
     if (annotations) {
         if (const FunctionSig* sig = annotations->signature_for(sf.ir->start); sig) {
             e.self_arity = static_cast<u8>(
-                std::min(sig->params.size(), int_arg_regs(e.abi).size()));
+                std::min(sig->params.size(), kMaxAbiArgs));
+            e.self_arg_layout = e.abi_layout_for(*sig);
             ctx.has_user_sig = true;
         }
     }
@@ -5831,7 +6165,28 @@ SignatureContext setup_signature_context(Emitter& e,
         }
     }
     if (e.self_arity == 0) {
-        e.self_arity = binary ? infer_arity(*binary, sf.ir->start) : u8{0};
+        if (binary) e.self_arg_layout = infer_arguments(*binary, sf.ir->start, e.abi);
+        e.self_arity = static_cast<u8>(std::min<std::size_t>(
+            e.self_arg_layout.size(), kMaxAbiArgs));
+    }
+    if (e.self_arg_layout.empty()) {
+        // Keep the complete candidate bank available even when the initial
+        // arity is zero. Later body/phi passes can then prove a live-in and
+        // raise self_arity without leaking an architectural register name.
+        const auto regs = int_arg_regs(e.abi);
+        e.self_arg_layout.reserve(regs.size());
+        for (std::size_t i = 0; i < regs.size(); ++i) {
+            e.self_arg_layout.push_back({regs[i], e.abi_word_type()});
+        }
+    } else if (e.abi != Abi::Ppc32Sysv && e.abi != Abi::Ppc64ElfV1Be &&
+               e.abi != Abi::Ppc64ElfV2Le) {
+        // Scalar arity gives non-PPC ABIs only the consumed prefix, while
+        // later body/phi analysis still needs to recognize a higher live-in
+        // register and raise that initial estimate.
+        const auto regs = int_arg_regs(e.abi);
+        for (std::size_t i = e.self_arg_layout.size(); i < regs.size(); ++i) {
+            e.self_arg_layout.push_back({regs[i], e.abi_word_type()});
+        }
     }
     return ctx;
 }
@@ -6365,6 +6720,14 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
             if (auto df = defs.find(bk->second); df != defs.end()) {
                 type_name = c_type_name_for(df->second->dst);
             }
+            if (fn && pos.first < fn->blocks.size() &&
+                pos.second < fn->blocks[pos.first].insts.size()) {
+                if (auto known = known_call_return_c_type(
+                        fn->blocks[pos.first].insts[pos.second]); known &&
+                    *known != "void") {
+                    type_name = *known;
+                }
+            }
             out += std::format("{}{} {} = {};\n", ind, type_name, name, call_expr);
         }
         return;
@@ -6421,14 +6784,43 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     }
 
     std::vector<IrValue> pending_args;
+    std::vector<IrValue> pending_fp_args;
     bool                 have_pending = false;
+
+    auto clear_pending_args = [&]() {
+        pending_args.clear();
+        pending_fp_args.clear();
+        have_pending = false;
+    };
+
+    auto args_for_layout = [&](const std::vector<InferredArgument>& layout) {
+        std::vector<IrValue> result;
+        result.reserve(layout.size());
+        const auto int_regs = int_arg_regs(abi);
+        const auto fp_regs = fp_arg_regs(abi);
+        for (const auto& arg : layout) {
+            const Reg canon = canonical_reg(arg.reg);
+            const auto append_from = [&](std::span<const Reg> regs,
+                                         const std::vector<IrValue>& values) {
+                for (std::size_t i = 0; i < regs.size() && i < values.size(); ++i) {
+                    if (canonical_reg(regs[i]) == canon) {
+                        result.push_back(values[i]);
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (append_from(int_regs, pending_args)) continue;
+            (void)append_from(fp_regs, pending_fp_args);
+        }
+        return result;
+    };
 
     auto flush_args_as_intrinsics = [&]() {
         if (have_pending) {
             out += std::format("{}// stray call.args: {} values\n",
-                               ind, pending_args.size());
-            pending_args.clear();
-            have_pending = false;
+                               ind, pending_args.size() + pending_fp_args.size());
+            clear_pending_args();
         }
     };
 
@@ -6496,8 +6888,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         // become the arguments of the next source-level call.
         if (hidden.contains({it->second, ii})) {
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
-                pending_args.clear();
-                have_pending = false;
+                clear_pending_args();
             }
             continue;
         }
@@ -6517,24 +6908,35 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 break;
         }
 
-        if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
-            pending_args.clear();
+        if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.args.")) {
+            if (inst.name == "call.args.1") pending_args.clear();
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
                 pending_args.push_back(inst.srcs[i]);
             }
             have_pending = true;
             continue;
         }
-        if (inst.op == IrOp::Intrinsic &&
-            (inst.name == "call.args.2" || inst.name == "call.args.3")) {
+        if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.fp_args.")) {
+            if (inst.name == "call.fp_args.1") pending_fp_args.clear();
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                pending_args.push_back(inst.srcs[i]);
+                pending_fp_args.push_back(inst.srcs[i]);
             }
+            have_pending = true;
             continue;
         }
 
         if (inst.op == IrOp::Call) {
             auto import_name = import_name_for_direct_call(inst.target1);
+            std::vector<IrValue> call_args = pending_args;
+            const bool ppc_abi =
+                abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
+                abi == Abi::Ppc64ElfV2Le;
+            if (ppc_abi) {
+                const auto layout = import_name
+                    ? abi_layout_for_import(*import_name)
+                    : cached_argument_layout(inst.target1);
+                if (!layout.empty() || !import_name) call_args = args_for_layout(layout);
+            }
             // Arity sources: imports → user sig at PLT / baked-in libc table;
             // printf/scanf family → parse format string to count args;
             // defined functions → infer_sysv_arity. No arity known → fallback
@@ -6542,47 +6944,51 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             std::optional<u8> arity;
             bool objc_sized = false;
             if (import_name) {
-                arity = objc_call_arity(*import_name, pending_args);
+                arity = objc_call_arity(*import_name, call_args);
                 objc_sized = arity.has_value();
                 if (!arity) arity = import_arity(inst.target1, *import_name);
                 if (!arity) {
                     if (auto fi = variadic_format_index(*import_name); fi) {
-                        arity = variadic_arity(pending_args, *fi);
+                        arity = variadic_arity(call_args, *fi);
                     }
                 }
             } else {
                 const std::string direct_name = function_display_name(inst.target1);
-                arity = objc_call_arity(direct_name, pending_args);
+                arity = objc_call_arity(direct_name, call_args);
                 objc_sized = arity.has_value();
+                if (!arity) arity = import_arity(inst.target1, direct_name);
                 if (!arity && is_generic_sub_name(direct_name)) {
-                    arity = printf_like_arity_from_literal_args(pending_args);
+                    arity = printf_like_arity_from_literal_args(call_args);
                 }
-                if (!arity) arity = cached_arity(inst.target1);
+                if (!arity) {
+                    arity = ppc_abi
+                        ? static_cast<u8>(std::min<std::size_t>(
+                              call_args.size(), std::numeric_limits<u8>::max()))
+                        : cached_arity(inst.target1);
+                }
             }
             std::vector<IrValue> used_args;
             const std::string args = arity
-                ? format_call_args_with_arity(pending_args, *arity, !objc_sized,
+                ? format_call_args_with_arity(call_args, *arity, !objc_sized,
                                               &used_args)
-                : format_call_args_fallback(pending_args, &used_args);
+                : format_call_args_fallback(call_args, &used_args);
             const std::string callee = import_name
                 ? *import_name
                 : function_display_name(inst.target1);
             const std::string call_expr =
-                render_objc_runtime_call(callee, pending_args)
+                render_objc_runtime_call(callee, call_args)
                     .value_or(std::format("{}({})", callee, args));
             for (const auto& a : used_args) {
                 emit_materializations_for_value(a, 0, out, ind);
             }
-            pending_args.clear();
-            have_pending = false;
+            clear_pending_args();
             emit_call_binding(out, ind, std::pair{it->second, ii}, call_expr,
-                              import_returns_void(callee));
+                              call_inst_returns_void(inst));
             continue;
         }
         if (inst.op == IrOp::CallIndirect) {
             if (inst.src_count < 1) {
-                pending_args.clear();
-                have_pending = false;
+                clear_pending_args();
                 out += std::format("{}(*?)();\n", ind);
                 continue;
             }
@@ -6590,20 +6996,26 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             std::string call_expr;
             std::vector<IrValue> used_args;
             if (auto name = import_name_for_indirect_call(inst.srcs[0]); name) {
+                std::vector<IrValue> indirect_args = pending_args;
+                if (abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
+                    abi == Abi::Ppc64ElfV2Le) {
+                    const auto layout = abi_layout_for_import(*name);
+                    if (!layout.empty()) indirect_args = args_for_layout(layout);
+                }
                 // No PLT address here, so user-sig lookup can't key off one.
-                auto arity = objc_call_arity(*name, pending_args);
+                auto arity = objc_call_arity(*name, indirect_args);
                 const bool objc_sized = arity.has_value();
                 if (!arity) arity = libc_arity_by_name(*name);
                 if (!arity) {
                     if (auto fi = variadic_format_index(*name); fi) {
-                        arity = variadic_arity(pending_args, *fi);
+                        arity = variadic_arity(indirect_args, *fi);
                     }
                 }
                 const std::string args = arity
-                    ? format_call_args_with_arity(pending_args, *arity, !objc_sized,
+                    ? format_call_args_with_arity(indirect_args, *arity, !objc_sized,
                                                   &used_args)
-                    : format_call_args_fallback(pending_args, &used_args);
-                call_expr = render_objc_runtime_call(*name, pending_args)
+                    : format_call_args_fallback(indirect_args, &used_args);
+                call_expr = render_objc_runtime_call(*name, indirect_args)
                     .value_or(std::format("{}({})", *name, args));
             } else if (options.call_resolutions && inst.source_addr != 0) {
                 // Vtable back-trace hit: the classifier decoded the
@@ -6617,13 +7029,23 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     std::optional<u8> arity;
                     bool objc_sized = false;
                     const auto direct_import = import_name_for_direct_call(target);
+                    std::vector<IrValue> resolved_args = pending_args;
+                    if (abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
+                        abi == Abi::Ppc64ElfV2Le) {
+                        const auto layout = direct_import
+                            ? abi_layout_for_import(*direct_import)
+                            : cached_argument_layout(target);
+                        if (!layout.empty() || !direct_import) {
+                            resolved_args = args_for_layout(layout);
+                        }
+                    }
                     if (direct_import) {
-                        arity = objc_call_arity(*direct_import, pending_args);
+                        arity = objc_call_arity(*direct_import, resolved_args);
                         objc_sized = arity.has_value();
                         if (!arity) arity = import_arity(target, *direct_import);
                         if (!arity) {
                             if (auto fi = variadic_format_index(*direct_import); fi) {
-                                arity = variadic_arity(pending_args, *fi);
+                                arity = variadic_arity(resolved_args, *fi);
                             }
                         }
                     } else if (annotations) {
@@ -6633,14 +7055,23 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                     if (!arity && !direct_import) {
                         if (is_generic_sub_name(fname)) {
-                            arity = printf_like_arity_from_literal_args(pending_args);
+                            arity = printf_like_arity_from_literal_args(resolved_args);
                         }
-                        if (!arity) arity = cached_arity(target);
+                        if (!arity) {
+                            const bool ppc = abi == Abi::Ppc32Sysv ||
+                                abi == Abi::Ppc64ElfV1Be ||
+                                abi == Abi::Ppc64ElfV2Le;
+                            arity = ppc
+                                ? static_cast<u8>(std::min<std::size_t>(
+                                      resolved_args.size(),
+                                      std::numeric_limits<u8>::max()))
+                                : cached_arity(target);
+                        }
                     }
                     const std::string args = arity
-                        ? format_call_args_with_arity(pending_args, *arity, !objc_sized,
+                        ? format_call_args_with_arity(resolved_args, *arity, !objc_sized,
                                                       &used_args)
-                        : format_call_args_fallback(pending_args, &used_args);
+                        : format_call_args_fallback(resolved_args, &used_args);
                     call_expr = std::format("{}({}){}",
                                             fname, args,
                                             observed_targets_comment(inst.source_addr));
@@ -6690,12 +7121,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             for (const auto& a : used_args) {
                 emit_materializations_for_value(a, 0, out, ind);
             }
-            pending_args.clear();
-            have_pending = false;
-            const auto resolved_name = import_name_for_indirect_call(inst.srcs[0]);
-            const bool is_void = resolved_name && import_returns_void(*resolved_name);
+            clear_pending_args();
             emit_call_binding(out, ind, std::pair{it->second, ii}, call_expr,
-                              is_void);
+                              call_inst_returns_void(inst));
             continue;
         }
 
@@ -6883,6 +7311,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_narrow_arg_types_from_uses();
+    }
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
+        e.infer_pointer_arg_types_from_memory_uses();
     }
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_ppc_helper_preserved_arg_types();
@@ -7164,7 +7595,6 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 auto it = e.options.signatures->find(sf.ir->start);
                 if (it != e.options.signatures->end()) ipa_sig = &it->second;
             }
-            const auto int_args = int_arg_regs(e.abi);
             for (u8 i = 0; i < arity; ++i) {
                 if (i > 0) params += ", ";
                 std::string t;
@@ -7175,15 +7605,26 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 // (populated by seed_call_return_types + infer_local_types
                 // ahead of emit). This is what surfaces import-derived
                 // arg types in non-IPA mode - `char*`, `void*`, etc.
-                if (t.empty() && i < int_args.size()) {
-                    IrValue probe = IrValue::make_reg(int_args[i], e.abi_word_type());
+                if (t.empty() && i < e.self_arg_layout.size() &&
+                    e.self_arg_layout[i].reg != Reg::None) {
+                    IrValue probe = IrValue::make_reg(e.self_arg_layout[i].reg,
+                                                      e.self_arg_layout[i].type);
                     probe.version = 0;
                     const auto local = e.c_type_name_for(probe);
-                    if (local != e.abi_word_c_type()) t = local;
+                    if (local != e.abi_word_c_type() ||
+                        is_float_type(e.self_arg_layout[i].type)) {
+                        t = local;
+                    }
                 }
                 if (t.empty()) {
-                    t = (i < e.charp_arg.size() && e.charp_arg[i])
-                        ? std::string{"char*"} : std::string{e.abi_word_c_type()};
+                    if (i < e.self_arg_layout.size() &&
+                        is_float_type(e.self_arg_layout[i].type)) {
+                        t = c_type_name(e.self_arg_layout[i].type);
+                    } else {
+                        t = (i < e.charp_arg.size() && e.charp_arg[i])
+                            ? std::string{"char*"}
+                            : std::string{e.abi_word_c_type()};
+                    }
                 }
                 if (ipa_sig == nullptr && i < e.self_arg_type_overrides.size() &&
                     e.self_arg_type_overrides[i]) {
@@ -7518,6 +7959,9 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     e.name_merge_values();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
+        e.infer_pointer_arg_types_from_memory_uses();
+    }
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_ppc_helper_preserved_arg_types();
     }

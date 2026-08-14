@@ -47,5 +47,5 @@ bb_100054  (entry):
   t12 = add i32 r3, 0x18
   store f64 [t12], f4_1
   ; 0x100084
-  return r3
+  return r3, f1_1
 

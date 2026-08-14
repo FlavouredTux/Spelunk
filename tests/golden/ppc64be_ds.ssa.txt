@@ -27,5 +27,5 @@ bb_100078  (entry):
   t9 = add i64 r1_1, 0x20
   r1_2 = t9
   ; 0x100090
-  return r3_2
+  return r3_2, f1
 

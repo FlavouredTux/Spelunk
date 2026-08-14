@@ -184,8 +184,9 @@ Known limits:
   relocations, and code-pointer xrefs. DTK project mode resolves configured
   REL-to-REL and `main.dol` references; a standalone REL keeps unavailable
   peer-module references explicit. Scalar mixed GPR/FPR and ordinary aligned
-  stack-passed arguments are recovered, but complete aggregate classification
-  and split-register values are not yet reconstructed. See
+  stack-passed arguments are recovered. Signature-backed Wii aggregates model
+  consecutive GPR words and hidden structure-return pointers, while unknown
+  binary-only aggregate sizes remain conservative. See
   [docs/powerpc.md](docs/powerpc.md).
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`, `std::vector<T, std::allocator<T>>` → `std::vector<T>`) is balanced-template aware while preserving custom allocators.

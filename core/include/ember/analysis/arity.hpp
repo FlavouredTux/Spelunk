@@ -1,6 +1,8 @@
 #pragma once
 
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <ember/binary/binary.hpp>
@@ -24,11 +26,22 @@ struct InferredArgument {
     // space for them. Reg::None plus a populated offset is therefore a real
     // stack-passed source argument, not an unknown register location.
     std::optional<i64> stack_offset;
+    // Signature-backed aggregate metadata. register_count is the number of
+    // consecutive integer words occupied by this single source parameter;
+    // aggregate_type/size let the emitter rebuild a C compound literal from
+    // those words while keeping following arguments aligned.
+    u8          register_count = 1;
+    u32         aggregate_size = 0;
+    std::string aggregate_type;
 
     InferredArgument() = default;
     InferredArgument(Reg r, IrType t, bool pointer = false,
-                     std::optional<i64> stack = std::nullopt) noexcept
-        : reg(r), type(t), pointer_like(pointer), stack_offset(stack) {}
+                     std::optional<i64> stack = std::nullopt,
+                     u8 words = 1, u32 aggregate_bytes = 0,
+                     std::string aggregate_name = {}) noexcept
+        : reg(r), type(t), pointer_like(pointer), stack_offset(stack),
+          register_count(words), aggregate_size(aggregate_bytes),
+          aggregate_type(std::move(aggregate_name)) {}
 };
 
 // Recover register arguments in likely source order. For PPC, the order is a

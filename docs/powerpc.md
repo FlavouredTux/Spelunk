@@ -59,6 +59,21 @@ parameter area are folded into the following call instead of leaking as
 synthetic `arg_28` assignments. Exact annotations determine mixed scalar slot
 width and alignment; stripped binary-only recovery remains conservative.
 
+## Aggregate values and structure returns
+
+Signature-backed small aggregates consume their complete consecutive GPR word
+span. Ember rebuilds those words as a C compound literal at a call site, so an
+eight-byte `CXParsedHeader` is emitted as one source argument and the following
+scalar is taken from `r5`, not mistaken for the second half in `r4`.
+
+Known large aggregate returns use the PPC hidden-result convention. The caller's
+`r3` result-buffer pointer is removed from the source argument list and the
+first declared integer parameter begins in `r4`. The call result keeps its
+declared aggregate type in pseudo-C. Current Wii aggregate size knowledge covers
+`GXColor`, `GXColorS10`, `CXParsedHeader`, `Vec`/`Vec3`, and
+`Quaternion`/`Quat`; pointers, references, and array typedef parameters retain
+their pointer-style ABI treatment.
+
 Integer parameters used as load/store bases are marked pointer-like. The
 evidence follows register copies, constant-offset address arithmetic, one level
 of direct argument forwarding, and Wii `psq_l`/`psq_st` addresses. When no
@@ -141,9 +156,10 @@ is documented in [scripting.md](scripting.md).
   are not assumed to return through `f1`; add a signature when a routine is not
   in the built-in prototype table.
 - Scalar stack-passed arguments are reconstructed for ordinary aligned PPC
-  parameter slots. Split-register values, dynamically addressed outgoing
-  areas, and complete aggregate-by-value classification are not reconstructed
-  yet.
+  parameter slots. Signature-backed aggregates with known sizes and large
+  hidden-result returns are classified. Dynamically addressed outgoing areas,
+  unknown named aggregate sizes, and binary-only aggregate classification are
+  not reconstructed yet.
 - Return types, pointer target types, and structure names can remain generic
   when the ABI state is ambiguous. Pointer-shaped parameters deliberately use
   `void*` until stronger evidence is available, and PPC `void` recovery remains

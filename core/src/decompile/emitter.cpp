@@ -774,6 +774,41 @@ struct Emitter {
                type.find("float") != std::string_view::npos;
     }
 
+    [[nodiscard]] static std::optional<u32>
+    ppc_known_aggregate_size(std::string_view type) noexcept {
+        type = trim_line_view(type);
+        if (type.find('*') != std::string_view::npos ||
+            type.find('&') != std::string_view::npos ||
+            type.find('[') != std::string_view::npos) {
+            return std::nullopt;
+        }
+        constexpr std::array<std::string_view, 3> qualifiers = {
+            "const ", "volatile ", "struct "
+        };
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (std::string_view q : qualifiers) {
+                if (type.starts_with(q)) {
+                    type.remove_prefix(q.size());
+                    type = trim_line_view(type);
+                    changed = true;
+                }
+            }
+        }
+        if (type == "GXColor" || type == "GXColorS10") return 4;
+        if (type == "CXParsedHeader") return 8;
+        if (type == "Vec" || type == "Vec3") return 12;
+        if (type == "Quaternion" || type == "Quat") return 16;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] static bool
+    ppc_return_uses_hidden_sret(std::string_view type) noexcept {
+        auto size = ppc_known_aggregate_size(type);
+        return size && *size > 8;
+    }
+
     [[nodiscard]] bool is_ppc_abi() const noexcept {
         return abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
                abi == Abi::Ppc64ElfV2Le;
@@ -788,9 +823,13 @@ struct Emitter {
     }
 
     [[nodiscard]] i64 ppc_advance_parameter_slot(i64& cursor,
-                                                  IrType type) const noexcept {
+                                                  IrType type,
+                                                  u32 byte_width = 0) const noexcept {
         const i64 word = ppc_parameter_word_size();
-        i64 width = std::max<i64>(word, static_cast<i64>(type_bits(type) / 8));
+        i64 width = byte_width != 0
+            ? static_cast<i64>(byte_width)
+            : static_cast<i64>(type_bits(type) / 8);
+        width = std::max<i64>(word, width);
         i64 align = std::min<i64>(width, 8);
         cursor = (cursor + align - 1) / align * align;
         const i64 result = cursor;
@@ -804,11 +843,15 @@ struct Emitter {
         const auto fp_regs    = fp_arg_regs(abi);
         const bool positional = abi_positional_arg_slots(abi);
         const Reg canon = canonical_reg(r);
-        std::size_t int_idx = 0;
+        std::size_t int_idx = is_ppc_abi() &&
+            ppc_return_uses_hidden_sret(sig.return_type) ? 1u : 0u;
         std::size_t fp_idx  = 0;
         std::size_t slot    = 0;
         for (const auto& p : sig.params) {
             const bool is_fp = is_declared_fp_scalar(p.type);
+            const auto aggregate_size = is_ppc_abi()
+                ? ppc_known_aggregate_size(p.type)
+                : std::nullopt;
             if (is_fp) {
                 const std::size_t idx = positional ? slot : fp_idx;
                 if (idx < fp_regs.size() && fp_regs[idx] == canon) return &p.name;
@@ -816,7 +859,12 @@ struct Emitter {
             } else {
                 const std::size_t idx = positional ? slot : int_idx;
                 if (idx < int_regs.size() && int_regs[idx] == canon) return &p.name;
-                ++int_idx;
+                const std::size_t words = aggregate_size
+                    ? std::max<std::size_t>(1, (*aggregate_size +
+                        static_cast<u32>(ppc_parameter_word_size()) - 1) /
+                        static_cast<u32>(ppc_parameter_word_size()))
+                    : 1;
+                int_idx += words;
             }
             ++slot;
         }
@@ -828,34 +876,56 @@ struct Emitter {
         const auto int_regs = int_arg_regs(abi);
         const auto fp_regs = fp_arg_regs(abi);
         const bool positional = abi_positional_arg_slots(abi);
-        std::size_t int_idx = 0;
+        const bool hidden_sret = is_ppc_abi() &&
+            ppc_return_uses_hidden_sret(sig.return_type);
+        std::size_t int_idx = hidden_sret ? 1u : 0u;
         std::size_t fp_idx = 0;
         std::size_t slot = 0;
         i64 ppc_cursor = is_ppc_abi() ? ppc_parameter_area_base() : 0;
+        if (hidden_sret) {
+            (void)ppc_advance_parameter_slot(ppc_cursor, abi_word_type());
+        }
         std::vector<InferredArgument> result;
         result.reserve(std::min<std::size_t>(sig.params.size(), kMaxAbiArgs));
         for (const auto& param : sig.params) {
             if (result.size() >= kMaxAbiArgs) break;
             const bool is_fp = is_declared_fp_scalar(param.type);
+            const auto aggregate_size = is_ppc_abi()
+                ? ppc_known_aggregate_size(param.type)
+                : std::nullopt;
             const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
             Reg reg = Reg::None;
+            std::size_t int_words = 1;
             const IrType ir_type = is_fp
                 ? (param.type.find("float") != std::string::npos
                        ? IrType::F32 : IrType::F64)
                 : abi_word_type();
             std::optional<i64> stack_slot;
             const i64 ppc_slot = is_ppc_abi()
-                ? ppc_advance_parameter_slot(ppc_cursor, ir_type)
+                ? ppc_advance_parameter_slot(ppc_cursor, ir_type,
+                                             aggregate_size.value_or(0))
                 : 0;
             if (is_fp) {
                 if (index < fp_regs.size()) reg = fp_regs[index];
                 ++fp_idx;
             } else {
-                if (index < int_regs.size()) reg = int_regs[index];
-                ++int_idx;
+                int_words = aggregate_size
+                    ? std::max<std::size_t>(1, (*aggregate_size +
+                        static_cast<u32>(ppc_parameter_word_size()) - 1) /
+                        static_cast<u32>(ppc_parameter_word_size()))
+                    : 1;
+                if (index < int_regs.size() && index + int_words <= int_regs.size()) {
+                    reg = int_regs[index];
+                }
+                int_idx += int_words;
             }
             if (is_ppc_abi() && reg == Reg::None) stack_slot = ppc_slot;
-            result.push_back({reg, ir_type, false, stack_slot});
+            result.push_back({reg, ir_type, false, stack_slot,
+                              static_cast<u8>(int_words),
+                              aggregate_size.value_or(0),
+                              aggregate_size
+                                  ? normalize_c_type_alias(param.type)
+                                  : std::string{}});
             ++slot;
         }
         return result;
@@ -872,29 +942,48 @@ struct Emitter {
         std::size_t int_idx = 0;
         std::size_t fp_idx = 0;
         i64 ppc_cursor = is_ppc_abi() ? ppc_parameter_area_base() : 0;
+        if (is_ppc_abi() && arena.kind(spec->ret) == TypeKind::Struct &&
+            arena.node(spec->ret).s.size > 8) {
+            int_idx = 1;
+            (void)ppc_advance_parameter_slot(ppc_cursor, abi_word_type());
+        }
         std::vector<InferredArgument> result;
         result.reserve(std::min<std::size_t>(spec->params.size(), kMaxAbiArgs));
         for (std::size_t slot = 0;
              slot < spec->params.size() && result.size() < kMaxAbiArgs; ++slot) {
             const TypeRef type = spec->params[slot];
             const bool is_fp = arena.kind(type) == TypeKind::Float;
+            const u32 aggregate_size = arena.kind(type) == TypeKind::Struct
+                ? arena.node(type).s.size
+                : 0;
             const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
             Reg reg = Reg::None;
             IrType ir_type = abi_word_type();
+            std::size_t int_words = 1;
             std::optional<i64> stack_slot;
             if (is_fp) {
                 if (index < fp_regs.size()) reg = fp_regs[index];
                 ir_type = arena.node(type).f.bits <= 32 ? IrType::F32 : IrType::F64;
                 ++fp_idx;
             } else {
-                if (index < int_regs.size()) reg = int_regs[index];
-                ++int_idx;
+                int_words = aggregate_size != 0
+                    ? std::max<std::size_t>(1, (aggregate_size +
+                        static_cast<u32>(ppc_parameter_word_size()) - 1) /
+                        static_cast<u32>(ppc_parameter_word_size()))
+                    : 1;
+                if (index < int_regs.size() && index + int_words <= int_regs.size()) {
+                    reg = int_regs[index];
+                }
+                int_idx += int_words;
             }
             const i64 ppc_slot = is_ppc_abi()
-                ? ppc_advance_parameter_slot(ppc_cursor, ir_type)
+                ? ppc_advance_parameter_slot(ppc_cursor, ir_type, aggregate_size)
                 : 0;
             if (is_ppc_abi() && reg == Reg::None) stack_slot = ppc_slot;
-            result.push_back({reg, ir_type, false, stack_slot});
+            result.push_back({reg, ir_type, false, stack_slot,
+                              static_cast<u8>(int_words), aggregate_size,
+                              aggregate_size != 0 ? arena.node(type).s.name
+                                                  : std::string{}});
         }
         return result;
     }
@@ -1905,6 +1994,9 @@ struct Emitter {
         if (ret.kind == TypeKind::Float) {
             return ret.f.bits <= 32 ? std::string{"float"}
                                     : std::string{"double"};
+        }
+        if (ret.kind == TypeKind::Struct && !ret.s.name.empty()) {
+            return ret.s.name;
         }
         return std::nullopt;
     }
@@ -6923,10 +7015,15 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             auto& values = ppc_outgoing_stack_args[scan];
             for (const auto& arg : layout) {
                 if (!arg.stack_offset) continue;
-                auto store = recent_stores.find(*arg.stack_offset);
-                if (store == recent_stores.end()) continue;
-                values.emplace(*arg.stack_offset, store->second.second);
-                ppc_outgoing_stack_stores.insert(store->second.first);
+                const i64 words = std::max<i64>(1, arg.register_count);
+                for (i64 word_index = 0; word_index < words; ++word_index) {
+                    const i64 off = *arg.stack_offset +
+                        word_index * ppc_parameter_word_size();
+                    auto store = recent_stores.find(off);
+                    if (store == recent_stores.end()) continue;
+                    values.emplace(off, store->second.second);
+                    ppc_outgoing_stack_stores.insert(store->second.first);
+                }
             }
             if (values.empty()) ppc_outgoing_stack_args.erase(scan);
             recent_stores.clear();
@@ -6934,9 +7031,14 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     }
 
     auto args_for_layout = [&](const std::vector<InferredArgument>& layout,
-                               std::size_t call_index) {
+                               std::size_t call_index,
+                               std::vector<std::string>* rendered = nullptr) {
         std::vector<IrValue> result;
         result.reserve(layout.size());
+        if (rendered) {
+            rendered->clear();
+            rendered->reserve(layout.size());
+        }
         const auto int_regs = int_arg_regs(abi);
         const auto fp_regs = fp_arg_regs(abi);
         for (const auto& arg : layout) {
@@ -6944,7 +7046,27 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 auto call = ppc_outgoing_stack_args.find(call_index);
                 if (call != ppc_outgoing_stack_args.end()) {
                     auto value = call->second.find(*arg.stack_offset);
-                    if (value != call->second.end()) result.push_back(value->second);
+                    if (value != call->second.end()) {
+                        result.push_back(value->second);
+                        std::string aggregate;
+                        if (arg.aggregate_size != 0 && !arg.aggregate_type.empty()) {
+                            aggregate = std::format("({}){{", arg.aggregate_type);
+                            bool complete = true;
+                            for (u8 wi = 0; wi < arg.register_count; ++wi) {
+                                auto piece = call->second.find(*arg.stack_offset +
+                                    static_cast<i64>(wi) * ppc_parameter_word_size());
+                                if (piece == call->second.end()) {
+                                    complete = false;
+                                    break;
+                                }
+                                if (wi > 0) aggregate += ", ";
+                                aggregate += expr(piece->second);
+                            }
+                            aggregate += "}";
+                            if (!complete) aggregate.clear();
+                        }
+                        if (rendered) rendered->push_back(std::move(aggregate));
+                    }
                 }
                 continue;
             }
@@ -6954,6 +7076,17 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 for (std::size_t i = 0; i < regs.size() && i < values.size(); ++i) {
                     if (canonical_reg(regs[i]) == canon) {
                         result.push_back(values[i]);
+                        std::string aggregate;
+                        if (arg.aggregate_size != 0 && !arg.aggregate_type.empty() &&
+                            i + arg.register_count <= values.size()) {
+                            aggregate = std::format("({}){{", arg.aggregate_type);
+                            for (u8 wi = 0; wi < arg.register_count; ++wi) {
+                                if (wi > 0) aggregate += ", ";
+                                aggregate += expr(values[i + wi]);
+                            }
+                            aggregate += "}";
+                        }
+                        if (rendered) rendered->push_back(std::move(aggregate));
                         return true;
                     }
                 }
@@ -7012,7 +7145,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     auto format_call_args_with_arity = [&](const std::vector<IrValue>& args,
                                            u8 arity,
                                            bool trim_raw_arch_regs = true,
-                                           std::vector<IrValue>* used = nullptr) {
+                                           std::vector<IrValue>* used = nullptr,
+                                           const std::vector<std::string>* rendered = nullptr) {
         std::size_t limit = std::min<std::size_t>(arity, args.size());
         while (limit > 0 &&
                (is_stale_arg_reg(args[limit - 1]) ||
@@ -7024,7 +7158,11 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         for (std::size_t i = 0; i < limit; ++i) {
             if (used) used->push_back(args[i]);
             if (i > 0) s += ", ";
-            s += expr(args[i]);
+            if (rendered && i < rendered->size() && !(*rendered)[i].empty()) {
+                s += (*rendered)[i];
+            } else {
+                s += expr(args[i]);
+            }
         }
         return s;
     };
@@ -7078,6 +7216,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         if (inst.op == IrOp::Call) {
             auto import_name = import_name_for_direct_call(inst.target1);
             std::vector<IrValue> call_args = pending_args;
+            std::vector<std::string> rendered_call_args;
             const bool ppc_abi =
                 abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
                 abi == Abi::Ppc64ElfV2Le;
@@ -7085,7 +7224,9 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 const auto layout = import_name
                     ? abi_layout_for_import(*import_name)
                     : cached_argument_layout(inst.target1);
-                if (!layout.empty() || !import_name) call_args = args_for_layout(layout, ii);
+                if (!layout.empty() || !import_name) {
+                    call_args = args_for_layout(layout, ii, &rendered_call_args);
+                }
             }
             // Arity sources: imports → user sig at PLT / baked-in libc table;
             // printf/scanf family → parse format string to count args;
@@ -7120,7 +7261,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             std::vector<IrValue> used_args;
             const std::string args = arity
                 ? format_call_args_with_arity(call_args, *arity, !objc_sized,
-                                              &used_args)
+                                              &used_args, &rendered_call_args)
                 : format_call_args_fallback(call_args, &used_args);
             const std::string callee = import_name
                 ? *import_name
@@ -7147,10 +7288,14 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             std::vector<IrValue> used_args;
             if (auto name = import_name_for_indirect_call(inst.srcs[0]); name) {
                 std::vector<IrValue> indirect_args = pending_args;
+                std::vector<std::string> rendered_indirect_args;
                 if (abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
                     abi == Abi::Ppc64ElfV2Le) {
                     const auto layout = abi_layout_for_import(*name);
-                    if (!layout.empty()) indirect_args = args_for_layout(layout, ii);
+                    if (!layout.empty()) {
+                        indirect_args = args_for_layout(layout, ii,
+                                                        &rendered_indirect_args);
+                    }
                 }
                 // No PLT address here, so user-sig lookup can't key off one.
                 auto arity = objc_call_arity(*name, indirect_args);
@@ -7163,7 +7308,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 }
                 const std::string args = arity
                     ? format_call_args_with_arity(indirect_args, *arity, !objc_sized,
-                                                  &used_args)
+                                                  &used_args, &rendered_indirect_args)
                     : format_call_args_fallback(indirect_args, &used_args);
                 call_expr = render_objc_runtime_call(*name, indirect_args)
                     .value_or(std::format("{}({})", *name, args));
@@ -7180,13 +7325,15 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     bool objc_sized = false;
                     const auto direct_import = import_name_for_direct_call(target);
                     std::vector<IrValue> resolved_args = pending_args;
+                    std::vector<std::string> rendered_resolved_args;
                     if (abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
                         abi == Abi::Ppc64ElfV2Le) {
                         const auto layout = direct_import
                             ? abi_layout_for_import(*direct_import)
                             : cached_argument_layout(target);
                         if (!layout.empty() || !direct_import) {
-                            resolved_args = args_for_layout(layout, ii);
+                            resolved_args = args_for_layout(layout, ii,
+                                                            &rendered_resolved_args);
                         }
                     }
                     if (direct_import) {
@@ -7220,7 +7367,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                     const std::string args = arity
                         ? format_call_args_with_arity(resolved_args, *arity, !objc_sized,
-                                                      &used_args)
+                                                      &used_args,
+                                                      &rendered_resolved_args)
                         : format_call_args_fallback(resolved_args, &used_args);
                     call_expr = std::format("{}({}){}",
                                             fname, args,

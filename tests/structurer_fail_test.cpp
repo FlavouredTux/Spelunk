@@ -76,6 +76,20 @@ public:
         stack_nine.kind = ember::SymbolKind::Function;
         symbols_.push_back(std::move(stack_nine));
 
+        ember::Symbol make_vec;
+        make_vec.name = "make_vec";
+        make_vec.addr = 0x1d00;
+        make_vec.size = 0x20;
+        make_vec.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(make_vec));
+
+        ember::Symbol consume_header;
+        consume_header.name = "consume_header";
+        consume_header.addr = 0x1f00;
+        consume_header.size = 0x20;
+        consume_header.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(consume_header));
+
         section_.name = ".text";
         section_.vaddr = 0x1000;
         section_.size = text_.size();
@@ -1225,6 +1239,128 @@ int test_ppc_annotated_incoming_stack_argument_name() {
     return 0;
 }
 
+int test_ppc_hidden_sret_shifts_declared_call_arguments() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1e00;
+    constexpr addr_t kTarget = 0x1d00;
+    IrValue r3_result = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    r3_result.version = 1;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "sret_caller";
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+
+    IrInst args;
+    args.op = IrOp::Intrinsic;
+    args.name = "call.args.1";
+    args.srcs[0] = IrValue::make_imm(0x3000, IrType::I32);  // hidden result buffer
+    args.srcs[1] = IrValue::make_imm(7, IrType::I32);       // declared tag
+    args.src_count = 2;
+    bb.insts.push_back(args);
+    bb.insts.push_back(make_call_imm(kStart + 4, kTarget));
+    bb.insts.push_back(make_clobber(r3_result));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x5000, IrType::I32),
+                                  r3_result));
+    bb.insts.push_back(make_ret(kStart + 0x10));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    Annotations ann;
+    FunctionSig sig;
+    sig.return_type = "Vec3";
+    sig.params.push_back({"uint32_t", "tag"});
+    ann.signatures[kTarget] = std::move(sig);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &ann, EmitOptions{});
+    check(pc.has_value(), "PPC hidden-sret call emits");
+    if (!pc) return 1;
+    const bool shifted = pc->find("Vec3 r_make_vec = make_vec(7)") !=
+        std::string::npos;
+    if (!shifted) std::fprintf(stderr, "PPC sret output:\n%s\n", pc->c_str());
+    check(shifted, "large aggregate return hides r3 and maps first parameter to r4");
+    check(pc->find("make_vec(0x3000") == std::string::npos,
+          "hidden PPC result-buffer pointer is not emitted as a source argument");
+    return 0;
+}
+
+int test_ppc_small_aggregate_consumes_multiple_gprs() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x2000;
+    constexpr addr_t kTarget = 0x1f00;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x10;
+    fn.name = "aggregate_caller";
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+
+    IrInst args;
+    args.op = IrOp::Intrinsic;
+    args.name = "call.args.1";
+    args.srcs[0] = IrValue::make_imm(0x11, IrType::I32);
+    args.srcs[1] = IrValue::make_imm(0x22, IrType::I32);
+    args.srcs[2] = IrValue::make_imm(9, IrType::I32);
+    args.src_count = 3;
+    bb.insts.push_back(args);
+    bb.insts.push_back(make_call_imm(kStart + 4, kTarget));
+    bb.insts.push_back(make_ret(kStart + 8));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    Annotations ann;
+    FunctionSig sig;
+    sig.return_type = "void";
+    sig.params.push_back({"CXParsedHeader", "header"});
+    sig.params.push_back({"uint32_t", "flags"});
+    ann.signatures[kTarget] = std::move(sig);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &ann, EmitOptions{});
+    check(pc.has_value(), "PPC small aggregate call emits");
+    if (!pc) return 1;
+    const bool aligned = pc->find(
+        "consume_header((CXParsedHeader){0x11, 0x22}, 9)") != std::string::npos;
+    if (!aligned) std::fprintf(stderr, "PPC aggregate output:\n%s\n", pc->c_str());
+    check(aligned, "eight-byte aggregate consumes r3/r4 and following scalar uses r5");
+    check(pc->find("}, 0x22)") == std::string::npos,
+          "second aggregate word stays inside the aggregate compound literal");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1245,5 +1381,7 @@ int main() {
     rc |= test_ppc_sdk_signature_seeds_mixed_lanes();
     rc |= test_ppc_annotated_stack_argument_at_call_site();
     rc |= test_ppc_annotated_incoming_stack_argument_name();
+    rc |= test_ppc_hidden_sret_shifts_declared_call_arguments();
+    rc |= test_ppc_small_aggregate_consumes_multiple_gprs();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

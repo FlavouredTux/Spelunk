@@ -57,6 +57,12 @@ public:
         // Compiler helper target used by the first call above.
         put(0x100, 0x4e800020);
 
+        // ninth_integer: leaf function reads the first PPC32 overflow word
+        // at entry-r1+0x28 after the eight GPR parameter-home slots.
+        put(0x108, 0x81610028);  // lwz r11,0x28(r1)
+        put(0x10c, 0x916c0000);  // stw r11,0(r12)
+        put(0x110, 0x4e800020);  // blr
+
         section_.name = ".text";
         section_.vaddr = kBase;
         section_.size = text_.size();
@@ -74,6 +80,7 @@ public:
         add_symbol("forwarded_pointer", kBase + 0xc0, 0x0c);
         add_symbol("paired_pointer", kBase + 0xe0, 0x08);
         add_symbol("_savegpr_27", kBase + 0x100, 0x04);
+        add_symbol("ninth_integer", kBase + 0x108, 0x0c);
     }
 
     [[nodiscard]] ember::Format format() const noexcept override {
@@ -151,6 +158,14 @@ void check_pointer(const std::vector<ember::InferredArgument>& args,
     ++failures;
 }
 
+void check_stack(const std::vector<ember::InferredArgument>& args,
+                 std::size_t index, ember::i64 expected, const char* message) {
+    if (index < args.size() && args[index].reg == ember::Reg::None &&
+        args[index].stack_offset && *args[index].stack_offset == expected) return;
+    std::fprintf(stderr, "FAIL: %s\n", message);
+    ++failures;
+}
+
 }  // namespace
 
 int main() {
@@ -184,5 +199,10 @@ int main() {
              "paired-single PPC address parameter is recovered");
     check_pointer(paired, 0,
                   "paired-single PPC memory address is pointer-like");
+    const auto overflow = ember::infer_arguments(binary, 0x80001108);
+    check_eq(static_cast<ember::u8>(overflow.size()), 9,
+             "PPC overflow load preserves the eight-register argument prefix");
+    check_stack(overflow, 8, 0x28,
+                "PPC ninth integer parameter is recovered at entry sp+0x28");
     return failures == 0 ? 0 : 1;
 }

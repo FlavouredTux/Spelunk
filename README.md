@@ -183,9 +183,10 @@ Known limits:
   DOL, Wii REL, and relocatable PPC32 ELF function discovery, core PPC32
   relocations, and code-pointer xrefs. DTK project mode resolves configured
   REL-to-REL and `main.dol` references; a standalone REL keeps unavailable
-  peer-module references explicit. Scalar mixed GPR/FPR arguments are recovered,
-  but aggregate classification and stack-passed PPC arguments are not yet
-  reconstructed. See [docs/powerpc.md](docs/powerpc.md).
+  peer-module references explicit. Scalar mixed GPR/FPR and ordinary aligned
+  stack-passed arguments are recovered, but complete aggregate classification
+  and split-register values are not yet reconstructed. See
+  [docs/powerpc.md](docs/powerpc.md).
 - Itanium demangle is comprehensive; MSVC demangle is partial.
 - C++ stdlib name simplification (`std::__cxx11::basic_string<…>` → `std::string`, `std::vector<T, std::allocator<T>>` → `std::vector<T>`) is balanced-template aware while preserving custom allocators.
 

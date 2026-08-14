@@ -50,6 +50,15 @@ The resulting layout drives both the recovered function header and its call
 sites. Direct calls and resolved or signature-known indirect calls use the
 callee layout to select and interleave the saved GPR/FPR values.
 
+Scalar overflow parameters are recovered from the ABI parameter area as well.
+On PPC32 the first integer overflow word is at entry `r1 + 0x28`, after the
+linkage area and eight GPR home slots. Ember follows a versioned `r1` through a
+Metrowerks `stwu` frame allocation, so the same incoming slot is recognized in
+leaf and framed callees. At call sites, layout-gated stores to the outgoing
+parameter area are folded into the following call instead of leaking as
+synthetic `arg_28` assignments. Exact annotations determine mixed scalar slot
+width and alignment; stripped binary-only recovery remains conservative.
+
 Integer parameters used as load/store bases are marked pointer-like. The
 evidence follows register copies, constant-offset address arithmetic, one level
 of direct argument forwarding, and Wii `psq_l`/`psq_st` addresses. When no
@@ -131,8 +140,10 @@ is documented in [scripting.md](scripting.md).
 - Floating return recovery is deliberately evidence-driven. Unknown routines
   are not assumed to return through `f1`; add a signature when a routine is not
   in the built-in prototype table.
-- Stack-passed arguments and complete aggregate-by-value classification are not
-  reconstructed yet.
+- Scalar stack-passed arguments are reconstructed for ordinary aligned PPC
+  parameter slots. Split-register values, dynamically addressed outgoing
+  areas, and complete aggregate-by-value classification are not reconstructed
+  yet.
 - Return types, pointer target types, and structure names can remain generic
   when the ABI state is ambiguous. Pointer-shaped parameters deliberately use
   `void*` until stronger evidence is available, and PPC `void` recovery remains

@@ -12,10 +12,12 @@ namespace ember {
 
 inline constexpr std::size_t kMaxAbiIntArgs = 8;
 inline constexpr std::size_t kMaxAbiFpArgs = 13;
-// Largest register-passed source argument set currently modelled. PPC64 can
-// carry eight integer/pointer arguments and thirteen floating-point arguments
-// in independent register sequences.
-inline constexpr std::size_t kMaxAbiArgs = kMaxAbiIntArgs + kMaxAbiFpArgs;
+inline constexpr std::size_t kMaxAbiRegArgs = kMaxAbiIntArgs + kMaxAbiFpArgs;
+// Keep bounded storage for recovered overflow parameters as well as the
+// register banks. This is deliberately a presentation/analysis cap rather
+// than an ABI limit; signatures beyond it remain available to the annotation
+// path, while heuristic recovery stays resistant to corrupt stack offsets.
+inline constexpr std::size_t kMaxAbiArgs = 32;
 
 // Which calling convention the lifter, arity inferencer, signature
 // inferencer, and emitter should assume for a binary.

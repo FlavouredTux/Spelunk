@@ -69,6 +69,13 @@ public:
         scale.kind = ember::SymbolKind::Function;
         symbols_.push_back(std::move(scale));
 
+        ember::Symbol stack_nine;
+        stack_nine.name = "stack_nine";
+        stack_nine.addr = 0x1b00;
+        stack_nine.size = 0x20;
+        stack_nine.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(stack_nine));
+
         section_.name = ".text";
         section_.vaddr = 0x1000;
         section_.size = text_.size();
@@ -1090,6 +1097,134 @@ int test_ppc_sdk_signature_seeds_mixed_lanes() {
     return 0;
 }
 
+int test_ppc_annotated_stack_argument_at_call_site() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1c00;
+    constexpr addr_t kTarget = 0x1b00;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x24;
+    fn.name = "stack_caller";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+
+    IrValue stack_addr = IrValue::make_temp(0, IrType::I32);
+    bb.insts.push_back(make_add(stack_addr,
+        IrValue::make_reg(Reg::PpcR1, IrType::I32),
+        IrValue::make_imm(0x28, IrType::I32)));
+    bb.insts.push_back(make_store(stack_addr,
+                                 IrValue::make_imm(9, IrType::I32)));
+    for (std::size_t group = 0; group < 3; ++group) {
+        IrInst args;
+        args.op = IrOp::Intrinsic;
+        args.name = std::format("call.args.{}", group + 1);
+        for (std::size_t lane = 0; lane < 3; ++lane) {
+            const std::size_t index = group * 3 + lane;
+            if (index >= 8) break;
+            args.srcs[args.src_count++] =
+                IrValue::make_imm(static_cast<i64>(index + 1), IrType::I32);
+        }
+        bb.insts.push_back(std::move(args));
+    }
+    bb.insts.push_back(make_call_imm(kStart + 0x18, kTarget));
+    bb.insts.push_back(make_ret(kStart + 0x1c));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    Annotations ann;
+    FunctionSig sig;
+    sig.return_type = "void";
+    for (int i = 1; i <= 9; ++i) {
+        sig.params.push_back({"uint32_t", std::format("p{}", i)});
+    }
+    ann.signatures[kTarget] = std::move(sig);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &ann, EmitOptions{});
+    check(pc.has_value(), "PPC outgoing stack argument emits");
+    if (!pc) return 1;
+    const bool recovered = pc->find(
+        "stack_nine(1, 2, 3, 4, 5, 6, 7, 8, 9)") != std::string::npos;
+    if (!recovered) std::fprintf(stderr, "PPC stack call output:\n%s\n", pc->c_str());
+    check(recovered, "ninth PPC integer argument is recovered from sp+0x28");
+    check(pc->find("arg_28") == std::string::npos,
+          "outgoing PPC argument store is not emitted as a local assignment");
+    return 0;
+}
+
+int test_ppc_annotated_incoming_stack_argument_name() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1b00;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x10;
+    fn.name = "stack_nine";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    IrValue addr = IrValue::make_temp(0, IrType::I32);
+    IrValue value = IrValue::make_temp(1, IrType::I32);
+    bb.insts.push_back(make_add(addr,
+        IrValue::make_reg(Reg::PpcR1, IrType::I32),
+        IrValue::make_imm(0x28, IrType::I32)));
+    bb.insts.push_back(make_load(value, addr));
+    bb.insts.push_back(make_ret_value(kStart + 8, value));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    tail->condition = value;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    Annotations ann;
+    FunctionSig sig;
+    sig.return_type = "uint32_t";
+    for (int i = 1; i <= 9; ++i) {
+        sig.params.push_back({"uint32_t", i == 9 ? "ninth" : std::format("p{}", i)});
+    }
+    ann.signatures[kStart] = std::move(sig);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &ann, EmitOptions{});
+    check(pc.has_value(), "PPC incoming stack argument emits");
+    if (!pc) return 1;
+    const bool named = pc->find("return ninth;") != std::string::npos;
+    if (!named) std::fprintf(stderr, "PPC incoming stack output:\n%s\n", pc->c_str());
+    check(named,
+          "incoming sp+0x28 load uses the annotated ninth parameter name");
+    check(pc->find("arg_28") == std::string::npos,
+          "incoming PPC overflow parameter does not leak a synthetic slot name");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1108,5 +1243,7 @@ int main() {
     rc |= test_ppc_known_float_call_binds_f1_result();
     rc |= test_ppc_annotated_float_call_selects_f1();
     rc |= test_ppc_sdk_signature_seeds_mixed_lanes();
+    rc |= test_ppc_annotated_stack_argument_at_call_site();
+    rc |= test_ppc_annotated_incoming_stack_argument_name();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

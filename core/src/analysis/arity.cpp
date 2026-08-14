@@ -1,5 +1,6 @@
 #include <ember/analysis/arity.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -22,6 +23,16 @@
 namespace ember {
 
 namespace {
+
+[[nodiscard]] constexpr i64 ppc_stack_arg_first_offset(Abi abi) noexcept {
+    // PPC32: 8-byte linkage area + eight 4-byte GPR parameter-home slots.
+    // PPC64: 48-byte linkage area + eight 8-byte GPR parameter-home slots.
+    return abi == Abi::Ppc32Sysv ? 0x28 : 0x70;
+}
+
+[[nodiscard]] constexpr i64 ppc_stack_arg_word_size(Abi abi) noexcept {
+    return abi == Abi::Ppc32Sysv ? 4 : 8;
+}
 
 [[nodiscard]] std::vector<InferredArgument>
 infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
@@ -53,6 +64,11 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
     };
     std::array<Evidence, kMaxAbiIntArgs> int_evidence{};
     std::array<Evidence, kMaxAbiFpArgs> fp_evidence{};
+    struct StackEvidence {
+        IrType type = IrType::I64;
+        std::size_t first_use = std::numeric_limits<std::size_t>::max();
+    };
+    std::map<i64, StackEvidence> stack_evidence;
     std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
     std::map<SsaKey, const IrInst*> defs;
     for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
@@ -84,6 +100,46 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                    sym->name.starts_with("__save_fpr");
         }
         return false;
+    };
+
+    const auto entry_stack_offset = [&](auto&& self, const IrValue& value,
+                                        int trace_depth) -> std::optional<i64> {
+        if (trace_depth > 16) return std::nullopt;
+        if (value.kind == IrValueKind::Reg) {
+            if (canonical_reg(value.reg) != Reg::PpcR1) return std::nullopt;
+            if (value.version == 0) return i64{0};
+            auto key = ssa_key(value);
+            if (!key) return std::nullopt;
+            auto it = defs.find(*key);
+            if (it == defs.end()) return std::nullopt;
+            const IrInst* def = it->second;
+            return def->op == IrOp::Assign && def->src_count == 1
+                ? self(self, def->srcs[0], trace_depth + 1)
+                : std::nullopt;
+        }
+        if (value.kind != IrValueKind::Temp) return std::nullopt;
+        auto key = ssa_key(value);
+        if (!key) return std::nullopt;
+        auto it = defs.find(*key);
+        if (it == defs.end()) return std::nullopt;
+        const IrInst* def = it->second;
+        if (def->op == IrOp::Assign && def->src_count == 1) {
+            return self(self, def->srcs[0], trace_depth + 1);
+        }
+        if ((def->op == IrOp::Add || def->op == IrOp::Sub) &&
+            def->src_count == 2 && def->srcs[1].kind == IrValueKind::Imm) {
+            auto base = self(self, def->srcs[0], trace_depth + 1);
+            if (!base) return std::nullopt;
+            return def->op == IrOp::Add
+                ? *base + def->srcs[1].imm
+                : *base - def->srcs[1].imm;
+        }
+        if (def->op == IrOp::Add && def->src_count == 2 &&
+            def->srcs[0].kind == IrValueKind::Imm) {
+            auto base = self(self, def->srcs[1], trace_depth + 1);
+            if (base) return *base + def->srcs[0].imm;
+        }
+        return std::nullopt;
     };
 
     auto candidate_for = [&](Reg r) -> std::optional<std::pair<bool, std::size_t>> {
@@ -215,6 +271,28 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                   inst.name.starts_with("call.fp_args.")))) {
                 continue;
             }
+            if (inst.op == IrOp::Load && inst.src_count >= 1) {
+                if (auto off = entry_stack_offset(entry_stack_offset,
+                                                  inst.srcs[0], 0); off) {
+                    const i64 first = ppc_stack_arg_first_offset(abi);
+                    const i64 word = ppc_stack_arg_word_size(abi);
+                    const i64 max = first +
+                        static_cast<i64>(kMaxAbiArgs - kMaxAbiIntArgs) * word;
+                    if (*off >= first && *off < max && (*off - first) % word == 0) {
+                        auto& evidence = stack_evidence[*off];
+                        evidence.type = inst.dst.type;
+                        evidence.first_use = std::min(evidence.first_use, order);
+                        // An overflow integer word proves the preceding GPR
+                        // parameter prefix even if those values are unused in
+                        // this callee. Exact mixed layouts remain signature-
+                        // driven because stripped code does not encode them.
+                        for (auto& e : int_evidence) {
+                            e.live = true;
+                            e.first_use = std::min(e.first_use, order);
+                        }
+                    }
+                }
+            }
             if ((inst.op == IrOp::Load || inst.op == IrOp::Store) &&
                 inst.src_count >= 1) {
                 mark_pointer_evidence(mark_pointer_evidence, inst.srcs[0], order, 0);
@@ -275,6 +353,23 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
             // binary-only declaration conservative; explicit signatures can
             // still pin a parameter to float.
             result.push_back({fp_args[fi++], IrType::F64});
+        }
+    }
+    if (!stack_evidence.empty()) {
+        const i64 first = ppc_stack_arg_first_offset(abi);
+        const i64 word = ppc_stack_arg_word_size(abi);
+        const i64 last = stack_evidence.rbegin()->first;
+        for (i64 off = first;
+             off <= last && result.size() < kMaxAbiArgs;) {
+            auto it = stack_evidence.find(off);
+            const IrType type = it == stack_evidence.end()
+                ? (abi == Abi::Ppc32Sysv ? IrType::I32 : IrType::I64)
+                : it->second.type;
+            result.push_back({Reg::None, type, false, off});
+            i64 width = static_cast<i64>(std::max<unsigned>(
+                static_cast<unsigned>(word), type_bits(type) / 8));
+            width = ((width + word - 1) / word) * word;
+            off += width;
         }
     }
     visiting.erase(target);

@@ -774,6 +774,30 @@ struct Emitter {
                type.find("float") != std::string_view::npos;
     }
 
+    [[nodiscard]] bool is_ppc_abi() const noexcept {
+        return abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
+               abi == Abi::Ppc64ElfV2Le;
+    }
+
+    [[nodiscard]] i64 ppc_parameter_area_base() const noexcept {
+        return abi == Abi::Ppc32Sysv ? 0x08 : 0x30;
+    }
+
+    [[nodiscard]] i64 ppc_parameter_word_size() const noexcept {
+        return abi == Abi::Ppc32Sysv ? 4 : 8;
+    }
+
+    [[nodiscard]] i64 ppc_advance_parameter_slot(i64& cursor,
+                                                  IrType type) const noexcept {
+        const i64 word = ppc_parameter_word_size();
+        i64 width = std::max<i64>(word, static_cast<i64>(type_bits(type) / 8));
+        i64 align = std::min<i64>(width, 8);
+        cursor = (cursor + align - 1) / align * align;
+        const i64 result = cursor;
+        cursor += (width + word - 1) / word * word;
+        return result;
+    }
+
     [[nodiscard]] const std::string*
     abi_param_for(const FunctionSig& sig, Reg r) const noexcept {
         const auto int_regs   = int_arg_regs(abi);
@@ -807,6 +831,7 @@ struct Emitter {
         std::size_t int_idx = 0;
         std::size_t fp_idx = 0;
         std::size_t slot = 0;
+        i64 ppc_cursor = is_ppc_abi() ? ppc_parameter_area_base() : 0;
         std::vector<InferredArgument> result;
         result.reserve(std::min<std::size_t>(sig.params.size(), kMaxAbiArgs));
         for (const auto& param : sig.params) {
@@ -814,6 +839,14 @@ struct Emitter {
             const bool is_fp = is_declared_fp_scalar(param.type);
             const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
             Reg reg = Reg::None;
+            const IrType ir_type = is_fp
+                ? (param.type.find("float") != std::string::npos
+                       ? IrType::F32 : IrType::F64)
+                : abi_word_type();
+            std::optional<i64> stack_slot;
+            const i64 ppc_slot = is_ppc_abi()
+                ? ppc_advance_parameter_slot(ppc_cursor, ir_type)
+                : 0;
             if (is_fp) {
                 if (index < fp_regs.size()) reg = fp_regs[index];
                 ++fp_idx;
@@ -821,10 +854,8 @@ struct Emitter {
                 if (index < int_regs.size()) reg = int_regs[index];
                 ++int_idx;
             }
-            result.push_back({reg, is_fp
-                ? (param.type.find("float") != std::string::npos
-                       ? IrType::F32 : IrType::F64)
-                : abi_word_type()});
+            if (is_ppc_abi() && reg == Reg::None) stack_slot = ppc_slot;
+            result.push_back({reg, ir_type, false, stack_slot});
             ++slot;
         }
         return result;
@@ -840,6 +871,7 @@ struct Emitter {
         const bool positional = abi_positional_arg_slots(abi);
         std::size_t int_idx = 0;
         std::size_t fp_idx = 0;
+        i64 ppc_cursor = is_ppc_abi() ? ppc_parameter_area_base() : 0;
         std::vector<InferredArgument> result;
         result.reserve(std::min<std::size_t>(spec->params.size(), kMaxAbiArgs));
         for (std::size_t slot = 0;
@@ -849,6 +881,7 @@ struct Emitter {
             const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
             Reg reg = Reg::None;
             IrType ir_type = abi_word_type();
+            std::optional<i64> stack_slot;
             if (is_fp) {
                 if (index < fp_regs.size()) reg = fp_regs[index];
                 ir_type = arena.node(type).f.bits <= 32 ? IrType::F32 : IrType::F64;
@@ -857,7 +890,11 @@ struct Emitter {
                 if (index < int_regs.size()) reg = int_regs[index];
                 ++int_idx;
             }
-            result.push_back({reg, ir_type});
+            const i64 ppc_slot = is_ppc_abi()
+                ? ppc_advance_parameter_slot(ppc_cursor, ir_type)
+                : 0;
+            if (is_ppc_abi() && reg == Reg::None) stack_slot = ppc_slot;
+            result.push_back({reg, ir_type, false, stack_slot});
         }
         return result;
     }
@@ -876,8 +913,28 @@ struct Emitter {
     // Returns the annotated parameter name when the signature declares that
     // slot, else a generic `aN`.
     [[nodiscard]] std::optional<std::string>
-    incoming_stack_arg_name(i64 off) const {
-        if (!fn || !abi_positional_arg_slots(abi)) return std::nullopt;
+    incoming_stack_arg_name(const IrValue& addr, i64 off) const {
+        if (!fn) return std::nullopt;
+        if (is_ppc_abi()) {
+            auto entry_off = entry_stack_offset(addr);
+            if (!entry_off) return std::nullopt;
+            for (std::size_t i = 0; i < self_arg_layout.size(); ++i) {
+                const auto& arg = self_arg_layout[i];
+                if (!arg.stack_offset || *arg.stack_offset != *entry_off) continue;
+                if (i < self_arg_names.size() && !self_arg_names[i].empty()) {
+                    return self_arg_names[i];
+                }
+                if (annotations) {
+                    if (const FunctionSig* sig = annotations->signature_for(fn->start);
+                        sig && i < sig->params.size() && !sig->params[i].name.empty()) {
+                        return sig->params[i].name;
+                    }
+                }
+                return std::format("a{}", i + 1);
+            }
+            return std::nullopt;
+        }
+        if (!abi_positional_arg_slots(abi)) return std::nullopt;
         if (off < 0x08 || (off - 0x08) % 8 != 0) return std::nullopt;
         const std::size_t k = static_cast<std::size_t>((off - 0x08) / 8);
         if (k < int_arg_regs(abi).size()) return std::nullopt;  // register-arg home
@@ -4412,6 +4469,44 @@ struct Emitter {
         emit_materializations_for_raw_temps(rendered, out, ind);
     }
 
+    // Trace a PPC stack address back to the entry value of r1. Unlike
+    // stack_offset(), this follows versioned r1 assignments through `stwu`
+    // so a callee load at current-r1 + frame-size + 0x28 resolves to the
+    // ABI's entry-r1 + 0x28 overflow slot.
+    [[nodiscard]] std::optional<i64>
+    entry_stack_offset(const IrValue& v, int depth = 0) const {
+        if (depth > 16 || !is_ppc_abi()) return std::nullopt;
+        if (v.kind == IrValueKind::Reg) {
+            if (canonical_reg(v.reg) != Reg::PpcR1) return std::nullopt;
+            if (v.version == 0) return i64{0};
+            const IrInst* d = def_of(v);
+            if (!d || d->op != IrOp::Assign || d->src_count < 1) {
+                return std::nullopt;
+            }
+            return entry_stack_offset(d->srcs[0], depth + 1);
+        }
+        if (v.kind != IrValueKind::Temp) return std::nullopt;
+        const IrInst* d = def_of(v);
+        if (!d) return std::nullopt;
+        if (d->op == IrOp::Assign && d->src_count >= 1) {
+            return entry_stack_offset(d->srcs[0], depth + 1);
+        }
+        if ((d->op == IrOp::Add || d->op == IrOp::Sub) &&
+            d->src_count >= 2 && d->srcs[1].kind == IrValueKind::Imm) {
+            auto base = entry_stack_offset(d->srcs[0], depth + 1);
+            if (!base) return std::nullopt;
+            return d->op == IrOp::Add
+                ? *base + d->srcs[1].imm
+                : *base - d->srcs[1].imm;
+        }
+        if (d->op == IrOp::Add && d->src_count >= 2 &&
+            d->srcs[0].kind == IrValueKind::Imm) {
+            auto base = entry_stack_offset(d->srcs[1], depth + 1);
+            if (base) return *base + d->srcs[0].imm;
+        }
+        return std::nullopt;
+    }
+
     // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.
     [[nodiscard]] std::optional<i64> stack_offset(const IrValue& v, int depth = 0) const {
         if (depth > 16) return std::nullopt;
@@ -5260,7 +5355,7 @@ struct Emitter {
                     it != frame_layout.slots.end() && !it->second.name.empty();
                 const bool synthetic = has_name && it->second.name == stack_name(*off);
                 if (has_name && !synthetic) return it->second.name;
-                if (auto arg = incoming_stack_arg_name(*off)) return *arg;
+                if (auto arg = incoming_stack_arg_name(addr, *off)) return *arg;
                 if (has_name) return it->second.name;
                 return stack_name(*off);
             }
@@ -6793,12 +6888,66 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         have_pending = false;
     };
 
-    auto args_for_layout = [&](const std::vector<InferredArgument>& layout) {
+    // Metrowerks writes overflow parameters into the outgoing parameter area
+    // immediately before `bl`. Pair those stores with the following call so
+    // the call can render the source argument and the raw stack assignment can
+    // disappear. The scan is deliberately block-local and signature/layout-
+    // gated; an arbitrary positive stack store is never hidden on its own.
+    std::map<std::size_t, std::map<i64, IrValue>> ppc_outgoing_stack_args;
+    std::set<std::size_t> ppc_outgoing_stack_stores;
+    if (is_ppc_abi()) {
+        std::map<i64, std::pair<std::size_t, IrValue>> recent_stores;
+        for (std::size_t scan = 0; scan < bb.insts.size(); ++scan) {
+            const IrInst& candidate = bb.insts[scan];
+            if (candidate.op == IrOp::Store && candidate.src_count >= 2) {
+                if (auto off = stack_offset(candidate.srcs[0]); off &&
+                    *off >= ppc_parameter_area_base()) {
+                    recent_stores[*off] = {scan, candidate.srcs[1]};
+                }
+                continue;
+            }
+            if (candidate.op != IrOp::Call && candidate.op != IrOp::CallIndirect) {
+                continue;
+            }
+
+            std::vector<InferredArgument> layout;
+            if (candidate.op == IrOp::Call) {
+                if (auto import_name = import_name_for_direct_call(candidate.target1)) {
+                    layout = abi_layout_for_import(*import_name);
+                } else {
+                    layout = cached_argument_layout(candidate.target1);
+                }
+            } else if (const FunctionSig* sig = call_annotation_signature(candidate); sig) {
+                layout = abi_layout_for(*sig);
+            }
+            auto& values = ppc_outgoing_stack_args[scan];
+            for (const auto& arg : layout) {
+                if (!arg.stack_offset) continue;
+                auto store = recent_stores.find(*arg.stack_offset);
+                if (store == recent_stores.end()) continue;
+                values.emplace(*arg.stack_offset, store->second.second);
+                ppc_outgoing_stack_stores.insert(store->second.first);
+            }
+            if (values.empty()) ppc_outgoing_stack_args.erase(scan);
+            recent_stores.clear();
+        }
+    }
+
+    auto args_for_layout = [&](const std::vector<InferredArgument>& layout,
+                               std::size_t call_index) {
         std::vector<IrValue> result;
         result.reserve(layout.size());
         const auto int_regs = int_arg_regs(abi);
         const auto fp_regs = fp_arg_regs(abi);
         for (const auto& arg : layout) {
+            if (arg.stack_offset) {
+                auto call = ppc_outgoing_stack_args.find(call_index);
+                if (call != ppc_outgoing_stack_args.end()) {
+                    auto value = call->second.find(*arg.stack_offset);
+                    if (value != call->second.end()) result.push_back(value->second);
+                }
+                continue;
+            }
             const Reg canon = canonical_reg(arg.reg);
             const auto append_from = [&](std::span<const Reg> regs,
                                          const std::vector<IrValue>& values) {
@@ -6882,6 +7031,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
 
     for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
         const auto& inst = bb.insts[ii];
+        if (ppc_outgoing_stack_stores.contains(ii)) continue;
         // Skip ABI-noise prologue/epilogue insts detected during analysis.
         // A hidden PPC save/restore helper still terminates the preceding
         // call.args pack; clear it so it cannot leak out as a stray marker or
@@ -6935,7 +7085,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 const auto layout = import_name
                     ? abi_layout_for_import(*import_name)
                     : cached_argument_layout(inst.target1);
-                if (!layout.empty() || !import_name) call_args = args_for_layout(layout);
+                if (!layout.empty() || !import_name) call_args = args_for_layout(layout, ii);
             }
             // Arity sources: imports → user sig at PLT / baked-in libc table;
             // printf/scanf family → parse format string to count args;
@@ -7000,7 +7150,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 if (abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
                     abi == Abi::Ppc64ElfV2Le) {
                     const auto layout = abi_layout_for_import(*name);
-                    if (!layout.empty()) indirect_args = args_for_layout(layout);
+                    if (!layout.empty()) indirect_args = args_for_layout(layout, ii);
                 }
                 // No PLT address here, so user-sig lookup can't key off one.
                 auto arity = objc_call_arity(*name, indirect_args);
@@ -7036,7 +7186,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                             ? abi_layout_for_import(*direct_import)
                             : cached_argument_layout(target);
                         if (!layout.empty() || !direct_import) {
-                            resolved_args = args_for_layout(layout);
+                            resolved_args = args_for_layout(layout, ii);
                         }
                     }
                     if (direct_import) {

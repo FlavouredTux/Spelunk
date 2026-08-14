@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <ember/binary/binary.hpp>
@@ -18,6 +19,16 @@ struct InferredArgument {
     Reg    reg          = Reg::None;
     IrType type         = IrType::I64;
     bool   pointer_like = false;
+    // Entry-stack-pointer-relative ABI slot for an overflow parameter.
+    // Register arguments leave this empty even though some ABIs reserve home
+    // space for them. Reg::None plus a populated offset is therefore a real
+    // stack-passed source argument, not an unknown register location.
+    std::optional<i64> stack_offset;
+
+    InferredArgument() = default;
+    InferredArgument(Reg r, IrType t, bool pointer = false,
+                     std::optional<i64> stack = std::nullopt) noexcept
+        : reg(r), type(t), pointer_like(pointer), stack_offset(stack) {}
 };
 
 // Recover register arguments in likely source order. For PPC, the order is a

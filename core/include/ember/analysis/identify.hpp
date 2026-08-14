@@ -26,6 +26,7 @@ enum class IdentifyCategory : u8 {
     Encryption,  // AES, ChaCha20, Salsa20, RC4, DES, XTEA
     Network,     // RakNet, WSA send/recv, UDP/TCP dispatch
     Encoding,    // Base64, Base32, URL-encode, hex-encode
+    Platform,    // console/OS SDK helpers (Revolution SDK, NW4R families)
 };
 
 [[nodiscard]] constexpr std::string_view
@@ -35,6 +36,7 @@ category_name(IdentifyCategory c) noexcept {
         case IdentifyCategory::Encryption:  return "encryption";
         case IdentifyCategory::Network:     return "network";
         case IdentifyCategory::Encoding:    return "encoding";
+        case IdentifyCategory::Platform:    return "platform";
     }
     return "?";
 }

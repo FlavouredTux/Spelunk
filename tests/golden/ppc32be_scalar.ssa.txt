@@ -7,60 +7,62 @@ bb_100054  (entry):
   store i32 [t0], r1
   r1_1 = t0
   ; 0x100058
-  t1 = sext i64 r3
-  t2 = sext i64 0x0
-  t3 = cmp.eq i1 t1, t2
-  zf_1 = t3
-  t4 = cmp.slt i1 t1, t2
-  sf_1 = t4
-  t5 = cmp.ult i1 t1, t2
-  cf_1 = t5
+  t1 = cmp.eq i1 r3, 0x0
+  t2 = cmp.sgt i1 r3, 0x0
+  t3 = cmp.slt i1 r3, 0x0
+  cr0_lt_1 = t3
+  cr0_gt_1 = t2
+  cr0_eq_1 = t1
+  cr0_so_1 = 0x0
+  sf_1 = t3
+  zf_1 = t1
+  cf_1 = t3
   of_1 = 0x0
   ; 0x10005c
-  cbr zf_1, bb_100084, bb_100060
+  cbr cr0_eq_1, bb_100084, bb_100060
 
 bb_100060  <- bb_100054:
   ; 0x100060
-  t6 = load i32 [r3]
-  r4_1 = t6
+  t4 = load i32 [r3]
+  r4_1 = t4
   ; 0x100064
-  t7 = add i32 r3, 0x4
-  t8 = load i8 [t7]
-  t9 = zext i32 t8
-  r5_1 = t9
+  t5 = add i32 r3, 0x4
+  t6 = load i8 [t5]
+  t7 = zext i32 t6
+  r5_1 = t7
   ; 0x100068
-  t10 = add i32 r3, 0x6
-  t11 = load i16 [t10]
-  t12 = zext i32 t11
-  r6_1 = t12
+  t8 = add i32 r3, 0x6
+  t9 = load i16 [t8]
+  t10 = zext i32 t9
+  r6_1 = t10
   ; 0x10006c
-  t13 = mul i32 r4_1, 0x3
-  r4_2 = t13
+  t11 = mul i32 r4_1, 0x3
+  r4_2 = t11
   ; 0x100070
-  t14 = shl i32 r5_1, 0x2
-  t15 = lshr i32 r5_1, 0x1e
-  t16 = or i32 t14, t15
-  t17 = and i32 t16, 0xfffffffc
-  r5_2 = t17
+  t12 = shl i32 r5_1, 0x2
+  t13 = lshr i32 r5_1, 0x1e
+  t14 = or i32 t12, t13
+  t15 = and i32 t14, 0xfffffffc
+  r5_2 = t15
   ; 0x100074
-  t18 = add i32 r4_2, r5_2
-  r3_1 = t18
+  t16 = add i32 r4_2, r5_2
+  r3_1 = t16
   ; 0x100078
-  t19 = add i32 r3_1, r6_1
-  r3_2 = t19
+  t17 = add i32 r3_1, r6_1
+  r3_2 = t17
   ; 0x10007c
-  t20 = add i32 r1_1, 0x10
-  r1_2 = t20
+  t18 = add i32 r1_1, 0x10
+  r1_2 = t18
   ; 0x100080
   return r3_2
 
 bb_100084  <- bb_100054:
   ; 0x100084
-  t21 = add i32 0x0, 0x0
-  r3_3 = t21
+  t19 = add i32 0x0, 0x0
+  r3_3 = t19
   ; 0x100088
-  t22 = add i32 r1_1, 0x10
-  r1_3 = t22
+  t20 = add i32 r1_1, 0x10
+  r1_3 = t20
   ; 0x10008c
   return r3_3
 

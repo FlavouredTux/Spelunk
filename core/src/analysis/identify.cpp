@@ -157,6 +157,83 @@ static constexpr InsnPat ipat_rc4_swap[]={
     {Mnemonic::Xor,  OPM_REG},  // xor with plaintext
 };
 
+// Nintendo Revolution SDK / Gekko structural signatures. These deliberately
+// use architecture-specific operations rather than addresses or symbols, so
+// they survive stripping and link-order changes across Wii titles.
+static constexpr InsnPat ipat_dc_flush_range[]={
+    {Mnemonic::Dcbf, OPM_MEM}, {Mnemonic::Bdnz, OPM_REL}, {Mnemonic::Sc, OPM_ANY},
+};
+static constexpr InsnPat ipat_dc_invalidate_range[]={
+    {Mnemonic::Dcbi, OPM_MEM}, {Mnemonic::Bdnz, OPM_REL}, {Mnemonic::Ret, OPM_ANY},
+};
+static constexpr InsnPat ipat_ic_invalidate_range[]={
+    {Mnemonic::Icbi, OPM_MEM}, {Mnemonic::Bdnz, OPM_REL},
+    {Mnemonic::Sync, OPM_ANY}, {Mnemonic::Isync, OPM_ANY},
+};
+static constexpr InsnPat ipat_os_get_time[]={
+    {Mnemonic::Mftb, OPM_REG}, {Mnemonic::Mftb, OPM_REG},
+    {Mnemonic::Mftb, OPM_REG}, {Mnemonic::Cmp, OPM_REG},
+    {Mnemonic::Bne, OPM_REL},
+};
+static constexpr InsnPat ipat_psmtx_identity[]={
+    {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsMerge10, OPM_REG},
+    {Mnemonic::PsMerge01, OPM_REG}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+};
+static constexpr InsnPat ipat_psmtx_copy[]={
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+};
+static constexpr InsnPat ipat_psmtx_concat[]={
+    {Mnemonic::PsMuls0, OPM_REG}, {Mnemonic::PsMuls0, OPM_REG},
+    {Mnemonic::PsMadds1, OPM_REG}, {Mnemonic::PsMadds1, OPM_REG},
+    {Mnemonic::PsMadds0, OPM_REG}, {Mnemonic::PsMadds0, OPM_REG},
+};
+static constexpr InsnPat ipat_psmtx_mult_vec[]={
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqL, OPM_REG | OPM_MEM},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsMul, OPM_REG},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsMadd, OPM_REG},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsSum0, OPM_REG},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsMul, OPM_REG},
+    {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsMadd, OPM_REG},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsSum0, OPM_REG},
+    {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsMul, OPM_REG},
+    {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsMadd, OPM_REG},
+    {Mnemonic::PsSum0, OPM_REG}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
+};
+static constexpr InsnPat ipat_nw4r_lyt_layout_ctor[]={
+    {Mnemonic::Addi, OPM_IMM}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Addis, OPM_IMM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
+    {Mnemonic::Addi, OPM_IMM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
+    {Mnemonic::Addi, OPM_IMM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
+    {Mnemonic::Stw, OPM_REG | OPM_MEM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
+    {Mnemonic::Stw, OPM_REG | OPM_MEM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
+    {Mnemonic::Stw, OPM_REG | OPM_MEM},
+    {Mnemonic::Stfs, OPM_REG | OPM_MEM}, {Mnemonic::Stfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Stb, OPM_REG | OPM_MEM}, {Mnemonic::Ret, OPM_ANY},
+};
+static constexpr InsnPat ipat_nw4r_lyt_layout_rect[]={
+    {Mnemonic::Lbz, OPM_REG | OPM_MEM}, {Mnemonic::Cmpl, OPM_REG | OPM_IMM},
+    {Mnemonic::Bne, OPM_REL}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Fneg, OPM_REG},
+    {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Fneg, OPM_REG},
+    {Mnemonic::Fmuls, OPM_REG},
+    {Mnemonic::Fmuls, OPM_REG}, {Mnemonic::Fmuls, OPM_REG},
+    {Mnemonic::Fmuls, OPM_REG}, {Mnemonic::Stfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Stfs, OPM_REG | OPM_MEM}, {Mnemonic::Stfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Stfs, OPM_REG | OPM_MEM}, {Mnemonic::Ret, OPM_ANY},
+    {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Stfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Stfs, OPM_REG | OPM_MEM}, {Mnemonic::Stfs, OPM_REG | OPM_MEM},
+    {Mnemonic::Stfs, OPM_REG | OPM_MEM}, {Mnemonic::Ret, OPM_ANY},
+};
+
 // ---- Profile table ----
 static const Profile kProfiles[]={
   // Hash profiles - constant-based
@@ -189,6 +266,17 @@ static const Profile kProfiles[]={
   {"chacha_qr",   IdentifyCategory::Encryption, 0.8f, nullptr,0,    nullptr,0,     nullptr,0, ipat_chacha_qr,10},
   {"aes_keyexp",  IdentifyCategory::Encryption, 0.6f, nullptr,0,    nullptr,0,     nullptr,0, ipat_aes_keyexp,6},
   {"rc4_swap",    IdentifyCategory::Encryption, 0.6f, nullptr,0,    nullptr,0,     nullptr,0, ipat_rc4_swap,4},
+  // Wii platform / SDK families - instruction-structure based.
+  {"revolution.DCFlushRange", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_dc_flush_range,3},
+  {"revolution.DCInvalidateRange", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_dc_invalidate_range,3},
+  {"revolution.ICInvalidateRange", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_ic_invalidate_range,4},
+  {"revolution.OSGetTime", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_os_get_time,5},
+  {"revolution.PSMTXIdentity", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_psmtx_identity,10},
+  {"revolution.PSMTXCopy_family", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_psmtx_copy,12},
+  {"revolution.PSMTXConcat_family", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_psmtx_concat,6},
+  {"revolution.PSMTXMultVec_family", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_psmtx_mult_vec,20},
+  {"nw4r.lyt.Layout_ctor_family", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_nw4r_lyt_layout_ctor,17},
+  {"nw4r.lyt.GetLayoutRect_family", IdentifyCategory::Platform, 1.0f, nullptr,0, nullptr,0, nullptr,0, ipat_nw4r_lyt_layout_rect,25},
   // Network profiles - import-based
   {"wsa_sendrecv",IdentifyCategory::Network,    0.5f, nullptr,0,    i_wsa,2,       nullptr,0, nullptr,0},
   {"raknet",      IdentifyCategory::Network,    0.5f, nullptr,0,    i_raknet,2,    nullptr,0, nullptr,0},
@@ -409,10 +497,33 @@ bool insn_subseq_match(const InsnPat* pat, std::size_t npat,
     for (std::size_t ii = 0; ii < ninsns && pi < npat; ++ii) {
         const auto& p = pat[pi];
         const auto& d = insns[ii];
-        if (d.mnem == p.mnem && (d.opmask & p.opmask) == p.opmask)
+        if (d.mnem == p.mnem &&
+            (p.opmask == OPM_ANY || (d.opmask & p.opmask) == p.opmask))
             ++pi;
     }
     return pi == npat;
+}
+
+bool platform_insn_match(const InsnPat* pat, std::size_t npat,
+                         const DecodedInsn* insns, std::size_t ninsns) {
+    if (npat == 0 || ninsns == 0) return false;
+    constexpr std::size_t kMaxLeadingInsns = 12;
+    constexpr std::size_t kMaxExtraSpan = 16;
+    const std::size_t start_limit = std::min(ninsns, kMaxLeadingInsns + 1);
+    for (std::size_t start = 0; start < start_limit; ++start) {
+        const auto matches = [](const InsnPat& p, const DecodedInsn& d) {
+            return d.mnem == p.mnem &&
+                   (p.opmask == OPM_ANY || (d.opmask & p.opmask) == p.opmask);
+        };
+        if (!matches(pat[0], insns[start])) continue;
+        std::size_t pi = 1;
+        const std::size_t end = std::min(ninsns, start + npat + kMaxExtraSpan);
+        for (std::size_t ii = start + 1; ii < end && pi < npat; ++ii) {
+            if (matches(pat[pi], insns[ii])) ++pi;
+        }
+        if (pi == npat) return true;
+    }
+    return false;
 }
 
 // Score instruction-sequence profiles: returns 1.0 if the subsequence
@@ -420,7 +531,10 @@ bool insn_subseq_match(const InsnPat* pat, std::size_t npat,
 // the subsequence must be complete to indicate the algorithm.)
 float score_insnpat(const Profile& p, const std::vector<DecodedInsn>& insns) {
     if (p.nip == 0 || p.ip == nullptr) return 0.0f;
-    return insn_subseq_match(p.ip, p.nip, insns.data(), insns.size()) ? 1.0f : 0.0f;
+    const bool matched = p.cat == IdentifyCategory::Platform
+        ? platform_insn_match(p.ip, p.nip, insns.data(), insns.size())
+        : insn_subseq_match(p.ip, p.nip, insns.data(), insns.size());
+    return matched ? 1.0f : 0.0f;
 }
 
 std::string via_insnpat(const Profile& p) {

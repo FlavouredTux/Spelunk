@@ -30,9 +30,15 @@ namespace {
 
 [[nodiscard]] std::optional<Reg> decode_spr(u32 spr) noexcept {
     switch (spr) {
+        case 1: return Reg::PpcXer;
         case 8: return Reg::PpcLr;
         case 9: return Reg::PpcCtr;
-        default: return std::nullopt;
+        default:
+            if (spr >= 912 && spr <= 919) {
+                return static_cast<Reg>(static_cast<unsigned>(Reg::PpcGqr0) +
+                                        (spr - 912));
+            }
+            return std::nullopt;
     }
 }
 
@@ -97,18 +103,130 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     }
 
     const u32 w = read_word(endian_, code.data());
+    const u32 op = w >> 26;
     Instruction insn;
     insn.address = addr;
     insn.length = 4;
+    insn.ppc_record = (((op == 4 || op == 20 || op == 21 || op == 31 ||
+                         op == 59 || op == 63) && (w & 1u) != 0) ||
+                       op == 13 || op == 28 || op == 29);
     std::copy_n(code.data(), 4, insn.raw_bytes.data());
 
-    const u32 op = w >> 26;
     const u32 rt = (w >> 21) & 0x1f;
     const u32 ra = (w >> 16) & 0x1f;
     const u32 rb = (w >> 11) & 0x1f;
 
     switch (op) {
         case 4: {
+            const u32 xo = (w >> 1) & 0x3ff;
+            const u32 indexed_xo = (w >> 1) & 0x3f;
+            const u32 arithmetic_xo = (w >> 1) & 0x1f;
+            const Reg fc = ppc_fpr((w >> 6) & 0x1f);
+
+            auto set_unary = [&](Mnemonic mnemonic) {
+                insn.mnemonic = mnemonic;
+                insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                insn.operands[1] = Operand::make_reg(ppc_fpr(rb));
+                insn.num_operands = 2;
+            };
+            auto set_binary = [&](Mnemonic mnemonic) {
+                insn.mnemonic = mnemonic;
+                insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                insn.operands[1] = Operand::make_reg(ppc_fpr(ra));
+                insn.operands[2] = Operand::make_reg(ppc_fpr(rb));
+                insn.num_operands = 3;
+            };
+            auto set_ac = [&](Mnemonic mnemonic) {
+                insn.mnemonic = mnemonic;
+                insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                insn.operands[1] = Operand::make_reg(ppc_fpr(ra));
+                insn.operands[2] = Operand::make_reg(fc);
+                insn.num_operands = 3;
+            };
+            auto set_ternary = [&](Mnemonic mnemonic) {
+                insn.mnemonic = mnemonic;
+                insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                insn.operands[1] = Operand::make_reg(ppc_fpr(ra));
+                insn.operands[2] = Operand::make_reg(fc);
+                insn.operands[3] = Operand::make_reg(ppc_fpr(rb));
+                insn.num_operands = 4;
+            };
+
+            if (indexed_xo == 6 || indexed_xo == 7 ||
+                indexed_xo == 38 || indexed_xo == 39) {
+                const bool load = indexed_xo == 6 || indexed_xo == 38;
+                const bool update = indexed_xo == 38 || indexed_xo == 39;
+                insn.mnemonic = load
+                    ? (update ? Mnemonic::PsqLux : Mnemonic::PsqLx)
+                    : (update ? Mnemonic::PsqStux : Mnemonic::PsqStx);
+                insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                insn.operands[1] = Operand::make_mem(make_indexed_mem(
+                    ra == 0 ? Reg::None : ppc_gpr(ra), ppc_gpr(rb),
+                    ((w >> 10) & 1u) != 0 ? 4 : 8));
+                insn.operands[2] = Operand::make_imm(
+                    Imm{static_cast<i64>((w >> 10) & 1u), 1, false});
+                insn.operands[3] = Operand::make_imm(
+                    Imm{static_cast<i64>((w >> 7) & 7u), 1, false});
+                insn.num_operands = 4;
+                return insn;
+            }
+
+            switch (xo) {
+                case 0:
+                case 32:
+                case 64:
+                case 96:
+                    insn.mnemonic = (xo == 0)  ? Mnemonic::PsCmpu0
+                                  : (xo == 32) ? Mnemonic::PsCmpo0
+                                  : (xo == 64) ? Mnemonic::PsCmpu1
+                                               : Mnemonic::PsCmpo1;
+                    insn.ppc_cr_field = static_cast<u8>((w >> 23) & 7u);
+                    insn.operands[0] = Operand::make_imm(
+                        Imm{static_cast<i64>((w >> 23) & 7u), 1, false});
+                    insn.operands[1] = Operand::make_reg(ppc_fpr(ra));
+                    insn.operands[2] = Operand::make_reg(ppc_fpr(rb));
+                    insn.num_operands = 3;
+                    return insn;
+                case 40:  set_unary(Mnemonic::PsNeg); return insn;
+                case 72:  set_unary(Mnemonic::PsMr); return insn;
+                case 136: set_unary(Mnemonic::PsNabs); return insn;
+                case 264: set_unary(Mnemonic::PsAbs); return insn;
+                case 528: set_binary(Mnemonic::PsMerge00); return insn;
+                case 560: set_binary(Mnemonic::PsMerge01); return insn;
+                case 592: set_binary(Mnemonic::PsMerge10); return insn;
+                case 624: set_binary(Mnemonic::PsMerge11); return insn;
+                case 1014:
+                    insn.mnemonic = Mnemonic::DcbzL;
+                    insn.operands[0] = Operand::make_mem(make_indexed_mem(
+                        ra == 0 ? Reg::None : ppc_gpr(ra), ppc_gpr(rb), 32));
+                    insn.num_operands = 1;
+                    return insn;
+                default:
+                    break;
+            }
+
+            switch (arithmetic_xo) {
+                case 10: set_ternary(Mnemonic::PsSum0); return insn;
+                case 11: set_ternary(Mnemonic::PsSum1); return insn;
+                case 12: set_ac(Mnemonic::PsMuls0); return insn;
+                case 13: set_ac(Mnemonic::PsMuls1); return insn;
+                case 14: set_ternary(Mnemonic::PsMadds0); return insn;
+                case 15: set_ternary(Mnemonic::PsMadds1); return insn;
+                case 18: set_binary(Mnemonic::PsDiv); return insn;
+                case 20: set_binary(Mnemonic::PsSub); return insn;
+                case 21: set_binary(Mnemonic::PsAdd); return insn;
+                case 23: set_ternary(Mnemonic::PsSel); return insn;
+                case 24: set_unary(Mnemonic::PsRes); return insn;
+                case 25: set_ac(Mnemonic::PsMul); return insn;
+                case 26: set_unary(Mnemonic::PsRsqrte); return insn;
+                case 28: set_ternary(Mnemonic::PsMsub); return insn;
+                case 29: set_ternary(Mnemonic::PsMadd); return insn;
+                case 30: set_ternary(Mnemonic::PsNmsub); return insn;
+                case 31: set_ternary(Mnemonic::PsNmadd); return insn;
+                default:
+                    break;
+            }
+
             insn.mnemonic = Mnemonic::PsOp4;
             insn.operands[0] = Operand::make_imm(Imm{static_cast<i64>(w), 4, false});
             insn.num_operands = 1;
@@ -125,6 +243,7 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         case 10:
         case 11: {
             insn.mnemonic = (op == 10) ? Mnemonic::Cmpl : Mnemonic::Cmp;
+            insn.ppc_cr_field = static_cast<u8>((w >> 23) & 7u);
             const i64 imm = (op == 10) ? static_cast<i64>(w & 0xffffu)
                                        : sign_extend(w & 0xffffu, 16);
             insn.operands[0] = Operand::make_reg(ppc_gpr(ra));
@@ -167,6 +286,9 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             const u32 bi = (w >> 16) & 0x1f;
             const bool aa = ((w >> 1) & 1u) != 0;
             const bool lk = (w & 1u) != 0;
+            insn.ppc_bo = static_cast<u8>(bo);
+            insn.ppc_bi = static_cast<u8>(bi);
+            insn.ppc_link = lk;
             const i64 disp = sign_extend(((w >> 2) & 0x3fffu) << 2, 16);
             const addr_t target =
                 aa ? static_cast<addr_t>(disp)
@@ -209,6 +331,9 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     const u32 bo = (w >> 21) & 0x1f;
                     const u32 bi = (w >> 16) & 0x1f;
                     const bool lk = (w & 1u) != 0;
+                    insn.ppc_bo = static_cast<u8>(bo);
+                    insn.ppc_bi = static_cast<u8>(bi);
+                    insn.ppc_link = lk;
                     if (bo == 20 && !lk) {
                         insn.mnemonic = Mnemonic::Ret;
                         return insn;
@@ -226,10 +351,27 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     return insn;
                 }
                 case 528:
-                    insn.mnemonic = (w & 1u) ? Mnemonic::Call : Mnemonic::Jmp;
-                    insn.operands[0] = Operand::make_reg(Reg::PpcCtr);
-                    insn.num_operands = 1;
-                    return insn;
+                    {
+                        const u32 bo = (w >> 21) & 0x1f;
+                        const u32 bi = (w >> 16) & 0x1f;
+                        const bool lk = (w & 1u) != 0;
+                        insn.ppc_bo = static_cast<u8>(bo);
+                        insn.ppc_bi = static_cast<u8>(bi);
+                        insn.ppc_link = lk;
+                        if (bo == 20) {
+                            insn.mnemonic = lk ? Mnemonic::Call : Mnemonic::Jmp;
+                            insn.operands[0] = Operand::make_reg(Reg::PpcCtr);
+                            insn.num_operands = 1;
+                        } else {
+                            insn.mnemonic = Mnemonic::Bcctr;
+                            insn.operands[0] = Operand::make_imm(
+                                Imm{static_cast<i64>(bo), 1, false});
+                            insn.operands[1] = Operand::make_imm(
+                                Imm{static_cast<i64>(bi), 1, false});
+                            insn.num_operands = 2;
+                        }
+                        return insn;
+                    }
                 case 50:
                     insn.mnemonic = Mnemonic::Rfi;
                     return insn;
@@ -361,6 +503,7 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 case 0:
                 case 32:
                     insn.mnemonic = (xo == 32) ? Mnemonic::Cmpl : Mnemonic::Cmp;
+                    insn.ppc_cr_field = static_cast<u8>((w >> 23) & 7u);
                     insn.operands[0] = Operand::make_reg(ppc_gpr(ra));
                     insn.operands[1] = Operand::make_reg(ppc_gpr(rb));
                     insn.num_operands = 2;
@@ -488,6 +631,13 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     insn.num_operands = 2;
                     return insn;
                 }
+                case 918:
+                    insn.mnemonic = Mnemonic::Sthbrx;
+                    insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
+                    insn.operands[1] = Operand::make_mem(make_indexed_mem(
+                        ra == 0 ? Reg::None : ppc_gpr(ra), ppc_gpr(rb), 2));
+                    insn.num_operands = 2;
+                    return insn;
                 case 535:
                 case 567:
                 case 599:
@@ -540,6 +690,13 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
                     insn.num_operands = 1;
                     return insn;
+                case 595:
+                    insn.mnemonic = Mnemonic::Mfsr;
+                    insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
+                    insn.operands[1] = Operand::make_imm(
+                        Imm{static_cast<i64>(ra), 1, false});
+                    insn.num_operands = 2;
+                    return insn;
                 case 371:
                     insn.mnemonic = Mnemonic::Mftb;
                     insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
@@ -550,6 +707,13 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     insn.mnemonic = Mnemonic::Mtmsr;
                     insn.operands[0] = Operand::make_reg(ppc_gpr(rt));
                     insn.num_operands = 1;
+                    return insn;
+                case 210:
+                    insn.mnemonic = Mnemonic::Mtsr;
+                    insn.operands[0] = Operand::make_imm(
+                        Imm{static_cast<i64>(ra), 1, false});
+                    insn.operands[1] = Operand::make_reg(ppc_gpr(rt));
+                    insn.num_operands = 2;
                     return insn;
                 case 54:
                 case 86:
@@ -619,6 +783,35 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             const u32 fp_xo = (w >> 1) & 0x1f;
             const bool single = op == 59;
             switch (fp_xo) {
+                case 23:
+                    if (!single) {
+                        insn.mnemonic = Mnemonic::Fsel;
+                        insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                        insn.operands[1] = Operand::make_reg(ppc_fpr(ra));
+                        insn.operands[2] = Operand::make_reg(ppc_fpr((w >> 6) & 0x1f));
+                        insn.operands[3] = Operand::make_reg(ppc_fpr(rb));
+                        insn.num_operands = 4;
+                        return insn;
+                    }
+                    break;
+                case 24:
+                    if (single) {
+                        insn.mnemonic = Mnemonic::Fres;
+                        insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                        insn.operands[1] = Operand::make_reg(ppc_fpr(rb));
+                        insn.num_operands = 2;
+                        return insn;
+                    }
+                    break;
+                case 26:
+                    if (!single) {
+                        insn.mnemonic = Mnemonic::Frsqrte;
+                        insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                        insn.operands[1] = Operand::make_reg(ppc_fpr(rb));
+                        insn.num_operands = 2;
+                        return insn;
+                    }
+                    break;
                 case 18:
                 case 20:
                 case 21: {
@@ -661,6 +854,7 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 case 0:
                 case 32:
                     insn.mnemonic = xo == 0 ? Mnemonic::Fcmpu : Mnemonic::Fcmpo;
+                    insn.ppc_cr_field = static_cast<u8>((w >> 23) & 7u);
                     insn.operands[0] = Operand::make_reg(ppc_fpr(ra));
                     insn.operands[1] = Operand::make_reg(ppc_fpr(rb));
                     insn.num_operands = 2;
@@ -677,11 +871,48 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     return insn;
                 case 40:
                 case 72:
+                case 136:
                 case 264:
                     insn.mnemonic = (xo == 40) ? Mnemonic::Fneg
                                     : (xo == 72) ? Mnemonic::Fmr
-                                                 : Mnemonic::Fabs;
+                                    : (xo == 136) ? Mnemonic::Fnabs
+                                                  : Mnemonic::Fabs;
                     insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                    insn.operands[1] = Operand::make_reg(ppc_fpr(rb));
+                    insn.num_operands = 2;
+                    return insn;
+                case 64:
+                    insn.mnemonic = Mnemonic::Mcrfs;
+                    insn.operands[0] = Operand::make_imm(
+                        Imm{static_cast<i64>((w >> 23) & 0x7), 1, false});
+                    insn.operands[1] = Operand::make_imm(
+                        Imm{static_cast<i64>((w >> 18) & 0x7), 1, false});
+                    insn.num_operands = 2;
+                    return insn;
+                case 583:
+                    insn.mnemonic = Mnemonic::Mffs;
+                    insn.operands[0] = Operand::make_reg(ppc_fpr(rt));
+                    insn.num_operands = 1;
+                    return insn;
+                case 38:
+                case 70:
+                    insn.mnemonic = xo == 38 ? Mnemonic::Mtfsb1 : Mnemonic::Mtfsb0;
+                    insn.operands[0] = Operand::make_imm(
+                        Imm{static_cast<i64>(rt), 1, false});
+                    insn.num_operands = 1;
+                    return insn;
+                case 134:
+                    insn.mnemonic = Mnemonic::Mtfsfi;
+                    insn.operands[0] = Operand::make_imm(
+                        Imm{static_cast<i64>((w >> 23) & 0x7), 1, false});
+                    insn.operands[1] = Operand::make_imm(
+                        Imm{static_cast<i64>((w >> 12) & 0xf), 1, false});
+                    insn.num_operands = 2;
+                    return insn;
+                case 711:
+                    insn.mnemonic = Mnemonic::Mtfsf;
+                    insn.operands[0] = Operand::make_imm(
+                        Imm{static_cast<i64>((w >> 17) & 0xff), 1, false});
                     insn.operands[1] = Operand::make_reg(ppc_fpr(rb));
                     insn.num_operands = 2;
                     return insn;

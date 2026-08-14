@@ -55,7 +55,9 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::PpcR20, Reg::PpcR21, Reg::PpcR22, Reg::PpcR23,
     Reg::PpcR24, Reg::PpcR25, Reg::PpcR26, Reg::PpcR27,
     Reg::PpcR28, Reg::PpcR29, Reg::PpcR30, Reg::PpcR31,
-    Reg::PpcLr, Reg::PpcCtr,
+    Reg::PpcLr, Reg::PpcCtr, Reg::PpcXer,
+    Reg::PpcGqr0, Reg::PpcGqr1, Reg::PpcGqr2, Reg::PpcGqr3,
+    Reg::PpcGqr4, Reg::PpcGqr5, Reg::PpcGqr6, Reg::PpcGqr7,
     Reg::PpcF0,  Reg::PpcF1,  Reg::PpcF2,  Reg::PpcF3,
     Reg::PpcF4,  Reg::PpcF5,  Reg::PpcF6,  Reg::PpcF7,
     Reg::PpcF8,  Reg::PpcF9,  Reg::PpcF10, Reg::PpcF11,
@@ -183,10 +185,14 @@ compute_df(const IrFunction& fn, const std::unordered_map<addr_t, addr_t>& idom)
 void insert_phis(IrFunction& fn,
                  const std::map<addr_t, std::set<addr_t>>& df) {
     std::map<VarKey, std::set<addr_t>> defs;
+    std::map<VarKey, IrType> observed_types;
+    std::set<VarKey> type_conflicts;
     for (const auto& bb : fn.blocks) {
         for (const auto& inst : bb.insts) {
             if (auto v = variable_of(inst.dst); v) {
                 defs[*v].insert(bb.start);
+                auto [it, inserted] = observed_types.emplace(*v, inst.dst.type);
+                if (!inserted && it->second != inst.dst.type) type_conflicts.insert(*v);
             }
         }
     }
@@ -213,9 +219,20 @@ void insert_phis(IrFunction& fn,
                 phi.op = IrOp::Phi;
                 if (var.kind == 0) {
                     const Reg canon = static_cast<Reg>(var.id);
-                    phi.dst = IrValue::make_reg(canon,
-                        is_ppc_fpr(canon) ? IrType::F64
-                                          : type_for_bits(reg_size(canon) * 8));
+                    IrType type = is_ppc_fpr(canon) ? IrType::F64
+                                                    : type_for_bits(reg_size(canon) * 8);
+                    const auto observed = observed_types.find(var);
+                    const bool is_ppc_register =
+                        canon >= Reg::PpcR0 && canon <= Reg::PpcF31;
+                    if (is_ppc_register && observed != observed_types.end() &&
+                        !type_conflicts.contains(var)) {
+                        // PPC register width is ABI-dependent (32-bit on Wii),
+                        // and paired-single FPRs carry a vector type. Preserve
+                        // the lifter's concrete type instead of reconstructing
+                        // it from the architecture-neutral register size.
+                        type = observed->second;
+                    }
+                    phi.dst = IrValue::make_reg(canon, type);
                 } else {
                     phi.dst = IrValue::make_flag(static_cast<Flag>(var.id));
                 }

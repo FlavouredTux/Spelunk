@@ -292,6 +292,7 @@ std::string_view c_type_name(IrType t) noexcept {
         case IrType::I128: return "__m128i";
         case IrType::F32:  return "float";
         case IrType::F64:  return "double";
+        case IrType::V2F32:return "float2";
     }
     return "?";
 }

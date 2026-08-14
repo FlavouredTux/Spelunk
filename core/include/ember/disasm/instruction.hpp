@@ -20,16 +20,24 @@ enum class Mnemonic : u16 {
     Ld, Ldu, Lwa, Std, Stdu, Lwz, Stw, Lbz, Stb, Lhz, Sth, Lha,
     Lwzu, Lbzu, Lhzu, Lhau, Stwu, Stbu, Sthu,
     Lmw, Stmw,
-    Lwzx, Stwx, Lbzx, Stbx, Lhzx, Sthx, Lhax,
+    Lwzx, Stwx, Lbzx, Stbx, Lhzx, Sthx, Sthbrx, Lhax,
     Lwzux, Stwux, Lbzux, Stbux, Lhzux, Sthux, Lhaux,
     Lfs, Lfsu, Lfd, Lfdu, Stfs, Stfsu, Stfd, Stfdu,
     Lfsx, Lfsux, Lfdx, Lfdux, Stfsx, Stfsux, Stfdx, Stfdux,
-    PsqL, PsqLu, PsqSt, PsqStu, PsOp4,
+    PsqL, PsqLu, PsqSt, PsqStu,
+    PsqLx, PsqLux, PsqStx, PsqStux,
+    PsCmpu0, PsCmpo0, PsCmpu1, PsCmpo1,
+    PsNeg, PsMr, PsNabs, PsAbs,
+    PsMerge00, PsMerge01, PsMerge10, PsMerge11,
+    PsSum0, PsSum1, PsMuls0, PsMuls1, PsMadds0, PsMadds1,
+    PsDiv, PsSub, PsAdd, PsSel, PsRes, PsMul, PsRsqrte,
+    PsMsub, PsMadd, PsNmsub, PsNmadd, PsOp4,
     Fadds, Fsubs, Fmuls, Fdivs,
     Fmadds, Fmsubs, Fnmadds, Fnmsubs,
     Fadd, Fsub, Fmul, Fdiv,
     Fmadd, Fmsub, Fnmadd, Fnmsub,
-    Fcmpu, Fcmpo, Fabs, Fmr, Fneg, Frsp, Fctiw, Fctiwz, FpOp,
+    Fcmpu, Fcmpo, Fabs, Fnabs, Fmr, Fneg, Frsp, Fres, Frsqrte, Fsel,
+    Fctiw, Fctiwz, Mcrfs, Mffs, Mtfsb0, Mtfsb1, Mtfsfi, Mtfsf, FpOp,
     Mulli, Rlwinm, Rlwimi,
 
     Add, Sub, Adc, Sbb, Inc, Dec, Neg,
@@ -40,7 +48,8 @@ enum class Mnemonic : u16 {
     Shl, Shr, Sar, Rol, Ror, Rcl, Rcr,
     Extsb, Extsh, Cntlzw,
     Crand, Crandc, Creqv, Crnand, Crnor, Cror, Crorc, Crxor,
-    Mfcr, Mtcrf, Mfspr, Mtspr, Mfmsr, Mtmsr, Mftb, Mulhw, Mulhwu, Addze, Subfze, Andc, Nor, Subfe,
+    Mfcr, Mtcrf, Mfspr, Mtspr, Mfsr, Mtsr, Mfmsr, Mtmsr, Mftb,
+    Mulhw, Mulhwu, Addze, Subfze, Andc, Nor, Subfe,
 
     Cmp, Cmpl, Cmn, Test,
 
@@ -48,11 +57,11 @@ enum class Mnemonic : u16 {
 
     Jo, Jno, Jb, Jae, Je, Jne, Jbe, Ja,
     Js, Jns, Jp, Jnp, Jl, Jge, Jle, Jg,
-    Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz, Bc, Bclr,
+    Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz, Bc, Bclr, Bcctr,
 
     Nop, Hlt, Int, Int3, Syscall, Ud2, Isync, Sync, Rfi, Sc, Twi,
     Lahf, Sahf, Cmc, Clc, Stc, Cli, Sti, Cld, StdDir,
-    Dcbf, Dcbst, Dcbi, Dcbz, Icbi,
+    Dcbf, Dcbst, Dcbi, Dcbz, DcbzL, Icbi,
     Cdq, Cqo, Cwde, Cdqe,
     Endbr64, Endbr32,
     // System-instruction zero-operand mnemonics. Common in anti-debug:
@@ -387,6 +396,14 @@ struct Instruction {
     // leave arm_setflags false.
     u8                       arm_cond     = kArmCondAL;
     bool                     arm_setflags = false;
+    // PowerPC condition/control metadata. Keeping BO/BI and CRFD outside the
+    // generic operand list preserves conventional disassembly while allowing
+    // the lifter to model all eight CR fields and combined CTR+CR branches.
+    u8                       ppc_cr_field = 0;
+    u8                       ppc_bo       = 0xff;
+    u8                       ppc_bi       = 0xff;
+    bool                     ppc_link     = false;
+    bool                     ppc_record   = false;
 };
 
 [[nodiscard]] std::string format_instruction(const Instruction& insn);
@@ -400,7 +417,7 @@ struct Instruction {
         case Mnemonic::Jl:  case Mnemonic::Jge: case Mnemonic::Jle: case Mnemonic::Jg:
         case Mnemonic::Beq: case Mnemonic::Bne: case Mnemonic::Blt: case Mnemonic::Bge:
         case Mnemonic::Bgt: case Mnemonic::Ble: case Mnemonic::Bdnz: case Mnemonic::Bdz:
-        case Mnemonic::Bc: case Mnemonic::Bclr:
+        case Mnemonic::Bc: case Mnemonic::Bclr: case Mnemonic::Bcctr:
         case Mnemonic::A64Bcc:
         case Mnemonic::A64Cbz: case Mnemonic::A64Cbnz:
         case Mnemonic::A64Tbz: case Mnemonic::A64Tbnz:
@@ -434,10 +451,11 @@ struct Instruction {
 
 [[nodiscard]] inline std::optional<addr_t>
 branch_target(const Instruction& insn) noexcept {
-    if (insn.num_operands == 0) return std::nullopt;
-    const auto& op = insn.operands[0];
-    if (op.kind != Operand::Kind::Relative) return std::nullopt;
-    return op.rel.target;
+    for (u8 i = 0; i < insn.num_operands; ++i) {
+        const auto& op = insn.operands[i];
+        if (op.kind == Operand::Kind::Relative) return op.rel.target;
+    }
+    return std::nullopt;
 }
 
 }  // namespace ember

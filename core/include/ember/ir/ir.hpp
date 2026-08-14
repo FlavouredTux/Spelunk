@@ -31,6 +31,8 @@ enum class IrType : u8 {
     I128,
     F32,
     F64,
+    // Gekko paired-single view of a 64-bit FPR: two packed float lanes.
+    V2F32,
 };
 
 [[nodiscard]] constexpr unsigned type_bits(IrType t) noexcept {
@@ -43,12 +45,13 @@ enum class IrType : u8 {
         case IrType::I128: return 128;
         case IrType::F32:  return 32;
         case IrType::F64:  return 64;
+        case IrType::V2F32:return 64;
     }
     return 0;
 }
 
 [[nodiscard]] constexpr bool is_float_type(IrType t) noexcept {
-    return t == IrType::F32 || t == IrType::F64;
+    return t == IrType::F32 || t == IrType::F64 || t == IrType::V2F32;
 }
 
 [[nodiscard]] constexpr IrType type_for_bits(unsigned bits) noexcept {
@@ -73,11 +76,27 @@ enum class IrType : u8 {
         case IrType::I128: return "i128";
         case IrType::F32:  return "f32";
         case IrType::F64:  return "f64";
+        case IrType::V2F32:return "v2f32";
     }
     return "?";
 }
 
-enum class Flag : u8 { Zf, Sf, Cf, Of };
+enum class Flag : u8 {
+    Zf, Sf, Cf, Of,
+    Cr0Lt, Cr0Gt, Cr0Eq, Cr0So,
+    Cr1Lt, Cr1Gt, Cr1Eq, Cr1So,
+    Cr2Lt, Cr2Gt, Cr2Eq, Cr2So,
+    Cr3Lt, Cr3Gt, Cr3Eq, Cr3So,
+    Cr4Lt, Cr4Gt, Cr4Eq, Cr4So,
+    Cr5Lt, Cr5Gt, Cr5Eq, Cr5So,
+    Cr6Lt, Cr6Gt, Cr6Eq, Cr6So,
+    Cr7Lt, Cr7Gt, Cr7Eq, Cr7So,
+};
+
+[[nodiscard]] constexpr Flag ppc_cr_flag(u8 field, u8 bit) noexcept {
+    return static_cast<Flag>(static_cast<u8>(Flag::Cr0Lt) +
+                             static_cast<u8>((field & 7u) * 4u + (bit & 3u)));
+}
 
 [[nodiscard]] constexpr std::string_view flag_name(Flag f) noexcept {
     switch (f) {
@@ -85,6 +104,38 @@ enum class Flag : u8 { Zf, Sf, Cf, Of };
         case Flag::Sf: return "sf";
         case Flag::Cf: return "cf";
         case Flag::Of: return "of";
+        case Flag::Cr0Lt: return "cr0_lt";
+        case Flag::Cr0Gt: return "cr0_gt";
+        case Flag::Cr0Eq: return "cr0_eq";
+        case Flag::Cr0So: return "cr0_so";
+        case Flag::Cr1Lt: return "cr1_lt";
+        case Flag::Cr1Gt: return "cr1_gt";
+        case Flag::Cr1Eq: return "cr1_eq";
+        case Flag::Cr1So: return "cr1_so";
+        case Flag::Cr2Lt: return "cr2_lt";
+        case Flag::Cr2Gt: return "cr2_gt";
+        case Flag::Cr2Eq: return "cr2_eq";
+        case Flag::Cr2So: return "cr2_so";
+        case Flag::Cr3Lt: return "cr3_lt";
+        case Flag::Cr3Gt: return "cr3_gt";
+        case Flag::Cr3Eq: return "cr3_eq";
+        case Flag::Cr3So: return "cr3_so";
+        case Flag::Cr4Lt: return "cr4_lt";
+        case Flag::Cr4Gt: return "cr4_gt";
+        case Flag::Cr4Eq: return "cr4_eq";
+        case Flag::Cr4So: return "cr4_so";
+        case Flag::Cr5Lt: return "cr5_lt";
+        case Flag::Cr5Gt: return "cr5_gt";
+        case Flag::Cr5Eq: return "cr5_eq";
+        case Flag::Cr5So: return "cr5_so";
+        case Flag::Cr6Lt: return "cr6_lt";
+        case Flag::Cr6Gt: return "cr6_gt";
+        case Flag::Cr6Eq: return "cr6_eq";
+        case Flag::Cr6So: return "cr6_so";
+        case Flag::Cr7Lt: return "cr7_lt";
+        case Flag::Cr7Gt: return "cr7_gt";
+        case Flag::Cr7Eq: return "cr7_eq";
+        case Flag::Cr7So: return "cr7_so";
     }
     return "?";
 }
@@ -171,7 +222,7 @@ enum class IrOp : u16 {
 struct IrInst {
     IrOp                    op          = IrOp::Nop;
     IrValue                 dst         = {};
-    std::array<IrValue, 3>  srcs        = {};
+    std::array<IrValue, 4>  srcs        = {};
     u8                      src_count   = 0;
     addr_t                  source_addr = 0;
     addr_t                  target1     = 0;

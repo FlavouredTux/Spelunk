@@ -35,7 +35,9 @@ enum class Reg : u16 {
     PpcR8,  PpcR9,  PpcR10, PpcR11, PpcR12, PpcR13, PpcR14, PpcR15,
     PpcR16, PpcR17, PpcR18, PpcR19, PpcR20, PpcR21, PpcR22, PpcR23,
     PpcR24, PpcR25, PpcR26, PpcR27, PpcR28, PpcR29, PpcR30, PpcR31,
-    PpcLr, PpcCtr,
+    PpcLr, PpcCtr, PpcXer,
+    PpcGqr0, PpcGqr1, PpcGqr2, PpcGqr3,
+    PpcGqr4, PpcGqr5, PpcGqr6, PpcGqr7,
     PpcF0,  PpcF1,  PpcF2,  PpcF3,  PpcF4,  PpcF5,  PpcF6,  PpcF7,
     PpcF8,  PpcF9,  PpcF10, PpcF11, PpcF12, PpcF13, PpcF14, PpcF15,
     PpcF16, PpcF17, PpcF18, PpcF19, PpcF20, PpcF21, PpcF22, PpcF23,
@@ -101,6 +103,8 @@ enum class Reg : u16 {
         v <= static_cast<unsigned>(Reg::PpcR31)) return 8;
     if (v == static_cast<unsigned>(Reg::PpcLr) ||
         v == static_cast<unsigned>(Reg::PpcCtr)) return 8;
+    if (v >= static_cast<unsigned>(Reg::PpcXer) &&
+        v <= static_cast<unsigned>(Reg::PpcGqr7)) return 4;
     if (v >= static_cast<unsigned>(Reg::PpcF0) &&
         v <= static_cast<unsigned>(Reg::PpcF31)) return 8;
     if (v >= static_cast<unsigned>(Reg::X0) &&

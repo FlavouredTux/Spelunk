@@ -32,6 +32,8 @@ struct LiftCtx {
             r == Reg::PpcLr || r == Reg::PpcCtr) {
             return ppc_reg_type();
         }
+        if (v >= static_cast<unsigned>(Reg::PpcXer) &&
+            v <= static_cast<unsigned>(Reg::PpcGqr7)) return IrType::I32;
         if (is_ppc_fpr(r)) return IrType::F64;
         return type_for_bits(reg_size(r) * 8);
     }
@@ -251,11 +253,30 @@ void lift_fp_unop(LiftCtx& ctx, IrOp op, IrType t) {
     store_fp_lvalue(insn.operands[0], ctx.emit_unop(op, src, t), ctx, t);
 }
 
-void set_fp_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs) {
-    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, lhs, rhs));
-    ctx.emit_set_flag(Flag::Sf, ctx.emit_cmp(IrOp::CmpSlt, lhs, rhs));
-    ctx.emit_set_flag(Flag::Cf, ctx.imm(0, IrType::I1));
-    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+void set_cr_field(LiftCtx& ctx, u8 field, IrValue lt, IrValue gt,
+                  IrValue eq, IrValue so) {
+    ctx.emit_set_flag(ppc_cr_flag(field, 0), lt);
+    ctx.emit_set_flag(ppc_cr_flag(field, 1), gt);
+    ctx.emit_set_flag(ppc_cr_flag(field, 2), eq);
+    ctx.emit_set_flag(ppc_cr_flag(field, 3), so);
+
+    // Keep CR0 mirrored in the legacy generic flags. Other architectures use
+    // these flags, and retaining the aliases avoids needless churn in existing
+    // PPC32 output while CR1..CR7 remain fully independent.
+    if (field == 0) {
+        ctx.emit_set_flag(Flag::Sf, lt);
+        ctx.emit_set_flag(Flag::Zf, eq);
+        ctx.emit_set_flag(Flag::Cf, lt);
+        ctx.emit_set_flag(Flag::Of, so);
+    }
+}
+
+void set_fp_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs, u8 field) {
+    set_cr_field(ctx, field,
+                 ctx.emit_cmp(IrOp::CmpSlt, lhs, rhs),
+                 ctx.emit_cmp(IrOp::CmpSgt, lhs, rhs),
+                 ctx.emit_cmp(IrOp::CmpEq, lhs, rhs),
+                 ctx.imm(0, IrType::I1));
 }
 
 void lift_fp_cmp(LiftCtx& ctx, IrType t) {
@@ -264,7 +285,7 @@ void lift_fp_cmp(LiftCtx& ctx, IrType t) {
     IrValue lhs = materialize_fp_rvalue(insn.operands[0], ctx, t);
     IrValue rhs = materialize_fp_rvalue(insn.operands[1], ctx, t);
     if (lhs.kind == IrValueKind::None || rhs.kind == IrValueKind::None) return;
-    set_fp_compare_flags(ctx, lhs, rhs);
+    set_fp_compare_flags(ctx, lhs, rhs, insn.ppc_cr_field);
 }
 
 void emit_call_clobbers(LiftCtx& ctx) {
@@ -358,71 +379,138 @@ void lift_jmp(LiftCtx& ctx) {
     ctx.emit(std::move(i));
 }
 
-void set_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs) {
-    lhs = ctx.match_size(lhs, IrType::I64, true);
-    rhs = ctx.match_size(rhs, IrType::I64, true);
-    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, lhs, rhs));
-    ctx.emit_set_flag(Flag::Sf, ctx.emit_cmp(IrOp::CmpSlt, lhs, rhs));
-    ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpUlt, lhs, rhs));
-    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+void set_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs, u8 field) {
+    const IrType type = ctx.ppc_reg_type();
+    lhs = ctx.match_size(lhs, type, true);
+    rhs = ctx.match_size(rhs, type, true);
+    set_cr_field(ctx, field,
+                 ctx.emit_cmp(IrOp::CmpSlt, lhs, rhs),
+                 ctx.emit_cmp(IrOp::CmpSgt, lhs, rhs),
+                 ctx.emit_cmp(IrOp::CmpEq, lhs, rhs),
+                 ctx.imm(0, IrType::I1));
 }
 
-void set_unsigned_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs) {
-    lhs = ctx.match_size(lhs, IrType::I64);
-    rhs = ctx.match_size(rhs, IrType::I64);
-    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, lhs, rhs));
-    ctx.emit_set_flag(Flag::Sf, ctx.emit_cmp(IrOp::CmpUlt, lhs, rhs));
-    ctx.emit_set_flag(Flag::Cf, ctx.flag_val(Flag::Sf));
-    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+void set_unsigned_compare_flags(LiftCtx& ctx, IrValue lhs, IrValue rhs, u8 field) {
+    const IrType type = ctx.ppc_reg_type();
+    lhs = ctx.match_size(lhs, type);
+    rhs = ctx.match_size(rhs, type);
+    set_cr_field(ctx, field,
+                 ctx.emit_cmp(IrOp::CmpUlt, lhs, rhs),
+                 ctx.emit_cmp(IrOp::CmpUgt, lhs, rhs),
+                 ctx.emit_cmp(IrOp::CmpEq, lhs, rhs),
+                 ctx.imm(0, IrType::I1));
 }
 
-[[nodiscard]] IrValue branch_predicate(LiftCtx& ctx, Mnemonic mn) {
-    const IrValue zf = ctx.flag_val(Flag::Zf);
-    const IrValue sf = ctx.flag_val(Flag::Sf);
+[[nodiscard]] IrValue ppc_branch_predicate(LiftCtx& ctx) {
+    const Instruction& insn = *ctx.insn;
+    const u8 bo = insn.ppc_bo;
+    const u8 bi = insn.ppc_bi;
+    IrValue predicate = ctx.imm(1, IrType::I1);
+    bool has_predicate = false;
 
-    switch (mn) {
-        case Mnemonic::Beq:
-            return zf;
-        case Mnemonic::Bne:
-            return ctx.emit_unop(IrOp::Not, zf, IrType::I1);
-        case Mnemonic::Blt:
-            return sf;
-        case Mnemonic::Bge:
-            return ctx.emit_unop(IrOp::Not, sf, IrType::I1);
-        case Mnemonic::Bgt: {
-            IrValue nzf = ctx.emit_unop(IrOp::Not, zf, IrType::I1);
-            IrValue nsf = ctx.emit_unop(IrOp::Not, sf, IrType::I1);
-            return ctx.emit_binop(IrOp::And, nzf, nsf, IrType::I1);
-        }
-        case Mnemonic::Ble:
-            return ctx.emit_binop(IrOp::Or, zf, sf, IrType::I1);
-        default:
-            return ctx.imm(0, IrType::I1);
+    // BO[0] == 0 checks CR[BI], with BO[1] selecting the expected value.
+    if ((bo & 0x10u) == 0) {
+        IrValue cr = ctx.flag_val(ppc_cr_flag(static_cast<u8>(bi / 4u),
+                                              static_cast<u8>(bi % 4u)));
+        if ((bo & 0x08u) == 0) cr = ctx.emit_unop(IrOp::Not, cr, IrType::I1);
+        predicate = cr;
+        has_predicate = true;
     }
+
+    // BO[2] == 0 decrements CTR before testing it. BO[3] selects zero vs
+    // nonzero. Combined BO forms require both the CR and CTR predicates.
+    if ((bo & 0x04u) == 0) {
+        IrValue ctr = ctx.read_reg(Reg::PpcCtr);
+        IrValue next = ctx.emit_binop(IrOp::Sub, ctr, ctx.imm(1, ctr.type), ctr.type);
+        ctx.write_reg(Reg::PpcCtr, next);
+        IrValue ctr_ok = ctx.emit_cmp((bo & 0x02u) != 0 ? IrOp::CmpEq : IrOp::CmpNe,
+                                      next, ctx.imm(0, next.type));
+        predicate = has_predicate
+            ? ctx.emit_binop(IrOp::And, predicate, ctr_ok, IrType::I1)
+            : ctr_ok;
+    }
+    return predicate;
 }
 
 void lift_cond_branch(LiftCtx& ctx) {
-    const auto& insn = *ctx.insn;
-    if (insn.num_operands != 1 || insn.operands[0].kind != Operand::Kind::Relative) return;
-
-    IrValue cond;
-    if (insn.mnemonic == Mnemonic::Bdnz || insn.mnemonic == Mnemonic::Bdz) {
-        IrValue ctr = ctx.read_reg(Reg::PpcCtr);
-        IrValue next = ctx.emit_binop(IrOp::Sub, ctr, ctx.imm(1));
-        ctx.write_reg(Reg::PpcCtr, next);
-        cond = ctx.emit_cmp(insn.mnemonic == Mnemonic::Bdnz ? IrOp::CmpNe : IrOp::CmpEq,
-                            next, ctx.imm(0));
-    } else {
-        cond = branch_predicate(ctx, insn.mnemonic);
-    }
+    if (ctx.blk->successors.size() != 2 || ctx.insn->ppc_bo == 0xff) return;
 
     IrInst i;
     i.op        = IrOp::CondBranch;
-    i.srcs[0]   = cond;
+    i.srcs[0]   = ppc_branch_predicate(ctx);
     i.src_count = 1;
-    i.target1   = insn.operands[0].rel.target;
-    i.target2   = insn.address + insn.length;
+    i.target1   = ctx.blk->successors[0];
+    i.target2   = ctx.blk->successors[1];
     ctx.emit(std::move(i));
+}
+
+void lift_cr_logical(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const auto bit = [&](u8 operand) {
+        const u8 n = static_cast<u8>(insn.operands[operand].imm.value) & 31u;
+        return ctx.flag_val(ppc_cr_flag(static_cast<u8>(n / 4u),
+                                        static_cast<u8>(n % 4u)));
+    };
+    IrValue a = bit(1);
+    IrValue b = bit(2);
+    IrValue result;
+    switch (insn.mnemonic) {
+        case Mnemonic::Crand:  result = ctx.emit_binop(IrOp::And, a, b, IrType::I1); break;
+        case Mnemonic::Crandc: result = ctx.emit_binop(IrOp::And, a,
+            ctx.emit_unop(IrOp::Not, b, IrType::I1), IrType::I1); break;
+        case Mnemonic::Creqv: result = ctx.emit_unop(IrOp::Not,
+            ctx.emit_binop(IrOp::Xor, a, b, IrType::I1), IrType::I1); break;
+        case Mnemonic::Crnand: result = ctx.emit_unop(IrOp::Not,
+            ctx.emit_binop(IrOp::And, a, b, IrType::I1), IrType::I1); break;
+        case Mnemonic::Crnor: result = ctx.emit_unop(IrOp::Not,
+            ctx.emit_binop(IrOp::Or, a, b, IrType::I1), IrType::I1); break;
+        case Mnemonic::Cror: result = ctx.emit_binop(IrOp::Or, a, b, IrType::I1); break;
+        case Mnemonic::Crorc: result = ctx.emit_binop(IrOp::Or, a,
+            ctx.emit_unop(IrOp::Not, b, IrType::I1), IrType::I1); break;
+        case Mnemonic::Crxor: result = ctx.emit_binop(IrOp::Xor, a, b, IrType::I1); break;
+        default: return;
+    }
+    const u8 dst = static_cast<u8>(insn.operands[0].imm.value) & 31u;
+    ctx.emit_set_flag(ppc_cr_flag(static_cast<u8>(dst / 4u),
+                                  static_cast<u8>(dst % 4u)), result);
+}
+
+[[nodiscard]] IrValue materialize_ps_value(const Operand& operand, LiftCtx& ctx) {
+    if (operand.kind == Operand::Kind::Register) {
+        return IrValue::make_reg(operand.reg, IrType::V2F32);
+    }
+    return materialize_rvalue(operand, ctx);
+}
+
+void lift_ps_compare(LiftCtx& ctx, std::string_view base_name) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const u8 field = static_cast<u8>(insn.operands[0].imm.value) & 7u;
+    const IrValue lhs = materialize_ps_value(insn.operands[1], ctx);
+    const IrValue rhs = materialize_ps_value(insn.operands[2], ctx);
+    constexpr std::array<std::string_view, 3> suffixes = {".lt", ".gt", ".eq"};
+    for (u8 bit = 0; bit < suffixes.size(); ++bit) {
+        IrInst i;
+        i.op = IrOp::Intrinsic;
+        i.name = std::string(base_name) + std::string(suffixes[bit]);
+        i.dst = IrValue::make_flag(ppc_cr_flag(field, bit));
+        i.srcs[0] = lhs;
+        i.srcs[1] = rhs;
+        i.src_count = 2;
+        ctx.emit(std::move(i));
+    }
+    ctx.emit_set_flag(ppc_cr_flag(field, 3), ctx.imm(0, IrType::I1));
+}
+
+void set_record_result(LiftCtx& ctx, IrValue value) {
+    value = ctx.match_size(value, ctx.ppc_reg_type(), true);
+    const IrValue zero = ctx.imm(0, value.type);
+    set_cr_field(ctx, 0,
+                 ctx.emit_cmp(IrOp::CmpSlt, value, zero),
+                 ctx.emit_cmp(IrOp::CmpSgt, value, zero),
+                 ctx.emit_cmp(IrOp::CmpEq, value, zero),
+                 ctx.imm(0, IrType::I1));
 }
 
 void lift_intrinsic(LiftCtx& ctx, std::string_view name) {
@@ -450,6 +538,71 @@ void lift_dst_intrinsic(LiftCtx& ctx, std::string_view name) {
         i.srcs[i.src_count++] = v;
     }
     ctx.emit(std::move(i));
+    if (insn.ppc_record) set_record_result(ctx, ctx.read_reg(insn.operands[0].reg));
+}
+
+void lift_ps_dst_intrinsic(LiftCtx& ctx, std::string_view name) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands == 0 || insn.operands[0].kind != Operand::Kind::Register) return;
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst = IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
+    for (u8 j = 1; j < insn.num_operands && j < 4; ++j) {
+        IrValue value = materialize_ps_value(insn.operands[j], ctx);
+        if (value.kind == IrValueKind::None) break;
+        i.srcs[i.src_count++] = value;
+    }
+    ctx.emit(std::move(i));
+}
+
+void lift_ps_binop(LiftCtx& ctx, IrOp op) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    IrValue lhs = materialize_ps_value(insn.operands[1], ctx);
+    IrValue rhs = materialize_ps_value(insn.operands[2], ctx);
+    IrValue result = ctx.emit_binop(op, lhs, rhs, IrType::V2F32);
+    ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::V2F32), result);
+}
+
+void lift_ps_unop(LiftCtx& ctx, IrOp op) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue result = ctx.emit_unop(op, materialize_ps_value(insn.operands[1], ctx),
+                                   IrType::V2F32);
+    ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::V2F32), result);
+}
+
+void lift_psq_intrinsic(LiftCtx& ctx, std::string_view name, bool load, bool update) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 4 ||
+        insn.operands[0].kind != Operand::Kind::Register ||
+        insn.operands[1].kind != Operand::Kind::Memory ||
+        insn.operands[2].kind != Operand::Kind::Immediate ||
+        insn.operands[3].kind != Operand::Kind::Immediate) {
+        return;
+    }
+
+    const Mem& mem = insn.operands[1].mem;
+    const IrValue ea = compute_ea(mem, ctx);
+    const u8 w = static_cast<u8>(insn.operands[2].imm.value) & 1u;
+    const u8 gqr = static_cast<u8>(insn.operands[3].imm.value) & 7u;
+
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = std::string(name);
+    if (load) {
+        i.dst = IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
+    } else {
+        i.srcs[i.src_count++] = IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
+    }
+    i.srcs[i.src_count++] = ea;
+    i.srcs[i.src_count++] = ctx.imm(w, IrType::I8);
+    i.srcs[i.src_count++] = ctx.read_reg(static_cast<Reg>(
+        static_cast<unsigned>(Reg::PpcGqr0) + gqr));
+    ctx.emit(std::move(i));
+
+    if (update && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
 }
 
 void lift_sign_extend_from(LiftCtx& ctx, IrType narrow) {
@@ -473,13 +626,16 @@ void lift_instruction(LiftCtx& ctx) {
         IrValue out = ctx.emit_binop(op, ctx.match_size(lhs, ty, true),
                                      ctx.match_size(rhs, ty, true), ty);
         store_lvalue(insn.operands[0], out, ctx);
+        if (insn.ppc_record) set_record_result(ctx, out);
     };
 
     auto unop = [&](IrOp op) {
         if (insn.num_operands != 2) return;
         const IrType ty = ctx.ppc_reg_type();
         IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), ty, true);
-        store_lvalue(insn.operands[0], ctx.emit_unop(op, src, ty), ctx);
+        IrValue out = ctx.emit_unop(op, src, ty);
+        store_lvalue(insn.operands[0], out, ctx);
+        if (insn.ppc_record) set_record_result(ctx, out);
     };
 
     auto load_int = [&](IrType mem_ty, bool sign_ext, bool update_base = false) {
@@ -506,7 +662,9 @@ void lift_instruction(LiftCtx& ctx) {
     switch (insn.mnemonic) {
         case Mnemonic::Mov:
             if (insn.num_operands == 2) {
-                store_lvalue(insn.operands[0], materialize_rvalue(insn.operands[1], ctx), ctx);
+                IrValue value = materialize_rvalue(insn.operands[1], ctx);
+                store_lvalue(insn.operands[0], value, ctx);
+                if (insn.ppc_record) set_record_result(ctx, value);
             }
             break;
         case Mnemonic::Addi:
@@ -581,6 +739,7 @@ void lift_instruction(LiftCtx& ctx) {
                     : ctx.emit_binop(IrOp::And, rot,
                                      ctx.imm(static_cast<i64>(mask), IrType::I32), IrType::I32);
                 store_lvalue(insn.operands[0], ctx.match_size(out, ctx.ppc_reg_type()), ctx);
+                if (insn.ppc_record) set_record_result(ctx, out);
             }
             break;
         case Mnemonic::Rlwimi:
@@ -589,14 +748,26 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Cmp:
             if (insn.num_operands == 2) {
                 set_compare_flags(ctx, materialize_rvalue(insn.operands[0], ctx),
-                                  materialize_rvalue(insn.operands[1], ctx));
+                                  materialize_rvalue(insn.operands[1], ctx),
+                                  insn.ppc_cr_field);
             }
             break;
         case Mnemonic::Cmpl:
             if (insn.num_operands == 2) {
                 set_unsigned_compare_flags(ctx, materialize_rvalue(insn.operands[0], ctx),
-                                           materialize_rvalue(insn.operands[1], ctx));
+                                           materialize_rvalue(insn.operands[1], ctx),
+                                           insn.ppc_cr_field);
             }
+            break;
+        case Mnemonic::Crand:
+        case Mnemonic::Crandc:
+        case Mnemonic::Creqv:
+        case Mnemonic::Crnand:
+        case Mnemonic::Crnor:
+        case Mnemonic::Cror:
+        case Mnemonic::Crorc:
+        case Mnemonic::Crxor:
+            lift_cr_logical(ctx);
             break;
         case Mnemonic::Mfcr:
             lift_dst_intrinsic(ctx, "ppc.mfcr");
@@ -610,6 +781,12 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Mtspr:
             lift_intrinsic(ctx, "ppc.mtspr");
             break;
+        case Mnemonic::Mfsr:
+            lift_dst_intrinsic(ctx, "ppc.mfsr");
+            break;
+        case Mnemonic::Mtsr:
+            lift_intrinsic(ctx, "ppc.mtsr");
+            break;
         case Mnemonic::Mfmsr:
             lift_dst_intrinsic(ctx, "ppc.mfmsr");
             break;
@@ -618,30 +795,6 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         case Mnemonic::Mftb:
             lift_dst_intrinsic(ctx, "ppc.mftb");
-            break;
-        case Mnemonic::Crand:
-            lift_intrinsic(ctx, "ppc.crand");
-            break;
-        case Mnemonic::Crandc:
-            lift_intrinsic(ctx, "ppc.crandc");
-            break;
-        case Mnemonic::Creqv:
-            lift_intrinsic(ctx, "ppc.creqv");
-            break;
-        case Mnemonic::Crnand:
-            lift_intrinsic(ctx, "ppc.crnand");
-            break;
-        case Mnemonic::Crnor:
-            lift_intrinsic(ctx, "ppc.crnor");
-            break;
-        case Mnemonic::Cror:
-            lift_intrinsic(ctx, "ppc.cror");
-            break;
-        case Mnemonic::Crorc:
-            lift_intrinsic(ctx, "ppc.crorc");
-            break;
-        case Mnemonic::Crxor:
-            lift_intrinsic(ctx, "ppc.crxor");
             break;
         case Mnemonic::Ld:
         case Mnemonic::Ldu:
@@ -760,11 +913,23 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Fmr:
             lift_fp_mov(ctx, IrType::F64);
             break;
+        case Mnemonic::Fnabs:
+            lift_dst_intrinsic(ctx, "ppc.fnabs");
+            break;
         case Mnemonic::Fneg:
             lift_fp_unop(ctx, IrOp::Neg, IrType::F64);
             break;
         case Mnemonic::Frsp:
             lift_dst_intrinsic(ctx, "ppc.frsp");
+            break;
+        case Mnemonic::Fres:
+            lift_dst_intrinsic(ctx, "ppc.fres");
+            break;
+        case Mnemonic::Frsqrte:
+            lift_dst_intrinsic(ctx, "ppc.frsqrte");
+            break;
+        case Mnemonic::Fsel:
+            lift_dst_intrinsic(ctx, "ppc.fsel");
             break;
         case Mnemonic::Fctiw:
             lift_dst_intrinsic(ctx, "ppc.fctiw");
@@ -775,6 +940,24 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Fcmpu:
         case Mnemonic::Fcmpo:
             lift_fp_cmp(ctx, IrType::F64);
+            break;
+        case Mnemonic::Mffs:
+            lift_dst_intrinsic(ctx, "ppc.mffs");
+            break;
+        case Mnemonic::Mcrfs:
+            lift_intrinsic(ctx, "ppc.mcrfs");
+            break;
+        case Mnemonic::Mtfsb0:
+            lift_intrinsic(ctx, "ppc.mtfsb0");
+            break;
+        case Mnemonic::Mtfsb1:
+            lift_intrinsic(ctx, "ppc.mtfsb1");
+            break;
+        case Mnemonic::Mtfsfi:
+            lift_intrinsic(ctx, "ppc.mtfsfi");
+            break;
+        case Mnemonic::Mtfsf:
+            lift_intrinsic(ctx, "ppc.mtfsf");
             break;
         case Mnemonic::Std:
         case Mnemonic::Stdu:
@@ -805,6 +988,19 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Sth:
         case Mnemonic::Sthx:
             store_int(IrType::I16, false);
+            break;
+        case Mnemonic::Sthbrx:
+            if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
+                IrValue src = ctx.match_size(materialize_rvalue(insn.operands[0], ctx),
+                                             IrType::I16);
+                IrValue lo = ctx.emit_binop(IrOp::And, src, ctx.imm(0xff, IrType::I16),
+                                            IrType::I16);
+                lo = ctx.emit_binop(IrOp::Shl, lo, ctx.imm(8, IrType::I16), IrType::I16);
+                IrValue hi = ctx.emit_binop(IrOp::Lshr, src, ctx.imm(8, IrType::I16),
+                                            IrType::I16);
+                ctx.emit_store(compute_ea(insn.operands[1].mem, ctx),
+                               ctx.emit_binop(IrOp::Or, lo, hi, IrType::I16));
+            }
             break;
         case Mnemonic::Sthu:
         case Mnemonic::Sthux:
@@ -838,13 +1034,115 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         case Mnemonic::PsqL:
         case Mnemonic::PsqLu:
-            lift_dst_intrinsic(ctx, insn.mnemonic == Mnemonic::PsqL ? "ppc.psq_l" : "ppc.psq_lu");
+            lift_psq_intrinsic(ctx, insn.mnemonic == Mnemonic::PsqL
+                ? "ppc.psq_l" : "ppc.psq_lu", true, insn.mnemonic == Mnemonic::PsqLu);
             break;
         case Mnemonic::PsqSt:
-            lift_intrinsic(ctx, "ppc.psq_st");
+            lift_psq_intrinsic(ctx, "ppc.psq_st", false, false);
             break;
         case Mnemonic::PsqStu:
-            lift_intrinsic(ctx, "ppc.psq_stu");
+            lift_psq_intrinsic(ctx, "ppc.psq_stu", false, true);
+            break;
+        case Mnemonic::PsqLx:
+        case Mnemonic::PsqLux:
+            lift_psq_intrinsic(ctx, insn.mnemonic == Mnemonic::PsqLx
+                ? "ppc.psq_lx" : "ppc.psq_lux", true, insn.mnemonic == Mnemonic::PsqLux);
+            break;
+        case Mnemonic::PsqStx:
+            lift_psq_intrinsic(ctx, "ppc.psq_stx", false, false);
+            break;
+        case Mnemonic::PsqStux:
+            lift_psq_intrinsic(ctx, "ppc.psq_stux", false, true);
+            break;
+        case Mnemonic::PsMr:
+            if (insn.num_operands == 2) {
+                ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::V2F32),
+                                materialize_ps_value(insn.operands[1], ctx));
+            }
+            break;
+        case Mnemonic::PsNeg:
+            lift_ps_unop(ctx, IrOp::Neg);
+            break;
+        case Mnemonic::PsNabs:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_nabs");
+            break;
+        case Mnemonic::PsAbs:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_abs");
+            break;
+        case Mnemonic::PsMerge00:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_merge00");
+            break;
+        case Mnemonic::PsMerge01:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_merge01");
+            break;
+        case Mnemonic::PsMerge10:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_merge10");
+            break;
+        case Mnemonic::PsMerge11:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_merge11");
+            break;
+        case Mnemonic::PsSum0:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_sum0");
+            break;
+        case Mnemonic::PsSum1:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_sum1");
+            break;
+        case Mnemonic::PsMuls0:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_muls0");
+            break;
+        case Mnemonic::PsMuls1:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_muls1");
+            break;
+        case Mnemonic::PsMadds0:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_madds0");
+            break;
+        case Mnemonic::PsMadds1:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_madds1");
+            break;
+        case Mnemonic::PsDiv:
+            lift_ps_binop(ctx, IrOp::Div);
+            break;
+        case Mnemonic::PsSub:
+            lift_ps_binop(ctx, IrOp::Sub);
+            break;
+        case Mnemonic::PsAdd:
+            lift_ps_binop(ctx, IrOp::Add);
+            break;
+        case Mnemonic::PsSel:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_sel");
+            break;
+        case Mnemonic::PsRes:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_res");
+            break;
+        case Mnemonic::PsMul:
+            lift_ps_binop(ctx, IrOp::Mul);
+            break;
+        case Mnemonic::PsRsqrte:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_rsqrte");
+            break;
+        case Mnemonic::PsMsub:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_msub");
+            break;
+        case Mnemonic::PsMadd:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_madd");
+            break;
+        case Mnemonic::PsNmsub:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_nmsub");
+            break;
+        case Mnemonic::PsNmadd:
+            lift_ps_dst_intrinsic(ctx, "ppc.ps_nmadd");
+            break;
+        case Mnemonic::PsCmpu0:
+            lift_ps_compare(ctx, "ppc.ps_cmpu0");
+            break;
+        case Mnemonic::PsCmpo0:
+            lift_ps_compare(ctx, "ppc.ps_cmpo0");
+            break;
+        case Mnemonic::PsCmpu1:
+            lift_ps_compare(ctx, "ppc.ps_cmpu1");
+            break;
+        case Mnemonic::PsCmpo1:
+            lift_ps_compare(ctx, "ppc.ps_cmpo1");
             break;
         case Mnemonic::PsOp4:
             lift_intrinsic(ctx, "ppc.ps.op4");
@@ -869,10 +1167,9 @@ void lift_instruction(LiftCtx& ctx) {
             lift_cond_branch(ctx);
             break;
         case Mnemonic::Bclr:
-            lift_intrinsic(ctx, "ppc.bclr");
-            break;
         case Mnemonic::Bc:
-            lift_intrinsic(ctx, "ppc.bc");
+        case Mnemonic::Bcctr:
+            lift_cond_branch(ctx);
             break;
         case Mnemonic::Nop: {
             IrInst i;
@@ -906,6 +1203,9 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         case Mnemonic::Dcbz:
             lift_intrinsic(ctx, "ppc.dcbz");
+            break;
+        case Mnemonic::DcbzL:
+            lift_intrinsic(ctx, "ppc.dcbz_l");
             break;
         case Mnemonic::Icbi:
             lift_intrinsic(ctx, "ppc.icbi");

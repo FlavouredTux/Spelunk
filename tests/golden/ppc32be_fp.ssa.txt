@@ -23,24 +23,29 @@ bb_100054  (entry):
   f6_1 = t6
   ; 0x10006c
   t7 = cmp.eq i1 f6_1, f0
+  t8 = cmp.sgt i1 f6_1, f0
+  t9 = cmp.slt i1 f6_1, f0
+  cr0_lt_1 = t9
+  cr0_gt_1 = t8
+  cr0_eq_1 = t7
+  cr0_so_1 = 0x0
+  sf_1 = t9
   zf_1 = t7
-  t8 = cmp.slt i1 f6_1, f0
-  sf_1 = t8
-  cf_1 = 0x0
+  cf_1 = t9
   of_1 = 0x0
   ; 0x100070
   f7_1 = f6_1
   ; 0x100074
   f8_1 = f7_1
   ; 0x100078
-  t9 = neg f64 f8_1
-  f9_1 = t9
+  t10 = neg f64 f8_1
+  f9_1 = t10
   ; 0x10007c
-  t10 = add i32 r3, 0x10
-  store f32 [t10], f3_1
+  t11 = add i32 r3, 0x10
+  store f32 [t11], f3_1
   ; 0x100080
-  t11 = add i32 r3, 0x18
-  store f64 [t11], f4_1
+  t12 = add i32 r3, 0x18
+  store f64 [t12], f4_1
   ; 0x100084
   return r3
 

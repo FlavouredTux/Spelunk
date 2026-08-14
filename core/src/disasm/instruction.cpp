@@ -48,6 +48,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Stbx:     return "stbx";
         case Mnemonic::Lhzx:     return "lhzx";
         case Mnemonic::Sthx:     return "sthx";
+        case Mnemonic::Sthbrx:   return "sthbrx";
         case Mnemonic::Lhax:     return "lhax";
         case Mnemonic::Lwzux:    return "lwzux";
         case Mnemonic::Stwux:    return "stwux";
@@ -76,6 +77,39 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::PsqLu:    return "psq_lu";
         case Mnemonic::PsqSt:    return "psq_st";
         case Mnemonic::PsqStu:   return "psq_stu";
+        case Mnemonic::PsqLx:    return "psq_lx";
+        case Mnemonic::PsqLux:   return "psq_lux";
+        case Mnemonic::PsqStx:   return "psq_stx";
+        case Mnemonic::PsqStux:  return "psq_stux";
+        case Mnemonic::PsCmpu0:  return "ps_cmpu0";
+        case Mnemonic::PsCmpo0:  return "ps_cmpo0";
+        case Mnemonic::PsCmpu1:  return "ps_cmpu1";
+        case Mnemonic::PsCmpo1:  return "ps_cmpo1";
+        case Mnemonic::PsNeg:    return "ps_neg";
+        case Mnemonic::PsMr:     return "ps_mr";
+        case Mnemonic::PsNabs:   return "ps_nabs";
+        case Mnemonic::PsAbs:    return "ps_abs";
+        case Mnemonic::PsMerge00:return "ps_merge00";
+        case Mnemonic::PsMerge01:return "ps_merge01";
+        case Mnemonic::PsMerge10:return "ps_merge10";
+        case Mnemonic::PsMerge11:return "ps_merge11";
+        case Mnemonic::PsSum0:   return "ps_sum0";
+        case Mnemonic::PsSum1:   return "ps_sum1";
+        case Mnemonic::PsMuls0:  return "ps_muls0";
+        case Mnemonic::PsMuls1:  return "ps_muls1";
+        case Mnemonic::PsMadds0: return "ps_madds0";
+        case Mnemonic::PsMadds1: return "ps_madds1";
+        case Mnemonic::PsDiv:    return "ps_div";
+        case Mnemonic::PsSub:    return "ps_sub";
+        case Mnemonic::PsAdd:    return "ps_add";
+        case Mnemonic::PsSel:    return "ps_sel";
+        case Mnemonic::PsRes:    return "ps_res";
+        case Mnemonic::PsMul:    return "ps_mul";
+        case Mnemonic::PsRsqrte: return "ps_rsqrte";
+        case Mnemonic::PsMsub:   return "ps_msub";
+        case Mnemonic::PsMadd:   return "ps_madd";
+        case Mnemonic::PsNmsub:  return "ps_nmsub";
+        case Mnemonic::PsNmadd:  return "ps_nmadd";
         case Mnemonic::PsOp4:    return "ps.op4";
         case Mnemonic::Fadds:    return "fadds";
         case Mnemonic::Fsubs:    return "fsubs";
@@ -96,11 +130,21 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Fcmpu:    return "fcmpu";
         case Mnemonic::Fcmpo:    return "fcmpo";
         case Mnemonic::Fabs:     return "fabs";
+        case Mnemonic::Fnabs:    return "fnabs";
         case Mnemonic::Fmr:      return "fmr";
         case Mnemonic::Fneg:     return "fneg";
         case Mnemonic::Frsp:     return "frsp";
+        case Mnemonic::Fres:     return "fres";
+        case Mnemonic::Frsqrte:  return "frsqrte";
+        case Mnemonic::Fsel:     return "fsel";
         case Mnemonic::Fctiw:    return "fctiw";
         case Mnemonic::Fctiwz:   return "fctiwz";
+        case Mnemonic::Mcrfs:    return "mcrfs";
+        case Mnemonic::Mffs:     return "mffs";
+        case Mnemonic::Mtfsb0:   return "mtfsb0";
+        case Mnemonic::Mtfsb1:   return "mtfsb1";
+        case Mnemonic::Mtfsfi:   return "mtfsfi";
+        case Mnemonic::Mtfsf:    return "mtfsf";
         case Mnemonic::FpOp:     return "fp.op";
         case Mnemonic::Mulli:    return "mulli";
         case Mnemonic::Rlwinm:   return "rlwinm";
@@ -148,6 +192,8 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Mtcrf:    return "mtcrf";
         case Mnemonic::Mfspr:    return "mfspr";
         case Mnemonic::Mtspr:    return "mtspr";
+        case Mnemonic::Mfsr:     return "mfsr";
+        case Mnemonic::Mtsr:     return "mtsr";
         case Mnemonic::Mfmsr:    return "mfmsr";
         case Mnemonic::Mtmsr:    return "mtmsr";
         case Mnemonic::Mftb:     return "mftb";
@@ -192,6 +238,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Bdz:      return "bdz";
         case Mnemonic::Bc:       return "bc";
         case Mnemonic::Bclr:     return "bclr";
+        case Mnemonic::Bcctr:    return "bcctr";
         case Mnemonic::Nop:      return "nop";
         case Mnemonic::Hlt:      return "hlt";
         case Mnemonic::Int:      return "int";
@@ -216,6 +263,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Dcbst:    return "dcbst";
         case Mnemonic::Dcbi:     return "dcbi";
         case Mnemonic::Dcbz:     return "dcbz";
+        case Mnemonic::DcbzL:    return "dcbz_l";
         case Mnemonic::Icbi:     return "icbi";
         case Mnemonic::Cdq:      return "cdq";
         case Mnemonic::Cqo:      return "cqo";
@@ -628,6 +676,70 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
 
 namespace {
 
+[[nodiscard]] constexpr std::string_view ppc_spr_name(u32 spr) noexcept {
+    switch (spr) {
+        case 18: return "dsisr";
+        case 19: return "dar";
+        case 22: return "dec";
+        case 25: return "sdr1";
+        case 26: return "srr0";
+        case 27: return "srr1";
+        case 268: return "tbl";
+        case 269: return "tbu";
+        case 272: return "sprg0";
+        case 273: return "sprg1";
+        case 274: return "sprg2";
+        case 275: return "sprg3";
+        case 280: return "asr";
+        case 282: return "ear";
+        case 284: return "tbl_w";
+        case 285: return "tbu_w";
+        case 287: return "pvr";
+        case 920: return "hid2";
+        case 921: return "wpar";
+        case 922: return "dmau";
+        case 923: return "dmal";
+        case 924: return "ecid_u";
+        case 925: return "ecid_m";
+        case 926: return "ecid_l";
+        case 936: return "ummcr0";
+        case 937: return "upmc1";
+        case 938: return "upmc2";
+        case 939: return "usia";
+        case 940: return "ummcr1";
+        case 941: return "upmc3";
+        case 942: return "upmc4";
+        case 952: return "mmcr0";
+        case 953: return "pmc1";
+        case 954: return "pmc2";
+        case 955: return "sia";
+        case 956: return "mmcr1";
+        case 957: return "pmc3";
+        case 958: return "pmc4";
+        case 1008: return "hid0";
+        case 1009: return "hid1";
+        case 1010: return "iabr";
+        case 1011: return "hid4";
+        case 1013: return "dabr";
+        case 1017: return "l2cr";
+        case 1019: return "ictc";
+        case 1020: return "thrm1";
+        case 1021: return "thrm2";
+        case 1022: return "thrm3";
+        default: break;
+    }
+    constexpr std::array<std::string_view, 48> bats = {
+        "ibat0u", "ibat0l", "ibat1u", "ibat1l", "ibat2u", "ibat2l", "ibat3u", "ibat3l",
+        "dbat0u", "dbat0l", "dbat1u", "dbat1l", "dbat2u", "dbat2l", "dbat3u", "dbat3l",
+        "ibat4u", "ibat4l", "ibat5u", "ibat5l", "ibat6u", "ibat6l", "ibat7u", "ibat7l",
+        "dbat4u", "dbat4l", "dbat5u", "dbat5l", "dbat6u", "dbat6l", "dbat7u", "dbat7l",
+        "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+    };
+    if (spr >= 528 && spr <= 543) return bats[spr - 528];
+    if (spr >= 560 && spr <= 575) return bats[16 + spr - 560];
+    return {};
+}
+
 [[nodiscard]] std::string_view size_keyword(u8 size) noexcept {
     switch (size) {
         case 1: return "byte ptr ";
@@ -738,6 +850,10 @@ std::string format_operand(const Instruction& insn, const Operand& op) {
         case Operand::Kind::Memory:
             return format_mem(op.mem, insn.mnemonic == Mnemonic::Lea, end_addr);
         case Operand::Kind::Immediate:
+            if (insn.mnemonic == Mnemonic::Mfspr || insn.mnemonic == Mnemonic::Mtspr) {
+                const auto name = ppc_spr_name(static_cast<u32>(op.imm.value));
+                if (!name.empty()) return std::string(name);
+            }
             return format_imm_value(op.imm);
         case Operand::Kind::Relative:
             return std::format("{:#x}", op.rel.target);

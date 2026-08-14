@@ -10,6 +10,7 @@
 #include <cstring>
 #include <deque>
 #include <format>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -760,6 +761,44 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
 }
 
 void partition(const Binary& b, const WalkState& ws, Function& fn) {
+    std::vector<BasicBlock> synthetic_blocks;
+    addr_t next_synthetic = std::numeric_limits<addr_t>::max() - 0x10000u;
+
+    auto make_indirect_arm = [&](const Instruction& branch, Reg target,
+                                 addr_t fallthrough) -> addr_t {
+        BasicBlock arm;
+        arm.start = next_synthetic;
+        next_synthetic -= 0x10u;
+        arm.end = arm.start + 4;
+
+        if (branch.ppc_link) {
+            Instruction call;
+            call.address = arm.start;
+            call.length = 4;
+            call.mnemonic = Mnemonic::Call;
+            call.operands[0] = Operand::make_reg(target);
+            call.num_operands = 1;
+            arm.instructions.push_back(call);
+            arm.kind = BlockKind::Fallthrough;
+            arm.successors.push_back(fallthrough);
+        } else if (target == Reg::PpcLr) {
+            arm.kind = BlockKind::Return;
+        } else {
+            Instruction jump;
+            jump.address = arm.start;
+            jump.length = 4;
+            jump.mnemonic = Mnemonic::Jmp;
+            jump.operands[0] = Operand::make_reg(target);
+            jump.num_operands = 1;
+            arm.instructions.push_back(jump);
+            arm.kind = BlockKind::IndirectJmp;
+        }
+
+        const addr_t result = arm.start;
+        synthetic_blocks.push_back(std::move(arm));
+        return result;
+    };
+
     for (addr_t leader : ws.leaders) {
         auto it = ws.insns.find(leader);
         if (it == ws.insns.end()) continue;
@@ -787,6 +826,10 @@ void partition(const Binary& b, const WalkState& ws, Function& fn) {
                     bb.kind = BlockKind::Conditional;
                     if (auto t = branch_target(insn); t) {
                         bb.successors.push_back(*t);
+                    } else if (mn == Mnemonic::Bclr) {
+                        bb.successors.push_back(make_indirect_arm(insn, Reg::PpcLr, next));
+                    } else if (mn == Mnemonic::Bcctr) {
+                        bb.successors.push_back(make_indirect_arm(insn, Reg::PpcCtr, next));
                     }
                     bb.successors.push_back(next);
                 } else if (is_unconditional_jmp(mn)) {
@@ -851,6 +894,11 @@ void partition(const Binary& b, const WalkState& ws, Function& fn) {
 
     for (const auto& blk : fn.blocks) {
         if (blk.end > fn.end) fn.end = blk.end;
+    }
+
+    for (auto& blk : synthetic_blocks) {
+        fn.block_at[blk.start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(blk));
     }
 }
 

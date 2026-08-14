@@ -810,6 +810,14 @@ struct Emitter {
         return std::nullopt;
     }
 
+    [[nodiscard]] IrType abi_word_type() const noexcept {
+        return abi == Abi::Ppc32Sysv ? IrType::I32 : IrType::I64;
+    }
+
+    [[nodiscard]] std::string_view abi_word_c_type() const noexcept {
+        return abi_word_type() == IrType::I32 ? "uint32_t" : "uint64_t";
+    }
+
     // Render a Reg IrValue's leaf name. Resolution order:
     //   1. A Call-return binding for this (canonical reg, version).
     //   2. Chase Assign aliases:
@@ -835,7 +843,7 @@ struct Emitter {
         }
         if (!slot) return std::nullopt;
 
-        IrValue v = IrValue::make_reg(canon, IrType::I64);
+        IrValue v = IrValue::make_reg(canon, abi_word_type());
         v.version = version;
         auto key = ssa_key(v);
         if (!key) return std::nullopt;
@@ -1990,7 +1998,7 @@ struct Emitter {
         if (auto slot = trace_to_self_arg_slot(op); slot) {
             const auto args = int_arg_regs(abi);
             if (*slot < args.size()) {
-                return IrValue::make_reg(args[*slot], IrType::I64);
+                return IrValue::make_reg(args[*slot], abi_word_type());
             }
         }
         return std::nullopt;
@@ -2677,13 +2685,13 @@ struct Emitter {
         const auto int_args = int_arg_regs(abi);
         const u8 limit = std::min<u8>(self_arity, static_cast<u8>(int_args.size()));
         for (u8 slot = 0; slot < limit; ++slot) {
-            IrValue arg = IrValue::make_reg(int_args[slot], IrType::I64);
+            IrValue arg = IrValue::make_reg(int_args[slot], abi_word_type());
             arg.version = 0;
 
             // Refined local inference already found a stronger type such as
             // `char*` / `u32*`; don't overwrite pointer evidence with an
             // integer-width guess from an incidental cast.
-            if (c_type_name_for(arg) != "uint64_t") continue;
+            if (c_type_name_for(arg) != abi_word_c_type()) continue;
 
             std::optional<IrType> narrowed;
             bool saw_use = false;
@@ -4510,7 +4518,7 @@ struct Emitter {
 
         const auto int_args = int_arg_regs(abi);
         if (int_args.empty()) return;
-        IrValue first = IrValue::make_reg(int_args[0], IrType::I64);
+        IrValue first = IrValue::make_reg(int_args[0], abi_word_type());
         first.version = 0;
         if (!looks_like_objc_block_capture_base(first) &&
             !first_arg_has_block_capture_accesses()) return;
@@ -6151,6 +6159,14 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (inst.name.starts_with("x64.")) {
                 return std::format("/* {}({}) */", inst.name, args);
             }
+            if (inst.name.starts_with("ppc.ps_cmp") &&
+                inst.dst.kind == IrValueKind::Flag && use_count(inst.dst) == 0) {
+                // Paired-single compare helpers are pure value producers for
+                // the four CR bits. Do not print unused LT/GT/EQ lanes as
+                // misleading standalone calls when only one condition flows
+                // into the structured branch.
+                return "";
+            }
             // If the intrinsic produces a value that survives downstream,
             // bind it to a named temp so subsequent reads have something
             // to refer to. Otherwise emit as a void statement.
@@ -6160,6 +6176,15 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                                    c_type_name_for(inst.dst),
                                    inst.dst.temp,
                                    inst.name, args);
+            }
+            if (inst.dst.kind == IrValueKind::Reg &&
+                visible_use_count(inst.dst) > 0) {
+                return std::format("{} = {}({});",
+                                   reg_name(inst.dst.reg), inst.name, args);
+            }
+            if (inst.dst.kind == IrValueKind::Flag && use_count(inst.dst) > 0) {
+                return std::format("{} = {}({});",
+                                   flag_name(inst.dst.flag), inst.name, args);
             }
             return std::format("{}({});", inst.name, args);
         }
@@ -7030,14 +7055,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 // ahead of emit). This is what surfaces import-derived
                 // arg types in non-IPA mode - `char*`, `void*`, etc.
                 if (t.empty() && i < int_args.size()) {
-                    IrValue probe = IrValue::make_reg(int_args[i], IrType::I64);
+                    IrValue probe = IrValue::make_reg(int_args[i], e.abi_word_type());
                     probe.version = 0;
                     const auto local = e.c_type_name_for(probe);
-                    if (local != "uint64_t") t = local;
+                    if (local != e.abi_word_c_type()) t = local;
                 }
                 if (t.empty()) {
                     t = (i < e.charp_arg.size() && e.charp_arg[i])
-                        ? std::string{"char*"} : std::string{"uint64_t"};
+                        ? std::string{"char*"} : std::string{e.abi_word_c_type()};
                 }
                 if (ipa_sig == nullptr && i < e.self_arg_type_overrides.size() &&
                     e.self_arg_type_overrides[i]) {

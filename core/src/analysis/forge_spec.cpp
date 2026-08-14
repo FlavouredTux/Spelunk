@@ -388,6 +388,7 @@ private:
         case IrType::I64: return "u64";
         case IrType::F32: return "f32";
         case IrType::F64: return "f64";
+        case IrType::V2F32: return "v2f32";
         default:          return "u64";
     }
 }

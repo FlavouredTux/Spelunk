@@ -156,6 +156,10 @@ ordinary arithmetic instead of `ppc.fmadds(...)` or `ppc.frsp(...)`.
 The common Metrowerks `fctiwz; stfd; lwz` sequence is also folded into a signed
 integer cast, removing the temporary stack spill used only to move the
 converted payload from an FPR into a GPR.
+Unquantized `psq_l`/`psq_st` operations using the conventional Wii GQR0 pair
+mode lift as ordinary `float2` loads and stores. Single-lane and quantized GQR
+forms keep explicit PPC helpers until their lane and scale semantics can be
+represented without guessing.
 
 ### Repeatable SPM pseudo-C benchmark
 

@@ -50,8 +50,9 @@ public:
         put(0xc4, 0x4bffffdd);  // bl pointer_callee
         put(0xc8, 0x4e800020);  // blr
 
-        // paired_pointer: Wii paired-single load uses r3 as its address.
-        put(0xe0, 0xe3e30000);  // psq_l f31,0(r3),0,0
+        // paired_pointer: Wii paired-single load uses r3 as its address.  Use
+        // the ABI return lane so ordinary typed-load DCE keeps the access.
+        put(0xe0, 0xe0230000);  // psq_l f1,0(r3),0,0
         put(0xe4, 0x4e800020);  // blr
 
         // Compiler helper target used by the first call above.

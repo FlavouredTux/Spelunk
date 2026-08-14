@@ -672,6 +672,24 @@ void lift_psq_intrinsic(LiftCtx& ctx, std::string_view name, bool load, bool upd
     const u8 w = static_cast<u8>(insn.operands[2].imm.value) & 1u;
     const u8 gqr = static_cast<u8>(insn.operands[3].imm.value) & 7u;
 
+    // Wii code reserves GQR0 for the unquantized two-float form. Model that
+    // overwhelmingly common case as an ordinary typed vector memory access;
+    // this gives SSA, memory forwarding, and pseudo-C real dataflow instead
+    // of an opaque architectural helper. W=1 and nonzero GQR forms retain the
+    // intrinsic because they need lane construction or runtime quantization.
+    if (ctx.is_ppc32() && w == 0 && gqr == 0) {
+        if (load) {
+            IrValue value = ctx.emit_load(ea, IrType::V2F32);
+            ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg,
+                                              IrType::V2F32), value);
+        } else {
+            ctx.emit_store(ea, IrValue::make_reg(insn.operands[0].reg,
+                                                 IrType::V2F32));
+        }
+        if (update && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
+        return;
+    }
+
     IrInst i;
     i.op = IrOp::Intrinsic;
     i.name = std::string(name);

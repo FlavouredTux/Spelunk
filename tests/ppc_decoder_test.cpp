@@ -662,17 +662,33 @@ void test_wii_lifter_forms() {
     bool saw_spurious_psq_load = false;
     for (const auto& inst : ir.blocks[0].insts) {
         saw_spurious_psq_load |= inst.op == ember::IrOp::Load;
-        saw_psq_store_address |= inst.op == ember::IrOp::Intrinsic &&
-                                 inst.name == "ppc.psq_st" && inst.src_count == 4 &&
-                                 inst.srcs[0].reg == ember::Reg::PpcF31 &&
-                                 inst.srcs[1].kind == ember::IrValueKind::Temp &&
-                                 inst.srcs[2].kind == ember::IrValueKind::Imm &&
-                                 inst.srcs[2].imm == 0 &&
-                                 inst.srcs[3].kind == ember::IrValueKind::Reg &&
-                                 inst.srcs[3].reg == ember::Reg::PpcGqr0;
+        saw_psq_store_address |= inst.op == ember::IrOp::Store &&
+                                 inst.src_count == 2 &&
+                                 inst.srcs[0].kind == ember::IrValueKind::Temp &&
+                                 inst.srcs[1].kind == ember::IrValueKind::Reg &&
+                                 inst.srcs[1].reg == ember::Reg::PpcF31 &&
+                                 inst.srcs[1].type == ember::IrType::V2F32;
     }
     check_eq(saw_psq_store_address && !saw_spurious_psq_load, true,
-             "psq_st passes effective address without loading it");
+             "unquantized psq_st becomes a typed float2 store");
+
+    ir = lift_one(0xE0230008);  // psq_l f1, 8(r3), 0, 0
+    bool saw_psq_pair_load = false;
+    bool saw_psq_pair_assign = false;
+    bool saw_psq_pair_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_psq_pair_load |= inst.op == ember::IrOp::Load &&
+                             inst.dst.type == ember::IrType::V2F32;
+        saw_psq_pair_assign |= inst.op == ember::IrOp::Assign &&
+                               inst.dst.kind == ember::IrValueKind::Reg &&
+                               inst.dst.reg == ember::Reg::PpcF1 &&
+                               inst.dst.type == ember::IrType::V2F32;
+        saw_psq_pair_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                                  inst.name == "ppc.psq_l";
+    }
+    check_eq(saw_psq_pair_load && saw_psq_pair_assign &&
+             !saw_psq_pair_intrinsic, true,
+             "unquantized psq_l becomes a typed float2 load");
 
     ir = lift_one(0xE483F234);  // psq_lu f4, 0x234(r3), 1, 7
     bool saw_psq_load_config = false;

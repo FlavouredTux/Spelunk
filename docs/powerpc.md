@@ -101,6 +101,14 @@ name. The same prototype data marks routines such as `PSVECSubtract` as
 `void`, preserves their pointer arguments, and places the scalar argument of
 `PSVECScale` in the independent FPR argument lane.
 
+The built-in Wii table also covers common `PSMTX*`/`C_MTX*`, GX state and
+texture setup, OS arena/context/thread/cache helpers, synchronous and
+asynchronous DVD reads, KPAD/WPAD controller routines, and CX decompression
+entry points. These prototypes provide exact void/integer/pointer/float return
+lanes, mixed scalar ordering, callback-as-pointer positions, and known
+`GXColor`/`CXParsedHeader` aggregate sizes. User annotations still take
+precedence over every built-in entry.
+
 For `r3`, Ember keeps direct definitions, call results with real consumers,
 and ordinary conditional return expressions. It suppresses an incidental
 merge when the evidence instead consists of unconsumed call clobbers or

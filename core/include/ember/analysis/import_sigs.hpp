@@ -8,8 +8,9 @@
 
 namespace ember {
 
-// Known signature for a libc / POSIX / pthread / Win32 import or a small set
-// of platform SDK routines with stable public prototypes. Used by
+// Known signature for a libc / POSIX / pthread / Win32 import or a curated set
+// of platform SDK routines with stable public prototypes. Wii coverage includes
+// common Revolution MTX, GX, OS, DVD, KPAD/WPAD, and CX entry points. Used by
 // IPA and the emitter's local pass to type call arguments and call
 // return values without touching the IR-level lattice (`infer_local_types`
 // then propagates the seeded types through the rest of the function).

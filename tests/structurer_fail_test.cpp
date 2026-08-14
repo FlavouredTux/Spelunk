@@ -90,6 +90,13 @@ public:
         consume_header.kind = ember::SymbolKind::Function;
         symbols_.push_back(std::move(consume_header));
 
+        ember::Symbol set_fog;
+        set_fog.name = "GXSetFog";
+        set_fog.addr = 0x2100;
+        set_fog.size = 0x20;
+        set_fog.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(set_fog));
+
         section_.name = ".text";
         section_.vaddr = 0x1000;
         section_.size = text_.size();
@@ -1361,6 +1368,111 @@ int test_ppc_small_aggregate_consumes_multiple_gprs() {
     return 0;
 }
 
+int test_wii_sdk_prototype_groups() {
+    using namespace ember;
+
+    const auto check_spec = [](std::string_view name, std::size_t params,
+                               TypeKind ret_kind) {
+        TypeArena arena;
+        auto spec = lookup_import_sig(name, arena);
+        check(spec.has_value(), "Wii SDK prototype is present");
+        if (!spec) return;
+        check(spec->params.size() == params, "Wii SDK prototype arity matches");
+        check(arena.kind(spec->ret) == ret_kind,
+              "Wii SDK prototype return kind matches");
+    };
+
+    check_spec("PSMTXTrans", 4, TypeKind::Void);
+    check_spec("GXSetFog", 6, TypeKind::Void);
+    check_spec("OSGetArenaHi", 0, TypeKind::Ptr);
+    check_spec("DVDReadPrio", 5, TypeKind::Int);
+    check_spec("KPADSetBtnRepeat", 3, TypeKind::Void);
+
+    TypeArena arena;
+    auto color = lookup_import_sig("GXSetTevColor", arena);
+    check(color && color->params.size() == 2,
+          "GX aggregate prototype is present");
+    if (color && color->params.size() == 2) {
+        const TypeNode& aggregate = arena.node(color->params[1]);
+        check(aggregate.kind == TypeKind::Struct &&
+              aggregate.s.name == "GXColor" && aggregate.s.size == 4,
+              "GXColor by-value aggregate retains its name and size");
+    }
+
+    TypeArena cx_arena;
+    auto cx = lookup_import_sig("CXGetCompressionHeader", cx_arena);
+    check(cx && cx_arena.kind(cx->ret) == TypeKind::Struct,
+          "CX aggregate return prototype is present");
+    if (cx && cx_arena.kind(cx->ret) == TypeKind::Struct) {
+        const auto& info = cx_arena.node(cx->ret).s;
+        check(info.name == "CXParsedHeader" && info.size == 8,
+              "CXParsedHeader return retains aggregate metadata");
+    }
+    return 0;
+}
+
+int test_ppc_gx_mixed_signature_layout() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x2200;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "gx_fog_caller";
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+
+    IrInst int_args;
+    int_args.op = IrOp::Intrinsic;
+    int_args.name = "call.args.1";
+    int_args.srcs[0] = IrValue::make_imm(1, IrType::I32);
+    int_args.srcs[1] = IrValue::make_imm(0x5000, IrType::I32);
+    int_args.src_count = 2;
+    bb.insts.push_back(int_args);
+    IrInst fp_args;
+    fp_args.op = IrOp::Intrinsic;
+    fp_args.name = "call.fp_args.1";
+    fp_args.srcs[0] = IrValue::make_imm(0x3f800000, IrType::F32);
+    fp_args.srcs[1] = IrValue::make_imm(0x40000000, IrType::F32);
+    fp_args.srcs[2] = IrValue::make_imm(0x40400000, IrType::F32);
+    fp_args.src_count = 3;
+    bb.insts.push_back(fp_args);
+    IrInst fp_args2;
+    fp_args2.op = IrOp::Intrinsic;
+    fp_args2.name = "call.fp_args.2";
+    fp_args2.srcs[0] = IrValue::make_imm(0x40800000, IrType::F32);
+    fp_args2.src_count = 1;
+    bb.insts.push_back(fp_args2);
+    bb.insts.push_back(make_call_imm(kStart + 0xc, 0x2100));
+    bb.insts.push_back(make_ret(kStart + 0x10));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "GX mixed signature emits");
+    if (!pc) return 1;
+    const bool ordered = pc->find(
+        "GXSetFog(1, 1f, 2f, 3f, 4f, 0x5000)") != std::string::npos;
+    if (!ordered) std::fprintf(stderr, "GX signature output:\n%s\n", pc->c_str());
+    check(ordered, "GXSetFog prototype interleaves r3/f1-f4/r4 in source order");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1383,5 +1495,7 @@ int main() {
     rc |= test_ppc_annotated_incoming_stack_argument_name();
     rc |= test_ppc_hidden_sret_shifts_declared_call_arguments();
     rc |= test_ppc_small_aggregate_consumes_multiple_gprs();
+    rc |= test_wii_sdk_prototype_groups();
+    rc |= test_ppc_gx_mixed_signature_layout();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

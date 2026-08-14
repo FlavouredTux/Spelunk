@@ -92,8 +92,8 @@ PowerPC pseudo-C recovery models the integer and floating-point argument
 registers as independent ABI lanes. Mixed calls are interleaved from callee-use
 evidence or an explicit signature instead of treating every argument as a GPR.
 Known scalar floating-point returns are recovered from `f1`, including common
-Wii SDK `PSVEC*` routines; unknown calls stay conservative rather than treating
-every post-call FPR clobber as a result.
+Wii SDK `PSVEC*`, MTX, GX, OS, DVD, controller, and CX routines; unknown calls
+stay conservative rather than treating every post-call FPR clobber as a result.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, and binary-only limits.
 

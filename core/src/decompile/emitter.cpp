@@ -1998,6 +1998,11 @@ struct Emitter {
         if (ret.kind == TypeKind::Struct && !ret.s.name.empty()) {
             return ret.s.name;
         }
+        if (ret.kind == TypeKind::Int) {
+            const std::string_view prefix = ret.i.sign_known && ret.i.is_signed
+                ? "int" : "uint";
+            return std::format("{}{}_t", prefix, ret.i.bits);
+        }
         return std::nullopt;
     }
 

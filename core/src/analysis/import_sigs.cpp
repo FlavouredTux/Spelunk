@@ -20,7 +20,11 @@ inline TypeRef t_int    (TypeArena& a, u8 bits, bool signed_)
     { return a.int_t(bits, /*sign_known=*/true, signed_); }
 inline TypeRef t_int32s (TypeArena& a) { return t_int(a, 32, true);  }
 inline TypeRef t_int32u (TypeArena& a) { return t_int(a, 32, false); }
+inline TypeRef t_int16u (TypeArena& a) { return t_int(a, 16, false); }
+inline TypeRef t_int8u  (TypeArena& a) { return t_int(a, 8,  false); }
+inline TypeRef t_int8s  (TypeArena& a) { return t_int(a, 8,  true);  }
 inline TypeRef t_int64s (TypeArena& a) { return t_int(a, 64, true);  }
+inline TypeRef t_int64u (TypeArena& a) { return t_int(a, 64, false); }
 inline TypeRef t_size   (TypeArena& a) { return t_int(a, 64, false); }   // size_t (LP64)
 inline TypeRef t_ssize  (TypeArena& a) { return t_int(a, 64, true);  }   // ssize_t (LP64)
 inline TypeRef t_float32(TypeArena& a) { return a.float_t(32); }
@@ -28,6 +32,15 @@ inline TypeRef t_float32(TypeArena& a) { return a.float_t(32); }
 inline TypeRef t_charp (TypeArena& a) { return a.ptr_t(a.int_t(8)); }
 inline TypeRef t_voidp (TypeArena& a) { return a.ptr_t(a.top());    }
 inline TypeRef t_intp  (TypeArena& a) { return a.ptr_t(t_int32s(a)); }
+inline TypeRef t_u16p  (TypeArena& a) { return a.ptr_t(t_int16u(a)); }
+
+inline TypeRef t_struct(TypeArena& a, std::string name, u32 size, u32 align) {
+    StructInfo info;
+    info.name = std::move(name);
+    info.size = size;
+    info.align = align;
+    return a.struct_t(std::move(info));
+}
 
 // Tag for "this entry's return is the same as void* (FILE*, DIR*, etc.)
 // rendered as void* for now - struct types are out of scope until the
@@ -219,6 +232,203 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     }
     if (name == "PSVECCrossProduct")
         return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+
+    // ---- Nintendo Revolution SDK MTX ------------------------------------
+    if (name == "PSMTXIdentity")
+        return m(t_void(a), {t_voidp(a)});
+    if (name == "PSMTXCopy")
+        return m(t_void(a), {t_voidp(a), t_voidp(a)});
+    if (name == "PSMTXConcat")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+    if (name == "PSMTXRotRad")
+        return m(t_void(a), {t_voidp(a), t_int8s(a), t_float32(a)});
+    if (name == "PSMTXRotAxisRad")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_float32(a)});
+    if (name == "PSMTXTrans" || name == "PSMTXScale")
+        return m(t_void(a), {t_voidp(a), t_float32(a), t_float32(a),
+                             t_float32(a)});
+    if (name == "PSMTXTransApply" || name == "PSMTXScaleApply")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_float32(a),
+                             t_float32(a), t_float32(a)});
+    if (name == "PSMTXQuat" || name == "QUATMtx")
+        return m(t_void(a), {t_voidp(a), t_voidp(a)});
+    if (name == "C_MTXPerspective")
+        return m(t_void(a), {t_voidp(a), t_float32(a), t_float32(a),
+                             t_float32(a), t_float32(a)});
+    if (name == "C_MTXOrtho")
+        return m(t_void(a), {t_voidp(a), t_float32(a), t_float32(a),
+                             t_float32(a), t_float32(a), t_float32(a),
+                             t_float32(a)});
+    if (name == "PSMTX44MultVec")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+
+    // ---- Nintendo Revolution SDK GX -------------------------------------
+    const TypeRef gx_color = t_struct(a, "GXColor", 4, 1);
+    if (name == "GXSetVtxDesc")
+        return m(t_void(a), {t_int8u(a), t_int8u(a)});
+    if (name == "GXClearVtxDesc" || name == "GXClearBoundingBox")
+        return m(t_void(a), {});
+    if (name == "GXSetVtxAttrFmt")
+        return m(t_void(a), {t_int8u(a), t_int32u(a), t_int32u(a),
+                             t_int32u(a), t_int32u(a)});
+    if (name == "GXSetNumTexGens" || name == "GXSetCurrentMtx")
+        return m(t_void(a), {t_int32u(a)});
+    if (name == "GXSetDrawSync")
+        return m(t_void(a), {t_int16u(a)});
+    if (name == "GXReadDrawSync")
+        return m(t_int16u(a), {});
+    if (name == "GXBegin")
+        return m(t_void(a), {t_int8u(a), t_int8u(a), t_int16u(a)});
+    if (name == "GXSetCullMode" || name == "GXSetNumChans" ||
+        name == "GXSetNumTevStages" || name == "GXSetZCompLoc") {
+        return m(t_void(a), {t_int8u(a)});
+    }
+    if (name == "GXReadBoundingBox")
+        return m(t_void(a), {t_u16p(a), t_u16p(a), t_u16p(a), t_u16p(a)});
+    if (name == "GXSetChanMatColor")
+        return m(t_void(a), {t_int32s(a), a.ptr_t(gx_color)});
+    if (name == "GXSetChanCtrl")
+        return m(t_void(a), {t_int32s(a), t_int8u(a), t_int8u(a),
+                             t_int8u(a), t_int8u(a), t_int8u(a), t_int8u(a)});
+    if (name == "GXInitTexObj")
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_int32u(a),
+                             t_int32u(a), t_int32u(a), t_int32u(a),
+                             t_int32u(a), t_int32s(a)});
+    if (name == "GXInitTexObjLOD")
+        return m(t_void(a), {t_float32(a), t_float32(a), t_float32(a),
+                             t_voidp(a), t_int32s(a), t_int32s(a),
+                             t_int32u(a), t_int32u(a), t_int32u(a)});
+    if (name == "GXInitTexObjData")
+        return m(t_void(a), {t_voidp(a), t_voidp(a)});
+    if (name == "GXSetTevOp")
+        return m(t_void(a), {t_int8u(a), t_int8u(a)});
+    if (name == "GXSetTevColorIn" || name == "GXSetTevAlphaIn")
+        return m(t_void(a), {t_int32s(a), t_int32s(a), t_int32s(a),
+                             t_int32s(a), t_int32s(a)});
+    if (name == "GXSetTevColorOp" || name == "GXSetTevAlphaOp")
+        return m(t_void(a), {t_int32s(a), t_int32s(a), t_int32s(a),
+                             t_int32s(a), t_int32s(a), t_int32s(a)});
+    if (name == "GXSetTevColor" || name == "GXSetTevKColor")
+        return m(t_void(a), {t_int32s(a), gx_color});
+    if (name == "GXSetTevKColorSel" || name == "GXSetTevKAlphaSel")
+        return m(t_void(a), {t_int32s(a), t_int32s(a)});
+    if (name == "GXSetTevSwapMode")
+        return m(t_void(a), {t_int8u(a), t_int8u(a), t_int8u(a)});
+    if (name == "GXSetAlphaCompare")
+        return m(t_void(a), {t_int8u(a), t_int8u(a), t_int8u(a),
+                             t_int8u(a), t_int8u(a)});
+    if (name == "GXSetTevOrder")
+        return m(t_void(a), {t_int32s(a), t_int32s(a), t_int32u(a),
+                             t_int32s(a)});
+    if (name == "GXSetFog")
+        return m(t_void(a), {t_int8u(a), t_float32(a), t_float32(a),
+                             t_float32(a), t_float32(a), a.ptr_t(gx_color)});
+    if (name == "GXSetBlendMode")
+        return m(t_void(a), {t_int8u(a), t_int8u(a), t_int8u(a), t_int8u(a)});
+    if (name == "GXSetZMode")
+        return m(t_void(a), {t_int8u(a), t_int8u(a), t_int8u(a)});
+    if (name == "GXSetProjection" || name == "GXLoadPosMtxImm")
+        return m(t_void(a), {t_voidp(a), t_int32u(a)});
+    if (name == "GXSetZScaleOffset")
+        return m(t_void(a), {t_float32(a), t_float32(a)});
+    if (name == "GXProject")
+        return m(t_void(a), {t_float32(a), t_float32(a), t_float32(a),
+                             t_voidp(a), t_voidp(a), t_voidp(a), t_voidp(a),
+                             t_voidp(a), t_voidp(a)});
+
+    // ---- Nintendo Revolution SDK OS -------------------------------------
+    if (name == "OSGetMEM1ArenaHi" || name == "OSGetMEM2ArenaHi" ||
+        name == "OSGetArenaHi" || name == "OSGetMEM1ArenaLo" ||
+        name == "OSGetMEM2ArenaLo" || name == "OSGetArenaLo" ||
+        name == "OSGetCurrentThread" || name == "OSGetCurrentContext") {
+        return m(t_voidp(a), {});
+    }
+    if (name == "OSSetMEM1ArenaHi" || name == "OSSetMEM2ArenaHi" ||
+        name == "OSSetArenaHi" || name == "OSSetMEM1ArenaLo" ||
+        name == "OSSetMEM2ArenaLo" || name == "OSSetArenaLo" ||
+        name == "OSInitMutex" || name == "OSLockMutex" ||
+        name == "OSUnlockMutex" || name == "OSSetCurrentContext" ||
+        name == "OSSaveFPUContext" || name == "OSClearContext" ||
+        name == "OSDumpContext" || name == "OSCancelThread" ||
+        name == "OSSleepThread" || name == "OSWakeupThread" ||
+        name == "OSExitThread") {
+        return m(t_void(a), {t_voidp(a)});
+    }
+    if (name == "OSDisableInterrupts" || name == "OSGetResetCode" ||
+        name == "OSGetFontEncode" || name == "OSGetStackPointer" ||
+        name == "OSGetTick") {
+        return m(t_int32u(a), {});
+    }
+    if (name == "OSRestoreInterrupts" || name == "OSRestart")
+        return m(t_void(a), {t_int32u(a)});
+    if (name == "OSGetTime") return m(t_int64u(a), {});
+    if (name == "DCFlushRange")
+        return m(t_voidp(a), {t_voidp(a), t_int32u(a)});
+    if (name == "ICInvalidateRange")
+        return m(t_void(a), {t_voidp(a), t_int32u(a)});
+    if (name == "OSLink")
+        return m(t_int32u(a), {t_voidp(a), t_voidp(a)});
+    if (name == "OSSaveContext" || name == "OSLoadContext" ||
+        name == "OSResumeThread" || name == "OSSuspendThread") {
+        return m(t_int32s(a), {t_voidp(a)});
+    }
+    if (name == "OSJoinThread")
+        return m(t_int32s(a), {t_voidp(a), a.ptr_t(t_voidp(a))});
+    if (name == "OSInitContext")
+        return m(t_void(a), {t_voidp(a), t_int32u(a), t_int32u(a)});
+    if (name == "OSReport") return m(t_void(a), {t_charp(a)}, true);
+    if (name == "OSShutdownSystem" || name == "OSReturnToMenu" ||
+        name == "OSYieldThread") {
+        return m(t_void(a), {});
+    }
+
+    // ---- Nintendo Revolution SDK DVD / controller -----------------------
+    if (name == "DVDConvertPathToEntrynum")
+        return m(t_int32s(a), {t_charp(a)});
+    if (name == "DVDFastOpen")
+        return m(t_int32s(a), {t_int32s(a), t_voidp(a)});
+    if (name == "DVDClose")
+        return m(t_int32s(a), {t_voidp(a)});
+    if (name == "DVDReadPrio")
+        return m(t_int32s(a), {t_voidp(a), t_voidp(a), t_int32s(a),
+                               t_int32s(a), t_int32s(a)});
+    if (name == "DVDReadAsyncPrio")
+        return m(t_int32s(a), {t_voidp(a), t_voidp(a), t_int32s(a),
+                               t_int32s(a), t_voidp(a), t_int32s(a)});
+    if (name == "__DVDPushWaitingQueue")
+        return m(t_int32s(a), {t_int32s(a), t_voidp(a)});
+    if (name == "KPADSetFSStickClamp")
+        return m(t_void(a), {t_int8s(a), t_int8s(a)});
+    if (name == "KPADSetBtnRepeat" || name == "KPADSetPosParam" ||
+        name == "KPADSetHoriParam" || name == "KPADSetDistParam" ||
+        name == "KPADSetAccParam") {
+        return m(t_void(a), {t_int32s(a), t_float32(a), t_float32(a)});
+    }
+    if (name == "KPADRead")
+        return m(t_int32s(a), {t_int32s(a), t_voidp(a), t_int32u(a)});
+    if (name == "KPADCalibrateDPD" || name == "KPADDisableDPD" ||
+        name == "KPADEnableDPD") {
+        return m(t_void(a), {t_int32s(a)});
+    }
+    if (name == "KPADInit") return m(t_void(a), {});
+    if (name == "WPADRegisterAllocator")
+        return m(t_void(a), {t_voidp(a), t_voidp(a)});
+    if (name == "WPADSetAutoSleepTime")
+        return m(t_void(a), {t_int8u(a)});
+    if (name == "WPADControlMotor")
+        return m(t_void(a), {t_int32s(a), t_int32u(a)});
+    if (name == "WPADIsMotorEnabled") return m(t_int32u(a), {});
+    if (name == "WPADIsDpdEnabled")
+        return m(t_int32u(a), {t_int32s(a)});
+
+    // ---- Nintendo Revolution SDK CX -------------------------------------
+    const TypeRef cx_header = t_struct(a, "CXParsedHeader", 8, 4);
+    if (name == "CXGetCompressionHeader")
+        return m(cx_header, {t_voidp(a)});
+    if (name == "CXGetUncompressedSize")
+        return m(t_int32u(a), {t_voidp(a)});
+    if (name == "CXUncompressLZ")
+        return m(t_void(a), {t_voidp(a), t_voidp(a)});
 
     // Suppress unused-parameter warning in build configs where the SV
     // alias above is the only mention of <string_view>.

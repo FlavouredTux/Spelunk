@@ -4977,16 +4977,61 @@ struct Emitter {
     // as `base->field_<offset>` instead of `*(T*)(base + off)`.
     std::map<SsaKey, std::set<i64>> struct_offsets;
     std::map<SsaKey, std::map<i64, std::set<unsigned>>> struct_access_widths;
+    std::map<SsaKey, std::map<i64, std::set<IrType>>> struct_access_types;
+
+    // Collapse copies and chains of constant pointer adjustments to one
+    // structure root. PPC commonly keeps the same work object in several
+    // nonvolatile GPRs; without canonicalization each alias sees only one
+    // member and none of them accumulate enough evidence for a record shape.
+    [[nodiscard]] std::optional<std::pair<IrValue, i64>>
+    canonical_struct_access(const IrValue& addr) const {
+        IrValue base = addr;
+        i64 offset = 0;
+        for (int depth = 0; depth < 12; ++depth) {
+            auto bo = try_base_plus_offset(base);
+            if (!bo) return std::nullopt;
+            auto old_key = ssa_key(base);
+            auto new_key = ssa_key(bo->first);
+            if (bo->second == 0 && old_key && new_key && *old_key == *new_key) {
+                break;
+            }
+            offset += bo->second;
+            base = bo->first;
+        }
+        if (auto root = alias_root_for_value(base); root) base = *root;
+        if (!ssa_key(base)) return std::nullopt;
+        return std::pair{base, offset};
+    }
+
+    [[nodiscard]] std::string fallback_field_name(i64 off, IrType t) const {
+        if (!is_ppc_abi()) return std::format("field_{:x}", static_cast<u64>(off));
+        std::string_view prefix = "field";
+        switch (t) {
+            case IrType::I8:    prefix = "byte"; break;
+            case IrType::I16:   prefix = "half"; break;
+            case IrType::I32:   prefix = "word"; break;
+            case IrType::I64:   prefix = "qword"; break;
+            case IrType::F32:   prefix = "float"; break;
+            case IrType::F64:   prefix = "double"; break;
+            case IrType::V2F32: prefix = "pair"; break;
+            default: break;
+        }
+        return std::format("{}_{:x}", prefix, static_cast<u64>(off));
+    }
 
     [[nodiscard]] bool is_struct_pointer(const IrValue& base) const {
-        auto k = ssa_key(base);
+        auto access = canonical_struct_access(base);
+        if (!access) return false;
+        auto k = ssa_key(access->first);
         if (!k) return false;
         auto it = struct_offsets.find(*k);
         return it != struct_offsets.end() && it->second.size() >= 2;
     }
 
     [[nodiscard]] bool is_strong_struct_pointer(const IrValue& base) const {
-        auto k = ssa_key(base);
+        auto access = canonical_struct_access(base);
+        if (!access) return false;
+        auto k = ssa_key(access->first);
         if (!k || !is_struct_pointer(base)) return false;
         const auto wit = struct_access_widths.find(*k);
         if (wit == struct_access_widths.end()) return false;
@@ -4997,6 +5042,20 @@ struct Emitter {
             widths.insert(ws.begin(), ws.end());
         }
         if (widths.size() >= 2) return true;
+
+        bool has_integer = false;
+        bool has_float = false;
+        if (const auto tit = struct_access_types.find(*k);
+            tit != struct_access_types.end()) {
+            for (const auto& [off, types] : tit->second) {
+                (void)off;
+                for (IrType type : types) {
+                    has_float |= is_float_type(type);
+                    has_integer |= !is_float_type(type);
+                }
+            }
+        }
+        if (has_integer && has_float) return true;
 
         const auto oit = struct_offsets.find(*k);
         if (oit == struct_offsets.end() || oit->second.size() < 2) return false;
@@ -5145,7 +5204,9 @@ struct Emitter {
     // than `field_0 / field_8 / field_10` for *any* struct shaped
     // like a contiguous container.
     [[nodiscard]] bool looks_like_vector(const IrValue& base) const {
-        auto k = ssa_key(base);
+        auto access = canonical_struct_access(base);
+        if (!access) return false;
+        auto k = ssa_key(access->first);
         if (!k) return false;
         auto it = struct_offsets.find(*k);
         if (it == struct_offsets.end()) return false;
@@ -5379,13 +5440,14 @@ struct Emitter {
     }
 
     void record_struct_access(const IrValue& addr, IrType t) {
-        auto bo = try_base_plus_offset(addr);
+        auto bo = canonical_struct_access(addr);
         if (!bo) return;
         // Skip stack-relative and global bases - those have richer rendering
         // paths already.
         if (stack_offset(bo->first).has_value()) return;
         if (auto k = ssa_key(bo->first); k) {
             struct_offsets[*k].insert(bo->second);
+            struct_access_types[*k][bo->second].insert(t);
             const unsigned bytes = type_bits(t) / 8;
             if (bytes != 0) {
                 struct_access_widths[*k][bo->second].insert(bytes);
@@ -5620,8 +5682,9 @@ struct Emitter {
             // argv-style indexing.
             if (auto bo = try_base_plus_offset(addr);
                 bo && is_strong_struct_pointer(bo->first)) {
-                const IrValue& base = bo->first;
-                const i64 off = bo->second;
+                auto shared = canonical_struct_access(addr);
+                const IrValue& base = shared ? shared->first : bo->first;
+                const i64 off = shared ? shared->second : bo->second;
                 const std::string base_expr =
                     expr(base, depth + 1, std::to_underlying(Prec::Unary));
                 if (off < 0) {
@@ -5632,8 +5695,8 @@ struct Emitter {
                 if (const std::string* field = annotated_field_name(base, off); field) {
                     return std::format("{}->{}", base_expr, *field);
                 }
-                return std::format("{}->field_{:x}", base_expr,
-                                   static_cast<u64>(off));
+                return std::format("{}->{}", base_expr,
+                                   fallback_field_name(off, t));
             }
             // Array-indexing form takes priority over the struct-field
             // rendering when both apply - u64 stride-8 accesses usually mean
@@ -5652,8 +5715,9 @@ struct Emitter {
             // presumed u64 field default.
             if (auto bo = try_base_plus_offset(addr);
                 bo && is_struct_pointer(bo->first)) {
-                const IrValue& base = bo->first;
-                const i64 off = bo->second;
+                auto shared = canonical_struct_access(addr);
+                const IrValue& base = shared ? shared->first : bo->first;
+                const i64 off = shared ? shared->second : bo->second;
                 const std::string base_expr =
                     expr(base, depth + 1, std::to_underlying(Prec::Unary));
                 // Vector-shape: i64 loads at the canonical {0, 8, 16}
@@ -5676,12 +5740,12 @@ struct Emitter {
                     return std::format("{}->{}", base_expr, *field);
                 }
                 if (t == IrType::I64) {
-                    return std::format("{}->field_{:x}", base_expr,
-                                       static_cast<u64>(off));
+                    return std::format("{}->{}", base_expr,
+                                       fallback_field_name(off, t));
                 }
-                return std::format("*({}*)&{}->field_{:x}",
+                return std::format("*({}*)&{}->{}",
                                    c_type_name(t), base_expr,
-                                   static_cast<u64>(off));
+                                   fallback_field_name(off, t));
             }
             return std::format("*({}*)({})", c_type_name(t),
                                expr(addr, depth + 1));

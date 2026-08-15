@@ -965,6 +965,67 @@ int test_ppc_small_data_bases_resolve_named_globals() {
     return 0;
 }
 
+int test_ppc_struct_shape_is_shared_across_pointer_aliases() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x13c0;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x20;
+    fn.name = "shared_work_shape";
+    fn.next_temp_id = 4;
+
+    const IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    IrValue r30 = IrValue::make_reg(Reg::PpcR30, IrType::I32);
+    IrValue r31 = IrValue::make_reg(Reg::PpcR31, IrType::I32);
+    r30.version = 1;
+    r31.version = 1;
+    const IrValue word_addr = IrValue::make_temp(0, IrType::I32);
+    const IrValue float_addr = IrValue::make_temp(1, IrType::I32);
+    const IrValue word = IrValue::make_temp(2, IrType::I32);
+    const IrValue scalar = IrValue::make_temp(3, IrType::F32);
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_assign(r30, r3));
+    bb.insts.push_back(make_assign(r31, r3));
+    bb.insts.push_back(make_add(
+        word_addr, r30, IrValue::make_imm(0, IrType::I32)));
+    bb.insts.push_back(make_load(word, word_addr));
+    bb.insts.push_back(make_add(
+        float_addr, r31, IrValue::make_imm(8, IrType::I32)));
+    bb.insts.push_back(make_load(scalar, float_addr));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6000, IrType::I32), word));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6004, IrType::I32), scalar));
+    bb.insts.push_back(make_ret(kStart + 0x20));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "shared PPC structure pseudo-C emits");
+    if (!pc) return 1;
+    const bool named_shape = pc->find("a1->word_0") != std::string::npos &&
+                             pc->find("a1->float_8") != std::string::npos;
+    if (!named_shape) std::fprintf(stderr, "Shared shape output:\n%s\n", pc->c_str());
+    check(named_shape, "PPC pointer aliases share typed member names");
+    return 0;
+}
+
 int test_ppc_mixed_call_arguments_follow_callee_layout() {
     using namespace ember;
 
@@ -1625,6 +1686,7 @@ int main() {
     rc |= test_ppc_small_incidental_return_merge_is_void();
     rc |= test_ppc_memory_base_live_in_is_pointer();
     rc |= test_ppc_small_data_bases_resolve_named_globals();
+    rc |= test_ppc_struct_shape_is_shared_across_pointer_aliases();
     rc |= test_ppc_mixed_call_arguments_follow_callee_layout();
     rc |= test_ppc_known_float_call_binds_f1_result();
     rc |= test_ppc_annotated_float_call_selects_f1();

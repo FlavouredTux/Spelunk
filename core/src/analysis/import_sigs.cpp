@@ -28,6 +28,7 @@ inline TypeRef t_int64u (TypeArena& a) { return t_int(a, 64, false); }
 inline TypeRef t_size   (TypeArena& a) { return t_int(a, 64, false); }   // size_t (LP64)
 inline TypeRef t_ssize  (TypeArena& a) { return t_int(a, 64, true);  }   // ssize_t (LP64)
 inline TypeRef t_float32(TypeArena& a) { return a.float_t(32); }
+inline TypeRef t_float64(TypeArena& a) { return a.float_t(64); }
 
 inline TypeRef t_charp (TypeArena& a) { return a.ptr_t(a.int_t(8)); }
 inline TypeRef t_voidp (TypeArena& a) { return a.ptr_t(a.top());    }
@@ -151,6 +152,26 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "srand")         return m(t_void(a),   {t_int32u(a)});
     if (name == "qsort")         return m(t_void(a),   {t_voidp(a), t_size(a), t_size(a), t_voidp(a)});
     if (name == "bsearch")       return m(t_voidp(a),  {t_voidp(a), t_voidp(a), t_size(a), t_size(a), t_voidp(a)});
+
+    // ---- <math.h> ---------------------------------------------------------
+    if (name == "fmod")  return m(t_float64(a), {t_float64(a), t_float64(a)});
+    if (name == "fmodf") return m(t_float32(a), {t_float32(a), t_float32(a)});
+    if (name == "sqrt")  return m(t_float64(a), {t_float64(a)});
+    if (name == "sqrtf") return m(t_float32(a), {t_float32(a)});
+    if (name == "sin" || name == "cos" || name == "tan" ||
+        name == "floor" || name == "ceil" || name == "fabs") {
+        return m(t_float64(a), {t_float64(a)});
+    }
+    if (name == "sinf" || name == "cosf" || name == "tanf" ||
+        name == "floorf" || name == "ceilf" || name == "fabsf") {
+        return m(t_float32(a), {t_float32(a)});
+    }
+    if (name == "atan2" || name == "pow") {
+        return m(t_float64(a), {t_float64(a), t_float64(a)});
+    }
+    if (name == "atan2f" || name == "powf") {
+        return m(t_float32(a), {t_float32(a), t_float32(a)});
+    }
 
     // ---- <unistd.h> --------------------------------------------------------
     if (name == "read")     return m(t_ssize(a),   {t_int32s(a), t_voidp(a), t_size(a)});

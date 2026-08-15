@@ -99,6 +99,13 @@ public:
         set_fog.kind = ember::SymbolKind::Function;
         symbols_.push_back(std::move(set_fog));
 
+        ember::Symbol fmod;
+        fmod.name = "fmod";
+        fmod.addr = 0x2400;
+        fmod.size = 4;
+        fmod.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(fmod));
+
         ember::Symbol sdata_global;
         sdata_global.name = "work_ptr";
         sdata_global.addr = 0x805ae0f8;
@@ -195,6 +202,19 @@ ember::IrInst make_branch(ember::addr_t pc, ember::addr_t target) {
     bi.op          = ember::IrOp::Branch;
     bi.source_addr = pc;
     bi.target1     = target;
+    return bi;
+}
+
+ember::IrInst make_cond_branch(ember::addr_t pc, ember::IrValue condition,
+                               ember::addr_t taken,
+                               ember::addr_t fallthrough) {
+    ember::IrInst bi;
+    bi.op          = ember::IrOp::CondBranch;
+    bi.source_addr = pc;
+    bi.srcs[0]     = condition;
+    bi.src_count   = 1;
+    bi.target1     = taken;
+    bi.target2     = fallthrough;
     return bi;
 }
 
@@ -402,6 +422,69 @@ int test_infinite_loop_body_recovered() {
     check(structured_text.find("STRUCTURER_FAIL") == std::string::npos,
           "no STRUCTURER_FAIL fires for a recovered infinite-loop body");
 
+    return 0;
+}
+
+// A one-block shared tail that flows directly into a diamond's merge should
+// be duplicated in the two source arms. Emitting a goto here is technically
+// correct but obscures the original nested condition and makes large Wii menu
+// functions look loopy even though the CFG is acyclic.
+int test_single_shared_diamond_tail_is_cloned() {
+    using namespace ember;
+
+    constexpr addr_t kEntry  = 0x401100;
+    constexpr addr_t kAlt    = 0x401110;
+    constexpr addr_t kShared = 0x401120;
+    constexpr addr_t kUnique = 0x401130;
+    constexpr addr_t kMerge  = 0x401140;
+
+    IrFunction fn;
+    fn.start = kEntry;
+    fn.end   = kMerge + 0x10;
+    fn.name  = "shared_diamond_tail";
+
+    const auto add_block = [&](addr_t start, BlockKind kind,
+                               std::vector<addr_t> successors,
+                               std::vector<IrInst> insts) {
+        IrBlock bb;
+        bb.start = start;
+        bb.end = start + 0x10;
+        bb.kind = kind;
+        bb.successors = std::move(successors);
+        bb.insts = std::move(insts);
+        fn.block_at[start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(bb));
+    };
+
+    add_block(kEntry, BlockKind::Conditional, {kShared, kAlt},
+              {make_cond_branch(kEntry, IrValue::make_imm(1, IrType::I1),
+                                kShared, kAlt)});
+    add_block(kAlt, BlockKind::Conditional, {kShared, kUnique},
+              {make_cond_branch(kAlt, IrValue::make_imm(0, IrType::I1),
+                                kShared, kUnique)});
+    add_block(kShared, BlockKind::Unconditional, {kMerge},
+              {make_call_imm(kShared, 0x402100),
+               make_branch(kShared + 4, kMerge)});
+    add_block(kUnique, BlockKind::Unconditional, {kMerge},
+              {make_call_imm(kUnique, 0x402200),
+               make_branch(kUnique + 4, kMerge)});
+    add_block(kMerge, BlockKind::Return, {}, {make_ret(kMerge)});
+
+    fn.blocks[fn.block_at[kEntry]].predecessors = {};
+    fn.blocks[fn.block_at[kAlt]].predecessors = {kEntry};
+    fn.blocks[fn.block_at[kShared]].predecessors = {kEntry, kAlt};
+    fn.blocks[fn.block_at[kUnique]].predecessors = {kAlt};
+    fn.blocks[fn.block_at[kMerge]].predecessors = {kShared, kUnique};
+
+    Structurer s;
+    auto sf = s.structure(fn);
+    check(sf.has_value(), "shared diamond tail structures");
+    if (!sf) return 1;
+    const std::string text = format_structured(*sf);
+    check(text.find("goto bb_401120") == std::string::npos,
+          "one-block shared tail is cloned instead of rendered as goto");
+    check(text.find("STRUCTURER_FAIL") == std::string::npos,
+          "cloned shared diamond tail keeps every CFG block represented");
     return 0;
 }
 
@@ -648,6 +731,193 @@ int test_phi_accumulator_name_is_mined() {
     check(pc_r->find("uint64_t i") == std::string::npos,
           "non-unit accumulator is not mislabeled as induction i");
 
+    return 0;
+}
+
+int test_ppc_float_phi_keeps_float_type_after_integer_seed() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402380;
+    IrValue f1_live = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    IrValue f1_phi = f1_live;
+    f1_phi.version = 1;
+    IrValue f1_next = f1_live;
+    f1_next.version = 2;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x10;
+    fn.name = "ppc_float_phi";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_phi(f1_phi, {f1_live, f1_next}));
+    bb.insts.push_back(make_add(
+        f1_next, f1_phi,
+        IrValue::make_imm(static_cast<i64>(0x4014000000000000ULL),
+                          IrType::F64)));  // 5.0
+    bb.insts.push_back(make_ret_value(kStart + 8, f1_phi));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    // Reproduce the conservative ABI seed that used to override the stronger
+    // F64 IR evidence when declaring and returning the merge local.
+    fn.value_types[value_type_key(f1_phi)] = fn.types.int_t(64);
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = f1_phi;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+    StructuredFunction sf{&fn, std::move(body)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "PPC floating phi pseudo-C emits");
+    if (!pc) return 1;
+    const bool float_header = pc->find("double sub_402380(") != std::string::npos;
+    check(float_header,
+          "PPC floating phi retains a floating return type");
+    check(pc->find("double acc") != std::string::npos,
+          "PPC floating phi retains a floating merge-local type");
+    check(pc->find("int64_t acc") == std::string::npos,
+          "integer ABI seed does not leak into floating phi presentation");
+    return 0;
+}
+
+int test_ppc_float_compare_does_not_integer_cast() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x4023c0;
+    const IrValue lhs = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    const IrValue rhs = IrValue::make_reg(Reg::PpcF2, IrType::F64);
+    const IrValue compared = IrValue::make_temp(0, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 8;
+    fn.name = "ppc_float_compare";
+    fn.next_temp_id = 1;
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    IrInst cmp;
+    cmp.op = IrOp::CmpSlt;
+    cmp.dst = compared;
+    cmp.srcs[0] = lhs;
+    cmp.srcs[1] = rhs;
+    cmp.src_count = 2;
+    bb.insts.push_back(cmp);
+    bb.insts.push_back(make_ret_value(kStart + 4, compared));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = compared;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+    StructuredFunction sf{&fn, std::move(body)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "PPC floating comparison pseudo-C emits");
+    if (!pc) return 1;
+    check(pc->find(" < ") != std::string::npos,
+          "PPC floating comparison remains a relational expression");
+    check(pc->find("(int64_t)") == std::string::npos,
+          "PPC floating comparison does not gain integer casts");
+    return 0;
+}
+
+int test_ppc_casted_call_result_initializes_phi_local() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402400;
+    const IrValue lhs = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    const IrValue rhs = IrValue::make_reg(Reg::PpcF2, IrType::F64);
+    IrValue call_result = lhs;
+    call_result.version = 1;
+    const IrValue rounded = IrValue::make_temp(0, IrType::F32);
+    IrValue feed = lhs;
+    feed.version = 2;
+    IrValue phi = lhs;
+    phi.version = 3;
+    IrValue next = lhs;
+    next.version = 4;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "ppc_casted_call_phi";
+    fn.next_temp_id = 1;
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    IrInst args;
+    args.op = IrOp::Intrinsic;
+    args.name = "call.fp_args.1";
+    args.srcs[0] = lhs;
+    args.srcs[1] = rhs;
+    args.src_count = 2;
+    bb.insts.push_back(args);
+    bb.insts.push_back(make_call_imm(kStart + 4, 0x2400));
+    bb.insts.push_back(make_clobber(call_result));
+    IrInst trunc;
+    trunc.op = IrOp::Trunc;
+    trunc.dst = rounded;
+    trunc.srcs[0] = call_result;
+    trunc.src_count = 1;
+    bb.insts.push_back(trunc);
+    bb.insts.push_back(make_assign(feed, rounded));
+    bb.insts.push_back(make_phi(phi, {feed, next}));
+    bb.insts.push_back(make_add(
+        next, phi,
+        IrValue::make_imm(static_cast<i64>(0x3ff0000000000000ULL),
+                          IrType::F64)));
+    bb.insts.push_back(make_ret_value(kStart + 0x10, phi));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = phi;
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Seq;
+    body->children.push_back(std::move(block));
+    body->children.push_back(std::move(ret));
+    StructuredFunction sf{&fn, std::move(body)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "casted PPC call/phi pseudo-C emits");
+    if (!pc) return 1;
+    const bool initialized = pc->find("acc = fmod(") != std::string::npos;
+    if (!initialized) {
+        std::fprintf(stderr, "Casted call/phi output:\n%s\n", pc->c_str());
+    }
+    check(initialized,
+          "call result traced through float cast initializes phi local");
     return 0;
 }
 
@@ -1137,10 +1407,77 @@ int test_ppc_struct_member_recovers_pointer_type() {
     auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
     check(pc.has_value(), "pointer-valued PPC structure member emits");
     if (!pc) return 1;
-    const bool typed = pc->find("uint16_t* word_0") != std::string::npos &&
-                       pc->find("state->word_0[0]") != std::string::npos;
+    const bool typed = pc->find("uint16_t* data_0") != std::string::npos &&
+                       pc->find("state->data_0[0]") != std::string::npos;
     if (!typed) std::fprintf(stderr, "Pointer member output:\n%s\n", pc->c_str());
     check(typed, "downstream dereference types the containing PPC member");
+    return 0;
+}
+
+int test_ppc_struct_member_recovers_nested_object() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1410;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x28;
+    fn.name = "nested_object_shape";
+    fn.next_temp_id = 8;
+
+    const IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    const IrValue member_addr = IrValue::make_temp(0, IrType::I32);
+    const IrValue object = IrValue::make_temp(1, IrType::I32);
+    const IrValue first = IrValue::make_temp(2, IrType::I32);
+    const IrValue second_addr = IrValue::make_temp(3, IrType::I32);
+    const IrValue second = IrValue::make_temp(4, IrType::F32);
+    const IrValue tag_addr = IrValue::make_temp(5, IrType::I32);
+    const IrValue tag = IrValue::make_temp(6, IrType::I32);
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_add(member_addr, r3,
+                                IrValue::make_imm(0, IrType::I32)));
+    bb.insts.push_back(make_load(object, member_addr));
+    bb.insts.push_back(make_load(first, object));
+    bb.insts.push_back(make_add(second_addr, object,
+                                IrValue::make_imm(4, IrType::I32)));
+    bb.insts.push_back(make_load(second, second_addr));
+    bb.insts.push_back(make_add(tag_addr, r3,
+                                IrValue::make_imm(8, IrType::I32)));
+    bb.insts.push_back(make_load(tag, tag_addr));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6100, IrType::I32), first));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6104, IrType::I32), second));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6108, IrType::I32), tag));
+    bb.insts.push_back(make_ret(kStart + 0x24));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "nested PPC structure member emits");
+    if (!pc) return 1;
+    const bool nested =
+        pc->find("typedef union PpcObject PpcObject;") != std::string::npos &&
+        pc->find("PpcObject* object_0") != std::string::npos &&
+        pc->find("PpcObject* object = state->object_0") != std::string::npos &&
+        pc->find("object->word_0") != std::string::npos &&
+        pc->find("object->float_4") != std::string::npos;
+    if (!nested) std::fprintf(stderr, "Nested object output:\n%s\n", pc->c_str());
+    check(nested, "loaded PPC members become nested object pointers");
     return 0;
 }
 
@@ -1793,6 +2130,7 @@ int test_wii_sdk_prototype_groups() {
     };
 
     check_spec("PSMTXTrans", 4, TypeKind::Void);
+    check_spec("fmod", 2, TypeKind::Float);
     check_spec("GXSetFog", 6, TypeKind::Void);
     check_spec("GXSetViewport", 6, TypeKind::Void);
     check_spec("GXGetTexBufferSize", 5, TypeKind::Int);
@@ -1954,10 +2292,14 @@ int main() {
     int rc = 0;
     rc |= test_dropped_block_diagnostic();
     rc |= test_infinite_loop_body_recovered();
+    rc |= test_single_shared_diamond_tail_is_cloned();
     rc |= test_phi_merge_names_are_mined();
     rc |= test_phi_induction_name_is_mined();
     rc |= test_phi_livein_initializer_is_mined();
     rc |= test_phi_accumulator_name_is_mined();
+    rc |= test_ppc_float_phi_keeps_float_type_after_integer_seed();
+    rc |= test_ppc_float_compare_does_not_integer_cast();
+    rc |= test_ppc_casted_call_result_initializes_phi_local();
     rc |= test_phi_index_name_is_mined();
     rc |= test_ppc_void_return_merge_becomes_entry_guard();
     rc |= test_ppc_small_incidental_return_merge_is_void();
@@ -1966,6 +2308,7 @@ int main() {
     rc |= test_ppc_small_data_bases_resolve_named_globals();
     rc |= test_ppc_struct_shape_is_shared_across_pointer_aliases();
     rc |= test_ppc_struct_member_recovers_pointer_type();
+    rc |= test_ppc_struct_member_recovers_nested_object();
     rc |= test_ppc_pointer_return_type_is_shared_across_calls();
     rc |= test_ppc_mixed_call_arguments_follow_callee_layout();
     rc |= test_ppc_known_float_call_binds_f1_result();

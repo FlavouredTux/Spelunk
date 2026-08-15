@@ -167,6 +167,11 @@ compiler-generated bit idioms readable and available to cleanup passes.
 their dataflow to SSA and lets the emitter suppress matched callee-saved
 register save/restore traffic as ABI boilerplate.
 
+The paired-single fused arithmetic family (`ps_madd`, `ps_msub`, `ps_nmadd`,
+and `ps_nmsub`) is likewise expanded into typed two-lane multiply/add/subtract
+dataflow. Lane-shuffle, reciprocal-estimate, and quantized GQR operations stay
+explicit until their exact vector semantics can be represented safely.
+
 Pseudo-C pointer declarations also follow visible memory-address flow through
 register copies and constant field offsets. This preserves pointer-shaped Wii
 locals even when an earlier ABI-width integer hint conflicts with later body
@@ -174,8 +179,9 @@ evidence; mixed-width field bases remain deliberately opaque `void*` values.
 
 ### Repeatable SPM pseudo-C benchmark
 
-The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a small, stable mix
-of ABI, control-flow, scalar-float, and GX call sites. Run it with:
+The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function
+mix of ABI, control-flow, scalar-float, nested object, pointer-return, and GX
+call sites. Run it with:
 
 ```sh
 python3 scripts/ppc_quality_benchmark.py \
@@ -183,6 +189,11 @@ python3 scripts/ppc_quality_benchmark.py \
   --dtk /path/to/spm \
   --version EU0
 ```
+
+Add `--timings` to collect wall-clock cost plus Ember's CFG, lift, SSA,
+cleanup, type-inference, structurer, and emitter phase timings. Timing values
+are reported for diagnosis but deliberately excluded from pass/fail baseline
+comparisons because machine load is noisy.
 
 The report counts raw architectural registers and versioned SSA names,
 temporary identifiers, opaque `ppc.*` calls, generic parameters and fields,

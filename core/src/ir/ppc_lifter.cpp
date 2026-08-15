@@ -658,6 +658,28 @@ void lift_ps_unop(LiftCtx& ctx, IrOp op) {
     ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::V2F32), result);
 }
 
+void lift_ps_fused_op(LiftCtx& ctx, bool subtract, bool negate) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 4) return;
+    // Paired-single A-form source order matches the scalar fused family:
+    // FRA, FRC, FRB. Preserve the two-lane vector type while exposing the
+    // multiply/add/subtract dataflow to cleanup and pseudo-C.
+    const IrValue lhs = materialize_ps_value(insn.operands[1], ctx);
+    const IrValue rhs = materialize_ps_value(insn.operands[2], ctx);
+    const IrValue addend = materialize_ps_value(insn.operands[3], ctx);
+    if (lhs.kind == IrValueKind::None || rhs.kind == IrValueKind::None ||
+        addend.kind == IrValueKind::None) {
+        return;
+    }
+    IrValue result = ctx.emit_binop(
+        subtract ? IrOp::Sub : IrOp::Add,
+        ctx.emit_binop(IrOp::Mul, lhs, rhs, IrType::V2F32),
+        addend, IrType::V2F32);
+    if (negate) result = ctx.emit_unop(IrOp::Neg, result, IrType::V2F32);
+    ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::V2F32),
+                    result);
+}
+
 void lift_psq_memory(LiftCtx& ctx, bool load, bool update) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 4 ||
@@ -1427,16 +1449,16 @@ void lift_instruction(LiftCtx& ctx) {
             lift_ps_dst_intrinsic(ctx, "ppc.ps_rsqrte");
             break;
         case Mnemonic::PsMsub:
-            lift_ps_dst_intrinsic(ctx, "ppc.ps_msub");
+            lift_ps_fused_op(ctx, true, false);
             break;
         case Mnemonic::PsMadd:
-            lift_ps_dst_intrinsic(ctx, "ppc.ps_madd");
+            lift_ps_fused_op(ctx, false, false);
             break;
         case Mnemonic::PsNmsub:
-            lift_ps_dst_intrinsic(ctx, "ppc.ps_nmsub");
+            lift_ps_fused_op(ctx, true, true);
             break;
         case Mnemonic::PsNmadd:
-            lift_ps_dst_intrinsic(ctx, "ppc.ps_nmadd");
+            lift_ps_fused_op(ctx, false, true);
             break;
         case Mnemonic::PsCmpu0:
             lift_ps_compare(ctx, "ppc.ps_cmpu0");

@@ -41,11 +41,11 @@ struct InferenceResult {
 //      sinks (strlen, strcmp, puts, fopen, ...).
 //   2. Iterate: for every call to a function with known charp slots, tag
 //      the caller's corresponding own arg slots if the data flows there.
-//   3. After convergence, harvest typed return + typed params from each
-//      function's local Phase 2 inference (infer_local_types) and meet
-//      them into the binary-wide arena. (Phase 3 v0: harvest only - no
-//      iterative re-propagation of typed fields. The worklist version
-//      is Phase 3.5.)
+//   3. Harvest typed return + typed params from each function's local Phase 2
+//      inference (infer_local_types) and meet them into the binary-wide arena.
+//   4. Iterate those richer parameter and return hints across direct calls
+//      until stable, so a pointer discovered in a leaf can flow through
+//      multiple wrapper layers.
 //
 // Runs the CFG+IR+SSA+cleanup pipeline per function once. For a binary
 // with hundreds of thousands of functions this is expensive the first

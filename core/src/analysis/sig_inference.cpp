@@ -366,6 +366,51 @@ void harvest_typed_sig(const IrFunction& fn, Abi abi,
     }
 }
 
+// Seed the post-call ABI result lane from signatures harvested for internal
+// callees. Import returns are handled by seed_call_return_types(); this closes
+// the same loop for direct calls inside the binary so pointer/scalar results
+// can propagate through wrappers before their caller signature is harvested.
+void seed_internal_call_return_types(
+    IrFunction& fn, Abi abi,
+    const std::map<addr_t, InferredSig>& known,
+    const TypeArena& shared_arena) {
+    const auto refine = [&](const IrValue& value, TypeRef shared_type) {
+        if (shared_type.is_top() || shared_type.is_bottom()) return;
+        const TypeRef local_type = translate(shared_arena, fn.types, shared_type);
+        if (local_type.is_top()) return;
+        const u64 key = value_type_key(value);
+        if (key == 0) return;
+        auto [it, inserted] = fn.value_types.emplace(key, local_type);
+        if (!inserted) it->second = fn.types.meet(it->second, local_type);
+    };
+
+    for (const auto& bb : fn.blocks) {
+        for (std::size_t i = 0; i < bb.insts.size(); ++i) {
+            const IrInst& call = bb.insts[i];
+            if (call.op != IrOp::Call) continue;
+            auto sig_it = known.find(call.target1);
+            if (sig_it == known.end()) continue;
+            const TypeRef return_type = sig_it->second.return_type;
+            if (return_type.is_top() || return_type.is_bottom()) continue;
+            const TypeKind kind = shared_arena.kind(return_type);
+            if (kind == TypeKind::Void) continue;
+            const Reg lane = kind == TypeKind::Float
+                ? fp_return_reg(abi)
+                : int_return_reg(abi);
+            if (lane == Reg::None) continue;
+            for (std::size_t j = i + 1; j < bb.insts.size(); ++j) {
+                const IrInst& clobber = bb.insts[j];
+                if (clobber.op != IrOp::Clobber) break;
+                if (clobber.dst.kind == IrValueKind::Reg &&
+                    canonical_reg(clobber.dst.reg) == canonical_reg(lane)) {
+                    refine(clobber.dst, return_type);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 InferenceResult infer_signatures(const Binary& b, IrCache* cache) {
@@ -396,7 +441,7 @@ InferenceResult infer_signatures(const Binary& b, IrCache* cache) {
         }
     }
 
-    // Phase 3 v0: harvest typed return + params after IPA converges.
+    // Harvest typed return + params after the legacy/char* pass converges.
     // For each function, first seed the post-Call return value type for
     // every call to a known import; then run local inference (which now
     // propagates the seeded types forward), then harvest the typed
@@ -415,6 +460,37 @@ InferenceResult infer_signatures(const Binary& b, IrCache* cache) {
         for (u8 i = 0; i < sig.params.size(); ++i) {
             if (sig.charp[i]) {
                 sig.params[i] = out.arena.meet(sig.params[i], char_ptr);
+            }
+        }
+    }
+
+    // Phase 3.5: now that every locally-provable type is in the shared arena,
+    // iterate it across the direct call graph. Parameter evidence flows from
+    // callee slots back into caller live-ins; return evidence seeds the
+    // caller's post-call ABI lane, then local inference and harvesting carry
+    // it onward. This is intentionally bounded like the earlier char* pass.
+    changed = true;
+    guard = 0;
+    while (changed && guard++ < 32) {
+        changed = false;
+        for (addr_t fn : entries) {
+            IrFunction* ir = lift_cached(ir_cache, b, fn);
+            if (!ir) continue;
+            InferredSig& sig = sigs[fn];
+            const InferredSig before = sig;
+            scan_function(b, abi, *ir, sigs, out.arena,
+                          sig.charp, sig.params);
+            seed_internal_call_return_types(*ir, abi, sigs, out.arena);
+            infer_local_types(*ir);
+            harvest_typed_sig(*ir, abi, out.arena, sig);
+            for (u8 i = 0; i < sig.params.size(); ++i) {
+                if (sig.charp[i]) {
+                    sig.params[i] = out.arena.meet(sig.params[i], char_ptr);
+                }
+            }
+            if (sig.charp != before.charp || sig.params != before.params ||
+                sig.return_type != before.return_type) {
+                changed = true;
             }
         }
     }

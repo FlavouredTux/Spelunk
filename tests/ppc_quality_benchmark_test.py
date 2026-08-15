@@ -47,6 +47,13 @@ void func_80100000(double a1, void* a2) {
     comparison = benchmark.compare_totals(totals, baseline)
     assert comparison["improvements"] == ["opaque_ppc_intrinsics"]
     assert comparison["regressions"] == ["generic_parameters"]
+
+    timings = benchmark.parse_timings("""\
+[timing]   cfg_build: 1.250 ms
+[timing]   emit: 0.500 ms
+[timing]   cfg_build: 0.750 ms
+""")
+    assert timings == {"cfg_build": 2.0, "emit": 0.5}
     return 0
 
 

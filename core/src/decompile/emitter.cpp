@@ -256,6 +256,8 @@ namespace {
         std::string base = "value";
         if (declared_type.find("PpcState") != std::string_view::npos) {
             base = "state";
+        } else if (declared_type.find("PpcObject") != std::string_view::npos) {
+            base = "object";
         } else if (declared_type.find('*') != std::string_view::npos) {
             base = "data";
         } else if (declared_type.find("bool") != std::string_view::npos) {
@@ -2509,6 +2511,14 @@ struct Emitter {
         const TypeRef t = fn->type_of(v);
         if (!t.is_top()) {
             const auto& node = fn->types.node(t);
+            // PPC floating-point registers are transport containers as well as
+            // numeric values.  A conservative ABI seed can therefore leave a
+            // genuinely floating IR value with an integer lattice type.  The
+            // explicit IR opcode/type is stronger evidence for presentation:
+            // do not turn an F32/F64/V2F32 phi web into an integer local.
+            if (is_float_type(v.type) && node.kind == TypeKind::Int) {
+                return std::string(c_type_name(v.type));
+            }
             if (node.kind == TypeKind::Ptr) {
                 const auto& pn = fn->types.node(node.p.pointee);
                 if (pn.kind == TypeKind::Int) {
@@ -4071,8 +4081,24 @@ struct Emitter {
                 if (mit == merge_value_names.end()) continue;
                 if (!phi_has_non_return_user(*pk)) continue;
                 for (const auto& op : inst.phi_operands) {
-                    if (auto ok = ssa_key(op); ok) {
+                    // A call result commonly reaches an FP phi through
+                    // `frsp`/Trunc and a register Assign. Follow those
+                    // transparent unary conversions back to the call's
+                    // Clobber so emit_call_binding can initialize the merge
+                    // local directly instead of letting dead-decl cleanup
+                    // erase the only visible call.
+                    IrValue origin = op;
+                    for (int depth = 0; depth < 8; ++depth) {
+                        auto ok = ssa_key(origin);
+                        if (!ok) break;
                         ret_key_to_merge_name.emplace(*ok, mit->second);
+                        const IrInst* d = def_of(origin);
+                        if (!d || d->src_count != 1) break;
+                        if (d->op != IrOp::Assign && d->op != IrOp::Trunc &&
+                            d->op != IrOp::ZExt && d->op != IrOp::SExt) {
+                            break;
+                        }
+                        origin = d->srcs[0];
                     }
                 }
             }
@@ -5617,9 +5643,10 @@ struct Emitter {
                     root_it != struct_root_values.end()) {
                     const IrInst* root_def = def_stripped(root_it->second);
                     if (root_def && root_def->op == IrOp::Load &&
-                        root_def->src_count >= 1 &&
-                        try_resolve_imm_addr(root_def->srcs[0])) {
-                        base = "PpcGlobalState";
+                        root_def->src_count >= 1) {
+                        base = try_resolve_imm_addr(root_def->srcs[0])
+                            ? "PpcGlobalState"
+                            : "PpcObject";
                     }
                 }
                 name = claim_type_name(std::move(base));
@@ -5679,8 +5706,41 @@ struct Emitter {
     }
 
     [[nodiscard]] std::string
+    synthetic_member_name(std::string_view struct_name, i64 offset,
+                          IrType storage_type) const {
+        auto struct_it = struct_member_type_names.find(std::string(struct_name));
+        if (struct_it != struct_member_type_names.end()) {
+            auto member_it = struct_it->second.find(offset);
+            if (member_it != struct_it->second.end() &&
+                member_it->second.ends_with('*')) {
+                const std::string_view prefix =
+                    member_it->second.starts_with("PpcObject")
+                    ? "object" : "data";
+                return std::format("{}_{:x}", prefix,
+                                   static_cast<u64>(offset));
+            }
+        }
+        return fallback_field_name(offset, storage_type);
+    }
+
+    [[nodiscard]] std::string
+    synthetic_member_name(const IrValue& base, i64 offset,
+                          IrType storage_type) const {
+        auto access = canonical_struct_access(base);
+        if (!access) return fallback_field_name(offset, storage_type);
+        auto key = ssa_key(access->first);
+        if (!key) return fallback_field_name(offset, storage_type);
+        auto name_it = struct_type_names.find(*key);
+        if (name_it == struct_type_names.end()) {
+            return fallback_field_name(offset, storage_type);
+        }
+        return synthetic_member_name(name_it->second, offset, storage_type);
+    }
+
+    [[nodiscard]] std::string
     synthetic_struct_declarations(std::string_view rendered_function) const {
         std::string out;
+        std::set<std::string> used_names;
         for (const auto& [name, members] : struct_type_members) {
             bool used = text_contains_identifier(rendered_function, name);
             if (!used) {
@@ -5691,13 +5751,64 @@ struct Emitter {
                     }
                 }
             }
-            if (!used || members.empty()) continue;
-            out += std::format("typedef union {} {{\n", name);
+            if (used && !members.empty()) used_names.insert(name);
+        }
+
+        // A nested type may appear only as a member of a directly rendered
+        // parent. Pull those dependencies into the declaration set until the
+        // graph closes, otherwise `parent->object_0->field` would reference an
+        // incomplete synthetic type that was never emitted.
+        bool added_dependency = true;
+        while (added_dependency) {
+            added_dependency = false;
+            for (const auto& [owner, members] : struct_member_type_names) {
+                if (!used_names.contains(owner)) continue;
+                for (const auto& [_, member_type] : members) {
+                    for (const auto& [candidate, candidate_members] :
+                         struct_type_members) {
+                        if (candidate_members.empty() ||
+                            used_names.contains(candidate)) continue;
+                        if (text_contains_identifier(member_type, candidate)) {
+                            used_names.insert(candidate);
+                            added_dependency = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        bool needs_forward_declarations = false;
+        for (const auto& [owner, members] : struct_member_type_names) {
+            if (!used_names.contains(owner)) continue;
+            for (const auto& [_, member_type] : members) {
+                for (const std::string& candidate : used_names) {
+                    if (text_contains_identifier(member_type, candidate)) {
+                        needs_forward_declarations = true;
+                        break;
+                    }
+                }
+                if (needs_forward_declarations) break;
+            }
+            if (needs_forward_declarations) break;
+        }
+        if (needs_forward_declarations) {
+            for (const std::string& name : used_names) {
+                out += std::format("typedef union {} {};\n", name, name);
+            }
+            out += "\n";
+        }
+
+        for (const auto& [name, members] : struct_type_members) {
+            if (!used_names.contains(name)) continue;
+            out += needs_forward_declarations
+                ? std::format("union {} {{\n", name)
+                : std::format("typedef union {} {{\n", name);
             std::set<std::string> emitted_fields;
             for (const auto& [offset, types] : members) {
                 if (offset < 0) continue;
                 for (IrType type : types) {
-                    const std::string field = fallback_field_name(offset, type);
+                    const std::string field =
+                        synthetic_member_name(name, offset, type);
                     if (!emitted_fields.insert(field).second) continue;
                     out += "  struct { ";
                     if (offset > 0) {
@@ -5715,7 +5826,9 @@ struct Emitter {
                     out += std::format("{} {}; }};\n", member_type, field);
                 }
             }
-            out += std::format("}} {};\n\n", name);
+            out += needs_forward_declarations
+                ? "};\n\n"
+                : std::format("}} {};\n\n", name);
         }
         return out;
     }
@@ -6450,7 +6563,7 @@ struct Emitter {
                 }
                 if (synthetic_member_type(base, off)) {
                     return std::format("{}->{}", base_expr,
-                                       fallback_field_name(off, t));
+                                       synthetic_member_name(base, off, t));
                 }
                 return std::format("{}->{}", base_expr,
                                    fallback_field_name(off, t));
@@ -6498,7 +6611,7 @@ struct Emitter {
                 }
                 if (synthetic_member_type(base, off)) {
                     return std::format("{}->{}", base_expr,
-                                       fallback_field_name(off, t));
+                                       synthetic_member_name(base, off, t));
                 }
                 if (t == IrType::I64) {
                     return std::format("{}->{}", base_expr,
@@ -7027,8 +7140,13 @@ struct Emitter {
         const Prec own = (op == "==" || op == "!=") ? Prec::Eq : Prec::Rel;
         const int p = std::to_underlying(own);
         const std::string_view c = "int64_t";
-        const bool cast_l = signed_cmp && a.kind != IrValueKind::Imm;
-        const bool cast_r = signed_cmp && b.kind != IrValueKind::Imm;
+        // CmpS* also represents ordered floating-point comparisons in the
+        // IR. Signed integer casts are appropriate for integer flags, but
+        // applying them to FPR operands destroys the source semantics.
+        const bool signed_integer_cmp =
+            signed_cmp && !is_float_type(a.type) && !is_float_type(b.type);
+        const bool cast_l = signed_integer_cmp && a.kind != IrValueKind::Imm;
+        const bool cast_r = signed_integer_cmp && b.kind != IrValueKind::Imm;
         // If we're going to wrap in `(int64_t)`, the inner must bind at Unary;
         // otherwise the compare's own precedence is enough.
         const int lp = cast_l ? std::to_underlying(Prec::Unary) : p;
@@ -8142,14 +8260,21 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             --limit;
         }
         std::string s;
+        bool first = true;
         for (std::size_t i = 0; i < limit; ++i) {
+            if (trim_raw_arch_regs &&
+                (is_stale_arg_reg(args[i]) ||
+                 renders_raw_arch_reg_name(args[i]))) {
+                continue;
+            }
             if (used) used->push_back(args[i]);
-            if (i > 0) s += ", ";
+            if (!first) s += ", ";
             if (rendered && i < rendered->size() && !(*rendered)[i].empty()) {
                 s += (*rendered)[i];
             } else {
                 s += expr(args[i]);
             }
+            first = false;
         }
         return s;
     };

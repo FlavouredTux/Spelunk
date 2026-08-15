@@ -241,8 +241,34 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                 // expensive and does not resolve the fundamental ambiguity
                 // of unused parameters.
                 if (depth < 1) {
-                    const auto callee_layout = infer_ppc_arguments_from_ir_impl(
-                        cache, visiting, b, inst.target1, abi, depth + 1);
+                    std::vector<InferredArgument> callee_layout;
+                    if (const Symbol* callee = b.defined_object_at(inst.target1);
+                        callee && callee->kind == SymbolKind::Function &&
+                        callee->addr == inst.target1) {
+                        TypeArena arena;
+                        if (auto spec = lookup_import_sig(callee->name, arena); spec) {
+                            std::size_t int_index = 0;
+                            std::size_t fp_index = 0;
+                            for (TypeRef param : spec->params) {
+                                const TypeKind kind = arena.kind(param);
+                                const bool fp = kind == TypeKind::Float;
+                                const auto regs = fp ? fp_args : int_args;
+                                const std::size_t index = fp ? fp_index++ : int_index++;
+                                if (index >= regs.size()) continue;
+                                callee_layout.push_back({
+                                    regs[index],
+                                    fp ? (arena.node(param).f.bits <= 32
+                                              ? IrType::F32 : IrType::F64)
+                                       : (abi == Abi::Ppc32Sysv
+                                              ? IrType::I32 : IrType::I64),
+                                    kind == TypeKind::Ptr});
+                            }
+                        }
+                    }
+                    if (callee_layout.empty()) {
+                        callee_layout = infer_ppc_arguments_from_ir_impl(
+                            cache, visiting, b, inst.target1, abi, depth + 1);
+                    }
                     for (const auto& arg : callee_layout) {
                         const auto regs = is_ppc_fpr(arg.reg) ? fp_args : int_args;
                         const auto& values = is_ppc_fpr(arg.reg) ? pending_fp

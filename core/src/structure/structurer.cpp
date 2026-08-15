@@ -374,6 +374,33 @@ public:
                 return seq;
             }
             if (visited_.contains(current)) {
+                // A tiny shared diamond tail often consists of one ordinary
+                // block followed immediately by this sequence's merge:
+                //
+                //   if (a) shared(); else if (b) shared(); else unique();
+                //
+                // Once the first arm has visited `shared`, the second arm
+                // used to become a backward-looking goto in pseudo-C. Clone
+                // only that one source-level block when its sole successor is
+                // exactly our stop point. This removes the label without
+                // cloning the (potentially huge) continuation after the
+                // merge, which is why the broader bounded-tail inliner is not
+                // suitable for this shape.
+                if (stop != kNoAddr) {
+                    auto shared_it = fn_.block_at.find(current);
+                    if (shared_it != fn_.block_at.end()) {
+                        const IrBlock& shared = fn_.blocks[shared_it->second];
+                        const bool plain_block =
+                            shared.kind == BlockKind::Unconditional ||
+                            shared.kind == BlockKind::Fallthrough;
+                        if (plain_block && shared.successors.size() == 1 &&
+                            shared.successors[0] == stop) {
+                            seq->children.push_back(make_block(current));
+                            if (out_last_block) *out_last_block = current;
+                            return seq;
+                        }
+                    }
+                }
                 // Common idiom: `if (err) goto fail; ... fail: cleanup; return -1;`
                 // When the target is a short unconditional chain ending in a
                 // Return, duplicate it here instead of emitting the goto.

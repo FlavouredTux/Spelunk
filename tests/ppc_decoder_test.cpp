@@ -973,13 +973,34 @@ void test_wii_lifter_forms() {
     check_eq(saw_ps_add, true, "ps_add keeps named paired-single dataflow in IR");
 
     ir = lift_one(ps_a_word(3, 4, 5, 6, 29));  // ps_madd f3, f4, f6, f5
-    bool saw_ps_madd = false;
+    bool saw_ps_madd_mul = false;
+    bool saw_ps_madd_add = false;
+    bool saw_ps_madd_intrinsic = false;
     for (const auto& inst : ir.blocks[0].insts) {
-        saw_ps_madd |= inst.op == ember::IrOp::Intrinsic && inst.name == "ppc.ps_madd" &&
-                       inst.dst.kind == ember::IrValueKind::Reg &&
-                       inst.dst.reg == ember::Reg::PpcF3 && inst.src_count == 3;
+        saw_ps_madd_mul |= inst.op == ember::IrOp::Mul &&
+                           inst.dst.type == ember::IrType::V2F32 &&
+                           inst.srcs[0].reg == ember::Reg::PpcF4 &&
+                           inst.srcs[1].reg == ember::Reg::PpcF6;
+        saw_ps_madd_add |= inst.op == ember::IrOp::Add &&
+                           inst.dst.type == ember::IrType::V2F32 &&
+                           inst.srcs[1].reg == ember::Reg::PpcF5;
+        saw_ps_madd_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                                 inst.name == "ppc.ps_madd";
     }
-    check_eq(saw_ps_madd, true, "ps_madd keeps all three sources in IR");
+    check_eq(saw_ps_madd_mul && saw_ps_madd_add && !saw_ps_madd_intrinsic,
+             true, "ps_madd lifts to typed paired multiply-add dataflow");
+
+    ir = lift_one(ps_a_word(3, 4, 5, 6, 30));  // ps_nmsub f3, f4, f6, f5
+    bool saw_ps_nmsub_sub = false;
+    bool saw_ps_nmsub_neg = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_ps_nmsub_sub |= inst.op == ember::IrOp::Sub &&
+                            inst.dst.type == ember::IrType::V2F32;
+        saw_ps_nmsub_neg |= inst.op == ember::IrOp::Neg &&
+                            inst.dst.type == ember::IrType::V2F32;
+    }
+    check_eq(saw_ps_nmsub_sub && saw_ps_nmsub_neg, true,
+             "ps_nmsub exposes paired subtract and final negation");
 
     ir = lift_one(fp_a_word(59, 3, 4, 5, 6, 29));  // fmadds f3, f4, f6, f5
     bool saw_fused_mul = false;

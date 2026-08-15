@@ -5,15 +5,15 @@
     "version": "EU0"
   },
   "totals": {
-    "functions": 6,
-    "lines_of_pseudo_c": 567,
-    "raw_register_references": 143,
-    "versioned_ssa_references": 11,
-    "temporary_references": 184,
+    "functions": 10,
+    "lines_of_pseudo_c": 914,
+    "raw_register_references": 0,
+    "versioned_ssa_references": 0,
+    "temporary_references": 0,
     "opaque_ppc_intrinsics": 0,
-    "generic_parameters": 10,
-    "generic_field_references": 75,
-    "unresolved_symbol_calls": 10,
+    "generic_parameters": 0,
+    "generic_field_references": 0,
+    "unresolved_symbol_calls": 15,
     "structurer_failures": 0
   }
 }

@@ -1,4 +1,5 @@
 #include <ember/analysis/arity.hpp>
+#include <ember/analysis/sig_inference.hpp>
 #include <ember/binary/binary.hpp>
 
 #include <array>
@@ -64,6 +65,13 @@ public:
         put(0x10c, 0x916c0000);  // stw r11,0(r12)
         put(0x110, 0x4e800020);  // blr
 
+        // fmod is linked as a normal DOL function rather than a PLT import.
+        // The known math prototype must still make a wrapper's f1/f2 values
+        // floating parameters instead of inventing r3/r4 integer arguments.
+        put(0x118, 0x4e800020);  // fmod stub: blr
+        put(0x128, 0x4bfffff1);  // bl fmod
+        put(0x12c, 0x4e800020);  // blr
+
         section_.name = ".text";
         section_.vaddr = kBase;
         section_.size = text_.size();
@@ -82,6 +90,8 @@ public:
         add_symbol("paired_pointer", kBase + 0xe0, 0x08);
         add_symbol("_savegpr_27", kBase + 0x100, 0x04);
         add_symbol("ninth_integer", kBase + 0x108, 0x0c);
+        add_symbol("fmod", kBase + 0x118, 0x04);
+        add_symbol("forwarded_fmod", kBase + 0x128, 0x08);
     }
 
     [[nodiscard]] ember::Format format() const noexcept override {
@@ -130,7 +140,7 @@ private:
         symbols_.push_back(std::move(symbol));
     }
 
-    std::array<std::byte, 0x120> text_{};
+    std::array<std::byte, 0x140> text_{};
     ember::Section section_{};
     std::vector<ember::Symbol> symbols_;
 };
@@ -205,5 +215,22 @@ int main() {
              "PPC overflow load preserves the eight-register argument prefix");
     check_stack(overflow, 8, 0x28,
                 "PPC ninth integer parameter is recovered at entry sp+0x28");
+    const auto fmod_wrapper = ember::infer_arguments(binary, 0x80001128);
+    check_eq(static_cast<ember::u8>(fmod_wrapper.size()), 2,
+             "defined math prototype sizes a PPC floating wrapper");
+    check_reg(fmod_wrapper, 0, ember::Reg::PpcF1,
+              "defined fmod wrapper arg 1 is f1");
+    check_reg(fmod_wrapper, 1, ember::Reg::PpcF2,
+              "defined fmod wrapper arg 2 is f2");
+
+    const ember::InferenceResult ipa = ember::infer_signatures(binary);
+    const auto forwarded_sig = ipa.sigs.find(0x800010c0);
+    const bool propagated_pointer = forwarded_sig != ipa.sigs.end() &&
+        ipa.arena.kind(forwarded_sig->second.params[1]) == ember::TypeKind::Ptr;
+    if (!propagated_pointer) {
+        std::fprintf(stderr,
+                     "FAIL: typed IPA propagates a leaf pointer through a wrapper\n");
+        ++failures;
+    }
     return failures == 0 ? 0 : 1;
 }

@@ -108,7 +108,9 @@ ember --dtk ./spm --version EU0 --evt-script lbl_80415e04
 `--decompile-data` understands primitive/pointer/record/array types. It uses
 applied DOL/REL relocation evidence before raw pointer words, resolves named
 objects and callbacks, renders printable character pointers as strings, and
-recurses through nested records. `--evt-script` validates each encoded opcode
+recurses through nested records. Arrays of record pointers are followed
+automatically and emitted as typed compound initializers. `--evt-script`
+validates each encoded opcode
 and argument count, reconstructs IF/SWITCH/DO/inline nesting, decodes SPM
 variable encodings such as `LW(0)`, and resolves user-function/script pointers.
 
@@ -118,6 +120,11 @@ evidence or an explicit signature instead of treating every argument as a GPR.
 Known scalar floating-point returns are recovered from `f1`, including common
 Wii SDK `PSVEC*`, MTX, GX, OS, DVD, controller, and CX routines; unknown calls
 stay conservative rather than treating every post-call FPR clobber as a result.
+
+Ember's pseudo-C is reverse-engineering guidance, not a promise of the original
+CodeWarrior source. Exact byte matching still requires objdiff-led iteration on
+source structure, declaration order, stack placement, expression spelling, and
+other compiler-sensitive details.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, binary-only limits, the `--ppc-coverage`
 decoder/semantic-gap report, and the repeatable SPM pseudo-C quality benchmark.

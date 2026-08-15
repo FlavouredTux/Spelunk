@@ -21,6 +21,19 @@ struct ParamSig {
 struct FunctionSig {
     std::string           return_type;
     std::vector<ParamSig> params;
+    bool                  variadic = false;
+};
+
+struct ImportedRecordField {
+    std::string name;
+    std::string type;
+    std::size_t offset = 0;
+    std::size_t size = 0;
+};
+
+struct ImportedRecordLayout {
+    std::size_t size = 0;
+    std::map<i64, ImportedRecordField> fields;
 };
 
 struct FieldKey {
@@ -133,8 +146,11 @@ struct Annotations {
     // serialized into the annotation sidecar: the headers remain the source
     // of truth and are reparsed when --headers is requested.
     std::map<addr_t, std::string> global_types;
+    std::map<std::string, std::string, std::less<>> imported_global_types_by_name;
     std::map<std::string, std::size_t, std::less<>> type_sizes;
     std::map<std::string, std::string, std::less<>> type_global_names;
+    std::map<std::string, ImportedRecordLayout, std::less<>> imported_records;
+    std::map<std::string, std::map<i64, std::string>, std::less<>> imported_enums;
 
     // Provenance, parallel to the maps above. Keys not present here
     // mean "no metadata recorded" - different from "metadata recorded

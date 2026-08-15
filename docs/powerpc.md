@@ -194,7 +194,11 @@ where an unresolved `bctr` otherwise hides nearly the entire function.
 
 Pass one or more header files/directories with `--headers`. Ember asks
 libclang for 32-bit PowerPC layouts and overlays matching function prototypes,
-parameter names, direct record fields, arrays, globals, and enums. Existing
+parameter names, direct record fields, arrays, globals, and enums. Imported
+pointer-valued globals also retain their record layouts, so SDA accesses can
+render as `gp->mapName` instead of `gp + 0x44`. Decomp-header
+`UNKNOWN_FUNCTION(name)` declarations are treated as incomplete prototypes,
+not as false zero-argument functions. Existing
 manual annotations retain priority. Extra include paths or project defines can
 be passed with repeatable `--header-arg` values:
 
@@ -213,7 +217,9 @@ all ordinary decompilation features and report a focused error only when
 Use `--decompile-data SYMBOL --type TYPE` to turn fixed data into a C
 initializer. Records and arrays come from imported headers; pointers consult
 loader relocation records first and are classified as functions, event/data
-objects, strings, nested records, or nulls.
+objects, strings, nested records, or nulls. Record pointers inside tables are
+followed automatically and rendered as typed compound initializers; recursion
+is bounded so corrupt or cyclic data cannot make the command run forever.
 
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
@@ -226,6 +232,14 @@ argument-count/opcode word, validates instruction boundaries, names callbacks
 through DOL/REL symbols, renders encoded values (`LW`, `GSW`, `FLOAT`, and the
 other event variable classes), and indents structured IF, SWITCH, DO, inline,
 and brother-event regions until `EVT_END()`.
+
+### CodeWarrior matching boundary
+
+Pseudo-C removes mechanical reverse-engineering work, but it cannot uniquely
+recover the programmer's original source from optimized instructions. Treat it
+as a typed starting point. Byte-for-byte CodeWarrior matching still needs
+manual objdiff iteration over control-flow spelling, local declaration order,
+stack layout, temporary lifetimes, casts, and compiler-sensitive expressions.
 
 ### Repeatable SPM pseudo-C benchmark
 

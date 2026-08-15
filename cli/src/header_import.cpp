@@ -9,9 +9,11 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <print>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -52,6 +54,7 @@ struct HeaderDatabase {
     std::map<i64, std::string> enum_values;
     std::map<std::string, std::map<i64, std::string>, std::less<>> enums;
     std::size_t diagnostics = 0;
+    std::vector<std::string> diagnostic_text;
 };
 
 std::string trim(std::string s) {
@@ -119,6 +122,7 @@ CXChildVisitResult visit_decl(CXCursor c, CXCursor, CXClientData raw) {
     if (kind == CXCursor_FunctionDecl && !name.empty()) {
         FunctionSig sig;
         CXType ft = clang_getCursorType(c);
+        sig.variadic = clang_isFunctionTypeVariadic(ft) != 0;
         sig.return_type = cx_string(clang_getTypeSpelling(clang_getResultType(ft)));
         const int n = clang_Cursor_getNumArguments(c);
         for (int i = 0; i < n; ++i) {
@@ -182,7 +186,7 @@ Result<HeaderDatabase> import_headers(const Args& args) {
     std::string source;
     for (const auto& f : files) source += std::format("#include \"{}\"\n", f.string());
     std::vector<std::string> owned_args{"-x", "c++", "-std=c++20", "-target", "powerpc-unknown-eabi",
-                                        "-D__MWERKS__=1", "-Wno-everything"};
+                                        "-DM2C=1", "-DRELAX_NAMESPACING=1", "-Wno-everything"};
     for (const auto& root : roots) owned_args.push_back("-I" + root.string());
     for (const auto& a : args.header_args) owned_args.push_back(a);
     std::vector<const char*> clang_args;
@@ -202,10 +206,39 @@ Result<HeaderDatabase> import_headers(const Args& args) {
     for (unsigned i = 0; i < diagnostics; ++i) {
         CXDiagnostic d = clang_getDiagnostic(tu, i);
         const auto severity = clang_getDiagnosticSeverity(d);
-        if (severity >= CXDiagnostic_Error) ++db.diagnostics;
+        if (severity >= CXDiagnostic_Error) {
+            ++db.diagnostics;
+            db.diagnostic_text.push_back(cx_string(clang_formatDiagnostic(
+                d, clang_defaultDiagnosticDisplayOptions())));
+        }
         clang_disposeDiagnostic(d);
     }
     clang_visitChildren(clang_getTranslationUnitCursor(tu), visit_decl, &db);
+    // UNKNOWN_FUNCTION deliberately erases the real prototype in decomp
+    // headers.  Keep those declarations useful without claiming a false
+    // zero-argument `void f(void)`: mark them incomplete/variadic so ABI
+    // recovery may still supply observed arguments and return values.
+    const std::regex unknown_function(
+        R"(UNKNOWN_FUNCTION\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))");
+    const std::regex pointer_global(
+        R"((?:extern\s+|DECOMP_STATIC\s*\(\s*)([A-Za-z_][A-Za-z0-9_:]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))");
+    for (const auto& file : files) {
+        std::ifstream in(file);
+        if (!in) continue;
+        const std::string contents((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+        for (std::sregex_iterator it(contents.begin(), contents.end(), unknown_function), end;
+             it != end; ++it) {
+            const std::string function_name = (*it)[1].str();
+            if (function_name == "name") continue;  // macro definition itself
+            db.functions[function_name] = FunctionSig{
+                .return_type = "", .params = {}, .variadic = true};
+        }
+        for (std::sregex_iterator it(contents.begin(), contents.end(), pointer_global), end;
+             it != end; ++it) {
+            db.globals.insert_or_assign((*it)[2].str(), (*it)[1].str() + " *");
+        }
+    }
     clang_disposeTranslationUnit(tu);
     clang_disposeIndex(index);
     return db;
@@ -363,6 +396,17 @@ std::string render_value(const HeaderDatabase& db, const Binary& b, const TypeNo
         if (pointee == "char" || pointee == "s8" || pointee == "u8") {
             if (auto s = c_string_at(b, value); !s.empty()) return std::format("\"{}\"", s);
         }
+        // Pointer tables of records are the common shape for Wii descriptor
+        // data.  Follow them by default and emit typed compound literals so
+        // `MapData *[468]` becomes actual MapData initializers rather than a
+        // wall of `&lbl_*` entries that each require another command.
+        if (type.child && type.child->kind == TypeNode::Kind::Record) {
+            const std::size_t needed = type_size(*type.child, pointer_size);
+            if (needed != 0 && b.bytes_at(value).size() >= needed) {
+                return std::format("&({}){}", type.child->name,
+                    render_value(db, b, *type.child, value, depth + 1, pointer_size));
+            }
+        }
         if (const Symbol* sym = exact_symbol_at(b, value)) return "&" + sym->name;
         if (const Symbol* sym = b.defined_object_at(value)) {
             if (value == sym->addr) return "&" + sym->name;
@@ -430,9 +474,18 @@ constexpr std::string_view kEvtNames[] = {
 };
 
 std::string evt_arg(const Binary& b, addr_t site, i32 v, bool pointer_hint) {
+    for (const auto& relocation : b.relocations()) {
+        if (relocation.site == site && !relocation.symbol_name.empty()) {
+            return relocation.symbol_name;
+        }
+    }
     const addr_t relocated = relocated_pointer(b, site, 4);
     const bool mapped_pointer = relocated != 0 && !b.bytes_at(relocated).empty();
-    if ((pointer_hint || mapped_pointer || relocated != static_cast<u32>(v)) && relocated != 0) {
+    const bool relocation_changed_value = relocated != static_cast<u32>(v);
+    // A pointer-position hint alone is not enough: event variables are signed
+    // sentinel encodings and can legally occupy pointer-like opcode slots.
+    // For example 0xfe363c81 is LW(1), not an unmapped address.
+    if ((mapped_pointer || relocation_changed_value) && relocated != 0) {
         if (!pointer_hint)
             if (auto s = c_string_at(b, relocated); !s.empty()) return std::format("PTR(\"{}\")", s);
         if (const auto* sym = exact_symbol_at(b, relocated)) return sym->name;
@@ -464,11 +517,32 @@ int apply_header_annotations(const Args& args, const Binary& b,
     std::size_t sigs = 0, fields = 0;
     for (const auto& [name, rec] : imported->records)
         annotations.type_sizes.try_emplace(name, rec.size);
+    for (const auto& [name, rec] : imported->records) {
+        ImportedRecordLayout layout;
+        layout.size = rec.size;
+        for (const auto& field : rec.fields) {
+            layout.fields.emplace(static_cast<i64>(field.offset), ImportedRecordField{
+                .name = field.name, .type = field.type,
+                .offset = field.offset, .size = field.size});
+        }
+        annotations.imported_records.try_emplace(name, std::move(layout));
+    }
+    annotations.imported_enums = imported->enums;
+    annotations.imported_global_types_by_name = imported->globals;
     for (const auto& [name, type] : imported->globals) {
         const std::string base = base_type_name(type);
         if (!imported->records.contains(base)) continue;
         auto [it, inserted] = annotations.type_global_names.try_emplace(base, name);
         if (!inserted && it->second != name) it->second.clear();
+    }
+    // DTK maps may expose aliases for the same SDA slot. Resolve the header's
+    // own spelling directly first so a preceding `lbl_*` alias cannot prevent
+    // the real pointer type from reaching that address.
+    for (const auto& [name, type] : imported->globals) {
+        if (const Symbol* symbol = b.find_by_name(name);
+            symbol && symbol->kind == SymbolKind::Object && !symbol->is_import) {
+            annotations.global_types.insert_or_assign(symbol->addr, type);
+        }
     }
     for (const auto& sym : b.symbols()) {
         if (sym.kind != SymbolKind::Object || sym.is_import || sym.name.empty()) continue;
@@ -496,6 +570,10 @@ int apply_header_annotations(const Args& args, const Binary& b,
         "ember: headers: {} prototype(s), {} field(s), {} enum value(s), {} record(s){}",
         sigs, fields, imported->enum_values.size(), imported->records.size(),
         imported->diagnostics ? std::format(", {} parse diagnostic(s)", imported->diagnostics) : "");
+    if (args.verbose) {
+        for (const auto& diagnostic : imported->diagnostic_text)
+            std::println(stderr, "ember: headers: {}", diagnostic);
+    }
     return EXIT_SUCCESS;
 }
 

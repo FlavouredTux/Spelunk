@@ -73,6 +73,11 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
 }
 
 void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) const {
+    if (auto constant = resolve_imm(r.condition); constant) {
+        const bool take = (*constant != 0) != r.invert;
+        if (take && !r.children.empty()) emit_region(*r.children[0], depth, out);
+        return;
+    }
     // Pre-render the body and skip the whole if when nothing survived. The
     // body can collapse to empty after store/decl suppression (e.g. an
     // -O0 prologue's xmm spill block that becomes literally `if (rax) {}`)
@@ -94,6 +99,14 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
 }
 
 void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) const {
+    if (auto constant = resolve_imm(r.condition); constant) {
+        const bool take_then = (*constant != 0) != r.invert;
+        const std::size_t child = take_then ? 0u : 1u;
+        if (child < r.children.size() && r.children[child]) {
+            emit_region(*r.children[child], depth, out);
+        }
+        return;
+    }
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const auto bindings_before_children = emitted_bindings;
     std::string then_buf;

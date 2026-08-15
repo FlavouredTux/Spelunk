@@ -669,6 +669,8 @@ struct Emitter {
     std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
     std::map<std::string, SsaMergeLocal>             merge_locals;
+    std::map<addr_t, std::vector<std::pair<std::string, IrValue>>>
+                                                    merge_edge_assignments;
     // Block addresses referenced by some `RegionKind::Goto` in the
     // structured tree. emit_block prepends a C `bb_<addr>:` label at
     // these blocks so the gotos resolve. Without this the structurer's
@@ -827,6 +829,13 @@ struct Emitter {
     // NUL-terminated string at that address.
     [[nodiscard]] std::optional<std::string>
     resolve_string_value(const IrValue& v) const {
+        // PPC materializes addresses with lis/addi chains, so the format
+        // operand is commonly an Add tree rather than a bare Imm/Assign.
+        if (auto resolved = try_resolve_imm_addr(v); resolved) {
+            const auto addr = normalized_address(*resolved);
+            if (auto s = try_decode_cfstring(addr); s) return s;
+            if (auto s = try_string_at(addr); s) return s;
+        }
         IrValue cur = v;
         for (int step = 0; step < 8; ++step) {
             if (cur.kind == IrValueKind::Imm) {
@@ -1383,6 +1392,54 @@ struct Emitter {
         return args[*slot];
     }
 
+    // Recover the value chosen by a one-arm CFG diamond as a C conditional
+    // expression.  The SSA cleanup used to name these Phis as locals without
+    // emitting either edge assignment, which produced uninitialized
+    // `value_N` variables in otherwise well-structured PPC output.
+    [[nodiscard]] std::optional<std::string>
+    render_selection_phi(const IrInst& phi, int depth) const {
+        if (!fn || phi.op != IrOp::Phi || phi.phi_operands.size() != 2 ||
+            phi.phi_preds.size() != 2 || depth >= kMaxExprDepth) {
+            return std::nullopt;
+        }
+        auto key = ssa_key(phi.dst);
+        if (!key) return std::nullopt;
+        auto pos = def_pos.find(*key);
+        if (pos == def_pos.end() || pos->second.first >= fn->blocks.size()) {
+            return std::nullopt;
+        }
+        const addr_t merge = fn->blocks[pos->second.first].start;
+        for (std::size_t direct_i = 0; direct_i < 2; ++direct_i) {
+            const addr_t direct_pred = phi.phi_preds[direct_i];
+            const addr_t arm_pred = phi.phi_preds[1 - direct_i];
+            const IrBlock* condition_block = nullptr;
+            const IrBlock* arm_block = nullptr;
+            for (const auto& block : fn->blocks) {
+                if (block.start == direct_pred) condition_block = &block;
+                if (block.start == arm_pred) arm_block = &block;
+            }
+            if (!condition_block || !arm_block || condition_block->insts.empty()) continue;
+            const IrInst& branch = condition_block->insts.back();
+            if (branch.op != IrOp::CondBranch || branch.src_count < 1) continue;
+            const bool true_to_arm = branch.target1 == arm_pred && branch.target2 == merge;
+            const bool false_to_arm = branch.target2 == arm_pred && branch.target1 == merge;
+            if (!true_to_arm && !false_to_arm) continue;
+            if (arm_block->successors.size() != 1 || arm_block->successors[0] != merge) continue;
+
+            const std::string condition = expr(branch.srcs[0], depth + 1,
+                                               std::to_underlying(Prec::Cond));
+            const std::string direct = expr(phi.phi_operands[direct_i], depth + 1,
+                                            std::to_underlying(Prec::Cond));
+            const std::string arm = expr(phi.phi_operands[1 - direct_i], depth + 1,
+                                         std::to_underlying(Prec::Cond));
+            if (condition.empty() || direct.empty() || arm.empty()) continue;
+            return true_to_arm
+                ? std::format("({} ? {} : {})", condition, arm, direct)
+                : std::format("({} ? {} : {})", condition, direct, arm);
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::string render_reg_leaf(Reg r, u32 version,
                                               int depth = 0,
                                               int min_prec = 0) const {
@@ -1485,6 +1542,9 @@ struct Emitter {
                     else if (s != unified) { all_match = false; break; }
                 }
                 if (all_match && !unified.empty()) return unified;
+                if (auto selected = render_selection_phi(*d, depth + 1); selected) {
+                    return *selected;
+                }
             }
             break;
         }
@@ -2356,6 +2416,9 @@ struct Emitter {
         if (annotations) {
             if (const std::string* imported = annotations->global_type_for(s.addr))
                 type_name = *imported;
+            else if (auto by_name = annotations->imported_global_types_by_name.find(s.name);
+                     by_name != annotations->imported_global_types_by_name.end())
+                type_name = by_name->second;
         }
         type_name = normalize_c_type_alias(type_name);
         if (type_name.find("(*") == std::string::npos &&
@@ -2802,6 +2865,70 @@ struct Emitter {
         auto recovered = recover_ssa_merge_locals(*fn, callbacks);
         merge_value_names = std::move(recovered.value_names);
         merge_locals = std::move(recovered.locals);
+
+        // Materialize literal/live-in Phi inputs on unconditional incoming
+        // edges. Feeder instructions that were coalesced into the same merge
+        // name already emit their own assignment; this fills the missing
+        // initialization edges that previously left flags and loop state
+        // undefined. Conditional diamond Phis render as ?: and need no local.
+        merge_edge_assignments.clear();
+        if (!is_ppc_abi()) return;
+        for (const auto& merge_block : fn->blocks) {
+            for (const auto& phi : merge_block.insts) {
+                if (phi.op != IrOp::Phi || phi.phi_operands.size() != phi.phi_preds.size()) {
+                    continue;
+                }
+                auto phi_key = ssa_key(phi.dst);
+                if (!phi_key) continue;
+                auto named = merge_value_names.find(*phi_key);
+                if (named == merge_value_names.end()) continue;
+                bool selection_phi = false;
+                if (phi.phi_operands.size() == 2 && phi.phi_preds.size() == 2) {
+                    for (std::size_t direct_i = 0; direct_i < 2 && !selection_phi;
+                         ++direct_i) {
+                        const addr_t direct_pred = phi.phi_preds[direct_i];
+                        const addr_t arm_pred = phi.phi_preds[1 - direct_i];
+                        const IrBlock* direct = nullptr;
+                        const IrBlock* arm = nullptr;
+                        for (const auto& candidate : fn->blocks) {
+                            if (candidate.start == direct_pred) direct = &candidate;
+                            if (candidate.start == arm_pred) arm = &candidate;
+                        }
+                        if (!direct || !arm || direct->insts.empty()) continue;
+                        const IrInst& branch = direct->insts.back();
+                        const bool diamond = branch.op == IrOp::CondBranch &&
+                            ((branch.target1 == arm_pred && branch.target2 == merge_block.start) ||
+                             (branch.target2 == arm_pred && branch.target1 == merge_block.start));
+                        selection_phi = diamond && arm->successors.size() == 1 &&
+                            arm->successors[0] == merge_block.start;
+                    }
+                }
+                if (selection_phi) continue;
+                for (std::size_t i = 0; i < phi.phi_operands.size(); ++i) {
+                    auto initializer = merge_initializer_candidate(phi.phi_operands[i]);
+                    if (!initializer) continue;
+                    if (auto operand_key = ssa_key(phi.phi_operands[i]); operand_key) {
+                        auto same = merge_value_names.find(*operand_key);
+                        if (same != merge_value_names.end() && same->second == named->second) {
+                            continue;
+                        }
+                    }
+                    const IrBlock* predecessor = nullptr;
+                    for (const auto& candidate : fn->blocks) {
+                        if (candidate.start == phi.phi_preds[i]) {
+                            predecessor = &candidate;
+                            break;
+                        }
+                    }
+                    if (!predecessor || predecessor->successors.size() != 1 ||
+                        predecessor->successors[0] != merge_block.start) {
+                        continue;
+                    }
+                    merge_edge_assignments[predecessor->start].emplace_back(
+                        named->second, *initializer);
+                }
+            }
+        }
     }
 
     void bump_arity_from_merge_initializers() {
@@ -3208,7 +3335,21 @@ struct Emitter {
                                     callee, static_cast<u8>(i + 1));
                                 if (callee_charp[i]) have_info = true;
                             }
-                        } else if (options.signatures) {
+                        } else if (annotations) {
+                            if (const FunctionSig* sig = annotations->signature_for(inst.target1);
+                                sig) {
+                                for (std::size_t i = 0;
+                                     i < sig->params.size() && i < callee_charp.size(); ++i) {
+                                    std::string type = normalize_c_type_alias(sig->params[i].type);
+                                    type.erase(std::remove_if(type.begin(), type.end(),
+                                        [](unsigned char c) { return std::isspace(c) != 0; }),
+                                        type.end());
+                                    callee_charp[i] = type.find("char*") != std::string::npos;
+                                    have_info |= callee_charp[i];
+                                }
+                            }
+                        }
+                        if (!have_info && options.signatures) {
                             auto it = options.signatures->find(inst.target1);
                             if (it != options.signatures->end()) {
                                 callee_charp = it->second.charp;
@@ -5938,6 +6079,103 @@ struct Emitter {
         return annotations->field_name_for(fn->start, *slot, off);
     }
 
+    [[nodiscard]] static std::string imported_record_base(std::string type) {
+        auto erase_word = [&](std::string_view word) {
+            for (;;) {
+                const auto pos = type.find(word);
+                if (pos == std::string::npos) break;
+                type.erase(pos, word.size());
+            }
+        };
+        erase_word("const ");
+        erase_word("volatile ");
+        erase_word("struct ");
+        while (!type.empty() &&
+               (type.back() == '*' || type.back() == '&' ||
+                std::isspace(static_cast<unsigned char>(type.back())))) {
+            type.pop_back();
+        }
+        const auto ns = type.rfind("::");
+        if (ns != std::string::npos) type.erase(0, ns + 2);
+        return type;
+    }
+
+    // Header types attached to pointer-valued globals need to survive the
+    // load of the pointer slot.  This is what turns `*(u32*)(gp + 0x44)` into
+    // `gp->mapName` and avoids the array heuristic inventing `gp[17]`.
+    [[nodiscard]] std::optional<std::string>
+    imported_global_pointer_field(const IrValue& base, i64 off) const {
+        if (!annotations || !binary || off < 0) return std::nullopt;
+        const Symbol* slot = global_object_for_load(base);
+        if (!slot) return std::nullopt;
+        const std::string* global_type = annotations->global_type_for(slot->addr);
+        if (!global_type) {
+            auto by_name = annotations->imported_global_types_by_name.find(slot->name);
+            if (by_name != annotations->imported_global_types_by_name.end()) {
+                global_type = &by_name->second;
+            }
+        }
+        if (!global_type || global_type->find('*') == std::string::npos) {
+            return std::nullopt;
+        }
+        const std::string record_name = imported_record_base(*global_type);
+        auto record = annotations->imported_records.find(record_name);
+        if (record == annotations->imported_records.end()) return std::nullopt;
+        auto field = record->second.fields.find(off);
+        if (field == record->second.fields.end() || field->second.name.empty()) {
+            return std::nullopt;
+        }
+        note_global_decl(*slot, *global_type);
+        return std::format("{}->{}", slot->name, field->second.name);
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    imported_call_result_field(const IrValue& base, i64 off, int depth) const {
+        if (!annotations || !fn || off < 0) return std::nullopt;
+        auto key = ssa_key(base);
+        if (!key) return std::nullopt;
+        auto position = def_pos.find(*key);
+        if (position == def_pos.end() || position->second.first >= fn->blocks.size()) {
+            return std::nullopt;
+        }
+        const auto& block = fn->blocks[position->second.first];
+        std::optional<addr_t> target;
+        for (std::size_t i = position->second.second; i > 0;) {
+            const IrInst& previous = block.insts[--i];
+            if (previous.op == IrOp::Clobber || previous.op == IrOp::Nop) continue;
+            if (previous.op == IrOp::Call) target = previous.target1;
+            break;
+        }
+        if (!target) return std::nullopt;
+        const FunctionSig* signature = annotations->signature_for(*target);
+        if (!signature || signature->return_type.find('*') == std::string::npos) {
+            return std::nullopt;
+        }
+        const std::string record_name = imported_record_base(signature->return_type);
+        auto record = annotations->imported_records.find(record_name);
+        if (record == annotations->imported_records.end()) return std::nullopt;
+        auto field = record->second.fields.find(off);
+        if (field == record->second.fields.end() || field->second.name.empty()) {
+            return std::nullopt;
+        }
+        return std::format("{}->{}",
+            expr(base, depth + 1, std::to_underlying(Prec::Postfix)),
+            field->second.name);
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    imported_enum_value(const IrValue& value, std::string type) const {
+        if (!annotations) return std::nullopt;
+        const std::string enum_name = imported_record_base(std::move(type));
+        auto enum_it = annotations->imported_enums.find(enum_name);
+        if (enum_it == annotations->imported_enums.end()) return std::nullopt;
+        auto raw = resolve_imm(value);
+        if (!raw) return std::nullopt;
+        auto value_it = enum_it->second.find(*raw);
+        if (value_it == enum_it->second.end()) return std::nullopt;
+        return value_it->second;
+    }
+
     [[nodiscard]] static bool objc_ivar_name_is_safe(std::string_view s) noexcept {
         if (s.empty()) return false;
         auto ok_first = [](char c) {
@@ -6541,6 +6779,12 @@ struct Emitter {
                 const IrValue& base = bo->first;
                 const i64 off = bo->second;
                 if (off >= 0) {
+                    if (auto field = imported_global_pointer_field(base, off); field) {
+                        return *field;
+                    }
+                    if (auto field = imported_call_result_field(base, off, depth); field) {
+                        return *field;
+                    }
                     if (const std::string* field = annotated_field_name(base, off); field) {
                         const std::string base_expr =
                             expr(base, depth + 1, std::to_underlying(Prec::Unary));
@@ -6657,6 +6901,18 @@ struct Emitter {
                                             Prec self_prec,
                                             bool commutative) const {
         const int p = static_cast<int>(self_prec);
+        if (d.op == IrOp::Add && d.src_count >= 2) {
+            if (auto off = resolve_imm(d.srcs[1]); off) {
+                if (auto field = imported_global_pointer_field(d.srcs[0], *off); field) {
+                    return wrap_if_lt(*field, Prec::Postfix, min_prec);
+                }
+            }
+            if (auto off = resolve_imm(d.srcs[0]); off) {
+                if (auto field = imported_global_pointer_field(d.srcs[1], *off); field) {
+                    return wrap_if_lt(*field, Prec::Postfix, min_prec);
+                }
+            }
+        }
         if ((d.op == IrOp::Add || d.op == IrOp::Sub) && d.src_count >= 2) {
             const IrValue* base = nullptr;
             const IrValue* offset = nullptr;
@@ -8334,15 +8590,47 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             auto import_name = import_name_for_direct_call(inst.target1);
             std::vector<IrValue> call_args = pending_args;
             std::vector<std::string> rendered_call_args;
+            const std::string direct_name = import_name
+                ? *import_name : function_display_name(inst.target1);
+            const FunctionSig* annotated_sig = call_annotation_signature(inst);
+            const bool known_variadic =
+                (annotated_sig && annotated_sig->variadic) ||
+                variadic_format_index(direct_name).has_value();
             const bool ppc_abi =
                 abi == Abi::Ppc32Sysv || abi == Abi::Ppc64ElfV1Be ||
                 abi == Abi::Ppc64ElfV2Le;
-            if (ppc_abi) {
+            if (ppc_abi && !known_variadic) {
                 const auto layout = import_name
                     ? abi_layout_for_import(*import_name)
                     : cached_argument_layout(inst.target1);
                 if (!layout.empty() || !import_name) {
                     call_args = args_for_layout(layout, ii, &rendered_call_args);
+                }
+            }
+            if (annotated_sig) {
+                if (rendered_call_args.size() < call_args.size()) {
+                    rendered_call_args.resize(call_args.size());
+                }
+                for (std::size_t arg_i = 0;
+                     arg_i < annotated_sig->params.size() && arg_i < call_args.size();
+                     ++arg_i) {
+                    if (auto named = imported_enum_value(
+                            call_args[arg_i], annotated_sig->params[arg_i].type); named) {
+                        rendered_call_args[arg_i] = *named;
+                    }
+                }
+            }
+            if (rendered_call_args.size() < call_args.size()) {
+                rendered_call_args.resize(call_args.size());
+            }
+            for (std::size_t arg_i = 0; arg_i < call_args.size(); ++arg_i) {
+                if (is_ppc_abi()) {
+                    if (auto off = stack_offset(call_args[arg_i]); off &&
+                        charp_local_slots.contains(*off)) {
+                        // A char array decays at a call boundary; `&array` has
+                        // pointer-to-array type and is needlessly incompatible.
+                        rendered_call_args[arg_i] = stack_name(*off);
+                    }
                 }
             }
             // Arity sources: imports → user sig at PLT / baked-in libc table;
@@ -8361,7 +8649,6 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                 }
             } else {
-                const std::string direct_name = function_display_name(inst.target1);
                 arity = objc_call_arity(direct_name, call_args);
                 objc_sized = arity.has_value();
                 if (!arity) arity = import_arity(inst.target1, direct_name);
@@ -8375,14 +8662,25 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                         : cached_arity(inst.target1);
                 }
             }
+            // A fixed prototype gives only the named part of a variadic
+            // call.  Let a literal printf/scanf format raise that arity, and
+            // retain the raw ABI argument pack so the unnamed arguments are
+            // not discarded by the fixed-parameter layout.
+            if (auto fi = variadic_format_index(direct_name); fi) {
+                if (auto formatted = variadic_arity(call_args, *fi); formatted) {
+                    arity = arity ? std::max(*arity, formatted) : formatted;
+                }
+            } else if (annotated_sig && annotated_sig->variadic) {
+                const u8 observed = static_cast<u8>(std::min<std::size_t>(
+                    call_args.size(), std::numeric_limits<u8>::max()));
+                arity = arity ? std::max(*arity, observed) : observed;
+            }
             std::vector<IrValue> used_args;
             std::string args = arity
                 ? format_call_args_with_arity(call_args, *arity, !objc_sized,
                                               &used_args, &rendered_call_args)
                 : format_call_args_fallback(call_args, &used_args);
-            const std::string callee = import_name
-                ? *import_name
-                : function_display_name(inst.target1);
+            const std::string& callee = direct_name;
             // Header layouts let a raw aggregate clear become the source
             // expression the programmer wrote. Keep this exact: the first
             // argument must be a known global and the byte count must equal
@@ -8601,6 +8899,13 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
 
     flush_args_as_intrinsics();
 
+    if (auto assignments = merge_edge_assignments.find(bb.start);
+        assignments != merge_edge_assignments.end()) {
+        for (const auto& [name, value] : assignments->second) {
+            out += std::format("{}{} = {};\n", ind, name, expr(value));
+        }
+    }
+
 }
 
 void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
@@ -8781,7 +9086,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
     e.infer_ppc_role_arg_names();
-    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
+    e.infer_charp_args();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
 
@@ -9262,9 +9567,13 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                name,
                                e.expr(*local.initializer));
         } else {
-            out += std::format("  {} {};\n",
-                               e.c_type_name_for(local.type_value),
-                               name);
+            if (e.is_ppc_abi()) {
+                out += std::format("  {} {} = {{0}}; /* unresolved SSA merge */\n",
+                                   e.c_type_name_for(local.type_value), name);
+            } else {
+                out += std::format("  {} {};\n",
+                                   e.c_type_name_for(local.type_value), name);
+            }
         }
     }
     // Slot extent → array recovery: if a slot's footprint (the gap to the
@@ -9299,9 +9608,16 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         std::string suffix;
         if (slot.type_override.empty() && elem_size > 0) {
             if (auto next_off = next_slot_offset(slot.offset)) {
-                const i64 span = *next_off - slot.offset;
-                if (span > 0 &&
-                    static_cast<u32>(span) > elem_size &&
+                i64 span = *next_off - slot.offset;
+                // CodeWarrior frequently leaves alignment/padding between a
+                // 256-byte character buffer and the next typed local. Do not
+                // turn that padding into a fictional 292-byte source array.
+                if (charp && e.is_ppc_abi() && span >= 64 && span <= 4096) {
+                    i64 power = 1;
+                    while (power <= span / 2) power *= 2;
+                    if (span - power <= 64) span = power;
+                }
+                if (span > 0 && static_cast<u32>(span) > elem_size &&
                     span % elem_size == 0) {
                     const u32 n = static_cast<u32>(span) / elem_size;
                     suffix = std::format("[{}]", n);
@@ -9461,7 +9777,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
     e.infer_ppc_role_arg_names();
-    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
+    e.infer_charp_args();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
 
@@ -9481,9 +9797,13 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
                                name,
                                e.expr(*local.initializer));
         } else {
-            out += std::format("//   {} {};\n",
-                               e.c_type_name_for(local.type_value),
-                               name);
+            if (e.is_ppc_abi()) {
+                out += std::format("//   {} {} = {{0}}; /* unresolved SSA merge */\n",
+                                   e.c_type_name_for(local.type_value), name);
+            } else {
+                out += std::format("//   {} {};\n",
+                                   e.c_type_name_for(local.type_value), name);
+            }
         }
     }
 

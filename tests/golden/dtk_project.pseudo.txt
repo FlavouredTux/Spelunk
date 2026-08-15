@@ -1,14 +1,14 @@
 // marioReInit
-typedef union PpcStruct0 {
+typedef union PpcState {
   struct { uint32_t word_0; };
   struct { uint8_t _pad_byte_4[4]; uint8_t byte_4; };
   struct { uint8_t _pad_half_6[6]; uint16_t half_6; };
-} PpcStruct0;
+} PpcState;
 
-uint32_t marioReInit(PpcStruct0* a1) {
-  if (!a1) {
+uint32_t marioReInit(PpcState* state) {
+  if (!state) {
     return 0;
   }
-  uint32_t value = (uint32_t)a1->byte_4;
-  return a1->word_0 * 3 + ((value << 2 | value >> 0x1e) & -4) + (uint32_t)a1->half_6;
+  uint32_t flags = (uint32_t)state->byte_4;
+  return state->word_0 * 3 + ((flags << 2 | flags >> 0x1e) & -4) + (uint32_t)state->half_6;
 }

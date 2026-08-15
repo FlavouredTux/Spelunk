@@ -901,8 +901,66 @@ int test_ppc_memory_base_live_in_is_pointer() {
     auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
     check(pc.has_value(), "PPC pointer-shaped parameter emits");
     if (!pc) return 1;
-    check(pc->find("void sub_1300(void* a1)") != std::string::npos,
-          "PPC live-in copied to a memory base is typed as void pointer");
+    check(pc->find("void sub_1300(void* state)") != std::string::npos,
+          "PPC live-in memory base receives pointer type and role name");
+    return 0;
+}
+
+int test_ppc_replicated_store_return_is_void() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1320;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "ppc_initializer";
+
+    IrValue f1 = IrValue::make_reg(Reg::PpcF1, IrType::F32);
+    f1.version = 1;
+    IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    r3.version = 1;
+    const IrValue scalar = IrValue::make_temp(0, IrType::F32);
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_load(scalar,
+                                 IrValue::make_imm(0x5000, IrType::I32)));
+    bb.insts.push_back(make_assign(f1, scalar));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6000, IrType::I32), f1));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6004, IrType::I32), f1));
+    IrInst ret;
+    ret.op = IrOp::Return;
+    ret.source_addr = kStart + 0x10;
+    ret.srcs[0] = r3;
+    ret.srcs[1] = f1;
+    ret.src_count = 2;
+    bb.insts.push_back(ret);
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    tail->condition = f1;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "replicated-store PPC initializer emits");
+    if (!pc) return 1;
+    check(pc->find("void sub_1320(void)") != std::string::npos,
+          "replicated stored FPR value is not mistaken for a return type");
+    check(pc->find("return scalar") == std::string::npos,
+          "incidental replicated-store return value is suppressed");
     return 0;
 }
 
@@ -1020,10 +1078,69 @@ int test_ppc_struct_shape_is_shared_across_pointer_aliases() {
     auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
     check(pc.has_value(), "shared PPC structure pseudo-C emits");
     if (!pc) return 1;
-    const bool named_shape = pc->find("a1->word_0") != std::string::npos &&
-                             pc->find("a1->float_8") != std::string::npos;
+    const bool named_shape = pc->find("PpcState* state") != std::string::npos &&
+                             pc->find("state->word_0") != std::string::npos &&
+                             pc->find("state->float_8") != std::string::npos;
     if (!named_shape) std::fprintf(stderr, "Shared shape output:\n%s\n", pc->c_str());
     check(named_shape, "PPC pointer aliases share typed member names");
+    return 0;
+}
+
+int test_ppc_struct_member_recovers_pointer_type() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x13d0;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x20;
+    fn.name = "pointer_member_shape";
+    fn.next_temp_id = 5;
+
+    const IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    const IrValue member_addr = IrValue::make_temp(0, IrType::I32);
+    const IrValue member = IrValue::make_temp(1, IrType::I32);
+    const IrValue pointee = IrValue::make_temp(2, IrType::I16);
+    const IrValue tag_addr = IrValue::make_temp(3, IrType::I32);
+    const IrValue tag = IrValue::make_temp(4, IrType::I32);
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_add(member_addr, r3,
+                                IrValue::make_imm(0, IrType::I32)));
+    bb.insts.push_back(make_load(member, member_addr));
+    bb.insts.push_back(make_load(pointee, member));
+    bb.insts.push_back(make_add(tag_addr, r3,
+                                IrValue::make_imm(8, IrType::I32)));
+    bb.insts.push_back(make_load(tag, tag_addr));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6000, IrType::I32),
+                                  pointee));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6004, IrType::I32), tag));
+    bb.insts.push_back(make_ret(kStart + 0x1c));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "pointer-valued PPC structure member emits");
+    if (!pc) return 1;
+    const bool typed = pc->find("uint16_t* word_0") != std::string::npos &&
+                       pc->find("state->word_0[0]") != std::string::npos;
+    if (!typed) std::fprintf(stderr, "Pointer member output:\n%s\n", pc->c_str());
+    check(typed, "downstream dereference types the containing PPC member");
     return 0;
 }
 
@@ -1677,6 +1794,11 @@ int test_wii_sdk_prototype_groups() {
 
     check_spec("PSMTXTrans", 4, TypeKind::Void);
     check_spec("GXSetFog", 6, TypeKind::Void);
+    check_spec("GXSetViewport", 6, TypeKind::Void);
+    check_spec("GXGetTexBufferSize", 5, TypeKind::Int);
+    check_spec("GXSetScissor", 4, TypeKind::Void);
+    check_spec("GXPixModeSync", 0, TypeKind::Void);
+    check_spec("GXInitTexObjLOD", 9, TypeKind::Void);
     check_spec("OSGetArenaHi", 0, TypeKind::Ptr);
     check_spec("DVDReadPrio", 5, TypeKind::Int);
     check_spec("KPADSetBtnRepeat", 3, TypeKind::Void);
@@ -1760,7 +1882,7 @@ int test_ppc_gx_mixed_signature_layout() {
     check(pc.has_value(), "GX mixed signature emits");
     if (!pc) return 1;
     const bool ordered = pc->find(
-        "GXSetFog(1, 1f, 2f, 3f, 4f, 0x5000)") != std::string::npos;
+        "GXSetFog(1, 1f, 2f, 3f, 4f, (GXColor){0x5000})") != std::string::npos;
     if (!ordered) std::fprintf(stderr, "GX signature output:\n%s\n", pc->c_str());
     check(ordered, "GXSetFog prototype interleaves r3/f1-f4/r4 in source order");
     return 0;
@@ -1818,7 +1940,7 @@ int test_memory_use_recovers_pointer_after_integer_seed_conflict() {
     auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
     check(pc.has_value(), "seed-conflicted pointer local emits");
     if (!pc) return 1;
-    const bool recovered = pc->find("uint16_t* pointer =") != std::string::npos;
+    const bool recovered = pc->find("uint16_t* data =") != std::string::npos;
     if (!recovered) std::fprintf(stderr, "Pointer recovery output:\n%s\n", pc->c_str());
     check(recovered, "visible dereferences recover the pointer declaration type");
     check(pc->find(" t0") == std::string::npos,
@@ -1840,8 +1962,10 @@ int main() {
     rc |= test_ppc_void_return_merge_becomes_entry_guard();
     rc |= test_ppc_small_incidental_return_merge_is_void();
     rc |= test_ppc_memory_base_live_in_is_pointer();
+    rc |= test_ppc_replicated_store_return_is_void();
     rc |= test_ppc_small_data_bases_resolve_named_globals();
     rc |= test_ppc_struct_shape_is_shared_across_pointer_aliases();
+    rc |= test_ppc_struct_member_recovers_pointer_type();
     rc |= test_ppc_pointer_return_type_is_shared_across_calls();
     rc |= test_ppc_mixed_call_arguments_follow_callee_layout();
     rc |= test_ppc_known_float_call_binds_f1_result();

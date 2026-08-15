@@ -291,12 +291,12 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
         return m(t_void(a), {t_int32s(a), t_int8u(a), t_int8u(a),
                              t_int8u(a), t_int8u(a), t_int8u(a), t_int8u(a)});
     if (name == "GXInitTexObj")
-        return m(t_void(a), {t_voidp(a), t_voidp(a), t_int32u(a),
-                             t_int32u(a), t_int32u(a), t_int32u(a),
+        return m(t_void(a), {t_voidp(a), t_voidp(a), t_int16u(a),
+                             t_int16u(a), t_int32u(a), t_int32u(a),
                              t_int32u(a), t_int32s(a)});
     if (name == "GXInitTexObjLOD")
-        return m(t_void(a), {t_float32(a), t_float32(a), t_float32(a),
-                             t_voidp(a), t_int32s(a), t_int32s(a),
+        return m(t_void(a), {t_voidp(a), t_int32s(a), t_int32s(a),
+                             t_float32(a), t_float32(a), t_float32(a),
                              t_int32u(a), t_int32u(a), t_int32u(a)});
     if (name == "GXInitTexObjData")
         return m(t_void(a), {t_voidp(a), t_voidp(a)});
@@ -322,7 +322,7 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
                              t_int32s(a)});
     if (name == "GXSetFog")
         return m(t_void(a), {t_int8u(a), t_float32(a), t_float32(a),
-                             t_float32(a), t_float32(a), a.ptr_t(gx_color)});
+                             t_float32(a), t_float32(a), gx_color});
     if (name == "GXSetBlendMode")
         return m(t_void(a), {t_int8u(a), t_int8u(a), t_int8u(a), t_int8u(a)});
     if (name == "GXSetZMode")
@@ -335,6 +335,33 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
         return m(t_void(a), {t_float32(a), t_float32(a), t_float32(a),
                              t_voidp(a), t_voidp(a), t_voidp(a), t_voidp(a),
                              t_voidp(a), t_voidp(a)});
+    if (name == "GXSetViewport")
+        return m(t_void(a), {t_float32(a), t_float32(a), t_float32(a),
+                             t_float32(a), t_float32(a), t_float32(a)});
+    if (name == "GXGetTexBufferSize")
+        return m(t_int32u(a), {t_int16u(a), t_int16u(a), t_int32u(a),
+                               t_int8u(a), t_int8u(a)});
+    if (name == "GXSetTexCopySrc" || name == "GXSetDispCopySrc")
+        return m(t_void(a), {t_int16u(a), t_int16u(a), t_int16u(a),
+                             t_int16u(a)});
+    if (name == "GXSetTexCopyDst")
+        return m(t_void(a), {t_int16u(a), t_int16u(a), t_int32u(a),
+                             t_int8u(a)});
+    if (name == "GXSetDispCopyDst")
+        return m(t_void(a), {t_int16u(a), t_int16u(a)});
+    if (name == "GXSetScissor")
+        return m(t_void(a), {t_int32u(a), t_int32u(a), t_int32u(a),
+                             t_int32u(a)});
+    if (name == "GXSetScissorBoxOffset")
+        return m(t_void(a), {t_int32s(a), t_int32s(a)});
+    if (name == "GXLoadTexObj")
+        return m(t_void(a), {t_voidp(a), t_int32u(a)});
+    if (name == "GXCopyTex" || name == "GXCopyDisp")
+        return m(t_void(a), {t_voidp(a), t_int8u(a)});
+    if (name == "GXPixModeSync" || name == "GXInvalidateTexAll")
+        return m(t_void(a), {});
+    if (name == "GXSetDispCopyYScale")
+        return m(t_int32u(a), {t_float32(a)});
 
     // ---- Nintendo Revolution SDK OS -------------------------------------
     if (name == "OSGetMEM1ArenaHi" || name == "OSGetMEM2ArenaHi" ||
@@ -363,7 +390,7 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
         return m(t_void(a), {t_int32u(a)});
     if (name == "OSGetTime") return m(t_int64u(a), {});
     if (name == "DCFlushRange")
-        return m(t_voidp(a), {t_voidp(a), t_int32u(a)});
+        return m(t_void(a), {t_voidp(a), t_int32u(a)});
     if (name == "ICInvalidateRange")
         return m(t_void(a), {t_voidp(a), t_int32u(a)});
     if (name == "OSLink")

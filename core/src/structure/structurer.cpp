@@ -1026,7 +1026,12 @@ public:
     // reasonably small.
     [[nodiscard]] std::unique_ptr<Region> try_inline_bounded_tail(addr_t target) {
         if (inlining_bounded_) return nullptr;
-        constexpr std::size_t kMaxNodes = 30;
+        // Larger clones look structured locally but explode at outer join
+        // points (a 25-node Wii menu tail can be copied four times into a
+        // 400-line function). Keep only genuinely small source-level tails;
+        // larger shared regions are clearer and more faithful as one labeled
+        // body reached by gotos.
+        constexpr std::size_t kMaxNodes = 12;
 
         auto saved_visited = visited_;
         visited_.erase(target);

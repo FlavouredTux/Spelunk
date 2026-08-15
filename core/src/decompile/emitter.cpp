@@ -197,7 +197,8 @@ namespace {
     };
     std::vector<Rename> renames;
     std::map<std::string, u32> next_suffix;
-    std::set<std::string> temporary_names;
+    std::vector<std::string> temporary_names;
+    std::set<std::string> seen_temporaries;
     for (std::size_t i = 0; i + 1 < text.size(); ++i) {
         if (text[i] != 't' ||
             !std::isdigit(static_cast<unsigned char>(text[i + 1])) ||
@@ -210,7 +211,10 @@ namespace {
             ++name_end;
         }
         if (name_end < text.size() && c_ident_char(text[name_end])) continue;
-        temporary_names.emplace(text.substr(i, name_end - i));
+        std::string name = text.substr(i, name_end - i);
+        if (seen_temporaries.insert(name).second) {
+            temporary_names.push_back(std::move(name));
+        }
         i = name_end - 1;
     }
 
@@ -231,20 +235,45 @@ namespace {
             start = end + 1;
         }
 
+        const auto used_on_line_with = [&](std::string_view needle) {
+            std::size_t line_start = 0;
+            while (line_start <= text.size()) {
+                std::size_t line_end = text.find('\n', line_start);
+                if (line_end == std::string::npos) line_end = text.size();
+                const std::string_view line = std::string_view(text).substr(
+                    line_start, line_end - line_start);
+                if (!line_declares_identifier(line, old_name) &&
+                    text_contains_identifier(line, old_name) &&
+                    line.find(needle) != std::string_view::npos) {
+                    return true;
+                }
+                if (line_end == text.size()) break;
+                line_start = line_end + 1;
+            }
+            return false;
+        };
+
         std::string base = "value";
-        if (declared_type.find('*') != std::string_view::npos) {
-            base = "pointer";
+        if (declared_type.find("PpcState") != std::string_view::npos) {
+            base = "state";
+        } else if (declared_type.find('*') != std::string_view::npos) {
+            base = "data";
         } else if (declared_type.find("bool") != std::string_view::npos) {
             base = "flag";
         } else if (declared_type.find("float") != std::string_view::npos ||
                    declared_type.find("double") != std::string_view::npos) {
-            base = "scalar";
+            base = used_on_line_with(" * ") ? "scale" : "scalar";
         } else if (declared_type.find("uint8_t") != std::string_view::npos ||
                    declared_type.find("int8_t") != std::string_view::npos) {
             base = "byte_value";
         } else if (declared_type.find("uint16_t") != std::string_view::npos ||
                    declared_type.find("int16_t") != std::string_view::npos) {
             base = "halfword";
+        } else if (used_on_line_with("SetMessage") ||
+                   used_on_line_with("Msg(")) {
+            base = "message_id";
+        } else if (used_on_line_with(" & ")) {
+            base = "flags";
         }
 
         u32& suffix = next_suffix[base];
@@ -260,6 +289,49 @@ namespace {
 
     for (const Rename& rename : renames) {
         text = replace_identifier(text, rename.old_name, rename.new_name);
+    }
+    return text;
+}
+
+[[nodiscard]] std::string compact_ppc_type_names(std::string text) {
+    static constexpr std::array<std::string_view, 3> families{
+        "PpcGlobalState", "PpcObject", "PpcState"
+    };
+    std::map<std::string, u32> counts;
+    std::vector<std::pair<std::string, std::string>> renames;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        const std::string_view line = std::string_view(text).substr(
+            start, end - start);
+        constexpr std::string_view prefix = "typedef union ";
+        if (line.starts_with(prefix)) {
+            const std::string_view declared = line.substr(prefix.size());
+            for (std::string_view family : families) {
+                if (!declared.starts_with(family)) continue;
+                std::size_t name_size = family.size();
+                while (name_size < declared.size() && std::isdigit(
+                           static_cast<unsigned char>(declared[name_size]))) {
+                    ++name_size;
+                }
+                const std::string old_name(declared.substr(0, name_size));
+                u32& count = counts[std::string(family)];
+                ++count;
+                const std::string new_name = count == 1
+                    ? std::string(family)
+                    : std::format("{}{}", family, count);
+                if (old_name != new_name) {
+                    renames.emplace_back(old_name, new_name);
+                }
+                break;
+            }
+        }
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+    for (const auto& [old_name, new_name] : renames) {
+        text = replace_identifier(text, old_name, new_name);
     }
     return text;
 }
@@ -3217,7 +3289,25 @@ struct Emitter {
     known_call_arity_for_arg_names(const IrInst& inst,
                                    const std::vector<IrValue>& args) const {
         std::optional<u8> arity;
-        if (inst.op == IrOp::CallIndirect && inst.src_count >= 1 &&
+        if (inst.op == IrOp::Call) {
+            if (auto direct_import = import_name_for_direct_call(inst.target1)) {
+                arity = objc_call_arity(*direct_import, args);
+                if (!arity) arity = import_arity(inst.target1, *direct_import);
+                if (!arity) {
+                    if (auto fi = variadic_format_index(*direct_import); fi) {
+                        arity = variadic_arity(args, *fi);
+                    }
+                }
+            } else if (annotations) {
+                if (const FunctionSig* sig = annotations->signature_for(inst.target1);
+                    sig) {
+                    arity = static_cast<u8>(sig->params.size());
+                }
+            }
+            if (!arity && !import_name_for_direct_call(inst.target1)) {
+                arity = cached_arity(inst.target1);
+            }
+        } else if (inst.op == IrOp::CallIndirect && inst.src_count >= 1 &&
             options.call_resolutions && inst.source_addr != 0) {
             auto res_it = options.call_resolutions->find(inst.source_addr);
             if (res_it != options.call_resolutions->end()) {
@@ -3245,8 +3335,41 @@ struct Emitter {
     }
 
     void infer_call_value_arg_names() {
-        static constexpr std::array<std::string_view, 4> kNames{
-            "x", "y", "z", "arg"
+        static constexpr std::array<std::string_view, 3> kAxisNames{
+            "x", "y", "z"
+        };
+        const auto sdk_param_name = [](std::string_view callee,
+                                       std::size_t index)
+            -> std::optional<std::string_view> {
+            static constexpr std::array<std::string_view, 6> viewport{
+                "x", "y", "width", "height", "near_z", "far_z"};
+            static constexpr std::array<std::string_view, 4> rectangle{
+                "left", "top", "width", "height"};
+            static constexpr std::array<std::string_view, 8> texture{
+                "texture", "image", "width", "height", "format",
+                "wrap_s", "wrap_t", "mipmap"};
+            static constexpr std::array<std::string_view, 2> copy{
+                "source", "destination"};
+            if (callee == "GXSetViewport" && index < viewport.size()) {
+                return viewport[index];
+            }
+            if ((callee == "GXSetScissor" || callee == "GXSetTexCopySrc" ||
+                 callee == "GXSetDispCopySrc") && index < rectangle.size()) {
+                return rectangle[index];
+            }
+            if (callee == "GXInitTexObj" && index < texture.size()) {
+                return texture[index];
+            }
+            if (callee == "PSMTXCopy" && index < copy.size()) {
+                return copy[index];
+            }
+            if ((callee.find("SetMessage") != std::string_view::npos ||
+                 callee.find("Msg") != std::string_view::npos) && index < 3) {
+                static constexpr std::array<std::string_view, 3> message{
+                    "entry", "message_id", "flags"};
+                return message[index];
+            }
+            return std::nullopt;
         };
         for (const auto& bb : fn->blocks) {
             std::vector<IrValue> args;
@@ -3276,9 +3399,29 @@ struct Emitter {
                     auto slot = trace_to_self_arg_slot(args[i]);
                     if (!slot || *slot >= self_arg_names.size()) continue;
                     if (!self_arg_names[*slot].empty()) continue;
-                    self_arg_names[*slot] = i < kNames.size() - 1
-                        ? std::string{kNames[i]}
-                        : std::format("arg{}", i + 1);
+
+                    std::optional<std::string> semantic_name;
+                    if (inst.op == IrOp::Call) {
+                        if (annotations) {
+                            if (const FunctionSig* sig =
+                                    annotations->signature_for(inst.target1);
+                                sig && i < sig->params.size() &&
+                                !sig->params[i].name.empty()) {
+                                semantic_name = sig->params[i].name;
+                            }
+                        }
+                        if (!semantic_name) {
+                            const std::string callee =
+                                function_display_name(inst.target1);
+                            if (auto role = sdk_param_name(callee, i); role) {
+                                semantic_name = std::string{*role};
+                            }
+                        }
+                    } else if (i < kAxisNames.size()) {
+                        semantic_name = std::string{kAxisNames[i]};
+                    }
+                    if (!semantic_name) continue;
+                    self_arg_names[*slot] = std::move(*semantic_name);
                     record_self_arg_type(*slot, call_arg_display_type(args[i]));
                 }
                 args.clear();
@@ -3501,6 +3644,85 @@ struct Emitter {
         }
     }
 
+    // Give unannotated PPC parameters a conservative source-level role.
+    // These names intentionally describe evidence visible in the current
+    // function rather than guessing game-specific nouns: pointer-shaped
+    // memory bases become `state`, pass-through pointers become `context`,
+    // and bit-mask inputs become `flags`.
+    void infer_ppc_role_arg_names() {
+        if (!is_ppc_abi()) return;
+        std::set<std::string> claimed;
+        for (const std::string& name : self_arg_names) {
+            if (!name.empty()) claimed.insert(name);
+        }
+        const std::string lower_fn = [&] {
+            std::string value = fn ? fn->name : std::string{};
+            for (char& c : value) {
+                c = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(c)));
+            }
+            return value;
+        }();
+        const auto unique_name = [&](std::string base) {
+            if (claimed.insert(base).second) return base;
+            for (u32 suffix = 2;; ++suffix) {
+                std::string candidate = std::format("{}{}", base, suffix);
+                if (claimed.insert(candidate).second) return candidate;
+            }
+        };
+
+        const u8 limit = std::min<u8>(self_arity,
+            static_cast<u8>(self_arg_layout.size()));
+        u8 fp_index = 0;
+        for (u8 slot = 0; slot < limit; ++slot) {
+            if (!self_arg_names[slot].empty()) continue;
+            const auto& layout = self_arg_layout[slot];
+            if (layout.reg == Reg::None) continue;
+            IrValue arg = IrValue::make_reg(layout.reg, layout.type);
+            arg.version = 0;
+            std::string type = self_arg_type_names[slot];
+            if (type.empty()) type = c_type_name_for(arg);
+
+            std::string role;
+            if (is_float_type(layout.type)) {
+                static constexpr std::array<std::string_view, 3> axes{
+                    "x", "y", "z"
+                };
+                role = fp_index < axes.size()
+                    ? std::string{axes[fp_index]}
+                    : "scalar";
+                ++fp_index;
+            } else if (type.ends_with('*') || type == "void*") {
+                if (lower_fn.find("shadow") != std::string::npos) {
+                    role = "shadow";
+                } else {
+                    auto key = ssa_key(arg);
+                    std::set<SsaKey> seen;
+                    const bool memory_base = key &&
+                        value_flows_to_memory_address(*key, seen, 0, true);
+                    role = memory_base ? "state" : "context";
+                }
+            } else {
+                bool bit_mask = false;
+                if (auto key = ssa_key(arg); key) {
+                    auto uses_it = visible_user_positions.find(*key);
+                    if (uses_it != visible_user_positions.end()) {
+                        for (const auto& [bi, ii] : uses_it->second) {
+                            if (bi >= fn->blocks.size() ||
+                                ii >= fn->blocks[bi].insts.size()) continue;
+                            const IrOp op = fn->blocks[bi].insts[ii].op;
+                            bit_mask |= op == IrOp::And || op == IrOp::Or ||
+                                op == IrOp::Xor || op == IrOp::Shl ||
+                                op == IrOp::Lshr;
+                        }
+                    }
+                }
+                role = bit_mask ? "flags" : "value";
+            }
+            self_arg_names[slot] = unique_name(std::move(role));
+        }
+    }
+
     [[nodiscard]] bool is_void_call_result(const IrValue& v) const {
         if (v.kind != IrValueKind::Reg) return false;
         const IrInst* def = def_of(v);
@@ -3657,6 +3879,61 @@ struct Emitter {
                 if (small_merge_is_incidental && clobbers + (saw_live_in ? 1u : 0u) > 0 &&
                     saw_side_effect_value) {
                     return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Optimized PPC void initializers commonly leave the last replicated
+    // store value in r3/f1 when they reach `blr`. When the exact returned SSA
+    // value was written to two or more object fields, that register is an
+    // implementation leftover rather than a credible source-level return.
+    // Requiring replicated stores avoids changing ordinary set-and-return
+    // helpers that intentionally write and return one value.
+    [[nodiscard]] bool has_incidental_ppc_stored_return() const {
+        if (!fn || !is_ppc_abi()) return false;
+        const auto source_value = [&](IrValue value) {
+            for (int depth = 0; depth < 12; ++depth) {
+                const IrInst* definition = def_of(value);
+                if (!definition || definition->src_count < 1) break;
+                if (definition->op != IrOp::Assign &&
+                    definition->op != IrOp::ZExt &&
+                    definition->op != IrOp::SExt &&
+                    definition->op != IrOp::Trunc) {
+                    break;
+                }
+                value = definition->srcs[0];
+            }
+            return value;
+        };
+        for (const auto& bb : fn->blocks) {
+            for (const IrInst& inst : bb.insts) {
+                if (inst.op != IrOp::Return || inst.src_count == 0) continue;
+                for (u8 source_index = 0;
+                     source_index < inst.src_count &&
+                     source_index < inst.srcs.size(); ++source_index) {
+                    const IrValue value = source_value(inst.srcs[source_index]);
+                    auto key = ssa_key(value);
+                    if (!key) continue;
+                    u32 replicated_stores = 0;
+                    u32 total_stores = 0;
+                    for (const auto& candidate_bb : fn->blocks) {
+                        for (const IrInst& candidate : candidate_bb.insts) {
+                            if (candidate.op != IrOp::Store ||
+                                candidate.src_count < 2) continue;
+                            ++total_stores;
+                            if (auto stored_key = ssa_key(
+                                    source_value(candidate.srcs[1]));
+                                stored_key && *stored_key == *key) {
+                                ++replicated_stores;
+                            }
+                        }
+                    }
+                    if (replicated_stores >= 2 ||
+                        (replicated_stores >= 1 && total_stores >= 6)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -3875,9 +4152,29 @@ struct Emitter {
                         oit != objc_return_base.end()) {
                         base = oit->second;
                     }
-                    name = "r_" + base;
+                    std::string semantic;
+                    if (is_ppc_abi()) {
+                        std::string lower = base;
+                        for (char& c : lower) {
+                            c = static_cast<char>(std::tolower(
+                                static_cast<unsigned char>(c)));
+                        }
+                        if (lower.find("alloc") != std::string::npos) {
+                            semantic = "allocation";
+                        } else if (lower.find("animposeentry") != std::string::npos) {
+                            semantic = "pose_entry";
+                        } else if (lower.find("camgetcurptr") != std::string::npos) {
+                            semantic = "camera";
+                        } else if (lower.find("gettexbuffersize") != std::string::npos) {
+                            semantic = "buffer_size";
+                        }
+                    }
+                    const std::string stem = semantic.empty()
+                        ? "r_" + base
+                        : semantic;
+                    name = stem;
                     for (int n = 2; used.contains(name); ++n) {
-                        name = std::format("r_{}_{}", base, n);
+                        name = std::format("{}_{}", stem, n);
                     }
                     used.insert(name);
                 }
@@ -5265,13 +5562,20 @@ struct Emitter {
     std::map<SsaKey, std::set<i64>> struct_offsets;
     std::map<SsaKey, std::map<i64, std::set<unsigned>>> struct_access_widths;
     std::map<SsaKey, std::map<i64, std::set<IrType>>> struct_access_types;
+    std::map<SsaKey, IrValue> struct_root_values;
     std::map<SsaKey, std::string> struct_type_names;
     std::map<std::string, std::map<i64, std::set<IrType>>> struct_type_members;
+    std::map<std::string, std::map<i64, std::string>> struct_member_type_names;
 
     void assign_synthetic_struct_types() {
         if (!is_ppc_abi() || !fn) return;
         std::map<addr_t, std::string> call_type_names;
-        u32 next_id = 0;
+        std::map<std::string, u32> type_name_counts;
+        const auto claim_type_name = [&](std::string base) {
+            u32& count = type_name_counts[base];
+            ++count;
+            return count == 1 ? base : std::format("{}{}", base, count);
+        };
 
         const auto call_target_for_root = [&](const SsaKey& key)
             -> std::optional<addr_t> {
@@ -5305,10 +5609,20 @@ struct Emitter {
             std::string name;
             if (auto target = call_target_for_root(key); target) {
                 auto [it, inserted] = call_type_names.emplace(*target, std::string{});
-                if (inserted) it->second = std::format("PpcStruct{}", next_id++);
+                if (inserted) it->second = claim_type_name("PpcObject");
                 name = it->second;
             } else {
-                name = std::format("PpcStruct{}", next_id++);
+                std::string base = "PpcState";
+                if (auto root_it = struct_root_values.find(key);
+                    root_it != struct_root_values.end()) {
+                    const IrInst* root_def = def_stripped(root_it->second);
+                    if (root_def && root_def->op == IrOp::Load &&
+                        root_def->src_count >= 1 &&
+                        try_resolve_imm_addr(root_def->srcs[0])) {
+                        base = "PpcGlobalState";
+                    }
+                }
+                name = claim_type_name(std::move(base));
             }
             struct_type_names.emplace(key, name);
             if (auto members = struct_access_types.find(key);
@@ -5319,6 +5633,49 @@ struct Emitter {
                 }
             }
         }
+
+        // The memory access itself only carries the storage width. Refine a
+        // member to T* when the loaded word is subsequently used as a memory
+        // base. This keeps the synthetic declaration and its expressions
+        // coherent (`state->buffer[0]`, not an integer `word_fc[0]`).
+        for (const auto& bb : fn->blocks) {
+            for (const IrInst& inst : bb.insts) {
+                const bool load = inst.op == IrOp::Load && inst.src_count >= 1;
+                const bool store = inst.op == IrOp::Store && inst.src_count >= 2;
+                if (!load && !store) continue;
+                const IrValue& address = inst.srcs[0];
+                const IrValue& member_value = load ? inst.dst : inst.srcs[1];
+                auto access = canonical_struct_access(address);
+                if (!access) continue;
+                auto key = ssa_key(access->first);
+                if (!key) continue;
+                auto type_it = struct_type_names.find(*key);
+                if (type_it == struct_type_names.end()) continue;
+                const std::string refined = c_type_name_for(member_value);
+                if (!refined.ends_with('*')) continue;
+                auto& member = struct_member_type_names[type_it->second][access->second];
+                if (member.empty() || member == "void*") {
+                    member = refined;
+                } else if (member != refined && refined != "void*") {
+                    member = "void*";
+                }
+            }
+        }
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    synthetic_member_type(const IrValue& base, i64 offset) const {
+        auto access = canonical_struct_access(base);
+        if (!access) return std::nullopt;
+        auto key = ssa_key(access->first);
+        if (!key) return std::nullopt;
+        auto name_it = struct_type_names.find(*key);
+        if (name_it == struct_type_names.end()) return std::nullopt;
+        auto struct_it = struct_member_type_names.find(name_it->second);
+        if (struct_it == struct_member_type_names.end()) return std::nullopt;
+        auto member_it = struct_it->second.find(offset);
+        if (member_it == struct_it->second.end()) return std::nullopt;
+        return member_it->second;
     }
 
     [[nodiscard]] std::string
@@ -5347,7 +5704,15 @@ struct Emitter {
                         out += std::format("uint8_t _pad_{}[{}]; ",
                                            field, offset);
                     }
-                    out += std::format("{} {}; }};\n", c_type_name(type), field);
+                    std::string member_type = std::string(c_type_name(type));
+                    if (auto struct_it = struct_member_type_names.find(name);
+                        struct_it != struct_member_type_names.end()) {
+                        if (auto member_it = struct_it->second.find(offset);
+                            member_it != struct_it->second.end()) {
+                            member_type = member_it->second;
+                        }
+                    }
+                    out += std::format("{} {}; }};\n", member_type, field);
                 }
             }
             out += std::format("}} {};\n\n", name);
@@ -5438,8 +5803,11 @@ struct Emitter {
         if (widths.size() != 1 || *widths.begin() == 0) return false;
 
         const i64 stride = static_cast<i64>(*widths.begin());
+        std::optional<i64> previous;
         for (i64 off : oit->second) {
             if (off < 0 || (off % stride) != 0) return true;
+            if (previous && off - *previous != stride) return true;
+            previous = off;
         }
         return false;
     }
@@ -5822,6 +6190,7 @@ struct Emitter {
         // paths already.
         if (stack_offset(bo->first).has_value()) return;
         if (auto k = ssa_key(bo->first); k) {
+            struct_root_values.try_emplace(*k, bo->first);
             struct_offsets[*k].insert(bo->second);
             struct_access_types[*k][bo->second].insert(t);
             const unsigned bytes = type_bits(t) / 8;
@@ -6079,6 +6448,10 @@ struct Emitter {
                 if (const std::string* field = annotated_field_name(base, off); field) {
                     return std::format("{}->{}", base_expr, *field);
                 }
+                if (synthetic_member_type(base, off)) {
+                    return std::format("{}->{}", base_expr,
+                                       fallback_field_name(off, t));
+                }
                 return std::format("{}->{}", base_expr,
                                    fallback_field_name(off, t));
             }
@@ -6122,6 +6495,10 @@ struct Emitter {
                 }
                 if (const std::string* field = annotated_field_name(base, off); field) {
                     return std::format("{}->{}", base_expr, *field);
+                }
+                if (synthetic_member_type(base, off)) {
+                    return std::format("{}->{}", base_expr,
+                                       fallback_field_name(off, t));
                 }
                 if (t == IrType::I64) {
                     return std::format("{}->{}", base_expr,
@@ -8230,6 +8607,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
+    e.infer_ppc_role_arg_names();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
@@ -8275,7 +8653,8 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // condition means the function yields a value. We use the condition's
     // IrType to pick an appropriate C type rather than always saying `u64`.
     auto inferred_return_type = [&](const Emitter&, const StructuredFunction& s) -> std::string {
-        if (e.has_incidental_ppc_return_merge()) return "void";
+        if (e.has_incidental_ppc_return_merge() ||
+            e.has_incidental_ppc_stored_return()) return "void";
         // IPA wins outright when it has concrete evidence - the typed
         // return came from harvesting Return-operand types after Phase 2
         // local inference, which sees more than this lambda's
@@ -8315,10 +8694,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         };
 
         std::vector<ReturnTypeCandidate> candidates;
+        bool saw_void_return = false;
         std::function<void(const Region&)> walk = [&](const Region& r) {
             if (r.kind == RegionKind::Return &&
                 r.condition.kind != IrValueKind::None) {
-                if (e.is_void_call_result(r.condition)) return;
+                if (e.is_void_call_result(r.condition)) {
+                    saw_void_return = true;
+                    return;
+                }
                 if (e.is_unbound_clobber_result(r.condition)) return;
                 if (e.renders_stack_chk_guard_value(r.condition)) return;
                 // ABI return registers are often wider than the source-level
@@ -8331,6 +8714,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             for (const auto& c : r.children) if (c) walk(*c);
         };
         walk(*s.body);
+        // A C function cannot be value-returning on only some paths. On PPC,
+        // a sibling path often carries an unknown call's incidental r3 while
+        // a known SDK void call proves the real source signature is void.
+        if (e.is_ppc_abi() && saw_void_return) return "void";
         if (candidates.empty()) return "void";
         // Pick the most-informative Return candidate. Many functions have
         // an early-return arm with `return 0;` (e.g. `if (!v0) return 0;`)
@@ -8850,7 +9237,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         }
         out = std::move(cleaned);
         out = collapse_empty_then_else_blocks(out);
-        if (e.is_ppc_abi()) out = rename_ppc_temporaries(std::move(out));
+        if (e.is_ppc_abi()) {
+            out = rename_ppc_temporaries(std::move(out));
+            out = compact_ppc_type_names(std::move(out));
+        }
     }
 
     return out;
@@ -8897,6 +9287,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     }
     e.infer_function_pointer_args();
     e.infer_call_value_arg_names();
+    e.infer_ppc_role_arg_names();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.infer_charp_args();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();

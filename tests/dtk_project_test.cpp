@@ -76,6 +76,8 @@ void test_resolver_and_symbols() {
     write_text(config_dir / "symbols.txt",
         "marioReInit = .text:0x80003100; // type:function size:0x20 scope:global align:4\n"
         "mario_work = .data:0x80004000; // type:object size:0x8 scope:local align:4\n"
+        "small_work = .sdata:0x80004008; // type:object size:0x4 scope:local align:4\n"
+        "small_const = .sdata2:0x8000400C; // type:object size:0x4 scope:local align:4\n"
         "mario_bss = .bss:0x80004020; // type:object size:0x10 scope:global align:4\n"
         "__ArenaLo = absolute:0x81200000; // type:object scope:global\n");
     const auto dol_bytes = make_dol();
@@ -124,7 +126,7 @@ void test_resolver_and_symbols() {
     check(dol.has_value(), "synthetic DOL loads");
     if (dol) {
         auto added = (*dol)->attach_dtk_symbols_from_path(config_dir / "symbols.txt");
-        check(added.has_value() && *added == 3,
+        check(added.has_value() && *added == 5,
               "exact DTK parser imports in-image text, data, and BSS symbols");
         const auto* function = (*dol)->find_by_name("marioReInit");
         check(function && function->addr == 0x80003100 &&
@@ -138,6 +140,9 @@ void test_resolver_and_symbols() {
               "DTK BSS global remains addressable");
         check((*dol)->find_by_name("__ArenaLo") == nullptr,
               "out-of-image absolute symbols are ignored");
+        check((*dol)->ppc_small_data_base(false) == 0x8000c008 &&
+              (*dol)->ppc_small_data_base(true) == 0x8000c00c,
+              "DTK section tags recover the r13 and r2 EABI anchors");
 
         bool has_bss_section = false;
         for (const auto& section : (*dol)->sections()) {

@@ -55,6 +55,15 @@ public:
     [[nodiscard]] virtual std::span<const Section> sections() const noexcept = 0;
     [[nodiscard]] virtual std::span<const Symbol>  symbols() const noexcept  = 0;
 
+    // PowerPC EABI small-data anchor recovered from symbol metadata. DTK
+    // names `.sdata`/`.sbss` through r13 and `.sdata2`/`.sbss2` through r2;
+    // formats without that metadata leave these empty.
+    [[nodiscard]] virtual std::optional<addr_t>
+    ppc_small_data_base(bool read_only) const noexcept {
+        (void)read_only;
+        return std::nullopt;
+    }
+
     [[nodiscard]] virtual std::span<const std::byte> image() const noexcept = 0;
 
     // Complete loader relocation evidence. Unlike relocated_qwords(), this

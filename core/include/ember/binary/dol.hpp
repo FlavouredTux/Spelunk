@@ -30,6 +30,10 @@ public:
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
     [[nodiscard]] std::span<const Symbol> symbols() const noexcept override { return symbols_; }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override { return buffer_; }
+    [[nodiscard]] std::optional<addr_t>
+    ppc_small_data_base(bool read_only) const noexcept override {
+        return read_only ? sda2_base_ : sda_base_;
+    }
 
 protected:
     [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
@@ -46,6 +50,8 @@ private:
     addr_t mapped_size_ = 0;
     std::vector<Section> sections_;
     std::vector<Symbol> symbols_;
+    std::optional<addr_t> sda_base_;
+    std::optional<addr_t> sda2_base_;
 };
 
 [[nodiscard]] bool looks_like_dol_path(const std::filesystem::path& path,

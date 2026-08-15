@@ -355,6 +355,20 @@ DolBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
                 path.string(), lineno)));
         }
 
+        // Metrowerks EABI places each small-data anchor 0x8000 bytes past
+        // the beginning of its addressable range. DTK's exact section-tagged
+        // map lets us retain that information even though a DOL header itself
+        // only calls these generic data sections.
+        auto remember_small_data_start = [&](std::optional<addr_t>& base) {
+            const addr_t candidate = static_cast<addr_t>(*address) + 0x8000;
+            if (!base || candidate < *base) base = candidate;
+        };
+        if (section_name == ".sdata" || section_name == ".sbss") {
+            remember_small_data_start(sda_base_);
+        } else if (section_name == ".sdata2" || section_name == ".sbss2") {
+            remember_small_data_start(sda2_base_);
+        }
+
         std::optional<SymbolKind> declared_kind;
         u64 declared_size = 0;
         bool is_export = true;

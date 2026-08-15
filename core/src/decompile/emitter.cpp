@@ -4867,12 +4867,34 @@ struct Emitter {
     // drilling through single-assign copies. Returns nullopt for any
     // non-constant address.
     [[nodiscard]] std::optional<i64>
-    try_resolve_imm_addr(const IrValue& v) const {
+    try_resolve_imm_addr(const IrValue& v, int depth = 0) const {
+        if (depth >= 8) return std::nullopt;
         if (v.kind == IrValueKind::Imm) return v.imm;
+        if (binary && v.kind == IrValueKind::Reg && v.version == 0) {
+            if (v.reg == Reg::PpcR13) {
+                if (auto base = binary->ppc_small_data_base(false); base) {
+                    return static_cast<i64>(*base);
+                }
+            } else if (v.reg == Reg::PpcR2) {
+                if (auto base = binary->ppc_small_data_base(true); base) {
+                    return static_cast<i64>(*base);
+                }
+            }
+        }
         const IrInst* d = def_stripped(v);
-        if (d && d->op == IrOp::Assign && d->src_count == 1 &&
-            d->srcs[0].kind == IrValueKind::Imm) {
-            return d->srcs[0].imm;
+        if (!d) return std::nullopt;
+        if (d->op == IrOp::Assign && d->src_count == 1) {
+            return try_resolve_imm_addr(d->srcs[0], depth + 1);
+        }
+        if ((d->op == IrOp::Add || d->op == IrOp::Sub) && d->src_count >= 2) {
+            auto lhs = try_resolve_imm_addr(d->srcs[0], depth + 1);
+            auto rhs = resolve_imm(d->srcs[1]);
+            if (lhs && rhs) return d->op == IrOp::Add ? *lhs + *rhs : *lhs - *rhs;
+            if (d->op == IrOp::Add) {
+                lhs = try_resolve_imm_addr(d->srcs[1], depth + 1);
+                rhs = resolve_imm(d->srcs[0]);
+                if (lhs && rhs) return *lhs + *rhs;
+            }
         }
         return std::nullopt;
     }

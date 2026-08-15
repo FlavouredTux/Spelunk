@@ -3,6 +3,7 @@
 #include <array>
 #include <format>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 #include <ember/disasm/register.hpp>
@@ -769,6 +770,86 @@ void lift_instruction(LiftCtx& ctx) {
         if (insn.ppc_record) set_record_result(ctx, out);
     };
 
+    auto complemented_logic = [&](IrOp op, bool complement_rhs,
+                                  bool complement_result) {
+        if (insn.num_operands != 3) return;
+        const IrType ty = ctx.ppc_reg_type();
+        IrValue lhs = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), ty);
+        IrValue rhs = ctx.match_size(materialize_rvalue(insn.operands[2], ctx), ty);
+        if (complement_rhs) rhs = ctx.emit_unop(IrOp::Not, rhs, ty);
+        IrValue out = ctx.emit_binop(op, lhs, rhs, ty);
+        if (complement_result) out = ctx.emit_unop(IrOp::Not, out, ty);
+        store_lvalue(insn.operands[0], out, ctx);
+        if (insn.ppc_record) set_record_result(ctx, out);
+    };
+
+    auto mul_high_word = [&](bool is_signed) {
+        if (insn.num_operands != 3) return;
+        IrValue lhs = ctx.match_size(materialize_rvalue(insn.operands[1], ctx),
+                                     IrType::I32);
+        IrValue rhs = ctx.match_size(materialize_rvalue(insn.operands[2], ctx),
+                                     IrType::I32);
+        lhs = ctx.match_size(lhs, IrType::I64, is_signed);
+        rhs = ctx.match_size(rhs, IrType::I64, is_signed);
+        IrValue product = ctx.emit_binop(IrOp::Mul, lhs, rhs, IrType::I64);
+        IrValue high = ctx.emit_binop(is_signed ? IrOp::Ashr : IrOp::Lshr,
+                                      product, ctx.imm(32, IrType::I64),
+                                      IrType::I64);
+        high = ctx.match_size(high, IrType::I32);
+        store_lvalue(insn.operands[0], high, ctx);
+        if (insn.ppc_record) set_record_result(ctx, high);
+    };
+
+    auto carry_add = [&](IrValue a, IrValue b) {
+        return ctx.emit_binop(IrOp::AddCarry, a, b, IrType::I1);
+    };
+    auto carry_pair = [&](IrValue a, IrValue b, IrValue carry_in) {
+        IrValue first = ctx.emit_binop(IrOp::Add, a, b, a.type);
+        IrValue out = ctx.emit_binop(IrOp::Add, first, carry_in, a.type);
+        IrValue c1 = carry_add(a, b);
+        IrValue c2 = carry_add(first, carry_in);
+        IrValue carry = ctx.emit_binop(IrOp::Or, c1, c2, IrType::I1);
+        return std::pair{out, carry};
+    };
+
+    auto lift_carry_arithmetic = [&](Mnemonic mnemonic) {
+        const IrType ty = ctx.ppc_reg_type();
+        if (insn.num_operands < 2) return;
+        IrValue a = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), ty);
+        IrValue out;
+        IrValue carry;
+        if (mnemonic == Mnemonic::Addc && insn.num_operands == 3) {
+            IrValue b = ctx.match_size(materialize_rvalue(insn.operands[2], ctx), ty);
+            out = ctx.emit_binop(IrOp::Add, a, b, ty);
+            carry = carry_add(a, b);
+        } else if (mnemonic == Mnemonic::Adde && insn.num_operands == 3) {
+            IrValue b = ctx.match_size(materialize_rvalue(insn.operands[2], ctx), ty);
+            IrValue carry_in = ctx.match_size(ctx.flag_val(Flag::PpcCa), ty);
+            std::tie(out, carry) = carry_pair(a, b, carry_in);
+        } else if (mnemonic == Mnemonic::Addze) {
+            IrValue carry_in = ctx.match_size(ctx.flag_val(Flag::PpcCa), ty);
+            out = ctx.emit_binop(IrOp::Add, a, carry_in, ty);
+            carry = carry_add(a, carry_in);
+        } else if (mnemonic == Mnemonic::Subfc && insn.num_operands == 3) {
+            IrValue b = ctx.match_size(materialize_rvalue(insn.operands[2], ctx), ty);
+            out = ctx.emit_binop(IrOp::Sub, b, a, ty);
+            IrValue borrow = ctx.emit_binop(IrOp::SubBorrow, b, a, IrType::I1);
+            carry = ctx.emit_unop(IrOp::Not, borrow, IrType::I1);
+        } else if ((mnemonic == Mnemonic::Subfe || mnemonic == Mnemonic::Subfze)) {
+            IrValue inverted = ctx.emit_unop(IrOp::Not, a, ty);
+            IrValue b = mnemonic == Mnemonic::Subfe && insn.num_operands == 3
+                ? ctx.match_size(materialize_rvalue(insn.operands[2], ctx), ty)
+                : ctx.imm(0, ty);
+            IrValue carry_in = ctx.match_size(ctx.flag_val(Flag::PpcCa), ty);
+            std::tie(out, carry) = carry_pair(inverted, b, carry_in);
+        } else {
+            return;
+        }
+        store_lvalue(insn.operands[0], out, ctx);
+        ctx.emit_set_flag(Flag::PpcCa, carry);
+        if (insn.ppc_record) set_record_result(ctx, out);
+    };
+
     auto load_int = [&](IrType mem_ty, bool sign_ext, bool update_base = false) {
         if (insn.num_operands == 2 && insn.operands[1].kind == Operand::Kind::Memory) {
             const Mem& mem = insn.operands[1].mem;
@@ -819,19 +900,19 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Add: binop(IrOp::Add); break;
         case Mnemonic::Sub: binop(IrOp::Sub); break;
         case Mnemonic::Mul: binop(IrOp::Mul); break;
-        case Mnemonic::Mulhw: lift_dst_intrinsic(ctx, "ppc.mulhw"); break;
-        case Mnemonic::Mulhwu: lift_dst_intrinsic(ctx, "ppc.mulhwu"); break;
-        case Mnemonic::Addc: lift_dst_intrinsic(ctx, "ppc.addc"); break;
-        case Mnemonic::Adde: lift_dst_intrinsic(ctx, "ppc.adde"); break;
-        case Mnemonic::Addze: lift_dst_intrinsic(ctx, "ppc.addze"); break;
-        case Mnemonic::Subfc: lift_dst_intrinsic(ctx, "ppc.subfc"); break;
-        case Mnemonic::Subfze: lift_dst_intrinsic(ctx, "ppc.subfze"); break;
-        case Mnemonic::Subfe: lift_dst_intrinsic(ctx, "ppc.subfe"); break;
+        case Mnemonic::Mulhw: mul_high_word(true); break;
+        case Mnemonic::Mulhwu: mul_high_word(false); break;
+        case Mnemonic::Addc: lift_carry_arithmetic(insn.mnemonic); break;
+        case Mnemonic::Adde: lift_carry_arithmetic(insn.mnemonic); break;
+        case Mnemonic::Addze: lift_carry_arithmetic(insn.mnemonic); break;
+        case Mnemonic::Subfc: lift_carry_arithmetic(insn.mnemonic); break;
+        case Mnemonic::Subfze: lift_carry_arithmetic(insn.mnemonic); break;
+        case Mnemonic::Subfe: lift_carry_arithmetic(insn.mnemonic); break;
         case Mnemonic::Divw: lift_dst_intrinsic(ctx, "ppc.divw"); break;
         case Mnemonic::Divwu: lift_dst_intrinsic(ctx, "ppc.divwu"); break;
-        case Mnemonic::Andc: lift_dst_intrinsic(ctx, "ppc.andc"); break;
-        case Mnemonic::Nor: lift_dst_intrinsic(ctx, "ppc.nor"); break;
-        case Mnemonic::Orc: lift_dst_intrinsic(ctx, "ppc.orc"); break;
+        case Mnemonic::Andc: complemented_logic(IrOp::And, true, false); break;
+        case Mnemonic::Nor: complemented_logic(IrOp::Or, false, true); break;
+        case Mnemonic::Orc: complemented_logic(IrOp::Or, true, false); break;
         case Mnemonic::And: binop(IrOp::And); break;
         case Mnemonic::Or:  binop(IrOp::Or);  break;
         case Mnemonic::Xor: binop(IrOp::Xor); break;

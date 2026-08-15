@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <span>
 #include <string>
+#include <tuple>
+#include <utility>
 
 namespace {
 
@@ -744,6 +746,107 @@ void test_wii_lifter_forms() {
     }
     check_eq(saw_clz && !saw_cntlzw_intrinsic, true,
              "cntlzw lifts as generic leading-zero dataflow");
+
+    ir = lift_one(0x7C030016);  // mulhwu r0, r3, r0
+    bool saw_wide_multiply = false;
+    bool saw_high_shift = false;
+    bool saw_mulhw_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_wide_multiply |= inst.op == ember::IrOp::Mul &&
+                             inst.dst.type == ember::IrType::I64;
+        saw_high_shift |= inst.op == ember::IrOp::Lshr &&
+                          inst.dst.type == ember::IrType::I64;
+        saw_mulhw_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                               inst.name == "ppc.mulhwu";
+    }
+    check_eq(saw_wide_multiply && saw_high_shift && !saw_mulhw_intrinsic, true,
+             "mulhwu lifts as widened multiply and high-word shift");
+
+    ir = lift_one((31u << 26) | (3u << 21) | (4u << 16) |
+                  (5u << 11) | (75u << 1));  // mulhw r3, r4, r5
+    bool saw_signed_high_shift = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_signed_high_shift |= inst.op == ember::IrOp::Ashr &&
+                                 inst.dst.type == ember::IrType::I64;
+    }
+    check_eq(saw_signed_high_shift, true,
+             "mulhw uses an arithmetic high-word shift");
+
+    ir = lift_one(0x7C852014);  // addc r4, r5, r4
+    bool saw_addc_sum = false;
+    bool saw_add_carry = false;
+    bool saw_ca_write = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_addc_sum |= inst.op == ember::IrOp::Add &&
+                        inst.dst.type == ember::IrType::I32;
+        saw_add_carry |= inst.op == ember::IrOp::AddCarry;
+        saw_ca_write |= inst.op == ember::IrOp::Assign &&
+                        inst.dst.kind == ember::IrValueKind::Flag &&
+                        inst.dst.flag == ember::Flag::PpcCa;
+    }
+    check_eq(saw_addc_sum && saw_add_carry && saw_ca_write, true,
+             "addc lifts sum and PPC carry dataflow");
+
+    ir = lift_one(0x7C601914);  // adde r3, r0, r3
+    unsigned adde_adds = 0;
+    unsigned adde_carries = 0;
+    bool saw_adde_intrinsic = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        adde_adds += inst.op == ember::IrOp::Add;
+        adde_carries += inst.op == ember::IrOp::AddCarry;
+        saw_adde_intrinsic |= inst.op == ember::IrOp::Intrinsic &&
+                              inst.name == "ppc.adde";
+    }
+    check_eq(adde_adds >= 2 && adde_carries >= 2 && !saw_adde_intrinsic, true,
+             "adde includes carry-in and recomputes carry-out");
+
+    for (const auto& [word, label] : std::array{
+             std::pair{xo_word(3, 4, 202), "addze"},
+             std::pair{xo_word(3, 4, 200), "subfze"},
+             std::pair{(31u << 26) | (3u << 21) | (4u << 16) |
+                           (5u << 11) | (136u << 1), "subfe"}}) {
+        ir = lift_one(word);
+        bool saw_carry_flow = false;
+        bool saw_opaque = false;
+        for (const auto& inst : ir.blocks[0].insts) {
+            saw_carry_flow |= inst.op == ember::IrOp::AddCarry;
+            saw_opaque |= inst.op == ember::IrOp::Intrinsic &&
+                          inst.name == std::string("ppc.") + label;
+        }
+        check_eq(saw_carry_flow && !saw_opaque, true,
+                 "extended carry instruction lifts as generic dataflow");
+    }
+
+    ir = lift_one(0x7C001810);  // subfc r0, r0, r3
+    bool saw_subfc_sub = false;
+    bool saw_subfc_borrow = false;
+    bool saw_subfc_invert = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_subfc_sub |= inst.op == ember::IrOp::Sub;
+        saw_subfc_borrow |= inst.op == ember::IrOp::SubBorrow;
+        saw_subfc_invert |= inst.op == ember::IrOp::Not &&
+                            inst.dst.type == ember::IrType::I1;
+    }
+    check_eq(saw_subfc_sub && saw_subfc_borrow && saw_subfc_invert, true,
+             "subfc models PPC no-borrow carry semantics");
+
+    for (const auto& [word, op, label] : std::array{
+             std::tuple{0x7C002078u, ember::IrOp::And, "andc"},
+             std::tuple{0x7CA420F8u, ember::IrOp::Or, "nor"},
+             std::tuple{0x7CA53338u, ember::IrOp::Or, "orc"}}) {
+        ir = lift_one(word);
+        bool saw_logic = false;
+        bool saw_not = false;
+        bool saw_opaque = false;
+        for (const auto& inst : ir.blocks[0].insts) {
+            saw_logic |= inst.op == op;
+            saw_not |= inst.op == ember::IrOp::Not;
+            saw_opaque |= inst.op == ember::IrOp::Intrinsic &&
+                          inst.name == std::string("ppc.") + label;
+        }
+        check_eq(saw_logic && saw_not && !saw_opaque, true,
+                 "complemented logical op lifts as generic dataflow");
+    }
 
     ir = lift_one(0x50C31F7E);  // rlwimi r3, r6, 3, 29, 31
     bool saw_insert_mask = false;

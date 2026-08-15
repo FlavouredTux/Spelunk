@@ -83,6 +83,7 @@ enum class IrType : u8 {
 
 enum class Flag : u8 {
     Zf, Sf, Cf, Of,
+    PpcCa,
     Cr0Lt, Cr0Gt, Cr0Eq, Cr0So,
     Cr1Lt, Cr1Gt, Cr1Eq, Cr1So,
     Cr2Lt, Cr2Gt, Cr2Eq, Cr2So,
@@ -104,6 +105,7 @@ enum class Flag : u8 {
         case Flag::Sf: return "sf";
         case Flag::Cf: return "cf";
         case Flag::Of: return "of";
+        case Flag::PpcCa: return "ppc_ca";
         case Flag::Cr0Lt: return "cr0_lt";
         case Flag::Cr0Gt: return "cr0_gt";
         case Flag::Cr0Eq: return "cr0_eq";

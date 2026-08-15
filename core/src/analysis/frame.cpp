@@ -40,7 +40,7 @@ trace_stack(const IrValue& v, const DefMap& defs, int depth = 0) {
     if (depth > 16) return std::nullopt;
     if (v.kind == IrValueKind::Reg) {
         const Reg c = canonical_reg(v.reg);
-        if (c == Reg::Rsp || c == Reg::Rbp) return 0;
+        if (c == Reg::Rsp || c == Reg::Rbp || c == Reg::PpcR1) return 0;
         return std::nullopt;
     }
     if (v.kind != IrValueKind::Temp) return std::nullopt;
@@ -102,10 +102,13 @@ StackFrameLayout compute_frame_layout(const IrFunction& fn,
         const u32 sz = type_bits(t) / 8;
         if (sz == 0) return;
         auto& s = layout.slots[off];
-        if (s.size_bytes == 0 || sz > s.size_bytes) {
+        if (!s.direct_observed || sz > s.size_bytes ||
+            (sz == s.size_bytes && is_float_type(t) &&
+             !is_float_type(s.type))) {
             s.size_bytes = sz;
             s.type       = t;
         }
+        s.direct_observed = true;
         if (s.name.empty()) {
             s.offset = off;
             s.name   = slot_name(off);
@@ -120,7 +123,7 @@ StackFrameLayout compute_frame_layout(const IrFunction& fn,
     auto observe_addr_only = [&](i64 off) {
         if (off == 0) return;
         auto& s = layout.slots[off];
-        if (s.size_bytes != 0) return;
+        if (s.direct_observed || s.size_bytes != 0) return;
         s.offset     = off;
         s.size_bytes = 8;
         s.type       = IrType::I64;

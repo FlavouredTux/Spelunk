@@ -9,6 +9,7 @@
 // block's address range.
 
 #include <ember/decompile/emitter.hpp>
+#include <ember/analysis/frame.hpp>
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/type_infer_local.hpp>
 #include <ember/binary/binary.hpp>
@@ -1266,6 +1267,98 @@ int test_ppc_annotated_float_call_selects_f1() {
     return 0;
 }
 
+int test_ppc_unknown_float_call_recovers_f1_lane() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1580;
+    constexpr addr_t kTarget = 0x1680;
+    IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    r3.version = 1;
+    IrValue f1 = IrValue::make_reg(Reg::PpcF1, IrType::F64);
+    f1.version = 1;
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "ppc_unknown_float_call";
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_call_imm(kStart, kTarget));
+    bb.insts.push_back(make_clobber(r3));
+    bb.insts.push_back(make_clobber(f1));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x5000, IrType::I32), f1));
+    bb.insts.push_back(make_ret(kStart + 0x10));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "unknown PPC floating-return call emits");
+    if (!pc) return 1;
+    const bool binds_float = pc->find(
+        "double r_sub_1680 = sub_1680()") != std::string::npos;
+    if (!binds_float) std::fprintf(
+        stderr, "Unknown PPC float call output:\n%s\n", pc->c_str());
+    check(binds_float,
+          "used f1 with unused r3 recovers unknown floating return lane");
+    check(pc->find("f1_1") == std::string::npos &&
+          pc->find("r3_1") == std::string::npos,
+          "unknown floating return does not leak PPC SSA lane names");
+    return 0;
+}
+
+int test_ppc_frame_layout_tracks_r1_float_slots() {
+    using namespace ember;
+
+    IrFunction fn;
+    fn.start = 0x16c0;
+    fn.end = fn.start + 8;
+    fn.name = "ppc_stack_float";
+
+    const IrValue address = IrValue::make_temp(0, IrType::I32);
+    const IrValue scalar = IrValue::make_temp(1, IrType::F32);
+    IrBlock bb;
+    bb.start = fn.start;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_add(
+        address,
+        IrValue::make_reg(Reg::PpcR1, IrType::I32),
+        IrValue::make_imm(-0x20, IrType::I32)));
+    bb.insts.push_back(make_load(scalar, address));
+    bb.insts.push_back(make_ret(fn.start + 4));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    const StackFrameLayout layout = compute_frame_layout(fn);
+    const auto slot = layout.slots.find(-0x20);
+    check(slot != layout.slots.end(), "PPC r1-relative local is recovered");
+    if (slot != layout.slots.end()) {
+        check(slot->second.name == "local_20",
+              "PPC r1-relative local receives a stable local name");
+        check(slot->second.type == IrType::F32 &&
+              slot->second.size_bytes == 4 &&
+              slot->second.direct_observed,
+              "direct float access overrides address-only stack evidence");
+    }
+    return 0;
+}
+
 int test_ppc_sdk_signature_seeds_mixed_lanes() {
     using namespace ember;
 
@@ -1725,9 +1818,11 @@ int test_memory_use_recovers_pointer_after_integer_seed_conflict() {
     auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
     check(pc.has_value(), "seed-conflicted pointer local emits");
     if (!pc) return 1;
-    const bool recovered = pc->find("uint16_t* t0 =") != std::string::npos;
+    const bool recovered = pc->find("uint16_t* pointer =") != std::string::npos;
     if (!recovered) std::fprintf(stderr, "Pointer recovery output:\n%s\n", pc->c_str());
     check(recovered, "visible dereferences recover the pointer declaration type");
+    check(pc->find(" t0") == std::string::npos,
+          "materialized PPC temporary receives a role-based name");
     return 0;
 }
 
@@ -1751,6 +1846,8 @@ int main() {
     rc |= test_ppc_mixed_call_arguments_follow_callee_layout();
     rc |= test_ppc_known_float_call_binds_f1_result();
     rc |= test_ppc_annotated_float_call_selects_f1();
+    rc |= test_ppc_unknown_float_call_recovers_f1_lane();
+    rc |= test_ppc_frame_layout_tracks_r1_float_slots();
     rc |= test_ppc_sdk_signature_seeds_mixed_lanes();
     rc |= test_ppc_annotated_stack_argument_at_call_site();
     rc |= test_ppc_annotated_incoming_stack_argument_name();

@@ -120,6 +120,150 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool line_declares_identifier(std::string_view line,
+                                            std::string_view name) noexcept {
+    line = trim_line_view(line);
+    std::size_t pos = line.find(name);
+    while (pos != std::string_view::npos) {
+        const std::size_t end = pos + name.size();
+        const bool boundary =
+            pos > 0 && std::isspace(static_cast<unsigned char>(line[pos - 1])) &&
+            (end == line.size() || !c_ident_char(line[end]));
+        if (boundary) {
+            std::string_view before = trim_line_view(line.substr(0, pos));
+            std::string_view after = trim_line_view(line.substr(end));
+            const bool declarator_tail = after.empty() || after.front() == '=' ||
+                after.front() == ';' || after.front() == '[';
+            if (!before.empty() && declarator_tail &&
+                before.find('(') == std::string_view::npos &&
+                before.find("->") == std::string_view::npos) {
+                return true;
+            }
+        }
+        pos = line.find(name, end);
+    }
+    return false;
+}
+
+[[nodiscard]] bool text_declares_identifier(std::string_view text,
+                                            std::string_view name) noexcept {
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) end = text.size();
+        if (line_declares_identifier(text.substr(start, end - start), name)) {
+            return true;
+        }
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+    return false;
+}
+
+[[nodiscard]] std::string replace_identifier(std::string_view text,
+                                             std::string_view old_name,
+                                             std::string_view new_name) {
+    std::string out;
+    out.reserve(text.size());
+    std::size_t cursor = 0;
+    while (cursor < text.size()) {
+        const std::size_t pos = text.find(old_name, cursor);
+        if (pos == std::string_view::npos) {
+            out.append(text.substr(cursor));
+            break;
+        }
+        const std::size_t end = pos + old_name.size();
+        const bool left_ok = pos == 0 || !c_ident_char(text[pos - 1]);
+        const bool right_ok = end == text.size() || !c_ident_char(text[end]);
+        out.append(text.substr(cursor, pos - cursor));
+        if (left_ok && right_ok) {
+            out.append(new_name);
+        } else {
+            out.append(old_name);
+        }
+        cursor = end;
+    }
+    return out;
+}
+
+// SSA temporaries are useful internally, but `t57` carries no meaning in the
+// final decompilation. Give materialized PPC values stable, type-oriented
+// names. The numeric suffix is retained only when more than one value of the
+// same role is simultaneously live in the rendered function.
+[[nodiscard]] std::string rename_ppc_temporaries(std::string text) {
+    struct Rename {
+        std::string old_name;
+        std::string new_name;
+    };
+    std::vector<Rename> renames;
+    std::map<std::string, u32> next_suffix;
+    std::set<std::string> temporary_names;
+    for (std::size_t i = 0; i + 1 < text.size(); ++i) {
+        if (text[i] != 't' ||
+            !std::isdigit(static_cast<unsigned char>(text[i + 1])) ||
+            (i != 0 && c_ident_char(text[i - 1]))) {
+            continue;
+        }
+        std::size_t name_end = i + 2;
+        while (name_end < text.size() && std::isdigit(
+                   static_cast<unsigned char>(text[name_end]))) {
+            ++name_end;
+        }
+        if (name_end < text.size() && c_ident_char(text[name_end])) continue;
+        temporary_names.emplace(text.substr(i, name_end - i));
+        i = name_end - 1;
+    }
+
+    for (const std::string& old_name : temporary_names) {
+        std::string_view declared_type;
+        std::size_t start = 0;
+        while (start <= text.size()) {
+            std::size_t end = text.find('\n', start);
+            if (end == std::string::npos) end = text.size();
+            const std::string_view line = std::string_view(text).substr(
+                start, end - start);
+            if (line_declares_identifier(line, old_name)) {
+                const std::size_t declared_at = line.find(old_name);
+                declared_type = trim_line_view(line.substr(0, declared_at));
+                break;
+            }
+            if (end == text.size()) break;
+            start = end + 1;
+        }
+
+        std::string base = "value";
+        if (declared_type.find('*') != std::string_view::npos) {
+            base = "pointer";
+        } else if (declared_type.find("bool") != std::string_view::npos) {
+            base = "flag";
+        } else if (declared_type.find("float") != std::string_view::npos ||
+                   declared_type.find("double") != std::string_view::npos) {
+            base = "scalar";
+        } else if (declared_type.find("uint8_t") != std::string_view::npos ||
+                   declared_type.find("int8_t") != std::string_view::npos) {
+            base = "byte_value";
+        } else if (declared_type.find("uint16_t") != std::string_view::npos ||
+                   declared_type.find("int16_t") != std::string_view::npos) {
+            base = "halfword";
+        }
+
+        u32& suffix = next_suffix[base];
+        std::string candidate;
+        do {
+            ++suffix;
+            candidate = suffix == 1
+                ? base
+                : std::format("{}_{}", base, suffix);
+        } while (text_contains_identifier(text, candidate));
+        renames.push_back({old_name, std::move(candidate)});
+    }
+
+    for (const Rename& rename : renames) {
+        text = replace_identifier(text, rename.old_name, rename.new_name);
+    }
+    return text;
+}
+
 [[nodiscard]] bool line_starts_empty_if(std::string_view line) noexcept {
     line = trim_line_view(line);
     return line.starts_with("if (") && line.ends_with("{");
@@ -299,12 +443,10 @@ inverted_if_line(std::string_view line) {
     for (std::size_t i = 0; i < lines.size(); ++i) {
         if (line_starts_empty_if(lines[i])) {
             std::size_t j = i + 1;
-            bool saw_label = false;
             while (j < lines.size() && line_semantically_empty(lines[j])) {
-                if (is_bb_label_line(lines[j])) saw_label = true;
                 ++j;
             }
-            if (saw_label && j < lines.size() && line_is_close_brace(lines[j])) {
+            if (j < lines.size() && line_is_close_brace(lines[j])) {
                 i = j;
                 continue;
             }
@@ -1977,6 +2119,32 @@ struct Emitter {
         const auto lane = known_call_return_lane(inst);
         if (lane == CallReturnLane::Void) return Reg::None;
         if (lane == CallReturnLane::Floating) return fp_return_reg(abi);
+        if (!lane && is_ppc_abi() && fn) {
+            // Stripped Wii routines often have no prototype, but the lane is
+            // still observable: a used f1 clobber with an unused r3 clobber
+            // is strong evidence of a scalar floating return.  Keep the
+            // established integer default when both lanes survive.
+            for (const auto& bb : fn->blocks) {
+                for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                    if (&bb.insts[ii] != &inst) continue;
+                    u32 int_uses = 0;
+                    u32 fp_uses = 0;
+                    for (std::size_t jj = ii + 1; jj < bb.insts.size(); ++jj) {
+                        const IrInst& clobber = bb.insts[jj];
+                        if (clobber.op != IrOp::Clobber) break;
+                        if (clobber.dst.kind != IrValueKind::Reg) continue;
+                        const Reg reg = canonical_reg(clobber.dst.reg);
+                        if (reg == canonical_reg(int_return_reg(abi))) {
+                            int_uses += visible_use_count(clobber.dst);
+                        } else if (reg == canonical_reg(fp_return_reg(abi))) {
+                            fp_uses += visible_use_count(clobber.dst);
+                        }
+                    }
+                    if (fp_uses > 0 && int_uses == 0) return fp_return_reg(abi);
+                    return int_return_reg(abi);
+                }
+            }
+        }
         // Preserve the established behavior for an unknown call: its used
         // integer lane is still a plausible return, while f1 requires proof.
         return int_return_reg(abi);
@@ -2128,6 +2296,18 @@ struct Emitter {
             return;
         }
 
+        // A load from a pointer-valued global still has the ABI integer
+        // width in IR.  Once downstream memory use proves the loaded value
+        // is a pointer, keep that stronger declaration instead of resolving
+        // the scalar/pointer disagreement to an unrelated uint64_t.
+        const bool old_pointer = it->second.ends_with('*');
+        const bool new_pointer = type_name.ends_with('*');
+        if (old_pointer) return;
+        if (new_pointer) {
+            it->second = std::move(type_name);
+            return;
+        }
+
         const bool old_array = it->second.ends_with("[]");
         const bool new_array = type_name.ends_with("[]");
         if (old_array && !new_array) return;
@@ -2181,6 +2361,14 @@ struct Emitter {
         }
         auto root = ssa_key(value);
         if (!root || !fn) return std::nullopt;
+        if (auto access = canonical_struct_access(value); access) {
+            if (auto key = ssa_key(access->first); key) {
+                if (auto it = struct_type_names.find(*key);
+                    it != struct_type_names.end()) {
+                    return it->second + "*";
+                }
+            }
+        }
 
         std::set<SsaKey> seen;
         std::set<IrType> pointees;
@@ -2238,6 +2426,14 @@ struct Emitter {
     // every untyped value rendering exactly as before.
     [[nodiscard]] std::string c_type_name_for(const IrValue& v) const {
         if (!fn) return std::string(c_type_name(v.type));
+        if (auto access = canonical_struct_access(v); access) {
+            if (auto key = ssa_key(access->first); key) {
+                if (auto it = struct_type_names.find(*key);
+                    it != struct_type_names.end()) {
+                    return it->second + "*";
+                }
+            }
+        }
         const TypeRef t = fn->type_of(v);
         if (!t.is_top()) {
             const auto& node = fn->types.node(t);
@@ -2264,6 +2460,13 @@ struct Emitter {
             default:
                 return std::string(c_type_name(v.type));
         }
+    }
+
+    [[nodiscard]] addr_t normalized_address(i64 value) const noexcept {
+        if (abi == Abi::Ppc32Sysv) {
+            return static_cast<addr_t>(static_cast<u32>(value));
+        }
+        return static_cast<addr_t>(value);
     }
 
     void analyze(const IrFunction& f) {
@@ -2491,7 +2694,16 @@ struct Emitter {
 
     void name_merge_values() {
         SsaMergeLocalRecoveryCallbacks callbacks;
-        callbacks.use_count = [&](const SsaKey& k) { return use_count_by_key(k); };
+        // Call-argument intrinsics are hidden from ordinary statement-use
+        // counts, but a Phi consumed only by a call still needs a source
+        // local; otherwise the call leaks `r3_14`/`f1_8`.  Include those
+        // uses for merge recovery while retaining the lean visible-use map
+        // everywhere else.
+        callbacks.use_count = [&](const SsaKey& k) {
+            return is_ppc_abi()
+                ? count_uses_with_call_args(k)
+                : use_count_by_key(k);
+        };
         callbacks.def_of = [&](const IrValue& v) { return def_of(v); };
         callbacks.type_name = [&](const IrValue& v) { return c_type_name_for(v); };
         callbacks.role_for_phi = [&](const IrInst& inst) {
@@ -3711,7 +3923,17 @@ struct Emitter {
                 auto [it, inserted] = inferred_call_return_types.emplace(
                     *target, *pointer_type);
                 if (!inserted && it->second != *pointer_type) {
-                    it->second = "void*";
+                    const bool old_generic = it->second == "void*";
+                    const bool new_generic = *pointer_type == "void*";
+                    if (old_generic && !new_generic) {
+                        it->second = *pointer_type;
+                    } else if (!old_generic && new_generic) {
+                        // Preserve the concrete shape found at a sibling
+                        // call site; an unobserved/generic use adds no
+                        // contradictory field evidence.
+                    } else {
+                        it->second = "void*";
+                    }
                 }
             }
         }
@@ -4368,6 +4590,7 @@ struct Emitter {
         }
     }
 
+
     // Every visible use of `v` is the source of an Assign-to-Flag.
     // Used to detect the trailing layer of a flag-set fan-out: the cmp result
     // (cmp.eq, cmp.slt, etc.) typically feeds straight into `assign zf, …`
@@ -4825,27 +5048,29 @@ struct Emitter {
             std::memcpy(&d, &bits, sizeof(d));
             return std::format("{}", d);
         }
+        const addr_t address = normalized_address(v.imm);
+        const bool plausible_address = binary &&
+            ((v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) ||
+             (abi == Abi::Ppc32Sysv && v.type == IrType::I32 &&
+              address >= 0x100));
         // Core Foundation string literal? `__DATA,__cfstring` holds 32-byte
         // `{isa, flags, data, length}` records for compile-time NSString/
         // CFString constants. Rendering as `@"..."` matches what the
         // source-level code actually wrote.
-        if (allow_string_literals &&
-            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
-            if (auto s = try_decode_cfstring(static_cast<u64>(v.imm)); s) {
+        if (allow_string_literals && plausible_address) {
+            if (auto s = try_decode_cfstring(address); s) {
                 return "@" + escape_string(*s);
             }
         }
         // If the immediate points into the binary and resolves to a NUL-terminated
         // printable string, render as a C string literal.
-        if (allow_string_literals &&
-            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
-            if (auto s = try_string_at(static_cast<u64>(v.imm)); s) {
+        if (allow_string_literals && plausible_address) {
+            if (auto s = try_string_at(address); s) {
                 return escape_string(*s);
             }
         }
-        if (allow_string_literals &&
-            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
-            const addr_t a = static_cast<addr_t>(v.imm);
+        if (allow_string_literals && plausible_address) {
+            const addr_t a = address;
             if (auto it = objc_block_by_literal.find(a);
                 it != objc_block_by_literal.end()) {
                 std::string out = objc_block_literal_name(a);
@@ -4857,10 +5082,10 @@ struct Emitter {
                 return out;
             }
         }
-        if (allow_string_literals &&
-            binary && v.imm > 0 && static_cast<u64>(v.imm) >= 0x100) {
-            if (auto n = named_address_for_imm(static_cast<addr_t>(v.imm)); n) {
-                return std::format("{} /* {:#x} */", *n, static_cast<u64>(v.imm));
+        if (allow_string_literals && plausible_address) {
+            if (auto n = named_address_for_imm(address); n) {
+                return std::format("{} /* {:#x} */", *n,
+                                   static_cast<u64>(address));
             }
         }
         // Small single-digit ints read much better as decimal; larger values
@@ -4971,7 +5196,7 @@ struct Emitter {
         if (!binary) return std::nullopt;
         auto imm = try_resolve_imm_addr(addr);
         if (!imm) return std::nullopt;
-        const addr_t a = static_cast<addr_t>(*imm);
+        const addr_t a = normalized_address(*imm);
         const Symbol* s = binary->defined_object_at(a);
         if (!s || s->kind != SymbolKind::Object) return std::nullopt;
         if (s->name.empty()) return std::nullopt;
@@ -5040,6 +5265,95 @@ struct Emitter {
     std::map<SsaKey, std::set<i64>> struct_offsets;
     std::map<SsaKey, std::map<i64, std::set<unsigned>>> struct_access_widths;
     std::map<SsaKey, std::map<i64, std::set<IrType>>> struct_access_types;
+    std::map<SsaKey, std::string> struct_type_names;
+    std::map<std::string, std::map<i64, std::set<IrType>>> struct_type_members;
+
+    void assign_synthetic_struct_types() {
+        if (!is_ppc_abi() || !fn) return;
+        std::map<addr_t, std::string> call_type_names;
+        u32 next_id = 0;
+
+        const auto call_target_for_root = [&](const SsaKey& key)
+            -> std::optional<addr_t> {
+            auto pos = def_pos.find(key);
+            if (pos == def_pos.end()) return std::nullopt;
+            const auto [bi, definition_index] = pos->second;
+            if (bi >= fn->blocks.size()) return std::nullopt;
+            const auto& bb = fn->blocks[bi];
+            std::size_t ii = definition_index;
+            while (ii > 0) {
+                --ii;
+                const IrInst& previous = bb.insts[ii];
+                if (previous.op == IrOp::Clobber || previous.op == IrOp::Nop) {
+                    continue;
+                }
+                if (previous.op == IrOp::Call) return previous.target1;
+                if (previous.op == IrOp::CallIndirect &&
+                    options.call_resolutions && previous.source_addr != 0) {
+                    if (auto it = options.call_resolutions->find(previous.source_addr);
+                        it != options.call_resolutions->end()) {
+                        return it->second;
+                    }
+                }
+                break;
+            }
+            return std::nullopt;
+        };
+
+        for (const auto& [key, offsets] : struct_offsets) {
+            if (offsets.size() < 2) continue;
+            std::string name;
+            if (auto target = call_target_for_root(key); target) {
+                auto [it, inserted] = call_type_names.emplace(*target, std::string{});
+                if (inserted) it->second = std::format("PpcStruct{}", next_id++);
+                name = it->second;
+            } else {
+                name = std::format("PpcStruct{}", next_id++);
+            }
+            struct_type_names.emplace(key, name);
+            if (auto members = struct_access_types.find(key);
+                members != struct_access_types.end()) {
+                auto& merged = struct_type_members[name];
+                for (const auto& [offset, types] : members->second) {
+                    merged[offset].insert(types.begin(), types.end());
+                }
+            }
+        }
+    }
+
+    [[nodiscard]] std::string
+    synthetic_struct_declarations(std::string_view rendered_function) const {
+        std::string out;
+        for (const auto& [name, members] : struct_type_members) {
+            bool used = text_contains_identifier(rendered_function, name);
+            if (!used) {
+                for (const auto& [_, type] : global_decls) {
+                    if (text_contains_identifier(type, name)) {
+                        used = true;
+                        break;
+                    }
+                }
+            }
+            if (!used || members.empty()) continue;
+            out += std::format("typedef union {} {{\n", name);
+            std::set<std::string> emitted_fields;
+            for (const auto& [offset, types] : members) {
+                if (offset < 0) continue;
+                for (IrType type : types) {
+                    const std::string field = fallback_field_name(offset, type);
+                    if (!emitted_fields.insert(field).second) continue;
+                    out += "  struct { ";
+                    if (offset > 0) {
+                        out += std::format("uint8_t _pad_{}[{}]; ",
+                                           field, offset);
+                    }
+                    out += std::format("{} {}; }};\n", c_type_name(type), field);
+                }
+            }
+            out += std::format("}} {};\n\n", name);
+        }
+        return out;
+    }
 
     // Collapse copies and chains of constant pointer adjustments to one
     // structure root. PPC commonly keeps the same work object in several
@@ -5554,6 +5868,11 @@ struct Emitter {
         if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
             return std::nullopt;
         }
+        // A Temp/Reg that simply aliases an immediate is still an address,
+        // not an array object.  Rendering it as `-2[-1071632328]` is both
+        // misleading and invalid C; leave it to the explicit typed-memory
+        // form (which can also resolve a PPC32 symbol).
+        if (resolve_imm(base)) return std::nullopt;
         // Reject when the base is itself an arithmetic combination - that's
         // the runtime-index pattern (`Add(Mul(idx, stride), Imm)` and friends),
         // not a real pointer base. Without this guard, `Load(Add(idx*8, &tbl))`
@@ -5561,7 +5880,10 @@ struct Emitter {
         // array path handle scaled indexing instead.
         if (const IrInst* bd = def_stripped(base);
             bd && (bd->op == IrOp::Mul || bd->op == IrOp::Shl ||
-                   bd->op == IrOp::Add || bd->op == IrOp::Sub)) {
+                   bd->op == IrOp::Lshr || bd->op == IrOp::Ashr ||
+                   bd->op == IrOp::And || bd->op == IrOp::Or ||
+                   bd->op == IrOp::Xor || bd->op == IrOp::Add ||
+                   bd->op == IrOp::Sub)) {
             return std::nullopt;
         }
         // Vector-shape pointer: defer to the struct-field path so the
@@ -5840,6 +6162,27 @@ struct Emitter {
                                             Prec self_prec,
                                             bool commutative) const {
         const int p = static_cast<int>(self_prec);
+        if ((d.op == IrOp::Add || d.op == IrOp::Sub) && d.src_count >= 2) {
+            const IrValue* base = nullptr;
+            const IrValue* offset = nullptr;
+            bool subtract = d.op == IrOp::Sub;
+            if (d.srcs[1].kind == IrValueKind::Imm &&
+                c_type_name_for(d.srcs[0]).ends_with('*')) {
+                base = &d.srcs[0];
+                offset = &d.srcs[1];
+            } else if (!subtract && d.srcs[0].kind == IrValueKind::Imm &&
+                       c_type_name_for(d.srcs[1]).ends_with('*')) {
+                base = &d.srcs[1];
+                offset = &d.srcs[0];
+            }
+            if (base && offset) {
+                const std::string rendered = std::format(
+                    "(uint8_t*){} {} {}",
+                    expr(*base, depth, std::to_underlying(Prec::Unary)),
+                    subtract ? "-" : "+", format_numeric_imm(*offset));
+                return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+            }
+        }
         // Left operand can share our precedence (left-assoc). Right operand
         // of a non-commutative op must bind strictly tighter to avoid
         // reassociation — e.g. `a - (b - c)` must stay parenthesized.
@@ -6642,6 +6985,14 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
             if (auto off = stack_offset(v); off) {
                 return std::format("&{}", stack_name(*off));
             }
+            // Stack loads are already a short source-level leaf.  Render
+            // them even at the recursion cap so a long PPC register shuffle
+            // ends at `local_34` rather than an undeclared `t14`.
+            if (const IrInst* d = def_of(v);
+                d && d->op == IrOp::Load && d->src_count >= 1 &&
+                d->segment == Reg::None && stack_offset(d->srcs[0])) {
+                return format_load_rhs(*d, depth, min_prec);
+            }
             if (depth < kMaxExprDepth && should_inline(v)) {
                 if (const auto* d = def_of(v)) return expand(*d, depth + 1, min_prec);
             }
@@ -6664,6 +7015,20 @@ std::string Emitter::format_load_rhs(const IrInst& d,
             if (auto it = init_only_slot_value.find(*off);
                 it != init_only_slot_value.end()) {
                 return expr(it->second, depth, min_prec);
+            }
+        }
+        // The load width describes pointer storage, not its pointee.  If
+        // downstream uses refined this result to T*, seed the exact global
+        // slot with T* before format_mem records the raw integer width.
+        const std::string refined = c_type_name_for(d.dst);
+        if (binary && refined.ends_with('*')) {
+            if (auto imm = try_resolve_imm_addr(d.srcs[0]); imm) {
+                const addr_t address = normalized_address(*imm);
+                if (const Symbol* symbol = binary->defined_object_at(address);
+                    symbol && symbol->kind == SymbolKind::Object &&
+                    symbol->addr == address) {
+                    note_global_decl(*symbol, refined);
+                }
             }
         }
     }
@@ -6979,6 +7344,12 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
         case IrOp::Assign: {
             if (inst.src_count < 1) return "";
             if (inst.dst.kind == IrValueKind::Reg) {
+                // Register Assigns are aliases.  When render_reg_leaf can
+                // already chase the destination to a source expression, an
+                // explicit `f31 = value;`/`r30 = ptr;` line is dead
+                // architectural noise even when the alias has several uses.
+                if (is_ppc_abi() &&
+                    !renders_raw_arch_reg_name(inst.dst)) return "";
                 // With rvalue forwarding in render_reg_leaf, a single reader
                 // inlines the source expression directly. The `reg = expr;`
                 // line becomes redundant in that case.
@@ -7831,6 +8202,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     const SignatureContext sig_ctx =
         setup_signature_context(e, sf, binary, annotations);
     e.analyze(*sf.ir);
+    e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
     e.name_merge_values();
     e.infer_objc_block_capture_names();
@@ -8292,6 +8664,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 bb.start, bb.end);
         }
     }
+    out += e.synthetic_struct_declarations(header + body_buf);
     for (const auto& [name, ty] : e.global_decls) {
         if (ty.find("(*") != std::string::npos) {
             out += std::format("extern {};\n", ty);
@@ -8305,6 +8678,22 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     if (!e.global_decls.empty()) out += "\n";
     out += header;
+    // A depth-capped expression may intentionally stop at `tN`.  Ensure
+    // every such fallback still has a declaration even when its defining
+    // IR instruction was otherwise eligible for inlining.  This is most
+    // visible in long PPC rotate/load chains and keeps pseudo-C syntactically
+    // self-contained without forcing those expressions to grow unbounded.
+    std::map<u32, IrValue> undeclared_temps;
+    for (const auto& [_, definition] : e.defs) {
+        if (!definition || definition->dst.kind != IrValueKind::Temp) continue;
+        const std::string name = std::format("t{}", definition->dst.temp);
+        if (!text_contains_identifier_in_code(body_buf, name)) continue;
+        if (text_declares_identifier(body_buf, name)) continue;
+        undeclared_temps.emplace(definition->dst.temp, definition->dst);
+    }
+    for (const auto& [temp, value] : undeclared_temps) {
+        out += std::format("  {} t{};\n", e.c_type_name_for(value), temp);
+    }
     for (const auto& [name, local] : e.merge_locals) {
         if (!text_contains_identifier_in_code(body_buf, name)) continue;
         if (local.initializer) {
@@ -8461,6 +8850,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         }
         out = std::move(cleaned);
         out = collapse_empty_then_else_blocks(out);
+        if (e.is_ppc_abi()) out = rename_ppc_temporaries(std::move(out));
     }
 
     return out;
@@ -8494,6 +8884,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     const SignatureContext sig_ctx =
         setup_signature_context(e, sf, binary, annotations);
     e.analyze(*sf.ir);
+    e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
     e.name_merge_values();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();

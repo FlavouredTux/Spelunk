@@ -23,6 +23,7 @@ struct FrameSlot {
     std::string name;
     IrType      type        = IrType::I64;
     u32         size_bytes  = 0;     // 0 = not yet observed
+    bool        direct_observed = false;
     std::string type_override;
 };
 

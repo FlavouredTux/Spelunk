@@ -1026,6 +1026,66 @@ int test_ppc_struct_shape_is_shared_across_pointer_aliases() {
     return 0;
 }
 
+int test_ppc_pointer_return_type_is_shared_across_calls() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x13e0;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x20;
+    fn.name = "shared_pointer_return";
+    fn.next_temp_id = 2;
+
+    IrValue first = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    IrValue second = first;
+    first.version = 1;
+    second.version = 2;
+    const IrValue field_addr = IrValue::make_temp(0, IrType::I32);
+    const IrValue field = IrValue::make_temp(1, IrType::I32);
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_call_imm(kStart, 0x1d00));
+    bb.insts.push_back(make_clobber(first));
+    bb.insts.push_back(make_add(
+        field_addr, first, IrValue::make_imm(4, IrType::I32)));
+    bb.insts.push_back(make_load(field, field_addr));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6000, IrType::I32), field));
+    bb.insts.push_back(make_call_imm(kStart + 0x14, 0x1d00));
+    bb.insts.push_back(make_clobber(second));
+    bb.insts.push_back(make_store(IrValue::make_imm(0x6004, IrType::I32), second));
+    bb.insts.push_back(make_ret(kStart + 0x20));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "shared PPC pointer return pseudo-C emits");
+    if (!pc) return 1;
+    const auto first_decl = pc->find("void* r_make_vec = make_vec(");
+    const auto second_decl = pc->find("void* r_make_vec_2 = make_vec(");
+    if (first_decl == std::string::npos || second_decl == std::string::npos) {
+        std::fprintf(stderr, "Shared return output:\n%s\n", pc->c_str());
+    }
+    check(first_decl != std::string::npos && second_decl != std::string::npos,
+          "dereference evidence types every call to the same PPC callee as pointer");
+    return 0;
+}
+
 int test_ppc_mixed_call_arguments_follow_callee_layout() {
     using namespace ember;
 
@@ -1687,6 +1747,7 @@ int main() {
     rc |= test_ppc_memory_base_live_in_is_pointer();
     rc |= test_ppc_small_data_bases_resolve_named_globals();
     rc |= test_ppc_struct_shape_is_shared_across_pointer_aliases();
+    rc |= test_ppc_pointer_return_type_is_shared_across_calls();
     rc |= test_ppc_mixed_call_arguments_follow_callee_layout();
     rc |= test_ppc_known_float_call_binds_f1_result();
     rc |= test_ppc_annotated_float_call_selects_f1();

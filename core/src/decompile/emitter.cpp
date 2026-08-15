@@ -437,6 +437,10 @@ struct Emitter {
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
     std::map<SsaKey, std::string>                    call_return_names;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
+    // Direct callee address -> return type recovered from the union of its
+    // call sites in this function. One dereferenced return is enough to keep
+    // sibling calls from falling back to an integer ABI-width declaration.
+    std::map<addr_t, std::string>                    inferred_call_return_types;
     // ARC claim helpers consume an autoreleased return purely for ownership
     // bookkeeping. When the claimed value has no real uses, render the
     // producer call as the statement and suppress the helper.
@@ -1983,6 +1987,22 @@ struct Emitter {
         if (const FunctionSig* sig = call_annotation_signature(inst); sig &&
             !sig->return_type.empty()) {
             return normalize_c_type_alias(sig->return_type);
+        }
+        std::optional<addr_t> target;
+        if (inst.op == IrOp::Call) {
+            target = inst.target1;
+        } else if (inst.op == IrOp::CallIndirect && options.call_resolutions &&
+                   inst.source_addr != 0) {
+            if (auto it = options.call_resolutions->find(inst.source_addr);
+                it != options.call_resolutions->end()) {
+                target = it->second;
+            }
+        }
+        if (target) {
+            if (auto it = inferred_call_return_types.find(*target);
+                it != inferred_call_return_types.end()) {
+                return it->second;
+            }
         }
         auto name = call_known_name(inst);
         if (!name) return std::nullopt;
@@ -3651,6 +3671,48 @@ struct Emitter {
                 }
                 call_return_names.emplace(*ret_key, name);
                 bound_call_key.emplace(std::pair{bi, ii}, *ret_key);
+            }
+        }
+    }
+
+    void infer_shared_call_return_types() {
+        if (!fn || !is_ppc_abi()) return;
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& bb = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+                const IrInst& call = bb.insts[ii];
+                std::optional<addr_t> target;
+                if (call.op == IrOp::Call) {
+                    target = call.target1;
+                } else if (call.op == IrOp::CallIndirect &&
+                           options.call_resolutions && call.source_addr != 0) {
+                    if (auto it = options.call_resolutions->find(call.source_addr);
+                        it != options.call_resolutions->end()) {
+                        target = it->second;
+                    }
+                }
+                if (!target) continue;
+
+                const IrValue* result = nullptr;
+                for (std::size_t jj = ii + 1; jj < bb.insts.size(); ++jj) {
+                    const IrInst& clobber = bb.insts[jj];
+                    if (clobber.op != IrOp::Clobber) break;
+                    if (clobber.dst.kind == IrValueKind::Reg &&
+                        canonical_reg(clobber.dst.reg) ==
+                            canonical_reg(int_return_reg(abi))) {
+                        result = &clobber.dst;
+                        break;
+                    }
+                }
+                if (!result) continue;
+                auto pointer_type = pointer_type_from_memory_uses(*result);
+                if (!pointer_type || !pointer_type->ends_with('*')) continue;
+
+                auto [it, inserted] = inferred_call_return_types.emplace(
+                    *target, *pointer_type);
+                if (!inserted && it->second != *pointer_type) {
+                    it->second = "void*";
+                }
             }
         }
     }
@@ -7769,6 +7831,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     const SignatureContext sig_ctx =
         setup_signature_context(e, sf, binary, annotations);
     e.analyze(*sf.ir);
+    e.infer_shared_call_return_types();
     e.name_merge_values();
     e.infer_objc_block_capture_names();
     e.frame_layout = compute_frame_layout(*sf.ir, binary);
@@ -8431,6 +8494,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     const SignatureContext sig_ctx =
         setup_signature_context(e, sf, binary, annotations);
     e.analyze(*sf.ir);
+    e.infer_shared_call_return_types();
     e.name_merge_values();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();

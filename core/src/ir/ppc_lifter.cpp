@@ -658,7 +658,7 @@ void lift_ps_unop(LiftCtx& ctx, IrOp op) {
     ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg, IrType::V2F32), result);
 }
 
-void lift_psq_intrinsic(LiftCtx& ctx, std::string_view name, bool load, bool update) {
+void lift_psq_memory(LiftCtx& ctx, bool load, bool update) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 4 ||
         insn.operands[0].kind != Operand::Kind::Register ||
@@ -673,36 +673,79 @@ void lift_psq_intrinsic(LiftCtx& ctx, std::string_view name, bool load, bool upd
     const u8 w = static_cast<u8>(insn.operands[2].imm.value) & 1u;
     const u8 gqr = static_cast<u8>(insn.operands[3].imm.value) & 7u;
 
-    // Wii code reserves GQR0 for the unquantized two-float form. Model that
-    // overwhelmingly common case as an ordinary typed vector memory access;
-    // this gives SSA, memory forwarding, and pseudo-C real dataflow instead
-    // of an opaque architectural helper. W=1 and nonzero GQR forms retain the
-    // intrinsic because they need lane construction or runtime quantization.
-    if (ctx.is_ppc32() && w == 0 && gqr == 0) {
-        if (load) {
+    // GQR0 is the SDK's unquantized float mode. W=0 transfers both lanes;
+    // W=1 transfers lane 0 and constructs/discards lane 1 as specified by
+    // Gekko (loads synthesize 1.0f). Keep the memory access typed even for
+    // the single-lane form so alias and stack analysis can see it.
+    if (ctx.is_ppc32() && gqr == 0) {
+        if (w == 0 && load) {
             IrValue value = ctx.emit_load(ea, IrType::V2F32);
             ctx.emit_assign(IrValue::make_reg(insn.operands[0].reg,
                                               IrType::V2F32), value);
-        } else {
+        } else if (w == 0) {
             ctx.emit_store(ea, IrValue::make_reg(insn.operands[0].reg,
                                                  IrType::V2F32));
+        } else if (load) {
+            IrValue lane0 = ctx.emit_load(ea, IrType::F32);
+            IrInst pack;
+            pack.op = IrOp::Intrinsic;
+            pack.name = "ppc.ps_build_pair_one";
+            pack.dst = IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
+            pack.srcs[pack.src_count++] = lane0;
+            ctx.emit(std::move(pack));
+        } else {
+            IrInst lane;
+            lane.op = IrOp::Intrinsic;
+            lane.name = "ppc.ps_lane0";
+            lane.dst = ctx.temp(IrType::F32);
+            lane.srcs[lane.src_count++] =
+                IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
+            const IrValue lane0 = lane.dst;
+            ctx.emit(std::move(lane));
+            ctx.emit_store(ea, lane0);
         }
         if (update && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
         return;
     }
 
+    // GQR layout differs by direction:
+    //   store type[2:0],  signed scale[13:8]
+    //   load  type[18:16], signed scale[29:24]
+    // Type selects float/u8/u16/s8/s16 and scale is the power-of-two
+    // quantization exponent. Decode both fields into ordinary IR so later
+    // passes see the real runtime configuration rather than an opaque GQR.
+    const IrValue raw_gqr = ctx.read_reg(static_cast<Reg>(
+        static_cast<unsigned>(Reg::PpcGqr0) + gqr));
+    const i64 type_shift = load ? 16 : 0;
+    const i64 scale_shift = load ? 24 : 8;
+    IrValue type_bits = raw_gqr;
+    if (type_shift != 0) {
+        type_bits = ctx.emit_binop(IrOp::Lshr, type_bits,
+                                   ctx.imm(type_shift, IrType::I32), IrType::I32);
+    }
+    type_bits = ctx.emit_binop(IrOp::And, type_bits,
+                               ctx.imm(7, IrType::I32), IrType::I32);
+    IrValue scale = ctx.emit_binop(IrOp::Lshr, raw_gqr,
+                                   ctx.imm(scale_shift, IrType::I32), IrType::I32);
+    scale = ctx.emit_binop(IrOp::And, scale,
+                           ctx.imm(0x3f, IrType::I32), IrType::I32);
+    scale = ctx.emit_binop(IrOp::Shl, scale,
+                           ctx.imm(26, IrType::I32), IrType::I32);
+    scale = ctx.emit_binop(IrOp::Ashr, scale,
+                           ctx.imm(26, IrType::I32), IrType::I32);
+
     IrInst i;
     i.op = IrOp::Intrinsic;
-    i.name = std::string(name);
+    i.name = std::format("ppc.psq_{}_quantized_w{}",
+                         load ? "load" : "store", w);
     if (load) {
         i.dst = IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
     } else {
         i.srcs[i.src_count++] = IrValue::make_reg(insn.operands[0].reg, IrType::V2F32);
     }
     i.srcs[i.src_count++] = ea;
-    i.srcs[i.src_count++] = ctx.imm(w, IrType::I8);
-    i.srcs[i.src_count++] = ctx.read_reg(static_cast<Reg>(
-        static_cast<unsigned>(Reg::PpcGqr0) + gqr));
+    i.srcs[i.src_count++] = type_bits;
+    i.srcs[i.src_count++] = scale;
     ctx.emit(std::move(i));
 
     if (update && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
@@ -1025,10 +1068,26 @@ void lift_instruction(LiftCtx& ctx) {
             lift_intrinsic(ctx, "ppc.mtcrf");
             break;
         case Mnemonic::Mfspr:
-            lift_dst_intrinsic(ctx, "ppc.mfspr");
+            if (insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register &&
+                insn.operands[1].kind == Operand::Kind::Register &&
+                insn.operands[1].reg >= Reg::PpcGqr0 &&
+                insn.operands[1].reg <= Reg::PpcGqr7) {
+                store_lvalue(insn.operands[0], ctx.read_reg(insn.operands[1].reg), ctx);
+            } else {
+                lift_dst_intrinsic(ctx, "ppc.mfspr");
+            }
             break;
         case Mnemonic::Mtspr:
-            lift_intrinsic(ctx, "ppc.mtspr");
+            if (insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register &&
+                insn.operands[0].reg >= Reg::PpcGqr0 &&
+                insn.operands[0].reg <= Reg::PpcGqr7) {
+                ctx.write_reg(insn.operands[0].reg,
+                              materialize_rvalue(insn.operands[1], ctx));
+            } else {
+                lift_intrinsic(ctx, "ppc.mtspr");
+            }
             break;
         case Mnemonic::Mfsr:
             lift_dst_intrinsic(ctx, "ppc.mfsr");
@@ -1283,25 +1342,23 @@ void lift_instruction(LiftCtx& ctx) {
             break;
         case Mnemonic::PsqL:
         case Mnemonic::PsqLu:
-            lift_psq_intrinsic(ctx, insn.mnemonic == Mnemonic::PsqL
-                ? "ppc.psq_l" : "ppc.psq_lu", true, insn.mnemonic == Mnemonic::PsqLu);
+            lift_psq_memory(ctx, true, insn.mnemonic == Mnemonic::PsqLu);
             break;
         case Mnemonic::PsqSt:
-            lift_psq_intrinsic(ctx, "ppc.psq_st", false, false);
+            lift_psq_memory(ctx, false, false);
             break;
         case Mnemonic::PsqStu:
-            lift_psq_intrinsic(ctx, "ppc.psq_stu", false, true);
+            lift_psq_memory(ctx, false, true);
             break;
         case Mnemonic::PsqLx:
         case Mnemonic::PsqLux:
-            lift_psq_intrinsic(ctx, insn.mnemonic == Mnemonic::PsqLx
-                ? "ppc.psq_lx" : "ppc.psq_lux", true, insn.mnemonic == Mnemonic::PsqLux);
+            lift_psq_memory(ctx, true, insn.mnemonic == Mnemonic::PsqLux);
             break;
         case Mnemonic::PsqStx:
-            lift_psq_intrinsic(ctx, "ppc.psq_stx", false, false);
+            lift_psq_memory(ctx, false, false);
             break;
         case Mnemonic::PsqStux:
-            lift_psq_intrinsic(ctx, "ppc.psq_stux", false, true);
+            lift_psq_memory(ctx, false, true);
             break;
         case Mnemonic::PsMr:
             if (insn.num_operands == 2) {

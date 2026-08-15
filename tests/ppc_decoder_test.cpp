@@ -695,19 +695,74 @@ void test_wii_lifter_forms() {
     ir = lift_one(0xE483F234);  // psq_lu f4, 0x234(r3), 1, 7
     bool saw_psq_load_config = false;
     bool saw_psq_base_update = false;
+    bool saw_gqr_type_mask = false;
+    bool saw_signed_gqr_scale = false;
     for (const auto& inst : ir.blocks[0].insts) {
         saw_psq_load_config |= inst.op == ember::IrOp::Intrinsic &&
-                               inst.name == "ppc.psq_lu" &&
+                               inst.name == "ppc.psq_load_quantized_w1" &&
                                inst.dst.reg == ember::Reg::PpcF4 &&
                                inst.dst.type == ember::IrType::V2F32 &&
-                               inst.src_count == 3 && inst.srcs[1].imm == 1 &&
-                               inst.srcs[2].kind == ember::IrValueKind::Reg &&
-                               inst.srcs[2].reg == ember::Reg::PpcGqr7;
+                               inst.src_count == 3;
+        saw_gqr_type_mask |= inst.op == ember::IrOp::And &&
+                             inst.src_count == 2 &&
+                             inst.srcs[1].kind == ember::IrValueKind::Imm &&
+                             inst.srcs[1].imm == 7;
+        saw_signed_gqr_scale |= inst.op == ember::IrOp::Ashr &&
+                                inst.src_count == 2 &&
+                                inst.srcs[1].kind == ember::IrValueKind::Imm &&
+                                inst.srcs[1].imm == 26;
         saw_psq_base_update |= inst.op == ember::IrOp::Assign &&
                                inst.dst.reg == ember::Reg::PpcR3;
     }
-    check_eq(saw_psq_load_config && saw_psq_base_update, true,
-             "psq_lu keeps quantization config and updates base");
+    check_eq(saw_psq_load_config && saw_gqr_type_mask &&
+             saw_signed_gqr_scale && saw_psq_base_update, true,
+             "psq_lu decodes GQR load type/scale and updates base");
+
+    ir = lift_one(0xE0238008);  // psq_l f1, 8(r3), 1, 0
+    bool saw_single_float_load = false;
+    bool saw_lane_one_build = false;
+    bool saw_opaque_single_load = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_single_float_load |= inst.op == ember::IrOp::Load &&
+                                 inst.dst.type == ember::IrType::F32;
+        saw_lane_one_build |= inst.op == ember::IrOp::Intrinsic &&
+                              inst.name == "ppc.ps_build_pair_one" &&
+                              inst.dst.type == ember::IrType::V2F32;
+        saw_opaque_single_load |= inst.op == ember::IrOp::Intrinsic &&
+                                  inst.name.starts_with("ppc.psq_load");
+    }
+    check_eq(saw_single_float_load && saw_lane_one_build &&
+             !saw_opaque_single_load, true,
+             "W=1 GQR0 load uses one float and synthesizes lane 1");
+
+    ir = lift_one(0xF3E18058);  // psq_st f31, 0x58(r1), 1, 0
+    bool saw_lane_zero_extract = false;
+    bool saw_single_float_store = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_lane_zero_extract |= inst.op == ember::IrOp::Intrinsic &&
+                                 inst.name == "ppc.ps_lane0" &&
+                                 inst.dst.type == ember::IrType::F32;
+        saw_single_float_store |= inst.op == ember::IrOp::Store &&
+                                  inst.src_count == 2 &&
+                                  inst.srcs[1].type == ember::IrType::F32;
+    }
+    check_eq(saw_lane_zero_extract && saw_single_float_store, true,
+             "W=1 GQR0 store writes only paired-single lane 0");
+
+    ir = lift_one(0xF3E17058);  // psq_st f31, 0x58(r1), 0, 7
+    bool saw_quantized_store = false;
+    bool saw_store_scale_shift = false;
+    for (const auto& inst : ir.blocks[0].insts) {
+        saw_quantized_store |= inst.op == ember::IrOp::Intrinsic &&
+                               inst.name == "ppc.psq_store_quantized_w0" &&
+                               inst.src_count == 4;
+        saw_store_scale_shift |= inst.op == ember::IrOp::Lshr &&
+                                 inst.src_count == 2 &&
+                                 inst.srcs[1].kind == ember::IrValueKind::Imm &&
+                                 inst.srcs[1].imm == 8;
+    }
+    check_eq(saw_quantized_store && saw_store_scale_shift, true,
+             "quantized psq_st decodes the GQR store half");
 
     ir = lift_one(0x10200090);  // ps_mr f1, f0
     bool saw_ps_move = false;

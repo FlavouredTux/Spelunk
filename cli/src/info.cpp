@@ -293,6 +293,19 @@ void help_load() {
     std::println("                       Out-of-scope addresses are skipped before lifting.");
 }
 
+void help_data() {
+    std::println("Typed source recovery (especially useful with DTK/Wii projects):");
+    std::println("      --headers PATH   import C/C++ prototypes, records, fields, globals,");
+    std::println("                       arrays, and enums through libclang; repeatable");
+    std::println("      --header-arg ARG pass an extra parser option such as -I/path; repeatable");
+    std::println("      --decompile-data SYMBOL --type TYPE");
+    std::println("                       emit a typed C initializer. Loader relocations name");
+    std::println("                       pointers, callbacks, strings, and nested records");
+    std::println("      --evt-script SYMBOL");
+    std::println("                       decode an SPM EvtScriptCode array into EVT macros,");
+    std::println("                       structured indentation, variables, and callbacks");
+}
+
 void help_patch() {
     std::println("Byte patching:");
     std::println("      --apply-patches FILE  apply byte patches (vaddr_hex bytes_hex per line)");
@@ -330,6 +343,7 @@ void print_help() {
     std::println("  ann      annotate, apply, list-annotations, dry-run, .ember scripts");
     std::println("  dbg      --debug, attach, backends, aux-bin");
     std::println("  load     DTK projects, pdb, regions, raw-bytes, base-va, force-fn-start, module");
+    std::println("  data     Clang headers, typed initializers, SPM event scripts");
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
     std::println("");
@@ -347,6 +361,7 @@ void print_help_topic(std::string_view topic) {
     else if (topic == "ann")   { help_ann();   return; }
     else if (topic == "dbg")   { help_dbg();   return; }
     else if (topic == "load")  { help_load();  return; }
+    else if (topic == "data")  { help_data();  return; }
     else if (topic == "patch") { help_patch(); return; }
     else if (topic == "cache") { help_cache(); return; }
     std::println(stderr, "ember: --help: unknown topic '{}'", topic);

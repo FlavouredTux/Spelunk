@@ -88,6 +88,30 @@ section-relative relocation targets are resolved automatically, so cross-REL
 calls and globals use names from the peer symbol maps instead of raw
 `rel<ID>_s<section>_<offset>` coordinates.
 
+For source-oriented Wii recovery, Ember can overlay project headers through
+libclang. Imported prototypes feed PPC ABI argument recovery, record layouts
+name direct parameter fields, and typed data/event commands reuse the same
+symbols and loader relocations:
+
+```sh
+# Header-aware pseudo-C (repeat --headers or --header-arg as needed).
+ember --headers ./spm-headers/include \
+  --header-arg=-I./spm-headers/decomp \
+  --dtk ./spm --version EU0 -p -s seq_mapChangeMain
+
+# Relocation-aware C initializers and SPM event macros.
+ember --headers ./spm-headers/include --dtk ./spm --version EU0 \
+  --decompile-data mapData --type 'MapData *[468]'
+ember --dtk ./spm --version EU0 --evt-script lbl_80415e04
+```
+
+`--decompile-data` understands primitive/pointer/record/array types. It uses
+applied DOL/REL relocation evidence before raw pointer words, resolves named
+objects and callbacks, renders printable character pointers as strings, and
+recurses through nested records. `--evt-script` validates each encoded opcode
+and argument count, reconstructs IF/SWITCH/DO/inline nesting, decodes SPM
+variable encodings such as `LW(0)`, and resolves user-function/script pointers.
+
 PowerPC pseudo-C recovery models the integer and floating-point argument
 registers as independent ABI lanes. Mixed calls are interleaved from callee-use
 evidence or an explicit signature instead of treating every argument as a GPR.

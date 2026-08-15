@@ -1,4 +1,5 @@
 #include "subcommands.hpp"
+#include "header_import.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -5674,6 +5675,9 @@ namespace {
 int run_emit(const Args& args, const Binary& b) {
     bool ann_loaded = false;
     Annotations annotations = load_annotations_for(args, ann_loaded);
+
+    if (int rc = apply_header_annotations(args, b, annotations, ann_loaded);
+        rc != EXIT_SUCCESS) return rc;
 
     if (!args.pat_paths.empty()) {
         if (int rc = apply_pat_files(args, b, annotations, ann_loaded);

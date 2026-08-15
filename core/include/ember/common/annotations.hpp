@@ -3,6 +3,7 @@
 #include <compare>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -128,6 +129,12 @@ struct Annotations {
     std::map<addr_t, std::string>  notes;
     std::map<u64,    std::string>  named_constants;
     std::map<FieldKey, std::string> field_names;
+    // Ephemeral type overlay populated by CLI header import. These are not
+    // serialized into the annotation sidecar: the headers remain the source
+    // of truth and are reparsed when --headers is requested.
+    std::map<addr_t, std::string> global_types;
+    std::map<std::string, std::size_t, std::less<>> type_sizes;
+    std::map<std::string, std::string, std::less<>> type_global_names;
 
     // Provenance, parallel to the maps above. Keys not present here
     // mean "no metadata recorded" - different from "metadata recorded
@@ -172,6 +179,31 @@ struct Annotations {
                                       i64 offset) const noexcept {
         auto it = field_names.find(FieldKey{function, param, offset});
         return it == field_names.end() ? nullptr : &it->second;
+    }
+
+    const std::string* global_type_for(addr_t a) const noexcept {
+        auto it = global_types.find(a);
+        return it == global_types.end() ? nullptr : &it->second;
+    }
+
+    std::optional<std::size_t> type_size_for(std::string_view name) const noexcept {
+        auto it = type_sizes.find(name);
+        return it == type_sizes.end() ? std::nullopt : std::optional{it->second};
+    }
+
+    const std::string* unique_type_for_size(std::size_t size) const noexcept {
+        const std::string* found = nullptr;
+        for (const auto& [name, bytes] : type_sizes) {
+            if (bytes != size) continue;
+            if (found != nullptr) return nullptr;
+            found = &name;
+        }
+        return found;
+    }
+
+    const std::string* global_name_for_type(std::string_view type) const noexcept {
+        auto it = type_global_names.find(type);
+        return it == type_global_names.end() || it->second.empty() ? nullptr : &it->second;
     }
 
     const AnnotationMeta* meta_for_rename(addr_t a) const noexcept {

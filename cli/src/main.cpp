@@ -418,6 +418,8 @@ int main(int argc, char** argv) {
     if (!args.forge_spec.empty())    return run_forge_spec(args, b);
     if (!args.annotate_addr.empty()) return run_annotate(args, b);
     if (args.list_annotations)       return run_list_annotations(args, b);
+    if (!args.decompile_data.empty()) return run_decompile_data(args, b);
+    if (!args.evt_script.empty())     return run_evt_script(args, b);
     if (args.strings)            return run_strings(args, b);
     if (args.surfaces)           return run_surfaces(args, b);
     if (args.graphics)           return run_graphics(args, b);

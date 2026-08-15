@@ -300,8 +300,11 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
 void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string_view rn = reg_name(r.switch_index);
+    const std::string selector = r.condition.kind != IrValueKind::None
+        ? expr(r.condition)
+        : (rn.empty() ? std::string("<idx>") : std::string(rn));
     out += std::format("{}switch ({}) {{\n", ind,
-                       rn.empty() ? std::string("<idx>") : std::string(rn));
+                       selector);
     const std::string cind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
     const std::size_t n_cases = r.case_values.size();
 

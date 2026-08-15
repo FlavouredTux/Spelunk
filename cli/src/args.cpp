@@ -85,6 +85,9 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--version",     &Args::dtk_version},
     {"",   "--dtk-version", &Args::dtk_version},
     {"",   "--dtk-module",  &Args::dtk_module},
+    {"",   "--decompile-data", &Args::decompile_data},
+    {"",   "--type",        &Args::data_type},
+    {"",   "--evt-script",  &Args::evt_script},
     {"-s", "--symbol",      &Args::symbol},
     {"",   "--annotations", &Args::annotations_path},
     {"",   "--export-annotations", &Args::export_annotations},
@@ -237,6 +240,25 @@ Result<Args> parse_args(int argc, char** argv) {
         }
         if (s.starts_with("--pat=")) {
             a.pat_paths.emplace_back(s.substr(6));
+            continue;
+        }
+
+        // Header paths and parser flags are repeatable because real projects
+        // commonly split generated SDK headers from project-local declarations.
+        if (s == "--headers" || s == "--header-arg") {
+            if (++i >= argc) {
+                return std::unexpected(Error::invalid_format(
+                    std::string(s) + " requires a value"));
+            }
+            (s == "--headers" ? a.header_paths : a.header_args).emplace_back(argv[i]);
+            continue;
+        }
+        if (s.starts_with("--headers=")) {
+            a.header_paths.emplace_back(s.substr(10));
+            continue;
+        }
+        if (s.starts_with("--header-arg=")) {
+            a.header_args.emplace_back(s.substr(13));
             continue;
         }
 

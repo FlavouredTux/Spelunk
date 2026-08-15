@@ -599,6 +599,68 @@ public:
         r->kind         = RegionKind::Switch;
         r->has_default  = sw_bb.has_default;
         r->switch_index = sw_bb.switch_index;
+        // CFG switch metadata stores only the architectural selector
+        // register. After SSA, recover the concrete version consumed by the
+        // dispatch block (e.g. CodeWarrior's rlwinm r0,r5,2 before lwzx).
+        // The emitter can then inline the selector's real producer instead of
+        // leaking `switch (r5)` into otherwise source-like pseudo-C.
+        if (sw_bb.switch_index >= Reg::PpcR0 && sw_bb.switch_index <= Reg::PpcR31) {
+            const Reg selector = canonical_reg(sw_bb.switch_index);
+            for (const auto& inst : sw_bb.insts) {
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    const IrValue& src = inst.srcs[i];
+                    if (src.kind == IrValueKind::Reg && src.version != 0 &&
+                        canonical_reg(src.reg) == selector) {
+                        r->condition = src;
+                        break;
+                    }
+                }
+                if (r->condition.kind != IrValueKind::None) break;
+            }
+            // The canonical PPC sequence keeps the selector definition in
+            // the bounds-check predecessor and only the scaled temporary in
+            // the dispatch block. Follow direct predecessors for the newest
+            // SSA definition of that architectural register.
+            if (r->condition.kind == IrValueKind::None) {
+                for (addr_t pred_addr : sw_bb.predecessors) {
+                    auto pit = fn_.block_at.find(pred_addr);
+                    if (pit == fn_.block_at.end()) continue;
+                    const auto& pred = fn_.blocks[pit->second];
+                    for (auto it = pred.insts.rbegin(); it != pred.insts.rend(); ++it) {
+                        const IrValue& dst = it->dst;
+                        if (dst.kind == IrValueKind::Reg && dst.version != 0 &&
+                            canonical_reg(dst.reg) == selector) {
+                            r->condition = dst;
+                            break;
+                        }
+                    }
+                    if (r->condition.kind != IrValueKind::None) break;
+                }
+            }
+            // Cleanup often copy-propagates the architectural register away
+            // entirely. The bounds-check predecessor still compares the
+            // exact selector against the table's maximum, so use its
+            // non-immediate operand as the stable source expression.
+            if (r->condition.kind == IrValueKind::None) {
+                for (addr_t pred_addr : sw_bb.predecessors) {
+                    auto pit = fn_.block_at.find(pred_addr);
+                    if (pit == fn_.block_at.end()) continue;
+                    const auto& pred = fn_.blocks[pit->second];
+                    for (auto it = pred.insts.rbegin(); it != pred.insts.rend(); ++it) {
+                        if (it->op < IrOp::CmpEq || it->op > IrOp::CmpSge || it->src_count < 2)
+                            continue;
+                        for (u8 i = 0; i < 2; ++i) {
+                            if (it->srcs[i].kind != IrValueKind::Imm) {
+                                r->condition = it->srcs[i];
+                                break;
+                            }
+                        }
+                        if (r->condition.kind != IrValueKind::None) break;
+                    }
+                    if (r->condition.kind != IrValueKind::None) break;
+                }
+            }
+        }
 
         const addr_t merge = compute_switch_merge(sw_bb);
 

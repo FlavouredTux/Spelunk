@@ -88,6 +88,8 @@ int run_list_syscalls(const Args& args, const Binary& b);
 int run_forge_spec   (const Args& args, const Binary& b);
 int run_annotate     (const Args& args, const Binary& b);
 int run_list_annotations(const Args& args, const Binary& b);
+int run_decompile_data(const Args& args, const Binary& b);
+int run_evt_script(const Args& args, const Binary& b);
 
 // The pseudo / struct / ir / cfg / cfg-pseudo / disasm pipeline. Loads
 // annotations, applies any --pat sigs, runs IPA / EH / indirect-call

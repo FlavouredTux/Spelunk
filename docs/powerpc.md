@@ -177,6 +177,56 @@ register copies and constant field offsets. This preserves pointer-shaped Wii
 locals even when an earlier ABI-width integer hint conflicts with later body
 evidence; mixed-width field bases remain deliberately opaque `void*` values.
 
+### CodeWarrior jump tables
+
+PPC32 CFG recovery recognizes the bounded CodeWarrior dispatch shape built
+from `lwzx`, `mtctr`, and `bctr`. Ember resolves the absolute big-endian target
+table, adds every in-range target plus the bounds-check default edge to the
+CFG, preserves duplicate targets as grouped cases, and emits a structured
+`switch`. The selector is traced back through the scaled table index and its
+bounds-check predecessor, so source output uses the recovered state field or
+local instead of `ctr` or a temporary register.
+
+This is important for large Wii state machines such as `seq_mapChangeMain`,
+where an unresolved `bctr` otherwise hides nearly the entire function.
+
+### Header-aware Wii source recovery
+
+Pass one or more header files/directories with `--headers`. Ember asks
+libclang for 32-bit PowerPC layouts and overlays matching function prototypes,
+parameter names, direct record fields, arrays, globals, and enums. Existing
+manual annotations retain priority. Extra include paths or project defines can
+be passed with repeatable `--header-arg` values:
+
+```sh
+ember --headers /path/to/spm/spm-headers/include \
+  --header-arg=-I/path/to/spm/spm-headers/decomp \
+  --dtk /path/to/spm --version EU0 -p -s seq_mapChangeMain
+```
+
+The importer is an optional CLI dependency. Builds made without libclang keep
+all ordinary decompilation features and report a focused error only when
+`--headers` is requested.
+
+### Typed data and SPM event scripts
+
+Use `--decompile-data SYMBOL --type TYPE` to turn fixed data into a C
+initializer. Records and arrays come from imported headers; pointers consult
+loader relocation records first and are classified as functions, event/data
+objects, strings, nested records, or nulls.
+
+```sh
+ember --headers /path/to/spm/spm-headers/include \
+  --dtk /path/to/spm --version EU0 \
+  --decompile-data mapData --type 'MapData *[468]'
+```
+
+`--evt-script SYMBOL` is the SPM-specific companion. It decodes the packed
+argument-count/opcode word, validates instruction boundaries, names callbacks
+through DOL/REL symbols, renders encoded values (`LW`, `GSW`, `FLOAT`, and the
+other event variable classes), and indents structured IF, SWITCH, DO, inline,
+and brother-event regions until `EVT_END()`.
+
 ### Repeatable SPM pseudo-C benchmark
 
 The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function

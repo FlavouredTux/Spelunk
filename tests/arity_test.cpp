@@ -1,6 +1,8 @@
 #include <ember/analysis/arity.hpp>
+#include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/disasm/decoder.hpp>
 
 #include <array>
 #include <cstdio>
@@ -72,6 +74,28 @@ public:
         put(0x128, 0x4bfffff1);  // bl fmod
         put(0x12c, 0x4e800020);  // blr
 
+        // Canonical CodeWarrior bounded jump table:
+        // cmplwi r3,2; bgt default; lis/slwi/addi/lwzx/mtctr/bctr.
+        put(0x140, 0x28030002);
+        put(0x144, 0x41810034);
+        put(0x148, 0x3c808000);
+        put(0x14c, 0x5460103a);
+        put(0x150, 0x388411c0);
+        put(0x154, 0x7c84002e);
+        put(0x158, 0x7c8903a6);
+        put(0x15c, 0x4e800420);
+        put(0x160, 0x3860000a);
+        put(0x164, 0x4e800020);
+        put(0x168, 0x38600014);
+        put(0x16c, 0x4e800020);
+        put(0x170, 0x3860001e);
+        put(0x174, 0x4e800020);
+        put(0x178, 0x3860ffff);
+        put(0x17c, 0x4e800020);
+        put(0x1c0, static_cast<ember::u32>(kBase + 0x160));
+        put(0x1c4, static_cast<ember::u32>(kBase + 0x168));
+        put(0x1c8, static_cast<ember::u32>(kBase + 0x170));
+
         section_.name = ".text";
         section_.vaddr = kBase;
         section_.size = text_.size();
@@ -92,6 +116,7 @@ public:
         add_symbol("ninth_integer", kBase + 0x108, 0x0c);
         add_symbol("fmod", kBase + 0x118, 0x04);
         add_symbol("forwarded_fmod", kBase + 0x128, 0x08);
+        add_symbol("codewarrior_switch", kBase + 0x140, 0x40);
     }
 
     [[nodiscard]] ember::Format format() const noexcept override {
@@ -140,7 +165,7 @@ private:
         symbols_.push_back(std::move(symbol));
     }
 
-    std::array<std::byte, 0x140> text_{};
+    std::array<std::byte, 0x200> text_{};
     ember::Section section_{};
     std::vector<ember::Symbol> symbols_;
 };
@@ -231,6 +256,32 @@ int main() {
         std::fprintf(stderr,
                      "FAIL: typed IPA propagates a leaf pointer through a wrapper\n");
         ++failures;
+    }
+
+    auto decoder = ember::make_decoder(binary);
+    if (!decoder) {
+        std::fprintf(stderr, "FAIL: PPC decoder creation for switch fixture\n");
+        ++failures;
+    } else {
+        ember::CfgBuilder builder(binary, **decoder);
+        auto cfg = builder.build(0x80001140, "codewarrior_switch");
+        if (!cfg) {
+            std::fprintf(stderr, "FAIL: CodeWarrior switch CFG builds\n");
+            ++failures;
+        } else {
+            const auto bit = cfg->block_at.find(0x80001148);
+            const bool recovered = bit != cfg->block_at.end() &&
+                cfg->blocks[bit->second].kind == ember::BlockKind::Switch &&
+                cfg->blocks[bit->second].case_values ==
+                    std::vector<ember::i64>{0, 1, 2} &&
+                cfg->blocks[bit->second].has_default &&
+                cfg->blocks[bit->second].switch_index == ember::Reg::PpcR3;
+            if (!recovered) {
+                std::fprintf(stderr,
+                             "FAIL: lwzx/mtctr/bctr recovers cases and selector\n");
+                ++failures;
+            }
+        }
     }
     return failures == 0 ? 0 : 1;
 }

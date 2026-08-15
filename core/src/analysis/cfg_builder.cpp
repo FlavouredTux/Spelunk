@@ -210,8 +210,13 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
     for (std::size_t i = 0; i + 1 < recent.size(); ++i) {
         const Instruction* ja  = recent[i];
         const Instruction* cmp = recent[i + 1];
-        if (ja->mnemonic != Mnemonic::Ja && ja->mnemonic != Mnemonic::Jae) continue;
-        if (cmp->mnemonic != Mnemonic::Cmp) continue;
+        const bool x86_bound =
+            (ja->mnemonic == Mnemonic::Ja || ja->mnemonic == Mnemonic::Jae) &&
+            cmp->mnemonic == Mnemonic::Cmp;
+        const bool ppc_bound =
+            (ja->mnemonic == Mnemonic::Bgt || ja->mnemonic == Mnemonic::Bge) &&
+            (cmp->mnemonic == Mnemonic::Cmpl || cmp->mnemonic == Mnemonic::Cmp);
+        if (!x86_bound && !ppc_bound) continue;
         if (cmp->num_operands != 2) continue;
         const auto& a = cmp->operands[0];
         const auto& b = cmp->operands[1];
@@ -223,7 +228,8 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
         const auto n = static_cast<u32>(b.imm.value);
         // ja:  idx > N  → default → valid range 0..N   → count = N+1
         // jae: idx >= N → default → valid range 0..N-1 → count = N
-        g.count = (ja->mnemonic == Mnemonic::Ja) ? (n + 1) : n;
+        g.count = (ja->mnemonic == Mnemonic::Ja ||
+                   ja->mnemonic == Mnemonic::Bgt) ? (n + 1) : n;
         if (ja->num_operands >= 1 && ja->operands[0].kind == Operand::Kind::Relative) {
             g.default_tgt = ja->operands[0].rel.target;
         }
@@ -231,6 +237,110 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
         return g;
     }
     return std::nullopt;
+}
+
+[[nodiscard]] std::optional<u64>
+ppc_constant_for_reg(const std::vector<const Instruction*>& recent,
+                     Reg want) noexcept;
+
+// CodeWarrior's canonical PPC switch sequence:
+//
+//   cmplwi  rIDX, max
+//   bgt     default
+//   lis     rTAB, table@ha
+//   slwi    rOFF, rIDX, 2
+//   addi    rTAB, rTAB, table@l
+//   lwzx    rTGT, rTAB, rOFF
+//   mtctr   rTGT
+//   bctr
+//
+// DOL tables contain absolute big-endian 32-bit code addresses. The bound
+// supplies both the exact case count and the source selector register, while
+// the table address is recovered from the lis/addi chain as it existed before
+// lwzx overwrote rTGT (CodeWarrior commonly reuses rTAB as rTGT).
+[[nodiscard]] std::optional<JumpTable>
+detect_ppc_ctr_jump_table(const Binary& b, const WalkState& ws,
+                          addr_t jmp_addr,
+                          const std::vector<const Instruction*>& recent) {
+    if (b.arch() != Arch::Ppc32) return std::nullopt;
+    auto jit = ws.insns.find(jmp_addr);
+    if (jit == ws.insns.end()) return std::nullopt;
+    const Instruction& jump = jit->second;
+    if (jump.mnemonic != Mnemonic::Jmp || jump.num_operands != 1 ||
+        jump.operands[0].kind != Operand::Kind::Register ||
+        canonical_reg(jump.operands[0].reg) != Reg::PpcCtr) {
+        return std::nullopt;
+    }
+
+    std::optional<Reg> target_reg;
+    const Instruction* load = nullptr;
+    for (const Instruction* in : recent) {
+        if (!target_reg && in->mnemonic == Mnemonic::Mov &&
+            in->num_operands == 2 &&
+            in->operands[0].kind == Operand::Kind::Register &&
+            canonical_reg(in->operands[0].reg) == Reg::PpcCtr &&
+            in->operands[1].kind == Operand::Kind::Register) {
+            target_reg = canonical_reg(in->operands[1].reg);
+            continue;
+        }
+        if (!target_reg || in->mnemonic != Mnemonic::Lwzx ||
+            in->num_operands != 2 ||
+            in->operands[0].kind != Operand::Kind::Register ||
+            canonical_reg(in->operands[0].reg) != *target_reg ||
+            in->operands[1].kind != Operand::Kind::Memory) {
+            continue;
+        }
+        const Mem& mem = in->operands[1].mem;
+        if (mem.base == Reg::None || mem.index == Reg::None || mem.size != 4) {
+            continue;
+        }
+        load = in;
+        break;
+    }
+    if (!target_reg || !load) return std::nullopt;
+
+    const Mem& table_mem = load->operands[1].mem;
+    std::vector<const Instruction*> before_load;
+    before_load.reserve(recent.size());
+    for (const Instruction* in : recent) {
+        if (in->address < load->address) before_load.push_back(in);
+    }
+    auto table_value = ppc_constant_for_reg(before_load, table_mem.base);
+    if (!table_value) return std::nullopt;
+    const addr_t table = static_cast<addr_t>(*table_value & 0xffffffffULL);
+
+    auto bound = detect_bound(ws.insns, ws.leaders, jmp_addr, table_mem.index);
+    constexpr u32 kJumpTableMax = 4096;
+    const u32 max_count =
+        std::min(bound ? bound->count : 256u, kJumpTableMax);
+
+    JumpTable jt;
+    jt.index_reg = bound ? canonical_reg(bound->index_reg)
+                         : canonical_reg(table_mem.index);
+    if (bound) jt.default_tgt = bound->default_tgt;
+
+    constexpr unsigned kMaxConsecBadProbes = 1;
+    unsigned consec_bad = 0;
+    for (u32 k = 0; k < max_count; ++k) {
+        i64 entry = 0;
+        if (!read_table_entry(b, table + static_cast<addr_t>(k) * 4u,
+                              4, false, entry)) {
+            break;
+        }
+        const addr_t target = static_cast<addr_t>(
+            static_cast<u64>(entry) & 0xffffffffULL);
+        if (!find_exec_section_for(b, target)) {
+            if (!bound) {
+                if (++consec_bad > kMaxConsecBadProbes) break;
+            }
+            continue;
+        }
+        consec_bad = 0;
+        jt.targets.push_back(target);
+        jt.values.push_back(static_cast<i64>(k));
+    }
+    if (jt.targets.empty()) return std::nullopt;
+    return jt;
 }
 
 // MSVC two-table indexed switches:
@@ -319,6 +429,10 @@ detect_jump_table(const Binary& b, const WalkState& ws, addr_t jmp_addr) {
             --cur;
             recent.push_back(&cur->second);
         }
+    }
+
+    if (auto ppc = detect_ppc_ctr_jump_table(b, ws, jmp_addr, recent); ppc) {
+        return ppc;
     }
 
     // -------- Pattern (B): absolute / lea-then-indexed 8-byte table --------

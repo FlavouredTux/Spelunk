@@ -14,6 +14,11 @@ struct Args {
     std::string dtk_version;        // --version ID: config/<ID>/config.yml
     std::string dtk_module;         // --dtk-module NAME: select a REL/module entry
     std::string dtk_symbols_path;   // resolved internally from the DTK config
+    std::vector<std::string> header_paths; // --headers PATH (repeatable): Clang C/C++ type overlay
+    std::vector<std::string> header_args;  // --header-arg ARG (repeatable): extra Clang parse option
+    std::string decompile_data;     // --decompile-data SYMBOL/VA: typed C initializer
+    std::string data_type;          // --type TYPE: type used by --decompile-data
+    std::string evt_script;         // --evt-script SYMBOL/VA: decode an SPM EvtScriptCode array
     std::string symbol;
     std::string annotations_path;   // --annotations PATH: explicit project file with renames/sigs/notes
     std::string export_annotations; // --export-annotations PATH: promote resolved source to PATH and exit

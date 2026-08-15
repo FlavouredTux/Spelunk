@@ -26,6 +26,7 @@
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/ssa_cleanup.hpp>
 #include <ember/common/types.hpp>
+#include <ember/common/bytes.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 #include <ember/ir/abi.hpp>
 #include <ember/ir/ssa.hpp>
@@ -2352,6 +2353,10 @@ struct Emitter {
 
     void note_global_decl(const Symbol& s, std::string type_name) const {
         if (s.name.empty()) return;
+        if (annotations) {
+            if (const std::string* imported = annotations->global_type_for(s.addr))
+                type_name = *imported;
+        }
         type_name = normalize_c_type_alias(type_name);
         if (type_name.find("(*") == std::string::npos &&
             !type_name.ends_with("[]")) {
@@ -8371,13 +8376,56 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 }
             }
             std::vector<IrValue> used_args;
-            const std::string args = arity
+            std::string args = arity
                 ? format_call_args_with_arity(call_args, *arity, !objc_sized,
                                               &used_args, &rendered_call_args)
                 : format_call_args_fallback(call_args, &used_args);
             const std::string callee = import_name
                 ? *import_name
                 : function_display_name(inst.target1);
+            // Header layouts let a raw aggregate clear become the source
+            // expression the programmer wrote. Keep this exact: the first
+            // argument must be a known global and the byte count must equal
+            // that imported type's complete size.
+            if (annotations && callee == "memset" && used_args.size() >= 3) {
+                const Symbol* global = nullptr;
+                if (auto address = try_resolve_imm_addr(used_args[0]); address)
+                    global = binary ? binary->defined_object_at(normalized_address(*address)) : nullptr;
+                // Wii code commonly passes a work pointer loaded from an
+                // SDA slot. Follow the slot's initialized pointer so the
+                // aggregate object, not the pointer variable, gets typed.
+                if (!global && binary) {
+                    if (const Symbol* slot = global_object_for_load(used_args[0]); slot) {
+                        auto raw = binary->bytes_at(slot->addr);
+                        if (raw.size() >= 4) {
+                            const addr_t pointee = binary->endian() == Endian::Big
+                                ? read_be_at<u32>(raw.data()) : read_le_at<u32>(raw.data());
+                            global = binary->defined_object_at(pointee);
+                        }
+                    }
+                }
+                if (global) {
+                    const addr_t at = global->addr;
+                    {
+                        const auto byte_count = resolve_imm(used_args[2]);
+                        const std::string* type = annotations->global_type_for(at);
+                        if (!type && byte_count && *byte_count > 0)
+                            type = annotations->unique_type_for_size(static_cast<std::size_t>(*byte_count));
+                        if (type) {
+                            const std::string base = normalize_c_type_alias(*type);
+                            if (auto size = annotations->type_size_for(base);
+                                size && byte_count == static_cast<i64>(*size)) {
+                                const std::string* imported_name = annotations->global_name_for_type(base);
+                                const std::string& name = imported_name ? *imported_name : global->name;
+                                args = std::format("&{}, {}, sizeof({})", name,
+                                                   expr(used_args[1]), base);
+                                if (imported_name) global_decls.try_emplace(name, base);
+                                else note_global_decl(*global, base);
+                            }
+                        }
+                    }
+                }
+            }
             const std::string call_expr =
                 render_objc_runtime_call(callee, call_args)
                     .value_or(std::format("{}({})", callee, args));

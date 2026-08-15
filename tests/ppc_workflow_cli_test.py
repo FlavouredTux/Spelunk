@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Exercise batch PPC views and code/data round-trip verification."""
+
+from __future__ import annotations
+
+import pathlib
+import struct
+import subprocess
+import sys
+import tempfile
+
+
+def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"command failed ({result.returncode}): {' '.join(command)}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+    return result
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: ppc_workflow_cli_test.py EMBER PPC_DOL")
+    ember = pathlib.Path(sys.argv[1])
+    fixture = pathlib.Path(sys.argv[2])
+
+    with tempfile.TemporaryDirectory() as directory:
+        temp = pathlib.Path(directory)
+        manifest = temp / "symbols.txt"
+        manifest.write_text(
+            "# comments and blank lines are accepted\n"
+            "scalar_entry\n\n"
+            "0x80003140\n"
+            "0x80003160\n",
+            encoding="utf-8",
+        )
+        batch = run([
+            str(ember), "-q", "-p", "--symbols", str(manifest), str(fixture)
+        ])
+        markers = [line for line in batch.stdout.splitlines()
+                   if line.startswith("// ember-symbol: ")]
+        assert markers == [
+            "// ember-symbol: scalar_entry",
+            "// ember-symbol: 0x80003140",
+            "// ember-symbol: 0x80003160",
+        ]
+
+        data = run([
+            str(ember), "-q", "--decompile-data", "0x80004000",
+            "--type", "uint32_t[2]", "--verify-roundtrip", str(fixture),
+        ])
+        assert "uint32_t data_80004000[2]" in data.stdout
+        assert "round-trip verified: 1 object(s), 0x8 bytes" in data.stderr
+
+        # Replace the fixture's data section with a tiny event script:
+        # SET(LW(1)); END_SCRIPT(). The DOL layout stays otherwise intact.
+        event_dol = temp / "event.dol"
+        image = bytearray(fixture.read_bytes())
+        data_offset = struct.unpack_from(">I", image, 0x1C)[0]
+        set_word = (1 << 16) | 50
+        lw_one = (-29_999_999) & 0xFFFFFFFF
+        end_script = 1
+        event = struct.pack(">III", set_word, lw_one, end_script)
+        image[data_offset:] = event
+        struct.pack_into(">I", image, 0xAC, len(event))
+        event_dol.write_bytes(image)
+        decoded = run([
+            str(ember), "-q", "--evt-script", "0x80004000",
+            "--verify-roundtrip", str(event_dol),
+        ])
+        assert "SET(LW(1))" in decoded.stdout
+        assert "END_SCRIPT()" in decoded.stdout
+        assert "round-trip verified: 12 event bytes" in decoded.stderr
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

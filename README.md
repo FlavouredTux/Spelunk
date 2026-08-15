@@ -99,10 +99,15 @@ ember --headers ./spm-headers/include \
   --header-arg=-I./spm-headers/decomp \
   --dtk ./spm --version EU0 -p -s seq_mapChangeMain
 
+# Batch a symbol manifest while loading the DOL, symbols, and headers once.
+ember --headers ./spm-headers/include --dtk ./spm --version EU0 \
+  -p --symbols benchmarks/spm_eu0_ppc.txt
+
 # Relocation-aware C initializers and SPM event macros.
 ember --headers ./spm-headers/include --dtk ./spm --version EU0 \
-  --decompile-data mapData --type 'MapData *[468]'
-ember --dtk ./spm --version EU0 --evt-script lbl_80415e04
+  --decompile-data mapData --type 'MapData *[468]' --verify-roundtrip
+ember --dtk ./spm --version EU0 --evt-script lbl_80415e04 \
+  --verify-roundtrip
 ```
 
 `--decompile-data` understands primitive/pointer/record/array types. It uses
@@ -113,6 +118,9 @@ automatically and emitted as typed compound initializers. `--evt-script`
 validates each encoded opcode
 and argument count, reconstructs IF/SWITCH/DO/inline nesting, decodes SPM
 variable encodings such as `LW(0)`, and resolves user-function/script pointers.
+`--verify-roundtrip` re-encodes scalar literals, record layouts, pointer slots,
+event opcodes, arguments, and relocation-backed symbols, then fails if they do
+not reproduce the loaded representation.
 
 PowerPC pseudo-C recovery models the integer and floating-point argument
 registers as independent ABI lanes. Mixed calls are interleaved from callee-use
@@ -120,6 +128,8 @@ evidence or an explicit signature instead of treating every argument as a GPR.
 Known scalar floating-point returns are recovered from `f1`, including common
 Wii SDK `PSVEC*`, MTX, GX, OS, DVD, controller, and CX routines; unknown calls
 stay conservative rather than treating every post-call FPR clobber as a result.
+Untyped `func_*`/`sub_*` calls carry an address and inferred PPC signature hint
+so unresolved names remain explicit without hiding recovered call information.
 
 Ember's pseudo-C is reverse-engineering guidance, not a promise of the original
 CodeWarrior source. Exact byte matching still requires objdiff-led iteration on
@@ -291,6 +301,7 @@ ember [options] <binary>
       --debug            launch / attach a debugger; see docs/debugger.md
 
   -s, --symbol NAME      target a specific symbol (default: main)
+      --symbols FILE     batch one-symbol-per-line views with one project load
       --annotations P    user renames / signatures sidecar file
       --apply PATH       apply a .ember declarative script
       --annotate ADDR    one-shot: append a single rename / note / signature

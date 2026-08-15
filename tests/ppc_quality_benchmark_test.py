@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+import tempfile
 
 
 def load_module(path: pathlib.Path):
@@ -26,19 +27,47 @@ void func_80100000(double a1, void* a2) {
   sub_80001234(t3);
   a2->field_10 = (float)f1_2;
   // STRUCTURER_FAIL: dropped block
+  if (!0) sub_80001234(PTR(0x1234));
+  uint32_t value = {0}; /* unresolved SSA merge */
 }
 """
     function = benchmark.analyze_pseudo_c("func_80100000", sample)
     metrics = function["metrics"]
-    assert metrics["lines_of_pseudo_c"] == 5
+    assert metrics["lines_of_pseudo_c"] == 7
     assert metrics["raw_register_references"] == 4
     assert metrics["versioned_ssa_references"] == 2
     assert metrics["temporary_references"] == 2
     assert metrics["opaque_ppc_intrinsics"] == 1
     assert metrics["generic_parameters"] == 2
     assert metrics["generic_field_references"] == 1
-    assert metrics["unresolved_symbol_calls"] == 1
+    assert metrics["unresolved_symbol_calls"] == 2
     assert metrics["structurer_failures"] == 1
+    assert metrics["constant_condition_artifacts"] == 1
+    assert metrics["unresolved_ssa_merges"] == 1
+    assert metrics["raw_pointer_literals"] == 1
+    assert metrics["syntax_failures"] == 0
+
+    split = benchmark.split_batch_output("""\
+// ember-symbol: first
+void first(void) {}\n
+// ember-symbol: second
+void second(void) {}\n
+""")
+    assert split == {
+        "first": "void first(void) {}\n\n",
+        "second": "void second(void) {}\n\n",
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = pathlib.Path(directory) / "roundtrip.tsv"
+        manifest.write_text(
+            "data\tmapData\tMapData *[468]\n"
+            "evt\tlbl_80415e04\n",
+            encoding="utf-8",
+        )
+        assert benchmark.load_roundtrip_manifest(manifest) == [
+            ("data", "mapData", "MapData *[468]"),
+            ("evt", "lbl_80415e04", ""),
+        ]
 
     totals = benchmark.aggregate([function])
     baseline = dict(totals)
@@ -54,6 +83,8 @@ void func_80100000(double a1, void* a2) {
 [timing]   cfg_build: 0.750 ms
 """)
     assert timings == {"cfg_build": 2.0, "emit": 0.5}
+    assert benchmark.check_syntax("void ok(void) {}\n", "clang", 5.0) is None
+    assert benchmark.check_syntax("void broken( {\n", "clang", 5.0) is not None
     return 0
 
 

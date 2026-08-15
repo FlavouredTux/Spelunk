@@ -873,6 +873,23 @@ struct Emitter {
         return true;
     }
 
+    [[nodiscard]] static bool is_unresolved_function_name(std::string_view name) noexcept {
+        const auto valid_suffix = [](std::string_view suffix) noexcept {
+            if (suffix.empty())
+                return false;
+            for (char c : suffix) {
+                if (!std::isxdigit(static_cast<unsigned char>(c)))
+                    return false;
+            }
+            return true;
+        };
+        if (name.starts_with("sub_"))
+            return valid_suffix(name.substr(4));
+        if (name.starts_with("func_"))
+            return valid_suffix(name.substr(5));
+        return false;
+    }
+
     [[nodiscard]] std::optional<u8>
     printf_like_arity_from_literal_args(const std::vector<IrValue>& args) const {
         const std::size_t limit = std::min<std::size_t>(args.size(), 6);
@@ -8724,9 +8741,29 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     }
                 }
             }
-            const std::string call_expr =
-                render_objc_runtime_call(callee, call_args)
-                    .value_or(std::format("{}({})", callee, args));
+            std::string call_expr = render_objc_runtime_call(callee, call_args)
+                                        .value_or(std::format("{}({})", callee, args));
+            if (ppc_abi && !annotated_sig && is_unresolved_function_name(callee)) {
+                std::string types;
+                for (std::size_t arg_i = 0; arg_i < used_args.size(); ++arg_i) {
+                    if (arg_i != 0)
+                        types += ", ";
+                    types += c_type_name(call_arg_display_type(used_args[arg_i]));
+                }
+                if (types.empty())
+                    types = "void";
+                bool format_like = false;
+                for (const auto& value : used_args) {
+                    if (auto literal = resolve_string_value(value);
+                        literal && literal->find('%') != std::string::npos) {
+                        format_like = true;
+                        break;
+                    }
+                }
+                call_expr +=
+                    std::format(" /* unresolved target {:#x}; inferred PPC signature ({}){} */",
+                                inst.target1, types, format_like ? "; format-like" : "");
+            }
             for (const auto& a : used_args) {
                 emit_materializations_for_value(a, 0, out, ind);
             }

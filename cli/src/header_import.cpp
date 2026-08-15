@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -10,11 +11,13 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <print>
 #include <regex>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -275,6 +278,13 @@ struct TypeNode {
     std::unique_ptr<TypeNode> child;
 };
 
+struct RoundtripStats {
+    std::size_t objects = 0;
+    std::size_t bytes = 0;
+    std::size_t pointers = 0;
+    std::size_t relocations = 0;
+};
+
 std::unique_ptr<TypeNode> parse_type(const HeaderDatabase& db, std::string text) {
     text = trim(std::move(text));
     std::vector<std::size_t> dims;
@@ -358,6 +368,25 @@ u64 read_uint(const Binary& b, addr_t at, std::size_t size) {
         for (std::size_t i = 0; i < size; ++i) v |= static_cast<u64>(std::to_integer<u8>(bytes[i])) << (i * 8);
     }
     return v;
+}
+
+void write_uint(std::span<std::byte> out, std::size_t offset, std::size_t size, u64 value,
+                Endian endian) {
+    if (offset > out.size() || size > out.size() - offset)
+        return;
+    for (std::size_t i = 0; i < size; ++i) {
+        const std::size_t shift_index = endian == Endian::Big ? size - i - 1 : i;
+        out[offset + i] = static_cast<std::byte>((value >> (shift_index * 8)) & 0xffu);
+    }
+}
+
+const Relocation* relocation_at(const Binary& b, addr_t site, std::size_t size) {
+    for (const auto& relocation : b.relocations()) {
+        if (relocation.site == site && (relocation.width == 0 || relocation.width == size)) {
+            return &relocation;
+        }
+    }
+    return nullptr;
 }
 
 std::string c_string_at(const Binary& b, addr_t at) {
@@ -456,6 +485,132 @@ std::string render_value(const HeaderDatabase& db, const Binary& b, const TypeNo
     return raw < 10 ? std::to_string(raw) : std::format("{:#x}", raw);
 }
 
+Result<RoundtripStats> verify_typed_roundtrip(const HeaderDatabase& db, const Binary& b,
+                                              const TypeNode& root, addr_t root_at,
+                                              std::size_t pointer_size) {
+    RoundtripStats stats;
+    std::set<std::pair<addr_t, std::string>> visited;
+    const auto verify_object = [&](auto&& self, const TypeNode& type, addr_t at,
+                                   unsigned depth) -> Result<void> {
+        if (depth > 12)
+            return {};
+        const std::size_t size = type_size(type, pointer_size);
+        if (size == 0 || b.bytes_at(at).size() < size) {
+            return std::unexpected(Error::invalid_format(
+                std::format("round-trip object {} at {:#x} is incomplete", type.name, at)));
+        }
+        const auto key = std::pair{at, type.name};
+        if (!visited.insert(key).second)
+            return {};
+        ++stats.objects;
+        stats.bytes += size;
+        std::vector<std::byte> encoded(size, std::byte{0});
+
+        const auto encode = [&](auto&& encode_self, const TypeNode& node, addr_t node_at,
+                                std::size_t out_offset, unsigned node_depth) -> Result<void> {
+            if (node_depth > 12)
+                return {};
+            if (node.kind == TypeNode::Kind::Pointer) {
+                const u64 raw = read_uint(b, node_at, pointer_size);
+                write_uint(encoded, out_offset, pointer_size, raw, b.endian());
+                ++stats.pointers;
+                if (relocation_at(b, node_at, pointer_size))
+                    ++stats.relocations;
+                const addr_t target = relocated_pointer(b, node_at, pointer_size);
+                if (target != 0 && node.child && node.child->kind == TypeNode::Kind::Record) {
+                    auto nested = self(self, *node.child, target, node_depth + 1);
+                    if (!nested)
+                        return nested;
+                }
+                return {};
+            }
+            if (node.kind == TypeNode::Kind::Array) {
+                const std::size_t stride = type_size(*node.child, pointer_size);
+                for (std::size_t i = 0; i < node.count; ++i) {
+                    auto item = encode_self(encode_self, *node.child, node_at + i * stride,
+                                            out_offset + i * stride, node_depth + 1);
+                    if (!item)
+                        return item;
+                }
+                return {};
+            }
+            if (node.kind == TypeNode::Kind::Record && node.record) {
+                for (const auto& field : node.record->fields) {
+                    auto field_type = parse_type(db, field.type);
+                    if (!field_type) {
+                        return std::unexpected(Error::invalid_format(
+                            std::format("round-trip cannot parse field type {}.{} ({})",
+                                        node.record->name, field.name, field.type)));
+                    }
+                    auto field_result =
+                        encode_self(encode_self, *field_type, node_at + field.offset,
+                                    out_offset + field.offset, node_depth + 1);
+                    if (!field_result)
+                        return field_result;
+                }
+                return {};
+            }
+            const std::size_t scalar_bytes = scalar_size(node.name);
+            const std::string rendered =
+                render_value(db, b, node, node_at, node_depth, pointer_size);
+            u64 roundtrip = 0;
+            const std::string base = base_type_name(node.name);
+            try {
+                if (base == "float" && scalar_bytes == 4) {
+                    std::string literal = rendered;
+                    if (!literal.empty() && literal.back() == 'f')
+                        literal.pop_back();
+                    const float value = std::stof(literal);
+                    u32 bits = 0;
+                    std::memcpy(&bits, &value, sizeof(bits));
+                    roundtrip = bits;
+                } else if (base == "double" && scalar_bytes == 8) {
+                    const double value = std::stod(rendered);
+                    std::memcpy(&roundtrip, &value, sizeof(value));
+                } else if (auto enum_it = db.enums.find(base); enum_it != db.enums.end()) {
+                    bool found = false;
+                    for (const auto& [value, name] : enum_it->second) {
+                        if (name == rendered) {
+                            roundtrip = static_cast<u64>(value);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                        roundtrip = std::stoull(rendered, nullptr, 0);
+                } else {
+                    roundtrip = std::stoull(rendered, nullptr, 0);
+                }
+            } catch (...) {
+                return std::unexpected(Error::invalid_format(
+                    std::format("round-trip cannot parse scalar '{}' for {} at {:#x}", rendered,
+                                node.name, node_at)));
+            }
+            write_uint(encoded, out_offset, scalar_bytes, roundtrip, b.endian());
+            return {};
+        };
+
+        auto encoded_result = encode(encode, type, at, 0, depth);
+        if (!encoded_result)
+            return encoded_result;
+        const auto original = b.bytes_at(at).first(size);
+        for (std::size_t i = 0; i < size; ++i) {
+            if (encoded[i] == original[i])
+                continue;
+            return std::unexpected(Error::invalid_format(
+                std::format("round-trip mismatch for {} at {:#x}+{:#x}: source "
+                            "{:#04x}, encoded {:#04x}",
+                            type.name, at, i, std::to_integer<unsigned>(original[i]),
+                            std::to_integer<unsigned>(encoded[i]))));
+        }
+        return {};
+    };
+    auto result = verify_object(verify_object, root, root_at, 0);
+    if (!result)
+        return std::unexpected(std::move(result).error());
+    return stats;
+}
+
 constexpr std::string_view kEvtNames[] = {
     "NEXT","END_SCRIPT","RETURN","LBL","GOTO","DO","WHILE","DO_BREAK","DO_CONTINUE",
     "WAIT_FRM","WAIT_MSEC","HALT","IF_STR_EQUAL","IF_STR_NOT_EQUAL","IF_STR_SMALL","IF_STR_LARGE",
@@ -502,6 +657,54 @@ std::string evt_arg(const Binary& b, addr_t site, i32 v, bool pointer_hint) {
         return std::format("{}({})", e.macro, v - e.base);
     }
     return std::to_string(v);
+}
+
+std::optional<i32> evt_scalar_from_rendered(std::string_view rendered) {
+    if (rendered.empty())
+        return std::nullopt;
+    i64 plain = 0;
+    const auto plain_result =
+        std::from_chars(rendered.data(), rendered.data() + rendered.size(), plain, 10);
+    if (plain_result.ec == std::errc{} && plain_result.ptr == rendered.data() + rendered.size() &&
+        plain >= std::numeric_limits<i32>::min() && plain <= std::numeric_limits<i32>::max()) {
+        return static_cast<i32>(plain);
+    }
+    struct Enc {
+        std::string_view macro;
+        i32 base;
+    };
+    constexpr Enc enc[] = {{"PTR", -270000000},  {"FLOAT", -240000000}, {"UF", -210000000},
+                           {"UW", -190000000},   {"GSW", -170000000},   {"LSW", -150000000},
+                           {"GSWF", -130000000}, {"LSWF", -110000000},  {"GF", -90000000},
+                           {"LF", -70000000},    {"GW", -50000000},     {"LW", -30000000}};
+    for (const auto& item : enc) {
+        const std::string prefix = std::string(item.macro) + "(";
+        if (!rendered.starts_with(prefix) || !rendered.ends_with(')'))
+            continue;
+        const std::string_view inner =
+            rendered.substr(prefix.size(), rendered.size() - prefix.size() - 1);
+        if (item.macro == "FLOAT") {
+            try {
+                const double value = std::stod(std::string(inner));
+                const i64 encoded = item.base + std::llround(value * 1024.0);
+                if (encoded < std::numeric_limits<i32>::min() ||
+                    encoded > std::numeric_limits<i32>::max())
+                    return std::nullopt;
+                return static_cast<i32>(encoded);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+        i64 value = 0;
+        const auto parsed = std::from_chars(inner.data(), inner.data() + inner.size(), value, 10);
+        if (parsed.ec != std::errc{} || parsed.ptr != inner.data() + inner.size())
+            return std::nullopt;
+        const i64 encoded = item.base + value;
+        if (encoded < std::numeric_limits<i32>::min() || encoded > std::numeric_limits<i32>::max())
+            return std::nullopt;
+        return static_cast<i32>(encoded);
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -605,13 +808,28 @@ int run_decompile_data(const Args& args, const Binary& b) {
         return EXIT_FAILURE;
     }
     std::string declaration = args.data_type;
-    const std::string var = unqualified(args.decompile_data);
+    const std::string var = parse_cli_addr(args.decompile_data)
+                                ? std::format("data_{:x}", *at)
+                                : unqualified(args.decompile_data);
     if (const auto bracket = declaration.find('['); bracket != std::string::npos)
         declaration.insert(bracket, " " + var);
     else
         declaration += " " + var;
-    std::println("{} = {};", declaration,
-                 render_value(*imported, b, *type, *at, 0, pointer_size));
+    const std::string initializer =
+        render_value(*imported, b, *type, *at, 0, pointer_size);
+    if (args.verify_roundtrip) {
+        auto verified = verify_typed_roundtrip(*imported, b, *type, *at, pointer_size);
+        if (!verified) {
+            std::println(stderr, "ember: --verify-roundtrip: {}: {}", verified.error().kind_name(),
+                         verified.error().message);
+            return EXIT_FAILURE;
+        }
+        std::println(stderr,
+                     "ember: round-trip verified: {} object(s), {:#x} bytes, {} "
+                     "pointer(s), {} relocation(s)",
+                     verified->objects, verified->bytes, verified->pointers, verified->relocations);
+    }
+    std::println("{} = {};", declaration, initializer);
     return EXIT_SUCCESS;
 }
 
@@ -624,6 +842,36 @@ int run_evt_script(const Args& args, const Binary& b) {
     std::println("EVT_BEGIN({})", unqualified(args.evt_script));
     addr_t pc = *at;
     unsigned indent = 1;
+    std::vector<std::byte> encoded;
+    std::size_t relocation_args = 0;
+    std::size_t symbolic_args = 0;
+    const auto append_word = [&](u32 value) {
+        const std::size_t offset = encoded.size();
+        encoded.resize(offset + 4);
+        write_uint(encoded, offset, 4, value, b.endian());
+    };
+    const auto verify_encoded = [&]() -> bool {
+        if (!args.verify_roundtrip)
+            return true;
+        const auto original = b.bytes_at(*at);
+        if (original.size() < encoded.size())
+            return false;
+        for (std::size_t i = 0; i < encoded.size(); ++i) {
+            if (original[i] == encoded[i])
+                continue;
+            std::println(stderr,
+                         "ember: --verify-roundtrip: event mismatch at {:#x}: "
+                         "source {:#04x}, encoded {:#04x}",
+                         *at + i, std::to_integer<unsigned>(original[i]),
+                         std::to_integer<unsigned>(encoded[i]));
+            return false;
+        }
+        std::println(stderr,
+                     "ember: round-trip verified: {} event bytes, {} symbolic "
+                     "argument(s), {} relocation(s)",
+                     encoded.size(), symbolic_args, relocation_args);
+        return true;
+    };
     for (std::size_t inst_no = 0; inst_no < 65536; ++inst_no) {
         if (b.bytes_at(pc).size() < 4) {
             std::println(stderr, "ember: --evt-script: truncated instruction at {:#x}", pc);
@@ -637,6 +885,7 @@ int run_evt_script(const Args& args, const Binary& b) {
             return EXIT_FAILURE;
         }
         const std::string_view name = kEvtNames[opcode];
+        append_word(word);
         if (name == "END_IF" || name == "END_SWITCH" || name == "WHILE" ||
             name == "END_INLINE" || name == "END_BROTHER" || name == "ELSE") {
             if (indent > 1) --indent;
@@ -650,12 +899,35 @@ int run_evt_script(const Args& args, const Binary& b) {
             const i32 value = static_cast<i32>(read_uint(b, arg_site, 4));
             const bool pointer_hint = (name == "USER_FUNC" && i == 0) ||
                 ((name == "RUN_EVT" || name == "RUN_CHILD_EVT" || name == "INLINE_EVT" || name == "BROTHER_EVT") && i == 0);
-            line += evt_arg(b, arg_site, value, pointer_hint);
+            const std::string rendered =
+                evt_arg(b, arg_site, value, pointer_hint);
+            line += rendered;
+            if (args.verify_roundtrip) {
+                const bool relocated = relocation_at(b, arg_site, 4) != nullptr;
+                if (relocated)
+                    ++relocation_args;
+                if (auto roundtrip = evt_scalar_from_rendered(rendered); roundtrip && !relocated) {
+                    if (*roundtrip != value) {
+                        std::println(stderr,
+                                     "ember: --verify-roundtrip: '{}' re-encodes as "
+                                     "{}, expected {} at {:#x}",
+                                     rendered, *roundtrip, value, arg_site);
+                        return EXIT_FAILURE;
+                    }
+                    append_word(static_cast<u32>(*roundtrip));
+                } else {
+                    ++symbolic_args;
+                    append_word(static_cast<u32>(value));
+                }
+            }
         }
         line += ')';
         std::println("{}", line);
         pc += 4 + static_cast<addr_t>(argc) * 4;
-        if (name == "END_SCRIPT") { std::println("EVT_END()"); return EXIT_SUCCESS; }
+        if (name == "END_SCRIPT") {
+            std::println("EVT_END()");
+            return verify_encoded() ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
         if (name.starts_with("IF_") || name.starts_with("IFF_") || name == "SWITCH" || name == "SWITCHI" ||
             name == "DO" || name == "INLINE_EVT" || name == "INLINE_EVT_ID" || name == "BROTHER_EVT" ||
             name == "BROTHER_EVT_ID" || name == "ELSE") ++indent;

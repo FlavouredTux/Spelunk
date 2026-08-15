@@ -1060,7 +1060,9 @@ int test_ppc_void_return_merge_becomes_entry_guard() {
 
     check(pc->find("void ppc_void_callback(void)") != std::string::npos,
           "incidental PPC r3 merge is inferred as void");
-    check(pc->find("if (!1) {\n    return;\n  }\n  sub_2000();") != std::string::npos,
+    check(pc->find(
+              "if (!1) {\n    return;\n  }\n  sub_2000() /* unresolved target "
+              "0x2000; inferred PPC signature (void) */;") != std::string::npos,
           "void tail if is recovered as an early entry guard");
     check(pc->find("return r3") == std::string::npos,
           "incidental PPC return-register value is not emitted");

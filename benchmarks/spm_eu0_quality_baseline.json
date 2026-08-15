@@ -1,19 +1,23 @@
 {
-  "schema": 1,
+  "schema": 2,
   "target": {
     "manifest": "spm_eu0_ppc.txt",
     "version": "EU0"
   },
   "totals": {
     "functions": 10,
-    "lines_of_pseudo_c": 914,
+    "lines_of_pseudo_c": 1094,
     "raw_register_references": 0,
     "versioned_ssa_references": 0,
     "temporary_references": 0,
     "opaque_ppc_intrinsics": 0,
     "generic_parameters": 0,
     "generic_field_references": 0,
-    "unresolved_symbol_calls": 15,
-    "structurer_failures": 0
+    "unresolved_symbol_calls": 26,
+    "structurer_failures": 0,
+    "constant_condition_artifacts": 0,
+    "unresolved_ssa_merges": 9,
+    "raw_pointer_literals": 0,
+    "syntax_failures": 0
   }
 }

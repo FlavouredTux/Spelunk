@@ -92,6 +92,14 @@ public:
         put(0x174, 0x4e800020);
         put(0x178, 0x3860ffff);
         put(0x17c, 0x4e800020);
+
+        // unknown_fp_leaf genuinely consumes f1. unknown_fp_forwarder merely
+        // calls it without writing f1; recursive inference must not turn the
+        // forwarder's untouched call snapshot into a phantom parameter.
+        put(0x180, 0xd02b0000); // stfs f1,0(r11)
+        put(0x184, 0x4e800020); // blr
+        put(0x190, 0x4bfffff1); // bl unknown_fp_leaf
+        put(0x194, 0x4e800020); // blr
         put(0x1c0, static_cast<ember::u32>(kBase + 0x160));
         put(0x1c4, static_cast<ember::u32>(kBase + 0x168));
         put(0x1c8, static_cast<ember::u32>(kBase + 0x170));
@@ -117,6 +125,8 @@ public:
         add_symbol("fmod", kBase + 0x118, 0x04);
         add_symbol("forwarded_fmod", kBase + 0x128, 0x08);
         add_symbol("codewarrior_switch", kBase + 0x140, 0x40);
+        add_symbol("unknown_fp_leaf", kBase + 0x180, 0x08);
+        add_symbol("unknown_fp_forwarder", kBase + 0x190, 0x08);
     }
 
     [[nodiscard]] ember::Format format() const noexcept override {
@@ -247,6 +257,11 @@ int main() {
               "defined fmod wrapper arg 1 is f1");
     check_reg(fmod_wrapper, 1, ember::Reg::PpcF2,
               "defined fmod wrapper arg 2 is f2");
+    check_eq(ember::infer_arity(binary, 0x80001180), 1,
+             "direct unknown PPC floating use remains an f1 parameter");
+    check_eq(ember::infer_arity(binary, 0x80001190), 0,
+             "unknown callee snapshots do not recursively manufacture f1 "
+             "parameters");
 
     const ember::InferenceResult ipa = ember::infer_signatures(binary);
     const auto forwarded_sig = ipa.sigs.find(0x800010c0);

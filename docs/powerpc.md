@@ -208,6 +208,11 @@ ember --headers /path/to/spm/spm-headers/include \
   --dtk /path/to/spm --version EU0 -p -s seq_mapChangeMain
 ```
 
+For multi-function work, `--symbols FILE` accepts the same comment-friendly,
+one-symbol-per-line format as the quality corpus. Ember loads the DOL/REL,
+DTK symbols, annotations, and headers once, prefixes each result with
+`// ember-symbol: NAME`, and reuses that project context across the batch.
+
 The importer is an optional CLI dependency. Builds made without libclang keep
 all ordinary decompilation features and report a focused error only when
 `--headers` is requested.
@@ -224,7 +229,7 @@ is bounded so corrupt or cyclic data cannot make the command run forever.
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
   --dtk /path/to/spm --version EU0 \
-  --decompile-data mapData --type 'MapData *[468]'
+  --decompile-data mapData --type 'MapData *[468]' --verify-roundtrip
 ```
 
 `--evt-script SYMBOL` is the SPM-specific companion. It decodes the packed
@@ -232,6 +237,18 @@ argument-count/opcode word, validates instruction boundaries, names callbacks
 through DOL/REL symbols, renders encoded values (`LW`, `GSW`, `FLOAT`, and the
 other event variable classes), and indents structured IF, SWITCH, DO, inline,
 and brother-event regions until `EVT_END()`.
+
+Add `--verify-roundtrip` to either command to validate output mechanically.
+Typed-data verification reparses emitted scalar/enum literals, checks record
+padding and recursively followed objects, and preserves pointer/relocation
+slots. Event verification reverses every variable macro, opcode, argument
+count, raw argument, callback, and relocation-backed symbol. A mismatch is a
+hard error; successful runs report the verified byte/object/relocation totals.
+
+Calls whose DTK name is still only `func_*` or `sub_*` retain that honest
+placeholder, but pseudo-C now appends the concrete target address and inferred
+PPC argument types. This makes unresolved callbacks actionable without
+inventing a semantic name that the binary cannot prove.
 
 ### CodeWarrior matching boundary
 
@@ -251,7 +268,9 @@ call sites. Run it with:
 python3 scripts/ppc_quality_benchmark.py \
   --ember ./build/cli/ember \
   --dtk /path/to/spm \
-  --version EU0
+  --version EU0 \
+  --headers /path/to/spm/spm-headers/include \
+  --roundtrip-manifest benchmarks/spm_eu0_roundtrip.txt
 ```
 
 Add `--timings` to collect wall-clock cost plus Ember's CFG, lift, SSA,
@@ -259,10 +278,19 @@ cleanup, type-inference, structurer, and emitter phase timings. Timing values
 are reported for diagnosis but deliberately excluded from pass/fail baseline
 comparisons because machine load is noisy.
 
+The benchmark uses Ember's batch mode by default, so project loading happens
+once. `--no-batch` retains the older one-process-per-function behavior for
+diagnosis. Repeatable `--headers` and `--header-arg` options exercise the same
+type overlay used during real decompilation. `--syntax-check` runs Clang over
+each generated function, while `--roundtrip-manifest` executes typed-data and
+event cases such as `benchmarks/spm_eu0_roundtrip.txt`.
+
 The report counts raw architectural registers and versioned SSA names,
 temporary identifiers, opaque `ppc.*` calls, generic parameters and fields,
 unresolved `func_`/`sub_` calls, and `STRUCTURER_FAIL` diagnostics. It also
-normalizes each lower-is-better metric per 1,000 lines. The checked-in
+checks constant conditions, unresolved SSA merges, raw event pointers, and
+optional syntax failures, then normalizes every lower-is-better metric per
+1,000 lines. The checked-in
 `benchmarks/spm_eu0_quality_baseline.json` captures the current corpus and can
 be enforced later:
 

@@ -242,11 +242,13 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                 // of unused parameters.
                 if (depth < 1) {
                     std::vector<InferredArgument> callee_layout;
+                    bool callee_layout_is_declared = false;
                     if (const Symbol* callee = b.defined_object_at(inst.target1);
                         callee && callee->kind == SymbolKind::Function &&
                         callee->addr == inst.target1) {
                         TypeArena arena;
                         if (auto spec = lookup_import_sig(callee->name, arena); spec) {
+                            callee_layout_is_declared = true;
                             std::size_t int_index = 0;
                             std::size_t fp_index = 0;
                             for (TypeRef param : spec->params) {
@@ -275,6 +277,19 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                                                                  : pending_int;
                         for (std::size_t i = 0; i < regs.size() && i < values.size(); ++i) {
                             if (canonical_reg(regs[i]) == canonical_reg(arg.reg)) {
+                                // A recursively inferred FPR lane is weak
+                                // evidence when this function merely forwards
+                                // its untouched entry value.  Every PPC call
+                                // snapshots f1..f8, so accepting that evidence
+                                // recursively lets one real floating callee
+                                // turn an entire integer-only wrapper chain
+                                // into phantom FP parameters.  A declared SDK
+                                // prototype (for example fmod) remains strong
+                                // enough to prove a forwarding wrapper.
+                                if (!callee_layout_is_declared && is_ppc_fpr(arg.reg) &&
+                                    values[i].kind == IrValueKind::Reg && values[i].version == 0) {
+                                    break;
+                                }
                                 mark_evidence(values[i], order, arg.pointer_like);
                                 break;
                             }

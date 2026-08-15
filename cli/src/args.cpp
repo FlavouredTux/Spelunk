@@ -78,6 +78,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--no-taint",  &Args::symuses_no_taint},
     {"",   "--verbose",   &Args::verbose},
     {"",   "--recover-imports", &Args::recover_imports},
+    {"",   "--verify-roundtrip", &Args::verify_roundtrip},
 });
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
@@ -89,6 +90,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--type",        &Args::data_type},
     {"",   "--evt-script",  &Args::evt_script},
     {"-s", "--symbol",      &Args::symbol},
+    {"",   "--symbols",     &Args::symbols_path},
     {"",   "--annotations", &Args::annotations_path},
     {"",   "--export-annotations", &Args::export_annotations},
     {"",   "--trace",       &Args::trace_path},

@@ -1,0 +1,3 @@
+# kind<TAB>symbol<TAB>type. Data cases require the SPM headers.
+data	mapData	MapData *[468]
+evt	lbl_80415e04

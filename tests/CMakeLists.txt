@@ -2596,6 +2596,14 @@ if(Python3_Interpreter_FOUND)
         DEPENDS "${_ppc32be_dol}" "${_ppc32be_dol_map}")
     set(EMBER_FIXTURE_ppc32be_dol_PATH "${_ppc32be_dol}")
 
+    add_test(
+        NAME ppc_workflow_cli
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/ppc_workflow_cli_test.py"
+                $<TARGET_FILE:ember_cli>
+                "${_ppc32be_dol}"
+    )
+
     set(_dtk_project "${_build_dir}/dtk_project")
     set(_dtk_object "${_dtk_project}/orig/EU0/sys/main.dol")
     set(_dtk_config "${_dtk_project}/config/EU0/config.yml")

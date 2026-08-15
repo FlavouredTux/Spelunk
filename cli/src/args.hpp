@@ -20,6 +20,8 @@ struct Args {
     std::string data_type;          // --type TYPE: type used by --decompile-data
     std::string evt_script;         // --evt-script SYMBOL/VA: decode an SPM EvtScriptCode array
     std::string symbol;
+    std::string
+        symbols_path; // --symbols FILE: batch view targets, one symbol per line
     std::string annotations_path;   // --annotations PATH: explicit project file with renames/sigs/notes
     std::string export_annotations; // --export-annotations PATH: promote resolved source to PATH and exit
     std::string trace_path;         // optional indirect-edge trace TSV (from\tto per line)
@@ -217,6 +219,8 @@ struct Args {
     bool collisions = false;        // --collisions: dump every name/fingerprint group bound to >1 address
     std::string functions_pattern;  // optional substring filter for --functions (second positional)
     bool quiet  = false;            // suppress progress output regardless of TTY
+    bool verify_roundtrip =
+        false; // verify typed data/event decoding reproduces source bytes
     bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
     bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
     bool debug  = false;            // --debug: launch the binary under the built-in REPL debugger

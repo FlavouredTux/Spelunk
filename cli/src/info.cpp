@@ -99,6 +99,10 @@ void help_view() {
     std::println("      --struct         structured regions (implies -O)");
     std::println("  -p, --pseudo         pseudo-C output (implies --struct)");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
+    std::println("      --symbols FILE   batch the selected view over one "
+                 "symbol per line;");
+    std::println("                       loads the binary/DTK project and "
+                 "headers only once");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --show-provenance  emit `// confidence: ...` headers when annotation meta is set");
     std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns)");
@@ -304,6 +308,10 @@ void help_data() {
     std::println("      --evt-script SYMBOL");
     std::println("                       decode an SPM EvtScriptCode array into EVT macros,");
     std::println("                       structured indentation, variables, and callbacks");
+    std::println("      --verify-roundtrip  with typed data/event decoding, "
+                 "verify that the");
+    std::println("                       decoded representation reproduces "
+                 "bytes/relocations");
 }
 
 void help_patch() {

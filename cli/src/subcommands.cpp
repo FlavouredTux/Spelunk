@@ -86,6 +86,48 @@ namespace ember::cli {
 
 namespace {
 
+[[nodiscard]] Result<std::vector<std::string>> load_view_symbols(const Args& args) {
+    if (args.symbols_path.empty())
+        return std::vector<std::string>{args.symbol};
+    if (!args.symbol.empty()) {
+        return std::unexpected(
+            Error::invalid_format("--symbols cannot be combined with -s/--symbol"));
+    }
+    std::ifstream in(args.symbols_path);
+    if (!in) {
+        return std::unexpected(Error::io("could not open symbol manifest: " + args.symbols_path));
+    }
+    std::vector<std::string> symbols;
+    std::set<std::string> seen;
+    std::string line;
+    std::size_t line_number = 0;
+    while (std::getline(in, line)) {
+        ++line_number;
+        if (const auto hash = line.find('#'); hash != std::string::npos) {
+            line.resize(hash);
+        }
+        const auto first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+            continue;
+        const auto last = line.find_last_not_of(" \t\r\n");
+        std::string symbol = line.substr(first, last - first + 1);
+        if (symbol.find_first_of(" \t") != std::string::npos) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "{}:{}: symbol must not contain whitespace", args.symbols_path, line_number)));
+        }
+        if (!seen.insert(symbol).second) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "{}:{}: duplicate symbol '{}'", args.symbols_path, line_number, symbol)));
+        }
+        symbols.push_back(std::move(symbol));
+    }
+    if (symbols.empty()) {
+        return std::unexpected(
+            Error::invalid_format(args.symbols_path + ": symbol manifest is empty"));
+    }
+    return symbols;
+}
+
 constexpr std::string_view kXrefsCacheTag = "xrefs-v5";
 constexpr std::string_view kAritiesCacheTag = "arities-v3";
 constexpr std::string_view kFunctionsCacheTag = "functions-v6";
@@ -5673,6 +5715,11 @@ namespace {
 }  // namespace
 
 int run_emit(const Args& args, const Binary& b) {
+    auto view_symbols_r = load_view_symbols(args);
+    if (!view_symbols_r)
+        return report(view_symbols_r.error());
+    const std::vector<std::string>& view_symbols = *view_symbols_r;
+    const bool batch = !args.symbols_path.empty();
     bool ann_loaded = false;
     Annotations annotations = load_annotations_for(args, ann_loaded);
 
@@ -5704,6 +5751,15 @@ int run_emit(const Args& args, const Binary& b) {
     EmitOptions emit_opts;
     emit_opts.show_bb_labels  = args.labels;
     emit_opts.show_provenance = args.show_provenance;
+    std::unordered_set<addr_t> known_function_entries;
+    if (batch && (args.pseudo || args.strct || args.cfg_pseudo)) {
+        const auto functions = enumerate_functions(b);
+        known_function_entries.reserve(functions.size());
+        for (const auto& function : functions) {
+            known_function_entries.insert(function.addr);
+        }
+        emit_opts.known_function_entries = &known_function_entries;
+    }
 
     // IPA: one-shot fixed-point over the call graph before emission so
     // char*-arg propagation can cross function boundaries. Expensive on
@@ -5731,10 +5787,15 @@ int run_emit(const Args& args, const Binary& b) {
         // observed. When the symbol can't be resolved the format step is
         // about to bail with "no symbol named X", so don't bother
         // resolving anything either.
-        if (auto win = resolve_function(b, args.symbol)) {
-            const addr_t fn = win->start;
-            const std::span<const addr_t> scope{&fn, 1};
-            std::println(stderr, "ember: resolving indirect calls (vtable + import back-trace)...");
+        std::vector<addr_t> scope;
+        scope.reserve(view_symbols.size());
+        for (const auto& symbol : view_symbols) {
+            if (auto win = resolve_function(b, symbol, ann_ptr))
+                scope.push_back(win->start);
+        }
+        if (!scope.empty()) {
+            std::println(stderr, "ember: resolving indirect calls (vtable + "
+                                 "import back-trace)...");
             std::fflush(stderr);
             resolutions = resolve_indirect_calls(b, &shared_ir_cache, scope);
             std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
@@ -5770,25 +5831,49 @@ int run_emit(const Args& args, const Binary& b) {
         selrefs = parse_objc_selrefs(b);
         if (!selrefs.empty()) emit_opts.objc_selrefs = &selrefs;
     }
+    auto run_each = [&](auto&& emit_one) {
+        for (std::size_t i = 0; i < view_symbols.size(); ++i) {
+            if (batch) {
+                if (i != 0)
+                    std::println("");
+                std::println("// ember-symbol: {}", view_symbols[i]);
+            }
+            if (const int rc = emit_one(view_symbols[i]); rc != EXIT_SUCCESS) {
+                return rc;
+            }
+        }
+        return EXIT_SUCCESS;
+    };
     if (args.pseudo) {
         ScopedTimer t("emit_pseudo");
-        return run_struct(b, args.symbol, /*pseudo=*/true, ann_ptr, emit_opts);
+        return run_each([&](std::string_view symbol) {
+            return run_struct(b, symbol, /*pseudo=*/true, ann_ptr, emit_opts);
+        });
     }
     if (args.strct) {
         ScopedTimer t("emit_struct");
-        return run_struct(b, args.symbol, /*pseudo=*/false, ann_ptr, emit_opts);
+        return run_each([&](std::string_view symbol) {
+            return run_struct(b, symbol, /*pseudo=*/false, ann_ptr, emit_opts);
+        });
     }
     if (args.ir) {
-        return run_ir(b, args.symbol, args.ssa, args.opt, ann_ptr);
+        return run_each([&](std::string_view symbol) {
+            return run_ir(b, symbol, args.ssa, args.opt, ann_ptr);
+        });
     }
     if (args.cfg_pseudo) {
-        return run_cfg_pseudo(b, args.symbol, ann_ptr, emit_opts);
+        return run_each(
+            [&](std::string_view symbol) { return run_cfg_pseudo(b, symbol, ann_ptr, emit_opts); });
     }
     if (args.cfg) {
-        return run_cfg(b, args.symbol, ann_ptr);
+        return run_each([&](std::string_view symbol) { return run_cfg(b, symbol, ann_ptr); });
     }
     if (args.disasm) {
-        return run_disasm(b, args.symbol, ann_ptr);
+        return run_each([&](std::string_view symbol) { return run_disasm(b, symbol, ann_ptr); });
+    }
+    if (batch) {
+        std::println(stderr, "ember: --symbols requires a function view such as -p or -d");
+        return EXIT_FAILURE;
     }
     constexpr std::size_t kDefaultInfoRowLimit = 2000;
     const std::size_t info_limit = args.row_limit_set

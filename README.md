@@ -135,6 +135,12 @@ Ember's pseudo-C is reverse-engineering guidance, not a promise of the original
 CodeWarrior source. Exact byte matching still requires objdiff-led iteration on
 source structure, declaration order, stack placement, expression spelling, and
 other compiler-sensitive details.
+`scripts/ppc_match_loop.py` automates that final iteration for controlled source
+alternatives. It reuses the unit's exact Ninja/CodeWarrior command, compiles
+every candidate outside the decompilation checkout, ranks the requested
+function through objdiff's one-shot JSON diff, and preserves `best.c`, `best.o`,
+`best.objdiff.json`, and a reproducible result manifest without editing the
+original source.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, binary-only limits, the `--ppc-coverage`
 decoder/semantic-gap report, and the repeatable SPM pseudo-C quality benchmark.

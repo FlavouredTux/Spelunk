@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "choices": [
+    {
+      "name": "comparison-shape",
+      "category": "condition",
+      "find": "value < limit",
+      "alternatives": [
+        {
+          "name": "swapped-operands",
+          "text": "limit > value"
+        },
+        {
+          "name": "negated-opposite",
+          "text": "!(value >= limit)"
+        }
+      ]
+    },
+    {
+      "name": "argument-cast",
+      "category": "cast",
+      "find": "callback(value);",
+      "alternatives": [
+        {
+          "name": "signed-cast",
+          "text": "callback((s32)value);"
+        },
+        {
+          "name": "unsigned-cast",
+          "text": "callback((u32)value);"
+        }
+      ]
+    },
+    {
+      "name": "local-order",
+      "category": "declarations",
+      "find": "    Vec3 position;\n    Vec3 offset;",
+      "alternatives": [
+        {
+          "name": "offset-first",
+          "text": "    Vec3 offset;\n    Vec3 position;"
+        }
+      ]
+    }
+  ]
+}

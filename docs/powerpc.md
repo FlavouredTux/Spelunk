@@ -258,6 +258,76 @@ as a typed starting point. Byte-for-byte CodeWarrior matching still needs
 manual objdiff iteration over control-flow spelling, local declaration order,
 stack layout, temporary lifetimes, casts, and compiler-sensitive expressions.
 
+### Automated CodeWarrior matching loop
+
+`scripts/ppc_match_loop.py` exhaustively evaluates a bounded set of controlled
+source alternatives. It reads the selected unit from `objdiff.json`, asks Ninja
+for that unit's real compiler invocation, substitutes only the candidate source
+and isolated output directory, then scores the requested function with
+objdiff's one-shot JSON diff:
+
+```sh
+python3 scripts/ppc_match_loop.py \
+  --project /path/to/spm \
+  --unit main/mario_motion \
+  --symbol mot_22 \
+  --spec mot22-variants.json \
+  --output-dir /tmp/mot22-match \
+  --jobs 4 \
+  --fail-unmatched
+```
+
+The version-1 JSON spec contains exact, non-overlapping source choices. The
+current source spelling is always included automatically, so alternatives only
+describe the variants worth testing. A single spec can combine equivalent
+comparison direction, casts, condition layouts, expression spelling, and local
+declaration order:
+
+```json
+{
+  "version": 1,
+  "choices": [
+    {
+      "name": "delay-condition",
+      "category": "condition",
+      "find": "timer > 0.0f",
+      "alternatives": [
+        { "name": "swapped", "text": "0.0f < timer" },
+        { "name": "negated", "text": "!(timer <= 0.0f)" }
+      ]
+    },
+    {
+      "name": "locals",
+      "category": "declarations",
+      "find": "    Vec3 position;\n    Vec3 offset;",
+      "alternatives": [
+        { "name": "offset-first", "text": "    Vec3 offset;\n    Vec3 position;" }
+      ]
+    }
+  ]
+}
+```
+
+See `docs/ppc_match_spec.example.json` for a larger template. If `find` occurs
+more than once, set a 1-based `occurrence`; overlapping choices are rejected.
+The Cartesian product is complete and deterministic, and the tool refuses to
+silently truncate it beyond `--max-candidates` (256 by default).
+
+Candidates are compiled in parallel under the marked output directory. The
+input source and project are never rewritten. Identical reruns reuse cached
+candidate results. `best.c` contains clean source without the synthetic
+`#line` used for compilation, `best.o` is the corresponding CodeWarrior object,
+and `best.objdiff.json` is the full diff evidence. `results.json` records every
+choice, command, timing, object path, exact percentage, function sizes, and diff
+count; `summary.txt` is the compact result. `--fail-unmatched` returns 1 unless
+objdiff reports an exact 100% function match.
+
+objdiff 3.8 or newer provides the direct per-function JSON path. Older versions
+fall back to a temporary one-unit progress report, but updating is recommended
+for speed and exact function-focused scoring. The workflow intentionally does
+not invent casts or reorder statements on its own: only alternatives explicitly
+asserted to be semantically equivalent are compiled.
+
 ### Repeatable SPM pseudo-C benchmark
 
 The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function

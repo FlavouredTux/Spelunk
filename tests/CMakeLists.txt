@@ -1501,6 +1501,12 @@ if(Python3_Interpreter_FOUND)
                 "${CMAKE_SOURCE_DIR}/tests/ppc_quality_benchmark_test.py"
                 "${CMAKE_SOURCE_DIR}/scripts/ppc_quality_benchmark.py"
     )
+    add_test(
+        NAME ppc_match_loop_unit
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tests/ppc_match_loop_test.py"
+                "${CMAKE_SOURCE_DIR}/scripts/ppc_match_loop.py"
+    )
 
     function(ember_build_python_macho_fixture name script)
         set(_out "${_build_dir}/${name}")

@@ -218,9 +218,16 @@ void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out)
     // here so the rendered `while (...)` expresses the actual continue
     // condition.
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    const auto condition_key = ssa_key(r.condition);
+    if (condition_key) deferred_ctr_conditions.insert(*condition_key);
     out += std::format("{}do {{\n", ind);
     for (const auto& c : r.children) emit_region(*c, depth + 1, out);
+    if (condition_key) active_ctr_tail_conditions.insert(*condition_key);
     const std::string cond = render_condition(r.condition, r.invert);
+    if (condition_key) {
+        active_ctr_tail_conditions.erase(*condition_key);
+        deferred_ctr_conditions.erase(*condition_key);
+    }
     emit_materializations_for_rendered_value(
         r.condition, cond, out,
         std::string(static_cast<std::size_t>(depth + 1) * 2u, ' '));

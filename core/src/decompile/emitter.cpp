@@ -654,6 +654,10 @@ struct Emitter {
     // `u64 r_fopen = fopen(...); if (r_fopen == 0)`.
     std::map<SsaKey, std::string>                    call_return_names;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> bound_call_key;
+    // A do-while tail can also appear as a duplicated inner continue/break
+    // region. Only the canonical tail spelling may consume PPC CTR.
+    mutable std::set<SsaKey>                         deferred_ctr_conditions;
+    mutable std::set<SsaKey>                         active_ctr_tail_conditions;
     // Direct callee address -> return type recovered from the union of its
     // call sites in this function. One dereferenced return is enough to keep
     // sibling calls from falling back to an integer ABI-width declaration.
@@ -1017,7 +1021,9 @@ struct Emitter {
             type.find('[') != std::string_view::npos) {
             return false;
         }
-        return type.find("double") != std::string_view::npos ||
+        type = trim_line_view(type);
+        return type == "f32" || type == "f64" ||
+               type.find("double") != std::string_view::npos ||
                type.find("float") != std::string_view::npos;
     }
 
@@ -1470,8 +1476,12 @@ struct Emitter {
             if (auto it = call_return_names.find(k); it != call_return_names.end()) {
                 return it->second;
             }
-            if (auto arg = preserved_call_arg_for_clobber(cur_reg, cur_ver); arg) {
-                return expr(*arg, 0);
+            if (auto arg = preserved_call_arg_for_clobber(cur_reg, cur_ver);
+                arg && depth < kMaxExprDepth) {
+                // Keep the caller's expression-depth budget. Resetting it to
+                // zero lets mutually preserved call lanes recurse forever in
+                // large PPC functions.
+                return expr(*arg, depth + 1);
             }
             if (cur_ver == 0) {
                 if (auto n = arg_name_for_live_in(cur_reg)) return *n;
@@ -2402,6 +2412,8 @@ struct Emitter {
             if (base == "s16" || base == "i16") return "int16_t";
             if (base == "s32" || base == "i32") return "int32_t";
             if (base == "s64" || base == "i64") return "int64_t";
+            if (base == "f32") return "float";
+            if (base == "f64") return "double";
             return {};
         };
 
@@ -7090,7 +7102,15 @@ struct Emitter {
 
     [[nodiscard]] const IrInst* def_stripped(const IrValue& v) const noexcept {
         const IrInst* d = def_of(v);
+        std::array<const IrInst*, 64> visited{};
+        std::size_t visited_count = 0;
         while (d && d->op == IrOp::Assign && d->src_count == 1) {
+            if (visited_count == visited.size() ||
+                std::find(visited.begin(), visited.begin() + visited_count, d) !=
+                    visited.begin() + visited_count) {
+                return nullptr;
+            }
+            visited[visited_count++] = d;
             const IrInst* n = def_of(d->srcs[0]);
             if (!n) return d;
             d = n;
@@ -7544,8 +7564,48 @@ struct Emitter {
         return std::nullopt;
     }
 
+    [[nodiscard]] std::optional<std::string>
+    render_ppc_ctr_condition(const IrValue& v, bool invert) const {
+        if (!is_ppc_abi()) return std::nullopt;
+        if (auto key = ssa_key(v); key && deferred_ctr_conditions.contains(*key) &&
+            !active_ctr_tail_conditions.contains(*key)) {
+            return std::nullopt;
+        }
+        const IrInst* compare = def_stripped(v);
+        if (!compare || (compare->op != IrOp::CmpEq && compare->op != IrOp::CmpNe) ||
+            compare->src_count < 2) {
+            return std::nullopt;
+        }
+        const IrValue* decremented = nullptr;
+        if (compare->srcs[0].kind == IrValueKind::Imm &&
+            compare->srcs[0].imm == 0) {
+            decremented = &compare->srcs[1];
+        } else if (compare->srcs[1].kind == IrValueKind::Imm &&
+                   compare->srcs[1].imm == 0) {
+            decremented = &compare->srcs[0];
+        }
+        if (!decremented) return std::nullopt;
+        const IrInst* sub = def_stripped(*decremented);
+        if (!sub || sub->op != IrOp::Sub || sub->src_count < 2 ||
+            sub->srcs[1].kind != IrValueKind::Imm || sub->srcs[1].imm != 1) {
+            return std::nullopt;
+        }
+        const IrInst* phi = def_stripped(sub->srcs[0]);
+        if (!phi || phi->op != IrOp::Phi || phi->dst.kind != IrValueKind::Reg ||
+            canonical_reg(phi->dst.reg) != Reg::PpcCtr) {
+            return std::nullopt;
+        }
+        auto key = ssa_key(phi->dst);
+        if (!key) return std::nullopt;
+        auto named = merge_value_names.find(*key);
+        if (named == merge_value_names.end()) return std::nullopt;
+        const bool nonzero = (compare->op == IrOp::CmpNe) != invert;
+        return std::format("--{} {} 0", named->second, nonzero ? "!=" : "==");
+    }
+
     [[nodiscard]] std::string render_condition(const IrValue& v, bool invert) const {
         // Condition is rendered into `if (...)`, so no outer wrapping needed.
+        if (auto ctr = render_ppc_ctr_condition(v, invert); ctr) return *ctr;
         if (auto s = try_simplify_flag(v, 0, invert, /*in_bool_ctx=*/true, 0); s) return *s;
         if (invert) {
             std::string base = expr(v, 0, std::to_underlying(Prec::Unary));
@@ -8693,8 +8753,10 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 arity = arity ? std::max(*arity, observed) : observed;
             }
             std::vector<IrValue> used_args;
+            const bool trim_unproven_registers = !objc_sized && !annotated_sig;
             std::string args = arity
-                ? format_call_args_with_arity(call_args, *arity, !objc_sized,
+                ? format_call_args_with_arity(call_args, *arity,
+                                              trim_unproven_registers,
                                               &used_args, &rendered_call_args)
                 : format_call_args_fallback(call_args, &used_args);
             const std::string& callee = direct_name;

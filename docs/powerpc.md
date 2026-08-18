@@ -156,6 +156,12 @@ ordinary arithmetic instead of `ppc.fmadds(...)` or `ppc.frsp(...)`.
 The common Metrowerks `fctiwz; stfd; lwz` sequence is also folded into a signed
 integer cast, removing the temporary stack spill used only to move the
 converted payload from an FPR into a GPR.
+Header aliases `f32` and `f64` participate in the same ABI classification as
+`float` and `double`. This is important for mixed-lane Wii calls: an `f32`
+return binds the post-call `f1` value, and `f32` parameters consume FPR slots
+without displacing independently numbered GPR arguments. PPC `bdnz`/CTR loops
+retain their predecrement side effect as `--i != 0` (or `--i == 0` for a break)
+instead of the incorrect non-mutating `i - 1` condition.
 Unquantized `psq_l`/`psq_st` operations using the conventional Wii GQR0 pair
 mode lift as ordinary `float2` loads and stores. Single-lane and quantized GQR
 forms keep explicit PPC helpers until their lane and scale semantics can be

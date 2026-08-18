@@ -676,6 +676,66 @@ int test_phi_livein_initializer_is_mined() {
     return 0;
 }
 
+int test_ppc_ctr_loop_keeps_predecrement() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x402180;
+    IrValue ctr1 = IrValue::make_reg(Reg::PpcCtr, IrType::I32);
+    IrValue ctr2 = ctr1;
+    IrValue ctr3 = ctr1;
+    ctr1.version = 1;
+    ctr2.version = 2;
+    ctr3.version = 3;
+    const IrValue decremented = IrValue::make_temp(0, IrType::I32);
+    const IrValue condition = IrValue::make_temp(1, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x20;
+    fn.name = "ppc_ctr_loop";
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Conditional;
+    bb.insts.push_back(make_assign(ctr1, IrValue::make_imm(5, IrType::I32)));
+    bb.insts.push_back(make_phi(ctr2, {ctr1, ctr3}));
+    IrInst sub;
+    sub.op = IrOp::Sub;
+    sub.dst = decremented;
+    sub.srcs[0] = ctr2;
+    sub.srcs[1] = IrValue::make_imm(1, IrType::I32);
+    sub.src_count = 2;
+    bb.insts.push_back(sub);
+    bb.insts.push_back(make_assign(ctr3, decremented));
+    IrInst compare;
+    compare.op = IrOp::CmpNe;
+    compare.dst = condition;
+    compare.srcs[0] = decremented;
+    compare.srcs[1] = IrValue::make_imm(0, IrType::I32);
+    compare.src_count = 2;
+    bb.insts.push_back(compare);
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto loop = std::make_unique<Region>();
+    loop->kind = RegionKind::DoWhile;
+    loop->condition = condition;
+    loop->children.push_back(std::move(block));
+    StructuredFunction sf{&fn, std::move(loop)};
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "PPC CTR loop pseudo-C emits");
+    if (!pc) return 1;
+    check(pc->find("while (--i != 0);") != std::string::npos,
+          "bdnz condition retains the CTR predecrement side effect");
+    return 0;
+}
+
 int test_phi_accumulator_name_is_mined() {
     using namespace ember;
 
@@ -1709,7 +1769,7 @@ int test_ppc_annotated_float_call_selects_f1() {
 
     Annotations ann;
     FunctionSig sig;
-    sig.return_type = "float";
+    sig.return_type = "f32";
     ann.signatures[kTarget] = std::move(sig);
 
     MockPpcBinary binary;
@@ -1718,7 +1778,7 @@ int test_ppc_annotated_float_call_selects_f1() {
     check(pc.has_value(), "annotated PPC float-return call emits");
     if (!pc) return 1;
     check(pc->find("float r_sub_1600 = sub_1600()") != std::string::npos,
-          "annotated float signature selects and types the f1 result lane");
+          "annotated f32 signature selects and types the f1 result lane");
     check(pc->find("f1_1") == std::string::npos,
           "annotated float call does not leak the f1 SSA name");
     return 0;
@@ -2299,6 +2359,7 @@ int main() {
     rc |= test_phi_merge_names_are_mined();
     rc |= test_phi_induction_name_is_mined();
     rc |= test_phi_livein_initializer_is_mined();
+    rc |= test_ppc_ctr_loop_keeps_predecrement();
     rc |= test_phi_accumulator_name_is_mined();
     rc |= test_ppc_float_phi_keeps_float_type_after_integer_seed();
     rc |= test_ppc_float_compare_does_not_integer_cast();

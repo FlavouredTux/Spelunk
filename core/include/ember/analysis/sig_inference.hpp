@@ -2,6 +2,7 @@
 
 #include <array>
 #include <map>
+#include <span>
 
 #include <ember/analysis/ir_cache.hpp>
 #include <ember/binary/binary.hpp>
@@ -55,6 +56,7 @@ struct InferenceResult {
 // can be handed the same cache so a function only ever pays its lift +
 // SSA + cleanup cost once across the whole CLI invocation.
 [[nodiscard]] InferenceResult
-infer_signatures(const Binary& b, IrCache* cache = nullptr);
+infer_signatures(const Binary& b, IrCache* cache = nullptr,
+                 std::span<const addr_t> roots = {});
 
 }  // namespace ember

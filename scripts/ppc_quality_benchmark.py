@@ -36,7 +36,7 @@ _TEMPORARY = re.compile(r"\bt[0-9]+\b")
 _OPAQUE_PPC = re.compile(r"\bppc\.[A-Za-z0-9_.]+\s*\(")
 _GENERIC_PARAMETER = re.compile(r"\ba[0-9]+\b")
 _GENERIC_FIELD = re.compile(r"(?:->|\.)field_[0-9a-fA-F]+\b")
-_UNRESOLVED_CALL = re.compile(r"\b(?:sub|func)_[0-9a-fA-F]+\s*\(")
+_UNRESOLVED_CALL = re.compile(r"/\*\s*unresolved target\b")
 _CONSTANT_CONDITION = re.compile(
     r"\b(?:if|while)\s*\(\s*!?\s*(?:0|1|true|false)\s*\)"
 )

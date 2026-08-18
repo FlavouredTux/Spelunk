@@ -318,6 +318,37 @@ return_type_value(const std::map<SsaKey, const IrInst*>& defs, IrValue v) {
     return out;
 }
 
+[[nodiscard]] bool substantive_return_value(
+    const std::map<SsaKey, const IrInst*>& defs, IrValue value,
+    std::set<SsaKey>& seen, int depth = 0) {
+    if (depth > 12) return false;
+    auto key = ssa_key(value);
+    if (!key || !seen.insert(*key).second) return false;
+    auto found = defs.find(*key);
+    if (found == defs.end()) return false;
+    const IrInst* definition = found->second;
+    if (definition->op == IrOp::Clobber) return false;
+    if (definition->op == IrOp::Assign && definition->src_count >= 1) {
+        return substantive_return_value(
+            defs, definition->srcs[0], seen, depth + 1);
+    }
+    if (definition->op == IrOp::Phi) {
+        bool saw_operand = false;
+        for (const IrValue& operand : definition->phi_operands) {
+            if (auto operand_key = ssa_key(operand); operand_key && *operand_key == *key) {
+                continue;
+            }
+            std::set<SsaKey> branch_seen = seen;
+            if (!substantive_return_value(defs, operand, branch_seen, depth + 1)) {
+                return false;
+            }
+            saw_operand = true;
+        }
+        return saw_operand;
+    }
+    return true;
+}
+
 [[nodiscard]] TypeRef type_ref_for_ir(TypeArena& arena,
                                       IrType type,
                                       bool is_signed) {
@@ -327,6 +358,8 @@ return_type_value(const std::map<SsaKey, const IrInst*>& defs, IrValue v) {
         case IrType::I16: return arena.int_t(16, true,  is_signed);
         case IrType::I32: return arena.int_t(32, true,  is_signed);
         case IrType::I64: return arena.int_t(64, true,  is_signed);
+        case IrType::F32: return arena.float_t(32);
+        case IrType::F64: return arena.float_t(64);
         default:          return arena.top();
     }
 }
@@ -338,20 +371,42 @@ void harvest_typed_sig(const IrFunction& fn, Abi abi,
                        TypeArena& arena, InferredSig& sig) {
     // Return type: meet of every Return-instruction's operand type.
     const auto defs = build_defs(fn);
+    bool saw_return = false;
+    bool saw_substantive_return = false;
     for (const auto& bb : fn.blocks) {
         for (const auto& inst : bb.insts) {
-            if (inst.op != IrOp::Return || inst.src_count == 0) continue;
-            const ReturnTypeValue ret = return_type_value(defs, inst.srcs[0]);
+            if (inst.op != IrOp::Return) continue;
+            saw_return = true;
+            if (inst.src_count == 0) continue;
+            IrValue selected = inst.srcs[0];
+            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                const IrValue& candidate = inst.srcs[i];
+                if (!is_float_type(candidate.type)) continue;
+                std::set<SsaKey> seen;
+                if (substantive_return_value(defs, candidate, seen)) {
+                    selected = candidate;
+                    break;
+                }
+            }
+            std::set<SsaKey> selected_seen;
+            if (!substantive_return_value(defs, selected, selected_seen)) continue;
+            saw_substantive_return = true;
+            const ReturnTypeValue ret = return_type_value(defs, selected);
             TypeRef src_t = fn.type_of(ret.value);
-            if (src_t.is_top() && ret.widened_from_narrow) {
-                src_t = type_ref_for_ir(arena, ret.value.type, ret.is_signed);
-                sig.return_type = arena.meet(sig.return_type, src_t);
+            if (src_t.is_top()) {
+                const TypeRef fallback = type_ref_for_ir(
+                    arena, ret.value.type, ret.is_signed);
+                if (!fallback.is_top()) {
+                    sig.return_type = arena.meet(sig.return_type, fallback);
+                }
                 continue;
             }
-            if (src_t.is_top()) continue;
             const TypeRef dst_t = translate(fn.types, arena, src_t);
             sig.return_type = arena.meet(sig.return_type, dst_t);
         }
+    }
+    if (saw_return && !saw_substantive_return) {
+        sig.return_type = arena.meet(sig.return_type, arena.void_t());
     }
     // Param types: walk SSA defs once; the version-0 read of each int-arg
     // register IS the parameter, so its inferred type is the param type.
@@ -413,12 +468,37 @@ void seed_internal_call_return_types(
 
 }  // namespace
 
-InferenceResult infer_signatures(const Binary& b, IrCache* cache) {
+InferenceResult infer_signatures(const Binary& b, IrCache* cache,
+                                 std::span<const addr_t> roots) {
     InferenceResult out;
     auto& sigs = out.sigs;
     IrCache local_cache;
     IrCache& ir_cache = cache ? *cache : local_cache;
-    const auto entries = collect_entries(b);
+    std::vector<addr_t> entries;
+    const auto all_entries = collect_entries(b);
+    if (roots.empty()) {
+        entries.assign(all_entries.begin(), all_entries.end());
+    } else {
+        const std::set<addr_t> allowed(all_entries.begin(), all_entries.end());
+        std::set<addr_t> selected;
+        std::vector<addr_t> pending(roots.begin(), roots.end());
+        while (!pending.empty()) {
+            const addr_t entry = pending.back();
+            pending.pop_back();
+            if (!allowed.contains(entry) || !selected.insert(entry).second) continue;
+            IrFunction* ir = lift_cached(ir_cache, b, entry);
+            if (!ir) continue;
+            for (const IrBlock& block : ir->blocks) {
+                for (const IrInst& inst : block.insts) {
+                    if (inst.op == IrOp::Call && allowed.contains(inst.target1) &&
+                        !selected.contains(inst.target1)) {
+                        pending.push_back(inst.target1);
+                    }
+                }
+            }
+        }
+        entries.assign(selected.begin(), selected.end());
+    }
     const Abi abi = abi_for(b.format(), b.arch(), b.endian());
 
     // Fixed-point: rescan every function until both the charp bitset and

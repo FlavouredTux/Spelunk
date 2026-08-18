@@ -2289,6 +2289,33 @@ struct Emitter {
         return nullptr;
     }
 
+    [[nodiscard]] const InferredSig*
+    call_inferred_signature(const IrInst& inst) const noexcept {
+        if (!options.signatures) return nullptr;
+        std::optional<addr_t> target;
+        if (inst.op == IrOp::Call) {
+            target = inst.target1;
+        } else if (inst.op == IrOp::CallIndirect && options.call_resolutions &&
+                   inst.source_addr != 0) {
+            if (auto found = options.call_resolutions->find(inst.source_addr);
+                found != options.call_resolutions->end()) {
+                target = found->second;
+            }
+        }
+        if (!target) return nullptr;
+        auto found = options.signatures->find(*target);
+        return found != options.signatures->end() ? &found->second : nullptr;
+    }
+
+    [[nodiscard]] bool call_has_inferred_signature(const IrInst& inst) const {
+        const InferredSig* signature = call_inferred_signature(inst);
+        if (!signature || !options.type_arena) return false;
+        if (!signature->return_type.is_top()) return true;
+        return std::ranges::any_of(signature->params, [](TypeRef type) {
+            return !type.is_top();
+        });
+    }
+
     [[nodiscard]] std::optional<std::string>
     call_known_name(const IrInst& inst) const {
         if (auto imported = call_import_name(inst); imported) return imported;
@@ -2313,17 +2340,49 @@ struct Emitter {
             if (!ret.empty()) return CallReturnLane::Integer;
         }
         auto name = call_known_name(inst);
-        if (!name) return std::nullopt;
-        TypeArena arena;
-        auto spec = lookup_import_sig(*name, arena);
-        if (!spec || spec->ret.is_top() || spec->ret.is_bottom()) {
-            return std::nullopt;
+        if (name) {
+            TypeArena arena;
+            auto spec = lookup_import_sig(*name, arena);
+            if (spec && !spec->ret.is_top() && !spec->ret.is_bottom()) {
+                switch (arena.kind(spec->ret)) {
+                    case TypeKind::Void:  return CallReturnLane::Void;
+                    case TypeKind::Float: return CallReturnLane::Floating;
+                    default:              return CallReturnLane::Integer;
+                }
+            }
         }
-        switch (arena.kind(spec->ret)) {
-            case TypeKind::Void:  return CallReturnLane::Void;
-            case TypeKind::Float: return CallReturnLane::Floating;
-            default:              return CallReturnLane::Integer;
+        if (const InferredSig* signature = call_inferred_signature(inst);
+            signature && options.type_arena && !signature->return_type.is_top()) {
+            switch (options.type_arena->kind(signature->return_type)) {
+                case TypeKind::Void: {
+                    // A scoped callee with no substantive return can still be
+                    // an ABI helper whose r3/f1 result is clearly consumed at
+                    // this call site. Caller dataflow is stronger than the
+                    // absence-based void inference.
+                    if (fn) {
+                        for (const IrBlock& block : fn->blocks) {
+                            for (std::size_t i = 0; i < block.insts.size(); ++i) {
+                                if (&block.insts[i] != &inst) continue;
+                                for (std::size_t j = i + 1; j < block.insts.size(); ++j) {
+                                    const IrInst& clobber = block.insts[j];
+                                    if (clobber.op != IrOp::Clobber) break;
+                                    if (clobber.dst.kind == IrValueKind::Reg) {
+                                        auto key = ssa_key(clobber.dst);
+                                        if (key && count_uses_with_call_args(*key) > 0) {
+                                            return std::nullopt;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return CallReturnLane::Void;
+                }
+                case TypeKind::Float: return CallReturnLane::Floating;
+                default:              return CallReturnLane::Integer;
+            }
         }
+        return std::nullopt;
     }
 
     [[nodiscard]] Reg call_result_reg(const IrInst& inst) const {
@@ -2377,6 +2436,32 @@ struct Emitter {
             }
             return declared;
         }
+        auto name = call_known_name(inst);
+        if (name) {
+            TypeArena arena;
+            auto spec = lookup_import_sig(*name, arena);
+            if (spec && !spec->ret.is_top() && !spec->ret.is_bottom()) {
+                const TypeNode& ret = arena.node(spec->ret);
+                if (ret.kind == TypeKind::Void) return std::string{"void"};
+                if (ret.kind == TypeKind::Float) {
+                    return ret.f.bits <= 32 ? std::string{"float"}
+                                            : std::string{"double"};
+                }
+                if (ret.kind == TypeKind::Struct && !ret.s.name.empty()) {
+                    return ret.s.name;
+                }
+                if (ret.kind == TypeKind::Int) {
+                    const std::string_view prefix = ret.i.sign_known && ret.i.is_signed
+                        ? "int" : "uint";
+                    return std::format("{}{}_t", prefix, ret.i.bits);
+                }
+            }
+        }
+        if (const InferredSig* signature = call_inferred_signature(inst);
+            signature && !signature->return_type.is_top()) {
+            const std::string inferred = ipa_type_name(signature->return_type);
+            if (!inferred.empty()) return inferred;
+        }
         std::optional<addr_t> target;
         if (inst.op == IrOp::Call) {
             target = inst.target1;
@@ -2392,27 +2477,6 @@ struct Emitter {
                 it != inferred_call_return_types.end()) {
                 return it->second;
             }
-        }
-        auto name = call_known_name(inst);
-        if (!name) return std::nullopt;
-        TypeArena arena;
-        auto spec = lookup_import_sig(*name, arena);
-        if (!spec || spec->ret.is_top() || spec->ret.is_bottom()) {
-            return std::nullopt;
-        }
-        const TypeNode& ret = arena.node(spec->ret);
-        if (ret.kind == TypeKind::Void) return std::string{"void"};
-        if (ret.kind == TypeKind::Float) {
-            return ret.f.bits <= 32 ? std::string{"float"}
-                                    : std::string{"double"};
-        }
-        if (ret.kind == TypeKind::Struct && !ret.s.name.empty()) {
-            return ret.s.name;
-        }
-        if (ret.kind == TypeKind::Int) {
-            const std::string_view prefix = ret.i.sign_known && ret.i.is_signed
-                ? "int" : "uint";
-            return std::format("{}{}_t", prefix, ret.i.bits);
         }
         return std::nullopt;
     }
@@ -9177,7 +9241,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             }
             std::string call_expr = render_objc_runtime_call(callee, call_args)
                                         .value_or(std::format("{}({})", callee, args));
-            if (ppc_abi && !annotated_sig && is_unresolved_function_name(callee)) {
+            if (ppc_abi && !annotated_sig && !call_has_inferred_signature(inst) &&
+                is_unresolved_function_name(callee)) {
                 std::string types;
                 for (std::size_t arg_i = 0; arg_i < used_args.size(); ++arg_i) {
                     if (arg_i != 0)

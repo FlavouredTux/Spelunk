@@ -24,7 +24,7 @@ def main() -> int:
     sample = """\
 void func_80100000(double a1, void* a2) {
   float t3 = ppc.fmadds(f1_2, *(float*)(r2 - 4), f3);
-  sub_80001234(t3);
+  sub_80001234(t3); /* unresolved target 0x80001234 */
   a2->field_10 = (float)f1_2;
   // STRUCTURER_FAIL: dropped block
   if (!0) sub_80001234(PTR(0x1234));
@@ -40,7 +40,7 @@ void func_80100000(double a1, void* a2) {
     assert metrics["opaque_ppc_intrinsics"] == 1
     assert metrics["generic_parameters"] == 2
     assert metrics["generic_field_references"] == 1
-    assert metrics["unresolved_symbol_calls"] == 2
+    assert metrics["unresolved_symbol_calls"] == 1
     assert metrics["structurer_failures"] == 1
     assert metrics["constant_condition_artifacts"] == 1
     assert metrics["unresolved_ssa_merges"] == 1

@@ -5760,6 +5760,13 @@ int run_emit(const Args& args, const Binary& b) {
         }
         emit_opts.known_function_entries = &known_function_entries;
     }
+    std::vector<addr_t> view_scope;
+    view_scope.reserve(view_symbols.size());
+    for (const auto& symbol : view_symbols) {
+        if (auto win = resolve_function(b, symbol, ann_ptr)) {
+            view_scope.push_back(win->start);
+        }
+    }
 
     // IPA: one-shot fixed-point over the call graph before emission so
     // char*-arg propagation can cross function boundaries. Expensive on
@@ -5770,12 +5777,23 @@ int run_emit(const Args& args, const Binary& b) {
     // free on top of the IPA pass.
     IrCache shared_ir_cache;
     InferenceResult ipa;
-    if (args.ipa && (args.pseudo || args.strct)) {
+    const bool project_ipa = !args.header_paths.empty() &&
+        (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) &&
+        (args.pseudo || args.strct) && !view_scope.empty();
+    if ((args.ipa || project_ipa) && (args.pseudo || args.strct)) {
         ScopedTimer t("ipa");
-        std::println(stderr, "ember: running IPA (this pass lifts every function once)...");
-        std::fflush(stderr);
-        ipa = infer_signatures(b, &shared_ir_cache);
-        std::println(stderr, "ember: IPA done: {} functions analyzed", ipa.sigs.size());
+        if (!args.quiet) {
+            std::println(stderr, "ember: running {} IPA...",
+                         args.ipa ? "whole-binary" : "project-scoped");
+            std::fflush(stderr);
+        }
+        ipa = infer_signatures(
+            b, &shared_ir_cache,
+            args.ipa ? std::span<const addr_t>{}
+                     : std::span<const addr_t>(view_scope));
+        if (!args.quiet) {
+            std::println(stderr, "ember: IPA done: {} functions analyzed", ipa.sigs.size());
+        }
         emit_opts.signatures = &ipa.sigs;
         emit_opts.type_arena = &ipa.arena;
     }
@@ -5787,17 +5805,11 @@ int run_emit(const Args& args, const Binary& b) {
         // observed. When the symbol can't be resolved the format step is
         // about to bail with "no symbol named X", so don't bother
         // resolving anything either.
-        std::vector<addr_t> scope;
-        scope.reserve(view_symbols.size());
-        for (const auto& symbol : view_symbols) {
-            if (auto win = resolve_function(b, symbol, ann_ptr))
-                scope.push_back(win->start);
-        }
-        if (!scope.empty()) {
+        if (!view_scope.empty()) {
             std::println(stderr, "ember: resolving indirect calls (vtable + "
                                  "import back-trace)...");
             std::fflush(stderr);
-            resolutions = resolve_indirect_calls(b, &shared_ir_cache, scope);
+            resolutions = resolve_indirect_calls(b, &shared_ir_cache, view_scope);
             std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
                          resolutions.size());
             emit_opts.call_resolutions = &resolutions;

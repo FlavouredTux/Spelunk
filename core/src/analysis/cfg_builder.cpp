@@ -1093,8 +1093,29 @@ CfgBuilder::build(addr_t entry, std::string name) const {
 
     ensure_known_entries_();
 
+    // A sized symbol is authoritative about ownership of its interior range.
+    // Prologue/call-target discovery can still propose an address inside that
+    // range (shared epilogues are especially branch-heavy), but treating that
+    // interior label as a function entry turns every branch to it into a fake
+    // tail call. Keep genuine entries outside the owner while allowing all
+    // of its internal blocks to participate in this CFG.
+    std::unordered_set<addr_t> effective_entries = known_entries_;
+    addr_t owned_end = entry;
+    for (const Symbol& symbol : binary_.symbols()) {
+        if (symbol.is_import || symbol.kind != SymbolKind::Function ||
+            symbol.addr != entry || symbol.size == 0) {
+            continue;
+        }
+        owned_end = std::max(owned_end, symbol.addr + symbol.size);
+    }
+    if (owned_end > entry) {
+        std::erase_if(effective_entries, [&](addr_t candidate) {
+            return candidate > entry && candidate < owned_end;
+        });
+    }
+
     WalkState ws;
-    walk_from(binary_, decoder_, ws, entry, known_entries_);
+    walk_from(binary_, decoder_, ws, entry, effective_entries);
 
     if (ws.insns.empty()) {
         return std::unexpected(Error::invalid_format(std::format(
@@ -1119,13 +1140,13 @@ CfgBuilder::build(addr_t entry, std::string name) const {
 
             for (addr_t t : table->targets) {
                 if (ws.leaders.insert(t).second) {
-                    walk_from(binary_, decoder_, ws, t, known_entries_);
+                    walk_from(binary_, decoder_, ws, t, effective_entries);
                     added_work = true;
                 }
             }
             if (table->default_tgt) {
                 if (ws.leaders.insert(*table->default_tgt).second) {
-                    walk_from(binary_, decoder_, ws, *table->default_tgt, known_entries_);
+                    walk_from(binary_, decoder_, ws, *table->default_tgt, effective_entries);
                     added_work = true;
                 }
             }

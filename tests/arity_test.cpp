@@ -272,6 +272,16 @@ int main() {
                      "FAIL: typed IPA propagates a leaf pointer through a wrapper\n");
         ++failures;
     }
+    const std::array<ember::addr_t, 1> scoped_roots{0x800010c0};
+    const ember::InferenceResult scoped = ember::infer_signatures(
+        binary, nullptr, scoped_roots);
+    if (!scoped.sigs.contains(0x800010c0) ||
+        !scoped.sigs.contains(0x800010a0) ||
+        scoped.sigs.contains(0x80001000)) {
+        std::fprintf(stderr,
+                     "FAIL: scoped IPA keeps the direct-callee closure only\n");
+        ++failures;
+    }
 
     auto decoder = ember::make_decoder(binary);
     if (!decoder) {

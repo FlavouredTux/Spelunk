@@ -273,6 +273,80 @@ Result<HeaderDatabase> import_headers(const Args& args) {
             db.globals.insert_or_assign(match[2].str(), type + arrays);
         }
     }
+    // Decomp projects often keep still-unknown prototypes beside the source
+    // unit rather than in the public header set. Import simple C declarations
+    // and definitions as lower-priority project evidence so sibling callers
+    // can share their return/parameter layout without parsing function bodies.
+    if (!args.dtk_project_path.empty()) {
+        std::filesystem::path project = std::filesystem::absolute(
+            args.dtk_project_path, ec);
+        std::filesystem::path source_root = project / "src";
+        if (!ec && std::filesystem::is_directory(source_root)) {
+            std::vector<std::filesystem::path> source_files;
+            for (std::filesystem::recursive_directory_iterator it(source_root, ec), end;
+                 it != end && !ec; it.increment(ec)) {
+                if (!it->is_regular_file()) continue;
+                const auto ext = it->path().extension().string();
+                if (ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx") {
+                    source_files.push_back(it->path());
+                }
+            }
+            std::sort(source_files.begin(), source_files.end());
+            const std::regex function_decl(
+                R"((?:^|\n)\s*(?:(?:extern|static|inline)\s+)*([A-Za-z_][A-Za-z0-9_:]*(?:\s*\*)?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^;{}\n]*)\)\s*(?:;|\{))");
+            for (const auto& file : source_files) {
+                std::ifstream in(file);
+                if (!in) continue;
+                const std::string contents((std::istreambuf_iterator<char>(in)),
+                                           std::istreambuf_iterator<char>());
+                for (std::sregex_iterator it(contents.begin(), contents.end(), function_decl), end;
+                     it != end; ++it) {
+                    const std::string name = (*it)[2].str();
+                    if (db.functions.contains(name)) continue;
+                    FunctionSig signature;
+                    signature.return_type = (*it)[1].str();
+                    std::string params = (*it)[3].str();
+                    std::size_t start = 0;
+                    std::size_t param_index = 0;
+                    while (start <= params.size()) {
+                        std::size_t comma = params.find(',', start);
+                        if (comma == std::string::npos) comma = params.size();
+                        std::string param = params.substr(start, comma - start);
+                        while (!param.empty() && std::isspace(
+                                   static_cast<unsigned char>(param.front()))) {
+                            param.erase(param.begin());
+                        }
+                        while (!param.empty() && std::isspace(
+                                   static_cast<unsigned char>(param.back()))) {
+                            param.pop_back();
+                        }
+                        if (param == "...") {
+                            signature.variadic = true;
+                        } else if (!param.empty() && param != "void") {
+                            const std::regex named_param(
+                                R"(^(.+?[\s*])([A-Za-z_][A-Za-z0-9_]*)\s*$)");
+                            std::smatch match;
+                            if (std::regex_match(param, match, named_param)) {
+                                std::string type = match[1].str();
+                                while (!type.empty() && std::isspace(
+                                           static_cast<unsigned char>(type.back()))) {
+                                    type.pop_back();
+                                }
+                                signature.params.push_back({type, match[2].str()});
+                            } else {
+                                signature.params.push_back(
+                                    {param, std::format("param_{}", param_index + 1)});
+                            }
+                            ++param_index;
+                        }
+                        if (comma == params.size()) break;
+                        start = comma + 1;
+                    }
+                    db.functions.try_emplace(name, std::move(signature));
+                }
+            }
+        }
+    }
     clang_disposeTranslationUnit(tu);
     clang_disposeIndex(index);
     return db;

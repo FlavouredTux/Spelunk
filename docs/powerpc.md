@@ -235,6 +235,15 @@ back to live-in parameters and allocator returns, and direct aggregate globals
 use imported field names. When a byte offset has no known field, fallback
 pointer arithmetic is explicitly cast through `uint8_t*` so it remains valid C.
 
+When headers accompany a DTK project, Ember also imports simple prototypes
+from sibling source units and runs signature inference over only the requested
+functions and their transitive direct callees. Public headers retain priority;
+source declarations fill private gaps, while scoped IPA supplies return lanes
+and parameter evidence for still-unnamed leaves. Built-in SDK signatures beat
+absence-based inference, and caller-visible return use prevents a helper from
+being mislabeled `void`. A sized DTK function symbol also owns all interior
+labels, so shared epilogues cannot be rediscovered as fake tail-call targets.
+
 ### Typed data and SPM event scripts
 
 Use `--decompile-data SYMBOL --type TYPE` to turn fixed data into a C
@@ -436,6 +445,7 @@ be enforced later:
 
 ```sh
 python3 scripts/ppc_quality_benchmark.py --dtk /path/to/spm \
+  --headers /path/to/spm/spm-headers/include \
   --baseline benchmarks/spm_eu0_quality_baseline.json --fail-on-regression
 ```
 

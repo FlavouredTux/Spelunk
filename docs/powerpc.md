@@ -331,6 +331,30 @@ more than once, set a 1-based `occurrence`; overlapping choices are rejected.
 The Cartesian product is complete and deterministic, and the tool refuses to
 silently truncate it beyond `--max-candidates` (256 by default).
 
+For a useful first pass without writing a spec, use automatic discovery:
+
+```sh
+ember-match \
+  --project /path/to/spm \
+  --unit main/mario_motion \
+  --symbol mot_22 \
+  --auto \
+  --output-dir /tmp/mot22-auto \
+  --jobs 4 \
+  --beam-width 8 \
+  --max-candidates 256
+```
+
+Automatic mode scopes itself to the requested source function. It ignores
+comments, strings and preprocessor lines, and generates only conservative
+side-effect-free forms: swapped pure comparison operands, adjacent uninitialized
+declaration order, identifier increments, simple compound assignments, and
+explicit boolean zero tests. Each step compiles the beam, ranks it with the
+requested function's objdiff score, and retains `--beam-width` survivors.
+`--max-candidates` is a hard total compile budget and `results.json` records
+whether that budget truncated the search. Use `--auto-whole-unit` only when the
+symbol has no source definition or a unit-wide search is intentional.
+
 Candidates are compiled in parallel under the marked output directory. The
 input source and project are never rewritten. Identical reruns reuse cached
 candidate results. `best.c` contains clean source without the synthetic
@@ -342,9 +366,12 @@ objdiff reports an exact 100% function match.
 
 objdiff 3.8 or newer provides the direct per-function JSON path. Older versions
 fall back to a temporary one-unit progress report, but updating is recommended
-for speed and exact function-focused scoring. The workflow intentionally does
-not invent casts or reorder statements on its own: only alternatives explicitly
-asserted to be semantically equivalent are compiled.
+for speed and exact function-focused scoring. Automatic mode deliberately does
+not invent casts, reorder initialized declarations, transform expressions
+containing calls/indexing, or claim that a high fuzzy score is a match. A JSON
+spec remains the right path for project-specific cast and control-flow
+alternatives. In both modes only an exact objdiff result is reported as 100%
+matching.
 
 ### Whole translation-unit recovery
 

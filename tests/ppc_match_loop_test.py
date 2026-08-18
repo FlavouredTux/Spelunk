@@ -110,6 +110,15 @@ int target_fn(int lhs, int rhs) {
         else:
             raise AssertionError("candidate limit was not enforced")
 
+        automatic = matcher.generate_auto_choices(source, 8)
+        categories = {choice.category for choice in automatic}
+        assert "declarations" in categories
+        assert "comparison" in categories
+        assert all(
+            source[choice.start:choice.end] == choice.alternatives[0].text
+            for choice in automatic
+        )
+
         overlapping_path = root / "overlap.json"
         overlapping_path.write_text(
             json.dumps(
@@ -213,6 +222,33 @@ output.write_text(json.dumps(report), encoding="utf-8")
         assert matcher.main(argv) == 0
         cached = json.loads((output / "results.json").read_text(encoding="utf-8"))
         assert all(result["cached"] for result in cached["results"])
+
+        auto_output = root / "auto-results"
+        auto_argv = [
+            "--project", str(project),
+            "--unit", "main/sample",
+            "--symbol", "target_fn",
+            "--auto",
+            "--output-dir", str(auto_output),
+            "--objdiff", str(objdiff),
+            "--compile-command", compile_command,
+            "--jobs", "2",
+            "--beam-width", "2",
+            "--max-candidates", "12",
+            "--fail-unmatched",
+            "--quiet",
+        ]
+        assert matcher.main(auto_argv) == 0
+        auto_report = json.loads(
+            (auto_output / "results.json").read_text(encoding="utf-8")
+        )
+        assert auto_report["mode"] == "auto"
+        assert auto_report["choice_count"] >= 2
+        assert auto_report["candidate_count"] <= 12
+        assert auto_report["best_exact"] is True
+        auto_best = (auto_output / "best.c").read_text(encoding="utf-8")
+        assert "rhs > lhs" in auto_best
+        assert "int second;\n    int first;" in auto_best
 
     return 0
 

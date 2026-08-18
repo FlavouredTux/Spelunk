@@ -141,6 +141,10 @@ every candidate outside the decompilation checkout, ranks the requested
 function through objdiff's one-shot JSON diff, and preserves `best.c`, `best.o`,
 `best.objdiff.json`, and a reproducible result manifest without editing the
 original source.
+Its `--auto` mode scopes discovery to the requested function, generates only
+conservative side-effect-free comparison, declaration, increment, boolean and
+compound-assignment spellings, then uses a bounded objdiff-guided beam to keep
+the closest CodeWarrior candidates.
 `scripts/ppc_decompile_unit.py` recovers every function owned by an objdiff
 unit in retail-object order, preserves the existing source preamble and
 includes, isolates inferred PPC record names between functions, and writes a

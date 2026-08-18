@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Search controlled source variants with CodeWarrior and objdiff.
 
-The matcher never edits the input source or decompilation project.  It expands
-an explicit set of source alternatives, compiles every candidate in an
-isolated directory, asks objdiff for a machine-readable report, and preserves
-the highest-scoring source/object pair with a reproducible JSON report.
+The matcher never edits the input source or decompilation project. It expands
+an explicit set of alternatives or discovers a conservative automatic beam,
+compiles candidates in isolated directories, asks objdiff for machine-readable
+scores, and preserves the best source/object pair with a reproducible report.
 """
 
 from __future__ import annotations
@@ -18,12 +18,13 @@ import json
 import math
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 
 class MatchError(RuntimeError):
@@ -262,6 +263,247 @@ def load_choices(spec_path: pathlib.Path, source: str) -> list[Choice]:
         if left.end > right.start:
             raise MatchError(f"choices {left.name} and {right.name} overlap")
     return choices
+
+
+def _code_mask(source: str) -> list[bool]:
+    mask = [True] * len(source)
+    state = "code"
+    quote = ""
+    escaped = False
+    line_start = True
+    offset = 0
+    while offset < len(source):
+        char = source[offset]
+        if state == "line_comment":
+            mask[offset] = False
+            if char == "\n":
+                state = "code"
+                line_start = True
+            offset += 1
+            continue
+        if state == "block_comment":
+            mask[offset] = False
+            if source.startswith("*/", offset):
+                if offset + 1 < len(mask):
+                    mask[offset + 1] = False
+                offset += 2
+                state = "code"
+            else:
+                offset += 1
+            continue
+        if state == "quoted":
+            mask[offset] = False
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                state = "code"
+            offset += 1
+            continue
+        if line_start:
+            probe = offset
+            while probe < len(source) and source[probe] in " \t":
+                probe += 1
+            if probe < len(source) and source[probe] == "#":
+                newline = source.find("\n", probe)
+                end = len(source) if newline < 0 else newline
+                for index in range(offset, end):
+                    mask[index] = False
+                offset = end
+                line_start = offset < len(source) and source[offset] == "\n"
+                continue
+            line_start = False
+        if source.startswith("//", offset):
+            mask[offset] = False
+            if offset + 1 < len(mask):
+                mask[offset + 1] = False
+            offset += 2
+            state = "line_comment"
+            continue
+        if source.startswith("/*", offset):
+            mask[offset] = False
+            if offset + 1 < len(mask):
+                mask[offset + 1] = False
+            offset += 2
+            state = "block_comment"
+            continue
+        if char in "\"'":
+            mask[offset] = False
+            quote = char
+            escaped = False
+            state = "quoted"
+        elif char == "\n":
+            line_start = True
+        offset += 1
+    return mask
+
+
+def function_source_span(source: str, symbol: str) -> tuple[int, int] | None:
+    mask = _code_mask(source)
+    for match in re.finditer(rf"\b{re.escape(symbol)}\s*\(", source):
+        if not all(mask[match.start():match.end()]):
+            continue
+        opening = source.find("(", match.start())
+        depth = 0
+        closing = -1
+        for offset in range(opening, len(source)):
+            if not mask[offset]:
+                continue
+            if source[offset] == "(":
+                depth += 1
+            elif source[offset] == ")":
+                depth -= 1
+                if depth == 0:
+                    closing = offset
+                    break
+        if closing < 0:
+            continue
+        opening_brace = -1
+        for offset in range(closing + 1, len(source)):
+            if not mask[offset] or source[offset].isspace():
+                continue
+            if source[offset] == ";":
+                break
+            if source[offset] == "{":
+                opening_brace = offset
+            break
+        if opening_brace < 0:
+            continue
+        depth = 0
+        for offset in range(opening_brace, len(source)):
+            if not mask[offset]:
+                continue
+            if source[offset] == "{":
+                depth += 1
+            elif source[offset] == "}":
+                depth -= 1
+                if depth == 0:
+                    return opening_brace, offset + 1
+    return None
+
+
+def generate_auto_choices(
+    source: str, maximum: int, scope: tuple[int, int] | None = None
+) -> list[Choice]:
+    """Find conservative, side-effect-free source spellings worth compiling."""
+    if maximum < 1:
+        raise MatchError("--auto-max-choices must be at least 1")
+    base_offset = scope[0] if scope else 0
+    if scope:
+        source = source[scope[0]:scope[1]]
+    mask = _code_mask(source)
+    proposals: list[tuple[int, Choice]] = []
+    serial = 0
+
+    def add(priority: int, category: str, start: int, end: int,
+            variants: Sequence[tuple[str, str]]) -> None:
+        nonlocal serial
+        if start >= end or not all(mask[start:end]):
+            return
+        original = source[start:end]
+        alternatives = [Alternative("original", original)]
+        alternatives.extend(
+            Alternative(name, text) for name, text in variants if text != original
+        )
+        unique = tuple(dict((item.text, item) for item in alternatives).values())
+        if len(unique) < 2:
+            return
+        serial += 1
+        proposals.append((priority, Choice(
+            f"auto-{category}-{serial}", category,
+            start + base_offset, end + base_offset, unique
+        )))
+
+    identifier = r"[A-Za-z_][A-Za-z0-9_]*"
+    member = rf"{identifier}(?:(?:->|\.){identifier})*"
+    number = r"(?:0[xX][0-9A-Fa-f]+|[0-9]+(?:\.[0-9]+)?[fFuUlL]*)"
+    operand = rf"(?:{member}|{number})"
+
+    increment = re.compile(rf"(?m)^(?P<indent>[ \t]+)(?P<name>{identifier})\s*\+=\s*1\s*;")
+    for match in increment.finditer(source):
+        indent, name = match.group("indent", "name")
+        add(0, "increment", match.start(), match.end(), (
+            ("post-increment", f"{indent}{name}++;"),
+            ("pre-increment", f"{indent}++{name};"),
+        ))
+
+    declaration = re.compile(
+        rf"(?m)^(?P<indent>[ \t]+)"
+        rf"(?P<first>(?:const\s+)?{identifier}(?:\s*\*+)?\s+{identifier}\s*;)\n"
+        rf"(?P=indent)(?P<second>(?:const\s+)?{identifier}(?:\s*\*+)?\s+{identifier}\s*;)"
+    )
+    for match in declaration.finditer(source):
+        indent = match.group("indent")
+        swapped = f"{indent}{match.group('second')}\n{indent}{match.group('first')}"
+        add(1, "declarations", match.start(), match.end(), (("swapped", swapped),))
+
+    assignment = re.compile(
+        rf"(?m)^(?P<indent>[ \t]+)(?P<lhs>{member})\s*=\s*(?P=lhs)\s*"
+        rf"(?P<op>[+\-*/])\s*(?P<rhs>{operand})\s*;"
+    )
+    for match in assignment.finditer(source):
+        add(2, "compound-assignment", match.start(), match.end(), ((
+            "compound",
+            f"{match.group('indent')}{match.group('lhs')} {match.group('op')}= "
+            f"{match.group('rhs')};",
+        ),))
+
+    inverse = {"<": ">", ">": "<", "<=": ">=", ">=": "<=", "==": "==", "!=": "!="}
+    comparison = re.compile(
+        rf"(?<![A-Za-z0-9_])(?P<left>{operand})\s*(?P<op><=|>=|==|!=|<|>)\s*"
+        rf"(?P<right>{operand})(?![A-Za-z0-9_])"
+    )
+    for match in comparison.finditer(source):
+        left, op, right = match.group("left", "op", "right")
+        if left == right:
+            continue
+        add(3, "comparison", match.start(), match.end(), ((
+            "swapped", f"{right} {inverse[op]} {left}",
+        ),))
+
+    boolean = re.compile(rf"\b(?:if|while)\s*\(\s*(?P<value>{member})\s*\)")
+    for match in boolean.finditer(source):
+        start, end = match.span("value")
+        add(4, "boolean", start, end, (("explicit-nonzero", f"{match.group('value')} != 0"),))
+
+    selected: list[Choice] = []
+    for _, choice in sorted(proposals, key=lambda item: (item[0], item[1].start, item[1].name)):
+        if any(
+            choice.start < existing.end and existing.start < choice.end
+            for existing in selected
+        ):
+            continue
+        selected.append(choice)
+        if len(selected) == maximum:
+            break
+    return sorted(selected, key=lambda choice: choice.start)
+
+
+def candidate_from_selections(
+    source: str, choices: Sequence[Choice], selections: dict[str, str]
+) -> Candidate:
+    selected: list[Alternative] = []
+    for choice in choices:
+        wanted = selections.get(choice.name, "original")
+        alternative = next(
+            (item for item in choice.alternatives if item.name == wanted), None
+        )
+        if alternative is None:
+            raise MatchError(f"choice {choice.name} has no alternative {wanted}")
+        selected.append(alternative)
+    transformed = source
+    for choice, alternative in sorted(
+        zip(choices, selected), key=lambda item: item[0].start, reverse=True
+    ):
+        transformed = transformed[:choice.start] + alternative.text + transformed[choice.end:]
+    candidate_id = _sha256_bytes(transformed.encode("utf-8"))[:12]
+    return Candidate(
+        candidate_id,
+        transformed,
+        tuple((choice.name, alternative.name) for choice, alternative in zip(choices, selected)),
+        sum(alternative.name != "original" for alternative in selected),
+    )
 
 
 def expand_candidates(source: str, choices: Sequence[Choice], maximum: int) -> list[Candidate]:
@@ -646,6 +888,99 @@ def _evaluate_candidate(
     return result
 
 
+def evaluate_candidates(
+    candidates: Sequence[Candidate],
+    evaluate: Callable[[Candidate], dict[str, Any]],
+    jobs: int,
+    quiet: bool,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
+        future_map = {executor.submit(evaluate, candidate): candidate for candidate in candidates}
+        for future in concurrent.futures.as_completed(future_map):
+            candidate = future_map[future]
+            try:
+                result = future.result()
+            except Exception as error:  # Preserve other candidates and a useful report.
+                result = {
+                    "candidate_id": candidate.candidate_id,
+                    "selections": dict(candidate.selections),
+                    "changed_choices": candidate.changed_choices,
+                    "error": f"internal candidate failure: {error}",
+                }
+            results.append(result)
+            if not quiet:
+                if isinstance(result.get("score"), dict):
+                    score = result["score"]
+                    suffix = " exact" if score["exact"] else ""
+                    cached = " cached" if result.get("cached") else ""
+                    print(
+                        f"ember-match: {candidate.candidate_id} "
+                        f"{score['match_percent']:.6f}%{suffix}{cached}"
+                    )
+                else:
+                    print(f"ember-match: {candidate.candidate_id} failed: {result.get('error')}")
+    return results
+
+
+def beam_search(
+    source: str,
+    choices: Sequence[Choice],
+    evaluate: Callable[[Candidate], dict[str, Any]],
+    jobs: int,
+    quiet: bool,
+    beam_width: int,
+    maximum: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    original = candidate_from_selections(source, choices, {})
+    candidates_by_id = {original.candidate_id: original}
+    results_by_id: dict[str, dict[str, Any]] = {}
+
+    def evaluate_new(candidates: Sequence[Candidate]) -> None:
+        remaining = maximum - len(results_by_id)
+        pending = [item for item in candidates if item.candidate_id not in results_by_id]
+        pending.sort(key=lambda item: item.candidate_id)
+        if len(pending) > remaining:
+            pending = pending[:remaining]
+        for item in pending:
+            candidates_by_id[item.candidate_id] = item
+        for result in evaluate_candidates(pending, evaluate, jobs, quiet):
+            results_by_id[str(result["candidate_id"])] = result
+
+    evaluate_new([original])
+    beam = [original]
+    truncated = False
+    for choice in choices:
+        expanded: dict[str, Candidate] = {}
+        for parent in beam:
+            parent_selections = dict(parent.selections)
+            for alternative in choice.alternatives:
+                selected = dict(parent_selections)
+                selected[choice.name] = alternative.name
+                candidate = candidate_from_selections(source, choices, selected)
+                expanded.setdefault(candidate.candidate_id, candidate)
+        before = len(results_by_id)
+        evaluate_new(list(expanded.values()))
+        if len(results_by_id) == maximum and any(
+            candidate_id not in results_by_id for candidate_id in expanded
+        ):
+            truncated = True
+        pool_ids = set(expanded) | {item.candidate_id for item in beam}
+        scored = [
+            results_by_id[candidate_id] for candidate_id in pool_ids
+            if candidate_id in results_by_id and
+            isinstance(results_by_id[candidate_id].get("score"), dict)
+        ]
+        scored.sort(key=_candidate_rank, reverse=True)
+        beam = [candidates_by_id[str(result["candidate_id"])] for result in scored[:beam_width]]
+        if any(result["score"]["exact"] for result in scored):
+            break
+        if not beam or len(results_by_id) == maximum:
+            truncated |= before == len(results_by_id) or len(results_by_id) == maximum
+            break
+    return list(results_by_id.values()), truncated
+
+
 def _write_summary(
     output: pathlib.Path,
     symbol: str,
@@ -681,7 +1016,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--unit", required=True, help="unit name from objdiff.json")
     parser.add_argument("--symbol", required=True, help="function symbol to score")
-    parser.add_argument("--spec", type=pathlib.Path, required=True, help="version-1 variant JSON")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--spec", type=pathlib.Path, help="version-1 variant JSON")
+    mode.add_argument(
+        "--auto", action="store_true",
+        help="discover conservative equivalent spellings and search them with a beam",
+    )
     parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     parser.add_argument("--source", type=pathlib.Path, help="override metadata.source_path")
     parser.add_argument("--target-object", type=pathlib.Path)
@@ -700,6 +1040,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout", type=float, default=120.0, help="seconds per compiler/objdiff process"
     )
     parser.add_argument("--max-candidates", type=int, default=256)
+    parser.add_argument("--beam-width", type=int, default=8,
+                        help="automatic-search survivors per step (default: 8)")
+    parser.add_argument("--auto-max-choices", type=int, default=24,
+                        help="maximum automatically discovered source choices (default: 24)")
+    parser.add_argument("--auto-whole-unit", action="store_true",
+                        help="discover alternatives across the whole source instead of --symbol")
     parser.add_argument("--no-line-directive", action="store_true")
     parser.add_argument(
         "--keep-diffs",
@@ -728,6 +1074,10 @@ def run(arguments: argparse.Namespace) -> int:
         raise MatchError("--timeout must be positive")
     if arguments.max_candidates < 1:
         raise MatchError("--max-candidates must be at least 1")
+    if arguments.beam_width < 1:
+        raise MatchError("--beam-width must be at least 1")
+    if arguments.auto_max_choices < 1:
+        raise MatchError("--auto-max-choices must be at least 1")
 
     source_override = arguments.source.expanduser().resolve() if arguments.source else None
     target_override = (
@@ -741,15 +1091,45 @@ def run(arguments: argparse.Namespace) -> int:
         source_text = unit.source.read_text(encoding="utf-8")
     except OSError as error:
         raise MatchError(f"cannot read {unit.source}: {error}") from error
-    spec_path = arguments.spec.expanduser().resolve()
-    choices = load_choices(spec_path, source_text)
-    candidates = expand_candidates(source_text, choices, arguments.max_candidates)
-    if not arguments.quiet:
-        print(
-            f"ember-match: {len(choices)} choice(s), {len(candidates)} unique candidate(s), "
-            f"symbol {arguments.symbol}"
+    spec_path = arguments.spec.expanduser().resolve() if arguments.spec else None
+    mode_name = "auto" if arguments.auto else "spec"
+    if arguments.auto:
+        scope = None if arguments.auto_whole_unit else function_source_span(
+            source_text, arguments.symbol
         )
+        if scope is None and not arguments.auto_whole_unit:
+            raise MatchError(
+                f"could not locate a source definition for {arguments.symbol}; "
+                "pass --auto-whole-unit to search the complete file"
+            )
+        choices = generate_auto_choices(
+            source_text, arguments.auto_max_choices, scope
+        )
+    else:
+        choices = load_choices(spec_path, source_text)
+    if not choices:
+        raise MatchError("automatic search found no conservative source alternatives")
+    candidates = (
+        [] if arguments.auto
+        else expand_candidates(source_text, choices, arguments.max_candidates)
+    )
+    if not arguments.quiet:
+        count = (
+            f"beam width {arguments.beam_width}"
+            if arguments.auto else f"{len(candidates)} candidates"
+        )
+        print(f"ember-match: {len(choices)} choice(s), {count}, symbol {arguments.symbol}")
     if arguments.dry_run:
+        if arguments.auto:
+            original = candidate_from_selections(source_text, choices, {})
+            candidates = [original]
+            for choice in choices:
+                for alternative in choice.alternatives:
+                    if alternative.name == "original":
+                        continue
+                    candidates.append(candidate_from_selections(
+                        source_text, choices, {choice.name: alternative.name}
+                    ))
         for candidate in candidates:
             print(f"{candidate.candidate_id}\t{dict(candidate.selections)}")
         return 0
@@ -773,8 +1153,21 @@ def run(arguments: argparse.Namespace) -> int:
         "symbol": arguments.symbol,
         "source": str(unit.source),
         "source_sha256": _sha256_bytes(source_text.encode("utf-8")),
-        "spec": str(spec_path),
-        "spec_sha256": _sha256_file(spec_path),
+        "mode": mode_name,
+        "spec": str(spec_path) if spec_path else None,
+        "spec_sha256": _sha256_file(spec_path) if spec_path else None,
+        "auto_choices": [
+            {
+                "name": choice.name,
+                "category": choice.category,
+                "start": choice.start,
+                "end": choice.end,
+                "alternatives": [item.name for item in choice.alternatives],
+            }
+            for choice in choices
+        ] if arguments.auto else None,
+        "beam_width": arguments.beam_width if arguments.auto else None,
+        "auto_whole_unit": arguments.auto_whole_unit if arguments.auto else None,
         "target_object": str(unit.target_object),
         "target_sha256": _sha256_file(unit.target_object),
         "compile_template": list(compile_template),
@@ -799,32 +1192,14 @@ def run(arguments: argparse.Namespace) -> int:
         timeout=arguments.timeout,
         line_directive=not arguments.no_line_directive,
     )
-    results: list[dict[str, Any]] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=arguments.jobs) as executor:
-        future_map = {executor.submit(evaluate, candidate): candidate for candidate in candidates}
-        for future in concurrent.futures.as_completed(future_map):
-            candidate = future_map[future]
-            try:
-                result = future.result()
-            except Exception as error:  # Preserve other candidates and a useful report.
-                result = {
-                    "candidate_id": candidate.candidate_id,
-                    "selections": dict(candidate.selections),
-                    "changed_choices": candidate.changed_choices,
-                    "error": f"internal candidate failure: {error}",
-                }
-            results.append(result)
-            if not arguments.quiet:
-                if isinstance(result.get("score"), dict):
-                    score = result["score"]
-                    suffix = " exact" if score["exact"] else ""
-                    cached = " cached" if result.get("cached") else ""
-                    print(
-                        f"ember-match: {candidate.candidate_id} "
-                        f"{score['match_percent']:.6f}%{suffix}{cached}"
-                    )
-                else:
-                    print(f"ember-match: {candidate.candidate_id} failed: {result.get('error')}")
+    if arguments.auto:
+        results, search_truncated = beam_search(
+            source_text, choices, evaluate, arguments.jobs, arguments.quiet,
+            arguments.beam_width, arguments.max_candidates,
+        )
+    else:
+        results = evaluate_candidates(candidates, evaluate, arguments.jobs, arguments.quiet)
+        search_truncated = False
 
     results.sort(key=lambda item: str(item.get("candidate_id", "")))
     scored = [item for item in results if isinstance(item.get("score"), dict)]
@@ -834,6 +1209,9 @@ def run(arguments: argparse.Namespace) -> int:
         "project": str(project),
         "unit": unit.name,
         "symbol": arguments.symbol,
+        "mode": mode_name,
+        "choice_count": len(choices),
+        "search_truncated": search_truncated,
         "candidate_count": len(results),
         "scored_count": len(scored),
         "best_candidate_id": best.get("candidate_id") if best else None,

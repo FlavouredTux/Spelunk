@@ -149,6 +149,9 @@ the closest CodeWarrior candidates.
 unit in retail-object order, preserves the existing source preamble and
 includes, isolates inferred PPC record names between functions, and writes a
 separate translation-unit candidate without modifying the project source.
+With `--verify`, it compiles that candidate through the unit's exact
+Ninja/CodeWarrior command and emits whole-object function/data evidence plus an
+`ember-match` queue for anything still nonmatching.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, binary-only limits, the `--ppc-coverage`
 decoder/semantic-gap report, and the repeatable SPM pseudo-C quality benchmark.

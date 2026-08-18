@@ -49,14 +49,20 @@ int second(int value) { return value + shared_value; }
         objdiff = root / "objdiff-cli"
         executable(objdiff, """#!/usr/bin/env python3
 import json
-print(json.dumps({"left": {"symbols": [
-  {"name": "first", "kind": "SYMBOL_FUNCTION", "size": "16"},
-  {"name": "second", "kind": "SYMBOL_FUNCTION", "address": "16", "size": "24"}
-]}, "right": {"symbols": [
+import pathlib
+import sys
+args = sys.argv[1:]
+inventory = [
   {"name": "first", "kind": "SYMBOL_FUNCTION", "size": "16"},
   {"name": "second", "kind": "SYMBOL_FUNCTION", "address": "16", "size": "24"},
   {"name": "third", "kind": "SYMBOL_FUNCTION", "address": "40", "size": "8"}
-]}}))
+]
+if "-1" in args:
+    exact = [dict(item, match_percent=100.0, instructions=[]) for item in inventory]
+    output = pathlib.Path(args[args.index("-o") + 1])
+    output.write_text(json.dumps({"left": {"symbols": exact}, "right": {"symbols": inventory}}))
+else:
+    print(json.dumps({"left": {"symbols": inventory[:2]}, "right": {"symbols": inventory}}))
 """)
         ember = root / "ember"
         executable(ember, """#!/usr/bin/env python3
@@ -94,6 +100,38 @@ for name in manifest.read_text().splitlines():
         assert "shared_value = 1" not in text
         assert source.read_text(encoding="utf-8") == original
         assert "recovered 3/3 function(s)" in result.stderr
+
+        compiler = root / "compiler"
+        executable(compiler, """#!/usr/bin/env python3
+import pathlib, sys
+source, output = map(pathlib.Path, sys.argv[1:3])
+output.write_text(source.read_text(encoding='utf-8'), encoding='utf-8')
+""")
+        verify_output = root / "verified.c"
+        verify_dir = root / "verification"
+        compile_command = f"{sys.executable} {compiler} {{source}} {{object}}"
+        verify_command = command.copy()
+        verify_command[verify_command.index(str(output))] = str(verify_output)
+        verify_command.extend([
+            "--verify", "--verify-dir", str(verify_dir),
+            "--compile-command", compile_command, "--fail-unmatched",
+        ])
+        verified = subprocess.run(
+            verify_command, text=True, capture_output=True, check=False
+        )
+        assert verified.returncode == 0, verified.stderr
+        verification = json.loads(
+            (verify_dir / "verification.json").read_text(encoding="utf-8")
+        )
+        assert verification["compile_ok"] is True
+        assert verification["objdiff_ok"] is True
+        assert verification["exact"] is True
+        assert verification["exact_function_count"] == 3
+        queue = json.loads(
+            (verify_dir / "matcher-queue.json").read_text(encoding="utf-8")
+        )
+        assert queue["functions"] == []
+        assert (verify_dir / "verification.txt").is_file()
     return 0
 
 

@@ -407,6 +407,30 @@ The result is a compile-oriented starting translation unit; exact source still
 requires resolving any explicitly reported SSA/type gaps and validating it
 with the unit's real CodeWarrior command and objdiff.
 
+Add `--verify` to perform that validation immediately:
+
+```sh
+ember-unit \
+  --project /path/to/spm \
+  --unit main/main \
+  --headers /path/to/spm/spm-headers/include \
+  --output /tmp/main.recovered.c \
+  --verify \
+  --verify-dir /tmp/main.evidence \
+  --fail-unmatched
+```
+
+Verification copies the recovered source under the original basename, reuses
+the exact compiler command exposed by Ninja, and writes `compile.log`, the
+candidate object, the full `objdiff.json`, `verification.json`, and a compact
+`verification.txt`. Function and data matches follow objdiff's target-symbol
+mapping, so CodeWarrior local-label renumbering does not create false data
+failures. Nonmatching functions are written to `matcher-symbols.txt` and
+`matcher-queue.json` with ready-to-run bounded `ember-match --auto` commands;
+compiler diagnostics and likely missing header/annotation names are retained
+when compilation fails. `--compile-command` provides the same placeholder
+override as `ember-match` for projects that do not expose Ninja commands.
+
 ### Repeatable SPM pseudo-C benchmark
 
 The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function

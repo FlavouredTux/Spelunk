@@ -481,18 +481,23 @@ InferenceResult infer_signatures(const Binary& b, IrCache* cache,
     } else {
         const std::set<addr_t> allowed(all_entries.begin(), all_entries.end());
         std::set<addr_t> selected;
-        std::vector<addr_t> pending(roots.begin(), roots.end());
-        while (!pending.empty()) {
-            const addr_t entry = pending.back();
+        std::vector<std::pair<addr_t, u8>> pending;
+        pending.reserve(roots.size());
+        for (addr_t root : roots) pending.emplace_back(root, 0);
+        constexpr std::size_t kMaxScopedFunctions = 256;
+        constexpr u8 kMaxScopedDepth = 3;
+        while (!pending.empty() && selected.size() < kMaxScopedFunctions) {
+            const auto [entry, depth] = pending.back();
             pending.pop_back();
             if (!allowed.contains(entry) || !selected.insert(entry).second) continue;
             IrFunction* ir = lift_cached(ir_cache, b, entry);
             if (!ir) continue;
+            if (depth >= kMaxScopedDepth) continue;
             for (const IrBlock& block : ir->blocks) {
                 for (const IrInst& inst : block.insts) {
                     if (inst.op == IrOp::Call && allowed.contains(inst.target1) &&
                         !selected.contains(inst.target1)) {
-                        pending.push_back(inst.target1);
+                        pending.emplace_back(inst.target1, static_cast<u8>(depth + 1));
                     }
                 }
             }

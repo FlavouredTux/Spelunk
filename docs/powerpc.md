@@ -328,6 +328,31 @@ for speed and exact function-focused scoring. The workflow intentionally does
 not invent casts or reorder statements on its own: only alternatives explicitly
 asserted to be semantically equivalent are compiled.
 
+### Whole translation-unit recovery
+
+`scripts/ppc_decompile_unit.py` bridges function-oriented pseudo-C and an
+objdiff source unit. It asks objdiff for the retail object's function symbols,
+keeps their object order, decompiles them through Ember's shared DTK batch
+context, and combines them with the original source preamble and includes:
+
+```sh
+python3 scripts/ppc_decompile_unit.py \
+  --project /path/to/spm \
+  --unit main/mario_motion \
+  --headers /path/to/spm/spm-headers/include \
+  --header-arg=-I/path/to/spm/spm-headers/decomp \
+  --output /tmp/mario_motion.recovered.c \
+  --strict
+```
+
+The output is always separate from `metadata.source_path`. Synthetic
+`PpcState`/`PpcObject` families are scoped by function name so independently
+inferred layouts do not collide when assembled into one file. `--strict`
+rejects partial batches, and the footer records the exact recovery command.
+The result is a compile-oriented starting translation unit; exact source still
+requires resolving any explicitly reported SSA/type gaps and validating it
+with the unit's real CodeWarrior command and objdiff.
+
 ### Repeatable SPM pseudo-C benchmark
 
 The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function

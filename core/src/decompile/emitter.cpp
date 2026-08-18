@@ -9695,6 +9695,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             if (!buf.empty()) lines.push_back(std::move(buf));
         }
         auto is_decl = [&](const std::string& line, std::string& name) {
+            // File-scope synthetic record terminators also resemble a
+            // two-token declaration. This pass owns function locals only.
+            if (!line.starts_with("  ") || line.starts_with("   ")) return false;
             std::size_t i = 0;
             while (i < line.size() && line[i] == ' ') ++i;
             // Type token (one word like u32, u64, bool, double).

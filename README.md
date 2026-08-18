@@ -141,6 +141,10 @@ every candidate outside the decompilation checkout, ranks the requested
 function through objdiff's one-shot JSON diff, and preserves `best.c`, `best.o`,
 `best.objdiff.json`, and a reproducible result manifest without editing the
 original source.
+`scripts/ppc_decompile_unit.py` recovers every function owned by an objdiff
+unit in retail-object order, preserves the existing source preamble and
+includes, isolates inferred PPC record names between functions, and writes a
+separate translation-unit candidate without modifying the project source.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, binary-only limits, the `--ppc-coverage`
 decoder/semantic-gap report, and the repeatable SPM pseudo-C quality benchmark.

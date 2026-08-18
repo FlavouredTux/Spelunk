@@ -1352,7 +1352,8 @@ int test_ppc_struct_shape_is_shared_across_pointer_aliases() {
     if (!pc) return 1;
     const bool named_shape = pc->find("PpcState* state") != std::string::npos &&
                              pc->find("state->word_0") != std::string::npos &&
-                             pc->find("state->float_8") != std::string::npos;
+                             pc->find("state->float_8") != std::string::npos &&
+                             pc->find("} PpcState;") != std::string::npos;
     if (!named_shape) std::fprintf(stderr, "Shared shape output:\n%s\n", pc->c_str());
     check(named_shape, "PPC pointer aliases share typed member names");
     return 0;

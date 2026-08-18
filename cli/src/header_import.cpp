@@ -164,14 +164,22 @@ Result<HeaderDatabase> import_headers(const Args& args) {
     HeaderDatabase db;
     if (args.header_paths.empty()) return db;
     std::vector<std::filesystem::path> files;
-    std::set<std::filesystem::path> roots;
+    std::set<std::filesystem::path> include_roots;
     std::error_code ec;
     for (const std::string& raw : args.header_paths) {
         std::filesystem::path p = std::filesystem::absolute(raw, ec);
         if (ec || !std::filesystem::exists(p))
             return std::unexpected(Error::io("header path does not exist: " + raw));
         if (std::filesystem::is_directory(p)) {
-            roots.insert(p);
+            include_roots.insert(p);
+            if (p.filename() == "include") {
+                for (std::string_view sibling : {"decomp", "mod"}) {
+                    const auto candidate = p.parent_path() / sibling;
+                    if (std::filesystem::is_directory(candidate)) {
+                        include_roots.insert(candidate);
+                    }
+                }
+            }
             for (std::filesystem::recursive_directory_iterator it(p, ec), end; it != end && !ec; it.increment(ec)) {
                 if (!it->is_regular_file()) continue;
                 const auto ext = it->path().extension().string();
@@ -179,7 +187,7 @@ Result<HeaderDatabase> import_headers(const Args& args) {
             }
         } else {
             files.push_back(p);
-            roots.insert(p.parent_path());
+            include_roots.insert(p.parent_path());
         }
     }
     if (files.empty()) return std::unexpected(Error::invalid_format("--headers found no header files"));
@@ -190,7 +198,7 @@ Result<HeaderDatabase> import_headers(const Args& args) {
     for (const auto& f : files) source += std::format("#include \"{}\"\n", f.string());
     std::vector<std::string> owned_args{"-x", "c++", "-std=c++20", "-target", "powerpc-unknown-eabi",
                                         "-DM2C=1", "-DRELAX_NAMESPACING=1", "-Wno-everything"};
-    for (const auto& root : roots) owned_args.push_back("-I" + root.string());
+    for (const auto& root : include_roots) owned_args.push_back("-I" + root.string());
     for (const auto& a : args.header_args) owned_args.push_back(a);
     std::vector<const char*> clang_args;
     for (const auto& a : owned_args) clang_args.push_back(a.c_str());
@@ -225,6 +233,7 @@ Result<HeaderDatabase> import_headers(const Args& args) {
         R"(UNKNOWN_FUNCTION\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\))");
     const std::regex pointer_global(
         R"((?:extern\s+|DECOMP_STATIC\s*\(\s*)([A-Za-z_][A-Za-z0-9_:]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))");
+    const std::regex decomp_static(R"(DECOMP_STATIC\s*\(\s*([^()\r\n]+)\s*\))");
     for (const auto& file : files) {
         std::ifstream in(file);
         if (!in) continue;
@@ -240,6 +249,28 @@ Result<HeaderDatabase> import_headers(const Args& args) {
         for (std::sregex_iterator it(contents.begin(), contents.end(), pointer_global), end;
              it != end; ++it) {
             db.globals.insert_or_assign((*it)[2].str(), (*it)[1].str() + " *");
+        }
+        for (std::sregex_iterator it(contents.begin(), contents.end(), decomp_static), end;
+             it != end; ++it) {
+            std::string declaration = (*it)[1].str();
+            if (declaration.find('(') != std::string::npos) continue;
+            while (!declaration.empty() && std::isspace(
+                       static_cast<unsigned char>(declaration.back()))) {
+                declaration.pop_back();
+            }
+            const std::regex object_decl(
+                R"(^\s*(.+?[\s*])([A-Za-z_][A-Za-z0-9_]*)(\s*(?:\[[^\]]*\])*)\s*$)");
+            std::smatch match;
+            if (!std::regex_match(declaration, match, object_decl)) continue;
+            std::string type = match[1].str();
+            while (!type.empty() && std::isspace(
+                       static_cast<unsigned char>(type.back()))) {
+                type.pop_back();
+            }
+            std::string arrays = match[3].str();
+            arrays.erase(std::remove_if(arrays.begin(), arrays.end(),
+                [](unsigned char c) { return std::isspace(c) != 0; }), arrays.end());
+            db.globals.insert_or_assign(match[2].str(), type + arrays);
         }
     }
     clang_disposeTranslationUnit(tu);

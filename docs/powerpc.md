@@ -222,6 +222,18 @@ DTK symbols, annotations, and headers once, prefixes each result with
 The importer is an optional CLI dependency. Builds made without libclang keep
 all ordinary decompilation features and report a focused error only when
 `--headers` is requested.
+For conventional `spm-headers/include` trees, sibling `decomp` and `mod`
+directories are added to Clang's include search automatically. Both ordinary
+Clang declarations and object-like `DECOMP_STATIC(...)` declarations populate
+the global type database, including arrays and aggregate objects hidden from
+Clang by decompilation macros.
+
+Header and body evidence are combined rather than applied as unrelated
+cosmetic hints. Mixed GPR/FPR prototypes shape stack locals (`f32*` produces a
+scalar `float`, not an accidental integer array), inferred record layouts flow
+back to live-in parameters and allocator returns, and direct aggregate globals
+use imported field names. When a byte offset has no known field, fallback
+pointer arithmetic is explicitly cast through `uint8_t*` so it remains valid C.
 
 ### Typed data and SPM event scripts
 

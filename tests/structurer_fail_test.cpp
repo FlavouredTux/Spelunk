@@ -2056,6 +2056,92 @@ int test_ppc_annotated_incoming_stack_argument_name() {
     return 0;
 }
 
+int test_ppc_pointer_parameters_shape_stack_locals() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x1c80;
+    constexpr addr_t kTarget = 0x1ca0;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x20;
+    fn.name = "typed_stack_locals";
+
+    IrValue sin_addr = IrValue::make_temp(0, IrType::I32);
+    IrValue cos_addr = IrValue::make_temp(1, IrType::I32);
+    IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    IrValue r4 = IrValue::make_reg(Reg::PpcR4, IrType::I32);
+    IrValue f1 = IrValue::make_reg(Reg::PpcF1, IrType::F32);
+    r3.version = 1;
+    r4.version = 1;
+    f1.version = 1;
+
+    IrBlock bb;
+    bb.start = kStart;
+    bb.end = fn.end;
+    bb.kind = BlockKind::Return;
+    bb.insts.push_back(make_add(sin_addr,
+        IrValue::make_reg(Reg::PpcR1, IrType::I32),
+        IrValue::make_imm(-8, IrType::I32)));
+    bb.insts.push_back(make_add(cos_addr,
+        IrValue::make_reg(Reg::PpcR1, IrType::I32),
+        IrValue::make_imm(-4, IrType::I32)));
+    bb.insts.push_back(make_assign(r3, sin_addr));
+    bb.insts.push_back(make_assign(r4, cos_addr));
+    bb.insts.push_back(make_assign(f1,
+        IrValue::make_imm(0x3f800000, IrType::F32)));
+    IrInst int_args;
+    int_args.op = IrOp::Intrinsic;
+    int_args.name = "call.args.1";
+    int_args.srcs[0] = r3;
+    int_args.srcs[1] = r4;
+    int_args.src_count = 2;
+    bb.insts.push_back(int_args);
+    IrInst fp_args;
+    fp_args.op = IrOp::Intrinsic;
+    fp_args.name = "call.fp_args.1";
+    fp_args.srcs[0] = f1;
+    fp_args.src_count = 1;
+    bb.insts.push_back(fp_args);
+    bb.insts.push_back(make_call_imm(kStart + 0x18, kTarget));
+    bb.insts.push_back(make_ret(kStart + 0x1c));
+    fn.block_at[bb.start] = 0;
+    fn.blocks.push_back(std::move(bb));
+
+    auto block = std::make_unique<Region>();
+    block->kind = RegionKind::Block;
+    block->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(block));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    Annotations annotations;
+    FunctionSig signature;
+    signature.return_type = "void";
+    signature.params = {{"f32", "x"}, {"f32 *", "sinx"}, {"f32 *", "cosx"}};
+    annotations.signatures[kTarget] = std::move(signature);
+
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &annotations, EmitOptions{});
+    check(pc.has_value(), "typed PPC stack locals emit");
+    if (!pc) return 1;
+    if (pc->find("float local_8;") == std::string::npos ||
+        pc->find("float local_4;") == std::string::npos) {
+        std::fprintf(stderr, "Typed stack-local output:\n%s\n", pc->c_str());
+    }
+    check(pc->find("float local_8;") != std::string::npos &&
+          pc->find("float local_4;") != std::string::npos,
+          "pointer parameter types refine stack slot declarations");
+    check(pc->find("local_8[") == std::string::npos &&
+          pc->find("local_4[") == std::string::npos,
+          "prototype-shaped scalar locals are not widened into arrays");
+    return 0;
+}
+
 int test_ppc_hidden_sret_shifts_declared_call_arguments() {
     using namespace ember;
 
@@ -2382,6 +2468,7 @@ int main() {
     rc |= test_ppc_sdk_signature_seeds_mixed_lanes();
     rc |= test_ppc_annotated_stack_argument_at_call_site();
     rc |= test_ppc_annotated_incoming_stack_argument_name();
+    rc |= test_ppc_pointer_parameters_shape_stack_locals();
     rc |= test_ppc_hidden_sret_shifts_declared_call_arguments();
     rc |= test_ppc_small_aggregate_consumes_multiple_gprs();
     rc |= test_wii_sdk_prototype_groups();

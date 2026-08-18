@@ -46,6 +46,29 @@ def main() -> int:
             "// ember-symbol: 0x80003160",
         ]
 
+        # A conventional headers/include path automatically sees its sibling
+        # decomp directory, and f32 aliases retain their scalar FP ABI role.
+        include = temp / "headers" / "include"
+        decomp = temp / "headers" / "decomp"
+        include.mkdir(parents=True)
+        decomp.mkdir(parents=True)
+        (decomp / "extra.h").write_text(
+            "typedef float f32;\n", encoding="utf-8")
+        (include / "fixture.h").write_text(
+            "#include \"extra.h\"\n"
+            "typedef struct UnitWork { int value; } UnitWork;\n"
+            "#define DECOMP_STATIC(expr)\n"
+            "DECOMP_STATIC(UnitWork unit_work)\n"
+            "void scalar_entry(UnitWork * state, f32 scale);\n",
+            encoding="utf-8",
+        )
+        imported = run([
+            str(ember), "--verbose", "--headers", str(include),
+            "-p", "-s", "scalar_entry", str(fixture),
+        ])
+        assert "parse diagnostic" not in imported.stderr
+        assert "void scalar_entry(UnitWork * state, float scale)" in imported.stdout
+
         data = run([
             str(ember), "-q", "--decompile-data", "0x80004000",
             "--type", "uint32_t[2]", "--verify-roundtrip", str(fixture),

@@ -2316,7 +2316,17 @@ struct Emitter {
     known_call_return_c_type(const IrInst& inst) const {
         if (const FunctionSig* sig = call_annotation_signature(inst); sig &&
             !sig->return_type.empty()) {
-            return normalize_c_type_alias(sig->return_type);
+            const std::string declared = normalize_c_type_alias(sig->return_type);
+            std::string compact = declared;
+            compact.erase(std::remove_if(compact.begin(), compact.end(),
+                [](unsigned char c) { return std::isspace(c) != 0; }), compact.end());
+            if (compact == "void*" && inst.op == IrOp::Call) {
+                if (auto it = inferred_call_return_types.find(inst.target1);
+                    it != inferred_call_return_types.end() && it->second != "void*") {
+                    return it->second;
+                }
+            }
+            return declared;
         }
         std::optional<addr_t> target;
         if (inst.op == IrOp::Call) {
@@ -3427,6 +3437,74 @@ struct Emitter {
         }
     }
 
+    void infer_typed_stack_slots_from_calls() {
+        if (!annotations || !is_ppc_abi()) return;
+        const auto int_regs = int_arg_regs(abi);
+        const auto fp_regs = fp_arg_regs(abi);
+        for (const auto& bb : fn->blocks) {
+            std::vector<IrValue> int_values;
+            std::vector<IrValue> fp_values;
+            for (const IrInst& inst : bb.insts) {
+                if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.args.")) {
+                    if (inst.name == "call.args.1") int_values.clear();
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        int_values.push_back(inst.srcs[i]);
+                    }
+                    continue;
+                }
+                if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.fp_args.")) {
+                    if (inst.name == "call.fp_args.1") fp_values.clear();
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        fp_values.push_back(inst.srcs[i]);
+                    }
+                    continue;
+                }
+                if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
+                const FunctionSig* signature = call_annotation_signature(inst);
+                if (!signature) {
+                    int_values.clear();
+                    fp_values.clear();
+                    continue;
+                }
+                const auto layout = abi_layout_for(*signature);
+                for (std::size_t i = 0; i < layout.size() && i < signature->params.size(); ++i) {
+                    std::string type = normalize_c_type_alias(signature->params[i].type);
+                    const auto star = type.rfind('*');
+                    if (star == std::string::npos || type.find("char") != std::string::npos) {
+                        continue;
+                    }
+                    const Reg wanted = canonical_reg(layout[i].reg);
+                    const IrValue* value = nullptr;
+                    const auto find_value = [&](std::span<const Reg> regs,
+                                                const std::vector<IrValue>& values) {
+                        for (std::size_t j = 0; j < regs.size() && j < values.size(); ++j) {
+                            if (canonical_reg(regs[j]) == wanted) return &values[j];
+                        }
+                        return static_cast<const IrValue*>(nullptr);
+                    };
+                    if (wanted != Reg::None) {
+                        value = find_value(int_regs, int_values);
+                        if (!value) value = find_value(fp_regs, fp_values);
+                    }
+                    if (!value) continue;
+                    auto offset = entry_stack_offset(*value);
+                    if (!offset) continue;
+                    auto slot = frame_layout.slots.find(*offset);
+                    if (slot == frame_layout.slots.end()) continue;
+                    type.erase(star);
+                    while (!type.empty() && std::isspace(
+                               static_cast<unsigned char>(type.back()))) {
+                        type.pop_back();
+                    }
+                    if (type.empty() || type == "void") continue;
+                    slot->second.type_override = std::move(type);
+                }
+                int_values.clear();
+                fp_values.clear();
+            }
+        }
+    }
+
     void infer_function_pointer_args() {
         std::size_t fn_count = 0;
         std::vector<IrValue> args;
@@ -3558,7 +3636,9 @@ struct Emitter {
         };
         for (const auto& bb : fn->blocks) {
             std::vector<IrValue> args;
+            std::vector<IrValue> fp_args;
             args.reserve(kMaxAbiIntArgs);
+            fp_args.reserve(kMaxAbiFpArgs);
             for (const auto& inst : bb.insts) {
                 if (inst.op == IrOp::Intrinsic && inst.name == "call.args.1") {
                     args.clear();
@@ -3572,16 +3652,55 @@ struct Emitter {
                         args.push_back(inst.srcs[i]);
                     continue;
                 }
+                if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.fp_args.")) {
+                    if (inst.name == "call.fp_args.1") fp_args.clear();
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        fp_args.push_back(inst.srcs[i]);
+                    }
+                    continue;
+                }
                 if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
 
                 auto arity = known_call_arity_for_arg_names(inst, args);
                 if (!arity) {
                     args.clear();
+                    fp_args.clear();
                     continue;
                 }
-                const std::size_t limit = std::min<std::size_t>(*arity, args.size());
+                std::vector<IrValue> named_values;
+                std::vector<std::size_t> parameter_indices;
+                const FunctionSig* signature = call_annotation_signature(inst);
+                if (signature && is_ppc_abi()) {
+                    const auto layout = abi_layout_for(*signature);
+                    const auto int_regs = int_arg_regs(abi);
+                    const auto fp_regs = fp_arg_regs(abi);
+                    for (std::size_t parameter = 0; parameter < layout.size(); ++parameter) {
+                        const Reg wanted = canonical_reg(layout[parameter].reg);
+                        const auto append = [&](std::span<const Reg> regs,
+                                                const std::vector<IrValue>& values) {
+                            for (std::size_t j = 0; j < regs.size() && j < values.size(); ++j) {
+                                if (canonical_reg(regs[j]) != wanted) continue;
+                                named_values.push_back(values[j]);
+                                parameter_indices.push_back(parameter);
+                                return true;
+                            }
+                            return false;
+                        };
+                        if (wanted != Reg::None && !append(int_regs, args)) {
+                            (void)append(fp_regs, fp_args);
+                        }
+                    }
+                } else {
+                    const std::size_t limit = std::min<std::size_t>(*arity, args.size());
+                    for (std::size_t i = 0; i < limit; ++i) {
+                        named_values.push_back(args[i]);
+                        parameter_indices.push_back(i);
+                    }
+                }
+                const std::size_t limit = named_values.size();
                 for (std::size_t i = 0; i < limit; ++i) {
-                    auto slot = trace_to_self_arg_slot(args[i]);
+                    const std::size_t parameter = parameter_indices[i];
+                    auto slot = trace_to_self_arg_slot(named_values[i]);
                     if (!slot || *slot >= self_arg_names.size()) continue;
                     if (!self_arg_names[*slot].empty()) continue;
 
@@ -3590,15 +3709,15 @@ struct Emitter {
                         if (annotations) {
                             if (const FunctionSig* sig =
                                     annotations->signature_for(inst.target1);
-                                sig && i < sig->params.size() &&
-                                !sig->params[i].name.empty()) {
-                                semantic_name = sig->params[i].name;
+                                sig && parameter < sig->params.size() &&
+                                !sig->params[parameter].name.empty()) {
+                                semantic_name = sig->params[parameter].name;
                             }
                         }
                         if (!semantic_name) {
                             const std::string callee =
                                 function_display_name(inst.target1);
-                            if (auto role = sdk_param_name(callee, i); role) {
+                            if (auto role = sdk_param_name(callee, parameter); role) {
                                 semantic_name = std::string{*role};
                             }
                         }
@@ -3607,9 +3726,10 @@ struct Emitter {
                     }
                     if (!semantic_name) continue;
                     self_arg_names[*slot] = std::move(*semantic_name);
-                    record_self_arg_type(*slot, call_arg_display_type(args[i]));
+                    record_self_arg_type(*slot, call_arg_display_type(named_values[i]));
                 }
                 args.clear();
+                fp_args.clear();
             }
         }
     }
@@ -3797,6 +3917,19 @@ struct Emitter {
             if (self_arg_type_names[slot].empty()) {
                 self_arg_type_names[slot] = "void*";
             }
+        }
+    }
+
+    void infer_synthetic_self_arg_types() {
+        if (!is_ppc_abi()) return;
+        for (const auto& [key, type_name] : struct_type_names) {
+            auto root = struct_root_values.find(key);
+            if (root == struct_root_values.end()) continue;
+            auto slot = trace_to_self_arg_slot(root->second);
+            if (!slot || *slot >= self_arg_type_names.size()) continue;
+            auto& current = self_arg_type_names[*slot];
+            const std::string inferred = type_name + "*";
+            if (current.empty() || current == "void*") current = inferred;
         }
     }
 
@@ -5432,7 +5565,13 @@ struct Emitter {
     entry_stack_offset(const IrValue& v, int depth = 0) const {
         if (depth > 16 || !is_ppc_abi()) return std::nullopt;
         if (v.kind == IrValueKind::Reg) {
-            if (canonical_reg(v.reg) != Reg::PpcR1) return std::nullopt;
+            if (canonical_reg(v.reg) != Reg::PpcR1) {
+                const IrInst* d = def_of(v);
+                if (d && d->op == IrOp::Assign && d->src_count >= 1) {
+                    return entry_stack_offset(d->srcs[0], depth + 1);
+                }
+                return std::nullopt;
+            }
             if (v.version == 0) return i64{0};
             const IrInst* d = def_of(v);
             if (!d || d->op != IrOp::Assign || d->src_count < 1) {
@@ -5655,12 +5794,12 @@ struct Emitter {
     try_resolve_imm_addr(const IrValue& v, int depth = 0) const {
         if (depth >= 8) return std::nullopt;
         if (v.kind == IrValueKind::Imm) return v.imm;
-        if (binary && v.kind == IrValueKind::Reg && v.version == 0) {
-            if (v.reg == Reg::PpcR13) {
+        if (binary && v.kind == IrValueKind::Reg) {
+            if (canonical_reg(v.reg) == Reg::PpcR13) {
                 if (auto base = binary->ppc_small_data_base(false); base) {
                     return static_cast<i64>(*base);
                 }
-            } else if (v.reg == Reg::PpcR2) {
+            } else if (canonical_reg(v.reg) == Reg::PpcR2) {
                 if (auto base = binary->ppc_small_data_base(true); base) {
                     return static_cast<i64>(*base);
                 }
@@ -5701,6 +5840,13 @@ struct Emitter {
 
         const unsigned t_bytes = type_bits(t) / 8;
         const i64 off = static_cast<i64>(a) - static_cast<i64>(s->addr);
+        if (off >= 0) {
+            const IrValue base = IrValue::make_imm(
+                static_cast<i64>(s->addr), abi_word_type());
+            if (auto field = imported_global_object_field(base, off); field) {
+                return *field;
+            }
+        }
 
         if (off == 0 && (s->size == 0 || s->size == t_bytes)) {
             note_global_decl(*s, std::string(c_type_name(t)));
@@ -5717,7 +5863,7 @@ struct Emitter {
             return std::format("*({}*)&{}", c_type_name(t), s->name);
         }
         note_global_decl(*s, std::format("{}[]", c_type_name(t)));
-        return std::format("*({}*)(&{} + {:#x})",
+        return std::format("*({}*)((uint8_t*)&{} + {:#x})",
                            c_type_name(t), s->name,
                            static_cast<u64>(off));
     }
@@ -5812,6 +5958,7 @@ struct Emitter {
                 auto [it, inserted] = call_type_names.emplace(*target, std::string{});
                 if (inserted) it->second = claim_type_name("PpcObject");
                 name = it->second;
+                inferred_call_return_types.insert_or_assign(*target, name + "*");
             } else {
                 std::string base = "PpcState";
                 if (auto root_it = struct_root_values.find(key);
@@ -6156,6 +6303,39 @@ struct Emitter {
         }
         note_global_decl(*slot, *global_type);
         return std::format("{}->{}", slot->name, field->second.name);
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    imported_global_object_field(const IrValue& base, i64 off) const {
+        if (!annotations || !binary || off < 0) return std::nullopt;
+        auto resolved = try_resolve_imm_addr(base);
+        if (!resolved) return std::nullopt;
+        const addr_t address = normalized_address(*resolved);
+        const Symbol* object = binary->defined_object_at(address);
+        if (!object || object->kind != SymbolKind::Object || object->name.empty() ||
+            address < object->addr) {
+            return std::nullopt;
+        }
+        const std::string* global_type = annotations->global_type_for(object->addr);
+        if (!global_type) {
+            auto by_name = annotations->imported_global_types_by_name.find(object->name);
+            if (by_name != annotations->imported_global_types_by_name.end()) {
+                global_type = &by_name->second;
+            }
+        }
+        if (!global_type || global_type->find('*') != std::string::npos) {
+            return std::nullopt;
+        }
+        const std::string record_name = imported_record_base(*global_type);
+        auto record = annotations->imported_records.find(record_name);
+        if (record == annotations->imported_records.end()) return std::nullopt;
+        const i64 field_offset = static_cast<i64>(address - object->addr) + off;
+        auto field = record->second.fields.find(field_offset);
+        if (field == record->second.fields.end() || field->second.name.empty()) {
+            return std::nullopt;
+        }
+        note_global_decl(*object, *global_type);
+        return std::format("{}.{}", object->name, field->second.name);
     }
 
     [[nodiscard]] std::optional<std::string>
@@ -6574,6 +6754,7 @@ struct Emitter {
         // Skip stack-relative and global bases - those have richer rendering
         // paths already.
         if (stack_offset(bo->first).has_value()) return;
+        if (try_resolve_imm_addr(bo->first).has_value()) return;
         if (auto k = ssa_key(bo->first); k) {
             struct_root_values.try_emplace(*k, bo->first);
             struct_offsets[*k].insert(bo->second);
@@ -6808,6 +6989,9 @@ struct Emitter {
                 const IrValue& base = bo->first;
                 const i64 off = bo->second;
                 if (off >= 0) {
+                    if (auto field = imported_global_object_field(base, off); field) {
+                        return *field;
+                    }
                     if (auto field = imported_global_pointer_field(base, off); field) {
                         return *field;
                     }
@@ -6932,11 +7116,17 @@ struct Emitter {
         const int p = static_cast<int>(self_prec);
         if (d.op == IrOp::Add && d.src_count >= 2) {
             if (auto off = resolve_imm(d.srcs[1]); off) {
+                if (auto field = imported_global_object_field(d.srcs[0], *off); field) {
+                    return wrap_if_lt(*field, Prec::Postfix, min_prec);
+                }
                 if (auto field = imported_global_pointer_field(d.srcs[0], *off); field) {
                     return wrap_if_lt(*field, Prec::Postfix, min_prec);
                 }
             }
             if (auto off = resolve_imm(d.srcs[0]); off) {
+                if (auto field = imported_global_object_field(d.srcs[1], *off); field) {
+                    return wrap_if_lt(*field, Prec::Postfix, min_prec);
+                }
                 if (auto field = imported_global_pointer_field(d.srcs[1], *off); field) {
                     return wrap_if_lt(*field, Prec::Postfix, min_prec);
                 }
@@ -7877,6 +8067,13 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
                 return std::format("&{}", stack_name(*off));
             }
+            if (is_ppc_abi()) {
+                if (auto address = try_resolve_imm_addr(d.dst); address) {
+                    if (auto named = named_address_for_imm(normalized_address(*address)); named) {
+                        return *named;
+                    }
+                }
+            }
             if (d.src_count >= 2) {
                 if (auto ivar = try_render_objc_ivar_addr_pair(d.srcs[0], d.srcs[1])) {
                     return wrap_if_lt(*ivar, Prec::Postfix, min_prec);
@@ -7901,6 +8098,13 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         case IrOp::Sub: {
             if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
                 return std::format("&{}", stack_name(*off));
+            }
+            if (is_ppc_abi()) {
+                if (auto address = try_resolve_imm_addr(d.dst); address) {
+                    if (auto named = named_address_for_imm(normalized_address(*address)); named) {
+                        return *named;
+                    }
+                }
             }
             return format_binop(d, "-", depth, min_prec, Prec::Add, /*commutative=*/false);
         }
@@ -8355,7 +8559,10 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
                 if (auto known = known_call_return_c_type(
                         fn->blocks[pos.first].insts[pos.second]); known &&
                     *known != "void") {
-                    type_name = *known;
+                    const bool generic_pointer = *known == "void*";
+                    const bool concrete_inferred = type_name.ends_with('*') &&
+                        type_name != "void*";
+                    if (!generic_pointer || !concrete_inferred) type_name = *known;
                 }
             }
             out += std::format("{}{} {} = {};\n", ind, type_name, name, call_expr);
@@ -9178,6 +9385,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_pointer_arg_types_from_memory_uses();
+        e.infer_synthetic_self_arg_types();
     }
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.infer_ppc_helper_preserved_arg_types();
@@ -9186,6 +9394,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.infer_call_value_arg_names();
     e.infer_ppc_role_arg_names();
     e.infer_charp_args();
+    e.infer_typed_stack_slots_from_calls();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
 

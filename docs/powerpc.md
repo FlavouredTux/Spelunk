@@ -439,6 +439,13 @@ python3 scripts/ppc_quality_benchmark.py --dtk /path/to/spm \
   --baseline benchmarks/spm_eu0_quality_baseline.json --fail-on-regression
 ```
 
+PPC merge recovery performs a CFG must-assignment pass after call binding and
+edge materialization. Stable stack/global pointer initializers are recovered
+from Phi webs, two-arm diamonds render as conditional expressions, and locals
+whose first top-level statement assigns them remain intentionally
+uninitialized until that statement. The baseline therefore rejects any return
+of synthetic `{0} /* unresolved SSA merge */` declarations.
+
 The tool returns 2 when a corpus function cannot be decompiled and 1 when a
 requested baseline check regresses. It has no third-party Python dependencies,
 and its metric parser is covered by the normal CTest suite.

@@ -1,5 +1,6 @@
 #include <ember/decompile/emitter.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstddef>
@@ -673,6 +674,7 @@ struct Emitter {
     std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
     std::map<std::string, SsaMergeLocal>             merge_locals;
+    std::set<std::string>                            definitely_assigned_merge_locals;
     std::map<addr_t, std::vector<std::pair<std::string, IrValue>>>
                                                     merge_edge_assignments;
     // Block addresses referenced by some `RegionKind::Goto` in the
@@ -1459,6 +1461,53 @@ struct Emitter {
             return true_to_arm
                 ? std::format("({} ? {} : {})", condition, arm, direct)
                 : std::format("({} ? {} : {})", condition, direct, arm);
+        }
+
+        // Full two-arm diamond:
+        //
+        //        condition
+        //       /        (other arm)
+        //      arm A   arm B
+        //        \      /
+        //          phi
+        //
+        // Both operands are real definitions, so the one-arm/direct-edge
+        // matcher above cannot select either as the "direct" value. Recover
+        // the shared predecessor and preserve the choice as a ternary.
+        const auto block_at = [&](addr_t address) -> const IrBlock* {
+            auto found = fn->block_at.find(address);
+            return found != fn->block_at.end() ? &fn->blocks[found->second] : nullptr;
+        };
+        const IrBlock* first_arm = block_at(phi.phi_preds[0]);
+        const IrBlock* second_arm = block_at(phi.phi_preds[1]);
+        if (first_arm && second_arm && first_arm->successors.size() == 1 &&
+            second_arm->successors.size() == 1 &&
+            first_arm->successors[0] == merge && second_arm->successors[0] == merge) {
+            for (addr_t predecessor : first_arm->predecessors) {
+                if (std::ranges::find(second_arm->predecessors, predecessor) ==
+                    second_arm->predecessors.end()) {
+                    continue;
+                }
+                const IrBlock* condition_block = block_at(predecessor);
+                if (!condition_block || condition_block->insts.empty()) continue;
+                const IrInst& branch = condition_block->insts.back();
+                if (branch.op != IrOp::CondBranch || branch.src_count < 1) continue;
+                const bool first_is_true =
+                    branch.target1 == first_arm->start && branch.target2 == second_arm->start;
+                const bool second_is_true =
+                    branch.target1 == second_arm->start && branch.target2 == first_arm->start;
+                if (!first_is_true && !second_is_true) continue;
+                const std::string condition = expr(
+                    branch.srcs[0], depth + 1, std::to_underlying(Prec::Cond));
+                const std::string first = expr(
+                    phi.phi_operands[0], depth + 1, std::to_underlying(Prec::Cond));
+                const std::string second = expr(
+                    phi.phi_operands[1], depth + 1, std::to_underlying(Prec::Cond));
+                if (condition.empty() || first.empty() || second.empty()) continue;
+                return first_is_true
+                    ? std::format("({} ? {} : {})", condition, first, second)
+                    : std::format("({} ? {} : {})", condition, second, first);
+            }
         }
         return std::nullopt;
     }
@@ -2878,6 +2927,19 @@ struct Emitter {
                                          self_arg_layout[*slot].type);
             }
         }
+        if (stack_offset(op).has_value() || try_resolve_imm_addr(op).has_value()) {
+            return op;
+        }
+        const Reg canonical = op.kind == IrValueKind::Reg
+            ? canonical_reg(op.reg) : Reg::None;
+        if (canonical >= Reg::PpcF14 && canonical <= Reg::PpcF31) {
+            const IrInst* definition = def_stripped(op);
+            if (definition && definition->op == IrOp::Load &&
+            definition->src_count >= 1 &&
+            try_resolve_imm_addr(definition->srcs[0]).has_value()) {
+                return op;
+            }
+        }
         return std::nullopt;
     }
 
@@ -2990,6 +3052,109 @@ struct Emitter {
             }
         }
         self_arity = need;
+    }
+
+    void analyze_merge_definite_assignment() {
+        definitely_assigned_merge_locals.clear();
+        if (!fn || merge_locals.empty()) return;
+
+        for (const auto& [name, local] : merge_locals) {
+            if (local.initializer) {
+                definitely_assigned_merge_locals.insert(name);
+                continue;
+            }
+            const auto local_key = [&](const IrValue& value) -> std::optional<SsaKey> {
+                auto key = ssa_key(value);
+                if (!key) return std::nullopt;
+                auto named = merge_value_names.find(*key);
+                if (named == merge_value_names.end() || named->second != name) {
+                    return std::nullopt;
+                }
+                return *key;
+            };
+            const auto assigns_at = [&](std::size_t bi, std::size_t ii,
+                                        const IrInst& inst) {
+                if (merge_assignment_name_for(inst) == name) return true;
+                const std::pair position{bi, ii};
+                if (!merge_bound_calls.contains(position)) return false;
+                auto bound = bound_call_key.find(position);
+                if (bound == bound_call_key.end()) return false;
+                auto named = merge_value_names.find(bound->second);
+                return named != merge_value_names.end() && named->second == name;
+            };
+
+            std::vector<bool> block_assigns(fn->blocks.size(), false);
+            std::vector<bool> edge_assigns(fn->blocks.size(), false);
+            for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+                const auto& block = fn->blocks[bi];
+                for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
+                    if (assigns_at(bi, ii, block.insts[ii])) {
+                        block_assigns[bi] = true;
+                    }
+                }
+                if (auto edge = merge_edge_assignments.find(block.start);
+                    edge != merge_edge_assignments.end()) {
+                    edge_assigns[bi] = std::ranges::any_of(
+                        edge->second, [&](const auto& item) { return item.first == name; });
+                }
+            }
+
+            std::vector<bool> in(fn->blocks.size(), true);
+            std::vector<bool> out(fn->blocks.size(), true);
+            if (!in.empty()) in[0] = false;
+            bool changed = true;
+            for (std::size_t iteration = 0;
+                 changed && iteration <= fn->blocks.size(); ++iteration) {
+                changed = false;
+                for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+                    bool next_in = false;
+                    if (bi != 0 && !fn->blocks[bi].predecessors.empty()) {
+                        next_in = true;
+                        for (addr_t predecessor : fn->blocks[bi].predecessors) {
+                            auto found = fn->block_at.find(predecessor);
+                            if (found == fn->block_at.end() || !out[found->second]) {
+                                next_in = false;
+                                break;
+                            }
+                        }
+                    }
+                    const bool next_out = next_in || block_assigns[bi] || edge_assigns[bi];
+                    if (in[bi] != next_in || out[bi] != next_out) {
+                        in[bi] = next_in;
+                        out[bi] = next_out;
+                        changed = true;
+                    }
+                }
+            }
+
+            bool safe = true;
+            for (std::size_t bi = 0; bi < fn->blocks.size() && safe; ++bi) {
+                bool assigned = in[bi];
+                const auto& block = fn->blocks[bi];
+                for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
+                    const IrInst& inst = block.insts[ii];
+                    if (inst.op != IrOp::Phi) {
+                        for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si) {
+                            auto key = local_key(inst.srcs[si]);
+                            if (!key) continue;
+                            bool visible = false;
+                            if (auto users = visible_user_positions.find(*key);
+                                users != visible_user_positions.end()) {
+                                visible |= std::ranges::find(
+                                    users->second, std::pair{bi, ii}) != users->second.end();
+                            }
+                            if (visible && !assigned) {
+                                safe = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (!safe) break;
+                    assigned |= assigns_at(bi, ii, inst);
+                }
+            }
+            if (safe) definitely_assigned_merge_locals.insert(name);
+        }
     }
 
     // Self-arg slots (a1..aN) known to flow into a libc char* parameter.
@@ -9397,6 +9562,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.infer_typed_stack_slots_from_calls();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
+    e.analyze_merge_definite_assignment();
 
     std::string out;
     out += std::format("// {}\n", sf.ir->name.empty()
@@ -9867,23 +10033,6 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     for (const auto& [temp, value] : undeclared_temps) {
         out += std::format("  {} t{};\n", e.c_type_name_for(value), temp);
     }
-    for (const auto& [name, local] : e.merge_locals) {
-        if (!text_contains_identifier_in_code(body_buf, name)) continue;
-        if (local.initializer) {
-            out += std::format("  {} {} = {};\n",
-                               e.c_type_name_for(local.type_value),
-                               name,
-                               e.expr(*local.initializer));
-        } else {
-            if (e.is_ppc_abi()) {
-                out += std::format("  {} {} = {{0}}; /* unresolved SSA merge */\n",
-                                   e.c_type_name_for(local.type_value), name);
-            } else {
-                out += std::format("  {} {};\n",
-                                   e.c_type_name_for(local.type_value), name);
-            }
-        }
-    }
     // Slot extent → array recovery: if a slot's footprint (the gap to the
     // next slot above it in the frame) is bigger than its observed access
     // width, the user wrote `T arr[N]`, not a single scalar. Render it as
@@ -9896,9 +10045,42 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         if (it == e.frame_layout.slots.end()) return std::nullopt;
         return it->second.offset;
     };
+    std::map<i64, std::set<std::string>> synthetic_merge_stack_types;
+    for (const auto& [_, local] : e.merge_locals) {
+        if (!local.initializer) continue;
+        auto offset = e.stack_offset(*local.initializer);
+        if (!offset || e.frame_layout.slots.contains(*offset)) continue;
+        std::string type = e.c_type_name_for(local.type_value);
+        if (!type.ends_with('*')) continue;
+        type.pop_back();
+        while (!type.empty() && std::isspace(
+                   static_cast<unsigned char>(type.back()))) {
+            type.pop_back();
+        }
+        if (!type.empty()) synthetic_merge_stack_types[*offset].insert(std::move(type));
+    }
+    for (const auto& [offset, types] : synthetic_merge_stack_types) {
+        const std::string name = Emitter::stack_name(offset);
+        if (types.size() == 1) {
+            out += std::format("  {} {};\n", *types.begin(), name);
+            continue;
+        }
+        out += "  union { ";
+        for (const std::string& type : types) {
+            out += std::format("{} as_{}; ", type, type);
+        }
+        out += std::format("}} {};\n", name);
+    }
     for (const auto& [_, slot] : e.frame_layout.slots) {
         if (slot.name.empty()) continue;
-        if (!text_contains_identifier_in_code(body_buf, slot.name)) continue;
+        bool used_by_merge_initializer = false;
+        for (const auto& [_, local] : e.merge_locals) {
+            if (!local.initializer) continue;
+            auto offset = e.stack_offset(*local.initializer);
+            used_by_merge_initializer |= offset && *offset == slot.offset;
+        }
+        if (!text_contains_identifier_in_code(body_buf, slot.name) &&
+            !used_by_merge_initializer) continue;
         // char* type propagation overrides the access-width-derived type
         // when an inferred libc-char* call observed `&local_X` flowing in.
         const bool charp = slot.type_override.empty() &&
@@ -9933,6 +10115,42 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
         }
         out += std::format("  {} {}{};\n", ty, slot.name, suffix);
+    }
+    const auto first_body_use_is_assignment = [&](const std::string& name) {
+        std::size_t start = 0;
+        while (start <= body_buf.size()) {
+            std::size_t end = body_buf.find('\n', start);
+            if (end == std::string::npos) end = body_buf.size();
+            const std::string_view line(body_buf.data() + start, end - start);
+            if (text_contains_identifier_in_code(line, name)) {
+                const std::string prefix = "  " + name + " =";
+                return line.starts_with(prefix);
+            }
+            if (end == body_buf.size()) break;
+            start = end + 1;
+        }
+        return false;
+    };
+    for (const auto& [name, local] : e.merge_locals) {
+        if (!text_contains_identifier_in_code(body_buf, name)) continue;
+        const std::string type = e.c_type_name_for(local.type_value);
+        if (local.initializer) {
+            std::string initializer = e.expr(*local.initializer);
+            if (e.stack_offset(*local.initializer).has_value() && type.ends_with('*')) {
+                initializer = std::format("({}){}", type, initializer);
+            }
+            out += std::format("  {} {} = {};\n", type, name, initializer);
+        } else {
+            const bool assigned_in_body = first_body_use_is_assignment(name);
+            if (e.is_ppc_abi() &&
+                !e.definitely_assigned_merge_locals.contains(name) &&
+                !assigned_in_body) {
+                out += std::format("  {} {} = {{0}}; /* unresolved SSA merge */\n",
+                                   type, name);
+            } else {
+                out += std::format("  {} {};\n", type, name);
+            }
+        }
     }
     const std::size_t body_offset = out.size();
     out += body_buf;

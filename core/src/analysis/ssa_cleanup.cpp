@@ -42,8 +42,11 @@ namespace {
         case IrValueKind::Reg:
             return canonical_reg(a.reg) == canonical_reg(b.reg) &&
                    a.version == b.version;
-        default:
-            return false;
+        default: {
+            auto ak = ssa_key(a);
+            auto bk = ssa_key(b);
+            return ak && bk && *ak == *bk;
+        }
     }
 }
 

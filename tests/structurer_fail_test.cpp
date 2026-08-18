@@ -616,6 +616,65 @@ int test_phi_induction_name_is_mined() {
     return 0;
 }
 
+int test_full_diamond_phi_renders_ternary() {
+    using namespace ember;
+
+    constexpr addr_t kCondition = 0x402180;
+    constexpr addr_t kTrue = 0x402190;
+    constexpr addr_t kFalse = 0x4021a0;
+    constexpr addr_t kMerge = 0x4021b0;
+    IrValue condition = IrValue::make_reg(Reg::PpcR4, IrType::I1);
+    IrValue result = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    result.version = 1;
+
+    IrFunction fn;
+    fn.start = kCondition;
+    fn.end = kMerge + 0x10;
+    fn.name = "full_diamond_phi";
+    auto add_block = [&](addr_t start, BlockKind kind,
+                         std::vector<addr_t> predecessors,
+                         std::vector<addr_t> successors,
+                         std::vector<IrInst> instructions) {
+        IrBlock block;
+        block.start = start;
+        block.end = start + 0x10;
+        block.kind = kind;
+        block.predecessors = std::move(predecessors);
+        block.successors = std::move(successors);
+        block.insts = std::move(instructions);
+        fn.block_at[start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(block));
+    };
+    add_block(kCondition, BlockKind::Conditional, {}, {kTrue, kFalse},
+              {make_cond_branch(kCondition, condition, kTrue, kFalse)});
+    add_block(kTrue, BlockKind::Unconditional, {kCondition}, {kMerge},
+              {make_branch(kTrue, kMerge)});
+    add_block(kFalse, BlockKind::Unconditional, {kCondition}, {kMerge},
+              {make_branch(kFalse, kMerge)});
+    IrInst phi = make_phi(result, {
+        IrValue::make_imm(1, IrType::I32),
+        IrValue::make_imm(2, IrType::I32),
+    });
+    phi.phi_preds = {kTrue, kFalse};
+    add_block(kMerge, BlockKind::Return, {kTrue, kFalse}, {},
+              {std::move(phi), make_ret_value(kMerge + 4, result)});
+
+    auto ret = std::make_unique<Region>();
+    ret->kind = RegionKind::Return;
+    ret->condition = result;
+    StructuredFunction sf{&fn, std::move(ret)};
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, nullptr, EmitOptions{});
+    check(pc.has_value(), "full diamond Phi emits");
+    if (!pc) return 1;
+    check(pc->find("? 1 : 2") != std::string::npos,
+          "two-arm diamond Phi renders as a conditional expression");
+    check(pc->find("unresolved SSA merge") == std::string::npos,
+          "two-arm diamond does not invent an uninitialized merge local");
+    return 0;
+}
+
 int test_phi_livein_initializer_is_mined() {
     using namespace ember;
 
@@ -2444,6 +2503,7 @@ int main() {
     rc |= test_single_shared_diamond_tail_is_cloned();
     rc |= test_phi_merge_names_are_mined();
     rc |= test_phi_induction_name_is_mined();
+    rc |= test_full_diamond_phi_renders_ternary();
     rc |= test_phi_livein_initializer_is_mined();
     rc |= test_ppc_ctr_loop_keeps_predecrement();
     rc |= test_phi_accumulator_name_is_mined();

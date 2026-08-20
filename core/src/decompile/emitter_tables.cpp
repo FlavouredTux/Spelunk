@@ -290,6 +290,8 @@ std::string_view c_type_name(IrType t) noexcept {
         // pseudo-C consumers recognise it as a packed value; the SIMD
         // intrinsic name on the same line carries the int-vs-fp interpretation.
         case IrType::I128: return "__m128i";
+        case IrType::I256: return "__m256i";
+        case IrType::I512: return "__m512i";
         case IrType::F32:  return "float";
         case IrType::F64:  return "double";
         case IrType::V2F32:return "float2";

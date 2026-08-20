@@ -5,6 +5,7 @@ add_executable(ember_cli
     src/fingerprint.cpp
     src/header_import.cpp
     src/info.cpp
+    src/kismet.cpp
     src/main.cpp
     src/patches.cpp
     src/subcommands.cpp

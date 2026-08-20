@@ -1013,10 +1013,28 @@ public:
             return true;
         };
         auto has_value_def = [&](const IrValue& v) {
-            auto k = ssa_key(v);
-            if (!k) return false;
-            auto it = defs_.find(*k);
-            return it != defs_.end() && it->second->op != IrOp::Clobber;
+            std::set<SsaKey> seen;
+            const auto substantive = [&](const auto& self, const IrValue& value,
+                                         int depth) -> bool {
+                if (depth > 16) return false;
+                auto key = ssa_key(value);
+                if (!key || !seen.insert(*key).second) return false;
+                auto found = defs_.find(*key);
+                if (found == defs_.end()) return false;
+                const IrInst* definition = found->second;
+                if (definition->op == IrOp::Clobber) return false;
+                if (definition->op == IrOp::Assign && definition->src_count >= 1) {
+                    return self(self, definition->srcs[0], depth + 1);
+                }
+                if (definition->op == IrOp::Phi) {
+                    return std::ranges::any_of(definition->phi_operands,
+                        [&](const IrValue& operand) {
+                            return self(self, operand, depth + 1);
+                        });
+                }
+                return true;
+            };
+            return substantive(substantive, v, 0);
         };
         for (auto it = bb.insts.rbegin(); it != bb.insts.rend(); ++it) {
             if (it->op != IrOp::Return || it->src_count == 0) continue;

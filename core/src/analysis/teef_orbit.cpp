@@ -49,6 +49,8 @@ constexpr u64 kFnvPrime  = 0x100000001b3ULL;
         case IrType::I32:  return Type::I32;
         case IrType::I64:  return Type::I64;
         case IrType::I128: return Type::I128;
+        case IrType::I256:
+        case IrType::I512: return Type::I128;
         case IrType::F32:  return Type::F32;
         case IrType::F64:  return Type::F64;
         case IrType::V2F32:return Type::I64;

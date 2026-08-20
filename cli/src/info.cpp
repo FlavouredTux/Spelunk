@@ -277,6 +277,10 @@ void help_load() {
     std::println("      --version ID     select config/ID/config.yml (required for multi-version projects)");
     std::println("      --dtk-module NAME load a named REL and link its configured peers");
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
+    std::println("      --kismet PATH    read a live Unreal Kismet bundle directory or manifest");
+    std::println("                       --functions lists functions; -d, -c, or -p selects a view");
+    std::println("      --kismet-events  list wrapper functions and their Ubergraph entry offsets");
+    std::println("      --kismet-event N with -p, emit one wrapper's reachable Ubergraph path");
     std::println("      --dsym PATH      overlay symbols from a Mach-O dSYM file or .dSYM bundle");
     std::println("      --infer-string-names  synthesize names from strong log/string anchors");
     std::println("      --no-pdb         skip PDB sidecar discovery / ingestion entirely");
@@ -350,7 +354,7 @@ void print_help() {
     std::println("           corpus, size caps");
     std::println("  ann      annotate, apply, list-annotations, dry-run, .ember scripts");
     std::println("  dbg      --debug, attach, backends, aux-bin");
-    std::println("  load     DTK projects, pdb, regions, raw-bytes, base-va, force-fn-start, module");
+    std::println("  load     DTK projects, pdb, Kismet, regions, raw-bytes, force-fn-start, module");
     std::println("  data     Clang headers, typed initializers, SPM event scripts");
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");

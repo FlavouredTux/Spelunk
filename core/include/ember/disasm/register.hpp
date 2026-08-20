@@ -30,6 +30,21 @@ enum class Reg : u16 {
     // (one float or double each); packed/SIMD semantics are not modeled.
     Xmm0,  Xmm1,  Xmm2,  Xmm3,  Xmm4,  Xmm5,  Xmm6,  Xmm7,
     Xmm8,  Xmm9,  Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15,
+    Xmm16, Xmm17, Xmm18, Xmm19, Xmm20, Xmm21, Xmm22, Xmm23,
+    Xmm24, Xmm25, Xmm26, Xmm27, Xmm28, Xmm29, Xmm30, Xmm31,
+
+    // AVX/AVX-512 architectural views. They remain separate SSA values for
+    // now: VEX/EVEX writes are modeled at their encoded width, while the
+    // decoder still preserves the correct register spelling and memory size.
+    Ymm0,  Ymm1,  Ymm2,  Ymm3,  Ymm4,  Ymm5,  Ymm6,  Ymm7,
+    Ymm8,  Ymm9,  Ymm10, Ymm11, Ymm12, Ymm13, Ymm14, Ymm15,
+    Ymm16, Ymm17, Ymm18, Ymm19, Ymm20, Ymm21, Ymm22, Ymm23,
+    Ymm24, Ymm25, Ymm26, Ymm27, Ymm28, Ymm29, Ymm30, Ymm31,
+    Zmm0,  Zmm1,  Zmm2,  Zmm3,  Zmm4,  Zmm5,  Zmm6,  Zmm7,
+    Zmm8,  Zmm9,  Zmm10, Zmm11, Zmm12, Zmm13, Zmm14, Zmm15,
+    Zmm16, Zmm17, Zmm18, Zmm19, Zmm20, Zmm21, Zmm22, Zmm23,
+    Zmm24, Zmm25, Zmm26, Zmm27, Zmm28, Zmm29, Zmm30, Zmm31,
+    K0, K1, K2, K3, K4, K5, K6, K7,
 
     PpcR0,  PpcR1,  PpcR2,  PpcR3,  PpcR4,  PpcR5,  PpcR6,  PpcR7,
     PpcR8,  PpcR9,  PpcR10, PpcR11, PpcR12, PpcR13, PpcR14, PpcR15,
@@ -98,7 +113,13 @@ enum class Reg : u16 {
     if (v <= static_cast<unsigned>(Reg::Gs))    return 2;
     if (v == static_cast<unsigned>(Reg::Rip))   return 8;
     if (v >= static_cast<unsigned>(Reg::Xmm0) &&
-        v <= static_cast<unsigned>(Reg::Xmm15)) return 16;
+        v <= static_cast<unsigned>(Reg::Xmm31)) return 16;
+    if (v >= static_cast<unsigned>(Reg::Ymm0) &&
+        v <= static_cast<unsigned>(Reg::Ymm31)) return 32;
+    if (v >= static_cast<unsigned>(Reg::Zmm0) &&
+        v <= static_cast<unsigned>(Reg::Zmm31)) return 64;
+    if (v >= static_cast<unsigned>(Reg::K0) &&
+        v <= static_cast<unsigned>(Reg::K7)) return 8;
     if (v >= static_cast<unsigned>(Reg::PpcR0) &&
         v <= static_cast<unsigned>(Reg::PpcR31)) return 8;
     if (v == static_cast<unsigned>(Reg::PpcLr) ||
@@ -121,7 +142,17 @@ enum class Reg : u16 {
 [[nodiscard]] constexpr bool is_xmm(Reg r) noexcept {
     const auto v = static_cast<unsigned>(r);
     return v >= static_cast<unsigned>(Reg::Xmm0) &&
-           v <= static_cast<unsigned>(Reg::Xmm15);
+           v <= static_cast<unsigned>(Reg::Xmm31);
+}
+
+[[nodiscard]] constexpr bool is_x86_vector(Reg r) noexcept {
+    const auto v = static_cast<unsigned>(r);
+    return (v >= static_cast<unsigned>(Reg::Xmm0) &&
+            v <= static_cast<unsigned>(Reg::Xmm31)) ||
+           (v >= static_cast<unsigned>(Reg::Ymm0) &&
+            v <= static_cast<unsigned>(Reg::Ymm31)) ||
+           (v >= static_cast<unsigned>(Reg::Zmm0) &&
+            v <= static_cast<unsigned>(Reg::Zmm31));
 }
 
 [[nodiscard]] constexpr bool is_aarch64_gpr(Reg r) noexcept {

@@ -286,6 +286,10 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         out += std::format("{}return;\n", ind);
         return;
     }
+    if (is_incidental_x86_fp_return(r.condition)) {
+        out += std::format("{}return;\n", ind);
+        return;
+    }
     if (renders_stack_chk_guard_value(r.condition)) {
         out += std::format("{}return;\n", ind);
         return;

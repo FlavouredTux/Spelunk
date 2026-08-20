@@ -29,6 +29,7 @@ LOWER_IS_BETTER = (
     "unresolved_expression_materializations",
     "raw_pointer_literals",
     "self_assignment_artifacts",
+    "semantic_expectation_failures",
     "syntax_failures",
 )
 
@@ -113,6 +114,28 @@ def analyze_pseudo_c(symbol: str, text: str,
     parameter_text = header.partition("(")[2].rpartition(")")[0]
     body_code = "\n".join(line for index, line in enumerate(code_lines)
                           if index != header_index)
+    semantic_expectation_failures = 0
+    if symbol == "pluswinMain":
+        semantic_expectation_failures += int("PpcNavigationEntry" not in text)
+        semantic_expectation_failures += int(".callback(&" not in text)
+        semantic_expectation_failures += int(
+            "OSTicksToMilliseconds(gp->time - pausewin_pluswinWp->openingTime)"
+            not in text)
+        semantic_expectation_failures += int("->entryIds[" not in text)
+        semantic_expectation_failures += int("].originalPos.x" not in text)
+        semantic_expectation_failures += int("].flags &= ~0x10" not in text)
+        semantic_expectation_failures += int("PpcDataEntry" not in text)
+        semantic_expectation_failures += int("__div2i(" in text)
+        semantic_expectation_failures += int("carry_add(" in text)
+        semantic_expectation_failures += int("word_1b0" in text)
+        semantic_expectation_failures += int("word_f8" in text)
+        semantic_expectation_failures += int("0x10624dd3" in text)
+        semantic_expectation_failures += int("pausewin_pluswinWp +" in text)
+    elif symbol == "pluswinBgDispSub":
+        semantic_expectation_failures += int("i++)" not in text)
+        semantic_expectation_failures += int("i_2++;" not in text)
+        semantic_expectation_failures += int("(float)(int32_t)(i - 2)" not in text)
+        semantic_expectation_failures += int("(float)(int32_t)(i_2 - 2)" not in text)
 
     metrics = {
         "lines_of_pseudo_c": len(code_lines),
@@ -130,6 +153,7 @@ def analyze_pseudo_c(symbol: str, text: str,
             "unresolved expression materialization"),
         "raw_pointer_literals": len(_RAW_POINTER.findall(code)),
         "self_assignment_artifacts": len(_SELF_ASSIGNMENT.findall(code)),
+        "semantic_expectation_failures": semantic_expectation_failures,
         "syntax_failures": int(syntax_failure is not None),
     }
     result: dict[str, Any] = {"symbol": symbol, "metrics": metrics}
@@ -211,7 +235,7 @@ def check_syntax(text: str, compiler: str | None,
                  timeout: float) -> str | None:
     if compiler is None:
         return None
-    source = "#include <stdint.h>\n#include <stddef.h>\n" + text
+    source = "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n" + text
     try:
         result = subprocess.run(
             [compiler, "-x", "c", "-std=c11", "-fsyntax-only",

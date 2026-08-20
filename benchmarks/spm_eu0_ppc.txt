@@ -16,3 +16,9 @@ marioReInit
 reviseAngle
 pausewinGetEntry
 getItemUseMsg
+
+# Large pause-menu CFG: caller-clobber Phi pruning and typed navigation table.
+pluswinMain
+
+# Nested register loops and CodeWarrior signed-int-to-float conversion idioms.
+pluswinBgDispSub

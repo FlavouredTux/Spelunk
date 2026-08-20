@@ -49,6 +49,16 @@ constexpr Reg kX86FpArgRegs[8] = {
 constexpr Reg kWin64FpArgRegs[4] = {
     Reg::Xmm0, Reg::Xmm1, Reg::Xmm2, Reg::Xmm3,
 };
+constexpr Reg kSysvCallerSavedFp[16] = {
+    Reg::Xmm0,  Reg::Xmm1,  Reg::Xmm2,  Reg::Xmm3,
+    Reg::Xmm4,  Reg::Xmm5,  Reg::Xmm6,  Reg::Xmm7,
+    Reg::Xmm8,  Reg::Xmm9,  Reg::Xmm10, Reg::Xmm11,
+    Reg::Xmm12, Reg::Xmm13, Reg::Xmm14, Reg::Xmm15,
+};
+constexpr Reg kWin64CallerSavedFp[6] = {
+    Reg::Xmm0, Reg::Xmm1, Reg::Xmm2,
+    Reg::Xmm3, Reg::Xmm4, Reg::Xmm5,
+};
 constexpr Reg kAapcs64FpArgRegs[8] = {
     Reg::V0, Reg::V1, Reg::V2, Reg::V3,
     Reg::V4, Reg::V5, Reg::V6, Reg::V7,
@@ -138,6 +148,9 @@ std::span<const Reg> caller_saved_fp_regs(Abi a) noexcept {
         case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be: return kPpcCallerSavedFp;
+        case Abi::Win64:        return kWin64CallerSavedFp;
+        case Abi::SysVAmd64:
+        case Abi::Unknown:      return kSysvCallerSavedFp;
         default:                return {};
     }
 }

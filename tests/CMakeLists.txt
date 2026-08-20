@@ -48,6 +48,14 @@ add_executable(ember_pdb_test pdb_test.cpp)
 target_link_libraries(ember_pdb_test PRIVATE ember::core ember::flags)
 add_test(NAME pdb_unit COMMAND ember_pdb_test)
 
+add_executable(ember_kismet_bundle_test kismet_bundle_test.cpp)
+target_link_libraries(ember_kismet_bundle_test PRIVATE ember::core ember::flags)
+add_test(NAME kismet_bundle_unit COMMAND ember_kismet_bundle_test)
+
+add_executable(ember_kismet_analysis_test kismet_analysis_test.cpp)
+target_link_libraries(ember_kismet_analysis_test PRIVATE ember::core ember::flags)
+add_test(NAME kismet_analysis_unit COMMAND ember_kismet_analysis_test)
+
 add_executable(ember_pe_reloc_test pe_reloc_test.cpp)
 target_link_libraries(ember_pe_reloc_test PRIVATE ember::core ember::flags)
 add_test(NAME pe_reloc_unit COMMAND ember_pe_reloc_test)

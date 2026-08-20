@@ -90,6 +90,11 @@ enum class Mnemonic : u16 {
     Bt, Bts, Btr, Btc,
     Bswap,
     Cmpxchg, Xadd,
+    Andn, Bzhi, Pext, Pdep, Shlx, Shrx, Sarx, Mulx,
+    Vzeroupper,
+    Vfmadd132ps, Vfmadd132pd, Vfmadd132ss, Vfmadd132sd,
+    Vfmadd213ps, Vfmadd213pd, Vfmadd213ss, Vfmadd213sd,
+    Vfmadd231ps, Vfmadd231pd, Vfmadd231ss, Vfmadd231sd,
 
     // ---- SSE (decoded to advance length; lifted as intrinsics) ------------
     Movd,        // 0x66 0x0F 6E - movd xmm, r/m32
@@ -404,6 +409,15 @@ struct Instruction {
     u8                       ppc_bi       = 0xff;
     bool                     ppc_link     = false;
     bool                     ppc_record   = false;
+    // x86 VEX/EVEX metadata. Operands already carry the selected XMM/YMM/ZMM
+    // registers; these fields preserve encoding semantics that do not fit the
+    // generic operand list (masking, zeroing, broadcast, and vector length).
+    bool                     x86_vex      = false;
+    bool                     x86_evex     = false;
+    bool                     x86_zeroing  = false;
+    bool                     x86_broadcast = false;
+    u8                       x86_vector_bits = 0;  // 0=legacy, 1=128, 2=256, 3=512
+    u8                       x86_mask     = 0;
 };
 
 [[nodiscard]] std::string format_instruction(const Instruction& insn);

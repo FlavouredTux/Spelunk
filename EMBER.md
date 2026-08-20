@@ -270,6 +270,13 @@ records, fields, globals, arrays, and enums using PPC32 layouts. Public headers
 take priority; sibling source prototypes and scoped interprocedural inference
 can fill private gaps. Manual annotations remain authoritative.
 
+Header-aware output emits compact declarations for the imported records and
+array aliases it actually uses. With a conventional DTK/SPM header tree, the
+matching linker list also supplies address-checked global aliases. Expect
+`pausewin_wp->entries`, nested `Vec3` components, named aggregate locals,
+`Mtx34` matrices, element-scaled pointer arithmetic, and `memcpy` for long
+contiguous field-copy runs instead of raw labels and byte strides.
+
 ### PPC control flow and semantics
 
 The PPC32 CFG recognizes bounded CodeWarrior `lwzx -> mtctr -> bctr` dispatch
@@ -279,6 +286,21 @@ retain the decrement side effect. Common scalar and paired-single arithmetic,
 load/store, and conventional unquantized paired-single memory operations are
 lifted into readable dataflow. Quantized or ambiguous vector forms stay as
 explicit `ppc.*` helpers rather than being guessed.
+
+Pseudo-C merge recovery discards Phi webs that never reach an observable sink
+and ignores packed call lanes outside the callee's recovered PPC ABI. Loop
+induction values feeding Phis render as `++`/`--` updates, including updates
+shared with the loop comparison. The common CodeWarrior
+`xoris`/stack/`lfd`/bias-subtract idiom folds back into a signed integer-to-float
+cast. Menu navigation tables with four neighbor bytes plus a callback slot are
+emitted as typed `PpcNavigationEntry` arrays rather than raw scaled pointer
+arithmetic.
+
+Imported eight-byte fields let Ember rejoin big-endian high/low loads and
+collapse `subfc`/`subfe` carry chains. The verified Wii clock/divide idiom is
+rendered through `OSTicksToMilliseconds`, while masked-rotate byte scales feed
+typed `object->array[index]` and `records[index].field` recovery. Wider
+fixed-address strides receive compact `PpcDataEntry` declarations.
 
 Measure a binary instead of assuming decoder/lifter coverage:
 
@@ -495,10 +517,18 @@ Confidence language:
 ## Platform notes
 
 - **x86-64 ELF:** SysV ABI, ELF relocations/imports, Itanium RTTI, and Linux
-  syscall inspection are supported.
+  syscall inspection are supported. XMM0–7 are tracked as floating/vector
+  argument lanes and XMM0–15 as caller-clobbered state.
 - **PE32+ x86-64:** Win64 ABI, regular/delay imports, exports, TLS callbacks,
   `.pdata`/UNWIND_INFO, PDB sidecars, MSVC RTTI/vtables, and DIR64 relocations
-  feed discovery and pseudo-C.
+  feed discovery and pseudo-C. Its four positional XMM argument slots and
+  XMM0–5 caller-clobber set are modeled separately from SysV.
+- **Modern x86 vectors:** two- and three-byte VEX plus four-byte EVEX preserve
+  non-destructive sources, XMM/YMM/ZMM widths, AVX-512 masks, zeroing, and
+  broadcast metadata. Common map-`0F` AVX/AVX2 operations, map-`0F38`
+  BMI/BMI2, FMA3, and `vzeroupper` lift to typed IR. Rare `0F3A`,
+  gather/scatter, and full EVEX tuple/compressed-displacement semantics remain
+  explicit coverage boundaries.
 - **Mach-O:** thin/universal 64-bit slices, entry metadata, function starts,
   dyld bind/export/chained fixups, dSYM overlays, ObjC metadata/blocks, and basic
   Swift nominal descriptors are supported.

@@ -6,6 +6,7 @@ add_library(ember_core STATIC
     src/binary/macho.cpp
     src/binary/pe.cpp
     src/binary/pdb.cpp
+    src/binary/kismet_bundle.cpp
     src/binary/minidump.cpp
     src/binary/raw_regions.cpp
     src/binary/loader.cpp
@@ -56,6 +57,7 @@ add_library(ember_core STATIC
     src/analysis/frame.cpp
     src/analysis/sigs.cpp
     src/analysis/identify.cpp
+    src/analysis/kismet.cpp
     src/analysis/libcxx_string.cpp
     src/analysis/rtti.cpp
     src/analysis/msvc_rtti.cpp

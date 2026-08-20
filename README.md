@@ -52,7 +52,8 @@ represented as <code>uint64_t</code>.</sub>
 
 Ember keeps the analysis stack local to the project:
 
-- Custom x86-64 decoder, with AArch64, PPC32, and PPC64 decoders in tree.
+- Custom x86-64 decoder with legacy, VEX, and common EVEX forms, plus
+  AArch64, PPC32, and PPC64 decoders in tree.
 - Custom IR, SSA construction, cleanup passes, structurer, and pseudo-C emitter.
 - No vendored runtime dependencies; the C++ core builds against the standard library.
 - The debugger uses Ember's own pseudo-C line map instead of source or DWARF.
@@ -75,6 +76,14 @@ propagation, GVN, store-to-load forwarding, dead-store elimination, and a small
 type lattice that propagates through phis. The structurer recovers `if`,
 `while`, `for`, and `switch`, falling back to `goto` when the control flow is
 not clean enough to structure.
+
+For PPC32, pseudo-C recovery prunes dead Phi webs using observable sinks,
+recovers register-based loop induction updates, folds CodeWarrior's
+stack-backed signed integer-to-float idiom, and types common eight-byte menu
+navigation descriptors instead of exposing register lanes and byte-scaled
+table arithmetic. Imported 64-bit fields and Wii clock idioms also recover
+source-like elapsed-time expressions, while masked rotate scales become typed
+array and record indexing.
 
 DTK projects can select either the main DOL or one of their configured RELs:
 
@@ -130,6 +139,16 @@ Wii SDK `PSVEC*`, MTX, GX, OS, DVD, controller, and CX routines; unknown calls
 stay conservative rather than treating every post-call FPR clobber as a result.
 Untyped `func_*`/`sub_*` calls carry an address and inferred PPC signature hint
 so unresolved names remain explicit without hiding recovered call information.
+Header-aware output also emits compact declarations for referenced records and
+matrix aliases, applies address-checked DTK linker-list global names, descends
+into nested aggregate/array fields, scales typed pointer arithmetic, and folds
+contiguous field-copy runs into `memcpy`.
+
+x86-64 calls model integer and XMM lanes independently. SysV carries XMM0–7
+as candidate floating/vector arguments and clobbers XMM0–15; Win64 uses four
+positional XMM slots and clobbers only XMM0–5, preserving XMM6–15. VEX
+instructions retain their non-destructive source, while YMM/ZMM values use
+256/512-bit IR storage instead of being truncated through XMM temporaries.
 
 Ember's pseudo-C is reverse-engineering guidance, not a promise of the original
 CodeWarrior source. Exact byte matching still requires objdiff-led iteration on
@@ -220,7 +239,7 @@ attached as a comment.
 |                       | x86-64                | AArch64           | PPC32 / PPC64 |
 |---                    |---                    |---                |---            |
 | Loader                | ELF / Mach-O / PE / minidump / regions | ELF / Mach-O | ELF32 / ELF64 / PPC32 `.o` / DOL / Wii REL |
-| Decoder + IR lift     | full                  | partial           | partial       |
+| Decoder + IR lift     | broad legacy + common AVX/AVX2/AVX-512/BMI/FMA | partial | partial |
 | SSA + cleanup         | full                  | partial           | partial       |
 | Pseudo-C              | full                  | partial           | partial       |
 | ABI                   | SysV / Win64          | AAPCS64           | SysV / ELFv1 / v2 |
@@ -234,6 +253,10 @@ attached as a comment.
 
 Known limits:
 
+- x86 VEX map `0F` and common `0F38` AVX/AVX2, BMI/BMI2, and FMA3 forms
+  recover non-destructive operands and XMM/YMM/ZMM widths. EVEX masking and
+  zeroing remain explicit in IR. Less-common `0F3A`, gather/scatter,
+  compressed-displacement broadcast semantics, and x87 are not yet complete.
 - Indirect calls without IAT, constant vtable, trace observation, or
   receiver-type evidence still render as typed unresolved function-pointer-slot
   calls with an evidence comment.

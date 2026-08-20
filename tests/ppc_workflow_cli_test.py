@@ -68,6 +68,7 @@ def main() -> int:
         ])
         assert "parse diagnostic" not in imported.stderr
         assert "void scalar_entry(UnitWork * state, float scale)" in imported.stdout
+        assert "typedef union UnitWork" in imported.stdout
 
         data = run([
             str(ember), "-q", "--decompile-data", "0x80004000",

@@ -48,7 +48,24 @@ void func_80100000(double a1, void* a2) {
     assert metrics["unresolved_expression_materializations"] == 0
     assert metrics["raw_pointer_literals"] == 1
     assert metrics["self_assignment_artifacts"] == 1
+    assert metrics["semantic_expectation_failures"] == 0
     assert metrics["syntax_failures"] == 0
+
+    pluswin = benchmark.analyze_pseudo_c("pluswinMain", """\
+typedef struct PpcNavigationEntry { void (*callback)(void); } PpcNavigationEntry;
+typedef struct PpcDataEntry { float float_0; } PpcDataEntry;
+void pluswinMain(void) {
+  table[i].callback(&table[i]);
+  entry = work->entryIds[i];
+  x = entries[entry].originalPos.x;
+  entries[entry].flags &= ~0x10;
+  if (OSTicksToMilliseconds(gp->time - pausewin_pluswinWp->openingTime) <= 500) {}
+}
+""")
+    assert pluswin["metrics"]["semantic_expectation_failures"] == 0
+    broken_pluswin = benchmark.analyze_pseudo_c(
+        "pluswinMain", "void pluswinMain(void) { __div2i(carry_add(a, b)); }\n")
+    assert broken_pluswin["metrics"]["semantic_expectation_failures"] == 9
 
     split = benchmark.split_batch_output("""\
 // ember-symbol: first

@@ -29,6 +29,8 @@ enum class IrType : u8 {
     // Constant folding doesn't apply (no I128 immediates); arithmetic at this
     // width only happens through Intrinsic nodes.
     I128,
+    I256,
+    I512,
     F32,
     F64,
     // Gekko paired-single view of a 64-bit FPR: two packed float lanes.
@@ -43,6 +45,8 @@ enum class IrType : u8 {
         case IrType::I32:  return 32;
         case IrType::I64:  return 64;
         case IrType::I128: return 128;
+        case IrType::I256: return 256;
+        case IrType::I512: return 512;
         case IrType::F32:  return 32;
         case IrType::F64:  return 64;
         case IrType::V2F32:return 64;
@@ -62,6 +66,8 @@ enum class IrType : u8 {
         case 32:  return IrType::I32;
         case 64:  return IrType::I64;
         case 128: return IrType::I128;
+        case 256: return IrType::I256;
+        case 512: return IrType::I512;
         default:  return IrType::I64;
     }
 }
@@ -74,6 +80,8 @@ enum class IrType : u8 {
         case IrType::I32:  return "i32";
         case IrType::I64:  return "i64";
         case IrType::I128: return "i128";
+        case IrType::I256: return "i256";
+        case IrType::I512: return "i512";
         case IrType::F32:  return "f32";
         case IrType::F64:  return "f64";
         case IrType::V2F32:return "v2f32";

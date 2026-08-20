@@ -465,9 +465,11 @@ unattended one-command decompilation.
 
 ### Repeatable SPM pseudo-C benchmark
 
-The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function
+The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable twelve-function
 mix of ABI, control-flow, scalar-float, nested object, pointer-return, and GX
-call sites. Run it with:
+call sites. It includes `pluswinMain` and `pluswinBgDispSub` as semantic
+regressions for navigation tables, Phi liveness, loop induction, and
+CodeWarrior integer-to-float conversion. Run it with:
 
 ```sh
 python3 scripts/ppc_quality_benchmark.py \
@@ -512,6 +514,13 @@ whose first top-level statement assigns them remain intentionally
 uninitialized until that statement. The baseline therefore rejects any return
 of synthetic `{0} /* unresolved SSA merge */` declarations.
 
+Phi pruning is sink-aware: a merge web survives only when it reaches an
+observable non-Phi use. Call arguments count as sinks only when the resolved
+callee ABI actually consumes that lane, so stale caller-clobbered register
+lanes no longer leak into pseudo-C as raw `r8`, `r9`, or `r10` values. Add/sub
+values feeding loop Phis are mapped back to their recovered locals and emitted
+as `i++`/`i--`, even when the same value also feeds a loop comparison.
+
 Pseudo-C also preserves the time at which a PPC memory value was read. A load
 kept across a later call or a proven aliasing store is materialized before that
 barrier, and one-write stack save slots whose source is itself a load remain
@@ -528,6 +537,59 @@ and rejects their reintroduction. Depth-capped expressions that still cannot
 be materialized are initialized explicitly and marked
 `unresolved expression materialization` instead of becoming silently
 uninitialized C variables.
+
+CodeWarrior's signed-integer-to-double sequence (`xoris`, paired stack stores,
+`lfd`, then subtraction of the `0x43300000` bias) is recognized as one typed
+conversion. The emitter uses the closest reaching low-word store and renders
+the source expression directly, such as `(float)(int32_t)(i - 2)`, instead of
+exposing the stack scratch and magic bias. Eight-byte menu-navigation tables
+with four neighbor bytes and a callback slot are rendered as typed
+`PpcNavigationEntry` arrays, including `neighbor_N` field accesses and a typed
+callback invocation with the selected entry address.
+
+Big-endian high/low load pairs are also rejoined when an imported eight-byte
+field proves their shared identity. CodeWarrior `subfc`/`subfe` chains then
+recover signed 64-bit differences, and the `mulhwu` magic-number division used
+for `/ 1000` is checked against the Wii timer-clock shape. A guarded elapsed
+time comparison can consequently render as
+`OSTicksToMilliseconds(gp->time - work->openingTime) <= 500` instead of an
+`__div2i` call, two raw word fields, carry expressions, and `0x10624dd3`.
+
+Header-aware pseudo-C is self-contained for the types it uses. Ember emits
+compact union overlays containing the imported fields referenced by the
+function, opaque storage for otherwise incomplete records, required forward
+declarations, and array aliases such as `Mtx34`. Nested aggregate accesses use
+the imported layout and access width, so scalar traffic at the start of a
+`Vec3` renders as `.x`, `.y`, or `.z` rather than assigning a float to the
+whole vector. Four- and eight-byte aggregate transfers use `_raw` compound
+literals for valid C while retaining the named aggregate type.
+
+When a DTK version accompanies conventional `spm-headers`, Ember reads the
+matching `linker/spm.<version>.lst` and overlays header globals by address.
+This turns anonymous map names such as `lbl_805ae930` into the project spelling
+`pausewin_wp`, allowing subsequent accesses to become
+`pausewin_wp->entries`. The binary symbol remains the address authority; an
+alias is accepted only when its linker-list address names an existing object
+and the header declares the same global.
+
+Typed pointer arithmetic now removes byte scaling already implied by C. For
+example, `entries + id * 0x78` becomes `entries + id` when the imported entry
+size is `0x78`, while a synthetic record iterator with a proven stride renders
+as `ptr++`. Masked rotate scales such as
+`rotl32(index, 2) & 0xfffffffc` normalize to a four-byte index before C pointer
+scaling. Header layouts then recover both `object->array[index]` and
+`records[index].field`; fixed-address tables with a wider proven stride get a
+self-contained `PpcDataEntry` declaration. Contiguous runs of four or more PPC
+field copies are folded into a
+single offset-preserving `memcpy`, and stack matrices passed to MTX routines
+recover `Mtx34` declarations instead of `uint64_t[6]` storage.
+
+Expression expansion remains bounded, but its budget covers the longer
+rotate/index/load chains seen in the SPM corpus. A dominating cross-block load
+is materialized at its definition, and a final fallback is expanded only when
+that snapshot is dependency-safe. The checked-in corpus currently contains no
+unresolved expression materializations and passes standalone C11 syntax
+checking with imported headers enabled.
 
 The tool returns 2 when a corpus function cannot be decompiled and 1 when a
 requested baseline check regresses. It has no third-party Python dependencies,

@@ -63,6 +63,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--no-pdb",    &Args::no_pdb},
+    {"",   "--kismet-events", &Args::kismet_events},
     {"",   "--infer-string-names", &Args::infer_string_names},
     {"",   "--full-analysis", &Args::full_analysis},
     {"",   "--dump-types", &Args::dump_types},
@@ -139,6 +140,8 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--apply-patches", &Args::apply_patches},
     {"",   "--apply",       &Args::apply_ember},
     {"",   "--pdb",         &Args::pdb_path},
+    {"",   "--kismet",      &Args::kismet_bundle},
+    {"",   "--kismet-event", &Args::kismet_event},
     {"",   "--dsym",        &Args::dsym_path},
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
@@ -620,6 +623,7 @@ Result<Args> parse_args(int argc, char** argv) {
     if (!a.help && a.binary.empty() && a.dtk_project_path.empty()
         && !diffs_from_tsvs && !a.dump_types
         && a.regions_manifest.empty() && a.raw_bytes_path.empty()
+        && a.kismet_bundle.empty()
         && !attach_only) {
         return std::unexpected(Error::invalid_format("no binary specified"));
     }

@@ -9,6 +9,6 @@ uint32_t _start(PpcState* state) {
   if (!state) {
     return 0;
   }
-  uint32_t flags = (uint32_t)state->byte_4;
-  return state->word_0 * 3 + ((flags << 2 | flags >> 0x1e) & -4) + (uint32_t)state->half_6;
+  uint32_t value = (uint32_t)state->byte_4;
+  return state->word_0 * 3 + value * 4 + (uint32_t)state->half_6;
 }

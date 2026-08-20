@@ -47,6 +47,7 @@ struct HeaderField {
 struct HeaderRecord {
     std::string name;
     std::size_t size = 0;
+    bool is_union = false;
     std::vector<HeaderField> fields;
 };
 struct HeaderDatabase {
@@ -98,7 +99,11 @@ std::optional<HeaderRecord> read_record(CXCursor cursor, std::string name) {
     CXType ty = clang_getCursorType(cursor);
     const auto size = clang_Type_getSizeOf(ty);
     if (size < 0) return std::nullopt;
-    HeaderRecord rec{.name = std::move(name), .size = static_cast<std::size_t>(size), .fields = {}};
+    HeaderRecord rec{
+        .name = std::move(name),
+        .size = static_cast<std::size_t>(size),
+        .is_union = clang_getCursorKind(cursor) == CXCursor_UnionDecl,
+        .fields = {}};
     struct State { HeaderRecord* rec; } state{&rec};
     clang_visitChildren(cursor, [](CXCursor c, CXCursor, CXClientData raw) {
         if (clang_getCursorKind(c) != CXCursor_FieldDecl) return CXChildVisit_Continue;
@@ -812,6 +817,62 @@ std::optional<i32> evt_scalar_from_rendered(std::string_view rendered) {
     return std::nullopt;
 }
 
+std::map<addr_t, std::string> load_dtk_linker_aliases(const Args& args) {
+    std::map<addr_t, std::string> aliases;
+    if (args.dtk_version.empty()) return aliases;
+    std::string version = args.dtk_version;
+    std::ranges::transform(version, version.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    std::set<std::filesystem::path> candidates;
+    std::error_code ec;
+    for (const std::string& raw : args.header_paths) {
+        auto path = std::filesystem::absolute(raw, ec);
+        if (ec) { ec.clear(); continue; }
+        const auto directory = std::filesystem::is_directory(path)
+            ? path : path.parent_path();
+        if (directory.filename() == "include") {
+            candidates.insert(directory.parent_path() / "linker" /
+                              std::format("spm.{}.lst", version));
+        }
+    }
+    if (!args.dtk_project_path.empty()) {
+        auto project = std::filesystem::absolute(args.dtk_project_path, ec);
+        if (!ec) {
+            candidates.insert(project / "spm-headers" / "linker" /
+                              std::format("spm.{}.lst", version));
+        }
+    }
+
+    for (const auto& path : candidates) {
+        std::ifstream input(path);
+        if (!input) continue;
+        std::string line;
+        while (std::getline(input, line)) {
+            const auto colon = line.find(':');
+            if (colon == std::string::npos || colon == 0) continue;
+            addr_t address = 0;
+            const std::string_view raw_address(line.data(), colon);
+            const auto parsed = std::from_chars(
+                raw_address.data(), raw_address.data() + raw_address.size(),
+                address, 16);
+            if (parsed.ec != std::errc{} ||
+                parsed.ptr != raw_address.data() + raw_address.size()) continue;
+            std::string name = trim(line.substr(colon + 1));
+            if (name.empty() ||
+                (!std::isalpha(static_cast<unsigned char>(name.front())) &&
+                 name.front() != '_')) continue;
+            if (!std::ranges::all_of(name, [](unsigned char c) {
+                    return std::isalnum(c) != 0 || c == '_';
+                })) continue;
+            aliases.try_emplace(address, std::move(name));
+        }
+        if (!aliases.empty()) break;
+    }
+    return aliases;
+}
+
 }  // namespace
 
 int apply_header_annotations(const Args& args, const Binary& b,
@@ -828,6 +889,7 @@ int apply_header_annotations(const Args& args, const Binary& b,
     for (const auto& [name, rec] : imported->records) {
         ImportedRecordLayout layout;
         layout.size = rec.size;
+        layout.is_union = rec.is_union;
         for (const auto& field : rec.fields) {
             layout.fields.emplace(static_cast<i64>(field.offset), ImportedRecordField{
                 .name = field.name, .type = field.type,
@@ -837,6 +899,17 @@ int apply_header_annotations(const Args& args, const Binary& b,
     }
     annotations.imported_enums = imported->enums;
     annotations.imported_global_types_by_name = imported->globals;
+    annotations.imported_aliases = imported->aliases;
+    const auto linker_aliases = load_dtk_linker_aliases(args);
+    for (const auto& [address, name] : linker_aliases) {
+        auto type = imported->globals.find(name);
+        if (type == imported->globals.end()) continue;
+        const Symbol* object = b.defined_object_at(address);
+        if (!object || object->kind != SymbolKind::Object ||
+            object->addr != address) continue;
+        annotations.global_types.insert_or_assign(address, type->second);
+        annotations.preferred_global_names.insert_or_assign(address, name);
+    }
     for (const auto& [name, type] : imported->globals) {
         const std::string base = base_type_name(type);
         if (!imported->records.contains(base)) continue;

@@ -114,8 +114,11 @@ struct Args {
     std::string annotate_evidence;  // --evidence TEXT: short reason; survives in the meta record
     std::string annotate_source;    // --source TAG: who's claiming. Defaults to `cli`.
     std::string pdb_path;           // --pdb PATH: explicit PDB file (skips auto-discovery)
+    std::string kismet_bundle;      // --kismet PATH: live UE Kismet bundle directory/manifest
+    std::string kismet_event;       // --kismet-event NAME: select one Ubergraph wrapper entry
     std::string dsym_path;          // --dsym PATH: explicit Mach-O dSYM file/bundle symbol overlay
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely
+    bool kismet_events = false;     // --kismet-events: list wrapper -> Ubergraph entry offsets
     bool infer_string_names = false; // --infer-string-names: derive names from strong log/string anchors
     bool dry_run = false;           // --dry-run: with --apply, don't write the result; print TSV to stdout
     bool no_cache = false;          // disable the disk cache entirely

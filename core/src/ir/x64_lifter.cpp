@@ -1383,6 +1383,12 @@ void emit_call_clobbers(LiftCtx& ctx) {
         c.dst = ctx.reg(r);
         ctx.emit(std::move(c));
     }
+    for (Reg r : caller_saved_fp_regs(ctx.abi)) {
+        IrInst c;
+        c.op  = IrOp::Clobber;
+        c.dst = IrValue::make_reg(r, IrType::I128);
+        ctx.emit(std::move(c));
+    }
 }
 
 // Emit the ABI barriers that keep argument-register setup code live
@@ -1419,6 +1425,23 @@ void emit_arg_barriers(LiftCtx& ctx) {
     fill("call.args.1", 0);
     fill("call.args.2", 3);
     fill("call.args.3", 6);
+
+    const auto fp_args = fp_arg_regs(ctx.abi);
+    auto fill_fp = [&](std::string_view name, std::size_t lo) {
+        IrInst in;
+        in.op   = IrOp::Intrinsic;
+        in.name = std::string(name);
+        u8 count = 0;
+        for (std::size_t i = 0; i < 3 && lo + i < fp_args.size(); ++i) {
+            in.srcs[count++] = IrValue::make_reg(fp_args[lo + i], IrType::I128);
+        }
+        if (count == 0) return;
+        in.src_count = count;
+        ctx.emit(std::move(in));
+    };
+    fill_fp("call.fp_args.1", 0);
+    fill_fp("call.fp_args.2", 3);
+    fill_fp("call.fp_args.3", 6);
 }
 
 void lift_call(LiftCtx& ctx) {
@@ -1691,6 +1714,100 @@ void lift_carry_flag_op(LiftCtx& ctx, Mnemonic mn) {
     }
 }
 
+[[nodiscard]] IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t);
+void write_xmm(LiftCtx& ctx, const Operand& op, IrValue value, IrType t);
+
+void lift_bmi_three_operand(LiftCtx& ctx, Mnemonic mnemonic) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    IrValue first = materialize_rvalue(insn.operands[1], ctx);
+    IrValue second = materialize_rvalue(insn.operands[2], ctx);
+    if (first.kind == IrValueKind::None || second.kind == IrValueKind::None) return;
+    const IrType result_type = operand_type(insn.operands[0]);
+    first = ctx.match_size(first, result_type, /*sign_ext=*/false);
+    second = ctx.match_size(second, result_type, /*sign_ext=*/false);
+
+    IrValue result;
+    if (mnemonic == Mnemonic::Andn) {
+        result = ctx.emit_binop(IrOp::And, ctx.emit_unop(IrOp::Not, first), second);
+    } else if (mnemonic == Mnemonic::Shlx) {
+        result = ctx.emit_binop(IrOp::Shl, first, second);
+    } else if (mnemonic == Mnemonic::Shrx) {
+        result = ctx.emit_binop(IrOp::Lshr, first, second);
+    } else if (mnemonic == Mnemonic::Sarx) {
+        result = ctx.emit_binop(IrOp::Ashr, first, second);
+    } else {
+        IrInst intrinsic;
+        intrinsic.op = IrOp::Intrinsic;
+        intrinsic.name = mnemonic == Mnemonic::Bzhi ? "_bzhi_u64"
+            : (mnemonic == Mnemonic::Pext ? "_pext_u64" : "_pdep_u64");
+        intrinsic.dst = ctx.temp(result_type);
+        intrinsic.srcs[0] = first;
+        intrinsic.srcs[1] = second;
+        intrinsic.src_count = 2;
+        result = intrinsic.dst;
+        ctx.emit(std::move(intrinsic));
+    }
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
+void lift_mulx(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    IrValue source = materialize_rvalue(insn.operands[2], ctx);
+    if (source.kind == IrValueKind::None) return;
+    const IrType result_type = operand_type(insn.operands[0]);
+    source = ctx.match_size(source, result_type, /*sign_ext=*/false);
+    IrValue multiplier = ctx.match_size(
+        ctx.read_reg(result_type == IrType::I64 ? Reg::Rdx : Reg::Edx),
+        result_type, /*sign_ext=*/false);
+    for (u8 output = 0; output < 2; ++output) {
+        IrInst intrinsic;
+        intrinsic.op = IrOp::Intrinsic;
+        intrinsic.name = output == 0 ? "mulx.low" : "mulx.high";
+        intrinsic.dst = ctx.temp(result_type);
+        intrinsic.srcs[0] = multiplier;
+        intrinsic.srcs[1] = source;
+        intrinsic.src_count = 2;
+        IrValue result = intrinsic.dst;
+        ctx.emit(std::move(intrinsic));
+        store_lvalue(insn.operands[output], result, ctx);
+    }
+}
+
+void lift_fma(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const bool scalar_single = insn.mnemonic == Mnemonic::Vfmadd132ss ||
+        insn.mnemonic == Mnemonic::Vfmadd213ss ||
+        insn.mnemonic == Mnemonic::Vfmadd231ss;
+    const bool scalar_double = insn.mnemonic == Mnemonic::Vfmadd132sd ||
+        insn.mnemonic == Mnemonic::Vfmadd213sd ||
+        insn.mnemonic == Mnemonic::Vfmadd231sd;
+    IrType type = scalar_single ? IrType::F32 :
+        (scalar_double ? IrType::F64 :
+            (insn.x86_vector_bits == 3 ? IrType::I512 :
+             (insn.x86_vector_bits == 2 ? IrType::I256 : IrType::I128)));
+    IrValue destination = read_xmm(ctx, insn.operands[0], type);
+    IrValue first = read_xmm(ctx, insn.operands[1], type);
+    IrValue second = read_xmm(ctx, insn.operands[2], type);
+    if (destination.kind == IrValueKind::None || first.kind == IrValueKind::None ||
+        second.kind == IrValueKind::None) return;
+    IrInst intrinsic;
+    intrinsic.op = IrOp::Intrinsic;
+    intrinsic.name = std::string(mnemonic_name(insn.mnemonic));
+    if (type == IrType::I256) intrinsic.name = "_mm256_" + intrinsic.name;
+    else if (type == IrType::I512) intrinsic.name = "_mm512_" + intrinsic.name;
+    intrinsic.dst = ctx.temp(type);
+    intrinsic.srcs[0] = destination;
+    intrinsic.srcs[1] = first;
+    intrinsic.srcs[2] = second;
+    intrinsic.src_count = 3;
+    IrValue result = intrinsic.dst;
+    ctx.emit(std::move(intrinsic));
+    write_xmm(ctx, insn.operands[0], result, type);
+}
+
 void lift_intrinsic(LiftCtx& ctx, std::string_view name) {
     const auto& insn = *ctx.insn;
     IrInst i;
@@ -1739,9 +1856,14 @@ void store_fp_lvalue(const Operand& op, IrValue value, LiftCtx& ctx, IrType t) {
 // Operand 0 is both source and destination (x86-two-operand form).
 void lift_fp_binop(LiftCtx& ctx, IrOp op, IrType t) {
     const auto& insn = *ctx.insn;
-    if (insn.num_operands != 2) return;
-    IrValue a = materialize_fp_rvalue(insn.operands[0], ctx, t);
-    IrValue b = materialize_fp_rvalue(insn.operands[1], ctx, t);
+    const bool nondestructive = (insn.x86_vex || insn.x86_evex) &&
+                                insn.num_operands >= 3;
+    if ((!nondestructive && insn.num_operands != 2) ||
+        (nondestructive && insn.num_operands < 3)) return;
+    IrValue a = materialize_fp_rvalue(
+        insn.operands[nondestructive ? 1 : 0], ctx, t);
+    IrValue b = materialize_fp_rvalue(
+        insn.operands[nondestructive ? 2 : 1], ctx, t);
     if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
     IrValue result = ctx.emit_binop(op, a, b);
     store_fp_lvalue(insn.operands[0], result, ctx, t);
@@ -1776,7 +1898,7 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
 // pin t = I128 at the call site below.
 [[nodiscard]] IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t) {
     if (op.kind == Operand::Kind::Register) {
-        if (!is_xmm(op.reg)) {
+        if (!is_x86_vector(op.reg)) {
             return ctx.match_size(ctx.read_reg(op.reg), t, /*sign_ext=*/false);
         }
         return IrValue::make_reg(op.reg, t);
@@ -1790,7 +1912,7 @@ void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing) {
 
 void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
     if (op.kind == Operand::Kind::Register) {
-        if (!is_xmm(op.reg)) {
+        if (!is_x86_vector(op.reg)) {
             v = ctx.match_size(v, operand_type(op), /*sign_ext=*/false);
             store_lvalue(op, v, ctx);
             return;
@@ -1820,24 +1942,46 @@ void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
 void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 2) return;
-    IrValue a = read_xmm(ctx, insn.operands[0], t);
-    IrValue b = read_xmm(ctx, insn.operands[1], t);
+    if ((insn.x86_vex || insn.x86_evex) && t == IrType::I128) {
+        t = insn.x86_vector_bits == 3 ? IrType::I512
+            : (insn.x86_vector_bits == 2 ? IrType::I256 : IrType::I128);
+    }
+    const bool nondestructive = (insn.x86_vex || insn.x86_evex) &&
+                                insn.num_operands >= 3;
+    IrValue a = read_xmm(ctx, insn.operands[nondestructive ? 1 : 0], t);
+    IrValue b = read_xmm(ctx, insn.operands[nondestructive ? 2 : 1], t);
     if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
     i.name = std::string(name);
+    if (t == IrType::I256 && i.name.starts_with("_mm_")) {
+        i.name.replace(0, 4, "_mm256_");
+    } else if (t == IrType::I512 && i.name.starts_with("_mm_")) {
+        i.name.replace(0, 4, "_mm512_");
+    }
+    if (insn.x86_evex && insn.x86_mask != 0) {
+        i.name = std::format("avx512.{}.{}",
+            insn.x86_zeroing ? "maskz" : "mask", i.name);
+    }
     i.dst  = ctx.temp(t);
     i.srcs[0]   = a;
     i.srcs[1]   = b;
     i.src_count = 2;
     // Three-operand forms (Pshufd's immediate selector) tag the imm onto
     // src[2] so the intrinsic shows the shuffle pattern in its argument list.
-    if (insn.num_operands == 3 &&
-        insn.operands[2].kind == Operand::Kind::Immediate) {
-        const Imm& im = insn.operands[2].imm;
-        i.srcs[2]   = ctx.imm(im.value, type_for_bits(im.size * 8));
-        i.src_count = 3;
+    const std::size_t immediate_index = nondestructive ? 3u : 2u;
+    if (insn.num_operands > immediate_index &&
+        insn.operands[immediate_index].kind == Operand::Kind::Immediate) {
+        const Imm& im = insn.operands[immediate_index].imm;
+        i.srcs[i.src_count++] = ctx.imm(
+            im.value, type_for_bits(im.size * 8));
+    }
+    if (insn.x86_evex && insn.x86_mask != 0 &&
+        i.src_count < i.srcs.size()) {
+        i.srcs[i.src_count++] = IrValue::make_reg(
+            static_cast<Reg>(static_cast<unsigned>(Reg::K0) + insn.x86_mask),
+            IrType::I64);
     }
     IrValue result = i.dst;
     ctx.emit(std::move(i));
@@ -1934,6 +2078,10 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
     (void)storing;  // operand order already encodes it
+    if ((insn.x86_vex || insn.x86_evex) && t == IrType::I128) {
+        t = insn.x86_vector_bits == 3 ? IrType::I512
+            : (insn.x86_vector_bits == 2 ? IrType::I256 : IrType::I128);
+    }
     IrValue v = read_xmm(ctx, insn.operands[1], t);
     if (v.kind == IrValueKind::None) return;
     write_xmm(ctx, insn.operands[0], v, t);
@@ -2028,8 +2176,12 @@ void lift_ucomi(LiftCtx& ctx, IrType t) {
 // plus the usual two-operand x86 `dst, src` form where dst==operand[0].
 void lift_fp_unop(LiftCtx& ctx, std::string_view name, IrType t) {
     const auto& insn = *ctx.insn;
-    if (insn.num_operands != 2) return;
-    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, t);
+    const bool vex_scalar = (insn.x86_vex || insn.x86_evex) &&
+                            insn.num_operands >= 3;
+    if ((!vex_scalar && insn.num_operands != 2) ||
+        (vex_scalar && insn.num_operands < 3)) return;
+    IrValue src = materialize_fp_rvalue(
+        insn.operands[vex_scalar ? 2 : 1], ctx, t);
     if (src.kind == IrValueKind::None) return;
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -2048,8 +2200,11 @@ void lift_fp_unop(LiftCtx& ctx, std::string_view name, IrType t) {
 // the dataflow, and the emitter prints `xmm0 = cvtsi2ss(rax);` cleanly.
 void lift_int_to_fp(LiftCtx& ctx, std::string_view name, IrType dst_t) {
     const auto& insn = *ctx.insn;
-    if (insn.num_operands != 2) return;
-    IrValue src = materialize_rvalue(insn.operands[1], ctx);
+    const bool vex_form = (insn.x86_vex || insn.x86_evex) &&
+                          insn.num_operands >= 3;
+    if ((!vex_form && insn.num_operands != 2) ||
+        (vex_form && insn.num_operands < 3)) return;
+    IrValue src = materialize_rvalue(insn.operands[vex_form ? 2 : 1], ctx);
     if (src.kind == IrValueKind::None) return;
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -2082,8 +2237,12 @@ void lift_fp_to_int(LiftCtx& ctx, std::string_view name, IrType src_t) {
 void lift_fp_to_fp(LiftCtx& ctx, std::string_view name, IrType src_t,
                    IrType dst_t) {
     const auto& insn = *ctx.insn;
-    if (insn.num_operands != 2) return;
-    IrValue src = materialize_fp_rvalue(insn.operands[1], ctx, src_t);
+    const bool vex_form = (insn.x86_vex || insn.x86_evex) &&
+                          insn.num_operands >= 3;
+    if ((!vex_form && insn.num_operands != 2) ||
+        (vex_form && insn.num_operands < 3)) return;
+    IrValue src = materialize_fp_rvalue(
+        insn.operands[vex_form ? 2 : 1], ctx, src_t);
     if (src.kind == IrValueKind::None) return;
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -2198,6 +2357,27 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::Shld:    lift_double_shift(ctx, /*right=*/false); break;
         case Mnemonic::Shrd:    lift_double_shift(ctx, /*right=*/true);  break;
         case Mnemonic::Bswap:   lift_bswap(ctx);   break;
+        case Mnemonic::Andn:
+        case Mnemonic::Bzhi:
+        case Mnemonic::Pext:
+        case Mnemonic::Pdep:
+        case Mnemonic::Shlx:
+        case Mnemonic::Shrx:
+        case Mnemonic::Sarx:
+            lift_bmi_three_operand(ctx, insn.mnemonic);
+            break;
+        case Mnemonic::Mulx:    lift_mulx(ctx); break;
+        case Mnemonic::Vfmadd132ps: case Mnemonic::Vfmadd132pd:
+        case Mnemonic::Vfmadd132ss: case Mnemonic::Vfmadd132sd:
+        case Mnemonic::Vfmadd213ps: case Mnemonic::Vfmadd213pd:
+        case Mnemonic::Vfmadd213ss: case Mnemonic::Vfmadd213sd:
+        case Mnemonic::Vfmadd231ps: case Mnemonic::Vfmadd231pd:
+        case Mnemonic::Vfmadd231ss: case Mnemonic::Vfmadd231sd:
+            lift_fma(ctx);
+            break;
+        case Mnemonic::Vzeroupper:
+            lift_intrinsic(ctx, "x64.vzeroupper");
+            break;
 
         case Mnemonic::Cmovo: case Mnemonic::Cmovno:
         case Mnemonic::Cmovb: case Mnemonic::Cmovae:

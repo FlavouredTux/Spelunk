@@ -22,6 +22,7 @@
 #include "dbg.hpp"
 #include "fingerprint.hpp"
 #include "info.hpp"
+#include "kismet.hpp"
 #include "patches.hpp"
 #include "subcommands.hpp"
 #include "util.hpp"
@@ -287,6 +288,7 @@ int main(int argc, char** argv) {
     apply_quiet_env(args);
 
     if (args.dump_types)  { return run_dump_types();                       }
+    if (!args.kismet_bundle.empty()) { return run_kismet(args);             }
 
     if (!args.diff_path.empty() ||
         !args.fp_old_in.empty() ||

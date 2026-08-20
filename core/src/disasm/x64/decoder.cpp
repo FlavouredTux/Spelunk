@@ -29,6 +29,11 @@ enum class OpSpec : u8 {
     Zb, Zv,
     // SSE xmm register from ModR/M.reg field (with REX.R extension).
     Vx,
+    // VEX/EVEX non-destructive first source from the encoded inverted vvvv
+    // field. The selected XMM/YMM/ZMM width comes from the prefix.
+    Hx,
+    // VEX vvvv interpreted as a general-purpose register (BMI/BMI2).
+    Hv,
     // SSE xmm register or 128-bit memory from ModR/M.r/m. Used for packed
     // (SIMD) instructions that read a full 128-bit operand.
     Wx,
@@ -43,6 +48,7 @@ struct OpcodeEntry {
     OpSpec   op1      = OpSpec::None;
     OpSpec   op2      = OpSpec::None;
     OpSpec   op3      = OpSpec::None;
+    OpSpec   op4      = OpSpec::None;
     u8       group    = 0;
     bool     modrm    = false;
 };
@@ -71,13 +77,14 @@ constexpr OpcodeEntry op(Mnemonic m,
                          OpSpec o1 = OpSpec::None,
                          OpSpec o2 = OpSpec::None,
                          OpSpec o3 = OpSpec::None,
-                         bool modrm = false) noexcept {
-    return {m, o1, o2, o3, 0, modrm};
+                         bool modrm = false,
+                         OpSpec o4 = OpSpec::None) noexcept {
+    return {m, o1, o2, o3, o4, 0, modrm};
 }
 
 constexpr OpcodeEntry grp(GroupId g) noexcept {
     return {Mnemonic::Invalid, OpSpec::None, OpSpec::None, OpSpec::None,
-            static_cast<u8>(g), true};
+            OpSpec::None, static_cast<u8>(g), true};
 }
 
 // ============================================================================
@@ -481,6 +488,43 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f2() noexcept {
     return t;
 }
 
+// VEX map 0F38 (m-mmmm=2). These are the high-value scalar BMI/BMI2
+// families emitted by modern compilers. AVX/AVX2 packed operations in map 0F
+// reuse the legacy SSE tables above with a non-destructive vvvv operand.
+constexpr std::array<OpcodeEntry, 256> build_vex_map2_none() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0xF2] = op(Mnemonic::Andn, OpSpec::Gv, OpSpec::Hv, OpSpec::Ev, true);
+    t[0xF5] = op(Mnemonic::Bzhi, OpSpec::Gv, OpSpec::Ev, OpSpec::Hv, true);
+    return t;
+}
+
+constexpr std::array<OpcodeEntry, 256> build_vex_map2_66() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0x98] = op(Mnemonic::Vfmadd132ps, OpSpec::Vx, OpSpec::Hx, OpSpec::Wx, true);
+    t[0x99] = op(Mnemonic::Vfmadd132ss, OpSpec::Vx, OpSpec::Hx, OpSpec::Wss, true);
+    t[0xA8] = op(Mnemonic::Vfmadd213ps, OpSpec::Vx, OpSpec::Hx, OpSpec::Wx, true);
+    t[0xA9] = op(Mnemonic::Vfmadd213ss, OpSpec::Vx, OpSpec::Hx, OpSpec::Wss, true);
+    t[0xB8] = op(Mnemonic::Vfmadd231ps, OpSpec::Vx, OpSpec::Hx, OpSpec::Wx, true);
+    t[0xB9] = op(Mnemonic::Vfmadd231ss, OpSpec::Vx, OpSpec::Hx, OpSpec::Wss, true);
+    t[0xF7] = op(Mnemonic::Shlx, OpSpec::Gv, OpSpec::Ev, OpSpec::Hv, true);
+    return t;
+}
+
+constexpr std::array<OpcodeEntry, 256> build_vex_map2_f3() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0xF5] = op(Mnemonic::Pext, OpSpec::Gv, OpSpec::Hv, OpSpec::Ev, true);
+    t[0xF7] = op(Mnemonic::Sarx, OpSpec::Gv, OpSpec::Ev, OpSpec::Hv, true);
+    return t;
+}
+
+constexpr std::array<OpcodeEntry, 256> build_vex_map2_f2() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0xF5] = op(Mnemonic::Pdep, OpSpec::Gv, OpSpec::Hv, OpSpec::Ev, true);
+    t[0xF6] = op(Mnemonic::Mulx, OpSpec::Gv, OpSpec::Hv, OpSpec::Ev, true);
+    t[0xF7] = op(Mnemonic::Shrx, OpSpec::Gv, OpSpec::Ev, OpSpec::Hv, true);
+    return t;
+}
+
 // ============================================================================
 // Group tables (ModR/M.reg selects mnemonic/operand pattern)
 // ============================================================================
@@ -574,7 +618,12 @@ constexpr auto kSecondary    = build_secondary();
 constexpr auto kSecondary_66 = build_secondary_66();
 constexpr auto kSecondary_F3 = build_secondary_f3();
 constexpr auto kSecondary_F2 = build_secondary_f2();
+constexpr auto kVexMap2      = build_vex_map2_none();
+constexpr auto kVexMap2_66   = build_vex_map2_66();
+constexpr auto kVexMap2_F3   = build_vex_map2_f3();
+constexpr auto kVexMap2_F2   = build_vex_map2_f2();
 constexpr auto kGroups       = build_groups();
+constexpr auto kVzeroupper   = op(Mnemonic::Vzeroupper);
 
 // ============================================================================
 // Register lookup tables
@@ -634,6 +683,17 @@ struct Context {
     bool rex_r = false;
     bool rex_x = false;
     bool rex_b = false;
+    bool vex_r2 = false;
+    bool vex_b2 = false;
+    bool vex = false;
+    bool evex = false;
+    u8 vex_map = 0;
+    u8 vex_pp = 0;
+    u8 vex_vvvv = 0;
+    u8 vector_bytes = 16;
+    u8 vector_mask = 0;
+    bool vector_zeroing = false;
+    bool vector_broadcast = false;
     bool default_64 = false;
     u8 opcode = 0;
     u8 opcode_low3 = 0;
@@ -668,6 +728,17 @@ struct Context {
         return v;
     }
 };
+
+[[nodiscard]] constexpr Reg vector_reg(u8 index, u8 bytes) noexcept {
+    index &= 31u;
+    if (bytes == 64) {
+        return static_cast<Reg>(static_cast<unsigned>(Reg::Zmm0) + index);
+    }
+    if (bytes == 32) {
+        return static_cast<Reg>(static_cast<unsigned>(Reg::Ymm0) + index);
+    }
+    return static_cast<Reg>(static_cast<unsigned>(Reg::Xmm0) + index);
+}
 
 // ============================================================================
 // Decoding helpers
@@ -922,39 +993,47 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
         }
 
         case OpSpec::Vx: {
-            // Xmm register from ModR/M.reg. REX.R extends to Xmm8..15.
+            // Vector register from ModR/M.reg. VEX extends to 15; EVEX adds
+            // the high extension bit for registers 16..31.
             const u8 reg_ext =
-                static_cast<u8>((ctx.rex_r ? 8u : 0u) | ((ctx.modrm >> 3) & 7));
-            return Operand::make_reg(static_cast<Reg>(
-                static_cast<u8>(Reg::Xmm0) + reg_ext));
+                static_cast<u8>((ctx.vex_r2 ? 16u : 0u) |
+                                (ctx.rex_r ? 8u : 0u) |
+                                ((ctx.modrm >> 3) & 7));
+            return Operand::make_reg(vector_reg(reg_ext, ctx.vector_bytes));
+        }
+        case OpSpec::Hx: {
+            return Operand::make_reg(vector_reg(ctx.vex_vvvv, ctx.vector_bytes));
+        }
+        case OpSpec::Hv: {
+            return Operand::make_reg(gpr(ctx.vex_vvvv, os, /*rex_present=*/true));
         }
         case OpSpec::Wx: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
             if (mod == 3) {
                 const u8 rm_ext =
-                    static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
-                return Operand::make_reg(static_cast<Reg>(
-                    static_cast<u8>(Reg::Xmm0) + rm_ext));
+                    static_cast<u8>((ctx.vex_b2 ? 16u : 0u) |
+                                    (ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
+                return Operand::make_reg(vector_reg(rm_ext, ctx.vector_bytes));
             }
-            return decode_modrm_rm(ctx, /*size=*/16, /*mem_only=*/true);
+            return decode_modrm_rm(ctx, ctx.vector_bytes, /*mem_only=*/true);
         }
         case OpSpec::Wss: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
             if (mod == 3) {
                 const u8 rm_ext =
                     static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
-                return Operand::make_reg(static_cast<Reg>(
-                    static_cast<u8>(Reg::Xmm0) + rm_ext));
+                return Operand::make_reg(vector_reg(rm_ext, 16));
             }
-            return decode_modrm_rm(ctx, /*size=*/4, /*mem_only=*/true);
+            const unsigned scalar_size =
+                (ctx.vex || ctx.evex) && ctx.vex_map == 2 && ctx.rex_w ? 8u : 4u;
+            return decode_modrm_rm(ctx, scalar_size, /*mem_only=*/true);
         }
         case OpSpec::Wsd: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
             if (mod == 3) {
                 const u8 rm_ext =
                     static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
-                return Operand::make_reg(static_cast<Reg>(
-                    static_cast<u8>(Reg::Xmm0) + rm_ext));
+                return Operand::make_reg(vector_reg(rm_ext, 16));
             }
             return decode_modrm_rm(ctx, /*size=*/8, /*mem_only=*/true);
         }
@@ -990,6 +1069,17 @@ void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noe
     } else if (insn.mnemonic == Mnemonic::MovdStore && ctx.rex_w) {
         insn.mnemonic = Mnemonic::MovqGprStore;
     }
+    if (ctx.rex_w) {
+        switch (insn.mnemonic) {
+            case Mnemonic::Vfmadd132ps: insn.mnemonic = Mnemonic::Vfmadd132pd; break;
+            case Mnemonic::Vfmadd132ss: insn.mnemonic = Mnemonic::Vfmadd132sd; break;
+            case Mnemonic::Vfmadd213ps: insn.mnemonic = Mnemonic::Vfmadd213pd; break;
+            case Mnemonic::Vfmadd213ss: insn.mnemonic = Mnemonic::Vfmadd213sd; break;
+            case Mnemonic::Vfmadd231ps: insn.mnemonic = Mnemonic::Vfmadd231pd; break;
+            case Mnemonic::Vfmadd231ss: insn.mnemonic = Mnemonic::Vfmadd231sd; break;
+            default: break;
+        }
+    }
     // 64-bit promotion for the default-sized string ops (REX.W).
     if (ctx.opsize() == 8) {
         switch (insn.mnemonic) {
@@ -1000,6 +1090,57 @@ void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noe
             case Mnemonic::Scasd: insn.mnemonic = Mnemonic::Scasq; break;
             default: break;
         }
+    }
+}
+
+[[nodiscard]] constexpr bool vex_has_nondestructive_source(Mnemonic mnemonic) noexcept {
+    switch (mnemonic) {
+        case Mnemonic::Addss: case Mnemonic::Subss:
+        case Mnemonic::Mulss: case Mnemonic::Divss:
+        case Mnemonic::Addsd: case Mnemonic::Subsd:
+        case Mnemonic::Mulsd: case Mnemonic::Divsd:
+        case Mnemonic::Minss: case Mnemonic::Maxss:
+        case Mnemonic::Minsd: case Mnemonic::Maxsd:
+        case Mnemonic::Sqrtss: case Mnemonic::Sqrtsd:
+        case Mnemonic::Cvtsi2ss: case Mnemonic::Cvtsi2sd:
+        case Mnemonic::Cvtss2sd: case Mnemonic::Cvtsd2ss:
+        case Mnemonic::Andps: case Mnemonic::Andnps:
+        case Mnemonic::Orps: case Mnemonic::Xorps:
+        case Mnemonic::Addps: case Mnemonic::Mulps:
+        case Mnemonic::Subps: case Mnemonic::Divps:
+        case Mnemonic::Minps: case Mnemonic::Maxps:
+        case Mnemonic::Andpd: case Mnemonic::Andnpd:
+        case Mnemonic::Orpd: case Mnemonic::Xorpd:
+        case Mnemonic::Addpd: case Mnemonic::Mulpd:
+        case Mnemonic::Subpd: case Mnemonic::Divpd:
+        case Mnemonic::Minpd: case Mnemonic::Maxpd:
+        case Mnemonic::Pxor: case Mnemonic::Pand:
+        case Mnemonic::Pandn: case Mnemonic::Por:
+        case Mnemonic::Pcmpeqb: case Mnemonic::Pcmpeqw:
+        case Mnemonic::Pcmpeqd: case Mnemonic::Pcmpgtb:
+        case Mnemonic::Pcmpgtw: case Mnemonic::Pcmpgtd:
+        case Mnemonic::Paddb: case Mnemonic::Paddw:
+        case Mnemonic::Paddd: case Mnemonic::Paddq:
+        case Mnemonic::Psubb: case Mnemonic::Psubw:
+        case Mnemonic::Psubd: case Mnemonic::Psubq:
+        case Mnemonic::Pmullw: case Mnemonic::Pmulhw:
+        case Mnemonic::Pmulhuw: case Mnemonic::Pmuludq:
+        case Mnemonic::Pmaddwd: case Mnemonic::Pminub:
+        case Mnemonic::Pmaxub: case Mnemonic::Pminsw:
+        case Mnemonic::Pmaxsw: case Mnemonic::Pavgb:
+        case Mnemonic::Pavgw: case Mnemonic::Psubusb:
+        case Mnemonic::Psubusw: case Mnemonic::Paddusb:
+        case Mnemonic::Paddusw: case Mnemonic::Psubsb:
+        case Mnemonic::Psubsw: case Mnemonic::Paddsb:
+        case Mnemonic::Paddsw: case Mnemonic::Punpcklbw:
+        case Mnemonic::Punpcklwd: case Mnemonic::Punpckldq:
+        case Mnemonic::Punpcklqdq: case Mnemonic::Punpckhbw:
+        case Mnemonic::Punpckhwd: case Mnemonic::Punpckhdq:
+        case Mnemonic::Punpckhqdq: case Mnemonic::Shufps:
+        case Mnemonic::Shufpd:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -1027,7 +1168,69 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
 
     if (!ctx.eof()) {
         const u8 b = static_cast<u8>(ctx.code[ctx.pos]);
-        if ((b & 0xF0) == 0x40) {
+        if (b == 0xC5) {
+            ++ctx.pos;
+            auto p1 = ctx.read_u8();
+            if (!p1) return std::unexpected(std::move(p1).error());
+            ctx.vex = true;
+            ctx.vex_map = 1;
+            ctx.rex_present = true;
+            ctx.rex_r = (*p1 & 0x80u) == 0;
+            ctx.vex_vvvv = static_cast<u8>(
+                (static_cast<u8>(~*p1) >> 3) & 0x0fu);
+            ctx.vector_bytes = (*p1 & 0x04u) ? 32u : 16u;
+            ctx.vex_pp = static_cast<u8>(*p1 & 0x03u);
+        } else if (b == 0xC4) {
+            ++ctx.pos;
+            auto p0 = ctx.read_u8();
+            auto p1 = ctx.read_u8();
+            if (!p0) return std::unexpected(std::move(p0).error());
+            if (!p1) return std::unexpected(std::move(p1).error());
+            ctx.vex = true;
+            ctx.vex_map = static_cast<u8>(*p0 & 0x1fu);
+            ctx.rex_present = true;
+            ctx.rex_r = (*p0 & 0x80u) == 0;
+            ctx.rex_x = (*p0 & 0x40u) == 0;
+            ctx.rex_b = (*p0 & 0x20u) == 0;
+            ctx.rex_w = (*p1 & 0x80u) != 0;
+            ctx.vex_vvvv = static_cast<u8>(
+                (static_cast<u8>(~*p1) >> 3) & 0x0fu);
+            ctx.vector_bytes = (*p1 & 0x04u) ? 32u : 16u;
+            ctx.vex_pp = static_cast<u8>(*p1 & 0x03u);
+        } else if (b == 0x62) {
+            ++ctx.pos;
+            auto p0 = ctx.read_u8();
+            auto p1 = ctx.read_u8();
+            auto p2 = ctx.read_u8();
+            if (!p0) return std::unexpected(std::move(p0).error());
+            if (!p1) return std::unexpected(std::move(p1).error());
+            if (!p2) return std::unexpected(std::move(p2).error());
+            if ((*p1 & 0x04u) == 0) {
+                return std::unexpected(Error::invalid_format(
+                    "x64: malformed EVEX prefix"));
+            }
+            ctx.evex = true;
+            ctx.vex_map = static_cast<u8>(*p0 & 0x03u);
+            ctx.rex_present = true;
+            ctx.vex_r2 = (*p0 & 0x80u) == 0;
+            ctx.rex_x = (*p0 & 0x40u) == 0;
+            ctx.rex_b = (*p0 & 0x20u) == 0;
+            ctx.vex_b2 = ctx.rex_x;
+            ctx.rex_r = (*p0 & 0x10u) == 0;
+            ctx.rex_w = (*p1 & 0x80u) != 0;
+            ctx.vex_vvvv = static_cast<u8>(((static_cast<u8>(~*p1) >> 3) & 0x0fu) |
+                (((*p2 & 0x08u) == 0 ? 1u : 0u) << 4));
+            const u8 length = static_cast<u8>((*p2 >> 5) & 0x03u);
+            if (length == 3) {
+                return std::unexpected(Error::invalid_format(
+                    "x64: reserved EVEX vector length"));
+            }
+            ctx.vector_bytes = length == 2 ? 64u : (length == 1 ? 32u : 16u);
+            ctx.vex_pp = static_cast<u8>(*p1 & 0x03u);
+            ctx.vector_mask = static_cast<u8>(*p2 & 0x07u);
+            ctx.vector_zeroing = (*p2 & 0x80u) != 0;
+            ctx.vector_broadcast = (*p2 & 0x10u) != 0;
+        } else if ((b & 0xF0) == 0x40) {
             ctx.rex_present = true;
             ctx.rex_w = (b & 0x8) != 0;
             ctx.rex_r = (b & 0x4) != 0;
@@ -1041,8 +1244,35 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     if (!op0_r) return std::unexpected(std::move(op0_r).error());
     u8 opcode = *op0_r;
 
+    const auto has_entry = [](const OpcodeEntry& candidate) {
+        return candidate.mnemonic != Mnemonic::Invalid || candidate.group != 0;
+    };
     const OpcodeEntry* entry = nullptr;
-    if (opcode == 0x0F) {
+    if (ctx.vex || ctx.evex) {
+        if (ctx.vex_map == 1 && opcode == 0x77 && ctx.vex_pp == 0) {
+            entry = &kVzeroupper;
+        } else if (ctx.vex_map == 1) {
+            switch (ctx.vex_pp) {
+                case 0: entry = &kSecondary[opcode]; break;
+                case 1: entry = &kSecondary_66[opcode]; break;
+                case 2: entry = &kSecondary_F3[opcode]; break;
+                case 3: entry = &kSecondary_F2[opcode]; break;
+                default: break;
+            }
+        } else if (ctx.vex_map == 2) {
+            switch (ctx.vex_pp) {
+                case 0: entry = &kVexMap2[opcode]; break;
+                case 1: entry = &kVexMap2_66[opcode]; break;
+                case 2: entry = &kVexMap2_F3[opcode]; break;
+                case 3: entry = &kVexMap2_F2[opcode]; break;
+                default: break;
+            }
+        } else {
+            return std::unexpected(Error::not_implemented(std::format(
+                "x64: unsupported {} opcode map {} at {:#x}",
+                ctx.evex ? "EVEX" : "VEX", ctx.vex_map, addr)));
+        }
+    } else if (opcode == 0x0F) {
         auto op1_r = ctx.read_u8();
         if (!op1_r) return std::unexpected(std::move(op1_r).error());
         opcode = *op1_r;
@@ -1071,9 +1301,6 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         // Either a real mnemonic OR a group entry (mnemonic=Invalid,
         // group!=0 - opcode-extension dispatch) counts as "the 66 table
         // owns this opcode".
-        const auto has_entry = [](const OpcodeEntry& e) {
-            return e.mnemonic != Mnemonic::Invalid || e.group != 0;
-        };
         entry = &kSecondary[opcode];
         if (ctx.prefix.opsize && has_entry(kSecondary_66[opcode])) {
             entry = &kSecondary_66[opcode];
@@ -1091,9 +1318,37 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         entry = &kPrimary[opcode];
     }
 
-    if (entry->mnemonic == Mnemonic::Invalid && entry->group == 0) {
+    if (!entry || (entry->mnemonic == Mnemonic::Invalid && entry->group == 0)) {
         return std::unexpected(Error::not_implemented(std::format(
             "x64: unsupported opcode {:#04x} at {:#x}", opcode, addr)));
+    }
+    if ((ctx.vex || ctx.evex) && ctx.vex_map == 1 &&
+        entry->group == 0 && entry->mnemonic != Mnemonic::Vzeroupper) {
+        const auto vector_spec = [](OpSpec spec) {
+            return spec == OpSpec::Vx || spec == OpSpec::Hx ||
+                   spec == OpSpec::Wx || spec == OpSpec::Wss ||
+                   spec == OpSpec::Wsd;
+        };
+        if (!vector_spec(entry->op1) && !vector_spec(entry->op2) &&
+            !vector_spec(entry->op3) && !vector_spec(entry->op4)) {
+            return std::unexpected(Error::not_implemented(std::format(
+                "x64: unsupported VEX form of {} at {:#x}",
+                mnemonic_name(entry->mnemonic), addr)));
+        }
+    }
+
+    OpcodeEntry vector_entry;
+    if ((ctx.vex || ctx.evex) && vex_has_nondestructive_source(entry->mnemonic)) {
+        vector_entry = *entry;
+        if (entry->op3 == OpSpec::None) {
+            vector_entry.op3 = entry->op2;
+            vector_entry.op2 = OpSpec::Hx;
+        } else {
+            vector_entry.op4 = entry->op3;
+            vector_entry.op3 = entry->op2;
+            vector_entry.op2 = OpSpec::Hx;
+        }
+        entry = &vector_entry;
     }
 
     if (entry->modrm) {
@@ -1117,11 +1372,18 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     insn.address  = addr;
     insn.mnemonic = entry->mnemonic;
     insn.prefixes = ctx.prefix;
+    insn.x86_vex = ctx.vex;
+    insn.x86_evex = ctx.evex;
+    insn.x86_zeroing = ctx.vector_zeroing;
+    insn.x86_broadcast = ctx.vector_broadcast;
+    insn.x86_mask = ctx.vector_mask;
+    insn.x86_vector_bits = ctx.vector_bytes == 64 ? 3u
+        : (ctx.vector_bytes == 32 ? 2u : 1u);
 
     ctx.default_64 = is_default_64(entry->mnemonic);
 
-    const OpSpec specs[3] = {entry->op1, entry->op2, entry->op3};
-    for (std::size_t i = 0; i < 3; ++i) {
+    const OpSpec specs[4] = {entry->op1, entry->op2, entry->op3, entry->op4};
+    for (std::size_t i = 0; i < 4; ++i) {
         if (specs[i] == OpSpec::None) break;
         auto o = decode_operand(ctx, specs[i], addr);
         if (!o) return std::unexpected(std::move(o).error());

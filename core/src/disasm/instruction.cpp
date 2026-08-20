@@ -334,6 +334,27 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Btr:      return "btr";
         case Mnemonic::Btc:      return "btc";
         case Mnemonic::Bswap:    return "bswap";
+        case Mnemonic::Andn:     return "andn";
+        case Mnemonic::Bzhi:     return "bzhi";
+        case Mnemonic::Pext:     return "pext";
+        case Mnemonic::Pdep:     return "pdep";
+        case Mnemonic::Shlx:     return "shlx";
+        case Mnemonic::Shrx:     return "shrx";
+        case Mnemonic::Sarx:     return "sarx";
+        case Mnemonic::Mulx:     return "mulx";
+        case Mnemonic::Vzeroupper:return "zeroupper";
+        case Mnemonic::Vfmadd132ps:return "fmadd132ps";
+        case Mnemonic::Vfmadd132pd:return "fmadd132pd";
+        case Mnemonic::Vfmadd132ss:return "fmadd132ss";
+        case Mnemonic::Vfmadd132sd:return "fmadd132sd";
+        case Mnemonic::Vfmadd213ps:return "fmadd213ps";
+        case Mnemonic::Vfmadd213pd:return "fmadd213pd";
+        case Mnemonic::Vfmadd213ss:return "fmadd213ss";
+        case Mnemonic::Vfmadd213sd:return "fmadd213sd";
+        case Mnemonic::Vfmadd231ps:return "fmadd231ps";
+        case Mnemonic::Vfmadd231pd:return "fmadd231pd";
+        case Mnemonic::Vfmadd231ss:return "fmadd231ss";
+        case Mnemonic::Vfmadd231sd:return "fmadd231sd";
         case Mnemonic::Cmpxchg:  return "cmpxchg";
         case Mnemonic::Xadd:     return "xadd";
 
@@ -866,6 +887,12 @@ std::string format_instruction(const Instruction& insn) {
     if (insn.prefixes.lock)  s += "lock ";
     if (insn.prefixes.rep)   s += "rep ";
     if (insn.prefixes.repne) s += "repne ";
+    const bool bmi_name = insn.mnemonic == Mnemonic::Andn ||
+        insn.mnemonic == Mnemonic::Bzhi || insn.mnemonic == Mnemonic::Pext ||
+        insn.mnemonic == Mnemonic::Pdep || insn.mnemonic == Mnemonic::Shlx ||
+        insn.mnemonic == Mnemonic::Shrx || insn.mnemonic == Mnemonic::Sarx ||
+        insn.mnemonic == Mnemonic::Mulx;
+    if ((insn.x86_vex || insn.x86_evex) && !bmi_name) s += 'v';
     s += mnemonic_name(insn.mnemonic);
     // ARM: append the S (flag-setting) suffix and the condition-code suffix.
     // Both are inert for other architectures (arm_setflags defaults false,
@@ -914,6 +941,10 @@ std::string format_instruction(const Instruction& insn) {
         for (std::size_t i = 0; i < insn.num_operands; ++i) {
             if (i > 0) s += ", ";
             s += format_operand(insn, insn.operands[i]);
+            if (i == 0 && insn.x86_evex && insn.x86_mask != 0) {
+                s += std::format(" {{k{}}}", insn.x86_mask);
+                if (insn.x86_zeroing) s += " {z}";
+            }
         }
     }
     return s;

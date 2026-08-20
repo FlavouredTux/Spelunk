@@ -617,38 +617,19 @@ public:
                 }
                 if (r->condition.kind != IrValueKind::None) break;
             }
-            // The canonical PPC sequence keeps the selector definition in
-            // the bounds-check predecessor and only the scaled temporary in
-            // the dispatch block. Follow direct predecessors for the newest
-            // SSA definition of that architectural register.
+            // Cleanup may propagate the selector register away from the
+            // dispatch entirely. The bounds-check predecessor still compares
+            // the exact source value against the table maximum, and that
+            // operand is stronger evidence than an unrelated call-clobber of
+            // the same architectural register earlier in the predecessor.
             if (r->condition.kind == IrValueKind::None) {
                 for (addr_t pred_addr : sw_bb.predecessors) {
                     auto pit = fn_.block_at.find(pred_addr);
                     if (pit == fn_.block_at.end()) continue;
                     const auto& pred = fn_.blocks[pit->second];
                     for (auto it = pred.insts.rbegin(); it != pred.insts.rend(); ++it) {
-                        const IrValue& dst = it->dst;
-                        if (dst.kind == IrValueKind::Reg && dst.version != 0 &&
-                            canonical_reg(dst.reg) == selector) {
-                            r->condition = dst;
-                            break;
-                        }
-                    }
-                    if (r->condition.kind != IrValueKind::None) break;
-                }
-            }
-            // Cleanup often copy-propagates the architectural register away
-            // entirely. The bounds-check predecessor still compares the
-            // exact selector against the table's maximum, so use its
-            // non-immediate operand as the stable source expression.
-            if (r->condition.kind == IrValueKind::None) {
-                for (addr_t pred_addr : sw_bb.predecessors) {
-                    auto pit = fn_.block_at.find(pred_addr);
-                    if (pit == fn_.block_at.end()) continue;
-                    const auto& pred = fn_.blocks[pit->second];
-                    for (auto it = pred.insts.rbegin(); it != pred.insts.rend(); ++it) {
-                        if (it->op < IrOp::CmpEq || it->op > IrOp::CmpSge || it->src_count < 2)
-                            continue;
+                        if (it->op < IrOp::CmpEq || it->op > IrOp::CmpSge ||
+                            it->src_count < 2) continue;
                         for (u8 i = 0; i < 2; ++i) {
                             if (it->srcs[i].kind != IrValueKind::Imm) {
                                 r->condition = it->srcs[i];
@@ -656,6 +637,26 @@ public:
                             }
                         }
                         if (r->condition.kind != IrValueKind::None) break;
+                    }
+                    if (r->condition.kind != IrValueKind::None) break;
+                }
+            }
+            // An unbounded/non-canonical table may have no comparison. Fall
+            // back to a real predecessor definition, but never select a
+            // caller-clobber: it describes call state, not table provenance.
+            if (r->condition.kind == IrValueKind::None) {
+                for (addr_t pred_addr : sw_bb.predecessors) {
+                    auto pit = fn_.block_at.find(pred_addr);
+                    if (pit == fn_.block_at.end()) continue;
+                    const auto& pred = fn_.blocks[pit->second];
+                    for (auto it = pred.insts.rbegin(); it != pred.insts.rend(); ++it) {
+                        const IrValue& dst = it->dst;
+                        if (it->op != IrOp::Clobber &&
+                            dst.kind == IrValueKind::Reg && dst.version != 0 &&
+                            canonical_reg(dst.reg) == selector) {
+                            r->condition = dst;
+                            break;
+                        }
                     }
                     if (r->condition.kind != IrValueKind::None) break;
                 }

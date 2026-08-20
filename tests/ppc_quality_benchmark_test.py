@@ -29,22 +29,25 @@ void func_80100000(double a1, void* a2) {
   // STRUCTURER_FAIL: dropped block
   if (!0) sub_80001234(PTR(0x1234));
   uint32_t value = {0}; /* unresolved SSA merge */
+  a2->field_10 = a2->field_10;
 }
 """
     function = benchmark.analyze_pseudo_c("func_80100000", sample)
     metrics = function["metrics"]
-    assert metrics["lines_of_pseudo_c"] == 7
+    assert metrics["lines_of_pseudo_c"] == 8
     assert metrics["raw_register_references"] == 4
     assert metrics["versioned_ssa_references"] == 2
     assert metrics["temporary_references"] == 2
     assert metrics["opaque_ppc_intrinsics"] == 1
     assert metrics["generic_parameters"] == 2
-    assert metrics["generic_field_references"] == 1
+    assert metrics["generic_field_references"] == 3
     assert metrics["unresolved_symbol_calls"] == 1
     assert metrics["structurer_failures"] == 1
     assert metrics["constant_condition_artifacts"] == 1
     assert metrics["unresolved_ssa_merges"] == 1
+    assert metrics["unresolved_expression_materializations"] == 0
     assert metrics["raw_pointer_literals"] == 1
+    assert metrics["self_assignment_artifacts"] == 1
     assert metrics["syntax_failures"] == 0
 
     split = benchmark.split_batch_output("""\

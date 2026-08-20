@@ -431,6 +431,38 @@ compiler diagnostics and likely missing header/annotation names are retained
 when compilation fails. `--compile-command` provides the same placeholder
 override as `ember-match` for projects that do not expose Ninja commands.
 
+### Project-scale expectations
+
+"100% exact" means that the rebuilt object code and data agree byte-for-byte
+with the configured reference according to objdiff. It does not include the
+disc's textures, audio, movies, or other unlinked assets, and it does not imply
+that the recovered C is textually identical to the lost original source.
+
+As a concrete scale reference, a whole-project objdiff report for SPM EU0 on
+2026-08-18 measured:
+
+| Metric | Whole target | Matched in the snapshot | Remaining |
+|---|---:|---:|---:|
+| Functions | 10,216 | 584 (5.72%) | 9,632 |
+| Code | 3,550,036 bytes | 136,908 bytes (3.86%) | 3,413,128 bytes |
+| Data | 4,636,761 bytes | 125,009 bytes (2.70%) | 4,511,752 bytes |
+| Code and data | 8,186,797 bytes (7.81 MiB) | 261,917 bytes | 7,924,880 bytes (7.56 MiB) |
+
+The code size corresponds to roughly 887,509 four-byte PPC instructions. The
+report contained 4,776 objdiff units, but only 27 had a configured source file;
+the remaining auto-split units are bookkeeping boundaries, not 4,749 separate
+C files that must each be written by hand. Thirteen units were completely
+matched in this snapshot.
+
+These figures are a dated project snapshot, not an Ember benchmark or a
+completion forecast. `ember-unit` can create and verify a starting point for a
+unit, and its matcher queue can drive `ember-match` across the remaining
+functions. Exact completion still requires human decisions for compiler-
+sensitive control flow and expressions, translation-unit layout, static data,
+relocations, and types that the binary cannot uniquely prove. The tools reduce
+that iteration; they do not make a multi-thousand-function project an
+unattended one-command decompilation.
+
 ### Repeatable SPM pseudo-C benchmark
 
 The checked-in `benchmarks/spm_eu0_ppc.txt` manifest keeps a stable ten-function
@@ -479,6 +511,23 @@ from Phi webs, two-arm diamonds render as conditional expressions, and locals
 whose first top-level statement assigns them remain intentionally
 uninitialized until that statement. The baseline therefore rejects any return
 of synthetic `{0} /* unresolved SSA merge */` declarations.
+
+Pseudo-C also preserves the time at which a PPC memory value was read. A load
+kept across a later call or a proven aliasing store is materialized before that
+barrier, and one-write stack save slots whose source is itself a load remain
+real locals. This prevents reset functions from collapsing a genuine
+save/`memset`/restore sequence into false output such as
+`work->flags = work->flags`. Pointer-to-const call parameters refine the stack
+object's base type without incorrectly declaring the caller's local `const`.
+
+CodeWarrior switch recovery prefers the bounds comparison's non-immediate
+operand when cleanup has propagated the architectural selector out of the
+dispatch block. A caller-clobbered `r3` in the same predecessor is not accepted
+as selector evidence. The quality baseline counts exact self-assignment lines
+and rejects their reintroduction. Depth-capped expressions that still cannot
+be materialized are initialized explicitly and marked
+`unresolved expression materialization` instead of becoming silently
+uninitialized C variables.
 
 The tool returns 2 when a corpus function cannot be decompiled and 1 when a
 requested baseline check regresses. It has no third-party Python dependencies,

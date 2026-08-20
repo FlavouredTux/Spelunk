@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <functional>
 #include <map>
@@ -622,6 +623,12 @@ struct Emitter {
     // is_flag_feeder_temp can iterate users in O(uses) instead of
     // re-walking the whole function each call.
     std::map<SsaKey, std::vector<std::pair<u32, u32>>> visible_user_positions;
+    std::map<SsaKey, std::vector<std::pair<u32, u32>>> all_user_positions;
+    // Loads whose value survives a possible memory mutation or leaves its
+    // defining block. These must be materialized where they execute; inlining
+    // them at a later use would re-read memory and can turn a real save/restore
+    // into the false source statement `work->field = work->field`.
+    std::set<SsaKey>                                    memory_snapshot_loads;
     // Stack-slot offsets (per stack_offset()) that have at least one Load
     // somewhere in the function. A Store to an offset NOT in this set is a
     // dead spill - common for -O0 spill-arg-to-slot prologues whose slot is
@@ -2785,11 +2792,19 @@ struct Emitter {
                 // following Call, so they shouldn't keep their operand-feeding assignments alive.
                 if (is_call_arg_barrier(inst)) continue;
                 if (inst.op == IrOp::Phi) {
-                    for (const auto& op : inst.phi_operands)
-                        if (auto k = ssa_key(op); k) uses[*k]++;
+                    for (const auto& op : inst.phi_operands) {
+                        if (auto k = ssa_key(op); k) {
+                            uses[*k]++;
+                            all_user_positions[*k].emplace_back(bi, ii);
+                        }
+                    }
                 } else {
-                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i)
-                        if (auto k = ssa_key(inst.srcs[i]); k) uses[*k]++;
+                    for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                        if (auto k = ssa_key(inst.srcs[i]); k) {
+                            uses[*k]++;
+                            all_user_positions[*k].emplace_back(bi, ii);
+                        }
+                    }
                 }
             }
         }
@@ -2816,6 +2831,125 @@ struct Emitter {
                     if (is_flag_assign) flag_assign_uses[*k]++;
                     visible_user_positions[*k].emplace_back(bi, ii);
                 }
+            }
+        }
+        // Preserve the time at which a load happened. SSA versions registers
+        // but not memory, so blindly inlining a load after a call/store can
+        // change its meaning. Follow only transparent value aliases; any
+        // cross-block use or intervening memory barrier forces a snapshot.
+        const auto transparent_alias = [](const IrInst& inst) noexcept {
+            return inst.op == IrOp::Assign || inst.op == IrOp::ZExt ||
+                   inst.op == IrOp::SExt || inst.op == IrOp::Trunc;
+        };
+        for (u32 def_bi = 0; is_ppc_abi() && def_bi < f.blocks.size(); ++def_bi) {
+            const auto& def_bb = f.blocks[def_bi];
+            for (u32 def_ii = 0; def_ii < def_bb.insts.size(); ++def_ii) {
+                const IrInst& load = def_bb.insts[def_ii];
+                if (load.op != IrOp::Load) continue;
+                auto load_key = ssa_key(load.dst);
+                if (!load_key) continue;
+                const auto store_may_alias_load = [&](const IrInst& store) {
+                    if (store.op != IrOp::Store || store.src_count < 1 ||
+                        load.src_count < 1) return false;
+                    const auto load_stack = stack_offset(load.srcs[0]);
+                    const auto store_stack = stack_offset(store.srcs[0]);
+                    const auto load_absolute = try_resolve_imm_addr(load.srcs[0]);
+                    const auto store_absolute = try_resolve_imm_addr(store.srcs[0]);
+                    const u32 load_bytes = std::max(1u, type_bits(load.dst.type) / 8u);
+                    const IrType stored_type = store.src_count >= 2
+                        ? store.srcs[1].type : IrType::I8;
+                    const u32 store_bytes = std::max(1u, type_bits(stored_type) / 8u);
+                    const auto overlaps = [](i64 a, u32 a_size, i64 b, u32 b_size) {
+                        return a < b + static_cast<i64>(b_size) &&
+                               b < a + static_cast<i64>(a_size);
+                    };
+                    if (load_stack && store_stack) {
+                        return overlaps(*load_stack, load_bytes,
+                                        *store_stack, store_bytes);
+                    }
+                    if (load_absolute && store_absolute) {
+                        return overlaps(*load_absolute, load_bytes,
+                                        *store_absolute, store_bytes);
+                    }
+                    const auto load_access = canonical_struct_access(load.srcs[0]);
+                    const auto store_access = canonical_struct_access(store.srcs[0]);
+                    if (load_access && store_access) {
+                        const auto load_root = ssa_key(load_access->first);
+                        const auto store_root = ssa_key(store_access->first);
+                        if (load_root && store_root && *load_root == *store_root) {
+                            return overlaps(load_access->second, load_bytes,
+                                            store_access->second, store_bytes);
+                        }
+                    }
+                    // A proven stack address and a proven absolute object
+                    // cannot alias.
+                    if ((load_stack && store_absolute) ||
+                        (load_absolute && store_stack)) return false;
+                    // Distinct unresolved pointer roots are not enough to
+                    // prove an alias. Calls remain conservative barriers;
+                    // unrelated copy-loop stores should not explode every
+                    // source load into a one-use scalar temporary.
+                    return false;
+                };
+                const auto is_memory_barrier = [&](const IrInst& inst) {
+                    return inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
+                           store_may_alias_load(inst);
+                };
+
+                std::set<SsaKey> seen;
+                std::deque<SsaKey> pending{*load_key};
+                bool snapshot = false;
+                while (!pending.empty() && !snapshot) {
+                    const SsaKey key = pending.front();
+                    pending.pop_front();
+                    if (!seen.insert(key).second) continue;
+                    auto users = all_user_positions.find(key);
+                    if (users == all_user_positions.end()) continue;
+                    for (const auto& [use_bi, use_ii] : users->second) {
+                        if (use_bi != def_bi || use_ii <= def_ii) {
+                            // Across blocks, use machine-address order as a
+                            // conservative CodeWarrior snapshot witness. This
+                            // catches entry-block saves restored after a later
+                            // memset/call without materializing ordinary phi
+                            // fallback loads (which have no intervening call).
+                            const IrInst& user = f.blocks[use_bi].insts[use_ii];
+                            if (load.source_addr != 0 &&
+                                user.source_addr > load.source_addr) {
+                                for (const auto& candidate_block : f.blocks) {
+                                    for (const IrInst& candidate : candidate_block.insts) {
+                                        if (candidate.source_addr <= load.source_addr ||
+                                            candidate.source_addr >= user.source_addr) {
+                                            continue;
+                                        }
+                                        if (candidate.op == IrOp::Call ||
+                                            candidate.op == IrOp::CallIndirect ||
+                                            store_may_alias_load(candidate)) {
+                                            snapshot = true;
+                                            break;
+                                        }
+                                    }
+                                    if (snapshot) break;
+                                }
+                            }
+                            if (snapshot) break;
+                            continue;
+                        }
+                        for (u32 between = def_ii + 1; between < use_ii; ++between) {
+                            if (is_memory_barrier(def_bb.insts[between])) {
+                                snapshot = true;
+                                break;
+                            }
+                        }
+                        if (snapshot) break;
+                        const IrInst& user = def_bb.insts[use_ii];
+                        if (transparent_alias(user)) {
+                            if (auto next = ssa_key(user.dst); next) {
+                                pending.push_back(*next);
+                            }
+                        }
+                    }
+                }
+                if (snapshot) memory_snapshot_loads.insert(*load_key);
             }
         }
         // Stack slots that are loaded from somewhere in the function. A
@@ -2878,7 +3012,13 @@ struct Emitter {
                 if (!k) continue;
                 auto dit = defs.find(*k);
                 if (dit == defs.end()) continue;
-                if (dit->second->op == IrOp::Clobber) continue;
+                // Forwarding a memory Load through its one-write stack slot
+                // loses the time at which the value was captured. A later
+                // reload after memset/calls would be printed as a fresh read
+                // from the mutated source object. Keep the stack local for
+                // Load producers; pure computed temps remain safe to forward.
+                if (dit->second->op == IrOp::Clobber ||
+                    (is_ppc_abi() && dit->second->op == IrOp::Load)) continue;
             }
             init_only_slot_value.emplace(off, v);
         }
@@ -3724,6 +3864,17 @@ struct Emitter {
                     while (!type.empty() && std::isspace(
                                static_cast<unsigned char>(type.back()))) {
                         type.pop_back();
+                    }
+                    // A pointer-to-const parameter proves that the callee
+                    // does not mutate the object; it does not prove that the
+                    // caller's stack object was declared const. Stack locals
+                    // are often written by one call and later consumed through
+                    // a const pointer by another, so keep the recovered object
+                    // declaration mutable.
+                    for (std::string_view qualifier : {"const ", "volatile "}) {
+                        while (type.starts_with(qualifier)) {
+                            type.erase(0, qualifier.size());
+                        }
                     }
                     if (type.empty() || type == "void") continue;
                     slot->second.type_override = std::move(type);
@@ -5493,6 +5644,11 @@ struct Emitter {
         const auto* d = def_of(v);
         if (!d) return false;
         if (!inlinable_op(d->op)) return false;
+        if (d->op == IrOp::Load) {
+            if (auto key = ssa_key(v); key && memory_snapshot_loads.contains(*key)) {
+                return false;
+            }
+        }
         if (visible_use_count(v) > 1) {
             // Flag-feeder temps are an exception: their multiple uses are
             // all flag-set computations that themselves render inline.
@@ -8655,10 +8811,9 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
         case IrOp::Load: {
             if (is_canary_value_load(inst) || renders_stack_chk_guard_load(inst)) return "";
             if (use_count(inst.dst) == 0) return "";
-            if (use_count(inst.dst) == 1) return "";  // will be inlined
-            // A multi-use load that should_inline accepts (stack-slot
-            // reads, init-only forwards) renders inline at every use site
-            // - no need to bind a name for it here.
+            // Loads that cross a possible memory mutation must bind here even
+            // with one eventual use. Other single-use and cheap multi-use
+            // loads remain inline.
             if (should_inline(inst.dst)) return "";
             return std::format("{} t{} = {};",
                                c_type_name_for(inst.dst),
@@ -10096,7 +10251,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         undeclared_temps.emplace(definition->dst.temp, definition->dst);
     }
     for (const auto& [temp, value] : undeclared_temps) {
-        out += std::format("  {} t{};\n", e.c_type_name_for(value), temp);
+        out += std::format(
+            "  {} t{} = {{0}}; /* unresolved expression materialization */\n",
+            e.c_type_name_for(value), temp);
     }
     // Slot extent → array recovery: if a slot's footprint (the gap to the
     // next slot above it in the frame) is bigger than its observed access
@@ -10248,10 +10405,22 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
             if (!buf.empty()) lines.push_back(std::move(buf));
         }
+        const std::string header_line = header.ends_with('\n')
+            ? header.substr(0, header.size() - 1)
+            : header;
+        std::size_t function_header_line = lines.size();
+        for (std::size_t li = 0; li < lines.size(); ++li) {
+            if (lines[li] == header_line) {
+                function_header_line = li;
+                break;
+            }
+        }
         auto is_decl = [&](const std::string& line, std::string& name) {
             // File-scope synthetic record terminators also resemble a
-            // two-token declaration. This pass owns function locals only.
-            if (!line.starts_with("  ") || line.starts_with("   ")) return false;
+            // two-token declaration. The caller limits this parser to lines
+            // after the function header, so nested case/if declarations are
+            // safe to consider as well as top-level locals.
+            if (!line.starts_with("  ")) return false;
             std::size_t i = 0;
             while (i < line.size() && line[i] == ' ') ++i;
             // Type token (one word like u32, u64, bool, double).
@@ -10301,7 +10470,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             kept.reserve(lines.size());
             for (std::size_t li = 0; li < lines.size(); ++li) {
                 std::string name;
-                if (is_decl(lines[li], name) &&
+                if (li > function_header_line && is_decl(lines[li], name) &&
                     !name_appears_elsewhere(name, li)) {
                     changed = true;
                     continue;  // dead declaration

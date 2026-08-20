@@ -6,7 +6,7 @@
   },
   "totals": {
     "functions": 10,
-    "lines_of_pseudo_c": 1143,
+    "lines_of_pseudo_c": 1178,
     "raw_register_references": 0,
     "versioned_ssa_references": 0,
     "temporary_references": 0,
@@ -17,7 +17,9 @@
     "structurer_failures": 0,
     "constant_condition_artifacts": 0,
     "unresolved_ssa_merges": 0,
+    "unresolved_expression_materializations": 6,
     "raw_pointer_literals": 0,
+    "self_assignment_artifacts": 0,
     "syntax_failures": 0
   }
 }

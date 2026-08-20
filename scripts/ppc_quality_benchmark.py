@@ -26,7 +26,9 @@ LOWER_IS_BETTER = (
     "structurer_failures",
     "constant_condition_artifacts",
     "unresolved_ssa_merges",
+    "unresolved_expression_materializations",
     "raw_pointer_literals",
+    "self_assignment_artifacts",
     "syntax_failures",
 )
 
@@ -41,6 +43,7 @@ _CONSTANT_CONDITION = re.compile(
     r"\b(?:if|while)\s*\(\s*!?\s*(?:0|1|true|false)\s*\)"
 )
 _RAW_POINTER = re.compile(r"\bPTR\s*\(\s*0x[0-9a-fA-F]+\s*\)")
+_SELF_ASSIGNMENT = re.compile(r"^\s*(.+?)\s+=\s+\1;\s*$", re.MULTILINE)
 _BATCH_MARKER = re.compile(r"^// ember-symbol: (\S+)\s*$")
 _TIMING = re.compile(
     r"^\[timing\]\s+(.+?):\s+([0-9]+(?:\.[0-9]+)?)\s+ms$"
@@ -123,7 +126,10 @@ def analyze_pseudo_c(symbol: str, text: str,
         "structurer_failures": text.count("STRUCTURER_FAIL"),
         "constant_condition_artifacts": len(_CONSTANT_CONDITION.findall(code)),
         "unresolved_ssa_merges": text.count("unresolved SSA merge"),
+        "unresolved_expression_materializations": text.count(
+            "unresolved expression materialization"),
         "raw_pointer_literals": len(_RAW_POINTER.findall(code)),
+        "self_assignment_artifacts": len(_SELF_ASSIGNMENT.findall(code)),
         "syntax_failures": int(syntax_failure is not None),
     }
     result: dict[str, Any] = {"symbol": symbol, "metrics": metrics}

@@ -154,7 +154,8 @@ Ninja/CodeWarrior command and emits whole-object function/data evidence plus an
 `ember-match` queue for anything still nonmatching.
 See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, binary-only limits, the `--ppc-coverage`
-decoder/semantic-gap report, and the repeatable SPM pseudo-C quality benchmark.
+decoder/semantic-gap report, project-scale exact-matching expectations, and the
+repeatable SPM pseudo-C quality benchmark.
 
 ---
 

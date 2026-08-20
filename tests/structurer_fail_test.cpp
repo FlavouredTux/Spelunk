@@ -2180,7 +2180,7 @@ int test_ppc_pointer_parameters_shape_stack_locals() {
     Annotations annotations;
     FunctionSig signature;
     signature.return_type = "void";
-    signature.params = {{"f32", "x"}, {"f32 *", "sinx"}, {"f32 *", "cosx"}};
+    signature.params = {{"f32", "x"}, {"const f32 *", "sinx"}, {"f32 *", "cosx"}};
     annotations.signatures[kTarget] = std::move(signature);
 
     MockPpcBinary binary;
@@ -2195,9 +2195,162 @@ int test_ppc_pointer_parameters_shape_stack_locals() {
     check(pc->find("float local_8;") != std::string::npos &&
           pc->find("float local_4;") != std::string::npos,
           "pointer parameter types refine stack slot declarations");
+    check(pc->find("const float local_8") == std::string::npos,
+          "pointer-to-const input does not make the caller's stack object const");
     check(pc->find("local_8[") == std::string::npos &&
           pc->find("local_4[") == std::string::npos,
           "prototype-shaped scalar locals are not widened into arrays");
+    return 0;
+}
+
+int test_ppc_switch_selector_prefers_bounds_operand() {
+    using namespace ember;
+
+    constexpr addr_t kBounds = 0x2280;
+    constexpr addr_t kSwitch = 0x22a0;
+    constexpr addr_t kCase0 = 0x22b0;
+    constexpr addr_t kCase1 = 0x22c0;
+    constexpr addr_t kDefault = 0x22d0;
+
+    IrFunction fn;
+    fn.start = kSwitch;
+    fn.end = kDefault + 4;
+    fn.name = "bounded_switch_selector";
+    fn.next_temp_id = 2;
+
+    const IrValue selector = IrValue::make_temp(0, IrType::I32);
+    const IrValue condition = IrValue::make_temp(1, IrType::I1);
+    IrValue stale_call_result = IrValue::make_reg(Reg::PpcR3, IrType::I32);
+    stale_call_result.version = 3;
+
+    IrBlock bounds;
+    bounds.start = kBounds;
+    bounds.end = kSwitch;
+    bounds.kind = BlockKind::Conditional;
+    bounds.successors = {kDefault, kSwitch};
+    bounds.insts.push_back(make_clobber(stale_call_result));
+    bounds.insts.push_back(make_load(
+        selector, IrValue::make_imm(0x80500000, IrType::I32)));
+    IrInst compare;
+    compare.op = IrOp::CmpUgt;
+    compare.dst = condition;
+    compare.srcs[0] = selector;
+    compare.srcs[1] = IrValue::make_imm(1, IrType::I32);
+    compare.src_count = 2;
+    bounds.insts.push_back(compare);
+    bounds.insts.push_back(make_cond_branch(
+        kSwitch - 4, condition, kDefault, kSwitch));
+    fn.block_at[bounds.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(bounds));
+
+    IrBlock dispatch;
+    dispatch.start = kSwitch;
+    dispatch.end = kSwitch + 4;
+    dispatch.kind = BlockKind::Switch;
+    dispatch.predecessors = {kBounds};
+    dispatch.successors = {kCase0, kCase1, kDefault};
+    dispatch.case_values = {0, 1};
+    dispatch.has_default = true;
+    dispatch.switch_index = Reg::PpcR3;
+    fn.block_at[dispatch.start] = fn.blocks.size();
+    fn.blocks.push_back(std::move(dispatch));
+
+    const auto add_return = [&](addr_t start, std::vector<addr_t> predecessors) {
+        IrBlock block;
+        block.start = start;
+        block.end = start + 4;
+        block.kind = BlockKind::Return;
+        block.predecessors = std::move(predecessors);
+        block.insts.push_back(make_ret(start));
+        fn.block_at[block.start] = fn.blocks.size();
+        fn.blocks.push_back(std::move(block));
+    };
+    add_return(kCase0, {kSwitch});
+    add_return(kCase1, {kSwitch});
+    add_return(kDefault, {kBounds, kSwitch});
+
+    Structurer structurer;
+    auto structured = structurer.structure(fn);
+    check(structured.has_value(), "bounded PPC switch structures");
+    if (!structured) return 1;
+    const Region* recovered_switch = nullptr;
+    const auto find_switch = [&](const auto& self, const Region& region) -> void {
+        if (region.kind == RegionKind::Switch && recovered_switch == nullptr) {
+            recovered_switch = &region;
+        }
+        for (const auto& child : region.children) {
+            if (child) self(self, *child);
+        }
+    };
+    find_switch(find_switch, *structured->body);
+    check(recovered_switch != nullptr, "bounded PPC switch region is present");
+    if (recovered_switch) {
+        check(recovered_switch->condition.kind == IrValueKind::Temp &&
+              recovered_switch->condition.temp == selector.temp,
+              "switch selector uses the compared value, not a stale r3 clobber");
+    }
+    return 0;
+}
+
+int test_load_crossing_call_is_materialized() {
+    using namespace ember;
+
+    constexpr addr_t kStart = 0x22e0;
+    constexpr addr_t kReset = 0x2500;
+    IrFunction fn;
+    fn.start = kStart;
+    fn.end = kStart + 0x14;
+    fn.name = "save_across_reset";
+    fn.next_temp_id = 1;
+
+    const IrValue saved = IrValue::make_temp(0, IrType::I32);
+    IrValue preserved = IrValue::make_reg(Reg::PpcR31, IrType::I32);
+    preserved.version = 1;
+    const IrValue address = IrValue::make_imm(0x805ae0f8, IrType::I32);
+
+    IrBlock block;
+    block.start = kStart;
+    block.end = fn.end;
+    block.kind = BlockKind::Return;
+    block.insts.push_back(make_load(saved, address));
+    block.insts.push_back(make_assign(preserved, saved));
+    block.insts.push_back(make_call_imm(kStart + 8, kReset));
+    block.insts.push_back(make_store(address, preserved));
+    block.insts.push_back(make_ret(kStart + 0x10));
+    fn.block_at[block.start] = 0;
+    fn.blocks.push_back(std::move(block));
+
+    auto body = std::make_unique<Region>();
+    body->kind = RegionKind::Block;
+    body->block_start = kStart;
+    auto tail = std::make_unique<Region>();
+    tail->kind = RegionKind::Return;
+    auto root = std::make_unique<Region>();
+    root->kind = RegionKind::Seq;
+    root->children.push_back(std::move(body));
+    root->children.push_back(std::move(tail));
+    StructuredFunction sf{&fn, std::move(root)};
+
+    Annotations annotations;
+    annotations.signatures[kReset] = FunctionSig{
+        .return_type = "void", .params = {}, .variadic = false};
+    annotations.renames[kReset] = "reset_work";
+    MockPpcBinary binary;
+    PseudoCEmitter emitter;
+    auto pc = emitter.emit(sf, &binary, &annotations, EmitOptions{});
+    check(pc.has_value(), "PPC memory snapshot pseudo-C emits");
+    if (!pc) return 1;
+    const bool saved_before_call =
+        pc->find("uint32_t value = work_ptr;") != std::string::npos &&
+        pc->find("reset_work();") != std::string::npos &&
+        pc->find("work_ptr = value;") != std::string::npos;
+    if (!saved_before_call) {
+        std::fprintf(stderr, "Memory snapshot output:\n%s\n", pc->c_str());
+    }
+    check(saved_before_call,
+          "load used after a call is materialized before the memory barrier");
+    check(pc->find("work_ptr = work_ptr") == std::string::npos,
+          "save/restore does not collapse into a false self-assignment");
     return 0;
 }
 
@@ -2529,6 +2682,8 @@ int main() {
     rc |= test_ppc_annotated_stack_argument_at_call_site();
     rc |= test_ppc_annotated_incoming_stack_argument_name();
     rc |= test_ppc_pointer_parameters_shape_stack_locals();
+    rc |= test_ppc_switch_selector_prefers_bounds_operand();
+    rc |= test_load_crossing_call_is_materialized();
     rc |= test_ppc_hidden_sret_shifts_declared_call_arguments();
     rc |= test_ppc_small_aggregate_consumes_multiple_gprs();
     rc |= test_wii_sdk_prototype_groups();

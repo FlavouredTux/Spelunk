@@ -1,7 +1,7 @@
 // preserve_upper_via_al
 extern uint64_t sink_u64;
 
-uint64_t preserve_upper_via_al(uint64_t a1, uint8_t a2) {
-  sink_u64 = a1 & ~0xff | (uint8_t)a2;
-  return rax;
+void preserve_upper_via_al(long unsigned int x, unsigned char b) {
+  sink_u64 = x & ~0xff | (uint8_t)b;
+  return;
 }

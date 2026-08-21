@@ -1,6 +1,6 @@
 // carry_rotate_mix
-uint32_t carry_rotate_mix(uint32_t a1) {
-  uint32_t t0 = a1;
+unsigned int carry_rotate_mix(unsigned int x) {
+  uint32_t t0 = (uint32_t)x;
   uint32_t t4 = rcl32(t0, 2, 1);
   rcl_cf32(t0, 2, 1);
   return t4 ^ 0x13572468;

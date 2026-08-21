@@ -1,4 +1,4 @@
 // carry_rotate_one
-uint32_t carry_rotate_one(uint32_t a1) {
-  return (a1 << 1 | 1) ^ 0x2468ace0;
+unsigned int carry_rotate_one(unsigned int x) {
+  return ((uint32_t)x << 1 | 1) ^ 0x2468ace0;
 }

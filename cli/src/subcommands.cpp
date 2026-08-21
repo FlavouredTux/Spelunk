@@ -130,10 +130,10 @@ namespace {
 
 constexpr std::string_view kXrefsCacheTag = "xrefs-v5";
 constexpr std::string_view kAritiesCacheTag = "arities-v3";
-constexpr std::string_view kFunctionsCacheTag = "functions-v6";
-constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v6";
-constexpr std::string_view kFunctionsInferredCacheTag = "functions_inferred-v5";
-constexpr std::string_view kFunctionsFullInferredCacheTag = "functions_full_inferred-v5";
+constexpr std::string_view kFunctionsCacheTag = "functions-v7";
+constexpr std::string_view kFunctionsFullCacheTag = "functions_full-v7";
+constexpr std::string_view kFunctionsInferredCacheTag = "functions_inferred-v6";
+constexpr std::string_view kFunctionsFullInferredCacheTag = "functions_full_inferred-v6";
 
 [[nodiscard]] std::vector<std::string>
 collect_bundle_artifacts(const std::filesystem::path& binary_path) {
@@ -5664,17 +5664,16 @@ namespace {
 // records into the user-facing Annotations under a "user explicit
 // wins" precedence so PDB types feed the emitter (and the UI's
 // signature renderer) without ever overwriting hand-edits.
-[[nodiscard]] std::size_t merge_pdb_signatures(const Binary& b,
-                                                Annotations& annotations) {
-    const auto* pe = dynamic_cast<const PeBinary*>(&b);
-    if (pe == nullptr) return 0;
-    const auto& sigs = pe->pdb_signatures();
-    if (sigs.empty()) return 0;
+[[nodiscard]] std::size_t merge_debug_signatures(const Binary& b,
+                                                  Annotations& annotations) {
     std::size_t added = 0;
-    for (const auto& [va, sig] : sigs) {
-        // try_emplace returns (it, true) only on insertion - perfect
-        // semantics here: user explicit signature already there ⇒ skip.
+    for (const auto& [va, sig] : b.debug_signatures()) {
         if (annotations.signatures.try_emplace(va, sig).second) ++added;
+    }
+    if (const auto* pe = dynamic_cast<const PeBinary*>(&b); pe != nullptr) {
+        for (const auto& [va, sig] : pe->pdb_signatures()) {
+            if (annotations.signatures.try_emplace(va, sig).second) ++added;
+        }
     }
     return added;
 }
@@ -5736,13 +5735,13 @@ int run_emit(const Args& args, const Binary& b) {
     // Merge PDB-derived signatures (only on PE binaries that had one
     // attached at load time). User-explicit sigs in the loaded
     // annotations win on collision.
-    if (const std::size_t pdb_added = merge_pdb_signatures(b, annotations);
-        pdb_added > 0) {
+    if (const std::size_t debug_added = merge_debug_signatures(b, annotations);
+        debug_added > 0) {
         ann_loaded = true;
         if (!args.quiet) {
             std::println(stderr,
-                "ember: pdb: {} function signature{} from TPI",
-                pdb_added, pdb_added == 1 ? "" : "s");
+                "ember: debug info: {} function signature{}",
+                debug_added, debug_added == 1 ? "" : "s");
         }
     }
 

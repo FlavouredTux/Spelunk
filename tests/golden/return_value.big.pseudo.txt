@@ -1,4 +1,4 @@
 // big
-uint64_t big(uint64_t a1, uint64_t a2, uint64_t a3) {
-  return (a1 ^ a2) + a3 * 4;
+long unsigned int big(long unsigned int a, long unsigned int b, long unsigned int c) {
+  return (a ^ b) + c * 4;
 }

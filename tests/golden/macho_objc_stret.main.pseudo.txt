@@ -1,6 +1,6 @@
 // main
-uint64_t main(void) {
-  uint64_t local_18[2];
+int main(void) {
+  uint64_t local_18;
   local_18 = [0x1234 bounds];
   return 0;
 }

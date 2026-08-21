@@ -27,6 +27,12 @@ constexpr VariadicImport kVariadicImports[] = {
     {"scanf",     0}, {"vscanf",    0},
     {"fscanf",    1}, {"vfscanf",   1},
     {"sscanf",    1}, {"vsscanf",   1},
+    {"__isoc99_scanf",  0},
+    {"__isoc99_fscanf", 1},
+    {"__isoc99_sscanf", 1},
+    {"__isoc23_scanf",  0},
+    {"__isoc23_fscanf", 1},
+    {"__isoc23_sscanf", 1},
 };
 
 }  // namespace
@@ -130,6 +136,11 @@ std::optional<u8> libc_arity_by_name(std::string_view n) noexcept {
         {"fgetc", 1}, {"getc", 1}, {"putc", 2}, {"ungetc", 2},
         {"putchar", 1}, {"getchar", 0}, {"gets", 1},
         {"GetTickCount", 0}, {"GetLastError", 0}, {"Sleep", 1},
+        {"IsDebuggerPresent", 0},
+        {"SetUnhandledExceptionFilter", 1},
+        {"_set_invalid_parameter_handler", 1},
+        {"_initterm", 2}, {"_initterm_e", 2},
+        {"_cexit", 0}, {"_c_exit", 0},
         {"ExitProcess", 1}, {"CloseHandle", 1},
         {"OutputDebugStringA", 1}, {"OutputDebugStringW", 1},
         {"GetModuleHandleA", 1}, {"GetModuleHandleW", 1},

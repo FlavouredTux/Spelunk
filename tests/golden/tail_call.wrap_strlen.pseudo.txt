@@ -1,4 +1,4 @@
 // wrap_strlen
-uint64_t wrap_strlen(char* a1) {
-  return strlen(a1);
+size_t wrap_strlen(const char* s) {
+  return strlen(s);
 }

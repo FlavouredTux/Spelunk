@@ -175,6 +175,9 @@ See [PowerPC decompilation](docs/powerpc.md) for the supported ABIs, recovery
 rules, annotation workflow, binary-only limits, the `--ppc-coverage`
 decoder/semantic-gap report, project-scale exact-matching expectations, and the
 repeatable SPM pseudo-C quality benchmark.
+See [x86-64 decompilation](docs/x86.md) for discovery safeguards, stack-buffer
+and pointer-depth recovery, embedded COFF/DWARF metadata, and current decoder
+and ABI boundaries.
 
 ---
 

@@ -1,7 +1,7 @@
 // block_copy
 extern uint64_t buf;
 
-uint64_t block_copy(uint64_t a1) {
-  rep.movsq(&buf /* 0x405040 */, a1, 8);
-  return rax;
+void block_copy(const char* src) {
+  rep.movsq(&buf /* 0x405040 */, src, 8);
+  return;
 }

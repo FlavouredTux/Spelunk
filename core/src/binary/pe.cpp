@@ -2,6 +2,7 @@
 #include <ember/binary/pe_view.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cstring>
 #include <format>
 #include <string>
@@ -33,7 +34,10 @@ constexpr u16 kOptMagicPe32Plus = 0x020b;
 // Offsets inside the IMAGE_FILE_HEADER (COFF header).
 constexpr std::size_t kCoffMachineOff       = 0x00;
 constexpr std::size_t kCoffNumSectionsOff   = 0x02;
+constexpr std::size_t kCoffSymbolPtrOff     = 0x08;
+constexpr std::size_t kCoffSymbolCountOff   = 0x0c;
 constexpr std::size_t kCoffSizeOfOptHdrOff  = 0x10;
+constexpr std::size_t kCoffSymbolSize       = 18;
 
 // Offsets inside the PE32+ IMAGE_OPTIONAL_HEADER64.
 constexpr std::size_t kOptMagicOff            = 0x00;
@@ -150,6 +154,8 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
 
     const u16 machine      = read_le_at<u16>(coff->data() + kCoffMachineOff);
     const u16 num_sections = read_le_at<u16>(coff->data() + kCoffNumSectionsOff);
+    const u32 symbol_offset = read_le_at<u32>(coff->data() + kCoffSymbolPtrOff);
+    const u32 symbol_count = read_le_at<u32>(coff->data() + kCoffSymbolCountOff);
     const u16 opt_size     = read_le_at<u16>(coff->data() + kCoffSizeOfOptHdrOff);
 
     arch_ = arch_from_machine(machine);
@@ -193,6 +199,8 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
         .sec_tab_off       = opt_off + opt_size,
         .num_sections      = num_sections,
         .opt_size          = opt_size,
+        .coff_symbol_offset = symbol_offset,
+        .coff_symbol_count = symbol_count,
         .num_rva_and_sizes = num_rva,
         .image_base        = image_base,
         .entry_rva         = entry_rva,
@@ -219,6 +227,27 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
 
         Section s;
         s.name        = read_section_name(p + 0x00);
+        if (s.name.starts_with('/') && h.coff_symbol_offset != 0 &&
+            h.coff_symbol_count != 0) {
+            u32 string_offset = 0;
+            const std::string_view raw(s.name);
+            const auto parsed = std::from_chars(
+                raw.data() + 1, raw.data() + raw.size(), string_offset, 10);
+            const u64 strings = static_cast<u64>(h.coff_symbol_offset) +
+                static_cast<u64>(h.coff_symbol_count) * kCoffSymbolSize;
+            if (parsed.ec == std::errc{} && string_offset >= 4 &&
+                strings + 4 <= buffer_.size()) {
+                const u32 string_size = read_le_at<u32>(buffer_.data() + strings);
+                if (string_offset < string_size && strings + string_size <= buffer_.size()) {
+                    const char* name = reinterpret_cast<const char*>(
+                        buffer_.data() + strings + string_offset);
+                    const std::size_t available = string_size - string_offset;
+                    std::size_t length = 0;
+                    while (length < available && name[length] != '\0') ++length;
+                    if (length < available) s.name.assign(name, length);
+                }
+            }
+        }
         s.vaddr       = h.image_base + static_cast<addr_t>(virt_rva);
         s.file_offset = static_cast<offset_t>(raw_ptr);
         s.size        = static_cast<u64>(virt_size);
@@ -252,6 +281,76 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
     return {};
 }
 
+void PeBinary::parse_coff_symbols(const ParsedHeaders& h) {
+    if (h.coff_symbol_offset == 0 || h.coff_symbol_count == 0 ||
+        h.coff_symbol_count > 5'000'000u) return;
+    const u64 table_bytes = static_cast<u64>(h.coff_symbol_count) *
+                            kCoffSymbolSize;
+    const u64 table_end = static_cast<u64>(h.coff_symbol_offset) + table_bytes;
+    if (table_end > buffer_.size() || table_end + 4 > buffer_.size()) return;
+    const u32 string_size = read_le_at<u32>(buffer_.data() + table_end);
+    if (string_size < 4 || table_end + string_size > buffer_.size()) return;
+
+    const auto symbol_name = [&](const std::byte* record) -> std::string {
+        const u32 zeroes = read_le_at<u32>(record);
+        if (zeroes == 0) {
+            const u32 offset = read_le_at<u32>(record + 4);
+            if (offset < 4 || offset >= string_size) return {};
+            const char* start = reinterpret_cast<const char*>(
+                buffer_.data() + table_end + offset);
+            const std::size_t available = string_size - offset;
+            std::size_t length = 0;
+            while (length < available && start[length] != '\0') ++length;
+            if (length == available || length > 4096) return {};
+            return std::string(start, length);
+        }
+        std::size_t length = 0;
+        while (length < 8 && record[length] != std::byte{0}) ++length;
+        return std::string(reinterpret_cast<const char*>(record), length);
+    };
+
+    for (u32 index = 0; index < h.coff_symbol_count;) {
+        const u64 offset = static_cast<u64>(h.coff_symbol_offset) +
+                           static_cast<u64>(index) * kCoffSymbolSize;
+        if (offset + kCoffSymbolSize > table_end) break;
+        const std::byte* record = buffer_.data() + offset;
+        const u32 value = read_le_at<u32>(record + 8);
+        const i16 section_number = read_le_at<i16>(record + 12);
+        const u16 type = read_le_at<u16>(record + 14);
+        const u8 storage_class = static_cast<u8>(record[16]);
+        const u8 auxiliary_count = static_cast<u8>(record[17]);
+        const bool defined = section_number > 0 &&
+            static_cast<std::size_t>(section_number) <= sections_.size();
+        const bool externally_visible = storage_class == 2 || storage_class == 3;
+        const bool function_type = (type & 0x20u) != 0;
+        if (defined && externally_visible) {
+            const Section& section = sections_[static_cast<std::size_t>(
+                section_number - 1)];
+            const bool function = function_type && section.flags.executable;
+            std::string name = symbol_name(record);
+            if (!name.empty() && name != ".file" &&
+                (!name.starts_with('.') || function)) {
+                Symbol symbol;
+                symbol.name = std::move(name);
+                symbol.addr = section.vaddr + value;
+                symbol.kind = function ? SymbolKind::Function : SymbolKind::Object;
+                if (function && auxiliary_count > 0 && index + 1 < h.coff_symbol_count) {
+                    const u64 aux_offset = offset + kCoffSymbolSize;
+                    if (aux_offset + kCoffSymbolSize <= table_end) {
+                        const u32 total_size = read_le_at<u32>(
+                            buffer_.data() + aux_offset + 4);
+                        if (total_size <= section.size) symbol.size = total_size;
+                    }
+                }
+                symbols_.push_back(std::move(symbol));
+            }
+        }
+        const u32 advance = 1u + auxiliary_count;
+        if (advance == 0 || index > h.coff_symbol_count - advance) break;
+        index += advance;
+    }
+}
+
 Result<void> PeBinary::parse() {
     auto hdrs = parse_headers();
     if (!hdrs) return std::unexpected(std::move(hdrs).error());
@@ -283,6 +382,7 @@ Result<void> PeBinary::parse() {
     }
 
     if (auto rv = parse_sections(*hdrs); !rv) return std::unexpected(rv.error());
+    parse_coff_symbols(*hdrs);
     if (auto rv = validate_entry_rva(); !rv) return std::unexpected(rv.error());
 
     // Imports first (so got_addr lives on each Symbol before thunk scan

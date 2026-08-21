@@ -1,4 +1,4 @@
 // describe
-uint32_t describe(uint64_t a1) {
-  return (uint32_t)a1 >= 6 ? -1 : (uint32_t)(a1 + 0x64);
+int describe(int op) {
+  return (uint32_t)op >= 6 ? -1 : (uint32_t)(op + 0x64);
 }

@@ -2,19 +2,19 @@
 extern uint64_t g_count;
 extern FILE* stdout;
 
-char* use_imports(char* a1, char* a2) {
-  if (a1) {
-    uint64_t r_strlen = strlen(a1);
+void use_imports(const char* a, const char* b) {
+  if (a) {
+    uint64_t r_strlen = strlen(a);
     g_count += r_strlen;
-    puts(a1);
+    puts(a);
   }
   if (a2) {
     fputs(a2, stdout);
   }
   char* r_getenv = getenv("HOME");
-  if (r_getenv) {
-    g_count++;
-    return g_count + 1;
+  if (!r_getenv) {
+    return;
   }
-  return r_getenv;
+  g_count++;
+  return;
 }

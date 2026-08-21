@@ -1,4 +1,4 @@
 // sahf_parity_select
-uint64_t sahf_parity_select(void) {
+unsigned int sahf_parity_select(void) {
   return 1;
 }

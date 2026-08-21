@@ -1,13 +1,13 @@
 // multi_exit
-uint64_t multi_exit(char* a1, char* a2) {
-  if (!a1) {
+int multi_exit(const char* s, const char* t) {
+  if (!s) {
     return -1;
   }
-  if (!a2) {
+  if (!t) {
     return -1;
   }
-  uint64_t r_strlen = strlen(a1);
-  uint64_t r_strlen_2 = strlen(a2);
+  uint64_t r_strlen = strlen(s);
+  uint64_t r_strlen_2 = strlen(t);
   if (r_strlen != r_strlen_2) {
     return -1;
   }

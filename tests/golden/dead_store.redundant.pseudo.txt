@@ -1,7 +1,7 @@
 // redundant
 extern uint64_t s;
 
-uint64_t redundant(uint64_t a1) {
-  s = a1;
-  return a1;
+void redundant(long int x) {
+  s = x;
+  return;
 }

@@ -1,8 +1,8 @@
 // zero_extend_via_eax
 extern uint64_t sink_u64;
 
-uint32_t zero_extend_via_eax(uint64_t a1) {
-  uint64_t t2 = (uint32_t)(a1 + 1);
+void zero_extend_via_eax(long unsigned int x) {
+  uint64_t t2 = (uint32_t)(x + 1);
   sink_u64 = t2;
-  return (uint32_t)(a1 + 1);
+  return;
 }

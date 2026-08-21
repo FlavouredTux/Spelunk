@@ -1148,13 +1148,13 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
 
 namespace {
 
-// Drop discovered `sub_*` entries that fall inside the first decoded
-// instruction of an earlier entry. The prologue sweep iterates byte by
-// byte and accepts every offset whose first 1–4 bytes match a prologue
-// shape AND whose first two instructions decode validly - at offsets
-// 1 byte after a real prologue, the bytes are usually still a valid
-// (different) instruction sequence, so both pass and the discovery
-// list ends up with phantom 1-byte entries adjacent to real ones.
+// Drop discovered `sub_*` entries that fall inside any instruction decoded
+// from the preceding accepted entry. The prologue/call-target sweeps can
+// nominate the displacement byte of a real two-byte jump (or a ModR/M/SIB
+// byte deeper in a function) as another function start. Checking only the
+// first instruction catches adjacent-prologue phantoms but misses these
+// later overlaps and then truncates the containing function at the bogus
+// entry.
 // Real symbols are authoritative and survive unconditionally.
 //
 // This runs before fill_unknown_sizes so the gap-to-next-entry size
@@ -1172,29 +1172,34 @@ void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
 
     std::vector<DiscoveredFunction> out;
     out.reserve(fns.size());
-    addr_t shadow_until = 0;       // exclusive upper bound of the
-                                   // last-emitted entry's first insn
+    addr_t scan_pc = 0;
     for (auto& fn : fns) {
-        if (fn.kind != DiscoveredFunction::Kind::Sub ||
-            fn.addr >= shadow_until) {
-            // Not shadowed by a prior entry. Push it, then advance the
-            // shadow window using its first instruction's length so the
-            // *next* iteration can detect overlap.
-            const auto bytes = b.bytes_at(fn.addr);
-            if (!bytes.empty()) {
-                if (auto insn = dec.decode(bytes, fn.addr); insn && insn->length > 0) {
-                    shadow_until = fn.addr + static_cast<addr_t>(insn->length);
-                } else {
-                    shadow_until = fn.addr + 1;
+        bool inside_instruction = false;
+        if (!out.empty() && fn.kind == DiscoveredFunction::Kind::Sub) {
+            // Continue a conservative linear decode from the preceding
+            // accepted entry until this candidate. We stop on the first
+            // undecodable byte rather than guessing alignment through data.
+            while (scan_pc < fn.addr) {
+                auto bytes = b.bytes_at(scan_pc);
+                if (bytes.empty()) break;
+                auto instruction = dec.decode(bytes, scan_pc);
+                if (!instruction || instruction->length == 0) break;
+                const addr_t end = scan_pc + instruction->length;
+                if (end > fn.addr) {
+                    inside_instruction = true;
+                    scan_pc = end;
+                    break;
                 }
-            } else {
-                shadow_until = fn.addr + 1;
+                scan_pc = end;
             }
-            out.push_back(std::move(fn));
         }
-        // else: fn.addr falls inside out.back()'s first decoded
-        // instruction - drop silently. Symbols never reach this
-        // branch because they bypass the shadow check above.
+        if (inside_instruction) continue;
+
+        // Symbols/unwind names remain authoritative even when a preceding
+        // function falls through to the same address. A non-overlapping Sub
+        // also starts a fresh scan range.
+        out.push_back(std::move(fn));
+        scan_pc = out.back().addr;
     }
     fns = std::move(out);
 }
@@ -1231,6 +1236,26 @@ void filter_entries_inside_unwind_extents(std::vector<DiscoveredFunction>& fns,
     std::erase_if(fns, [&](const DiscoveredFunction& fn) {
         return fn.kind == DiscoveredFunction::Kind::Sub &&
                covered_by_other_start(fn.addr);
+    });
+}
+
+void filter_entries_inside_sized_symbols(std::vector<DiscoveredFunction>& fns) {
+    if (fns.size() < 2) return;
+    std::ranges::sort(fns, {}, &DiscoveredFunction::addr);
+    std::vector<std::pair<addr_t, addr_t>> authoritative;
+    for (const auto& function : fns) {
+        if (function.kind != DiscoveredFunction::Kind::Symbol ||
+            function.size == 0) continue;
+        authoritative.emplace_back(function.addr, function.addr + function.size);
+    }
+    if (authoritative.empty()) return;
+    std::erase_if(fns, [&](const DiscoveredFunction& function) {
+        if (function.kind != DiscoveredFunction::Kind::Sub) return false;
+        auto next = std::ranges::upper_bound(
+            authoritative, function.addr, {}, &std::pair<addr_t, addr_t>::first);
+        if (next == authoritative.begin()) return false;
+        --next;
+        return function.addr > next->first && function.addr < next->second;
     });
 }
 
@@ -1899,6 +1924,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
             filter_entries_inside_unwind_extents(out, unwind_extents);
         }
         filter_shadowed_entries(out, b);
+        filter_entries_inside_sized_symbols(out);
         fill_unknown_sizes(out, b);
         return out;
     }
@@ -1914,6 +1940,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         filter_entries_inside_unwind_extents(out, unwind_extents);
     }
     filter_shadowed_entries(out, b);
+    filter_entries_inside_sized_symbols(out);
     fill_unknown_sizes(out, b);
     return out;
 }

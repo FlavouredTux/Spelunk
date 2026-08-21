@@ -1,6 +1,6 @@
 // rotate_mix
-uint32_t rotate_mix(uint32_t a1) {
-  uint32_t t4 = rotl32(a1, 5);
+unsigned int rotate_mix(unsigned int x) {
+  uint32_t t4 = rotl32((uint32_t)x, 5);
   uint32_t t14 = rotr32(t4, 3);
   return t14 ^ 0x13579bdf;
 }

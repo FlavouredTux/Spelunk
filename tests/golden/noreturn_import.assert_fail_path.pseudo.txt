@@ -1,8 +1,8 @@
 // assert_fail_path
-uint32_t assert_fail_path(uint32_t a1) {
-  if (!a1) {
+int assert_fail_path(int x) {
+  if (!(uint32_t)x) {
     __assert_fail("x != 0", "noreturn_import.c", 5, "assert_fail_path");
     __unreachable();
   }
-  return a1;
+  return (uint32_t)x;
 }

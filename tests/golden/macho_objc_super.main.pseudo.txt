@@ -1,5 +1,5 @@
 // main
-uint64_t main(void) {
+int main(void) {
   [super description];
   [super description];
   return 0;

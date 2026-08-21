@@ -48,6 +48,14 @@ add_executable(ember_pdb_test pdb_test.cpp)
 target_link_libraries(ember_pdb_test PRIVATE ember::core ember::flags)
 add_test(NAME pdb_unit COMMAND ember_pdb_test)
 
+add_executable(ember_pe_coff_test pe_coff_test.cpp)
+target_link_libraries(ember_pe_coff_test PRIVATE ember::core ember::flags)
+add_test(NAME pe_coff_unit COMMAND ember_pe_coff_test)
+
+add_executable(ember_dwarf_test dwarf_test.cpp)
+target_link_libraries(ember_dwarf_test PRIVATE ember::core ember::flags)
+add_test(NAME dwarf_unit COMMAND ember_dwarf_test)
+
 add_executable(ember_kismet_bundle_test kismet_bundle_test.cpp)
 target_link_libraries(ember_kismet_bundle_test PRIVATE ember::core ember::flags)
 add_test(NAME kismet_bundle_unit COMMAND ember_kismet_bundle_test)
@@ -416,6 +424,7 @@ ember_build_fixture(arith_idiom OPT "-O2")
 ember_build_fixture(vector_like)
 ember_build_fixture(struct_fields)
 ember_build_fixture(global_resolution)
+ember_build_fixture(x86_types OPT "-O0")
 # -O0 so dbg_marker stays a real function (no inlining, no tail-call
 # fold) and gets a stable symbol address the smoke test can set a
 # software breakpoint at. Built once non-PIE (dbg_target) and once
@@ -556,6 +565,13 @@ ember_golden_test(
     FIXTURE switch_basic
     ARGS    "-c|-s|describe"
     GOLDEN  switch_basic.describe.cfg.txt
+)
+
+ember_golden_test(
+    NAME    x86_types_pseudo
+    FIXTURE x86_types
+    ARGS    "-p|-s|main"
+    GOLDEN  x86_types.pseudo.txt
 )
 
 # ---- partial_reg ------------------------------------------------------------

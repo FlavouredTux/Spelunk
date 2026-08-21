@@ -1,7 +1,7 @@
 // vector_word_roundtrip
-uint32_t vector_word_roundtrip(uint16_t a1) {
+int vector_word_roundtrip(int x) {
   __m128i t0 = _mm_xor_si128(xmm0, xmm0);
-  __m128i t3 = _mm_insert_epi16(t0, a1, 3);
+  __m128i t3 = _mm_insert_epi16(t0, (uint16_t)x, 3);
   uint32_t t4 = _mm_extract_epi16(t3, 3);
   return t4;
 }

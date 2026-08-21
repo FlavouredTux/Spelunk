@@ -1,4 +1,4 @@
 // call_fp
-uint32_t call_fp(uint32_t (*fn)(uint32_t), uint32_t x) {
+int call_fp(op_t fn, int x) {
   return plus7(x) /* observed targets: plus7, minus3 */ + 1;
 }

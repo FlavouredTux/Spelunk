@@ -1,5 +1,5 @@
 // sub_180001140
-uint64_t sub_180001140(uint64_t a1) {
+uint64_t sub_180001140(void* a1) {
   if ((uint32_t)a1 > 2) {
     return -1;
   }

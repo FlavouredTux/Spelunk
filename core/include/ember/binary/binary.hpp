@@ -15,6 +15,7 @@
 #include <ember/binary/relocation.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/annotations.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
 
@@ -152,6 +153,12 @@ public:
     // replaced. Returns true when the symbol table changed.
     bool add_inferred_function_name(addr_t va, std::string_view name);
 
+    void add_debug_signature(addr_t va, FunctionSig signature) {
+        debug_signatures_.try_emplace(va, std::move(signature));
+    }
+    [[nodiscard]] const std::map<addr_t, FunctionSig>&
+    debug_signatures() const noexcept { return debug_signatures_; }
+
     // Merge defined Function/Object symbols from a separate symbol-bearing
     // binary by linked-image offset. This covers split-debug companions such
     // as Mach-O dSYM files: a symbol at (overlay.base + X) names the primary
@@ -165,6 +172,7 @@ protected:
     // synthetic entries - the public `symbols()` accessor stays
     // const-only.
     [[nodiscard]] virtual std::vector<Symbol>& mutable_symbols() noexcept = 0;
+    std::map<addr_t, FunctionSig> debug_signatures_;
 public:
 
     // ---- Indirect-edge oracle ----------------------------------------

@@ -1,4 +1,5 @@
 #include <ember/analysis/discovery.hpp>
+#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
 
 #include <algorithm>
@@ -46,6 +47,25 @@ public:
         }
         text_[0x48] = static_cast<std::byte>(0xc3u);
 
+        // A two-byte jump whose displacement byte (0x55) begins a valid
+        // prologue-shaped byte stream. The heuristic sweep will nominate
+        // kBase+0x21, but it is inside the jump at kBase+0x20 and must be
+        // rejected by final function enumeration.
+        const std::array<unsigned char, 8> overlapping{
+            0xeb, 0x55, 0x48, 0x89, 0xe5, 0x90, 0x90, 0xc3,
+        };
+        for (std::size_t i = 0; i < overlapping.size(); ++i) {
+            text_[0x20 + i] = static_cast<std::byte>(overlapping[i]);
+        }
+        ember::Symbol overlap_owner;
+        overlap_owner.name = "overlap_owner";
+        overlap_owner.addr = kBase + 0x20;
+        // Leave the owner unsized so this specifically exercises the
+        // instruction-overlap filter rather than sized-symbol containment.
+        overlap_owner.size = 0;
+        overlap_owner.kind = ember::SymbolKind::Function;
+        syms_.push_back(std::move(overlap_owner));
+
         // A CET-enabled function:
         //   endbr64; push rbp; mov rbp, rsp; ret
         // Discovery must keep the start at ENDBR, not split at 0x401064.
@@ -81,7 +101,7 @@ public:
         return std::span<const ember::Section>(&section_, 1);
     }
     [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
-        return {};
+        return syms_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
         return {};
@@ -210,6 +230,19 @@ void test_stack_alloc_after_frame_setup_not_split() {
           "x64 endbr64-prefixed function is not split after entry hint");
 }
 
+void test_candidate_inside_instruction_is_rejected() {
+    MockBinary binary;
+    auto functions = ember::enumerate_functions(binary);
+    check(std::ranges::find_if(functions, [](const auto& function) {
+              return function.addr == 0x401020;
+          }) != functions.end(),
+          "authoritative owner function retained");
+    check(std::ranges::find_if(functions, [](const auto& function) {
+              return function.addr == 0x401021;
+          }) == functions.end(),
+          "prologue-shaped displacement byte rejected as function start");
+}
+
 void test_arm64_prologue_discovery() {
     Arm64MockBinary b;
     auto hits = ember::discover_from_prologues(b);
@@ -229,6 +262,7 @@ void test_arm64_prologue_discovery() {
 
 int main() {
     test_stack_alloc_after_frame_setup_not_split();
+    test_candidate_inside_instruction_is_rejected();
     test_arm64_prologue_discovery();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

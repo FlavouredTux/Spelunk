@@ -140,12 +140,15 @@ private:
         std::size_t sec_tab_off;       // file offset of the section table
         u16         num_sections;
         u16         opt_size;
+        u32         coff_symbol_offset;
+        u32         coff_symbol_count;
         u32         num_rva_and_sizes;
         u64         image_base;
         u32         entry_rva;
     };
     [[nodiscard]] Result<ParsedHeaders> parse_headers();
     [[nodiscard]] Result<void>          parse_sections(const ParsedHeaders& h);
+    void                                parse_coff_symbols(const ParsedHeaders& h);
     [[nodiscard]] Result<void>          validate_entry_rva() const;
     // Walks IMAGE_DIRECTORY_ENTRY_IMPORT. Populates is_import=true
     // Symbols with got_addr set to the IAT slot VA. got_to_name carries

@@ -1,4 +1,4 @@
 // double_wrap
-uint64_t double_wrap(uint64_t a1, uint64_t a2) {
-  return inner(a1, a2);
+long int double_wrap(long int a, long int b) {
+  return inner(a, b);
 }

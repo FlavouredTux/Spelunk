@@ -594,6 +594,8 @@ documented in [docs/python.md](docs/python.md).
 - [README.md](README.md): design, features, support matrix, build, and layout
 - [docs/powerpc.md](docs/powerpc.md): PPC/Wii ABI, DTK/REL, typed data/events,
   coverage, benchmarks, unit recovery, and CodeWarrior matching
+- [docs/x86.md](docs/x86.md): x86-64 discovery, ABI/type recovery, COFF/DWARF,
+  strings, imports, and current limitations
 - [docs/scripting.md](docs/scripting.md): `.ember` annotations
 - [docs/debugger.md](docs/debugger.md): pseudo-C debugger
 - [docs/raw-input.md](docs/raw-input.md): raw bytes and region manifests

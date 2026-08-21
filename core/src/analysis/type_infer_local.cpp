@@ -47,7 +47,13 @@ bool sweep(IrFunction& fn) {
             switch (inst.op) {
                 case IrOp::Load: {
                     if (inst.src_count >= 1) {
-                        const TypeRef pointee = int_for(a, inst.dst.type);
+                        // The storage width is not the pointee's semantic
+                        // type. Start with Ptr<Top>; if a downstream call
+                        // later proves the loaded value is char*, the next
+                        // sweep refines the address to char** instead of
+                        // conflicting with an eagerly-created uint64_t*.
+                        TypeRef pointee = fn.type_of(inst.dst);
+                        if (pointee.is_bottom()) pointee = a.top();
                         changed |= refine(fn, inst.srcs[0], a.ptr_t(pointee));
                     }
                     break;
@@ -55,7 +61,10 @@ bool sweep(IrFunction& fn) {
 
                 case IrOp::Store: {
                     if (inst.src_count >= 2) {
-                        const TypeRef pointee = int_for(a, inst.srcs[1].type);
+                        TypeRef pointee = fn.type_of(inst.srcs[1]);
+                        if (pointee.is_top() || pointee.is_bottom()) {
+                            pointee = int_for(a, inst.srcs[1].type);
+                        }
                         changed |= refine(fn, inst.srcs[0], a.ptr_t(pointee));
                     }
                     break;

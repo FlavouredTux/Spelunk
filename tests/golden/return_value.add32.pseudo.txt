@@ -1,4 +1,4 @@
 // add32
-uint32_t add32(uint64_t a1, uint64_t a2) {
-  return (uint32_t)(a1 + a2);
+int add32(int a, int b) {
+  return (uint32_t)(a + b);
 }

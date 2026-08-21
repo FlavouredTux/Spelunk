@@ -1,4 +1,4 @@
 // lahf_snapshot
-uint8_t lahf_snapshot(void) {
+unsigned int lahf_snapshot(void) {
   return 0x46;
 }

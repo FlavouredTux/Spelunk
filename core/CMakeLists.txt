@@ -6,6 +6,7 @@ add_library(ember_core STATIC
     src/binary/macho.cpp
     src/binary/pe.cpp
     src/binary/pdb.cpp
+    src/binary/dwarf.cpp
     src/binary/kismet_bundle.cpp
     src/binary/minidump.cpp
     src/binary/raw_regions.cpp

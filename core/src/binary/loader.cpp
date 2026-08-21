@@ -11,6 +11,7 @@
 
 #include <ember/binary/elf.hpp>
 #include <ember/binary/dol.hpp>
+#include <ember/binary/dwarf.hpp>
 #include <ember/binary/macho.hpp>
 #include <ember/binary/minidump.hpp>
 #include <ember/binary/pe.hpp>
@@ -19,6 +20,17 @@
 #include <ember/extension/loader_registry.hpp>
 
 namespace ember {
+
+namespace {
+
+void attach_embedded_dwarf(Binary& binary) {
+    for (auto& [address, function] : parse_dwarf_functions(binary)) {
+        binary.add_inferred_function_name(address, function.name);
+        binary.add_debug_signature(address, std::move(function.signature));
+    }
+}
+
+}  // namespace
 
 const Binary::LookupCaches& Binary::caches() const {
     if (caches_) return *caches_;
@@ -462,6 +474,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
     if (looks_like_elf(*buffer)) {
         auto elf = ElfBinary::load_from_buffer(std::move(*buffer));
         if (!elf) return std::unexpected(std::move(elf).error());
+        attach_embedded_dwarf(**elf);
         return std::unique_ptr<Binary>(std::move(*elf));
     }
     if (looks_like_dol_path(path, *buffer)) {
@@ -497,6 +510,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
     if (looks_like_macho_64(*buffer)) {
         auto m = MachOBinary::load_from_buffer(std::move(*buffer));
         if (!m) return std::unexpected(std::move(m).error());
+        attach_embedded_dwarf(**m);
         return std::unique_ptr<Binary>(std::move(*m));
     }
     if (looks_like_minidump(*buffer)) {
@@ -551,6 +565,8 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
                 try_load(path.parent_path() / (path.stem().string() + ".pdb"));
             }
         }
+
+        attach_embedded_dwarf(**pe);
 
         return std::unique_ptr<Binary>(std::move(*pe));
     }

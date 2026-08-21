@@ -1,4 +1,4 @@
 // neg_i32
-uint32_t neg_i32(uint32_t a1) {
-  return -a1;
+int neg_i32(int x) {
+  return -(uint32_t)x;
 }

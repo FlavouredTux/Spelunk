@@ -1,6 +1,6 @@
 // addr_unsized_tail
 extern uint64_t g_unsized[];
 
-uint64_t addr_unsized_tail(void) {
+uintptr_t addr_unsized_tail(void) {
   return (uint8_t*)&g_unsized + 0x8 /* 0x404018 */;
 }

@@ -1,6 +1,7 @@
 // sse_memclr
 extern uint64_t big_dst;
 
-void* sse_memclr(uint64_t a1, uint64_t a2) {
-  return memset(&big_dst /* 0x404040 */, 0, 0x1000);
+void sse_memclr(void) {
+  memset(&big_dst /* 0x404040 */, 0, 0x1000);
+  return;
 }

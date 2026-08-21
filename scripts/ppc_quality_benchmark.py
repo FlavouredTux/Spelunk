@@ -117,7 +117,8 @@ def analyze_pseudo_c(symbol: str, text: str,
     semantic_expectation_failures = 0
     if symbol == "pluswinMain":
         semantic_expectation_failures += int("PpcNavigationEntry" not in text)
-        semantic_expectation_failures += int(".callback(&" not in text)
+        semantic_expectation_failures += int(
+            re.search(r"\.callback\)*\(&", text) is None)
         semantic_expectation_failures += int(
             "OSTicksToMilliseconds(gp->time - pausewin_pluswinWp->openingTime)"
             not in text)

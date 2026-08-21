@@ -116,9 +116,12 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "sprintf")   return m(t_int32s(a), {t_charp(a),  t_charp(a)},          /*var*/true);
     if (name == "snprintf")  return m(t_int32s(a), {t_charp(a),  t_size(a), t_charp(a)}, /*var*/true);
     if (name == "dprintf")   return m(t_int32s(a), {t_int32s(a), t_charp(a)},          /*var*/true);
-    if (name == "scanf")     return m(t_int32s(a), {t_charp(a)},                       /*var*/true);
-    if (name == "fscanf")    return m(t_int32s(a), {t_filep(a),  t_charp(a)},          /*var*/true);
-    if (name == "sscanf")    return m(t_int32s(a), {t_charp(a),  t_charp(a)},          /*var*/true);
+    if (name == "scanf" || name == "__isoc99_scanf" || name == "__isoc23_scanf")
+        return m(t_int32s(a), {t_charp(a)}, /*var*/true);
+    if (name == "fscanf" || name == "__isoc99_fscanf" || name == "__isoc23_fscanf")
+        return m(t_int32s(a), {t_filep(a), t_charp(a)}, /*var*/true);
+    if (name == "sscanf" || name == "__isoc99_sscanf" || name == "__isoc23_sscanf")
+        return m(t_int32s(a), {t_charp(a), t_charp(a)}, /*var*/true);
     if (name == "remove")    return m(t_int32s(a), {t_charp(a)});
     if (name == "rename")    return m(t_int32s(a), {t_charp(a),  t_charp(a)});
     if (name == "tmpfile")   return m(t_filep(a),  {});
@@ -152,6 +155,19 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "srand")         return m(t_void(a),   {t_int32u(a)});
     if (name == "qsort")         return m(t_void(a),   {t_voidp(a), t_size(a), t_size(a), t_voidp(a)});
     if (name == "bsearch")       return m(t_voidp(a),  {t_voidp(a), t_voidp(a), t_size(a), t_size(a), t_voidp(a)});
+
+    // ---- MSVCRT / Win32 process startup ---------------------------------
+    if (name == "_initterm")
+        return m(t_void(a), {a.ptr_t(t_voidp(a)), a.ptr_t(t_voidp(a))});
+    if (name == "_initterm_e")
+        return m(t_int32s(a), {a.ptr_t(t_voidp(a)), a.ptr_t(t_voidp(a))});
+    if (name == "_cexit" || name == "_c_exit") return m(t_void(a), {});
+    if (name == "SetUnhandledExceptionFilter")
+        return m(t_voidp(a), {t_voidp(a)});
+    if (name == "_set_invalid_parameter_handler")
+        return m(t_voidp(a), {t_voidp(a)});
+    if (name == "Sleep") return m(t_void(a), {t_int32u(a)});
+    if (name == "IsDebuggerPresent") return m(t_int32s(a), {});
 
     // ---- <math.h> ---------------------------------------------------------
     if (name == "fmod")  return m(t_float64(a), {t_float64(a), t_float64(a)});
@@ -498,6 +514,9 @@ namespace {
 [[nodiscard]] std::string clean_import_name_local(std::string_view name) {
     auto at = name.find('@');
     std::string bare(at == std::string_view::npos ? name : name.substr(0, at));
+    if (const auto bang = bare.rfind('!'); bang != std::string::npos) {
+        bare.erase(0, bang + 1);
+    }
     if (bare.starts_with("__imp_")) bare.erase(0, 6);
     return bare;
 }
@@ -656,6 +675,12 @@ void seed_call_return_types(const Binary& b, IrFunction& fn) {
                 if (is_fp) ++fp_idx;
                 else       ++int_idx;
                 if (idx >= bank.size()) continue;
+                // Refine the actual value reaching this call even when it is
+                // a load or computed expression rather than a direct
+                // live-in register. A later local sweep can then propagate
+                // `strcmp(..., loaded)` back through Load to prove that the
+                // owning argument is char**.
+                refine(bank[idx], param);
                 Reg r = trace_to_arg_reg(defs, bank[idx]);
                 if (r == Reg::None) continue;
                 IrValue probe = IrValue::make_reg(r, bank[idx].type);

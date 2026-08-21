@@ -3,10 +3,10 @@ extern uint32_t g_flag;
 extern uint64_t g_max;
 extern uint64_t g_swap;
 
-uint64_t set_and_swap(uint64_t a1, uint64_t a2) {
-  g_flag = (uint32_t)((int64_t)a1 > (int64_t)a2);
-  uint64_t t22 = bswap(a1);
+void set_and_swap(long int x, long int y) {
+  g_flag = (uint32_t)((int64_t)x > (int64_t)y);
+  uint64_t t22 = bswap(x);
   g_swap = t22;
-  g_max = (int64_t)a1 < (int64_t)a2 ? a2 : a1;
-  return t22;
+  g_max = (int64_t)x < (int64_t)y ? y : x;
+  return;
 }

@@ -785,6 +785,11 @@ struct Emitter {
     // dead spill - common for -O0 spill-arg-to-slot prologues whose slot is
     // never reloaded - and should be suppressed by format_store.
     std::set<i64>                                    loaded_stack_slots;
+    // Minimum byte extent proven by bounded library calls such as
+    // memset(dst, ..., n), fgets(dst, n, ...), and fread(dst, size, count).
+    // This prevents an address-only stack slot from staying a scalar when a
+    // call demonstrably writes a buffer beginning there.
+    mutable std::map<i64, u32>                       stack_required_extents;
     // Stack slots written exactly once in the entry block before any
     // conditional branch, where the stored value is the unmodified live-in
     // arg-register (rdi/rsi/...). Loads from these slots forward to the
@@ -856,10 +861,21 @@ struct Emitter {
 
     // Try to resolve an integer immediate as a pointer to a NUL-terminated
     // printable string in the binary image. Results are cached.
-    [[nodiscard]] std::optional<std::string> try_string_at(u64 addr) const {
+    [[nodiscard]] std::optional<std::string> try_string_at(
+        u64 addr, std::size_t min_printable = 2) const {
         if (!binary) return std::nullopt;
-        auto it = string_cache.find(addr);
-        if (it != string_cache.end()) return it->second;
+        if (min_printable == 2) {
+            auto it = string_cache.find(addr);
+            if (it != string_cache.end()) return it->second;
+        }
+
+        for (const Section& section : binary->sections()) {
+            if (addr < section.vaddr || addr >= section.vaddr + section.size) continue;
+            // Code bytes frequently contain two printable opcode bytes before
+            // a zero and used to masquerade as handler/function strings.
+            if (section.flags.executable) return std::nullopt;
+            break;
+        }
 
         std::optional<std::string> result;
         auto span = binary->bytes_at(static_cast<addr_t>(addr));
@@ -898,12 +914,12 @@ struct Emitter {
             // "%d", "%s", "%c" and short keywords like "OK", "No" are real
             // string content in codegen tables; the printable-vs-escaped
             // tiebreak still keeps `*(u64*)(" ")`-style noise out.
-            if (terminated && printable_count >= 2 &&
+            if (terminated && printable_count >= min_printable &&
                 printable_count >= escaped_count) {
                 result = std::move(s);
             }
         }
-        string_cache.emplace(addr, result);
+        if (min_printable == 2) string_cache.emplace(addr, result);
         return result;
     }
 
@@ -954,6 +970,9 @@ struct Emitter {
         std::string bare = (pos != std::string_view::npos)
             ? std::string(n.substr(0, pos))
             : std::string(n);
+        if (const auto bang = bare.rfind('!'); bang != std::string::npos) {
+            bare.erase(0, bang + 1);
+        }
         if (bare.starts_with("__imp_")) bare.erase(0, 6);
         // C++ names come out of the linker mangled. For use at the call site
         // we only want the qualified identifier, not the parenthesized arg
@@ -1043,6 +1062,61 @@ struct Emitter {
         auto fmt = resolve_string_value(args[format_index]);
         if (!fmt) return static_cast<u8>(format_index + 1);
         return static_cast<u8>(format_index + 1 + count_printf_specifiers(*fmt));
+    }
+
+    [[nodiscard]] bool variadic_scanf_arg_is_charp(
+        std::string_view name, const std::vector<IrValue>& args,
+        std::size_t argument_index) const {
+        if (name.find("scanf") == std::string_view::npos ||
+            name.find("vscanf") != std::string_view::npos ||
+            name.find("vfscanf") != std::string_view::npos ||
+            name.find("vsscanf") != std::string_view::npos) {
+            return false;
+        }
+        const auto format_index = variadic_format_index(name);
+        if (!format_index || *format_index >= args.size()) return false;
+        const auto format = resolve_string_value(args[*format_index]);
+        if (!format) return false;
+
+        std::size_t destination = static_cast<std::size_t>(*format_index) + 1;
+        for (std::size_t i = 0; i < format->size(); ++i) {
+            if ((*format)[i] != '%') continue;
+            if (++i >= format->size()) break;
+            if ((*format)[i] == '%') continue;
+            bool suppressed = false;
+            if ((*format)[i] == '*') {
+                suppressed = true;
+                if (++i >= format->size()) break;
+            }
+            while (i < format->size() &&
+                   std::isdigit(static_cast<unsigned char>((*format)[i]))) ++i;
+            bool wide = false;
+            if (i < format->size() && ((*format)[i] == 'h' || (*format)[i] == 'l')) {
+                wide = (*format)[i] == 'l';
+                const char length = (*format)[i++];
+                if (i < format->size() && (*format)[i] == length) ++i;
+            } else if (i < format->size() &&
+                       std::string_view{"jztL"}.find((*format)[i]) !=
+                           std::string_view::npos) {
+                ++i;
+            }
+            if (i >= format->size()) break;
+            const char conversion = (*format)[i];
+            if (!suppressed) {
+                if (destination == argument_index) {
+                    return !wide &&
+                        (conversion == 's' || conversion == 'c' || conversion == '[');
+                }
+                ++destination;
+            }
+            if (conversion == '[') {
+                if (i + 1 < format->size() && (*format)[i + 1] == '^') ++i;
+                if (i + 1 < format->size() && (*format)[i + 1] == ']') ++i;
+                while (i + 1 < format->size() && (*format)[i + 1] != ']') ++i;
+                if (i + 1 < format->size()) ++i;
+            }
+        }
+        return false;
     }
 
     [[nodiscard]] static bool is_generic_sub_name(std::string_view name) noexcept {
@@ -3736,7 +3810,7 @@ struct Emitter {
     // observed flowing into a libc char* parameter. The local-decl
     // emitter renders these as `char <name>[N]` instead of the default
     // `u64 <name>[N/8]` recovered from access widths alone.
-    std::set<i64> charp_local_slots;
+    mutable std::set<i64> charp_local_slots;
 
     // Mach-O Obj-C method table, keyed by IMP address. Populated lazily in
     // PseudoCEmitter::emit when the binary carries __objc_classlist; used
@@ -4668,15 +4742,30 @@ struct Emitter {
     // describe a struct, not an array of whichever width happened to appear
     // first.
     void infer_pointer_arg_types_from_memory_uses() {
-        if (abi != Abi::Ppc32Sysv && abi != Abi::Ppc64ElfV1Be &&
-            abi != Abi::Ppc64ElfV2Le) {
-            return;
-        }
         const u8 limit = std::min<u8>(self_arity,
             static_cast<u8>(self_arg_layout.size()));
+
+        // A load through an argument whose result is itself pointer-typed
+        // proves one additional pointer level: `loaded` is char* and its
+        // address traces to a2, therefore a2 is char**. This also follows
+        // the common -O0 spill/reload through init_only_slot_value.
+        for (const auto& block : fn->blocks) {
+            for (const IrInst& instruction : block.insts) {
+                if (instruction.op != IrOp::Load || instruction.src_count < 1) continue;
+                auto slot = trace_to_self_arg_slot(instruction.srcs[0]);
+                if (!slot || *slot >= limit) continue;
+                std::string loaded = c_type_name_for(instruction.dst);
+                if (!loaded.ends_with('*')) continue;
+                auto& current = self_arg_type_names[*slot];
+                const std::string nested = loaded + "*";
+                if (current.empty() || current == "void*") current = nested;
+            }
+        }
+
         for (u8 slot = 0; slot < limit; ++slot) {
             const auto& layout = self_arg_layout[slot];
-            if (layout.reg == Reg::None || is_ppc_fpr(layout.reg)) continue;
+            if (layout.reg == Reg::None || is_ppc_fpr(layout.reg) ||
+                is_xmm(layout.reg) || is_aarch64_vector(layout.reg)) continue;
 
             IrValue arg = IrValue::make_reg(layout.reg, layout.type);
             arg.version = 0;
@@ -8222,7 +8311,8 @@ struct Emitter {
     // string scanners and trailing-byte readers, and `p[-1]` reads better
     // than `*(T*)(p - 8)`.
     [[nodiscard]] std::optional<std::string>
-    try_render_array_index(const IrValue& addr, IrType t, int depth = 0) const {
+    try_render_array_index(const IrValue& addr, IrType t, int depth = 0,
+                           std::string_view loaded_type = {}) const {
         if (is_float_type(t)) return std::nullopt;
         const i64 stride = static_cast<i64>(type_bits(t) / 8);
         if (stride == 0) return std::nullopt;
@@ -8293,8 +8383,17 @@ struct Emitter {
             bd && bd->op == IrOp::Load && fn &&
             fn->types.kind(fn->type_of(base)) == TypeKind::Ptr &&
             rendered_base.starts_with("*(")) {
-            rendered_base = std::format("(({}){})",
-                                        c_type_name_for(base), rendered_base);
+            std::string base_type = c_type_name_for(base);
+            if (base_type == "void*") {
+                // A load result refined to T* proves that the address of
+                // that load is T**. Preserve that extra pointer level at the
+                // expression boundary even when the local lattice retained
+                // only Ptr<Top> for the intermediate address.
+                base_type = loaded_type.ends_with('*')
+                    ? std::string(loaded_type) + "*"
+                    : std::string(c_type_name(t)) + "*";
+            }
+            rendered_base = std::format("(({}){})", base_type, rendered_base);
         }
         return std::format("{}[{}]", rendered_base, off / stride);
     }
@@ -8782,7 +8881,8 @@ struct Emitter {
     }
 
     [[nodiscard]] std::string format_mem(const IrValue& addr, IrType t, Reg seg,
-                                          int depth = 0) const {
+                                          int depth = 0,
+                                          std::string_view loaded_type = {}) const {
         if (seg == Reg::None) {
             if (auto off = stack_offset(addr); off) {
                 if (auto field = imported_stack_field(*off, t); field) {
@@ -8910,7 +9010,7 @@ struct Emitter {
             // rendering when both apply - u64 stride-8 accesses usually mean
             // "argv-style pointer-to-pointer", which reads more naturally
             // as `a[i]` than `a->field_N`.
-            if (auto s = try_render_array_index(addr, t, depth); s) {
+            if (auto s = try_render_array_index(addr, t, depth, loaded_type); s) {
                 return *s;
             }
             if (auto s = try_render_runtime_array_index(addr, t, depth); s) {
@@ -10235,6 +10335,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
                                      int depth,
                                      int min_prec) const {
     if (d.op != IrOp::Load || d.src_count < 1) return "";
+    const std::string refined = c_type_name_for(d.dst);
     // Init-only stack slot: forward to the live-in value the entry prologue
     // stored. Keeping this in one helper prevents merge-local materializers
     // from rendering the same load as a raw `local_X` while normal expr()
@@ -10249,7 +10350,6 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
         // The load width describes pointer storage, not its pointee.  If
         // downstream uses refined this result to T*, seed the exact global
         // slot with T* before format_mem records the raw integer width.
-        const std::string refined = c_type_name_for(d.dst);
         if (binary && refined.ends_with('*')) {
             if (auto imm = try_resolve_imm_addr(d.srcs[0]); imm) {
                 const addr_t address = normalized_address(*imm);
@@ -10261,7 +10361,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
             }
         }
     }
-    return format_mem(d.srcs[0], d.dst.type, d.segment, depth);
+    return format_mem(d.srcs[0], d.dst.type, d.segment, depth, refined);
 }
 
 std::optional<std::string>
@@ -11248,12 +11348,33 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 rendered_call_args.resize(call_args.size());
             }
             for (std::size_t arg_i = 0; arg_i < call_args.size(); ++arg_i) {
-                if (is_ppc_abi()) {
-                    if (auto off = stack_offset(call_args[arg_i]); off &&
-                        charp_local_slots.contains(*off)) {
-                        // A char array decays at a call boundary; `&array` has
-                        // pointer-to-array type and is needlessly incompatible.
+                if (auto off = stack_offset(call_args[arg_i]); off &&
+                    charp_local_slots.contains(*off)) {
+                    // A char array decays at a call boundary; `&array` has
+                    // pointer-to-array type and is needlessly incompatible.
+                    // This is a C rule, not a PPC ABI special case.
+                    rendered_call_args[arg_i] = stack_name(*off);
+                }
+                bool expects_string = libc_arg_is_charp(
+                    direct_name, static_cast<u8>(arg_i + 1));
+                expects_string = expects_string || variadic_scanf_arg_is_charp(
+                    direct_name, call_args, arg_i);
+                if (!expects_string && annotated_sig &&
+                    arg_i < annotated_sig->params.size()) {
+                    const std::string normalized = normalize_c_type_alias(
+                        annotated_sig->params[arg_i].type);
+                    expects_string = normalized.find("char*") != std::string::npos;
+                }
+                if (expects_string) {
+                    if (auto off = stack_offset(call_args[arg_i]); off) {
+                        charp_local_slots.insert(*off);
                         rendered_call_args[arg_i] = stack_name(*off);
+                    }
+                    if (auto address = try_resolve_imm_addr(call_args[arg_i]); address) {
+                        if (auto literal = try_string_at(
+                                normalized_address(*address), 1); literal) {
+                            rendered_call_args[arg_i] = escape_string(*literal);
+                        }
                     }
                 }
             }
@@ -11307,6 +11428,33 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                                               &used_args, &rendered_call_args)
                 : format_call_args_fallback(call_args, &used_args);
             const std::string& callee = direct_name;
+            if (!used_args.empty()) {
+                auto base = stack_offset(used_args[0]);
+                std::optional<u64> required;
+                const auto positive_size = [&](std::size_t index) -> std::optional<u64> {
+                    if (index >= used_args.size()) return std::nullopt;
+                    auto value = resolve_imm(used_args[index]);
+                    if (!value || *value <= 0) return std::nullopt;
+                    return static_cast<u64>(*value);
+                };
+                if (callee == "memset" || callee == "memcpy" ||
+                    callee == "memmove" || callee == "strncpy" ||
+                    callee == "read" || callee == "recv") {
+                    required = positive_size(2);
+                } else if (callee == "fgets") {
+                    required = positive_size(1);
+                } else if (callee == "fread") {
+                    auto size = positive_size(1);
+                    auto count = positive_size(2);
+                    if (size && count && *size <= (1u << 20) / *count) {
+                        required = *size * *count;
+                    }
+                }
+                if (base && required && *required <= (1u << 20)) {
+                    auto& extent = stack_required_extents[*base];
+                    extent = std::max(extent, static_cast<u32>(*required));
+                }
+            }
             // Header layouts let a raw aggregate clear become the source
             // expression the programmer wrote. Keep this exact: the first
             // argument must be a known global and the byte count must equal
@@ -11524,7 +11672,15 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                     if (!tgt.empty() && tgt.front() == '*') {
                         call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
                     } else {
-                        call_expr = std::format("{}({})", tgt, args);
+                        const std::string target_type = c_type_name_for(inst.srcs[0]);
+                        if (!target_type.ends_with('*') &&
+                            target_type.find("(*") == std::string::npos) {
+                            call_expr = std::format(
+                                "((uint64_t (*)({}))({}))({})",
+                                fallback_call_arg_types(pending_args), tgt, args);
+                        } else {
+                            call_expr = std::format("{}({})", tgt, args);
+                        }
                     }
                 }
             }
@@ -12107,7 +12263,11 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                 }
             }
         }
-        const std::string ret = inferred_return_type(e, sf);
+        std::string ret = inferred_return_type(e, sf);
+        // Even a stripped binary normally preserves `main` as a public
+        // symbol. Its ABI return register is pointer-width on x86-64, but the
+        // language-level return type is int when no debug signature survives.
+        if (display_name() == "main") ret = "int";
         e.current_return_is_void = ret == "void";
         header = std::format("{} {}({}) {{\n",
                              ret, display_name(), params);
@@ -12279,6 +12439,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     if (!e.global_decls.empty()) out += "\n";
     out += header;
+    if (text_contains_identifier_in_code(body_buf, "stack_top")) {
+        out += "  uint64_t stack_top; /* entry stack word */\n";
+    }
     for (const auto& [temp, materialization] : fallback_materializations) {
         if (!materialization.initializer.empty()) {
             out += std::format("  {} t{} = {};\n",
@@ -12372,8 +12535,18 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         }
         std::string suffix;
         if (!matrix_stack_locals.contains(slot.name) &&
+            slot.type_override.empty()) {
+            if (auto required = e.stack_required_extents.find(slot.offset);
+                required != e.stack_required_extents.end() &&
+                required->second > elem_size) {
+                ty = charp ? "char" : "uint8_t";
+                elem_size = 1;
+                suffix = std::format("[{}]", required->second);
+            }
+        }
+        if (suffix.empty() && !matrix_stack_locals.contains(slot.name) &&
             slot.type_override.empty() && elem_size > 0 &&
-            (!e.is_ppc_abi() || !assigned_as_scalar(slot.name))) {
+            !assigned_as_scalar(slot.name)) {
             if (auto next_off = next_slot_offset(slot.offset)) {
                 i64 span = *next_off - slot.offset;
                 // CodeWarrior frequently leaves alignment/padding between a

@@ -1,12 +1,12 @@
 // shared_tail
 extern uint32_t g_log;
 
-uint32_t shared_tail(char* a1) {
+int shared_tail(const char* s) {
   uint32_t local_c;
   local_c = 0;
-  if (a1) {
-    if (a1[0]) {
-      uint64_t r_strlen = strlen(a1);
+  if (s) {
+    if (s[0]) {
+      uint64_t r_strlen = strlen(s);
       local_c = (uint32_t)r_strlen;
     }
   }

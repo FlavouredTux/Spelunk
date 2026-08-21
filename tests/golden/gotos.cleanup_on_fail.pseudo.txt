@@ -1,19 +1,19 @@
 // cleanup_on_fail
-uint64_t cleanup_on_fail(char* a1) {
+int cleanup_on_fail(const char* name) {
   uint64_t local_10;
   void* r_malloc = malloc(0x40);
   local_10 = r_malloc;
   if (r_malloc) {
-    if (!a1) {
+    if (!name) {
       free(local_10);
       return -1;
     }
-    uint64_t r_strlen = strlen(a1);
+    uint64_t r_strlen = strlen(name);
     if (r_strlen > 0x20) {
       free(local_10);
       return -1;
     }
-    strcpy(local_10, a1);
+    strcpy(local_10, name);
     free(local_10);
     return 0;
   }

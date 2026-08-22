@@ -1227,8 +1227,28 @@ void lift_bit_test(LiftCtx& ctx, char op) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
     IrValue base = materialize_rvalue(insn.operands[0], ctx);
-    IrValue off  = materialize_rvalue(insn.operands[1], ctx);
-    off = ctx.match_size(off, base.type, /*sign_ext=*/false);
+    const u64 width_mask = static_cast<u64>(type_bits(base.type)) - 1;
+
+    // SDM: the bit offset is taken modulo the operand width, so `bt %ecx,
+    // %eax` tests bit (cl & 31) and a wide immediate like `btw $100, %ax`
+    // still lands inside the operand. Applying the mask up front keeps the
+    // common immediate form as plain constants (`lshr rdi, 0x3`) instead of
+    // a zext-of-imm temp feeding both the shift and the mask rebuild; it
+    // also keeps every emitted shift in range where the raw offset could
+    // run past the width. Caveat we accept: the memory form can legally
+    // straddle into the following quadword, which this single-load model
+    // does not reproduce either way.
+    IrValue off;
+    if (insn.operands[1].kind == Operand::Kind::Immediate) {
+        off = ctx.imm(static_cast<i64>(static_cast<u64>(insn.operands[1].imm.value) &
+                                        width_mask),
+                      base.type);
+    } else {
+        off = materialize_rvalue(insn.operands[1], ctx);
+        off = ctx.match_size(off, base.type, /*sign_ext=*/false);
+        off = ctx.emit_binop(IrOp::And, off,
+                             ctx.imm(static_cast<i64>(width_mask), base.type));
+    }
 
     IrValue shifted = ctx.emit_binop(IrOp::Lshr, base, off);
     IrValue one_t   = ctx.imm(1, base.type);
@@ -1238,7 +1258,12 @@ void lift_bit_test(LiftCtx& ctx, char op) {
 
     if (op == 't') return;  // BT - read-only
 
-    IrValue mask = ctx.emit_binop(IrOp::Shl, one_t, off);
+    // BTS/BTR/BTC write the bit back; with an immediate offset the mask is
+    // a compile-time constant, so emit it directly rather than shl(1, off)
+    // and let the reader see `xor rdi, 0x8` instead of `xor rdi, 1 << t0`.
+    IrValue mask = (off.kind == IrValueKind::Imm)
+        ? ctx.imm(static_cast<i64>(u64{1} << static_cast<u64>(off.imm)), base.type)
+        : ctx.emit_binop(IrOp::Shl, one_t, off);
     IrValue r;
     if (op == 's') {
         r = ctx.emit_binop(IrOp::Or, base, mask);

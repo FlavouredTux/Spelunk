@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ember/common/annotations.hpp>
 #include <ember/common/cache.hpp>
@@ -57,6 +58,13 @@ int run_int3_resolve(const Args& args, const Binary& b);
 int run_ppc_coverage(const Args& args, const Binary& b);
 int run_arities     (const Args& args, const Binary& b);
 [[nodiscard]] std::string_view functions_cache_tag(const Args& args);
+
+// Exclusive output selectors (one view per run): names, in dispatch
+// order, of every selector present on the command line. More than one
+// entry means only the first - the dispatch-order winner - runs; main()
+// turns that into the mutual-exclusion warning before any view output.
+[[nodiscard]] std::vector<std::string_view> requested_view_flags(const Args& args);
+
 [[nodiscard]] std::optional<int> run_functions_cache_only(const Args& args);
 int run_functions   (const Args& args, const Binary& b);
 

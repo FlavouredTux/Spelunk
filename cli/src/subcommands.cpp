@@ -2,6 +2,7 @@
 #include "header_import.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cstddef>
@@ -269,16 +270,50 @@ make_surface_filter(const Args& args, bool include_artifacts) {
     return ann;
 }
 
+// Shape test for "the user typed an address, just a mangled one".
+// A token that starts with 0x / sub_ or is pure hex must never fall
+// through to symbol lookup and masquerade as `no symbol named '...'`;
+// names like "main" or "seqGame" stay on the symbol path.
+[[nodiscard]] bool looks_like_address(std::string_view spec) noexcept {
+    // Judge shape with surrounding whitespace trimmed.
+    while (!spec.empty() &&
+           (spec.front() == ' ' || spec.front() == '\t')) {
+        spec.remove_prefix(1);
+    }
+    while (!spec.empty() && (spec.back() == ' ' || spec.back() == '\t')) {
+        spec.remove_suffix(1);
+    }
+    if (spec.empty()) return false;
+    if (spec.starts_with("0x") || spec.starts_with("0X") ||
+        spec.starts_with("sub_")) {
+        return true;
+    }
+    if (spec.size() > 64) return false;
+    for (const char c : spec) {
+        const bool hex = (c >= '0' && c <= '9') ||
+                         (c >= 'a' && c <= 'f') ||
+                         (c >= 'A' && c <= 'F');
+        if (!hex) return false;
+    }
+    return true;
+}
+
 // Address-or-name resolution shared by the one-shot VA flags. Numeric
 // input (0x… / sub_…) parses directly; anything else falls through to
 // resolve_function so a bare symbol name works everywhere the
 // FN|VA-taking siblings (--side-effects, --callees, …) already do.
-// Returns nullopt only after resolve_function has reported the reason;
+// An address-shaped token that fails to parse is reported here as
+// `invalid address` instead of pretending it was a symbol name.
+// Returns nullopt only after the failure reason has been reported;
 // callers should not print a second diagnostic.
 [[nodiscard]] std::optional<addr_t> resolve_flag_target(const Binary& b,
                                                         const Args& args,
                                                         std::string_view spec) {
     if (auto va = parse_cli_addr(spec)) return *va;
+    if (looks_like_address(spec)) {
+        std::println(stderr, "ember: invalid address '{}'", spec);
+        return std::nullopt;
+    }
     const Annotations ann = load_annotations_quiet(args);
     if (auto win = resolve_function(b, spec, &ann)) return win->start;
     return std::nullopt;
@@ -310,8 +345,93 @@ std::string_view functions_cache_tag(const Args& args) {
                : (args.infer_string_names ? kFunctionsInferredCacheTag : kFunctionsCacheTag);
 }
 
+// ---------------------------------------------------------------------------
+// Exclusive output selectors
+// ---------------------------------------------------------------------------
+
+struct ViewFlagSpec {
+    std::string_view name;
+    bool (*present)(const Args&);
+};
+
+// One row per exclusive output selector, in main()'s dispatch order:
+// when several are present the first match wins and the rest are
+// ignored (main() prints the mutual-exclusion warning). Keep this in
+// sync with the if-chain at the bottom of main() - a new view flag
+// needs a row here and a dispatch line there, nothing else; pairwise
+// checks would be O(n^2) and drift.
+constexpr auto kViewFlags = std::to_array<ViewFlagSpec>({
+    {"--xrefs",            [](const Args& a) { return a.xrefs; }},
+    {"--data-xrefs",       [](const Args& a) { return a.data_xrefs; }},
+    {"--symtable",         [](const Args& a) { return !a.symtable.empty(); }},
+    {"--symresolve",       [](const Args& a) { return !a.symresolve.empty(); }},
+    {"--symuses",          [](const Args& a) { return !a.symuses.empty(); }},
+    {"--refs-to",          [](const Args& a) { return !a.refs_to.empty(); }},
+    {"--refs-to-loose",    [](const Args& a) { return !a.refs_to_loose.empty(); }},
+    {"--state-map",        [](const Args& a) { return !a.state_map.empty(); }},
+    {"--branch-on",        [](const Args& a) { return !a.branch_on.empty(); }},
+    {"--guard-map",        [](const Args& a) { return !a.guard_map.empty(); }},
+    {"--state-lifetime",   [](const Args& a) { return !a.state_lifetime.empty(); }},
+    {"--side-effects",     [](const Args& a) { return !a.side_effects.empty(); }},
+    {"--object-roles",     [](const Args& a) { return !a.object_roles.empty(); }},
+    {"--explain-address",  [](const Args& a) { return !a.explain_address.empty(); }},
+    {"--explain-vcall",    [](const Args& a) { return !a.explain_vcall.empty(); }},
+    {"--recover-imports",  [](const Args& a) { return a.recover_imports; }},
+    {"--vtable-at",        [](const Args& a) { return !a.vtable_at.empty(); }},
+    {"--dump-object",      [](const Args& a) { return !a.dump_object.empty(); }},
+    {"--containing-fn",    [](const Args& a) { return !a.containing_fn.empty(); }},
+    {"--validate",         [](const Args& a) { return !a.validate_name.empty(); }},
+    {"--collisions",       [](const Args& a) { return a.collisions; }},
+    {"--callees",          [](const Args& a) { return !a.callees.empty(); }},
+    {"--callees-class",    [](const Args& a) { return !a.callees_class.empty(); }},
+    {"--patch-plan",       [](const Args& a) { return !a.patch_plan.empty(); }},
+    {"--disasm-at",        [](const Args& a) { return !a.disasm_at.empty(); }},
+    {"--disasm-window",    [](const Args& a) { return !a.disasm_window.empty(); }},
+    {"--list-syscalls",    [](const Args& a) { return !a.list_syscalls.empty(); }},
+    {"--forge-spec",       [](const Args& a) { return !a.forge_spec.empty(); }},
+    {"--annotate",         [](const Args& a) { return !a.annotate_addr.empty(); }},
+    {"--list-annotations", [](const Args& a) { return a.list_annotations; }},
+    {"--decompile-data",   [](const Args& a) { return !a.decompile_data.empty(); }},
+    {"--evt-script",       [](const Args& a) { return !a.evt_script.empty(); }},
+    {"--strings",          [](const Args& a) { return a.strings; }},
+    {"--surfaces",         [](const Args& a) { return a.surfaces; }},
+    {"--graphics",         [](const Args& a) { return a.graphics; }},
+    {"--log-categories",   [](const Args& a) { return a.log_categories; }},
+    {"--fingerprints",     [](const Args& a) { return a.fingerprints; }},
+    {"--teef",             [](const Args& a) { return a.teef; }},
+    {"--orbit-dump",       [](const Args& a) { return a.orbit_dump; }},
+    {"--recognize",        [](const Args& a) { return a.recognize; }},
+    {"--identify",         [](const Args& a) { return a.identify; }},
+    {"--objc-names",       [](const Args& a) { return a.objc_names; }},
+    {"--objc-protocols",   [](const Args& a) { return a.objc_protos; }},
+    {"--objc-surfaces",    [](const Args& a) { return a.objc_surfaces; }},
+    {"--rtti",             [](const Args& a) { return a.rtti; }},
+    {"--vtables",          [](const Args& a) { return a.vtables; }},
+    {"--int3-resolve",     [](const Args& a) { return a.int3_resolve; }},
+    {"--ppc-coverage",     [](const Args& a) { return a.ppc_coverage; }},
+    {"--arities",          [](const Args& a) { return a.arities; }},
+    {"--functions",        [](const Args& a) { return a.functions; }},
+});
+
+std::vector<std::string_view> requested_view_flags(const Args& args) {
+    std::vector<std::string_view> names;
+    for (const auto& flag : kViewFlags) {
+        if (flag.present(args)) names.push_back(flag.name);
+    }
+    return names;
+}
+
 std::optional<int> run_functions_cache_only(const Args& args) {
     if (!args.functions || args.no_cache || args.json || !args.module_filter.empty()) {
+        return std::nullopt;
+    }
+    // When conflicting view flags are present the dispatch chain picks a
+    // winner that may not be --functions; serving the cached listing
+    // from here would let a warm cache outrank that winner (and fire
+    // before main's warning could change the outcome). Step aside and
+    // let the chain decide.
+    const auto requested = requested_view_flags(args);
+    if (requested.size() > 1 && requested.front() != "--functions") {
         return std::nullopt;
     }
 
@@ -3410,11 +3530,25 @@ int run_symuses(const Args& args, const Binary& b) {
 int run_refs_to(const Args& args, const Binary& b) {
     auto va = resolve_flag_target(b, args, args.refs_to);
     if (!va) return EXIT_FAILURE;  // resolver reported the reason
+    // An unmapped VA can only ever yield zero rows, and silently
+    // returning them would be indistinguishable from "mapped but no
+    // callers" - call it out as a failure instead. A mapped target
+    // with zero rows stays a valid empty result (exit 0) so scripts
+    // piping the output keep working; it just gets a stderr note.
+    if (b.bytes_at(*va).empty()) {
+        std::println(stderr,
+                     "ember: --refs-to: {:#x} is not in any mapped section",
+                     *va);
+        return EXIT_FAILURE;
+    }
     const auto rows = gather_refs_to_rows(args, b, *va);
     const std::string out = args.json
         ? format_ref_rows_json(rows)
         : format_ref_rows_tsv(rows, &b, args.verbose);
     std::fwrite(out.data(), 1, out.size(), stdout);
+    if (rows.empty()) {
+        std::println(stderr, "ember: --refs-to: 0 references found ({:#x})", *va);
+    }
     return EXIT_SUCCESS;
 }
 
@@ -5022,11 +5156,11 @@ int run_patch_plan(const Args& args, const Binary& b) {
 }
 
 int run_disasm_at(const Args& args, const Binary& b) {
-    auto va = parse_cli_addr(args.disasm_at);
-    if (!va) {
-        std::println(stderr, "ember: --disasm-at: bad address '{}'", args.disasm_at);
-        return EXIT_FAILURE;
-    }
+    // Shared FN|VA resolver: accepts a symbol name as well as a raw
+    // VA, and reports the failure reason itself (bad address vs no
+    // such symbol) - so this returns silently on failure.
+    auto va = resolve_flag_target(b, args, args.disasm_at);
+    if (!va) return EXIT_FAILURE;
     std::size_t count = 32;
     if (!parse_disasm_count(args.disasm_count, count, "--disasm-at")) {
         return EXIT_FAILURE;

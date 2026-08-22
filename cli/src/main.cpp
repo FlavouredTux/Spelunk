@@ -242,8 +242,11 @@ int main(int argc, char** argv) {
 
     auto args_r = parse_args(argc, argv);
     if (!args_r) {
+        // Parse errors get the specific message plus a one-line pointer
+        // to --help; the full banner stays reserved for explicit
+        // -h/--help so failures don't scroll the terminal.
         std::println(stderr, "ember: {}", args_r.error().message);
-        print_help();
+        std::println(stderr, "run 'ember --help' for full usage");
         return EXIT_FAILURE;
     }
     auto args = std::move(*args_r);
@@ -299,11 +302,33 @@ int main(int argc, char** argv) {
     // only to consult the section table for vaddr→file-offset
     // translation, then writes a patched copy. No analysis runs.
     if (!args.apply_patches.empty()) return run_apply_patches(args);
+
+    // Mutual-exclusion notice for the exclusive output selectors. The
+    // dispatch chain below always ran only its first match, silently
+    // ignoring the rest - indistinguishable from the flags combining.
+    // Name every requested selector plus the single winner on stderr
+    // (stdout stays parseable), then proceed so existing scripts keep
+    // working. Must sit ahead of run_functions_cache_only: a warm
+    // --functions cache entry would otherwise emit output before the
+    // warning and outrank the dispatch-order winner.
+    const auto view_flags = requested_view_flags(args);
+    if (view_flags.size() > 1) {
+        std::string requested_list;
+        for (std::size_t i = 0; i < view_flags.size(); ++i) {
+            if (i) requested_list += ", ";
+            requested_list += view_flags[i];
+        }
+        std::println(stderr,
+                     "ember: multiple view flags requested ({}); running {} only",
+                     requested_list, view_flags.front());
+    }
+    if (view_flags.size() <= 1 || view_flags.front() == "--functions") {
+        if (auto cached_functions = run_functions_cache_only(args)) {
+            return *cached_functions;
+        }
+    }
     if (surfaces_artifacts_only_requested(args)) {
         return run_surface_artifacts(args);
-    }
-    if (auto cached_functions = run_functions_cache_only(args)) {
-        return *cached_functions;
     }
 
     // Aux-binary loading happens once, up front, so both the no-primary

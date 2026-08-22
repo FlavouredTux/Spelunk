@@ -69,7 +69,7 @@ struct Args {
     std::string validate_name;      // --validate NAME: report all addrs bound to NAME + byte-similar lookalikes
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string patch_plan;         // --patch-plan VA: hook/trampoline safety plan for a code address
-    std::string disasm_at;          // --disasm-at VA: disasm window at VA
+    std::string disasm_at;          // --disasm-at FN|VA: disasm window at FN or VA
     std::string disasm_count;       // --count N: instructions for --disasm-at / --disasm-window
     std::string disasm_window;      // --disasm-window VA1,VA2,... - batch disassembly. Same per-VA
                                     // shape as --disasm-at, but emits one block per VA for efficient

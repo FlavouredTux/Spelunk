@@ -1017,38 +1017,30 @@ int run_evt_script(const Args& args, const Binary& b) {
         std::println(stderr, "ember: --evt-script: unknown symbol/address '{}'", args.evt_script);
         return EXIT_FAILURE;
     }
-    std::println("EVT_BEGIN({})", unqualified(args.evt_script));
+    // The manual advertises "--json where supported"; this writer has
+    // no machine form, so announce the downgrade instead of silently
+    // emitting plain text under a --json-expecting script.
+    if (args.json) {
+        std::println(stderr,
+                     "ember: --evt-script has no --json output; emitting plain text");
+    }
+    // Decode and validate the whole script before anything reaches
+    // stdout. Emitting while parsing used to leave a partial EVT_BEGIN
+    // body trailing the error line - and because stdout block-buffers
+    // under a pipe while stderr does not, the already-written header
+    // even appeared AFTER the diagnostic. Nothing is printed unless the
+    // last opcode validates.
+    std::vector<std::string> lines;
     addr_t pc = *at;
     unsigned indent = 1;
     std::vector<std::byte> encoded;
     std::size_t relocation_args = 0;
     std::size_t symbolic_args = 0;
+    bool reached_end = false;
     const auto append_word = [&](u32 value) {
         const std::size_t offset = encoded.size();
         encoded.resize(offset + 4);
         write_uint(encoded, offset, 4, value, b.endian());
-    };
-    const auto verify_encoded = [&]() -> bool {
-        if (!args.verify_roundtrip)
-            return true;
-        const auto original = b.bytes_at(*at);
-        if (original.size() < encoded.size())
-            return false;
-        for (std::size_t i = 0; i < encoded.size(); ++i) {
-            if (original[i] == encoded[i])
-                continue;
-            std::println(stderr,
-                         "ember: --verify-roundtrip: event mismatch at {:#x}: "
-                         "source {:#04x}, encoded {:#04x}",
-                         *at + i, std::to_integer<unsigned>(original[i]),
-                         std::to_integer<unsigned>(encoded[i]));
-            return false;
-        }
-        std::println(stderr,
-                     "ember: round-trip verified: {} event bytes, {} symbolic "
-                     "argument(s), {} relocation(s)",
-                     encoded.size(), symbolic_args, relocation_args);
-        return true;
     };
     for (std::size_t inst_no = 0; inst_no < 65536; ++inst_no) {
         if (b.bytes_at(pc).size() < 4) {
@@ -1100,18 +1092,52 @@ int run_evt_script(const Args& args, const Binary& b) {
             }
         }
         line += ')';
-        std::println("{}", line);
+        lines.push_back(std::move(line));
         pc += 4 + static_cast<addr_t>(argc) * 4;
         if (name == "END_SCRIPT") {
-            std::println("EVT_END()");
-            return verify_encoded() ? EXIT_SUCCESS : EXIT_FAILURE;
+            reached_end = true;
+            break;
         }
         if (name.starts_with("IF_") || name.starts_with("IFF_") || name == "SWITCH" || name == "SWITCHI" ||
             name == "DO" || name == "INLINE_EVT" || name == "INLINE_EVT_ID" || name == "BROTHER_EVT" ||
             name == "BROTHER_EVT_ID" || name == "ELSE") ++indent;
     }
-    std::println(stderr, "ember: --evt-script: instruction limit reached");
-    return EXIT_FAILURE;
+    if (!reached_end) {
+        std::println(stderr, "ember: --evt-script: instruction limit reached");
+        return EXIT_FAILURE;
+    }
+    // Byte-level round-trip check runs before the dump too, so a
+    // mismatch aborts with a reason and no partial body.
+    if (args.verify_roundtrip) {
+        const auto original = b.bytes_at(*at);
+        if (original.size() < encoded.size()) {
+            std::println(stderr,
+                         "ember: --verify-roundtrip: re-encoded {} bytes but only "
+                         "{} source bytes mapped at {:#x}",
+                         encoded.size(), original.size(), *at);
+            return EXIT_FAILURE;
+        }
+        for (std::size_t i = 0; i < encoded.size(); ++i) {
+            if (original[i] == encoded[i])
+                continue;
+            std::println(stderr,
+                         "ember: --verify-roundtrip: event mismatch at {:#x}: "
+                         "source {:#04x}, encoded {:#04x}",
+                         *at + i, std::to_integer<unsigned>(original[i]),
+                         std::to_integer<unsigned>(encoded[i]));
+            return EXIT_FAILURE;
+        }
+    }
+    std::println("EVT_BEGIN({})", unqualified(args.evt_script));
+    for (const auto& line : lines) std::println("{}", line);
+    std::println("EVT_END()");
+    if (args.verify_roundtrip) {
+        std::println(stderr,
+                     "ember: round-trip verified: {} event bytes, {} symbolic "
+                     "argument(s), {} relocation(s)",
+                     encoded.size(), symbolic_args, relocation_args);
+    }
+    return EXIT_SUCCESS;
 }
 
 }  // namespace ember::cli

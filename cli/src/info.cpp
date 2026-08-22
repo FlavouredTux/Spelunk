@@ -105,7 +105,7 @@ void help_view() {
                  "headers only once");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --show-provenance  emit `// confidence: ...` headers when annotation meta is set");
-    std::println("      --disasm-at VA   disasm a bounded window at VA (default 32 insns)");
+    std::println("      --disasm-at FN|VA  disasm a bounded window at FN or VA (default 32 insns)");
     std::println("                       includes trampoline steal/relocation metadata;");
     std::println("                       --json emits bytes, operands, targets, hazards");
     std::println("      --count N        instruction count for --disasm-at / --disasm-window");
@@ -312,6 +312,7 @@ void help_data() {
     std::println("      --evt-script SYMBOL");
     std::println("                       decode an SPM EvtScriptCode array into EVT macros,");
     std::println("                       structured indentation, variables, and callbacks");
+    std::println("                       (plain text only; --json emits a warning)");
     std::println("      --verify-roundtrip  with typed data/event decoding, "
                  "verify that the");
     std::println("                       decoded representation reproduces "
@@ -376,8 +377,11 @@ void print_help_topic(std::string_view topic) {
     else if (topic == "data")  { help_data();  return; }
     else if (topic == "patch") { help_patch(); return; }
     else if (topic == "cache") { help_cache(); return; }
+    // Unknown topics are an error, not a help request: report the bad
+    // topic and point at the full banner instead of dumping it (the
+    // topic list itself lives in `ember --help`).
     std::println(stderr, "ember: --help: unknown topic '{}'", topic);
-    print_help();
+    std::println(stderr, "run 'ember --help' for full usage");
 }
 
 }  // namespace ember::cli

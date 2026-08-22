@@ -96,6 +96,41 @@ def main() -> int:
         assert "SET(LW(1))" in decoded.stdout
         assert "END_SCRIPT()" in decoded.stdout
         assert "round-trip verified: 12 event bytes" in decoded.stderr
+
+        # A non-script address fails validation before anything reaches
+        # stdout: no partial EVT_BEGIN body may trail the error line.
+        raw = subprocess.run(
+            [str(ember), "-q", "--evt-script", "0x80004000", str(fixture)],
+            capture_output=True, text=True, check=False)
+        assert raw.returncode != 0
+        assert "invalid opcode/count" in raw.stderr
+        assert "EVT_BEGIN" not in raw.stdout
+
+        # --json has no evt-script form; the downgrade is announced on
+        # stderr instead of silently emitting plain text.
+        raw = subprocess.run(
+            [str(ember), "-q", "--evt-script", "0x80004000", "--json",
+             str(fixture)],
+            capture_output=True, text=True, check=False)
+        assert raw.returncode != 0
+        assert "--evt-script has no --json output" in raw.stderr
+
+        decoded_json = run([
+            str(ember), "-q", "--evt-script", "0x80004000",
+            "--verify-roundtrip", "--json", str(event_dol),
+        ])
+        assert "--evt-script has no --json output" in decoded_json.stderr
+        assert "SET(LW(1))" in decoded_json.stdout
+        assert "round-trip verified: 12 event bytes" in decoded_json.stderr
+
+        # Conflicting view flags: one stderr line names every requested
+        # selector plus the dispatch-order winner, then the run proceeds
+        # (no hard fail - scripts keep working).
+        batch = run([
+            str(ember), "-q", "--strings", "--functions", str(fixture),
+        ])
+        assert ("multiple view flags requested (--strings, --functions); "
+                "running --strings only") in batch.stderr
     return 0
 
 

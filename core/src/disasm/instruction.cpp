@@ -676,6 +676,41 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::A32Nop:   return "nop";
         case Mnemonic::A32Udf:   return "udf";
         case Mnemonic::A32Undef: return ".word";
+
+        // ---- x87 FPU escapes (D8-DF) ------------------------------------
+        case Mnemonic::X87Fld:    return "fld";
+        case Mnemonic::X87Fst:    return "fst";
+        case Mnemonic::X87Fstp:   return "fstp";
+        case Mnemonic::X87Fild:   return "fild";
+        case Mnemonic::X87Fist:   return "fist";
+        case Mnemonic::X87Fistp:  return "fistp";
+        case Mnemonic::X87Fadd:   return "fadd";
+        case Mnemonic::X87Fmul:   return "fmul";
+        case Mnemonic::X87Fcom:   return "fcom";
+        case Mnemonic::X87Fcomp:  return "fcomp";
+        case Mnemonic::X87Fcompp: return "fcompp";
+        case Mnemonic::X87Fsub:   return "fsub";
+        case Mnemonic::X87Fsubr:  return "fsubr";
+        case Mnemonic::X87Fdiv:   return "fdiv";
+        case Mnemonic::X87Fdivr:  return "fdivr";
+        case Mnemonic::X87Faddp:  return "faddp";
+        case Mnemonic::X87Fmulp:  return "fmulp";
+        case Mnemonic::X87Fsubp:  return "fsubp";
+        case Mnemonic::X87Fsubrp: return "fsubrp";
+        case Mnemonic::X87Fdivp:  return "fdivp";
+        case Mnemonic::X87Fdivrp: return "fdivrp";
+        case Mnemonic::X87Fxch:   return "fxch";
+        case Mnemonic::X87Fchs:   return "fchs";
+        case Mnemonic::X87Fabs:   return "fabs";
+        case Mnemonic::X87Fsqrt:  return "fsqrt";
+        case Mnemonic::X87Fldcw:  return "fldcw";
+        case Mnemonic::X87Fnstcw: return "fnstcw";
+        case Mnemonic::X87Fnstsw: return "fnstsw";
+        case Mnemonic::X87Fucom:  return "fucom";
+        case Mnemonic::X87Fucomp: return "fucomp";
+        case Mnemonic::X87Fucomi: return "fucomi";
+        case Mnemonic::X87Fucomip:return "fucomip";
+        case Mnemonic::X87Finit:  return "finit";
     }
     return "???";
 }
@@ -843,6 +878,12 @@ std::string format_operand(const Instruction& insn, const Operand& op) {
         case Operand::Kind::None:
             return "";
         case Operand::Kind::Register: {
+            // x87 register-stack operand: st(N), carried outside the Reg
+            // enum (see Operand::x87_stack).
+            if (op.x87_stack != 0xff) {
+                return std::format("st({})",
+                                   static_cast<unsigned>(op.x87_stack));
+            }
             std::string r(reg_name(op.reg));
             // ARM barrel shift on the register operand.
             if (op.arm_shift_reg != Reg::None) {

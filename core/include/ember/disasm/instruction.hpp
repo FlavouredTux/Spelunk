@@ -306,6 +306,23 @@ enum class Mnemonic : u16 {
     A32Ldm, A32LdmPc, A32Stm, A32Push, A32Pop,
     A32B, A32Bl, A32Bx, A32Blx, A32Bcc, A32Ret,
     A32Svc, A32Bkpt, A32Nop, A32Udf, A32Undef,
+
+    // ---- x87 FPU escapes (D8–DF) -------------------------------------------
+    // X87 prefix namespaces these away from the PPC scalar-FP names that
+    // already own Fadd/Fsub/Fmul/Fdiv/Fabs. Displayed names are the
+    // canonical lowercase asm spellings (fadd, fstp, …). Decoded with full
+    // mnemonic + operands; the lifter treats them as unknowns.
+    X87Fld,
+    X87Fst, X87Fstp,
+    X87Fild, X87Fist, X87Fistp,
+    X87Fadd, X87Fmul, X87Fcom, X87Fcomp, X87Fcompp,
+    X87Fsub, X87Fsubr, X87Fdiv, X87Fdivr,
+    X87Faddp, X87Fmulp, X87Fsubp, X87Fsubrp, X87Fdivp, X87Fdivrp,
+    X87Fxch,
+    X87Fchs, X87Fabs, X87Fsqrt,
+    X87Fldcw, X87Fnstcw, X87Fnstsw,
+    X87Fucom, X87Fucomp, X87Fucomi, X87Fucomip,
+    X87Finit,
 };
 
 // ARM condition field (bits 31:28). 0xE = AL (always) is the default carried
@@ -363,6 +380,14 @@ struct Operand {
     ArmShift arm_shift     = ArmShift::Lsl;
     u8       arm_shift_amt = 0;
     Reg      arm_shift_reg = Reg::None;
+
+    // x87 register-stack operand slot (st(0)..st(7)). The shared Reg enum
+    // cannot grow per-ISA without re-sizing the SSA canonicalisation table,
+    // so - following the same pattern as the ARM shift fields above - an
+    // x87 stack operand is a Kind::Register operand with reg == Reg::None
+    // and this slot index set; format_operand renders it as st(N).
+    // 0xff = not an x87 stack operand; inert everywhere else.
+    u8       x87_stack     = 0xff;
 
     [[nodiscard]] static Operand make_reg(Reg r) noexcept {
         Operand o; o.kind = Kind::Register; o.reg = r; return o;

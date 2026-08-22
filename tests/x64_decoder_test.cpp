@@ -382,6 +382,201 @@ void test_word_push_pop_width() {
     check_eq(load_i16 && add_two, true, "popw uses a two-byte stack slot");
 }
 
+using M = ember::Mnemonic;
+
+// ---- x87 FPU escapes (D8-DF) ---------------------------------------------
+// Hand-packed byte arrays. Every positive case asserts mnemonic, length and
+// the full rendered text so operand order/shape regressions cannot slip
+// through; negative cases assert the unsupported-error path, and reserved
+// rows must additionally embed the instruction address in the message.
+
+template <typename... Bs>
+std::vector<std::byte> xb(Bs... bs) {
+    return {std::byte{static_cast<unsigned char>(bs)}...};
+}
+
+struct X87Case {
+    std::vector<std::byte> code;
+    ember::Mnemonic m;
+    const char* text;
+};
+
+struct X87Bad {
+    std::vector<std::byte> code;
+    const char* what;
+};
+
+void run_x87(const std::vector<X87Case>& pos, const std::vector<X87Bad>& neg,
+             bool neg_want_addr) {
+    const ember::X64Decoder dec;
+    for (const auto& c : pos) {
+        auto insn = dec.decode(c.code, 0x401000);
+        if (!insn) {
+            std::fprintf(stderr, "FAIL: x87 %s decode failed: %s\n", c.text,
+                         insn.error().message.c_str());
+            ++fails;
+            continue;
+        }
+        check_eq(insn->mnemonic, c.m, c.text);
+        check_eq(insn->length,
+                 static_cast<ember::u8>(c.code.size()), c.text);
+        check_eq(ember::format_instruction(*insn), std::string(c.text),
+                 c.text);
+    }
+    for (const auto& b : neg) {
+        auto insn = dec.decode(b.code, 0x401000);
+        if (insn) {
+            std::fprintf(stderr, "FAIL: %s should hit the unsupported path\n",
+                         b.what);
+            ++fails;
+            continue;
+        }
+        if (neg_want_addr) {
+            check_eq(insn.error().message.find("401000") != std::string::npos,
+                     true, b.what);
+        }
+    }
+}
+
+void test_x87_d8_d9_memory_register_state() {
+    run_x87(
+        {
+            // D8: /N selects the op over m32 real; st(i), st(0) reg forms.
+            {{xb(0xD8, 0x00)}, M::X87Fadd, "fadd dword ptr [rax]"},
+            {{xb(0xD8, 0x4B, 0x10)}, M::X87Fmul, "fmul dword ptr [rbx + 0x10]"},
+            {{xb(0xD8, 0x15, 0x78, 0x56, 0x34, 0x12)},
+             M::X87Fcom, "fcom dword ptr [0x1274667e]"},
+            {{xb(0xD8, 0x1D, 0x78, 0x56, 0x34, 0x12)},
+             M::X87Fcomp, "fcomp dword ptr [0x1274667e]"},
+            {{xb(0xD8, 0x61, 0x08)}, M::X87Fsub, "fsub dword ptr [rcx + 0x8]"},
+            {{xb(0xD8, 0x6A, 0xF4)}, M::X87Fsubr, "fsubr dword ptr [rdx - 0xc]"},
+            {{xb(0xD8, 0x30)}, M::X87Fdiv, "fdiv dword ptr [rax]"},
+            {{xb(0xD8, 0x39)}, M::X87Fdivr, "fdivr dword ptr [rcx]"},
+            {{xb(0xD8, 0xC1)}, M::X87Fadd, "fadd st(1), st(0)"},
+            {{xb(0xD8, 0xCA)}, M::X87Fmul, "fmul st(2), st(0)"},
+            {{xb(0xD8, 0xD3)}, M::X87Fcom, "fcom st(3)"},
+            {{xb(0xD8, 0xDC)}, M::X87Fcomp, "fcomp st(4)"},
+            {{xb(0xD8, 0xE5)}, M::X87Fsub, "fsub st(5), st(0)"},
+            {{xb(0xD8, 0xEE)}, M::X87Fsubr, "fsubr st(6), st(0)"},
+            {{xb(0xD8, 0xF7)}, M::X87Fdiv, "fdiv st(7), st(0)"},
+            {{xb(0xD8, 0xF9)}, M::X87Fdivr, "fdivr st(1), st(0)"},
+            // D9: m32 transfers, control/status word, stack + state ops.
+            {{xb(0xD9, 0x00)}, M::X87Fld, "fld dword ptr [rax]"},
+            {{xb(0xD9, 0x11)}, M::X87Fst, "fst dword ptr [rcx]"},
+            {{xb(0xD9, 0x1C, 0x24)}, M::X87Fstp, "fstp dword ptr [rsp]"},
+            {{xb(0xD9, 0xC3)}, M::X87Fld, "fld st(3)"},
+            {{xb(0xD9, 0xCA)}, M::X87Fxch, "fxch st(2)"},
+            {{xb(0xD9, 0xE0)}, M::X87Fchs, "fchs"},
+            {{xb(0xD9, 0xE1)}, M::X87Fabs, "fabs"},
+            {{xb(0xD9, 0xFA)}, M::X87Fsqrt, "fsqrt"},
+            {{xb(0xD9, 0x20)}, M::X87Fldcw, "fldcw word ptr [rax]"},
+            {{xb(0xD9, 0x38)}, M::X87Fnstsw, "fnstsw word ptr [rax]"},
+            {{xb(0xD9, 0x68, 0x02)}, M::X87Fnstcw, "fnstcw word ptr [rax + 0x2]"},
+        },
+        {
+            // Truncated disp32 errors out instead of misdecoding.
+            {{xb(0xD8, 0xA0)}, "truncated x87 m32 disp32"},
+            // Reserved/not-modeled rows land on not_implemented with addr.
+            {{xb(0xD9, 0x08)}, "reserved D9 /1"},
+            {{xb(0xD9, 0xFF)}, "fcos not modeled"},
+            {{xb(0xD9, 0xD0)}, "fnop not modeled"},
+            {{xb(0xD9, 0x30)}, "fstenv not modeled"},
+        },
+        false);
+}
+
+void test_x87_dc_dd_m64_and_fucom() {
+    run_x87(
+        {
+            // DC: same /N rows as D8 but over m64 real.
+            {{xb(0xDC, 0x00)}, M::X87Fadd, "fadd qword ptr [rax]"},
+            {{xb(0xDC, 0x48, 0xF0)}, M::X87Fmul, "fmul qword ptr [rax - 0x10]"},
+            {{xb(0xDC, 0x10)}, M::X87Fcom, "fcom qword ptr [rax]"},
+            {{xb(0xDC, 0x19)}, M::X87Fcomp, "fcomp qword ptr [rcx]"},
+            {{xb(0xDC, 0x20)}, M::X87Fsub, "fsub qword ptr [rax]"},
+            {{xb(0xDC, 0x2B)}, M::X87Fsubr, "fsubr qword ptr [rbx]"},
+            {{xb(0xDC, 0x32)}, M::X87Fdiv, "fdiv qword ptr [rdx]"},
+            {{xb(0xDC, 0x3B)}, M::X87Fdivr, "fdivr qword ptr [rbx]"},
+            // DC register rows write st(0) and swap sub/div vs D8:
+            // E8 is fsub (not fsubr!), F8 fdiv, E0/F0 the R forms.
+            {{xb(0xDC, 0xC1)}, M::X87Fadd, "fadd st(0), st(1)"},
+            {{xb(0xDC, 0xCA)}, M::X87Fmul, "fmul st(0), st(2)"},
+            {{xb(0xDC, 0xE1)}, M::X87Fsubr, "fsubr st(0), st(1)"},
+            {{xb(0xDC, 0xEA)}, M::X87Fsub, "fsub st(0), st(2)"},
+            {{xb(0xDC, 0xF3)}, M::X87Fdivr, "fdivr st(0), st(3)"},
+            {{xb(0xDC, 0xFC)}, M::X87Fdiv, "fdiv st(0), st(4)"},
+            // DD: m64 transfers, fnstsw m16, fucom/fucomp st(i).
+            {{xb(0xDD, 0x00)}, M::X87Fld, "fld qword ptr [rax]"},
+            {{xb(0xDD, 0x10)}, M::X87Fst, "fst qword ptr [rax]"},
+            {{xb(0xDD, 0x1C, 0x24)}, M::X87Fstp, "fstp qword ptr [rsp]"},
+            {{xb(0xDD, 0x3C, 0x24)}, M::X87Fnstsw, "fnstsw word ptr [rsp]"},
+            {{xb(0xDD, 0xD1)}, M::X87Fst, "fst st(1)"},
+            {{xb(0xDD, 0xDA)}, M::X87Fstp, "fstp st(2)"},
+            {{xb(0xDD, 0xE3)}, M::X87Fucom, "fucom st(3)"},
+            {{xb(0xDD, 0xEC)}, M::X87Fucomp, "fucomp st(4)"},
+        },
+        {
+            {{xb(0xDC, 0xD1)}, "reserved DC D1"},
+            {{xb(0xDC, 0xDA)}, "reserved DC DA"},
+            {{xb(0xDD, 0xC1)}, "ffree not modeled"},
+            {{xb(0xDD, 0x20)}, "frstor not modeled"},
+        },
+        true);
+}
+
+void test_x87_db_de_df_integer_pop_fini() {
+    run_x87(
+        {
+            // DB: m32 integer transfers, fucomi/fucomip, finit.
+            {{xb(0xDB, 0x00)}, M::X87Fild, "fild dword ptr [rax]"},
+            {{xb(0xDB, 0x11)}, M::X87Fist, "fist dword ptr [rcx]"},
+            {{xb(0xDB, 0x5C, 0x24, 0x40)}, M::X87Fistp, "fistp dword ptr [rsp + 0x40]"},
+            {{xb(0xDB, 0xE9)}, M::X87Fucomi, "fucomi st(1)"},
+            {{xb(0xDB, 0xF3)}, M::X87Fucomip, "fucomip st(3)"},
+            {{xb(0xDB, 0xE3)}, M::X87Finit, "finit"},
+            // DE: pop variants write st(i) then pop; D9 lone fcompp.
+            {{xb(0xDE, 0xC1)}, M::X87Faddp, "faddp st(1), st(0)"},
+            {{xb(0xDE, 0xCA)}, M::X87Fmulp, "fmulp st(2), st(0)"},
+            {{xb(0xDE, 0xE3)}, M::X87Fsubrp, "fsubrp st(3), st(0)"},
+            {{xb(0xDE, 0xEC)}, M::X87Fsubp, "fsubp st(4), st(0)"},
+            {{xb(0xDE, 0xF5)}, M::X87Fdivrp, "fdivrp st(5), st(0)"},
+            {{xb(0xDE, 0xFE)}, M::X87Fdivp, "fdivp st(6), st(0)"},
+            {{xb(0xDE, 0xD9)}, M::X87Fcompp, "fcompp"},
+            // DF: m16/m64 integer transfers; E0 stores status to AX.
+            {{xb(0xDF, 0x00)}, M::X87Fild, "fild word ptr [rax]"},
+            {{xb(0xDF, 0x10)}, M::X87Fist, "fist word ptr [rax]"},
+            {{xb(0xDF, 0x1C, 0x24)}, M::X87Fistp, "fistp word ptr [rsp]"},
+            {{xb(0xDF, 0x28)}, M::X87Fild, "fild qword ptr [rax]"},
+            {{xb(0xDF, 0x39)}, M::X87Fistp, "fistp qword ptr [rcx]"},
+            {{xb(0xDF, 0xE0)}, M::X87Fnstsw, "fnstsw ax"},
+        },
+        {
+            {{xb(0xDB, 0x28)}, "fld m80 not modeled"},
+            {{xb(0xDB, 0x38)}, "fstp m80 not modeled"},
+            {{xb(0xDB, 0xE2)}, "fnclex not modeled"},
+            {{xb(0xDB, 0xE1)}, "reserved DB E1"},
+            {{xb(0xDE, 0xD1)}, "reserved DE D1"},
+            {{xb(0xDE, 0xDA)}, "reserved DE DA"},
+            {{xb(0xDE, 0x00)}, "fiadd m16 not modeled"},
+            {{xb(0xDF, 0xC4)}, "ffreep not modeled"},
+            {{xb(0xDF, 0xE9)}, "reserved DF E9"},
+        },
+        true);
+
+    // Segment override must flow through to x87 memory operands.
+    const ember::X64Decoder dec;
+    auto insn =
+        dec.decode(xb(0x64, 0xD8, 0x05, 0x78, 0x56, 0x34, 0x12),
+                   0x401000);
+    check_eq(insn.has_value(), true, "fs-prefixed x87 decode");
+    if (insn) {
+        check_eq(insn->operands[0].mem.segment, ember::Reg::Fs,
+                 "segment override on x87 memory operand");
+        check_eq(insn->length, static_cast<ember::u8>(7),
+                 "prefix counted in x87 length");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -392,5 +587,8 @@ int main() {
     test_word_push_pop_width();
     test_vex_evex_and_bmi_decode();
     test_x64_fp_call_lanes_and_vex_lift();
+    test_x87_d8_d9_memory_register_state();
+    test_x87_dc_dd_m64_and_fucom();
+    test_x87_db_de_df_integer_pop_fini();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

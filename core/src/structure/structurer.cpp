@@ -694,17 +694,24 @@ public:
         }
 
         // De-duplicate cases that share the same target - the resulting
-        // switch would be structurally identical; instead we group them
-        // by target and let the emitter render multiple "case N:" labels
-        // before a single body. We encode this by emitting empty children
-        // (RegionKind::Empty) for duplicates, with the body under the last
-        // one. Simple and preserves the 1:1 values↔children mapping.
+        // switch would be structurally identical. All labels of one body
+        // must render CONSECUTIVELY: C fallthrough binds a bare `case N:`
+        // to the *following* body, so an Empty placeholder only reads as
+        // "same body" when it sits directly ahead of its own target's
+        // region. Grouping in first-appearance target order keeps the
+        // 1:1 values<->children shape the switch renderer walks while
+        // never letting a label attach to a foreign body (the old
+        // table-order encoding let `case 1:` fall into `case 2:`'s
+        // body whenever the compiler merged their blocks).
         const std::size_t n_cases = sw_bb.case_values.size();
-        std::map<addr_t, std::size_t> last_occurrence;
+        std::vector<addr_t>             group_order;
+        std::map<addr_t, std::vector<std::size_t>> groups;
         for (std::size_t i = 0; i < n_cases; ++i) {
             const addr_t tgt = sw_bb.successors[i];
             if (tgt == dflt_target) continue;
-            last_occurrence[tgt] = i;
+            auto& slot = groups[tgt];
+            if (slot.empty()) group_order.push_back(tgt);
+            slot.push_back(i);
         }
 
         auto build_case_with_optional_sink = [&](addr_t tgt) {
@@ -720,14 +727,15 @@ public:
             return body;
         };
 
-        for (std::size_t i = 0; i < n_cases; ++i) {
-            const addr_t tgt = sw_bb.successors[i];
-            if (tgt == dflt_target) continue;
-            r->case_values.push_back(sw_bb.case_values[i]);
-            if (last_occurrence[tgt] == i) {
-                r->children.push_back(build_case_with_optional_sink(tgt));
-            } else {
-                r->children.push_back(make_empty());
+        for (const addr_t tgt : group_order) {
+            const auto& idxs = groups[tgt];
+            for (std::size_t k = 0; k < idxs.size(); ++k) {
+                r->case_values.push_back(sw_bb.case_values[idxs[k]]);
+                if (k + 1 == idxs.size()) {
+                    r->children.push_back(build_case_with_optional_sink(tgt));
+                } else {
+                    r->children.push_back(make_empty());
+                }
             }
         }
         if (sw_bb.has_default && !sw_bb.successors.empty()) {

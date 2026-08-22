@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit an x86_64 PE32+ executable exercising Win64 argument passing.
 
-Two functions, each with a real UNWIND_INFO record (so .xdata-driven frame
+Three functions, each with a real UNWIND_INFO record (so .xdata-driven frame
 analysis can recover the prologue RSP delta), no Windows toolchain needed:
 
   stack_sum (RVA 0x1000): int stack_sum(a, b, c, d, e, f)
@@ -18,6 +18,11 @@ analysis can recover the prologue RSP delta), no Windows toolchain needed:
       (rcx, xmm0, rdx). The body returns a + c, reading ecx and r8d.
       With a declared signature the 3rd parameter `c` must map to r8
       (slot 2), proving positional fp/int arg mapping (item 1).
+
+  cookie_return (RVA 0x1080): unsigned char cookie_return(void)
+      Returns 1 through AL, then invokes an MSVC-style security-cookie helper
+      with `saved_cookie ^ rsp`. The helper must not replace the real return
+      value with an undefined post-call RAX clobber.
 
 The image is structural-only (zero checksum, no real DOS stub) but passes
 every check Ember's PeBinary loader performs.
@@ -63,6 +68,15 @@ def main() -> int:
 
     stack_sum_rva = rva_text + 0x00
     fp_pos_rva    = rva_text + 0x40
+    cookie_return_rva = rva_text + 0x80
+    cookie_helper_rva = rva_text + 0xc0
+
+    # .rdata layout is deterministic: stack_sum unwind (8), fp_pos unwind
+    # (4), cookie_return unwind (8), alignment (4), then the cookie qword.
+    cookie_rva = rva_rdata + 0x18
+
+    def rel32(ip_after, target):
+        return struct.pack("<i", target - ip_after)
 
     # ---- .text -----------------------------------------------------------
     # stack_sum: eax = ecx + edx + r8d + r9d + [rsp+0x50] + [rsp+0x58]
@@ -85,11 +99,31 @@ def main() -> int:
         b"\xc3"                # ret
     )
 
+    cookie_return = bytearray()
+    cookie_return += b"\x48\x83\xec\x28"  # sub rsp, 0x28
+    cookie_return += b"\x48\x8b\x05" + rel32(
+        cookie_return_rva + len(cookie_return) + 7, cookie_rva)
+    cookie_return += b"\x48\x31\xe0"      # xor rax, rsp
+    cookie_return += b"\x48\x89\x44\x24\x20"  # mov [rsp+0x20], rax
+    cookie_return += b"\xb8\x01\x00\x00\x00"  # mov eax, 1
+    cookie_return += b"\x48\x8b\x4c\x24\x20"  # mov rcx, [rsp+0x20]
+    cookie_return += b"\x48\x31\xe1"      # xor rcx, rsp
+    cookie_return += b"\xe8" + rel32(
+        cookie_return_rva + len(cookie_return) + 5, cookie_helper_rva)
+    cookie_return += b"\x48\x83\xc4\x28"  # add rsp, 0x28
+    cookie_return += b"\xc3"                  # ret
+
     text = bytearray()
     text += stack_sum
     while len(text) < (fp_pos_rva - stack_sum_rva):
         text.append(0)
     text += fp_pos
+    while len(text) < (cookie_return_rva - stack_sum_rva):
+        text.append(0)
+    text += cookie_return
+    while len(text) < (cookie_helper_rva - stack_sum_rva):
+        text.append(0)
+    text += b"\xc3"
     text_virt_size = len(text)
 
     # ---- .rdata: UNWIND_INFO blobs --------------------------------------
@@ -111,6 +145,16 @@ def main() -> int:
     xdata_fp_pos_rva = rva_rdata + len(rdata)
     rdata += bytes([0x01, 0x00, 0x00, 0x00])
 
+    xdata_cookie_return_rva = rva_rdata + len(rdata)
+    rdata += bytes([
+        0x01, 0x04, 0x01, 0x00,
+        0x04, 0x42, 0x00, 0x00,
+    ])
+    while len(rdata) % 8:
+        rdata.append(0)
+    assert rva_rdata + len(rdata) == cookie_rva
+    rdata += struct.pack("<Q", 0x8877665544332211)
+
     rdata_virt_size = len(rdata)
 
     # ---- .pdata: RUNTIME_FUNCTION table ---------------------------------
@@ -119,6 +163,9 @@ def main() -> int:
                          stack_sum_rva + len(stack_sum), xdata_stack_sum_rva)
     pdata += struct.pack("<III", fp_pos_rva,
                          fp_pos_rva + len(fp_pos), xdata_fp_pos_rva)
+    pdata += struct.pack("<III", cookie_return_rva,
+                         cookie_return_rva + len(cookie_return),
+                         xdata_cookie_return_rva)
     pdata_virt_size = len(pdata)
 
     # ---- offsets + sizes ------------------------------------------------

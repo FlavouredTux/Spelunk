@@ -307,6 +307,9 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     // return type reads as noise. One hop only - deeper casts are
     // semantically real.
     IrValue v = r.condition;
+    if (auto payload = low_byte_return_payload(v); payload) {
+        v = *payload;
+    }
     if (const IrInst* d = def_of(v); d && d->src_count >= 1
             && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
             && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {

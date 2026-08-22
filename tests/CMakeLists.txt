@@ -3005,6 +3005,12 @@ if(Python3_Interpreter_FOUND)
         ARGS    "-p|--annotations|${_fixture_dir}/pe_stackargs.anns|-s|fp_pos"
         GOLDEN  pe_stackargs.fp_pos.pseudo.txt
     )
+    ember_golden_test(
+        NAME    pe_stackargs_cookie_return_pseudo
+        FIXTURE pe_stackargs
+        ARGS    "-p|-s|sub_140001080"
+        GOLDEN  pe_stackargs.cookie_return.pseudo.txt
+    )
 
     # ---- recover-imports (IAT reconstruction) ------------------------
     #

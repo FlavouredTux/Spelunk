@@ -1,5 +1,6 @@
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/disasm/decoder.hpp>
@@ -216,6 +217,31 @@ void check_stack(const std::vector<ember::InferredArgument>& args,
 
 int main() {
     PpcArityBinary binary;
+
+    ember::TypeArena win_types;
+    const auto write_process = ember::lookup_import_sig(
+        "WriteProcessMemory", win_types);
+    if (!write_process || write_process->params.size() != 5 ||
+        win_types.kind(write_process->ret) != ember::TypeKind::Int ||
+        win_types.kind(write_process->params[0]) != ember::TypeKind::Ptr ||
+        win_types.kind(write_process->params[4]) != ember::TypeKind::Ptr) {
+        std::fprintf(stderr,
+                     "FAIL: WriteProcessMemory has its five-argument pointer signature\n");
+        ++failures;
+    }
+    const auto snapshot = ember::lookup_import_sig(
+        "CreateToolhelp32Snapshot", win_types);
+    const auto process_first = ember::lookup_import_sig(
+        "Process32First", win_types);
+    const auto open_process = ember::lookup_import_sig(
+        "OpenProcess", win_types);
+    if (!snapshot || snapshot->params.size() != 2 ||
+        !process_first || process_first->params.size() != 2 ||
+        !open_process || open_process->params.size() != 3) {
+        std::fprintf(stderr,
+                     "FAIL: Win32 process-discovery signatures keep exact arity\n");
+        ++failures;
+    }
     check_eq(ember::infer_arity(binary, 0x80001000), 1,
              "PPC direct live-in r3 read implies one parameter");
     check_eq(ember::infer_arity(binary, 0x80001020), 2,

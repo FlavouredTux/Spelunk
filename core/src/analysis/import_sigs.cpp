@@ -169,6 +169,27 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "Sleep") return m(t_void(a), {t_int32u(a)});
     if (name == "IsDebuggerPresent") return m(t_int32s(a), {});
 
+    // ---- Win32 process / remote-memory APIs ------------------------------
+    // HANDLE/LPVOID stay opaque pointers until named Win32 typedefs become
+    // first-class TypeArena nodes. Exact arity and pointer depth are still
+    // enough to remove stale Win64 register/home-slot arguments and recover
+    // buffers, byte counts, and output pointers correctly.
+    if (name == "ReadProcessMemory" || name == "WriteProcessMemory")
+        return m(t_int32s(a), {t_voidp(a), t_voidp(a), t_voidp(a),
+                               t_size(a), a.ptr_t(t_size(a))});
+    if (name == "VirtualQueryEx")
+        return m(t_size(a), {t_voidp(a), t_voidp(a), t_voidp(a), t_size(a)});
+    if (name == "CreateToolhelp32Snapshot")
+        return m(t_voidp(a), {t_int32u(a), t_int32u(a)});
+    if (name == "Process32First" || name == "Process32Next" ||
+        name == "Module32First" || name == "Module32Next")
+        return m(t_int32s(a), {t_voidp(a), t_voidp(a)});
+    if (name == "OpenProcess")
+        return m(t_voidp(a), {t_int32u(a), t_int32s(a), t_int32u(a)});
+    if (name == "CloseHandle") return m(t_int32s(a), {t_voidp(a)});
+    if (name == "FindWindowA") return m(t_voidp(a), {t_charp(a), t_charp(a)});
+    if (name == "FindWindowW") return m(t_voidp(a), {t_u16p(a), t_u16p(a)});
+
     // ---- <math.h> ---------------------------------------------------------
     if (name == "fmod")  return m(t_float64(a), {t_float64(a), t_float64(a)});
     if (name == "fmodf") return m(t_float32(a), {t_float32(a), t_float32(a)});

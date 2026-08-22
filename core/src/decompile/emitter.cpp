@@ -839,12 +839,19 @@ struct Emitter {
     // producer call as the statement and suppress the helper.
     std::set<std::pair<std::size_t, std::size_t>>    arc_claim_producer_positions;
     std::set<std::pair<std::size_t, std::size_t>>    suppressed_call_positions;
+    // MSVC emits __security_check_cookie as a special epilogue helper that
+    // preserves the source-level return value in RAX. Generic Win64 call
+    // clobbers lose that fact, so remember the pre-cookie return lane and
+    // substitute it for the synthetic post-call Clobber at Return sites.
+    std::set<SsaKey>                                msvc_cookie_return_clobbers;
+    std::map<SsaKey, IrValue>                       msvc_cookie_preserved_returns;
     // Bound-call positions whose binding name reuses a phi merge-value
     // name (e.g. `v0`). Such call statements skip the type prefix because
     // the merge declaration is already emitted at the function head.
     std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
     std::map<std::string, SsaMergeLocal>             merge_locals;
+    std::set<SsaKey>                                 structured_return_values;
     std::set<std::string>                            definitely_assigned_merge_locals;
     std::map<addr_t, std::vector<std::pair<std::string, IrValue>>>
                                                     merge_edge_assignments;
@@ -3043,12 +3050,113 @@ struct Emitter {
         return static_cast<addr_t>(value);
     }
 
+    void record_x86_string_intrinsic_extents(const IrInst& inst) {
+        if (inst.op != IrOp::Intrinsic || inst.src_count < 3) return;
+        const bool copy = inst.name == "rep.movsb" ||
+                          inst.name == "rep.movsd" ||
+                          inst.name == "rep.movsq";
+        const bool fill = inst.name == "rep.stosb" ||
+                          inst.name == "rep.stosd" ||
+                          inst.name == "rep.stosq";
+        if (!copy && !fill) return;
+        const u64 element_size = inst.name.ends_with('b') ? 1u
+            : (inst.name.ends_with('d') ? 4u : 8u);
+        const auto count = resolve_imm(inst.srcs[2]);
+        if (!count || *count <= 0 ||
+            static_cast<u64>(*count) > (1u << 20) / element_size) return;
+        const u32 bytes = static_cast<u32>(
+            static_cast<u64>(*count) * element_size);
+        const auto record = [&](const IrValue& address) {
+            if (auto offset = stack_offset(address); offset) {
+                auto& extent = stack_required_extents[*offset];
+                extent = std::max(extent, bytes);
+            }
+        };
+        record(inst.srcs[0]);
+        if (copy) record(inst.srcs[1]);
+    }
+
+    void analyze_msvc_security_cookie_calls() {
+        if (!fn || abi != Abi::Win64) return;
+        const Reg return_reg = canonical_reg(int_return_reg(abi));
+        const auto is_rsp = [&](const IrValue& value) {
+            if (value.kind == IrValueKind::Reg &&
+                canonical_reg(value.reg) == Reg::Rsp) return true;
+            // Optimization forwards the adjusted stack pointer through its
+            // defining Sub/Add temp, so the XOR often reads `t5` rather than
+            // an architectural `rsp_N` leaf. stack_offset recognizes both.
+            const IrInst* definition = def_stripped(value);
+            return (!definition || definition->op != IrOp::Load) &&
+                   stack_offset(value).has_value();
+        };
+        const auto cookie_stack_load = [&](const IrValue& value)
+            -> std::optional<i64> {
+            const IrInst* x = def_stripped(value);
+            if (!x || x->op != IrOp::Xor || x->src_count < 2) return std::nullopt;
+            for (u8 side = 0; side < 2; ++side) {
+                if (!is_rsp(x->srcs[1 - side])) continue;
+                const IrInst* load = def_stripped(x->srcs[side]);
+                if (!load || load->op != IrOp::Load || load->src_count < 1) continue;
+                if (auto offset = stack_offset(load->srcs[0]); offset) return offset;
+            }
+            return std::nullopt;
+        };
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            const auto& block = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
+                const IrInst& call = block.insts[ii];
+                if (call.op != IrOp::Call || call.source_addr == 0) continue;
+
+                const IrValue* first_arg = nullptr;
+                for (std::size_t scan = ii; scan > 0;) {
+                    const IrInst& previous = block.insts[--scan];
+                    if (previous.op == IrOp::Intrinsic &&
+                        previous.name == "call.args.1" && previous.src_count >= 1) {
+                        first_arg = &previous.srcs[0];
+                        break;
+                    }
+                    if (previous.op == IrOp::Call ||
+                        previous.op == IrOp::CallIndirect) break;
+                }
+                if (!first_arg) continue;
+                const auto cookie_offset = cookie_stack_load(*first_arg);
+                if (!cookie_offset) continue;
+
+                suppressed_call_positions.insert({bi, ii});
+                hidden.insert({bi, ii});
+
+                std::optional<IrValue> preserved;
+                for (std::size_t scan = ii; scan > 0;) {
+                    const IrInst& previous = block.insts[--scan];
+                    if (previous.dst.kind != IrValueKind::Reg ||
+                        canonical_reg(previous.dst.reg) != return_reg) continue;
+                    if (previous.op != IrOp::Clobber) preserved = previous.dst;
+                    break;
+                }
+                for (std::size_t scan = ii + 1; scan < block.insts.size(); ++scan) {
+                    const IrInst& clobber = block.insts[scan];
+                    if (clobber.op != IrOp::Clobber) break;
+                    if (clobber.dst.kind != IrValueKind::Reg ||
+                        canonical_reg(clobber.dst.reg) != return_reg) continue;
+                    if (auto key = ssa_key(clobber.dst); key) {
+                        msvc_cookie_return_clobbers.insert(*key);
+                        if (preserved) {
+                            msvc_cookie_preserved_returns.emplace(*key, *preserved);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     void analyze(const IrFunction& f) {
         fn = &f;
         for (std::size_t bi = 0; bi < f.blocks.size(); ++bi) {
             const auto& bb = f.blocks[bi];
             for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
                 const auto& inst = bb.insts[ii];
+                record_x86_string_intrinsic_extents(inst);
                 if (auto k = ssa_key(inst.dst); k) {
                     defs[*k] = &inst;
                     def_pos[*k] = {bi, ii};
@@ -3073,6 +3181,7 @@ struct Emitter {
                 }
             }
         }
+        analyze_msvc_security_cookie_calls();
         analyze_abi_noise();
         // Single sweep populating the visible-use caches. Mirrors the
         // filter the on-demand functions used to apply (skip hidden,
@@ -3557,6 +3666,36 @@ struct Emitter {
         merge_value_names = std::move(recovered.value_names);
         merge_locals = std::move(recovered.locals);
 
+        // A Win64 bool/byte return often reaches the shared epilogue as a
+        // full-width RAX Phi. False arms clear AL with `rax & ~0xff`; true
+        // arms zero-extend an i8. The upper carrier bits are not part of the
+        // source return value, so type the merge local from the recovered low
+        // byte instead of declaring an opaque uint64_t result.
+        for (const auto& block : fn->blocks) {
+            for (const IrInst& phi : block.insts) {
+                if (phi.op != IrOp::Phi || phi.phi_operands.empty()) continue;
+                auto key = ssa_key(phi.dst);
+                if (!key) continue;
+                auto named = merge_value_names.find(*key);
+                if (named == merge_value_names.end()) continue;
+                std::optional<IrValue> representative;
+                bool all_low_bytes = true;
+                for (const IrValue& operand : phi.phi_operands) {
+                    auto payload = low_byte_return_payload(operand);
+                    if (!payload) {
+                        all_low_bytes = false;
+                        break;
+                    }
+                    if (!representative) representative = *payload;
+                }
+                if (!all_low_bytes || !representative) continue;
+                auto local = merge_locals.find(named->second);
+                if (local != merge_locals.end()) {
+                    local->second.type_value = *representative;
+                }
+            }
+        }
+
         // Register induction updates commonly feed both the back-edge Phi and
         // the loop comparison (`next = i + 1; cmp next, limit`). Their use
         // count is therefore two, so the generic pure-Phi-feeder rule does not
@@ -3610,7 +3749,6 @@ struct Emitter {
         // initialization edges that previously left flags and loop state
         // undefined. Conditional diamond Phis render as ?: and need no local.
         merge_edge_assignments.clear();
-        if (!is_ppc_abi()) return;
         for (const auto& merge_block : fn->blocks) {
             for (const auto& phi : merge_block.insts) {
                 if (phi.op != IrOp::Phi || phi.phi_operands.size() != phi.phi_preds.size()) {
@@ -3618,6 +3756,8 @@ struct Emitter {
                 }
                 auto phi_key = ssa_key(phi.dst);
                 if (!phi_key) continue;
+                if (!is_ppc_abi() &&
+                    !structured_return_values.contains(*phi_key)) continue;
                 auto named = merge_value_names.find(*phi_key);
                 if (named == merge_value_names.end()) continue;
                 bool selection_phi = false;
@@ -3644,11 +3784,29 @@ struct Emitter {
                 if (selection_phi) continue;
                 for (std::size_t i = 0; i < phi.phi_operands.size(); ++i) {
                     auto initializer = merge_initializer_candidate(phi.phi_operands[i]);
+                    if (!initializer && !is_ppc_abi()) {
+                        const IrValue& operand = phi.phi_operands[i];
+                        const IrInst* definition = def_of(operand);
+                        if (operand.kind == IrValueKind::Imm ||
+                            (definition && definition->op != IrOp::Clobber &&
+                             !renders_raw_arch_reg_name(operand))) {
+                            initializer = operand;
+                        }
+                    }
                     if (!initializer) continue;
                     if (auto operand_key = ssa_key(phi.phi_operands[i]); operand_key) {
                         auto same = merge_value_names.find(*operand_key);
                         if (same != merge_value_names.end() && same->second == named->second) {
-                            continue;
+                            // Coalesced feeder values normally assign the
+                            // merge local through format_merge_assignment.
+                            // Return-only Phis deliberately suppress those
+                            // feeder statements, so they still need an edge
+                            // assignment or the declared `result` is never
+                            // initialized.
+                            const IrInst* feeder = def_of(phi.phi_operands[i]);
+                            if (feeder && merge_assignment_name_for(*feeder)) {
+                                continue;
+                            }
                         }
                     }
                     const IrBlock* predecessor = nullptr;
@@ -4352,6 +4510,72 @@ struct Emitter {
         }
     }
 
+    void infer_import_pointer_stack_values() {
+        if (!fn || abi != Abi::Win64) return;
+        for (const auto& block : fn->blocks) {
+            std::vector<IrValue> args;
+            for (const IrInst& instruction : block.insts) {
+                if (instruction.op == IrOp::Intrinsic &&
+                    instruction.name.starts_with("call.args.")) {
+                    if (instruction.name == "call.args.1") args.clear();
+                    for (u8 i = 0;
+                         i < instruction.src_count && i < instruction.srcs.size(); ++i) {
+                        args.push_back(instruction.srcs[i]);
+                    }
+                    continue;
+                }
+                if (instruction.op != IrOp::Call &&
+                    instruction.op != IrOp::CallIndirect) continue;
+                auto import = call_import_name(instruction);
+                if (!import) {
+                    args.clear();
+                    continue;
+                }
+                TypeArena arena;
+                auto signature = lookup_import_sig(*import, arena);
+                if (!signature) {
+                    args.clear();
+                    continue;
+                }
+                const auto type_name = [&](const auto& self, TypeRef type,
+                                           int depth) -> std::string {
+                    if (depth > 4 || type.is_top() || type.is_bottom()) return {};
+                    const TypeNode& node = arena.node(type);
+                    if (node.kind == TypeKind::Int) {
+                        const char* prefix = node.i.sign_known && node.i.is_signed
+                            ? "int" : "uint";
+                        return std::format("{}{}_t", prefix, node.i.bits);
+                    }
+                    if (node.kind == TypeKind::Ptr) {
+                        if (node.p.pointee.is_top()) return "void*";
+                        std::string pointee = self(self, node.p.pointee, depth + 1);
+                        if (pointee == "uint8_t") pointee = "char";
+                        return pointee.empty() ? std::string{"void*"} : pointee + "*";
+                    }
+                    if (node.kind == TypeKind::Float) {
+                        return node.f.bits == 32 ? "float" : "double";
+                    }
+                    if (node.kind == TypeKind::Struct) return node.s.name;
+                    return {};
+                };
+                const std::size_t count = std::min(args.size(), signature->params.size());
+                for (std::size_t index = 0; index < count; ++index) {
+                    const TypeRef parameter = signature->params[index];
+                    if (arena.kind(parameter) != TypeKind::Ptr) continue;
+                    const IrInst* load = def_stripped(args[index]);
+                    if (!load || load->op != IrOp::Load || load->src_count < 1) continue;
+                    auto offset = stack_offset(load->srcs[0]);
+                    if (!offset) continue;
+                    auto slot = frame_layout.slots.find(*offset);
+                    if (slot == frame_layout.slots.end()) continue;
+                    std::string rendered = type_name(type_name, parameter, 0);
+                    if (!rendered.empty()) slot->second.type_override = std::move(rendered);
+                }
+                args.clear();
+            }
+        }
+    }
+
     void infer_function_pointer_args() {
         std::size_t fn_count = 0;
         std::vector<IrValue> args;
@@ -4753,12 +4977,27 @@ struct Emitter {
             for (const IrInst& instruction : block.insts) {
                 if (instruction.op != IrOp::Load || instruction.src_count < 1) continue;
                 auto slot = trace_to_self_arg_slot(instruction.srcs[0]);
+                if (!slot) {
+                    if (auto access = canonical_struct_access(instruction.srcs[0]);
+                        access) {
+                        slot = trace_to_self_arg_slot(access->first);
+                    }
+                }
+                if (!slot) {
+                    if (auto access = try_base_plus_offset(instruction.srcs[0]);
+                        access) {
+                        slot = trace_to_self_arg_slot(access->first);
+                    }
+                }
                 if (!slot || *slot >= limit) continue;
                 std::string loaded = c_type_name_for(instruction.dst);
-                if (!loaded.ends_with('*')) continue;
                 auto& current = self_arg_type_names[*slot];
-                const std::string nested = loaded + "*";
-                if (current.empty() || current == "void*") current = nested;
+                if (loaded.ends_with('*')) {
+                    const std::string nested = loaded + "*";
+                    if (current.empty() || current == "void*") current = nested;
+                    continue;
+                }
+                if (current.empty()) current = "void*";
             }
         }
 
@@ -4795,7 +5034,9 @@ struct Emitter {
             if (!slot || *slot >= self_arg_type_names.size()) continue;
             auto& current = self_arg_type_names[*slot];
             const std::string inferred = type_name + "*";
-            if (current.empty() || current == "void*") current = inferred;
+            if (current.empty() || current == "void*" || current == "void**") {
+                current = inferred;
+            }
         }
     }
 
@@ -4951,6 +5192,20 @@ struct Emitter {
             return prev.op != IrOp::Call && prev.op != IrOp::CallIndirect;
         }
         return true;
+    }
+
+    [[nodiscard]] bool is_msvc_cookie_return_clobber(const IrValue& value) const {
+        const auto key = ssa_key(value);
+        return key && msvc_cookie_return_clobbers.contains(*key);
+    }
+
+    [[nodiscard]] std::optional<IrValue>
+    return_value_before_msvc_cookie(const IrValue& value) const {
+        const auto key = ssa_key(value);
+        if (!key) return std::nullopt;
+        auto found = msvc_cookie_preserved_returns.find(*key);
+        if (found == msvc_cookie_preserved_returns.end()) return std::nullopt;
+        return found->second;
     }
 
     // Once x86 calls model their real XMM clobber set, a shared epilogue can
@@ -5203,6 +5458,17 @@ struct Emitter {
                 fold_call_ssa_key.emplace(std::pair{bi, ii}, *cond_key);
             }
             return;  // first non-clobber: either the Call we want, or abort
+        }
+    }
+
+    void collect_structured_return_values(const Region& region) {
+        if (region.kind == RegionKind::Return) {
+            if (auto key = ssa_key(region.condition); key) {
+                structured_return_values.insert(*key);
+            }
+        }
+        for (const auto& child : region.children) {
+            if (child) collect_structured_return_values(*child);
         }
     }
 
@@ -8381,9 +8647,9 @@ struct Emitter {
         // Reapply the refined pointer type at this expression boundary.
         if (const IrInst* bd = def_stripped(base);
             bd && bd->op == IrOp::Load && fn &&
-            fn->types.kind(fn->type_of(base)) == TypeKind::Ptr &&
-            rendered_base.starts_with("*(")) {
+            fn->types.kind(fn->type_of(base)) == TypeKind::Ptr) {
             std::string base_type = c_type_name_for(base);
+            bool unknown_pointer = base_type == "void*";
             if (base_type == "void*") {
                 // A load result refined to T* proves that the address of
                 // that load is T**. Preserve that extra pointer level at the
@@ -8392,8 +8658,41 @@ struct Emitter {
                 base_type = loaded_type.ends_with('*')
                     ? std::string(loaded_type) + "*"
                     : std::string(c_type_name(t)) + "*";
+                if (annotations) {
+                    auto slot = trace_to_self_arg_slot(base);
+                    if (!slot) {
+                        for (std::size_t index = 0;
+                             index < self_arg_names.size(); ++index) {
+                            if (!self_arg_names[index].empty() &&
+                                self_arg_names[index] == rendered_base) {
+                                slot = static_cast<u8>(index);
+                                break;
+                            }
+                        }
+                    }
+                    if (slot) {
+                        if (const FunctionSig* signature =
+                                annotations->signature_for(fn->start);
+                            signature && *slot < signature->params.size()) {
+                            const std::string declared = normalize_c_type_alias(
+                                signature->params[*slot].type);
+                            const auto byte_pointer = [](std::string_view type) {
+                                return type == "char*" || type == "uint8_t*" ||
+                                       type == "int8_t*" || type == "const char*" ||
+                                       type == "const uint8_t*" ||
+                                       type == "const int8_t*";
+                            };
+                            if (declared == base_type ||
+                                (byte_pointer(declared) && byte_pointer(base_type))) {
+                                unknown_pointer = false;
+                            }
+                        }
+                    }
+                }
             }
-            rendered_base = std::format("(({}){})", base_type, rendered_base);
+            if (unknown_pointer || rendered_base.starts_with("*(")) {
+                rendered_base = std::format("(({}){})", base_type, rendered_base);
+            }
         }
         return std::format("{}[{}]", rendered_base, off / stride);
     }
@@ -9537,6 +9836,9 @@ struct Emitter {
             return is_mask(xd->srcs[0]) || is_mask(xd->srcs[1]);
         };
         auto bool_cast_src = [&](const IrValue& x) -> std::optional<IrValue> {
+            if (x.kind == IrValueKind::Imm && (x.imm == 0 || x.imm == 1)) {
+                return IrValue::make_imm(x.imm, IrType::I8);
+            }
             const IrInst* xd = def_stripped(x);
             if (!xd) return std::nullopt;
             if ((xd->op == IrOp::ZExt || xd->op == IrOp::SExt ||
@@ -9553,6 +9855,57 @@ struct Emitter {
         if (is_low_byte_clear(d->srcs[0])) return bool_cast_src(d->srcs[1]);
         if (is_low_byte_clear(d->srcs[1])) return bool_cast_src(d->srcs[0]);
         return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<IrValue>
+    low_byte_return_payload(const IrValue& value, int depth = 0) const {
+        if (depth > 10) return std::nullopt;
+        if (auto merged = match_low_byte_setcc_merge(value, depth); merged) {
+            return *merged;
+        }
+        const IrInst* definition = def_stripped(value);
+        if (!definition) {
+            if (value.type == IrType::I1 || value.type == IrType::I8) return value;
+            return std::nullopt;
+        }
+        if ((definition->op == IrOp::Assign || definition->op == IrOp::Trunc ||
+             definition->op == IrOp::ZExt || definition->op == IrOp::SExt) &&
+            definition->src_count >= 1) {
+            if (definition->srcs[0].type == IrType::I1 ||
+                definition->srcs[0].type == IrType::I8) {
+                return definition->srcs[0];
+            }
+            return low_byte_return_payload(definition->srcs[0], depth + 1);
+        }
+        if (definition->op == IrOp::And && definition->src_count >= 2) {
+            const auto clears_low_byte = [](const IrValue& mask) {
+                return mask.kind == IrValueKind::Imm &&
+                       static_cast<u64>(mask.imm) == 0xffffffffffffff00ull;
+            };
+            if (clears_low_byte(definition->srcs[0]) ||
+                clears_low_byte(definition->srcs[1])) {
+                return IrValue::make_imm(0, IrType::I8);
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool low_byte_merge_has_raw_carrier(
+        const IrValue& value) const {
+        const IrInst* merge = def_stripped(value);
+        if (!merge || merge->op != IrOp::Or || merge->src_count < 2) return false;
+        const auto raw_clear = [&](const IrValue& candidate) {
+            const IrInst* clear = def_stripped(candidate);
+            if (!clear || clear->op != IrOp::And || clear->src_count < 2) return false;
+            const auto mask = [](const IrValue& operand) {
+                return operand.kind == IrValueKind::Imm &&
+                       static_cast<u64>(operand.imm) == 0xffffffffffffff00ull;
+            };
+            if (mask(clear->srcs[0])) return renders_raw_arch_reg_name(clear->srcs[1]);
+            if (mask(clear->srcs[1])) return renders_raw_arch_reg_name(clear->srcs[0]);
+            return false;
+        };
+        return raw_clear(merge->srcs[0]) || raw_clear(merge->srcs[1]);
     }
 
     [[nodiscard]] std::optional<std::string>
@@ -11348,6 +11701,12 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 rendered_call_args.resize(call_args.size());
             }
             for (std::size_t arg_i = 0; arg_i < call_args.size(); ++arg_i) {
+                if (low_byte_merge_has_raw_carrier(call_args[arg_i])) {
+                    if (auto payload = match_low_byte_setcc_merge(call_args[arg_i]);
+                        payload) {
+                        rendered_call_args[arg_i] = expr(*payload);
+                    }
+                }
                 if (auto off = stack_offset(call_args[arg_i]); off &&
                     charp_local_slots.contains(*off)) {
                     // A char array decays at a call boundary; `&array` has
@@ -11712,7 +12071,20 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     if (auto assignments = merge_edge_assignments.find(bb.start);
         assignments != merge_edge_assignments.end()) {
         for (const auto& [name, value] : assignments->second) {
-            std::string rendered = expr(value);
+            std::string rendered;
+            if (auto payload = low_byte_return_payload(value); payload) {
+                rendered = expr(*payload);
+            }
+            if (auto key = ssa_key(value); key) {
+                auto alias = merge_value_names.find(*key);
+                const IrInst* definition = def_of(value);
+                if (rendered.empty() && alias != merge_value_names.end() &&
+                    alias->second == name &&
+                    definition && definition->op != IrOp::Phi) {
+                    rendered = expand(*definition, 0);
+                }
+            }
+            if (rendered.empty()) rendered = expr(value);
             if (auto local = merge_locals.find(name); local != merge_locals.end()) {
                 const std::string type = c_type_name_for(local->second.type_value);
                 if (type.ends_with('*') && rendered.starts_with('&')) {
@@ -11761,7 +12133,18 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                         pick = 1;
                     }
                 }
-                const IrValue& rv = term->srcs[pick];
+                IrValue rv = term->srcs[pick];
+                if (is_msvc_cookie_return_clobber(rv)) {
+                    if (auto preserved = return_value_before_msvc_cookie(rv); preserved) {
+                        rv = *preserved;
+                    } else {
+                        out += std::format("{}return;\n", ind);
+                        break;
+                    }
+                }
+                if (auto payload = low_byte_return_payload(rv); payload) {
+                    rv = *payload;
+                }
 
                 if (auto k = ssa_key(rv); k) {
                     auto s = fold_void_call_stmt.find(*k);
@@ -11876,6 +12259,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.analyze(*sf.ir);
     e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
+    if (sf.body) e.collect_structured_return_values(*sf.body);
     e.name_merge_values();
     e.infer_objc_block_capture_names();
     e.frame_layout = compute_frame_layout(*sf.ir, binary);
@@ -11906,6 +12290,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.infer_ppc_role_arg_names();
     e.infer_charp_args();
     e.infer_typed_stack_slots_from_calls();
+    e.infer_import_pointer_stack_values();
     if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
     e.bind_call_returns();
     e.refine_synthetic_member_types_from_stores();
@@ -11954,6 +12339,25 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     auto inferred_return_type = [&](const Emitter&, const StructuredFunction& s) -> std::string {
         if (e.has_incidental_ppc_return_merge() ||
             e.has_incidental_ppc_stored_return()) return "void";
+        if (s.ir) {
+            for (const auto& block : s.ir->blocks) {
+                for (const IrInst& instruction : block.insts) {
+                    if (instruction.op != IrOp::Return ||
+                        instruction.src_count == 0) continue;
+                    const IrInst* definition = e.def_stripped(instruction.srcs[0]);
+                    if (!definition || definition->op != IrOp::Phi ||
+                        definition->phi_operands.empty()) continue;
+                    bool all_low_bytes = true;
+                    for (const IrValue& operand : definition->phi_operands) {
+                        if (!e.low_byte_return_payload(operand)) {
+                            all_low_bytes = false;
+                            break;
+                        }
+                    }
+                    if (all_low_bytes) return "uint8_t";
+                }
+            }
+        }
         // IPA wins outright when it has concrete evidence - the typed
         // return came from harvesting Return-operand types after Phase 2
         // local inference, which sees more than this lambda's
@@ -11987,6 +12391,22 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                     candidate.value = v;
                     candidate.widened_from_narrow = true;
                 }
+                if (d->op == IrOp::Phi && !d->phi_operands.empty()) {
+                    std::optional<IrValue> representative;
+                    bool all_low_bytes = true;
+                    for (const IrValue& operand : d->phi_operands) {
+                        auto payload = e.low_byte_return_payload(operand);
+                        if (!payload) {
+                            all_low_bytes = false;
+                            break;
+                        }
+                        if (!representative) representative = *payload;
+                    }
+                    if (all_low_bytes && representative) {
+                        candidate.value = *representative;
+                        candidate.widened_from_narrow = true;
+                    }
+                }
                 break;
             }
             return candidate;
@@ -11997,19 +12417,28 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         std::function<void(const Region&)> walk = [&](const Region& r) {
             if (r.kind == RegionKind::Return &&
                 r.condition.kind != IrValueKind::None) {
-                if (e.is_void_call_result(r.condition)) {
+                IrValue return_value = r.condition;
+                if (e.is_msvc_cookie_return_clobber(return_value)) {
+                    auto preserved = e.return_value_before_msvc_cookie(return_value);
+                    if (!preserved) {
+                        saw_void_return = true;
+                        return;
+                    }
+                    return_value = *preserved;
+                }
+                if (e.is_void_call_result(return_value)) {
                     saw_void_return = true;
                     return;
                 }
-                if (e.is_unbound_clobber_result(r.condition)) return;
-                if (e.is_incidental_x86_fp_return(r.condition)) return;
-                if (e.renders_stack_chk_guard_value(r.condition)) return;
+                if (e.is_unbound_clobber_result(return_value)) return;
+                if (e.is_incidental_x86_fp_return(return_value)) return;
+                if (e.renders_stack_chk_guard_value(return_value)) return;
                 // ABI return registers are often wider than the source-level
                 // value and usually appear behind an `Assign` to RAX. Prefer
                 // the narrowed producer for return-type inference so
                 // `return zext(i32)` becomes a `u32` function instead of a
                 // `u64` function with casts.
-                candidates.push_back(return_type_value(r.condition));
+                candidates.push_back(return_type_value(return_value));
             }
             for (const auto& c : r.children) if (c) walk(*c);
         };

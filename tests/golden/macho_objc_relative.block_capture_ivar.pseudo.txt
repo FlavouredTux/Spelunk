@@ -1,4 +1,4 @@
 // Tiny_withCallback_consumeBlock__block_invoke
 uint32_t sub_100001038(void* block) {
-  return block->self->count + block->callback[0];
+  return block->self->count + ((uint32_t*)block->callback)[0];
 }

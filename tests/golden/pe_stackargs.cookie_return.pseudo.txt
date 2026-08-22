@@ -1,0 +1,4 @@
+// sub_140001080
+uint64_t sub_140001080(void) {
+  return 1;
+}

@@ -1301,6 +1301,172 @@ struct IdiomRewrite {
 }
 
 // ============================================================================
+// MSVC's __security_check_cookie is a compiler helper with a stronger
+// convention than an ordinary Win64 call: it preserves the source-level
+// return value already placed in RAX. The generic lifter correctly clobbers
+// RAX for normal calls, but doing that here makes DCE delete the real return
+// producer and leaves `return rax_N` with no definition in pseudo-C.
+//
+// Recognize the distinctive epilogue argument `saved_cookie ^ rsp`, then
+// redirect the post-call RAX clobber back to the last pre-call RAX SSA value.
+// When there is no such value, the function is void and the incidental ABI
+// return lanes are removed. This runs once before DCE so the producer is
+// still present.
+std::size_t pass_msvc_security_cookie_return(IrFunction& fn,
+                                             AnalysisManager& am) {
+    const auto& defs = am.defs(fn);
+    const auto definition = [&](const IrValue& value) -> const IrInst* {
+        const auto key = ssa_key(value);
+        if (!key) return nullptr;
+        auto found = defs.find(*key);
+        if (found == defs.end()) return nullptr;
+        return &fn.blocks[found->second.block].insts[found->second.inst];
+    };
+    const auto stripped = [&](IrValue value) -> const IrInst* {
+        const IrInst* result = definition(value);
+        for (int depth = 0;
+             result && result->op == IrOp::Assign && result->src_count == 1 &&
+             depth < 16; ++depth) {
+            result = definition(result->srcs[0]);
+        }
+        return result;
+    };
+    const auto rsp_derived = [&](const auto& self, const IrValue& value,
+                                 int depth) -> bool {
+        if (depth > 12) return false;
+        if (value.kind == IrValueKind::Reg &&
+            canonical_reg(value.reg) == Reg::Rsp) return true;
+        const IrInst* source = stripped(value);
+        if (!source || (source->op != IrOp::Add && source->op != IrOp::Sub) ||
+            source->src_count < 2) return false;
+        return self(self, source->srcs[0], depth + 1) ||
+               (source->op == IrOp::Add &&
+                self(self, source->srcs[1], depth + 1));
+    };
+    const auto cookie_argument = [&](const IrValue& value) {
+        const IrInst* x = stripped(value);
+        if (!x || x->op != IrOp::Xor || x->src_count < 2) return false;
+        for (u8 side = 0; side < 2; ++side) {
+            if (!rsp_derived(rsp_derived, x->srcs[1 - side], 0)) continue;
+            const IrInst* load = stripped(x->srcs[side]);
+            if (load && load->op == IrOp::Load && load->src_count >= 1 &&
+                rsp_derived(rsp_derived, load->srcs[0], 0)) return true;
+        }
+        return false;
+    };
+    const auto substantive_value = [&](const auto& self, const IrValue& value,
+                                       int depth) -> bool {
+        if (depth > 16) return false;
+        if (value.kind == IrValueKind::Imm) return true;
+        if (value.kind == IrValueKind::Reg && value.version == 0) return true;
+        const IrInst* source = definition(value);
+        if (!source || source->op == IrOp::Clobber) return false;
+        if (source->op == IrOp::Assign && source->src_count == 1) {
+            return self(self, source->srcs[0], depth + 1);
+        }
+        if (source->op == IrOp::Phi) {
+            return std::ranges::any_of(source->phi_operands,
+                [&](const IrValue& operand) {
+                    return self(self, operand, depth + 1);
+                });
+        }
+        return true;
+    };
+
+    std::size_t rewritten = 0;
+    for (auto& block : fn.blocks) {
+        for (std::size_t call_index = 0;
+             call_index < block.insts.size(); ++call_index) {
+            IrInst& call = block.insts[call_index];
+            if (call.op != IrOp::Call) continue;
+            const IrValue* first_arg = nullptr;
+            for (std::size_t scan = call_index; scan > 0;) {
+                const IrInst& previous = block.insts[--scan];
+                if (previous.op == IrOp::Intrinsic &&
+                    previous.name == "call.args.1" && previous.src_count >= 1) {
+                    first_arg = &previous.srcs[0];
+                    break;
+                }
+                if (previous.op == IrOp::Call ||
+                    previous.op == IrOp::CallIndirect) break;
+            }
+            if (!first_arg || !cookie_argument(*first_arg)) continue;
+
+            std::optional<IrValue> preserved;
+            for (std::size_t scan = call_index; scan > 0;) {
+                const IrInst& previous = block.insts[--scan];
+                if (previous.dst.kind != IrValueKind::Reg ||
+                    canonical_reg(previous.dst.reg) != Reg::Rax) continue;
+                if (previous.op != IrOp::Clobber &&
+                    substantive_value(substantive_value, previous.dst, 0)) {
+                    preserved = previous.dst;
+                }
+                break;
+            }
+
+            std::optional<SsaKey> clobber_key;
+            for (std::size_t scan = call_index + 1;
+                 scan < block.insts.size(); ++scan) {
+                const IrInst& clobber = block.insts[scan];
+                if (clobber.op != IrOp::Clobber) break;
+                if (clobber.dst.kind != IrValueKind::Reg ||
+                    canonical_reg(clobber.dst.reg) != Reg::Rax) continue;
+                clobber_key = ssa_key(clobber.dst);
+                break;
+            }
+            if (!clobber_key) continue;
+
+            for (auto& use_block : fn.blocks) {
+                for (auto& instruction : use_block.insts) {
+                    if (instruction.op == IrOp::Return) {
+                        bool returns_cookie_clobber = false;
+                        for (u8 source = 0; source < instruction.src_count; ++source) {
+                            const auto key = ssa_key(instruction.srcs[source]);
+                            returns_cookie_clobber |= key && *key == *clobber_key;
+                        }
+                        if (returns_cookie_clobber) {
+                            if (preserved) {
+                                instruction.srcs[0] = *preserved;
+                                instruction.src_count = 1;
+                            } else {
+                                instruction.src_count = 0;
+                            }
+                            ++rewritten;
+                            continue;
+                        }
+                    }
+                    if (!preserved) continue;
+                    for_each_use(instruction, [&](IrValue& use) {
+                        const auto key = ssa_key(use);
+                        if (key && *key == *clobber_key) {
+                            use = *preserved;
+                            ++rewritten;
+                        }
+                    });
+                }
+            }
+            for (std::size_t scan = call_index; scan > 0;) {
+                IrInst& previous = block.insts[--scan];
+                if (previous.op == IrOp::Call ||
+                    previous.op == IrOp::CallIndirect) break;
+                if (previous.op == IrOp::Intrinsic &&
+                    (previous.name.starts_with("call.args.") ||
+                     previous.name.starts_with("call.fp_args."))) {
+                    previous.op = IrOp::Nop;
+                    previous.src_count = 0;
+                    previous.name.clear();
+                    ++rewritten;
+                }
+            }
+            call.op = IrOp::Nop;
+            call.src_count = 0;
+            call.name.clear();
+            ++rewritten;
+        }
+    }
+    return rewritten;
+}
+
 // PassManager - fixpoint driver with per-block dirty tracking
 // ============================================================================
 //
@@ -1317,6 +1483,7 @@ struct IdiomRewrite {
 CleanupStats run_pipeline(IrFunction& fn) {
     CleanupStats stats;
     AnalysisManager am;
+    stats.copies_propagated += pass_msvc_security_cookie_return(fn, am);
     constexpr std::size_t kMaxIter = 16;
 
     std::vector<u32> dirty;

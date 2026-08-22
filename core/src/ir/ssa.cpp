@@ -4,7 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <deque>
-#include <functional>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <ranges>
@@ -219,6 +219,13 @@ void insert_phis(IrFunction& fn,
         }
     }
 
+    // Phis are staged per block and spliced once. Repeated insert-at-front
+    // into a block's instruction vector is O(k^2) element shifting for k
+    // phis, which compounds on large functions with thousands of defs.
+    // Splicing in reverse arrival order ahead of the existing instructions
+    // keeps the final layout identical to the old front-insertion behavior.
+    std::map<addr_t, std::vector<IrInst>> staged;
+
     for (const auto& [var, def_sites] : defs) {
         std::set<addr_t>   has_phi;
         std::deque<addr_t> wl(def_sites.begin(), def_sites.end());
@@ -263,13 +270,27 @@ void insert_phis(IrFunction& fn,
                     phi.phi_preds.push_back(p);
                 }
 
-                by.insts.insert(by.insts.begin(), std::move(phi));
+                staged[y].push_back(std::move(phi));
 
                 if (!def_sites.contains(y)) {
                     wl.push_back(y);
                 }
             }
         }
+    }
+
+    for (auto& [y, phis] : staged) {
+        auto yit = fn.block_at.find(y);
+        if (yit == fn.block_at.end()) continue;
+        auto& insts = fn.blocks[yit->second].insts;
+        std::vector<IrInst> merged;
+        merged.reserve(phis.size() + insts.size());
+        for (auto pit = phis.rbegin(); pit != phis.rend(); ++pit)
+            merged.push_back(std::move(*pit));
+        merged.insert(merged.end(),
+                      std::move_iterator(insts.begin()),
+                      std::move_iterator(insts.end()));
+        insts = std::move(merged);
     }
 }
 
@@ -296,12 +317,23 @@ void rename_variables(IrFunction& fn,
         return it->second.back();
     };
 
-    std::function<void(addr_t)> recurse = [&](addr_t block_addr) {
-        auto it = fn.block_at.find(block_addr);
+    // Explicit-frame preorder walk of the dominator tree - the same
+    // treatment compute_rpo already received. The previous recursive
+    // lambda overflowed the call stack on deep pathological CFGs (long
+    // if/else chains, huge straight-line runs). Traversal order is kept
+    // byte-identical: children ascending by address, version counters
+    // bumped on entry, SSA stacks popped when the frame is left.
+    struct Frame {
+        addr_t              node;
+        std::size_t         next_child = 0;
+        std::vector<VarKey> defined_here;
+    };
+    std::vector<Frame> stack;
+
+    auto enter = [&](Frame& fr) {
+        auto it = fn.block_at.find(fr.node);
         if (it == fn.block_at.end()) return;
         auto& bb = fn.blocks[it->second];
-
-        std::vector<VarKey> defined_here;
 
         for (auto& inst : bb.insts) {
             if (inst.op != IrOp::Phi) {
@@ -317,7 +349,7 @@ void rename_variables(IrFunction& fn,
                 const u32 new_ver = ++counters[*dv];
                 stacks[*dv].push_back(new_ver);
                 inst.dst.version = new_ver;
-                defined_here.push_back(*dv);
+                fr.defined_here.push_back(*dv);
             }
         }
 
@@ -339,26 +371,42 @@ void rename_variables(IrFunction& fn,
                 // after the first match left the second slot at
                 // version 0, surfacing as a phantom live-in elsewhere.
                 for (std::size_t k = 0; k < inst.phi_preds.size(); ++k) {
-                    if (inst.phi_preds[k] == block_addr &&
+                    if (inst.phi_preds[k] == fr.node &&
                         k < inst.phi_operands.size()) {
                         inst.phi_operands[k].version = cur;
                     }
                 }
             }
         }
+    };
 
-        auto cit = children.find(block_addr);
-        if (cit != children.end()) {
-            for (addr_t c : cit->second) recurse(c);
-        }
-
-        for (const VarKey& v : defined_here) {
+    auto leave = [&](Frame& fr) {
+        for (const VarKey& v : fr.defined_here) {
             auto& st = stacks[v];
             if (!st.empty()) st.pop_back();
         }
     };
 
-    recurse(fn.start);
+    // A missing start block means nothing is reachable from the dominator
+    // tree's root: the old recursion returned before visiting any child,
+    // so mirror that and rename nothing.
+    if (fn.block_at.find(fn.start) == fn.block_at.end()) return;
+
+    stack.push_back(Frame{fn.start, 0, {}});
+    enter(stack.back());
+
+    while (!stack.empty()) {
+        Frame& top = stack.back();
+        auto   cit = children.find(top.node);
+        if (cit != children.end() && top.next_child < cit->second.size()) {
+            const addr_t c = cit->second[top.next_child++];
+            stack.push_back(Frame{c, 0, {}});
+            enter(stack.back());
+        } else {
+            leave(top);
+            stack.pop_back();
+        }
+    }
 }
 
 }  // namespace

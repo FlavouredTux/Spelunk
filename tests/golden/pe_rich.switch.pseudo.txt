@@ -1,9 +1,10 @@
 // sub_180001140
 uint64_t sub_180001140(void* a1) {
+  uint32_t t0 = (uint32_t)a1;
   if ((uint32_t)a1 > 2) {
     return -1;
   }
-  switch (rcx) {
+  switch (t0) {
     case 0:
       return 0xa;
     case 1:

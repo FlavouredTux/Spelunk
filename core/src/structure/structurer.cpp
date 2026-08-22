@@ -601,10 +601,13 @@ public:
         r->switch_index = sw_bb.switch_index;
         // CFG switch metadata stores only the architectural selector
         // register. After SSA, recover the concrete version consumed by the
-        // dispatch block (e.g. CodeWarrior's rlwinm r0,r5,2 before lwzx).
+        // dispatch block (e.g. CodeWarrior's rlwinm r0,r5,2 before lwzx, or
+        // the x86-64 arg register feeding `movsxd rax,[tab+rdi*4]`).
         // The emitter can then inline the selector's real producer instead of
-        // leaking `switch (r5)` into otherwise source-like pseudo-C.
-        if (sw_bb.switch_index >= Reg::PpcR0 && sw_bb.switch_index <= Reg::PpcR31) {
+        // leaking a bare `switch (r5)` / `switch (rdi)` into otherwise
+        // source-like pseudo-C. The recovery steps are arch-neutral; only
+        // the canonical register names differ.
+        if (sw_bb.switch_index != Reg::None) {
             const Reg selector = canonical_reg(sw_bb.switch_index);
             for (const auto& inst : sw_bb.insts) {
                 for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
@@ -622,6 +625,31 @@ public:
             // the exact source value against the table maximum, and that
             // operand is stronger evidence than an unrelated call-clobber of
             // the same architectural register earlier in the predecessor.
+            //
+            // x86 lowers `cmp r/m, imm` into explicit flag math whose
+            // compare operands reference a scratch Sub result rather than
+            // the selector itself (`t3 = sub t0, 9; cmp.eq t3, 0`).
+            // Unwrapping one such Sub level recovers the tested value, so
+            // the switch reads `switch (a1)` instead of the discarded
+            // difference `switch (t0 - 9)`.
+            auto unwrap_sub_base = [&](const IrBlock& pred,
+                                       const IrValue& v) -> IrValue {
+                for (auto it = pred.insts.rbegin(); it != pred.insts.rend();
+                     ++it) {
+                    const IrValue& dst = it->dst;
+                    const bool same = dst.kind == v.kind &&
+                                      dst.reg == v.reg &&
+                                      dst.version == v.version &&
+                                      dst.temp == v.temp;
+                    if (!same) continue;
+                    if (it->op == IrOp::Sub && it->src_count >= 2 &&
+                        it->srcs[1].kind == IrValueKind::Imm) {
+                        return it->srcs[0];
+                    }
+                    return v;
+                }
+                return v;
+            };
             if (r->condition.kind == IrValueKind::None) {
                 for (addr_t pred_addr : sw_bb.predecessors) {
                     auto pit = fn_.block_at.find(pred_addr);
@@ -632,7 +660,7 @@ public:
                             it->src_count < 2) continue;
                         for (u8 i = 0; i < 2; ++i) {
                             if (it->srcs[i].kind != IrValueKind::Imm) {
-                                r->condition = it->srcs[i];
+                                r->condition = unwrap_sub_base(pred, it->srcs[i]);
                                 break;
                             }
                         }

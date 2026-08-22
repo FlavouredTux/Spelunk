@@ -207,6 +207,10 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::And:
                 if (ai && a.imm == 0) return IrValue::make_imm(0, dt);
                 if (bi && b.imm == 0) return IrValue::make_imm(0, dt);
+                // Imms are stored sign-extended, so -1 is the all-ones
+                // pattern at every width <= 64: x & ~0 -> x.
+                if (ai && a.imm == -1) return b;
+                if (bi && b.imm == -1) return a;
                 if (same_ssa_value(a, b)) return a;
                 break;
             case IrOp::Or:
@@ -311,15 +315,99 @@ try_fold(const IrInst& inst) noexcept {
 }
 
 [[nodiscard]] std::size_t pass_constant_fold(
-    IrFunction& fn, AnalysisManager& /*am*/,
+    IrFunction& fn, AnalysisManager& am,
     std::span<const u32> dirty, std::vector<u32>& touched)
 {
+    const auto& defs = am.defs(fn);
+    auto peel_to_def = [&](const IrValue& v) -> const IrInst* {
+        IrValue cur = v;
+        for (int hop = 0; hop < 16; ++hop) {
+            auto k = ssa_key(cur);
+            if (!k) return nullptr;
+            auto it = defs.find(*k);
+            if (it == defs.end()) return nullptr;
+            const IrInst& d = fn.blocks[it->second.block].insts[it->second.inst];
+            if (d.op == IrOp::Assign && d.src_count == 1 &&
+                d.srcs[0].type == cur.type) {
+                cur = d.srcs[0];
+                continue;
+            }
+            return &d;
+        }
+        return nullptr;
+    };
+
     std::size_t count = 0;
     for_blocks(fn, dirty, [&](u32 bi, IrBlock& bb) {
         const std::size_t before = count;
         for (auto& inst : bb.insts) {
             if (inst.op == IrOp::Assign || inst.op == IrOp::Nop) continue;
             if (inst.op == IrOp::Phi) continue;
+
+            // Not(Not(x)) -> x
+            if (inst.op == IrOp::Not && inst.src_count == 1 &&
+                inst.srcs[0].kind != IrValueKind::Imm) {
+                const IrInst* inner = peel_to_def(inst.srcs[0]);
+                if (inner && inner->op == IrOp::Not && inner->src_count == 1 &&
+                    inner->srcs[0].type == inst.dst.type) {
+                    inst.op        = IrOp::Assign;
+                    inst.srcs[0]   = inner->srcs[0];
+                    inst.srcs[1]   = IrValue{};
+                    inst.srcs[2]   = IrValue{};
+                    inst.src_count = 1;
+                    ++count;
+                    continue;
+                }
+            }
+
+            // Xor(Xor(a, b), b) -> a (either operand order on both levels)
+            if (inst.op == IrOp::Xor && inst.src_count == 2) {
+                bool cancelled = false;
+                for (u8 side = 0; side < 2 && !cancelled; ++side) {
+                    const IrValue& chained = inst.srcs[side];
+                    const IrValue& other   = inst.srcs[1 - side];
+                    if (chained.kind == IrValueKind::Imm &&
+                        other.kind == IrValueKind::Imm) continue;
+                    const IrInst* d = peel_to_def(chained);
+                    if (!d || d->op != IrOp::Xor || d->src_count != 2) continue;
+                    for (u8 j = 0; j < 2; ++j) {
+                        if (!same_ssa_value(d->srcs[j], other)) continue;
+                        const IrValue& survivor = d->srcs[1 - j];
+                        if (survivor.type != chained.type) break;
+                        inst.op        = IrOp::Assign;
+                        inst.srcs[0]   = survivor;
+                        inst.srcs[1]   = IrValue{};
+                        inst.srcs[2]   = IrValue{};
+                        inst.src_count = 1;
+                        ++count;
+                        cancelled = true;
+                        break;
+                    }
+                }
+                if (cancelled) continue;
+            }
+
+            // Add(x, Neg(x)) -> 0 (either operand order)
+            if (inst.op == IrOp::Add && inst.src_count == 2) {
+                for (u8 side = 0; side < 2; ++side) {
+                    const IrValue& other = inst.srcs[side];
+                    if (other.kind == IrValueKind::Imm) continue;
+                    const IrInst* d = peel_to_def(inst.srcs[1 - side]);
+                    if (!d || d->op != IrOp::Neg || d->src_count != 1) continue;
+                    if (!same_ssa_value(d->srcs[0], other)) continue;
+                    if (d->srcs[0].type != other.type ||
+                        d->dst.type != inst.srcs[1 - side].type) continue;
+                    inst.op        = IrOp::Assign;
+                    inst.srcs[0]   = IrValue::make_imm(0, inst.dst.type);
+                    inst.srcs[1]   = IrValue{};
+                    inst.srcs[2]   = IrValue{};
+                    inst.src_count = 1;
+                    ++count;
+                    break;
+                }
+                if (inst.op == IrOp::Assign) continue;
+            }
+
             auto folded = try_fold(inst);
             if (!folded) continue;
             if (folded->type != inst.dst.type) {

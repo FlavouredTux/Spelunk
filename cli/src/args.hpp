@@ -46,8 +46,8 @@ struct Args {
                                               // matching IMM in candidate fns. Diagnostic only - useful
                                               // for "did the taint walker miss anything obvious?"
     bool        verbose             = false;  // --verbose: per-callsite TSV under --symuses
-    std::string refs_to;            // --refs-to VA: print callers of VA
-    std::string refs_to_loose;      // --refs-to-loose VA: extend --refs-to with constant-pool /
+    std::string refs_to;            // --refs-to FN|VA: print callers of FN or VA
+    std::string refs_to_loose;      // --refs-to-loose FN|VA: extend --refs-to with constant-pool /
                                     // imm64 scanning. Surfaces functions whose body holds the
                                     // target as a literal - the fn-ptr-only case where direct
                                      // E8/E9 callers are absent.
@@ -65,7 +65,7 @@ struct Args {
     std::string dump_object;        // --dump-object ADDR: dump pointer-sized fields with classification
     std::string object_size;        // --size N: byte size for --dump-object
     std::string callees;            // --callees VA: print direct call targets of the function at VA
-    std::string containing_fn;      // --containing-fn VA: name/extent of the function covering VA
+    std::string containing_fn;      // --containing-fn FN|VA: name/extent of the function covering VA
     std::string validate_name;      // --validate NAME: report all addrs bound to NAME + byte-similar lookalikes
     std::string callees_class;      // --callees-class NAME: JSON callee map for every vfn slot of a class
     std::string patch_plan;         // --patch-plan VA: hook/trampoline safety plan for a code address

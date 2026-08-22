@@ -113,6 +113,7 @@ Useful relationship queries:
 ember --xrefs ./target
 ember --data-xrefs ./target
 ember --refs-to 0xVA ./target
+ember --refs-to FN ./target
 ember --refs-to-loose 0xVA ./target
 ember --callees 0xVA ./target
 ember --state-map 0xVA ./target
@@ -123,7 +124,9 @@ ember --side-effects 0xFN ./target
 ember --object-roles 0xFN ./target
 ```
 
-`--refs-to` reports direct calls and ordinary code/data references.
+`--refs-to` reports direct calls and ordinary code/data references. It accepts
+a symbol name or a VA, matching the `--side-effects FN` / `--guard-map FN`
+form.
 `--refs-to-loose` additionally scans literal pointer slots and relocation
 evidence; use it for callback tables and address-taken functions. Add
 `--access read|write|lea|code-ptr|all` where supported and `--verbose` when the

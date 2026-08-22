@@ -269,6 +269,21 @@ make_surface_filter(const Args& args, bool include_artifacts) {
     return ann;
 }
 
+// Address-or-name resolution shared by the one-shot VA flags. Numeric
+// input (0x… / sub_…) parses directly; anything else falls through to
+// resolve_function so a bare symbol name works everywhere the
+// FN|VA-taking siblings (--side-effects, --callees, …) already do.
+// Returns nullopt only after resolve_function has reported the reason;
+// callers should not print a second diagnostic.
+[[nodiscard]] std::optional<addr_t> resolve_flag_target(const Binary& b,
+                                                        const Args& args,
+                                                        std::string_view spec) {
+    if (auto va = parse_cli_addr(spec)) return *va;
+    const Annotations ann = load_annotations_quiet(args);
+    if (auto win = resolve_function(b, spec, &ann)) return win->start;
+    return std::nullopt;
+}
+
 [[nodiscard]] bool parse_disasm_count(std::string_view raw,
                                       std::size_t& out,
                                       std::string_view command) {
@@ -3393,11 +3408,8 @@ int run_symuses(const Args& args, const Binary& b) {
 }
 
 int run_refs_to(const Args& args, const Binary& b) {
-    auto va = parse_cli_addr(args.refs_to);
-    if (!va) {
-        std::println(stderr, "ember: --refs-to: bad address '{}'", args.refs_to);
-        return EXIT_FAILURE;
-    }
+    auto va = resolve_flag_target(b, args, args.refs_to);
+    if (!va) return EXIT_FAILURE;  // resolver reported the reason
     const auto rows = gather_refs_to_rows(args, b, *va);
     const std::string out = args.json
         ? format_ref_rows_json(rows)
@@ -3421,12 +3433,8 @@ int run_refs_to_loose_impl(const Args& args, const Binary& b) {
     // strong; `imm64-stored` rows are circumstantial - the function
     // reads from a slot whose value matches the target, but the read
     // hasn't been chased to a call.
-    auto va = parse_cli_addr(args.refs_to_loose);
-    if (!va) {
-        std::println(stderr, "ember: --refs-to-loose: bad address '{}'",
-                     args.refs_to_loose);
-        return EXIT_FAILURE;
-    }
+    auto va = resolve_flag_target(b, args, args.refs_to_loose);
+    if (!va) return EXIT_FAILURE;  // resolver reported the reason
 
     std::vector<RefRow> rows;
     const auto targets = refs_to_target_candidates(b, *va);
@@ -4671,11 +4679,8 @@ int run_dump_object(const Args& args, const Binary& b) {
 }
 
 int run_containing_fn(const Args& args, const Binary& b) {
-    auto va = parse_cli_addr(args.containing_fn);
-    if (!va) {
-        std::println(stderr, "ember: --containing-fn: bad address '{}'", args.containing_fn);
-        return EXIT_FAILURE;
-    }
+    auto va = resolve_flag_target(b, args, args.containing_fn);
+    if (!va) return EXIT_FAILURE;  // resolver reported the reason
     auto cf = containing_function(b, *va);
     if (!cf) {
         std::println(stderr, "ember: --containing-fn: no function covers {:#x}", *va);
@@ -5760,10 +5765,17 @@ int run_emit(const Args& args, const Binary& b) {
         emit_opts.known_function_entries = &known_function_entries;
     }
     std::vector<addr_t> view_scope;
+    std::vector<bool> symbol_resolved;
+    symbol_resolved.reserve(view_symbols.size());
     view_scope.reserve(view_symbols.size());
     for (const auto& symbol : view_symbols) {
         if (auto win = resolve_function(b, symbol, ann_ptr)) {
             view_scope.push_back(win->start);
+            symbol_resolved.push_back(true);
+        } else {
+            // resolve_function already reported why; keep the slot so
+            // per-view runners below neither re-report nor emit it.
+            symbol_resolved.push_back(false);
         }
     }
 
@@ -5843,17 +5855,25 @@ int run_emit(const Args& args, const Binary& b) {
         if (!selrefs.empty()) emit_opts.objc_selrefs = &selrefs;
     }
     auto run_each = [&](auto&& emit_one) {
+        int status = EXIT_SUCCESS;
+        std::size_t emitted = 0;
         for (std::size_t i = 0; i < view_symbols.size(); ++i) {
+            if (!symbol_resolved[i]) {
+                // Failure already reported once during scoping.
+                status = EXIT_FAILURE;
+                continue;
+            }
             if (batch) {
-                if (i != 0)
+                if (emitted != 0)
                     std::println("");
                 std::println("// ember-symbol: {}", view_symbols[i]);
             }
             if (const int rc = emit_one(view_symbols[i]); rc != EXIT_SUCCESS) {
                 return rc;
             }
+            ++emitted;
         }
-        return EXIT_SUCCESS;
+        return status;
     };
     if (args.pseudo) {
         ScopedTimer t("emit_pseudo");

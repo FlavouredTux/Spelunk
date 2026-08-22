@@ -125,7 +125,7 @@ void help_syms() {
     std::println("                       --row-limit N caps emitted rows for scripted use.");
     std::println("      --collisions     every name / fingerprint bound to >1 address (TSV/JSON)");
     std::println("      --validate NAME  every addr bound to NAME + byte-similar lookalikes");
-    std::println("      --containing-fn VA  entry/size/name/offset of the function covering VA");
+    std::println("      --containing-fn FN|VA  entry/size/name/offset of the function covering VA");
     std::println("      --strings        printable strings (addr | text | xrefs)");
     std::println("      --surfaces       app/subsystem inventory (ScriptVM, network, media,");
     std::println("                       web auth, storage, analytics, crash/update, etc.);");
@@ -162,7 +162,7 @@ void help_syms() {
     std::println("                       finds resolver functions (longest stride-8 write run);");
     std::println("                       merged TSV: idx, str_va, symbol, fnptr_va, n_callsites,");
     std::println("                       top_callsites. --filter cat,... / --max-callsites N (default 5).");
-    std::println("      --refs-to VA     callers of VA (one-shot reverse xref)");
+    std::println("      --refs-to FN|VA  callers of FN or VA (one-shot reverse xref)");
     std::println("      --callees VA     direct/tail/indirect_const callees of the fn at VA");
     std::println("      --callees-class NAME  JSON {{slot_N: [callees]}} for every vfn of an RTTI class");
     std::println("      --json           machine-readable output where supported");
@@ -173,9 +173,9 @@ void help_xrefs() {
     std::println("  -X, --xrefs          full call graph (all fn -> call targets)");
     std::println("      --data-xrefs     TSV <target>\\t<site>\\t<kind> for every rip-rel / abs");
     std::println("                       data-section reference (kind = read/write/lea)");
-    std::println("      --refs-to VA     target-only callers/code-ptr/lea for one VA");
+    std::println("      --refs-to FN|VA  target-only callers/code-ptr/lea for one FN or VA");
     std::println("                       --access read|write|lea|code-ptr|all filters data refs");
-    std::println("      --refs-to-loose VA  superset: also scans constant-pool imm64s and");
+    std::println("      --refs-to-loose FN|VA  superset: also scans constant-pool imm64s and");
     std::println("                       R_*_RELATIVE relocs whose addend == VA, recovering");
     std::println("                       fn-pointer-only dispatch shapes");
     std::println("      --state-map VA   target-only read/write/lea map for one state/global");

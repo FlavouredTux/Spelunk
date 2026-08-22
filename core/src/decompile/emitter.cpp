@@ -330,6 +330,79 @@ namespace {
     return text;
 }
 
+// Count statements that subscript or shift-index through an untyped
+// pointer. A parameter or declaration spelled `void* name` makes any
+// later `name[...]` invalid C - deliberate RE guidance in a listing,
+// but worth flagging since everything else around it compiles.
+// Casts like `((T*)p)[i]` are already valid and never match.
+[[nodiscard]] std::size_t count_untyped_pointer_index_sites(
+    const std::string& text) {
+    std::vector<std::string> untyped_names;
+    const auto is_ident_char = [](char c) {
+        const auto uc = static_cast<unsigned char>(c);
+        return std::isalnum(uc) || c == '_';
+    };
+    const auto scan_line = [&](std::string_view line) {
+        std::size_t pos = 0;
+        while ((pos = line.find("void*", pos)) != std::string_view::npos) {
+            pos += 5;
+            if (pos < line.size() && line[pos] == '*') continue;  // void**: indexable
+            while (pos < line.size() && line[pos] == ' ') ++pos;
+            const std::size_t start = pos;
+            while (pos < line.size() && is_ident_char(line[pos])) ++pos;
+            if (pos > start) {
+                untyped_names.emplace_back(line.substr(start, pos - start));
+            }
+        }
+    };
+
+    std::size_t sites = 0;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        const std::string_view line(text.data() + start, end - start);
+        const std::string_view trimmed = trim_line_view(line);
+        if (trimmed.starts_with("//")) {
+            if (end == text.size()) break;
+            start = end + 1;
+            continue;
+        }
+        scan_line(trimmed);
+        for (const std::string& name : untyped_names) {
+            std::size_t hit = 0;
+            while ((hit = trimmed.find(name, hit)) != std::string_view::npos) {
+                const std::size_t after = hit + name.size();
+                const bool whole = (hit == 0 || !is_ident_char(trimmed[hit - 1])) &&
+                                   (after >= trimmed.size() ||
+                                    !is_ident_char(trimmed[after]));
+                if (whole && after < trimmed.size()) {
+                    std::size_t bracket = after;
+                    while (bracket < trimmed.size() &&
+                           trimmed[bracket] == ' ') ++bracket;
+                    // Skip the name's own declarator (`void* name[N];` is
+                    // a valid array of void*); anything else indexing
+                    // through the untyped pointer counts once per line.
+                    const bool own_declarator =
+                        bracket != after && hit >= 6 &&
+                        trimmed.substr(0, 5) == "void*" &&
+                        trimmed.substr(5, hit - 5).find_first_not_of(' ') ==
+                            std::string_view::npos;
+                    if (bracket < trimmed.size() && trimmed[bracket] == '[' &&
+                        !own_declarator) {
+                        ++sites;
+                        break;
+                    }
+                }
+                hit = after;
+            }
+        }
+        if (end == text.size()) break;
+        start = end + 1;
+    }
+    return sites;
+}
+
 [[nodiscard]] std::string compact_ppc_type_names(std::string text) {
     static constexpr std::array<std::string_view, 3> families{
         "PpcGlobalState", "PpcObject", "PpcState"
@@ -13169,6 +13242,24 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             out = rename_ppc_temporaries(std::move(out));
             out = fix_ppc_offset_pointer_declarations(std::move(out));
             out = compact_ppc_type_names(std::move(out));
+        }
+        // Non-compilable-spelling note: subscripting through a void* is
+        // deliberate RE guidance here, but unlike everything else in a
+        // listing it will not compile as written. Say so once, above the
+        // function, instead of letting the reader discover it at cc time.
+        if (const std::size_t sites = count_untyped_pointer_index_sites(out);
+            sites > 0) {
+            std::string note = std::format(
+                "// note: {} statement{} index through untyped pointers "
+                "(void*); guidance only, not valid C without record types\n",
+                sites, sites == 1 ? "" : "s");
+            const std::string signature = header.ends_with('\n')
+                ? header.substr(0, header.size() - 1)
+                : header;
+            const std::size_t at = out.find(signature);
+            if (at != std::string::npos) {
+                out.insert(at, std::move(note) + "\n");
+            }
         }
     }
 

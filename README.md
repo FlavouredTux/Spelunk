@@ -360,7 +360,7 @@ ember [options] <binary>
       --base-va 0xVA     base address for --raw-bytes
       --apply-patches F  apply (vaddr_hex, bytes_hex) patches to the binary
       --trace PATH       runtime facts: edges, qwords, objects, vptrs
-      --refs-to-loose VA find direct refs plus pointer slots to VA
+      --refs-to-loose FN|VA  find direct refs plus pointer slots to FN or VA
       --explain-vcall OBJ:OFF  resolve *( *(OBJ) + OFF )
       --dump-object ADDR --size N  classify object qwords
       --cache-dir DIR    override ~/.cache/ember

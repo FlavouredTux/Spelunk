@@ -17,6 +17,12 @@ namespace ember {
 struct LandingPad {
     addr_t lp_addr      = 0;
     u64    action_index = 0;
+    // Catch-type evidence: virtual address of the std::type_info object
+    // named by the first action filter guarding this pad. 0 for plain
+    // cleanups (no action record) or when the type table wasn't decoded.
+    // Display layers resolve the symbol + demangle; the parser only
+    // carries the address so the struct stays cheap to copy.
+    u64    typeinfo_va  = 0;
 };
 
 // Map from call-site instruction address to its landing pad, aggregated

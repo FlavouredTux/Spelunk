@@ -290,6 +290,18 @@ cmake --build build -j
 ./build/cli/ember --help
 ```
 
+Desktop GUI (optional, needs Qt 6 Widgets; linked straight against the
+core, no IPC). IDA-style layout: Functions window, disassembly and
+pseudocode tabs, Output window, navigation band. `F5` pseudocode, `G` jump
+to address, `Esc` back, `Ctrl+Enter` forward, `Shift+F12` strings:
+
+```sh
+cmake --preset gui && cmake --build --preset gui
+./build/gui/gui/ember-gui path/to/binary
+# headless smoke test / screenshot
+QT_QPA_PLATFORM=offscreen ./build/gui/gui/ember-gui --screenshot out.png path/to/binary
+```
+
 Python wrapper:
 
 ```sh

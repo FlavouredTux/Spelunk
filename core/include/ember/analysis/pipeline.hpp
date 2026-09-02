@@ -41,8 +41,21 @@ resolve_function(const Binary& b, std::string_view symbol,
 std::optional<FuncWindow>
 resolve_function_at(const Binary& b, addr_t addr);
 
+// Optional knobs for `format_disasm`.
+struct DisasmOptions {
+    // Callers to list in the `;   xrefs from:` header. Unset: compute them
+    // with `compute_callers`, which costs one whole-program call-graph
+    // walk per call. Set: use as-is; an empty span omits the header.
+    // Interactive front ends build the graph once per session and pass
+    // the slice for this function here.
+    std::optional<std::span<const addr_t>> callers;
+};
+
 Result<std::string>
 format_disasm(const Binary& b, const FuncWindow& w);
+
+Result<std::string>
+format_disasm(const Binary& b, const FuncWindow& w, const DisasmOptions& opts);
 
 Result<std::string>
 format_disasm_range(const Binary& b, addr_t start, addr_t end);

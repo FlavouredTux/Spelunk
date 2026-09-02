@@ -586,6 +586,11 @@ resolve_function_at(const Binary& b, addr_t addr) {
 
 Result<std::string>
 format_disasm(const Binary& b, const FuncWindow& w) {
+    return format_disasm(b, w, DisasmOptions{});
+}
+
+Result<std::string>
+format_disasm(const Binary& b, const FuncWindow& w, const DisasmOptions& opts) {
     auto avail = b.bytes_at(w.start);
     if (avail.empty()) {
         return std::unexpected(Error::invalid_format(
@@ -601,7 +606,15 @@ format_disasm(const Binary& b, const FuncWindow& w) {
     // first invocation (~1s on a 12k-fn binary), but the result reads as a
     // jump-off point - `; xrefs from: foo, bar, baz (+12 more)` saves the
     // common "open disasm, then go grep callers separately" round trip.
-    if (const auto callers = compute_callers(b, w.start); !callers.empty()) {
+    std::vector<addr_t>     computed;
+    std::span<const addr_t> callers;
+    if (opts.callers) {
+        callers = *opts.callers;
+    } else {
+        computed = compute_callers(b, w.start);
+        callers  = computed;
+    }
+    if (!callers.empty()) {
         constexpr std::size_t kMaxShown = 8;
         const std::size_t shown = std::min(callers.size(), kMaxShown);
         std::string line = ";   xrefs from: ";

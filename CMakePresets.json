@@ -47,6 +47,15 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "EMBER_BUILD_CLI": "OFF"
             }
+        },
+        {
+            "name": "gui",
+            "displayName": "Release + Qt 6 GUI",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "EMBER_BUILD_GUI": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -54,7 +63,8 @@
         { "name": "debug",           "configurePreset": "debug" },
         { "name": "relwithdebinfo",  "configurePreset": "relwithdebinfo" },
         { "name": "asan",            "configurePreset": "asan" },
-        { "name": "no-cli",          "configurePreset": "no-cli" }
+        { "name": "no-cli",          "configurePreset": "no-cli" },
+        { "name": "gui",             "configurePreset": "gui" }
     ],
     "testPresets": [
         {

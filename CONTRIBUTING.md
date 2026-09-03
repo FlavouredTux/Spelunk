@@ -85,8 +85,12 @@ suite minus the `dbg_*` smoke tests, which need ptrace. Run it with the
 gcc major the goldens were generated with (gcc 16 today; a `gcc:16`
 container works). `scripts/ci.sh clang` builds the core with clang and
 libc++ and runs the toolchain-independent unit tests; `scripts/ci.sh
-release` builds, strips and packages the CLI. Wire those three into
-whatever the host offers.
+release` builds, strips and packages the CLI. `scripts/ci.sh asan` runs
+the suite under AddressSanitizer and UBSan, and `scripts/ci.sh fuzz`
+builds the libFuzzer harnesses in `tests/fuzz/` (every loader, every
+decoder, the PDB reader) and runs each for `FUZZ_SECONDS`. A crash lands
+as `build-fuzz/crash-<target>-<hash>`; reproduce it with
+`build-fuzz/tests/fuzz/<target> <file>`. Wire what the host can run.
 
 ## Code style
 

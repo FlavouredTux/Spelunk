@@ -20,6 +20,7 @@ option(EMBER_WERROR    "Treat warnings as errors"     ON)
 option(EMBER_SANITIZE  "Enable AddressSanitizer+UBSan" OFF)
 option(EMBER_BUILD_CLI "Build the command-line tool"  ON)
 option(EMBER_BUILD_GUI "Build the Qt 6 desktop front end" OFF)
+option(EMBER_BUILD_FUZZERS "Build the libFuzzer targets (clang + EMBER_SANITIZE)" OFF)
 option(EMBER_COMPILE_FIXTURES
     "Compile test fixtures from source instead of staging the committed binaries" OFF)
 
@@ -43,6 +44,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(ember_flags INTERFACE
             -fsanitize=address,undefined)
+        # gcc's maybe-uninitialized heuristic misfires inside <regex> once
+        # the sanitizer instrumentation is in; the sanitizers themselves
+        # catch real uninitialized reads at run time.
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(ember_flags INTERFACE -Wno-maybe-uninitialized)
+        endif()
     endif()
 elseif(MSVC)
     target_compile_options(ember_flags INTERFACE /W4 /permissive- /Zc:preprocessor)
@@ -71,4 +78,7 @@ if(BUILD_TESTING)
     # golden tests inside tests/CMakeLists.txt gate themselves on the
     # ember_cli target so they no-op when EMBER_BUILD_CLI=OFF.
     add_subdirectory(tests)
+endif()
+if(EMBER_BUILD_FUZZERS)
+    add_subdirectory(tests/fuzz)
 endif()

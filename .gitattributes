@@ -7,3 +7,4 @@ tests/golden/**     linguist-generated=true
 # Binary fixtures - don't try to diff these.
 tests/fixtures/**   binary
 *.teef              binary
+tests/fuzz/corpus/** binary

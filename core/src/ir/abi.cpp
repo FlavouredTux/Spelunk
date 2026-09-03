@@ -1,5 +1,9 @@
 #include <ember/ir/abi.hpp>
 
+#include <span>
+
+#include <ember/disasm/register.hpp>
+
 namespace ember {
 
 namespace {

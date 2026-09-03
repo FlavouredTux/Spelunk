@@ -1,9 +1,14 @@
 #include <ember/ir/lifter.hpp>
 
+#include <expected>
 #include <format>
+#include <memory>
 
+#include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/error.hpp>
 #include <ember/extension/lifter_registry.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/arm32_lifter.hpp>
 #include <ember/ir/arm64_lifter.hpp>
 #include <ember/ir/ppc_lifter.hpp>

@@ -69,11 +69,25 @@ add_library(ember_core STATIC
     src/ir/types.cpp
     src/ir/lifter.cpp
     src/ir/ppc_lifter.cpp
+    src/ir/ppc_lifter_control.cpp
+    src/ir/ppc_lifter_fp.cpp
+    src/ir/ppc_lifter_operands.cpp
+    src/ir/ppc_lifter_ps.cpp
     src/ir/x64_lifter.cpp
+    src/ir/x64_lifter_alu.cpp
+    src/ir/x64_lifter_control.cpp
+    src/ir/x64_lifter_data.cpp
+    src/ir/x64_lifter_flags.cpp
+    src/ir/x64_lifter_operands.cpp
+    src/ir/x64_lifter_simd.cpp
     src/ir/arm64_lifter.cpp
     src/ir/arm32_lifter.cpp
     src/ir/ssa.cpp
     src/ir/passes.cpp
+    src/ir/passes_fold.cpp
+    src/ir/passes_idiom.cpp
+    src/ir/passes_memory.cpp
+    src/ir/passes_simplify.cpp
     src/structure/structurer.cpp
     src/decompile/emitter.cpp
     src/decompile/emitter_abi.cpp

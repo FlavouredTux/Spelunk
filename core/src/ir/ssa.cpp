@@ -14,7 +14,10 @@
 #include <vector>
 
 #include <ember/analysis/cfg_util.hpp>
+#include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/ir/ir.hpp>
 
 namespace ember {
 

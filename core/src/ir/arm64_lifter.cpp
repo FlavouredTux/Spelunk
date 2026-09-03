@@ -1,10 +1,18 @@
 #include <ember/ir/arm64_lifter.hpp>
 
+#include <cstddef>
 #include <format>
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include <ember/analysis/function.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/ir/abi.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/ssa.hpp>
 
 namespace ember {

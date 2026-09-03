@@ -1,7 +1,12 @@
 #include <ember/ir/ir.hpp>
 
+#include <cstddef>
 #include <format>
 #include <string>
+#include <string_view>
+
+#include <ember/common/types.hpp>
+#include <ember/disasm/register.hpp>
 
 namespace ember {
 

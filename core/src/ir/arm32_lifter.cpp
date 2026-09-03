@@ -1,11 +1,20 @@
 #include <ember/ir/arm32_lifter.hpp>
 
 #include <bit>
+#include <cstddef>
 #include <format>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include <ember/analysis/function.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/ir/abi.hpp>
+#include <ember/ir/ir.hpp>
 
 // ARM (A32) → IR lifter. Mirrors the AArch64 lifter's shape: register file
 // is 32-bit (self-canonical, no sub-register views), NZCV maps onto the

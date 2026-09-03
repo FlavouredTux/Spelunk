@@ -1,7 +1,13 @@
-#include <ember/ir/types.hpp>
+#include <ember/common/types.hpp>
 
+#include <cstddef>
 #include <format>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <ember/ir/abi.hpp>
+#include <ember/ir/types.hpp>
 
 namespace ember {
 

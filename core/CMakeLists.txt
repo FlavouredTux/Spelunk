@@ -59,7 +59,6 @@ add_library(ember_core STATIC
     src/analysis/sigs.cpp
     src/analysis/identify.cpp
     src/analysis/kismet.cpp
-    src/analysis/libcxx_string.cpp
     src/analysis/rtti.cpp
     src/analysis/msvc_rtti.cpp
     src/analysis/vtables.cpp
@@ -77,13 +76,31 @@ add_library(ember_core STATIC
     src/ir/passes.cpp
     src/structure/structurer.cpp
     src/decompile/emitter.cpp
-    src/decompile/emitter_helpers.cpp
+    src/decompile/emitter_abi.cpp
+    src/decompile/emitter_analyze.cpp
+    src/decompile/emitter_block.cpp
+    src/decompile/emitter_calls.cpp
+    src/decompile/emitter_expr.cpp
+    src/decompile/emitter_flags.cpp
+    src/decompile/emitter_infer.cpp
+    src/decompile/emitter_inline.cpp
+    src/decompile/emitter_leaf.cpp
+    src/decompile/emitter_mem.cpp
+    src/decompile/emitter_noise.cpp
+    src/decompile/emitter_objc.cpp
+    src/decompile/emitter_records.cpp
+    src/decompile/emitter_regions.cpp
+    src/decompile/emitter_setup.cpp
+    src/decompile/emitter_strings.cpp
     src/decompile/emitter_tables.cpp
+    src/decompile/emitter_text.cpp
+    src/decompile/emitter_types.cpp
     src/script/declarative.cpp
     src/debug/target.cpp
     src/debug/unwind_rbp.cpp
     src/debug/unwind_eh.cpp
     src/debug/unwind_scavenge.cpp
+    src/analysis/libcxx_string.cpp
 )
 add_library(ember::core ALIAS ember_core)
 

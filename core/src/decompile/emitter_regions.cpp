@@ -1,3 +1,197 @@
+// Region-level helpers: for-update collection and structured control flow.
+#include <cstddef>
+#include <format>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <ember/common/types.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/ir/ir.hpp>
+#include <ember/ir/ssa.hpp>
+#include <ember/structure/region.hpp>
+
+#include "emitter_internal.hpp"
+
+namespace ember::emit {
+
+void Emitter::collect_for_updates(const Region& r) {
+    if (r.kind == RegionKind::For && r.has_update) {
+        auto it = fn->block_at.find(r.update_block);
+        u32 resolved_inst = r.update_inst;
+        if (it != fn->block_at.end() &&
+            !render_update_inst(r.update_block, r.update_inst,
+                                &resolved_inst).empty()) {
+            for_update_positions.emplace(it->second, resolved_inst);
+        }
+    }
+    for (const auto& c : r.children) if (c) collect_for_updates(*c);
+}
+
+void Emitter::collect_goto_targets(const Region& r) {
+    if (r.kind == RegionKind::Goto) {
+        goto_targets.insert(r.target);
+    }
+    for (const auto& c : r.children) if (c) collect_goto_targets(*c);
+}
+
+std::string
+Emitter::render_update_inst(addr_t block_addr, u32 inst_idx,
+                            u32* resolved_inst) const {
+    auto it = fn->block_at.find(block_addr);
+    if (it == fn->block_at.end()) return {};
+    const auto& bb = fn->blocks[it->second];
+    const auto render_at = [&](u32 index) -> std::string {
+        if (index >= bb.insts.size()) return {};
+        const auto& inst = bb.insts[index];
+        if (auto name = merge_assignment_name_for(inst); name) {
+            std::string statement = format_merge_assignment(inst, *name);
+            while (!statement.empty() &&
+                   (statement.back() == ';' || statement.back() == '\n')) {
+                statement.pop_back();
+            }
+            return statement;
+        }
+        if (inst.op != IrOp::Store || inst.src_count < 2) return {};
+        const auto& addr = inst.srcs[0];
+        const auto& val  = inst.srcs[1];
+        std::string lhs;
+        if (auto off = stack_offset(addr); off) lhs = stack_name(*off);
+        if (lhs.empty()) lhs = format_mem(addr, val.type, inst.segment);
+        std::string statement = try_compound_store(lhs, addr, val);
+        while (!statement.empty() &&
+               (statement.back() == ';' || statement.back() == '\n')) {
+            statement.pop_back();
+        }
+        return statement;
+    };
+    if (std::string direct = render_at(inst_idx); !direct.empty()) {
+        if (resolved_inst) *resolved_inst = inst_idx;
+        return direct;
+    }
+    for (u32 index = 0; index < bb.insts.size(); ++index) {
+        std::string candidate = render_at(index);
+        if (!candidate.ends_with("++") && !candidate.ends_with("--")) continue;
+        if (resolved_inst) *resolved_inst = index;
+        return candidate;
+    }
+    return {};
+}
+
+std::optional<u8>
+Emitter::trace_to_self_arg_slot(const IrValue& v, int depth) const {
+    if (depth > 8) return std::nullopt;
+    IrValue cur = v;
+    for (int hop = 0; hop < 8; ++hop) {
+        if (cur.kind == IrValueKind::Temp) {
+            auto k = ssa_key(cur);
+            if (!k) return std::nullopt;
+            auto it = defs.find(*k);
+            if (it == defs.end()) return std::nullopt;
+            const IrInst* d = it->second;
+            if ((d->op == IrOp::Assign || d->op == IrOp::Trunc ||
+                 d->op == IrOp::ZExt   || d->op == IrOp::SExt) &&
+                d->src_count == 1) {
+                cur = d->srcs[0];
+                continue;
+            }
+            if (d->op == IrOp::Load && d->segment == Reg::None &&
+                d->src_count >= 1) {
+                if (auto off = stack_offset(d->srcs[0]); off) {
+                    if (auto init = init_only_slot_value.find(*off);
+                        init != init_only_slot_value.end()) {
+                        cur = init->second;
+                        continue;
+                    }
+                }
+            }
+            return std::nullopt;
+        }
+        if (cur.kind != IrValueKind::Reg) return std::nullopt;
+        const Reg canon = canonical_reg(cur.reg);
+        if (cur.version == 0) {
+            for (u8 i = 0; i < self_arg_layout.size(); ++i) {
+                if (canonical_reg(self_arg_layout[i].reg) == canon) return i;
+            }
+            return std::nullopt;
+        }
+        if (auto preserved = preserved_call_arg_for_clobber(cur.reg, cur.version);
+            preserved) {
+            return trace_to_self_arg_slot(*preserved, depth + 1);
+        }
+        const IrInst* d = def_of(cur);
+        if (!d) return std::nullopt;
+        if (d->op == IrOp::Assign && d->src_count == 1) {
+            cur = d->srcs[0];
+            continue;
+        }
+        if (d->op == IrOp::Load && d->segment == Reg::None &&
+            d->src_count >= 1) {
+            if (auto off = stack_offset(d->srcs[0]); off) {
+                if (auto init = init_only_slot_value.find(*off);
+                    init != init_only_slot_value.end()) {
+                    cur = init->second;
+                    continue;
+                }
+            }
+        }
+        if (d->op == IrOp::Phi && !d->phi_operands.empty()) {
+            std::optional<u8> common;
+            for (const auto& op : d->phi_operands) {
+                auto opk = ssa_key(op);
+                if (opk && *opk == ssa_key(cur)) continue;  // self-ref
+                auto slot = trace_to_self_arg_slot(op, depth + 1);
+                if (!slot) return std::nullopt;
+                if (!common) common = *slot;
+                else if (*common != *slot) return std::nullopt;
+            }
+            return common;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+bool Emitter::region_always_exits(const Region& r) noexcept {
+    const Region* cur = &r;
+    while (cur && cur->kind == RegionKind::Seq && !cur->children.empty()) {
+        cur = cur->children.back().get();
+    }
+    if (!cur) return false;
+    switch (cur->kind) {
+        case RegionKind::Return:
+        case RegionKind::Break:
+        case RegionKind::Continue:
+        case RegionKind::Unreachable:
+        case RegionKind::Goto:
+            return true;
+        case RegionKind::IfElse:
+            // Both arms must always exit for the if to always exit.
+            return cur->children.size() >= 2 &&
+                   cur->children[0] && cur->children[1] &&
+                   region_always_exits(*cur->children[0]) &&
+                   region_always_exits(*cur->children[1]);
+        default:
+            return false;
+    }
+}
+
+bool Emitter::rendered_region_empty(std::string_view s) noexcept {
+    std::size_t line_start = 0;
+    while (line_start <= s.size()) {
+        std::size_t line_end = s.find('\n', line_start);
+        if (line_end == std::string_view::npos) line_end = s.size();
+        std::string_view line = trim_line_view(s.substr(line_start, line_end - line_start));
+        if (!line.empty()) {
+            if (!line_semantically_empty(line)) return false;
+        }
+        if (line_end == s.size()) break;
+        line_start = line_end + 1;
+    }
+    return true;
+}
+
 void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
 
@@ -110,7 +304,7 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const auto bindings_before_children = emitted_bindings;
     std::string then_buf;
-    if (r.children.size() > 0) emit_region(*r.children[0], depth + 1, then_buf);
+    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, then_buf);
     auto bindings_after_then = emitted_bindings;
     emitted_bindings = bindings_before_children;
     std::string else_buf;
@@ -378,3 +572,5 @@ void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) c
     }
     out += std::format("{}}}\n", ind);
 }
+
+}  // namespace ember::emit

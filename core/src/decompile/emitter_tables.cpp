@@ -1,9 +1,16 @@
+// libc / ObjC arity and argument-type tables the emitter consults.
+
 #include "emitter_tables.hpp"
 
 #include <cstddef>
+#include <optional>
+#include <string_view>
 #include <utility>
 
-namespace ember::detail {
+#include <ember/common/types.hpp>
+#include <ember/ir/ir.hpp>
+
+namespace ember::emit {
 
 namespace {
 
@@ -317,4 +324,4 @@ std::string_view c_type_name(IrType t) noexcept {
     return "?";
 }
 
-}  // namespace ember::detail
+}  // namespace ember::emit

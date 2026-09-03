@@ -8,8 +8,8 @@ add_executable(ember_cli
     src/kismet.cpp
     src/main.cpp
     src/patches.cpp
-    src/subcommands.cpp
     src/util.cpp
+    src/subcommands.cpp
 )
 
 # Header/type import is optional at build time. The CLI keeps a useful error
@@ -24,6 +24,9 @@ endif()
 
 set_target_properties(ember_cli PROPERTIES
     OUTPUT_NAME ember
+)
+target_compile_definitions(ember_cli PRIVATE
+    EMBER_VERSION_STRING="${PROJECT_VERSION}"
 )
 
 target_link_libraries(ember_cli PRIVATE

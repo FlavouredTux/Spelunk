@@ -1,0 +1,864 @@
+// Expression, operator and statement rendering.
+
+#include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <format>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/ir/ir.hpp>
+#include <ember/ir/ssa.hpp>
+
+#include "emitter_internal.hpp"
+#include "emitter_tables.hpp"
+
+namespace ember::emit {
+
+std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
+    // Recognize compiler flag-based compare idioms and emit direct C comparisons.
+    if (v.type == IrType::I1 &&
+        (v.kind == IrValueKind::Temp || v.kind == IrValueKind::Flag)) {
+        if (auto s = try_simplify_flag(v, depth, false, false, min_prec); s) return *s;
+    }
+    switch (v.kind) {
+        case IrValueKind::None:
+            return "";
+        case IrValueKind::Reg: {
+            // For versioned regs, inline a trivial Imm assignment - lets the
+            // absorbed call() show the actual constant instead of an orphan reg name.
+            if (v.version > 0 && depth < kMaxExprDepth) {
+                const IrInst* d = def_of(v);
+                while (d && d->op == IrOp::Assign && d->src_count == 1) {
+                    const auto& src = d->srcs[0];
+                    if (src.kind == IrValueKind::Imm) return expr(src, depth + 1, min_prec);
+                    if (src.kind == IrValueKind::Reg && src.version == 0) {
+                        return render_reg_leaf(src.reg, src.version, depth + 1,
+                                               min_prec);
+                    }
+                    break;
+                }
+            }
+            return render_reg_leaf(v.reg, v.version, depth, min_prec);
+        }
+        case IrValueKind::Flag:
+            return std::string(flag_name(v.flag));
+        case IrValueKind::Imm:
+            return format_imm(v);
+        case IrValueKind::Temp: {
+            if (auto key = ssa_key(v); key) {
+                if (auto merged = merge_value_names.find(*key);
+                    merged != merge_value_names.end()) return merged->second;
+            }
+            // A temp whose value is a stack-relative address renders as &local_X
+            // at every use, so we don't need a named def line like "u64 tN = &local_X;".
+            if (auto off = stack_offset(v); off) {
+                return std::format("&{}", stack_name(*off));
+            }
+            // Stack loads are already a short source-level leaf.  Render
+            // them even at the recursion cap so a long PPC register shuffle
+            // ends at `local_34` rather than an undeclared `t14`.
+            if (const IrInst* d = def_of(v);
+                d && d->op == IrOp::Load && d->src_count >= 1 &&
+                d->segment == Reg::None && stack_offset(d->srcs[0])) {
+                return format_load_rhs(*d, depth, min_prec);
+            }
+            if (depth < kMaxExprDepth && should_inline(v)) {
+                if (const auto* d = def_of(v)) return expand(*d, depth + 1, min_prec);
+            }
+            return std::format("t{}", v.temp);
+        }
+    }
+    return "";
+}
+
+    std::string Emitter::format_load_rhs(const IrInst& d,
+                                     int depth,
+                                     int min_prec) const {
+    if (d.op != IrOp::Load || d.src_count < 1) return "";
+    const std::string refined = c_type_name_for(d.dst);
+    // Init-only stack slot: forward to the live-in value the entry prologue
+    // stored. Keeping this in one helper prevents merge-local materializers
+    // from rendering the same load as a raw `local_X` while normal expr()
+    // rendering correctly says `a2`.
+    if (d.segment == Reg::None) {
+        if (auto off = stack_offset(d.srcs[0]); off) {
+            if (auto it = init_only_slot_value.find(*off);
+                it != init_only_slot_value.end()) {
+                return expr(it->second, depth, min_prec);
+            }
+        }
+        // The load width describes pointer storage, not its pointee.  If
+        // downstream uses refined this result to T*, seed the exact global
+        // slot with T* before format_mem records the raw integer width.
+        if (binary && refined.ends_with('*')) {
+            if (auto imm = try_resolve_imm_addr(d.srcs[0]); imm) {
+                const addr_t address = normalized_address(*imm);
+                if (const Symbol* symbol = binary->defined_object_at(address);
+                    symbol && symbol->kind == SymbolKind::Object &&
+                    symbol->addr == address) {
+                    note_global_decl(*symbol, refined);
+                }
+            }
+        }
+    }
+    return format_mem(d.srcs[0], d.dst.type, d.segment, depth, refined);
+}
+
+std::optional<std::string>
+Emitter::try_render_ppc_int_to_float(const IrInst& subtraction,
+                                     int depth) const {
+    if (!is_ppc_abi() || !fn || subtraction.op != IrOp::Sub ||
+        subtraction.src_count < 2 || !is_float_type(subtraction.dst.type)) {
+        return std::nullopt;
+    }
+    const IrInst* payload_load = def_stripped(subtraction.srcs[0]);
+    if (!payload_load || payload_load->op != IrOp::Load ||
+        payload_load->dst.type != IrType::F64 || payload_load->src_count < 1) {
+        return std::nullopt;
+    }
+    const auto high_word_offset = stack_offset(payload_load->srcs[0]);
+    if (!high_word_offset) return std::nullopt;
+    const i64 low_word_offset = *high_word_offset + 4;
+    const IrValue* best_source = nullptr;
+    addr_t best_address = 0;
+    for (const auto& block : fn->blocks) {
+        for (const IrInst& store : block.insts) {
+            if (store.op != IrOp::Store || store.src_count < 2) continue;
+            auto offset = stack_offset(store.srcs[0]);
+            if (!offset || *offset != low_word_offset) continue;
+            const IrInst* xor_value = def_stripped(store.srcs[1]);
+            if (!xor_value || xor_value->op != IrOp::Xor ||
+                xor_value->src_count < 2) continue;
+            const IrValue* source = nullptr;
+            for (u8 i = 0; i < 2; ++i) {
+                if (auto mask = resolve_imm(xor_value->srcs[i]);
+                    mask && static_cast<u32>(*mask) == 0x80000000u) {
+                    source = &xor_value->srcs[1 - i];
+                    break;
+                }
+            }
+            if (!source) continue;
+            if (payload_load->source_addr != 0 && store.source_addr != 0) {
+                if (store.source_addr > payload_load->source_addr) continue;
+                if (best_source && store.source_addr < best_address) continue;
+            } else if (best_source) {
+                continue;
+            }
+            best_source = source;
+            best_address = store.source_addr;
+        }
+    }
+    if (!best_source) return std::nullopt;
+    const std::string target_type = subtraction.dst.type == IrType::F32
+        ? "float" : "double";
+    return std::format("({})(int32_t)({})", target_type,
+                       expr(*best_source, depth + 1));
+}
+
+std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
+    switch (d.op) {
+        case IrOp::Assign:
+            return d.src_count >= 1 ? expr(d.srcs[0], depth, min_prec) : "";
+
+        case IrOp::Add: {
+            if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
+                return std::format("&{}", stack_name(*off));
+            }
+            if (is_ppc_abi()) {
+                if (auto navigation = try_render_ppc_navigation_table_address(
+                        d.dst, depth); navigation) return *navigation;
+                if (auto table = try_render_ppc_strided_table_address(
+                        d.dst, depth); table) return *table;
+                if (auto address = try_resolve_imm_addr(d.dst); address) {
+                    if (auto named = named_address_for_imm(normalized_address(*address)); named) {
+                        return *named;
+                    }
+                }
+            }
+            if (d.src_count >= 2) {
+                if (auto ivar = try_render_objc_ivar_addr_pair(d.srcs[0], d.srcs[1])) {
+                    return wrap_if_lt(*ivar, Prec::Postfix, min_prec);
+                }
+                if (auto ivar = try_render_objc_ivar_addr_pair(d.srcs[1], d.srcs[0])) {
+                    return wrap_if_lt(*ivar, Prec::Postfix, min_prec);
+                }
+            }
+            // `Add(x, negative_imm)` reads cleaner as `Sub(x, |imm|)`:
+            // `a - 7` beats `a + -7`. Skip INT64_MIN (no safe negation).
+            if (d.src_count >= 2 && d.srcs[1].kind == IrValueKind::Imm &&
+                d.srcs[1].imm < 0 &&
+                d.srcs[1].imm > std::numeric_limits<i64>::min()) {
+                IrInst rebuilt = d;
+                rebuilt.op           = IrOp::Sub;
+                rebuilt.srcs[1].imm  = -d.srcs[1].imm;
+                return format_binop(rebuilt, "-", depth, min_prec,
+                                    Prec::Add, /*commutative=*/false);
+            }
+            return format_binop(d, "+", depth, min_prec, Prec::Add, /*commutative=*/true);
+        }
+        case IrOp::Sub: {
+            if (auto converted = try_render_ppc_int_to_float(d, depth); converted) {
+                return wrap_if_lt(std::move(*converted), Prec::Unary, min_prec);
+            }
+            if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
+                return std::format("&{}", stack_name(*off));
+            }
+            if (is_ppc_abi()) {
+                if (auto address = try_resolve_imm_addr(d.dst); address) {
+                    if (auto named = named_address_for_imm(normalized_address(*address)); named) {
+                        return *named;
+                    }
+                }
+            }
+            return format_binop(d, "-", depth, min_prec, Prec::Add, /*commutative=*/false);
+        }
+        case IrOp::Mul:  return format_binop(d, "*", depth, min_prec, Prec::Mul,   true);
+        case IrOp::Div:  return format_binop(d, "/", depth, min_prec, Prec::Mul,   false);
+        case IrOp::Mod:  return format_binop(d, "%", depth, min_prec, Prec::Mul,   false);
+        case IrOp::And: {
+            if (is_ppc_abi()) {
+                const IrValue value = d.dst.kind == IrValueKind::Temp
+                    ? IrValue::make_temp(d.dst.temp, d.dst.type) : d.dst;
+                if (auto scaled = match_ppc_scaled_index(value); scaled) {
+                    std::string rendered = std::format(
+                        "{} * {}",
+                        expr(scaled->index, depth,
+                             std::to_underlying(Prec::Mul)),
+                        scaled->scale);
+                    return wrap_if_lt(std::move(rendered), Prec::Mul, min_prec);
+                }
+            }
+            return format_bitop(d, "&", depth, min_prec, Prec::BitAnd);
+        }
+        case IrOp::Or:   return format_bitop(d, "|", depth, min_prec, Prec::BitOr);
+        case IrOp::Xor:  return format_bitop(d, "^", depth, min_prec, Prec::BitXor);
+        case IrOp::Shl:  return format_binop(d, "<<", depth, min_prec, Prec::Shift, false);
+        case IrOp::Lshr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
+        case IrOp::Ashr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
+
+        case IrOp::Neg: {
+            std::string inner = expr(d.srcs[0], depth, std::to_underlying(Prec::Unary));
+            return wrap_if_lt("-" + inner, Prec::Unary, min_prec);
+        }
+        case IrOp::Not: {
+            const char* op = (d.dst.type == IrType::I1) ? "!" : "~";
+            std::string inner = expr(d.srcs[0], depth, std::to_underlying(Prec::Unary));
+            return wrap_if_lt(std::string(op) + inner, Prec::Unary, min_prec);
+        }
+        case IrOp::Clz:
+            return std::format("count_leading_zeros({})",
+                               expr(d.srcs[0], depth, 0));
+
+        case IrOp::CmpEq:  return format_binop(d, "==", depth, min_prec, Prec::Eq,  true);
+        case IrOp::CmpNe:  return format_binop(d, "!=", depth, min_prec, Prec::Eq,  true);
+        case IrOp::CmpSlt:
+        case IrOp::CmpUlt: return format_binop(d, "<",  depth, min_prec, Prec::Rel, false);
+        case IrOp::CmpSle:
+        case IrOp::CmpUle: return format_binop(d, "<=", depth, min_prec, Prec::Rel, false);
+        case IrOp::CmpSgt:
+        case IrOp::CmpUgt: return format_binop(d, ">",  depth, min_prec, Prec::Rel, false);
+        case IrOp::CmpSge:
+        case IrOp::CmpUge: return format_binop(d, ">=", depth, min_prec, Prec::Rel, false);
+
+        case IrOp::ZExt:
+        case IrOp::SExt:
+        case IrOp::Trunc: {
+            const IrValue& src = d.srcs[0];
+            // No-op: cast to the same type the value already has.
+            if (src.type == d.dst.type) {
+                return expr(src, depth, min_prec);
+            }
+            // If the header already narrowed this live-in arg to the cast's
+            // destination type, repeating `(u32)a1` at every use just leaks
+            // ABI width back into otherwise source-like output.
+            if (auto slot = trace_to_self_arg_slot(src);
+                slot && *slot < self_arg_type_overrides.size() &&
+                self_arg_type_overrides[*slot] &&
+                *self_arg_type_overrides[*slot] == d.dst.type) {
+                return expr(src, depth, min_prec);
+            }
+            // A generated source-level parameter name is already a semantic
+            // value, not an architectural register width. When a call
+            // argument was packed as zext(trunc(param)), render the param
+            // directly instead of `(u32)x`.
+            if ((d.op == IrOp::ZExt || d.op == IrOp::SExt) &&
+                (type_bits(d.dst.type) > type_bits(src.type))) {
+                if (const IrInst* inner = def_stripped(src);
+                    inner && inner->op == IrOp::Trunc && inner->src_count >= 1) {
+                    if (auto slot = trace_to_self_arg_slot(inner->srcs[0]);
+                        slot && *slot < self_arg_names.size() &&
+                        !self_arg_names[*slot].empty()) {
+                        return expr(inner->srcs[0], depth, min_prec);
+                    }
+                }
+            }
+            // The call-result inliner already proved this call has exactly
+            // one use inside this return expression. If the compiler then
+            // narrows it for a 32-bit add, prefer `foo(x) + 1` over
+            // `(u32)foo(x) + 1`; the source-level call carries the intent.
+            if (d.op == IrOp::Trunc) {
+                if (auto k = ssa_key(src); k && inline_call_expr.contains(*k)) {
+                    return expr(src, depth, min_prec);
+                }
+                if (d.dst.type == IrType::I8) {
+                    if (auto b = match_low_byte_setcc_merge(src); b) {
+                        std::string pred;
+                        if (auto s = try_simplify_flag(*b, depth + 1,
+                                                       /*negate=*/false,
+                                                       /*in_bool_ctx=*/false,
+                                                       std::to_underlying(Prec::Unary));
+                            s) {
+                            pred = *s;
+                        } else {
+                            pred = expr(*b, depth + 1, std::to_underlying(Prec::Unary));
+                        }
+                        return wrap_if_lt(std::format("({})({})",
+                                                      c_type_name(IrType::I8),
+                                                      pred),
+                                          Prec::Unary, min_prec);
+                    }
+                }
+            }
+            // `zext(trunc(x, T))` → `(T)x`. The trunc already produces the
+            // observable value; widening back to a bigger type is redundant
+            // for the reader.
+            if (d.op == IrOp::ZExt) {
+                if (const IrInst* inner = def_stripped(src);
+                    inner && inner->op == IrOp::Trunc && inner->src_count >= 1 &&
+                    type_bits(inner->dst.type) <= type_bits(d.dst.type)) {
+                    std::string casted = std::format(
+                        "({}){}",
+                        c_type_name(inner->dst.type),
+                        expr(inner->srcs[0], depth, std::to_underlying(Prec::Unary)));
+                    return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
+                }
+            }
+            std::string casted = std::format(
+                "({}){}",
+                c_type_name(d.dst.type),
+                expr(src, depth, std::to_underlying(Prec::Unary)));
+            return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
+        }
+
+        case IrOp::FpToInt: {
+            std::string casted = std::format(
+                "(int32_t){}",
+                expr(d.srcs[0], depth, std::to_underlying(Prec::Unary)));
+            return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
+        }
+
+        case IrOp::Load: {
+            return format_load_rhs(d, depth, min_prec);
+        }
+
+        case IrOp::AddCarry:
+            return std::format("carry_add({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
+        case IrOp::SubBorrow:
+            return std::format("borrow_sub({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
+        case IrOp::AddOverflow:
+            return std::format("overflow_add({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
+        case IrOp::SubOverflow:
+            return std::format("overflow_sub({}, {})",
+                               expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
+
+        case IrOp::Intrinsic: {
+            std::string args;
+            for (u8 i = 0; i < d.src_count && i < d.srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(d.srcs[i], depth, 0);
+            }
+            return std::format("{}({})", d.name, args);
+        }
+
+        case IrOp::Select: {
+            if (d.src_count < 3) return std::format("t{}", d.dst.temp);
+            // C's `?:` precedence sits above assignment but below most other
+            // operators; wrap in parens whenever the surrounding context isn't
+            // already paren-bounded so the reader doesn't have to think.
+            std::string c = expr(d.srcs[0], depth, std::to_underlying(Prec::LogOr));
+            std::string a = expr(d.srcs[1], depth, std::to_underlying(Prec::Cond));
+            std::string b = expr(d.srcs[2], depth, std::to_underlying(Prec::Cond));
+            return wrap_if_lt(std::format("{} ? {} : {}", c, a, b),
+                              Prec::Cond, min_prec);
+        }
+
+        default:
+            return std::format("t{}", d.dst.temp);
+    }
+}
+
+// Peephole: `store addr, (op load(addr), K)` → `<name> += K;` / `--name;` etc.
+// `lhs_text` is the already-rendered name of the storage location (stack,
+// global, or `*(T*)…`). Returns empty if no idiom match; caller falls back
+// to `lhs = expr;`.
+std::string Emitter::try_compound_store(std::string_view lhs_text,
+                                        const IrValue& addr,
+                                        const IrValue& val) const {
+    // val must be a binary op we know how to compound-assign.
+    IrValue core = val;
+    const IrInst* d = def_stripped(core);
+    for (int depth = 0; d && depth < 6 &&
+         (d->op == IrOp::Trunc || d->op == IrOp::ZExt || d->op == IrOp::SExt) &&
+         d->src_count >= 1; ++depth) {
+        core = d->srcs[0];
+        d = def_stripped(core);
+    }
+    if (!d || d->src_count < 2) return {};
+
+    std::string_view op_text;
+    switch (d->op) {
+        case IrOp::Add:  op_text = "+"; break;
+        case IrOp::Sub:  op_text = "-"; break;
+        case IrOp::Mul:  op_text = "*"; break;
+        case IrOp::And:  op_text = "&"; break;
+        case IrOp::Or:   op_text = "|"; break;
+        case IrOp::Xor:  op_text = "^"; break;
+        case IrOp::Shl:  op_text = "<<"; break;
+        case IrOp::Lshr: op_text = ">>"; break;
+        case IrOp::Ashr: op_text = ">>"; break;
+        default: return {};
+    }
+
+    // LHS of the binop must be a Load of the same storage as `addr`. For
+    // commutative ops we also accept the RHS as the load.
+    const bool commutative = d->op == IrOp::Add || d->op == IrOp::Mul ||
+                             d->op == IrOp::And || d->op == IrOp::Or  ||
+                             d->op == IrOp::Xor;
+
+    auto is_load_of_same_addr = [&](const IrValue& v) {
+        IrValue candidate = v;
+        const IrInst* ld = def_stripped(candidate);
+        for (int depth = 0; ld && depth < 6 &&
+             (ld->op == IrOp::Trunc || ld->op == IrOp::ZExt ||
+              ld->op == IrOp::SExt) && ld->src_count >= 1; ++depth) {
+            candidate = ld->srcs[0];
+            ld = def_stripped(candidate);
+        }
+        if (!ld || ld->op != IrOp::Load || ld->src_count < 1) return false;
+        if (same_ssa(ld->srcs[0], addr)) return true;
+        return format_mem(ld->srcs[0], ld->dst.type, ld->segment) == lhs_text;
+    };
+
+    const IrValue* delta = nullptr;
+    if (is_load_of_same_addr(d->srcs[0])) {
+        delta = &d->srcs[1];
+    } else if (commutative && is_load_of_same_addr(d->srcs[1])) {
+        delta = &d->srcs[0];
+    } else {
+        return {};
+    }
+
+    // Integer +/- 1 collapses further to ++/--.
+    if ((d->op == IrOp::Add || d->op == IrOp::Sub) &&
+        delta->kind == IrValueKind::Imm && delta->imm == 1 &&
+        !is_float_type(val.type)) {
+        const char* sym = (d->op == IrOp::Add) ? "++" : "--";
+        return std::format("{}{};", lhs_text, sym);
+    }
+    if (d->op == IrOp::And && delta->kind == IrValueKind::Imm) {
+        const unsigned bits = std::min<unsigned>(32, std::max<unsigned>(
+            1, type_bits(val.type)));
+        const u64 width_mask = bits == 32
+            ? 0xffffffffull : ((u64{1} << bits) - 1);
+        const u64 cleared = (~static_cast<u64>(delta->imm)) & width_mask;
+        if (cleared != 0 && std::has_single_bit(cleared)) {
+            return std::format("{} &= ~{:#x};", lhs_text, cleared);
+        }
+    }
+    return std::format("{} {}= {};", lhs_text, op_text, expr(*delta));
+}
+
+std::string Emitter::format_store(const IrInst& inst) const {
+    if (inst.src_count < 2) return "";
+    const auto& addr = inst.srcs[0];
+    const auto& val  = inst.srcs[1];
+    std::string lhs;
+    if (inst.segment == Reg::None) {
+        if (auto off = stack_offset(addr); off) {
+            // Dead-spill suppression: drop the store when the slot has no
+            // observable reader in the rendered output. Two cases collapse
+            // here: (1) no Load anywhere reads the slot (common -O0 spill-
+            // and-forget prologue noise), and (2) every load is an init-
+            // only forward to the original arg-reg, so the slot's name
+            // never appears in the body. Exception: slots whose name came
+            // from an external source (PDB S_REGREL32, sidecar annotation)
+            // carry source-level intent - keep their stores so the user's
+            // named locals don't silently disappear.
+            const bool has_reader = loaded_stack_slots.contains(*off);
+            const bool init_only  = init_only_slot_value.contains(*off);
+            if (!has_reader || init_only) {
+                auto it = frame_layout.slots.find(*off);
+                const bool user_named =
+                    it != frame_layout.slots.end() &&
+                    !it->second.type_override.empty();
+                if (!user_named) return "";
+            }
+            if (auto field = imported_stack_field(*off, val.type); field) {
+                lhs = *field;
+            } else if (auto it = frame_layout.slots.find(*off);
+                it != frame_layout.slots.end() && !it->second.name.empty()) {
+                lhs = it->second.name;
+            } else {
+                lhs = stack_name(*off);
+            }
+        }
+    }
+    if (lhs.empty()) {
+        lhs = format_mem(addr, val.type, inst.segment);
+    }
+    if (annotations && inst.segment == Reg::None) {
+        if (auto off = stack_offset(addr); off) {
+            auto slot = frame_layout.slots.find(*off);
+            if (slot != frame_layout.slots.end() &&
+                !slot->second.type_override.empty() &&
+                lhs == slot->second.name) {
+                const std::string record_name = imported_record_base(
+                    slot->second.type_override);
+                auto record = annotations->imported_records.find(record_name);
+                const std::size_t value_size = std::max<unsigned>(
+                    1, type_bits(val.type) / 8);
+                if (record != annotations->imported_records.end() &&
+                    record->second.size == value_size &&
+                    (value_size == 1 || value_size == 2 ||
+                     value_size == 4 || value_size == 8)) {
+                    return std::format("{} = ({}){{ ._raw = {} }};",
+                                       lhs, record_name, expr(val));
+                }
+            }
+        }
+    }
+    if (auto compound = try_compound_store(lhs, addr, val); !compound.empty()) {
+        return compound;
+    }
+    return std::format("{} = {};", lhs, expr(val));
+}
+
+std::string Emitter::format_stmt(const IrInst& inst) const {
+    if (auto name = merge_assignment_name_for(inst)) {
+        return format_merge_assignment(inst, *name);
+    }
+    switch (inst.op) {
+        case IrOp::Store:
+            return format_store(inst);
+
+        case IrOp::Assign: {
+            if (inst.src_count < 1) return "";
+            if (inst.dst.kind == IrValueKind::Reg) {
+                // Register Assigns are aliases.  When render_reg_leaf can
+                // already chase the destination to a source expression, an
+                // explicit `f31 = value;`/`r30 = ptr;` line is dead
+                // architectural noise even when the alias has several uses.
+                if (is_ppc_abi() &&
+                    !renders_raw_arch_reg_name(inst.dst)) return "";
+                // With rvalue forwarding in render_reg_leaf, a single reader
+                // inlines the source expression directly. The `reg = expr;`
+                // line becomes redundant in that case.
+                //
+                // Exception: a Reg assign whose only readers are Phi
+                // operands is the per-iteration update of a loop induction
+                // variable - visible_use_count excludes phi reads, so the
+                // count looks like 0 even though the value drives the loop.
+                // Without surfacing the assign, accumulator loops decompile
+                // to `do { } while (cond)` with the body work invisible.
+                // Detect by comparing visible_uses (excludes phi) to the
+                // broader uses-table count (includes phi).
+                if (visible_use_count(inst.dst) <= 1) {
+                    auto k = ssa_key(inst.dst);
+                    const u32 vis = visible_use_count(inst.dst);
+                    const u32 all = k ? use_count_by_key(*k) : 0u;
+                    if (all <= vis) return "";
+                }
+                return std::format("{} = {};",
+                                   reg_name(inst.dst.reg), expr(inst.srcs[0]));
+            }
+            if (inst.dst.kind == IrValueKind::Flag) {
+                if (use_count(inst.dst) == 0) return "";
+                return std::format("{} = {};",
+                                   flag_name(inst.dst.flag), expr(inst.srcs[0]));
+            }
+            if (inst.dst.kind == IrValueKind::Temp) {
+                if (use_count(inst.dst) <= 1) return "";
+                return std::format("{} t{} = {};",
+                                   c_type_name_for(inst.dst),
+                                   inst.dst.temp,
+                                   expr(inst.srcs[0]));
+            }
+            return "";
+        }
+
+        case IrOp::Load: {
+            if (is_canary_value_load(inst) || renders_stack_chk_guard_load(inst)) return "";
+            if (use_count(inst.dst) == 0) return "";
+            // Loads that cross a possible memory mutation must bind here even
+            // with one eventual use. Other single-use and cheap multi-use
+            // loads remain inline.
+            if (should_inline(inst.dst)) return "";
+            const std::string type = c_type_name_for(inst.dst);
+            std::string initializer = format_load_rhs(inst);
+            bool already_typed = false;
+            if (auto access = canonical_struct_access(inst.srcs[0]); access) {
+                if (auto member = synthetic_member_type(
+                        access->first, access->second); member) {
+                    already_typed = normalize_c_type_alias(*member) == type;
+                }
+            }
+            if (type.ends_with('*') && !already_typed &&
+                !initializer.starts_with('(') && initializer != "NULL") {
+                initializer = std::format("({}){}", type, initializer);
+            }
+            return std::format("{} t{} = {};", type, inst.dst.temp,
+                               initializer);
+        }
+
+        case IrOp::Intrinsic: {
+            // CET markers are emitted at every function entry on toolchains
+            // with -fcf-protection (Ubuntu 24.04's gcc-14 defaults to it).
+            // They're NOPs semantically, so suppress them from the output.
+            if (inst.name == "endbr64" || inst.name == "endbr32") return "";
+            std::string args;
+            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                if (i > 0) args += ", ";
+                args += expr(inst.srcs[i], 0, 0);
+            }
+            // `x64.*` tags a raw x86 mnemonic the lifter couldn't model
+            // in the IR (SIMD, FPU, system ops). Render it as a block
+            // comment so the reader sees the elision rather than an
+            // imaginary C call. The rest - explicit intrinsics like
+            // `sqrtss(x)` that the lifter emits deliberately - stay as
+            // calls because they carry real dataflow.
+            if (inst.name.starts_with("x64.")) {
+                return std::format("/* {}({}) */", inst.name, args);
+            }
+            if (inst.name.starts_with("ppc.ps_cmp") &&
+                inst.dst.kind == IrValueKind::Flag && use_count(inst.dst) == 0) {
+                // Paired-single compare helpers are pure value producers for
+                // the four CR bits. Do not print unused LT/GT/EQ lanes as
+                // misleading standalone calls when only one condition flows
+                // into the structured branch.
+                return "";
+            }
+            // If the intrinsic produces a value that survives downstream,
+            // bind it to a named temp so subsequent reads have something
+            // to refer to. Otherwise emit as a void statement.
+            if (inst.dst.kind == IrValueKind::Temp &&
+                visible_use_count(inst.dst) > 0) {
+                return std::format("{} t{} = {}({});",
+                                   c_type_name_for(inst.dst),
+                                   inst.dst.temp,
+                                   inst.name, args);
+            }
+            if (inst.dst.kind == IrValueKind::Reg &&
+                visible_use_count(inst.dst) > 0) {
+                return std::format("{} = {}({});",
+                                   reg_name(inst.dst.reg), inst.name, args);
+            }
+            if (inst.dst.kind == IrValueKind::Flag && use_count(inst.dst) > 0) {
+                return std::format("{} = {}({});",
+                                   flag_name(inst.dst.flag), inst.name, args);
+            }
+            return std::format("{}({});", inst.name, args);
+        }
+
+        default:
+            if (inlinable_op(inst.op) && inst.dst.kind == IrValueKind::Temp) {
+                if (visible_use_count(inst.dst) <= 1) return "";
+                if (stack_offset(inst.dst).has_value()) return "";
+                // Suppress the declaration when this temp's only consumers
+                // are flag-set instructions - those will inline the
+                // expression when they themselves render.
+                if (is_flag_feeder_temp(inst.dst)) return "";
+                // Low-byte boolean merges (`x & ~0xff | bool`) are usually
+                // compiler plumbing before a byte test. Rendering the carrier
+                // temp as `tN = ...` leaves dead-looking noise after the
+                // condition itself has simplified.
+                if (match_low_byte_setcc_merge(inst.dst)) return "";
+                const std::string type = c_type_name_for(inst.dst);
+                std::string initializer = expand(inst, 0);
+                if (type.ends_with('*') && !initializer.starts_with('(') &&
+                    initializer != "NULL") {
+                    initializer = std::format("({})({})", type, initializer);
+                }
+                return std::format("{} t{} = {};", type, inst.dst.temp,
+                                   initializer);
+            }
+            return "";
+    }
+}
+
+std::string Emitter::format_binop(const IrInst& d, std::string_view op,
+                                        int depth, int min_prec,
+                                        Prec self_prec,
+                                        bool commutative) const {
+    const int p = static_cast<int>(self_prec);
+    if (is_ppc_abi() && binary && d.op == IrOp::Add && d.src_count >= 2) {
+        for (u8 base_i = 0; base_i < 2; ++base_i) {
+            auto address = try_resolve_imm_addr(d.srcs[base_i]);
+            auto scaled = match_ppc_scaled_index(d.srcs[1 - base_i]);
+            if (!address || !scaled || scaled->scale <= 0) continue;
+            const Symbol* symbol = binary->defined_object_at(
+                normalized_address(*address));
+            if (!symbol || symbol->addr != normalized_address(*address) ||
+                symbol->name.empty()) continue;
+            const std::string name = global_display_name(*symbol);
+            auto table = ppc_strided_tables.find(name);
+            if (table == ppc_strided_tables.end()) {
+                if (symbol->size == 0 || scaled->scale <= 4 ||
+                    symbol->size % static_cast<u64>(scaled->scale) != 0) {
+                    continue;
+                }
+                auto [created, _] = ppc_strided_tables.try_emplace(name);
+                created->second.type_name = ppc_strided_tables.size() == 1
+                    ? "PpcDataEntry"
+                    : std::format("PpcDataEntry{}", ppc_strided_tables.size());
+                created->second.stride =
+                    static_cast<std::size_t>(scaled->scale);
+                global_decls[name] = created->second.type_name + "[]";
+                table = created;
+            }
+            if (table->second.stride !=
+                static_cast<std::size_t>(scaled->scale)) continue;
+            return wrap_if_lt(std::format("&{}[{}]", name,
+                expr(scaled->index, depth + 1,
+                     std::to_underlying(Prec::Postfix))),
+                Prec::Unary, min_prec);
+        }
+    }
+    if (d.op == IrOp::Add && d.src_count >= 2) {
+        if (auto off = resolve_imm(d.srcs[1]); off) {
+            if (auto field = imported_global_object_field(d.srcs[0], *off); field) {
+                return wrap_if_lt(*field, Prec::Postfix, min_prec);
+            }
+            if (auto field = imported_global_pointer_field(d.srcs[0], *off); field) {
+                return wrap_if_lt(*field, Prec::Postfix, min_prec);
+            }
+            if (auto field = imported_typed_pointer_field(d.srcs[0], *off, depth); field) {
+                return wrap_if_lt(*field, Prec::Postfix, min_prec);
+            }
+        }
+        if (auto off = resolve_imm(d.srcs[0]); off) {
+            if (auto field = imported_global_object_field(d.srcs[1], *off); field) {
+                return wrap_if_lt(*field, Prec::Postfix, min_prec);
+            }
+            if (auto field = imported_global_pointer_field(d.srcs[1], *off); field) {
+                return wrap_if_lt(*field, Prec::Postfix, min_prec);
+            }
+            if (auto field = imported_typed_pointer_field(d.srcs[1], *off, depth); field) {
+                return wrap_if_lt(*field, Prec::Postfix, min_prec);
+            }
+        }
+    }
+    if ((d.op == IrOp::Add || d.op == IrOp::Sub) && d.src_count >= 2) {
+        const IrValue* base = nullptr;
+        const IrValue* offset = nullptr;
+        bool subtract = d.op == IrOp::Sub;
+        if (c_type_name_for(d.srcs[0]).ends_with('*') ||
+            pointer_pointee_size(d.srcs[0]).has_value()) {
+            base = &d.srcs[0];
+            offset = &d.srcs[1];
+        } else if (!subtract &&
+                   (c_type_name_for(d.srcs[1]).ends_with('*') ||
+                    pointer_pointee_size(d.srcs[1]).has_value())) {
+            base = &d.srcs[1];
+            offset = &d.srcs[0];
+        }
+        if (base && offset) {
+            if (auto size = pointer_pointee_size(*base); size && *size != 0) {
+                std::optional<IrValue> index;
+                if (offset->kind == IrValueKind::Imm &&
+                    offset->imm % static_cast<i64>(*size) == 0) {
+                    index = IrValue::make_imm(
+                        offset->imm / static_cast<i64>(*size), offset->type);
+                } else if (auto scaled = match_ppc_scaled_index(*offset);
+                           scaled && scaled->scale == static_cast<i64>(*size)) {
+                    index = scaled->index;
+                } else if (const IrInst* fallback_scale = def_stripped(*offset);
+                           fallback_scale && fallback_scale->src_count >= 2) {
+                    if (fallback_scale->op == IrOp::Mul) {
+                        for (u8 i = 0; i < 2; ++i) {
+                            if (auto factor = resolve_imm(fallback_scale->srcs[i]);
+                                factor == static_cast<i64>(*size)) {
+                                index = fallback_scale->srcs[1 - i];
+                                break;
+                            }
+                        }
+                    } else if (fallback_scale->op == IrOp::Shl) {
+                        if (auto shift = resolve_imm(fallback_scale->srcs[1]);
+                            shift && *shift >= 0 && *shift < 63 &&
+                            (u64{1} << *shift) == *size) {
+                            index = fallback_scale->srcs[0];
+                        }
+                    }
+                }
+                if (index) {
+                    std::string rendered = std::format(
+                        "{} {} {}",
+                        expr(*base, depth, std::to_underlying(Prec::Add)),
+                        subtract ? "-" : "+",
+                        expr(*index, depth, std::to_underlying(Prec::Add)));
+                    return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+                }
+            }
+            if (offset->kind != IrValueKind::Imm) {
+                std::string rendered = std::format(
+                    "{} {} {}",
+                    expr(d.srcs[0], depth, std::to_underlying(Prec::Add)),
+                    subtract ? "-" : "+",
+                    expr(d.srcs[1], depth, std::to_underlying(Prec::Add)));
+                return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+            }
+            std::string rendered = std::format(
+                "(uint8_t*){} {} {}",
+                expr(*base, depth, std::to_underlying(Prec::Unary)),
+                subtract ? "-" : "+", format_numeric_imm(*offset));
+            return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+        }
+    }
+    // Left operand can share our precedence (left-assoc). Right operand
+    // of a non-commutative op must bind strictly tighter to avoid
+    // reassociation — e.g. `a - (b - c)` must stay parenthesized.
+    const bool pointer_arith =
+        (d.op == IrOp::Add || d.op == IrOp::Sub) &&
+        (d.srcs[0].type == IrType::I64 || d.srcs[1].type == IrType::I64 ||
+         d.dst.type == IrType::I64);
+    auto render = [&](const IrValue& v, int operand_prec) {
+        return pointer_arith && v.kind == IrValueKind::Imm
+            ? format_numeric_imm(v)
+            : expr(v, depth, operand_prec);
+    };
+    std::string L = render(d.srcs[0], p);
+    std::string R = render(d.srcs[1], commutative ? p : p + 1);
+    std::string result = std::format("{} {} {}", L, op, R);
+    return wrap_if_lt(std::move(result), self_prec, min_prec);
+}
+
+std::string Emitter::format_bitop(const IrInst& d, std::string_view op,
+                                        int depth, int min_prec,
+                                        Prec self_prec) const {
+    const int p = static_cast<int>(self_prec);
+    auto render = [&](const IrValue& v) -> std::string {
+        if (v.kind == IrValueKind::Imm && v.imm < 0) {
+            const u64 absv =
+                static_cast<u64>(0) - static_cast<u64>(v.imm);
+            if (absv >= 2 && (absv & (absv - 1)) == 0) {
+                return std::format("~{:#x}", absv - 1);
+            }
+        }
+        return expr(v, depth, p);
+    };
+    std::string L = render(d.srcs[0]);
+    std::string R = render(d.srcs[1]);
+    return wrap_if_lt(std::format("{} {} {}", L, op, R),
+                      self_prec, min_prec);
+}
+
+}  // namespace ember::emit

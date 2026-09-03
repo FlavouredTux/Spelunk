@@ -1,6 +1,6 @@
 ---
 name: Runtime / library support request
-about: Suggest a runtime or library you'd like ember Pro to recognize
+about: Suggest a runtime or library you'd like ember to recognize
 title: '[runtime] '
 labels: corpus-request
 ---

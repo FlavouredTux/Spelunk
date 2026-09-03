@@ -25,21 +25,21 @@ project's MIT license.
 
 ### Corpus recipes, prebuilt corpora, or annotations for third-party binaries
 
-ember Pro ships curated TEEF corpora as a paid product. The build
-recipes for those corpora are open, but **we don't accept community
-contributions to them.**
+The corpus build recipes under `scripts/` are open, but **we don't
+accept community contributions to them**, nor prebuilt corpora or
+annotations derived from third-party binaries.
 
 Reasons:
 
-- Building a recipe requires verifying we have the right to process and
-  redistribute hashes derived from third-party binaries. That's
-  license-clearance work we can't outsource without a contributor
-  license agreement we don't want to maintain.
+- A recipe has to be checked for the right to process and redistribute
+  hashes derived from third-party binaries. That's license-clearance
+  work we can't outsource without a contributor license agreement we
+  don't want to maintain.
 - Annotations layered on top of reverse-engineered runtimes are
-  themselves potentially copyrightable. Accepting them from contributors
-  without a CLA muddies the licensing of the resulting corpus product.
+  themselves potentially copyrightable. Accepting them without a CLA
+  muddies the licensing of the result.
 - Recipes that point at proprietary or grey-area binary sources are a
-  reputational liability we'd rather control directly.
+  liability we'd rather control directly.
 
 If you want a runtime supported, **open an issue** describing it. If we
 agree it's useful and we can clear the licensing, we'll build it
@@ -71,6 +71,12 @@ security advisories.
   cases that can't happen, no validation outside system boundaries.
 - Don't add comments that narrate the obvious. Only note non-obvious
   invariants, workarounds, or surprises.
+- One topic per translation unit. When a file outgrows ~1,500 lines,
+  split it by concern and put what the pieces share in a sibling
+  `<name>_internal.hpp` under a named namespace (`ember::x64_lift`,
+  `ember::cli::dbg`, ...). Helpers used by a single unit stay in that
+  unit's anonymous namespace. Public headers under `core/include` never
+  include internal ones.
 - Goldens live in `tests/golden/`. When you intentionally change
   behaviour that shifts output, update goldens in the same commit and
   narrate what changed in the commit message.

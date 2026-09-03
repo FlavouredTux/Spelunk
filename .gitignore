@@ -31,6 +31,9 @@ __pycache__/
 Thumbs.db
 
 third_party_downloads/
+*.iso
+*.wbfs
+*.gcm
 Testing/
 nohup.out
 *.log

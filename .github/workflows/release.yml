@@ -38,7 +38,9 @@ jobs:
       # Golden tests live in ci.yml and have their own drift to chase.
 
       - name: Package CLI
-        run: cmake -E tar czf ember-linux-x86_64.tar.gz build/cli/ember
+        run: |
+          strip build/cli/ember
+          cmake -E tar czf ember-linux-x86_64.tar.gz build/cli/ember
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

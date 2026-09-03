@@ -9,6 +9,12 @@
 // snapshot: PERF_SAMPLE_REGS_USER is GPR-only on x86-64. set_regs
 // has no kernel surface here at all and returns Error::unsupported.
 
+#include <expected>
+
+#include <ember/common/error.hpp>
+#include <ember/debug/regs.hpp>
+#include <ember/debug/types.hpp>
+
 #include "perf_target.hpp"
 
 namespace ember::debug::linux_perf {

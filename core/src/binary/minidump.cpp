@@ -2,14 +2,27 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdio>
+#include <expected>
 #include <format>
 #include <limits>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/pe_view.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

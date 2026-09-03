@@ -2,16 +2,31 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <cstring>
+#include <expected>
 #include <format>
 #include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <ember/analysis/eh_frame.hpp>
+#include <ember/binary/arch.hpp>
+#include <ember/binary/relocation.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {
@@ -390,7 +405,7 @@ Result<void> ElfBinary::parse_segments(const ParsedEhdr& h) {
                 return std::unexpected(std::move(bytes).error());
             }
         }
-        segments_.push_back(std::move(seg));
+        segments_.push_back(seg);
     }
     return {};
 }

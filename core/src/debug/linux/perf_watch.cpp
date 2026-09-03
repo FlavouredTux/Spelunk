@@ -9,9 +9,15 @@
 // or "read/write". Users asking for read fire on writes too; we
 // follow the existing Watchpoint::Mode contract from breakpoint.hpp.
 
-#include "perf_target.hpp"
-
+#include <expected>
 #include <linux/hw_breakpoint.h>
+#include <utility>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/breakpoint.hpp>
+
+#include "perf_target.hpp"
 
 namespace ember::debug::linux_perf {
 

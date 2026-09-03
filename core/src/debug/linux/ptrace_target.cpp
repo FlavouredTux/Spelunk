@@ -1,8 +1,12 @@
 #include "ptrace_target.hpp"
 
 #include <algorithm>
-
 #include <unistd.h>
+#include <vector>
+
+#include <ember/common/types.hpp>
+#include <ember/debug/breakpoint.hpp>
+#include <ember/debug/types.hpp>
 
 namespace ember::debug::linux_ {
 

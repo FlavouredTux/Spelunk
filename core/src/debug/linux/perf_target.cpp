@@ -8,9 +8,13 @@
 #include "perf_target.hpp"
 
 #include <algorithm>
-
-#include <unistd.h>
 #include <sys/mman.h>
+#include <unistd.h>
+#include <vector>
+
+#include <ember/debug/breakpoint.hpp>
+#include <ember/debug/regs.hpp>
+#include <ember/debug/types.hpp>
 
 namespace ember::debug::linux_perf {
 

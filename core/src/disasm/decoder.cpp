@@ -1,8 +1,12 @@
 #include <ember/disasm/decoder.hpp>
 
+#include <expected>
 #include <format>
+#include <memory>
 
+#include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/error.hpp>
 #include <ember/disasm/arm32_decoder.hpp>
 #include <ember/disasm/arm64_decoder.hpp>
 #include <ember/disasm/ppc_decoder.hpp>

@@ -5,24 +5,29 @@
 // threads with empty DR state, so ptrace_event re-arms each one
 // via rearm_watchpoints_on_new_thread before resuming.
 
-#include "ptrace_target.hpp"
-
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <expected>
+#include <sched.h>
 #include <string>
-
 #include <sys/ptrace.h>
 #include <sys/user.h>
+#include <utility>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/breakpoint.hpp>
+#include <ember/debug/types.hpp>
+
+#include "errno_io.hpp"
+#include "ptrace_target.hpp"
 
 namespace ember::debug::linux_ {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 constexpr std::size_t kDrBase   = offsetof(struct user, u_debugreg[0]);
 constexpr std::size_t kDrStride = sizeof(reinterpret_cast<struct user*>(0)->u_debugreg[0]);

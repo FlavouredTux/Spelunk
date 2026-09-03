@@ -97,7 +97,25 @@ private:
     explicit MachOBinary(std::vector<std::byte> buffer) noexcept
         : buffer_(std::move(buffer)) {}
 
+    // parse() runs these in order; ParseState carries the load-command
+    // index and __LINKEDIT slices between them.
+    struct ParseState;
     [[nodiscard]] Result<void> parse();
+    [[nodiscard]] Result<void> read_load_commands(ParseState& st);
+    [[nodiscard]] Result<void> parse_segments(ParseState& st);
+    [[nodiscard]] Result<void> read_linkedit_commands(ParseState& st);
+    void parse_nlist_symbols(ParseState& st);
+    void add_exported_symbols(const ParseState& st);
+    void collect_bind_records(ParseState& st);
+    void parse_data_in_code(const ParseState& st);
+    void attach_import_slots(const ParseState& st);
+    void resolve_import_stubs(const ParseState& st);
+    void strip_c_symbol_prefix();
+    void synthesize_entry_symbol();
+    void apply_function_starts(const ParseState& st);
+    void scan_objc_methods();
+    void scan_swift_types();
+    void finalize_symbols();
 
     std::vector<std::byte>    buffer_;
     Arch                      arch_  = Arch::Unknown;

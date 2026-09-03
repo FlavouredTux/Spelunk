@@ -28,28 +28,36 @@
 // invisible). interrupt() is the explicit "stop now" hook for cases
 // where the user does want to freeze the target.
 
-#include "perf_target.hpp"
+#include <linux/perf_event.h>
 
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <string>
-#include <vector>
-
-#include <linux/perf_event.h>
+#include <expected>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
-#include <sys/types.h>
+#include <span>
+#include <stdlib.h>
+#include <string>
+#include <sys/poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/event.hpp>
+#include <ember/debug/regs.hpp>
+#include <ember/debug/types.hpp>
+
+#include "errno_io.hpp"
+#include "perf_target.hpp"
 
 namespace ember::debug::linux_perf {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 // PERF_SAMPLE_REGS_USER on x86-64 emits regs in PERF_REG_X86_* enum
 // order (low bit to high). The kernel rejects DS/ES/FS/GS in

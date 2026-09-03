@@ -4,24 +4,25 @@
 // the access path is exactly the same - short reads at unmapped pages
 // surface as a partial returned count, not an error.
 
-#include "perf_target.hpp"
-
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <string>
-
+#include <expected>
 #include <fcntl.h>
+#include <span>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+
+#include "errno_io.hpp"
+#include "perf_target.hpp"
 
 namespace ember::debug::linux_perf {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 [[nodiscard]] int ensure_mem_fd(PerfTarget& t) {
     int& fd = PerfMemFdAccess::fd_of(t);

@@ -1,5 +1,11 @@
 #include <ember/debug/target.hpp>
 
+#include <expected>
+#include <memory>
+
+#include <ember/common/error.hpp>
+#include <ember/debug/types.hpp>
+
 #if defined(__linux__) && defined(__x86_64__)
 #define EMBER_DBG_LINUX_X64 1
 #include "linux/ptrace_target.hpp"

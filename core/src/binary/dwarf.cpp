@@ -1,7 +1,6 @@
 #include <ember/binary/dwarf.hpp>
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -10,10 +9,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/common/annotations.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 
@@ -22,7 +26,6 @@ namespace {
 constexpr u64 DW_TAG_formal_parameter = 0x05;
 constexpr u64 DW_TAG_pointer_type = 0x0f;
 constexpr u64 DW_TAG_reference_type = 0x10;
-constexpr u64 DW_TAG_compile_unit = 0x11;
 constexpr u64 DW_TAG_structure_type = 0x13;
 constexpr u64 DW_TAG_subroutine_type = 0x15;
 constexpr u64 DW_TAG_typedef = 0x16;

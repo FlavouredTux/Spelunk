@@ -1,13 +1,19 @@
-#include <ember/disasm/x64_decoder.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <expected>
 #include <format>
+#include <span>
 #include <type_traits>
+#include <utility>
 
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {
 

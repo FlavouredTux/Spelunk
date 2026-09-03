@@ -12,8 +12,8 @@
 // land in a builtin loader, so a slow sniff makes every load slow.
 // `load` consumes the buffer (by move) and returns a fully-constructed
 // Binary instance; the LoadOptions are forwarded so format-specific
-// knobs (e.g. a Pro analogue of PE's PDB sidecar discovery) can ride
-// on the same surface the builtin loaders use.
+// knobs (a sidecar discovery like PE's PDB lookup, say) can ride on
+// the same surface the builtin loaders use.
 //
 // Registration is not thread-safe: call from main() before the first
 // load_binary() invocation. Registrations last for the process and are

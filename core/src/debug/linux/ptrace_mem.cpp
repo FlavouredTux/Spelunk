@@ -3,24 +3,25 @@
 // returns short reads cleanly at unmapped boundaries (EIO), and a
 // single open() amortises across thousands of accesses.
 
-#include "ptrace_target.hpp"
-
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
-#include <string>
-
+#include <expected>
 #include <fcntl.h>
+#include <span>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+
+#include "errno_io.hpp"
+#include "ptrace_target.hpp"
 
 namespace ember::debug::linux_ {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 [[nodiscard]] int ensure_mem_fd(LinuxTarget& t) {
     int& fd = MemFdAccess::fd_of(t);

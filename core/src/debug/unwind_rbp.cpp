@@ -1,7 +1,14 @@
-#include <ember/debug/unwind.hpp>
-
 #include <cstddef>
 #include <cstring>
+#include <expected>
+#include <utility>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/target.hpp>
+#include <ember/debug/types.hpp>
+#include <ember/debug/unwind.hpp>
 
 namespace ember::debug {
 

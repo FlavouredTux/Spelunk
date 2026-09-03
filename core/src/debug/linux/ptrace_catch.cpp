@@ -2,6 +2,11 @@
 // SIGTRAP|0x80; when catching is on, cont() / step() route through
 // PTRACE_SYSCALL and wait_event decodes orig_rax into EvSyscallStop.
 
+#include <span>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+
 #include "ptrace_target.hpp"
 
 namespace ember::debug::linux_ {

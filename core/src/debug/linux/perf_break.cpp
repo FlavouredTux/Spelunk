@@ -10,28 +10,29 @@
 // full GPR snapshot at hit time (PERF_SAMPLE_REGS_USER), which is
 // the only way to read regs in this backend.
 
-#include "perf_target.hpp"
-
+#include <asm/perf_regs.h>
 #include <cerrno>
 #include <cstring>
-#include <string>
-
-#include <asm/perf_regs.h>
+#include <expected>
 #include <linux/hw_breakpoint.h>
 #include <linux/perf_event.h>
-#include <sys/ioctl.h>
+#include <sched.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/syscall.h>
-#include <sys/types.h>
 #include <unistd.h>
+#include <utility>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/breakpoint.hpp>
+
+#include "errno_io.hpp"
+#include "perf_target.hpp"
 
 namespace ember::debug::linux_perf {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 [[nodiscard]] long sys_perf_event_open(perf_event_attr* attr, pid_t pid,
                                        int cpu, int group_fd, unsigned long flags) {

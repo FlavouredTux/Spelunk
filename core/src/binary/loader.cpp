@@ -1,22 +1,33 @@
-#include <ember/binary/binary.hpp>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <ios>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
 
-#include <ember/binary/elf.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/dol.hpp>
 #include <ember/binary/dwarf.hpp>
+#include <ember/binary/elf.hpp>
 #include <ember/binary/macho.hpp>
 #include <ember/binary/minidump.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/binary/rel.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/extension/loader_registry.hpp>
 
 namespace ember {
@@ -273,10 +284,6 @@ std::size_t Binary::indirect_edge_count() const noexcept {
     std::size_t n = 0;
     for (const auto& [from, vec] : indirect_edges_) n += vec.size();
     return n;
-}
-
-void Binary::clear_indirect_edges() const noexcept {
-    indirect_edges_.clear();
 }
 
 void Binary::record_runtime_qword(addr_t at, u64 value) const {

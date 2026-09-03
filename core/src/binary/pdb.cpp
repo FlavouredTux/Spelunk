@@ -3,13 +3,21 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
-#include <fstream>
+#include <expected>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <ios>
+#include <optional>
 #include <span>
+#include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember::pdb {
 
@@ -1144,13 +1152,6 @@ load_publics_from_buffer(std::vector<std::byte> data) {
     auto rdr = load_pdb_from_buffer(std::move(data));
     if (!rdr) return std::unexpected(std::move(rdr).error());
     return std::move(rdr->publics);
-}
-
-Result<std::vector<PublicSymbol>>
-load_publics(const std::filesystem::path& path) {
-    auto buf = read_file(path);
-    if (!buf) return std::unexpected(std::move(buf).error());
-    return load_publics_from_buffer(std::move(*buf));
 }
 
 }  // namespace ember::pdb

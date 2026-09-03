@@ -2,12 +2,25 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <cstdio>
-#include <fstream>
+#include <expected>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <ios>
 #include <limits>
+#include <memory>
+#include <span>
 #include <sstream>
+#include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
+
+#include <ember/binary/section.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 
@@ -37,7 +50,7 @@ namespace {
     }
     SectionFlags f{};
     f.allocated = true;
-    if (tok.size() >= 1 && tok[0] == 'r') f.readable   = true;
+    if (!tok.empty() && tok[0] == 'r') f.readable   = true;
     if (tok.size() >= 2 && tok[1] == 'w') f.writable   = true;
     if (tok.size() >= 3 && tok[2] == 'x') f.executable = true;
     return f;

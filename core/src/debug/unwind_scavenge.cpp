@@ -3,14 +3,22 @@
 // before it decodes as a `call`. Both together kill the bulk of
 // false positives a naïve scan would surface.
 
-#include <ember/debug/unwind.hpp>
-
 #include <cstddef>
 #include <cstring>
+#include <expected>
+#include <memory>
+#include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/target.hpp>
+#include <ember/debug/types.hpp>
+#include <ember/debug/unwind.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/instruction.hpp>
 

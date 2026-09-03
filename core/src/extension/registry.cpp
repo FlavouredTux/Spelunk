@@ -1,10 +1,12 @@
+#include <algorithm>
+#include <span>
+#include <unordered_map>
+#include <vector>
+
+#include <ember/binary/arch.hpp>
 #include <ember/extension/decoder_registry.hpp>
 #include <ember/extension/lifter_registry.hpp>
 #include <ember/extension/loader_registry.hpp>
-
-#include <algorithm>
-#include <unordered_map>
-#include <vector>
 
 namespace ember::ext {
 

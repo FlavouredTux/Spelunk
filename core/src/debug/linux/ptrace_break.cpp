@@ -3,9 +3,15 @@
 // original byte is parked in the SoftwareBreakpoint table so we can
 // restore it on clear or during step-over.
 
-#include "ptrace_target.hpp"
-
 #include <cstddef>
+#include <expected>
+#include <utility>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/breakpoint.hpp>
+
+#include "ptrace_target.hpp"
 
 namespace ember::debug::linux_ {
 

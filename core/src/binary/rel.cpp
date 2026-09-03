@@ -4,16 +4,32 @@
 #include <bit>
 #include <cctype>
 #include <charconv>
+#include <cstddef>
 #include <cstring>
-#include <fstream>
+#include <expected>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include <ember/binary/binary.hpp>
+#include <ember/binary/relocation.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/text.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 namespace {
@@ -106,16 +122,6 @@ void write_be(std::byte* output, T value) noexcept {
            type == rppc::REL14_BRNTAKEN;
 }
 
-[[nodiscard]] std::string_view trim(std::string_view text) noexcept {
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
-        text.remove_prefix(1);
-    }
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
-        text.remove_suffix(1);
-    }
-    return text;
-}
-
 [[nodiscard]] std::vector<std::string_view> split_ws(std::string_view line) {
     std::vector<std::string_view> output;
     for (std::size_t index = 0; index < line.size();) {
@@ -134,7 +140,7 @@ void write_be(std::byte* output, T value) noexcept {
 }
 
 [[nodiscard]] std::optional<u64> parse_integer(std::string_view text) noexcept {
-    text = trim(text);
+    text = trim_space(text);
     int base = 10;
     if (text.starts_with("0x") || text.starts_with("0X")) {
         text.remove_prefix(2);
@@ -822,8 +828,8 @@ RelBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
 
         const auto slash = line.find("//");
         const std::string_view attributes = slash == std::string::npos
-            ? std::string_view{} : trim(std::string_view(line).substr(slash + 2));
-        std::string_view declaration = trim(std::string_view(line).substr(0, slash));
+            ? std::string_view{} : trim_space(std::string_view(line).substr(slash + 2));
+        std::string_view declaration = trim_space(std::string_view(line).substr(0, slash));
         if (declaration.empty() || declaration.starts_with('#')) continue;
 
         const auto equal = declaration.find('=');
@@ -835,12 +841,12 @@ RelBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
                 path.string(), line_number)));
         }
 
-        const std::string_view name = trim(declaration.substr(0, equal));
-        const std::string_view section_name = trim(
+        const std::string_view name = trim_space(declaration.substr(0, equal));
+        const std::string_view section_name = trim_space(
             declaration.substr(equal + 1, colon - equal - 1));
-        std::string_view offset_text = trim(declaration.substr(colon + 1));
+        std::string_view offset_text = trim_space(declaration.substr(colon + 1));
         if (offset_text.ends_with(';')) {
-            offset_text = trim(offset_text.substr(0, offset_text.size() - 1));
+            offset_text = trim_space(offset_text.substr(0, offset_text.size() - 1));
         }
         const auto relative_offset = parse_integer(offset_text);
         if (name.empty() || !relative_offset) {

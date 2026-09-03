@@ -2,25 +2,24 @@
 
 #include <algorithm>
 #include <cctype>
-#include <fstream>
+#include <cstddef>
+#include <expected>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
+#include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/text.hpp>
 
 namespace ember {
 
 namespace {
-
-[[nodiscard]] std::string_view trim(std::string_view s) noexcept {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
-        s.remove_prefix(1);
-    }
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-        s.remove_suffix(1);
-    }
-    return s;
-}
 
 [[nodiscard]] std::string strip_yaml_comment(std::string_view line) {
     bool single = false;
@@ -52,7 +51,7 @@ namespace {
 }
 
 [[nodiscard]] std::string scalar_value(std::string_view value) {
-    value = trim(value);
+    value = trim_space(value);
     if (value.size() >= 2 &&
         ((value.front() == '\'' && value.back() == '\'') ||
          (value.front() == '"' && value.back() == '"'))) {
@@ -81,7 +80,7 @@ read_top_level_scalars(const std::filesystem::path& path) {
         }
 
         std::string without_comment = strip_yaml_comment(line);
-        const std::string_view view = trim(without_comment);
+        const std::string_view view = trim_space(without_comment);
         if (view.empty() || view == "---" || view == "...") continue;
         const auto colon = view.find(':');
         if (colon == std::string_view::npos) {
@@ -89,8 +88,8 @@ read_top_level_scalars(const std::filesystem::path& path) {
                 "dtk: {}:{}: expected a top-level key:value entry",
                 path.string(), lineno)));
         }
-        const std::string_view key = trim(view.substr(0, colon));
-        const std::string_view value = trim(view.substr(colon + 1));
+        const std::string_view key = trim_space(view.substr(0, colon));
+        const std::string_view value = trim_space(view.substr(colon + 1));
         if (key.empty()) continue;
         // Mapping/list-valued keys are intentionally ignored in the first
         // main-DOL slice. The scalar keys below are all we consume.
@@ -123,7 +122,7 @@ read_modules_scalars(const std::filesystem::path& path) {
         ++lineno;
         if (!line.empty() && line.back() == '\r') line.pop_back();
         std::string without_comment = strip_yaml_comment(line);
-        const std::string_view view = trim(without_comment);
+        const std::string_view view = trim_space(without_comment);
         if (view.empty()) continue;
 
         const bool indented = !without_comment.empty() &&
@@ -141,7 +140,7 @@ read_modules_scalars(const std::filesystem::path& path) {
         std::string_view field = view;
         if (field.starts_with('-')) {
             finish_current();
-            field = trim(field.substr(1));
+            field = trim_space(field.substr(1));
             if (field.empty()) continue;
         }
         const auto colon = field.find(':');
@@ -150,8 +149,8 @@ read_modules_scalars(const std::filesystem::path& path) {
                 "dtk: {}:{}: expected a module key:value entry",
                 path.string(), lineno)));
         }
-        const auto key = trim(field.substr(0, colon));
-        const auto value = trim(field.substr(colon + 1));
+        const auto key = trim_space(field.substr(0, colon));
+        const auto value = trim_space(field.substr(colon + 1));
         if (!key.empty() && !value.empty()) {
             current[std::string(key)] = scalar_value(value);
         }
@@ -229,7 +228,7 @@ find_version_configs(const std::filesystem::path& root) {
 [[nodiscard]] Result<std::filesystem::path>
 resolve_config_path(const std::filesystem::path& raw_input,
                     std::string_view version) {
-    const auto input = absolute_normal(raw_input);
+    auto input = absolute_normal(raw_input);
     std::error_code ec;
     if (std::filesystem::is_regular_file(input, ec) && !ec) return input;
     if (!std::filesystem::is_directory(input, ec) || ec) {
@@ -238,7 +237,7 @@ resolve_config_path(const std::filesystem::path& raw_input,
             raw_input.string())));
     }
 
-    const auto direct = input / "config.yml";
+    auto direct = input / "config.yml";
     if (std::filesystem::is_regular_file(direct, ec) && !ec) return direct;
 
     if (!version.empty()) {

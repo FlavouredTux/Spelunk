@@ -226,12 +226,7 @@ load_pdb(const std::filesystem::path& path);
 [[nodiscard]] Result<PdbReader>
 load_pdb_from_buffer(std::vector<std::byte> data);
 
-// Legacy single-purpose entry: only walks the symbol-record stream
-// for S_PUB32 names. Kept for test back-compat. New callers should
-// prefer `load_pdb` since it returns the richer PdbReader.
-[[nodiscard]] Result<std::vector<PublicSymbol>>
-load_publics(const std::filesystem::path& path);
-
+// Just the S_PUB32 names; load_pdb_from_buffer returns the full reader.
 [[nodiscard]] Result<std::vector<PublicSymbol>>
 load_publics_from_buffer(std::vector<std::byte> data);
 

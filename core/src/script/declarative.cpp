@@ -1,22 +1,30 @@
 #include <ember/script/declarative.hpp>
 
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cstddef>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <limits>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/annotations.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember::script {
 

@@ -1,10 +1,21 @@
 #include <ember/binary/kismet_bundle.hpp>
 
 #include <charconv>
+#include <cstddef>
+#include <expected>
+#include <filesystem>
 #include <fstream>
-#include <iterator>
+#include <ios>
+#include <iosfwd>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 namespace {

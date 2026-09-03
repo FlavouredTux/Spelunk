@@ -9,23 +9,33 @@
 // explicit define. If a future toolchain changes that, this file
 // will fail to compile and we'll add the define back.
 
-#include "ptrace_target.hpp"
-
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <string>
-#include <vector>
-
 #include <dirent.h>
+#include <expected>
 #include <fcntl.h>
+#include <memory>
+#include <sched.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <string>
+#include <string_view>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/target.hpp>
+#include <ember/debug/types.hpp>
+
+#include "errno_io.hpp"
+#include "ptrace_target.hpp"
 
 extern char** environ;
 
@@ -45,10 +55,6 @@ constexpr long kPtraceOptions =
     static_cast<long>(PTRACE_O_TRACEVFORK)    |
     static_cast<long>(PTRACE_O_TRACESYSGOOD)  |   // syscall-stops marked as SIGTRAP|0x80
     static_cast<long>(PTRACE_O_EXITKILL);
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 [[nodiscard]] void* as_ptrace_data(long v) {
     return reinterpret_cast<void*>(static_cast<std::uintptr_t>(v));

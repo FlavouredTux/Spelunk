@@ -1,10 +1,18 @@
-#include <ember/disasm/arm64_decoder.hpp>
-
 #include <bit>
+#include <cstddef>
 #include <cstring>
+#include <expected>
 #include <format>
+#include <optional>
+#include <span>
+#include <string_view>
 
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/disasm/arm64_decoder.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 
 // AArch64 (ARMv8-A) instruction decoder.
 //

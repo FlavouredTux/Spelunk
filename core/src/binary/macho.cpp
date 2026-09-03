@@ -1,10 +1,14 @@
 #include <ember/binary/macho.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <expected>
 #include <format>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -12,8 +16,15 @@
 #include <utility>
 #include <vector>
 
+#include <ember/binary/arch.hpp>
+#include <ember/binary/elf.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {
@@ -860,12 +871,81 @@ MachOBinary::load_from_buffer(std::vector<std::byte> buffer) {
     return self;
 }
 
-Result<void> MachOBinary::parse() {
-    const ByteReader r(buffer_);
+struct MachOBinary::ParseState {
+    struct LoadCommand { std::size_t off; u32 cmd; u32 size; };
 
-    if (r.size() < 32) {
+    ByteReader r;
+    std::vector<LoadCommand> lcs;
+    std::vector<SegInfo>     seg_info;
+
+    // __LINKEDIT slices located by the second load-command pass.
+    std::span<const std::byte> symtab_bytes;
+    std::span<const std::byte> strtab_bytes;
+    std::span<const std::byte> indirect_sym_bytes;
+    u32                        nsyms = 0;
+    std::span<const std::byte> bind_bytes;
+    std::span<const std::byte> lazy_bind_bytes;
+    std::span<const std::byte> weak_bind_bytes;
+    std::span<const std::byte> export_trie_bytes;
+    std::span<const std::byte> chained_fixups_bytes;
+    std::span<const std::byte> data_in_code_bytes;
+    std::span<const std::byte> fn_starts_bytes;
+    bool   have_entryoff = false;
+    u64    entryoff      = 0;
+    addr_t unixthread_pc = 0;
+
+    // nlist index -> symbols_ index, for the indirect symbol table.
+    std::vector<std::size_t>                sym_index_to_symbols;
+    std::vector<BindRec>                    binds;
+    std::unordered_map<addr_t, std::string> slot_to_name;
+
+    explicit ParseState(std::span<const std::byte> image) noexcept : r(image) {}
+
+    // Visit every section_64 header of every LC_SEGMENT_64.
+    template <class Fn>
+    void for_each_section(Fn&& fn) const {
+        for (const auto& lc : lcs) {
+            if (lc.cmd != LC_SEGMENT_64) continue;
+            if (lc.size < SEGMENT_COMMAND_64_SIZE) continue;
+            auto lcb = r.slice(lc.off, lc.size);
+            if (!lcb) continue;
+            const std::byte* const p = lcb->data();
+            const u32 nsects = read_le_at<u32>(p + 64);
+            for (u32 s = 0; s < nsects; ++s) {
+                const std::size_t so = SEGMENT_COMMAND_64_SIZE +
+                    static_cast<std::size_t>(s) * SECTION_64_SIZE;
+                if (so + SECTION_64_SIZE > lc.size) break;
+                fn(lc, p + so);
+            }
+        }
+    }
+};
+
+Result<void> MachOBinary::parse() {
+    ParseState st(buffer_);
+    if (auto res = read_load_commands(st); !res) return res;
+    if (auto res = parse_segments(st); !res) return res;
+    if (auto res = read_linkedit_commands(st); !res) return res;
+    parse_nlist_symbols(st);
+    add_exported_symbols(st);
+    collect_bind_records(st);
+    parse_data_in_code(st);
+    attach_import_slots(st);
+    resolve_import_stubs(st);
+    strip_c_symbol_prefix();
+    synthesize_entry_symbol();
+    apply_function_starts(st);
+    scan_objc_methods();
+    scan_swift_types();
+    finalize_symbols();
+    return {};
+}
+
+// Validate mach_header_64 and index the variable-length load commands.
+Result<void> MachOBinary::read_load_commands(ParseState& st) {
+    if (st.r.size() < 32) {
         return std::unexpected(Error::truncated(std::format(
-            "macho: file smaller than mach_header_64 ({} < 32)", r.size())));
+            "macho: file smaller than mach_header_64 ({} < 32)", st.r.size())));
     }
 
     const std::byte* const hdr = buffer_.data();
@@ -884,17 +964,14 @@ Result<void> MachOBinary::parse() {
     // (needed before bind opcodes can resolve addresses), then again for
     // symtab/dysymtab/dyld_info/main.
     const std::size_t cmd_start = 32;
-    auto cmds_bytes = r.slice(cmd_start, sizeofcmds);
+    auto cmds_bytes = st.r.slice(cmd_start, sizeofcmds);
     if (!cmds_bytes) return std::unexpected(std::move(cmds_bytes).error());
     if (ncmds > sizeofcmds / 8u) {
         return std::unexpected(Error::invalid_format(std::format(
             "macho: {} load commands cannot fit in {} bytes", ncmds, sizeofcmds)));
     }
 
-    // Load commands are variable-length; collect (offset, cmd, cmdsize) triples.
-    struct LCRef { std::size_t off; u32 cmd; u32 size; };
-    std::vector<LCRef> lcs;
-    lcs.reserve(ncmds);
+    st.lcs.reserve(ncmds);
     {
         std::size_t p = 0;
         const std::size_t limit = cmds_bytes->size();
@@ -913,7 +990,7 @@ Result<void> MachOBinary::parse() {
                 return std::unexpected(Error::truncated(std::format(
                     "macho: load command {} overruns command area", i)));
             }
-            lcs.push_back({cmd_start + p, cmd, size});
+            st.lcs.push_back({cmd_start + p, cmd, size});
             p += size;
         }
         if (p != limit) {
@@ -921,33 +998,18 @@ Result<void> MachOBinary::parse() {
                 "macho: load commands consume {} of {} declared bytes", p, limit)));
         }
     }
+    return {};
+}
 
-    std::vector<SegInfo> seg_info;
-    auto for_each_segment_section = [&](auto&& fn) {
-        for (const auto& lc : lcs) {
-            if (lc.cmd != LC_SEGMENT_64) continue;
-            if (lc.size < SEGMENT_COMMAND_64_SIZE) continue;
-            auto lcb = r.slice(lc.off, lc.size);
-            if (!lcb) continue;
-            const std::byte* const p = lcb->data();
-            const u32 nsects = read_le_at<u32>(p + 64);
-            for (u32 s = 0; s < nsects; ++s) {
-                const std::size_t so = SEGMENT_COMMAND_64_SIZE +
-                    static_cast<std::size_t>(s) * SECTION_64_SIZE;
-                if (so + SECTION_64_SIZE > lc.size) break;
-                fn(lc, p + so);
-            }
-        }
-    };
-
-    // ---- Pass 1: LC_SEGMENT_64 ---------------------------------------------
-    for (const auto& lc : lcs) {
+// LC_SEGMENT_64: segment map, mapped data, and the section table.
+Result<void> MachOBinary::parse_segments(ParseState& st) {
+    for (const auto& lc : st.lcs) {
         if (lc.cmd != LC_SEGMENT_64) continue;
         if (lc.size < SEGMENT_COMMAND_64_SIZE) {
             return std::unexpected(Error::invalid_format(
                 "macho: LC_SEGMENT_64 is smaller than its fixed header"));
         }
-        auto lcb = r.slice(lc.off, lc.size);
+        auto lcb = st.r.slice(lc.off, lc.size);
         if (!lcb) return std::unexpected(std::move(lcb).error());
         const std::byte* const p = lcb->data();
 
@@ -967,12 +1029,12 @@ Result<void> MachOBinary::parse() {
             return std::unexpected(Error::invalid_format(
                 "macho: segment virtual range wraps"));
         }
-        if (filesize > 0 && !r.slice(fileoff, filesize)) {
+        if (filesize > 0 && !st.r.slice(fileoff, filesize)) {
             return std::unexpected(Error::truncated(std::format(
                 "macho: segment {} file range is outside the image", segname)));
         }
 
-        seg_info.push_back({static_cast<addr_t>(vmaddr), vmsize, fileoff, filesize, segname});
+        st.seg_info.push_back({static_cast<addr_t>(vmaddr), vmsize, fileoff, filesize, segname});
 
         // Skip the __PAGEZERO no-map segment so it doesn't pollute bytes_at().
         if (vmsize > 0 && !(segname == "__PAGEZERO")) {
@@ -984,11 +1046,11 @@ Result<void> MachOBinary::parse() {
             seg.writable   = (initprot & VM_PROT_WRITE)   != 0;
             seg.executable = (initprot & VM_PROT_EXECUTE) != 0;
             if (filesize > 0) {
-                auto bytes = r.slice(fileoff, filesize);
+                auto bytes = st.r.slice(fileoff, filesize);
                 if (!bytes) return std::unexpected(std::move(bytes).error());
                 seg.data = *bytes;
             }
-            segments_.push_back(std::move(seg));
+            segments_.push_back(seg);
         }
 
         // Parse sections contiguously after the segment_command_64 header.
@@ -1015,7 +1077,7 @@ Result<void> MachOBinary::parse() {
             out.flags.writable   = (initprot & VM_PROT_WRITE)   != 0;
             out.flags.executable = executable;
             if (size > 0 && !section_is_zerofill(flags)) {
-                auto data = r.slice(offset, size);
+                auto data = st.r.slice(offset, size);
                 if (!data) {
                     return std::unexpected(Error::truncated(std::format(
                         "macho: section {} initialized range is outside the image",
@@ -1026,28 +1088,14 @@ Result<void> MachOBinary::parse() {
             sections_.push_back(std::move(out));
         }
     }
+    return {};
+}
 
-    // ---- Pass 2: LC_SYMTAB / LC_DYSYMTAB / LC_DYLD_INFO_ONLY / LC_MAIN ------
-    std::span<const std::byte> symtab_bytes;
-    std::span<const std::byte> strtab_bytes;
-    std::span<const std::byte> indirect_sym_bytes;
-    u32 nsyms = 0;
-
-    std::span<const std::byte> bind_bytes;
-    std::span<const std::byte> lazy_bind_bytes;
-    std::span<const std::byte> weak_bind_bytes;
-    std::span<const std::byte> export_trie_bytes;
-    std::span<const std::byte> chained_fixups_bytes;
-    std::span<const std::byte> data_in_code_bytes;
-
-    bool     have_entryoff = false;
-    u64      entryoff      = 0;
-    addr_t   unixthread_pc = 0;
-
-    std::span<const std::byte> fn_starts_bytes;
-
-    for (const auto& lc : lcs) {
-        auto lcb = r.slice(lc.off, lc.size);
+// LC_SYMTAB / LC_DYSYMTAB / LC_DYLD_INFO / LC_MAIN and the other
+// __LINKEDIT commands, then the entry point they imply.
+Result<void> MachOBinary::read_linkedit_commands(ParseState& st) {
+    for (const auto& lc : st.lcs) {
+        auto lcb = st.r.slice(lc.off, lc.size);
         if (!lcb) continue;
         const std::byte* const p = lcb->data();
         switch (lc.cmd) {
@@ -1057,15 +1105,15 @@ Result<void> MachOBinary::parse() {
             const u32 ns      = read_le_at<u32>(p + 12);
             const u32 stroff  = read_le_at<u32>(p + 16);
             const u32 strsize = read_le_at<u32>(p + 20);
-            auto syms = r.slice(symoff, static_cast<std::size_t>(ns) * 16u);
-            auto strs = r.slice(stroff, strsize);
+            auto syms = st.r.slice(symoff, static_cast<std::size_t>(ns) * 16u);
+            auto strs = st.r.slice(stroff, strsize);
             if (!syms || !strs) {
                 return std::unexpected(Error::truncated(
                     "macho: LC_SYMTAB tables are outside the image"));
             }
-            nsyms = ns;
-            symtab_bytes = *syms;
-            strtab_bytes = *strs;
+            st.nsyms = ns;
+            st.symtab_bytes = *syms;
+            st.strtab_bytes = *strs;
             break;
         }
         case LC_DYSYMTAB: {
@@ -1073,9 +1121,9 @@ Result<void> MachOBinary::parse() {
             const u32 indirectsymoff = read_le_at<u32>(p + 56);
             const u32 nindirectsyms  = read_le_at<u32>(p + 60);
             if (nindirectsyms > 0) {
-                if (auto s = r.slice(indirectsymoff,
+                if (auto s = st.r.slice(indirectsymoff,
                                      static_cast<std::size_t>(nindirectsyms) * 4); s) {
-                    indirect_sym_bytes = *s;
+                    st.indirect_sym_bytes = *s;
                 }
             }
             break;
@@ -1092,16 +1140,16 @@ Result<void> MachOBinary::parse() {
             const u32 export_off     = read_le_at<u32>(p + 40);
             const u32 export_size    = read_le_at<u32>(p + 44);
             if (bind_size > 0) {
-                if (auto s = r.slice(bind_off, bind_size); s) bind_bytes = *s;
+                if (auto s = st.r.slice(bind_off, bind_size); s) st.bind_bytes = *s;
             }
             if (lazy_bind_size > 0) {
-                if (auto s = r.slice(lazy_bind_off, lazy_bind_size); s) lazy_bind_bytes = *s;
+                if (auto s = st.r.slice(lazy_bind_off, lazy_bind_size); s) st.lazy_bind_bytes = *s;
             }
             if (weak_bind_size > 0) {
-                if (auto s = r.slice(weak_bind_off, weak_bind_size); s) weak_bind_bytes = *s;
+                if (auto s = st.r.slice(weak_bind_off, weak_bind_size); s) st.weak_bind_bytes = *s;
             }
             if (export_size > 0) {
-                if (auto s = r.slice(export_off, export_size); s) export_trie_bytes = *s;
+                if (auto s = st.r.slice(export_off, export_size); s) st.export_trie_bytes = *s;
             }
             break;
         }
@@ -1110,18 +1158,18 @@ Result<void> MachOBinary::parse() {
             const u32 dataoff  = read_le_at<u32>(p + 8);
             const u32 datasize = read_le_at<u32>(p + 12);
             if (datasize > 0) {
-                if (auto s = r.slice(dataoff, datasize); s) export_trie_bytes = *s;
+                if (auto s = st.r.slice(dataoff, datasize); s) st.export_trie_bytes = *s;
             }
             break;
         }
         case LC_MAIN: {
             if (lc.size < ENTRY_POINT_COMMAND_SIZE) break;
-            entryoff = read_le_at<u64>(p + 8);
-            have_entryoff = true;
+            st.entryoff = read_le_at<u64>(p + 8);
+            st.have_entryoff = true;
             break;
         }
         case LC_UNIXTHREAD: {
-            if (unixthread_pc == 0) unixthread_pc = unixthread_entry(*lcb, arch_);
+            if (st.unixthread_pc == 0) st.unixthread_pc = unixthread_entry(*lcb, arch_);
             break;
         }
         case LC_FUNCTION_STARTS: {
@@ -1130,7 +1178,7 @@ Result<void> MachOBinary::parse() {
             const u32 dataoff  = read_le_at<u32>(p + 8);
             const u32 datasize = read_le_at<u32>(p + 12);
             if (datasize > 0) {
-                if (auto s = r.slice(dataoff, datasize); s) fn_starts_bytes = *s;
+                if (auto s = st.r.slice(dataoff, datasize); s) st.fn_starts_bytes = *s;
             }
             break;
         }
@@ -1139,7 +1187,7 @@ Result<void> MachOBinary::parse() {
             const u32 dataoff  = read_le_at<u32>(p + 8);
             const u32 datasize = read_le_at<u32>(p + 12);
             if (datasize > 0) {
-                if (auto s = r.slice(dataoff, datasize); s) chained_fixups_bytes = *s;
+                if (auto s = st.r.slice(dataoff, datasize); s) st.chained_fixups_bytes = *s;
             }
             break;
         }
@@ -1148,7 +1196,7 @@ Result<void> MachOBinary::parse() {
             const u32 dataoff  = read_le_at<u32>(p + 8);
             const u32 datasize = read_le_at<u32>(p + 12);
             if (datasize > 0) {
-                if (auto s = r.slice(dataoff, datasize); s) data_in_code_bytes = *s;
+                if (auto s = st.r.slice(dataoff, datasize); s) st.data_in_code_bytes = *s;
             }
             break;
         }
@@ -1156,27 +1204,29 @@ Result<void> MachOBinary::parse() {
         }
     }
 
-    // Resolve LC_MAIN's file-offset entryoff to a VM address by finding which
+    // Resolve LC_MAIN's file-offset st.entryoff to a VM address by finding which
     // segment contains it. Real Mach-O encodes this as an offset from the
     // start of __TEXT; resolve_lc_main_entry keeps a file-offset fallback for
     // local synthetic fixtures.
-    if (have_entryoff) {
-        if (auto ep = resolve_lc_main_entry(entryoff, seg_info); ep) entry_ = *ep;
-        else entry_ = static_cast<addr_t>(entryoff);
+    if (st.have_entryoff) {
+        if (auto ep = resolve_lc_main_entry(st.entryoff, st.seg_info); ep) entry_ = *ep;
+        else entry_ = static_cast<addr_t>(st.entryoff);
     }
-    if (entry_ == 0 && unixthread_pc != 0) entry_ = unixthread_pc;
+    if (entry_ == 0 && st.unixthread_pc != 0) entry_ = st.unixthread_pc;
+    return {};
+}
 
-    // ---- Parse the nlist symbol table -------------------------------------
-    // Imports are nlist entries with N_TYPE == N_UNDF; their name is in the
-    // string table; we'll later point Symbol.addr at a __stubs slot via the
-    // indirect symbol table, and Symbol.got_addr at the filled-in pointer slot.
-    std::unordered_map<std::string, std::size_t> import_by_name;
-    std::vector<std::size_t> sym_index_to_symbols(nsyms, std::size_t(-1));
+// ---- Parse the nlist symbol table -------------------------------------
+// Imports are nlist entries with N_TYPE == N_UNDF; their name is in the
+// string table; we'll later point Symbol.addr at a __stubs slot via the
+// indirect symbol table, and Symbol.got_addr at the filled-in pointer slot.
+void MachOBinary::parse_nlist_symbols(ParseState& st) {
+    st.sym_index_to_symbols.assign(st.nsyms, std::size_t(-1));
 
-    if (!symtab_bytes.empty() && !strtab_bytes.empty()) {
-        const ByteReader str(strtab_bytes);
-        for (u32 k = 0; k < nsyms; ++k) {
-            const std::byte* const np = symtab_bytes.data() + static_cast<std::size_t>(k) * 16;
+    if (!st.symtab_bytes.empty() && !st.strtab_bytes.empty()) {
+        const ByteReader str(st.strtab_bytes);
+        for (u32 k = 0; k < st.nsyms; ++k) {
+            const std::byte* const np = st.symtab_bytes.data() + static_cast<std::size_t>(k) * 16;
             const u32 n_strx = read_le_at<u32>(np + 0);
             const u8  n_type = read_le_at<u8> (np + 4);
             const u8  n_sect = read_le_at<u8> (np + 5);
@@ -1199,9 +1249,6 @@ Result<void> MachOBinary::parse() {
 
             if (is_undef) {
                 sym.addr = 0;  // filled in later via __stubs
-                if (!name.empty()) {
-                    import_by_name.emplace(name, symbols_.size());
-                }
             } else if (type_bits == N_SECT) {
                 // n_sect is a 1-based index into the section table. Use it to
                 // avoid treating named globals in __DATA / __const / __cstring
@@ -1215,20 +1262,22 @@ Result<void> MachOBinary::parse() {
             }
 
             if (!name.empty() || sym.is_import) {
-                sym_index_to_symbols[k] = symbols_.size();
+                st.sym_index_to_symbols[k] = symbols_.size();
                 symbols_.push_back(std::move(sym));
             }
         }
     }
+}
 
-    // ---- Dyld export trie -------------------------------------------------
-    // LC_DYLD_EXPORTS_TRIE / LC_DYLD_INFO.export_* names are authoritative
-    // for what dyld exports, and modern stripped binaries may leave LC_SYMTAB
-    // sparse. Add exported code/data names here so -s resolution and
-    // --functions still see them.
-    if (!export_trie_bytes.empty()) {
+// ---- Dyld export trie -------------------------------------------------
+// LC_DYLD_EXPORTS_TRIE / LC_DYLD_INFO.export_* names are authoritative
+// for what dyld exports, and modern stripped binaries may leave LC_SYMTAB
+// sparse. Add exported code/data names here so -s resolution and
+// --functions still see them.
+void MachOBinary::add_exported_symbols(const ParseState& st) {
+    if (!st.export_trie_bytes.empty()) {
         std::vector<ExportRec> exports;
-        parse_export_trie(export_trie_bytes, macho_image_base(seg_info), exports);
+        parse_export_trie(st.export_trie_bytes, macho_image_base(st.seg_info), exports);
         for (auto& ex : exports) {
             if (ex.name.empty() || ex.vaddr == 0) continue;
             Symbol sym;
@@ -1241,21 +1290,22 @@ Result<void> MachOBinary::parse() {
             symbols_.push_back(std::move(sym));
         }
     }
+}
 
-    // ---- Parse bind/lazy_bind/weak_bind opcodes ---------------------------
-    // Builds slot_vaddr → name for every imported data/func pointer. The
-    // lazy_bind stream covers __la_symbol_ptr slots (which are what __stubs
-    // indirect through), so scanning it is essential for named calls to work.
-    std::vector<BindRec> binds;
-    binds.reserve(256);
-    if (!bind_bytes.empty())      parse_bind_stream(bind_bytes,      seg_info, binds, false);
-    if (!weak_bind_bytes.empty()) parse_bind_stream(weak_bind_bytes, seg_info, binds, false);
-    if (!lazy_bind_bytes.empty()) parse_bind_stream(lazy_bind_bytes, seg_info, binds, true);
+// ---- Parse bind/lazy_bind/weak_bind opcodes ---------------------------
+// Builds slot_vaddr → name for every imported data/func pointer. The
+// lazy_bind stream covers __la_symbol_ptr slots (which are what __stubs
+// indirect through), so scanning it is essential for named calls to work.
+void MachOBinary::collect_bind_records(ParseState& st) {
+    st.binds.reserve(256);
+    if (!st.bind_bytes.empty())      parse_bind_stream(st.bind_bytes,      st.seg_info, st.binds, false);
+    if (!st.weak_bind_bytes.empty()) parse_bind_stream(st.weak_bind_bytes, st.seg_info, st.binds, false);
+    if (!st.lazy_bind_bytes.empty()) parse_bind_stream(st.lazy_bind_bytes, st.seg_info, st.binds, true);
     // Modern builds emit LC_DYLD_CHAINED_FIXUPS instead of LC_DYLD_INFO
     // opcodes. Parse both - newer linkers occasionally emit both, older
     // ones only one.
-    if (!chained_fixups_bytes.empty()) {
-        parse_chained_fixups(chained_fixups_bytes, seg_info, buffer_, binds);
+    if (!st.chained_fixups_bytes.empty()) {
+        parse_chained_fixups(st.chained_fixups_bytes, st.seg_info, buffer_, st.binds);
     }
 
     // Older or hand-linked Mach-O files can name lazy/non-lazy pointer slots
@@ -1263,8 +1313,8 @@ Result<void> MachOBinary::parse() {
     // are sparse. Recover those slot -> import-name edges so the existing
     // __stubs scan can still render calls as `puts(...)` instead of
     // `sub_<stub>(...)`.
-    if (!indirect_sym_bytes.empty() && !sym_index_to_symbols.empty()) {
-        for_each_segment_section([&](const auto&, const std::byte* sp) {
+    if (!st.indirect_sym_bytes.empty() && !st.sym_index_to_symbols.empty()) {
+        st.for_each_section([&](const auto&, const std::byte* sp) {
             const u64 addr    = read_le_at<u64>(sp + 32);
             const u64 size    = read_le_at<u64>(sp + 40);
             const u32 flags   = read_le_at<u32>(sp + 64);
@@ -1277,34 +1327,39 @@ Result<void> MachOBinary::parse() {
             const u64 count = size / 8u;
             for (u64 i = 0; i < count; ++i) {
                 const u64 indirect_index = static_cast<u64>(first) + i;
-                if ((indirect_index + 1u) * 4u > indirect_sym_bytes.size()) break;
+                if ((indirect_index + 1u) * 4u > st.indirect_sym_bytes.size()) break;
                 const u32 raw = read_le_at<u32>(
-                    indirect_sym_bytes.data() + indirect_index * 4u);
+                    st.indirect_sym_bytes.data() + indirect_index * 4u);
                 if ((raw & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) != 0) continue;
-                if (raw >= sym_index_to_symbols.size()) continue;
-                const std::size_t sym_idx = sym_index_to_symbols[raw];
+                if (raw >= st.sym_index_to_symbols.size()) continue;
+                const std::size_t sym_idx = st.sym_index_to_symbols[raw];
                 if (sym_idx == std::size_t(-1) || sym_idx >= symbols_.size()) continue;
                 const auto& sym = symbols_[sym_idx];
                 if (sym.name.empty()) continue;
-                binds.push_back({static_cast<addr_t>(addr + i * 8u), sym.name});
+                st.binds.push_back({static_cast<addr_t>(addr + i * 8u), sym.name});
             }
         });
     }
 
-    // LC_DATA_IN_CODE: list of (file_offset, length, kind) marking embedded
-    // data inside __TEXT. Convert each file offset into a VA using the
-    // segment map so the CFG walker can steer around them.
-    if (!data_in_code_bytes.empty()) {
-        const std::size_t n = data_in_code_bytes.size() / 8;
+    st.slot_to_name.reserve(st.binds.size());
+    for (auto& b : st.binds) st.slot_to_name.emplace(b.vaddr, std::move(b.name));
+}
+
+// LC_DATA_IN_CODE: list of (file_offset, length, kind) marking embedded
+// data inside __TEXT. Convert each file offset into a VA using the
+// segment map so the CFG walker can steer around them.
+void MachOBinary::parse_data_in_code(const ParseState& st) {
+    if (!st.data_in_code_bytes.empty()) {
+        const std::size_t n = st.data_in_code_bytes.size() / 8;
         data_in_code_.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
-            const std::byte* e = data_in_code_bytes.data() + i * 8;
+            const std::byte* e = st.data_in_code_bytes.data() + i * 8;
             const u32 foff   = read_le_at<u32>(e + 0);
             const u16 len    = read_le_at<u16>(e + 4);
             const u16 kind   = read_le_at<u16>(e + 6);
             // Resolve file offset to vaddr via the segment map.
             addr_t va = 0;
-            for (const auto& s : seg_info) {
+            for (const auto& s : st.seg_info) {
                 if (foff >= s.fileoff && foff < s.fileoff + s.filesize) {
                     va = static_cast<addr_t>(s.vmaddr + (foff - s.fileoff));
                     break;
@@ -1315,15 +1370,12 @@ Result<void> MachOBinary::parse() {
             }
         }
     }
+}
 
-    std::unordered_map<addr_t, std::string> slot_to_name;
-    slot_to_name.reserve(binds.size());
-    for (auto& b : binds) slot_to_name.emplace(b.vaddr, std::move(b.name));
-
-    // Chained-fixups-only binaries can expose imports through bind records
-    // without a useful undefined nlist row. Synthesize imports from those
-    // records so GOT/stub lookup still has a Symbol to return.
-    for (const auto& [addr, name] : slot_to_name) {
+// Synthesize imports that only bind records name, then give every
+// import its GOT / lazy-pointer slot.
+void MachOBinary::attach_import_slots(const ParseState& st) {
+    for (const auto& [addr, name] : st.slot_to_name) {
         if (name.empty()) continue;
         bool have_slot = false;
         for (const auto& sym : symbols_) {
@@ -1338,7 +1390,6 @@ Result<void> MachOBinary::parse() {
         sym.kind = SymbolKind::Function;
         sym.is_import = true;
         sym.got_addr = addr;
-        import_by_name.emplace(sym.name, symbols_.size());
         symbols_.push_back(std::move(sym));
     }
 
@@ -1347,16 +1398,19 @@ Result<void> MachOBinary::parse() {
     // to render indirect calls through the GOT as named calls.
     for (auto& sym : symbols_) {
         if (!sym.is_import || sym.got_addr != 0) continue;
-        for (const auto& [addr, name] : slot_to_name) {
+        for (const auto& [addr, name] : st.slot_to_name) {
             if (name == sym.name) { sym.got_addr = addr; break; }
         }
     }
+}
 
-    // ---- arm64 stubs: ADRP Xt; LDR Xt, [Xt,#imm]; BR Xt -----------------
-    if (arch_ == Arch::Arm64 && !slot_to_name.empty()) {
+// Point each import's addr at its __stubs trampoline: ADRP/LDR/BR on
+// arm64, `jmp qword [rip + D]` on x86-64 (mirroring the ELF PLT scan).
+void MachOBinary::resolve_import_stubs(const ParseState& st) {
+    if (arch_ == Arch::Arm64 && !st.slot_to_name.empty()) {
         std::unordered_map<std::string, addr_t> import_stub_addr;
 
-        for_each_segment_section([&](const auto&, const std::byte* sp) {
+        st.for_each_section([&](const auto&, const std::byte* sp) {
             const u64 addr    = read_le_at<u64>(sp + 32);
             const u64 size    = read_le_at<u64>(sp + 40);
             const u32 offset  = read_le_at<u32>(sp + 48);
@@ -1364,15 +1418,15 @@ Result<void> MachOBinary::parse() {
             const u32 stype   = flags & SECTION_TYPE_MASK;
             if (stype != S_SYMBOL_STUBS) return;
             if (offset == 0 || size < 12) return;
-            auto data = r.slice(offset, size);
+            auto data = st.r.slice(offset, size);
             if (!data) return;
 
             for (std::size_t off = 0; off + 12 <= data->size(); off += 4) {
                 const addr_t ip = static_cast<addr_t>(addr + off);
                 auto slot = decode_arm64_stub_slot(*data, off, ip);
                 if (!slot) continue;
-                auto it = slot_to_name.find(*slot);
-                if (it != slot_to_name.end()) {
+                auto it = st.slot_to_name.find(*slot);
+                if (it != st.slot_to_name.end()) {
                     import_stub_addr.try_emplace(it->second, ip);
                 }
             }
@@ -1389,15 +1443,15 @@ Result<void> MachOBinary::parse() {
     // ---- Stub scan: __stubs → __la_symbol_ptr slot → name ----------------
     // We mirror the ELF PLT scan: decode each `jmp qword [rip + D]` in a
     // section whose SECTION_TYPE is S_SYMBOL_STUBS. The RIP-relative target
-    // is the __la_symbol_ptr slot; slot_to_name gives us the import.
-    if (arch_ == Arch::X86_64 && !slot_to_name.empty()) {
+    // is the __la_symbol_ptr slot; st.slot_to_name gives us the import.
+    if (arch_ == Arch::X86_64 && !st.slot_to_name.empty()) {
         // Find __stubs sections by walking the segment/section tables once more.
         // We've stored sections in sections_ already but without flags, so redo
         // the walk to check SECTION_TYPE.
         std::unordered_map<std::string, addr_t> import_stub_addr;
         const X64Decoder dec;
 
-        for_each_segment_section([&](const auto&, const std::byte* sp) {
+        st.for_each_section([&](const auto&, const std::byte* sp) {
             const u64 addr    = read_le_at<u64>(sp + 32);
             const u64 size    = read_le_at<u64>(sp + 40);
             const u32 offset  = read_le_at<u32>(sp + 48);
@@ -1405,7 +1459,7 @@ Result<void> MachOBinary::parse() {
             const u32 stype   = flags & SECTION_TYPE_MASK;
             if (stype != S_SYMBOL_STUBS) return;
             if (offset == 0 || size == 0) return;
-            auto data = r.slice(offset, size);
+            auto data = st.r.slice(offset, size);
             if (!data) return;
 
             addr_t ip = static_cast<addr_t>(addr);
@@ -1423,8 +1477,8 @@ Result<void> MachOBinary::parse() {
                         op.mem.has_disp) {
                         const addr_t slot = ip + insn.length +
                                             static_cast<addr_t>(op.mem.disp);
-                        auto it = slot_to_name.find(slot);
-                        if (it != slot_to_name.end()) {
+                        auto it = st.slot_to_name.find(slot);
+                        if (it != st.slot_to_name.end()) {
                             import_stub_addr.try_emplace(it->second, ip);
                         }
                     }
@@ -1441,19 +1495,23 @@ Result<void> MachOBinary::parse() {
             sym.addr = it->second;
         }
     }
+}
 
-    // Strip the leading `_` that Mach-O prepends to C symbols, so that
-    // `strlen` (and everything the emitter's name-based logic keys on)
-    // matches without the caller having to know about it.
+// Strip the leading `_` that Mach-O prepends to C symbols, so that
+// `strlen` (and everything the emitter's name-based logic keys on)
+// matches without the caller having to know about it.
+void MachOBinary::strip_c_symbol_prefix() {
     for (auto& sym : symbols_) {
         if (!sym.name.empty() && sym.name.front() == '_') {
             sym.name = demangle_macho(sym.name);
         }
     }
+}
 
-    // Synthesize `main` at the LC_MAIN entry *before* LC_FUNCTION_STARTS runs,
-    // so that pass leaves the entry address to the conventional name instead
-    // of stamping `sub_<hex>` on top.
+// Synthesize `main` at the LC_MAIN entry *before* LC_FUNCTION_STARTS runs,
+// so that pass leaves the entry address to the conventional name instead
+// of stamping `sub_<hex>` on top.
+void MachOBinary::synthesize_entry_symbol() {
     if (entry_ != 0) {
         bool named_here = false;
         for (const auto& s : symbols_) {
@@ -1469,19 +1527,21 @@ Result<void> MachOBinary::parse() {
             symbols_.push_back(std::move(m));
         }
     }
+}
 
-    // ---- LC_FUNCTION_STARTS: full function-boundary map -------------------
-    // Mach-O rarely carries nlist sizes, and release binaries drop most
-    // internal names - but LC_FUNCTION_STARTS is almost always present and
-    // lists every function's starting address as a ULEB128 delta stream.
-    // Decoding it lets us: (a) fill in `size` on every existing function
-    // symbol (next_start - this_start), and (b) add synthetic `sub_<hex>`
-    // entries for the rest so the CFG builder, arity inference, call graph,
-    // and UI sidebar all see the complete function set.
-    if (!fn_starts_bytes.empty()) {
+// ---- LC_FUNCTION_STARTS: full function-boundary map -------------------
+// Mach-O rarely carries nlist sizes, and release binaries drop most
+// internal names - but LC_FUNCTION_STARTS is almost always present and
+// lists every function's starting address as a ULEB128 delta stream.
+// Decoding it lets us: (a) fill in `size` on every existing function
+// symbol (next_start - this_start), and (b) add synthetic `sub_<hex>`
+// entries for the rest so the CFG builder, arity inference, call graph,
+// and UI sidebar all see the complete function set.
+void MachOBinary::apply_function_starts(const ParseState& st) {
+    if (!st.fn_starts_bytes.empty()) {
         addr_t text_base = 0;
         u64    text_end  = 0;
-        for (const auto& s : seg_info) {
+        for (const auto& s : st.seg_info) {
             if (s.name == "__TEXT") {
                 text_base = s.vmaddr;
                 text_end  = s.vmaddr + s.vmsize;
@@ -1490,8 +1550,8 @@ Result<void> MachOBinary::parse() {
         }
         if (text_base != 0) {
             std::vector<addr_t> starts;
-            const std::byte* bp = fn_starts_bytes.data();
-            const std::byte* be = bp + fn_starts_bytes.size();
+            const std::byte* bp = st.fn_starts_bytes.data();
+            const std::byte* be = bp + st.fn_starts_bytes.size();
             addr_t cur = text_base;
             while (bp < be) {
                 const u64 delta = read_uleb128(bp, be);
@@ -1529,104 +1589,106 @@ Result<void> MachOBinary::parse() {
             }
         }
     }
+}
 
-    // ---- ObjC method scan: __objc_classlist → [Class method] names -------
-    // For each class_t pointer in __objc_classlist we read:
-    //   class_t { isa; superclass; cache; vtable; class_ro_t* data; }   (5 * 8)
-    //   class_ro_t { flags; instance_*; ivar_layout; char* name;
-    //                method_list_t* methods; ... }
-    //   method_list_t { u32 entsize; u32 count; method_t methods[count]; }
-    //   method_t { char* name; char* types; imp; }   (3 * 8 by default)
-    // We fire a Function symbol at each imp with a human-readable name,
-    // which makes the decompile output show Objective-C method names where
-    // `sub_<hex>` would otherwise appear.
-    {
-        const Section* classlist = find_section_suffix(sections_, "__objc_classlist");
-        if (classlist && classlist->size >= 8) {
-            const std::size_t n_classes = static_cast<std::size_t>(classlist->size / 8);
-            auto also_scan_ro = [&](addr_t ro_ptr, std::string_view cls_name, bool meta) {
-                if (ro_ptr == 0) return;
-                // class_ro_t.name at offset 24, methods at offset 32 (on 64-bit).
-                const addr_t name_ptr    = static_cast<addr_t>(read_u64_at(segments_, ro_ptr + 24));
-                const addr_t methods_ptr = static_cast<addr_t>(read_u64_at(segments_, ro_ptr + 32));
-                std::string final_cls(cls_name);
-                if (final_cls.empty() && name_ptr) {
-                    final_cls = read_cstring_at(segments_, name_ptr);
+// ---- ObjC method scan: __objc_classlist → [Class method] names -------
+// For each class_t pointer in __objc_classlist we read:
+//   class_t { isa; superclass; cache; vtable; class_ro_t* data; }   (5 * 8)
+//   class_ro_t { flags; instance_*; ivar_layout; char* name;
+//                method_list_t* methods; ... }
+//   method_list_t { u32 entsize; u32 count; method_t methods[count]; }
+//   method_t { char* name; char* types; imp; }   (3 * 8 by default)
+// We fire a Function symbol at each imp with a human-readable name,
+// which makes the decompile output show Objective-C method names where
+// `sub_<hex>` would otherwise appear.
+void MachOBinary::scan_objc_methods() {
+    const Section* classlist = find_section_suffix(sections_, "__objc_classlist");
+    if (classlist && classlist->size >= 8) {
+        const std::size_t n_classes = static_cast<std::size_t>(classlist->size / 8);
+        auto also_scan_ro = [&](addr_t ro_ptr, std::string_view cls_name, bool meta) {
+            if (ro_ptr == 0) return;
+            // class_ro_t.name at offset 24, methods at offset 32 (on 64-bit).
+            const addr_t name_ptr    = static_cast<addr_t>(read_u64_at(segments_, ro_ptr + 24));
+            const addr_t methods_ptr = static_cast<addr_t>(read_u64_at(segments_, ro_ptr + 32));
+            std::string final_cls(cls_name);
+            if (final_cls.empty() && name_ptr) {
+                final_cls = read_cstring_at(segments_, name_ptr);
+            }
+            if (final_cls.empty() || !methods_ptr) return;
+
+            const u32 entsize = read_u32_at(segments_, methods_ptr + 0);
+            const u32 count   = read_u32_at(segments_, methods_ptr + 4);
+            const bool relative = (entsize & OBJC_RELATIVE_METHOD_LIST_FLAG) != 0;
+            const bool preopt_sel = (entsize & OBJC_PREOPT_SEL_FLAG) != 0;
+            const u32 real_entsize = relative ? (entsize & 0x3FFFFFFFu)
+                                              : (entsize & 0xFFFCu);
+            if ((!relative && real_entsize != 24) ||
+                ( relative && real_entsize < 12)) return;
+            if (count > 100000) return;  // sanity
+
+            const char prefix = meta ? '+' : '-';
+            for (u32 m = 0; m < count; ++m) {
+                const addr_t base = methods_ptr + 8 +
+                                    static_cast<addr_t>(m) * real_entsize;
+                addr_t sel_ptr = 0;
+                addr_t imp = 0;
+                if (relative) {
+                    const i32 sel_delta = read_i32_at(segments_, base + 0);
+                    const i32 imp_delta = read_i32_at(segments_, base + 8);
+                    const addr_t sel_or_ref = static_cast<addr_t>(
+                        static_cast<i64>(base + 0) + static_cast<i64>(sel_delta));
+                    sel_ptr = preopt_sel
+                        ? static_cast<addr_t>(read_u64_at(segments_, sel_or_ref))
+                        : sel_or_ref;
+                    imp = static_cast<addr_t>(
+                        static_cast<i64>(base + 8) + static_cast<i64>(imp_delta));
+                } else {
+                    sel_ptr = static_cast<addr_t>(read_u64_at(segments_, base + 0));
+                    imp     = static_cast<addr_t>(read_u64_at(segments_, base + 16));
                 }
-                if (final_cls.empty() || !methods_ptr) return;
+                if (!sel_ptr || !imp) continue;
+                std::string sel = read_cstring_at(segments_, sel_ptr);
+                if (sel.empty()) continue;
 
-                const u32 entsize = read_u32_at(segments_, methods_ptr + 0);
-                const u32 count   = read_u32_at(segments_, methods_ptr + 4);
-                const bool relative = (entsize & OBJC_RELATIVE_METHOD_LIST_FLAG) != 0;
-                const bool preopt_sel = (entsize & OBJC_PREOPT_SEL_FLAG) != 0;
-                const u32 real_entsize = relative ? (entsize & 0x3FFFFFFFu)
-                                                  : (entsize & 0xFFFCu);
-                if ((!relative && real_entsize != 24) ||
-                    ( relative && real_entsize < 12)) return;
-                if (count > 100000) return;  // sanity
+                // Prefer the ObjC name over a synthetic `sub_<hex>` entry
+                // created by LC_FUNCTION_STARTS.
+                Symbol s;
+                s.name = std::format("{}[{} {}]", prefix, final_cls, sel);
+                s.addr = imp;
+                s.kind = SymbolKind::Function;
+                symbols_.push_back(std::move(s));
+            }
+        };
 
-                const char prefix = meta ? '+' : '-';
-                for (u32 m = 0; m < count; ++m) {
-                    const addr_t base = methods_ptr + 8 +
-                                        static_cast<addr_t>(m) * real_entsize;
-                    addr_t sel_ptr = 0;
-                    addr_t imp = 0;
-                    if (relative) {
-                        const i32 sel_delta = read_i32_at(segments_, base + 0);
-                        const i32 imp_delta = read_i32_at(segments_, base + 8);
-                        const addr_t sel_or_ref = static_cast<addr_t>(
-                            static_cast<i64>(base + 0) + static_cast<i64>(sel_delta));
-                        sel_ptr = preopt_sel
-                            ? static_cast<addr_t>(read_u64_at(segments_, sel_or_ref))
-                            : sel_or_ref;
-                        imp = static_cast<addr_t>(
-                            static_cast<i64>(base + 8) + static_cast<i64>(imp_delta));
-                    } else {
-                        sel_ptr = static_cast<addr_t>(read_u64_at(segments_, base + 0));
-                        imp     = static_cast<addr_t>(read_u64_at(segments_, base + 16));
-                    }
-                    if (!sel_ptr || !imp) continue;
-                    std::string sel = read_cstring_at(segments_, sel_ptr);
-                    if (sel.empty()) continue;
+        for (std::size_t i = 0; i < n_classes; ++i) {
+            const addr_t slot     = classlist->vaddr + static_cast<addr_t>(i) * 8u;
+            const addr_t cls_ptr  = static_cast<addr_t>(read_u64_at(segments_, slot));
+            if (cls_ptr == 0) continue;
+            // class_t layout: 5 * 8; `data` (class_ro_t*) at +32. The low
+            // bit of data is a realized flag - mask it off.
+            const addr_t meta_ptr = static_cast<addr_t>(read_u64_at(segments_, cls_ptr + 0));
+            const addr_t ro_ptr   = static_cast<addr_t>(read_u64_at(segments_, cls_ptr + 32)) & ~addr_t{1};
+            // Grab the class name from instance ro so we can pass it to
+            // the metaclass scan too (class methods list sits on the isa).
+            const addr_t name_ptr = static_cast<addr_t>(read_u64_at(segments_, ro_ptr + 24));
+            std::string cls_name = name_ptr ? read_cstring_at(segments_, name_ptr) : std::string{};
 
-                    // Prefer the ObjC name over a synthetic `sub_<hex>` entry
-                    // created by LC_FUNCTION_STARTS.
-                    Symbol s;
-                    s.name = std::format("{}[{} {}]", prefix, final_cls, sel);
-                    s.addr = imp;
-                    s.kind = SymbolKind::Function;
-                    symbols_.push_back(std::move(s));
-                }
-            };
-
-            for (std::size_t i = 0; i < n_classes; ++i) {
-                const addr_t slot     = classlist->vaddr + static_cast<addr_t>(i) * 8u;
-                const addr_t cls_ptr  = static_cast<addr_t>(read_u64_at(segments_, slot));
-                if (cls_ptr == 0) continue;
-                // class_t layout: 5 * 8; `data` (class_ro_t*) at +32. The low
-                // bit of data is a realized flag - mask it off.
-                const addr_t meta_ptr = static_cast<addr_t>(read_u64_at(segments_, cls_ptr + 0));
-                const addr_t ro_ptr   = static_cast<addr_t>(read_u64_at(segments_, cls_ptr + 32)) & ~addr_t{1};
-                // Grab the class name from instance ro so we can pass it to
-                // the metaclass scan too (class methods list sits on the isa).
-                const addr_t name_ptr = static_cast<addr_t>(read_u64_at(segments_, ro_ptr + 24));
-                std::string cls_name = name_ptr ? read_cstring_at(segments_, name_ptr) : std::string{};
-
-                also_scan_ro(ro_ptr, cls_name, /*meta=*/false);
-                if (meta_ptr) {
-                    const addr_t meta_ro = static_cast<addr_t>(read_u64_at(segments_, meta_ptr + 32)) & ~addr_t{1};
-                    also_scan_ro(meta_ro, cls_name, /*meta=*/true);
-                }
+            also_scan_ro(ro_ptr, cls_name, /*meta=*/false);
+            if (meta_ptr) {
+                const addr_t meta_ro = static_cast<addr_t>(read_u64_at(segments_, meta_ptr + 32)) & ~addr_t{1};
+                also_scan_ro(meta_ro, cls_name, /*meta=*/true);
             }
         }
     }
+}
 
-    // ---- Swift nominal type descriptors ---------------------------------
-    // __swift5_types contains i32 relative pointers to nominal type
-    // descriptors. For class/struct/enum descriptors, TargetTypeContext-
-    // Descriptor places a relative direct pointer to the type name at +8.
-    // Naming the descriptor gives address/name resolution a foothold in
-    // stripped Swift binaries without needing full Swift demangling.
+// ---- Swift nominal type descriptors ---------------------------------
+// __swift5_types contains i32 relative pointers to nominal type
+// descriptors. For class/struct/enum descriptors, TargetTypeContext-
+// Descriptor places a relative direct pointer to the type name at +8.
+// Naming the descriptor gives address/name resolution a foothold in
+// stripped Swift binaries without needing full Swift demangling.
+void MachOBinary::scan_swift_types() {
     if (const Section* swift_types = find_section_suffix(sections_, "__swift5_types");
         swift_types && swift_types->size >= 4) {
         const std::size_t n = swift_types->size / 4;
@@ -1702,8 +1764,10 @@ Result<void> MachOBinary::parse() {
             }
         }
     }
+}
 
-    // Sort + dedupe, mirroring ELF.
+// Sort + dedupe, mirroring ELF.
+void MachOBinary::finalize_symbols() {
     std::ranges::sort(symbols_, [](const Symbol& a, const Symbol& b) noexcept {
         if (a.is_import != b.is_import) return a.is_import < b.is_import;
         if (a.addr      != b.addr)      return a.addr < b.addr;
@@ -1720,7 +1784,6 @@ Result<void> MachOBinary::parse() {
                 && a.name == b.name;
         });
     symbols_.erase(dups.begin(), dups.end());
-    return {};
 }
 
 }  // namespace ember

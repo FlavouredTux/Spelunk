@@ -1,9 +1,16 @@
-#include <ember/disasm/ppc_decoder.hpp>
-
 #include <algorithm>
+#include <cstddef>
+#include <expected>
 #include <optional>
+#include <span>
 
+#include <ember/binary/arch.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/ppc_decoder.hpp>
+#include <ember/disasm/register.hpp>
 
 namespace ember {
 

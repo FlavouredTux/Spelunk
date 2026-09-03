@@ -14,13 +14,20 @@
 //           rule (re-slid for the live address space).
 //        e. Stop on no-progress, undefined return address, or zero PC.
 
-#include <ember/debug/unwind.hpp>
-
+#include <cstddef>
 #include <cstring>
+#include <expected>
+#include <utility>
+#include <vector>
 
 #include <ember/analysis/cfi.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/regs.hpp>
+#include <ember/debug/target.hpp>
+#include <ember/debug/types.hpp>
+#include <ember/debug/unwind.hpp>
 
 namespace ember::debug {
 

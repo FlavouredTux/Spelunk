@@ -1,13 +1,19 @@
 #include <ember/common/cache.hpp>
 
 #include <cstdlib>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <ios>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <system_error>
 
+#include <ember/common/error.hpp>
 #include <ember/common/hash.hpp>
-#include <ember/common/types.hpp>
 
 namespace ember::cache {
 

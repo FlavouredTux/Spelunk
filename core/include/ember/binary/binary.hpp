@@ -153,7 +153,7 @@ public:
     // replaced. Returns true when the symbol table changed.
     bool add_inferred_function_name(addr_t va, std::string_view name);
 
-    void add_debug_signature(addr_t va, FunctionSig signature) {
+    void add_debug_signature(addr_t va, const FunctionSig& signature) {
         debug_signatures_.try_emplace(va, std::move(signature));
     }
     [[nodiscard]] const std::map<addr_t, FunctionSig>&
@@ -189,7 +189,6 @@ public:
     [[nodiscard]] std::span<const addr_t>
     indirect_edges_from(addr_t from) const noexcept;
     [[nodiscard]] std::size_t indirect_edge_count() const noexcept;
-    void clear_indirect_edges() const noexcept;
 
     // Runtime value facts from logs/traces. These overlay sparse qword values
     // not present in a static file view: singleton globals, object vptrs, or

@@ -6,26 +6,29 @@
 // re-enables the bp if we were mid step-over, decides whether to
 // surface the event or loop internally).
 
-#include "ptrace_target.hpp"
-
 #include <cerrno>
 #include <cstdint>
-#include <cstring>
-#include <string>
-
+#include <expected>
+#include <sched.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <string>
 #include <sys/ptrace.h>
-#include <sys/types.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+#include <utility>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/event.hpp>
+#include <ember/debug/types.hpp>
+
+#include "errno_io.hpp"
+#include "ptrace_target.hpp"
 
 namespace ember::debug::linux_ {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 [[nodiscard]] void* sig_data(int sig) {
     return reinterpret_cast<void*>(static_cast<std::uintptr_t>(sig));

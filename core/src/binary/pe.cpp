@@ -1,19 +1,35 @@
 #include <ember/binary/pe.hpp>
-#include <ember/binary/pe_view.hpp>
 
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <cstring>
+#include <expected>
+#include <filesystem>
 #include <format>
+#include <map>
+#include <memory>
+#include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <ember/analysis/pe_unwind.hpp>
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/pdb.hpp>
+#include <ember/binary/pe_view.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
+#include <ember/common/annotations.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember {

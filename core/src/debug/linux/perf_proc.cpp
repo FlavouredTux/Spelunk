@@ -18,22 +18,32 @@
 // The launch path could use waitpid, but using pidfd uniformly keeps
 // the event loop simple.
 
-#include "perf_target.hpp"
-
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <string>
-#include <vector>
-
 #include <dirent.h>
+#include <expected>
 #include <fcntl.h>
+#include <memory>
+#include <sched.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <string>
+#include <string_view>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/target.hpp>
+#include <ember/debug/types.hpp>
+
+#include "errno_io.hpp"
+#include "perf_target.hpp"
 
 #ifndef SYS_pidfd_open
 #  define SYS_pidfd_open 434
@@ -47,10 +57,6 @@ extern char** environ;
 namespace ember::debug::linux_perf {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 [[nodiscard]] int sys_pidfd_open(pid_t pid) {
     return static_cast<int>(::syscall(SYS_pidfd_open, pid, 0u));

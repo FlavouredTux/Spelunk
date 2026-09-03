@@ -6,8 +6,8 @@
 // make_decoder() - registering a factory for one of those arches has no
 // effect; the builtin path always wins. Arches that core doesn't ship a
 // decoder for fall through to this registry, so an out-of-tree extension
-// (ember-pro, a research fork) can plug in RISC-V / MIPS / etc. without
-// editing core's switch statement.
+// can plug in RISC-V / MIPS / etc. without editing core's switch
+// statement.
 //
 // Registration is not thread-safe: call from main() before any decoder
 // is requested. Registrations are global and last for the process.

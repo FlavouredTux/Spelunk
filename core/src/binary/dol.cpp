@@ -2,16 +2,29 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cctype>
-#include <fstream>
+#include <charconv>
+#include <cstddef>
+#include <expected>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <tuple>
+#include <utility>
+#include <vector>
 
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/text.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 
@@ -107,18 +120,8 @@ struct DolSeg {
     return out;
 }
 
-[[nodiscard]] std::string_view trim(std::string_view text) noexcept {
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
-        text.remove_prefix(1);
-    }
-    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
-        text.remove_suffix(1);
-    }
-    return text;
-}
-
 [[nodiscard]] std::optional<u64> parse_integer(std::string_view text) noexcept {
-    text = trim(text);
+    text = trim_space(text);
     int base = 10;
     if (text.starts_with("0x") || text.starts_with("0X")) {
         text.remove_prefix(2);
@@ -331,8 +334,8 @@ DolBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
 
         const auto slash = line.find("//");
         const std::string_view attributes = slash == std::string::npos
-            ? std::string_view{} : trim(std::string_view(line).substr(slash + 2));
-        std::string_view declaration = trim(std::string_view(line).substr(0, slash));
+            ? std::string_view{} : trim_space(std::string_view(line).substr(slash + 2));
+        std::string_view declaration = trim_space(std::string_view(line).substr(0, slash));
         if (declaration.empty() || declaration.starts_with('#')) continue;
 
         const auto equal = declaration.find('=');
@@ -343,11 +346,11 @@ DolBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
                 path.string(), lineno)));
         }
 
-        const std::string_view name = trim(declaration.substr(0, equal));
-        const std::string_view section_name = trim(
+        const std::string_view name = trim_space(declaration.substr(0, equal));
+        const std::string_view section_name = trim_space(
             declaration.substr(equal + 1, colon - equal - 1));
-        std::string_view address_text = trim(declaration.substr(colon + 1));
-        if (address_text.ends_with(';')) address_text = trim(address_text.substr(0, address_text.size() - 1));
+        std::string_view address_text = trim_space(declaration.substr(colon + 1));
+        if (address_text.ends_with(';')) address_text = trim_space(address_text.substr(0, address_text.size() - 1));
         const auto address = parse_integer(address_text);
         if (name.empty() || !address) {
             return std::unexpected(Error::invalid_format(std::format(

@@ -2,14 +2,22 @@
 
 #include <charconv>
 #include <cstddef>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <ios>
 #include <limits>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
+#include <ember/common/error.hpp>
 #include <ember/common/hash.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

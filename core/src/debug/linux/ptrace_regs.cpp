@@ -10,28 +10,30 @@
 // The kernel returns the standard (non-compacted) XSAVE layout for
 // PTRACE_GETREGSET so EBX from CPUID(0xD, n) is the right offset.
 
-#include "ptrace_target.hpp"
-
+#include <sys/uio.h>
 #include <cerrno>
+#include <cpuid.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <sys/ptrace.h>
-#include <sys/uio.h>
-#include <sys/user.h>
-#include <unistd.h>
-
-#include <cpuid.h>
 #include <elf.h>
+#include <expected>
+#include <sched.h>
+#include <sys/ptrace.h>
+#include <sys/user.h>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/debug/regs.hpp>
+#include <ember/debug/types.hpp>
+
+#include "errno_io.hpp"
+#include "ptrace_target.hpp"
 
 namespace ember::debug::linux_ {
 
 namespace {
-
-[[nodiscard]] Error errno_io(const char* op) {
-    return Error::io(std::string(op) + ": " + std::strerror(errno));
-}
 
 // Cached XSAVE area layout for the host CPU. CPUID(0xD, 0) gives the
 // total area size and the user-state XCR0 bitmap; CPUID(0xD, n) for

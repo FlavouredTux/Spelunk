@@ -1,9 +1,16 @@
-#include <ember/disasm/arm32_decoder.hpp>
-
+#include <cstddef>
 #include <cstring>
+#include <expected>
 #include <format>
+#include <initializer_list>
+#include <span>
 
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/disasm/arm32_decoder.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 
 // ARM (A32 / ARMv7-A) instruction decoder.
 //

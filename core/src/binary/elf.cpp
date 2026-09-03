@@ -1312,6 +1312,9 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
         } else {
             dynsym_bytes = vaddr_slice(segments_, dynsym_vaddr, dynsym_bytes_sz);
         }
+        // The count came from header arithmetic; the bytes we could map
+        // are the real bound.
+        dynsym_count = std::min(dynsym_count, dynsym_bytes.size() / syment);
         const ByteReader str_r(dynstr_bytes);
         dynsym_names.resize(dynsym_count);
         for (std::size_t k = 0; k < dynsym_count; ++k) {

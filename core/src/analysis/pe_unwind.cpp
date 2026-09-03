@@ -48,7 +48,9 @@ std::vector<PeUnwindEntry> parse_pe_pdata(const Binary& b) {
 
     const addr_t image_base = pe->image_base();
     std::vector<PeUnwindEntry> out;
-    out.reserve(dd.size / kRuntimeFuncSize);
+    // dd.size is untrusted; the mapped bytes bound the entry count.
+    const std::size_t mapped = b.bytes_at(image_base + dd.virtual_address).size();
+    out.reserve(std::min<std::size_t>(dd.size, mapped) / kRuntimeFuncSize);
 
     for (u32 off = 0; off + kRuntimeFuncSize <= dd.size; off += kRuntimeFuncSize) {
         const auto span = b.bytes_at(image_base + dd.virtual_address + off);

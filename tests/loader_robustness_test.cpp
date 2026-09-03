@@ -1,8 +1,16 @@
+#include <ember/binary/dol.hpp>
+#include <ember/binary/elf.hpp>
 #include <ember/binary/macho.hpp>
 #include <ember/binary/minidump.hpp>
+#include <ember/binary/pdb.hpp>
+#include <ember/binary/pe.hpp>
 
 #include <array>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 namespace {
@@ -115,10 +123,37 @@ void test_macho_rejects_unmapped_initialized_tables() {
 
 }  // namespace
 
+// Every file under tests/fuzz/corpus once made a loader crash or
+// allocate an absurd amount. Each is fed to every loader; the only
+// requirement is that the process survives.
+void test_fuzz_corpus_replays_cleanly() {
+#ifdef EMBER_FUZZ_CORPUS_DIR
+    namespace fs = std::filesystem;
+    std::size_t replayed = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(EMBER_FUZZ_CORPUS_DIR)) {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream in(entry.path(), std::ios::binary);
+        std::vector<char> raw((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+        std::vector<std::byte> bytes(raw.size());
+        for (std::size_t i = 0; i < raw.size(); ++i) bytes[i] = static_cast<std::byte>(raw[i]);
+        (void)ember::ElfBinary::load_from_buffer(bytes);
+        (void)ember::PeBinary::load_from_buffer(bytes);
+        (void)ember::MachOBinary::load_from_buffer(bytes);
+        (void)ember::MinidumpBinary::load_from_buffer(bytes);
+        (void)ember::DolBinary::load_from_buffer(bytes);
+        (void)ember::pdb::load_pdb_from_buffer(bytes);
+        ++replayed;
+    }
+    check(replayed >= 2, "fuzz corpus inputs were found and replayed");
+#endif
+}
+
 int main() {
     test_minidump_rejects_invalid_rvas();
     test_minidump_counts_are_bounded_by_stream();
     test_macho_validates_command_count_before_allocating();
     test_macho_rejects_unmapped_initialized_tables();
+    test_fuzz_corpus_replays_cleanly();
     return fails == 0 ? 0 : 1;
 }

@@ -168,7 +168,7 @@ parse_compact_unwind(const Binary& b) {
     // (functionOffset, secondLevelPagesSectionOffset, lsdaIndexArraySectionOffset)
     struct FirstIdx { u32 fn_off, pages_off, lsda_idx_off; };
     std::vector<FirstIdx> first;
-    first.reserve(*idx_cnt);
+    first.reserve(std::min<std::size_t>(*idx_cnt, bytes.size() / sizeof(FirstIdx)));
     for (u32 i = 0; i < *idx_cnt; ++i) {
         const std::size_t p = *idx_off + i * 12;
         auto a = rd32(p), bp = rd32(p + 4), c = rd32(p + 8);
@@ -410,7 +410,7 @@ std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
 
     struct FirstIdx { u32 fn_off, pages_off, lsda_idx_off; };
     std::vector<FirstIdx> first;
-    first.reserve(*idx_cnt);
+    first.reserve(std::min<std::size_t>(*idx_cnt, bytes.size() / sizeof(FirstIdx)));
     for (u32 i = 0; i < *idx_cnt; ++i) {
         const std::size_t p = *idx_off + static_cast<std::size_t>(i) * 12u;
         auto a = rd32(p), bp = rd32(p + 4), c = rd32(p + 8);

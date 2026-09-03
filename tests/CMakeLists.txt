@@ -138,6 +138,9 @@ add_test(NAME ir_cleanup_unit COMMAND ember_ir_cleanup_test)
 
 add_executable(ember_loader_robustness_test loader_robustness_test.cpp)
 target_link_libraries(ember_loader_robustness_test PRIVATE ember::core ember::flags)
+# Inputs the fuzzers found bugs with are replayed through every loader.
+target_compile_definitions(ember_loader_robustness_test PRIVATE
+    EMBER_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus")
 add_test(NAME loader_robustness_unit COMMAND ember_loader_robustness_test)
 
 add_executable(ember_dtk_project_test dtk_project_test.cpp)

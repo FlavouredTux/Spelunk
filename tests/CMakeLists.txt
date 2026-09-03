@@ -185,20 +185,20 @@ if(NOT TARGET ember_cli)
     return()
 endif()
 
-# Build each fixture from .c → binary with deterministic flags. We drive it
-# through add_custom_command so CTest depends on a real file target.
+# Fixtures are staged into the build directory through add_custom_command
+# so CTest depends on a real file target.
 set(_fixture_dir "${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 set(_golden_dir  "${CMAKE_CURRENT_SOURCE_DIR}/golden")
 set(_build_dir   "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 file(MAKE_DIRECTORY "${_build_dir}")
 
-# For fixtures whose goldens record absolute addresses or function sizes,
-# any gcc point-release codegen drift breaks the test even though ember's
-# behaviour is unchanged. `ember_use_prebuilt_fixture` copies a pre-built
-# binary checked into `tests/fixtures/<name>.prebuilt` into the same build
-# location `ember_build_fixture` would produce, so downstream test rules
-# don't need to know which path produced it. Use this for tests that
-# depend on exact compiled bytes; everything else stays compiled-on-build.
+# The goldens record absolute addresses and function sizes, so any gcc
+# point-release codegen drift breaks them even though ember's behaviour
+# is unchanged. Compiled fixtures are therefore committed as
+# `tests/fixtures/<name>.prebuilt` and staged from there; the sources and
+# the flags on each ember_build_fixture() call say how they were built.
+# Configure with -DEMBER_COMPILE_FIXTURES=ON (scripts/refresh_fixtures.sh
+# does) to rebuild them from source when a fixture changes.
 function(ember_use_prebuilt_fixture name)
     set(_src "${_fixture_dir}/${name}.prebuilt")
     set(_out "${_build_dir}/${name}")
@@ -220,6 +220,11 @@ function(ember_use_prebuilt_fixture name)
 endfunction()
 
 function(ember_build_fixture name)
+    if(NOT EMBER_COMPILE_FIXTURES AND EXISTS "${_fixture_dir}/${name}.prebuilt")
+        ember_use_prebuilt_fixture(${name})
+        set(EMBER_FIXTURE_${name}_PATH "${EMBER_FIXTURE_${name}_PATH}" PARENT_SCOPE)
+        return()
+    endif()
     cmake_parse_arguments(F "PIE" "OPT;PROTECTOR;SRC;FP" "EXTRA_LDFLAGS" ${ARGN})
     if(NOT F_OPT)
         set(F_OPT "-O2")

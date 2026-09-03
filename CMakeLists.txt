@@ -20,6 +20,8 @@ option(EMBER_WERROR    "Treat warnings as errors"     ON)
 option(EMBER_SANITIZE  "Enable AddressSanitizer+UBSan" OFF)
 option(EMBER_BUILD_CLI "Build the command-line tool"  ON)
 option(EMBER_BUILD_GUI "Build the Qt 6 desktop front end" OFF)
+option(EMBER_COMPILE_FIXTURES
+    "Compile test fixtures from source instead of staging the committed binaries" OFF)
 
 add_library(ember_flags INTERFACE)
 add_library(ember::flags ALIAS ember_flags)

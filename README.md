@@ -168,6 +168,10 @@ regenerate them in the same commit:
 UPDATE_GOLDEN=1 ctest --test-dir build -V
 ```
 
+The compiled test fixtures are committed as `tests/fixtures/*.prebuilt`
+so the goldens don't depend on the installed compiler; edit a fixture
+source and run `scripts/refresh_fixtures.sh` to rebuild them.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

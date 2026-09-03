@@ -14,7 +14,10 @@ document covers what we accept, what we don't, and why.
   comments. Typos through reorganization, all welcome.
 - **Test fixtures you built yourself.** A small C/Rust/asm source plus
   a build script that produces a tiny binary - fair game, since
-  you produced the binary from scratch.
+  you produced the binary from scratch. Compiled fixtures are committed
+  as `tests/fixtures/<name>.prebuilt` because the goldens pin their
+  addresses; `scripts/refresh_fixtures.sh` rebuilds them and regenerates
+  the goldens when a source changes.
 - **Issue reports.** Bug reports with reproducible inputs are valuable
   even without a fix attached.
 

@@ -4,18 +4,21 @@ add_library(ember_core STATIC
     src/binary/rel.cpp
     src/binary/dtk_project.cpp
     src/binary/macho.cpp
+    src/binary/macho_metadata.cpp
     src/binary/pe.cpp
     src/binary/pdb.cpp
     src/binary/dwarf.cpp
     src/binary/kismet_bundle.cpp
     src/binary/minidump.cpp
     src/binary/raw_regions.cpp
+    src/binary/binary.cpp
     src/binary/loader.cpp
     src/extension/registry.cpp
     src/disasm/decoder.cpp
     src/disasm/register.cpp
     src/disasm/instruction.cpp
     src/disasm/x64/decoder.cpp
+    src/disasm/x64/decoder_tables.cpp
     src/disasm/ppc/decoder.cpp
     src/disasm/arm/decoder.cpp
     src/disasm/arm/decoder32.cpp
@@ -47,6 +50,8 @@ add_library(ember_core STATIC
     src/analysis/teef_orbit.cpp
     src/analysis/teef_behav.cpp
     src/analysis/demangle.cpp
+    src/analysis/demangle_itanium.cpp
+    src/analysis/demangle_simplify.cpp
     src/analysis/msvc_demangle.cpp
     src/analysis/sig_inference.cpp
     src/analysis/ir_cache.cpp
@@ -72,6 +77,7 @@ add_library(ember_core STATIC
     src/analysis/vtables.cpp
     src/common/annotations.cpp
     src/common/cache.cpp
+    src/common/text.cpp
     src/ir/abi.cpp
     src/ir/ir.cpp
     src/ir/types.cpp
@@ -130,6 +136,7 @@ add_library(ember::core ALIAS ember_core)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
    CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_sources(ember_core PRIVATE
+        src/debug/linux/proc_mem.cpp
         src/debug/linux/ptrace_target.cpp
         src/debug/linux/ptrace_proc.cpp
         src/debug/linux/ptrace_mem.cpp

@@ -1,4 +1,5 @@
 100001000	-	Tiny	ping	void ()
 100001006	-	Tiny	count	int ()
 100001017	-	Tiny	withCallback:	void (id)
+10000104d	+	Tiny	factory	int ()
 100001011	-	Tiny(Extra)	pong	int ()

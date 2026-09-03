@@ -24,6 +24,7 @@
 #include <ember/binary/binary.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/error.hpp>
+#include <ember/common/text.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember::script {
@@ -48,67 +49,6 @@ namespace {
 
 [[nodiscard]] std::string_view trim(std::string_view s) noexcept {
     return rtrim(ltrim(s));
-}
-
-[[nodiscard]] bool parse_float_clamped(std::string_view s, float& out) noexcept {
-    // libc++ on macOS 14 lacks float from_chars; keep .ember meta parsing
-    // locale-independent by accepting the small decimal grammar we emit.
-    if (s.empty()) return false;
-
-    std::size_t i = 0;
-    bool neg = false;
-    if (s[i] == '-' || s[i] == '+') {
-        neg = s[i] == '-';
-        ++i;
-        if (i == s.size()) return false;
-    }
-
-    double v = 0.0;
-    bool any_digit = false;
-    while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
-        any_digit = true;
-        v = v * 10.0 + static_cast<double>(s[i] - '0');
-        ++i;
-    }
-    if (i < s.size() && s[i] == '.') {
-        ++i;
-        double place = 0.1;
-        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
-            any_digit = true;
-            v += static_cast<double>(s[i] - '0') * place;
-            place *= 0.1;
-            ++i;
-        }
-    }
-    if (!any_digit) return false;
-
-    if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
-        ++i;
-        if (i == s.size()) return false;
-        bool exp_neg = false;
-        if (s[i] == '-' || s[i] == '+') {
-            exp_neg = s[i] == '-';
-            ++i;
-            if (i == s.size()) return false;
-        }
-        int exp = 0;
-        bool exp_digit = false;
-        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
-            exp_digit = true;
-            if (exp < 64) exp = exp * 10 + (s[i] - '0');
-            ++i;
-        }
-        if (!exp_digit) return false;
-        const int capped = exp > 64 ? 64 : exp;
-        for (int n = 0; n < capped; ++n) v = exp_neg ? (v / 10.0) : (v * 10.0);
-    }
-
-    if (i != s.size()) return false;
-    if (neg) v = -v;
-    if (v < 0.0) v = 0.0;
-    if (v > 1.0) v = 1.0;
-    out = static_cast<float>(v);
-    return true;
 }
 
 // Strip a trailing ` # comment`. The `#` must be preceded by whitespace
@@ -376,7 +316,7 @@ struct KvPair {
                 const std::string_view val = trim(chunk.substr(eq + 1));
                 if (key == "conf") {
                     float v = 0.0f;
-                    if (parse_float_clamped(val, v)) {
+                    if (ember::parse_float_clamped(val, v)) {
                         m.confidence = v;
                     }
                 } else if (key == "src") {
@@ -422,7 +362,7 @@ split_kv(std::string_view line, std::size_t lineno) {
             "ember: line {}: missing `=` or `->` separator", lineno)));
     }
     bool arrow = false;
-    std::size_t after = sep;
+    std::size_t after;
     if (line[sep] == '=') {
         after = sep + 1;
     } else if (sep + 1 < line.size() && line[sep] == '-' && line[sep + 1] == '>') {

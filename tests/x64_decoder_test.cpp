@@ -285,6 +285,62 @@ void test_vex_evex_and_bmi_decode() {
     }
 }
 
+void test_vex_map2_opcode_tables() {
+    struct Case {
+        std::byte vex;
+        std::byte opcode;
+        ember::Mnemonic mnemonic;
+        const char* text;
+    };
+    constexpr std::array<Case, 9> cases{{
+        {std::byte{0xF0}, std::byte{0xF5}, ember::Mnemonic::Bzhi,
+         "bzhi rax, rdx, rcx"},
+        {std::byte{0xF1}, std::byte{0xF7}, ember::Mnemonic::Shlx,
+         "shlx rax, rdx, rcx"},
+        {std::byte{0xF2}, std::byte{0xF5}, ember::Mnemonic::Pext,
+         "pext rax, rcx, rdx"},
+        {std::byte{0xF2}, std::byte{0xF7}, ember::Mnemonic::Sarx,
+         "sarx rax, rdx, rcx"},
+        {std::byte{0xF3}, std::byte{0xF5}, ember::Mnemonic::Pdep,
+         "pdep rax, rcx, rdx"},
+        {std::byte{0xF3}, std::byte{0xF6}, ember::Mnemonic::Mulx,
+         "mulx rax, rcx, rdx"},
+        {std::byte{0xF3}, std::byte{0xF7}, ember::Mnemonic::Shrx,
+         "shrx rax, rdx, rcx"},
+        {std::byte{0xF5}, std::byte{0xA8}, ember::Mnemonic::Vfmadd213pd,
+         "vfmadd213pd ymm0, ymm1, ymm2"},
+        {std::byte{0xF1}, std::byte{0xB9}, ember::Mnemonic::Vfmadd231sd,
+         "vfmadd231sd xmm0, xmm1, xmm2"},
+    }};
+
+    const ember::X64Decoder decoder;
+    for (const auto& c : cases) {
+        const std::array<std::byte, 5> code{
+            std::byte{0xC4}, std::byte{0xE2}, c.vex, c.opcode,
+            std::byte{0xC2},
+        };
+        auto instruction = decoder.decode(code, 0x4800);
+        if (!instruction) {
+            std::fprintf(stderr, "FAIL: %s decode failed: %s\n", c.text,
+                         instruction.error().message.c_str());
+            ++fails;
+            continue;
+        }
+        check_eq(instruction->mnemonic, c.mnemonic, c.text);
+        check_eq(instruction->length, static_cast<ember::u8>(code.size()),
+                 c.text);
+        check_eq(instruction->num_operands, static_cast<ember::u8>(3),
+                 c.text);
+        check_eq(instruction->x86_vex, true, c.text);
+        for (ember::u8 i = 0; i < instruction->num_operands; ++i) {
+            check_eq(instruction->operands[i].kind,
+                     ember::Operand::Kind::Register, c.text);
+        }
+        check_eq(ember::format_instruction(*instruction), std::string(c.text),
+                 c.text);
+    }
+}
+
 void test_x64_fp_call_lanes_and_vex_lift() {
     const std::array<std::byte, 5> call{
         std::byte{0xE8}, std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
@@ -586,6 +642,7 @@ int main() {
     test_long_mode_prefix_edge_cases();
     test_word_push_pop_width();
     test_vex_evex_and_bmi_decode();
+    test_vex_map2_opcode_tables();
     test_x64_fp_call_lanes_and_vex_lift();
     test_x87_d8_d9_memory_register_state();
     test_x87_dc_dd_m64_and_fucom();

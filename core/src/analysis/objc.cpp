@@ -25,7 +25,7 @@ namespace {
 // absolute VAs in the image map back to file bytes naturally.
 
 constexpr u32 kRelativeMethodListFlag = 0x80000000u;
-constexpr u32 kPreoptSelFlag          = 0x40000000u;  // clang emits this
+constexpr u32 kSelectorOffsetsFlag    = 0x40000000u;
 constexpr u32 kRwMeta                 = 0x1u;  // class_ro_t flags bit: is metaclass
 constexpr u32 kBlockHasCopyDispose    = 1u << 25;
 constexpr u32 kBlockHasSignature      = 1u << 30;
@@ -60,8 +60,7 @@ constexpr addr_t kCategoryClassPropertiesOffset    = 48;
     return static_cast<i32>(*v);
 }
 
-[[nodiscard]] std::string read_cstring(const Binary& b, addr_t va) {
-    auto bytes = b.bytes_at(va);
+[[nodiscard]] std::string read_cstring(std::span<const std::byte> bytes) {
     std::string out;
     out.reserve(64);
     const std::size_t kMax = 4096;
@@ -73,6 +72,10 @@ constexpr addr_t kCategoryClassPropertiesOffset    = 48;
         out.push_back(static_cast<char>(c));
     }
     return {};
+}
+
+[[nodiscard]] std::string read_cstring(const Binary& b, addr_t va) {
+    return read_cstring(b.bytes_at(va));
 }
 
 // Locate a Mach-O section by suffix ("__objc_classlist", "__objc_selrefs",
@@ -93,6 +96,12 @@ find_section(const Binary& b, std::string_view name, u64& out_vaddr) {
     }
     out_vaddr = 0;
     return {};
+}
+
+[[nodiscard]] std::span<const std::byte>
+find_section(const Binary& b, std::string_view name) {
+    u64 unused_vaddr = 0;
+    return find_section(b, name, unused_vaddr);
 }
 
 template <typename Fn>
@@ -149,11 +158,13 @@ read_abs_method(const Binary& b, addr_t entry_va, std::string_view cls,
 //     i32 name_off  → selector string (or @selector() indirection)
 //     i32 types_off
 //     i32 imp_off
-// When the method list header's entsize has the preopt flag set, name_off
-// is the offset to a selref slot instead of the selector string directly.
+// With the selector-offset flag, name_off is an unsigned offset from the
+// __objc_methname string buffer. Without it, name_off is a signed
+// field-relative offset to a selref slot that contains the string pointer.
 [[nodiscard]] std::optional<ObjcMethod>
 read_rel_method(const Binary& b, addr_t entry_va,
-                std::string_view cls, bool preopt_sel, bool allow_zero_imp) {
+                std::string_view cls, bool selector_uses_buffer_offset,
+                bool allow_zero_imp) {
     auto name_d  = load_i32(b, entry_va + 0);
     auto types_d = load_i32(b, entry_va + 4);
     auto imp_d   = load_i32(b, entry_va + 8);
@@ -161,14 +172,21 @@ read_rel_method(const Binary& b, addr_t entry_va,
 
     ObjcMethod m;
     m.cls = std::string(cls);
-    const addr_t sel_or_ref = static_cast<addr_t>(
-        static_cast<i64>(entry_va) + static_cast<i64>(*name_d));
-    if (preopt_sel) {
-        auto ptr = load_u64(b, sel_or_ref);
+    if (selector_uses_buffer_offset) {
+        // Binary has no shared-cache header to supply a global base. Only use
+        // an embedded methname section, and never let the offset escape it.
+        const auto selector_buffer = find_section(b, "__objc_methname");
+        const u32 selector_offset = static_cast<u32>(*name_d);
+        if (selector_offset >= selector_buffer.size()) {
+            return std::nullopt;
+        }
+        m.selector = read_cstring(selector_buffer.subspan(selector_offset));
+    } else {
+        const addr_t selref = static_cast<addr_t>(
+            static_cast<i64>(entry_va) + static_cast<i64>(*name_d));
+        auto ptr = load_u64(b, selref);
         if (!ptr) return std::nullopt;
         m.selector = read_cstring(b, static_cast<addr_t>(*ptr));
-    } else {
-        m.selector = read_cstring(b, sel_or_ref);
     }
     // Types are always a direct (non-indirect) relative offset to a C string.
     const addr_t types_va = static_cast<addr_t>(
@@ -195,7 +213,8 @@ bool read_method_list(const Binary& b, addr_t ml_va,
     auto count       = load_u32(b, ml_va + 4);
     if (!entsize_raw || !count) return false;
     const bool relative  = (*entsize_raw & kRelativeMethodListFlag) != 0;
-    const bool preopt    = (*entsize_raw & kPreoptSelFlag) != 0;
+    const bool selectors_use_buffer_offsets =
+        (*entsize_raw & kSelectorOffsetsFlag) != 0;
     const u32  entsize   = *entsize_raw & 0x3FFFFFFFu;
     if (entsize == 0) return false;
     if (*count > 100'000) return false;   // runaway guard
@@ -203,8 +222,13 @@ bool read_method_list(const Binary& b, addr_t ml_va,
     for (u32 i = 0; i < *count; ++i) {
         const addr_t entry_va = ml_va + 8 + static_cast<addr_t>(i) * entsize;
         std::optional<ObjcMethod> m;
-        if (relative) m = read_rel_method(b, entry_va, cls, preopt, allow_zero_imp);
-        else          m = read_abs_method(b, entry_va, cls, allow_zero_imp);
+        if (relative) {
+            m = read_rel_method(b, entry_va, cls,
+                                selectors_use_buffer_offsets,
+                                allow_zero_imp);
+        } else {
+            m = read_abs_method(b, entry_va, cls, allow_zero_imp);
+        }
         if (!m) continue;
         m->is_class = is_class;
         out.push_back(std::move(*m));

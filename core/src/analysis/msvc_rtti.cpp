@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <ember/analysis/discovery.hpp>
 #include <ember/analysis/msvc_demangle.hpp>
 #include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
@@ -40,8 +41,8 @@ struct CodeRanges {
 [[nodiscard]] CodeRanges collect_code_ranges(const Binary& b) {
     CodeRanges r;
     for (const auto& s : b.sections()) {
-        if (!s.flags.executable) continue;
         if (s.size == 0) continue;
+        if (!addr_in_code_section(b, s.vaddr)) continue;
         r.ranges.emplace_back(static_cast<addr_t>(s.vaddr),
                               static_cast<addr_t>(s.vaddr + s.size));
     }
@@ -53,14 +54,14 @@ struct RdataSection {
     addr_t                     vaddr;
 };
 
-// MSVC RTTI metadata and vtables live in read-only, non-executable
-// sections - classically `.rdata`. We accept any R-only section to be
+// MSVC RTTI metadata and vtables live in read-only, non-code sections -
+// classically `.rdata`. We accept any R-only section to be
 // resilient to linker renames ("const", "xdata" variants).
 [[nodiscard]] std::vector<RdataSection>
 collect_rdata_sections(const Binary& b) {
     std::vector<RdataSection> out;
     for (const auto& s : b.sections()) {
-        if (s.flags.executable) continue;
+        if (addr_in_code_section(b, s.vaddr)) continue;
         if (s.flags.writable)   continue;
         if (!s.flags.readable)  continue;
         if (s.data.empty())     continue;

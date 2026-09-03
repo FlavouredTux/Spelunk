@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 
+#include <ember/analysis/discovery.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/bytes.hpp>
@@ -96,7 +97,7 @@ int main() {
 
     const std::size_t sec = opt + 240;
     section(b, sec + 0 * 40, ".text", text_size, text_rva, 0x200, text_off,
-            0x60000020);
+            0x40000040);
     section(b, sec + 1 * 40, ".rdata", rdata_size, rdata_rva, 0x400, rdata_off,
             0x40000040);
 
@@ -134,6 +135,10 @@ int main() {
 
     auto pe = PeBinary::load_from_buffer(std::move(b));
     check(pe.has_value(), "synthetic PE should load");
+    check(!(*pe)->sections()[0].flags.executable,
+          "synthetic .text should not carry the executable flag");
+    check(addr_in_code_section(**pe, image_base + text_rva),
+          "named PE .text should remain canonical code");
 
     const auto classes = parse_msvc_rtti(**pe);
     check(classes.size() == 1, "expected one MSVC RTTI class");

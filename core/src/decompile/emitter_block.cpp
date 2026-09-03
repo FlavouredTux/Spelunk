@@ -16,6 +16,7 @@
 #include <ember/analysis/arity.hpp>
 #include <ember/analysis/eh_frame.hpp>
 #include <ember/analysis/function.hpp>
+#include <ember/analysis/import_sigs.hpp>
 #include <ember/binary/arch.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/annotations.hpp>
@@ -361,8 +362,9 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
             // This is a C rule, not a PPC ABI special case.
             rendered_call_args[arg_i] = stack_name(*off);
         }
-        bool expects_string = libc_arg_is_charp(
-            direct_name, static_cast<u8>(arg_i + 1));
+        bool expects_string = import_arg_string_kind(
+            direct_name, static_cast<u8>(arg_i + 1)) ==
+            ImportStringKind::Narrow;
         expects_string = expects_string || variadic_scanf_arg_is_charp(
             direct_name, call_args, arg_i);
         if (!expects_string && annotated_sig &&

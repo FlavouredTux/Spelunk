@@ -33,6 +33,10 @@ add_executable(ember_sigs_test sigs_test.cpp)
 target_link_libraries(ember_sigs_test PRIVATE ember::core ember::flags)
 add_test(NAME sigs_unit COMMAND ember_sigs_test)
 
+add_executable(ember_import_sigs_test import_sigs_test.cpp)
+target_link_libraries(ember_import_sigs_test PRIVATE ember::core ember::flags)
+add_test(NAME import_sigs_unit COMMAND ember_import_sigs_test)
+
 # Unit tests for the .ember declarative scripting format. Self-contained:
 # a synthetic MockBinary with one defined function and a rodata string
 # the function references, so the [from-strings] path has a real
@@ -178,6 +182,16 @@ add_test(NAME teef_corpus_unit COMMAND ember_teef_corpus_test)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "ember tests: fixture goldens skipped (Linux only)")
     return()
+endif()
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    add_executable(ember_proc_mem_test proc_mem_test.cpp)
+    target_include_directories(ember_proc_mem_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/core/src/debug/linux")
+    target_link_libraries(ember_proc_mem_test
+        PRIVATE ember::core ember::flags)
+    add_test(NAME proc_mem_unit COMMAND ember_proc_mem_test)
+    set_tests_properties(proc_mem_unit PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # Fixture-based golden tests shell out to the CLI; skip them entirely
@@ -1881,6 +1895,12 @@ if(Python3_Interpreter_FOUND)
         FIXTURE macho_objc_relative
         ARGS    "-p|-s|-[Tiny count]"
         GOLDEN  macho_objc_relative.count.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_relative_indirect_selector_function
+        FIXTURE macho_objc_relative
+        ARGS    "--functions|factory"
+        GOLDEN  macho_objc_relative.indirect_selector.functions.txt
     )
     ember_golden_test(
         NAME    macho_objc_relative_objc_names

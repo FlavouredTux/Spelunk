@@ -54,14 +54,6 @@ namespace {
     return false;
 }
 
-[[nodiscard]] bool addr_in_executable_section(const Binary& b, addr_t a) noexcept {
-    for (const auto& s : b.sections()) {
-        if (!s.flags.executable) continue;
-        if (a >= s.vaddr && a < s.vaddr + s.size) return true;
-    }
-    return false;
-}
-
 [[nodiscard]] std::optional<u64> read_u64_le(const Binary& b, addr_t a) noexcept {
     auto span = b.bytes_at(a);
     if (span.size() < 8) return std::nullopt;
@@ -425,7 +417,7 @@ compute_classified_callees(const Binary& b, addr_t fn,
         const std::size_t slot = static_cast<std::size_t>(disp) / 8;
         if (slot >= it->second->methods.size()) return std::nullopt;
         const addr_t imp = it->second->methods[slot];
-        if (imp == 0 || !addr_in_executable_section(b, imp)) return std::nullopt;
+        if (imp == 0 || !addr_in_code_section(b, imp)) return std::nullopt;
         return imp;
     };
 
@@ -554,7 +546,7 @@ compute_classified_callees(const Binary& b, addr_t fn,
                                         static_cast<addr_t>(op.mem.disp);
                     if (auto v = read_u64_le(b, slot); v) {
                         const auto target = static_cast<addr_t>(*v);
-                        if (target != 0 && addr_in_executable_section(b, target)) {
+                        if (target != 0 && addr_in_code_section(b, target)) {
                             out.push_back({target, CalleeKind::IndirectConst,
                                            insn.address});
                         }

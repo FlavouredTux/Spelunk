@@ -677,10 +677,7 @@ int run_diff(const Args& args) {
         ? cache::default_dir()
         : std::filesystem::path(args.cache_dir);
 
-    // Pre-computed fingerprint TSVs via --fingerprint-old / --fingerprint-new
-    // skip the lift-SSA-cleanup pipeline entirely. Useful for iterative
-    // version diffs: export v717 once, then diff v717→v718 / v718→v719 /
-    // … against that stored TSV without recomputing v717.
+    // Precomputed TSV inputs bypass binary analysis for iterative diffs.
     std::string old_tsv, new_tsv;
     std::string old_label = args.diff_path;
     std::string new_label = args.binary;

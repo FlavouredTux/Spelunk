@@ -20,9 +20,6 @@ libc_arity_by_name(std::string_view name) noexcept;
 [[nodiscard]] bool
 import_returns_void(std::string_view name) noexcept;
 
-[[nodiscard]] bool
-libc_arg_is_charp(std::string_view name, u8 arg_idx_1) noexcept;
-
 [[nodiscard]] std::string_view
 c_type_name(IrType t) noexcept;
 

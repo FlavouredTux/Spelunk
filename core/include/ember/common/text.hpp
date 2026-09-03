@@ -16,4 +16,9 @@ namespace ember {
     return s;
 }
 
+// Parse the locale-independent decimal grammar used for confidence values and
+// clamp successful results to [0, 1]. `out` is unchanged on failure.
+[[nodiscard]] bool
+parse_float_clamped(std::string_view s, float& out) noexcept;
+
 }  // namespace ember

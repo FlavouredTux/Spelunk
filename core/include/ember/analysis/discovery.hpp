@@ -9,8 +9,8 @@ namespace ember {
 class Binary;
 struct Section;
 
-// True iff `a` falls inside any section that looks like code
-// (executable flag or canonical text-section name).
+// Canonical code-address predicate for analysis passes. Accepts sections
+// with the executable flag or a recognized text-section name.
 [[nodiscard]] bool addr_in_code_section(const Binary& b, addr_t a) noexcept;
 
 // Linear-sweep `.text`/code sections for architecture-specific function

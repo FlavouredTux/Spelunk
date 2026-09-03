@@ -84,6 +84,7 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "strchr")    return m(t_charp(a),  {t_charp(a), t_int32s(a)});
     if (name == "strrchr")   return m(t_charp(a),  {t_charp(a), t_int32s(a)});
     if (name == "strstr")    return m(t_charp(a),  {t_charp(a), t_charp(a)});
+    if (name == "strcasestr") return m(t_charp(a), {t_charp(a), t_charp(a)});
     if (name == "strdup")    return m(t_charp(a),  {t_charp(a)});
     if (name == "strndup")   return m(t_charp(a),  {t_charp(a), t_size(a)});
     if (name == "strpbrk")   return m(t_charp(a),  {t_charp(a), t_charp(a)});
@@ -534,6 +535,75 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
 std::optional<ImportSigSpec>
 lookup_import_sig(std::string_view name, TypeArena& arena) {
     return build(name, arena);
+}
+
+ImportStringKind import_arg_string_kind(std::string_view name,
+                                        u8 arg_index_1based) noexcept {
+    struct Entry {
+        std::string_view name;
+        u8               arg_index_1based;
+    };
+    static constexpr Entry kNarrowEntries[] = {
+        {"strlen", 1}, {"strnlen", 1},
+        {"strdup", 1}, {"strndup", 1},
+        {"strchr", 1}, {"strrchr", 1},
+        {"strstr", 1}, {"strstr", 2},
+        {"strcasestr", 1}, {"strcasestr", 2},
+        {"strcmp", 1}, {"strcmp", 2},
+        {"strncmp", 1}, {"strncmp", 2},
+        {"strcasecmp", 1}, {"strcasecmp", 2},
+        {"strncasecmp", 1}, {"strncasecmp", 2},
+        {"strcpy", 1}, {"strcpy", 2},
+        {"strncpy", 1}, {"strncpy", 2},
+        {"stpcpy", 1}, {"stpcpy", 2},
+        {"stpncpy", 1}, {"stpncpy", 2},
+        {"strcat", 1}, {"strcat", 2},
+        {"strncat", 1}, {"strncat", 2},
+        {"strpbrk", 1}, {"strpbrk", 2},
+        {"strspn", 1}, {"strspn", 2},
+        {"strcspn", 1}, {"strcspn", 2},
+        {"strtok", 1}, {"strtok", 2},
+        {"strtok_r", 1}, {"strtok_r", 2},
+        {"strsep", 2},
+        {"index", 1}, {"rindex", 1},
+        {"basename", 1}, {"dirname", 1},
+        {"puts", 1}, {"fputs", 1}, {"perror", 1}, {"gets", 1},
+        {"lstrlenA", 1}, {"OutputDebugStringA", 1},
+        {"GetModuleHandleA", 1}, {"LoadLibraryA", 1},
+        {"GetProcAddress", 2}, {"CreateFileA", 1}, {"DeleteFileA", 1},
+        {"fopen", 1}, {"fopen", 2},
+        {"freopen", 1}, {"freopen", 2},
+        {"fdopen", 2},
+        {"getenv", 1}, {"secure_getenv", 1},
+        {"setenv", 1}, {"setenv", 2},
+        {"unsetenv", 1}, {"putenv", 1},
+        {"atoi", 1}, {"atol", 1}, {"atoll", 1}, {"atof", 1},
+        {"strtol", 1}, {"strtoul", 1}, {"strtoll", 1}, {"strtoull", 1},
+        {"strtod", 1}, {"strtof", 1}, {"strtold", 1},
+        {"remove", 1}, {"rename", 1}, {"rename", 2},
+        {"unlink", 1}, {"mkdir", 1}, {"rmdir", 1},
+        {"chdir", 1}, {"access", 1}, {"chmod", 1}, {"chown", 1},
+        {"stat", 1}, {"lstat", 1},
+        {"open", 1}, {"system", 1},
+    };
+    static constexpr Entry kWideEntries[] = {
+        {"lstrlenW", 1}, {"OutputDebugStringW", 1},
+        {"GetModuleHandleW", 1}, {"LoadLibraryW", 1},
+        {"CreateFileW", 1}, {"DeleteFileW", 1},
+    };
+    for (const auto& entry : kNarrowEntries) {
+        if (entry.name == name &&
+            entry.arg_index_1based == arg_index_1based) {
+            return ImportStringKind::Narrow;
+        }
+    }
+    for (const auto& entry : kWideEntries) {
+        if (entry.name == name &&
+            entry.arg_index_1based == arg_index_1based) {
+            return ImportStringKind::Wide;
+        }
+    }
+    return ImportStringKind::None;
 }
 
 // Local copy of the symbol-name cleaner (also lives in sig_inference.cpp /

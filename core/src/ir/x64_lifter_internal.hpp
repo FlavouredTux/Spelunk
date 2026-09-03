@@ -411,8 +411,6 @@ void lift_ret(LiftCtx& ctx);
 
 void lift_jmp(LiftCtx& ctx);
 
-IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx);
-
 void lift_jcc(LiftCtx& ctx, Mnemonic mn);
 
 void lift_nop(LiftCtx& ctx);
@@ -448,10 +446,6 @@ void store_fp_lvalue(const Operand& op, IrValue value, LiftCtx& ctx, IrType t);
 void lift_fp_binop(LiftCtx& ctx, IrOp op, IrType t);
 
 void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing);
-
-[[nodiscard]] IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t);
-
-void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t);
 
 void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t);
 

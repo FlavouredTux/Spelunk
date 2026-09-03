@@ -240,11 +240,7 @@ attach_macos(ProcessId pid) {
 
 Result<void> MachOTarget::detach() {
     if (!is_attached()) return {};
-    // Leave the tracee running. Restoring previous exception ports
-    // properly would require us to have snapshotted them on attach
-    // (task_get_exception_ports); for v0 we just drop ours and the
-    // kernel falls back to the default crash reporter / signal
-    // handlers. Real debuggers save+restore - note for v1.
+    // Detach resumes the task but does not restore its previous exception ports.
     if (task_port_) ::task_resume(task_port_);
     if (exc_port_)  ::mach_port_destroy (::mach_task_self(), exc_port_);
     if (task_port_) ::mach_port_deallocate(::mach_task_self(), task_port_);

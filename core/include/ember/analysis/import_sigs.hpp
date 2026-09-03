@@ -34,6 +34,19 @@ struct ImportSigSpec {
 [[nodiscard]] std::optional<ImportSigSpec>
 lookup_import_sig(std::string_view name, TypeArena& arena);
 
+enum class ImportStringKind : u8 {
+    None,
+    Narrow,
+    Wide,
+};
+
+// String representation expected by the fixed argument at the given 1-based
+// position. `name` follows `lookup_import_sig`: it is the cleaned, bare symbol
+// name. Wide identifies Win32 UTF-16 strings; callers without wide-string
+// support must not treat them as narrow strings.
+[[nodiscard]] ImportStringKind
+import_arg_string_kind(std::string_view name, u8 arg_index_1based) noexcept;
+
 class Binary;     // <ember/binary/binary.hpp>
 struct IrFunction;  // <ember/ir/ir.hpp>
 

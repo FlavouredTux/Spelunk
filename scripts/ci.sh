@@ -34,9 +34,10 @@ case "$mode" in
     CXXFLAGS="${CXXFLAGS:-} -stdlib=libc++" LDFLAGS="${LDFLAGS:-} -stdlib=libc++" \
       cmake -S . -B build-ci-clang "${gen[@]}" -DCMAKE_BUILD_TYPE=Release -DEMBER_BUILD_CLI=OFF
     cmake --build build-ci-clang --target ember_core ember_demangle_test \
-                                          ember_annotations_resolver_test ember_sigs_test
+                                          ember_annotations_resolver_test ember_sigs_test \
+                                          ember_import_sigs_test
     ctest --test-dir build-ci-clang --output-on-failure \
-      -R '^(demangle_unit|annotations_resolver_unit|sigs_unit)$'
+      -R '^(demangle_unit|annotations_resolver_unit|sigs_unit|import_sigs_unit)$'
     ;;
   release)
     cmake -S . -B build-release "${gen[@]}" -DCMAKE_BUILD_TYPE=Release

@@ -1,5 +1,7 @@
 #include <ember/analysis/discovery.hpp>
+#include <ember/analysis/indirect_calls.hpp>
 #include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/vtables.hpp>
 #include <ember/binary/binary.hpp>
 
 #include <algorithm>
@@ -213,6 +215,140 @@ private:
     std::vector<ember::Symbol>  syms_{};
 };
 
+class NamedCodeTargetBinary final : public ember::Binary {
+public:
+    static constexpr ember::addr_t kCaller = 0x401000;
+    static constexpr ember::addr_t kSlot   = 0x402000;
+    static constexpr ember::addr_t kTarget = 0x403000;
+    static constexpr ember::addr_t kUnrelated = 0x404000;
+
+    NamedCodeTargetBinary() {
+        caller_.fill(std::byte{0x90});
+        slot_.fill(std::byte{0});
+        target_.fill(std::byte{0x90});
+        unrelated_.fill(std::byte{0x90});
+
+        // call qword ptr [rip + 0xffa]; ret
+        caller_[0] = std::byte{0xff};
+        caller_[1] = std::byte{0x15};
+        put32(caller_, 2, static_cast<std::uint32_t>(kSlot - (kCaller + 6)));
+        caller_[6] = std::byte{0xc3};
+        put64(slot_, 0, kTarget);
+        put64(slot_, 8, kTarget);
+        target_[0] = std::byte{0xc3};
+
+        // An unrelated executable function containing `call rax`. This keeps
+        // the x64 FF-prefilter active while the scoped caller below lives in a
+        // canonical, non-executable code section.
+        unrelated_[0] = std::byte{0xff};
+        unrelated_[1] = std::byte{0xd0};
+        unrelated_[2] = std::byte{0xc3};
+
+        sections_[0].name = ".text";
+        sections_[0].vaddr = kCaller;
+        sections_[0].size = caller_.size();
+        sections_[0].flags.readable = true;
+        sections_[0].flags.executable = false;
+        sections_[0].flags.allocated = true;
+        sections_[0].data = caller_;
+
+        sections_[1].name = ".rdata";
+        sections_[1].vaddr = kSlot;
+        sections_[1].size = slot_.size();
+        sections_[1].flags.readable = true;
+        sections_[1].flags.allocated = true;
+        sections_[1].data = slot_;
+
+        sections_[2].name = ".text";
+        sections_[2].vaddr = kTarget;
+        sections_[2].size = target_.size();
+        sections_[2].flags.readable = true;
+        sections_[2].flags.executable = false;
+        sections_[2].flags.allocated = true;
+        sections_[2].data = target_;
+
+        sections_[3].name = ".noise";
+        sections_[3].vaddr = kUnrelated;
+        sections_[3].size = unrelated_.size();
+        sections_[3].flags.readable = true;
+        sections_[3].flags.executable = true;
+        sections_[3].flags.allocated = true;
+        sections_[3].data = unrelated_;
+
+        ember::Symbol caller;
+        caller.name = "caller";
+        caller.addr = kCaller;
+        caller.size = 7;
+        caller.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(caller));
+
+        ember::Symbol target;
+        target.name = "target";
+        target.addr = kTarget;
+        target.size = 1;
+        target.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(target));
+
+        ember::Symbol unrelated;
+        unrelated.name = "unrelated_indirect";
+        unrelated.addr = kUnrelated;
+        unrelated.size = 3;
+        unrelated.kind = ember::SymbolKind::Function;
+        symbols_.push_back(std::move(unrelated));
+    }
+
+    [[nodiscard]] ember::Format format() const noexcept override {
+        return ember::Format::Elf;
+    }
+    [[nodiscard]] ember::Arch arch() const noexcept override {
+        return ember::Arch::X86_64;
+    }
+    [[nodiscard]] ember::Endian endian() const noexcept override {
+        return ember::Endian::Little;
+    }
+    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+        return kCaller;
+    }
+    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+        return sections_;
+    }
+    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+        return symbols_;
+    }
+    [[nodiscard]] std::span<const std::byte> image() const noexcept override {
+        return {};
+    }
+
+protected:
+    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+        return symbols_;
+    }
+
+private:
+    template <std::size_t N>
+    static void put32(std::array<std::byte, N>& dst, std::size_t off,
+                      std::uint32_t value) {
+        for (std::size_t i = 0; i < 4; ++i) {
+            dst[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xffu);
+        }
+    }
+
+    template <std::size_t N>
+    static void put64(std::array<std::byte, N>& dst, std::size_t off,
+                      std::uint64_t value) {
+        for (std::size_t i = 0; i < 8; ++i) {
+            dst[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xffu);
+        }
+    }
+
+    std::array<std::byte, 0x10> caller_{};
+    std::array<std::byte, 0x10> slot_{};
+    std::array<std::byte, 0x10> target_{};
+    std::array<std::byte, 0x10> unrelated_{};
+    std::array<ember::Section, 4> sections_{};
+    std::vector<ember::Symbol> symbols_{};
+};
+
 void test_stack_alloc_after_frame_setup_not_split() {
     MockBinary b;
     auto hits = ember::discover_from_prologues(b);
@@ -258,11 +394,62 @@ void test_arm64_prologue_discovery() {
           "arm64 prologue-shaped bytes in data are ignored");
 }
 
+void test_named_code_addresses_without_executable_flags() {
+    NamedCodeTargetBinary binary;
+    check(!binary.sections()[0].flags.executable,
+          "named code caller fixture has no executable flag");
+    check(ember::addr_in_code_section(binary, NamedCodeTargetBinary::kCaller),
+          "canonical predicate accepts a non-executable .text caller");
+    check(!binary.sections()[2].flags.executable,
+          "named code target fixture has no executable flag");
+    check(ember::addr_in_code_section(binary, NamedCodeTargetBinary::kTarget),
+          "canonical predicate accepts a non-executable .text address");
+
+    const auto vtables = ember::discover_runtime_vtables(binary);
+    check(vtables.size() == 1 &&
+              vtables.front().vaddr == NamedCodeTargetBinary::kSlot &&
+              vtables.front().methods.size() == 2 &&
+              vtables.front().methods[0] == NamedCodeTargetBinary::kTarget &&
+              vtables.front().methods[1] == NamedCodeTargetBinary::kTarget,
+          "runtime vtable accepts methods in non-executable .text");
+
+    const auto classified = ember::compute_classified_callees(
+        binary, NamedCodeTargetBinary::kCaller);
+    check(std::ranges::find_if(classified, [](const auto& edge) {
+              return edge.target == NamedCodeTargetBinary::kTarget &&
+                     edge.kind == ember::CalleeKind::IndirectConst &&
+                     edge.site == NamedCodeTargetBinary::kCaller;
+          }) != classified.end(),
+          "static function pointer resolves from non-executable .text");
+
+    const std::array scope{NamedCodeTargetBinary::kCaller};
+    const auto statically_resolved =
+        ember::resolve_indirect_calls(binary, nullptr, scope);
+    const auto static_it =
+        statically_resolved.find(NamedCodeTargetBinary::kCaller);
+    check(static_it != statically_resolved.end() &&
+              static_it->second == NamedCodeTargetBinary::kTarget,
+          "static resolver accepts code addresses without executable flags");
+    check(statically_resolved.size() == 1,
+          "scoped resolution ignores the unrelated executable FF hit");
+
+    binary.record_indirect_edge(NamedCodeTargetBinary::kCaller,
+                                NamedCodeTargetBinary::kTarget);
+    const auto traced_resolved =
+        ember::resolve_indirect_calls(binary, nullptr, scope);
+    const auto traced_it =
+        traced_resolved.find(NamedCodeTargetBinary::kCaller);
+    check(traced_it != traced_resolved.end() &&
+              traced_it->second == NamedCodeTargetBinary::kTarget,
+          "traced resolver accepts code addresses without executable flags");
+}
+
 }  // namespace
 
 int main() {
     test_stack_alloc_after_frame_setup_not_split();
     test_candidate_inside_instruction_is_rejected();
     test_arm64_prologue_discovery();
+    test_named_code_addresses_without_executable_flags();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

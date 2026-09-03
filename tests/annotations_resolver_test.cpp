@@ -1,4 +1,5 @@
 #include <ember/common/annotations.hpp>
+#include <ember/common/text.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -56,6 +57,42 @@ fs::path write_stub(const fs::path& p, std::string_view bytes) {
 int main() {
     const auto root = scratch_root();
     const auto cache = root / "cache";
+
+    // The annotations and declarative loaders share this strict decimal
+    // parser. Pin its accepted grammar, clamping, and failure contract here.
+    {
+        struct ValidCase {
+            std::string_view text;
+            float expected;
+        };
+        constexpr ValidCase valid[] = {
+            {"0", 0.0f},
+            {"1.", 1.0f},
+            {".5", 0.5f},
+            {"+2.5e-1", 0.25f},
+            {"2", 1.0f},
+            {"-0.5", 0.0f},
+        };
+        for (const auto& test : valid) {
+            float value = -1.0f;
+            if (!ember::parse_float_clamped(test.text, value) ||
+                value != test.expected) {
+                fail("confidence parser rejected or changed a valid value",
+                     std::string(test.text));
+            }
+        }
+
+        constexpr std::string_view invalid[] = {
+            "", "+", ".", "1e", "1e+", "1x", " 0.5",
+        };
+        for (const auto text : invalid) {
+            float value = 0.375f;
+            if (ember::parse_float_clamped(text, value) || value != 0.375f) {
+                fail("confidence parser accepted invalid input or changed output",
+                     std::string(text));
+            }
+        }
+    }
 
     // Fixture binary with no sidecar: resolver falls through to the
     // cache path (returned even when the file doesn't yet exist so the

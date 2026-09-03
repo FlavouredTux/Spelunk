@@ -7,7 +7,6 @@
 #include <set>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -28,63 +27,6 @@
 namespace ember {
 
 namespace {
-
-// Libc/POSIX functions whose arg at the given 1-based slot is a
-// NUL-terminated string. Duplicates the table in emitter.cpp on purpose:
-// keeping the IPA independent of the emitter lets callers consume it
-// without pulling the whole decompile pipeline along.
-[[nodiscard]] bool libc_arg_is_charp(std::string_view name, u8 arg_idx_1) noexcept {
-    struct Entry { std::string_view fn; u8 slot; };
-    static const Entry kTable[] = {
-        {"strlen", 1}, {"strnlen", 1},
-        {"strdup", 1}, {"strndup", 1},
-        {"strchr", 1}, {"strrchr", 1},
-        {"strstr", 1}, {"strstr", 2},
-        {"strcmp", 1}, {"strcmp", 2},
-        {"strncmp", 1}, {"strncmp", 2},
-        {"strcasecmp", 1}, {"strcasecmp", 2},
-        {"strncasecmp", 1}, {"strncasecmp", 2},
-        {"strcpy", 1}, {"strcpy", 2},
-        {"strncpy", 1}, {"strncpy", 2},
-        {"stpcpy", 1}, {"stpcpy", 2},
-        {"stpncpy", 1}, {"stpncpy", 2},
-        {"strcat", 1}, {"strcat", 2},
-        {"strncat", 1}, {"strncat", 2},
-        {"strpbrk", 1}, {"strpbrk", 2},
-        {"strspn", 1}, {"strspn", 2},
-        {"strcspn", 1}, {"strcspn", 2},
-        {"strtok", 1}, {"strtok", 2},
-        {"strtok_r", 1}, {"strtok_r", 2},
-        {"strsep", 2},
-        {"index", 1}, {"rindex", 1},
-        {"basename", 1}, {"dirname", 1},
-        {"puts", 1}, {"fputs", 1}, {"perror", 1}, {"gets", 1},
-        {"lstrlenA", 1}, {"lstrlenW", 1},
-        {"OutputDebugStringA", 1}, {"OutputDebugStringW", 1},
-        {"GetModuleHandleA", 1}, {"GetModuleHandleW", 1},
-        {"LoadLibraryA", 1}, {"LoadLibraryW", 1},
-        {"GetProcAddress", 2}, {"CreateFileA", 1}, {"CreateFileW", 1},
-        {"DeleteFileA", 1}, {"DeleteFileW", 1},
-        {"fopen", 1}, {"fopen", 2},
-        {"freopen", 1}, {"freopen", 2},
-        {"fdopen", 2},
-        {"getenv", 1}, {"secure_getenv", 1},
-        {"setenv", 1}, {"setenv", 2},
-        {"unsetenv", 1}, {"putenv", 1},
-        {"atoi", 1}, {"atol", 1}, {"atoll", 1}, {"atof", 1},
-        {"strtol", 1}, {"strtoul", 1}, {"strtoll", 1}, {"strtoull", 1},
-        {"strtod", 1}, {"strtof", 1}, {"strtold", 1},
-        {"remove", 1}, {"rename", 1}, {"rename", 2},
-        {"unlink", 1}, {"mkdir", 1}, {"rmdir", 1},
-        {"chdir", 1}, {"access", 1}, {"chmod", 1}, {"chown", 1},
-        {"stat", 1}, {"lstat", 1},
-        {"open", 1}, {"system", 1},
-    };
-    for (const auto& e : kTable) {
-        if (e.fn == name && e.slot == arg_idx_1) return true;
-    }
-    return false;
-}
 
 [[nodiscard]] std::string clean_import_name(const std::string& n) {
     const auto at = n.find('@');
@@ -166,10 +108,11 @@ struct CalleeInfo {
                 if (!spec->params[i].is_top()) out.any = true;
             }
         }
-        // Bridge the legacy charp table - covers any name not yet in
-        // import_sigs (Win32, etc.) so we don't regress char* slots.
+        // Bridge narrow-string metadata for imports not yet covered by the
+        // typed signature table. Wide strings do not enter the char* lattice.
         for (u8 k = 0; k < out.charp.size(); ++k) {
-            out.charp[k] = libc_arg_is_charp(name, static_cast<u8>(k + 1));
+            out.charp[k] = import_arg_string_kind(
+                name, static_cast<u8>(k + 1)) == ImportStringKind::Narrow;
             if (out.charp[k]) out.any = true;
         }
         return out;

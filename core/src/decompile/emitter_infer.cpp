@@ -131,17 +131,18 @@ void Emitter::infer_charp_args() {
                 continue;
             }
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
-                // Callee-side char*-slot bitset: for a libc import, look
-                // up the direct-sink table; for an internal function,
-                // consult the pre-computed IPA map when one was passed.
+                // Callee-side char*-slot bitset: for an import, consult the
+                // shared metadata but admit only narrow strings; for an
+                // internal function, consult the pre-computed IPA map.
                 std::array<bool, kMaxAbiIntArgs> callee_charp{};
                 bool have_info = false;
                 if (inst.op == IrOp::Call) {
                     if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
                         const std::string callee = clean_import_name(s->name);
                         for (u8 i = 0; i < callee_charp.size(); ++i) {
-                            callee_charp[i] = libc_arg_is_charp(
-                                callee, static_cast<u8>(i + 1));
+                            callee_charp[i] = import_arg_string_kind(
+                                callee, static_cast<u8>(i + 1)) ==
+                                ImportStringKind::Narrow;
                             if (callee_charp[i]) have_info = true;
                         }
                     } else if (annotations) {
@@ -168,8 +169,9 @@ void Emitter::infer_charp_args() {
                 } else if (inst.src_count >= 1) {
                     if (auto callee = import_name_for_indirect_call(inst.srcs[0])) {
                         for (u8 i = 0; i < callee_charp.size(); ++i) {
-                            callee_charp[i] = libc_arg_is_charp(
-                                *callee, static_cast<u8>(i + 1));
+                            callee_charp[i] = import_arg_string_kind(
+                                *callee, static_cast<u8>(i + 1)) ==
+                                ImportStringKind::Narrow;
                             if (callee_charp[i]) have_info = true;
                         }
                     }

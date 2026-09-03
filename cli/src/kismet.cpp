@@ -15,6 +15,7 @@
 #include <ember/common/types.hpp>
 
 #include "args.hpp"
+#include "util.hpp"
 
 namespace ember::cli {
 namespace {
@@ -24,31 +25,6 @@ namespace {
     std::ranges::transform(result, result.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
-    return result;
-}
-
-[[nodiscard]] std::string json_escape(std::string_view value) {
-    std::string result;
-    result.reserve(value.size() + 8);
-    for (const char raw : value) {
-        const auto c = static_cast<unsigned char>(raw);
-        switch (c) {
-            case '"': result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\n': result += "\\n"; break;
-            case '\r': result += "\\r"; break;
-            case '\t': result += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    constexpr char hex[] = "0123456789abcdef";
-                    result += "\\u00";
-                    result += hex[c >> 4];
-                    result += hex[c & 0x0f];
-                } else {
-                    result += static_cast<char>(c);
-                }
-        }
-    }
     return result;
 }
 

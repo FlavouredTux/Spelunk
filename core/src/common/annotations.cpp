@@ -17,6 +17,7 @@
 
 #include <ember/common/error.hpp>
 #include <ember/common/hash.hpp>
+#include <ember/common/text.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {
@@ -58,67 +59,6 @@ split(std::string_view s, char delim) {
 
 [[nodiscard]] bool parse_hex_u64(std::string_view s, u64& out) noexcept {
     return parse_hex_addr(s, out);  // same wire format as addr_t
-}
-
-[[nodiscard]] bool parse_float_clamped(std::string_view s, float& out) noexcept {
-    // Keep this locale-independent without relying on libc++ float from_chars,
-    // which is not available on all supported CI targets.
-    if (s.empty()) return false;
-
-    std::size_t i = 0;
-    bool neg = false;
-    if (s[i] == '-' || s[i] == '+') {
-        neg = s[i] == '-';
-        ++i;
-        if (i == s.size()) return false;
-    }
-
-    double v = 0.0;
-    bool any_digit = false;
-    while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
-        any_digit = true;
-        v = v * 10.0 + static_cast<double>(s[i] - '0');
-        ++i;
-    }
-    if (i < s.size() && s[i] == '.') {
-        ++i;
-        double place = 0.1;
-        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
-            any_digit = true;
-            v += static_cast<double>(s[i] - '0') * place;
-            place *= 0.1;
-            ++i;
-        }
-    }
-    if (!any_digit) return false;
-
-    if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
-        ++i;
-        if (i == s.size()) return false;
-        bool exp_neg = false;
-        if (s[i] == '-' || s[i] == '+') {
-            exp_neg = s[i] == '-';
-            ++i;
-            if (i == s.size()) return false;
-        }
-        int exp = 0;
-        bool exp_digit = false;
-        while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
-            exp_digit = true;
-            if (exp < 64) exp = exp * 10 + (s[i] - '0');
-            ++i;
-        }
-        if (!exp_digit) return false;
-        const int capped = exp > 64 ? 64 : exp;
-        for (int n = 0; n < capped; ++n) v = exp_neg ? (v / 10.0) : (v * 10.0);
-    }
-
-    if (i != s.size()) return false;
-    if (neg) v = -v;
-    if (v < 0.0) v = 0.0;
-    if (v > 1.0) v = 1.0;
-    out = static_cast<float>(v);
-    return true;
 }
 
 // Pipe-separated split that honours `\|` as an escaped delimiter.

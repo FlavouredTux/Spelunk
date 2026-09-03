@@ -26,6 +26,14 @@ def pack_rel_method(buf, off, entry_va, sel_va, types_va, imp_va):
                      imp_va - (entry_va + 8))
 
 
+def pack_direct_rel_method(buf, off, entry_va, selector_offset,
+                           types_va, imp_va):
+    struct.pack_into("<Iii", buf, off,
+                     selector_offset,
+                     types_va - (entry_va + 4),
+                     imp_va - (entry_va + 8))
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: make_macho_objc_relative.py <output-path>", file=sys.stderr)
@@ -65,19 +73,31 @@ def main() -> int:
 
     pad_to(data, 8)
     selrefs_off = len(data)
-    data += b"\0" * 8
+    data += b"\0" * 16
 
     pad_to(data, 8)
     class_off = len(data)
     data += b"\0" * 40
 
     pad_to(data, 8)
+    metaclass_off = len(data)
+    data += b"\0" * 40
+
+    pad_to(data, 8)
     ro_off = len(data)
+    data += b"\0" * 72
+
+    pad_to(data, 8)
+    metaclass_ro_off = len(data)
     data += b"\0" * 72
 
     pad_to(data, 4)
     method_list_off = len(data)
     data += b"\0" * (8 + 3 * 12)
+
+    pad_to(data, 4)
+    metaclass_method_list_off = len(data)
+    data += b"\0" * (8 + 12)
 
     pad_to(data, 8)
     cat_off = len(data)
@@ -129,6 +149,7 @@ def main() -> int:
     ping_sel_off = add_cstr(data, "ping")
     count_sel_off = add_cstr(data, "count")
     with_callback_sel_off = add_cstr(data, "withCallback:")
+    factory_sel_off = add_cstr(data, "factory")
     consume_block_sel_off = add_cstr(data, "consumeBlock:")
     pong_sel_off = add_cstr(data, "pong")
     did_ping_sel_off = add_cstr(data, "tinyDidPing:")
@@ -147,8 +168,12 @@ def main() -> int:
     cat_prop_attrs_off = add_cstr(data, "T@,N")
 
     class_va = data_vmaddr + class_off
+    metaclass_va = data_vmaddr + metaclass_off
     ro_va = data_vmaddr + ro_off
+    metaclass_ro_va = data_vmaddr + metaclass_ro_off
     method_list_va = data_vmaddr + method_list_off
+    metaclass_method_list_va = data_vmaddr + metaclass_method_list_off
+    selector_strings_va = data_vmaddr + ping_sel_off
     cat_va = data_vmaddr + cat_off
     cat_method_list_va = data_vmaddr + cat_method_list_off
     ivar_list_va = data_vmaddr + ivar_list_off
@@ -196,7 +221,10 @@ def main() -> int:
         bytes.fromhex("8b0401") +
         bytes.fromhex("0302c3")
     )
-    code = ping_code + count_code + pong_code + with_callback_code + block_invoke_code
+    factory_va = block_invoke_va + len(block_invoke_code)
+    factory_code = bytes.fromhex("b80b000000c3")
+    code = (ping_code + count_code + pong_code + with_callback_code +
+            block_invoke_code + factory_code)
 
     def va(off):
         return data_vmaddr + off
@@ -207,32 +235,55 @@ def main() -> int:
     struct.pack_into("<Q", data, nlcatlist_off, cat_va)
     struct.pack_into("<Q", data, protolist_off, proto_va)
     struct.pack_into("<QQ", data, class_proto_list_off, 1, proto_va)
-    struct.pack_into("<Q", data, selrefs_off, va(consume_block_sel_off))
-    struct.pack_into("<QQQQQ", data, class_off, 0, 0, 0, 0, ro_va)
+    factory_selref_va = data_vmaddr + selrefs_off + 8
+    struct.pack_into("<QQ", data, selrefs_off,
+                     va(consume_block_sel_off), va(factory_sel_off))
+    # class_data_bits_t uses its low three bits for runtime flags. Bits 1 and 2
+    # catch parsers that clear only the legacy bit 0 before following the pointer.
+    struct.pack_into("<QQQQQ", data, class_off,
+                     metaclass_va, 0, 0, 0, ro_va | 0x6)
+    struct.pack_into("<QQQQQ", data, metaclass_off,
+                     metaclass_va, 0, 0, 0, metaclass_ro_va | 0x6)
     struct.pack_into("<IIIIQQQQQQQ", data, ro_off,
                      0, 0, 16, 0,
                      0, va(name_off), method_list_va, class_proto_list_va,
                      ivar_list_va, 0, prop_list_va)
+    struct.pack_into("<IIIIQQQQQQQ", data, metaclass_ro_off,
+                     1, 0, 40, 0,
+                     0, va(name_off), metaclass_method_list_va, 0,
+                     0, 0, 0)
 
-    struct.pack_into("<II", data, method_list_off, 0x8000000C, 3)
+    # Shared-cache/preoptimized lists set the selector-offset flag: name_off is
+    # an unsigned offset from the selector strings buffer.
+    struct.pack_into("<II", data, method_list_off, 0xC000000C, 3)
     entry_va = method_list_va + 8
-    pack_rel_method(data, method_list_off + 8,
-                    entry_va, va(ping_sel_off), va(void_types_off), ping_va)
+    pack_direct_rel_method(data, method_list_off + 8, entry_va,
+                           va(ping_sel_off) - selector_strings_va,
+                           va(void_types_off), ping_va)
     entry_va += 12
-    pack_rel_method(data, method_list_off + 20,
-                    entry_va, va(count_sel_off), va(int_types_off), count_va)
+    pack_direct_rel_method(data, method_list_off + 20, entry_va,
+                           va(count_sel_off) - selector_strings_va,
+                           va(int_types_off), count_va)
     entry_va += 12
-    pack_rel_method(data, method_list_off + 32,
-                    entry_va, va(with_callback_sel_off), va(void_id_types_off),
-                    with_callback_va)
+    pack_direct_rel_method(data, method_list_off + 32, entry_va,
+                           va(with_callback_sel_off) - selector_strings_va,
+                           va(void_id_types_off), with_callback_va)
+
+    # Ordinary image-relative lists leave the direct-selector flag clear:
+    # name_off lands on a selref slot, which contains the selector pointer.
+    struct.pack_into("<II", data, metaclass_method_list_off, 0x8000000C, 1)
+    entry_va = metaclass_method_list_va + 8
+    pack_rel_method(data, metaclass_method_list_off + 8,
+                    entry_va, factory_selref_va, va(int_types_off), factory_va)
 
     struct.pack_into("<QQQQQQQ", data, cat_off,
                      va(cat_name_off), class_va, cat_method_list_va, 0, 0,
                      cat_prop_list_va, 0)
-    struct.pack_into("<II", data, cat_method_list_off, 0x8000000C, 1)
+    struct.pack_into("<II", data, cat_method_list_off, 0xC000000C, 1)
     entry_va = cat_method_list_va + 8
-    pack_rel_method(data, cat_method_list_off + 8,
-                    entry_va, va(pong_sel_off), va(int_types_off), pong_va)
+    pack_direct_rel_method(data, cat_method_list_off + 8, entry_va,
+                           va(pong_sel_off) - selector_strings_va,
+                           va(int_types_off), pong_va)
 
     struct.pack_into("<II", data, ivar_list_off, 32, 1)
     struct.pack_into("<QQQII", data, ivar_list_off + 8,
@@ -279,8 +330,9 @@ def main() -> int:
         ("__objc_catlist", catlist_off, 8, 3),
         ("__objc_nlcatlist", nlcatlist_off, 8, 3),
         ("__objc_protolist", protolist_off, 8, 3),
-        ("__objc_selrefs", selrefs_off, 8, 3),
-        ("__objc_data", class_off, 40, 3),
+        ("__objc_selrefs", selrefs_off, 16, 3),
+        ("__objc_methname", ping_sel_off, void_types_off - ping_sel_off, 0),
+        ("__objc_data", class_off, ro_off - class_off, 3),
         ("__objc_const", ro_off, ivar_offset_off - ro_off, 3),
         ("__objc_ivar", ivar_offset_off, 8, 3),
     ]

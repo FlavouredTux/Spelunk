@@ -147,7 +147,7 @@ enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto,
 // `call <imm>`; `Tail` covers an unconditional `jmp` whose target is a
 // known function entry (defined symbol or PLT stub); `IndirectConst`
 // covers `call qword ptr [rip + disp]` where the dereferenced 8 bytes
-// resolve to an executable address (vtable/IAT/RTTI thunk patterns).
+// resolve to a code address (vtable/IAT/RTTI thunk patterns).
 // Genuinely opaque indirect calls are dropped - by design the primitive
 // only emits edges with a concrete callee VA.
 enum class CalleeKind : u8 { Direct, Tail, IndirectConst };

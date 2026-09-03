@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <ember/analysis/demangle.hpp>
+#include <ember/analysis/discovery.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/types.hpp>
@@ -489,8 +490,9 @@ try_demangle_vtable_symbol(std::string_view symbol) {
     return try_demangle_typeinfo(*payload);
 }
 
-// `code_sections` holds [start, end) ranges of executable sections so a
-// pointer check can answer "is this in __TEXT?" in O(log n).
+// `code_sections` holds [start, end) ranges of canonical code sections so a
+// pointer check can answer "is this a code address?" without losing protected
+// text sections whose executable bit is restored only at runtime.
 struct CodeRanges {
     std::vector<std::pair<addr_t, addr_t>> ranges;
 
@@ -505,8 +507,8 @@ struct CodeRanges {
 [[nodiscard]] CodeRanges collect_code_ranges(const Binary& b) {
     CodeRanges r;
     for (const auto& s : b.sections()) {
-        if (!s.flags.executable) continue;
         if (s.size == 0) continue;
+        if (!addr_in_code_section(b, s.vaddr)) continue;
         // Mach-O segment protections bleed into section flags, so `__TEXT`
         // data sections (`__cstring`, `__const`, `__literal*`, `__unwind_info`,
         // `__eh_frame`, `__gcc_except_tab`) all show up as "executable" even

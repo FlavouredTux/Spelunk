@@ -181,12 +181,7 @@ std::string read_cstr_advance(std::span<const std::byte> body,
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// MSF (Multi-Stream File) container - same as before. Only the prologue
-// has been factored out from the legacy load_publics path; logic
-// unchanged so existing tests still parse the synthetic MSF the test
-// builds.
-// ---------------------------------------------------------------------------
+// MSF (Multi-Stream File) container.
 
 Result<Msf> Msf::from_buffer(std::vector<std::byte> data) {
     if (data.size() < kSuperblockSize) {
@@ -1019,10 +1014,6 @@ std::string TpiTable::render_type(u32 type_index, int depth) const {
 
 namespace {
 
-// One-shot record walker that pulls every relevant symbol out of the
-// global symbol record stream (the legacy path) - same as before, but
-// now lives inside walk_symbol_records so the publics-only test
-// fixture continues to work.
 void walk_global_symbol_stream(std::span<const std::byte> stream,
                                std::vector<PublicSymbol>& out) {
     SymbolBuckets b{};

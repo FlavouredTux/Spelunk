@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <ember/analysis/discovery.hpp>
 #include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/pipeline.hpp>
@@ -31,14 +32,6 @@ namespace {
 
 // IrCache + lift_cached now live in <ember/analysis/ir_cache.hpp> so this
 // pass and the IPA pass can share one cache and amortise the lift cost.
-
-[[nodiscard]] bool addr_in_executable_section(const Binary& b, addr_t a) noexcept {
-    for (const auto& s : b.sections()) {
-        if (!s.flags.executable) continue;
-        if (a >= s.vaddr && a < s.vaddr + s.size) return true;
-    }
-    return false;
-}
 
 [[nodiscard]] std::optional<u64> read_u64_le(const Binary& b, addr_t a) noexcept {
     if (auto fact = b.runtime_qword_at(a); fact) return fact;
@@ -168,7 +161,7 @@ slot_at(const std::map<addr_t, VtableEntry>& idx,
     const std::size_t slot = static_cast<std::size_t>(disp) / 8;
     if (slot >= it->second.methods->size()) return std::nullopt;
     const addr_t imp = (*it->second.methods)[slot];
-    if (imp == 0 || !addr_in_executable_section(b, imp)) return std::nullopt;
+    if (imp == 0 || !addr_in_code_section(b, imp)) return std::nullopt;
     return imp;
 }
 
@@ -205,7 +198,7 @@ resolve_target(const Binary& b,
             // loaded value is a real code address.
             if (auto v = read_u64_le(b, slot); v) {
                 const auto t = static_cast<addr_t>(*v);
-                if (t != 0 && addr_in_executable_section(b, t)) return t;
+                if (t != 0 && addr_in_code_section(b, t)) return t;
             }
         }
     }
@@ -317,7 +310,7 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
     std::vector<addr_t> hit_addrs;
     if (b.arch() == Arch::X86_64) {
         for (const auto& sec : b.sections()) {
-            if (!sec.flags.executable || sec.data.empty()) continue;
+            if (sec.data.empty() || !addr_in_code_section(b, sec.vaddr)) continue;
             const auto* p = sec.data.data();
             const std::size_t n = sec.data.size();
             for (std::size_t i = 0; i + 1 < n; ++i) {
@@ -409,7 +402,7 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
                 if (auto traced = b.indirect_edges_from(inst.source_addr);
                     !traced.empty()) {
                     const addr_t t = traced.front();
-                    if (addr_in_executable_section(b, t) ||
+                    if (addr_in_code_section(b, t) ||
                         b.import_at_plt(t) != nullptr) {
                         out.emplace(inst.source_addr, t);
                         continue;

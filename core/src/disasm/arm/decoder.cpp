@@ -518,10 +518,6 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
         //   01: STGP (v8.5) when L=0; LDPSW when L=1
         //   10: STP/LDP 64-bit
         //   11: reserved
-        // The previous gate accepted opc=0b11 as LDPSW and STGP-with-L=0
-        // as LDPSW too - reserved encodings (and the not-yet-modelled
-        // STGP) silently rendered as a 32-bit signed-load-pair, which
-        // would mislead anyone reading the disasm against fuzzed input.
         if (opc == 0b11) {
             insn.mnemonic = Mnemonic::Invalid;
             return;
@@ -531,10 +527,7 @@ void decode_loads_stores(u32 raw, addr_t addr, Instruction& insn) {
             // rather than mislabel it.
             return;
         }
-        // LDPSW destinations are 64-bit (sign-extended from 32-bit
-        // memory) regardless of the underlying access width, so its
-        // `sf` differs from LDP/STP's. Bake that into the gpr_of call
-        // instead of the previous `opc == 0b10` shortcut.
+        // LDPSW sign-extends 32-bit values into 64-bit destinations.
         const bool dest_64 = (opc == 0b10) || (opc == 0b01);
         const Reg rt2 = gpr_of(bits(raw, 14, 10), dest_64, /*is_sp=*/false);
         const Reg rn  = gpr_of(bits(raw, 9, 5), /*sf=*/true, /*is_sp=*/true);
@@ -872,10 +865,7 @@ void decode_dp_reg(u32 raw, Instruction& insn) {
             case 0b000000: m = Mnemonic::A64Rbit; break;
             case 0b000001: m = Mnemonic::A64Rev16; break;
             case 0b000010: m = sf ? Mnemonic::A64Rev32 : Mnemonic::A64Rev; break;
-            // opcode=000011 is REV (64-bit) when sf=1; sf=0 is unallocated
-            // per ARM ARM C4.1.7. The previous mapping fell through to a
-            // valid REV in both branches and silently accepted reserved
-            // 32-bit encodings as a real instruction.
+            // opcode=000011 is REV only when sf=1; sf=0 is unallocated.
             case 0b000011: m = sf ? Mnemonic::A64Rev   : Mnemonic::Invalid; break;
             case 0b000100: m = Mnemonic::A64Clz; break;
             case 0b000101: m = Mnemonic::A64Cls; break;

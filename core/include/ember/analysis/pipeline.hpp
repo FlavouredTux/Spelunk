@@ -24,16 +24,10 @@ struct FuncWindow {
     std::string label;
 };
 
-// Resolve a `-s NAME` token to a function entry. Lookup chain:
-//   1. Obj-C bracket form: `-[Class sel]` / `+[Class sel]`.
-//   2. Hex VA / `sub_<hex>` - jump to VA-driven resolution.
-//   3. Binary symbol table.
-//   4. `ann->renames` reverse lookup, when `ann` is non-null. Lets the
-//      user type the rename (e.g. `cap_check_v2`) instead of the
-//      original `sub_<hex>` after `ember annotate` / `--apply` lands.
-//      Ambiguous renames (one name bound to multiple addrs in the
-//      annotations file) are rejected the same way ambiguous symbols
-//      are - pass the VA to disambiguate.
+// Resolve a `-s NAME` token: `-[Class sel]` / `+[Class sel]`, then a
+// hex VA or `sub_<hex>`, then the symbol table, then (with `ann`) a
+// rename from the annotations file. An ambiguous rename is rejected
+// like an ambiguous symbol; pass the VA instead.
 std::optional<FuncWindow>
 resolve_function(const Binary& b, std::string_view symbol,
                  const Annotations* ann = nullptr);
@@ -133,31 +127,18 @@ discovered_kind_name(DiscoveredFunction::Kind k) noexcept {
     return "?";
 }
 
-// `Auto` (default): on a packed binary, skip the CFG-walked pass 2
-// entirely - it just produces garbage `sub_…` entries chasing
-// indirect-jmp imm32s through encrypted stubs. Even on unpacked
-// binaries, individual call targets that land in high-entropy sections
-// are dropped. `Full`: bypass both gates and walk everything (the
-// indirect-call resolver wants this since it's already opted in to
-// expensive analysis). `Cheap`: skip pass 2 unconditionally - used
-// by `resolve_containing_function` so per-function CLI invocations
-// (`-d -s sub_X`, `-p -s sub_X`) don't pay the full call-graph
-// walk just to map a literal-VA argument back to its enclosing
-// function. Pass 1 + Pass 1.5 (vtables + prologue sweep) cover
-// every entry the user could plausibly have clicked from a sidebar
-// populated by an earlier `--functions` pass.
+// Auto: skip the CFG-walked pass on packed binaries (it only chases
+// imm32s through encrypted stubs) and drop call targets that land in
+// high-entropy sections. Full: walk everything (the indirect-call
+// resolver). Cheap: skip the CFG walk unconditionally, for per-function
+// CLI views that only need to map a VA to its enclosing function.
 enum class EnumerateMode { Auto, Full, Cheap };
 
-// Union of defined function symbols and CFG-discovered call targets,
-// deduplicated and sorted by address. PLT stubs are excluded - they're
-// import thunks, not definitions. Shared by the scripting binding
-// (`binary.functions()`) and the `--functions` CLI output so both stay
-// in sync.
-// `lo`/`hi`: when `hi > lo`, restrict every discovery pass to addresses
-// in [lo, hi). Designed for `--module` scoping on minidumps where most
-// of the dumped pages belong to system DLLs the user doesn't care
-// about. The prologue sweep clips its byte range to the intersection
-// per section, so out-of-scope memory isn't even scanned.
+// Defined function symbols plus CFG-discovered call targets, deduped
+// and sorted; PLT stubs excluded. Backs both `--functions` and the
+// scripting `binary.functions()`. When `hi > lo`, every pass is
+// restricted to [lo, hi) (`--module` on minidumps); the prologue sweep
+// clips its byte range per section.
 [[nodiscard]] std::vector<DiscoveredFunction>
 enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto,
                     addr_t lo = 0, addr_t hi = 0);
@@ -204,18 +185,12 @@ struct ContainingFn {
 [[nodiscard]] std::optional<ContainingFn>
 containing_function(const Binary& b, addr_t addr);
 
-// Disambiguate a name lookup. Tonight's "wrong VA" hours all came from
-// `find_by_name` returning one address while a near-identical function
-// elsewhere matched the user's mental model. `validate_name` reports
-// every address that carries `name` plus the byte-similar candidates the
-// caller should sanity-check before trusting any one of them.
-//
-// "Byte-similar" is tuple equality on (blocks, insts, calls). FNV-1a is
-// binary equality only - no useful Hamming distance - so the shape
-// counters from FunctionFingerprint are the disambiguator. Cheap (one
-// pass over the function set) and surfaces exactly the lookalikes that
-// caused the recurring confusion (cxa_guard getters, shared_ptr
-// release stubs, OTLP method bodies).
+// Every address carrying `name`, plus byte-similar lookalikes the
+// caller should check before trusting one of them. "Byte-similar" is
+// equality on the (blocks, insts, calls) shape counters; the FNV
+// content hash has no useful distance. This catches cxa_guard getters,
+// shared_ptr release stubs and OTLP method bodies that resolve to the
+// wrong twin.
 struct NameValidation {
     enum class Verdict : u8 {
         Strong,    // single bound, no near-matches → safe to use
@@ -268,19 +243,14 @@ struct FingerprintRow {
 validate_name(const Binary& b, std::string_view name,
               std::span<const FingerprintRow> precomputed = {});
 
-// Sweep the binary for ambiguity that would silently mis-resolve a name
-// or fingerprint lookup downstream. Two flavours:
-//
-//   by_name        - symbol-table names bound to >1 non-import address
-//                    (typically a fingerprint-import that hit twice, or
-//                    a hand rename that aliased a stub).
-//   by_fingerprint - distinct functions whose content hash collides.
-//                    These are the false-positive risks for a name DB:
-//                    importing a name keyed on this fingerprint will
-//                    apply to the wrong twin half the time.
-//
-// Both vectors are sorted: `by_name` lexicographically, `by_fingerprint`
-// by address of the first member. Each group's `addrs` is sorted ascending.
+// Ambiguity that would silently mis-resolve a name or fingerprint:
+//   by_name         symbol names bound to more than one non-import
+//                   address (a fingerprint import that hit twice, a
+//                   hand rename aliasing a stub)
+//   by_fingerprint  distinct functions with the same content hash;
+//                   importing a name keyed on it hits the wrong twin
+// `by_name` sorts lexicographically, `by_fingerprint` by first
+// address; each group's `addrs` ascends.
 struct NameCollision {
     std::string         name;
     std::vector<addr_t> addrs;
@@ -300,16 +270,11 @@ struct Collisions {
 collect_collisions(const Binary& b,
                    std::span<const FingerprintRow> precomputed = {});
 
-// Walk the CFG of the function at `fn` and return its outgoing direct
-// call/tail/indirect-const edges. Sorted by target VA, deduped on
-// (target, kind) pairs. Empty when `fn` is not a decodable function.
-//
-// Vtable back-trace: `call [reg + disp]` is resolved when preceded
-// (within the same basic block) by a `mov reg, [rip + k]` whose target
-// is a known Itanium vtable base. The edge is emitted as IndirectConst
-// with `target` set to the slot's IMP. Cross-block tracking is
-// intentionally out of scope - a register redef on a join path would
-// produce misleading resolutions without flow analysis.
+// Outgoing direct call / tail / indirect-const edges of the function at
+// `fn`, sorted by target and deduped on (target, kind); empty when `fn`
+// does not decode. `call [reg + disp]` resolves to a vtable slot when
+// the same block loaded `reg` from a known Itanium vtable; no
+// cross-block tracking.
 [[nodiscard]] std::vector<ClassifiedCallee>
 compute_classified_callees(const Binary& b, addr_t fn,
                            const std::unordered_set<addr_t>* known_entries = nullptr);

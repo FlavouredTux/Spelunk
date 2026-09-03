@@ -1,8 +1,13 @@
 #include <ember/analysis/ir_cache.hpp>
 
+#include <memory>
+#include <utility>
+
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>

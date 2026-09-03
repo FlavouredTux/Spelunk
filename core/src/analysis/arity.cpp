@@ -3,22 +3,29 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <map>
 #include <limits>
+#include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/import_sigs.hpp>
+#include <ember/analysis/ir_cache.hpp>
+#include <ember/binary/arch.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
+#include <ember/ir/abi.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/ssa.hpp>
+#include <ember/ir/types.hpp>
 
 namespace ember {
 

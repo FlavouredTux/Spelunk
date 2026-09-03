@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ember {
@@ -178,9 +179,9 @@ private:
     // class name terminator.
     std::optional<std::string> parse_named_type();
     std::optional<std::string> parse_symbol_name(bool& has_return_type);
-    std::optional<std::string> parse_function_tail(std::string name,
+    std::optional<std::string> parse_function_tail(const std::string& name,
                                                    bool has_return_type);
-    std::optional<std::string> parse_data_tail(std::string name);
+    std::optional<std::string> parse_data_tail(const std::string& name);
     std::optional<FunctionPrefix> parse_function_prefix();
     std::optional<std::vector<std::string>> parse_param_list();
 
@@ -333,7 +334,7 @@ std::optional<std::vector<std::string>> MsvcDemangler::parse_param_list() {
 }
 
 std::optional<std::string>
-MsvcDemangler::parse_function_tail(std::string name, bool has_return_type) {
+MsvcDemangler::parse_function_tail(const std::string& name, bool has_return_type) {
     if (peek() == '6') return std::nullopt;  // vftable/vbtable and friends
 
     const std::size_t saved = pos_;
@@ -371,7 +372,7 @@ MsvcDemangler::parse_function_tail(std::string name, bool has_return_type) {
     return out;
 }
 
-std::optional<std::string> MsvcDemangler::parse_data_tail(std::string name) {
+std::optional<std::string> MsvcDemangler::parse_data_tail(const std::string& name) {
     const std::size_t saved = pos_;
     const char storage = peek();
     if (storage < '0' || storage > '4') return std::nullopt;

@@ -1,10 +1,16 @@
 #include <ember/analysis/cfg_util.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <set>
+#include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include <ember/common/types.hpp>
+#include <ember/ir/ir.hpp>
 
 namespace ember {
 

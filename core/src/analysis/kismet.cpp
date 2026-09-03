@@ -1,14 +1,25 @@
 #include <ember/analysis/kismet.hpp>
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
+#include <cstddef>
+#include <expected>
 #include <format>
 #include <limits>
 #include <map>
-#include <set>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include <ember/common/error.hpp>
+#include <ember/common/text.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 namespace {
@@ -23,21 +34,11 @@ struct IndentedLine {
     std::string text;
 };
 
-[[nodiscard]] std::string_view trim(std::string_view value) {
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
-        value.remove_suffix(1);
-    }
-    return value;
-}
-
 [[nodiscard]] std::string strip_opcode(std::string_view text) {
-    text = trim(text);
+    text = trim_space(text);
     if (!text.empty() && text.front() == '$') {
         const std::size_t colon = text.find(':');
-        if (colon != std::string_view::npos) text = trim(text.substr(colon + 1));
+        if (colon != std::string_view::npos) text = trim_space(text.substr(colon + 1));
     }
     return std::string(text);
 }
@@ -62,7 +63,7 @@ struct IndentedLine {
 }
 
 [[nodiscard]] std::optional<u64> label_offset(std::string_view line) {
-    line = trim(line);
+    line = trim_space(line);
     constexpr std::string_view prefix = "Label_0x";
     if (!line.starts_with(prefix)) return std::nullopt;
     const std::size_t colon = line.find(':', prefix.size());
@@ -126,7 +127,7 @@ parse_nodes(const std::vector<IndentedLine>& lines, std::size_t& index,
     for (const auto& raw : block.lines) {
         std::size_t indent = 0;
         while (indent < raw.size() && raw[indent] == ' ') ++indent;
-        const std::string_view content = trim(std::string_view(raw).substr(indent));
+        const std::string_view content = trim_space(std::string_view(raw).substr(indent));
         if (!content.empty()) lines.push_back({indent, std::string(content)});
     }
     if (lines.empty()) return {};
@@ -136,14 +137,14 @@ parse_nodes(const std::vector<IndentedLine>& lines, std::size_t& index,
 
 [[nodiscard]] const TextNode* child_named(const TextNode& node, std::string_view name) {
     for (const auto& child : node.children) {
-        if (trim(child.text) == name) return &child;
+        if (trim_space(child.text) == name) return &child;
     }
     return nullptr;
 }
 
 [[nodiscard]] const TextNode* first_expression(const TextNode& node) {
     const std::string stripped = strip_opcode(node.text);
-    if (!node.text.empty() && trim(node.text).starts_with("$")) return &node;
+    if (!node.text.empty() && trim_space(node.text).starts_with("$")) return &node;
     for (const auto& child : node.children) {
         if (const TextNode* result = first_expression(child)) return result;
     }
@@ -183,7 +184,7 @@ struct VariableInfo {
 };
 
 [[nodiscard]] std::optional<VariableInfo> parse_variable(std::string_view description) {
-    description = trim(description);
+    description = trim_space(description);
     const bool out = description.starts_with("Local out variable of type ");
     const bool local = description.starts_with("Local variable of type ") || out;
     const bool instance = description.starts_with("Instance variable of type ");
@@ -219,7 +220,7 @@ struct VariableInfo {
 [[nodiscard]] std::vector<std::string> direct_arguments(const TextNode& node) {
     std::vector<std::string> arguments;
     for (const auto& child : node.children) {
-        if (!trim(child.text).starts_with("$")) continue;
+        if (!trim_space(child.text).starts_with("$")) continue;
         const std::string operation = strip_opcode(child.text);
         if (operation == "EX_EndFunctionParms") continue;
         arguments.push_back(render_expr(child));
@@ -703,7 +704,7 @@ Result<KismetCfg> parse_kismet_cfg(std::string_view disassembly) {
                 .computed_jump = false,
             });
             current = &cfg.blocks.back();
-        } else if (current && !trim(line).empty() && !trim(line).starts_with("// Kismet")) {
+        } else if (current && !trim_space(line).empty() && !trim_space(line).starts_with("// Kismet")) {
             current->lines.emplace_back(line);
         }
         if (newline == std::string_view::npos) break;
@@ -743,7 +744,6 @@ Result<KismetCfg> parse_kismet_cfg(std::string_view disassembly) {
         }
         std::erase_if(block.successors, [&](u64 target) { return !offsets.contains(target); });
     }
-
 
     struct FlowState {
         u64 offset = 0;

@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/demangle.hpp>
@@ -17,6 +18,7 @@
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 
@@ -502,8 +504,8 @@ void add_reflection_descriptor_evidence(
     const ReflectionDescriptor& desc,
     addr_t addr,
     std::string_view text,
-    std::vector<addr_t> xrefs,
-    std::vector<addr_t> function_addrs,
+    const std::vector<addr_t>& xrefs,
+    const std::vector<addr_t>& function_addrs,
     bool include_classified_subsystems = true) {
     std::vector<std::string> subsystems{"reflection_metadata"};
     if (include_classified_subsystems) {

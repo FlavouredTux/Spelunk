@@ -1,21 +1,35 @@
 #include <ember/analysis/cfg_builder.hpp>
 
-#include <ember/analysis/eh_frame.hpp>
-#include <ember/analysis/pe_unwind.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/ir/ssa.hpp>  // canonical_reg
-
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <expected>
 #include <format>
 #include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
+
+#include <ember/analysis/eh_frame.hpp>
+#include <ember/analysis/function.hpp>
+#include <ember/analysis/pe_unwind.hpp>
+#include <ember/analysis/pipeline.hpp>
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
+#include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
+#include <ember/disasm/decoder.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
+#include <ember/ir/ssa.hpp>  // canonical_reg
 
 namespace ember {
 
@@ -807,7 +821,7 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
             auto decoded = dec.decode(bytes, ip);
             if (!decoded) break;
 
-            auto [it, _] = ws.insns.emplace(ip, std::move(*decoded));
+            auto [it, _] = ws.insns.emplace(ip, *decoded);
             const Instruction& insn = it->second;
             const addr_t fallthrough = ip + insn.length;
             const Mnemonic mn = insn.mnemonic;

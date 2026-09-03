@@ -1,25 +1,29 @@
 #include <ember/analysis/sig_inference.hpp>
 
 #include <array>
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/import_sigs.hpp>
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/type_infer_local.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/register.hpp>
 #include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
+#include <ember/ir/types.hpp>
 
 namespace ember {
 

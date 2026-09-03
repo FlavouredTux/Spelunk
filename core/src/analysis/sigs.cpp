@@ -3,15 +3,24 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <expected>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <ember/analysis/pipeline.hpp>  // DiscoveredFunction
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 

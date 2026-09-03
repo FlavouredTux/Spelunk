@@ -60,7 +60,5 @@ struct OrbitSig {
 inline constexpr std::size_t kOrbitDefaultMaxNodes = 4096;
 inline constexpr std::size_t kOrbitDefaultMaxIters = 16;
 
-// Estimate Jaccard similarity from two orbit MinHash sketches.
-[[nodiscard]] float orbit_jaccard(const OrbitSig& a, const OrbitSig& b) noexcept;
 
 }  // namespace ember

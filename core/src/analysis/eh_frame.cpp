@@ -7,11 +7,12 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ember/binary/binary.hpp>
+#include <ember/binary/format.hpp>
 #include <ember/binary/macho.hpp>
-#include <ember/common/bytes.hpp>
 #include <ember/common/types.hpp>
 
 #include "eh_frame_internal.hpp"

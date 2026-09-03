@@ -1,6 +1,8 @@
 #include <ember/analysis/forge_spec.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <expected>
 #include <format>
 #include <queue>
 #include <span>
@@ -11,11 +13,16 @@
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/function.hpp>
 #include <ember/analysis/import_sigs.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/type_infer_local.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/ir/abi.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>

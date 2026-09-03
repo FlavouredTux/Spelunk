@@ -1,13 +1,20 @@
 #include <ember/analysis/objc.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <initializer_list>
+#include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
+#include <ember/binary/binary.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {

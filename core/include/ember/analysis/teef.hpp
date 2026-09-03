@@ -47,15 +47,7 @@ struct TeefSig {
     std::array<u64, 8>   minhash    = {};
 };
 
-// Estimate Jaccard similarity from two MinHash sketches: fraction of
-// positions where the minimum-hash agrees. Standard MinHash result.
-[[nodiscard]] float jaccard_estimate(const TeefSig& a, const TeefSig& b) noexcept;
 
-// Compute TEEF for the function entering at `fn_start`. Runs the full
-// decompile pipeline (lift → ssa → cleanup → structure → emit) so it's
-// significantly more expensive than compute_fingerprint; expect 1-100ms
-// per function depending on size. Cache aggressively.
-[[nodiscard]] TeefSig compute_teef(const Binary& b, addr_t fn_start);
 
 // One sub-function "chunk" - a region of the structured IR substantial
 // enough to be its own identification target. Big functions tend to
@@ -152,11 +144,5 @@ compute_teef_max(const Binary& b, addr_t fn_start,
 compute_teef_max(const Binary& b, addr_t fn_start,
                  const TeefComputeOptions& opts);
 
-// Hash + MinHash a pseudo-C source string directly. Useful for
-// callers that already have the emitted text (the CLI fingerprint
-// command, the UI's per-function diff). Same canonicalization as
-// compute_teef - splitting it out lets us unit-test the hashing
-// independently of the decompile pipeline.
-[[nodiscard]] TeefSig teef_from_pseudo_c(std::string_view pseudo_c);
 
 }  // namespace ember

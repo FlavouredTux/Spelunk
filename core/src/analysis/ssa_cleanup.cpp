@@ -1,8 +1,17 @@
 #include <ember/analysis/ssa_cleanup.hpp>
 
 #include <format>
+#include <map>
+#include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
+
+#include <ember/common/types.hpp>
+#include <ember/ir/ir.hpp>
+#include <ember/ir/ssa.hpp>
 
 namespace ember {
 

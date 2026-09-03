@@ -3,10 +3,13 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <string>
 
 #include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/register.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/ssa.hpp>
 
 namespace ember {

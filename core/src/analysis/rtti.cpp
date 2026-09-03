@@ -1,18 +1,22 @@
 #include <ember/analysis/rtti.hpp>
 
 #include <algorithm>
-#include <cstddef>
 #include <cctype>
+#include <cstddef>
 #include <cstring>
 #include <format>
+#include <iterator>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/demangle.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/types.hpp>
 
 namespace ember {

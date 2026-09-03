@@ -2,18 +2,25 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/function.hpp>
+#include <ember/analysis/teef_behav.hpp>
 #include <ember/binary/binary.hpp>
-#include <ember/decompile/emit_options.hpp>
+#include <ember/common/hash.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
@@ -25,83 +32,11 @@ namespace ember {
 
 namespace {
 
-// FNV-1a-64 over a string view. Hot loop over per-token strings; no
-// std::hash because we need bit-stable output across hosts/builds.
-[[nodiscard]] constexpr u64 fnv1a(std::string_view s) noexcept {
-    u64 h = 0xcbf29ce484222325ULL;
-    for (char c : s) {
-        h ^= static_cast<u8>(c);
-        h *= 0x100000001b3ULL;
-    }
-    return h;
-}
-
-[[nodiscard]] u64 mix64(u64 a, u64 b) noexcept {
-    u64 x = a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2));
-    x ^= x >> 30;
-    x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;
-    x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
-}
-
-// Cheap bigram hash over the post-canonicalization token stream.
+// Bigram hash over the canonical token stream.
 [[nodiscard]] u64 bigram_hash(u64 a, u64 b) noexcept { return mix64(a, b); }
 
-// ---- Canonicalizer ----------------------------------------------------
-//
-// Take the emitter's pseudo-C output and produce a token stream where
-// per-build noise (SSA temp numbers, sub-address suffixes, large literal
-// values, identifier choices) is removed. See docs/teef.md for the rules.
-//
-// Approach: hand-rolled tokenizer (no regex), one pass over the string.
-// Each token is hashed with fnv1a and either kept verbatim, replaced
-// with a category-class hash, or alpha-renamed.
-
-constexpr u64 kClassCallRet = fnv1a("CALL_RET");
-constexpr u64 kClassCallee  = fnv1a("CALLEE");
-constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
-
-// C / pseudo-C keywords + ember type names that we keep verbatim.
-[[nodiscard]] bool is_kept_keyword(std::string_view s) noexcept {
-    static constexpr std::string_view kKeywords[] = {
-        "if","else","while","for","do","return","switch","case","default",
-        "break","continue","goto","void","char","int","long","short","signed",
-        "unsigned","float","double","bool","true","false","NULL",
-        "u8","u16","u32","u64","i8","i16","i32","i64","f32","f64","f80","f128",
-        "s8","s16","s32","s64",
-        "size_t","ptrdiff_t","addr_t","static","extern","inline",
-        "struct","union","enum","typedef","const","volatile","restrict",
-    };
-    for (auto kw : kKeywords) if (s == kw) return true;
-    return false;
-}
-
-// `t<digits>` and `a<digits>` are SSA temps and arg names - alpha-rename
-// in order-of-first-appearance. Other identifiers (callee names, struct
-// fields, types, externs) are anchor points and stay verbatim.
-[[nodiscard]] bool is_temp_ident(std::string_view s) noexcept {
-    if (s.size() < 2) return false;
-    if (s[0] != 't' && s[0] != 'a') return false;
-    for (std::size_t i = 1; i < s.size(); ++i) {
-        if (s[i] < '0' || s[i] > '9') return false;
-    }
-    return true;
-}
-
-[[nodiscard]] bool starts_with(std::string_view s, std::string_view pre) noexcept {
-    return s.size() >= pre.size() && s.compare(0, pre.size(), pre) == 0;
-}
-
-[[nodiscard]] bool is_identifier_start(char c) noexcept {
-    return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-[[nodiscard]] bool is_identifier_cont(char c) noexcept {
-    return c == '_' || c == '$' || (c >= 'a' && c <= 'z') ||
-           (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-}
+// Token class for literals too large to be anything but an address.
+constexpr u64 kClassAddr = fnv1a_64("ADDR");
 
 // Classify a hex / decimal literal. Two principles:
 //   1. Small literals (<= 0x10000) keep their literal value - these are
@@ -117,7 +52,7 @@ constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
         // negatives so `-1` vs `0xffffffff` still match.
         char buf[24];
         const int n = std::snprintf(buf, sizeof buf, "%lx", static_cast<unsigned long>(v));
-        return fnv1a(std::string_view(buf, static_cast<std::size_t>(n)));
+        return fnv1a_64(std::string_view(buf, static_cast<std::size_t>(n)));
     }
     // Negative i64 immediates land here too (high bits set). For those
     // we still want a stable class - emit a sign-extended-class token.
@@ -125,132 +60,9 @@ constexpr u64 kClassAddr    = fnv1a("ADDR");     // beyond literal range
     if (s < 0 && s >= -0x10000) {
         char buf[24];
         const int n = std::snprintf(buf, sizeof buf, "-%lx", static_cast<unsigned long>(-s));
-        return fnv1a(std::string_view(buf, static_cast<std::size_t>(n)));
+        return fnv1a_64(std::string_view(buf, static_cast<std::size_t>(n)));
     }
     return kClassAddr;
-}
-
-[[nodiscard]] u64 parse_hex_literal(std::string_view s) noexcept {
-    u64 v = 0;
-    for (char c : s) {
-        const u64 d = (c >= '0' && c <= '9') ? static_cast<u64>(c - '0')
-                    : (c >= 'a' && c <= 'f') ? static_cast<u64>(c - 'a' + 10)
-                    : (c >= 'A' && c <= 'F') ? static_cast<u64>(c - 'A' + 10)
-                    : 0u;
-        v = (v << 4) | d;
-    }
-    return v;
-}
-
-[[nodiscard]] u64 parse_decimal_literal(std::string_view s) noexcept {
-    u64 v = 0;
-    for (char c : s) v = v * 10 + static_cast<u64>(c - '0');
-    return v;
-}
-
-// Strip everything outside the function body - return type, signature,
-// trailing closing brace. The emitter's signature line carries
-// type-inference results that drift between builds (the signature
-// might be `u64` in one build and `double` in another for the same
-// function); ignoring it focuses the hash on the actual code.
-[[nodiscard]] std::string_view body_only(std::string_view src) noexcept {
-    auto first = src.find('{');
-    if (first == std::string_view::npos) return src;
-    auto last = src.rfind('}');
-    if (last == std::string_view::npos || last <= first) return src;
-    return src.substr(first + 1, last - first - 1);
-}
-
-// One pass, emits one u64 per canonical token into `out`.
-void tokenize_canonical(std::string_view src, std::vector<u64>& out) {
-    out.clear();
-    out.reserve(src.size() / 4);
-    std::unordered_map<std::string, u64> alpha;  // local-name → renamed hash
-
-    auto rename = [&](std::string_view name) -> u64 {
-        // ID0, ID1, ID2 ... assigned in first-appearance order. The
-        // hashes are picked deterministically so the same canonical
-        // form across runs produces the same bigrams.
-        std::string key(name);
-        auto it = alpha.find(key);
-        if (it != alpha.end()) return it->second;
-        const u64 h = fnv1a("ID") ^ (alpha.size() * 0x9e3779b97f4a7c15ULL);
-        alpha.emplace(std::move(key), h);
-        return h;
-    };
-
-    const std::size_t n = src.size();
-    std::size_t i = 0;
-    while (i < n) {
-        const char c = src[i];
-        // ---- whitespace ----
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') { ++i; continue; }
-        // ---- line comment ----
-        if (c == '/' && i + 1 < n && src[i + 1] == '/') {
-            while (i < n && src[i] != '\n') ++i;
-            continue;
-        }
-        // ---- hex literal ----
-        if (c == '0' && i + 1 < n && (src[i + 1] == 'x' || src[i + 1] == 'X')) {
-            std::size_t j = i + 2;
-            while (j < n && (std::isxdigit(static_cast<unsigned char>(src[j])))) ++j;
-            const u64 v = parse_hex_literal(src.substr(i + 2, j - i - 2));
-            out.push_back(literal_class(v));
-            i = j;
-            continue;
-        }
-        // ---- decimal literal ----
-        if (c >= '0' && c <= '9') {
-            std::size_t j = i;
-            while (j < n && src[j] >= '0' && src[j] <= '9') ++j;
-            const u64 v = parse_decimal_literal(src.substr(i, j - i));
-            out.push_back(literal_class(v));
-            i = j;
-            continue;
-        }
-        // ---- identifier / keyword ----
-        if (is_identifier_start(c)) {
-            std::size_t j = i + 1;
-            while (j < n && is_identifier_cont(src[j])) ++j;
-            std::string_view ident = src.substr(i, j - i);
-            i = j;
-            if (starts_with(ident, "r_sub_")) { out.push_back(kClassCallRet); continue; }
-            if (starts_with(ident, "sub_"))   { out.push_back(kClassCallee);  continue; }
-            if (is_kept_keyword(ident)) {
-                out.push_back(fnv1a(ident));
-                continue;
-            }
-            if (is_temp_ident(ident)) {
-                out.push_back(rename(ident));
-                continue;
-            }
-            // Any other identifier (callee name, type, struct field,
-            // extern global) is an anchor - preserve verbatim. This is
-            // exactly the cross-version stable signal: sigs don't
-            // shift just because the compiler renumbered SSA temps.
-            out.push_back(fnv1a(ident));
-            continue;
-        }
-        // ---- punctuation ----
-        // Group runs of operator characters (e.g. `>>=`, `<<`, `==`)
-        // so that the bigram hash sees them as one token.
-        constexpr std::string_view ops = "+-*/%&|^~!<>=?:.";
-        if (ops.find(c) != std::string_view::npos) {
-            std::size_t j = i + 1;
-            while (j < n && ops.find(src[j]) != std::string_view::npos) ++j;
-            out.push_back(fnv1a(src.substr(i, j - i)));
-            i = j;
-            continue;
-        }
-        if (c == '{' || c == '}' || c == '(' || c == ')' ||
-            c == '[' || c == ']' || c == ',' || c == ';') {
-            out.push_back(fnv1a(std::string_view{&src[i], 1}));
-            ++i;
-            continue;
-        }
-        // ---- unknown byte - skip ----
-        ++i;
-    }
 }
 
 // MinHash sketch over the bigram set. Standard construction: for each
@@ -272,7 +84,7 @@ minhash_bigrams(const std::vector<u64>& tokens) noexcept {
         for (std::size_t k = 0; k < kMinHashSlots; ++k) {
             // Per-slot deterministic hash perturbation. mix64 with a
             // slot-specific salt gives K independent hash families.
-            const u64 hk = mix64(b, fnv1a(kTeefSchema) + k * 0x9e3779b97f4a7c15ULL);
+            const u64 hk = mix64(b, fnv1a_64(kTeefSchema) + k * 0x9e3779b97f4a7c15ULL);
             if (hk < mh[k]) mh[k] = hk;
         }
     }
@@ -280,71 +92,42 @@ minhash_bigrams(const std::vector<u64>& tokens) noexcept {
 }
 
 [[nodiscard]] u64 exact_token_stream_hash(const std::vector<u64>& tokens) noexcept {
-    u64 h = fnv1a(kTeefSchema);
+    u64 h = fnv1a_64(kTeefSchema);
     for (u64 t : tokens) h = mix64(h, t);
     return h;
 }
 
 }  // namespace
 
-float jaccard_estimate(const TeefSig& a, const TeefSig& b) noexcept {
-    if (a.exact_hash == 0 || b.exact_hash == 0) return 0.0f;
-    if (a.exact_hash == b.exact_hash) return 1.0f;
-    int eq = 0;
-    for (std::size_t i = 0; i < kMinHashSlots; ++i) {
-        if (a.minhash[i] == b.minhash[i]) ++eq;
-    }
-    return static_cast<float>(eq) / static_cast<float>(kMinHashSlots);
-}
-
-TeefSig teef_from_pseudo_c(std::string_view pseudo_c) {
-    TeefSig out;
-    if (pseudo_c.empty()) return out;
-    std::vector<u64> tokens;
-    tokenize_canonical(body_only(pseudo_c), tokens);
-    if (tokens.empty()) return out;
-    out.exact_hash = exact_token_stream_hash(tokens);
-    out.minhash    = minhash_bigrams(tokens);
-    return out;
-}
-
 // ---- Direct IR-walking TEEF ----------------------------------------
 //
-// The text-based path (lift → structure → emit pseudo-C → tokenize the
-// string → hash) was bottlenecked on the emitter's recursive expression
-// inliner and std::format calls - profiling showed those alone took
-// >70% of compute time. Since the canonical hash doesn't actually need
-// the string, we skip the emitter and walk the structured IR directly,
-// hashing canonical tokens straight into the bigram stream.
+// The canonical hash never needs the pseudo-C text, so the structured IR
+// is hashed directly instead of emitting and re-tokenizing it (the
+// emitter dominated the old profile).
 //
 // Token alphabet (one u64 each):
-//   • Region kinds (Block, Seq, IfThen, IfElse, While, ...) - fixed
-//     per-RegionKind hash, plus structural delimiters.
-//   • IR opcode names from op_name(IrOp).
-//   • Operand classes:
-//       Reg  → alpha-rename(canonical_reg, version)
-//       Temp → alpha-rename(temp_id)
-//       Imm  → SMI / MEDI / ADDR / literal-as-string for v<16
-//       Flag → flag name verbatim
-//   • Anchor names (callee names, intrinsic names, import targets) -
-//     fnv1a of the verbatim string, kept across canonicalization.
+//   - region kinds and structural delimiters
+//   - IR opcode names from op_name(IrOp)
+//   - operands: Reg -> alpha-renamed (canonical_reg, version),
+//     Temp -> alpha-renamed id, Imm -> literal_class, Flag -> its name
+//   - anchor names (callees, intrinsics, imports): fnv1a of the string
 
 namespace {
 
 constexpr std::array<u64, 14> kRegionKindHashes = {
-    fnv1a("R/Empty"),       fnv1a("R/Block"),       fnv1a("R/Seq"),
-    fnv1a("R/IfThen"),      fnv1a("R/IfElse"),      fnv1a("R/While"),
-    fnv1a("R/DoWhile"),     fnv1a("R/For"),         fnv1a("R/Loop"),
-    fnv1a("R/Switch"),      fnv1a("R/Return"),      fnv1a("R/Unreachable"),
-    fnv1a("R/Break"),       fnv1a("R/Continue"),
+    fnv1a_64("R/Empty"),       fnv1a_64("R/Block"),       fnv1a_64("R/Seq"),
+    fnv1a_64("R/IfThen"),      fnv1a_64("R/IfElse"),      fnv1a_64("R/While"),
+    fnv1a_64("R/DoWhile"),     fnv1a_64("R/For"),         fnv1a_64("R/Loop"),
+    fnv1a_64("R/Switch"),      fnv1a_64("R/Return"),      fnv1a_64("R/Unreachable"),
+    fnv1a_64("R/Break"),       fnv1a_64("R/Continue"),
 };
-constexpr u64 kRegionGoto      = fnv1a("R/Goto");
-constexpr u64 kRegionOpen      = fnv1a("{");
-constexpr u64 kRegionClose     = fnv1a("}");
-constexpr u64 kCondTok         = fnv1a("?");
-constexpr u64 kInvertTok       = fnv1a("!");
-constexpr u64 kIntrinsicTok    = fnv1a("INTRINSIC");
-constexpr u64 kFlagTok         = fnv1a("FLAG");
+constexpr u64 kRegionGoto      = fnv1a_64("R/Goto");
+constexpr u64 kRegionOpen      = fnv1a_64("{");
+constexpr u64 kRegionClose     = fnv1a_64("}");
+constexpr u64 kCondTok         = fnv1a_64("?");
+constexpr u64 kInvertTok       = fnv1a_64("!");
+constexpr u64 kIntrinsicTok    = fnv1a_64("INTRINSIC");
+constexpr u64 kFlagTok         = fnv1a_64("FLAG");
 
 struct IrTokenizer {
     std::vector<u64>& out;
@@ -364,13 +147,13 @@ struct IrTokenizer {
     //   nothing matches → ADDR class
     [[nodiscard]] u64 resolve_addr_token(addr_t a) const noexcept {
         if (const auto* imp = bin.import_at_plt(a); imp && !imp->name.empty()) {
-            return fnv1a(imp->name);
+            return fnv1a_64(imp->name);
         }
         if (const auto* imp = bin.import_at_got(a); imp && !imp->name.empty()) {
-            return fnv1a(imp->name);
+            return fnv1a_64(imp->name);
         }
         if (const auto* sym = bin.defined_object_at(a); sym && !sym->name.empty()) {
-            return fnv1a(sym->name);
+            return fnv1a_64(sym->name);
         }
         return kClassAddr;
     }
@@ -378,7 +161,7 @@ struct IrTokenizer {
     [[nodiscard]] u64 alpha(u64 key, std::unordered_map<u64, u64>& map) {
         auto it = map.find(key);
         if (it != map.end()) return it->second;
-        const u64 h = fnv1a("ID") ^ (next_alpha++ * 0x9e3779b97f4a7c15ULL);
+        const u64 h = fnv1a_64("ID") ^ (next_alpha++ * 0x9e3779b97f4a7c15ULL);
         map.emplace(key, h);
         return h;
     }
@@ -387,10 +170,10 @@ struct IrTokenizer {
         // Type tag: i1, i8, ..., i64, f32/f64. Distinguishes operand
         // shapes - `Add i32` (likely an int) hashes differently from
         // `Add i64` (likely a pointer offset).
-        out.push_back(fnv1a(type_name(v.type)));
+        out.push_back(fnv1a_64(type_name(v.type)));
         switch (v.kind) {
             case IrValueKind::None:
-                out.push_back(fnv1a("none"));
+                out.push_back(fnv1a_64("none"));
                 return;
             case IrValueKind::Reg: {
                 const u64 key = (static_cast<u64>(v.reg) << 32)
@@ -402,7 +185,7 @@ struct IrTokenizer {
                 u64 key = 0;
                 auto it = temp_alpha.find(v.temp);
                 if (it == temp_alpha.end()) {
-                    key = fnv1a("ID") ^ (next_alpha++ * 0x9e3779b97f4a7c15ULL);
+                    key = fnv1a_64("ID") ^ (next_alpha++ * 0x9e3779b97f4a7c15ULL);
                     temp_alpha.emplace(v.temp, key);
                 } else {
                     key = it->second;
@@ -421,33 +204,27 @@ struct IrTokenizer {
             }
             case IrValueKind::Flag:
                 out.push_back(kFlagTok);
-                out.push_back(fnv1a(flag_name(v.flag)));
+                out.push_back(fnv1a_64(flag_name(v.flag)));
                 return;
         }
     }
 
     void emit_inst(const IrInst& inst) {
         if (inst.op == IrOp::Nop) return;
-        out.push_back(fnv1a(op_name(inst.op)));
+        out.push_back(fnv1a_64(op_name(inst.op)));
         // Segment-prefixed loads/stores (fs:[..] for TLS, gs:[..] for
         // PEB) are distinguishing signal - `read TLS canary` vs `read
         // ordinary global` look the same opcode-wise but the segment
         // tags them apart.
         if (inst.segment != Reg::None) {
-            out.push_back(fnv1a("seg"));
-            out.push_back(fnv1a(reg_name(inst.segment)));
+            out.push_back(fnv1a_64("seg"));
+            out.push_back(fnv1a_64(reg_name(inst.segment)));
         }
         if (inst.op == IrOp::Call) {
-            // Anchor weighting: a call to a NAMED import/symbol is far
-            // stronger fingerprint signal than the surrounding alpha-
-            // renamed reg arithmetic. A function calling malloc + free
-            // + memcpy has a more discriminating identity than two
-            // unrelated functions sharing some random reg-arith
-            // patterns. Repeat the resolved-name token 3x in the
-            // stream so it dominates both the exact hash and the
-            // bigram-derived MinHash. Unresolved (kClassAddr) calls
-            // get a single token as before - no weighting boost when
-            // we can't tell what's being called.
+            // A named callee is far stronger evidence than the alpha-
+            // renamed arithmetic around it, so its token is repeated 3x
+            // to weight both the exact hash and the MinHash. Unresolved
+            // (kClassAddr) calls stay single.
             const u64 t = resolve_addr_token(inst.target1);
             out.push_back(t);
             if (t != kClassAddr) {
@@ -457,7 +234,7 @@ struct IrTokenizer {
         } else if (inst.op == IrOp::Intrinsic && !inst.name.empty()) {
             // Intrinsic names (cpuid, rdtsc, syscall, x64.lock, etc) are
             // also strong anchors - same 3x weighting.
-            const u64 nameTok = fnv1a(inst.name);
+            const u64 nameTok = fnv1a_64(inst.name);
             out.push_back(kIntrinsicTok);
             out.push_back(nameTok);
             out.push_back(nameTok);
@@ -486,7 +263,7 @@ void emit_region_tokens(IrTokenizer& t, const IrFunction& fn, const Region& r) {
     if (k < kRegionKindHashes.size()) {
         t.out.push_back(kRegionKindHashes[k]);
     } else {
-        t.out.push_back(fnv1a("R/?"));
+        t.out.push_back(fnv1a_64("R/?"));
     }
     if (r.kind == RegionKind::Block) {
         emit_block_tokens(t, fn, r.block_start);
@@ -632,19 +409,11 @@ namespace {
     return total > cap;
 }
 
-// L0 topology hash from the CFG (pre-lift). Same six features as the
-// previous IR-derived version, but read from the analysis::Function
-// directly so we can compute the hash before lift and use it as an
-// early-exit gate when --l0-prefilter is on. CFG-block-count and
-// IR-block-count usually match exactly; the few cases where lift
-// splits or merges a block produce slightly different hashes, but
-// since the corpus is also built from CFG-topo now, both sides agree.
-//   • num_blocks  - coarse size signal
-//   • num_edges   - sum of successors over all blocks
-//   • max_in_degree, max_out_degree - branching density
-//   • num_loop_headers - blocks with > 1 predecessor (proxy for loops
-//     and re-entry points; cleanup-stable)
-//   • num_returns - blocks whose CFG kind is BlockKind::Return
+// L0 topology hash from the pre-lift CFG, so it can gate the lift when
+// --l0-prefilter is on. Features: block count, edge count, max in/out
+// degree, blocks with more than one predecessor (loop proxy), return
+// blocks. Corpus and query both hash the CFG, so lift-time block
+// splits do not matter.
 [[nodiscard]] u64 compute_topo_hash_from_cfg(const Function& fn) noexcept {
     u32 num_blocks       = static_cast<u32>(fn.blocks.size());
     u32 num_edges        = 0;
@@ -661,7 +430,7 @@ namespace {
         if (bb.predecessors.size() > 1) ++num_loop_headers;
         if (bb.kind == BlockKind::Return) ++num_returns;
     }
-    u64 h = fnv1a("topo");
+    u64 h = fnv1a_64("topo");
     h = mix64(h, num_blocks);
     h = mix64(h, num_edges);
     h = mix64(h, max_in_degree);
@@ -671,21 +440,12 @@ namespace {
     return h;
 }
 
-// L1 byte-prefix hash for tiny functions. Walks the CFG's pre-decoded
-// instruction stream in address order and folds (mnemonic, operand-shape,
-// reg identity, classed immediates) into a single u64. Skipped (returns
-// 0) unless the function is small enough that a literal byte signature
-// is the right tier - large fns are better served by L2/L4. The byte
-// budget (≤ 64 bytes, ≤ 16 insns) targets the FLIRT sweet spot: tiny
-// thunks, getters, stubs that L2 cleanup-canonical and L4 K=64 traces
-// can't tell apart.
-//
-// Immediates are kept verbatim when ≤ 0x10000 (struct offsets, syscall
-// numbers, flag bits - distinguishing signal) and classed to ADDR
-// otherwise (rip-relative globals shift across builds). Register
-// identity is preserved literally - a `mov rax, [rdi]` is NOT equivalent
-// to `mov rcx, [rsi]` at this tier; that's exactly the discriminating
-// power FLIRT relies on.
+// L1 byte-prefix hash for tiny functions (<= 64 bytes, <= 16 insns):
+// (mnemonic, operand shape, register identity, classed immediate) per
+// instruction in address order, folded into one u64. Returns 0 for
+// anything larger; L2/L4 serve those. Register identity is literal
+// (`mov rax, [rdi]` != `mov rcx, [rsi]`) and immediates > 0x10000 are
+// classed to ADDR, the same trade-off FLIRT makes.
 [[nodiscard]] u64 compute_prefix_hash(const Function& fn) noexcept {
     constexpr u32 kMaxInsns = 16;
     constexpr u32 kMaxBytes = 64;
@@ -701,7 +461,7 @@ namespace {
 
     u32 inst_count = 0;
     u32 byte_count = 0;
-    u64 h = fnv1a("prefix.v1");
+    u64 h = fnv1a_64("prefix.v1");
 
     for (const auto* bb : ordered) {
         for (const auto& insn : bb->instructions) {
@@ -710,7 +470,7 @@ namespace {
             byte_count += insn.length;
             if (inst_count > kMaxInsns || byte_count > kMaxBytes) return 0;
 
-            h = mix64(h, fnv1a(mnemonic_name(insn.mnemonic)));
+            h = mix64(h, fnv1a_64(mnemonic_name(insn.mnemonic)));
             h = mix64(h, static_cast<u64>(insn.num_operands));
             for (u8 oi = 0; oi < insn.num_operands; ++oi) {
                 const auto& op = insn.operands[oi];
@@ -719,11 +479,11 @@ namespace {
                     case Operand::Kind::None:
                         break;
                     case Operand::Kind::Register:
-                        h = mix64(h, fnv1a(reg_name(op.reg)));
+                        h = mix64(h, fnv1a_64(reg_name(op.reg)));
                         break;
                     case Operand::Kind::Memory:
-                        h = mix64(h, fnv1a(reg_name(op.mem.base)));
-                        h = mix64(h, fnv1a(reg_name(op.mem.index)));
+                        h = mix64(h, fnv1a_64(reg_name(op.mem.base)));
+                        h = mix64(h, fnv1a_64(reg_name(op.mem.index)));
                         h = mix64(h, static_cast<u64>(op.mem.scale));
                         h = mix64(h, static_cast<u64>(op.mem.size));
                         if (op.mem.has_disp) {
@@ -809,7 +569,7 @@ compute_teef_with_chunks(const Binary& b, addr_t fn_start,
     if (auto rv = run_cleanup(*ir_r); !rv) return out;
 
     auto l2 = compute_l2_from_ir(b, *ir_r, opts.min_chunk_insts);
-    out.whole  = std::move(l2.whole);
+    out.whole  = l2.whole;
     out.chunks = std::move(l2.chunks);
     return out;
 }
@@ -869,13 +629,9 @@ compute_teef_max(const Binary& b, addr_t fn_start,
 
     // L2 - structurer + region tokenization on the same IR.
     auto l2 = compute_l2_from_ir(b, *ir_r, opts.min_chunk_insts);
-    out.whole  = std::move(l2.whole);
+    out.whole  = l2.whole;
     out.chunks = std::move(l2.chunks);
     return out;
-}
-
-TeefSig compute_teef(const Binary& b, addr_t fn_start) {
-    return compute_teef_with_chunks(b, fn_start, /*min_chunk_insts=*/10).whole;
 }
 
 }  // namespace ember

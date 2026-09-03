@@ -3,19 +3,23 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <initializer_list>
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <string_view>
 #include <tuple>
-#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <ember/analysis/discovery.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/strings.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

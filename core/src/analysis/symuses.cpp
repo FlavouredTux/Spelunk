@@ -1,17 +1,28 @@
 #include <ember/analysis/symuses.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <expected>
 #include <map>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/fn_table.hpp>
-#include <ember/analysis/pipeline.hpp>
+#include <ember/analysis/symtable.hpp>
 #include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>
 
 namespace ember::analysis {

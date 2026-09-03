@@ -6,14 +6,15 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/cfg_util.hpp>
-#include <ember/analysis/pipeline.hpp>
+#include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>

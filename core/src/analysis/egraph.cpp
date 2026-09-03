@@ -3,32 +3,16 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <utility>
+#include <vector>
+
+#include <ember/common/hash.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember::egraph {
 
 namespace {
-
-constexpr u64 kFnvOffset = 0xcbf29ce484222325ULL;
-constexpr u64 kFnvPrime  = 0x100000001b3ULL;
-
-[[nodiscard]] constexpr u64 fnv1a(const void* p, std::size_t n) noexcept {
-    const auto* b = static_cast<const u8*>(p);
-    u64 h = kFnvOffset;
-    for (std::size_t i = 0; i < n; ++i) {
-        h ^= b[i];
-        h *= kFnvPrime;
-    }
-    return h;
-}
-
-[[nodiscard]] constexpr u64 mix64(u64 a, u64 b) noexcept {
-    u64 x = a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2));
-    x ^= x >> 30;  x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;  x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
-}
 
 }  // namespace
 
@@ -156,7 +140,7 @@ u64 EGraph::enode_key(const ENode& n) const noexcept {
     p.c0 = (n.n_children > 0) ? find(n.children[0]) : kNullClass;
     p.c1 = (n.n_children > 1) ? find(n.children[1]) : kNullClass;
     p.c2 = (n.n_children > 2) ? find(n.children[2]) : kNullClass;
-    return fnv1a(&p, sizeof p);
+    return fnv1a_64(&p, sizeof p);
 }
 
 ENode EGraph::canonicalize_node(ENode n) const noexcept {
@@ -369,7 +353,7 @@ std::size_t EGraph::saturate(std::size_t max_iters, std::size_t max_nodes) {
         for (const auto& r : rules_) {
             std::vector<MatchHit> rh;
             match_(r.lhs, rh);
-            for (auto& h : rh) hits.push_back({&r, std::move(h)});
+            for (const auto& h : rh) hits.push_back({&r, h});
         }
         // Phase 2: apply matches. Each match instantiates rhs and unions
         // with the matched-root class.

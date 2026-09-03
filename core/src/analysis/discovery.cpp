@@ -1,20 +1,25 @@
 #include <ember/analysis/discovery.hpp>
-#include <ember/common/threads.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <span>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/packed.hpp>
+#include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/threads.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/arm64_decoder.hpp>
+#include <ember/disasm/instruction.hpp>
 #include <ember/disasm/ppc_decoder.hpp>
 #include <ember/disasm/register.hpp>
 #include <ember/disasm/x64_decoder.hpp>

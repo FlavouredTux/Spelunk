@@ -1,4 +1,5 @@
 #include <ember/analysis/identify.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
@@ -6,11 +7,14 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
+
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/progress.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/disasm/instruction.hpp>
 
@@ -57,74 +61,74 @@ struct Profile {
 };
 
 // ---- Constant tables ----
-static constexpr CS c_sha256h[]={{0x6a09e667,1},{0xbb67ae85,1},{0x3c6ef372,1},{0xa54ff53a,1},{0x510e527f,1},{0x9b05688c,1},{0x1f83d9ab,1},{0x5be0cd19,1}};
-static constexpr CS c_sha256k[]={{0x428a2f98,1},{0x71374491,1},{0xb5c0fbcf,1},{0xe9b5dba5,1},{0x3956c25b,1},{0x59f111f1,1},{0x923f82a4,1},{0xab1c5ed5,1}};
-static constexpr CS c_sha1[]={{0x67452301,1},{0xEFCDAB89,1},{0x98BADCFE,1},{0x10325476,1},{0xC3D2E1F0,1}};
-static constexpr CS c_sha512[]={{0x6a09e667f3bcc908ull,1},{0xbb67ae8584caa73bull,1},{0x3c6ef372fe94f82bull,1},{0xa54ff53a5f1d36f1ull,1}};
-static constexpr CS c_md5[]={{0x67452301,1},{0xefcdab89,1},{0x98badcfe,1},{0x10325476,1}};
-static constexpr CS c_blake2b[]={{0x6a09e667f3bcc908ull,1},{0xbb67ae8584caa73bull,1},{0x3c6ef372fe94f82bull,1},{0xa54ff53a5f1d36f1ull,1},{0x510e527fade682d1ull,1},{0x9b05688c2b3e6c1full,1},{0x1f83d9abfb41bd6bull,1},{0x5be0cd19137e2179ull,1}};
-static constexpr CS c_blake2s[]={{0x6a09e667,1},{0xbb67ae85,1},{0x3c6ef372,1},{0xa54ff53a,1},{0x510e527f,1},{0x9b05688c,1},{0x1f83d9ab,1},{0x5be0cd19,1}};
-static constexpr CS c_blake3[]={{0x6a09e667,1},{0xbb67ae85,1},{0x3c6ef372,1},{0xa54ff53a,1},{0x510e527f,1},{0x9b05688c,1},{0x1f83d9ab,1},{0x5be0cd19,1}};
-static constexpr CS c_fnv1a32[]={{0x811c9dc5,1},{0x01000193,1}};
-static constexpr CS c_fnv1a64[]={{0xcbf29ce484222325ull,1},{0x00000100000001b3ull,1}};
-static constexpr CS c_crc32[]={{0xedb88320,1}};
-static constexpr CS c_murmur3[]={{0xcc9e2d51,1},{0x1b873593,1},{0xe6546b64,1}};
-static constexpr CS c_chacha20[]={{0x61707865,1},{0x3320646e,1},{0x79622d32,1},{0x6b206574,1}};
-static constexpr CS c_salsa20[]={{0x61707865,1},{0x3320646e,1},{0x79622d32,1},{0x6b206574,1}};
-static constexpr CS c_aes_rcon[]={{0x01,0},{0x02,0},{0x04,0},{0x08,0},{0x10,0},{0x20,0},{0x40,0},{0x80,0},{0x1b,0},{0x36,0}};
-static constexpr CS c_des[]={{0x0001030507090B0Dull,0},{0x0F111315171B1D1Full,0}};
-static constexpr CS c_xtea[]={{0x9E3779B9,1}};
+constexpr CS c_sha256h[]={{0x6a09e667,1},{0xbb67ae85,1},{0x3c6ef372,1},{0xa54ff53a,1},{0x510e527f,1},{0x9b05688c,1},{0x1f83d9ab,1},{0x5be0cd19,1}};
+constexpr CS c_sha256k[]={{0x428a2f98,1},{0x71374491,1},{0xb5c0fbcf,1},{0xe9b5dba5,1},{0x3956c25b,1},{0x59f111f1,1},{0x923f82a4,1},{0xab1c5ed5,1}};
+constexpr CS c_sha1[]={{0x67452301,1},{0xEFCDAB89,1},{0x98BADCFE,1},{0x10325476,1},{0xC3D2E1F0,1}};
+constexpr CS c_sha512[]={{0x6a09e667f3bcc908ull,1},{0xbb67ae8584caa73bull,1},{0x3c6ef372fe94f82bull,1},{0xa54ff53a5f1d36f1ull,1}};
+constexpr CS c_md5[]={{0x67452301,1},{0xefcdab89,1},{0x98badcfe,1},{0x10325476,1}};
+constexpr CS c_blake2b[]={{0x6a09e667f3bcc908ull,1},{0xbb67ae8584caa73bull,1},{0x3c6ef372fe94f82bull,1},{0xa54ff53a5f1d36f1ull,1},{0x510e527fade682d1ull,1},{0x9b05688c2b3e6c1full,1},{0x1f83d9abfb41bd6bull,1},{0x5be0cd19137e2179ull,1}};
+constexpr CS c_blake2s[]={{0x6a09e667,1},{0xbb67ae85,1},{0x3c6ef372,1},{0xa54ff53a,1},{0x510e527f,1},{0x9b05688c,1},{0x1f83d9ab,1},{0x5be0cd19,1}};
+constexpr CS c_blake3[]={{0x6a09e667,1},{0xbb67ae85,1},{0x3c6ef372,1},{0xa54ff53a,1},{0x510e527f,1},{0x9b05688c,1},{0x1f83d9ab,1},{0x5be0cd19,1}};
+constexpr CS c_fnv1a32[]={{0x811c9dc5,1},{0x01000193,1}};
+constexpr CS c_fnv1a64[]={{0xcbf29ce484222325ull,1},{0x00000100000001b3ull,1}};
+constexpr CS c_crc32[]={{0xedb88320,1}};
+constexpr CS c_murmur3[]={{0xcc9e2d51,1},{0x1b873593,1},{0xe6546b64,1}};
+constexpr CS c_chacha20[]={{0x61707865,1},{0x3320646e,1},{0x79622d32,1},{0x6b206574,1}};
+constexpr CS c_salsa20[]={{0x61707865,1},{0x3320646e,1},{0x79622d32,1},{0x6b206574,1}};
+constexpr CS c_aes_rcon[]={{0x01,0},{0x02,0},{0x04,0},{0x08,0},{0x10,0},{0x20,0},{0x40,0},{0x80,0},{0x1b,0},{0x36,0}};
+constexpr CS c_des[]={{0x0001030507090B0Dull,0},{0x0F111315171B1D1Full,0}};
+constexpr CS c_xtea[]={{0x9E3779B9,1}};
 
 // ---- Import signal tables ----
-static constexpr IS i_wsa[]={{"WSASend"},{"WSARecv"}};
-static constexpr IS i_raknet[]={{"RakPeer"},{"RakNet"}};
-static constexpr IS i_sendrecv[]={{"send"},{"recv"}};
+constexpr IS i_wsa[]={{"WSASend"},{"WSARecv"}};
+constexpr IS i_raknet[]={{"RakPeer"},{"RakNet"}};
+constexpr IS i_sendrecv[]={{"send"},{"recv"}};
 
 // ---- Byte-pattern tables (0xFF = wildcard ??) ----
 
 // AES S-box first 16 bytes - the most reliable AES fingerprint.
-static constexpr u8 bp_aes_sbox[]={
+constexpr u8 bp_aes_sbox[]={
     0x63,0x7C,0x77,0x7B,0xF2,0x6B,0x6F,0xC5,
     0x30,0x01,0x67,0x2B,0xFE,0xD7,0xAB,0x76
 };
-static constexpr BytePat bpat_aes_sbox={bp_aes_sbox, sizeof(bp_aes_sbox)};
+constexpr BytePat bpat_aes_sbox={bp_aes_sbox, sizeof(bp_aes_sbox)};
 
 // AES Inverse S-box first 16 bytes - appears in AES decryption.
-static constexpr u8 bp_aes_inv_sbox[]={
+constexpr u8 bp_aes_inv_sbox[]={
     0x52,0x09,0x6A,0xD5,0x30,0x36,0xA5,0x38,
     0xBF,0x40,0xA3,0x9E,0x81,0xF3,0xD7,0xFB
 };
-static constexpr BytePat bpat_aes_inv_sbox={bp_aes_inv_sbox, sizeof(bp_aes_inv_sbox)};
+constexpr BytePat bpat_aes_inv_sbox={bp_aes_inv_sbox, sizeof(bp_aes_inv_sbox)};
 
 // RC4 KSA identity: the initial permutation 0,1,2,...,15 as a byte table.
 // A custom RC4 implementation often embeds this as a lookup table.
-static constexpr u8 bp_rc4_init[]={
+constexpr u8 bp_rc4_init[]={
     0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
     0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F
 };
-static constexpr BytePat bpat_rc4_init={bp_rc4_init, sizeof(bp_rc4_init)};
+constexpr BytePat bpat_rc4_init={bp_rc4_init, sizeof(bp_rc4_init)};
 
 // Base64 encoding table - the classic "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef..."
-static constexpr u8 bp_base64[]={
+constexpr u8 bp_base64[]={
     0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,  // A B C D E F G H
     0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,0x50,  // I J K L M N O P
     0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,  // Q R S T U V W X
     0x59,0x5A,0x61,0x62,0x63,0x64,0x65,0x66   // Y Z a b c d e f
 };
-static constexpr BytePat bpat_base64={bp_base64, sizeof(bp_base64)};
+constexpr BytePat bpat_base64={bp_base64, sizeof(bp_base64)};
 
 // DES initial permutation (IP) table first 16 bytes.
-static constexpr u8 bp_des_ip[]={
+constexpr u8 bp_des_ip[]={
     0x3A,0x35,0x2C,0x28,0x24,0x1E,0x1A,0x11,
     0x0E,0x0A,0x06,0x03,0x3F,0x3B,0x37,0x33
 };
-static constexpr BytePat bpat_des_ip={bp_des_ip, sizeof(bp_des_ip)};
+constexpr BytePat bpat_des_ip={bp_des_ip, sizeof(bp_des_ip)};
 
 // ---- Instruction-sequence pattern tables ----
 
 // ChaCha20 quarter-round signature: rol 16, add, xor, rol 12, add, xor,
 // rol 8, add, xor, rol 7.  This sequence is extremely characteristic.
-static constexpr InsnPat ipat_chacha_qr[]={
+constexpr InsnPat ipat_chacha_qr[]={
     {Mnemonic::Rol, OPM_IMM},   // rol reg, 16
     {Mnemonic::Add, OPM_REG},   // add reg, reg
     {Mnemonic::Xor, OPM_REG},   // xor reg, reg
@@ -140,7 +144,7 @@ static constexpr InsnPat ipat_chacha_qr[]={
 // AES key expansion: the pattern of rotating, substituting via S-box,
 // and XOR with round constant appears as: shufps/xor/rol or pshufb/xor.
 // A simplified structural signature: xor + shufps/shl + xor repeating.
-static constexpr InsnPat ipat_aes_keyexp[]={
+constexpr InsnPat ipat_aes_keyexp[]={
     {Mnemonic::Xor,  OPM_REG},  // xor with rcon
     {Mnemonic::Shl,  OPM_IMM},  // rotate/shift subkey
     {Mnemonic::Xor,  OPM_REG},  // xor into key schedule
@@ -150,7 +154,7 @@ static constexpr InsnPat ipat_aes_keyexp[]={
 };
 
 // RC4 swap-and-add pattern: xchg + add + mov in a loop structure.
-static constexpr InsnPat ipat_rc4_swap[]={
+constexpr InsnPat ipat_rc4_swap[]={
     {Mnemonic::Xchg, OPM_REG},  // swap S[i] and S[j]
     {Mnemonic::Add,  OPM_REG},  // add indices
     {Mnemonic::Mov,  OPM_REG},  // load S[i]+S[j]
@@ -160,29 +164,29 @@ static constexpr InsnPat ipat_rc4_swap[]={
 // Nintendo Revolution SDK / Gekko structural signatures. These deliberately
 // use architecture-specific operations rather than addresses or symbols, so
 // they survive stripping and link-order changes across Wii titles.
-static constexpr InsnPat ipat_dc_flush_range[]={
+constexpr InsnPat ipat_dc_flush_range[]={
     {Mnemonic::Dcbf, OPM_MEM}, {Mnemonic::Bdnz, OPM_REL}, {Mnemonic::Sc, OPM_ANY},
 };
-static constexpr InsnPat ipat_dc_invalidate_range[]={
+constexpr InsnPat ipat_dc_invalidate_range[]={
     {Mnemonic::Dcbi, OPM_MEM}, {Mnemonic::Bdnz, OPM_REL}, {Mnemonic::Ret, OPM_ANY},
 };
-static constexpr InsnPat ipat_ic_invalidate_range[]={
+constexpr InsnPat ipat_ic_invalidate_range[]={
     {Mnemonic::Icbi, OPM_MEM}, {Mnemonic::Bdnz, OPM_REL},
     {Mnemonic::Sync, OPM_ANY}, {Mnemonic::Isync, OPM_ANY},
 };
-static constexpr InsnPat ipat_os_get_time[]={
+constexpr InsnPat ipat_os_get_time[]={
     {Mnemonic::Mftb, OPM_REG}, {Mnemonic::Mftb, OPM_REG},
     {Mnemonic::Mftb, OPM_REG}, {Mnemonic::Cmp, OPM_REG},
     {Mnemonic::Bne, OPM_REL},
 };
-static constexpr InsnPat ipat_psmtx_identity[]={
+constexpr InsnPat ipat_psmtx_identity[]={
     {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
     {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsMerge10, OPM_REG},
     {Mnemonic::PsMerge01, OPM_REG}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
     {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
     {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
 };
-static constexpr InsnPat ipat_psmtx_copy[]={
+constexpr InsnPat ipat_psmtx_copy[]={
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
@@ -190,12 +194,12 @@ static constexpr InsnPat ipat_psmtx_copy[]={
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
 };
-static constexpr InsnPat ipat_psmtx_concat[]={
+constexpr InsnPat ipat_psmtx_concat[]={
     {Mnemonic::PsMuls0, OPM_REG}, {Mnemonic::PsMuls0, OPM_REG},
     {Mnemonic::PsMadds1, OPM_REG}, {Mnemonic::PsMadds1, OPM_REG},
     {Mnemonic::PsMadds0, OPM_REG}, {Mnemonic::PsMadds0, OPM_REG},
 };
-static constexpr InsnPat ipat_psmtx_mult_vec[]={
+constexpr InsnPat ipat_psmtx_mult_vec[]={
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsqL, OPM_REG | OPM_MEM},
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsMul, OPM_REG},
     {Mnemonic::PsqL, OPM_REG | OPM_MEM}, {Mnemonic::PsMadd, OPM_REG},
@@ -207,7 +211,7 @@ static constexpr InsnPat ipat_psmtx_mult_vec[]={
     {Mnemonic::PsqSt, OPM_REG | OPM_MEM}, {Mnemonic::PsMadd, OPM_REG},
     {Mnemonic::PsSum0, OPM_REG}, {Mnemonic::PsqSt, OPM_REG | OPM_MEM},
 };
-static constexpr InsnPat ipat_nw4r_lyt_layout_ctor[]={
+constexpr InsnPat ipat_nw4r_lyt_layout_ctor[]={
     {Mnemonic::Addi, OPM_IMM}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
     {Mnemonic::Addis, OPM_IMM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
     {Mnemonic::Addi, OPM_IMM}, {Mnemonic::Stw, OPM_REG | OPM_MEM},
@@ -218,7 +222,7 @@ static constexpr InsnPat ipat_nw4r_lyt_layout_ctor[]={
     {Mnemonic::Stfs, OPM_REG | OPM_MEM}, {Mnemonic::Stfs, OPM_REG | OPM_MEM},
     {Mnemonic::Stb, OPM_REG | OPM_MEM}, {Mnemonic::Ret, OPM_ANY},
 };
-static constexpr InsnPat ipat_nw4r_lyt_layout_rect[]={
+constexpr InsnPat ipat_nw4r_lyt_layout_rect[]={
     {Mnemonic::Lbz, OPM_REG | OPM_MEM}, {Mnemonic::Cmpl, OPM_REG | OPM_IMM},
     {Mnemonic::Bne, OPM_REL}, {Mnemonic::Lfs, OPM_REG | OPM_MEM},
     {Mnemonic::Lfs, OPM_REG | OPM_MEM}, {Mnemonic::Fneg, OPM_REG},
@@ -235,7 +239,7 @@ static constexpr InsnPat ipat_nw4r_lyt_layout_rect[]={
 };
 
 // ---- Profile table ----
-static const Profile kProfiles[]={
+const Profile kProfiles[]={
   // Hash profiles - constant-based
   {"sha256",      IdentifyCategory::Hash,       0.5f, c_sha256h,8,  nullptr,0,     nullptr,0, nullptr,0},
   {"sha256_k",    IdentifyCategory::Hash,       0.5f, c_sha256k,8,  nullptr,0,     nullptr,0, nullptr,0},

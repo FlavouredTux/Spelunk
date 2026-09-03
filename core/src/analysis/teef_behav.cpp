@@ -1,8 +1,8 @@
 #include <ember/analysis/teef_behav.hpp>
 
 #include <algorithm>
-#include <bit>
 #include <array>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,13 +12,16 @@
 #include <string_view>
 #include <vector>
 
+#include <ember/common/types.hpp>
+#include <ember/disasm/register.hpp>
+
 #if defined(_MSC_VER)
 #include <intrin.h>
 #endif
 
 #include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/hash.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
@@ -30,23 +33,6 @@ namespace ember {
 namespace {
 
 // ---- Hash helpers --------------------------------------------------------
-
-constexpr u64 kFnvOffset = 0xcbf29ce484222325ULL;
-constexpr u64 kFnvPrime  = 0x100000001b3ULL;
-
-[[nodiscard]] constexpr u64 fnv1a(std::string_view s) noexcept {
-    u64 h = kFnvOffset;
-    for (char c : s) { h ^= static_cast<u8>(c); h *= kFnvPrime; }
-    return h;
-}
-
-[[nodiscard]] constexpr u64 mix64(u64 a, u64 b) noexcept {
-    u64 x = a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2));
-    x ^= x >> 30;  x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;  x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
-}
 
 [[nodiscard]] constexpr u64 mask_to(u64 v, unsigned bits) noexcept {
     if (bits >= 64) return v;
@@ -62,13 +48,13 @@ constexpr u64 kFnvPrime  = 0x100000001b3ULL;
 [[nodiscard]] u64 value_key(const IrValue& v) noexcept {
     switch (v.kind) {
         case IrValueKind::Reg:
-            return mix64(fnv1a("reg"),
+            return mix64(fnv1a_64("reg"),
                          (static_cast<u64>(v.reg) << 16) | v.version);
         case IrValueKind::Temp:
-            return mix64(fnv1a("temp"),
+            return mix64(fnv1a_64("temp"),
                          (static_cast<u64>(v.temp) << 8) | v.version);
         case IrValueKind::Flag:
-            return mix64(fnv1a("flag"),
+            return mix64(fnv1a_64("flag"),
                          (static_cast<u64>(v.flag) << 8) | v.version);
         default:
             return 0;
@@ -215,12 +201,12 @@ public:
 
 [[nodiscard]] u64 addr_class_hash(const Binary& bin, addr_t a) noexcept {
     if (const auto* imp = bin.import_at_plt(a); imp && !imp->name.empty())
-        return mix64(fnv1a("plt"), fnv1a(imp->name));
+        return mix64(fnv1a_64("plt"), fnv1a_64(imp->name));
     if (const auto* imp = bin.import_at_got(a); imp && !imp->name.empty())
-        return mix64(fnv1a("got"), fnv1a(imp->name));
+        return mix64(fnv1a_64("got"), fnv1a_64(imp->name));
     if (const auto* sym = bin.defined_object_at(a); sym && !sym->name.empty())
-        return mix64(fnv1a("sym"), fnv1a(sym->name));
-    return fnv1a("addr");
+        return mix64(fnv1a_64("sym"), fnv1a_64(sym->name));
+    return fnv1a_64("addr");
 }
 
 // ---- Memory model --------------------------------------------------------
@@ -292,7 +278,7 @@ struct Trace {
             // would abort 95% of traces on stripped fns; synthesize a
             // deterministic-by-identity value instead and cache it so
             // subsequent reads of the same key see the same value.
-            const u64 synth = mix64(fnv1a("synth"), k);
+            const u64 synth = mix64(fnv1a_64("synth"), k);
             values[k] = synth;
             return synth;
         }
@@ -321,7 +307,7 @@ struct Trace {
 // src-count or operand-kind mismatches.
 [[nodiscard]] inline bool synth_dst(Trace& t, const IrInst& inst) {
     if (inst.dst.kind == IrValueKind::None) return true;
-    u64 h = mix64(fnv1a("synth-dst"), static_cast<u64>(inst.op));
+    u64 h = mix64(fnv1a_64("synth-dst"), static_cast<u64>(inst.op));
     for (u8 i = 0; i < inst.src_count; ++i) {
         const auto v = t.get(inst.srcs[i]);
         if (v) h = mix64(h, *v);
@@ -456,7 +442,7 @@ struct Trace {
     const unsigned w = (type_bits(inst.srcs[1].type) + 7) / 8;
     t.mem.store(*addr, *val, w == 0 ? 8 : w);
     // Side effect: hash (kind="store", addr_class, value).
-    u64 h = mix64(fnv1a("store"), *addr);
+    u64 h = mix64(fnv1a_64("store"), *addr);
     h = mix64(h, *val);
     t.side_effects.push_back(h);
     return true;
@@ -472,7 +458,7 @@ struct Trace {
         if (inst.src_count < 1) return synth_dst(t, inst);
         const auto t0 = t.get(inst.srcs[0]);
         if (!t0) return synth_dst(t, inst);
-        tgt = mix64(fnv1a("ind-call"), *t0);
+        tgt = mix64(fnv1a_64("ind-call"), *t0);
     } else {
         tgt = addr_class_hash(t.bin, inst.target1);
     }
@@ -489,7 +475,7 @@ struct Trace {
         if (v) args.push_back(*v);
     }
     std::sort(args.begin(), args.end());
-    u64 h = mix64(fnv1a("call"), tgt);
+    u64 h = mix64(fnv1a_64("call"), tgt);
     for (u64 a : args) h = mix64(h, a);
     t.side_effects.push_back(h);
     // Synthetic return value: deterministic hash of the call signature.
@@ -715,7 +701,7 @@ struct Trace {
         // outright; signal the budget cap into a side-effect so two
         // traces that bottomed out at the same place still produce a
         // stable hash, and stop processing this insn.
-        t.side_effects.push_back(fnv1a("trace-budget"));
+        t.side_effects.push_back(fnv1a_64("trace-budget"));
         t.aborted = true;     // forces the block walker to exit
         return true;
     }
@@ -769,7 +755,7 @@ struct Trace {
             // aborting on missing-bind.
             if (inst.dst.kind != IrValueKind::None) {
                 const u64 k = value_key(inst.dst);
-                t.set(inst.dst, mix64(fnv1a("clobber"), k));
+                t.set(inst.dst, mix64(fnv1a_64("clobber"), k));
             }
             return true;
         case IrOp::Intrinsic:
@@ -783,8 +769,8 @@ struct Trace {
             // emits to stash arg regs before a call) just no-op here.
             if (inst.dst.kind != IrValueKind::None) {
                 if (try_semantic_intrinsic(t, inst)) return true;
-                u64 h = mix64(fnv1a("intr"),
-                              inst.name.empty() ? 0 : fnv1a(inst.name));
+                u64 h = mix64(fnv1a_64("intr"),
+                              inst.name.empty() ? 0 : fnv1a_64(inst.name));
                 for (u8 i = 0; i < inst.src_count; ++i) {
                     const auto v = t.get(inst.srcs[i]);
                     if (v) h = mix64(h, *v);
@@ -808,7 +794,7 @@ struct Trace {
     // (e.g. AddCarry on i128) that we don't model precisely; aborting
     // each one would kill behavioural fingerprinting on most fns.
     if (inst.dst.kind != IrValueKind::None) {
-        u64 h = mix64(fnv1a("unk-op"), static_cast<u64>(inst.op));
+        u64 h = mix64(fnv1a_64("unk-op"), static_cast<u64>(inst.op));
         for (u8 i = 0; i < inst.src_count; ++i) {
             const auto v = t.get(inst.srcs[i]);
             if (v) h = mix64(h, *v);
@@ -827,7 +813,7 @@ struct Trace {
 
 // Seed the argument registers into the trace's value map.
 // Called once per trace after reset().
-static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
+void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
     // SysV ABI argument registers (seven incoming integer slots: rdi rsi
     // rdx rcx r8 r9 + return rax pre-init to 0). The lifter exposes
     // these as Reg::* with version=0.
@@ -991,14 +977,14 @@ static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
                     }
                 }
                 // No metadata or unresolved: emit a side-effect and exit.
-                t.side_effects.push_back(mix64(fnv1a("ind-br"), cur));
+                t.side_effects.push_back(mix64(fnv1a_64("ind-br"), cur));
                 returned = true;
                 break;
             }
             case IrOp::Unreachable: {
                 // Trap intrinsic / unreachable - record as a side-effect
                 // and exit cleanly so the trace contributes a hash.
-                t.side_effects.push_back(fnv1a("unreachable"));
+                t.side_effects.push_back(fnv1a_64("unreachable"));
                 returned = true;
                 break;
             }
@@ -1012,10 +998,10 @@ static void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
     t.side_effects.erase(
         std::unique(t.side_effects.begin(), t.side_effects.end()),
         t.side_effects.end());
-    u64 sx = fnv1a("se");
+    u64 sx = fnv1a_64("se");
     for (u64 e : t.side_effects) sx = mix64(sx, e);
 
-    u64 outcome = mix64(fnv1a(kBehavSchema), input_seed);
+    u64 outcome = mix64(fnv1a_64(kBehavSchema), input_seed);
     outcome = mix64(outcome, ret_value);
     outcome = mix64(outcome, sx);
     return outcome;
@@ -1058,7 +1044,7 @@ minhash8(const std::vector<u64>& xs) noexcept {
     std::array<u64, 8> mh;
     mh.fill(std::numeric_limits<u64>::max());
     if (xs.empty()) return mh;
-    const u64 schemaSalt = fnv1a(kBehavSchema);
+    const u64 schemaSalt = fnv1a_64(kBehavSchema);
     for (u64 x : xs) {
         for (std::size_t k = 0; k < 8; ++k) {
             const u64 hk = mix64(x, schemaSalt + k * 0x9e3779b97f4a7c15ULL);
@@ -1069,7 +1055,7 @@ minhash8(const std::vector<u64>& xs) noexcept {
 }
 
 [[nodiscard]] u64 multiset_hash(const std::vector<u64>& xs) noexcept {
-    u64 h = fnv1a(kBehavSchema);
+    u64 h = fnv1a_64(kBehavSchema);
     for (u64 x : xs) h = mix64(h, x);
     return h;
 }
@@ -1130,16 +1116,6 @@ BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start) {
     if (auto rv = ssa.convert(*ir_r); !rv) return {};
     if (auto rv = run_cleanup(*ir_r); !rv) return {};
     return compute_behav_sig_from_ir(*ir_r, bin);
-}
-
-float behav_jaccard(const BehavSig& a, const BehavSig& b) noexcept {
-    if (a.exact_hash == 0 || b.exact_hash == 0) return 0.0f;
-    if (a.exact_hash == b.exact_hash) return 1.0f;
-    int eq = 0;
-    for (std::size_t i = 0; i < 8; ++i) {
-        if (a.minhash[i] == b.minhash[i]) ++eq;
-    }
-    return static_cast<float>(eq) / 8.0f;
 }
 
 }  // namespace ember

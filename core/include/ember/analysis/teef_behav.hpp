@@ -66,6 +66,4 @@ struct BehavSig {
 [[nodiscard]] BehavSig
 compute_behav_sig_from_ir(const IrFunction& fn, const Binary& bin);
 
-[[nodiscard]] float behav_jaccard(const BehavSig& a, const BehavSig& b) noexcept;
-
 }  // namespace ember

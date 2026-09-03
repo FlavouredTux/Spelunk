@@ -1,16 +1,26 @@
 #include <ember/analysis/teef_recognize.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <ios>
+#include <optional>
+#include <ratio>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+
+#include <ember/common/types.hpp>
 
 #if defined(_WIN32)
 #include <cstdio>
@@ -23,7 +33,6 @@
 #endif
 
 #include <ember/analysis/teef.hpp>
-#include <ember/common/progress.hpp>
 
 namespace ember {
 
@@ -89,28 +98,8 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
     return static_cast<float>(eq) / 8.0f;
 }
 
-// "Correct but useless" name classes - drop glue, panic forwarders,
-// and fmt trait impls. These are real Rust functions present in
-// every binary, with structurally-trivial bodies that collide with
-// thousands of unrelated user fns. A single-collision lookup here
-// would otherwise emit confidence 1.0 with a meaningless type label
-// (e.g. labeling a query as `core::ptr::drop_in_place::<HashMap<K,V>>`
-// just because it happens to be a 4-instruction free-and-return).
-// Cap the confidence so the match still surfaces for human review
-// but doesn't auto-promote at the typical 0.85 cascade threshold.
-//
-// C++ has the same class via Itanium-mangled `_ZN_..._D[012]Ev`
-// destructors and `__cxa_*` runtime forwarders; treated together
-// since the symptom and remedy are identical.
-// gcc partition-variant suffixes - fragments of real fns, never
-// independent labels worth surfacing. Cold halves all share a
-// "load string + call printf + abort" shape and chunk-vote-collide
-// against arbitrary library functions; .isra/.constprop/.part are
-// IPA clones whose body diverged enough to be a different fingerprint
-// but whose name still claims to be the parent. Drop both kinds at
-// corpus load time so existing TSVs (built before the corpus-emit
-// filter shipped) get the FP suppression for free, no re-fingerprint
-// required.
+// gcc clone suffixes are fragments, not labels (the CLI filters them
+// at corpus emit); dropping them here covers TSVs built before that.
 [[nodiscard]] bool is_compiler_partition_variant(std::string_view nm) noexcept {
     if (nm.find(".cold")      != std::string_view::npos) return true;
     if (nm.find(".isra")      != std::string_view::npos) return true;
@@ -120,6 +109,11 @@ jaccard_minhash(const std::array<u64, 8>& a, const std::array<u64, 8>& b) noexce
     return false;
 }
 
+// Names that are correct but useless as labels: Rust drop glue, panic
+// forwarders and fmt trait impls, Itanium destructors and __cxa_*
+// forwarders. Their bodies are trivial and collide with thousands of
+// unrelated fns, so a match is capped below the 0.85 auto-promote
+// threshold instead of reported at 1.0.
 [[nodiscard]] bool is_boilerplate_label(std::string_view nm) noexcept {
     // Match raw identifier substrings that appear in all three name
     // forms a real Rust binary will throw at us:
@@ -680,7 +674,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
             e.l4_minhash = f.l4_mh;
             e.topo_hash   = f.topo_hash;
             e.prefix_hash = f.prefix_hash;
-            whole_by_name_.push_back(std::move(e));
+            whole_by_name_.push_back(e);
             const auto& we = whole_by_name_[idx];
             if (we.exact_hash != 0) {
                 whole_exact_.emplace(we.exact_hash, idx);
@@ -798,22 +792,40 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     return rows;
 }
 
-std::vector<TeefMatch>
-TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
-                      std::string_view query_runtime) const {
-    if (query.whole.exact_hash == 0) return {};
+namespace {
 
-    // Anti-corpus short-circuit. Queries whose L2/L4/prefix hash
-    // matches any blocked entry are structurally-identifiable junk
-    // (UPX prologues, packer trampolines, CRT bootloaders) - surface
-    // nothing rather than letting the cascade emit a misleading
-    // confident label from a coincidentally-shaped corpus entry.
-    // Cheap: three unordered_set lookups, all O(1).
-    if (blocked_l2_.contains(query.whole.exact_hash))           return {};
-    if (query.behav.exact_hash != 0 &&
-        blocked_l4_.contains(query.behav.exact_hash))           return {};
-    if (query.prefix_hash != 0 &&
-        blocked_prefix_.contains(query.prefix_hash))            return {};
+// Exact-tier verdict. A unique name is reported at `cap`; several names
+// share the confidence evenly and the via gets a "-tied" suffix. Empty
+// input means "no verdict, fall through to the next tier".
+[[nodiscard]] std::vector<TeefMatch>
+exact_tier_matches(std::vector<std::string> names, float cap,
+                   std::string_view via, std::size_t top_k) {
+    auto capped = [&](float raw, std::string_view nm) {
+        float c = std::min(raw, cap);
+        if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
+        return c;
+    };
+    if (names.size() == 1) {
+        return { TeefMatch{names[0], capped(1.0f, names[0]), std::string(via), 0} };
+    }
+    std::vector<TeefMatch> out;
+    const float base = 1.0f / static_cast<float>(names.size());
+    for (auto& nm : names) {
+        const float conf = capped(base, nm);
+        out.push_back(TeefMatch{std::move(nm), conf, std::string(via) + "-tied", 0});
+        if (out.size() >= top_k) break;
+    }
+    return out;
+}
+
+}  // namespace
+
+struct TeefCorpus::RecognizeQuery {
+    const TeefFunction& query;
+    std::string_view    runtime;
+    std::size_t         top_k;
+    bool                has_l4;           // query carries a behavioural sketch
+    bool                hash_too_common;  // L2 hash shared by > kMaxWholeBucket corpus rows
 
     // String-anchor disqualifier. If the query AND the candidate both
     // have ≥2 identifying strings and they share zero hashes, the
@@ -823,8 +835,8 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // false ⇒ "ditch it." Conservative - when either side has < 2
     // strings (small fns, EH cleanup, anonymous helpers), the filter
     // is bypassed and structural match is the sole signal as before.
-    const auto& qs = query.string_hashes;
-    auto strings_compatible = [&](const SmallStringHashes& cs) -> bool {
+    [[nodiscard]] bool strings_compatible(const SmallStringHashes& cs) const noexcept {
+        const auto& qs = query.string_hashes;
         // Query has no string evidence (anonymous helper, EH cleanup, pure
         // arithmetic) → can't filter, structural match is the sole signal.
         if (qs.empty()) return true;
@@ -841,371 +853,298 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             }
         }
         return false;
-    };
+    }
 
     // L4 (behavioural) jaccard helper - used both as the primary path
     // when query has an L4 sketch and as a verifier on top of the L2
     // whole-jaccard path. Returns 0.0 if either side has no L4 sketch.
-    const bool query_has_l4 = (query.behav.exact_hash != 0);
-    auto l4_jaccard_with = [&](const WholeEntry& we) -> float {
-        if (!query_has_l4 || we.l4_exact == 0) return 0.0f;
+    [[nodiscard]] float l4_jaccard_with(const WholeEntry& we) const noexcept {
+        if (!has_l4 || we.l4_exact == 0) return 0.0f;
         if (we.l4_exact == query.behav.exact_hash) return 1.0f;
         int eq = 0;
         for (std::size_t k = 0; k < 8; ++k) {
             if (we.l4_minhash[k] == query.behav.minhash[k]) ++eq;
         }
         return static_cast<float>(eq) / 8.0f;
+    }
+};
+
+// Anti-corpus short-circuit. Queries whose L2/L4/prefix hash
+// matches any blocked entry are structurally-identifiable junk
+// (UPX prologues, packer trampolines, CRT bootloaders) - surface
+// nothing rather than letting the cascade emit a misleading
+// confident label from a coincidentally-shaped corpus entry.
+// Cheap: three unordered_set lookups, all O(1).
+bool TeefCorpus::query_blocked(const TeefFunction& query) const noexcept {
+    if (blocked_l2_.contains(query.whole.exact_hash)) return true;
+    if (query.behav.exact_hash != 0 &&
+        blocked_l4_.contains(query.behav.exact_hash)) return true;
+    return query.prefix_hash != 0 && blocked_prefix_.contains(query.prefix_hash);
+}
+
+// L1: byte-prefix exact match for tiny fns (<= 16 insns / 64 bytes),
+// where the L2 token bag and the L4 trace multiset both collapse to a
+// couple of values. The raw prefix keeps register identity and small
+// immediates, which is what FLIRT gets right at this size. Same
+// popularity guard as whole-exact: a prefix shared by many corpus fns
+// is a generic stub, not an identity.
+std::vector<TeefMatch>
+TeefCorpus::match_prefix_exact(const RecognizeQuery& rq) const {
+    constexpr std::size_t kMaxPrefixBucket = 4;
+    if (rq.query.prefix_hash == 0) return {};
+    // Distinct-name count instead of raw bucket - see the comment on
+    // whole_prefix_distinct_ for why.
+    auto dn = whole_prefix_distinct_.find(rq.query.prefix_hash);
+    const std::size_t names_n = (dn == whole_prefix_distinct_.end())
+        ? 0u : dn->second;
+    const std::size_t bucket = whole_prefix_.count(rq.query.prefix_hash);
+    if (names_n > 0 && names_n <= kMaxPrefixBucket && bucket > 0) {
+        auto [lo, hi] = whole_prefix_.equal_range(rq.query.prefix_hash);
+        std::unordered_set<std::string> distinct;
+        std::vector<std::string> ordered;
+        for (auto it = lo; it != hi; ++it) {
+            const auto& we = whole_by_name_[it->second];
+            if (!runtime_compatible(rq.runtime, interned(we.runtime_id))) continue;
+            if (!rq.strings_compatible(we.string_hashes)) continue;
+            const auto name = interned(we.name_id);
+            if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
+        }
+        // Confidence floor for prefix-exact when the query has no
+        // string evidence. Anonymous helpers (no strings) hitting a
+        // single corpus prefix-exact target previously emitted 1.0 -
+        // for a 3-instruction stub that's overconfident: the corpus
+        // entry could be from any unrelated codebase that happens to
+        // share the same byte prefix. Cap at 0.7 so the match still
+        // surfaces for review but won't auto-promote at the typical
+        // 0.85 cascade threshold. Queries WITH strings already
+        // require an overlap in strings_compatible above.
+        const float zero_string_cap =
+            rq.query.string_hashes.empty() ? 0.7f : 1.0f;
+        return exact_tier_matches(std::move(ordered), zero_string_cap,
+                                  "prefix-exact", rq.top_k);
+    }
+    return {};
+}
+
+// ---- Behavioural exact match (highest precision) ----
+// L4 collisions are 64-trace I/O-multiset hashes; an accidental
+// collision between two semantically-distinct functions is
+// vanishingly rare. Same boilerplate guard as L2 - if the L4 hash
+// is shared by many corpus rows it's a "trivial-shape behaviour"
+// (return-zero, identity stub) and a single canonical name
+// shouldn't be surfaced. kMaxL4Bucket is tighter than the L2
+// counterpart since L4 collisions on substantive code are very
+// unusual.
+std::vector<TeefMatch>
+TeefCorpus::match_behav_exact(const RecognizeQuery& rq) const {
+    constexpr std::size_t kMaxL4Bucket = 4;
+    if (!rq.has_l4) return {};
+    // Distinct-name count: 50 corpus versions of `memcpy` should
+    // collapse to 1 distinct name, not trip the boilerplate floor.
+    auto dn = whole_l4_distinct_.find(rq.query.behav.exact_hash);
+    const std::size_t names_n = (dn == whole_l4_distinct_.end())
+        ? 0u : dn->second;
+    const std::size_t bucket = whole_l4_exact_.count(rq.query.behav.exact_hash);
+    if (names_n > 0 && names_n <= kMaxL4Bucket && bucket > 0) {
+        auto [it_lo, it_hi] = whole_l4_exact_.equal_range(rq.query.behav.exact_hash);
+        std::unordered_set<std::string> distinct;
+        std::vector<std::string> ordered;
+        // Track best L2 minhash jaccard across the L4-colliding
+        // candidates. K=64 traces on small / low-entropy fns can
+        // collide spuriously across semantically-unrelated fns
+        // whose I/O arity happens to match. Adapt the corroboration
+        // floor to the QUERY's L2 minhash entropy: a query with
+        // many duplicate minhash slot values has a degenerate
+        // canonical token stream and even high-jaccard L2 agreement
+        // is suspect for small wrappers. Tighten the floor when
+        // entropy is low.
+        auto minhash_unique_slots = [](const std::array<u64, 8>& mh) -> int {
+            std::array<u64, 8> sorted = mh;
+            std::sort(sorted.begin(), sorted.end());
+            return static_cast<int>(
+                std::unique(sorted.begin(), sorted.end()) - sorted.begin());
+        };
+        const int q_entropy = minhash_unique_slots(rq.query.whole.minhash);
+        // Empirical floors: full-entropy (8 unique slots) → 0.25
+        // catches genuine cross-compiler matches; ≤4 unique slots
+        // → 0.625 (5/8 agree) demands stronger structural overlap
+        // because both K=64 trace AND minhash collapse on small
+        // wrapper fns.
+        const float l2_floor = (q_entropy <= 4) ? 0.625f : 0.25f;
+        float best_l2j = 0.0f;
+        // Topology agreement: a third orthogonal signal. Same
+        // source across compiler versions produces the same
+        // high-level CFG (block/edge/return/loop counts), so
+        // same topo_hash. Spurious L4 collisions across
+        // semantically-unrelated fns produce different CFGs and
+        // different topo hashes. Only apply when both sides
+        // actually have a non-zero topo (build_teef_tsv emits 0
+        // for fns whose CFG signal is unreliable).
+        bool topo_disagrees = false;
+        for (auto it = it_lo; it != it_hi; ++it) {
+            const auto& we = whole_by_name_[it->second];
+            if (!runtime_compatible(rq.runtime, interned(we.runtime_id))) continue;
+            if (!rq.strings_compatible(we.string_hashes)) continue;
+            const float l2j = jaccard_minhash(rq.query.whole.minhash, we.minhash);
+            if (l2j > best_l2j) best_l2j = l2j;
+            if (rq.query.topo_hash != 0 && we.topo_hash != 0 &&
+                rq.query.topo_hash != we.topo_hash) {
+                topo_disagrees = true;
+            }
+            const auto name = interned(we.name_id);
+            if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
+        }
+        const float l2_cap =
+            (best_l2j >= l2_floor && !topo_disagrees) ? 1.0f : 0.7f;
+        return exact_tier_matches(std::move(ordered), l2_cap,
+                                  "behav-exact", rq.top_k);
+    }
+    return {};
+}
+
+// L2: whole-function exact match. One corpus name is the answer;
+// several are emitted as tied low-confidence candidates. A hash shared
+// by many corpus rows (a one-instruction stub hundreds of fns reduce
+// to) is skipped even when it maps to a single name; chunk vote
+// demands more evidence.
+std::vector<TeefMatch>
+TeefCorpus::match_whole_exact(const RecognizeQuery& rq) const {
+    // Distinct-name guard: same bug pattern as L4/prefix. The
+    // rq.hash_too_common check above stays - it counts ALL F rows
+    // (including sub_*) and detects "this L2 hash is a generic
+    // shape that many trivial stubs share," which is a different
+    // signal than the named-fn replication we're fixing here.
+    auto dn = whole_exact_distinct_.find(rq.query.whole.exact_hash);
+    const std::size_t names_n = (dn == whole_exact_distinct_.end())
+        ? 0u : dn->second;
+    const std::size_t bucket = whole_exact_.count(rq.query.whole.exact_hash);
+    if (!rq.hash_too_common && names_n > 0 && names_n <= kMaxWholeBucket && bucket > 0) {
+        auto [it_lo, it_hi] = whole_exact_.equal_range(rq.query.whole.exact_hash);
+        std::unordered_set<std::string> distinct;
+        std::vector<std::string> ordered;
+        for (auto it = it_lo; it != it_hi; ++it) {
+            const auto& we = whole_by_name_[it->second];
+            if (!runtime_compatible(rq.runtime, interned(we.runtime_id))) continue;
+            if (!rq.strings_compatible(we.string_hashes)) continue;
+            const auto name = interned(we.name_id);
+            if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
+        }
+        // Thin-evidence cap: pure-structural L2 collision with no
+        // string anchor and no behavioural corroboration is the FP
+        // class for Rust generic helpers (e.g. small `impl<T>` fns
+        // whose canonical token stream collides across types). The
+        // match still surfaces but doesn't auto-promote at 0.85.
+        // Mirrors the prefix-exact zero_string_cap.
+        const float thin_cap = (rq.query.string_hashes.empty() && !rq.has_l4) ? 0.7f : 1.0f;
+        return exact_tier_matches(std::move(ordered), thin_cap,
+                                  "whole-exact", rq.top_k);
+    }
+    return {};
+}
+
+// L2 jaccard narrows, L4 re-ranks. With an L4 sketch the score is
+// 0.5*L2 + 0.5*L4 against a 0.6 bar and 0.20 margin; without one (the
+// interpreter aborted) it is pure L2 against 0.875 and 0.25. The
+// topology bucket is scanned when the MinHash index yields nothing
+// confident.
+std::vector<TeefMatch>
+TeefCorpus::match_whole_jaccard(const RecognizeQuery& rq) const {
+    if (rq.hash_too_common) return {};
+    // Per-candidate scorer + verdict, shared by the topo-bucket
+    // and full-scan paths.
+    struct ScanState {
+        std::string best_name;     float best_combined  = 0.0f;
+        std::string second_name;   float second_combined = 0.0f;
+        bool        best_has_l4 = false;
+    };
+    auto score_entry = [&](const WholeEntry& e, ScanState& s) {
+        if (e.exact_hash == 0) return;
+        if (!runtime_compatible(rq.runtime, interned(e.runtime_id))) return;
+        if (!rq.strings_compatible(e.string_hashes)) return;
+        const float l2j = jaccard_minhash(rq.query.whole.minhash, e.minhash);
+        const float l4j = rq.l4_jaccard_with(e);
+        const bool has_l4 = (rq.has_l4 && e.l4_exact != 0);
+        const float combined = has_l4 ? (0.5f * l2j + 0.5f * l4j) : l2j;
+        if (combined > s.best_combined) {
+            s.second_combined = s.best_combined;
+            s.second_name     = std::move(s.best_name);
+            s.best_combined   = combined;
+            s.best_name       = std::string(interned(e.name_id));
+            s.best_has_l4     = has_l4;
+        } else if (combined > s.second_combined) {
+            s.second_combined = combined;
+            s.second_name     = std::string(interned(e.name_id));
+        }
+    };
+    auto verdict = [&](ScanState& s) -> std::optional<TeefMatch> {
+        const float bar    = s.best_has_l4 ? 0.6f  : 0.875f;
+        const float margin = s.best_has_l4 ? 0.20f : 0.25f;
+        if (s.best_combined < bar) return std::nullopt;
+        if ((s.best_combined - s.second_combined) < margin) return std::nullopt;
+        const std::string via = s.best_has_l4 ? "whole-jaccard+behav" : "whole-jaccard";
+        float conf = s.best_combined;
+        if (is_boilerplate_label(s.best_name)) conf = std::min(conf, 0.7f);
+        return TeefMatch{std::move(s.best_name), conf, via, 0};
     };
 
-    // ---- L1 byte-prefix exact match (tiny-fn fast path) ----
-    // For functions ≤ 16 insns / ≤ 64 bytes, L2 cleanup-canonical
-    // collapses to a 2-3 token bag (every getter / thunk hashes alike)
-    // and L4 K=64 traces collapse to a 1-2 outcome multiset (every
-    // identity stub matches everything). The byte prefix preserves
-    // register identity and small immediates verbatim - that's what
-    // FLIRT's literal byte-pattern model gets right at this size, and
-    // we replicate it here as a discrete tier above the structural
-    // ones. Same popularity guard as whole-exact: a prefix shared by
-    // many corpus fns is a generic stub shape, not an identity.
-    constexpr std::size_t kMaxPrefixBucket = 4;
-    if (query.prefix_hash != 0) {
-        // Distinct-name count instead of raw bucket - see the comment on
-        // whole_prefix_distinct_ for why.
-        auto dn = whole_prefix_distinct_.find(query.prefix_hash);
-        const std::size_t names_n = (dn == whole_prefix_distinct_.end())
-            ? 0u : dn->second;
-        const std::size_t bucket = whole_prefix_.count(query.prefix_hash);
-        if (names_n > 0 && names_n <= kMaxPrefixBucket && bucket > 0) {
-            auto [lo, hi] = whole_prefix_.equal_range(query.prefix_hash);
-            std::unordered_set<std::string> distinct;
-            std::vector<std::string> ordered;
-            for (auto it = lo; it != hi; ++it) {
-                const auto& we = whole_by_name_[it->second];
-                if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
-                if (!strings_compatible(we.string_hashes)) continue;
-                const auto name = interned(we.name_id);
-                if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
-            }
-            // Confidence floor for prefix-exact when the query has no
-            // string evidence. Anonymous helpers (no strings) hitting a
-            // single corpus prefix-exact target previously emitted 1.0 -
-            // for a 3-instruction stub that's overconfident: the corpus
-            // entry could be from any unrelated codebase that happens to
-            // share the same byte prefix. Cap at 0.7 so the match still
-            // surfaces for review but won't auto-promote at the typical
-            // 0.85 cascade threshold. Queries WITH strings already
-            // require an overlap in strings_compatible above.
-            const float zero_string_cap =
-                qs.empty() ? 0.7f : 1.0f;
-            auto cap_for = [&](float raw, std::string_view nm) {
-                float c = std::min(raw, zero_string_cap);
-                if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
-                return c;
-            };
-            if (ordered.size() == 1) {
-                return { TeefMatch{ordered[0],
-                                   cap_for(1.0f, ordered[0]),
-                                   "prefix-exact", 0} };
-            }
-            if (!ordered.empty()) {
-                std::vector<TeefMatch> out;
-                const float base = 1.0f / static_cast<float>(ordered.size());
-                for (auto& nm : ordered) {
-                    const float conf = cap_for(base, nm);
-                    out.push_back(TeefMatch{std::move(nm), conf, "prefix-exact-tied", 0});
-                    if (out.size() >= top_k) break;
-                }
-                return out;
-            }
+    // Stage 1: L2 MinHash inverted index. Entries hit by at least
+    // kMinSlotHits of the query's 8 slot values have an estimated
+    // jaccard >= kMinSlotHits/8 and are the only ones scored. Slot
+    // buckets larger than EMBER_TEEF_MAX_SLOT_BUCKET are boilerplate
+    // and skipped. 2/8 keeps L4-rescued candidates: weak L2 (0.25)
+    // with L4 = 1.0 scores 0.625, above the 0.6 bar; 3/8 lost 4/361
+    // matches on the probe2 matrix.
+    constexpr u8 kMinSlotHits = 2;     // estimate jaccard ≥ 2/8 = 0.25
+    static const std::size_t kMaxSlotBucket = []() -> std::size_t {
+        if (const char* s = std::getenv("EMBER_TEEF_MAX_SLOT_BUCKET")) {
+            try { return static_cast<std::size_t>(std::stoull(s)); }
+            catch (...) { /* fall through */ }
         }
-    }
-
-    // ---- Behavioural exact match (highest precision) ----
-    // L4 collisions are 64-trace I/O-multiset hashes; an accidental
-    // collision between two semantically-distinct functions is
-    // vanishingly rare. Same boilerplate guard as L2 - if the L4 hash
-    // is shared by many corpus rows it's a "trivial-shape behaviour"
-    // (return-zero, identity stub) and a single canonical name
-    // shouldn't be surfaced. kMaxL4Bucket is tighter than the L2
-    // counterpart since L4 collisions on substantive code are very
-    // unusual.
-    constexpr std::size_t kMaxL4Bucket = 4;
-    if (query_has_l4) {
-        // Distinct-name count: 50 corpus versions of `memcpy` should
-        // collapse to 1 distinct name, not trip the boilerplate floor.
-        auto dn = whole_l4_distinct_.find(query.behav.exact_hash);
-        const std::size_t names_n = (dn == whole_l4_distinct_.end())
-            ? 0u : dn->second;
-        const std::size_t bucket = whole_l4_exact_.count(query.behav.exact_hash);
-        if (names_n > 0 && names_n <= kMaxL4Bucket && bucket > 0) {
-            auto [it_lo, it_hi] = whole_l4_exact_.equal_range(query.behav.exact_hash);
-            std::unordered_set<std::string> distinct;
-            std::vector<std::string> ordered;
-            // Track best L2 minhash jaccard across the L4-colliding
-            // candidates. K=64 traces on small / low-entropy fns can
-            // collide spuriously across semantically-unrelated fns
-            // whose I/O arity happens to match. Adapt the corroboration
-            // floor to the QUERY's L2 minhash entropy: a query with
-            // many duplicate minhash slot values has a degenerate
-            // canonical token stream and even high-jaccard L2 agreement
-            // is suspect for small wrappers. Tighten the floor when
-            // entropy is low.
-            auto minhash_unique_slots = [](const std::array<u64, 8>& mh) -> int {
-                std::array<u64, 8> sorted = mh;
-                std::sort(sorted.begin(), sorted.end());
-                return static_cast<int>(
-                    std::unique(sorted.begin(), sorted.end()) - sorted.begin());
-            };
-            const int q_entropy = minhash_unique_slots(query.whole.minhash);
-            // Empirical floors: full-entropy (8 unique slots) → 0.25
-            // catches genuine cross-compiler matches; ≤4 unique slots
-            // → 0.625 (5/8 agree) demands stronger structural overlap
-            // because both K=64 trace AND minhash collapse on small
-            // wrapper fns.
-            const float l2_floor = (q_entropy <= 4) ? 0.625f : 0.25f;
-            float best_l2j = 0.0f;
-            // Topology agreement: a third orthogonal signal. Same
-            // source across compiler versions produces the same
-            // high-level CFG (block/edge/return/loop counts), so
-            // same topo_hash. Spurious L4 collisions across
-            // semantically-unrelated fns produce different CFGs and
-            // different topo hashes. Only apply when both sides
-            // actually have a non-zero topo (build_teef_tsv emits 0
-            // for fns whose CFG signal is unreliable).
-            bool topo_disagrees = false;
-            for (auto it = it_lo; it != it_hi; ++it) {
-                const auto& we = whole_by_name_[it->second];
-                if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
-                if (!strings_compatible(we.string_hashes)) continue;
-                const float l2j = jaccard_minhash(query.whole.minhash, we.minhash);
-                if (l2j > best_l2j) best_l2j = l2j;
-                if (query.topo_hash != 0 && we.topo_hash != 0 &&
-                    query.topo_hash != we.topo_hash) {
-                    topo_disagrees = true;
-                }
-                const auto name = interned(we.name_id);
-                if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
-            }
-            const float l2_cap =
-                (best_l2j >= l2_floor && !topo_disagrees) ? 1.0f : 0.7f;
-            auto cap_for = [&](float raw, std::string_view nm) {
-                float c = std::min(raw, l2_cap);
-                if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
-                return c;
-            };
-            if (ordered.size() == 1) {
-                return { TeefMatch{ordered[0], cap_for(1.0f, ordered[0]),
-                                   "behav-exact", 0} };
-            }
-            if (!ordered.empty()) {
-                std::vector<TeefMatch> out;
-                const float base = 1.0f / static_cast<float>(ordered.size());
-                for (auto& nm : ordered) {
-                    const float conf = cap_for(base, nm);
-                    out.push_back(TeefMatch{std::move(nm), conf, "behav-exact-tied", 0});
-                    if (out.size() >= top_k) break;
-                }
-                return out;
-            }
-        }
-    }
-
-    // Corpus-side gate: a hash shared by many corpus F rows (named
-    // OR sub_*) is a "common trivial shape" and a single canonical
-    // name shouldn't be surfaced as the unique answer. Caller-side
-    // gates (query-side popularity in particular) handle the
-    // complementary case where the unknown binary itself has many
-    // tiny functions hashing the same.
-    auto pop_it = whole_popularity_.find(query.whole.exact_hash);
-    const std::size_t hash_popularity = (pop_it == whole_popularity_.end())
-        ? 0u : pop_it->second;
-    const bool hash_too_common = hash_popularity > kMaxWholeBucket;
-
-    // ---- Whole-function exact match (highest precision) ----
-    // If the corpus has exactly one function with our query's hash,
-    // that's the answer. Multiple matches → ambiguous; emit the first
-    // few as low-confidence candidates.
-    //
-    // Boilerplate guard: if the corpus has MANY entries with this hash
-    // (e.g., a 1-instruction `xgetbv` stub that hundreds of trivial
-    // functions hash equivalent to), we can't trust whole-exact even
-    // if `distinct` size is 1 - the query is itself just a trivial
-    // stub that happens to match a popular name. Skip and fall through
-    // to chunk-vote, which requires substantive evidence.
+        return 5000;
+    }();
     {
-        // Distinct-name guard: same bug pattern as L4/prefix. The
-        // hash_too_common check above stays - it counts ALL F rows
-        // (including sub_*) and detects "this L2 hash is a generic
-        // shape that many trivial stubs share," which is a different
-        // signal than the named-fn replication we're fixing here.
-        auto dn = whole_exact_distinct_.find(query.whole.exact_hash);
-        const std::size_t names_n = (dn == whole_exact_distinct_.end())
-            ? 0u : dn->second;
-        const std::size_t bucket = whole_exact_.count(query.whole.exact_hash);
-        if (!hash_too_common && names_n > 0 && names_n <= kMaxWholeBucket && bucket > 0) {
-            auto [it_lo, it_hi] = whole_exact_.equal_range(query.whole.exact_hash);
-            std::unordered_set<std::string> distinct;
-            std::vector<std::string> ordered;
-            for (auto it = it_lo; it != it_hi; ++it) {
-                const auto& we = whole_by_name_[it->second];
-                if (!runtime_compatible(query_runtime, interned(we.runtime_id))) continue;
-                if (!strings_compatible(we.string_hashes)) continue;
-                const auto name = interned(we.name_id);
-                if (distinct.insert(std::string(name)).second) ordered.emplace_back(name);
-            }
-            // Thin-evidence cap: pure-structural L2 collision with no
-            // string anchor and no behavioural corroboration is the FP
-            // class for Rust generic helpers (e.g. small `impl<T>` fns
-            // whose canonical token stream collides across types). The
-            // match still surfaces but doesn't auto-promote at 0.85.
-            // Mirrors the prefix-exact zero_string_cap.
-            const float thin_cap = (qs.empty() && !query_has_l4) ? 0.7f : 1.0f;
-            auto cap_for = [&](float raw, std::string_view nm) {
-                float c = std::min(raw, thin_cap);
-                if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
-                return c;
-            };
-            if (ordered.size() == 1) {
-                return { TeefMatch{ordered[0], cap_for(1.0f, ordered[0]),
-                                   "whole-exact", 0} };
-            }
-            if (!ordered.empty()) {
-                std::vector<TeefMatch> out;
-                const float base = 1.0f / static_cast<float>(ordered.size());
-                for (auto& nm : ordered) {
-                    const float conf = cap_for(base, nm);
-                    out.push_back(TeefMatch{std::move(nm), conf, "whole-exact-tied", 0});
-                    if (out.size() >= top_k) break;
-                }
-                return out;
-            }
+        std::unordered_map<u32, u8> hits;
+        for (std::size_t k = 0; k < 8; ++k) {
+            const u64 v = rq.query.whole.minhash[k];
+            auto it = whole_minhash_[k].find(v);
+            if (it == whole_minhash_[k].end()) continue;
+            if (it->second.size() > kMaxSlotBucket) continue;
+            for (u32 idx : it->second) ++hits[idx];
         }
+        ScanState s;
+        for (const auto& [idx, count] : hits) {
+            if (count < kMinSlotHits) continue;
+            score_entry(whole_by_name_[idx], s);
+        }
+        if (auto m = verdict(s)) return { *m };
     }
 
-    // ---- Whole-function jaccard fallback ----
-    // CEBin-style two-stage: L2 whole-jaccard narrows candidates, then
-    // L4 re-ranks. When the query has an L4 sketch, the per-candidate
-    // score is 0.5·L2_jacc + 0.5·L4_jacc and the acceptance bar drops
-    // to 0.6 (with a 0.20 second-best margin) - behavioural agreement
-    // is much stronger evidence than structural similarity alone, so a
-    // weaker L2 with strong L4 backing is now trusted.
-    //
-    // L0 topo pre-filter: when the query has a topo_hash and the corpus
-    // has entries with the same topo, scan that bucket first. Most query
-    // fns have a unique topo collision in the corpus, so the bucket
-    // narrows the candidate set from O(corpus) to O(few). Falls through
-    // to a full scan if the bucket is empty or doesn't yield a
-    // confident enough match - pure perf optimization, never rejects
-    // a candidate.
-    //
-    // When the query has no L4 (the L4 interpreter aborted on this
-    // function - rare, but happens on pathological IR), the score
-    // collapses to pure L2 and the conservative thresholds (0.875 bar,
-    // 0.25 margin) apply.
-    if (!hash_too_common) {
-        // Per-candidate scorer + verdict, shared by the topo-bucket
-        // and full-scan paths.
-        struct ScanState {
-            std::string best_name;     float best_combined  = 0.0f;
-            std::string second_name;   float second_combined = 0.0f;
-            bool        best_has_l4 = false;
-        };
-        auto score_entry = [&](const WholeEntry& e, ScanState& s) {
-            if (e.exact_hash == 0) return;
-            if (!runtime_compatible(query_runtime, interned(e.runtime_id))) return;
-            if (!strings_compatible(e.string_hashes)) return;
-            const float l2j = jaccard_minhash(query.whole.minhash, e.minhash);
-            const float l4j = l4_jaccard_with(e);
-            const bool has_l4 = (query_has_l4 && e.l4_exact != 0);
-            const float combined = has_l4 ? (0.5f * l2j + 0.5f * l4j) : l2j;
-            if (combined > s.best_combined) {
-                s.second_combined = s.best_combined;
-                s.second_name     = std::move(s.best_name);
-                s.best_combined   = combined;
-                s.best_name       = std::string(interned(e.name_id));
-                s.best_has_l4     = has_l4;
-            } else if (combined > s.second_combined) {
-                s.second_combined = combined;
-                s.second_name     = std::string(interned(e.name_id));
+    // Stage 2 - topo bucket fallback. Catches cases where slot
+    // collisions are too sparse to cross kMinSlotHits but the L0
+    // topology agrees (small fns where minhash entropy is low and
+    // jaccard estimates are noisy). Bounded - topo buckets are
+    // rarely huge.
+    if (rq.query.topo_hash != 0) {
+        auto [lo, hi] = whole_topo_.equal_range(rq.query.topo_hash);
+        if (lo != hi) {
+            ScanState s2;
+            for (auto it = lo; it != hi; ++it) {
+                score_entry(whole_by_name_[it->second], s2);
             }
-        };
-        auto verdict = [&](ScanState& s) -> std::optional<TeefMatch> {
-            const float bar    = s.best_has_l4 ? 0.6f  : 0.875f;
-            const float margin = s.best_has_l4 ? 0.20f : 0.25f;
-            if (s.best_combined < bar) return std::nullopt;
-            if ((s.best_combined - s.second_combined) < margin) return std::nullopt;
-            const std::string via = s.best_has_l4 ? "whole-jaccard+behav" : "whole-jaccard";
-            float conf = s.best_combined;
-            if (is_boilerplate_label(s.best_name)) conf = std::min(conf, 0.7f);
-            return TeefMatch{std::move(s.best_name), conf, via, 0};
-        };
-
-        // Stage 1 - L2 MinHash inverted index. The query's 8 slot
-        // values index into per-slot buckets of corpus entry idxs;
-        // entries appearing in ≥ kMinSlotHits buckets have a
-        // probabilistic L2 jaccard ≥ kMinSlotHits/8. Only those get
-        // scored. Cuts O(N) full-scan to O(slot_bucket × 8) per query
-        // - the difference between minutes and milliseconds on
-        // 100K-fn library corpora.
-        //
-        // EMBER_TEEF_MAX_SLOT_BUCKET caps the size of any single slot
-        // bucket we'll iterate; values shared by thousands of corpus
-        // entries are "popular trivial bits" (boilerplate stubs) that
-        // would dominate the candidate set without adding precision.
-        // Threshold of 2/8 lets L4-corroborated low-L2-jaccard candidates
-        // through: combined = 0.5·L2 + 0.5·L4, and a query with weak L2
-        // (≥0.25) but strong L4 (=1.0) gives combined ≈ 0.625 > 0.6 bar.
-        // Higher thresholds drop those L4-rescued matches in cross-config
-        // runs (verified: kMinSlotHits=3 lost 4/361 matches in the
-        // probe2 6-config matrix).
-        constexpr u8 kMinSlotHits = 2;     // estimate jaccard ≥ 2/8 = 0.25
-        static const std::size_t kMaxSlotBucket = []() -> std::size_t {
-            if (const char* s = std::getenv("EMBER_TEEF_MAX_SLOT_BUCKET")) {
-                try { return static_cast<std::size_t>(std::stoull(s)); }
-                catch (...) { /* fall through */ }
-            }
-            return 5000;
-        }();
-        {
-            std::unordered_map<u32, u8> hits;
-            for (std::size_t k = 0; k < 8; ++k) {
-                const u64 v = query.whole.minhash[k];
-                auto it = whole_minhash_[k].find(v);
-                if (it == whole_minhash_[k].end()) continue;
-                if (it->second.size() > kMaxSlotBucket) continue;
-                for (u32 idx : it->second) ++hits[idx];
-            }
-            ScanState s;
-            for (const auto& [idx, count] : hits) {
-                if (count < kMinSlotHits) continue;
-                score_entry(whole_by_name_[idx], s);
-            }
-            if (auto m = verdict(s)) return { *m };
-        }
-
-        // Stage 2 - topo bucket fallback. Catches cases where slot
-        // collisions are too sparse to cross kMinSlotHits but the L0
-        // topology agrees (small fns where minhash entropy is low and
-        // jaccard estimates are noisy). Bounded - topo buckets are
-        // rarely huge.
-        if (query.topo_hash != 0) {
-            auto [lo, hi] = whole_topo_.equal_range(query.topo_hash);
-            if (lo != hi) {
-                ScanState s2;
-                for (auto it = lo; it != hi; ++it) {
-                    score_entry(whole_by_name_[it->second], s2);
-                }
-                if (auto m = verdict(s2)) return { *m };
-            }
+            if (auto m = verdict(s2)) return { *m };
         }
     }
+    return {};
+}
 
-    // ---- Chunk vote ----
-    // Each query chunk that hits the corpus contributes its size to
-    // the candidate functions that contain that chunk (capped at
-    // kMaxChunkFns to avoid boilerplate noise).
+// ---- Chunk vote ----
+// Each query chunk that hits the corpus contributes its size to
+// the candidate functions that contain that chunk (capped at
+// kMaxChunkFns to avoid boilerplate noise).
+std::vector<TeefMatch>
+TeefCorpus::match_chunk_vote(const RecognizeQuery& rq) const {
     std::unordered_map<std::string, u64> votes;
-    for (const auto& ch : query.chunks) {
+    for (const auto& ch : rq.query.chunks) {
         if (ch.sig.exact_hash == 0) continue;
         auto it = chunk_index_.find(ch.sig.exact_hash);
         if (it == chunk_index_.end()) continue;
@@ -1218,38 +1157,25 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
             ? it->second.size() : dn->second;
         if (names_n > kMaxChunkFns) continue;
         for (const auto& ref : it->second) {
-            if (!runtime_compatible(query_runtime, interned(ref.runtime_id))) continue;
+            if (!runtime_compatible(rq.runtime, interned(ref.runtime_id))) continue;
             votes[std::string(interned(ref.name_id))] += ch.inst_count;
         }
     }
     if (votes.empty()) return {};
 
-    // String-anchor filter on chunk-vote candidates. The whole-exact
-    // and whole-jaccard paths already filter via strings_compatible
-    // on each WholeEntry. Chunk-vote operates on names, so we look
-    // up each candidate's parent fn via idx_by_name_ and apply the
-    // same filter. Skips when the parent has no string_hashes (the
-    // filter falls through automatically - strings_compatible
-    // returns true on empty corpus side).
-    // Two-tier filter:
-    //  - strings_compatible (lenient): empty corpus side passes;
-    //    same as whole-exact/whole-jaccard.
-    //  - structural-coincidence guard (strict, chunk-vote only):
-    //    if the query function has substantive strings (≥3) and the
-    //    candidate's parent fn has zero, the chunk-vote match is
-    //    structural coincidence (e.g. Wayland main hitting a
-    //    libstdc++ wide-char template). Drop. Cuts the
-    //    high-volume FP class without touching the recall lane -
-    //    most library fns with shared structure also share at
-    //    least some characteristic strings.
-    if (!qs.empty()) {
+    // String-anchor filter for chunk-vote candidates, applied to each
+    // candidate's parent fn. On top of strings_compatible, a query with
+    // >= 3 strings never matches a parent with none: that overlap is
+    // coincidence (a Wayland main hitting a libstdc++ wide-char
+    // template).
+    if (!rq.query.string_hashes.empty()) {
         for (auto it = votes.begin(); it != votes.end(); ) {
             auto nit = idx_by_name_.find(it->first);
             if (nit == idx_by_name_.end()) { ++it; continue; }
             const auto& we = whole_by_name_[nit->second];
             const bool drop =
-                !strings_compatible(we.string_hashes) ||
-                (qs.size() >= 3 && we.string_hashes.empty());
+                !rq.strings_compatible(we.string_hashes) ||
+                (rq.query.string_hashes.size() >= 3 && we.string_hashes.empty());
             if (drop) {
                 it = votes.erase(it);
             } else {
@@ -1272,11 +1198,11 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // suppresses *most* structural FPs, but it can't help when the
     // corpus parent has empty string_hashes; L4 fills exactly that gap.
     bool behav_agreed = false;
-    if (query_has_l4 && !ranked.empty()) {
+    if (rq.has_l4 && !ranked.empty()) {
         auto top_l4 = [&](const std::string& nm) -> float {
             auto it = idx_by_name_.find(nm);
             if (it == idx_by_name_.end()) return 0.0f;
-            return l4_jaccard_with(whole_by_name_[it->second]);
+            return rq.l4_jaccard_with(whole_by_name_[it->second]);
         };
         // Re-rank: combined = vote_norm + L4_jacc * top_vote_score.
         // Practical effect: among similar vote scores, prefer the
@@ -1314,7 +1240,7 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     }
 
     std::vector<TeefMatch> out;
-    out.reserve(top_k);
+    out.reserve(rq.top_k);
     const u64 top1 = ranked[0].second;
     const u64 top2 = ranked.size() > 1 ? ranked[1].second : 0;
     const float margin_raw = static_cast<float>(top1) /
@@ -1333,13 +1259,13 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     // doesn't auto-promote at 0.85. behav_agreed=true means L4
     // re-ranking confirmed the winner; that lifts the cap.
     const float thin_cap =
-        (qs.empty() && !behav_agreed) ? 0.7f : 1.0f;
+        (rq.query.string_hashes.empty() && !behav_agreed) ? 0.7f : 1.0f;
     auto cap_for = [&](float raw, std::string_view nm) {
         float c = std::min(raw, thin_cap);
         if (is_boilerplate_label(nm)) c = std::min(c, 0.7f);
         return c;
     };
-    for (std::size_t i = 0; i < ranked.size() && i < top_k; ++i) {
+    for (std::size_t i = 0; i < ranked.size() && i < rq.top_k; ++i) {
         TeefMatch m;
         m.name       = std::move(ranked[i].first);
         m.via        = std::string(via_tag);
@@ -1350,6 +1276,32 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
         out.push_back(std::move(m));
     }
     return out;
+}
+
+std::vector<TeefMatch>
+TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
+                      std::string_view query_runtime) const {
+    if (query.whole.exact_hash == 0) return {};
+    if (query_blocked(query)) return {};
+
+    // Corpus-side gate: a hash shared by many corpus F rows (named
+    // OR sub_*) is a "common trivial shape" and a single canonical
+    // name shouldn't be surfaced as the unique answer. Caller-side
+    // gates (query-side popularity in particular) handle the
+    // complementary case where the unknown binary itself has many
+    // tiny functions hashing the same.
+    auto pop_it = whole_popularity_.find(query.whole.exact_hash);
+    const std::size_t hash_popularity = (pop_it == whole_popularity_.end())
+        ? 0u : pop_it->second;
+    const RecognizeQuery rq{query, query_runtime, top_k,
+                            /*has_l4=*/query.behav.exact_hash != 0,
+                            /*hash_too_common=*/hash_popularity > kMaxWholeBucket};
+
+    if (auto m = match_prefix_exact(rq); !m.empty()) return m;
+    if (auto m = match_behav_exact(rq); !m.empty()) return m;
+    if (auto m = match_whole_exact(rq); !m.empty()) return m;
+    if (auto m = match_whole_jaccard(rq); !m.empty()) return m;
+    return match_chunk_vote(rq);
 }
 
 }  // namespace ember

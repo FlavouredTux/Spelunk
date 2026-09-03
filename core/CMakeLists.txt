@@ -24,6 +24,10 @@ add_library(ember_core STATIC
     src/analysis/arity.cpp
     src/analysis/syscalls.cpp
     src/analysis/strings.cpp
+    src/analysis/string_names.cpp
+    src/analysis/string_names_anchors.cpp
+    src/analysis/string_names_itanium.cpp
+    src/analysis/log_categories.cpp
     src/analysis/app_surface.cpp
     src/analysis/graphics.cpp
     src/analysis/symtable.cpp
@@ -31,6 +35,10 @@ add_library(ember_core STATIC
     src/analysis/symuses.cpp
     src/analysis/data_xrefs.cpp
     src/analysis/pipeline.cpp
+    src/analysis/pipeline_callgraph.cpp
+    src/analysis/pipeline_discovery.cpp
+    src/analysis/pipeline_names.cpp
+    src/analysis/pipeline_resolve.cpp
     src/analysis/name_resolver.cpp
     src/analysis/fingerprint.cpp
     src/analysis/teef.cpp
@@ -114,7 +122,6 @@ add_library(ember_core STATIC
     src/debug/unwind_rbp.cpp
     src/debug/unwind_eh.cpp
     src/debug/unwind_scavenge.cpp
-    src/analysis/libcxx_string.cpp
 )
 add_library(ember::core ALIAS ember_core)
 

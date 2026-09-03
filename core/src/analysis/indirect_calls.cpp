@@ -1,26 +1,28 @@
 #include <ember/analysis/indirect_calls.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
-#include <unordered_map>
+#include <span>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/msvc_rtti.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/analysis/rtti.hpp>
 #include <ember/analysis/vtables.hpp>
+#include <ember/binary/arch.hpp>
+#include <ember/binary/format.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
 
 namespace ember {

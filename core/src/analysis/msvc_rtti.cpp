@@ -1,16 +1,22 @@
 #include <ember/analysis/msvc_rtti.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <optional>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/msvc_demangle.hpp>
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

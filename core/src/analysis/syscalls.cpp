@@ -1,15 +1,21 @@
 #include <ember/analysis/syscalls.hpp>
 
 #include <array>
+#include <cstddef>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/function.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/section.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <ember/disasm/instruction.hpp>
+#include <ember/disasm/register.hpp>
 #include <ember/ir/ssa.hpp>
 
 namespace ember {

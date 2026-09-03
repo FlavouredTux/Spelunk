@@ -1,5 +1,7 @@
 #include <ember/analysis/type_infer_local.hpp>
 
+#include <ember/common/types.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/types.hpp>
 
 namespace ember {

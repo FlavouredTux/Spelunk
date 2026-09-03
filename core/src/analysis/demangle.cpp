@@ -1,13 +1,16 @@
 #include <ember/analysis/demangle.hpp>
-#include <ember/analysis/msvc_demangle.hpp>
 
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
 #include <format>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include <ember/analysis/msvc_demangle.hpp>
 
 #if defined(__has_include)
 #if __has_include(<cxxabi.h>)
@@ -877,7 +880,7 @@ std::optional<std::string> demangle_itanium(std::string_view mangled) {
 }
 
 [[nodiscard]] std::optional<std::string>
-stdlib_alias(std::string name, const std::vector<std::string>& args) {
+stdlib_alias(const std::string& name, const std::vector<std::string>& args) {
     const bool dtor = name.starts_with("~");
     std::string base = dtor ? name.substr(1) : name;
     base = strip_std_cxx11(std::move(base));

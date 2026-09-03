@@ -1,9 +1,16 @@
 #include <ember/analysis/pe_unwind.hpp>
 
 #include <algorithm>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <vector>
 
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/pe.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

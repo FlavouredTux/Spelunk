@@ -7,13 +7,16 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/cfg_builder.hpp>
 #include <ember/analysis/egraph.hpp>
-#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/common/hash.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
+#include <ember/ir/ir.hpp>
 #include <ember/ir/lifter.hpp>
 #include <ember/ir/passes.hpp>
 #include <ember/ir/ssa.hpp>
@@ -23,23 +26,6 @@ namespace ember {
 namespace {
 
 using namespace egraph;
-
-constexpr u64 kFnvOffset = 0xcbf29ce484222325ULL;
-constexpr u64 kFnvPrime  = 0x100000001b3ULL;
-
-[[nodiscard]] constexpr u64 fnv1a(std::string_view s) noexcept {
-    u64 h = kFnvOffset;
-    for (char c : s) { h ^= static_cast<u8>(c); h *= kFnvPrime; }
-    return h;
-}
-
-[[nodiscard]] constexpr u64 mix64(u64 a, u64 b) noexcept {
-    u64 x = a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2));
-    x ^= x >> 30;  x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;  x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
-}
 
 [[nodiscard]] Type map_type(IrType t) noexcept {
     switch (t) {
@@ -121,7 +107,7 @@ struct Walker {
     [[nodiscard]] u64 var_key(const IrValue& v) const {
         switch (v.kind) {
             case IrValueKind::Reg:
-                return mix64(fnv1a("reg"),
+                return mix64(fnv1a_64("reg"),
                              (static_cast<u64>(v.reg) << 16) | v.version);
             case IrValueKind::Temp: {
                 // Alpha-rename temp so two structurally identical fns
@@ -129,10 +115,10 @@ struct Walker {
                 // populated temp_alpha eagerly on first appearance.
                 auto it = temp_alpha.find(v.temp);
                 const u64 a = (it == temp_alpha.end()) ? v.temp : it->second;
-                return mix64(fnv1a("temp"), (a << 8) | v.version);
+                return mix64(fnv1a_64("temp"), (a << 8) | v.version);
             }
             case IrValueKind::Flag:
-                return mix64(fnv1a("flag"), static_cast<u64>(v.flag));
+                return mix64(fnv1a_64("flag"), static_cast<u64>(v.flag));
             default:
                 return 0;
         }
@@ -144,12 +130,12 @@ struct Walker {
     // trivially collide across binaries.
     [[nodiscard]] u64 addr_class_hash(addr_t a) const noexcept {
         if (const auto* imp = bin.import_at_plt(a); imp && !imp->name.empty())
-            return mix64(fnv1a("plt"), fnv1a(imp->name));
+            return mix64(fnv1a_64("plt"), fnv1a_64(imp->name));
         if (const auto* imp = bin.import_at_got(a); imp && !imp->name.empty())
-            return mix64(fnv1a("got"), fnv1a(imp->name));
+            return mix64(fnv1a_64("got"), fnv1a_64(imp->name));
         if (const auto* sym = bin.defined_object_at(a); sym && !sym->name.empty())
-            return mix64(fnv1a("sym"), fnv1a(sym->name));
-        return fnv1a("addr");
+            return mix64(fnv1a_64("sym"), fnv1a_64(sym->name));
+        return fnv1a_64("addr");
     }
 
     [[nodiscard]] ClassId resolve(const IrValue& v) {
@@ -219,7 +205,7 @@ struct Walker {
             // node from (op, target-class, src classes) - NOT from
             // insertion order - so the e-class is positionally invariant
             // across compilations that order ops differently.
-            u64 oid = fnv1a(op_name(inst.op));
+            u64 oid = fnv1a_64(op_name(inst.op));
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
                 inst.op == IrOp::Branch || inst.op == IrOp::CondBranch ||
                 inst.op == IrOp::BranchIndirect) {
@@ -259,14 +245,14 @@ struct Walker {
             // resolved-address class for memory ops / calls so two
             // calls to memcpy hash the same across compilers but a
             // call to malloc hashes differently from memcpy.
-            u64 payload = fnv1a(op_name(inst.op));
+            u64 payload = fnv1a_64(op_name(inst.op));
             if (inst.op == IrOp::Call || inst.op == IrOp::Branch ||
                 inst.op == IrOp::CondBranch || inst.op == IrOp::BranchIndirect ||
                 inst.op == IrOp::CallIndirect) {
                 payload = mix64(payload, addr_class_hash(inst.target1));
             }
             if (inst.op == IrOp::Intrinsic && !inst.name.empty()) {
-                payload = mix64(payload, fnv1a(inst.name));
+                payload = mix64(payload, fnv1a_64(inst.name));
             }
             // Children: each src contributes via its existing class id
             // so the opaque's identity is sensitive to its input shape.
@@ -560,7 +546,7 @@ minhash_multiset(const std::vector<u64>& xs) noexcept {
     std::array<u64, 16> mh;
     mh.fill(std::numeric_limits<u64>::max());
     if (xs.empty()) return mh;
-    const u64 schemaSalt = fnv1a(kOrbitSchema);
+    const u64 schemaSalt = fnv1a_64(kOrbitSchema);
     for (u64 x : xs) {
         for (std::size_t k = 0; k < 16; ++k) {
             const u64 hk = mix64(x, schemaSalt + k * 0x9e3779b97f4a7c15ULL);
@@ -571,7 +557,7 @@ minhash_multiset(const std::vector<u64>& xs) noexcept {
 }
 
 [[nodiscard]] u64 multiset_exact_hash(const std::vector<u64>& xs) noexcept {
-    u64 h = fnv1a(kOrbitSchema);
+    u64 h = fnv1a_64(kOrbitSchema);
     // Already sorted by caller.
     for (u64 x : xs) h = mix64(h, x);
     return h;
@@ -627,16 +613,6 @@ OrbitSig compute_orbit_sig(const Binary& bin, addr_t fn_start) {
     out.total_iters  = static_cast<u8>(std::min<std::size_t>(g.total_iters(), 255));
     out.budget_hit   = g.budget_hit();
     return out;
-}
-
-float orbit_jaccard(const OrbitSig& a, const OrbitSig& b) noexcept {
-    if (a.exact_hash == 0 || b.exact_hash == 0) return 0.0f;
-    if (a.exact_hash == b.exact_hash) return 1.0f;
-    int eq = 0;
-    for (std::size_t i = 0; i < 16; ++i) {
-        if (a.minhash[i] == b.minhash[i]) ++eq;
-    }
-    return static_cast<float>(eq) / 16.0f;
 }
 
 }  // namespace ember

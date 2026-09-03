@@ -1,7 +1,15 @@
 #include <ember/analysis/vtables.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
+#include <span>
+#include <utility>
+#include <vector>
+
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

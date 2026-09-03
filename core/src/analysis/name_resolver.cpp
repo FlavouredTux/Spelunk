@@ -1,10 +1,13 @@
 #include <ember/analysis/name_resolver.hpp>
 
 #include <format>
+#include <optional>
+#include <string>
 
 #include <ember/analysis/demangle.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

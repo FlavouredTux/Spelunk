@@ -84,19 +84,11 @@ public:
     // earlier indexes. Returns the number of F + C rows ingested.
     [[nodiscard]] std::size_t load_tsv(const std::filesystem::path& path);
 
-    // Load (and merge) anti-corpus rows from a TSV with the same
-    // format as load_tsv. Only the hash fields (L2 exact, L4 exact,
-    // L1 prefix) are kept - names and chunks are discarded. Queries
-    // whose corresponding hashes match any blocked entry short-
-    // circuit at the top of recognize() and return no matches.
-    //
-    // Use case: structurally-identifiable junk that lives inside
-    // every binary of a class - UPX prologues, packer trampolines,
-    // CRT bootloaders that wrap real code with no semantic identity.
-    // Without an anti-corpus, those functions structurally collide
-    // with library entry points and surface as confident-but-wrong
-    // labels. Multiple paths supported. Returns the number of rows
-    // whose hashes were ingested.
+    // Anti-corpus: rows in load_tsv format whose L2/L4/L1 hashes mark
+    // structurally identifiable junk (UPX prologues, packer trampolines,
+    // CRT bootloaders). A query matching any of them returns no match
+    // instead of a confident wrong label. Names and chunks are ignored.
+    // Returns the number of rows ingested.
     [[nodiscard]] std::size_t load_anti_tsv(const std::filesystem::path& path);
 
     [[nodiscard]] std::size_t blocked_count() const noexcept {
@@ -119,23 +111,25 @@ public:
     [[nodiscard]] std::size_t function_count() const noexcept { return whole_by_name_.size(); }
     [[nodiscard]] std::size_t chunk_count()    const noexcept { return chunk_index_.size(); }
 
-    // Set of distinct L0 topology hashes present in the corpus. Used by
-    // `--recognize` to short-circuit L4 computation on target fns whose
-    // CFG topology has no corpus counterpart - those queries can't match
-    // anything anyway, so the K=64 trace pass is wasted. On obfuscator-
-    // spawned targets (hundreds of thousands of unique-shape stubs)
-    // this filter saves the bulk of corpus-build time.
-    //
-    // `max_popularity` (when > 0) excludes topologies shared by more
-    // than that many corpus entries - generic shapes (single-block
-    // return-stub, two-block if-then) match thousands of unrelated
-    // corpus fns AND a target's stubs, so target fns with those topos
-    // run the full pipeline pointlessly. Filtering them out raises the
-    // pre-filter's skip rate dramatically. 0 = include every topology.
+    // Distinct L0 topology hashes in the corpus. `--recognize` skips the
+    // K=64 trace pass for target fns whose topology is absent, which is
+    // most of an obfuscated target. `max_popularity` > 0 drops shapes
+    // shared by more than that many corpus entries (return stubs,
+    // two-block if-then) since they gate nothing.
     [[nodiscard]] std::unordered_set<u64>
     topo_hashes(std::size_t max_popularity = 0) const;
 
 private:
+    // recognize() runs these tiers in order; the first non-empty verdict
+    // wins. RecognizeQuery bundles the per-call inputs and predicates.
+    struct RecognizeQuery;
+    [[nodiscard]] bool query_blocked(const TeefFunction& query) const noexcept;
+    [[nodiscard]] std::vector<TeefMatch> match_prefix_exact(const RecognizeQuery& rq) const;
+    [[nodiscard]] std::vector<TeefMatch> match_behav_exact(const RecognizeQuery& rq) const;
+    [[nodiscard]] std::vector<TeefMatch> match_whole_exact(const RecognizeQuery& rq) const;
+    [[nodiscard]] std::vector<TeefMatch> match_whole_jaccard(const RecognizeQuery& rq) const;
+    [[nodiscard]] std::vector<TeefMatch> match_chunk_vote(const RecognizeQuery& rq) const;
+
     struct SmallStringHashes {
         std::array<u64, 8> values = {};
         u8 count = 0;

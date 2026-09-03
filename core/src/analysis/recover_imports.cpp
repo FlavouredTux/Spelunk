@@ -1,9 +1,17 @@
 #include <ember/analysis/recover_imports.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <set>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <ember/binary/binary.hpp>
 #include <ember/common/bytes.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

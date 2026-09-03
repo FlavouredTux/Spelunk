@@ -9,6 +9,7 @@
 
 #include <ember/binary/binary.hpp>
 #include <ember/binary/section.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember {
 

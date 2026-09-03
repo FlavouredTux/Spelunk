@@ -3,10 +3,17 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <expected>
 #include <format>
 #include <span>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include <ember/binary/binary.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember::analysis {
 

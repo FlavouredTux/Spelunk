@@ -2,14 +2,23 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <expected>
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <ember/analysis/data_xrefs.hpp>
 #include <ember/analysis/fn_table.hpp>
+#include <ember/analysis/symtable.hpp>
+#include <ember/binary/arch.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/section.hpp>
+#include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 namespace ember::analysis {
 

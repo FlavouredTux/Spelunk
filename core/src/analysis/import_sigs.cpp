@@ -1,13 +1,21 @@
 #include <ember/analysis/import_sigs.hpp>
 
+#include <cstddef>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <ember/binary/binary.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/register.hpp>
+#include <ember/ir/abi.hpp>
 #include <ember/ir/ir.hpp>
 #include <ember/ir/ssa.hpp>
+#include <ember/ir/types.hpp>
 
 namespace ember {
 

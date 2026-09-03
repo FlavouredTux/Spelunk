@@ -2,6 +2,6 @@
 extern FILE* stderr;
 
 int two_args(const char* a, const char* b) {
-  fprintf(stderr, "a=%s b=%s\\n", a, b);
+  fprintf(stderr, "a=%s b=%s\n", a, b);
   return 0;
 }

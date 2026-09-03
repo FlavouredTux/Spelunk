@@ -419,6 +419,7 @@ struct Emitter {
 
     [[nodiscard]] std::string observed_targets_comment(addr_t site) const;
 
+    // Quote raw string bytes as a C/C++ literal, escaping each byte once.
     [[nodiscard]] static std::string escape_string(const std::string& s);
 
     [[nodiscard]] bool same_value_key(const IrValue& a,

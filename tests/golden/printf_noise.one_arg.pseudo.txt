@@ -1,6 +1,6 @@
 // one_arg
 int one_arg(const char* s) {
   uint64_t r_strlen = strlen(s);
-  printf("len=%zu\\n", r_strlen);
+  printf("len=%zu\n", r_strlen);
   return 0;
 }

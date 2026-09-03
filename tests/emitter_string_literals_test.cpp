@@ -1,5 +1,5 @@
-// Focused coverage for the emitter's private binary string decoder.
-#include "emitter_string_literals.hpp"
+// Focused coverage for the emitter's private string decoding and rendering.
+#include "emitter_internal.hpp"
 
 #include <ember/binary/binary.hpp>
 
@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -41,6 +42,14 @@ void check_string(const std::optional<std::string>& actual,
     ++failures;
 }
 
+void check_text(std::string_view actual,
+                std::string_view expected,
+                const char* context) {
+    if (actual == expected) return;
+    std::fprintf(stderr, "FAIL: %s\n", context);
+    ++failures;
+}
+
 template <std::size_t N>
 void write_bytes(std::array<std::byte, N>& destination,
                  std::size_t offset,
@@ -59,7 +68,10 @@ void write_native(std::array<std::byte, N>& destination,
 
 class MockBinary final : public ember::Binary {
 public:
-    explicit MockBinary(ember::Format format = ember::Format::MachO)
+    explicit MockBinary(ember::Format format = ember::Format::MachO,
+                        ember::addr_t rodata_address = kRodata,
+                        ember::addr_t cfstrings_address = kCfstrings,
+                        bool rodata_executable = false)
         : format_(format) {
         text_.fill(std::byte{0});
         rodata_.fill(static_cast<std::byte>('Q'));
@@ -68,7 +80,8 @@ public:
 
         write_bytes(text_, 0, {'C', 'O', 'D', 'E', 0});
         write_bytes(rodata_, 0, {'h', 'e', 'l', 'l', 'o', 0});
-        write_bytes(rodata_, 8, {'A', '\n', '"', '\\', 0x80, 'B', 0});
+        write_bytes(rodata_, 8,
+                    {'A', '\n', '"', '\\', 0x01, 0x80, 'B', 0});
         write_bytes(rodata_, 0x18, {'A', 0});
 
         write_bytes(cfdata_, 0, {'h', 0xc3, 0xa9});
@@ -81,8 +94,9 @@ public:
         write_cfstring_record(2, kCfdata + 0x20, 1);
 
         configure_section(sections_[0], ".text", kText, text_, true);
-        configure_section(sections_[1], ".rodata", kRodata, rodata_, false);
-        configure_section(sections_[2], "__DATA,__cfstring", kCfstrings,
+        configure_section(sections_[1], ".rodata", rodata_address, rodata_,
+                          rodata_executable);
+        configure_section(sections_[2], "__DATA,__cfstring", cfstrings_address,
                           cfstrings_, false);
         configure_section(sections_[3], "__TEXT,__cstring", kCfdata,
                           cfdata_, false);
@@ -178,9 +192,15 @@ void test_c_strings() {
           "executable bytes are not C strings");
     check(binary.byte_reads_at(kText) == 0,
           "executable rejection avoids reading code bytes");
-    check_string(strings.try_c_string_at(kRodata + 8),
-                 "A\\n\\\"\\\\\\x80" "B",
-                 "C string escaping remains unchanged");
+    const std::string raw_specials("A\n\"\\\x01\x80" "B");
+    const auto decoded_specials = strings.try_c_string_at(kRodata + 8);
+    check_string(decoded_specials, raw_specials,
+                 "C string decoder returns raw bytes");
+    if (decoded_specials) {
+        check_text(ember::emit::Emitter::escape_string(*decoded_specials),
+                   "\"A\\n\\\"\\\\\\x01\\x80\" \"B\"",
+                   "decoded C string is escaped exactly once when rendered");
+    }
     check(!strings.try_c_string_at(kRodata + 0x30),
           "unterminated C string is rejected");
 
@@ -204,6 +224,31 @@ void test_c_strings() {
                  "successful default lookup is cached");
     check(binary.byte_reads_at(kRodata) == 1,
           "cached success performs no second read");
+}
+
+void test_c_literal_rendering() {
+    check_text(ember::emit::Emitter::escape_string(
+                   std::string("\n\"\\\x01\x80")),
+               "\"\\n\\\"\\\\\\x01\\x80\"",
+               "C literal renderer escapes special bytes exactly once");
+}
+
+void test_overflow_safe_section_membership() {
+    constexpr auto kTopRodata = std::numeric_limits<ember::addr_t>::max() - 0x3f;
+    MockBinary c_binary(ember::Format::MachO, kTopRodata, kCfstrings,
+                        true);
+    const ember::emit::BinaryStringLiterals c_strings(&c_binary);
+    check(!c_strings.try_c_string_at(kTopRodata),
+          "overflowing executable section range rejects C-string bytes");
+    check(c_binary.byte_reads_at(kTopRodata) == 0,
+          "overflowing executable section is rejected before reading bytes");
+
+    constexpr auto kTopCfstrings =
+        std::numeric_limits<ember::addr_t>::max() - 0x7f;
+    MockBinary cf_binary(ember::Format::MachO, kRodata, kTopCfstrings);
+    const ember::emit::BinaryStringLiterals cf_strings(&cf_binary);
+    check_string(cf_strings.try_cfstring_at(kTopCfstrings), "h\xc3\xa9",
+                 "overflowing CFString section range contains its base");
 }
 
 void test_cfstrings() {
@@ -232,6 +277,8 @@ void test_cfstrings() {
 int main() {
     test_null_binary();
     test_c_strings();
+    test_c_literal_rendering();
+    test_overflow_safe_section_membership();
     test_cfstrings();
 
     if (failures != 0) {

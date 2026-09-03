@@ -292,14 +292,32 @@ std::string Emitter::escape_string(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 2);
     out += '"';
-    for (char c : s) {
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const auto c = static_cast<unsigned char>(s[i]);
         switch (c) {
             case '\\': out += "\\\\"; break;
             case '"':  out += "\\\""; break;
             case '\n': out += "\\n";  break;
             case '\r': out += "\\r";  break;
             case '\t': out += "\\t";  break;
-            default:   out += c;      break;
+            default:
+                if (c >= 0x20 && c <= 0x7e) {
+                    out += static_cast<char>(c);
+                    break;
+                }
+                out += std::format("\\x{:02x}", c);
+                // A C hex escape consumes every following hex digit. End
+                // this token before a literal byte such as the B in
+                // `\x80` + `B`; adjacent string literals preserve the bytes.
+                if (i + 1 < s.size()) {
+                    const auto next = static_cast<unsigned char>(s[i + 1]);
+                    const bool next_is_hex =
+                        (next >= '0' && next <= '9') ||
+                        (next >= 'A' && next <= 'F') ||
+                        (next >= 'a' && next <= 'f');
+                    if (next_is_hex) out += "\" \"";
+                }
+                break;
         }
     }
     out += '"';

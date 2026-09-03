@@ -97,6 +97,8 @@ add_library(ember_core STATIC
     src/ir/passes_memory.cpp
     src/ir/passes_simplify.cpp
     src/structure/structurer.cpp
+    src/structure/structurer_build.cpp
+    src/structure/structurer_cfg.cpp
     src/decompile/emitter.cpp
     src/decompile/emitter_abi.cpp
     src/decompile/emitter_analyze.cpp

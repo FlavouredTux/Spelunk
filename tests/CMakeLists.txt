@@ -153,7 +153,9 @@ add_test(NAME discovery_unit COMMAND ember_discovery_test)
 # block carrying a Call, runs the structurer, and asserts the
 # pseudo-C output contains a STRUCTURER_FAIL marker for the dropped
 # block instead of silently omitting it.
-add_executable(ember_structurer_fail_test structurer_fail_test.cpp)
+add_executable(ember_structurer_fail_test
+    structurer_fail_test.cpp
+    structurer_fail_ppc_test.cpp)
 target_link_libraries(ember_structurer_fail_test
     PRIVATE ember::core ember::flags)
 add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)

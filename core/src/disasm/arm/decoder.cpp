@@ -5,7 +5,6 @@
 #include <format>
 #include <optional>
 #include <span>
-#include <string_view>
 
 #include <ember/common/bytes.hpp>
 #include <ember/common/error.hpp>
@@ -103,14 +102,6 @@ using u32 = ember::u32;
     return Operand::make_imm(i);
 }
 
-[[maybe_unused, nodiscard]] Operand make_imm_s(i64 v, u8 size = 8) noexcept {
-    Imm i;
-    i.value = v;
-    i.size  = size;
-    i.is_signed = true;
-    return Operand::make_imm(i);
-}
-
 [[nodiscard]] Operand make_rel(addr_t target, u8 size = 4) noexcept {
     Rel r;
     r.target = target;
@@ -127,15 +118,6 @@ using u32 = ember::u32;
     m.size = size;
     m.has_disp = has_disp;
     m.writeback = writeback;
-    return Operand::make_mem(m);
-}
-
-[[maybe_unused, nodiscard]] Operand make_mem_idx(Reg base, Reg index, u8 scale, u8 size) noexcept {
-    Mem m;
-    m.base  = base;
-    m.index = index;
-    m.scale = scale;
-    m.size  = size;
     return Operand::make_mem(m);
 }
 
@@ -159,7 +141,6 @@ void set_ops(Instruction& insn,
 [[nodiscard]] std::optional<u64>
 decode_bitmask_imm(unsigned N, unsigned imms, unsigned immr,
                    bool is_64bit) noexcept {
-    const unsigned len_bit_w = is_64bit ? 7u : 6u;
     const u32 combined = (N << 6) | (~imms & 0x3f);
     if (combined == 0) return std::nullopt;
     const int len = std::bit_width(combined) - 1;
@@ -183,23 +164,7 @@ decode_bitmask_imm(unsigned N, unsigned imms, unsigned immr,
         result |= element << i;
     }
     if (!is_64bit) result &= 0xffffffffu;
-    (void)len_bit_w;
     return result;
-}
-
-// AArch64 condition-code encodings (4-bit field).
-[[maybe_unused, nodiscard]] std::string_view cond_name(unsigned c) noexcept {
-    switch (c & 0xf) {
-        case 0x0: return "eq"; case 0x1: return "ne";
-        case 0x2: return "cs"; case 0x3: return "cc";
-        case 0x4: return "mi"; case 0x5: return "pl";
-        case 0x6: return "vs"; case 0x7: return "vc";
-        case 0x8: return "hi"; case 0x9: return "ls";
-        case 0xa: return "ge"; case 0xb: return "lt";
-        case 0xc: return "gt"; case 0xd: return "le";
-        case 0xe: return "al"; case 0xf: return "nv";
-    }
-    return "?";
 }
 
 // ============================================================================

@@ -69,13 +69,6 @@ int PerfTarget::find_wp_slot(WatchpointId id) const {
     return -1;
 }
 
-int PerfTarget::find_slot_by_fd(int fd) const {
-    for (int i = 0; i < kMaxSlots; ++i) {
-        if (slots_[i].fd == fd) return i;
-    }
-    return -1;
-}
-
 std::vector<Breakpoint> PerfTarget::breakpoints() const {
     std::vector<Breakpoint> out;
     for (const auto& s : slots_) {

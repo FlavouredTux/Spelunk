@@ -28,9 +28,8 @@ struct ImportSigSpec {
     bool                   variadic = false;
 };
 
-// Look up a known import. `name` is the bare symbol name as returned by
-// `clean_import_name` (already stripped of `@GLIBC_*` suffix and
-// `__imp_` prefix). Returns nullopt for any unknown name.
+// Look up a known import. `name` is the bare symbol name returned by
+// `strip_import_name_decorations`. Returns nullopt for any unknown name.
 [[nodiscard]] std::optional<ImportSigSpec>
 lookup_import_sig(std::string_view name, TypeArena& arena);
 

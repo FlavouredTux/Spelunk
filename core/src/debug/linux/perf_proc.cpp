@@ -19,23 +19,14 @@
 // the event loop simple.
 
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
-#include <dirent.h>
 #include <expected>
 #include <fcntl.h>
 #include <memory>
-#include <sched.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <string.h>
-#include <string>
-#include <string_view>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <vector>
 
 #include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
@@ -44,6 +35,7 @@
 
 #include "errno_io.hpp"
 #include "perf_target.hpp"
+#include "proc_utils.hpp"
 
 #ifndef SYS_pidfd_open
 #  define SYS_pidfd_open 434
@@ -60,96 +52,6 @@ namespace {
 
 [[nodiscard]] int sys_pidfd_open(pid_t pid) {
     return static_cast<int>(::syscall(SYS_pidfd_open, pid, 0u));
-}
-
-struct OwnedArgv {
-    std::vector<char*> ptrs;
-    ~OwnedArgv() { for (auto* p : ptrs) if (p) std::free(p); }
-};
-
-OwnedArgv build_argv(const std::string& program,
-                     const std::vector<std::string>& args) {
-    OwnedArgv a;
-    a.ptrs.reserve(args.size() + 2);
-    a.ptrs.push_back(::strdup(program.c_str()));
-    for (const auto& s : args) a.ptrs.push_back(::strdup(s.c_str()));
-    a.ptrs.push_back(nullptr);
-    return a;
-}
-
-OwnedArgv build_envp(const std::vector<std::string>& env) {
-    OwnedArgv a;
-    a.ptrs.reserve(env.size() + 1);
-    for (const auto& s : env) a.ptrs.push_back(::strdup(s.c_str()));
-    a.ptrs.push_back(nullptr);
-    return a;
-}
-
-addr_t parse_hex(std::string_view s) {
-    addr_t v = 0;
-    for (char c : s) {
-        const int d = (c >= '0' && c <= '9') ? c - '0'
-                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                    : -1;
-        if (d < 0) break;
-        v = (v << 4) | static_cast<addr_t>(d);
-    }
-    return v;
-}
-
-std::vector<LoadedImage> read_proc_maps(pid_t pid) {
-    std::vector<LoadedImage> out;
-    char path[64];
-    std::snprintf(path, sizeof(path), "/proc/%d/maps", pid);
-    FILE* f = std::fopen(path, "r");
-    if (!f) return out;
-
-    char line[4096];
-    while (std::fgets(line, sizeof(line), f)) {
-        std::string_view sv(line);
-        const auto path_pos = sv.find('/');
-        if (path_pos == std::string_view::npos) continue;
-
-        const auto dash = sv.find('-');
-        if (dash == std::string_view::npos) continue;
-
-        const addr_t start = parse_hex(sv.substr(0, dash));
-        if (start == 0) continue;
-
-        std::string fpath(sv.substr(path_pos));
-        while (!fpath.empty() && (fpath.back() == ' ' || fpath.back() == '\t' ||
-                                  fpath.back() == '\r' || fpath.back() == '\n')) {
-            fpath.pop_back();
-        }
-
-        bool found = false;
-        for (auto& img : out) {
-            if (img.path == fpath) {
-                if (start < img.base) img.base = start;
-                found = true;
-                break;
-            }
-        }
-        if (!found) out.push_back({fpath, start});
-    }
-    std::fclose(f);
-    return out;
-}
-
-std::vector<pid_t> read_task_tids(pid_t pid) {
-    std::vector<pid_t> out;
-    char dirpath[64];
-    std::snprintf(dirpath, sizeof(dirpath), "/proc/%d/task", pid);
-
-    DIR* d = ::opendir(dirpath);
-    if (!d) return out;
-    while (auto* e = ::readdir(d)) {
-        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
-        out.push_back(static_cast<pid_t>(std::atoi(e->d_name)));
-    }
-    ::closedir(d);
-    return out;
 }
 
 }  // namespace
@@ -190,8 +92,9 @@ launch_perf(const LaunchOptions& opts) {
             if (::chdir(opts.cwd.c_str()) < 0) bail();
         }
 
-        OwnedArgv argv = build_argv(opts.program, opts.args);
-        OwnedArgv envv = build_envp(opts.env);
+        linux_detail::OwnedArgv argv =
+            linux_detail::build_argv(opts.program, opts.args);
+        linux_detail::OwnedArgv envv = linux_detail::build_envp(opts.env);
         char** envp = opts.env.empty() ? environ : envv.ptrs.data();
 
         ::execvpe(opts.program.c_str(), argv.ptrs.data(), envp);
@@ -262,7 +165,7 @@ attach_perf(ProcessId pid) {
     // first sample that names them. Listing them up front lets
     // images() / threads() report a sensible state to the REPL right
     // after attach.
-    for (pid_t tid : read_task_tids(main_tid)) {
+    for (pid_t tid : linux_detail::read_task_tids(main_tid)) {
         (void)t->thread_state(static_cast<ThreadId>(tid));
     }
     if (t->thread_state_map().empty()) {
@@ -309,7 +212,7 @@ Result<void> PerfTarget::kill() {
 }
 
 std::vector<LoadedImage> PerfTarget::images() const {
-    return read_proc_maps(static_cast<pid_t>(pid_v_));
+    return linux_detail::read_proc_maps(static_cast<pid_t>(pid_v_));
 }
 
 }  // namespace ember::debug::linux_perf

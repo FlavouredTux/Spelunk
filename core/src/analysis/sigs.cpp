@@ -317,15 +317,10 @@ linear_calls(const Binary& b, addr_t entry, u32 byte_budget) {
 // Resolve a call target to a public name we can compare against a sig
 // reference: PLT import → bare import name (no @GLIBC_*), defined
 // symbol → its name. Returns empty when the target is anonymous (an
-// internal `sub_*` we haven't already renamed via some prior sig pass).
+    // internal `sub_*` we haven't already renamed via some prior sig pass).
 [[nodiscard]] std::string_view resolve_target_name(const Binary& b, addr_t tgt) noexcept {
     if (const Symbol* s = b.import_at_plt(tgt); s) {
-        std::string_view name = s->name;
-        if (auto at = name.find('@'); at != std::string_view::npos) {
-            name = name.substr(0, at);
-        }
-        if (name.starts_with("__imp_")) name.remove_prefix(6);
-        return name;
+        return strip_import_name_decorations(s->name);
     }
     if (const Symbol* s = b.defined_object_at(tgt); s) {
         if (s->kind == SymbolKind::Function && s->addr == tgt) {

@@ -499,7 +499,8 @@ output.
 | `core/include/ember/analysis/teef_recognize.hpp` | `TeefCorpus`, `TeefMatch` |
 | `core/src/analysis/teef.cpp` | L2 + L0; `compute_teef_max` (shared pipeline) |
 | `core/src/analysis/teef_behav.cpp` | L4 interpreter, intrinsic semantic modeling |
-| `core/src/analysis/teef_recognize.cpp` | Corpus load (mmap+parallel parse), recognize cascade, MinHash inverted index |
+| `core/src/analysis/teef_corpus.cpp` | Corpus load, mmap parsing, interning, and index construction |
+| `core/src/analysis/teef_recognize.cpp` | Recognition cascade and candidate scoring |
 | `core/src/analysis/teef_orbit.cpp` | E-graph orbit-class fingerprint (foundation, not on critical path) |
 | `core/src/analysis/egraph.cpp` | Bounded e-graph saturation engine |
 | `cli/src/commands/teef.cpp` | `--teef` / `--recognize` / `--orbit-dump` drivers |

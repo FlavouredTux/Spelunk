@@ -1,4 +1,4 @@
-// Unit tests for the TeefCorpus loader (`core/src/analysis/teef_recognize.cpp`).
+// Unit tests for TeefCorpus loading and recognition.
 //
 // The corpus loader has historically had no direct test coverage - its
 // behavior was only exercised end-to-end via `--corpus + --recognize`,

@@ -6,7 +6,7 @@
 #include <optional>
 #include <set>
 #include <span>
-#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,13 +27,6 @@
 namespace ember {
 
 namespace {
-
-[[nodiscard]] std::string clean_import_name(const std::string& n) {
-    const auto at = n.find('@');
-    std::string bare = at == std::string::npos ? n : n.substr(0, at);
-    if (bare.starts_with("__imp_")) bare.erase(0, 6);
-    return bare;
-}
 
 // IrCache + lift_cached now live in <ember/analysis/ir_cache.hpp> so the
 // IPA fixed-point and the indirect-call resolver can share one cache and
@@ -100,7 +93,7 @@ struct CalleeInfo {
 {
     CalleeInfo out;
     if (const Symbol* s = b.import_at_plt(target); s) {
-        const std::string name = clean_import_name(s->name);
+        const std::string_view name = strip_import_name_decorations(s->name);
         if (auto spec = lookup_import_sig(name, arena); spec) {
             for (std::size_t i = 0; i < spec->params.size() &&
                                      i < out.param_types.size(); ++i) {

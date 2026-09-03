@@ -1,7 +1,5 @@
-// Process control for the Linux ptrace backend: launch + attach +
-// detach + kill, plus the /proc/<pid>/maps reader that powers
-// LinuxTarget::images() and the /proc/<pid>/task walker that lets
-// attach_linux pick up sibling threads at attach time.
+// Process control for the Linux ptrace backend: launch, attach, detach, and
+// kill. Shared launch-argument and /proc discovery helpers live in proc_utils.
 
 // _GNU_SOURCE is supplied by glibc's features.h via <features.h> with
 // the default _DEFAULT_SOURCE feature test, plus CMake doesn't set
@@ -11,23 +9,14 @@
 
 #include <cerrno>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <dirent.h>
 #include <expected>
 #include <fcntl.h>
 #include <memory>
-#include <sched.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <string.h>
-#include <string>
-#include <string_view>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <vector>
 
 #include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
@@ -35,6 +24,7 @@
 #include <ember/debug/types.hpp>
 
 #include "errno_io.hpp"
+#include "proc_utils.hpp"
 #include "ptrace_target.hpp"
 
 extern char** environ;
@@ -58,109 +48,6 @@ constexpr long kPtraceOptions =
 
 [[nodiscard]] void* as_ptrace_data(long v) {
     return reinterpret_cast<void*>(static_cast<std::uintptr_t>(v));
-}
-
-// argv / envp owners for the brief window between fork and exec.
-// Each pointer is malloc'd via strdup; the destructor frees them
-// only if exec failed (the successful exec replaces the address
-// space and the destructor never runs).
-struct OwnedArgv {
-    std::vector<char*> ptrs;
-    ~OwnedArgv() { for (auto* p : ptrs) if (p) std::free(p); }
-};
-
-OwnedArgv build_argv(const std::string& program,
-                     const std::vector<std::string>& args) {
-    OwnedArgv a;
-    a.ptrs.reserve(args.size() + 2);
-    a.ptrs.push_back(::strdup(program.c_str()));
-    for (const auto& s : args) a.ptrs.push_back(::strdup(s.c_str()));
-    a.ptrs.push_back(nullptr);
-    return a;
-}
-
-OwnedArgv build_envp(const std::vector<std::string>& env) {
-    OwnedArgv a;
-    a.ptrs.reserve(env.size() + 1);
-    for (const auto& s : env) a.ptrs.push_back(::strdup(s.c_str()));
-    a.ptrs.push_back(nullptr);
-    return a;
-}
-
-// Parse one hex address from the start of a string; stops at the
-// first non-hex char. Returns 0 on a leading non-hex byte.
-addr_t parse_hex(std::string_view s) {
-    addr_t v = 0;
-    for (char c : s) {
-        const int d = (c >= '0' && c <= '9') ? c - '0'
-                    : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                    : (c >= 'A' && c <= 'F') ? c - 'A' + 10
-                    : -1;
-        if (d < 0) break;
-        v = (v << 4) | static_cast<addr_t>(d);
-    }
-    return v;
-}
-
-// One LoadedImage per unique path with at least one file-backed
-// mapping. Base = lowest mapping start for that path - for an ELF
-// the kernel maps the lowest-vaddr PT_LOAD here, so the base lands
-// on the ELF header.
-std::vector<LoadedImage> read_proc_maps(pid_t pid) {
-    std::vector<LoadedImage> out;
-    char path[64];
-    std::snprintf(path, sizeof(path), "/proc/%d/maps", pid);
-    FILE* f = std::fopen(path, "r");
-    if (!f) return out;
-
-    char line[4096];
-    while (std::fgets(line, sizeof(line), f)) {
-        std::string_view sv(line);
-        const auto path_pos = sv.find('/');
-        if (path_pos == std::string_view::npos) continue;  // [vdso] / [stack] / anon
-
-        const auto dash = sv.find('-');
-        if (dash == std::string_view::npos) continue;
-
-        const addr_t start = parse_hex(sv.substr(0, dash));
-        if (start == 0) continue;
-
-        std::string fpath(sv.substr(path_pos));
-        while (!fpath.empty() && (fpath.back() == ' ' || fpath.back() == '\t' ||
-                                  fpath.back() == '\r' || fpath.back() == '\n')) {
-            fpath.pop_back();
-        }
-
-        bool found = false;
-        for (auto& img : out) {
-            if (img.path == fpath) {
-                if (start < img.base) img.base = start;
-                found = true;
-                break;
-            }
-        }
-        if (!found) out.push_back({fpath, start});
-    }
-    std::fclose(f);
-    return out;
-}
-
-// Walk /proc/<pid>/task - the kernel's truth for thread membership.
-// attach_linux uses this once at seize time; ongoing thread tracking
-// rides on PTRACE_EVENT_CLONE in the event loop.
-std::vector<pid_t> read_task_tids(pid_t pid) {
-    std::vector<pid_t> out;
-    char dirpath[64];
-    std::snprintf(dirpath, sizeof(dirpath), "/proc/%d/task", pid);
-
-    DIR* d = ::opendir(dirpath);
-    if (!d) return out;
-    while (auto* e = ::readdir(d)) {
-        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
-        out.push_back(static_cast<pid_t>(std::atoi(e->d_name)));
-    }
-    ::closedir(d);
-    return out;
 }
 
 }  // namespace
@@ -205,8 +92,9 @@ launch_linux(const LaunchOptions& opts) {
         }
         if (::ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) < 0) bail();
 
-        OwnedArgv argv = build_argv(opts.program, opts.args);
-        OwnedArgv envv = build_envp(opts.env);
+        linux_detail::OwnedArgv argv =
+            linux_detail::build_argv(opts.program, opts.args);
+        linux_detail::OwnedArgv envv = linux_detail::build_envp(opts.env);
         char** envp = opts.env.empty() ? environ : envv.ptrs.data();
 
         ::execvpe(opts.program.c_str(), argv.ptrs.data(), envp);
@@ -281,7 +169,7 @@ attach_linux(ProcessId pid) {
 
     // Pick up every other thread that already exists. PTRACE_O_TRACECLONE
     // handles future ones automatically via the event loop.
-    for (pid_t tid : read_task_tids(main_tid)) {
+    for (pid_t tid : linux_detail::read_task_tids(main_tid)) {
         if (tid == main_tid) continue;
         if (::ptrace(PTRACE_SEIZE, tid, nullptr,
                      as_ptrace_data(kPtraceOptions)) < 0) {
@@ -334,7 +222,7 @@ Result<void> LinuxTarget::kill() {
 }
 
 std::vector<LoadedImage> LinuxTarget::images() const {
-    return read_proc_maps(static_cast<pid_t>(pid_v_));
+    return linux_detail::read_proc_maps(static_cast<pid_t>(pid_v_));
 }
 
 }  // namespace ember::debug::linux_

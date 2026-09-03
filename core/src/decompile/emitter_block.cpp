@@ -45,8 +45,7 @@ eh_pattern_hint(const IrBlock& bb, const Binary* binary) {
         if (inst.op != IrOp::Call) continue;
         const Symbol* s = binary->import_at_plt(inst.target1);
         if (!s) continue;
-        std::string_view n = s->name;
-        if (auto at = n.find('@'); at != std::string_view::npos) n = n.substr(0, at);
+        const std::string_view n = strip_import_name_decorations(s->name);
         if (n == "__cxa_begin_catch")  return std::string_view{"catch (...)"};
         if (n == "__cxa_throw")        return std::string_view{"throw"};
         if (n == "__cxa_rethrow")      return std::string_view{"throw  // rethrow"};

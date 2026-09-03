@@ -64,16 +64,8 @@ struct WalkState {
 // (`is_function_entry` lives on CfgBuilder so it can lazy-cache the
 // discovered-fn entry set; see the method below.)
 
-[[nodiscard]] std::string_view clean_import_name(std::string_view name) noexcept {
-    if (name.starts_with("__imp_")) name.remove_prefix(6);
-    if (const auto at = name.find('@'); at != std::string_view::npos) {
-        name = name.substr(0, at);
-    }
-    return name;
-}
-
 [[nodiscard]] bool is_noreturn_import_name(std::string_view name) noexcept {
-    name = clean_import_name(name);
+    name = strip_import_name_decorations(name);
     return name == "__stack_chk_fail" ||
            name == "__android_log_assert" ||
            name == "__assert" ||

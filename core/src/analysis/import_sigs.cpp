@@ -606,21 +606,6 @@ ImportStringKind import_arg_string_kind(std::string_view name,
     return ImportStringKind::None;
 }
 
-// Local copy of the symbol-name cleaner (also lives in sig_inference.cpp /
-// emitter.cpp). Tiny enough to duplicate; keeping it here means
-// import_sigs.cpp doesn't pull in the whole IPA / emitter dependency.
-namespace {
-[[nodiscard]] std::string clean_import_name_local(std::string_view name) {
-    auto at = name.find('@');
-    std::string bare(at == std::string_view::npos ? name : name.substr(0, at));
-    if (const auto bang = bare.rfind('!'); bang != std::string::npos) {
-        bare.erase(0, bang + 1);
-    }
-    if (bare.starts_with("__imp_")) bare.erase(0, 6);
-    return bare;
-}
-}  // namespace
-
 namespace {
 
 // Index every SSA def in the function once, used by trace_to_arg_reg
@@ -735,7 +720,8 @@ void seed_call_return_types(const Binary& b, IrFunction& fn) {
                 }
             }
             if (!s) { int_args.clear(); fp_args.clear(); continue; }
-            auto spec = lookup_import_sig(clean_import_name_local(s->name), fn.types);
+            auto spec = lookup_import_sig(
+                strip_import_name_decorations(s->name), fn.types);
             if (!spec) { int_args.clear(); fp_args.clear(); continue; }
 
             const Abi abi = abi_for(b.format(), b.arch(), b.endian());

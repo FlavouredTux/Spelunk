@@ -8,8 +8,6 @@
 #include <optional>
 #include <set>
 #include <span>
-#include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -507,14 +505,6 @@ follow_trivial_wrapper(const Binary& b, addr_t target) noexcept {
     return -1;
 }
 
-[[nodiscard]] std::string clean_import_name_local(std::string_view name) {
-    auto at = name.find('@');
-    std::string bare(at == std::string_view::npos ? name : name.substr(0, at));
-    if (bare.starts_with("__imp_")) bare.erase(0, 6);
-    if (bare.starts_with('_') && !bare.starts_with("__")) bare.erase(0, 1);
-    return bare;
-}
-
 enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 
 [[nodiscard]] DstRole dst_role(Mnemonic m) noexcept {
@@ -665,7 +655,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
                 const Symbol* s = b.import_at_plt(insn.operands[0].rel.target);
                 if (s) {
                     if (auto spec = lookup_import_sig(
-                            clean_import_name_local(s->name), import_types); spec) {
+                            strip_import_name_decorations(s->name), import_types); spec) {
                         const std::size_t n =
                             std::min<std::size_t>(spec->params.size(), args.size());
                         for (std::size_t i = 0; i < n; ++i) {

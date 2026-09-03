@@ -133,7 +133,6 @@ public:
     // Find by id - bp_id when is_watch == false, wp_id otherwise.
     [[nodiscard]] int find_bp_slot(BreakpointId id) const;
     [[nodiscard]] int find_wp_slot(WatchpointId id) const;
-    [[nodiscard]] int find_slot_by_fd(int fd) const;
 
     [[nodiscard]] BreakpointId next_bp_id() { return next_bp_id_++; }
     [[nodiscard]] WatchpointId next_wp_id() { return next_wp_id_++; }
@@ -142,9 +141,6 @@ public:
     [[nodiscard]] const PerfThreadState* thread_state_lookup(ThreadId tid) const;
     [[nodiscard]] std::map<ThreadId, PerfThreadState>&       thread_state_map()       { return thread_state_; }
     [[nodiscard]] const std::map<ThreadId, PerfThreadState>& thread_state_map() const { return thread_state_; }
-
-    void mark_dead() { dead_ = true; }
-    [[nodiscard]] bool dead() const noexcept { return dead_; }
 
 private:
     ProcessId    pid_v_   = 0;

@@ -162,7 +162,12 @@ add_test(NAME discovery_unit COMMAND ember_discovery_test)
 # block instead of silently omitting it.
 add_executable(ember_structurer_fail_test
     structurer_fail_test.cpp
-    structurer_fail_ppc_test.cpp)
+    structurer_fail_ppc_test.cpp
+    structurer_fail_ppc_control_test.cpp
+    structurer_fail_ppc_floating_test.cpp
+    structurer_fail_ppc_types_test.cpp
+    structurer_fail_ppc_memory_test.cpp
+    structurer_fail_ppc_abi_test.cpp)
 target_link_libraries(ember_structurer_fail_test
     PRIVATE ember::core ember::flags)
 add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)
@@ -192,6 +197,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         PRIVATE ember::core ember::flags)
     add_test(NAME proc_mem_unit COMMAND ember_proc_mem_test)
     set_tests_properties(proc_mem_unit PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_executable(ember_proc_utils_test proc_utils_test.cpp)
+    target_include_directories(ember_proc_utils_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/core/src/debug/linux")
+    target_link_libraries(ember_proc_utils_test
+        PRIVATE ember::core ember::flags)
+    add_test(NAME proc_utils_unit COMMAND ember_proc_utils_test)
 endif()
 
 # Fixture-based golden tests shell out to the CLI; skip them entirely

@@ -269,8 +269,8 @@ struct Emitter {
     [[nodiscard]] const std::vector<InferredArgument>&
     cached_argument_layout(addr_t target) const;
 
-    // Drop ELF `@GLIBC_*` / `@@GLIBC_*` version suffix that clutters import
-    // names in pseudo-C (e.g. "puts@GLIBC_2.2.5" → "puts").
+    // Strip import transport/linker decoration, then demangle and remove the
+    // signature so the result can be rendered as a pseudo-C call target.
     [[nodiscard]] static std::string clean_import_name(std::string_view n);
 
     // For `call <abs_target>`: if the target is a PLT stub, return the

@@ -370,14 +370,6 @@ candidate_name_from_string(std::string_view text) {
     return std::nullopt;
 }
 
-[[nodiscard]] std::string clean_import_name_local(std::string_view name) {
-    auto at = name.find('@');
-    std::string bare(at == std::string_view::npos ? name : name.substr(0, at));
-    if (bare.starts_with("__imp_")) bare.erase(0, 6);
-    if (bare.starts_with('_') && !bare.starts_with("__")) bare.erase(0, 1);
-    return bare;
-}
-
 [[nodiscard]] std::optional<std::size_t>
 function_name_arg_index(std::string_view callee) noexcept {
     // glibc: __assert_fail(assertion, file, line, function)
@@ -390,7 +382,7 @@ function_name_arg_index(std::string_view callee) noexcept {
 [[nodiscard]] bool has_function_name_assert_import(const Binary& b) {
     for (const auto& sym : b.symbols()) {
         if (!sym.is_import) continue;
-        if (function_name_arg_index(clean_import_name_local(sym.name))) return true;
+        if (function_name_arg_index(strip_import_name_decorations(sym.name))) return true;
     }
     return false;
 }
@@ -852,7 +844,8 @@ void infer_assertion_function_names(const Binary& b,
                     args.clear();
                     continue;
                 }
-                auto idx = function_name_arg_index(clean_import_name_local(s->name));
+                auto idx = function_name_arg_index(
+                    strip_import_name_decorations(s->name));
                 if (!idx || *idx >= args.size()) {
                     args.clear();
                     continue;

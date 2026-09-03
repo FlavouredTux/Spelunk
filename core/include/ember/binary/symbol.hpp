@@ -26,6 +26,69 @@ enum class SymbolKind {
     return "unknown";
 }
 
+// Remove loader/linker decorations from an import name while preserving the
+// symbol spelling itself. MachOBinary already removes the C-ABI underscore
+// from Symbol names; request that step only when handling a raw Mach-O name.
+[[nodiscard]] constexpr std::string_view
+strip_import_name_decorations(std::string_view name,
+                              bool strip_macho_c_prefix = false) noexcept {
+    const auto bang = name.rfind('!');
+    if (bang != std::string_view::npos && bang != 0 && bang + 1 < name.size()) {
+        name.remove_prefix(bang + 1);
+    }
+    if (name.starts_with("__imp_")) name.remove_prefix(6);
+
+    // Preserve MSVC C++ mangling, but canonicalize x86 stdcall, fastcall, and
+    // vectorcall names into identifiers callers can look up and render.
+    if (name.empty() || name.starts_with('?')) return name;
+    const auto call_suffix = name.rfind('@');
+    if (call_suffix != std::string_view::npos &&
+        call_suffix + 1 < name.size()) {
+        bool numeric_suffix = true;
+        for (std::size_t i = call_suffix + 1; i < name.size(); ++i) {
+            if (name[i] < '0' || name[i] > '9') {
+                numeric_suffix = false;
+                break;
+            }
+        }
+        if (numeric_suffix) {
+            if ((name.front() == '_' || name.front() == '@') &&
+                call_suffix > 1) {
+                return name.substr(1, call_suffix - 1);
+            }
+            // `name@@N` is also a possible numeric ELF default version; both
+            // interpretations are transport decoration for these consumers.
+            if (call_suffix > 1 && name[call_suffix - 1] == '@') {
+                return name.substr(0, call_suffix - 1);
+            }
+        }
+    }
+
+    if (strip_macho_c_prefix && name.starts_with('_')) name.remove_prefix(1);
+
+    // Only remove a non-empty, identifier-like ELF version suffix from an
+    // otherwise ordinary symbol.
+    if (name.starts_with('@')) return name;
+    const auto at = name.find('@');
+    if (at == std::string_view::npos || at == 0) return name;
+    std::size_t version = at + 1;
+    if (version < name.size() && name[version] == '@') ++version;
+    if (version == name.size()) return name;
+
+    bool has_identifier_char = false;
+    for (std::size_t i = version; i < name.size(); ++i) {
+        const char c = name[i];
+        const bool alpha = (c >= 'a' && c <= 'z') ||
+                           (c >= 'A' && c <= 'Z');
+        if (alpha || c == '_') {
+            has_identifier_char = true;
+        } else if (!((c >= '0' && c <= '9') || c == '.' || c == '-')) {
+            return name;
+        }
+    }
+    return has_identifier_char ? name.substr(0, at) : name;
+}
+
 struct Symbol {
     std::string name;
     // For defined symbols: the symbol's virtual address.

@@ -115,11 +115,20 @@ struct Hasher {
     return {};  // unterminated within kMax: drop it
 }
 
+// Fingerprint schema v3 strips only ELF-style version suffixes. Broader
+// transport normalization would change existing corpus hashes and needs a
+// schema bump.
+[[nodiscard]] std::string fingerprint_symbol_name(std::string_view name) {
+    const auto at = name.find('@');
+    return at == std::string_view::npos
+        ? std::string(name)
+        : std::string(name.substr(0, at));
+}
+
 [[nodiscard]] std::string import_name_at(const Binary& b, addr_t target) {
     const Symbol* s = b.import_at_plt(target);
     if (!s) return {};
-    const auto at = s->name.find('@');
-    return at == std::string::npos ? s->name : s->name.substr(0, at);
+    return fingerprint_symbol_name(s->name);
 }
 
 // If `addr` resolves to a named defined-object symbol, return its name.
@@ -131,8 +140,7 @@ struct Hasher {
     if (!s) return {};
     if (s->kind != SymbolKind::Object) return {};
     if (s->name.empty()) return {};
-    const auto at = s->name.find('@');
-    return at == std::string::npos ? s->name : s->name.substr(0, at);
+    return fingerprint_symbol_name(s->name);
 }
 
 // Append a token description of `v` to the hasher. Stable across SSA

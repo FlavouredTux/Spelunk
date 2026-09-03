@@ -1,6 +1,8 @@
 #include <ember/analysis/import_sigs.hpp>
+#include <ember/binary/symbol.hpp>
 
 #include <cstdio>
+#include <string_view>
 
 namespace {
 
@@ -18,7 +20,55 @@ int main() {
     using ember::ImportStringKind;
     using ember::import_arg_string_kind;
 
+    const auto check_import_name = [](std::string_view decorated,
+                                      std::string_view expected,
+                                      const char* message,
+                                      bool raw_macho = false) {
+        check(ember::strip_import_name_decorations(decorated, raw_macho) == expected,
+              message);
+    };
+    check_import_name("puts@GLIBC_2.2.5", "puts",
+                      "ELF import version is removed");
+    check_import_name("memcpy@@GLIBC_2.14", "memcpy",
+                      "default ELF import version is removed");
+    check_import_name("__imp_CreateFileW", "CreateFileW",
+                      "PE import thunk prefix is removed");
+    check_import_name("kernel32.dll!__imp_CreateFileW@KERNELBASE_1.0",
+                      "CreateFileW",
+                      "module, thunk, and version decorations compose");
+    check_import_name("_puts", "_puts",
+                      "loader-normalized mode preserves a leading underscore");
+    check_import_name("_puts", "puts",
+                      "raw Mach-O mode removes its C-ABI underscore", true);
+    check_import_name("___assert_rtn", "__assert_rtn",
+                      "raw Mach-O mode removes exactly one underscore", true);
+
+    check_import_name("?method@Widget@@QEAAXXZ", "?method@Widget@@QEAAXXZ",
+                      "MSVC decoration is not mistaken for an ELF version");
+    check_import_name("__imp_?method@Widget@@QEAAXXZ",
+                      "?method@Widget@@QEAAXXZ",
+                      "PE thunk removal preserves MSVC decoration");
+    check_import_name("_Function@8", "Function",
+                      "stdcall decoration is removed");
+    check_import_name("@FastFunction@8", "FastFunction",
+                      "fastcall decoration is removed");
+    check_import_name("__imp__Sleep@4", "Sleep",
+                      "PE thunk and stdcall decorations compose");
+    check_import_name("__imp_Sleep@@4", "Sleep",
+                      "PE thunk and vectorcall decorations compose");
+    check_import_name("plain@", "plain@",
+                      "empty version suffix is preserved");
+    check_import_name("operator!", "operator!",
+                      "trailing exclamation mark is not a module qualifier");
+    check_import_name("!puts", "!puts",
+                      "empty module qualifier is preserved");
+
     ember::TypeArena arena;
+    const auto decorated_sleep = ember::lookup_import_sig(
+        ember::strip_import_name_decorations("__imp__Sleep@4"), arena);
+    check(decorated_sleep.has_value() && decorated_sleep->params.size() == 1,
+          "decorated stdcall import reaches its typed signature");
+
     const auto strcasestr = ember::lookup_import_sig("strcasestr", arena);
     check(strcasestr.has_value(), "strcasestr has a typed import signature");
     if (strcasestr) {

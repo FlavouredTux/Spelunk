@@ -1,5 +1,6 @@
 add_library(ember_core STATIC
     src/binary/elf.cpp
+    src/binary/elf_phdr.cpp
     src/binary/dol.cpp
     src/binary/rel.cpp
     src/binary/dtk_project.cpp
@@ -45,6 +46,7 @@ add_library(ember_core STATIC
     src/analysis/name_resolver.cpp
     src/analysis/fingerprint.cpp
     src/analysis/teef.cpp
+    src/analysis/teef_corpus.cpp
     src/analysis/teef_recognize.cpp
     src/analysis/egraph.cpp
     src/analysis/teef_orbit.cpp
@@ -137,6 +139,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
    CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     target_sources(ember_core PRIVATE
         src/debug/linux/proc_mem.cpp
+        src/debug/linux/proc_utils.cpp
         src/debug/linux/ptrace_target.cpp
         src/debug/linux/ptrace_proc.cpp
         src/debug/linux/ptrace_mem.cpp

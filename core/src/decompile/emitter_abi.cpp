@@ -65,18 +65,10 @@ Emitter::cached_argument_layout(addr_t target) const {
 }
 
 std::string Emitter::clean_import_name(std::string_view n) {
-    auto pos = n.find('@');
-    std::string bare = (pos != std::string_view::npos)
-        ? std::string(n.substr(0, pos))
-        : std::string(n);
-    if (const auto bang = bare.rfind('!'); bang != std::string::npos) {
-        bare.erase(0, bang + 1);
-    }
-    if (bare.starts_with("__imp_")) bare.erase(0, 6);
     // C++ names come out of the linker mangled. For use at the call site
     // we only want the qualified identifier, not the parenthesized arg
     // list from the demangler (the emitter will render the actual args).
-    return pretty_symbol_base(bare);
+    return pretty_symbol_base(strip_import_name_decorations(n));
 }
 
 std::optional<std::string>

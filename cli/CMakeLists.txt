@@ -3,6 +3,7 @@ add_executable(ember_cli
     src/builders.cpp
     src/builders_graphics.cpp
     src/builders_surfaces.cpp
+    src/builders_surfaces_model.cpp
     src/dbg.cpp
     src/dbg_breakpoints.cpp
     src/dbg_inspect.cpp

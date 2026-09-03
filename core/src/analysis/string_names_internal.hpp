@@ -9,9 +9,30 @@
 
 namespace ember::string_names {
 
+struct ReflectionDescriptorNameParts {
+    std::string owner;
+    std::string_view marker;
+    std::string_view tag;
+    std::string arity;
+    bool include_arity = false;
+};
+
 [[nodiscard]] bool is_ident_char(char c) noexcept;
 
 [[nodiscard]] std::string sanitize_name(std::string_view s);
+
+[[nodiscard]] std::optional<ReflectionDescriptorNameParts>
+parse_reflection_descriptor_name_parts(std::string_view text);
+
+[[nodiscard]] std::optional<std::string>
+reflection_descriptor_candidate_name(const ReflectionDescriptorNameParts& parts,
+                                     std::optional<std::string_view> member);
+
+[[nodiscard]] bool
+looks_like_reflection_member_name(std::string_view text) noexcept;
+
+[[nodiscard]] std::optional<std::string>
+candidate_name_from_string(std::string_view text);
 
 [[nodiscard]] std::string_view trim_ascii(std::string_view s) noexcept;
 

@@ -154,7 +154,7 @@ public:
     bool add_inferred_function_name(addr_t va, std::string_view name);
 
     void add_debug_signature(addr_t va, const FunctionSig& signature) {
-        debug_signatures_.try_emplace(va, std::move(signature));
+        debug_signatures_.try_emplace(va, signature);
     }
     [[nodiscard]] const std::map<addr_t, FunctionSig>&
     debug_signatures() const noexcept { return debug_signatures_; }

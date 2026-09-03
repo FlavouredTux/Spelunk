@@ -93,7 +93,12 @@ add_executable(ember_x64_decoder_test x64_decoder_test.cpp)
 target_link_libraries(ember_x64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME x64_decoder_unit COMMAND ember_x64_decoder_test)
 
-add_executable(ember_ppc_decoder_test ppc_decoder_test.cpp)
+add_executable(ember_ppc_decoder_test
+    ppc_decoder_test.cpp
+    ppc_decoder_integer_test.cpp
+    ppc_decoder_floating_point_test.cpp
+    ppc_decoder_control_flow_test.cpp
+    ppc_decoder_paired_single_test.cpp)
 target_link_libraries(ember_ppc_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME ppc_decoder_unit COMMAND ember_ppc_decoder_test)
 

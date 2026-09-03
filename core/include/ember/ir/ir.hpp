@@ -48,8 +48,8 @@ enum class IrType : u8 {
         case IrType::I256: return 256;
         case IrType::I512: return 512;
         case IrType::F32:  return 32;
-        case IrType::F64:  return 64;
-        case IrType::V2F32:return 64;
+        case IrType::F64:
+        case IrType::V2F32: return 64;
     }
     return 0;
 }

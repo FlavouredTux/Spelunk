@@ -8,7 +8,10 @@ add_library(ember_core STATIC
     src/binary/macho_dyld.cpp
     src/binary/macho_metadata.cpp
     src/binary/pe.cpp
+    src/binary/pe_tables.cpp
     src/binary/pdb.cpp
+    src/binary/pdb_msf.cpp
+    src/binary/pdb_tpi.cpp
     src/binary/dwarf.cpp
     src/binary/kismet_bundle.cpp
     src/binary/minidump.cpp
@@ -29,11 +32,14 @@ add_library(ember_core STATIC
     src/disasm/arm/decoder.cpp
     src/disasm/arm/decoder32.cpp
     src/analysis/cfg_builder.cpp
+    src/analysis/cfg_builder_decode.cpp
+    src/analysis/cfg_builder_flow.cpp
     src/analysis/cfg_util.cpp
     src/analysis/arity.cpp
     src/analysis/syscalls.cpp
     src/analysis/strings.cpp
     src/analysis/string_names.cpp
+    src/analysis/string_names_candidates.cpp
     src/analysis/string_names_anchors.cpp
     src/analysis/string_names_itanium.cpp
     src/analysis/log_categories.cpp
@@ -56,6 +62,7 @@ add_library(ember_core STATIC
     src/analysis/egraph.cpp
     src/analysis/teef_orbit.cpp
     src/analysis/teef_behav.cpp
+    src/analysis/teef_behav_interpreter.cpp
     src/analysis/demangle.cpp
     src/analysis/demangle_itanium.cpp
     src/analysis/demangle_simplify.cpp

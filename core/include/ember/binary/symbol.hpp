@@ -54,12 +54,12 @@ strip_import_name_decorations(std::string_view name,
         if (numeric_suffix) {
             if ((name.front() == '_' || name.front() == '@') &&
                 call_suffix > 1) {
-                return name.substr(1, call_suffix - 1);
+                return {name.data() + 1, call_suffix - 1};
             }
             // `name@@N` is also a possible numeric ELF default version; both
             // interpretations are transport decoration for these consumers.
             if (call_suffix > 1 && name[call_suffix - 1] == '@') {
-                return name.substr(0, call_suffix - 1);
+                return {name.data(), call_suffix - 1};
             }
         }
     }
@@ -86,7 +86,9 @@ strip_import_name_decorations(std::string_view name,
             return name;
         }
     }
-    return has_identifier_char ? name.substr(0, at) : name;
+    return has_identifier_char
+        ? std::string_view{name.data(), at}
+        : name;
 }
 
 struct Symbol {

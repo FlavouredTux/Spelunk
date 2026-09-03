@@ -801,9 +801,11 @@ void Emitter::infer_synthetic_self_arg_types() {
         if (root == struct_root_values.end()) continue;
         auto slot = trace_to_self_arg_slot(root->second);
         if (!slot || *slot >= self_arg_type_names.size()) continue;
+        // Two or more member offsets outweigh a `T**` guessed from one
+        // pointer-typed member load.
         auto& current = self_arg_type_names[*slot];
         const std::string inferred = type_name + "*";
-        if (current.empty() || current == "void*" || current == "void**") {
+        if (current.empty() || current == "void*" || current.ends_with("**")) {
             current = inferred;
         }
     }

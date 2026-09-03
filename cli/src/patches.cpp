@@ -4,16 +4,21 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdlib>
+#include <expected>
 #include <format>
 #include <fstream>
+#include <ios>
 #include <print>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include <ember/binary/binary.hpp>
+#include <ember/binary/section.hpp>
 #include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 #include "args.hpp"
 #include "cli_error.hpp"

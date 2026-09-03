@@ -1,21 +1,28 @@
 #include <cstdlib>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <print>
+#include <span>
+#include <stdlib.h>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
 #include <ember/analysis/strings.hpp>
+#include <ember/binary/binary.hpp>
 #include <ember/binary/dtk_project.hpp>
 #include <ember/binary/raw_regions.hpp>
 #include <ember/binary/rel.hpp>
+#include <ember/common/cache.hpp>
 #include <ember/common/error.hpp>
 #include <ember/common/timing.hpp>
+#include <ember/common/types.hpp>
 
 #include "args.hpp"
 #include "cli_error.hpp"
@@ -155,7 +162,7 @@ resolve_dsym_bundle_path(const std::filesystem::path& p,
     const auto dwarf_dir = p / "Contents" / "Resources" / "DWARF";
     if (!std::filesystem::is_directory(dwarf_dir, ec) || ec) return p;
 
-    const auto by_primary_name = dwarf_dir / primary.filename();
+    auto by_primary_name = dwarf_dir / primary.filename();
     if (std::filesystem::exists(by_primary_name, ec) && !ec) return by_primary_name;
 
     std::filesystem::path only;

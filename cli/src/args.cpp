@@ -1,13 +1,19 @@
 #include "args.hpp"
-#include "util.hpp"
 
 #include <array>
 #include <charconv>
+#include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
+
+#include <ember/common/error.hpp>
+
+#include "util.hpp"
 
 namespace ember::cli {
 

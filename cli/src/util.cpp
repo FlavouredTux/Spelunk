@@ -3,7 +3,12 @@
 #include <charconv>
 #include <cmath>
 #include <format>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <system_error>
+
+#include <ember/common/types.hpp>
 
 namespace ember::cli {
 

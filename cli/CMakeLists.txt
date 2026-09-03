@@ -1,7 +1,13 @@
 add_executable(ember_cli
     src/args.cpp
     src/builders.cpp
+    src/builders_graphics.cpp
+    src/builders_surfaces.cpp
     src/dbg.cpp
+    src/dbg_breakpoints.cpp
+    src/dbg_inspect.cpp
+    src/dbg_process.cpp
+    src/dbg_resolve.cpp
     src/fingerprint.cpp
     src/header_import.cpp
     src/info.cpp
@@ -9,7 +15,17 @@ add_executable(ember_cli
     src/main.cpp
     src/patches.cpp
     src/util.cpp
-    src/subcommands.cpp
+    src/commands/annotations.cpp
+    src/commands/common.cpp
+    src/commands/disasm.cpp
+    src/commands/explain.cpp
+    src/commands/functions.cpp
+    src/commands/inventory.cpp
+    src/commands/metadata.cpp
+    src/commands/state.cpp
+    src/commands/symbols.cpp
+    src/commands/teef.cpp
+    src/commands/views.cpp
 )
 
 # Header/type import is optional at build time. The CLI keeps a useful error

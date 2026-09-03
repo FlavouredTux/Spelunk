@@ -1,31 +1,42 @@
 #include "header_import.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <cctype>
 #include <charconv>
+#include <clang-c/CXDiagnostic.h>
+#include <clang-c/CXErrorCode.h>
+#include <clang-c/CXString.h>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
+#include <iterator>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <print>
 #include <regex>
 #include <set>
 #include <span>
-#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
+#include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/relocation.hpp>
 #include <ember/binary/symbol.hpp>
+#include <ember/common/annotations.hpp>
 #include <ember/common/error.hpp>
+#include <ember/common/types.hpp>
 
 #include "args.hpp"
 #include "subcommands.hpp"

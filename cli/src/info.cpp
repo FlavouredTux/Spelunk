@@ -5,7 +5,11 @@
 #include <print>
 #include <string_view>
 
+#include <ember/binary/arch.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/format.hpp>
+#include <ember/binary/section.hpp>
+#include <ember/binary/symbol.hpp>
 
 namespace ember::cli {
 

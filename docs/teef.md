@@ -502,7 +502,7 @@ output.
 | `core/src/analysis/teef_recognize.cpp` | Corpus load (mmap+parallel parse), recognize cascade, MinHash inverted index |
 | `core/src/analysis/teef_orbit.cpp` | E-graph orbit-class fingerprint (foundation, not on critical path) |
 | `core/src/analysis/egraph.cpp` | Bounded e-graph saturation engine |
-| `cli/src/subcommands.cpp` | `--teef` / `--recognize` / `--orbit-dump` drivers |
+| `cli/src/commands/teef.cpp` | `--teef` / `--recognize` / `--orbit-dump` drivers |
 
 Self-contained unit tests in `tests/egraph_test.cpp` cover the
 e-graph core (hash-cons, congruence closure, every rule family,

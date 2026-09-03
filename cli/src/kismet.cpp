@@ -3,13 +3,16 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <optional>
 #include <print>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include <ember/binary/kismet_bundle.hpp>
 #include <ember/analysis/kismet.hpp>
+#include <ember/binary/kismet_bundle.hpp>
+#include <ember/common/types.hpp>
 
 #include "args.hpp"
 

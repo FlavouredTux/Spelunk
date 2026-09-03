@@ -1,5 +1,4 @@
 #include "fingerprint.hpp"
-#include "subcommands.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,8 +7,10 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <ios>
 #include <mutex>
 #include <optional>
 #include <print>
@@ -27,14 +28,17 @@
 #include <ember/analysis/fingerprint.hpp>
 #include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
+#include <ember/binary/symbol.hpp>
 #include <ember/common/cache.hpp>
 #include <ember/common/progress.hpp>
 #include <ember/common/threads.hpp>
 #include <ember/common/timing.hpp>
+#include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
 #include <ember/ir/lifter.hpp>
 
 #include "args.hpp"
+#include "subcommands.hpp"
 #include "util.hpp"
 
 namespace ember::cli {

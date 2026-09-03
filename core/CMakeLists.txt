@@ -5,6 +5,7 @@ add_library(ember_core STATIC
     src/binary/rel.cpp
     src/binary/dtk_project.cpp
     src/binary/macho.cpp
+    src/binary/macho_dyld.cpp
     src/binary/macho_metadata.cpp
     src/binary/pe.cpp
     src/binary/pdb.cpp
@@ -21,6 +22,10 @@ add_library(ember_core STATIC
     src/disasm/x64/decoder.cpp
     src/disasm/x64/decoder_tables.cpp
     src/disasm/ppc/decoder.cpp
+    src/disasm/ppc/decoder_branch.cpp
+    src/disasm/ppc/decoder_floating.cpp
+    src/disasm/ppc/decoder_integer.cpp
+    src/disasm/ppc/decoder_paired_single.cpp
     src/disasm/arm/decoder.cpp
     src/disasm/arm/decoder32.cpp
     src/analysis/cfg_builder.cpp

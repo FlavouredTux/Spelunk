@@ -34,6 +34,7 @@
 #include <ember/ir/ssa.hpp>
 
 #include "emitter_tables.hpp"
+#include "emitter_string_literals.hpp"
 
 namespace ember::emit {
 
@@ -122,6 +123,9 @@ wrap_if_lt(std::string s, Prec own, int min_prec) {
 }
 
 struct Emitter {
+    explicit Emitter(const Binary* input_binary)
+        : binary(input_binary), string_literals(input_binary) {}
+
     // Calling convention the emitted function uses. Drives which int-arg
     // register set maps to a1/a2/..., which slots are considered arg regs
     // for live-in-from-caller detection, and which registers a callee may
@@ -131,6 +135,7 @@ struct Emitter {
     Abi abi = Abi::SysVAmd64;
     const IrFunction*                                fn = nullptr;
     const Binary*                                    binary = nullptr;
+    BinaryStringLiterals                             string_literals;
     const Annotations*                               annotations = nullptr;
     EmitOptions                                      options{};
     // Recovered stack-frame slots, populated once at the start of emit()
@@ -188,7 +193,6 @@ struct Emitter {
     // Used to recognise phi merges where one path still has the just-stored
     // value and another path reloads the same slot.
     std::map<i64, IrValue>                           single_write_slot_value;
-    mutable std::map<u64, std::optional<std::string>> string_cache;
     // Call sites whose return value flows straight into a Return(rax). The
     // Call statement is suppressed and its rendered expression is stashed in
     // `fold_return_expr`, keyed on the rax SSA key; the Return handler then
@@ -253,11 +257,6 @@ struct Emitter {
     // `rax_3` / `t17` when a structured condition or return reads a value
     // whose defining IR statement was otherwise suppressed as single-use.
     mutable std::set<SsaKey>                          emitted_bindings;
-
-    // Try to resolve an integer immediate as a pointer to a NUL-terminated
-    // printable string in the binary image. Results are cached.
-    [[nodiscard]] std::optional<std::string> try_string_at(
-        u64 addr, std::size_t min_printable = 2) const;
 
     // Cached per-target arity via infer_arity().
     mutable std::map<u64, u8> arity_cache;
@@ -647,17 +646,6 @@ struct Emitter {
     std::map<u64, std::string> objc_block_capture_names;
     std::string objc_block_self_class;
     bool current_return_is_void = false;
-
-    // Mach-O __DATA,__cfstring section bounds. When set, any Imm that falls
-    // inside this range is decoded as a Core Foundation string literal via
-    // the standard 32-byte CFString-in-cfstring layout.
-    addr_t cfstring_lo = 0;
-    addr_t cfstring_hi = 0;
-
-    static void append_utf8(std::string& out, u32 cp);
-
-    [[nodiscard]] std::optional<std::string>
-    try_decode_cfstring(u64 addr) const;
 
     // For-loop update-instruction positions, pulled from every RegionKind::For
     // in the structured body. emit_block skips these so the increment doesn't

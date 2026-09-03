@@ -97,6 +97,22 @@ add_executable(ember_ppc_decoder_test ppc_decoder_test.cpp)
 target_link_libraries(ember_ppc_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME ppc_decoder_unit COMMAND ember_ppc_decoder_test)
 
+add_executable(ember_emitter_string_literals_test
+    emitter_string_literals_test.cpp)
+target_include_directories(ember_emitter_string_literals_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/decompile")
+target_link_libraries(ember_emitter_string_literals_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_string_literals_unit
+         COMMAND ember_emitter_string_literals_test)
+
+add_executable(ember_eh_frame_internal_test eh_frame_internal_test.cpp)
+target_include_directories(ember_eh_frame_internal_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/analysis")
+target_link_libraries(ember_eh_frame_internal_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME eh_frame_internal_unit COMMAND ember_eh_frame_internal_test)
+
 add_executable(ember_arity_test arity_test.cpp)
 target_link_libraries(ember_arity_test PRIVATE ember::core ember::flags)
 add_test(NAME arity_unit COMMAND ember_arity_test)

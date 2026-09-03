@@ -546,14 +546,14 @@ std::string Emitter::format_imm_impl(const IrValue& v,
     // CFString constants. Rendering as `@"..."` matches what the
     // source-level code actually wrote.
     if (allow_string_literals && plausible_address) {
-        if (auto s = try_decode_cfstring(address); s) {
+        if (auto s = string_literals.try_cfstring_at(address); s) {
             return "@" + escape_string(*s);
         }
     }
     // If the immediate points into the binary and resolves to a NUL-terminated
     // printable string, render as a C string literal.
     if (allow_string_literals && plausible_address) {
-        if (auto s = try_string_at(address); s) {
+        if (auto s = string_literals.try_c_string_at(address); s) {
             return escape_string(*s);
         }
     }

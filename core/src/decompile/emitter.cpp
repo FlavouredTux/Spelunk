@@ -996,8 +996,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             "pseudo-c: StructuredFunction has no IR"));
     }
 
-    Emitter e;
-    e.binary      = binary;
+    Emitter e(binary);
     e.annotations = annotations;
     e.options     = options;
     e.abi         = binary
@@ -1132,8 +1131,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     // body-tree walks (suppress_canary_regions / analyze_return_folds /
     // collect_for_updates) since per-block output has no structured body
     // to reason about.
-    Emitter e;
-    e.binary      = binary;
+    Emitter e(binary);
     e.annotations = annotations;
     e.options     = options;
     e.abi         = binary

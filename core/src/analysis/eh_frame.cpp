@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
-#include <map>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -22,10 +21,7 @@ namespace ember {
 namespace {
 
 using ehfi::Reader;
-using ehfi::CieInfo;
 using ehfi::read_encoded;
-using ehfi::find_eh_frame;
-using ehfi::parse_cie;
 using ehfi::DW_EH_PE_omit;
 
 void parse_lsda(std::span<const std::byte> lsda_bytes,
@@ -223,92 +219,17 @@ LpMap parse_landing_pads(const Binary& b) {
         }
     }
 
-    auto eh = find_eh_frame(b);
-    if (!eh) return out;
-
-    // Map cie_offset (absolute position within section) → CieInfo, so FDEs
-    // can look up their parent CIE's augmentation.
-    std::map<std::size_t, CieInfo> cies;
-    Reader top{eh->bytes, 0};
-
-    while (top.pos + 4 <= top.buf.size()) {
-        const std::size_t entry_off = top.pos;
-        u32 length = 0;
-        if (!top.get_le(length)) break;
-        if (length == 0) break;  // terminator / padding
-        std::size_t entry_len = length;
-        if (length == 0xFFFFFFFFu) {
-            // 64-bit length extension - rare in practice; bail out safely.
-            break;
+    ehfi::for_each_decoded_fde(b, [&](const ehfi::DecodedFde& fde) {
+        if (!fde.lsda_address || *fde.lsda_address == 0) {
+            return ehfi::FdeVisit::Continue;
         }
-        const std::size_t payload_end = top.pos + entry_len;
-        if (payload_end > top.buf.size()) break;
-
-        u32 cie_id = 0;
-        if (!top.get_le(cie_id)) break;
-
-        std::span<const std::byte> inner(
-            eh->bytes.data() + top.pos,
-            payload_end - top.pos);
-        Reader rd{inner, 0};
-
-        const u64 entry_vaddr = eh->vaddr + entry_off;
-        const u64 cie_id_vaddr = entry_vaddr + 4;
-        (void)cie_id_vaddr;
-
-        if (cie_id == 0) {
-            // This is a CIE.
-            const u64 cie_vaddr = entry_vaddr;
-            auto info = parse_cie(rd, cie_vaddr);
-            if (info) cies[entry_off] = *info;
-        } else {
-            // FDE. cie_id is a BACKWARD offset from the cie_id field's own
-            // position to the CIE's length field.
-            const std::size_t cie_ptr_pos = top.pos - 4;  // where cie_id lived
-            const std::size_t cie_off = (cie_id <= cie_ptr_pos)
-                ? (cie_ptr_pos - cie_id)
-                : 0;
-            auto ci_it = cies.find(cie_off);
-            if (ci_it == cies.end()) {
-                top.pos = payload_end;
-                continue;
-            }
-            const CieInfo& ci = ci_it->second;
-
-            // pc_begin + pc_range using fde_ptr_enc
-            const u64 pc_begin_vaddr = entry_vaddr + 4 + 4 + rd.pos;
-            auto pc_begin_v = read_encoded(rd, ci.fde_ptr_enc,
-                                           eh->vaddr, pc_begin_vaddr);
-            if (!pc_begin_v) { top.pos = payload_end; continue; }
-            auto pc_range_v = read_encoded(
-                rd, ci.fde_ptr_enc & 0x0F,  // range is same format, no pcrel
-                eh->vaddr, entry_vaddr + 4 + 4 + rd.pos);
-            if (!pc_range_v) { top.pos = payload_end; continue; }
-            (void)pc_range_v;
-
-            std::optional<u64> lsda_addr;
-            if (ci.has_augmentation) {
-                u64 fde_aug_len = 0;
-                if (!rd.get_uleb128(fde_aug_len)) { top.pos = payload_end; continue; }
-                const std::size_t aug_end = rd.pos + static_cast<std::size_t>(fde_aug_len);
-                if (ci.lsda_enc != DW_EH_PE_omit && fde_aug_len > 0) {
-                    auto lsda_vaddr = entry_vaddr + 4 + 4 + rd.pos;
-                    lsda_addr = read_encoded(rd, ci.lsda_enc, eh->vaddr,
-                                             lsda_vaddr);
-                }
-                rd.pos = aug_end;
-            }
-
-            if (lsda_addr && *lsda_addr != 0) {
-                auto lsda_bytes = b.bytes_at(static_cast<addr_t>(*lsda_addr));
-                if (!lsda_bytes.empty()) {
-                    parse_lsda(lsda_bytes, *lsda_addr, *pc_begin_v, out);
-                }
-            }
+        auto lsda_bytes = b.bytes_at(
+            static_cast<addr_t>(*fde.lsda_address));
+        if (!lsda_bytes.empty()) {
+            parse_lsda(lsda_bytes, *fde.lsda_address, fde.pc_begin, out);
         }
-
-        top.pos = payload_end;
-    }
+        return ehfi::FdeVisit::Continue;
+    });
 
     return out;
 }
@@ -319,58 +240,12 @@ LpMap parse_landing_pads(const Binary& b) {
 // often the only remaining source of function starts.
 std::vector<FdeExtent> enumerate_fde_extents(const Binary& b) {
     std::vector<FdeExtent> out;
-    auto eh = find_eh_frame(b);
-    if (!eh) return out;
-
-    std::map<std::size_t, CieInfo> cies;
-    Reader top{eh->bytes, 0};
-
-    while (top.pos + 4 <= top.buf.size()) {
-        const std::size_t entry_off = top.pos;
-        u32 length = 0;
-        if (!top.get_le(length)) break;
-        if (length == 0) break;
-        if (length == 0xFFFFFFFFu) break;
-
-        const std::size_t payload_end = top.pos + length;
-        if (payload_end > top.buf.size()) break;
-
-        u32 cie_id = 0;
-        if (!top.get_le(cie_id)) break;
-
-        std::span<const std::byte> inner(
-            eh->bytes.data() + top.pos,
-            payload_end - top.pos);
-        Reader rd{inner, 0};
-
-        const u64 entry_vaddr = eh->vaddr + entry_off;
-
-        if (cie_id == 0) {
-            auto info = parse_cie(rd, entry_vaddr);
-            if (info) cies[entry_off] = *info;
-        } else {
-            const std::size_t cie_ptr_pos = top.pos - 4;
-            const std::size_t cie_off = (cie_id <= cie_ptr_pos)
-                ? (cie_ptr_pos - cie_id) : 0;
-            auto ci_it = cies.find(cie_off);
-            if (ci_it == cies.end()) { top.pos = payload_end; continue; }
-            const CieInfo& ci = ci_it->second;
-
-            const u64 pc_begin_vaddr = entry_vaddr + 4 + 4 + rd.pos;
-            auto pc_begin_v = read_encoded(rd, ci.fde_ptr_enc,
-                                           eh->vaddr, pc_begin_vaddr);
-            if (!pc_begin_v) { top.pos = payload_end; continue; }
-            auto pc_range_v = read_encoded(
-                rd, ci.fde_ptr_enc & 0x0F,
-                eh->vaddr, entry_vaddr + 4 + 4 + rd.pos);
-            if (!pc_range_v) { top.pos = payload_end; continue; }
-
-            if (*pc_begin_v != 0 && *pc_range_v != 0) {
-                out.push_back({static_cast<addr_t>(*pc_begin_v), *pc_range_v});
-            }
+    ehfi::for_each_decoded_fde(b, [&](const ehfi::DecodedFde& fde) {
+        if (fde.pc_begin != 0 && fde.pc_range != 0) {
+            out.push_back({static_cast<addr_t>(fde.pc_begin), fde.pc_range});
         }
-        top.pos = payload_end;
-    }
+        return ehfi::FdeVisit::Continue;
+    });
     return out;
 }
 

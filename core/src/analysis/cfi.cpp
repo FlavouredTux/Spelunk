@@ -1,7 +1,6 @@
 #include <ember/analysis/cfi.hpp>
 
 #include <cstddef>
-#include <map>
 #include <optional>
 #include <span>
 #include <vector>
@@ -16,10 +15,6 @@ namespace ember::cfi {
 namespace {
 
 using ember::ehfi::Reader;
-using ember::ehfi::CieInfo;
-using ember::ehfi::read_encoded;
-using ember::ehfi::find_eh_frame;
-using ember::ehfi::parse_cie;
 
 // DW_CFA_* opcode constants. The "primary" opcodes pack a small
 // operand into the low 6 bits of the byte; the high 2 bits select
@@ -290,92 +285,35 @@ void restore_reg(Vm& vm, u32 reg) {
 }  // namespace
 
 std::optional<State> recover(const Binary& b, addr_t target_pc) {
-    auto eh = find_eh_frame(b);
-    if (!eh) return std::nullopt;
-
-    std::map<std::size_t, CieInfo> cies;
-    Reader top{eh->bytes, 0};
-
-    while (top.pos + 4 <= top.buf.size()) {
-        const std::size_t entry_off = top.pos;
-        u32 length = 0;
-        if (!top.get_le(length)) break;
-        if (length == 0) break;
-        if (length == 0xFFFFFFFFu) break;
-
-        const std::size_t payload_end = top.pos + length;
-        if (payload_end > top.buf.size()) break;
-
-        u32 cie_id = 0;
-        if (!top.get_le(cie_id)) break;
-
-        std::span<const std::byte> inner(
-            eh->bytes.data() + top.pos,
-            payload_end - top.pos);
-        Reader rd{inner, 0};
-
-        const u64 entry_vaddr = eh->vaddr + entry_off;
-
-        if (cie_id == 0) {
-            auto info = parse_cie(rd, entry_vaddr);
-            if (info) cies[entry_off] = *info;
-            top.pos = payload_end;
-            continue;
-        }
-
-        const std::size_t cie_ptr_pos = top.pos - 4;
-        const std::size_t cie_off = (cie_id <= cie_ptr_pos)
-            ? (cie_ptr_pos - cie_id) : 0;
-        auto ci_it = cies.find(cie_off);
-        if (ci_it == cies.end()) { top.pos = payload_end; continue; }
-        const CieInfo& ci = ci_it->second;
-
-        const u64 pc_begin_vaddr = entry_vaddr + 4 + 4 + rd.pos;
-        auto pc_begin_v = read_encoded(rd, ci.fde_ptr_enc,
-                                       eh->vaddr, pc_begin_vaddr);
-        if (!pc_begin_v) { top.pos = payload_end; continue; }
-        auto pc_range_v = read_encoded(
-            rd, ci.fde_ptr_enc & 0x0F,
-            eh->vaddr, entry_vaddr + 4 + 4 + rd.pos);
-        if (!pc_range_v) { top.pos = payload_end; continue; }
-
-        if (ci.has_augmentation) {
-            u64 fde_aug_len = 0;
-            if (!rd.get_uleb128(fde_aug_len)) {
-                top.pos = payload_end; continue;
-            }
-            rd.pos += static_cast<std::size_t>(fde_aug_len);
-            if (rd.pos > rd.buf.size()) { top.pos = payload_end; continue; }
-        }
-
-        if (target_pc < *pc_begin_v ||
-            target_pc >= *pc_begin_v + *pc_range_v) {
-            top.pos = payload_end;
-            continue;
+    std::optional<State> result;
+    ehfi::for_each_decoded_fde(b, [&](const ehfi::DecodedFde& fde) {
+        if (!fde.augmentation_valid ||
+            target_pc < fde.pc_begin ||
+            target_pc - fde.pc_begin >= fde.pc_range) {
+            return ehfi::FdeVisit::Continue;
         }
 
         // Coverage match - run the FDE.
         Vm vm;
-        vm.code_align = ci.code_alignment_factor;
-        vm.data_align = ci.data_alignment_factor;
+        vm.code_align = fde.cie.code_alignment_factor;
+        vm.data_align = fde.cie.data_alignment_factor;
         vm.state.return_address_register =
-            static_cast<u32>(ci.return_address_register);
+            static_cast<u32>(fde.cie.return_address_register);
 
-        if (!run(vm, ci.initial_instructions, /*target_pc*/ 0)) {
-            return std::nullopt;
+        if (!run(vm, fde.cie.initial_instructions, /*target_pc*/ 0)) {
+            return ehfi::FdeVisit::Stop;
         }
         vm.initial_state = vm.state;
-        vm.location = *pc_begin_v;
+        vm.location = fde.pc_begin;
 
-        const std::span<const std::byte> fde_insns =
-            rd.buf.subspan(rd.pos);
-        if (!run(vm, fde_insns, target_pc) && vm.failed) {
-            return std::nullopt;
+        if (!run(vm, fde.instructions, target_pc) && vm.failed) {
+            return ehfi::FdeVisit::Stop;
         }
-        return vm.state;
-    }
+        result = vm.state;
+        return ehfi::FdeVisit::Stop;
+    });
 
-    return std::nullopt;
+    return result;
 }
 
 }  // namespace ember::cfi

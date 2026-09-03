@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <format>
-#include <string_view>
 #include <utility>
 
 #include <ember/analysis/arity.hpp>
@@ -84,14 +83,6 @@ void setup_emitter_metadata(Emitter& e,
             }
         }
 
-        for (const auto& s : binary->sections()) {
-            const std::string_view n = s.name;
-            if (n == "__cfstring" || n.ends_with(",__cfstring")) {
-                e.cfstring_lo = static_cast<addr_t>(s.vaddr);
-                e.cfstring_hi = static_cast<addr_t>(s.vaddr + s.size);
-                break;
-            }
-        }
     } else if (binary && binary->format() == Format::Pe) {
         if (!e.options.rtti_methods) {
             storage.local_rtti_methods = rtti_method_names(parse_msvc_rtti(*binary));

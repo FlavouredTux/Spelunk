@@ -115,15 +115,15 @@ Emitter::resolve_string_value(const IrValue& v) const {
     // operand is commonly an Add tree rather than a bare Imm/Assign.
     if (auto resolved = try_resolve_imm_addr(v); resolved) {
         const auto addr = normalized_address(*resolved);
-        if (auto s = try_decode_cfstring(addr); s) return s;
-        if (auto s = try_string_at(addr); s) return s;
+        if (auto s = string_literals.try_cfstring_at(addr); s) return s;
+        if (auto s = string_literals.try_c_string_at(addr); s) return s;
     }
     IrValue cur = v;
     for (int step = 0; step < 8; ++step) {
         if (cur.kind == IrValueKind::Imm) {
             const auto addr = static_cast<u64>(cur.imm);
-            if (auto s = try_decode_cfstring(addr); s) return s;
-            return try_string_at(addr);
+            if (auto s = string_literals.try_cfstring_at(addr); s) return s;
+            return string_literals.try_c_string_at(addr);
         }
         const IrInst* d = def_of(cur);
         if (!d) return std::nullopt;

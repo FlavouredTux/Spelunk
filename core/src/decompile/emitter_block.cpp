@@ -378,7 +378,7 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
                 rendered_call_args[arg_i] = stack_name(*off);
             }
             if (auto address = try_resolve_imm_addr(call_args[arg_i]); address) {
-                if (auto literal = try_string_at(
+                if (auto literal = string_literals.try_c_string_at(
                         normalized_address(*address), 1); literal) {
                     rendered_call_args[arg_i] = escape_string(*literal);
                 }

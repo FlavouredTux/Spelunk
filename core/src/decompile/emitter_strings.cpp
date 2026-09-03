@@ -5,24 +5,40 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include <ember/binary/binary.hpp>
+#include <ember/binary/format.hpp>
 #include <ember/binary/section.hpp>
 #include <ember/common/types.hpp>
 
-#include "emitter_internal.hpp"
+#include "emitter_string_literals.hpp"
 
 namespace ember::emit {
 
-std::optional<std::string> Emitter::try_string_at(
+BinaryStringLiterals::BinaryStringLiterals(const Binary* binary)
+    : binary_(binary) {
+    if (!binary_ || binary_->format() != Format::MachO) return;
+    for (const Section& section : binary_->sections()) {
+        const std::string_view name = section.name;
+        if (name == "__cfstring" || name.ends_with(",__cfstring")) {
+            cfstring_lo_ = static_cast<addr_t>(section.vaddr);
+            cfstring_hi_ = static_cast<addr_t>(section.vaddr + section.size);
+            break;
+        }
+    }
+}
+
+std::optional<std::string> BinaryStringLiterals::try_c_string_at(
     u64 addr, std::size_t min_printable) const {
-    if (!binary) return std::nullopt;
+    if (!binary_) return std::nullopt;
     if (min_printable == 2) {
-        auto it = string_cache.find(addr);
-        if (it != string_cache.end()) return it->second;
+        auto it = c_string_cache_.find(addr);
+        if (it != c_string_cache_.end()) return it->second;
     }
 
-    for (const Section& section : binary->sections()) {
+    for (const Section& section : binary_->sections()) {
         if (addr < section.vaddr || addr >= section.vaddr + section.size) continue;
         // Code bytes frequently contain two printable opcode bytes before
         // a zero and used to masquerade as handler/function strings.
@@ -31,7 +47,7 @@ std::optional<std::string> Emitter::try_string_at(
     }
 
     std::optional<std::string> result;
-    auto span = binary->bytes_at(static_cast<addr_t>(addr));
+    auto span = binary_->bytes_at(static_cast<addr_t>(addr));
     const std::size_t max_len = 512;
     if (!span.empty()) {
         std::string s;
@@ -72,11 +88,11 @@ std::optional<std::string> Emitter::try_string_at(
             result = std::move(s);
         }
     }
-    if (min_printable == 2) string_cache.emplace(addr, result);
+    if (min_printable == 2) c_string_cache_.emplace(addr, result);
     return result;
 }
 
-void Emitter::append_utf8(std::string& out, u32 cp) {
+void BinaryStringLiterals::append_utf8(std::string& out, u32 cp) {
     if (cp <= 0x7f) {
         out.push_back(static_cast<char>(cp));
     } else if (cp <= 0x7ff) {
@@ -95,13 +111,13 @@ void Emitter::append_utf8(std::string& out, u32 cp) {
 }
 
 std::optional<std::string>
-Emitter::try_decode_cfstring(u64 addr) const {
-    if (!binary) return std::nullopt;
-    if (cfstring_lo == 0 || addr < cfstring_lo || addr >= cfstring_hi)
+BinaryStringLiterals::try_cfstring_at(u64 addr) const {
+    if (!binary_) return std::nullopt;
+    if (cfstring_lo_ == 0 || addr < cfstring_lo_ || addr >= cfstring_hi_)
         return std::nullopt;
     // Each entry is 32 bytes: u64 isa; u32 flags; u32 pad; u64 data;
     // u64 length. Offsets: data at +16, length at +24.
-    auto bytes = binary->bytes_at(static_cast<addr_t>(addr));
+    auto bytes = binary_->bytes_at(static_cast<addr_t>(addr));
     if (bytes.size() < 32) return std::nullopt;
     u32 flags = 0;
     u64 data_ptr = 0, length = 0;
@@ -109,7 +125,7 @@ Emitter::try_decode_cfstring(u64 addr) const {
     std::memcpy(&data_ptr, bytes.data() + 16, 8);
     std::memcpy(&length,   bytes.data() + 24, 8);
     if (data_ptr == 0 || length == 0 || length > 1'000'000) return std::nullopt;
-    auto strb = binary->bytes_at(static_cast<addr_t>(data_ptr));
+    auto strb = binary_->bytes_at(static_cast<addr_t>(data_ptr));
     if (strb.size() < length) return std::nullopt;
     const bool maybe_utf16 = length * 2 <= strb.size() && [&] {
         bool saw_wide_marker = false;

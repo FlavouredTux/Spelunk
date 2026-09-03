@@ -776,7 +776,7 @@ std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
                         u64 ptr = 0;
                         std::memcpy(&ptr, raw.data(), 8);
                         if (ptr >= 0x100) {
-                            if (auto s = try_string_at(ptr); s) {
+                            if (auto s = string_literals.try_c_string_at(ptr); s) {
                                 return escape_string(*s);
                             }
                         }

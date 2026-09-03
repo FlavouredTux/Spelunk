@@ -701,7 +701,7 @@ Emitter::objc_class_from_block_literal_captures(addr_t literal, u64 size) const 
         u64 ptr = 0;
         std::memcpy(&ptr, bytes.data(), 8);
         if (ptr < 0x100) continue;
-        auto s = try_string_at(ptr);
+        auto s = string_literals.try_c_string_at(ptr);
         if (!s) continue;
         if (auto cls = objc_class_from_bracket_name(*s); cls) return cls;
     }

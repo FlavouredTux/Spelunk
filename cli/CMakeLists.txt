@@ -10,6 +10,7 @@ add_executable(ember_cli
     src/dbg_resolve.cpp
     src/fingerprint.cpp
     src/header_import.cpp
+    src/header_import_model.cpp
     src/info.cpp
     src/kismet.cpp
     src/main.cpp
@@ -25,6 +26,7 @@ add_executable(ember_cli
     src/commands/state.cpp
     src/commands/symbols.cpp
     src/commands/teef.cpp
+    src/commands/teef_recognize.cpp
     src/commands/views.cpp
 )
 

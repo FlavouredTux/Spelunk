@@ -10,6 +10,8 @@
 
 #include <cstddef>
 #include <cstring>
+#include <limits>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -50,7 +52,9 @@ struct Reader {
     std::size_t pos = 0;
 
     [[nodiscard]] bool eof()              const { return pos >= buf.size(); }
-    [[nodiscard]] bool remaining(std::size_t n) const { return pos + n <= buf.size(); }
+    [[nodiscard]] bool remaining(std::size_t n) const {
+        return pos <= buf.size() && n <= buf.size() - pos;
+    }
 
     bool get(u8& v) {
         if (!remaining(1)) return false;
@@ -269,28 +273,32 @@ parse_cie(Reader& cr, u64 cie_vaddr) {
 
     u64 aug_len = 0;
     if (!cr.get_uleb128(aug_len)) return std::nullopt;
-    const std::size_t aug_end = cr.pos + static_cast<std::size_t>(aug_len);
-    if (aug_end > cr.buf.size()) return std::nullopt;
+    if (aug_len > cr.buf.size() - cr.pos) return std::nullopt;
+    const std::size_t aug_start = cr.pos;
+    const auto aug_size = static_cast<std::size_t>(aug_len);
+    const std::size_t aug_end =
+        aug_start + aug_size;
+    Reader augmentation{cr.buf.subspan(aug_start, aug_size), 0};
 
     for (std::size_t i = 1; i < aug.size(); ++i) {
         const char c = aug[i];
         if (c == 'L') {
             u8 enc = 0;
-            if (!cr.get(enc)) return std::nullopt;
+            if (!augmentation.get(enc)) return std::nullopt;
             out.lsda_enc = enc;
         } else if (c == 'R') {
             u8 enc = 0;
-            if (!cr.get(enc)) return std::nullopt;
+            if (!augmentation.get(enc)) return std::nullopt;
             out.fde_ptr_enc = enc;
         } else if (c == 'P') {
             u8 enc = 0;
-            if (!cr.get(enc)) return std::nullopt;
-            if (!read_encoded(cr, enc, 0, cie_vaddr)) return std::nullopt;
-        } else if (c == 'S') {
-            // signal frame, no payload
-        } else if (c == 'B' || c == 'G') {
-            u8 ignore = 0;
-            (void)cr.get(ignore);
+            if (!augmentation.get(enc)) return std::nullopt;
+            if (!read_encoded(augmentation, enc, 0, cie_vaddr)) {
+                return std::nullopt;
+            }
+        } else if (c == 'S' || c == 'B' || c == 'G') {
+            // Signal-frame and AArch64 signing/tagging markers carry no
+            // augmentation-data byte.
         } else {
             // Unknown augmentation char - rest of augmentation_data is
             // opaque; jump past it via aug_end below.
@@ -300,6 +308,140 @@ parse_cie(Reader& cr, u64 cie_vaddr) {
     cr.pos = aug_end;
     out.initial_instructions = cr.buf.subspan(cr.pos);
     return out;
+}
+
+// The common portion of an FDE: its associated CIE, covered address range,
+// and the payload that follows the FDE augmentation data. Extent discovery
+// intentionally uses pc_begin/pc_range even when augmentation_valid is false;
+// the unwind consumer rejects those entries because their instruction boundary
+// is unknown. LSDA decoding remains best-effort, matching its previous parser,
+// while the extent scan remains deliberately tolerant.
+struct DecodedFde {
+    CieInfo cie;
+    u64 pc_begin = 0;
+    u64 pc_range = 0;
+    std::optional<u64> lsda_address;
+    std::span<const std::byte> instructions;
+    bool augmentation_valid = true;
+};
+
+enum class FdeVisit {
+    Continue,
+    Stop,
+};
+
+// Walk the 32-bit-length .eh_frame form used by the existing parser. Record
+// framing, CIE lookup, and encoded PC/range reads live here so extent, LSDA,
+// and unwind consumers cannot drift into subtly different interpretations.
+// The callback may stop the walk early, which is useful for PC-based unwind
+// lookup.
+template <class Visitor>
+inline void for_each_decoded_fde(const Binary& b, Visitor&& visitor) {
+    auto eh = find_eh_frame(b);
+    if (!eh) return;
+
+    std::map<std::size_t, CieInfo> cies;
+    Reader top{eh->bytes, 0};
+
+    while (top.pos + sizeof(u32) <= top.buf.size()) {
+        const std::size_t entry_off = top.pos;
+        u32 length = 0;
+        if (!top.get_le(length)) break;
+        if (length == 0 || length == 0xFFFF'FFFFu) break;
+        if (length < sizeof(u32)) break;
+
+        if (length > top.buf.size() - top.pos) break;
+        const std::size_t payload_end = top.pos + length;
+
+        u32 cie_id = 0;
+        if (!top.get_le(cie_id)) break;
+
+        const std::span<const std::byte> inner(
+            eh->bytes.data() + top.pos,
+            payload_end - top.pos);
+        Reader rd{inner, 0};
+        const u64 entry_vaddr = eh->vaddr + entry_off;
+
+        if (cie_id == 0) {
+            if (auto info = parse_cie(rd, entry_vaddr)) {
+                cies[entry_off] = *info;
+            }
+            top.pos = payload_end;
+            continue;
+        }
+
+        // In .eh_frame, the CIE pointer is a backwards offset from the
+        // pointer field itself to the CIE's length field.
+        const std::size_t cie_ptr_pos = top.pos - sizeof(cie_id);
+        if (cie_id > cie_ptr_pos) {
+            top.pos = payload_end;
+            continue;
+        }
+        const std::size_t cie_off = cie_ptr_pos - cie_id;
+        const auto ci_it = cies.find(cie_off);
+        if (ci_it == cies.end()) {
+            top.pos = payload_end;
+            continue;
+        }
+
+        const CieInfo& cie = ci_it->second;
+        auto pc_begin = read_encoded(
+            rd, cie.fde_ptr_enc, eh->vaddr,
+            entry_vaddr + sizeof(length) + sizeof(cie_id) + rd.pos);
+        if (!pc_begin) {
+            top.pos = payload_end;
+            continue;
+        }
+        auto pc_range = read_encoded(
+            rd, cie.fde_ptr_enc & 0x0F, eh->vaddr,
+            entry_vaddr + sizeof(length) + sizeof(cie_id) + rd.pos);
+        if (!pc_range) {
+            top.pos = payload_end;
+            continue;
+        }
+        if (*pc_range > std::numeric_limits<u64>::max() - *pc_begin) {
+            top.pos = payload_end;
+            continue;
+        }
+
+        DecodedFde fde;
+        fde.cie = cie;
+        fde.pc_begin = *pc_begin;
+        fde.pc_range = *pc_range;
+
+        if (cie.has_augmentation) {
+            u64 augmentation_length = 0;
+            if (!rd.get_uleb128(augmentation_length)) {
+                fde.augmentation_valid = false;
+            } else {
+                const std::size_t augmentation_start = rd.pos;
+                if (augmentation_length >
+                    rd.buf.size() - augmentation_start) {
+                    fde.augmentation_valid = false;
+                } else {
+                    const auto augmentation_size =
+                        static_cast<std::size_t>(augmentation_length);
+                    Reader augmentation{
+                        rd.buf.subspan(augmentation_start, augmentation_size),
+                        0};
+                    if (cie.lsda_enc != DW_EH_PE_omit &&
+                        augmentation_size != 0) {
+                        fde.lsda_address = read_encoded(
+                            augmentation, cie.lsda_enc, eh->vaddr,
+                            entry_vaddr + sizeof(length) + sizeof(cie_id) +
+                                augmentation_start);
+                    }
+                    rd.pos = augmentation_start + augmentation_size;
+                }
+            }
+        }
+
+        if (fde.augmentation_valid) {
+            fde.instructions = rd.buf.subspan(rd.pos);
+        }
+        if (visitor(fde) == FdeVisit::Stop) return;
+        top.pos = payload_end;
+    }
 }
 
 }  // namespace ember::ehfi

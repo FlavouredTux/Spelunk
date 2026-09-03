@@ -278,7 +278,7 @@ void help_dbg() {
 void help_load() {
     std::println("Loading non-default inputs / non-default function-entry hints:");
     std::println("      --dtk PROJECT    load the main object and exact symbols from a DTK project");
-    std::println("      --version ID     select config/ID/config.yml (required for multi-version projects)");
+    std::println("      --dtk-version ID select config/<ID>/config.yml inside the project");
     std::println("      --dtk-module NAME load a named REL and link its configured peers");
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
     std::println("      --kismet PATH    read a live Unreal Kismet bundle directory or manifest");
@@ -342,7 +342,7 @@ void help_cache() {
 
 void print_help() {
     std::println("usage: ember [view-flag] [-s NAME] <binary>");
-    std::println("       ember [view-flag] --dtk <project> [--version ID] [-s NAME]");
+    std::println("       ember [view-flag] --dtk <project> [--dtk-version ID] [-s NAME]");
     std::println("       ember --help <topic>");
     std::println("");
     std::println("View pipeline:");
@@ -364,7 +364,7 @@ void print_help() {
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
     std::println("");
-    std::println("Common:  --json  -q/--quiet  -h/--help");
+    std::println("Common:  --json  -q/--quiet  -h/--help  --version");
     std::println("");
     std::println("Get topic detail:  ember --help <topic>   (or --help=<topic>)");
 }

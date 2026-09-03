@@ -581,7 +581,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.batch_size < 1:
             raise UnitError("--batch-size must be at least 1")
         command = [
-            str(ember), "--dtk", str(project), "--version", arguments.version,
+            str(ember), "--dtk", str(project), "--dtk-version", arguments.version,
             "-q", "-p", "--symbols", "<generated-manifest>",
         ]
         for header in arguments.headers:

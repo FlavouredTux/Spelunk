@@ -138,7 +138,7 @@ hard decoder failures first, then ranks decoded instructions that still lift to
 an opaque `ppc.*` intrinsic:
 
 ```sh
-ember --dtk ./spm --version EU0 --ppc-coverage --coverage-limit 20
+ember --dtk ./spm --dtk-version EU0 --ppc-coverage --coverage-limit 20
 ```
 
 Use `--json` for tooling and `--coverage-limit 0` for the complete ranking. The
@@ -211,7 +211,7 @@ be passed with repeatable `--header-arg` values:
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
   --header-arg=-I/path/to/spm/spm-headers/decomp \
-  --dtk /path/to/spm --version EU0 -p -s seq_mapChangeMain
+  --dtk /path/to/spm --dtk-version EU0 -p -s seq_mapChangeMain
 ```
 
 For multi-function work, `--symbols FILE` accepts the same comment-friendly,
@@ -255,7 +255,7 @@ is bounded so corrupt or cyclic data cannot make the command run forever.
 
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
-  --dtk /path/to/spm --version EU0 \
+  --dtk /path/to/spm --dtk-version EU0 \
   --decompile-data mapData --type 'MapData *[468]' --verify-roundtrip
 ```
 
@@ -475,7 +475,7 @@ CodeWarrior integer-to-float conversion. Run it with:
 python3 scripts/ppc_quality_benchmark.py \
   --ember ./build/cli/ember \
   --dtk /path/to/spm \
-  --version EU0 \
+  --dtk-version EU0 \
   --headers /path/to/spm/spm-headers/include \
   --roundtrip-manifest benchmarks/spm_eu0_roundtrip.txt
 ```

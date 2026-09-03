@@ -11,7 +11,7 @@ namespace ember::cli {
 struct Args {
     std::string binary;
     std::string dtk_project_path;   // --dtk PATH: project root or version config
-    std::string dtk_version;        // --version ID: config/<ID>/config.yml
+    std::string dtk_version;        // --dtk-version ID: config/<ID>/config.yml
     std::string dtk_module;         // --dtk-module NAME: select a REL/module entry
     std::string dtk_symbols_path;   // resolved internally from the DTK config
     std::vector<std::string> header_paths; // --headers PATH (repeatable): Clang C/C++ type overlay
@@ -256,7 +256,8 @@ struct Args {
     // a runtime that knows its own recovery sites writes this sidecar
     // at startup, the debugger consumes it, new entries auto-pick-up.
     std::vector<std::string> ignore_fault_files;
-    bool help   = false;
+    bool help    = false;
+    bool version = false;           // --version / -V: print the version and exit
     std::string help_topic;         // --help <topic>: pick one section of the
                                     // help text; empty means "short overview"
 };

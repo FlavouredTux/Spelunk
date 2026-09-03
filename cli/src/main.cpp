@@ -263,6 +263,10 @@ int main(int argc, char** argv) {
         else                         print_help_topic(args.help_topic);
         return EXIT_SUCCESS;
     }
+    if (args.version) {
+        std::println("ember {}", EMBER_VERSION_STRING);
+        return EXIT_SUCCESS;
+    }
     std::optional<ember::DtkProject> dtk_main_project;
     std::vector<ember::DtkProject> dtk_rel_projects;
     std::string selected_dtk_module;

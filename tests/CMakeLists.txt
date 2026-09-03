@@ -2755,31 +2755,31 @@ if(Python3_Interpreter_FOUND)
     ember_golden_test(
         NAME    dtk_project_pseudo_by_name
         FIXTURE dtk_project
-        ARGS    "--dtk|__BINARY__|--version|EU0|-p|-s|marioReInit|-q"
+        ARGS    "--dtk|__BINARY__|--dtk-version|EU0|-p|-s|marioReInit|-q"
         GOLDEN  dtk_project.pseudo.txt
     )
     ember_golden_test(
         NAME    dtk_project_functions
         FIXTURE dtk_project
-        ARGS    "--dtk|__BINARY__|--version|EU0|--no-cache|--functions|-q"
+        ARGS    "--dtk|__BINARY__|--dtk-version|EU0|--no-cache|--functions|-q"
         GOLDEN  dtk_project.functions.txt
     )
     ember_golden_test(
         NAME    dtk_rel_prolog_disasm
         FIXTURE dtk_project
-        ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|test|-d|-s|fixture_prolog|-q"
+        ARGS    "--dtk|__BINARY__|--dtk-version|EU0|--dtk-module|test|-d|-s|fixture_prolog|-q"
         GOLDEN  dtk_rel.prolog.disasm.txt
     )
     ember_golden_test(
         NAME    dtk_rel_cross_module_disasm
         FIXTURE dtk_project
-        ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|link_source|-d|-s|link_source_entry|-q"
+        ARGS    "--dtk|__BINARY__|--dtk-version|EU0|--dtk-module|link_source|-d|-s|link_source_entry|-q"
         GOLDEN  dtk_rel_cross_module.disasm.txt
     )
     ember_golden_test(
         NAME    dtk_rel_peer_function_disasm
         FIXTURE dtk_project
-        ARGS    "--dtk|__BINARY__|--version|EU0|--dtk-module|link_source|-d|-s|peer_entry|-q"
+        ARGS    "--dtk|__BINARY__|--dtk-version|EU0|--dtk-module|link_source|-d|-s|peer_entry|-q"
         GOLDEN  dtk_rel_peer_function.disasm.txt
     )
 

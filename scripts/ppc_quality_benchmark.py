@@ -196,7 +196,7 @@ def run_function(ember: pathlib.Path, dtk: pathlib.Path, version: str,
                  headers: list[pathlib.Path] | None = None,
                  header_args: list[str] | None = None,
                  syntax_compiler: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
-    command = [str(ember), "--dtk", str(dtk), "--version", version, "-p", "-s", symbol]
+    command = [str(ember), "--dtk", str(dtk), "--dtk-version", version, "-p", "-s", symbol]
     for path in headers or []:
         command.extend(("--headers", str(path)))
     for argument in header_args or []:
@@ -275,7 +275,7 @@ def run_batch(ember: pathlib.Path, dtk: pathlib.Path, version: str,
               header_args: list[str] | None = None,
               syntax_compiler: str | None = None
               ) -> tuple[list[dict[str, Any]], list[str], dict[str, float]]:
-    command = [str(ember), "--dtk", str(dtk), "--version", version,
+    command = [str(ember), "--dtk", str(dtk), "--dtk-version", version,
                "-q", "-p", "--symbols", str(manifest)]
     for path in headers or []:
         command.extend(("--headers", str(path)))
@@ -323,7 +323,7 @@ def run_roundtrip_cases(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     passed = 0
     failures: list[str] = []
     for kind, symbol, type_name in cases:
-        command = [str(ember), "--dtk", str(dtk), "--version", version,
+        command = [str(ember), "--dtk", str(dtk), "--dtk-version", version,
                    "-q", "--verify-roundtrip"]
         for path in headers or []:
             command.extend(("--headers", str(path)))

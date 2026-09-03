@@ -90,7 +90,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
 
 constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--dtk",         &Args::dtk_project_path},
-    {"",   "--version",     &Args::dtk_version},
     {"",   "--dtk-version", &Args::dtk_version},
     {"",   "--dtk-module",  &Args::dtk_module},
     {"",   "--decompile-data", &Args::decompile_data},
@@ -220,6 +219,10 @@ Result<Args> parse_args(int argc, char** argv) {
         if (s.starts_with("--help=")) {
             a.help = true;
             a.help_topic = std::string(s.substr(7));
+            continue;
+        }
+        if (s == "--version" || s == "-V") {
+            a.version = true;
             continue;
         }
 
@@ -620,13 +623,13 @@ Result<Args> parse_args(int argc, char** argv) {
     }
     if (a.dtk_project_path.empty() && !a.dtk_version.empty()) {
         return std::unexpected(Error::invalid_format(
-            "--version requires --dtk <project>"));
+            "--dtk-version requires --dtk <project>"));
     }
     if (a.dtk_project_path.empty() && !a.dtk_module.empty()) {
         return std::unexpected(Error::invalid_format(
             "--dtk-module requires --dtk <project>"));
     }
-    if (!a.help && a.binary.empty() && a.dtk_project_path.empty()
+    if (!a.help && !a.version && a.binary.empty() && a.dtk_project_path.empty()
         && !diffs_from_tsvs && !a.dump_types
         && a.regions_manifest.empty() && a.raw_bytes_path.empty()
         && a.kismet_bundle.empty()

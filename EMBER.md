@@ -233,8 +233,8 @@ standalone DOL or REL because the project supplies exact symbols, function
 sizes, module selection, peer-module relocations, and objdiff metadata.
 
 ```sh
-ember --dtk /path/to/spm --version EU0 -p -s marioMain
-ember --dtk /path/to/spm --version EU0 --dtk-module relF \
+ember --dtk /path/to/spm --dtk-version EU0 -p -s marioMain
+ember --dtk /path/to/spm --dtk-version EU0 --dtk-module relF \
   -p -s func_80c458fc
 ```
 
@@ -265,7 +265,7 @@ Header import is the preferred way to replace ABI guesses with project facts:
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
   --header-arg=-I/path/to/spm/spm-headers/decomp \
-  --dtk /path/to/spm --version EU0 -p -s seq_mapChangeMain
+  --dtk /path/to/spm --dtk-version EU0 -p -s seq_mapChangeMain
 ```
 
 Repeat `--headers` and `--header-arg` as needed. Libclang imports prototypes,
@@ -308,9 +308,9 @@ fixed-address strides receive compact `PpcDataEntry` declarations.
 Measure a binary instead of assuming decoder/lifter coverage:
 
 ```sh
-ember --dtk /path/to/spm --version EU0 \
+ember --dtk /path/to/spm --dtk-version EU0 \
   --ppc-coverage --coverage-limit 20
-ember --dtk /path/to/spm --version EU0 \
+ember --dtk /path/to/spm --dtk-version EU0 \
   --ppc-coverage --coverage-limit 0 --json
 ```
 
@@ -322,11 +322,11 @@ embedded data, so inspect sample addresses before filing a decoder gap.
 
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
-  --dtk /path/to/spm --version EU0 \
+  --dtk /path/to/spm --dtk-version EU0 \
   --decompile-data mapData --type 'MapData *[468]' \
   --verify-roundtrip
 
-ember --dtk /path/to/spm --version EU0 \
+ember --dtk /path/to/spm --dtk-version EU0 \
   --evt-script lbl_80415e04 --verify-roundtrip
 ```
 
@@ -345,12 +345,12 @@ proves representation fidelity, not original identifier names or source layout.
 
 ```sh
 ember --headers /path/to/spm/spm-headers/include \
-  --dtk /path/to/spm --version EU0 \
+  --dtk /path/to/spm --dtk-version EU0 \
   -p --symbols benchmarks/spm_eu0_ppc.txt
 
 python3 scripts/ppc_quality_benchmark.py \
   --ember ./build/cli/ember \
-  --dtk /path/to/spm --version EU0 \
+  --dtk /path/to/spm --dtk-version EU0 \
   --headers /path/to/spm/spm-headers/include \
   --syntax-check \
   --roundtrip-manifest benchmarks/spm_eu0_roundtrip.txt
@@ -372,7 +372,7 @@ the source preamble/includes, and writes a separate candidate file:
 ember-unit \
   --project /path/to/spm \
   --unit main/mario_motion \
-  --version EU0 \
+  --dtk-version EU0 \
   --headers /path/to/spm/spm-headers/include \
   --output /tmp/mario_motion.recovered.c \
   --strict

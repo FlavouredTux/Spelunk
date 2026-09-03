@@ -40,3 +40,5 @@ nohup.out
 ROADMAP.md
 .pi/ember-artifacts/
 crackme_test/
+ember-*.tar.gz
+ember-*.zip

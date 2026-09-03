@@ -20,9 +20,6 @@ classifiers = [
     "Topic :: Software Development :: Debuggers",
 ]
 
-[project.urls]
-Homepage = "https://github.com/FlavouredTux/Ember"
-
 [tool.setuptools]
 package-dir = { "" = "python" }
 

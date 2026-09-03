@@ -541,15 +541,16 @@ void Emitter::name_merge_values() {
                 continue;
             }
             if (inst.op != IrOp::Call && inst.op != IrOp::CallIndirect) continue;
-            std::vector<InferredArgument> layout;
-            if (const FunctionSig* signature = call_annotation_signature(inst);
-                signature && !(signature->return_type.empty() &&
-                               signature->params.empty() &&
-                               signature->variadic)) {
-                layout = abi_layout_for(*signature);
-            } else if (inst.op == IrOp::Call) {
-                layout = cached_argument_layout(inst.target1);
-            }
+            const std::vector<InferredArgument> layout = [&]() -> std::vector<InferredArgument> {
+                if (const FunctionSig* signature = call_annotation_signature(inst);
+                    signature && !(signature->return_type.empty() &&
+                                   signature->params.empty() &&
+                                   signature->variadic)) {
+                    return abi_layout_for(*signature);
+                }
+                if (inst.op == IrOp::Call) return cached_argument_layout(inst.target1);
+                return {};
+            }();
             const auto count_value = [&](const IrValue& value) {
                 if (auto key = ssa_key(value); key) ++non_phi_uses[*key];
             };

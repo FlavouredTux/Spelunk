@@ -6,8 +6,8 @@ document covers what we accept, what we don't, and why.
 ## What we accept
 
 - **Bug fixes and algorithm improvements** anywhere in `core/` or `cli/`.
-  Open a PR; include a test if you're fixing user-visible
-  behavior.
+  Send a merge request or a patch; include a test if you're fixing
+  user-visible behavior.
 - **New analyses, decoders, lifters, structurer passes.** Same flow.
   See the style notes at the bottom of this file.
 - **Documentation.** Fixes to `docs/`, the README, this file, code
@@ -18,8 +18,8 @@ document covers what we accept, what we don't, and why.
 - **Issue reports.** Bug reports with reproducible inputs are valuable
   even without a fix attached.
 
-By submitting a PR you agree your contribution is licensed under the
-project's MIT license.
+By submitting a change you agree it is licensed under the project's
+MIT license.
 
 ## What we don't accept
 
@@ -56,11 +56,34 @@ by a license that prohibits RE.
 The tool is designed for that work. The repository is not the place to
 publish the output of it.
 
+## Reporting bugs
+
+A useful report has the exact command line, what happened (output,
+error, or the wrong pseudo-C), what you expected, and the ember version
+or commit, OS and build type. A reproducer helps most: a small binary
+or the build script that produces one. Public binaries (distro
+packages, open-source builds) are the easiest to chase.
+
+Runtime and library recognition requests: name the runtime, where its
+binaries come from and under what license, and what recognizing it
+would unlock. Public references are welcome; binary samples and
+annotations from reverse-engineered builds are not (see above).
+
 ## Reporting security issues
 
 For vulnerabilities in ember itself (parser bugs, debugger memory
-safety, etc.), see `SECURITY.md` for private disclosure via GitHub's
-security advisories.
+safety, etc.), see `SECURITY.md`; report them privately, not in the
+tracker.
+
+## Continuous integration
+
+`scripts/ci.sh test` is the reference job: a gcc build and the full
+suite minus the `dbg_*` smoke tests, which need ptrace. Run it with the
+gcc major the goldens were generated with (gcc 16 today; a `gcc:16`
+container works). `scripts/ci.sh clang` builds the core with clang and
+libc++ and runs the toolchain-independent unit tests; `scripts/ci.sh
+release` builds, strips and packages the CLI. Wire those three into
+whatever the host offers.
 
 ## Code style
 

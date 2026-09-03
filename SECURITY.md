@@ -8,15 +8,8 @@ challenges, captured payloads).
 
 If you find a memory-safety issue, parser crash on a crafted input,
 or any vulnerability that could be triggered by a malicious binary,
-please **do not file a public issue**. Use GitHub's private
-vulnerability reporting on this repository:
-
-> **Security tab → Report a vulnerability**
-
-(direct link: https://github.com/FlavouredTux/Ember/security/advisories/new)
-
-This routes the report straight to the maintainer without exposing it
-publicly.
+please **do not file it in the public tracker**. Send it privately to
+the maintainer; the contact address is published with the repository.
 
 ## What counts as a vulnerability
 

@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.28)
 project(ember
     VERSION 1.3.0
     DESCRIPTION "Ember - reverse engineering toolkit"
-    HOMEPAGE_URL "https://github.com/FlavouredTux/Ember"
     LANGUAGES C CXX
 )
 

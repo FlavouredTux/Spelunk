@@ -304,13 +304,13 @@ Emitter::imported_call_result_field(const IrValue& base, i64 off, int depth,
     if (!annotations || !fn || off < 0) return std::nullopt;
     auto key = ssa_key(base);
     if (!key) return std::nullopt;
-    auto position = def_pos.find(*key);
-    if (position == def_pos.end() || position->second.first >= fn->blocks.size()) {
+    const auto position = ssa_uses.definition_position(*key);
+    if (!position || position->first >= fn->blocks.size()) {
         return std::nullopt;
     }
-    const auto& block = fn->blocks[position->second.first];
+    const auto& block = fn->blocks[position->first];
     std::optional<addr_t> target;
-    for (std::size_t i = position->second.second; i > 0;) {
+    for (std::size_t i = position->second; i > 0;) {
         const IrInst& previous = block.insts[--i];
         if (previous.op == IrOp::Clobber || previous.op == IrOp::Nop) continue;
         if (previous.op == IrOp::Call) target = previous.target1;

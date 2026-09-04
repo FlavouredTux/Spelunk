@@ -1,6 +1,5 @@
 // ABI noise, stack-canary suppression and common tail-return folding.
 #include <cstddef>
-#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -57,30 +56,11 @@ void Emitter::analyze_abi_noise() {
     }
     // Pass 2: propagate. A pure temp whose every use is in a hidden inst is itself dead.
     //
-    // We build a one-shot user-list per SsaKey up front so each fixpoint
-    // iteration touches O(uses) instead of re-walking the entire IR.
+    // The phase-one SSA index lets each fixpoint iteration touch O(uses)
+    // instead of re-walking the entire IR.
     // The previous shape was O(N) outer × O(N) inner × up-to-16 iters,
     // which on a 50 k-inst function turns into tens of billions of
     // ssa_key comparisons.
-    std::map<SsaKey, std::vector<std::pair<u32, u32>>> users_of;
-    for (u32 bi = 0; bi < fn->blocks.size(); ++bi) {
-        const auto& bb = fn->blocks[bi];
-        for (u32 ii = 0; ii < bb.insts.size(); ++ii) {
-            const auto& inst = bb.insts[ii];
-            auto record = [&](const IrValue& v) {
-                if (auto k = ssa_key(v); k) {
-                    users_of[*k].emplace_back(bi, ii);
-                }
-            };
-            if (inst.op == IrOp::Phi) {
-                for (const auto& op : inst.phi_operands) record(op);
-            } else {
-                for (u8 k = 0; k < inst.src_count && k < inst.srcs.size(); ++k) {
-                    record(inst.srcs[k]);
-                }
-            }
-        }
-    }
     bool changed = true;
     int guard = 0;
     while (changed && guard++ < 16) {
@@ -94,12 +74,15 @@ void Emitter::analyze_abi_noise() {
                 if (!inlinable_op(inst.op)) continue;
                 auto target_key = ssa_key(inst.dst);
                 if (!target_key) continue;
-                auto uit = users_of.find(*target_key);
-                if (uit == users_of.end() || uit->second.empty()) continue;
+                const auto users =
+                    ssa_uses.semantic_user_positions(*target_key);
+                // A value read only by call.args/fp_args has no semantic
+                // positions, but historically still counted as an all-noise
+                // value because every syntactic reader is a barrier.
+                if (ssa_uses.syntactic_use_count(*target_key) == 0) continue;
                 bool all_hidden = true;
-                for (const auto& [bj, ij] : uit->second) {
+                for (const auto& [bj, ij] : users) {
                     if (hidden.contains({bj, ij})) continue;
-                    if (is_call_arg_barrier(fn->blocks[bj].insts[ij])) continue;
                     all_hidden = false;
                     break;
                 }

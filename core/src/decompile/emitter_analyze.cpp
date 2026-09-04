@@ -126,61 +126,21 @@ void Emitter::analyze_msvc_security_cookie_calls() {
 
 void Emitter::analyze(const IrFunction& f) {
     fn = &f;
+    ssa_uses.reset();
     for (std::size_t bi = 0; bi < f.blocks.size(); ++bi) {
         const auto& bb = f.blocks[bi];
         for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
             const auto& inst = bb.insts[ii];
+            // Some analysis performed here follows definitions. Observe the
+            // current instruction afterward so forward definitions remain
+            // unavailable, matching the emitter's original scan order.
             record_x86_string_intrinsic_extents(inst);
-            if (auto k = ssa_key(inst.dst); k) {
-                defs[*k] = &inst;
-                def_pos[*k] = {bi, ii};
-            }
-            // Skip uses from call.args.* intrinsics - they get absorbed into the
-            // following Call, so they shouldn't keep their operand-feeding assignments alive.
-            if (is_call_arg_barrier(inst)) continue;
-            if (inst.op == IrOp::Phi) {
-                for (const auto& op : inst.phi_operands) {
-                    if (auto k = ssa_key(op); k) {
-                        uses[*k]++;
-                        all_user_positions[*k].emplace_back(bi, ii);
-                    }
-                }
-            } else {
-                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                    if (auto k = ssa_key(inst.srcs[i]); k) {
-                        uses[*k]++;
-                        all_user_positions[*k].emplace_back(bi, ii);
-                    }
-                }
-            }
+            ssa_uses.observe(inst, {bi, ii});
         }
     }
     analyze_msvc_security_cookie_calls();
     analyze_abi_noise();
-    // Single sweep populating the visible-use caches. Mirrors the
-    // filter the on-demand functions used to apply (skip hidden,
-    // call-arg barriers, Phi operands), so visible_use_count and
-    // every_use_is_flag_assign collapse to map lookups instead of
-    // O(N) scans per query.
-    for (u32 bi = 0; bi < f.blocks.size(); ++bi) {
-        const auto& bb = f.blocks[bi];
-        for (u32 ii = 0; ii < bb.insts.size(); ++ii) {
-            if (hidden.contains({bi, ii})) continue;
-            const auto& inst = bb.insts[ii];
-            if (is_call_arg_barrier(inst)) continue;
-            if (inst.op == IrOp::Phi) continue;
-            const bool is_flag_assign =
-                inst.op == IrOp::Assign &&
-                inst.dst.kind == IrValueKind::Flag;
-            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                auto k = ssa_key(inst.srcs[i]);
-                if (!k) continue;
-                visible_uses[*k]++;
-                if (is_flag_assign) flag_assign_uses[*k]++;
-                visible_user_positions[*k].emplace_back(bi, ii);
-            }
-        }
-    }
+    ssa_uses.scan_visible(f, hidden);
     // Preserve the time at which a load happened. SSA versions registers
     // but not memory, so blindly inlining a load after a call/store can
     // change its meaning. Follow only transparent value aliases; any
@@ -264,9 +224,8 @@ void Emitter::analyze(const IrFunction& f) {
                 const SsaKey key = pending.front();
                 pending.pop_front();
                 if (!seen.insert(key).second) continue;
-                auto users = all_user_positions.find(key);
-                if (users == all_user_positions.end()) continue;
-                for (const auto& [use_bi, use_ii] : users->second) {
+                const auto users = ssa_uses.semantic_user_positions(key);
+                for (const auto& [use_bi, use_ii] : users) {
                     if (use_bi != def_bi || use_ii <= def_ii) {
                         if (use_bi < f.blocks.size() &&
                             block_dominates(def_bb.start,
@@ -377,15 +336,15 @@ void Emitter::analyze(const IrFunction& f) {
         if (is_temp) {
             auto k = ssa_key(v);
             if (!k) continue;
-            auto dit = defs.find(*k);
-            if (dit == defs.end()) continue;
+            const IrInst* definition = ssa_uses.definition(*k);
+            if (!definition) continue;
             // Forwarding a memory Load through its one-write stack slot
             // loses the time at which the value was captured. A later
             // reload after memset/calls would be printed as a fresh read
             // from the mutated source object. Keep the stack local for
             // Load producers; pure computed temps remain safe to forward.
-            if (dit->second->op == IrOp::Clobber ||
-                (is_ppc_abi() && dit->second->op == IrOp::Load)) continue;
+            if (definition->op == IrOp::Clobber ||
+                (is_ppc_abi() && definition->op == IrOp::Load)) continue;
         }
         init_only_slot_value.emplace(off, v);
     }
@@ -412,10 +371,9 @@ void Emitter::analyze(const IrFunction& f) {
 bool Emitter::phi_value_feeds_step(const SsaKey& k,
                                    bool* non_unit_accum) const {
     if (non_unit_accum) *non_unit_accum = false;
-    auto uses_it = visible_user_positions.find(k);
-    if (uses_it == visible_user_positions.end()) return false;
+    const auto users = ssa_uses.visible_user_positions(k);
     bool unit_step = false;
-    for (const auto& [bi, ii] : uses_it->second) {
+    for (const auto& [bi, ii] : users) {
         if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) continue;
         const IrInst& inst = fn->blocks[bi].insts[ii];
         if (inst.src_count < 2) continue;
@@ -440,9 +398,8 @@ bool Emitter::value_flows_to_memory_address(const SsaKey& k,
                                             int depth,
                                             bool follow_assigns) const {
     if (depth > 6 || !seen.insert(k).second) return false;
-    auto uses_it = visible_user_positions.find(k);
-    if (uses_it == visible_user_positions.end()) return false;
-    for (const auto& [bi, ii] : uses_it->second) {
+    const auto users = ssa_uses.visible_user_positions(k);
+    for (const auto& [bi, ii] : users) {
         if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) continue;
         const IrInst& inst = fn->blocks[bi].insts[ii];
         if ((inst.op == IrOp::Load || inst.op == IrOp::Store) &&
@@ -521,7 +478,7 @@ void Emitter::name_merge_values() {
     // caller-clobber-only Phi webs alive. Count ordinary visible users,
     // add only arguments selected by the callee layout, then retain a Phi
     // web only when it reaches one of those non-Phi sinks.
-    std::map<SsaKey, u32> non_phi_uses = visible_uses;
+    std::map<SsaKey, u32> selected_call_arg_uses;
     for (const auto& block : fn->blocks) {
         std::vector<IrValue> int_values;
         std::vector<IrValue> fp_values;
@@ -552,7 +509,9 @@ void Emitter::name_merge_values() {
                 return {};
             }();
             const auto count_value = [&](const IrValue& value) {
-                if (auto key = ssa_key(value); key) ++non_phi_uses[*key];
+                if (auto key = ssa_key(value); key) {
+                    ++selected_call_arg_uses[*key];
+                }
             };
             if (layout.empty()) {
                 for (const IrValue& value : int_values) count_value(value);
@@ -580,6 +539,12 @@ void Emitter::name_merge_values() {
             fp_values.clear();
         }
     }
+    const auto non_phi_use_count = [&](const SsaKey& key) {
+        const auto selected = selected_call_arg_uses.find(key);
+        return ssa_uses.visible_use_count(key) +
+               (selected == selected_call_arg_uses.end()
+                    ? 0u : selected->second);
+    };
 
     std::map<SsaKey, const IrInst*> phi_defs;
     for (const auto& block : fn->blocks) {
@@ -590,7 +555,7 @@ void Emitter::name_merge_values() {
     }
     std::set<SsaKey> live_phis;
     for (const auto& [key, _] : phi_defs) {
-        if (non_phi_uses[key] != 0) live_phis.insert(key);
+        if (non_phi_use_count(key) != 0) live_phis.insert(key);
     }
     bool changed = true;
     while (changed) {
@@ -604,16 +569,16 @@ void Emitter::name_merge_values() {
             }
         }
     }
-    std::map<SsaKey, u32> effective_uses = non_phi_uses;
+    std::set<SsaKey> dead_phis;
+    std::map<SsaKey, u32> live_phi_operand_uses;
     for (const auto& [key, phi] : phi_defs) {
         if (!live_phis.contains(key)) {
-            effective_uses[key] = 0;
+            dead_phis.insert(key);
             continue;
         }
-        effective_uses[key] = std::max<u32>(effective_uses[key], 1);
         for (const IrValue& operand : phi->phi_operands) {
             if (auto operand_key = ssa_key(operand); operand_key) {
-                ++effective_uses[*operand_key];
+                ++live_phi_operand_uses[*operand_key];
             }
         }
     }
@@ -626,8 +591,14 @@ void Emitter::name_merge_values() {
     // everywhere else.
     callbacks.use_count = [&](const SsaKey& k) {
         if (!is_ppc_abi()) return use_count_by_key(k);
-        auto found = effective_uses.find(k);
-        return found == effective_uses.end() ? 0u : found->second;
+        if (dead_phis.contains(k)) return 0u;
+        u32 count = non_phi_use_count(k);
+        if (auto found = live_phi_operand_uses.find(k);
+            found != live_phi_operand_uses.end()) {
+            count += found->second;
+        }
+        if (live_phis.contains(k)) count = std::max<u32>(count, 1);
+        return count;
     };
     callbacks.def_of = [&](const IrValue& v) { return def_of(v); };
     callbacks.type_name = [&](const IrValue& v) { return c_type_name_for(v); };
@@ -808,8 +779,7 @@ void Emitter::bump_arity_from_merge_initializers() {
         if (!local.initializer) continue;
         bool has_visible_use = false;
         for (const auto& k : local.keys) {
-            auto it = visible_uses.find(k);
-            if (it != visible_uses.end() && it->second > 0) {
+            if (ssa_uses.visible_use_count(k) > 0) {
                 has_visible_use = true;
                 break;
             }
@@ -907,12 +877,10 @@ void Emitter::analyze_merge_definite_assignment() {
                     for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si) {
                         auto key = local_key(inst.srcs[si]);
                         if (!key) continue;
-                        bool visible = false;
-                        if (auto users = visible_user_positions.find(*key);
-                            users != visible_user_positions.end()) {
-                            visible |= std::ranges::find(
-                                users->second, std::pair{bi, ii}) != users->second.end();
-                        }
+                        const auto users =
+                            ssa_uses.visible_user_positions(*key);
+                        const bool visible = std::ranges::find(
+                            users, SsaUseIndex::Position{bi, ii}) != users.end();
                         if (visible && !assigned) {
                             safe = false;
                             break;

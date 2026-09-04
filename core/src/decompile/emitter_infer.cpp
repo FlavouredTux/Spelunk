@@ -58,9 +58,7 @@ Emitter::constant_fnptr_slot_for_call_target(const IrValue& v) const {
 
 IrType Emitter::call_arg_display_type(const IrValue& v) const {
     if (auto k = ssa_key(v); k) {
-        auto it = defs.find(*k);
-        if (it != defs.end()) {
-            const IrInst* d = it->second;
+        if (const IrInst* d = ssa_uses.definition(*k)) {
             if (d->op == IrOp::Trunc) return d->dst.type;
             if ((d->op == IrOp::ZExt || d->op == IrOp::SExt) &&
                 d->src_count >= 1) {
@@ -892,16 +890,14 @@ void Emitter::infer_ppc_role_arg_names() {
         } else {
             bool bit_mask = false;
             if (auto key = ssa_key(arg); key) {
-                auto uses_it = visible_user_positions.find(*key);
-                if (uses_it != visible_user_positions.end()) {
-                    for (const auto& [bi, ii] : uses_it->second) {
-                        if (bi >= fn->blocks.size() ||
-                            ii >= fn->blocks[bi].insts.size()) continue;
-                        const IrOp op = fn->blocks[bi].insts[ii].op;
-                        bit_mask |= op == IrOp::And || op == IrOp::Or ||
-                            op == IrOp::Xor || op == IrOp::Shl ||
-                            op == IrOp::Lshr;
-                    }
+                for (const auto& [bi, ii] :
+                     ssa_uses.visible_user_positions(*key)) {
+                    if (bi >= fn->blocks.size() ||
+                        ii >= fn->blocks[bi].insts.size()) continue;
+                    const IrOp op = fn->blocks[bi].insts[ii].op;
+                    bit_mask |= op == IrOp::And || op == IrOp::Or ||
+                        op == IrOp::Xor || op == IrOp::Shl ||
+                        op == IrOp::Lshr;
                 }
             }
             role = bit_mask ? "flags" : "value";

@@ -137,6 +137,7 @@ add_library(ember_core STATIC
     src/decompile/emitter_records.cpp
     src/decompile/emitter_regions.cpp
     src/decompile/emitter_setup.cpp
+    src/decompile/emitter_ssa_use_index.cpp
     src/decompile/emitter_strings.cpp
     src/decompile/emitter_tables.cpp
     src/decompile/emitter_text.cpp

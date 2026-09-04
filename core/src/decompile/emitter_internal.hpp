@@ -34,6 +34,7 @@
 #include <ember/ir/ssa.hpp>
 
 #include "emitter_tables.hpp"
+#include "emitter_ssa_use_index.hpp"
 #include "emitter_string_literals.hpp"
 
 namespace ember::emit {
@@ -148,26 +149,8 @@ struct Emitter {
     // the compact count used by the existing header/name passes.
     u8                                               self_arity = 0;
     std::vector<InferredArgument>                    self_arg_layout;
-    std::map<SsaKey, const IrInst*>                  defs;
-    std::map<SsaKey, std::pair<std::size_t, std::size_t>> def_pos;
-    std::map<SsaKey, u32>                            uses;
-    std::set<std::pair<std::size_t, std::size_t>>    hidden;
-    // Precomputed counts populated once `hidden` and ABI-noise filters
-    // have been applied. `visible_uses[k]` matches what `visible_use_count`
-    // would return on demand; `flag_assign_uses[k]` counts the subset of
-    // those uses that are Assign-to-Flag (the discriminator
-    // `every_use_is_flag_assign` was scanning the function for). Without
-    // these, those queries each O(N)-walked the IR per leaf-render, which
-    // turned the emitter into O(N²) for any function with thousands of
-    // instructions - the brain crackme's 160KB hand-written `main`
-    // bottomed out at >2 minutes purely on those scans.
-    std::map<SsaKey, u32>                            visible_uses;
-    std::map<SsaKey, u32>                            flag_assign_uses;
-    // (block, inst) positions of every visible use of a given key, so
-    // is_flag_feeder_temp can iterate users in O(uses) instead of
-    // re-walking the whole function each call.
-    std::map<SsaKey, std::vector<std::pair<u32, u32>>> visible_user_positions;
-    std::map<SsaKey, std::vector<std::pair<u32, u32>>> all_user_positions;
+    SsaUseIndex                                      ssa_uses;
+    std::set<SsaUseIndex::Position>                  hidden;
     // Loads whose value survives a possible memory mutation or leaves its
     // defining block. These must be materialized where they execute; inlining
     // them at a later use would re-read memory and can turn a real save/restore

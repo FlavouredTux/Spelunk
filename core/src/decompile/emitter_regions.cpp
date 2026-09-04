@@ -87,9 +87,8 @@ Emitter::trace_to_self_arg_slot(const IrValue& v, int depth) const {
         if (cur.kind == IrValueKind::Temp) {
             auto k = ssa_key(cur);
             if (!k) return std::nullopt;
-            auto it = defs.find(*k);
-            if (it == defs.end()) return std::nullopt;
-            const IrInst* d = it->second;
+            const IrInst* d = ssa_uses.definition(*k);
+            if (!d) return std::nullopt;
             if ((d->op == IrOp::Assign || d->op == IrOp::Trunc ||
                  d->op == IrOp::ZExt   || d->op == IrOp::SExt) &&
                 d->src_count == 1) {

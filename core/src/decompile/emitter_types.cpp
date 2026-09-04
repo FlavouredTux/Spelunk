@@ -172,9 +172,8 @@ Emitter::pointer_type_from_memory_uses(const IrValue& value) const {
     bool has_field_offset = false;
     const auto visit = [&](auto&& self, const SsaKey& key, int depth) -> void {
         if (depth > 12 || !seen.insert(key).second) return;
-        auto uses_it = visible_user_positions.find(key);
-        if (uses_it == visible_user_positions.end()) return;
-        for (const auto& [bi, ii] : uses_it->second) {
+        for (const auto& [bi, ii] :
+             ssa_uses.visible_user_positions(key)) {
             if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) {
                 continue;
             }
@@ -296,9 +295,9 @@ void Emitter::assign_synthetic_struct_types() {
 
     const auto call_target_for_root = [&](const SsaKey& key)
         -> std::optional<addr_t> {
-        auto pos = def_pos.find(key);
-        if (pos == def_pos.end()) return std::nullopt;
-        const auto [bi, definition_index] = pos->second;
+        const auto position = ssa_uses.definition_position(key);
+        if (!position) return std::nullopt;
+        const auto [bi, definition_index] = *position;
         if (bi >= fn->blocks.size()) return std::nullopt;
         const auto& bb = fn->blocks[bi];
         std::size_t ii = definition_index;

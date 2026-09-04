@@ -570,8 +570,8 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // count looks like 0 even though the value drives the loop.
                 // Without surfacing the assign, accumulator loops decompile
                 // to `do { } while (cond)` with the body work invisible.
-                // Detect by comparing visible_uses (excludes phi) to the
-                // broader uses-table count (includes phi).
+                // Detect by comparing the visible count (excludes phi) to
+                // the broader semantic count (includes phi).
                 if (visible_use_count(inst.dst) <= 1) {
                     auto k = ssa_key(inst.dst);
                     const u32 vis = visible_use_count(inst.dst);

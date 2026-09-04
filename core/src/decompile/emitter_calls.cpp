@@ -261,9 +261,7 @@ bool Emitter::call_inst_returns_void(const IrInst& inst) const {
 }
 
 bool Emitter::is_call_arg_barrier(const IrInst& inst) noexcept {
-    return inst.op == IrOp::Intrinsic &&
-           (inst.name.starts_with("call.args.") ||
-            inst.name.starts_with("call.fp_args."));
+    return SsaUseIndex::is_call_arg_barrier(inst);
 }
 
 bool Emitter::is_callee_saved(Reg r) noexcept {
@@ -286,9 +284,9 @@ bool Emitter::is_void_call_result(const IrValue& v) const {
     if (!def || def->op != IrOp::Clobber) return false;
     auto k = ssa_key(v);
     if (!k) return false;
-    auto pos_it = def_pos.find(*k);
-    if (pos_it == def_pos.end()) return false;
-    auto [bi, ii] = pos_it->second;
+    const auto position = ssa_uses.definition_position(*k);
+    if (!position) return false;
+    auto [bi, ii] = *position;
     const auto& bb = fn->blocks[bi];
     while (ii > 0) {
         --ii;
@@ -313,9 +311,9 @@ bool Emitter::is_unbound_clobber_result(const IrValue& v) const {
         fold_void_call_stmt.contains(*k)) {
         return false;
     }
-    auto pos_it = def_pos.find(*k);
-    if (pos_it == def_pos.end()) return true;
-    auto [bi, ii] = pos_it->second;
+    const auto position = ssa_uses.definition_position(*k);
+    if (!position) return true;
+    auto [bi, ii] = *position;
     const auto& bb = fn->blocks[bi];
     while (ii > 0) {
         --ii;
@@ -399,8 +397,7 @@ bool Emitter::has_incidental_ppc_return_merge() const {
                  op_index < phi->phi_operands.size(); ++op_index) {
                 IrValue op = phi->phi_operands[op_index];
                 if (auto key = ssa_key(op); key) {
-                    auto uses_it = visible_uses.find(*key);
-                    if (uses_it != visible_uses.end() && uses_it->second > 0) {
+                    if (ssa_uses.visible_use_count(*key) > 0) {
                         saw_side_effect_value = true;
                     }
                 }
@@ -437,15 +434,12 @@ bool Emitter::has_incidental_ppc_return_merge() const {
                     if (!d) break;
                     if (d->op == IrOp::Clobber) {
                         auto key = ssa_key(op);
-                        const auto uses_it = key ? visible_uses.find(*key)
-                                                 : visible_uses.end();
                         // bind_call_returns gives every unknown call a
                         // provisional name, even if the trailing dead-
                         // declaration pass later removes it. A real
                         // non-Phi use is the stronger evidence that this
                         // clobber is an intentional return value.
-                        if (!key || uses_it == visible_uses.end() ||
-                            uses_it->second == 0) {
+                        if (!key || ssa_uses.visible_use_count(*key) == 0) {
                             ++clobbers;
                             classified = true;
                         }
@@ -455,8 +449,7 @@ bool Emitter::has_incidental_ppc_return_merge() const {
                         // The assigned register can feed a store while its
                         // source is an immediate with no SSA key.
                         if (auto key = ssa_key(op); key) {
-                            auto uses_it = visible_uses.find(*key);
-                            if (uses_it != visible_uses.end() && uses_it->second > 0) {
+                            if (ssa_uses.visible_use_count(*key) > 0) {
                                 classified = true;
                                 break;
                             }
@@ -545,9 +538,9 @@ void Emitter::analyze_return_folds(const Region& r) {
     // surface a return whose value the surrounding `if` already tested,
     // creating exactly this hazard.
     if (count_uses_with_call_args(*cond_key) > 1) return;
-    auto pos_it = def_pos.find(*cond_key);
-    if (pos_it == def_pos.end()) return;
-    auto [bi, ii] = pos_it->second;
+    const auto position = ssa_uses.definition_position(*cond_key);
+    if (!position) return;
+    auto [bi, ii] = *position;
     const auto& bb = fn->blocks[bi];
     // Walk back past the clobber sequence the lifter emits after a call.
     while (ii > 0) {
@@ -845,33 +838,18 @@ void Emitter::infer_shared_call_return_types() {
 }
 
 u32 Emitter::use_count_by_key(const SsaKey& k) const {
-    auto it = uses.find(k);
-    return it != uses.end() ? it->second : 0u;
+    return ssa_uses.semantic_use_count(k);
 }
 
 u32 Emitter::count_uses_with_call_args(const SsaKey& k) const {
-    u32 n = 0;
-    for (const auto& bb : fn->blocks) {
-        for (const auto& inst : bb.insts) {
-            if (inst.op == IrOp::Phi) {
-                for (const auto& op : inst.phi_operands) {
-                    if (auto ok = ssa_key(op); ok && *ok == k) ++n;
-                }
-            } else {
-                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-                    if (auto ok = ssa_key(inst.srcs[i]); ok && *ok == k) ++n;
-                }
-            }
-        }
-    }
-    return n;
+    return ssa_uses.syntactic_use_count(k);
 }
 
 std::optional<std::pair<std::size_t, std::size_t>>
 Emitter::call_position_for_return_key(const SsaKey& k) const {
-    auto pos_it = def_pos.find(k);
-    if (pos_it == def_pos.end()) return std::nullopt;
-    auto [bi, ii] = pos_it->second;
+    const auto position = ssa_uses.definition_position(k);
+    if (!position) return std::nullopt;
+    auto [bi, ii] = *position;
     const auto& bb = fn->blocks[bi];
     while (ii > 0) {
         --ii;

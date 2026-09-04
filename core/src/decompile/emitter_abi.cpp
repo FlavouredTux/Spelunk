@@ -647,9 +647,9 @@ Emitter::preserved_call_arg_for_clobber(Reg r, u32 version) const {
     if (!key) return std::nullopt;
     const IrInst* def = def_of(v);
     if (!def || def->op != IrOp::Clobber) return std::nullopt;
-    auto pos_it = def_pos.find(*key);
-    if (pos_it == def_pos.end()) return std::nullopt;
-    const auto [bi, clobber_ii] = pos_it->second;
+    const auto position = ssa_uses.definition_position(*key);
+    if (!position) return std::nullopt;
+    const auto [bi, clobber_ii] = *position;
     if (bi >= fn->blocks.size()) return std::nullopt;
     const auto& bb = fn->blocks[bi];
 

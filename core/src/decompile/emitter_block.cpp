@@ -102,8 +102,8 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
             out += std::format("{}{} = {};\n", ind, name, call_expr);
         } else {
             std::string type_name = "uint64_t";
-            if (auto df = defs.find(bk->second); df != defs.end()) {
-                type_name = c_type_name_for(df->second->dst);
+            if (const IrInst* definition = ssa_uses.definition(bk->second)) {
+                type_name = c_type_name_for(definition->dst);
             }
             if (fn && pos.first < fn->blocks.size() &&
                 pos.second < fn->blocks[pos.first].insts.size()) {
@@ -935,8 +935,8 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                     auto has_value_def = [&](const IrValue& v) {
                         auto k = ssa_key(v);
                         if (!k) return false;
-                        auto it = defs.find(*k);
-                        return it != defs.end() && it->second->op != IrOp::Clobber;
+                        const IrInst* definition = ssa_uses.definition(*k);
+                        return definition && definition->op != IrOp::Clobber;
                     };
                     if (!has_value_def(term->srcs[0]) &&
                         has_value_def(term->srcs[1])) {

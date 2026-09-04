@@ -32,11 +32,11 @@ Emitter::render_selection_phi(const IrInst& phi, int depth) const {
     }
     auto key = ssa_key(phi.dst);
     if (!key) return std::nullopt;
-    auto pos = def_pos.find(*key);
-    if (pos == def_pos.end() || pos->second.first >= fn->blocks.size()) {
+    const auto position = ssa_uses.definition_position(*key);
+    if (!position || position->first >= fn->blocks.size()) {
         return std::nullopt;
     }
-    const addr_t merge = fn->blocks[pos->second.first].start;
+    const addr_t merge = fn->blocks[position->first].start;
     for (std::size_t direct_i = 0; direct_i < 2; ++direct_i) {
         const addr_t direct_pred = phi.phi_preds[direct_i];
         const addr_t arm_pred = phi.phi_preds[1 - direct_i];

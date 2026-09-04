@@ -21,22 +21,19 @@ namespace ember::emit {
 const IrInst* Emitter::def_of(const IrValue& v) const {
     auto k = ssa_key(v);
     if (!k) return nullptr;
-    auto it = defs.find(*k);
-    return it != defs.end() ? it->second : nullptr;
+    return ssa_uses.definition(*k);
 }
 
 u32 Emitter::use_count(const IrValue& v) const {
     auto k = ssa_key(v);
     if (!k) return 0;
-    auto it = uses.find(*k);
-    return it != uses.end() ? it->second : 0u;
+    return ssa_uses.semantic_use_count(*k);
 }
 
 u32 Emitter::visible_use_count(const IrValue& v) const {
     auto key = ssa_key(v);
     if (!key) return 0u;
-    auto it = visible_uses.find(*key);
-    return it != visible_uses.end() ? it->second : 0u;
+    return ssa_uses.visible_use_count(*key);
 }
 
 bool Emitter::inlinable_op(IrOp op) noexcept {
@@ -68,22 +65,16 @@ bool Emitter::every_use_is_flag_assign(const IrValue& v) const {
     if (v.kind != IrValueKind::Temp) return false;
     auto k = ssa_key(v);
     if (!k) return false;
-    auto vit = visible_uses.find(*k);
-    if (vit == visible_uses.end() || vit->second == 0) return false;
-    auto fit = flag_assign_uses.find(*k);
-    const u32 fa = fit == flag_assign_uses.end() ? 0u : fit->second;
-    return fa == vit->second;
+    return ssa_uses.every_visible_use_is_flag_assign(*k);
 }
 
 bool Emitter::is_flag_feeder_temp(const IrValue& v) const {
     if (v.kind != IrValueKind::Temp) return false;
     auto k = ssa_key(v);
     if (!k) return false;
-    auto pit = visible_user_positions.find(*k);
-    if (pit == visible_user_positions.end() || pit->second.empty()) {
-        return false;
-    }
-    for (const auto& [bi, ii] : pit->second) {
+    const auto users = ssa_uses.visible_user_positions(*k);
+    if (users.empty()) return false;
+    for (const auto& [bi, ii] : users) {
         const auto& inst = fn->blocks[bi].insts[ii];
         if (inst.dst.kind != IrValueKind::Temp) return false;
         if (!every_use_is_flag_assign(inst.dst)) return false;
@@ -166,9 +157,8 @@ Emitter::merge_assignment_name_for(const IrInst& inst) const {
     if (local_it == merge_locals.end()) return std::nullopt;
     bool has_non_return_reader = false;
     for (const auto& local_key : local_it->second.keys) {
-        auto pos_it = visible_user_positions.find(local_key);
-        if (pos_it == visible_user_positions.end()) continue;
-        for (const auto& [bi, ii] : pos_it->second) {
+        for (const auto& [bi, ii] :
+             ssa_uses.visible_user_positions(local_key)) {
             if (!fn || bi >= fn->blocks.size()) continue;
             const auto& bb = fn->blocks[bi];
             if (ii >= bb.insts.size()) continue;
@@ -340,10 +330,9 @@ void Emitter::emit_raw_temp_binding(u32 temp, std::string& out,
                                     std::string_view ind) const {
     const SsaKey key{u8{2}, temp, 0};
     if (emitted_bindings.contains(key)) return;
-    auto it = defs.find(key);
-    if (it == defs.end()) return;
-    const IrInst* d = it->second;
-    if (!d || d->dst.kind != IrValueKind::Temp || d->dst.temp != temp) return;
+    const IrInst* d = ssa_uses.definition(key);
+    if (!d) return;
+    if (d->dst.kind != IrValueKind::Temp || d->dst.temp != temp) return;
     if (d->op == IrOp::Phi || d->op == IrOp::Clobber) return;
     if (d->op != IrOp::Assign && d->op != IrOp::Load &&
         d->op != IrOp::Intrinsic && !inlinable_op(d->op)) {

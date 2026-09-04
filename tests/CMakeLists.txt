@@ -118,6 +118,15 @@ target_link_libraries(ember_emitter_string_literals_test
 add_test(NAME emitter_string_literals_unit
          COMMAND ember_emitter_string_literals_test)
 
+add_executable(ember_emitter_ssa_use_index_test
+    emitter_ssa_use_index_test.cpp)
+target_include_directories(ember_emitter_ssa_use_index_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/decompile")
+target_link_libraries(ember_emitter_ssa_use_index_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_ssa_use_index_unit
+         COMMAND ember_emitter_ssa_use_index_test)
+
 add_executable(ember_eh_frame_internal_test eh_frame_internal_test.cpp)
 target_include_directories(ember_eh_frame_internal_test PRIVATE
     "${PROJECT_SOURCE_DIR}/core/src/analysis")

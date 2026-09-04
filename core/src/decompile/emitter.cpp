@@ -612,11 +612,11 @@ fallback_materializations(const Emitter& e, const std::string& body) {
         }
         return false;
     };
-    for (const auto& [_, definition] : e.defs) {
-        if (!definition || definition->dst.kind != IrValueKind::Temp) continue;
+    e.ssa_uses.for_each_definition([&](const SsaKey&, const IrInst* definition) {
+        if (!definition || definition->dst.kind != IrValueKind::Temp) return;
         const std::string name = std::format("t{}", definition->dst.temp);
         if (!text_contains_identifier_in_code(body, name) ||
-            text_declares_identifier(body, name)) continue;
+            text_declares_identifier(body, name)) return;
         std::string initializer;
         if (auto key = ssa_key(definition->dst);
             key && e.memory_snapshot_loads.contains(*key) &&
@@ -629,7 +629,7 @@ fallback_materializations(const Emitter& e, const std::string& body) {
         out.emplace(
             definition->dst.temp,
             FallbackMaterialization{definition->dst, std::move(initializer)});
-    }
+    });
     return out;
 }
 

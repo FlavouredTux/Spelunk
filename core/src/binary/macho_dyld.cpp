@@ -1,5 +1,6 @@
 #include "macho_internal.hpp"
 
+#include <bit>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -26,7 +27,6 @@ constexpr u16 DYLD_CHAINED_PTR_ARM64E_FIRMWARE   = 10u;
 constexpr u16 DYLD_CHAINED_PTR_ARM64E_USERLAND24 = 12u;
 constexpr u16 DYLD_CHAINED_PTR_START_NONE        = 0xFFFFu;
 constexpr u16 DYLD_CHAINED_PTR_START_MULTI       = 0x8000u;
-constexpr u16 DYLD_CHAINED_PTR_START_LAST        = 0x8000u;
 
 // Bind opcodes (BIND_OPCODE_MASK = 0xF0).
 constexpr u8 BIND_OPCODE_MASK                             = 0xF0u;
@@ -45,22 +45,69 @@ constexpr u8 BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB            = 0xA0u;
 constexpr u8 BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED      = 0xB0u;
 constexpr u8 BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0u;
 
-[[nodiscard]] i64 read_sleb128(const std::byte*& p,
-                               const std::byte* end) noexcept {
-    i64 result = 0;
+[[nodiscard]] std::optional<i64>
+read_sleb128(const std::byte*& p, const std::byte* end) noexcept {
+    u64 result = 0;
     unsigned shift = 0;
-    u8 b = 0;
-    while (p < end) {
-        b = static_cast<u8>(*p++);
-        result |= static_cast<i64>(b & 0x7F) << shift;
+    for (unsigned byte_index = 0; byte_index < 10; ++byte_index) {
+        if (p == end) return std::nullopt;
+        const u8 byte = static_cast<u8>(*p++);
+        const u8 payload = byte & 0x7fu;
+
+        // A signed 64-bit LEB may use ten bytes, but the final byte contains
+        // only the sign-extension bit. Any other payload overflows i64, and a
+        // continuation bit would require an eleventh byte.
+        if (byte_index == 9) {
+            if ((byte & 0x80u) != 0 || (payload != 0 && payload != 0x7fu)) {
+                return std::nullopt;
+            }
+            result |= static_cast<u64>(payload & 1u) << 63;
+        } else {
+            result |= static_cast<u64>(payload) << shift;
+        }
+
+        if ((byte & 0x80u) == 0) {
+            const unsigned consumed = shift + 7;
+            if (consumed < 64 && (byte & 0x40u) != 0) {
+                result |= ~u64{0} << consumed;
+            }
+            return std::bit_cast<i64>(result);
+        }
         shift += 7;
-        if ((b & 0x80) == 0) break;
-        if (shift >= 64) break;
     }
-    if (shift < 64 && (b & 0x40)) {
-        result |= -(static_cast<i64>(1) << shift);
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::size_t>
+chain_file_offset(std::span<const std::byte> image, const SegInfo& seg,
+                  u64 page_vaddr, u64 page_size,
+                  u64 chain_vaddr) noexcept {
+    if (chain_vaddr < page_vaddr) return std::nullopt;
+    const u64 page_offset = chain_vaddr - page_vaddr;
+    // Formats with a four-byte stride may place an eight-byte pointer at
+    // page_size-4. The chain entry starts on this page even though the qword
+    // straddles into the next backed page.
+    if (page_offset >= page_size) return std::nullopt;
+    if (chain_vaddr < seg.vmaddr) return std::nullopt;
+    const u64 segment_offset = chain_vaddr - seg.vmaddr;
+    if (segment_offset > seg.vmsize || 8 > seg.vmsize - segment_offset) {
+        return std::nullopt;
     }
-    return result;
+    if (segment_offset > seg.filesize || 8 > seg.filesize - segment_offset) {
+        return std::nullopt;
+    }
+    if (seg.fileoff > image.size()) return std::nullopt;
+    const u64 available = static_cast<u64>(image.size()) - seg.fileoff;
+    if (segment_offset > available || 8 > available - segment_offset) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(seg.fileoff + segment_offset);
+}
+
+[[nodiscard]] bool advance_chain(u64& chain_vaddr, u64 delta) noexcept {
+    if (delta > std::numeric_limits<u64>::max() - chain_vaddr) return false;
+    chain_vaddr += delta;
+    return true;
 }
 
 [[nodiscard]] bool arm64e_pointer_format(u16 fmt) noexcept {
@@ -72,12 +119,13 @@ constexpr u8 BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB = 0xC0u;
 }
 
 [[nodiscard]] u64 arm64e_stride(u16 fmt) noexcept {
-    return (fmt == DYLD_CHAINED_PTR_ARM64E ||
+    return (fmt == DYLD_CHAINED_PTR_ARM64E_KERNEL ||
             fmt == DYLD_CHAINED_PTR_ARM64E_FIRMWARE) ? 4u : 8u;
 }
 
-[[nodiscard]] bool arm64e_target_is_offset(u16 fmt) noexcept {
-    return fmt == DYLD_CHAINED_PTR_ARM64E_USERLAND ||
+[[nodiscard]] bool arm64e_unauth_target_is_offset(u16 fmt) noexcept {
+    return fmt == DYLD_CHAINED_PTR_ARM64E_KERNEL ||
+           fmt == DYLD_CHAINED_PTR_ARM64E_USERLAND ||
            fmt == DYLD_CHAINED_PTR_ARM64E_USERLAND24;
 }
 
@@ -89,19 +137,20 @@ void walk_chain_64(std::span<std::byte>     image,
                    const SegInfo&           seg,
                    u64                      image_base,
                    u64                      start_vaddr,
+                   u64                      page_vaddr,
+                   u64                      page_size,
                    bool                     target_is_offset,
                    auto&&                   import_name,
                    std::vector<BindRec>&    out)
 {
     u64 chain_vaddr = start_vaddr;
     for (u32 steps = 0; steps < 1'000'000; ++steps) {
-        if (chain_vaddr < seg.vmaddr ||
-            chain_vaddr >= seg.vmaddr + seg.vmsize) return;
-        const u64 fo = seg.fileoff + (chain_vaddr - seg.vmaddr);
-        if (fo + 8 > image.size()) return;
+        const auto file_offset = chain_file_offset(
+            image, seg, page_vaddr, page_size, chain_vaddr);
+        if (!file_offset) return;
 
         u64 raw = 0;
-        std::memcpy(&raw, image.data() + fo, 8);
+        std::memcpy(&raw, image.data() + *file_offset, 8);
         const bool is_bind = (raw >> 63) & 1;
         const u64  next    = (raw >> 51) & 0xFFFu;
 
@@ -128,12 +177,16 @@ void walk_chain_64(std::span<std::byte>     image,
             //   bind    [   63]  == 0 here (we're in the rebase arm)
             const u64 target = raw & ((u64{1} << 36) - 1);
             const u64 high8  = (raw >> 36) & 0xFFu;
-            const u64 real   = ((target_is_offset ? image_base : 0) + target) |
-                               (high8 << 56);
-            std::memcpy(image.data() + fo, &real, 8);
+            u64 real = target;
+            if (target_is_offset) {
+                real = image_base;
+                if (!advance_chain(real, target)) return;
+            }
+            real |= high8 << 56;
+            std::memcpy(image.data() + *file_offset, &real, 8);
         }
         if (next == 0) return;
-        chain_vaddr += next * 4u;  // stride is 4 on format 6
+        if (!advance_chain(chain_vaddr, next * 4u)) return;
     }
 }
 
@@ -141,6 +194,8 @@ void walk_chain_arm64e(std::span<std::byte>     image,
                        const SegInfo&           seg,
                        u64                      image_base,
                        u64                      start_vaddr,
+                       u64                      page_vaddr,
+                       u64                      page_size,
                        u16                      ptr_format,
                        auto&&                   import_name,
                        std::vector<BindRec>&    out)
@@ -148,13 +203,12 @@ void walk_chain_arm64e(std::span<std::byte>     image,
     const u64 stride = arm64e_stride(ptr_format);
     u64 chain_vaddr = start_vaddr;
     for (u32 steps = 0; steps < 1'000'000; ++steps) {
-        if (chain_vaddr < seg.vmaddr ||
-            chain_vaddr >= seg.vmaddr + seg.vmsize) return;
-        const u64 fo = seg.fileoff + (chain_vaddr - seg.vmaddr);
-        if (fo + 8 > image.size()) return;
+        const auto file_offset = chain_file_offset(
+            image, seg, page_vaddr, page_size, chain_vaddr);
+        if (!file_offset) return;
 
         u64 raw = 0;
-        std::memcpy(&raw, image.data() + fo, 8);
+        std::memcpy(&raw, image.data() + *file_offset, 8);
         const bool is_auth = (raw >> 63) & 1u;
         const bool is_bind = (raw >> 62) & 1u;
         const u64  next    = (raw >> 51) & 0x7FFu;
@@ -171,19 +225,25 @@ void walk_chain_arm64e(std::span<std::byte>     image,
             u64 real = 0;
             if (is_auth) {
                 // dyld_chained_ptr_arm64e_auth_rebase::target is a 32-bit
-                // vm offset for userland formats and a vmaddr elsewhere.
+                // runtime offset from the image base in every supported
+                // arm64e pointer format.
                 const u64 target = raw & 0xFFFFFFFFu;
-                real = (arm64e_target_is_offset(ptr_format) ? image_base : 0) + target;
+                real = image_base;
+                if (!advance_chain(real, target)) return;
             } else {
                 const u64 target = raw & ((u64{1} << 43) - 1);
                 const u64 high8  = (raw >> 43) & 0xFFu;
-                real = ((arm64e_target_is_offset(ptr_format) ? image_base : 0) + target) |
-                       (high8 << 56);
+                real = target;
+                if (arm64e_unauth_target_is_offset(ptr_format)) {
+                    real = image_base;
+                    if (!advance_chain(real, target)) return;
+                }
+                real |= high8 << 56;
             }
-            std::memcpy(image.data() + fo, &real, 8);
+            std::memcpy(image.data() + *file_offset, &real, 8);
         }
         if (next == 0) return;
-        chain_vaddr += next * stride;
+        if (!advance_chain(chain_vaddr, next * stride)) return;
     }
 }
 
@@ -191,6 +251,8 @@ void walk_chained_fixup_start(std::span<std::byte>     image,
                               const SegInfo&           seg,
                               u64                      image_base,
                               u64                      chain_vaddr,
+                              u64                      page_vaddr,
+                              u64                      page_size,
                               u16                      ptr_format,
                               auto&&                   import_name,
                               std::vector<BindRec>&    out)
@@ -198,10 +260,12 @@ void walk_chained_fixup_start(std::span<std::byte>     image,
     if (ptr_format == DYLD_CHAINED_PTR_64 ||
         ptr_format == DYLD_CHAINED_PTR_64_OFFSET) {
         walk_chain_64(image, seg, image_base, chain_vaddr,
+                      page_vaddr, page_size,
                       ptr_format == DYLD_CHAINED_PTR_64_OFFSET,
                       import_name, out);
     } else if (arm64e_pointer_format(ptr_format)) {
         walk_chain_arm64e(image, seg, image_base, chain_vaddr,
+                          page_vaddr, page_size,
                           ptr_format, import_name, out);
     }
 }
@@ -229,7 +293,12 @@ void walk_chained_fixup_start(std::span<std::byte>     image,
     for (const auto& s : segs) {
         if (s.fileoff == 0 && s.vmaddr != 0) return s.vmaddr;
     }
-    return segs.empty() ? 0 : segs.front().vmaddr;
+    for (const auto& s : segs) {
+        const bool null_reservation =
+            s.vmaddr == 0 && s.fileoff == 0 && s.filesize == 0;
+        if (s.name != "__PAGEZERO" && !null_reservation) return s.vmaddr;
+    }
+    return 0;
 }
 
 void parse_bind_stream(
@@ -290,7 +359,7 @@ void parse_bind_stream(
         case BIND_OPCODE_SET_TYPE_IMM:
             break;
         case BIND_OPCODE_SET_ADDEND_SLEB:
-            (void)read_sleb128(p, end);
+            if (!read_sleb128(p, end)) return;
             break;
         case BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB:
             seg_index = imm;
@@ -364,12 +433,18 @@ void parse_export_trie(std::span<const std::byte> data,
             if ((flags & EXPORT_SYMBOL_FLAGS_REEXPORT) == 0 &&
                 kind == EXPORT_SYMBOL_FLAGS_KIND_REGULAR) {
                 const u64 offset = read_uleb128(p, children);
-                out.push_back({static_cast<addr_t>(image_base + offset),
-                               w.prefix});
+                if (offset <= std::numeric_limits<u64>::max() - image_base) {
+                    out.push_back({static_cast<addr_t>(image_base + offset),
+                                   w.prefix});
+                }
             } else if ((flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER) != 0) {
                 const u64 stub_offset = read_uleb128(p, children);
-                out.push_back({static_cast<addr_t>(image_base + stub_offset),
-                               w.prefix});
+                if (stub_offset <=
+                    std::numeric_limits<u64>::max() - image_base) {
+                    out.push_back({
+                        static_cast<addr_t>(image_base + stub_offset),
+                        w.prefix});
+                }
             }
         }
 
@@ -440,8 +515,10 @@ void parse_chained_fixups(
     auto symbols_off   = rd32(12);
     auto imports_count = rd32(16);
     auto imports_fmt   = rd32(20);
+    auto symbols_fmt   = rd32(24);
     if (!version || *version != 0) return;
-    if (!starts_off || !imports_off || !symbols_off || !imports_count || !imports_fmt)
+    if (!starts_off || !imports_off || !symbols_off || !imports_count ||
+        !imports_fmt || !symbols_fmt || *symbols_fmt != 0)
         return;
 
     // Resolve each ordinal to its symbol name. Formats 1/2 share the
@@ -452,10 +529,23 @@ void parse_chained_fixups(
         (*imports_fmt == 1) ? 4 : (*imports_fmt == 2) ? 8 : 16;
     if (*imports_fmt < 1 || *imports_fmt > 3) return;
 
+    const std::size_t starts_base = static_cast<std::size_t>(*starts_off);
+    const std::size_t imports_base = static_cast<std::size_t>(*imports_off);
+    const std::size_t symbols_base = static_cast<std::size_t>(*symbols_off);
+    if (starts_base < 28 || starts_base >= imports_base ||
+        imports_base > symbols_base || symbols_base > data.size()) {
+        return;
+    }
+    if (static_cast<std::size_t>(*imports_count) >
+        (symbols_base - imports_base) / entry_size) {
+        return;
+    }
+
     auto import_name = [&](u32 ordinal) -> std::string {
         if (ordinal >= *imports_count) return {};
-        const std::size_t ent = *imports_off +
+        const std::size_t ordinal_offset =
             static_cast<std::size_t>(ordinal) * entry_size;
+        const std::size_t ent = imports_base + ordinal_offset;
         u32 name_offset = 0;
         if (*imports_fmt == 3) {
             // dyld_chained_import_addend64:
@@ -470,11 +560,16 @@ void parse_chained_fixups(
             if (!raw) return {};
             name_offset = (*raw >> 9);
         }
-        const std::size_t nameoff = *symbols_off + name_offset;
-        if (nameoff >= data.size()) return {};
+        if (symbols_base >= data.size() ||
+            static_cast<std::size_t>(name_offset) >=
+                data.size() - symbols_base) {
+            return {};
+        }
+        const std::size_t nameoff =
+            symbols_base + static_cast<std::size_t>(name_offset);
         std::string s;
         for (std::size_t i = nameoff;
-             i < data.size() && i < nameoff + 1024; ++i) {
+             i < data.size() && i - nameoff < 1024; ++i) {
             char c = static_cast<char>(data[i]);
             if (c == 0) break;
             s.push_back(c);
@@ -483,62 +578,85 @@ void parse_chained_fixups(
     };
 
     // Walk starts_in_image → starts_in_segment → each page's chain.
-    auto seg_count = rd32(*starts_off);
+    if (4 > imports_base - starts_base) return;
+    auto seg_count = rd32(starts_base);
     if (!seg_count) return;
-    if (*starts_off > data.size() - 4u) return;
+    const std::size_t seg_offsets_base = starts_base + 4u;
+    if (seg_offsets_base > imports_base) return;
     const std::size_t available_seg_offsets =
-        (data.size() - *starts_off - 4u) / 4u;
+        (imports_base - seg_offsets_base) / 4u;
     if (*seg_count > available_seg_offsets || *seg_count > segs.size()) return;
+    const std::size_t seg_records_begin =
+        seg_offsets_base + static_cast<std::size_t>(*seg_count) * 4u;
     for (u32 si = 0; si < *seg_count; ++si) {
-        auto seg_info_off = rd32(*starts_off + 4 + si * 4);
+        const std::size_t seg_offset_entry =
+            seg_offsets_base + static_cast<std::size_t>(si) * 4u;
+        auto seg_info_off = rd32(seg_offset_entry);
         if (!seg_info_off || *seg_info_off == 0) continue;
-        const std::size_t sig = *starts_off + *seg_info_off;
-        auto size        = rd32(sig);
-        auto page_size   = rd16(sig + 4);
-        auto ptr_format  = rd16(sig + 6);
-        auto seg_offset  = rd64(sig + 8);
-        auto page_count  = rd16(sig + 20);
-        if (!size || !page_size || !ptr_format || !seg_offset || !page_count)
+        if (static_cast<std::size_t>(*seg_info_off) >
+            imports_base - starts_base) {
             continue;
-        if (*size < 22) continue;
+        }
+        const std::size_t sig =
+            starts_base + static_cast<std::size_t>(*seg_info_off);
+        if (sig < seg_records_begin) continue;
+        auto size = rd32(sig);
+        if (!size || *size < 22 ||
+            sig > imports_base ||
+            static_cast<std::size_t>(*size) > imports_base - sig) {
+            continue;
+        }
+        const std::size_t record_end = sig + static_cast<std::size_t>(*size);
+        auto page_size  = rd16(sig + 4);
+        auto ptr_format = rd16(sig + 6);
+        auto seg_offset = rd64(sig + 8);
+        auto page_count = rd16(sig + 20);
+        if (!page_size || !ptr_format || !seg_offset || !page_count) continue;
+        if (*page_size != 0x1000 && *page_size != 0x4000) continue;
         const std::size_t page_starts_off = sig + 22;
-        const std::size_t page_starts_end =
-            page_starts_off + static_cast<std::size_t>(*page_count) * 2u;
-        if (page_starts_end > data.size()) continue;
+        const std::size_t page_starts_size =
+            static_cast<std::size_t>(*page_count) * 2u;
+        if (page_starts_size > record_end - page_starts_off) continue;
 
         if (si >= segs.size()) continue;
-        const u64 seg_vaddr = segs[si].vmaddr;
-
         const SegInfo& seg = segs[si];
+        if (seg.vmaddr - image_base != *seg_offset) {
+            continue;
+        }
         for (u16 pi = 0; pi < *page_count; ++pi) {
             auto page_start = rd16(page_starts_off + pi * 2);
             if (!page_start) break;
             if (*page_start == DYLD_CHAINED_PTR_START_NONE) continue;
 
+            u64 page_vaddr = seg.vmaddr;
+            if (!advance_chain(page_vaddr,
+                               static_cast<u64>(pi) * *page_size)) {
+                continue;
+            }
+            auto valid_page_start = [&](u16 off) {
+                u16 alignment = 1;
+                if (*ptr_format == DYLD_CHAINED_PTR_64 ||
+                    *ptr_format == DYLD_CHAINED_PTR_64_OFFSET) {
+                    alignment = 4;
+                } else if (arm64e_pointer_format(*ptr_format)) {
+                    alignment = static_cast<u16>(arm64e_stride(*ptr_format));
+                }
+                return static_cast<u64>(off) < *page_size &&
+                       off % alignment == 0;
+            };
             auto walk_page_start = [&](u16 off) {
-                const u64 chain_vaddr = seg_vaddr + *seg_offset +
-                                        static_cast<u64>(pi) * *page_size +
-                                        off;
+                if (!valid_page_start(off)) return;
+                u64 chain_vaddr = page_vaddr;
+                if (!advance_chain(chain_vaddr, off)) return;
                 walk_chained_fixup_start(image, seg, image_base, chain_vaddr,
+                                         page_vaddr, *page_size,
                                          *ptr_format, import_name, out);
             };
 
-            if ((*page_start & DYLD_CHAINED_PTR_START_MULTI) == 0) {
-                walk_page_start(*page_start);
-                continue;
-            }
-
-            constexpr u16 kStartOffsetMask =
-                static_cast<u16>(~DYLD_CHAINED_PTR_START_MULTI);
-            std::size_t chain_idx = static_cast<std::size_t>(*page_start & kStartOffsetMask);
-            const std::size_t chain_starts_off = page_starts_end;
-            for (u32 guard = 0; guard < 1'000'000; ++guard) {
-                auto chain_start = rd16(chain_starts_off + chain_idx * 2u);
-                if (!chain_start) break;
-                walk_page_start(static_cast<u16>(*chain_start & kStartOffsetMask));
-                if ((*chain_start & DYLD_CHAINED_PTR_START_LAST) != 0) break;
-                ++chain_idx;
-            }
+            // MULTI starts are a 32-bit chained-pointer feature. This loader
+            // only accepts 64-bit Mach-O pointer formats, so fail closed.
+            if ((*page_start & DYLD_CHAINED_PTR_START_MULTI) != 0) continue;
+            walk_page_start(*page_start);
         }
     }
 }

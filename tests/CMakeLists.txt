@@ -194,6 +194,13 @@ target_compile_definitions(ember_loader_robustness_test PRIVATE
     EMBER_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus")
 add_test(NAME loader_robustness_unit COMMAND ember_loader_robustness_test)
 
+add_executable(ember_macho_loader_robustness_test
+    macho_loader_robustness_test.cpp)
+target_link_libraries(ember_macho_loader_robustness_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME macho_loader_robustness_unit
+         COMMAND ember_macho_loader_robustness_test)
+
 add_executable(ember_elf_loader_robustness_test
     elf_loader_robustness_test.cpp
     elf_test_builder.cpp)

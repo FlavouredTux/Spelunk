@@ -44,6 +44,9 @@ using macho::read_uleb128;
 constexpr u32 MH_MAGIC_64         = 0xFEEDFACFu;
 constexpr u32 CPU_TYPE_X86_64     = 0x01000007u;
 constexpr u32 CPU_TYPE_ARM64      = 0x0100000Cu;
+constexpr u32 MH_OBJECT           = 0x01u;
+constexpr u32 MH_DYLIB_STUB       = 0x09u;
+constexpr u32 MH_DSYM             = 0x0au;
 
 // Load command IDs (only the ones we consume).
 constexpr u32 LC_SEGMENT_64       = 0x19u;
@@ -75,6 +78,11 @@ constexpr u32 LINKEDIT_DATA_COMMAND_SIZE = 16u;
 constexpr u32 VM_PROT_READ        = 0x1u;
 constexpr u32 VM_PROT_WRITE       = 0x2u;
 constexpr u32 VM_PROT_EXECUTE     = 0x4u;
+
+// Segment flags. SG_HIGHVM maps the file-backed bytes at the high end of
+// the virtual range, while LoadSegment models the ordinary low-to-high
+// mapping used by modern 64-bit images.
+constexpr u32 SG_HIGHVM           = 0x1u;
 
 // Section types (flags & SECTION_TYPE).
 constexpr u32 SECTION_TYPE_MASK          = 0x000000FFu;
@@ -235,6 +243,7 @@ struct MachOBinary::ParseState {
     ByteReader r;
     std::vector<LoadCommand> lcs;
     std::vector<SegInfo>     seg_info;
+    u32                      filetype = 0;
 
     // __LINKEDIT slices located by the second load-command pass.
     std::span<const std::byte> symtab_bytes;
@@ -314,9 +323,15 @@ Result<void> MachOBinary::read_load_commands(ParseState& st) {
     }
     endian_ = Endian::Little;
     const u32 cputype  = read_le_at<u32>(hdr + 4);
+    st.filetype        = read_le_at<u32>(hdr + 12);
+    section_bytes_authoritative_ = st.filetype == MH_DSYM;
     const u32 ncmds    = read_le_at<u32>(hdr + 16);
     const u32 sizeofcmds = read_le_at<u32>(hdr + 20);
     arch_ = arch_from_cpu(cputype);
+    if (arch_ == Arch::Unknown) {
+        return std::unexpected(Error::unsupported(std::format(
+            "macho: unsupported CPU type {:#x}", cputype)));
+    }
 
     // Collect raw command slices. We iterate twice: once to pull segments
     // (needed before bind opcodes can resolve addresses), then again for
@@ -361,6 +376,8 @@ Result<void> MachOBinary::read_load_commands(ParseState& st) {
 
 // LC_SEGMENT_64: segment map, mapped data, and the section table.
 Result<void> MachOBinary::parse_segments(ParseState& st) {
+    std::vector<std::pair<u64, u64>> virtual_ranges;
+    std::vector<std::pair<u64, u64>> file_ranges;
     for (const auto& lc : st.lcs) {
         if (lc.cmd != LC_SEGMENT_64) continue;
         if (lc.size < SEGMENT_COMMAND_64_SIZE) {
@@ -376,8 +393,10 @@ Result<void> MachOBinary::parse_segments(ParseState& st) {
         const u64 vmsize   = read_le_at<u64>(p + 32);
         const u64 fileoff  = read_le_at<u64>(p + 40);
         const u64 filesize = read_le_at<u64>(p + 48);
+        const u32 maxprot  = read_le_at<u32>(p + 56);
         const u32 initprot = read_le_at<u32>(p + 60);
         const u32 nsects   = read_le_at<u32>(p + 64);
+        const u32 segflags = read_le_at<u32>(p + 68);
         if (nsects > (lc.size - SEGMENT_COMMAND_64_SIZE) / SECTION_64_SIZE) {
             return std::unexpected(Error::invalid_format(std::format(
                 "macho: segment {} declares {} sections outside its command",
@@ -387,15 +406,68 @@ Result<void> MachOBinary::parse_segments(ParseState& st) {
             return std::unexpected(Error::invalid_format(
                 "macho: segment virtual range wraps"));
         }
-        if (filesize > 0 && !st.r.slice(fileoff, filesize)) {
+        if (fileoff > st.r.size() ||
+            (filesize > 0 && !st.r.slice(fileoff, filesize))) {
             return std::unexpected(Error::truncated(std::format(
                 "macho: segment {} file range is outside the image", segname)));
+        }
+        if (filesize > 0) {
+            const u64 fileend = fileoff + filesize;
+            for (const auto& [existing_start, existing_end] : file_ranges) {
+                if (fileoff < existing_end && existing_start < fileend) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: segment {} overlaps another segment in the file",
+                        segname)));
+                }
+            }
+            file_ranges.emplace_back(fileoff, fileend);
         }
 
         st.seg_info.push_back({static_cast<addr_t>(vmaddr), vmsize, fileoff, filesize, segname});
 
-        // Skip the __PAGEZERO no-map segment so it doesn't pollute bytes_at().
-        if (vmsize > 0 && !(segname == "__PAGEZERO")) {
+        // A no-access, zero-file-size range at address zero is a virtual
+        // reservation, whether or not a producer used the conventional
+        // __PAGEZERO name. Keep its SegInfo entry so dyld's segment indices
+        // still line up with load-command order, but never expose it as a
+        // mapped segment or as section metadata.
+        const bool is_named_pagezero = segname == "__PAGEZERO";
+        const bool is_null_reservation =
+            vmaddr == 0 && vmsize > 0 && fileoff == 0 && filesize == 0 &&
+            maxprot == 0 && initprot == 0 && nsects == 0;
+        if (is_named_pagezero && !is_null_reservation) {
+            return std::unexpected(Error::invalid_format(
+                "macho: __PAGEZERO must be a no-access virtual reservation"));
+        }
+
+        if (vmsize > 0) {
+            const u64 vmend = vmaddr + vmsize;
+            for (const auto& [existing_start, existing_end] : virtual_ranges) {
+                if (vmaddr < existing_end && existing_start < vmend) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: segment {} overlaps another virtual segment",
+                        segname)));
+                }
+            }
+            virtual_ranges.emplace_back(vmaddr, vmend);
+        }
+        if (is_null_reservation) {
+            continue;
+        }
+
+        const bool nonalloc_file_payload =
+            vmsize == 0 && initprot == 0;
+        if (filesize > vmsize && st.filetype != MH_OBJECT &&
+            !nonalloc_file_payload) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "macho: segment {} file size exceeds its virtual size", segname)));
+        }
+        if ((segflags & SG_HIGHVM) != 0) {
+            return std::unexpected(Error::unsupported(std::format(
+                "macho: segment {} uses unsupported SG_HIGHVM mapping", segname)));
+        }
+
+        has_load_segments_ = true;
+        if (vmsize > 0) {
             LoadSegment seg;
             seg.vaddr      = static_cast<addr_t>(vmaddr);
             seg.memsz      = vmsize;
@@ -418,23 +490,77 @@ Result<void> MachOBinary::parse_segments(ParseState& st) {
             if (so + SECTION_64_SIZE > lc.size) break;
             const std::byte* const sp = p + so;
             const std::string sectname = read_fixed_cstr(sp + 0, 16);
-            // const std::string segn_s   = read_fixed_cstr(sp + 16, 16);
+            const std::string section_segname = read_fixed_cstr(sp + 16, 16);
             const u64 addr    = read_le_at<u64>(sp + 32);
             const u64 size    = read_le_at<u64>(sp + 40);
             const u32 offset  = read_le_at<u32>(sp + 48);
             const u32 flags   = read_le_at<u32>(sp + 64);
             const bool executable = section_has_instructions(sectname, flags, initprot);
+            const bool metadata_placeholder =
+                (st.filetype == MH_DSYM || st.filetype == MH_DYLIB_STUB) &&
+                offset == 0;
+
+            const bool object_with_anonymous_segment =
+                st.filetype == MH_OBJECT && segname.empty();
+            if (!section_segname.empty() &&
+                !object_with_anonymous_segment &&
+                section_segname != segname) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "macho: section {},{} names a different declaring segment {}",
+                    segname, sectname, section_segname)));
+            }
+
+            u64 vm_offset = 0;
+            const bool stripped_stub_section =
+                st.filetype == MH_DYLIB_STUB && metadata_placeholder;
+            if (!nonalloc_file_payload && !stripped_stub_section) {
+                if (addr < vmaddr) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: section {},{} begins before its declaring segment",
+                        segname, sectname)));
+                }
+                vm_offset = addr - vmaddr;
+                if (vm_offset > vmsize || size > vmsize - vm_offset) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: section {},{} virtual range is outside its declaring segment",
+                        segname, sectname)));
+                }
+            }
+
+            const bool zerofill = section_is_zerofill(flags);
+            if (size > 0 && !zerofill && !metadata_placeholder) {
+                const u64 section_fileoff = offset;
+                if (section_fileoff < fileoff) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: section {},{} begins before its declaring segment in the file",
+                        segname, sectname)));
+                }
+                const u64 file_offset = section_fileoff - fileoff;
+                if (file_offset > filesize || size > filesize - file_offset) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: section {},{} file range is outside its declaring segment",
+                        segname, sectname)));
+                }
+                if (!nonalloc_file_payload && st.filetype != MH_DSYM &&
+                    file_offset != vm_offset) {
+                    return std::unexpected(Error::invalid_format(std::format(
+                        "macho: section {},{} file and virtual offsets disagree",
+                        segname, sectname)));
+                }
+            }
 
             Section out;
-            out.name = segname + "," + sectname;
+            const std::string& effective_segname =
+                section_segname.empty() ? segname : section_segname;
+            out.name = effective_segname + "," + sectname;
             out.vaddr = static_cast<addr_t>(addr);
             out.file_offset = offset;
             out.size = size;
-            out.flags.allocated  = true;
+            out.flags.allocated  = !nonalloc_file_payload;
             out.flags.readable   = (initprot & VM_PROT_READ)    != 0;
             out.flags.writable   = (initprot & VM_PROT_WRITE)   != 0;
             out.flags.executable = executable;
-            if (size > 0 && !section_is_zerofill(flags)) {
+            if (size > 0 && !zerofill && !metadata_placeholder) {
                 auto data = st.r.slice(offset, size);
                 if (!data) {
                     return std::unexpected(Error::truncated(std::format(

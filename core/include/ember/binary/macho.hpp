@@ -27,31 +27,24 @@ public:
 
     [[nodiscard]] std::span<const LoadSegment> segments() const noexcept { return segments_; }
 
-    // Lowest *loaded* segment vmaddr - i.e. the linked address of the
-    // first segment a real loader (dyld, or any in-process userspace
-    // mapper) would actually map. __PAGEZERO is excluded: it has
-    // vmaddr=0 + no permissions and is a placeholder reservation, not
-    // a region the loader pulls bytes into. Including it would make
-    // slide math wrong by exactly its base (typically 0x100000000 on
-    // x86-64).
+    // Lowest non-empty loadable segment vmaddr. parse_segments() excludes
+    // __PAGEZERO explicitly; permission bits do not decide whether dyld maps
+    // a segment, so execute-only and write-only segments participate too.
     [[nodiscard]] addr_t preferred_load_base() const noexcept override {
         addr_t lo = 0;
         bool   set = false;
         for (const auto& seg : segments_) {
-            if (!seg.readable) continue;   // skip __PAGEZERO
             if (!set || seg.vaddr < lo) { lo = seg.vaddr; set = true; }
         }
         return set ? lo : 0;
     }
 
-    // VA span of the binary's loaded segments - same __PAGEZERO
-    // exclusion as preferred_load_base so the pair stays consistent.
-    // For a typical Mach-O this is __TEXT-through-__LINKEDIT.
+    // VA span of the non-empty loadable segments. __PAGEZERO is absent from
+    // segments_, keeping this consistent with preferred_load_base().
     [[nodiscard]] addr_t mapped_size() const noexcept override {
         addr_t lo = 0, hi = 0;
         bool set = false;
         for (const auto& seg : segments_) {
-            if (!seg.readable) continue;
             if (!set) { lo = seg.vaddr; hi = seg.vaddr + seg.memsz; set = true; }
             else {
                 if (seg.vaddr < lo) lo = seg.vaddr;
@@ -75,14 +68,16 @@ public:
 
     [[nodiscard]] std::span<const std::byte>
     bytes_at(addr_t vaddr) const noexcept override {
+        if (section_bytes_authoritative_) return Binary::bytes_at(vaddr);
         for (const auto& seg : segments_) {
             if (vaddr < seg.vaddr) continue;
             const u64 off = vaddr - seg.vaddr;
             if (off >= seg.memsz) continue;
             if (off >= seg.filesz) return {};
-            if (seg.data.empty()) continue;
+            if (seg.data.empty()) return {};
             return seg.data.subspan(static_cast<std::size_t>(off));
         }
+        if (has_load_segments_) return {};
         return Binary::bytes_at(vaddr);
     }
 
@@ -125,6 +120,11 @@ private:
     std::vector<Symbol>          symbols_;
     std::vector<LoadSegment>     segments_;
     std::vector<DataInCodeRange> data_in_code_;
+    bool                         has_load_segments_ = false;
+    // dSYM files may compact selected section payloads while preserving
+    // their original virtual addresses, so segment delta mapping is not
+    // authoritative for their file bytes.
+    bool                         section_bytes_authoritative_ = false;
 };
 
 }  // namespace ember

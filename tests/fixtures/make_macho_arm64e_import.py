@@ -85,6 +85,7 @@ def main() -> int:
 
     text_file_off = PAGE
     data_file_off = PAGE * 2
+    text_segment_vmaddr = BASE
     text_vmaddr = BASE + PAGE
     data_vmaddr = BASE + PAGE * 2
     main_vmaddr = text_vmaddr
@@ -116,7 +117,8 @@ def main() -> int:
     seg_text = bytearray()
     seg_text += struct.pack("<II", 0x19, 72 + 2 * 80)
     seg_text += b"__TEXT".ljust(16, b"\0")
-    seg_text += struct.pack("<QQQQ", text_vmaddr, PAGE, text_file_off, len(code))
+    seg_text += struct.pack("<QQQQ", text_segment_vmaddr, PAGE * 2,
+                            0, text_file_off + len(code))
     seg_text += struct.pack("<IIII", 5, 5, 2, 0)
     seg_text += b"__text".ljust(16, b"\0")
     seg_text += b"__TEXT".ljust(16, b"\0")
@@ -154,7 +156,8 @@ def main() -> int:
     starts += struct.pack("<I", seg_count)
     starts += struct.pack("<III", 0, data_seg_info_off, 0)
     starts += struct.pack("<IHHQIH",
-                          24, PAGE, 12, 0, 0, 1)  # ARM64E_USERLAND24
+                          24, PAGE, 12, data_vmaddr - BASE, 0,
+                          1)  # ARM64E_USERLAND24
     starts += struct.pack("<H", 0)
     imports_off = starts_off + len(starts)
     import_entry_size = 16 if mode == "import-addend64" else (

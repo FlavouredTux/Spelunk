@@ -56,7 +56,7 @@ void find_loops(const IrFunction& fn, CfgInfo& info);
 // ============================================================================
 class Builder {
 public:
-    Builder(const IrFunction& fn, const CfgInfo& info) noexcept;
+    Builder(const IrFunction& fn, const CfgInfo& info);
 
     // A return-only merge: a Return block whose only "real" instructions are
     // Phi and Return (no loads, stores, or computation). Sinking such a block

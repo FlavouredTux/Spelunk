@@ -83,7 +83,7 @@ std::unique_ptr<Region> make_empty() {
     return std::make_unique<Region>();
 }
 
-Builder::Builder(const IrFunction& fn, const CfgInfo& info) noexcept
+Builder::Builder(const IrFunction& fn, const CfgInfo& info)
     : fn_(fn), info_(info) {
     for (const auto& bb : fn_.blocks) {
         for (const auto& inst : bb.insts) {

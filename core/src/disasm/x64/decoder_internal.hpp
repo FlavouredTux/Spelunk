@@ -1,7 +1,14 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <expected>
+#include <format>
+#include <span>
+#include <type_traits>
 
+#include <ember/common/bytes.hpp>
+#include <ember/common/error.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/instruction.hpp>
 
@@ -43,6 +50,71 @@ struct OpcodeEntry {
     bool     modrm    = false;
 };
 
+struct Context {
+    std::span<const std::byte> code{};
+    std::size_t pos  = 0;
+    PrefixSet   prefix{};
+    bool rex_present = false;
+    bool rex_w = false;
+    bool rex_r = false;
+    bool rex_x = false;
+    bool rex_b = false;
+    bool vex_r2 = false;
+    bool vex_b2 = false;
+    bool vex = false;
+    bool evex = false;
+    u8 vex_map = 0;
+    u8 vex_pp = 0;
+    u8 vex_vvvv = 0;
+    u8 vector_bytes = 16;
+    u8 vector_mask = 0;
+    bool vector_zeroing = false;
+    bool vector_broadcast = false;
+    bool default_64 = false;
+    u8 opcode = 0;
+    u8 opcode_low3 = 0;
+    u8 modrm = 0;
+
+    [[nodiscard]] bool eof() const noexcept { return pos >= code.size(); }
+
+    [[nodiscard]] unsigned opsize() const noexcept {
+        if (default_64) return prefix.opsize ? 2u : 8u;
+        if (rex_w) return 8;
+        if (prefix.opsize) return 2;
+        return 4;
+    }
+
+    [[nodiscard]] Result<u8> read_u8() noexcept {
+        if (pos >= code.size()) {
+            return std::unexpected(Error::truncated("x64: truncated opcode stream"));
+        }
+        return static_cast<u8>(code[pos++]);
+    }
+
+    template <typename T>
+        requires std::is_trivially_copyable_v<T>
+    [[nodiscard]] Result<T> read_le() noexcept {
+        if (pos > code.size() || code.size() - pos < sizeof(T)) {
+            return std::unexpected(Error::truncated(std::format(
+                "x64: truncated {}-byte operand at pos {:#x}", sizeof(T), pos)));
+        }
+        const T v = read_le_at<T>(code.data() + pos);
+        pos += sizeof(T);
+        return v;
+    }
+};
+
+[[nodiscard]] bool parse_legacy_prefix(Context& ctx, u8 b) noexcept;
+
+[[nodiscard]] Result<Operand>
+decode_modrm_rm(Context& ctx, unsigned size, bool mem_only) noexcept;
+
+[[nodiscard]] Result<Operand>
+decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept;
+
+[[nodiscard]] Result<Instruction>
+decode_x87_escape(Context& ctx, addr_t addr) noexcept;
+
 enum GroupId : u8 {
     Grp_None = 0,
     Grp_1_Eb_Ib,
@@ -76,4 +148,3 @@ extern const std::array<std::array<OpcodeEntry, 8>, Grp_Count> kGroups;
 extern const OpcodeEntry kVzeroupper;
 
 }  // namespace ember::x64_decode
-

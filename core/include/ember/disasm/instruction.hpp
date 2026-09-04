@@ -323,6 +323,7 @@ enum class Mnemonic : u16 {
     X87Fldcw, X87Fnstcw, X87Fnstsw,
     X87Fucom, X87Fucomp, X87Fucomi, X87Fucomip,
     X87Finit,
+    Count,
 };
 
 // ARM condition field (bits 31:28). 0xE = AL (always) is the default carried

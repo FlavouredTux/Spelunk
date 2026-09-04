@@ -93,6 +93,10 @@ add_executable(ember_x64_decoder_test x64_decoder_test.cpp)
 target_link_libraries(ember_x64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME x64_decoder_unit COMMAND ember_x64_decoder_test)
 
+add_executable(ember_instruction_test instruction_test.cpp)
+target_link_libraries(ember_instruction_test PRIVATE ember::core ember::flags)
+add_test(NAME instruction_unit COMMAND ember_instruction_test)
+
 add_executable(ember_ppc32_relocation_test ppc32_relocation_test.cpp)
 target_include_directories(ember_ppc32_relocation_test PRIVATE
     "${PROJECT_SOURCE_DIR}/core/src/binary")

@@ -24,8 +24,12 @@ add_library(ember_core STATIC
     src/disasm/decoder.cpp
     src/disasm/register.cpp
     src/disasm/instruction.cpp
+    src/disasm/instruction_format.cpp
+    src/disasm/instruction_mnemonic_arm.cpp
     src/disasm/x64/decoder.cpp
+    src/disasm/x64/decoder_operands.cpp
     src/disasm/x64/decoder_tables.cpp
+    src/disasm/x64/decoder_x87.cpp
     src/disasm/ppc/decoder.cpp
     src/disasm/ppc/decoder_branch.cpp
     src/disasm/ppc/decoder_floating.cpp

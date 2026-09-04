@@ -121,6 +121,37 @@ void test_incremental_observation_order() {
           "incremental scan exposes a definition once observed");
 }
 
+void test_literals_are_not_indexed() {
+    const IrValue first_literal = IrValue::make_imm(7, IrType::I64);
+    const IrValue equal_literal = IrValue::make_imm(7, IrType::I64);
+    const SsaKey literal_key = key_of(first_literal);
+
+    IrFunction fn;
+    fn.blocks.resize(1);
+    fn.blocks[0].insts.push_back(instruction(
+        IrOp::Add, temp(40), {first_literal, equal_literal}));
+    fn.blocks[0].insts.push_back(instruction(
+        IrOp::Assign, temp(41), {equal_literal}));
+
+    SsaUseIndex index;
+    index.scan(fn);
+    index.scan_visible(fn, {});
+
+    check(index.definition(literal_key) == nullptr &&
+              !index.definition_position(literal_key),
+          "literal operands do not create definition entries");
+    check_count(index.syntactic_use_count(literal_key), 0,
+                "equal literals do not share a syntactic-use entry");
+    check_count(index.semantic_use_count(literal_key), 0,
+                "equal literals do not share a semantic-use entry");
+    check_count(index.visible_use_count(literal_key), 0,
+                "equal literals do not share a visible-use entry");
+    check(index.syntactic_user_positions(literal_key).empty() &&
+              index.semantic_user_positions(literal_key).empty() &&
+              index.visible_user_positions(literal_key).empty(),
+          "literal operands do not retain user positions");
+}
+
 void test_use_policies_and_scan_order() {
     const IrValue value = temp(1);
     IrFunction fn;
@@ -146,6 +177,10 @@ void test_use_policies_and_scan_order() {
                 "syntactic count includes repeated, Phi, and both barriers");
     check_count(index.semantic_use_count(key), 6,
                 "semantic count excludes both call argument barriers");
+    check_positions(index.syntactic_user_positions(key),
+                    {{0, 1}, {0, 1}, {0, 2}, {0, 2},
+                     {0, 3}, {0, 4}, {0, 5}, {0, 6}},
+                    "syntactic positions retain hidden call argument packs");
     check_positions(index.semantic_user_positions(key),
                     {{0, 1}, {0, 1}, {0, 2}, {0, 2}, {0, 5}, {0, 6}},
                     "semantic user positions retain occurrences and scan order");
@@ -219,7 +254,8 @@ void test_empty_queries_and_reset_reuse() {
                 "empty semantic count is zero");
     check_count(index.visible_use_count(missing), 0,
                 "empty visible count is zero");
-    check(index.semantic_user_positions(missing).empty() &&
+    check(index.syntactic_user_positions(missing).empty() &&
+              index.semantic_user_positions(missing).empty() &&
               index.visible_user_positions(missing).empty(),
           "empty user-position queries return empty spans");
 
@@ -259,6 +295,7 @@ void test_empty_queries_and_reset_reuse() {
 int main() {
     test_definitions_and_last_positions();
     test_incremental_observation_order();
+    test_literals_are_not_indexed();
     test_use_policies_and_scan_order();
     test_flag_only_visible_users();
     test_empty_queries_and_reset_reuse();

@@ -104,6 +104,7 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
     addr_t best = 0;
     bool   found = false;
     for (const auto& h : line_map.hits) {
+        if (h.byte_offset >= text.size()) continue;
         const auto ln = static_cast<u32>(1 + std::count(
             text.begin(),
             text.begin() + static_cast<std::ptrdiff_t>(h.byte_offset),

@@ -2,16 +2,16 @@
 #include <algorithm>
 #include <cstddef>
 #include <deque>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
-#include <unordered_map>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include <ember/analysis/arity.hpp>
-#include <ember/analysis/cfg_util.hpp>
 #include <ember/analysis/ssa_cleanup.hpp>
 #include <ember/common/annotations.hpp>
 #include <ember/common/types.hpp>
@@ -143,26 +143,11 @@ void Emitter::analyze(const IrFunction& f) {
     ssa_uses.scan_visible(f, hidden);
     // Preserve the time at which a load happened. SSA versions registers
     // but not memory, so blindly inlining a load after a call/store can
-    // change its meaning. Follow only transparent value aliases; any
-    // cross-block use or intervening memory barrier forces a snapshot.
-    const auto transparent_alias = [](const IrInst& inst) noexcept {
-        return inst.op == IrOp::Assign || inst.op == IrOp::ZExt ||
-               inst.op == IrOp::SExt || inst.op == IrOp::Trunc;
-    };
-    const auto rpo = compute_rpo(f);
-    std::unordered_map<addr_t, std::size_t> rpo_index;
-    rpo_index.reserve(rpo.size());
-    for (std::size_t i = 0; i < rpo.size(); ++i) rpo_index.emplace(rpo[i], i);
-    const auto idom = compute_idoms(f, rpo, rpo_index);
-    const auto block_dominates = [&](addr_t dominator, addr_t node) {
-        for (;;) {
-            if (node == dominator) return true;
-            auto parent = idom.find(node);
-            if (parent == idom.end() || parent->second == node) return false;
-            node = parent->second;
-        }
-    };
-    for (u32 def_bi = 0; is_ppc_abi() && def_bi < f.blocks.size(); ++def_bi) {
+    // change its meaning. Follow every expression the renderer may defer,
+    // including values captured by hidden call-argument packs, and materialize
+    // when a call or aliasing store can execute before the eventual use. A
+    // cross-block use alone is safe and stays inline.
+    for (u32 def_bi = 0; def_bi < f.blocks.size(); ++def_bi) {
         const auto& def_bb = f.blocks[def_bi];
         for (u32 def_ii = 0; def_ii < def_bb.insts.size(); ++def_ii) {
             const IrInst& load = def_bb.insts[def_ii];
@@ -180,17 +165,29 @@ void Emitter::analyze(const IrFunction& f) {
                 const IrType stored_type = store.src_count >= 2
                     ? store.srcs[1].type : IrType::I8;
                 const u32 store_bytes = std::max(1u, type_bits(stored_type) / 8u);
-                const auto overlaps = [](i64 a, u32 a_size, i64 b, u32 b_size) {
-                    return a < b + static_cast<i64>(b_size) &&
-                           b < a + static_cast<i64>(a_size);
+                const auto overlaps_signed = [](i64 a, u32 a_size,
+                                                 i64 b, u32 b_size) {
+                    if (a <= b) {
+                        return static_cast<u64>(b) - static_cast<u64>(a) <
+                               a_size;
+                    }
+                    return static_cast<u64>(a) - static_cast<u64>(b) <
+                           b_size;
+                };
+                const auto overlaps_unsigned = [](i64 a, u32 a_size,
+                                                   i64 b, u32 b_size) {
+                    const u64 ua = static_cast<u64>(a);
+                    const u64 ub = static_cast<u64>(b);
+                    if (ua <= ub) return ub - ua < a_size;
+                    return ua - ub < b_size;
                 };
                 if (load_stack && store_stack) {
-                    return overlaps(*load_stack, load_bytes,
-                                    *store_stack, store_bytes);
+                    return overlaps_signed(*load_stack, load_bytes,
+                                           *store_stack, store_bytes);
                 }
                 if (load_absolute && store_absolute) {
-                    return overlaps(*load_absolute, load_bytes,
-                                    *store_absolute, store_bytes);
+                    return overlaps_unsigned(*load_absolute, load_bytes,
+                                             *store_absolute, store_bytes);
                 }
                 const auto load_access = canonical_struct_access(load.srcs[0]);
                 const auto store_access = canonical_struct_access(store.srcs[0]);
@@ -198,24 +195,84 @@ void Emitter::analyze(const IrFunction& f) {
                     const auto load_root = ssa_key(load_access->first);
                     const auto store_root = ssa_key(store_access->first);
                     if (load_root && store_root && *load_root == *store_root) {
-                        return overlaps(load_access->second, load_bytes,
-                                        store_access->second, store_bytes);
+                        return overlaps_signed(
+                            load_access->second, load_bytes,
+                            store_access->second, store_bytes);
                     }
                 }
                 // A proven stack address and a proven absolute object
                 // cannot alias.
                 if ((load_stack && store_absolute) ||
                     (load_absolute && store_stack)) return false;
-                // Distinct unresolved pointer roots are not enough to
-                // prove an alias. Calls remain conservative barriers;
-                // unrelated copy-loop stores should not explode every
-                // source load into a one-use scalar temporary.
-                return false;
+                // Different unresolved pointer roots can still alias. Only
+                // the concrete stack/absolute/same-root cases above prove
+                // that a store cannot change this load's source.
+                return true;
             };
             const auto is_memory_barrier = [&](const IrInst& inst) {
-                return inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
-                       store_may_alias_load(inst);
+                if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
+                    store_may_alias_load(inst)) {
+                    return true;
+                }
+                if (inst.op != IrOp::Intrinsic) return false;
+                // Argument packs are metadata-only. Every real Intrinsic is
+                // conservatively memory-effecting, matching the IR memory
+                // passes: a destination does not prove purity (an opaque
+                // intrinsic may be an atomic read/modify/write).
+                if (SsaUseIndex::is_call_arg_barrier(inst)) return false;
+                return true;
             };
+            if (ssa_uses.syntactic_use_count(*load_key) == 0) continue;
+
+            // Propagate clean/dirty memory state once for this load. Each CFG
+            // block is scanned at most once per incoming state, so all uses of
+            // the load and its transparent aliases are constant-time queries.
+            // A dirty loop edge can revisit a use that ran clean initially;
+            // re-executing the defining Load resets the state to clean.
+            std::vector<std::vector<bool>> dirty_before;
+            dirty_before.reserve(f.blocks.size());
+            for (const IrBlock& block : f.blocks) {
+                dirty_before.emplace_back(block.insts.size(), false);
+            }
+            std::vector<bool> visited_clean(f.blocks.size(), false);
+            std::vector<bool> visited_dirty(f.blocks.size(), false);
+            std::deque<std::pair<std::size_t, bool>> pending_blocks;
+            const auto scan_block = [&](std::size_t block_index,
+                                        std::size_t begin,
+                                        bool dirty) {
+                const auto& instructions = f.blocks[block_index].insts;
+                for (std::size_t ii = begin; ii < instructions.size(); ++ii) {
+                    if (dirty) dirty_before[block_index][ii] = true;
+                    if (block_index == def_bi && ii == def_ii) {
+                        dirty = false;
+                    } else if (is_memory_barrier(instructions[ii])) {
+                        dirty = true;
+                    }
+                }
+                return dirty;
+            };
+            const auto enqueue_successors = [&](std::size_t block_index,
+                                                bool dirty) {
+                for (addr_t successor : f.blocks[block_index].successors) {
+                    auto found = f.block_at.find(successor);
+                    if (found != f.block_at.end()) {
+                        pending_blocks.emplace_back(found->second, dirty);
+                    }
+                }
+            };
+
+            const bool suffix_dirty = scan_block(def_bi, def_ii + 1, false);
+            enqueue_successors(def_bi, suffix_dirty);
+            while (!pending_blocks.empty()) {
+                const auto [block_index, incoming_dirty] = pending_blocks.front();
+                pending_blocks.pop_front();
+                auto& visited = incoming_dirty ? visited_dirty : visited_clean;
+                if (visited[block_index]) continue;
+                visited[block_index] = true;
+                const bool outgoing_dirty = scan_block(
+                    block_index, 0, incoming_dirty);
+                enqueue_successors(block_index, outgoing_dirty);
+            }
 
             std::set<SsaKey> seen;
             std::deque<SsaKey> pending{*load_key};
@@ -224,76 +281,306 @@ void Emitter::analyze(const IrFunction& f) {
                 const SsaKey key = pending.front();
                 pending.pop_front();
                 if (!seen.insert(key).second) continue;
-                const auto users = ssa_uses.semantic_user_positions(key);
+                const auto users = ssa_uses.syntactic_user_positions(key);
                 for (const auto& [use_bi, use_ii] : users) {
-                    if (use_bi != def_bi || use_ii <= def_ii) {
-                        if (use_bi < f.blocks.size() &&
-                            block_dominates(def_bb.start,
-                                            f.blocks[use_bi].start)) {
-                            snapshot = true;
-                            break;
-                        }
-                        // Across blocks, use machine-address order as a
-                        // conservative CodeWarrior snapshot witness. This
-                        // catches entry-block saves restored after a later
-                        // memset/call without materializing ordinary phi
-                        // fallback loads (which have no intervening call).
-                        const IrInst& user = f.blocks[use_bi].insts[use_ii];
-                        if (load.source_addr != 0 &&
-                            user.source_addr > load.source_addr) {
-                            for (const auto& candidate_block : f.blocks) {
-                                for (const IrInst& candidate : candidate_block.insts) {
-                                    if (candidate.source_addr <= load.source_addr ||
-                                        candidate.source_addr >= user.source_addr) {
-                                        continue;
-                                    }
-                                    if (candidate.op == IrOp::Call ||
-                                        candidate.op == IrOp::CallIndirect ||
-                                        store_may_alias_load(candidate)) {
-                                        snapshot = true;
-                                        break;
-                                    }
-                                }
-                                if (snapshot) break;
-                            }
-                        }
-                        if (snapshot) break;
+                    if (use_bi >= f.blocks.size() ||
+                        use_ii >= f.blocks[use_bi].insts.size()) {
                         continue;
                     }
-                    for (u32 between = def_ii + 1; between < use_ii; ++between) {
-                        if (is_memory_barrier(def_bb.insts[between])) {
-                            snapshot = true;
-                            break;
-                        }
-                    }
+                    snapshot = dirty_before[use_bi][use_ii];
                     if (snapshot) break;
-                    const IrInst& user = def_bb.insts[use_ii];
-                    if (transparent_alias(user)) {
+                    const IrInst& user = f.blocks[use_bi].insts[use_ii];
+                    if (inlinable_op(user.op) || user.op == IrOp::Phi) {
                         if (auto next = ssa_key(user.dst); next) {
                             pending.push_back(*next);
                         }
                     }
                 }
             }
-            if (snapshot) memory_snapshot_loads.insert(*load_key);
+            if (snapshot) {
+                memory_snapshot_loads.insert(*load_key);
+                // ABI-noise propagation hides values used only by call.args.
+                // A load that must be captured at its definition is semantic
+                // state, not pack noise, so restore that statement here.
+                hidden.erase({def_bi, def_ii});
+            }
         }
     }
-    // Stack slots that are loaded from somewhere in the function. A
-    // store whose address resolves to a slot NOT in this set is a dead
-    // spill - at -O0 the compiler routinely emits `mov [rbp-N], reg`
-    // for an arg even when the slot is never read, and we want those
-    // suppressed in the pseudo-C output. The set is keyed by the slot
-    // offset returned by `stack_offset(addr)` so it lines up with the
-    // emitter's own naming for `local_<hex>` lvalues.
+    std::map<i64, int> slot_write_count;
+    std::map<i64, IrValue> slot_first_write_value;
+    std::map<i64, u32> stored_stack_ranges;
+    std::set<std::tuple<i64, u32, IrType>> stack_access_ranges;
+    std::set<i64> nonforwardable_stack_slots;
+    for (const auto& bb : f.blocks) {
+        for (const auto& inst : bb.insts) {
+            if (inst.op == IrOp::Load && inst.src_count >= 1 &&
+                inst.segment == Reg::None) {
+                if (auto off = stack_offset(inst.srcs[0]); off) {
+                    stack_access_ranges.emplace(
+                        *off, std::max(1u, type_bits(inst.dst.type) / 8u),
+                        inst.dst.type);
+                }
+            }
+            if (inst.op != IrOp::Store || inst.src_count < 2 ||
+                inst.segment != Reg::None) {
+                continue;
+            }
+            auto off = stack_offset(inst.srcs[0]);
+            if (!off) continue;
+            const u32 bytes = std::max(
+                1u, type_bits(inst.srcs[1].type) / 8u);
+            stack_access_ranges.emplace(*off, bytes, inst.srcs[1].type);
+            auto& range_size = stored_stack_ranges[*off];
+            range_size = std::max(range_size, bytes);
+            if (++slot_write_count[*off] == 1) {
+                slot_first_write_value[*off] = inst.srcs[1];
+            }
+        }
+    }
+
+    // A stack-slot store is observable when code either loads the slot or
+    // lets its address escape. Seed each stored slot's address provenance,
+    // propagate it through pointer-shaped SSA operations, then conservatively
+    // treat every non-memory-address consumer as an escape. This includes
+    // call.args intrinsics, returns, and storing the pointer somewhere else.
+    std::map<SsaKey, std::set<i64>> stack_address_origins;
+    const auto range_contains = [](i64 start, u32 size, i64 point) {
+        return start <= point &&
+               static_cast<u64>(point) - static_cast<u64>(start) < size;
+    };
+    const auto ranges_overlap = [](i64 a, u32 a_size,
+                                   i64 b, u32 b_size) {
+        if (a <= b) {
+            return static_cast<u64>(b) - static_cast<u64>(a) < a_size;
+        }
+        return static_cast<u64>(a) - static_cast<u64>(b) < b_size;
+    };
+    for (auto first = stored_stack_ranges.begin();
+         first != stored_stack_ranges.end(); ++first) {
+        for (auto second = std::next(first);
+             second != stored_stack_ranges.end(); ++second) {
+            if (!ranges_overlap(first->first, first->second,
+                                second->first, second->second)) {
+                continue;
+            }
+            nonforwardable_stack_slots.insert(first->first);
+            nonforwardable_stack_slots.insert(second->first);
+        }
+    }
+    struct StorageComponent {
+        i64 start = 0;
+        u64 span = 0;
+        std::size_t distinct_shapes = 0;
+    };
+    std::vector<StorageComponent> storage_components;
+    for (const auto& access : stack_access_ranges) {
+        const i64 start = std::get<0>(access);
+        const u32 size = std::get<1>(access);
+        if (storage_components.empty()) {
+            storage_components.push_back({start, size, 1});
+            continue;
+        }
+        StorageComponent& previous = storage_components.back();
+        const u64 distance = static_cast<u64>(start) -
+                             static_cast<u64>(previous.start);
+        if (distance < previous.span) {
+            previous.span = std::max(
+                previous.span, distance + static_cast<u64>(size));
+            ++previous.distinct_shapes;
+        } else {
+            storage_components.push_back({start, size, 1});
+        }
+    }
+    stack_storage_ranges.clear();
+    stack_byte_storage_ranges.clear();
+    for (const StorageComponent& component : storage_components) {
+        stack_storage_ranges.emplace(component.start, component.span);
+        if (component.distinct_shapes > 1) {
+            stack_byte_storage_ranges.emplace(component.start, component.span);
+            for (const auto& stored : stored_stack_ranges) {
+                const i64 stored_off = stored.first;
+                if (stored_off < component.start) continue;
+                const u64 displacement = static_cast<u64>(stored_off) -
+                                         static_cast<u64>(component.start);
+                if (displacement < component.span) {
+                    nonforwardable_stack_slots.insert(stored_off);
+                }
+            }
+        }
+    }
+    const auto seed_stack_address = [&](const IrValue& value) {
+        if (value.kind == IrValueKind::Reg &&
+            is_stack_base_reg(value.reg)) return;
+        auto key = ssa_key(value);
+        if (!key) return;
+        auto off = stack_offset(value);
+        if (!off) return;
+        for (const auto& [stored_off, stored_size] : stored_stack_ranges) {
+            if (range_contains(stored_off, stored_size, *off)) {
+                stack_address_origins[*key].insert(stored_off);
+            }
+        }
+    };
+    for (const auto& bb : f.blocks) {
+        for (const auto& inst : bb.insts) {
+            seed_stack_address(inst.dst);
+            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                seed_stack_address(inst.srcs[i]);
+            }
+            for (const IrValue& operand : inst.phi_operands) {
+                seed_stack_address(operand);
+            }
+        }
+    }
+    const auto transports_pointer = [](IrOp op) noexcept {
+        switch (op) {
+            case IrOp::Assign:
+            case IrOp::Add:
+            case IrOp::Sub:
+            case IrOp::And:
+            case IrOp::Or:
+            case IrOp::Xor:
+            case IrOp::Shl:
+            case IrOp::Lshr:
+            case IrOp::Ashr:
+            case IrOp::Select:
+            case IrOp::Phi:
+            case IrOp::ZExt:
+            case IrOp::SExt:
+            case IrOp::Trunc:
+                return true;
+            default:
+                return false;
+        }
+    };
+    bool propagated = true;
+    while (propagated) {
+        propagated = false;
+        for (const auto& bb : f.blocks) {
+            for (const auto& inst : bb.insts) {
+                if (!transports_pointer(inst.op)) continue;
+                auto dst = ssa_key(inst.dst);
+                if (!dst) continue;
+                if (inst.dst.kind == IrValueKind::Reg &&
+                    is_stack_base_reg(inst.dst.reg)) continue;
+                std::set<i64> incoming;
+                const auto collect = [&](const IrValue& value) {
+                    auto key = ssa_key(value);
+                    if (!key) return;
+                    auto found = stack_address_origins.find(*key);
+                    if (found != stack_address_origins.end()) {
+                        incoming.insert(found->second.begin(), found->second.end());
+                    }
+                };
+                for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                    collect(inst.srcs[i]);
+                }
+                for (const IrValue& operand : inst.phi_operands) collect(operand);
+                if (auto destination_offset = stack_offset(inst.dst);
+                    destination_offset) {
+                    std::erase_if(incoming, [&](i64 origin) {
+                        const i64 base =
+                            stack_storage_base(origin).value_or(origin);
+                        auto range = stack_storage_ranges.find(base);
+                        if (range == stack_storage_ranges.end()) return false;
+                        if (*destination_offset < base) return true;
+                        const u64 displacement =
+                            static_cast<u64>(*destination_offset) -
+                            static_cast<u64>(base);
+                        // Keep addresses within the object and its legal
+                        // one-past position. A large stack-pointer adjustment
+                        // (e.g. saved-RSP minus frame size) is not an alias of
+                        // the saved slot merely because it flowed through the
+                        // same SSA temp.
+                        return displacement > range->second;
+                    });
+                }
+                if (incoming.empty()) continue;
+                auto& origins = stack_address_origins[*dst];
+                const std::size_t old_size = origins.size();
+                origins.insert(incoming.begin(), incoming.end());
+                propagated |= origins.size() != old_size;
+            }
+        }
+    }
+
+    stack_address_storage_base.clear();
+    for (const auto& [key, origins] : stack_address_origins) {
+        std::set<i64> canonical_bases;
+        for (i64 origin : origins) {
+            canonical_bases.insert(
+                stack_storage_base(origin).value_or(origin));
+        }
+        if (canonical_bases.size() == 1) {
+            stack_address_storage_base.emplace(key, *canonical_bases.begin());
+        }
+    }
+
+    std::set<i64> escaped_stack_slots;
+    const auto record_escape = [&](const IrValue& value) {
+        auto key = ssa_key(value);
+        if (!key) return;
+        auto found = stack_address_origins.find(*key);
+        if (found != stack_address_origins.end()) {
+            escaped_stack_slots.insert(found->second.begin(), found->second.end());
+        }
+        if (auto off = stack_offset(value); off) {
+            std::optional<i64> base;
+            if (auto provenance = stack_address_storage_base.find(*key);
+                provenance != stack_address_storage_base.end()) {
+                base = provenance->second;
+            } else {
+                base = stack_storage_base(*off);
+            }
+            if (base && *base != *off) {
+                auto range = stack_storage_ranges.find(*base);
+                if (range != stack_storage_ranges.end()) {
+                    stack_byte_storage_ranges[*base] = range->second;
+                }
+            }
+        }
+    };
+    for (const auto& bb : f.blocks) {
+        for (const auto& inst : bb.insts) {
+            if (transports_pointer(inst.op) && ssa_key(inst.dst)) continue;
+            if (inst.op == IrOp::Phi) continue;
+            for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
+                const bool memory_address =
+                    (inst.op == IrOp::Load || inst.op == IrOp::Store) && i == 0;
+                if (!memory_address) record_escape(inst.srcs[i]);
+            }
+            if (inst.op != IrOp::Load && inst.op != IrOp::Store) {
+                for (const IrValue& operand : inst.phi_operands) {
+                    record_escape(operand);
+                }
+            }
+        }
+    }
+
+    // Keep the existing set as the single format_store query: an explicit
+    // load and an escaped address both make the slot's stored value observable.
     for (const auto& bb : f.blocks) {
         for (const auto& inst : bb.insts) {
             if (inst.op != IrOp::Load || inst.src_count < 1) continue;
             if (inst.segment != Reg::None) continue;
             if (auto off = stack_offset(inst.srcs[0]); off) {
-                loaded_stack_slots.insert(*off);
+                const u32 bytes = std::max(
+                    1u, type_bits(inst.dst.type) / 8u);
+                for (const auto& [stored_off, stored_size] :
+                     stored_stack_ranges) {
+                    if (ranges_overlap(stored_off, stored_size, *off, bytes)) {
+                        loaded_stack_slots.insert(stored_off);
+                        if (stored_off != *off || stored_size != bytes) {
+                            nonforwardable_stack_slots.insert(stored_off);
+                        }
+                    }
+                }
             }
         }
     }
+    loaded_stack_slots.insert(escaped_stack_slots.begin(),
+                              escaped_stack_slots.end());
+
     // Init-only slot detection. A slot is "init-only" if it has exactly
     // one Store across the whole function and the stored value is an
     // unmodified arg-reg live-in (version 0). All loads of that slot
@@ -306,22 +593,37 @@ void Emitter::analyze(const IrFunction& f) {
     // is just as safe (any path that bypasses the write would be
     // reading uninitialised storage, which is undefined-behaviour
     // territory we don't owe the user a friendly rendering for).
-    std::map<i64, int>     slot_write_count;
-    std::map<i64, IrValue> slot_first_write_value;
-    for (const auto& bb : f.blocks) {
-        for (const auto& inst : bb.insts) {
-            if (inst.op != IrOp::Store || inst.src_count < 2) continue;
-            if (inst.segment != Reg::None) continue;
-            auto off = stack_offset(inst.srcs[0]);
-            if (!off) continue;
-            if (++slot_write_count[*off] == 1) {
-                slot_first_write_value[*off] = inst.srcs[1];
-            }
+    const auto stable_for_slot_forwarding = [&](const auto& self,
+                                                const IrValue& value,
+                                                std::set<SsaKey>& seen,
+                                                int depth) -> bool {
+        if (depth > 32) return false;
+        if (value.kind == IrValueKind::Imm) return true;
+        if (value.kind == IrValueKind::Reg && value.version == 0) return true;
+        auto key = ssa_key(value);
+        if (!key || !seen.insert(*key).second) return false;
+        const IrInst* definition = ssa_uses.definition(*key);
+        if (!definition || definition->op == IrOp::Clobber ||
+            (!inlinable_op(definition->op) && definition->op != IrOp::Phi)) {
+            return false;
         }
-    }
+        if (definition->op == IrOp::Load) {
+            return memory_snapshot_loads.contains(*key);
+        }
+        for (u8 i = 0;
+             i < definition->src_count && i < definition->srcs.size(); ++i) {
+            if (!self(self, definition->srcs[i], seen, depth + 1)) return false;
+        }
+        for (const IrValue& operand : definition->phi_operands) {
+            if (!self(self, operand, seen, depth + 1)) return false;
+        }
+        return true;
+    };
     for (const auto& [off, count] : slot_write_count) {
         if (count != 1) continue;
         const IrValue& v = slot_first_write_value[off];
+        if (escaped_stack_slots.contains(off) ||
+            nonforwardable_stack_slots.contains(off)) continue;
         single_write_slot_value.emplace(off, v);
         // Forward live-in args (rdi/rsi/...) and SSA temps directly:
         // both have a single dominating def that survives unchanged
@@ -334,17 +636,12 @@ void Emitter::analyze(const IrFunction& f) {
         const bool is_temp = v.kind == IrValueKind::Temp;
         if (!is_live_in_arg && !is_temp) continue;
         if (is_temp) {
-            auto k = ssa_key(v);
-            if (!k) continue;
-            const IrInst* definition = ssa_uses.definition(*k);
-            if (!definition) continue;
-            // Forwarding a memory Load through its one-write stack slot
-            // loses the time at which the value was captured. A later
-            // reload after memset/calls would be printed as a fresh read
-            // from the mutated source object. Keep the stack local for
-            // Load producers; pure computed temps remain safe to forward.
-            if (definition->op == IrOp::Clobber ||
-                (is_ppc_abi() && definition->op == IrOp::Load)) continue;
+            std::set<SsaKey> seen;
+            // A pure-looking Assign/Add can still depend on a Load or
+            // clobbered register. Re-expanding that tree at a later slot load
+            // would move the original read across intervening side effects.
+            if (!stable_for_slot_forwarding(
+                    stable_for_slot_forwarding, v, seen, 0)) continue;
         }
         init_only_slot_value.emplace(off, v);
     }

@@ -131,7 +131,7 @@ std::optional<std::size_t>
 Emitter::pointer_pointee_size(const IrValue& pointer) const {
     std::string type = c_type_name_for(pointer);
     if (annotations && fn) {
-        if (auto slot = trace_to_self_arg_slot(pointer); slot) {
+        if (auto slot = trace_pointer_alias_to_self_arg_slot(pointer); slot) {
             if (const FunctionSig* signature = annotations->signature_for(fn->start);
                 signature && *slot < signature->params.size()) {
                 const std::string declared = normalize_c_type_alias(

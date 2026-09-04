@@ -33,6 +33,7 @@
 #include <ember/structure/region.hpp>
 
 #include "emitter_internal.hpp"
+#include "emitter_render_chunk.hpp"
 #include "emitter_tables.hpp"
 
 namespace ember {
@@ -769,7 +770,15 @@ frame_slot_declarations(const Emitter& e, const std::string& body,
             elem_size = 48;
         }
         std::string suffix;
-        if (!matrix_locals.contains(slot.name) &&
+        const auto byte_storage =
+            e.stack_byte_storage_ranges.find(slot.offset);
+        if (byte_storage != e.stack_byte_storage_ranges.end() &&
+            slot.type_override.empty()) {
+            ty = "uint8_t";
+            elem_size = 1;
+            suffix = std::format("[{}]", byte_storage->second);
+        }
+        if (suffix.empty() && !matrix_locals.contains(slot.name) &&
             slot.type_override.empty()) {
             if (auto required = e.stack_required_extents.find(slot.offset);
                 required != e.stack_required_extents.end() &&
@@ -865,7 +874,16 @@ merge_local_declarations(const Emitter& e, const std::string& body) {
 // anywhere else in the output. visible_use_count can over-count when
 // the sole reader folds the value through a register-assign chain.
 [[nodiscard]] std::string
-strip_dead_declarations(const std::string& out, const std::string& header) {
+strip_dead_declarations(const Emitter& emitter, const std::string& out,
+                        const std::string& header) {
+    // Call-result bindings carry an effectful initializer. If the result name
+    // becomes dead after rendering, keep the initializer as a bare statement
+    // instead of deleting the call along with its unused result.
+    std::set<std::string> call_binding_names;
+    for (const auto& [_, name] : emitter.call_return_names) {
+        call_binding_names.insert(name);
+    }
+
     std::vector<std::string> lines;
     {
         std::string buf;
@@ -947,6 +965,20 @@ strip_dead_declarations(const std::string& out, const std::string& header) {
             if (li > function_header_line && is_decl(lines[li], name) &&
                 !name_appears_elsewhere(name, li)) {
                 changed = true;
+                if (call_binding_names.contains(name)) {
+                    const std::size_t equals = lines[li].find('=');
+                    if (equals != std::string::npos) {
+                        const std::size_t indent_end =
+                            lines[li].find_first_not_of(' ');
+                        std::string statement = indent_end == std::string::npos
+                            ? std::string{}
+                            : lines[li].substr(0, indent_end);
+                        statement += trim_line_view(
+                            std::string_view(lines[li]).substr(equals + 1));
+                        kept.push_back(std::move(statement));
+                        continue;
+                    }
+                }
                 continue;  // dead declaration
             }
             kept.push_back(std::move(lines[li]));
@@ -991,6 +1023,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                                          const Binary* binary,
                                          const Annotations* annotations,
                                          EmitOptions options) const {
+    if (options.line_map) options.line_map->hits.clear();
     if (!sf.ir) {
         return std::unexpected(Error::invalid_format(
             "pseudo-c: StructuredFunction has no IR"));
@@ -1050,17 +1083,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // declarations only for referenced slots keeps the function head
     // tidy without leaning on the dead-decl pruner (which only
     // recognises `TYPE NAME = expr;` form).
-    // Hits added to options.line_map during emit_region carry offsets
-    // relative to body_buf. We snapshot the index of the first hit
-    // recorded for this body so we can re-shift them once body_buf
-    // gets concatenated into `out` below.
-    const std::size_t lm_first_body_hit =
-        options.line_map ? options.line_map->hits.size() : 0;
-
-    std::string body_buf;
-    if (sf.body) {
-        e.emit_region(*sf.body, 1, body_buf);
-    }
+    auto body = RenderChunk::capture(options.line_map, [&](std::string& text) {
+        if (sf.body) e.emit_region(*sf.body, 1, text);
+    });
+    std::string& body_buf = body.text();
     if (sf.body && !sf.ir->blocks.empty()) {
         body_buf += structurer_fail_markers(sf, binary);
     }
@@ -1071,7 +1097,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     for (const std::string& local : matrix_locals) {
         declaration_context += std::format("\nMtx34 {};", local);
     }
-    if (e.is_ppc_abi()) {
+    if (e.is_ppc_abi() && !options.line_map) {
         body_buf = collapse_ppc_field_copy_runs(body_buf);
     }
     const auto fallbacks = fallback_materializations(e, body_buf);
@@ -1086,14 +1112,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     out += frame_slot_declarations(e, body_buf, matrix_locals);
     out += merge_local_declarations(e, body_buf);
 
-    const std::size_t body_offset = out.size();
-    out += body_buf;
-    if (options.line_map) {
-        for (std::size_t i = lm_first_body_hit;
-             i < options.line_map->hits.size(); ++i) {
-            options.line_map->hits[i].byte_offset += body_offset;
-        }
-    }
+    std::move(body).append_to(out);
 
     out += "}\n";
 
@@ -1103,7 +1122,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // listing in exchange for accurate PC-to-line mapping).
     if (!options.line_map) {
         out = strip_label_only_if_blocks(out);
-        out = strip_dead_declarations(out, header);
+        out = strip_dead_declarations(e, out, header);
         out = collapse_empty_then_else_blocks(out);
         if (e.is_ppc_abi()) {
             out = rename_ppc_temporaries(std::move(out));
@@ -1121,6 +1140,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
                                const Binary* binary,
                                const Annotations* annotations,
                                EmitOptions options) const {
+    if (options.line_map) options.line_map->hits.clear();
     if (!sf.ir) {
         return std::unexpected(Error::invalid_format(
             "pseudo-c per-block: StructuredFunction has no IR"));

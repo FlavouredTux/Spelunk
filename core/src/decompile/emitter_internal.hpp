@@ -161,6 +161,12 @@ struct Emitter {
     // dead spill - common for -O0 spill-arg-to-slot prologues whose slot is
     // never reloaded - and should be suppressed by format_store.
     std::set<i64>                                    loaded_stack_slots;
+    // Canonical byte-storage ranges formed by overlapping stack stores.
+    // Interior addresses/loads render relative to the first backing object
+    // instead of inventing independent C locals for aliased bytes.
+    std::map<i64, u64>                               stack_storage_ranges;
+    std::map<i64, u64>                               stack_byte_storage_ranges;
+    std::map<SsaKey, i64>                            stack_address_storage_base;
     // Minimum byte extent proven by bounded library calls such as
     // memset(dst, ..., n), fgets(dst, n, ...), and fread(dst, size, count).
     // This prevents an address-only stack slot from staying a scalar when a
@@ -338,6 +344,9 @@ struct Emitter {
 
     [[nodiscard]] const std::string*
     abi_param_for(const FunctionSig& sig, Reg r) const noexcept;
+
+    [[nodiscard]] const ParamSig*
+    abi_param_signature_for(const FunctionSig& sig, Reg r) const noexcept;
 
     [[nodiscard]] std::vector<InferredArgument>
     abi_layout_for(const FunctionSig& sig) const;
@@ -663,6 +672,12 @@ struct Emitter {
     [[nodiscard]] std::optional<u8>
     trace_to_self_arg_slot(const IrValue& v, int depth = 0) const;
 
+    // Pointer-identity variant: follows copies, same-source Phis and safe
+    // init-only spills, but never integer width conversions.
+    [[nodiscard]] std::optional<u8>
+    trace_pointer_alias_to_self_arg_slot(const IrValue& v,
+                                         int depth = 0) const;
+
     [[nodiscard]] const Symbol*
     global_object_for_load(const IrValue& v) const;
 
@@ -939,6 +954,16 @@ struct Emitter {
 
     // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.
     [[nodiscard]] std::optional<i64> stack_offset(const IrValue& v, int depth = 0) const;
+
+    [[nodiscard]] std::optional<i64>
+    stack_storage_base(i64 offset, u32 access_bytes = 1) const noexcept;
+
+    [[nodiscard]] std::string
+    stack_address_expr(i64 offset, const IrValue* value = nullptr) const;
+
+    [[nodiscard]] std::string
+    stack_storage_access(i64 offset, IrType type,
+                         std::string_view loaded_type = {}) const;
 
     [[nodiscard]] static std::string stack_name(i64 off);
 
@@ -1368,9 +1393,6 @@ struct Emitter {
     [[nodiscard]] std::optional<SubOps> match_or_cf_zf(const IrValue& v) const;
 
     [[nodiscard]] std::optional<SubOps> match_or_zf_sfxorof(const IrValue& v) const;
-
-    // Matches Not(v) and returns the inner operand (via def chain).
-    [[nodiscard]] const IrInst* match_not(const IrValue& v) const;
 
     [[nodiscard]] std::optional<SubOps> match_and_notzf_notcf(const IrValue& v) const;
 

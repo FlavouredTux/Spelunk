@@ -576,10 +576,6 @@ void Emitter::analyze_return_expr_call_folds(const Region& r) {
     if (r.condition.kind == IrValueKind::None) return;
     auto ret_key = single_call_return_key_in_expr(r.condition);
     if (!ret_key) return;
-    if (fold_return_expr.contains(*ret_key) ||
-        fold_void_call_stmt.contains(*ret_key)) {
-        return;
-    }
     if (count_uses_with_call_args(*ret_key) != 1) return;
     auto pos = call_position_for_return_key(*ret_key);
     if (!pos) return;

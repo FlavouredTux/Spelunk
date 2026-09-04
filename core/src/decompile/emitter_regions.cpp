@@ -13,6 +13,7 @@
 #include <ember/structure/region.hpp>
 
 #include "emitter_internal.hpp"
+#include "emitter_render_chunk.hpp"
 
 namespace ember::emit {
 
@@ -152,6 +153,81 @@ Emitter::trace_to_self_arg_slot(const IrValue& v, int depth) const {
     return std::nullopt;
 }
 
+std::optional<u8>
+Emitter::trace_pointer_alias_to_self_arg_slot(const IrValue& v,
+                                              int depth) const {
+    if (depth > 8) return std::nullopt;
+    if (v.kind == IrValueKind::Reg && v.version == 0) {
+        const Reg wanted = canonical_reg(v.reg);
+        for (u8 i = 0; i < self_arg_layout.size(); ++i) {
+            if (canonical_reg(self_arg_layout[i].reg) != wanted) continue;
+            if (annotations && fn) {
+                if (const FunctionSig* signature =
+                        annotations->signature_for(fn->start);
+                    signature && i < signature->params.size()) {
+                    const std::string declared = normalize_c_type_alias(
+                        signature->params[i].type);
+                    return declared.ends_with('*')
+                        ? std::optional<u8>{i} : std::nullopt;
+                }
+            }
+            return c_type_name_for(v).ends_with('*')
+                ? std::optional<u8>{i} : std::nullopt;
+        }
+        return std::nullopt;
+    }
+    if (v.kind == IrValueKind::Reg) {
+        if (auto preserved = preserved_call_arg_for_clobber(v.reg, v.version)) {
+            return trace_pointer_alias_to_self_arg_slot(*preserved, depth + 1);
+        }
+    }
+    const IrInst* definition = def_of(v);
+    if (!definition) return std::nullopt;
+    if (definition->op == IrOp::Assign && definition->src_count == 1) {
+        return trace_pointer_alias_to_self_arg_slot(
+            definition->srcs[0], depth + 1);
+    }
+    if ((definition->op == IrOp::Add || definition->op == IrOp::Sub) &&
+        definition->src_count >= 2 && c_type_name_for(v).ends_with('*')) {
+        const auto lhs = trace_pointer_alias_to_self_arg_slot(
+            definition->srcs[0], depth + 1);
+        const auto rhs = trace_pointer_alias_to_self_arg_slot(
+            definition->srcs[1], depth + 1);
+        if (definition->op == IrOp::Sub) {
+            if (lhs && !rhs) return lhs;
+        } else if (lhs.has_value() != rhs.has_value()) {
+            return lhs ? lhs : rhs;
+        }
+        return std::nullopt;
+    }
+    if (definition->op == IrOp::Load && definition->segment == Reg::None &&
+        definition->src_count >= 1) {
+        if (auto off = stack_offset(definition->srcs[0]); off) {
+            if (auto init = init_only_slot_value.find(*off);
+                init != init_only_slot_value.end()) {
+                return trace_pointer_alias_to_self_arg_slot(
+                    init->second, depth + 1);
+            }
+        }
+        return std::nullopt;
+    }
+    if (definition->op != IrOp::Phi || definition->phi_operands.empty()) {
+        return std::nullopt;
+    }
+    const auto self_key = ssa_key(v);
+    std::optional<u8> common;
+    for (const IrValue& operand : definition->phi_operands) {
+        const auto operand_key = ssa_key(operand);
+        if (self_key && operand_key && *self_key == *operand_key) continue;
+        const auto slot = trace_pointer_alias_to_self_arg_slot(
+            operand, depth + 1);
+        if (!slot) return std::nullopt;
+        if (!common) common = slot;
+        else if (*common != *slot) return std::nullopt;
+    }
+    return common;
+}
+
 bool Emitter::region_always_exits(const Region& r) noexcept {
     const Region* cur = &r;
     while (cur && cur->kind == RegionKind::Seq && !cur->children.empty()) {
@@ -211,21 +287,27 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
             if (current_return_is_void && r.children.size() >= 2) {
                 const Region* tail = r.children.back().get();
                 std::size_t guard_index = r.children.size() - 1;
-                std::string suffix;
                 const auto bindings_before_suffix = emitted_bindings;
-                while (guard_index > 0) {
-                    const Region* candidate = r.children[guard_index - 1].get();
-                    if (!candidate || (candidate->kind != RegionKind::Block &&
-                                       candidate->kind != RegionKind::Empty)) {
-                        break;
-                    }
-                    --guard_index;
-                    emit_region(*candidate, depth, suffix);
-                }
+                auto suffix = RenderChunk::capture(
+                    options.line_map, [&](std::string& text) {
+                        while (guard_index > 0) {
+                            const Region* candidate =
+                                r.children[guard_index - 1].get();
+                            if (!candidate ||
+                                (candidate->kind != RegionKind::Block &&
+                                 candidate->kind != RegionKind::Empty)) {
+                                break;
+                            }
+                            --guard_index;
+                            emit_region(*candidate, depth, text);
+                        }
+                    });
                 emitted_bindings = bindings_before_suffix;
                 const Region* guarded = guard_index > 0
                     ? r.children[guard_index - 1].get() : nullptr;
-                if (rendered_region_empty(suffix) && guarded && tail &&
+                const bool suffix_empty = rendered_region_empty(suffix.text());
+                suffix.discard();
+                if (suffix_empty && guarded && tail &&
                     guarded->kind == RegionKind::IfThen &&
                     tail->kind == RegionKind::Return && !guarded->children.empty() &&
                     guarded->children[0]) {
@@ -276,17 +358,21 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
     // -O0 prologue's xmm spill block that becomes literally `if (rax) {}`)
     // - emitting the dead conditional is just visual noise, since the
     // condition itself has no observable effect.
-    std::string body;
     const auto bindings_before_body = emitted_bindings;
-    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, body);
+    auto body = RenderChunk::capture(options.line_map, [&](std::string& text) {
+        if (!r.children.empty()) emit_region(*r.children[0], depth + 1, text);
+    });
     const auto bindings_after_body = emitted_bindings;
     emitted_bindings = bindings_before_body;
-    if (rendered_region_empty(body)) return;
+    if (rendered_region_empty(body.text())) {
+        body.discard();
+        return;
+    }
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string cond = render_condition(r.condition, r.invert);
     emit_materializations_for_rendered_value(r.condition, cond, out, ind);
     out += std::format("{}if ({}) {{\n", ind, cond);
-    out += body;
+    std::move(body).append_to(out);
     emitted_bindings.insert(bindings_after_body.begin(), bindings_after_body.end());
     out += std::format("{}}}\n", ind);
 }
@@ -302,23 +388,35 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     }
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const auto bindings_before_children = emitted_bindings;
-    std::string then_buf;
-    if (!r.children.empty()) emit_region(*r.children[0], depth + 1, then_buf);
+    auto then_buf = RenderChunk::capture(
+        options.line_map, [&](std::string& text) {
+            if (!r.children.empty()) {
+                emit_region(*r.children[0], depth + 1, text);
+            }
+        });
     auto bindings_after_then = emitted_bindings;
     emitted_bindings = bindings_before_children;
-    std::string else_buf;
-    if (r.children.size() > 1) emit_region(*r.children[1], depth + 1, else_buf);
+    auto else_buf = RenderChunk::capture(
+        options.line_map, [&](std::string& text) {
+            if (r.children.size() > 1) {
+                emit_region(*r.children[1], depth + 1, text);
+            }
+        });
     auto bindings_after_else = emitted_bindings;
     emitted_bindings = bindings_before_children;
-    bool then_empty = rendered_region_empty(then_buf);
-    bool else_empty = rendered_region_empty(else_buf);
-    if (then_empty && else_empty) return;
+    bool then_empty = rendered_region_empty(then_buf.text());
+    bool else_empty = rendered_region_empty(else_buf.text());
+    if (then_empty && else_empty) {
+        then_buf.discard();
+        else_buf.discard();
+        return;
+    }
     // If only the else arm has content, invert the condition and drop the
     // dead then. Reads much cleaner than `if (!x) {} else {…}`.
     bool invert_effective = r.invert;
     if (then_empty && !else_empty) {
         invert_effective = !invert_effective;
-        std::swap(then_buf, else_buf);
+        then_buf.swap(else_buf);
         std::swap(bindings_after_then, bindings_after_else);
         std::swap(then_empty, else_empty);
     }
@@ -333,29 +431,35 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     // the indentation matches the new flat layout.
     if (r.children.size() > 1 && r.children[0] && r.children[1] &&
         region_always_exits(*r.children[0])) {
-        std::string else_outer;
         const auto bindings_before_else_outer = emitted_bindings;
-        emit_region(*r.children[1], depth, else_outer);
+        auto else_outer = RenderChunk::capture(
+            options.line_map, [&](std::string& text) {
+                emit_region(*r.children[1], depth, text);
+            });
         const auto bindings_after_else_outer = emitted_bindings;
         emitted_bindings = bindings_before_else_outer;
-        if (!rendered_region_empty(else_outer)) {
+        if (!rendered_region_empty(else_outer.text())) {
             out += std::format("{}if ({}) {{\n", ind, cond);
-            out += then_buf;
+            std::move(then_buf).append_to(out);
             emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
             out += std::format("{}}}\n", ind);
-            out += else_outer;
+            std::move(else_outer).append_to(out);
+            else_buf.discard();
             emitted_bindings.insert(bindings_after_else_outer.begin(),
                                    bindings_after_else_outer.end());
             return;
         }
+        else_outer.discard();
     }
     out += std::format("{}if ({}) {{\n", ind, cond);
-    out += then_buf;
+    std::move(then_buf).append_to(out);
     emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
     if (!else_empty) {
         out += std::format("{}}} else {{\n", ind);
-        out += else_buf;
+        std::move(else_buf).append_to(out);
         emitted_bindings.insert(bindings_after_else.begin(), bindings_after_else.end());
+    } else {
+        else_buf.discard();
     }
     out += std::format("{}}}\n", ind);
 }
@@ -376,14 +480,17 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
 
-    std::string header_buf;
     const auto bindings_before_header = emitted_bindings;
-    if (!r.children.empty()) {
-        emit_region(*r.children[0], depth + 1, header_buf);
-    }
+    auto header_buf = RenderChunk::capture(
+        options.line_map, [&](std::string& text) {
+            if (!r.children.empty()) {
+                emit_region(*r.children[0], depth + 1, text);
+            }
+        });
     const auto bindings_after_header = emitted_bindings;
     emitted_bindings = bindings_before_header;
-    if (header_buf.empty()) {
+    if (header_buf.text().empty()) {
+        header_buf.discard();
         const std::string cond = render_condition(r.condition, r.invert);
         emit_materializations_for_rendered_value(r.condition, cond, out, ind);
         out += std::format("{}while ({}) {{\n", ind, cond);
@@ -395,7 +502,7 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     }
     const std::string break_cond = render_condition(r.condition, !r.invert);
     out += std::format("{}for (;;) {{\n", ind);
-    out += header_buf;
+    std::move(header_buf).append_to(out);
     emitted_bindings.insert(bindings_after_header.begin(), bindings_after_header.end());
     emit_materializations_for_rendered_value(r.condition, break_cond, out, inner_ind);
     out += std::format("{}if ({}) break;\n", inner_ind, break_cond);
@@ -448,15 +555,34 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
 
 void Emitter::emit_region_return(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    addr_t return_source = 0;
+    if (fn) {
+        auto block = fn->block_at.find(r.block_start);
+        if (block != fn->block_at.end()) {
+            const auto& instructions = fn->blocks[block->second].insts;
+            for (auto it = instructions.rbegin(); it != instructions.rend(); ++it) {
+                if (it->op == IrOp::Return) {
+                    return_source = it->source_addr;
+                    break;
+                }
+            }
+        }
+    }
+    const auto append_return = [&](std::string statement) {
+        if (options.line_map && return_source != 0) {
+            options.line_map->hits.push_back({out.size(), return_source});
+        }
+        out += ind + std::move(statement) + "\n";
+    };
     if (r.condition.kind == IrValueKind::None) {
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
     if (auto k = ssa_key(r.condition); k) {
         auto s = fold_void_call_stmt.find(*k);
         if (s != fold_void_call_stmt.end()) {
             out += std::format("{}{};\n", ind, s->second);
-            out += std::format("{}return;\n", ind);
+            append_return("return;");
             return;
         }
     }
@@ -468,30 +594,30 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
                 out += std::format("{}{};\n", ind, f->second);
             }
         }
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
     if (is_void_call_result(r.condition)) {
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
     if (is_unbound_clobber_result(r.condition)) {
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
     if (is_incidental_x86_fp_return(r.condition)) {
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
     if (renders_stack_chk_guard_value(r.condition)) {
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
     if (auto k = ssa_key(r.condition); k) {
         auto f = fold_return_expr.find(*k);
         if (f != fold_return_expr.end()) {
             emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
-            out += std::format("{}return {};\n", ind, f->second);
+            append_return(std::format("return {};", f->second));
             return;
         }
     }
@@ -511,10 +637,10 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     std::string rendered = expr(v);
     emit_materializations_for_rendered_value(v, rendered, out, ind);
     if (renders_stack_chk_guard_value(v)) {
-        out += std::format("{}return;\n", ind);
+        append_return("return;");
         return;
     }
-    out += std::format("{}return {};\n", ind, rendered);
+    append_return(std::format("return {};", rendered));
 }
 
 void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) const {

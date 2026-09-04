@@ -137,6 +137,18 @@ target_link_libraries(ember_emitter_ssa_use_index_test
 add_test(NAME emitter_ssa_use_index_unit
          COMMAND ember_emitter_ssa_use_index_test)
 
+add_executable(ember_emitter_line_map_test emitter_line_map_test.cpp)
+target_link_libraries(ember_emitter_line_map_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_line_map_unit COMMAND ember_emitter_line_map_test)
+
+add_executable(ember_emitter_memory_semantics_test
+    emitter_memory_semantics_test.cpp)
+target_link_libraries(ember_emitter_memory_semantics_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_memory_semantics_unit
+         COMMAND ember_emitter_memory_semantics_test)
+
 add_executable(ember_eh_frame_internal_test eh_frame_internal_test.cpp)
 target_include_directories(ember_eh_frame_internal_test PRIVATE
     "${PROJECT_SOURCE_DIR}/core/src/analysis")

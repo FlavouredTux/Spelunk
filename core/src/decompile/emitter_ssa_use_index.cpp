@@ -3,6 +3,24 @@
 namespace ember::emit {
 namespace {
 
+[[nodiscard]] std::optional<SsaKey>
+indexed_key(const IrValue& value) noexcept {
+    // ssa_key() also gives immediates a stable identity for memory-analysis
+    // callers. Literals are not SSA values, though, and merging every equal
+    // literal into one def/use entry would describe occurrences rather than
+    // data flow.
+    switch (value.kind) {
+        case IrValueKind::Reg:
+        case IrValueKind::Temp:
+        case IrValueKind::Flag:
+            return ssa_key(value);
+        case IrValueKind::None:
+        case IrValueKind::Imm:
+            return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 template <typename Visitor>
 void for_each_operand(const IrInst& inst, Visitor&& visitor) {
     if (inst.op == IrOp::Phi) {
@@ -33,7 +51,7 @@ void SsaUseIndex::scan(const IrFunction& fn) {
 }
 
 void SsaUseIndex::observe(const IrInst& inst, Position position) {
-    if (const auto key = ssa_key(inst.dst); key) {
+    if (const auto key = indexed_key(inst.dst); key) {
         // Assignment (rather than emplace) intentionally preserves the
         // emitter's historical last-definition-wins behaviour.
         Entry& entry = entries_[*key];
@@ -43,10 +61,11 @@ void SsaUseIndex::observe(const IrInst& inst, Position position) {
 
     const bool barrier = is_call_arg_barrier(inst);
     for_each_operand(inst, [&](const IrValue& operand) {
-        const auto key = ssa_key(operand);
+        const auto key = indexed_key(operand);
         if (!key) return;
         Entry& entry = entries_[*key];
         ++entry.syntactic_uses;
+        entry.syntactic_user_positions.push_back(position);
         if (barrier) return;
         entry.semantic_user_positions.push_back(position);
     });
@@ -72,7 +91,7 @@ void SsaUseIndex::scan_visible(const IrFunction& fn,
                 inst.op == IrOp::Assign &&
                 inst.dst.kind == IrValueKind::Flag;
             for_each_operand(inst, [&](const IrValue& operand) {
-                const auto key = ssa_key(operand);
+                const auto key = indexed_key(operand);
                 if (!key) return;
                 Entry& entry = entries_[*key];
                 if (flag_assign) ++entry.visible_flag_assign_uses;
@@ -131,6 +150,13 @@ bool SsaUseIndex::every_visible_use_is_flag_assign(
         : 0u;
     return entry && visible != 0u &&
            entry->visible_flag_assign_uses == visible;
+}
+
+std::span<const SsaUseIndex::Position>
+SsaUseIndex::syntactic_user_positions(const SsaKey& key) const noexcept {
+    const Entry* entry = find_entry(key);
+    if (!entry) return {};
+    return entry->syntactic_user_positions;
 }
 
 std::span<const SsaUseIndex::Position>

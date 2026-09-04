@@ -112,10 +112,6 @@ std::optional<Emitter::SubOps> Emitter::match_or_zf_sfxorof(const IrValue& v) co
     return std::nullopt;
 }
 
-const IrInst* Emitter::match_not(const IrValue& v) const {
-    return def_stripped(v);
-}
-
 std::optional<Emitter::SubOps> Emitter::match_and_notzf_notcf(const IrValue& v) const {
     const IrInst* d = def_stripped(v);
     if (!d || d->op != IrOp::And || d->src_count < 2) return std::nullopt;

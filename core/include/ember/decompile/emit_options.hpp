@@ -14,8 +14,8 @@ namespace ember {
 
 // Sidecar provenance produced by the emitter. One Hit per IR
 // instruction whose statement was appended to the output buffer:
-// `byte_offset` is the position in the returned string where the
-// statement's first character lands, `source_addr` is the IR's
+// `byte_offset` is the start of the returned string's statement line
+// (before indentation), `source_addr` is the IR's
 // source_addr (i.e. the machine-instruction VA the IR was lifted
 // from). Translate to line numbers by counting '\n's up to the
 // offset - keeps the emitter hot path O(1) per statement.

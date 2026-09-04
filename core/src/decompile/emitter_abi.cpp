@@ -399,6 +399,14 @@ i64 Emitter::ppc_advance_parameter_slot(i64& cursor,
 
 const std::string*
 Emitter::abi_param_for(const FunctionSig& sig, Reg r) const noexcept {
+    if (const ParamSig* param = abi_param_signature_for(sig, r)) {
+        return &param->name;
+    }
+    return nullptr;
+}
+
+const ParamSig*
+Emitter::abi_param_signature_for(const FunctionSig& sig, Reg r) const noexcept {
     const auto int_regs   = int_arg_regs(abi);
     const auto fp_regs    = fp_arg_regs(abi);
     const bool positional = abi_positional_arg_slots(abi);
@@ -414,11 +422,11 @@ Emitter::abi_param_for(const FunctionSig& sig, Reg r) const noexcept {
             : std::nullopt;
         if (is_fp) {
             const std::size_t idx = positional ? slot : fp_idx;
-            if (idx < fp_regs.size() && fp_regs[idx] == canon) return &p.name;
+            if (idx < fp_regs.size() && fp_regs[idx] == canon) return &p;
             ++fp_idx;
         } else {
             const std::size_t idx = positional ? slot : int_idx;
-            if (idx < int_regs.size() && int_regs[idx] == canon) return &p.name;
+            if (idx < int_regs.size() && int_regs[idx] == canon) return &p;
             const std::size_t words = aggregate_size
                 ? std::max<std::size_t>(1, (*aggregate_size +
                     static_cast<u32>(ppc_parameter_word_size()) - 1) /

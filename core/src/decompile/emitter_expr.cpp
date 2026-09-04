@@ -59,7 +59,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
             // A temp whose value is a stack-relative address renders as &local_X
             // at every use, so we don't need a named def line like "u64 tN = &local_X;".
             if (auto off = stack_offset(v); off) {
-                return std::format("&{}", stack_name(*off));
+                return stack_address_expr(*off, &v);
             }
             // Stack loads are already a short source-level leaf.  Render
             // them even at the recursion cap so a long PPC register shuffle
@@ -168,8 +168,8 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             return d.src_count >= 1 ? expr(d.srcs[0], depth, min_prec) : "";
 
         case IrOp::Add: {
-            if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
-                return std::format("&{}", stack_name(*off));
+            if (auto off = stack_offset(d.dst); off) {
+                return stack_address_expr(*off, &d.dst);
             }
             if (is_ppc_abi()) {
                 if (auto navigation = try_render_ppc_navigation_table_address(
@@ -207,8 +207,8 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             if (auto converted = try_render_ppc_int_to_float(d, depth); converted) {
                 return wrap_if_lt(std::move(*converted), Prec::Unary, min_prec);
             }
-            if (auto off = stack_offset(IrValue::make_temp(d.dst.temp, d.dst.type)); off) {
-                return std::format("&{}", stack_name(*off));
+            if (auto off = stack_offset(d.dst); off) {
+                return stack_address_expr(*off, &d.dst);
             }
             if (is_ppc_abi()) {
                 if (auto address = try_resolve_imm_addr(d.dst); address) {
@@ -485,18 +485,13 @@ std::string Emitter::format_store(const IrInst& inst) const {
     std::string lhs;
     if (inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {
-            // Dead-spill suppression: drop the store when the slot has no
-            // observable reader in the rendered output. Two cases collapse
-            // here: (1) no Load anywhere reads the slot (common -O0 spill-
-            // and-forget prologue noise), and (2) every load is an init-
-            // only forward to the original arg-reg, so the slot's name
-            // never appears in the body. Exception: slots whose name came
-            // from an external source (PDB S_REGREL32, sidecar annotation)
-            // carry source-level intent - keep their stores so the user's
-            // named locals don't silently disappear.
-            const bool has_reader = loaded_stack_slots.contains(*off);
+            // Dead-spill suppression: drop the store only when the slot has no
+            // explicit reader and its address never escapes. Escaped slots are
+            // observable through calls, returned/stored pointers, and other
+            // indirect consumers even when no IR Load reads them locally.
+            const bool observable = loaded_stack_slots.contains(*off);
             const bool init_only  = init_only_slot_value.contains(*off);
-            if (!has_reader || init_only) {
+            if (!observable || init_only) {
                 auto it = frame_layout.slots.find(*off);
                 const bool user_named =
                     it != frame_layout.slots.end() &&
@@ -505,6 +500,9 @@ std::string Emitter::format_store(const IrInst& inst) const {
             }
             if (auto field = imported_stack_field(*off, val.type); field) {
                 lhs = *field;
+            } else if (auto interior = stack_storage_access(*off, val.type);
+                       !interior.empty()) {
+                lhs = std::move(interior);
             } else if (auto it = frame_layout.slots.find(*off);
                 it != frame_layout.slots.end() && !it->second.name.empty()) {
                 lhs = it->second.name;
@@ -598,7 +596,10 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
 
         case IrOp::Load: {
             if (is_canary_value_load(inst) || renders_stack_chk_guard_load(inst)) return "";
-            if (use_count(inst.dst) == 0) return "";
+            const auto load_key = ssa_key(inst.dst);
+            const bool snapshot = load_key &&
+                memory_snapshot_loads.contains(*load_key);
+            if (use_count(inst.dst) == 0 && !snapshot) return "";
             // Loads that cross a possible memory mutation must bind here even
             // with one eventual use. Other single-use and cheap multi-use
             // loads remain inline.
@@ -758,16 +759,63 @@ std::string Emitter::format_binop(const IrInst& d, std::string_view op,
         }
     }
     if ((d.op == IrOp::Add || d.op == IrOp::Sub) && d.src_count >= 2) {
+        const auto declared_pointer_type = [&](const IrValue& value) {
+            std::string type = c_type_name_for(value);
+            if (!annotations || !fn) return type;
+            const auto slot = trace_pointer_alias_to_self_arg_slot(value);
+            const FunctionSig* signature = annotations->signature_for(fn->start);
+            if (!slot || !signature || *slot >= signature->params.size()) {
+                return type;
+            }
+            const std::string declared =
+                normalize_c_type_alias(signature->params[*slot].type);
+            return declared.ends_with('*') ? declared : type;
+        };
+        const std::string lhs_type = declared_pointer_type(d.srcs[0]);
+        const std::string rhs_type = declared_pointer_type(d.srcs[1]);
+        const bool lhs_pointer = lhs_type.ends_with('*') ||
+            pointer_pointee_size(d.srcs[0]).has_value();
+        const bool rhs_pointer = rhs_type.ends_with('*') ||
+            pointer_pointee_size(d.srcs[1]).has_value();
+        const auto byte_pointer_type_for = [](std::string_view first,
+                                              std::string_view second = {}) {
+            std::string result;
+            const auto pointee = [](std::string_view type) {
+                return type.substr(0, type.rfind('*'));
+            };
+            const std::string_view first_pointee = pointee(first);
+            const std::string_view second_pointee = pointee(second);
+            if (text_contains_identifier(first_pointee, "const") ||
+                text_contains_identifier(second_pointee, "const")) {
+                result += "const ";
+            }
+            if (text_contains_identifier(first_pointee, "volatile") ||
+                text_contains_identifier(second_pointee, "volatile")) {
+                result += "volatile ";
+            }
+            result += "uint8_t*";
+            return result;
+        };
+
+        if (d.op == IrOp::Sub && lhs_pointer && rhs_pointer) {
+            const std::string byte_pointer_type =
+                byte_pointer_type_for(lhs_type, rhs_type);
+            std::string rendered = std::format(
+                "({}){} - ({}){}",
+                byte_pointer_type,
+                expr(d.srcs[0], depth, std::to_underlying(Prec::Unary)),
+                byte_pointer_type,
+                expr(d.srcs[1], depth, std::to_underlying(Prec::Unary)));
+            return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+        }
+
         const IrValue* base = nullptr;
         const IrValue* offset = nullptr;
         bool subtract = d.op == IrOp::Sub;
-        if (c_type_name_for(d.srcs[0]).ends_with('*') ||
-            pointer_pointee_size(d.srcs[0]).has_value()) {
+        if (lhs_pointer) {
             base = &d.srcs[0];
             offset = &d.srcs[1];
-        } else if (!subtract &&
-                   (c_type_name_for(d.srcs[1]).ends_with('*') ||
-                    pointer_pointee_size(d.srcs[1]).has_value())) {
+        } else if (!subtract && rhs_pointer) {
             base = &d.srcs[1];
             offset = &d.srcs[0];
         }
@@ -808,19 +856,34 @@ std::string Emitter::format_binop(const IrInst& d, std::string_view op,
                     return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
                 }
             }
+            const std::string base_type = declared_pointer_type(*base);
+            const std::string byte_pointer_type =
+                byte_pointer_type_for(base_type);
+            const auto finish_byte_address = [&](std::string rendered) {
+                if (!base_type.ends_with('*')) {
+                    return wrap_if_lt(
+                        std::move(rendered), Prec::Add, min_prec);
+                }
+                return wrap_if_lt(
+                    std::format("({})({})", base_type, rendered),
+                    Prec::Unary, min_prec);
+            };
             if (offset->kind != IrValueKind::Imm) {
                 std::string rendered = std::format(
-                    "{} {} {}",
-                    expr(d.srcs[0], depth, std::to_underlying(Prec::Add)),
+                    "({}){} {} {}",
+                    byte_pointer_type,
+                    expr(*base, depth, std::to_underlying(Prec::Unary)),
                     subtract ? "-" : "+",
-                    expr(d.srcs[1], depth, std::to_underlying(Prec::Add)));
-                return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+                    expr(*offset, depth, std::to_underlying(Prec::Add) +
+                        (subtract ? 1 : 0)));
+                return finish_byte_address(std::move(rendered));
             }
             std::string rendered = std::format(
-                "(uint8_t*){} {} {}",
+                "({}){} {} {}",
+                byte_pointer_type,
                 expr(*base, depth, std::to_underlying(Prec::Unary)),
                 subtract ? "-" : "+", format_numeric_imm(*offset));
-            return wrap_if_lt(std::move(rendered), Prec::Add, min_prec);
+            return finish_byte_address(std::move(rendered));
         }
     }
     // Left operand can share our precedence (left-assoc). Right operand

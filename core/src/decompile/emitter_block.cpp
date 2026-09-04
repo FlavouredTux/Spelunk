@@ -921,6 +921,12 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
             op == IrOp::BranchIndirect || op == IrOp::Return     ||
             op == IrOp::Unreachable) { term = &*it; break; }
     }
+    const auto append_terminator = [&](std::string statement) {
+        if (options.line_map && term && term->source_addr != 0) {
+            options.line_map->hits.push_back({out.size(), term->source_addr});
+        }
+        out += ind + std::move(statement) + "\n";
+    };
 
     switch (bb.kind) {
         case BlockKind::Return: {
@@ -948,7 +954,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                     if (auto preserved = return_value_before_msvc_cookie(rv); preserved) {
                         rv = *preserved;
                     } else {
-                        out += std::format("{}return;\n", ind);
+                        append_terminator("return;");
                         break;
                     }
                 }
@@ -960,7 +966,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                     auto s = fold_void_call_stmt.find(*k);
                     if (s != fold_void_call_stmt.end()) {
                         out += std::format("{}{};\n", ind, s->second);
-                        out += std::format("{}return;\n", ind);
+                        append_terminator("return;");
                         break;
                     }
                 }
@@ -971,15 +977,15 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                             out += std::format("{}{};\n", ind, f->second);
                         }
                     }
-                    out += std::format("{}return;\n", ind);
+                    append_terminator("return;");
                     break;
                 }
                 if (is_void_call_result(rv)) {
-                    out += std::format("{}return;\n", ind);
+                    append_terminator("return;");
                     break;
                 }
                 if (renders_stack_chk_guard_value(rv)) {
-                    out += std::format("{}return;\n", ind);
+                    append_terminator("return;");
                     break;
                 }
                 // Reuse the return-fold table populated during region
@@ -988,18 +994,18 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                 if (auto k = ssa_key(rv); k) {
                     auto f = fold_return_expr.find(*k);
                     if (f != fold_return_expr.end()) {
-                        out += std::format("{}return {};\n", ind, f->second);
+                        append_terminator(std::format("return {};", f->second));
                         break;
                     }
                 }
                 const std::string rendered_rv = expr(rv);
                 if (rendered_rv.find("__stack_chk_guard") != std::string::npos) {
-                    out += std::format("{}return;\n", ind);
+                    append_terminator("return;");
                     break;
                 }
-                out += std::format("{}return {};\n", ind, rendered_rv);
+                append_terminator(std::format("return {};", rendered_rv));
             } else {
-                out += std::format("{}return;\n", ind);
+                append_terminator("return;");
             }
             break;
         }
@@ -1007,26 +1013,27 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
             if (term && term->op == IrOp::CondBranch && term->src_count > 0) {
                 const std::string cond = expr(term->srcs[0]);
                 emit_materializations_for_rendered_value(term->srcs[0], cond, out, ind);
-                out += std::format("{}if ({})\n", ind, cond);
+                append_terminator(std::format("if ({})", cond));
             } else {
-                out += std::format("{}if (?)\n", ind);
+                append_terminator("if (?)");
             }
             break;
         }
         case BlockKind::Switch: {
             if (bb.switch_index != Reg::None) {
-                out += std::format("{}switch ({})\n", ind,
-                                   reg_name(bb.switch_index));
+                append_terminator(std::format(
+                    "switch ({})", reg_name(bb.switch_index)));
             } else {
-                out += std::format("{}switch (?)\n", ind);
+                append_terminator("switch (?)");
             }
             break;
         }
         case BlockKind::IndirectJmp: {
             if (term && term->op == IrOp::BranchIndirect && term->src_count > 0) {
-                out += std::format("{}goto *{};\n", ind, expr(term->srcs[0]));
+                append_terminator(std::format(
+                    "goto *{};", expr(term->srcs[0])));
             } else {
-                out += std::format("{}goto *(?);\n", ind);
+                append_terminator("goto *(?);");
             }
             break;
         }

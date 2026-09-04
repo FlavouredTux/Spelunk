@@ -66,6 +66,9 @@ public:
     every_visible_use_is_flag_assign(const SsaKey& key) const noexcept;
 
     [[nodiscard]] std::span<const Position>
+    syntactic_user_positions(const SsaKey& key) const noexcept;
+
+    [[nodiscard]] std::span<const Position>
     semantic_user_positions(const SsaKey& key) const noexcept;
 
     [[nodiscard]] std::span<const Position>
@@ -89,6 +92,7 @@ private:
         std::optional<Position> definition_position;
         u32 syntactic_uses = 0;
         u32 visible_flag_assign_uses = 0;
+        std::vector<Position> syntactic_user_positions;
         std::vector<Position> semantic_user_positions;
         std::vector<Position> visible_user_positions;
     };

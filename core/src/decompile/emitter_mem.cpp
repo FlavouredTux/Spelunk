@@ -718,6 +718,84 @@ Emitter::try_render_ppc_navigation_table_address(const IrValue& addr, int depth)
     return "&" + *first_field;
 }
 
+std::optional<i64>
+Emitter::stack_storage_base(i64 offset, u32 access_bytes) const noexcept {
+    const u64 bytes = std::max<u32>(1u, access_bytes);
+    for (const auto& [start, span] : stack_storage_ranges) {
+        if (start > offset) break;
+        const u64 displacement = static_cast<u64>(offset) -
+                                 static_cast<u64>(start);
+        if (displacement <= span && bytes <= span - displacement) {
+            return start;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string Emitter::stack_address_expr(i64 offset,
+                                        const IrValue* value) const {
+    std::optional<i64> base;
+    if (value) {
+        if (auto key = ssa_key(*value); key) {
+            auto provenance = stack_address_storage_base.find(*key);
+            if (provenance != stack_address_storage_base.end()) {
+                base = provenance->second;
+            }
+        }
+    }
+    if (!base) base = stack_storage_base(offset);
+    const i64 storage = base.value_or(offset);
+    const auto slot = frame_layout.slots.find(storage);
+    const std::string name =
+        slot != frame_layout.slots.end() && !slot->second.name.empty()
+            ? slot->second.name
+            : stack_name(storage);
+    const bool byte_storage = base &&
+        stack_byte_storage_ranges.contains(storage) &&
+        (slot == frame_layout.slots.end() || slot->second.type_override.empty());
+    if (!base || (!byte_storage && storage == offset)) return "&" + name;
+    const bool after_base = offset >= storage;
+    const u64 displacement = after_base
+        ? static_cast<u64>(offset) - static_cast<u64>(storage)
+        : static_cast<u64>(storage) - static_cast<u64>(offset);
+    if (byte_storage) {
+        if (displacement == 0) return name;
+        return std::format("({} {} {:#x})", name,
+                           after_base ? "+" : "-", displacement);
+    }
+    return std::format("((uint8_t*)&{} {} {:#x})", name,
+                       after_base ? "+" : "-", displacement);
+}
+
+std::string Emitter::stack_storage_access(i64 offset, IrType type,
+                                          std::string_view loaded_type) const {
+    const u32 access_bytes = std::max(1u, type_bits(type) / 8u);
+    const auto base = stack_storage_base(offset, access_bytes);
+    if (!base) return {};
+    const auto slot = frame_layout.slots.find(*base);
+    const bool byte_storage = stack_byte_storage_ranges.contains(*base) &&
+        (slot == frame_layout.slots.end() || slot->second.type_override.empty());
+    if (!byte_storage && *base == offset) return {};
+    const std::string name =
+        slot != frame_layout.slots.end() && !slot->second.name.empty()
+            ? slot->second.name
+            : stack_name(*base);
+    const u64 displacement = static_cast<u64>(offset) -
+                             static_cast<u64>(*base);
+    const std::string value_type = loaded_type.empty()
+        ? std::string(c_type_name(type))
+        : normalize_c_type_alias(loaded_type);
+    if (byte_storage) {
+        if (displacement == 0) {
+            return std::format("*({}*){}", value_type, name);
+        }
+        return std::format("*({}*)({} + {:#x})",
+                           value_type, name, displacement);
+    }
+    return std::format("*({}*)((uint8_t*)&{} + {:#x})",
+                       value_type, name, displacement);
+}
+
 std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
                                       int depth,
                                       std::string_view loaded_type) const {
@@ -725,6 +803,10 @@ std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
         if (auto off = stack_offset(addr); off) {
             if (auto field = imported_stack_field(*off, t); field) {
                 return *field;
+            }
+            if (auto interior = stack_storage_access(*off, t, loaded_type);
+                !interior.empty()) {
+                return interior;
             }
             // A real (PDB / user-supplied) frame-layout name wins over
             // everything. A recovered incoming stack-argument name beats

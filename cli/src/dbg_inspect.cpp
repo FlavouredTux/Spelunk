@@ -379,6 +379,7 @@ int cmd_code(ReplState& rs) {
     const LineMap::Hit* best = nullptr;
     const LineMap::Hit* first_after = nullptr;
     for (const auto& h : line_map.hits) {
+        if (h.byte_offset >= text.size()) continue;
         if (h.source_addr <= pc_static) {
             if (!best || h.source_addr > best->source_addr) best = &h;
         } else {

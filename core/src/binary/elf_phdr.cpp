@@ -157,7 +157,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // no-EH binary will legitimately lack one or both.
     addr_t dyn_vaddr = 0; u64 dyn_memsz = 0;
     addr_t eh_hdr_vaddr = 0; u64 eh_hdr_memsz = 0;
-    for (u16 i = 0; i < h.e_phnum; ++i) {
+    for (u32 i = 0; i < h.e_phnum; ++i) {
         const std::byte* const p =
             phtab->data() + static_cast<std::size_t>(i) * kPhdr64Size;
         const u32 p_type  = read_at<u32>(endian_, p + 0x00);
@@ -443,7 +443,7 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     // and attaches the resolved name to each import Symbol.
     std::unordered_map<addr_t, std::string> got_to_name;
     auto ingest_rela = [&](std::span<const std::byte> bytes) {
-        if (bytes.empty() || dynsym_names.empty()) return;
+        if (arch_ != Arch::X86_64 || bytes.empty() || dynsym_names.empty()) return;
         const std::size_t count = bytes.size() / kRela64Size;
         for (std::size_t k = 0; k < count; ++k) {
             const std::byte* const p = bytes.data() + k * kRela64Size;
@@ -482,4 +482,3 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
 }
 
 }  // namespace ember
-

@@ -62,63 +62,22 @@ public:
 
     // Lowest PT_LOAD vaddr - 0 for PIE/ET_DYN, the linker's preferred
     // base (typically 0x400000 on x86-64 sysv) for non-PIE.
-    [[nodiscard]] addr_t preferred_load_base() const noexcept override {
-        addr_t lo = 0;
-        bool   set = false;
-        for (const auto& seg : segments_) {
-            if (!set || seg.vaddr < lo) { lo = seg.vaddr; set = true; }
-        }
-        if (set) return lo;
-        for (const auto& sec : sections_) {
-            if (!sec.flags.allocated || sec.size == 0) continue;
-            if (lo == 0 || sec.vaddr < lo) lo = sec.vaddr;
-        }
-        return lo;
-    }
+    [[nodiscard]] addr_t preferred_load_base() const noexcept override;
 
     // VA span of the binary's PT_LOAD segments. Used as a runtime
     // anon-region size hint by the debugger's aux-binary path.
-    [[nodiscard]] addr_t mapped_size() const noexcept override {
-        addr_t lo = 0, hi = 0;
-        bool set = false;
-        for (const auto& seg : segments_) {
-            if (!set) { lo = seg.vaddr; hi = seg.vaddr + seg.memsz; set = true; }
-            else {
-                if (seg.vaddr < lo) lo = seg.vaddr;
-                if (seg.vaddr + seg.memsz > hi) hi = seg.vaddr + seg.memsz;
-            }
-        }
-        if (set) return hi - lo;
-        for (const auto& sec : sections_) {
-            if (!sec.flags.allocated || sec.size == 0) continue;
-            if (lo == 0 || sec.vaddr < lo) lo = sec.vaddr;
-            if (sec.vaddr + sec.size > hi) hi = sec.vaddr + sec.size;
-        }
-        return hi > lo ? hi - lo : 0;
-    }
+    [[nodiscard]] addr_t mapped_size() const noexcept override;
 
 protected:
     [[nodiscard]] std::vector<Symbol>& mutable_symbols() noexcept override { return symbols_; }
 public:
 
     // Prefer PT_LOAD segments when resolving virtual addresses to bytes.
-    // Falls back to section-table lookup if the file has no program header
-    // table. This means a sectionless (stripped-headers) binary still maps
-    // correctly as long as it carries a phdr, which every executable ELF does.
+    // Falls back to section-table lookup only if the file has no PT_LOAD
+    // program header. This means a sectionless (stripped-headers) binary still
+    // maps correctly as long as it carries a load segment.
     [[nodiscard]] std::span<const std::byte>
-    bytes_at(addr_t vaddr) const noexcept override {
-        for (const auto& seg : segments_) {
-            if (vaddr < seg.vaddr) continue;
-            const u64 off = vaddr - seg.vaddr;
-            if (off >= seg.memsz) continue;
-            if (off >= seg.filesz) return {};  // in BSS tail - no file bytes
-            if (seg.data.empty()) continue;
-            return seg.data.subspan(static_cast<std::size_t>(off));
-        }
-        // Fallback: section-table-driven (covers relocatable .o files that
-        // have section headers but no program headers).
-        return Binary::bytes_at(vaddr);
-    }
+    bytes_at(addr_t vaddr) const noexcept override;
 
 private:
     explicit ElfBinary(std::vector<std::byte> buffer) noexcept
@@ -136,8 +95,8 @@ private:
         u16 e_machine;
         u64 e_entry;
         u64 e_phoff, e_shoff;
-        u16 e_phentsize, e_phnum;
-        u16 e_shentsize, e_shnum, e_shstrndx;
+        u16 e_phentsize, e_shentsize;
+        u32 e_phnum, e_shnum, e_shstrndx;
     };
     [[nodiscard]] Result<ParsedEhdr>   parse_ehdr();
     [[nodiscard]] Result<void>         parse_segments(const ParsedEhdr& h);
@@ -147,14 +106,14 @@ private:
     [[nodiscard]] Result<void>
     parse_symbols(const ParsedEhdr& h,
                   std::vector<std::string>& dynsym_names,
-                  u16& dynsym_section,
+                  u32& dynsym_section,
                   bool& dynsym_section_seen);
     [[nodiscard]] Result<void> parse_relocations(const ParsedEhdr& h);
     // Walks RELA sections and attaches GOT-slot addrs to matching imports.
     [[nodiscard]] Result<void>
     attach_got_addrs(const ParsedEhdr& h,
                      const std::vector<std::string>& dynsym_names,
-                     u16 dynsym_section,
+                     u32 dynsym_section,
                      std::unordered_map<addr_t, std::string>& got_to_name);
     // Scans .plt* sections for the jmp-through-GOT stub pattern; sets
     // Symbol.addr on imports whose stub is found.
@@ -176,9 +135,7 @@ private:
     struct ParsedSymbol {
         std::string name;
         addr_t      addr = 0;
-        u64         size = 0;
         SymbolKind  kind = SymbolKind::Unknown;
-        u16         section_index = 0;
         bool        undefined = false;
     };
 
@@ -191,10 +148,11 @@ private:
     std::vector<LoadSegment>  segments_;
     std::vector<Relocation>   relocations_;
     std::vector<addr_t>       section_bases_;
-    std::unordered_map<u16, std::vector<ParsedSymbol>> symbol_tables_;
+    std::unordered_map<u32, std::vector<ParsedSymbol>> symbol_tables_;
     std::unordered_map<std::string, addr_t> external_symbol_addrs_;
     addr_t                    next_external_addr_ = 0;
     bool                      is_relocatable_ = false;
+    bool                      has_load_segments_ = false;
 };
 
 }  // namespace ember

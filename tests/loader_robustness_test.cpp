@@ -4,6 +4,7 @@
 #include <ember/binary/minidump.hpp>
 #include <ember/binary/pdb.hpp>
 #include <ember/binary/pe.hpp>
+#include <ember/binary/rel.hpp>
 
 #include <array>
 #include <cstdio>
@@ -142,6 +143,7 @@ void test_fuzz_corpus_replays_cleanly() {
         (void)ember::MachOBinary::load_from_buffer(bytes);
         (void)ember::MinidumpBinary::load_from_buffer(bytes);
         (void)ember::DolBinary::load_from_buffer(bytes);
+        (void)ember::RelBinary::load_from_buffer(bytes);
         (void)ember::pdb::load_pdb_from_buffer(bytes);
         ++replayed;
     }

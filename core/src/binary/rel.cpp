@@ -5,11 +5,11 @@
 #include <cctype>
 #include <charconv>
 #include <cstddef>
-#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -31,6 +31,8 @@
 #include <ember/common/text.hpp>
 #include <ember/common/types.hpp>
 
+#include "ppc32_relocation.hpp"
+
 namespace ember {
 namespace {
 
@@ -42,84 +44,12 @@ constexpr std::size_t kImportEntrySize = 8;
 constexpr std::size_t kRelocEntrySize = 8;
 constexpr addr_t kPpc32Max = std::numeric_limits<u32>::max();
 
-namespace rppc {
-constexpr u8 NONE = 0;
-constexpr u8 ADDR32 = 1;
-constexpr u8 ADDR24 = 2;
-constexpr u8 ADDR16 = 3;
-constexpr u8 ADDR16_LO = 4;
-constexpr u8 ADDR16_HI = 5;
-constexpr u8 ADDR16_HA = 6;
-constexpr u8 REL24 = 10;
-constexpr u8 REL14 = 11;
-constexpr u8 REL14_BRTAKEN = 12;
-constexpr u8 REL14_BRNTAKEN = 13;
-constexpr u8 UADDR32 = 24;
-constexpr u8 EMB_SDA21 = 109;
-constexpr u8 DOLPHIN_NOP = 201;
-constexpr u8 DOLPHIN_SECTION = 202;
-constexpr u8 DOLPHIN_END = 203;
-constexpr u8 DOLPHIN_MRKREF = 204;
-}  // namespace rppc
+namespace rppc = ppc32::type;
 
 [[nodiscard]] addr_t align_up(addr_t value, addr_t alignment) noexcept {
     if (alignment <= 1) return value;
     const addr_t remainder = value % alignment;
     return remainder == 0 ? value : value + (alignment - remainder);
-}
-
-template <typename T>
-void write_be(std::byte* output, T value) noexcept {
-    if constexpr (sizeof(T) > 1 && std::endian::native == std::endian::little) {
-        value = std::byteswap(value);
-    }
-    std::memcpy(output, &value, sizeof(T));
-}
-
-[[nodiscard]] std::string_view relocation_name(u8 type) noexcept {
-    switch (type) {
-        case rppc::NONE:             return "R_PPC_NONE";
-        case rppc::ADDR32:           return "R_PPC_ADDR32";
-        case rppc::ADDR24:           return "R_PPC_ADDR24";
-        case rppc::ADDR16:           return "R_PPC_ADDR16";
-        case rppc::ADDR16_LO:        return "R_PPC_ADDR16_LO";
-        case rppc::ADDR16_HI:        return "R_PPC_ADDR16_HI";
-        case rppc::ADDR16_HA:        return "R_PPC_ADDR16_HA";
-        case rppc::REL24:            return "R_PPC_REL24";
-        case rppc::REL14:            return "R_PPC_REL14";
-        case rppc::REL14_BRTAKEN:    return "R_PPC_REL14_BRTAKEN";
-        case rppc::REL14_BRNTAKEN:   return "R_PPC_REL14_BRNTAKEN";
-        case rppc::UADDR32:          return "R_PPC_UADDR32";
-        case rppc::EMB_SDA21:        return "R_PPC_EMB_SDA21";
-        case rppc::DOLPHIN_MRKREF:   return "R_DOLPHIN_MRKREF";
-        default:                     return "R_PPC_UNKNOWN";
-    }
-}
-
-[[nodiscard]] u8 relocation_width(u8 type) noexcept {
-    switch (type) {
-        case rppc::ADDR16:
-        case rppc::ADDR16_LO:
-        case rppc::ADDR16_HI:
-        case rppc::ADDR16_HA:
-            return 2;
-        case rppc::ADDR32:
-        case rppc::UADDR32:
-        case rppc::ADDR24:
-        case rppc::REL24:
-        case rppc::REL14:
-        case rppc::REL14_BRTAKEN:
-        case rppc::REL14_BRNTAKEN:
-            return 4;
-        default:
-            return 0;
-    }
-}
-
-[[nodiscard]] bool is_branch_relocation(u8 type) noexcept {
-    return type == rppc::ADDR24 || type == rppc::REL24 ||
-           type == rppc::REL14 || type == rppc::REL14_BRTAKEN ||
-           type == rppc::REL14_BRNTAKEN;
 }
 
 [[nodiscard]] std::vector<std::string_view> split_ws(std::string_view line) {
@@ -154,86 +84,262 @@ void write_be(std::byte* output, T value) noexcept {
     return value;
 }
 
+struct RelSectionView {
+    u32 file_offset = 0;
+    u32 size = 0;
+    bool executable = false;
+};
+
+struct RelHeaderView {
+    u32 module_id = 0;
+    u32 section_count = 0;
+    u32 section_table_offset = 0;
+    u32 version = 0;
+    u32 bss_size = 0;
+    u32 rel_offset = 0;
+    u32 imp_offset = 0;
+    u32 imp_size = 0;
+    u8 prolog_section = 0;
+    u8 epilog_section = 0;
+    u8 unresolved_section = 0;
+    u32 prolog_offset = 0;
+    u32 epilog_offset = 0;
+    u32 unresolved_offset = 0;
+    u32 section_align = 4;
+    u32 bss_align = 4;
+    u32 fixed_boundary = 0;
+    std::size_t header_size = kHeaderV1Size;
+};
+
+struct DecodedRelView {
+    RelHeaderView header;
+    std::vector<RelSectionView> sections;
+};
+
+[[nodiscard]] Result<DecodedRelView>
+decode_rel_view(std::span<const std::byte> bytes) {
+    if (bytes.size() < kHeaderV1Size) {
+        return std::unexpected(Error::truncated(std::format(
+            "rel: file smaller than v1 header ({} < {})",
+            bytes.size(), kHeaderV1Size)));
+    }
+
+    auto word = [&](std::size_t offset) -> u32 {
+        return read_be_at<u32>(bytes.data() + offset);
+    };
+
+    DecodedRelView output;
+    auto& header = output.header;
+    header.module_id = word(0x00);
+    const u32 next = word(0x04);
+    const u32 prev = word(0x08);
+    header.section_count = word(0x0c);
+    header.section_table_offset = word(0x10);
+    header.version = word(0x1c);
+    header.bss_size = word(0x20);
+    header.rel_offset = word(0x24);
+    header.imp_offset = word(0x28);
+    header.imp_size = word(0x2c);
+    header.prolog_section = static_cast<u8>(bytes[0x30]);
+    header.epilog_section = static_cast<u8>(bytes[0x31]);
+    header.unresolved_section = static_cast<u8>(bytes[0x32]);
+    const u8 bss_section = static_cast<u8>(bytes[0x33]);
+    header.prolog_offset = word(0x34);
+    header.epilog_offset = word(0x38);
+    header.unresolved_offset = word(0x3c);
+
+    if (header.version < 1 || header.version > 3) {
+        return std::unexpected(Error::unsupported(std::format(
+            "rel: unsupported format version {}", header.version)));
+    }
+    header.header_size = header.version == 1
+        ? kHeaderV1Size : (header.version == 2 ? kHeaderV2Size : kHeaderV3Size);
+    if (bytes.size() < header.header_size) {
+        return std::unexpected(Error::truncated(std::format(
+            "rel: v{} header extends past file", header.version)));
+    }
+    if (next != 0 || prev != 0 || bss_section != 0) {
+        return std::unexpected(Error::invalid_format(
+            "rel: runtime next/prev/bss-section fields must be zero on disk"));
+    }
+    if (header.module_id == 0) {
+        return std::unexpected(Error::invalid_format(
+            "rel: module ID 0 is reserved for the main executable"));
+    }
+    if (header.section_count == 0 || header.section_count > 255) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "rel: invalid section count {}", header.section_count)));
+    }
+
+    const u64 section_table_size =
+        static_cast<u64>(header.section_count) * kSectionEntrySize;
+    if (header.section_table_offset > bytes.size() ||
+        section_table_size > bytes.size() - header.section_table_offset) {
+        return std::unexpected(Error::out_of_bounds(
+            "rel: section table extends past end of file"));
+    }
+    if (header.imp_size % kImportEntrySize != 0 ||
+        header.imp_offset > bytes.size() ||
+        header.imp_size > bytes.size() - header.imp_offset) {
+        return std::unexpected(Error::out_of_bounds(
+            "rel: invalid import table range or entry count"));
+    }
+    if (header.imp_size != 0 &&
+        (header.rel_offset > bytes.size() ||
+         bytes.size() - header.rel_offset < kRelocEntrySize)) {
+        return std::unexpected(Error::out_of_bounds(
+            "rel: relocation data starts outside the file"));
+    }
+
+    if (header.version >= 2) {
+        header.section_align = word(0x40);
+        header.bss_align = word(0x44);
+        auto valid_alignment = [](u32 alignment) {
+            return alignment == 0 || std::has_single_bit(alignment);
+        };
+        if (!valid_alignment(header.section_align) ||
+            !valid_alignment(header.bss_align)) {
+            return std::unexpected(Error::invalid_format(
+                "rel: non-zero section and BSS alignments must be powers of two"));
+        }
+    }
+    if (header.version >= 3) header.fixed_boundary = word(0x48);
+
+    output.sections.reserve(header.section_count);
+    std::vector<std::pair<u64, u64>> file_ranges;
+    file_ranges.reserve(header.section_count);
+    u64 total_bss_size = 0;
+    bool saw_bss = false;
+    bool saw_allocated_section = false;
+    for (u32 index = 0; index < header.section_count; ++index) {
+        const std::size_t entry =
+            static_cast<std::size_t>(header.section_table_offset) +
+            static_cast<std::size_t>(index) * kSectionEntrySize;
+        RelSectionView section;
+        const u32 offset_and_flags = read_be_at<u32>(bytes.data() + entry);
+        section.file_offset = offset_and_flags & ~1u;
+        section.size = read_be_at<u32>(bytes.data() + entry + 4);
+        section.executable = (offset_and_flags & 1u) != 0;
+        output.sections.push_back(section);
+
+        if (index == 0 &&
+            (offset_and_flags != 0 || section.size != 0)) {
+            return std::unexpected(Error::invalid_format(
+                "rel: reserved section 0 entry must be entirely zero"));
+        }
+        if (section.size == 0) continue;
+        saw_allocated_section = true;
+
+        if (section.file_offset == 0) {
+            if (saw_bss) {
+                return std::unexpected(Error::invalid_format(
+                    "rel: multiple non-empty BSS sections"));
+            }
+            saw_bss = true;
+            total_bss_size += section.size;
+        } else {
+            if (section.file_offset > bytes.size() ||
+                section.size > bytes.size() - section.file_offset) {
+                return std::unexpected(Error::out_of_bounds(std::format(
+                    "rel: section {} [{:#x}, +{:#x}) extends past file",
+                    index, section.file_offset, section.size)));
+            }
+            file_ranges.emplace_back(
+                section.file_offset,
+                static_cast<u64>(section.file_offset) + section.size);
+        }
+    }
+
+    std::ranges::sort(file_ranges);
+    for (std::size_t index = 1; index < file_ranges.size(); ++index) {
+        if (file_ranges[index].first < file_ranges[index - 1].second) {
+            return std::unexpected(Error::invalid_format(
+                "rel: overlapping file-backed sections"));
+        }
+    }
+    if (total_bss_size != header.bss_size) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "rel: BSS size mismatch ({:#x} in sections, {:#x} in header)",
+            total_bss_size, header.bss_size)));
+    }
+    if (!saw_allocated_section) {
+        return std::unexpected(Error::invalid_format("rel: no allocated sections"));
+    }
+
+    auto validate_function_coordinate = [&](std::string_view name, u8 section_index,
+                                             u32 offset) -> Result<void> {
+        if (section_index == 0) {
+            if (offset == 0) return {};
+            return std::unexpected(Error::invalid_format(std::format(
+                "rel: absent {} must use coordinate 0:0", name)));
+        }
+        if (section_index >= output.sections.size()) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "rel: {} coordinate {}:{:#x} does not name executable section data",
+                name, section_index, offset)));
+        }
+        const auto& section = output.sections[section_index];
+        if (section.file_offset == 0 || !section.executable ||
+            offset >= section.size || offset % 4 != 0) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "rel: {} coordinate {}:{:#x} does not name executable section data",
+                name, section_index, offset)));
+        }
+        return {};
+    };
+    if (auto result = validate_function_coordinate(
+            "prolog", header.prolog_section, header.prolog_offset); !result) {
+        return std::unexpected(std::move(result).error());
+    }
+    if (auto result = validate_function_coordinate(
+            "epilog", header.epilog_section, header.epilog_offset); !result) {
+        return std::unexpected(std::move(result).error());
+    }
+    if (auto result = validate_function_coordinate(
+            "unresolved", header.unresolved_section,
+            header.unresolved_offset); !result) {
+        return std::unexpected(std::move(result).error());
+    }
+
+    if (header.version >= 3) {
+        u64 retained_end = std::max<u64>(
+            static_cast<u64>(header.header_size),
+            static_cast<u64>(header.section_table_offset) + section_table_size);
+        retained_end = std::max(
+            retained_end,
+            static_cast<u64>(header.imp_offset) + header.imp_size);
+        for (const auto& range : file_ranges) {
+            retained_end = std::max(retained_end, range.second);
+        }
+        if (header.fixed_boundary > bytes.size() ||
+            header.fixed_boundary < retained_end ||
+            header.fixed_boundary % 4 != 0) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "rel: invalid OSLinkFixed retained-byte boundary {:#x}",
+                header.fixed_boundary)));
+        }
+    }
+
+    return output;
+}
+
 }  // namespace
 
 bool looks_like_rel_path(const std::filesystem::path& path,
                          std::span<const std::byte> bytes) noexcept {
     if (bytes.size() < kHeaderV1Size) return false;
-    std::string extension = path.extension().string();
-    std::ranges::transform(extension, extension.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    // Preserve useful parser diagnostics for an explicitly named REL, even
-    // when its header is malformed. DTK's virtual filesystem extraction,
-    // however, commonly resolves `foo.bin:nlzss` to a file literally named
-    // `nlzss`, so extension-only detection cannot be the whole story.
-    if (extension == ".rel") return true;
-
-    auto word = [&](std::size_t offset) -> u32 {
-        return read_be_at<u32>(bytes.data() + offset);
-    };
-    const u32 next = word(0x04);
-    const u32 prev = word(0x08);
-    const u32 section_count = word(0x0c);
-    const u32 section_table_offset = word(0x10);
-    const u32 version = word(0x1c);
-    const u32 bss_size = word(0x20);
-    const u32 rel_offset = word(0x24);
-    const u32 imp_offset = word(0x28);
-    const u32 imp_size = word(0x2c);
-    const u8 prolog_section = static_cast<u8>(bytes[0x30]);
-    const u8 epilog_section = static_cast<u8>(bytes[0x31]);
-    const u8 unresolved_section = static_cast<u8>(bytes[0x32]);
-    const u8 bss_section = static_cast<u8>(bytes[0x33]);
-
-    if (version < 1 || version > 3 || next != 0 || prev != 0 ||
-        bss_section != 0 || section_count == 0 || section_count > 255) {
+    try {
+        std::string extension = path.extension().string();
+        std::ranges::transform(extension, extension.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        // Explicitly named RELs should reach the parser so callers receive
+        // the shared validator's detailed error instead of a format miss.
+        if (extension == ".rel") return true;
+        return decode_rel_view(bytes).has_value();
+    } catch (...) {
         return false;
     }
-    const std::size_t header_size = version == 1
-        ? kHeaderV1Size : (version == 2 ? kHeaderV2Size : kHeaderV3Size);
-    if (bytes.size() < header_size) return false;
-
-    const u64 section_table_size =
-        static_cast<u64>(section_count) * kSectionEntrySize;
-    if (section_table_offset > bytes.size() ||
-        section_table_size > bytes.size() - section_table_offset ||
-        imp_size % kImportEntrySize != 0 || imp_offset > bytes.size() ||
-        imp_size > bytes.size() - imp_offset) {
-        return false;
-    }
-    if (imp_size != 0 &&
-        (rel_offset > bytes.size() || bytes.size() - rel_offset < kRelocEntrySize)) {
-        return false;
-    }
-    if (version >= 2 && (word(0x40) == 0 || word(0x44) == 0)) return false;
-
-    auto valid_entry_section = [&](u8 section) {
-        return section == 0 || section < section_count;
-    };
-    if (!valid_entry_section(prolog_section) ||
-        !valid_entry_section(epilog_section) ||
-        !valid_entry_section(unresolved_section)) {
-        return false;
-    }
-
-    u64 total_bss_size = 0;
-    bool saw_allocated_section = false;
-    for (u32 index = 0; index < section_count; ++index) {
-        const std::size_t entry =
-            static_cast<std::size_t>(section_table_offset) +
-            index * kSectionEntrySize;
-        const u32 file_offset = read_be_at<u32>(bytes.data() + entry) & ~1u;
-        const u32 size = read_be_at<u32>(bytes.data() + entry + 4);
-        if (size == 0) continue;
-        saw_allocated_section = true;
-        if (file_offset == 0) {
-            total_bss_size += size;
-        } else if (file_offset > bytes.size() || size > bytes.size() - file_offset) {
-            return false;
-        }
-    }
-    return saw_allocated_section && total_bss_size == bss_size;
 }
 
 Result<std::unique_ptr<RelBinary>>
@@ -312,144 +418,67 @@ void RelBinary::add_known_function(std::string name, u8 section, u32 offset) {
 }
 
 Result<void> RelBinary::parse() {
-    if (buffer_.size() < kHeaderV1Size) {
-        return std::unexpected(Error::truncated(std::format(
-            "rel: file smaller than v1 header ({} < {})",
-            buffer_.size(), kHeaderV1Size)));
-    }
-
+    auto decoded = decode_rel_view(buffer_);
+    if (!decoded) return std::unexpected(std::move(decoded).error());
+    const auto& header = decoded->header;
     const ByteReader reader(buffer_);
-    auto word = [&](std::size_t offset) -> u32 {
-        return read_be_at<u32>(buffer_.data() + offset);
-    };
+    module_id_ = header.module_id;
+    version_ = header.version;
 
-    module_id_ = word(0x00);
-    const u32 next = word(0x04);
-    const u32 prev = word(0x08);
-    const u32 section_count = word(0x0c);
-    const u32 section_table_offset = word(0x10);
-    version_ = word(0x1c);
-    const u32 bss_size = word(0x20);
-    const u32 rel_offset = word(0x24);
-    const u32 imp_offset = word(0x28);
-    const u32 imp_size = word(0x2c);
-    const u8 prolog_section = static_cast<u8>(buffer_[0x30]);
-    const u8 epilog_section = static_cast<u8>(buffer_[0x31]);
-    const u8 unresolved_section = static_cast<u8>(buffer_[0x32]);
-    const u8 bss_section = static_cast<u8>(buffer_[0x33]);
-    const u32 prolog_offset = word(0x34);
-    const u32 epilog_offset = word(0x38);
-    const u32 unresolved_offset = word(0x3c);
-
-    if (version_ < 1 || version_ > 3) {
-        return std::unexpected(Error::unsupported(std::format(
-            "rel: unsupported format version {}", version_)));
-    }
-    const std::size_t header_size = version_ == 1
-        ? kHeaderV1Size : (version_ == 2 ? kHeaderV2Size : kHeaderV3Size);
-    if (buffer_.size() < header_size) {
-        return std::unexpected(Error::truncated(std::format(
-            "rel: v{} header extends past file", version_)));
-    }
-    if (next != 0 || prev != 0 || bss_section != 0) {
-        return std::unexpected(Error::invalid_format(
-            "rel: runtime next/prev/bss-section fields must be zero on disk"));
-    }
-    if (section_count == 0 || section_count > 255) {
-        return std::unexpected(Error::invalid_format(std::format(
-            "rel: invalid section count {}", section_count)));
-    }
-    const u64 section_table_size = static_cast<u64>(section_count) * kSectionEntrySize;
-    if (section_table_offset > buffer_.size() ||
-        section_table_size > buffer_.size() - section_table_offset) {
-        return std::unexpected(Error::out_of_bounds(
-            "rel: section table extends past end of file"));
-    }
-
-    const u32 section_align = version_ >= 2 ? word(0x40) : 4;
-    const u32 bss_align = version_ >= 2 ? word(0x44) : 4;
-    const u32 fix_size = version_ >= 3 ? word(0x48) : 0;
-    if (section_align == 0 || bss_align == 0) {
-        return std::unexpected(Error::invalid_format(
-            "rel: section and BSS alignments must be non-zero"));
-    }
-
-    section_bases_.assign(section_count, 0);
-    section_offsets_.assign(section_count, 0);
-    section_sizes_.assign(section_count, 0);
-    section_executable_.assign(section_count, false);
-    sections_.reserve(section_count);
+    // The SDK treats zero alignment fields as no additional constraint.
+    const u32 section_align = std::max(header.section_align, 1u);
+    const u32 bss_align = std::max(header.bss_align, 1u);
+    section_bases_.assign(header.section_count, 0);
+    section_offsets_.assign(header.section_count, 0);
+    section_sizes_.assign(header.section_count, 0);
+    sections_.reserve(header.section_count);
 
     addr_t cursor = synthetic_base_;
-    u64 total_bss_size = 0;
-    bool saw_bss = false;
     bool named_text = false;
-    std::vector<std::pair<u64, u64>> file_ranges;
-    for (u32 index = 0; index < section_count; ++index) {
-        const std::size_t header_offset =
-            static_cast<std::size_t>(section_table_offset) + index * kSectionEntrySize;
-        const u32 offset_and_flags = read_be_at<u32>(buffer_.data() + header_offset);
-        const u32 file_offset = offset_and_flags & ~1u;
-        const u32 size = read_be_at<u32>(buffer_.data() + header_offset + 4);
-        const bool executable = (offset_and_flags & 1u) != 0;
-        section_offsets_[index] = file_offset;
-        section_sizes_[index] = size;
-        section_executable_[index] = executable;
-        if (size == 0) continue;
+    for (u32 index = 0; index < header.section_count; ++index) {
+        const auto& decoded_section = decoded->sections[index];
+        section_offsets_[index] = decoded_section.file_offset;
+        section_sizes_[index] = decoded_section.size;
+        if (decoded_section.size == 0) continue;
 
-        const bool is_bss = file_offset == 0;
-        if (is_bss && saw_bss) {
-            return std::unexpected(Error::invalid_format(
-                "rel: multiple non-empty BSS sections"));
-        }
-        if (!is_bss &&
-            (file_offset > buffer_.size() || size > buffer_.size() - file_offset)) {
-            return std::unexpected(Error::out_of_bounds(std::format(
-                "rel: section {} [{:#x}, +{:#x}) extends past file",
-                index, file_offset, size)));
-        }
-        if (!is_bss) {
-            file_ranges.emplace_back(file_offset,
-                                     static_cast<u64>(file_offset) + size);
-        }
-
+        const bool is_bss = decoded_section.file_offset == 0;
         const addr_t alignment = is_bss ? bss_align : section_align;
         const addr_t base = align_up(cursor, alignment);
-        if (base < cursor || base > kPpc32Max || size > kPpc32Max - base) {
+        if (base < cursor || base > kPpc32Max ||
+            decoded_section.size > kPpc32Max - base) {
             return std::unexpected(Error::invalid_format(
                 "rel: synthetic section layout exceeds PPC32 address space"));
         }
-        cursor = base + size;
+        cursor = base + decoded_section.size;
         section_bases_[index] = base;
 
         Section section;
         if (is_bss) {
             section.name = ".bss";
-            saw_bss = true;
-            total_bss_size += size;
-        } else if (executable && !named_text) {
+        } else if (decoded_section.executable && !named_text) {
             section.name = ".text";
             named_text = true;
-        } else if (section_count >= 7 && index == 2) {
+        } else if (header.section_count >= 7 && index == 2) {
             section.name = ".ctors";
-        } else if (section_count >= 7 && index == 3) {
+        } else if (header.section_count >= 7 && index == 3) {
             section.name = ".dtors";
-        } else if (section_count >= 7 && index == 4) {
+        } else if (header.section_count >= 7 && index == 4) {
             section.name = ".rodata";
-        } else if (section_count >= 7 && index == 5) {
+        } else if (header.section_count >= 7 && index == 5) {
             section.name = ".data";
         } else {
             section.name = std::format(".section{}", index);
         }
         section.vaddr = base;
-        section.file_offset = file_offset;
-        section.size = size;
+        section.file_offset = decoded_section.file_offset;
+        section.size = decoded_section.size;
         section.flags.readable = true;
-        section.flags.writable = !executable;
-        section.flags.executable = executable;
+        section.flags.writable = !decoded_section.executable;
+        section.flags.executable = decoded_section.executable;
         section.flags.allocated = true;
         if (!is_bss) {
-            section.data = *reader.slice(file_offset, size);
+            section.data = *reader.slice(
+                decoded_section.file_offset, decoded_section.size);
         }
         sections_.push_back(std::move(section));
     }
@@ -467,23 +496,6 @@ Result<void> RelBinary::parse() {
         if (candidate != sections_.rend()) candidate->name = ".data";
     }
 
-    std::ranges::sort(file_ranges);
-    for (std::size_t index = 1; index < file_ranges.size(); ++index) {
-        if (file_ranges[index].first < file_ranges[index - 1].second) {
-            return std::unexpected(Error::invalid_format(
-                "rel: overlapping file-backed sections"));
-        }
-    }
-
-    if (total_bss_size != bss_size) {
-        return std::unexpected(Error::invalid_format(std::format(
-            "rel: BSS size mismatch ({:#x} in sections, {:#x} in header)",
-            total_bss_size, bss_size)));
-    }
-    if (sections_.empty()) {
-        return std::unexpected(Error::invalid_format("rel: no allocated sections"));
-    }
-
     load_base_ = sections_.front().vaddr;
     addr_t high = load_base_;
     for (const auto& section : sections_) {
@@ -492,9 +504,10 @@ Result<void> RelBinary::parse() {
     }
     mapped_size_ = high - load_base_;
 
-    add_known_function("_prolog", prolog_section, prolog_offset);
-    add_known_function("_epilog", epilog_section, epilog_offset);
-    add_known_function("_unresolved", unresolved_section, unresolved_offset);
+    add_known_function("_prolog", header.prolog_section, header.prolog_offset);
+    add_known_function("_epilog", header.epilog_section, header.epilog_offset);
+    add_known_function(
+        "_unresolved", header.unresolved_section, header.unresolved_offset);
     if (const auto prolog = std::ranges::find_if(symbols_, [](const Symbol& symbol) {
             return symbol.name == "_prolog";
         }); prolog != symbols_.end()) {
@@ -514,7 +527,9 @@ Result<void> RelBinary::parse() {
         }
     }
 
-    if (auto result = parse_relocations(rel_offset, imp_offset, imp_size, fix_size); !result) {
+    if (auto result = parse_relocations(
+            header.rel_offset, header.imp_offset, header.imp_size,
+            header.fixed_boundary); !result) {
         return result;
     }
     sort_and_dedupe_symbols();
@@ -522,48 +537,95 @@ Result<void> RelBinary::parse() {
 }
 
 Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
-                                          u32 imp_size, u32 fix_size) {
+                                          u32 imp_size, u32 fixed_boundary) {
     if (imp_size == 0) return {};
-    if (imp_size % kImportEntrySize != 0 || imp_offset > buffer_.size() ||
-        imp_size > buffer_.size() - imp_offset) {
-        return std::unexpected(Error::out_of_bounds(
-            "rel: invalid import table range or entry count"));
-    }
 
+    const u64 import_end = static_cast<u64>(imp_offset) + imp_size;
+    if (rel_offset >= imp_offset && rel_offset < import_end) {
+        return std::unexpected(Error::invalid_format(
+            "rel: relocation data starts inside the import table"));
+    }
+    const std::size_t relocation_end = rel_offset < imp_offset
+        ? static_cast<std::size_t>(imp_offset) : buffer_.size();
+
+    struct ImportStream {
+        u32 target_module;
+        u32 offset;
+    };
     const std::size_t import_count = imp_size / kImportEntrySize;
+    std::vector<ImportStream> imports;
+    imports.reserve(import_count);
+    std::vector<u32> stream_starts;
+    stream_starts.reserve(import_count);
+    std::unordered_map<u32, std::size_t> stream_owners;
+    stream_owners.reserve(import_count);
+    std::unordered_map<u32, std::size_t> module_owners;
+    module_owners.reserve(import_count);
+    bool saw_fixed_only_import = false;
     for (std::size_t import_index = 0; import_index < import_count; ++import_index) {
         const std::size_t import_at = imp_offset + import_index * kImportEntrySize;
         const u32 target_module = read_be_at<u32>(buffer_.data() + import_at);
         const u32 stream_offset = read_be_at<u32>(buffer_.data() + import_at + 4);
-        if (import_index == 0 && stream_offset != rel_offset) {
+        const auto [owner, inserted] = stream_owners.emplace(stream_offset, import_index);
+        if (!inserted) {
             return std::unexpected(Error::invalid_format(std::format(
-                "rel: first import stream {:#x} does not match rel offset {:#x}",
-                stream_offset, rel_offset)));
+                "rel: import relocation streams {} and {} share start {:#x}",
+                owner->second, import_index, stream_offset)));
         }
-        if (version_ >= 3 && target_module == module_id_ && stream_offset != fix_size) {
+        const auto [module_owner, module_inserted] =
+            module_owners.emplace(target_module, import_index);
+        if (!module_inserted) {
             return std::unexpected(Error::invalid_format(std::format(
-                "rel: self relocation stream {:#x} does not match fix_size {:#x}",
-                stream_offset, fix_size)));
+                "rel: import descriptors {} and {} duplicate target module {}",
+                module_owner->second, import_index, target_module)));
         }
-        if (stream_offset > buffer_.size() ||
-            buffer_.size() - stream_offset < kRelocEntrySize) {
+        if (version_ >= 3) {
+            const bool fixed_only = target_module == 0 || target_module == module_id_;
+            if (fixed_only) {
+                saw_fixed_only_import = true;
+            } else if (saw_fixed_only_import) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "rel: external module {} import follows a self/DOL import",
+                    target_module)));
+            }
+        }
+        if (stream_offset < rel_offset || stream_offset > relocation_end ||
+            relocation_end - stream_offset < kRelocEntrySize ||
+            stream_offset % 4 != 0) {
             return std::unexpected(Error::out_of_bounds(std::format(
-                "rel: import {} relocation stream starts outside file", import_index)));
+                "rel: import {} relocation stream has invalid start {:#x}",
+                import_index, stream_offset)));
         }
+        imports.push_back({target_module, stream_offset});
+        stream_starts.push_back(stream_offset);
+    }
+    std::ranges::sort(stream_starts);
+    if (stream_starts.front() != rel_offset) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "rel: first relocation stream {:#x} does not match rel offset {:#x}",
+            stream_starts.front(), rel_offset)));
+    }
 
+    for (std::size_t import_index = 0; import_index < imports.size(); ++import_index) {
+        const u32 target_module = imports[import_index].target_module;
+        const u32 stream_offset = imports[import_index].offset;
+        const auto start = std::ranges::lower_bound(stream_starts, stream_offset);
+        const std::size_t stream_end = std::next(start) == stream_starts.end()
+            ? relocation_end : static_cast<std::size_t>(*std::next(start));
         u64 source_offset = 0;
         u8 source_section = 0xff;
         bool found_end = false;
+        std::size_t consumed_end = stream_offset;
         for (std::size_t stream_at = stream_offset;
-             stream_at <= buffer_.size() - kRelocEntrySize;
+             stream_at < stream_end &&
+             stream_end - stream_at >= kRelocEntrySize;
              stream_at += kRelocEntrySize) {
             const u16 delta = read_be_at<u16>(buffer_.data() + stream_at);
             const u8 type = static_cast<u8>(buffer_[stream_at + 2]);
             const u8 target_section = static_cast<u8>(buffer_[stream_at + 3]);
             const u32 addend = read_be_at<u32>(buffer_.data() + stream_at + 4);
 
-            if (type == rppc::NONE) continue;
-            if (type == rppc::DOLPHIN_NOP) {
+            if (type == rppc::NONE || type == rppc::DOLPHIN_NOP) {
                 source_offset += delta;
                 if (source_offset > std::numeric_limits<u32>::max()) {
                     return std::unexpected(Error::invalid_format(
@@ -584,6 +646,7 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
             }
             if (type == rppc::DOLPHIN_END) {
                 found_end = true;
+                consumed_end = stream_at + kRelocEntrySize;
                 break;
             }
             if (source_section == 0xff) {
@@ -595,10 +658,15 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
                 return std::unexpected(Error::invalid_format(
                     "rel: relocation source offset overflow"));
             }
-            const u32 word_offset = static_cast<u32>(source_offset) & ~3u;
-            const u8 width = relocation_width(type);
-            const bool halfword = width == 2;
-            const u32 field_offset = word_offset + (halfword ? 2u : 0u);
+            const ppc32::RelocationInfo properties = ppc32::info(type);
+            const u8 width = properties.width;
+            const u8 required_alignment = properties.alignment;
+            if (source_offset % required_alignment != 0) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "rel: {} source offset {:#x} violates {}-byte alignment",
+                    properties.name, source_offset, required_alignment)));
+            }
+            const u32 field_offset = static_cast<u32>(source_offset);
             const u8 storage_width = width == 0 ? 4 : width;
             if (field_offset > section_sizes_[source_section] ||
                 storage_width > section_sizes_[source_section] - field_offset) {
@@ -631,7 +699,7 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
                     Symbol symbol;
                     symbol.name = target_name;
                     symbol.addr = target;
-                    symbol.kind = is_branch_relocation(type)
+                    symbol.kind = properties.branch
                         ? SymbolKind::Function : SymbolKind::Object;
                     symbols_.push_back(std::move(symbol));
                 }
@@ -642,7 +710,7 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
                 Symbol symbol;
                 symbol.name = target_name;
                 symbol.addr = target;
-                symbol.kind = is_branch_relocation(type)
+                symbol.kind = properties.branch
                     ? SymbolKind::Function : SymbolKind::Object;
                 symbol.is_import = true;
                 symbols_.push_back(std::move(symbol));
@@ -651,7 +719,7 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
                                           target_module, target_section, addend);
                 Symbol symbol;
                 symbol.name = target_name;
-                symbol.kind = is_branch_relocation(type)
+                symbol.kind = properties.branch
                     ? SymbolKind::Function : SymbolKind::Object;
                 symbol.is_import = true;
                 symbols_.push_back(std::move(symbol));
@@ -666,9 +734,8 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
             relocation.target_module = target_module;
             relocation.target_section = target_section;
             relocation.width = width;
-            relocation.pc_relative = type == rppc::REL24 || type == rppc::REL14 ||
-                type == rppc::REL14_BRTAKEN || type == rppc::REL14_BRNTAKEN;
-            relocation.type_name = std::string(relocation_name(type));
+            relocation.pc_relative = properties.pc_relative;
+            relocation.type_name = std::string(properties.name);
             relocation.symbol_name = target_name;
             const auto source = std::ranges::find_if(sections_, [&](const Section& section) {
                 return section.vaddr == section_bases_[source_section];
@@ -685,8 +752,22 @@ Result<void> RelBinary::parse_relocations(u32 rel_offset, u32 imp_offset,
         }
         if (!found_end) {
             return std::unexpected(Error::truncated(std::format(
-                "rel: import {} relocation stream has no R_DOLPHIN_END",
-                import_index)));
+                "rel: import {} relocation stream [{:#x}, {:#x}) has no "
+                "R_DOLPHIN_END", import_index, stream_offset, stream_end)));
+        }
+        if (version_ >= 3) {
+            if (fixed_boundary > stream_offset && fixed_boundary < consumed_end) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "rel: OSLinkFixed boundary {:#x} cuts import {} stream "
+                    "[{:#x}, {:#x})", fixed_boundary, import_index,
+                    stream_offset, consumed_end)));
+            }
+            if (target_module != 0 && target_module != module_id_ &&
+                consumed_end > fixed_boundary) {
+                return std::unexpected(Error::invalid_format(std::format(
+                    "rel: OSLinkFixed boundary {:#x} discards required module {} "
+                    "relocation stream", fixed_boundary, target_module)));
+            }
         }
     }
     return {};
@@ -697,7 +778,7 @@ Result<bool> RelBinary::apply_relocation(Relocation& relocation,
     const u32 source_section = relocation.source_section;
     if (relocation.width == 0 || source_section >= section_bases_.size() ||
         section_bases_[source_section] == 0 ||
-        section_offsets_[source_section] == 0 || target > kPpc32Max) {
+        section_offsets_[source_section] == 0) {
         return false;
     }
     if (relocation.site < section_bases_[source_section]) {
@@ -725,64 +806,11 @@ Result<bool> RelBinary::apply_relocation(Relocation& relocation,
     }
 
     std::byte* patch = buffer_.data() + patch_offset;
-    bool applied = true;
-    switch (relocation.type) {
-        case rppc::ADDR32:
-        case rppc::UADDR32:
-            write_be<u32>(patch, static_cast<u32>(target));
-            break;
-        case rppc::ADDR16:
-        case rppc::ADDR16_LO:
-            write_be<u16>(patch, static_cast<u16>(target));
-            break;
-        case rppc::ADDR16_HI:
-            write_be<u16>(patch, static_cast<u16>(target >> 16));
-            break;
-        case rppc::ADDR16_HA:
-            write_be<u16>(patch, static_cast<u16>((target + 0x8000u) >> 16));
-            break;
-        case rppc::ADDR24: {
-            applied = (target & 3u) == 0 && target <= 0x03fffffcu;
-            if (applied) {
-                const u32 word_value = read_be_at<u32>(patch);
-                write_be<u32>(patch, (word_value & ~0x03fffffcu) |
-                    (static_cast<u32>(target) & 0x03fffffcu));
-            }
-            break;
-        }
-        case rppc::REL24: {
-            const addr_t instruction_site = relocation.site & ~addr_t{3};
-            const i64 delta_value = static_cast<i64>(target) -
-                                    static_cast<i64>(instruction_site);
-            applied = (delta_value & 3) == 0 &&
-                delta_value >= -0x02000000LL && delta_value <= 0x01fffffcLL;
-            if (applied) {
-                const u32 word_value = read_be_at<u32>(patch);
-                write_be<u32>(patch, (word_value & ~0x03fffffcu) |
-                    (static_cast<u32>(delta_value) & 0x03fffffcu));
-            }
-            break;
-        }
-        case rppc::REL14:
-        case rppc::REL14_BRTAKEN:
-        case rppc::REL14_BRNTAKEN: {
-            const addr_t instruction_site = relocation.site & ~addr_t{3};
-            const i64 delta_value = static_cast<i64>(target) -
-                                    static_cast<i64>(instruction_site);
-            applied = (delta_value & 3) == 0 &&
-                delta_value >= -0x8000LL && delta_value <= 0x7ffcLL;
-            if (applied) {
-                const u32 word_value = read_be_at<u32>(patch);
-                write_be<u32>(patch, (word_value & ~0x0000fffcu) |
-                    (static_cast<u32>(delta_value) & 0x0000fffcu));
-            }
-            break;
-        }
-        default:
-            applied = false;
-            break;
-    }
-    relocation.target = target;
+    const u32 value = ppc32::resolve(target, 0);
+    const bool applied = ppc32::encode(
+        std::span<std::byte>{patch, relocation.width}, relocation.type,
+        Endian::Big, value, relocation.site);
+    relocation.target = value;
     return applied;
 }
 
@@ -863,12 +891,6 @@ RelBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
             // sections. They have no addressable bytes in this REL.
             continue;
         }
-        if (*relative_offset >= section->size) {
-            return std::unexpected(Error::out_of_bounds(std::format(
-                "dtk REL symbols: {}:{}: offset {:#x} exceeds {}",
-                path.string(), line_number, *relative_offset, section_name)));
-        }
-
         std::optional<SymbolKind> declared_kind;
         u64 declared_size = 0;
         bool is_export = true;
@@ -890,6 +912,16 @@ RelBinary::attach_dtk_symbols_from_path(const std::filesystem::path& path) {
             } else if (token == "scope:local") {
                 is_export = false;
             }
+        }
+        if (*relative_offset > section->size) {
+            return std::unexpected(Error::out_of_bounds(std::format(
+                "dtk REL symbols: {}:{}: offset {:#x} exceeds {}",
+                path.string(), line_number, *relative_offset, section_name)));
+        }
+        if (declared_size > section->size - *relative_offset) {
+            return std::unexpected(Error::out_of_bounds(std::format(
+                "dtk REL symbols: {}:{}: symbol '{}' size {:#x} escapes {}",
+                path.string(), line_number, name, declared_size, section_name)));
         }
 
         Symbol symbol;
@@ -1020,8 +1052,7 @@ link_rel_modules(std::span<RelLinkModule> modules, const Binary* main_dol) {
                     Symbol symbol;
                     symbol.name = *resolved_name;
                     symbol.addr = target;
-                    symbol.kind = is_branch_relocation(
-                        static_cast<u8>(relocation.type))
+                    symbol.kind = ppc32::info(relocation.type).branch
                         ? SymbolKind::Function : SymbolKind::Object;
                     symbol.is_import = true;
                     source.symbols_.push_back(std::move(symbol));

@@ -1,8 +1,10 @@
 add_library(ember_core STATIC
     src/binary/elf.cpp
     src/binary/elf_phdr.cpp
+    src/binary/elf_symbols.cpp
     src/binary/dol.cpp
     src/binary/rel.cpp
+    src/binary/ppc32_relocation.cpp
     src/binary/dtk_project.cpp
     src/binary/macho.cpp
     src/binary/macho_dyld.cpp

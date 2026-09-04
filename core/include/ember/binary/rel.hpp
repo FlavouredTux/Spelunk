@@ -76,7 +76,8 @@ private:
 
     [[nodiscard]] Result<void> parse();
     [[nodiscard]] Result<void> parse_relocations(u32 rel_offset, u32 imp_offset,
-                                                  u32 imp_size, u32 fix_size);
+                                                  u32 imp_size,
+                                                  u32 fixed_boundary);
     [[nodiscard]] Result<bool> apply_relocation(Relocation& relocation,
                                                  addr_t target);
     void add_known_function(std::string name, u8 section, u32 offset);
@@ -98,7 +99,6 @@ private:
     std::vector<addr_t> section_bases_;
     std::vector<u32> section_offsets_;
     std::vector<u32> section_sizes_;
-    std::vector<bool> section_executable_;
     std::vector<std::unique_ptr<Binary>> linked_binaries_;
 };
 

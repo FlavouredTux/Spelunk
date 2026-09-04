@@ -23,33 +23,89 @@ def main() -> None:
         ".text", ".data", ".rela.text", ".rela.data", ".symtab",
         ".strtab", ".shstrtab",
     )}
-    strtab = b"\0local_entry\0external_call\0local_global\0"
-    strname = {name: strtab.index(name.encode()) for name in (
-        "local_entry", "external_call", "local_global",
-    )}
-
     # bl external_call; lis r3, local_global@ha;
-    # addi r3, r3, local_global@l; blr
-    text = struct.pack(">IIII", 0x48000001, 0x3C600000, 0x38630000, 0x4E800020)
-    data = bytes(4)
+    # addi r3, r3, local_global@l; blr; followed by relocation sentinels
+    # and boundary/wraparound cases.
+    text = struct.pack(
+        ">IIIIIIIIIIIIII",
+        0x48000001,
+        0x3C600000,
+        0x38630000,
+        0x4E800020,
+        0x49ABCDE3,
+        0x38A55A5A,
+        0x49BCDEF3,
+        0x38C66B6B,
+        0x48000003,
+        0x38E71234,
+        0x39080000,
+        0x48000003,
+        0x48000001,
+        0x41820000,
+    )
+    # The final five bytes provide an unaligned four-byte sentinel window at
+    # offset 13. An ordinary ADDR32 relocation must reject that site without
+    # modifying the bytes (unlike R_PPC_UADDR32, which ELF does not support).
+    data = bytes(12) + struct.pack(">IB", 0xA1B2C3D4, 0x5A)
+
+    # name, value, size, info, other, section index. The tuple order defines
+    # the symbol table order; relocations resolve indices through this map.
+    symbols = (
+        ("local_entry", 0, len(text), 0x12, 0, 1),
+        ("external_call", 0, 0, 0x12, 0, 0),
+        ("local_global", 0, len(data), 0x11, 0, 2),
+        ("absolute_far", 0x02000000, 0, 0x12, 0, 0xFFF1),
+        ("negative_far24", 0xFDFFFFFC, 0, 0x12, 0, 0xFFF1),
+        ("negative_far16", 0xFFFF7FFF, 0, 0x11, 0, 0xFFF1),
+        ("high_valid24", 0xFE000000, 0, 0x12, 0, 0xFFF1),
+        ("high_valid16", 0xFFFF8000, 0, 0x11, 0, 0xFFF1),
+        ("wrap_base", 0xFFFFFFF0, 0, 0x11, 0, 0xFFF1),
+        ("common_global", 32, 12, 0x11, 0, 0xFFF2),
+        ("positive_far16", 0x00008000, 0, 0x11, 0, 0xFFF1),
+        ("absolute_zero", 0, 0, 0x11, 0, 0xFFF1),
+    )
+    symbol_names = tuple(symbol[0] for symbol in symbols)
+    strtab = b"\0" + b"".join(
+        name.encode() + b"\0" for name in symbol_names
+    )
+    strname = {name: strtab.index(name.encode()) for name in symbol_names}
+    symbol_index = {
+        name: index for index, (name, *_rest) in enumerate(symbols, start=1)
+    }
 
     def rela(offset: int, symbol: int, reloc_type: int, addend: int = 0) -> bytes:
         return struct.pack(">IIi", offset, (symbol << 8) | reloc_type, addend)
 
     rela_text = b"".join((
-        rela(0, 2, 10),  # R_PPC_REL24 external_call
+        rela(0, symbol_index["external_call"], 10),
         # Big-endian halfword relocations name the immediate field itself,
         # which begins two bytes into each instruction.
-        rela(6, 3, 6),   # R_PPC_ADDR16_HA local_global
-        rela(10, 3, 4),  # R_PPC_ADDR16_LO local_global
+        rela(6, symbol_index["local_global"], 6),
+        rela(10, symbol_index["local_global"], 4),
+        rela(16, symbol_index["absolute_far"], 2),
+        rela(22, symbol_index["positive_far16"], 3),
+        rela(24, symbol_index["negative_far24"], 2),
+        rela(30, symbol_index["negative_far16"], 3),
+        rela(32, symbol_index["high_valid24"], 2),
+        rela(38, symbol_index["high_valid16"], 3),
+        rela(42, symbol_index["wrap_base"], 3, 0x20),
+        rela(44, symbol_index["wrap_base"], 2, 0x20),
+        rela(48, symbol_index["wrap_base"], 10, 0x10000050),
+        rela(52, symbol_index["wrap_base"], 11, 0x10000048),
     ))
-    rela_data = rela(0, 1, 1)  # R_PPC_ADDR32 local_entry
+    rela_data = b"".join((
+        rela(0, symbol_index["local_entry"], 1),
+        rela(4, symbol_index["common_global"], 1),
+        rela(8, symbol_index["absolute_zero"], 1, 0x12345678),
+        rela(13, symbol_index["local_entry"], 1),
+    ))
 
     # ELF32 symbol layout: name, value, size, info, other, section index.
     symtab = bytes(16)
-    symtab += struct.pack(">IIIBBH", strname["local_entry"], 0, len(text), 0x12, 0, 1)
-    symtab += struct.pack(">IIIBBH", strname["external_call"], 0, 0, 0x12, 0, 0)
-    symtab += struct.pack(">IIIBBH", strname["local_global"], 0, len(data), 0x11, 0, 2)
+    for name, value, size, info, other, section_index in symbols:
+        symtab += struct.pack(
+            ">IIIBBH", strname[name], value, size, info, other, section_index
+        )
 
     contents = [b"", text, data, rela_text, rela_data, symtab, strtab, shstr]
     offsets = [0] * len(contents)

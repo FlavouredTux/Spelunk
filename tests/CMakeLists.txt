@@ -93,6 +93,13 @@ add_executable(ember_x64_decoder_test x64_decoder_test.cpp)
 target_link_libraries(ember_x64_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME x64_decoder_unit COMMAND ember_x64_decoder_test)
 
+add_executable(ember_ppc32_relocation_test ppc32_relocation_test.cpp)
+target_include_directories(ember_ppc32_relocation_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/binary")
+target_link_libraries(ember_ppc32_relocation_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME ppc32_relocation_unit COMMAND ember_ppc32_relocation_test)
+
 add_executable(ember_ppc_decoder_test
     ppc_decoder_test.cpp
     ppc_decoder_integer_test.cpp
@@ -167,6 +174,14 @@ target_link_libraries(ember_loader_robustness_test PRIVATE ember::core ember::fl
 target_compile_definitions(ember_loader_robustness_test PRIVATE
     EMBER_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus")
 add_test(NAME loader_robustness_unit COMMAND ember_loader_robustness_test)
+
+add_executable(ember_elf_loader_robustness_test
+    elf_loader_robustness_test.cpp
+    elf_test_builder.cpp)
+target_link_libraries(ember_elf_loader_robustness_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME elf_loader_robustness_unit
+         COMMAND ember_elf_loader_robustness_test)
 
 add_executable(ember_dtk_project_test dtk_project_test.cpp)
 target_link_libraries(ember_dtk_project_test PRIVATE ember::core ember::flags)
@@ -1726,9 +1741,11 @@ if(Python3_Interpreter_FOUND)
     add_custom_command(
         OUTPUT "${_wii_rel}"
         COMMAND ${Python3_EXECUTABLE}
+                -B
                 "${_fixture_dir}/make_wii_rel.py"
                 "${_wii_rel}"
         DEPENDS "${_fixture_dir}/make_wii_rel.py"
+                "${_fixture_dir}/wii_rel_fixture.py"
         COMMENT "Generating Wii REL fixture wii_rel.rel"
         VERBATIM
     )
@@ -1747,9 +1764,11 @@ if(Python3_Interpreter_FOUND)
     add_custom_command(
         OUTPUT "${_wii_rel_link_source}" "${_wii_rel_link_peer}"
         COMMAND ${Python3_EXECUTABLE}
+                -B
                 "${_fixture_dir}/make_wii_rel_pair.py"
                 "${_wii_rel_link_source}" "${_wii_rel_link_peer}"
         DEPENDS "${_fixture_dir}/make_wii_rel_pair.py"
+                "${_fixture_dir}/wii_rel_fixture.py"
         COMMENT "Generating linked Wii REL pair fixtures"
         VERBATIM
     )

@@ -1,5 +1,5 @@
 // width_star
 int width_star(int w, int x) {
-  printf("%*d\n", (uint32_t)w, (uint32_t)x);
+  printf("%*d\n", w, x);
   return 0;
 }

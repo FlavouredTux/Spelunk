@@ -149,6 +149,24 @@ target_link_libraries(ember_emitter_memory_semantics_test
 add_test(NAME emitter_memory_semantics_unit
          COMMAND ember_emitter_memory_semantics_test)
 
+add_executable(ember_emitter_signature_context_test
+    emitter_signature_context_test.cpp)
+target_include_directories(ember_emitter_signature_context_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/decompile")
+target_link_libraries(ember_emitter_signature_context_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_signature_context_unit
+         COMMAND ember_emitter_signature_context_test)
+
+add_executable(ember_emitter_region_normalization_test
+    emitter_region_normalization_test.cpp)
+target_include_directories(ember_emitter_region_normalization_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/decompile")
+target_link_libraries(ember_emitter_region_normalization_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_region_normalization_unit
+         COMMAND ember_emitter_region_normalization_test)
+
 add_executable(ember_eh_frame_internal_test eh_frame_internal_test.cpp)
 target_include_directories(ember_eh_frame_internal_test PRIVATE
     "${PROJECT_SOURCE_DIR}/core/src/analysis")
@@ -1332,11 +1350,10 @@ ember_golden_test(
 # Two regressions land here. First: `IrOp::Mod` was added in adffa81 and
 # until now had no direct golden - divmod_runtime exercises a runtime
 # `% b` (gcc emits `IDIV r/m32`, the lifter raises it to a Mod alongside
-# the Div). Second: the structurer's do-while detection now accepts
-# loops with multiple back-edge predecessors (one cond-and-exit tail
-# plus inner unconditional jumps from skip arms) - dowhile_with_skip
-# is the smallest such shape and locks the rendered output so a future
-# regression that falls back to goto soup shows up as a clean diff.
+# the Div). Second: do-while recovery requires one proven conditional
+# latch. `dowhile_with_skip` checks that a source-level continue still
+# reaches that latch and retains the structured loop instead of falling
+# back to goto soup.
 
 ember_golden_test(
     NAME    arith_divmod_runtime_pseudo

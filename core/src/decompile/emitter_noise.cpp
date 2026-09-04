@@ -1,4 +1,5 @@
 // ABI noise, stack-canary suppression and common tail-return folding.
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -232,26 +233,101 @@ bool Emitter::is_canary_condition(const IrValue& cond) const {
     return false;
 }
 
-bool Emitter::region_calls_stack_chk_fail(const Region& r) const {
-    // Find a Block/Seq whose body contains a Call to __stack_chk_fail.
-    auto block_matches = [&](addr_t block_addr) {
+bool Emitter::region_always_calls_stack_chk_fail(const Region& r) const {
+    // Suppressing a canary arm is safe only when every path reaches
+    // __stack_chk_fail and everything before that call is removable compiler
+    // plumbing. Keep the distinction explicit: a conditional exit is neither
+    // harmless fallthrough nor guaranteed failure, and an audit/store/call
+    // before the failure must remain visible even though the process aborts.
+    enum class CanaryFlow { RemovableFallthrough, GuaranteedFail, Unsafe };
+    const auto classify_block = [&](addr_t block_addr) {
         auto it = fn->block_at.find(block_addr);
-        if (it == fn->block_at.end()) return false;
+        if (it == fn->block_at.end()) return CanaryFlow::Unsafe;
         const auto& bb = fn->blocks[it->second];
-        for (const auto& inst : bb.insts) {
-            if (inst.op != IrOp::Call) continue;
-            if (!binary) continue;
-            if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
-                if (clean_import_name(s->name) == "__stack_chk_fail") return true;
+        for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+            const IrInst& inst = bb.insts[ii];
+            if (inst.op == IrOp::Call && binary) {
+                if (const Symbol* s = binary->import_at_plt(inst.target1);
+                    s && clean_import_name(s->name) == "__stack_chk_fail") {
+                    return CanaryFlow::GuaranteedFail;
+                }
             }
+            if (hidden.contains({it->second, ii}) || inst.op == IrOp::Nop ||
+                inst.op == IrOp::Clobber ||
+                SsaUseIndex::is_call_arg_barrier(inst)) continue;
+            return CanaryFlow::Unsafe;
         }
-        return false;
+        return CanaryFlow::RemovableFallthrough;
     };
-    if (r.kind == RegionKind::Block) return block_matches(r.block_start);
-    for (const auto& c : r.children) {
-        if (c && region_calls_stack_chk_fail(*c)) return true;
-    }
-    return false;
+
+    const auto classify = [&](const auto& self,
+                              const Region& region) -> CanaryFlow {
+        switch (region.kind) {
+            case RegionKind::Empty:
+                return CanaryFlow::RemovableFallthrough;
+            case RegionKind::Block:
+                return classify_block(region.block_start);
+            case RegionKind::Seq:
+                for (const auto& child : region.children) {
+                    if (!child) continue;
+                    const CanaryFlow flow = self(self, *child);
+                    if (flow != CanaryFlow::RemovableFallthrough) return flow;
+                }
+                return CanaryFlow::RemovableFallthrough;
+            case RegionKind::IfThen: {
+                if (region.children.empty() || !region.children[0]) {
+                    return CanaryFlow::RemovableFallthrough;
+                }
+                return self(self, *region.children[0]) ==
+                               CanaryFlow::RemovableFallthrough
+                    ? CanaryFlow::RemovableFallthrough
+                    : CanaryFlow::Unsafe;
+            }
+            case RegionKind::IfElse: {
+                if (region.children.size() < 2 || !region.children[0] ||
+                    !region.children[1]) return CanaryFlow::Unsafe;
+                const CanaryFlow first = self(self, *region.children[0]);
+                const CanaryFlow second = self(self, *region.children[1]);
+                if (first == CanaryFlow::GuaranteedFail &&
+                    second == CanaryFlow::GuaranteedFail) {
+                    return CanaryFlow::GuaranteedFail;
+                }
+                if (first == CanaryFlow::RemovableFallthrough &&
+                    second == CanaryFlow::RemovableFallthrough) {
+                    return CanaryFlow::RemovableFallthrough;
+                }
+                return CanaryFlow::Unsafe;
+            }
+            case RegionKind::Switch: {
+                if (region.children.empty()) return CanaryFlow::Unsafe;
+                bool all_removable = true;
+                bool all_fail = region.has_default &&
+                    region.children.size() > region.case_values.size();
+                for (const auto& child : region.children) {
+                    if (!child) return CanaryFlow::Unsafe;
+                    const CanaryFlow flow = self(self, *child);
+                    all_removable &= flow == CanaryFlow::RemovableFallthrough;
+                    all_fail &= flow == CanaryFlow::GuaranteedFail;
+                }
+                if (all_fail) return CanaryFlow::GuaranteedFail;
+                if (all_removable) return CanaryFlow::RemovableFallthrough;
+                return CanaryFlow::Unsafe;
+            }
+            case RegionKind::While:
+            case RegionKind::DoWhile:
+            case RegionKind::For:
+            case RegionKind::Loop:
+            case RegionKind::Return:
+            case RegionKind::Unreachable:
+            case RegionKind::Break:
+            case RegionKind::Continue:
+            case RegionKind::Goto:
+                return CanaryFlow::Unsafe;
+        }
+        return CanaryFlow::Unsafe;
+    };
+
+    return classify(classify, r) == CanaryFlow::GuaranteedFail;
 }
 
 void Emitter::suppress_canary_regions(Region& r) const {
@@ -265,8 +341,10 @@ void Emitter::suppress_canary_regions(Region& r) const {
     auto* then_branch = r.children.empty() ? nullptr : r.children[0].get();
     auto* else_branch = (has_else && r.children.size() >= 2) ? r.children[1].get() : nullptr;
 
-    const bool then_fails = then_branch && region_calls_stack_chk_fail(*then_branch);
-    const bool else_fails = else_branch && region_calls_stack_chk_fail(*else_branch);
+    const bool then_fails = then_branch &&
+        region_always_calls_stack_chk_fail(*then_branch);
+    const bool else_fails = else_branch &&
+        region_always_calls_stack_chk_fail(*else_branch);
     if (!then_fails && !else_fails) return;
 
     // Pull the surviving branch up; if neither survives, collapse to Empty.
@@ -316,10 +394,10 @@ void Emitter::strip_matching_tail_returns(Region& r, const IrValue& value) const
         r.children.clear();
         return;
     }
-    for (auto& c : r.children) {
-        if (c) strip_matching_tail_returns(*c, value);
-    }
     if (r.kind == RegionKind::Seq) {
+        if (!r.children.empty() && r.children.back()) {
+            strip_matching_tail_returns(*r.children.back(), value);
+        }
         while (!r.children.empty()) {
             auto& last = r.children.back();
             if (!last || last->kind == RegionKind::Empty ||
@@ -332,6 +410,11 @@ void Emitter::strip_matching_tail_returns(Region& r, const IrValue& value) const
         if (r.children.empty()) {
             r.kind = RegionKind::Empty;
         }
+        return;
+    }
+    if (r.kind == RegionKind::IfElse && r.children.size() >= 2) {
+        if (r.children[0]) strip_matching_tail_returns(*r.children[0], value);
+        if (r.children[1]) strip_matching_tail_returns(*r.children[1], value);
     }
 }
 

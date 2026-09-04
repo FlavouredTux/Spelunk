@@ -1,4 +1,4 @@
 // sub_140001000
-uint32_t sub_140001000(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+uint32_t sub_140001000(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
   return (uint32_t)a1 + (uint32_t)a2 + (uint32_t)a3 + (uint32_t)a4 + a5 + a6;
 }

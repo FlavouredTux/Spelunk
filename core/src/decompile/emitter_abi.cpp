@@ -29,6 +29,175 @@
 
 namespace ember::emit {
 
+namespace {
+
+bool is_c_type_qualifier(std::string_view word) noexcept {
+    return word == "const" || word == "volatile" || word == "restrict" ||
+           word == "__restrict" || word == "__restrict__" ||
+           word == "_Atomic";
+}
+
+std::optional<IrType>
+declared_fp_ir_type(std::string_view type) noexcept {
+    if (type.find('*') != std::string_view::npos ||
+        type.find('&') != std::string_view::npos ||
+        type.find('[') != std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    std::array<std::string_view, 2> base_words{};
+    std::size_t base_count = 0;
+    type = trim_line_view(type);
+    for (std::size_t begin = 0; begin < type.size();) {
+        while (begin < type.size() &&
+               std::isspace(static_cast<unsigned char>(type[begin])) != 0) {
+            ++begin;
+        }
+        if (begin == type.size()) break;
+        std::size_t end = begin;
+        while (end < type.size() &&
+               std::isspace(static_cast<unsigned char>(type[end])) == 0) {
+            ++end;
+        }
+        const std::string_view word = type.substr(begin, end - begin);
+        if (!is_c_type_qualifier(word)) {
+            if (base_count == base_words.size()) return std::nullopt;
+            base_words[base_count++] = word;
+        }
+        begin = end;
+    }
+
+    if (base_count != 1) return std::nullopt;
+
+    constexpr std::array f32_names{
+        std::string_view{"f32"}, std::string_view{"float"},
+        std::string_view{"float32_t"}, std::string_view{"std::float32_t"},
+        std::string_view{"_Float32"},
+    };
+    constexpr std::array f64_names{
+        std::string_view{"f64"}, std::string_view{"double"},
+        std::string_view{"float64_t"}, std::string_view{"std::float64_t"},
+        std::string_view{"_Float64"},
+    };
+    if (std::ranges::find(f32_names, base_words[0]) != f32_names.end()) {
+        return IrType::F32;
+    }
+    if (std::ranges::find(f64_names, base_words[0]) != f64_names.end()) {
+        return IrType::F64;
+    }
+    return std::nullopt;
+}
+
+struct DeclaredInteger {
+    unsigned bits = 0;
+    bool is_signed = false;
+};
+
+std::optional<DeclaredInteger>
+declared_integer_type(std::string_view type, Abi abi) noexcept {
+    if (type.find('*') != std::string_view::npos ||
+        type.find('&') != std::string_view::npos ||
+        type.find('[') != std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    type = trim_line_view(type);
+    std::vector<std::string_view> words;
+    for (std::size_t begin = 0; begin < type.size();) {
+        while (begin < type.size() &&
+               std::isspace(static_cast<unsigned char>(type[begin])) != 0) {
+            ++begin;
+        }
+        if (begin == type.size()) break;
+        std::size_t end = begin;
+        while (end < type.size() &&
+               std::isspace(static_cast<unsigned char>(type[end])) == 0) {
+            ++end;
+        }
+        const std::string_view word = type.substr(begin, end - begin);
+        if (!is_c_type_qualifier(word)) words.push_back(word);
+        begin = end;
+    }
+    if (words.empty()) return std::nullopt;
+
+    if (words.size() == 1) {
+        constexpr std::array fixed_types{
+            std::pair{std::string_view{"uint8_t"}, DeclaredInteger{8, false}},
+            std::pair{std::string_view{"int8_t"}, DeclaredInteger{8, true}},
+            std::pair{std::string_view{"uint16_t"}, DeclaredInteger{16, false}},
+            std::pair{std::string_view{"int16_t"}, DeclaredInteger{16, true}},
+            std::pair{std::string_view{"uint32_t"}, DeclaredInteger{32, false}},
+            std::pair{std::string_view{"int32_t"}, DeclaredInteger{32, true}},
+            std::pair{std::string_view{"uint64_t"}, DeclaredInteger{64, false}},
+            std::pair{std::string_view{"int64_t"}, DeclaredInteger{64, true}},
+            std::pair{std::string_view{"std::uint8_t"}, DeclaredInteger{8, false}},
+            std::pair{std::string_view{"std::int8_t"}, DeclaredInteger{8, true}},
+            std::pair{std::string_view{"std::uint16_t"}, DeclaredInteger{16, false}},
+            std::pair{std::string_view{"std::int16_t"}, DeclaredInteger{16, true}},
+            std::pair{std::string_view{"std::uint32_t"}, DeclaredInteger{32, false}},
+            std::pair{std::string_view{"std::int32_t"}, DeclaredInteger{32, true}},
+            std::pair{std::string_view{"std::uint64_t"}, DeclaredInteger{64, false}},
+            std::pair{std::string_view{"std::int64_t"}, DeclaredInteger{64, true}},
+        };
+        for (const auto& [name, integer] : fixed_types) {
+            if (words.front() == name) return integer;
+        }
+
+        const unsigned pointer_bits =
+            abi == Abi::Ppc32Sysv || abi == Abi::AapcsArm32 ? 32u : 64u;
+        if (words.front() == "size_t" || words.front() == "uintptr_t" ||
+            words.front() == "std::size_t" ||
+            words.front() == "std::uintptr_t") {
+            return DeclaredInteger{pointer_bits, false};
+        }
+        if (words.front() == "ssize_t" || words.front() == "intptr_t" ||
+            words.front() == "ptrdiff_t" ||
+            words.front() == "std::intptr_t" ||
+            words.front() == "std::ptrdiff_t") {
+            return DeclaredInteger{pointer_bits, true};
+        }
+    }
+
+    const auto has = [&](std::string_view word) {
+        return std::ranges::find(words, word) != words.end();
+    };
+    const bool is_unsigned = has("unsigned");
+    const bool explicitly_signed = has("signed");
+    if (is_unsigned && explicitly_signed) return std::nullopt;
+
+    const std::size_t long_count = static_cast<std::size_t>(
+        std::ranges::count(words, std::string_view{"long"}));
+    unsigned bits = 32;
+    if (has("char")) {
+        if (has("short") || has("int") || long_count != 0 ||
+            (!is_unsigned && !explicitly_signed)) {
+            return std::nullopt;
+        }
+        bits = 8;
+    } else if (has("short")) {
+        if (long_count != 0) return std::nullopt;
+        bits = 16;
+    } else if (long_count >= 2) {
+        bits = 64;
+    } else if (long_count == 1) {
+        bits = (abi == Abi::Win64 || abi == Abi::Ppc32Sysv ||
+                abi == Abi::AapcsArm32)
+            ? 32u : 64u;
+    } else if (!has("int") && !is_unsigned && !explicitly_signed) {
+        return std::nullopt;
+    }
+
+    for (std::string_view word : words) {
+        if (word != "unsigned" && word != "signed" && word != "char" &&
+            word != "short" && word != "int" && word != "long") {
+            return std::nullopt;
+        }
+    }
+    return DeclaredInteger{bits, !is_unsigned};
+}
+
+}  // namespace
+
 u8 Emitter::cached_arity(addr_t target) const {
     auto it = arity_cache.find(static_cast<u64>(target));
     if (it != arity_cache.end()) return it->second;
@@ -323,15 +492,22 @@ Emitter::import_name_for_indirect_call(const IrValue& v) const {
 }
 
 bool Emitter::is_declared_fp_scalar(std::string_view type) noexcept {
-    if (type.find('*') != std::string_view::npos ||
-        type.find('&') != std::string_view::npos ||
-        type.find('[') != std::string_view::npos) {
-        return false;
+    return declared_fp_ir_type(type).has_value();
+}
+
+std::optional<bool>
+Emitter::declared_arg_signedness_for_width(u8 slot,
+                                           IrType value_type) const noexcept {
+    if (slot >= self_arg_type_names.size() ||
+        self_arg_type_names[slot].empty() || is_float_type(value_type)) {
+        return std::nullopt;
     }
-    type = trim_line_view(type);
-    return type == "f32" || type == "f64" ||
-           type.find("double") != std::string_view::npos ||
-           type.find("float") != std::string_view::npos;
+    const auto declared = declared_integer_type(
+        normalize_c_type_alias(self_arg_type_names[slot]), abi);
+    if (!declared || declared->bits != type_bits(value_type)) {
+        return std::nullopt;
+    }
+    return declared->is_signed;
 }
 
 std::optional<u32>
@@ -416,11 +592,12 @@ Emitter::abi_param_signature_for(const FunctionSig& sig, Reg r) const noexcept {
     std::size_t fp_idx  = 0;
     std::size_t slot    = 0;
     for (const auto& p : sig.params) {
-        const bool is_fp = is_declared_fp_scalar(p.type);
+        const bool uses_fp_bank =
+            !fp_regs.empty() && is_declared_fp_scalar(p.type);
         const auto aggregate_size = is_ppc_abi()
             ? ppc_known_aggregate_size(p.type)
             : std::nullopt;
-        if (is_fp) {
+        if (uses_fp_bank) {
             const std::size_t idx = positional ? slot : fp_idx;
             if (idx < fp_regs.size() && fp_regs[idx] == canon) return &p;
             ++fp_idx;
@@ -450,6 +627,8 @@ Emitter::abi_layout_for(const FunctionSig& sig) const {
     std::size_t fp_idx = 0;
     std::size_t slot = 0;
     i64 ppc_cursor = is_ppc_abi() ? ppc_parameter_area_base() : 0;
+    const i64 stack_word = abi_word_type() == IrType::I32 ? 4 : 8;
+    i64 stack_cursor = abi == Abi::SysVAmd64 ? 8 : 0;
     if (hidden_sret) {
         (void)ppc_advance_parameter_slot(ppc_cursor, abi_word_type());
     }
@@ -457,23 +636,23 @@ Emitter::abi_layout_for(const FunctionSig& sig) const {
     result.reserve(std::min<std::size_t>(sig.params.size(), kMaxAbiArgs));
     for (const auto& param : sig.params) {
         if (result.size() >= kMaxAbiArgs) break;
-        const bool is_fp = is_declared_fp_scalar(param.type);
+        const auto declared_fp_type = declared_fp_ir_type(param.type);
+        const bool uses_fp_bank =
+            !fp_regs.empty() && declared_fp_type.has_value();
         const auto aggregate_size = is_ppc_abi()
             ? ppc_known_aggregate_size(param.type)
             : std::nullopt;
-        const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
+        const std::size_t index = positional
+            ? slot : (uses_fp_bank ? fp_idx : int_idx);
         Reg reg = Reg::None;
         std::size_t int_words = 1;
-        const IrType ir_type = is_fp
-            ? (param.type.find("float") != std::string::npos
-                   ? IrType::F32 : IrType::F64)
-            : abi_word_type();
+        const IrType ir_type = declared_fp_type.value_or(abi_word_type());
         std::optional<i64> stack_slot;
         const i64 ppc_slot = is_ppc_abi()
             ? ppc_advance_parameter_slot(ppc_cursor, ir_type,
                                          aggregate_size.value_or(0))
             : 0;
-        if (is_fp) {
+        if (uses_fp_bank) {
             if (index < fp_regs.size()) reg = fp_regs[index];
             ++fp_idx;
         } else {
@@ -487,7 +666,21 @@ Emitter::abi_layout_for(const FunctionSig& sig) const {
             }
             int_idx += int_words;
         }
-        if (is_ppc_abi() && reg == Reg::None) stack_slot = ppc_slot;
+        if (reg == Reg::None) {
+            if (is_ppc_abi()) {
+                stack_slot = ppc_slot;
+            } else if (abi == Abi::Win64) {
+                stack_slot = 8 + static_cast<i64>(slot) * 8;
+            } else {
+                const i64 value_size = std::max<i64>(
+                    stack_word, static_cast<i64>(type_bits(ir_type) / 8u));
+                const i64 alignment = std::min<i64>(value_size, 8);
+                stack_cursor = (stack_cursor + alignment - 1) /
+                               alignment * alignment;
+                stack_slot = stack_cursor;
+                stack_cursor += value_size;
+            }
+        }
         result.push_back({reg, ir_type, false, stack_slot,
                           static_cast<u8>(int_words),
                           aggregate_size.value_or(0),
@@ -520,18 +713,21 @@ Emitter::abi_layout_for_import(std::string_view name) const {
     for (std::size_t slot = 0;
          slot < spec->params.size() && result.size() < kMaxAbiArgs; ++slot) {
         const TypeRef type = spec->params[slot];
-        const bool is_fp = arena.kind(type) == TypeKind::Float;
+        const bool declared_fp = arena.kind(type) == TypeKind::Float;
+        const bool uses_fp_bank = !fp_regs.empty() && declared_fp;
         const u32 aggregate_size = arena.kind(type) == TypeKind::Struct
             ? arena.node(type).s.size
             : 0;
-        const std::size_t index = positional ? slot : (is_fp ? fp_idx : int_idx);
+        const std::size_t index = positional
+            ? slot : (uses_fp_bank ? fp_idx : int_idx);
         Reg reg = Reg::None;
-        IrType ir_type = abi_word_type();
+        const IrType ir_type = declared_fp
+            ? (arena.node(type).f.bits <= 32 ? IrType::F32 : IrType::F64)
+            : abi_word_type();
         std::size_t int_words = 1;
         std::optional<i64> stack_slot;
-        if (is_fp) {
+        if (uses_fp_bank) {
             if (index < fp_regs.size()) reg = fp_regs[index];
-            ir_type = arena.node(type).f.bits <= 32 ? IrType::F32 : IrType::F64;
             ++fp_idx;
         } else {
             int_words = aggregate_size != 0
@@ -559,28 +755,27 @@ Emitter::abi_layout_for_import(std::string_view name) const {
 std::optional<std::string>
 Emitter::incoming_stack_arg_name(const IrValue& addr, i64 off) const {
     if (!fn) return std::nullopt;
-    if (is_ppc_abi()) {
-        auto entry_off = entry_stack_offset(addr);
-        if (!entry_off) return std::nullopt;
-        for (std::size_t i = 0; i < self_arg_layout.size(); ++i) {
-            const auto& arg = self_arg_layout[i];
-            if (!arg.stack_offset || *arg.stack_offset != *entry_off) continue;
-            if (i < self_arg_names.size() && !self_arg_names[i].empty()) {
-                return self_arg_names[i];
-            }
-            if (annotations) {
-                if (const FunctionSig* sig = annotations->signature_for(fn->start);
-                    sig && i < sig->params.size() && !sig->params[i].name.empty()) {
-                    return sig->params[i].name;
-                }
-            }
-            return std::format("a{}", i + 1);
+    (void)off;
+    const auto entry_off = entry_stack_offset(addr);
+    if (!entry_off) return std::nullopt;
+    for (std::size_t i = 0; i < self_arg_layout.size(); ++i) {
+        const auto& argument = self_arg_layout[i];
+        if (!argument.stack_offset || *argument.stack_offset != *entry_off) continue;
+        if (i < self_arg_names.size() && !self_arg_names[i].empty()) {
+            return self_arg_names[i];
         }
-        return std::nullopt;
+        if (annotations) {
+            if (const FunctionSig* signature = annotations->signature_for(fn->start);
+                signature && i < signature->params.size()) {
+                return signature_parameter_name(signature->params[i], i);
+            }
+        }
+        return std::format("a{}", i + 1);
     }
+    if (is_ppc_abi()) return std::nullopt;
     if (!abi_positional_arg_slots(abi)) return std::nullopt;
-    if (off < 0x08 || (off - 0x08) % 8 != 0) return std::nullopt;
-    const std::size_t k = static_cast<std::size_t>((off - 0x08) / 8);
+    if (*entry_off < 0x08 || (*entry_off - 0x08) % 8 != 0) return std::nullopt;
+    const std::size_t k = static_cast<std::size_t>((*entry_off - 0x08) / 8);
     if (k < int_arg_regs(abi).size()) return std::nullopt;  // register-arg home
 
     if (annotations) {
@@ -615,7 +810,8 @@ Emitter::arg_name_for_live_in(Reg r) const {
 }
 
 IrType Emitter::abi_word_type() const noexcept {
-    return abi == Abi::Ppc32Sysv ? IrType::I32 : IrType::I64;
+    return (abi == Abi::Ppc32Sysv || abi == Abi::AapcsArm32)
+        ? IrType::I32 : IrType::I64;
 }
 
 std::string_view Emitter::abi_word_c_type() const noexcept {

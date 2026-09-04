@@ -275,7 +275,7 @@ bool Emitter::is_callee_saved(Reg r) noexcept {
 bool Emitter::is_stack_base_reg(Reg r) noexcept {
     const Reg c = canonical_reg(r);
     return c == Reg::Rsp || c == Reg::Rbp ||
-           c == Reg::PpcR1;
+           c == Reg::PpcR1 || c == Reg::Xsp || c == Reg::Asp;
 }
 
 bool Emitter::is_void_call_result(const IrValue& v) const {

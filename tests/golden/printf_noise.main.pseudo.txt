@@ -11,6 +11,6 @@ int main(int argc, char** argv) {
   }
   fwrite("hello\n", 1, 6, stdout);
   puts("ready");
-  printf("%*d\n", (uint32_t)argc, (uint64_t)g_count);
+  printf("%*d\n", argc, (uint64_t)g_count);
   return g_count;
 }

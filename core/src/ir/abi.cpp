@@ -185,6 +185,10 @@ Reg fp_return_reg(Abi a) noexcept {
             return Reg::Xmm0;
         case Abi::Aapcs64:
             return Reg::V0;
+        case Abi::AapcsArm32:
+            // The model uses the base/soft-float PCS: scalar FP results use
+            // the core result lane (r0 is the primary lane for double too).
+            return Reg::ArmR0;
         case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be:

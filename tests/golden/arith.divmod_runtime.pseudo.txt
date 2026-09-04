@@ -1,4 +1,4 @@
 // divmod_runtime
 unsigned int divmod_runtime(unsigned int a, unsigned int b) {
-  return (uint32_t)((uint32_t)a % (uint32_t)b);
+  return (uint32_t)(a % b);
 }

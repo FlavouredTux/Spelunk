@@ -8,8 +8,8 @@ void use_imports(const char* a, const char* b) {
     g_count += r_strlen;
     puts(a);
   }
-  if (a2) {
-    fputs(a2, stdout);
+  if (b) {
+    fputs(b, stdout);
   }
   char* r_getenv = getenv("HOME");
   if (!r_getenv) {

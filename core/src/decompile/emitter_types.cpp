@@ -41,19 +41,48 @@ std::string Emitter::normalize_c_type_alias(std::string_view t) {
         return {};
     };
 
+    auto is_qualifier = [](std::string_view word) noexcept {
+        return word == "const" || word == "volatile" ||
+               word == "restrict" || word == "__restrict" ||
+               word == "__restrict__" || word == "_Atomic";
+    };
+
     std::string out(t);
-    std::size_t star = out.find('*');
-    std::string_view base = star == std::string::npos
+    const std::size_t declarator = out.find_first_of("*&[");
+    std::string_view base = declarator == std::string::npos
         ? std::string_view(out)
-        : std::string_view(out).substr(0, star);
-    while (!base.empty() && base.back() == ' ') base.remove_suffix(1);
-    if (auto mapped = map_base(base); !mapped.empty()) {
-        std::string suffix = star == std::string::npos
-            ? std::string{}
-            : out.substr(star);
-        return std::string(mapped) + suffix;
+        : std::string_view(out).substr(0, declarator);
+    base = trim_line_view(base);
+
+    std::string normalized_base;
+    bool mapped_base = false;
+    for (std::size_t begin = 0; begin < base.size();) {
+        while (begin < base.size() &&
+               std::isspace(static_cast<unsigned char>(base[begin])) != 0) {
+            ++begin;
+        }
+        if (begin == base.size()) break;
+        std::size_t end = begin;
+        while (end < base.size() &&
+               std::isspace(static_cast<unsigned char>(base[end])) == 0) {
+            ++end;
+        }
+        const std::string_view word = base.substr(begin, end - begin);
+        const std::string_view mapped = map_base(word);
+        if (mapped.empty() && !is_qualifier(word)) return out;
+        if (!mapped.empty()) {
+            if (mapped_base) return out;
+            mapped_base = true;
+        }
+        if (!normalized_base.empty()) normalized_base.push_back(' ');
+        normalized_base.append(mapped.empty() ? word : mapped);
+        begin = end;
     }
-    return out;
+    if (!mapped_base) return out;
+    if (declarator != std::string::npos) {
+        normalized_base.append(out.substr(declarator));
+    }
+    return normalized_base;
 }
 
 std::optional<std::string_view>
@@ -143,6 +172,9 @@ std::string Emitter::ipa_type_name(TypeRef r) const {
             }
             if (pn.kind == TypeKind::Int) {
                 return std::format("uint{}_t*", pn.i.bits);
+            }
+            if (pn.kind == TypeKind::Struct && !pn.s.name.empty()) {
+                return pn.s.name + "*";
             }
             return "void*";
         }

@@ -98,7 +98,8 @@ enum class Abi : u8 {
 [[nodiscard]] bool abi_positional_arg_slots(Abi a) noexcept;
 
 [[nodiscard]] Reg int_return_reg(Abi a) noexcept;
-// Scalar floating-point return register. PPC SysV returns float/double in f1.
+// Scalar floating-point return register. PPC SysV returns float/double in f1;
+// the modelled ARM32 base/soft-float PCS uses r0 as its primary result lane.
 // This is a candidate lane, not proof that every call returns a float; callers
 // must select it from a known signature or concrete dataflow evidence.
 [[nodiscard]] Reg fp_return_reg(Abi a) noexcept;

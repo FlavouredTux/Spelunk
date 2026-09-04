@@ -190,9 +190,11 @@ struct Emitter {
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> fold_call_ssa_key;
     mutable std::map<SsaKey, std::string>            fold_return_expr;
     mutable std::map<SsaKey, std::string>            fold_void_call_stmt;
+    mutable std::map<SsaKey, addr_t>                 fold_call_source;
     std::set<std::pair<std::size_t, std::size_t>>    inline_call_positions;
     std::map<std::pair<std::size_t, std::size_t>, SsaKey> inline_call_ssa_key;
     mutable std::map<SsaKey, std::string>            inline_call_expr;
+    mutable std::map<SsaKey, addr_t>                 inline_call_source;
     mutable std::map<std::string, std::string>       global_decls;
     mutable std::map<std::string, std::size_t>       ppc_navigation_tables;
     struct PpcStridedTable {
@@ -325,6 +327,14 @@ struct Emitter {
     // Win64 passes only 4 args in regs; the 5th+ sit on the stack and are
     // named separately via incoming_stack_arg_name().
     [[nodiscard]] static bool is_declared_fp_scalar(std::string_view type) noexcept;
+
+    // Returns the declared signedness only when the source parameter's
+    // integer width exactly matches `value_type`. An empty result means the
+    // spelling is not a supported scalar integer type, or that a narrowing
+    // conversion is semantically significant.
+    [[nodiscard]] std::optional<bool>
+    declared_arg_signedness_for_width(u8 slot,
+                                      IrType value_type) const noexcept;
 
     [[nodiscard]] static std::optional<u32>
     ppc_known_aggregate_size(std::string_view type) noexcept;
@@ -867,7 +877,8 @@ struct Emitter {
     // followed by `not` wrapper that x86 condition codes produce.
     [[nodiscard]] bool is_canary_condition(const IrValue& cond) const;
 
-    [[nodiscard]] bool region_calls_stack_chk_fail(const Region& r) const;
+    [[nodiscard]] bool
+    region_always_calls_stack_chk_fail(const Region& r) const;
 
     // Rewrite If/IfElse regions whose condition is a canary check: replace the
     // region with its non-fail branch so the canary guard vanishes entirely.
@@ -1265,6 +1276,7 @@ struct Emitter {
     // collapse uses this to drop the `else` wrapper when the then arm
     // always exits.
     [[nodiscard]] static bool region_always_exits(const Region& r) noexcept;
+    [[nodiscard]] bool region_has_deferred_call(const Region& r) const;
 
     [[nodiscard]] static bool rendered_region_empty(std::string_view s) noexcept;
     void emit_region_while    (const Region& r, int depth, std::string& out) const;
@@ -1303,6 +1315,8 @@ struct Emitter {
     [[nodiscard]] std::string
     format_call_args_fallback(const std::vector<IrValue>& args,
                               std::vector<IrValue>* used = nullptr) const;
+    [[nodiscard]] std::optional<std::string_view>
+    source_arg_name_for_call_transport(const IrValue& value) const;
     [[nodiscard]] std::string
     fallback_call_arg_types(const std::vector<IrValue>& args) const;
     [[nodiscard]] std::string
@@ -1351,6 +1365,12 @@ struct Emitter {
                            std::pair<std::size_t, std::size_t> pos,
                            const std::string& call_expr,
                            bool result_is_void) const;
+
+    void record_folded_call_hit(const SsaKey& key,
+                                std::size_t output_offset) const;
+
+    void record_inline_call_hit(const IrValue& value,
+                                std::size_t output_offset) const;
     // Renders the trailing summary line for a block when its kind
     // implies one - the conditional / switch test, the return value,
     // or an explicit `goto *...` for indirect jumps. Plain
@@ -1473,9 +1493,15 @@ struct EmitterMetadataStorage {
 struct SignatureContext {
     bool has_user_sig = false;
     bool has_metadata_sig = false;
+    bool has_authoritative_arity = false;
+    bool has_authoritative_types = false;
+    std::optional<FunctionSig> effective_metadata_signature;
 };
 
 [[nodiscard]] bool is_incomplete_decomp_signature(const FunctionSig& signature);
+
+[[nodiscard]] std::string
+signature_parameter_name(const ParamSig& parameter, std::size_t index);
 
 void setup_emitter_metadata(Emitter& e,
                             const StructuredFunction& sf,

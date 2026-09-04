@@ -63,12 +63,19 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
                                 std::pair<std::size_t, std::size_t> pos,
                                 const std::string& call_expr,
                                 bool result_is_void) const {
+    // Source addr for provenance. fn is guaranteed non-null while emit is in
+    // flight; pos came from the active block walk.
+    const auto src = (fn && pos.first < fn->blocks.size() &&
+                      pos.second < fn->blocks[pos.first].insts.size())
+        ? fn->blocks[pos.first].insts[pos.second].source_addr
+        : addr_t{0};
     if (suppressed_call_positions.contains(pos)) return;
     if (fold_call_positions.contains(pos)) {
         auto k = fold_call_ssa_key.find(pos);
         if (k != fold_call_ssa_key.end()) {
             if (result_is_void) fold_void_call_stmt[k->second] = call_expr;
             else                fold_return_expr[k->second]    = call_expr;
+            fold_call_source[k->second] = src;
         }
         return;
     }
@@ -76,16 +83,10 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
         auto k = inline_call_ssa_key.find(pos);
         if (k != inline_call_ssa_key.end() && !result_is_void) {
             inline_call_expr[k->second] = call_expr;
+            inline_call_source[k->second] = src;
         }
         return;
     }
-    // Source addr for the LineMap hit. fn is guaranteed non-null while
-    // emit is in flight; pos came from the active block walk.
-    const auto src = (fn && pos.first < fn->blocks.size() &&
-                      pos.second < fn->blocks[pos.first].insts.size())
-        ? fn->blocks[pos.first].insts[pos.second].source_addr
-        : addr_t{0};
-
     if (auto bk = bound_call_key.find(pos); bk != bound_call_key.end()) {
         if (options.line_map) {
             options.line_map->hits.push_back({out.size(), src});
@@ -124,6 +125,24 @@ void Emitter::emit_call_binding(std::string& out, std::string_view ind,
         options.line_map->hits.push_back({out.size(), src});
     }
     out += std::format("{}{};\n", ind, call_expr);
+}
+
+void Emitter::record_folded_call_hit(const SsaKey& key,
+                                     std::size_t output_offset) const {
+    if (!options.line_map) return;
+    auto source = fold_call_source.find(key);
+    if (source == fold_call_source.end() || source->second == 0) return;
+    options.line_map->hits.push_back({output_offset, source->second});
+}
+
+void Emitter::record_inline_call_hit(const IrValue& value,
+                                     std::size_t output_offset) const {
+    if (!options.line_map) return;
+    const auto key = single_call_return_key_in_expr(value);
+    if (!key) return;
+    auto source = inline_call_source.find(*key);
+    if (source == inline_call_source.end() || source->second == 0) return;
+    options.line_map->hits.push_back({output_offset, source->second});
 }
 
 // Metrowerks writes overflow parameters into the outgoing parameter area
@@ -254,6 +273,51 @@ Emitter::args_for_layout(const std::vector<InferredArgument>& layout,
     return result;
 }
 
+// Register ABIs commonly materialize a source-level narrow integer as
+// zext/sext(trunc(param)) before a call. At a C call boundary the prototype or
+// default promotions perform that transport conversion. Recover the declared
+// source name only when the cast chain never narrows the source type.
+std::optional<std::string_view>
+Emitter::source_arg_name_for_call_transport(const IrValue& value) const {
+    const auto slot = trace_to_self_arg_slot(value);
+    if (!slot || *slot >= self_arg_names.size() ||
+        self_arg_names[*slot].empty()) {
+        return std::nullopt;
+    }
+
+    IrValue current = value;
+    std::optional<IrType> narrowest;
+    bool cast_chain = false;
+    for (int depth = 0; depth < 8; ++depth) {
+        const IrInst* definition = def_of(current);
+        if (!definition || definition->src_count < 1) break;
+        if (definition->op == IrOp::Assign) {
+            current = definition->srcs[0];
+            continue;
+        }
+        if (definition->op != IrOp::Trunc &&
+            definition->op != IrOp::ZExt &&
+            definition->op != IrOp::SExt) {
+            break;
+        }
+        cast_chain = true;
+        const IrType candidate =
+            type_bits(definition->dst.type) <
+                    type_bits(definition->srcs[0].type)
+                ? definition->dst.type
+                : definition->srcs[0].type;
+        if (!narrowest || type_bits(candidate) < type_bits(*narrowest)) {
+            narrowest = candidate;
+        }
+        current = definition->srcs[0];
+    }
+    if (!cast_chain || !narrowest ||
+        !declared_arg_signedness_for_width(*slot, *narrowest).has_value()) {
+        return std::nullopt;
+    }
+    return self_arg_names[*slot];
+}
+
 // Fallback for callees with no known arity: drop args that look stale
 // (live-in regs the caller never set, or regs whose most recent def is
 // a Clobber from an earlier call).
@@ -266,7 +330,8 @@ Emitter::format_call_args_fallback(const std::vector<IrValue>& args,
         if (is_stale_arg_reg(a)) continue;
         if (used) used->push_back(a);
         if (!first) s += ", ";
-        s += expr(a);
+        if (auto name = source_arg_name_for_call_transport(a)) s += *name;
+        else s += expr(a);
         first = false;
     }
     return s;
@@ -316,6 +381,8 @@ Emitter::format_call_args_with_arity(const std::vector<IrValue>& args, u8 arity,
         if (!first) s += ", ";
         if (rendered && i < rendered->size() && !(*rendered)[i].empty()) {
             s += (*rendered)[i];
+        } else if (auto name = source_arg_name_for_call_transport(args[i])) {
+            s += *name;
         } else {
             s += expr(args[i]);
         }
@@ -965,6 +1032,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                 if (auto k = ssa_key(rv); k) {
                     auto s = fold_void_call_stmt.find(*k);
                     if (s != fold_void_call_stmt.end()) {
+                        record_folded_call_hit(*k, out.size());
                         out += std::format("{}{};\n", ind, s->second);
                         append_terminator("return;");
                         break;
@@ -974,6 +1042,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                     if (auto k = ssa_key(rv); k) {
                         auto f = fold_return_expr.find(*k);
                         if (f != fold_return_expr.end()) {
+                            record_folded_call_hit(*k, out.size());
                             out += std::format("{}{};\n", ind, f->second);
                         }
                     }
@@ -994,6 +1063,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
                 if (auto k = ssa_key(rv); k) {
                     auto f = fold_return_expr.find(*k);
                     if (f != fold_return_expr.end()) {
+                        record_folded_call_hit(*k, out.size());
                         append_terminator(std::format("return {};", f->second));
                         break;
                     }

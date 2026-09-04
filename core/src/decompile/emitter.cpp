@@ -1,13 +1,11 @@
 #include <ember/decompile/emitter.hpp>
 
-#include <cctype>
 #include <cstddef>
 #include <expected>
 #include <format>
 #include <functional>
-#include <map>
+#include <memory>
 #include <optional>
-#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -32,6 +30,7 @@
 #include <ember/ir/ssa.hpp>
 #include <ember/structure/region.hpp>
 
+#include "emitter_document.hpp"
 #include "emitter_internal.hpp"
 #include "emitter_render_chunk.hpp"
 #include "emitter_tables.hpp"
@@ -42,11 +41,32 @@ using namespace emit;
 
 namespace {
 
+[[nodiscard]] std::unique_ptr<Region> clone_region_tree(const Region& source) {
+    auto clone = std::make_unique<Region>();
+    clone->kind = source.kind;
+    clone->block_start = source.block_start;
+    clone->condition = source.condition;
+    clone->invert = source.invert;
+    clone->target = source.target;
+    clone->case_values = source.case_values;
+    clone->has_default = source.has_default;
+    clone->switch_index = source.switch_index;
+    clone->update_block = source.update_block;
+    clone->update_inst = source.update_inst;
+    clone->has_update = source.has_update;
+    clone->children.reserve(source.children.size());
+    for (const auto& child : source.children) {
+        clone->children.push_back(child ? clone_region_tree(*child) : nullptr);
+    }
+    return clone;
+}
+
 // Every inference pass the emitter runs before rendering, in dependency
 // order. Signature-shaping passes are skipped when the user or the
 // binary's metadata already declared one.
 void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
-                         const SignatureContext& sig_ctx) {
+                         const SignatureContext& sig_ctx,
+                         bool structured_render) {
     e.analyze(*sf.ir);
     e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
@@ -54,7 +74,7 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
     e.name_merge_values();
     e.infer_objc_block_capture_names();
     e.frame_layout = compute_frame_layout(*sf.ir, e.binary);
-    if (sf.body) {
+    if (structured_render && sf.body) {
         e.suppress_canary_regions(*sf.body);
         e.fold_common_tail_returns(*sf.body);
         e.analyze_return_folds(*sf.body);
@@ -63,12 +83,12 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
         e.collect_goto_targets(*sf.body);
     }
     e.analyze_arc_claim_folds();
-    const bool infer_signature =
-        !sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig;
-    if (infer_signature) {
+    if (!sig_ctx.has_authoritative_arity) {
         e.bump_arity_from_call_sites();
         e.bump_arity_from_body_reads();
         e.bump_arity_from_merge_initializers();
+    }
+    if (!sig_ctx.has_authoritative_types) {
         e.infer_narrow_arg_types_from_uses();
         e.infer_pointer_arg_types_from_memory_uses();
         e.infer_synthetic_self_arg_types();
@@ -80,7 +100,9 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
     e.infer_charp_args();
     e.infer_typed_stack_slots_from_calls();
     e.infer_import_pointer_stack_values();
-    if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
+    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
+        e.promote_block_like_first_arg();
+    }
     e.bind_call_returns();
     e.refine_synthetic_member_types_from_stores();
     e.analyze_merge_definite_assignment();
@@ -127,6 +149,15 @@ provenance_preamble(const Annotations& annotations, addr_t start) {
 // IrType to pick an appropriate C type rather than always saying `u64`.
 [[nodiscard]] std::string
 infer_return_type(const Emitter& e, const StructuredFunction& sf) {
+    // Interprocedural inference is the strongest available type evidence and
+    // wins over presentation heuristics for PPC carriers and low-byte Phis.
+    if (e.options.signatures && e.options.type_arena && sf.ir) {
+        auto it = e.options.signatures->find(sf.ir->start);
+        if (it != e.options.signatures->end()) {
+            std::string name = e.ipa_type_name(it->second.return_type);
+            if (!name.empty()) return name;
+        }
+    }
     if (e.has_incidental_ppc_return_merge() ||
         e.has_incidental_ppc_stored_return()) return "void";
     if (sf.ir) {
@@ -146,17 +177,6 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
                 }
                 if (all_low_bytes) return "uint8_t";
             }
-        }
-    }
-    // IPA wins outright when it has concrete evidence - the typed
-    // return came from harvesting Return-operand types after Phase 2
-    // local inference, which sees more than this function's
-    // bit-width-only fallback.
-    if (e.options.signatures && e.options.type_arena && sf.ir) {
-        auto it = e.options.signatures->find(sf.ir->start);
-        if (it != e.options.signatures->end()) {
-            std::string n = e.ipa_type_name(it->second.return_type);
-            if (!n.empty()) return n;
         }
     }
     if (!sf.body) return "void";
@@ -325,72 +345,20 @@ header_from_signature(Emitter& e, const StructuredFunction& sf,
                       const FunctionSig& sig, std::string_view display_name) {
     std::string params;
     if (sig.params.empty()) {
-        params = "void";
+        params = sig.variadic ? "..." : "void";
     } else {
         for (std::size_t i = 0; i < sig.params.size(); ++i) {
             if (i > 0) params += ", ";
             params += std::format("{} {}",
                                   Emitter::normalize_c_type_alias(sig.params[i].type),
-                                  sig.params[i].name);
+                                  signature_parameter_name(sig.params[i], i));
         }
+        if (sig.variadic) params += ", ...";
     }
     const std::string ret = sig.return_type.empty()
         ? infer_return_type(e, sf)
         : Emitter::normalize_c_type_alias(sig.return_type);
     return function_header(e, ret, display_name, params);
-}
-
-// Obj-C IMP: derive the header from the method's ObjC type
-// encoding. Gives us proper self / _cmd / typed args instead of
-// u64 placeholders - for a method with encoding "v40@0:8@16i32"
-// we get `void -[Foo bar:](Foo* self, SEL _cmd, id arg0, int arg1)`.
-[[nodiscard]] std::string
-header_from_objc_method(Emitter& e, const ObjcMethod& meth,
-                        std::string_view display_name) {
-    const auto parts = decode_objc_type_parts(meth.type_encoding);
-    if (parts.empty()) return {};
-    const std::string& ret_ty = parts[0];
-    std::string params;
-    if (parts.size() <= 1) {
-        params = "void";
-    } else {
-        // `self` is typed as `Class*` when we know the class,
-        // otherwise `id`.
-        const std::string self_ty = meth.cls.empty()
-            ? std::string{"id"}
-            : meth.cls + "*";
-        params = self_ty + " self";
-        if (parts.size() > 1) params += ", SEL _cmd";
-        const auto arg_names = objc_selector_arg_names(meth.selector);
-        for (std::size_t i = 3; i < parts.size(); ++i) {
-            const std::size_t arg_idx = i - 3;
-            const std::string name = arg_idx < arg_names.size()
-                ? arg_names[arg_idx]
-                : std::format("arg{}", arg_idx);
-            params += std::format(", {} {}", parts[i], name);
-        }
-    }
-    return function_header(e, ret_ty, display_name, params);
-}
-
-[[nodiscard]] std::string
-header_from_objc_block(Emitter& e, std::string_view signature,
-                       std::string_view display_name) {
-    const auto parts = decode_objc_type_parts(signature);
-    if (parts.empty()) return {};
-    std::string params;
-    if (parts.size() <= 1) {
-        params = "void";
-    } else {
-        for (std::size_t i = 1; i < parts.size(); ++i) {
-            if (i > 1) params += ", ";
-            const std::string name = (i == 1)
-                ? std::string{"block"}
-                : std::format("arg{}", i - 2);
-            params += std::format("{} {}", block_param_type(parts[i]), name);
-        }
-    }
-    return function_header(e, block_param_type(parts[0]), display_name, params);
 }
 
 // No declared or metadata signature: arity-inferred parameters with the
@@ -417,6 +385,7 @@ header_from_inference(Emitter& e, const StructuredFunction& sf,
             if (ipa_sig && i < ipa_sig->params.size()) {
                 t = e.ipa_type_name(ipa_sig->params[i]);
             }
+            const bool concrete_ipa_type = !t.empty();
             // No IPA: consult the per-function value_types side table
             // (populated by seed_call_return_types + infer_local_types
             // ahead of emit). This is what surfaces import-derived
@@ -442,11 +411,11 @@ header_from_inference(Emitter& e, const StructuredFunction& sf,
                         : std::string{e.abi_word_c_type()};
                 }
             }
-            if (ipa_sig == nullptr && i < e.self_arg_type_overrides.size() &&
+            if (!concrete_ipa_type && i < e.self_arg_type_overrides.size() &&
                 e.self_arg_type_overrides[i]) {
                 t = c_type_name(*e.self_arg_type_overrides[i]);
             }
-            if (i < e.self_arg_type_names.size() &&
+            if (!concrete_ipa_type && i < e.self_arg_type_names.size() &&
                 !e.self_arg_type_names[i].empty()) {
                 t = e.self_arg_type_names[i];
             }
@@ -489,532 +458,62 @@ header_from_inference(Emitter& e, const StructuredFunction& sf,
     return function_header(e, ret, display_name, params);
 }
 
-// When the header name is a long RTTI `Class::vfn_N` - especially for
-// templates - advertise a shorter alias the user can type with `-s`.
-// Purely a discoverability comment; the resolver accepts the short form
-// via the same class_aliases machinery used here.
-[[nodiscard]] std::string rtti_alias_comment(const Emitter& e, addr_t start) {
-    if (!e.options.rtti_methods) return {};
-    const auto it = e.options.rtti_methods->find(start);
-    if (it == e.options.rtti_methods->end()) return {};
-    const std::string& full = it->second;
-    const auto vfn_pos = full.rfind("::vfn_");
-    if (vfn_pos != std::string::npos) {
-        std::string_view cls_sv{full.data(), vfn_pos};
-        std::string_view base_sv = cls_sv;
-        for (std::size_t i = 0; i < cls_sv.size(); ++i) {
-            if (cls_sv[i] == '<') { base_sv = cls_sv.substr(0, i); break; }
-        }
-        const auto slash = base_sv.rfind("::");
-        const std::string_view short_sv = slash == std::string_view::npos
-            ? base_sv
-            : base_sv.substr(slash + 2);
-        if (!short_sv.empty() && short_sv != cls_sv) {
-            return std::format("// alias: {}{}\n",
-                               short_sv,
-                               std::string_view{full}.substr(vfn_pos));
-        }
-    }
-    return {};
-}
-
-// Surface blocks the structurer failed to fit as explicit markers
-// rather than letting their content vanish silently. Any IR block
-// not reached by a `RegionKind::Block` node in the structured tree
-// is unrendered - its instructions (calls included) would otherwise
-// disappear with no diagnostic. The marker carries the address range
-// so the user can fall back to `--disasm-at` to see what was dropped.
-//
-// Blocks the emitter intentionally suppressed (the canary `if
-// (cookie) __stack_chk_fail()` fail-arm) are exempt - they're
-// dropped on purpose, not by structurer failure.
 [[nodiscard]] std::string
-structurer_fail_markers(const StructuredFunction& sf, const Binary* binary) {
-    std::string out;
-    std::set<addr_t> rendered_blocks;
-    std::function<void(const Region&)> collect = [&](const Region& r) {
-        if (r.kind == RegionKind::Block) rendered_blocks.insert(r.block_start);
-        for (const auto& c : r.children) if (c) collect(*c);
-    };
-    collect(*sf.body);
-    auto is_intentionally_suppressed = [&](const IrBlock& bb) noexcept {
-        if (!binary) return false;
-        for (const auto& inst : bb.insts) {
-            if (inst.op != IrOp::Call) continue;
-            if (const Symbol* s = binary->import_at_plt(inst.target1); s) {
-                if (Emitter::clean_import_name(s->name) == "__stack_chk_fail") {
-                    return true;
-                }
+select_function_header(Emitter& e, const StructuredFunction& sf,
+                       const SignatureContext& signature_context,
+                       const Annotations* annotations,
+                       std::string_view display_name,
+                       bool infer_when_missing = true) {
+    const addr_t start = sf.ir->start;
+    if (annotations) {
+        if (const FunctionSig* signature = annotations->signature_for(start);
+            signature && !is_incomplete_decomp_signature(*signature)) {
+            if (!infer_when_missing && signature->return_type.empty()) {
+                return {};
             }
+            return header_from_signature(e, sf, *signature, display_name);
         }
-        return false;
-    };
-    for (const auto& bb : sf.ir->blocks) {
-        if (bb.end <= bb.start) continue;
-        if (rendered_blocks.contains(bb.start)) continue;
-        if (is_intentionally_suppressed(bb)) continue;
-        out += std::format(
-            "  // STRUCTURER_FAIL: {:#x}..{:#x} (see --disasm-at)\n",
-            bb.start, bb.end);
     }
-    return out;
-}
-
-// Stack slots handed by address to the PPC matrix helpers are Mtx34s,
-// whatever their observed access width says.
-[[nodiscard]] std::set<std::string> matrix_stack_locals(const std::string& body) {
-    std::set<std::string> out;
-    const std::regex matrix_call(
-        R"((?:PSMTX[A-Za-z0-9_]*|C_MTX[A-Za-z0-9_]*|QUATMtx)\([^;\n]*&((?:local|arg)_[0-9a-fA-F]+))");
-    for (std::sregex_iterator it(body.begin(), body.end(), matrix_call), end;
-         it != end; ++it) {
-        out.insert((*it)[1].str());
-    }
-    return out;
-}
-
-// `&fn /* 0x... */` in the body needs an extern declaration above it.
-void collect_address_taken_functions(Emitter& e, const std::string& body,
-                                     const Binary* binary) {
-    const std::regex addressed_function(
-        R"(&([A-Za-z_][A-Za-z0-9_]*)\s*/\*\s*0x[0-9a-fA-F]+\s*\*/)");
-    for (std::sregex_iterator it(
-             body.begin(), body.end(), addressed_function), end;
-         it != end; ++it) {
-        const std::string name = (*it)[1].str();
-        if (binary) {
-            const Symbol* symbol = binary->find_by_name(name);
-            if (!symbol || symbol->kind != SymbolKind::Function) continue;
+    if (signature_context.effective_metadata_signature) {
+        if (!infer_when_missing &&
+            signature_context.effective_metadata_signature->return_type.empty()) {
+            return {};
         }
-        e.address_taken_function_decls.insert(name);
-    }
-}
-
-    // A depth-capped expression may intentionally stop at `tN`. Resolve
-    // dependency-safe PPC snapshots before file-scope declarations are
-    // emitted so any globals discovered by expansion also receive an extern.
-    struct FallbackMaterialization {
-        IrValue value;
-        std::string initializer;
-    };
-
-[[nodiscard]] std::map<u32, FallbackMaterialization>
-fallback_materializations(const Emitter& e, const std::string& body) {
-    std::map<u32, FallbackMaterialization> out;
-    const auto contains_raw_temp = [](std::string_view text) {
-        for (std::size_t i = 0; i + 1 < text.size(); ++i) {
-            if (text[i] != 't' ||
-                !std::isdigit(static_cast<unsigned char>(text[i + 1])) ||
-                (i != 0 && c_ident_char(text[i - 1]))) continue;
-            std::size_t end = i + 2;
-            while (end < text.size() && std::isdigit(
-                       static_cast<unsigned char>(text[end]))) ++end;
-            if (end == text.size() || !c_ident_char(text[end])) return true;
-        }
-        return false;
-    };
-    e.ssa_uses.for_each_definition([&](const SsaKey&, const IrInst* definition) {
-        if (!definition || definition->dst.kind != IrValueKind::Temp) return;
-        const std::string name = std::format("t{}", definition->dst.temp);
-        if (!text_contains_identifier_in_code(body, name) ||
-            text_declares_identifier(body, name)) return;
-        std::string initializer;
-        if (auto key = ssa_key(definition->dst);
-            key && e.memory_snapshot_loads.contains(*key) &&
-            Emitter::inlinable_op(definition->op)) {
-            initializer = e.expand(*definition, 0, 0);
-            if (initializer == name || contains_raw_temp(initializer)) {
-                initializer.clear();
+        FunctionSig effective =
+            *signature_context.effective_metadata_signature;
+        for (std::size_t i = 0; i < effective.params.size(); ++i) {
+            if (!effective.params[i].type.empty()) continue;
+            std::string type;
+            if (i < e.self_arg_layout.size() &&
+                e.self_arg_layout[i].reg != Reg::None) {
+                IrValue probe = IrValue::make_reg(
+                    e.self_arg_layout[i].reg, e.self_arg_layout[i].type);
+                type = e.c_type_name_for(probe);
             }
-        }
-        out.emplace(
-            definition->dst.temp,
-            FallbackMaterialization{definition->dst, std::move(initializer)});
-    });
-    return out;
-}
-
-// Record definitions, function externs and global externs, in that
-// order, ahead of the function itself.
-[[nodiscard]] std::string
-file_scope_declarations(const Emitter& e, const std::string& declaration_context) {
-    std::string out;
-    out += e.imported_record_declarations(declaration_context);
-    out += e.synthetic_struct_declarations(declaration_context);
-    for (const std::string& function : e.address_taken_function_decls) {
-        out += std::format("extern void {}(void);\n", function);
-    }
-    if (!e.address_taken_function_decls.empty()) out += "\n";
-    for (const auto& [name, ty] : e.global_decls) {
-        if (ty.find("(*") != std::string::npos) {
-            out += std::format("extern {};\n", ty);
-        } else if (ty.ends_with("[]")) {
-            out += std::format("extern {} {}[];\n",
-                               std::string_view(ty).substr(0, ty.size() - 2),
-                               name);
-        } else {
-            out += std::format("extern {} {};\n", ty, name);
-        }
-    }
-    if (!e.global_decls.empty()) out += "\n";
-    return out;
-}
-
-[[nodiscard]] std::string fallback_temp_declarations(
-    const Emitter& e, const std::map<u32, FallbackMaterialization>& fallbacks) {
-    std::string out;
-    for (const auto& [temp, materialization] : fallbacks) {
-        if (!materialization.initializer.empty()) {
-            out += std::format("  {} t{} = {};\n",
-                               e.c_type_name_for(materialization.value), temp,
-                               materialization.initializer);
-        } else {
-            out += std::format(
-                "  {} t{} = {{0}}; /* unresolved expression materialization */\n",
-                e.c_type_name_for(materialization.value), temp);
-        }
-    }
-    return out;
-}
-
-// Merge locals initialised from a stack address that the frame layout
-// never saw still need a declaration; conflicting pointee types render
-// as a union.
-[[nodiscard]] std::string synthetic_merge_stack_declarations(const Emitter& e) {
-    std::string out;
-    std::map<i64, std::set<std::string>> synthetic_merge_stack_types;
-    for (const auto& [_, local] : e.merge_locals) {
-        if (!local.initializer) continue;
-        auto offset = e.stack_offset(*local.initializer);
-        if (!offset || e.frame_layout.slots.contains(*offset)) continue;
-        std::string type = e.c_type_name_for(local.type_value);
-        if (!type.ends_with('*')) continue;
-        type.pop_back();
-        while (!type.empty() && std::isspace(
-                   static_cast<unsigned char>(type.back()))) {
-            type.pop_back();
-        }
-        if (!type.empty()) synthetic_merge_stack_types[*offset].insert(std::move(type));
-    }
-    for (const auto& [offset, types] : synthetic_merge_stack_types) {
-        const std::string name = Emitter::stack_name(offset);
-        if (types.size() == 1) {
-            out += std::format("  {} {};\n", *types.begin(), name);
-            continue;
-        }
-        out += "  union { ";
-        for (const std::string& type : types) {
-            out += std::format("{} as_{}; ", type, type);
-        }
-        out += std::format("}} {};\n", name);
-    }
-    return out;
-}
-
-// Slot extent → array recovery: if a slot's footprint (the gap to the
-// next slot above it in the frame) is bigger than its observed access
-// width, the user wrote `T arr[N]`, not a single scalar. Render it as
-// such so a 128-byte `fgets` buffer doesn't read as `u64 local_208;`.
-// The map iterates in ascending offset order; for stack locals (negative
-// offsets) that means deepest-first, so each slot's "next" entry sits
-// closer to entry rsp and gives us the slot's upper edge directly.
-[[nodiscard]] std::string
-frame_slot_declarations(const Emitter& e, const std::string& body,
-                        const std::set<std::string>& matrix_locals) {
-    std::string out;
-    auto next_slot_offset = [&](i64 off) -> std::optional<i64> {
-        auto it = e.frame_layout.slots.upper_bound(off);
-        if (it == e.frame_layout.slots.end()) return std::nullopt;
-        return it->second.offset;
-    };
-    const auto assigned_as_scalar = [&](std::string_view name) {
-        std::size_t start = 0;
-        while (start <= body.size()) {
-            std::size_t end = body.find('\n', start);
-            if (end == std::string::npos) end = body.size();
-            const std::string_view line = trim_line_view(
-                std::string_view(body).substr(start, end - start));
-            if (line.starts_with(name) && line.size() > name.size() &&
-                line.substr(name.size()).starts_with(" =")) return true;
-            if (end == body.size()) break;
-            start = end + 1;
-        }
-        return false;
-    };
-    for (const auto& [_, slot] : e.frame_layout.slots) {
-        if (slot.name.empty()) continue;
-        bool used_by_merge_initializer = false;
-        for (const auto& [_, local] : e.merge_locals) {
-            if (!local.initializer) continue;
-            auto offset = e.stack_offset(*local.initializer);
-            used_by_merge_initializer |= offset && *offset == slot.offset;
-        }
-        if (!text_contains_identifier_in_code(body, slot.name) &&
-            !used_by_merge_initializer) continue;
-        // char* type propagation overrides the access-width-derived type
-        // when an inferred libc-char* call observed `&local_X` flowing in.
-        const bool charp = slot.type_override.empty() &&
-                           e.charp_local_slots.contains(slot.offset);
-        std::string ty;
-        u32 elem_size = slot.size_bytes;
-        if (!slot.type_override.empty()) {
-            ty = Emitter::normalize_c_type_alias(slot.type_override);
-        } else if (charp) {
-            ty = "char";
-            elem_size = 1;
-        } else {
-            ty = std::string(c_type_name(slot.type));
-        }
-        if (matrix_locals.contains(slot.name)) {
-            ty = "Mtx34";
-            elem_size = 48;
-        }
-        std::string suffix;
-        const auto byte_storage =
-            e.stack_byte_storage_ranges.find(slot.offset);
-        if (byte_storage != e.stack_byte_storage_ranges.end() &&
-            slot.type_override.empty()) {
-            ty = "uint8_t";
-            elem_size = 1;
-            suffix = std::format("[{}]", byte_storage->second);
-        }
-        if (suffix.empty() && !matrix_locals.contains(slot.name) &&
-            slot.type_override.empty()) {
-            if (auto required = e.stack_required_extents.find(slot.offset);
-                required != e.stack_required_extents.end() &&
-                required->second > elem_size) {
-                ty = charp ? "char" : "uint8_t";
-                elem_size = 1;
-                suffix = std::format("[{}]", required->second);
+            if (i < e.charp_arg.size() && e.charp_arg[i]) type = "char*";
+            if (i < e.self_arg_type_overrides.size() &&
+                e.self_arg_type_overrides[i]) {
+                type = c_type_name(*e.self_arg_type_overrides[i]);
             }
-        }
-        if (suffix.empty() && !matrix_locals.contains(slot.name) &&
-            slot.type_override.empty() && elem_size > 0 &&
-            !assigned_as_scalar(slot.name)) {
-            if (auto next_off = next_slot_offset(slot.offset)) {
-                i64 span = *next_off - slot.offset;
-                // CodeWarrior frequently leaves alignment/padding between a
-                // 256-byte character buffer and the next typed local. Do not
-                // turn that padding into a fictional 292-byte source array.
-                if (charp && e.is_ppc_abi() && span >= 64 && span <= 4096) {
-                    i64 power = 1;
-                    while (power <= span / 2) power *= 2;
-                    if (span - power <= 64) span = power;
-                }
-                if (span > 0 && static_cast<u32>(span) > elem_size &&
-                    span % elem_size == 0) {
-                    const u32 n = static_cast<u32>(span) / elem_size;
-                    suffix = std::format("[{}]", n);
-                }
+            if (i < e.self_arg_type_names.size() &&
+                !e.self_arg_type_names[i].empty()) {
+                type = e.self_arg_type_names[i];
             }
+            if (type.empty()) type = std::string(e.abi_word_c_type());
+            effective.params[i].type = std::move(type);
         }
-        out += std::format("  {} {}{};\n", ty, slot.name, suffix);
+        return header_from_signature(
+            e, sf, effective, display_name);
     }
-    return out;
-}
-
-[[nodiscard]] std::string
-merge_local_declarations(const Emitter& e, const std::string& body) {
-    std::string out;
-    const auto first_body_use_is_assignment = [&](const std::string& name) {
-        std::size_t start = 0;
-        while (start <= body.size()) {
-            std::size_t end = body.find('\n', start);
-            if (end == std::string::npos) end = body.size();
-            const std::string_view line(body.data() + start, end - start);
-            if (text_contains_identifier_in_code(line, name)) {
-                const std::string prefix = "  " + name + " =";
-                return line.starts_with(prefix);
-            }
-            if (end == body.size()) break;
-            start = end + 1;
-        }
-        return false;
-    };
-    for (const auto& [name, local] : e.merge_locals) {
-        if (!text_contains_identifier_in_code(body, name)) continue;
-        std::string type = e.c_type_name_for(local.type_value);
-        if (local.initializer) {
-            std::string initializer = e.expr(*local.initializer);
-            if (type.ends_with('*')) {
-                if (const IrInst* definition = e.def_stripped(*local.initializer);
-                    definition && (definition->op == IrOp::Mul ||
-                                   definition->op == IrOp::And ||
-                                   definition->op == IrOp::Or ||
-                                   definition->op == IrOp::Xor ||
-                                   definition->op == IrOp::Shl ||
-                                   definition->op == IrOp::Lshr ||
-                                   definition->op == IrOp::Ashr)) {
-                    type = std::string(c_type_name(local.initializer->type));
-                }
-            }
-            if (type.ends_with('*') &&
-                (e.stack_offset(*local.initializer).has_value() ||
-                 (e.try_resolve_imm_addr(*local.initializer).has_value() &&
-                  initializer.starts_with('&')))) {
-                initializer = std::format("({}){}", type, initializer);
-            }
-            out += std::format("  {} {} = {};\n", type, name, initializer);
-        } else {
-            const bool assigned_in_body = first_body_use_is_assignment(name);
-            if (e.is_ppc_abi() &&
-                !e.definitely_assigned_merge_locals.contains(name) &&
-                !assigned_in_body) {
-                out += std::format("  {} {} = {{0}}; /* unresolved SSA merge */\n",
-                                   type, name);
-            } else {
-                out += std::format("  {} {};\n", type, name);
-            }
+    if (!infer_when_missing) {
+        if (!e.options.signatures || !e.options.type_arena) return {};
+        auto inferred = e.options.signatures->find(start);
+        if (inferred == e.options.signatures->end() ||
+            e.ipa_type_name(inferred->second.return_type).empty()) {
+            return {};
         }
     }
-    return out;
-}
-
-// Dead-temp pass: drop `T tN = ...;` lines whose `tN` doesn't appear
-// anywhere else in the output. visible_use_count can over-count when
-// the sole reader folds the value through a register-assign chain.
-[[nodiscard]] std::string
-strip_dead_declarations(const Emitter& emitter, const std::string& out,
-                        const std::string& header) {
-    // Call-result bindings carry an effectful initializer. If the result name
-    // becomes dead after rendering, keep the initializer as a bare statement
-    // instead of deleting the call along with its unused result.
-    std::set<std::string> call_binding_names;
-    for (const auto& [_, name] : emitter.call_return_names) {
-        call_binding_names.insert(name);
-    }
-
-    std::vector<std::string> lines;
-    {
-        std::string buf;
-        for (char c : out) {
-            if (c == '\n') { lines.push_back(std::move(buf)); buf.clear(); }
-            else { buf.push_back(c); }
-        }
-        if (!buf.empty()) lines.push_back(std::move(buf));
-    }
-    const std::string header_line = header.ends_with('\n')
-        ? header.substr(0, header.size() - 1)
-        : header;
-    std::size_t function_header_line = lines.size();
-    for (std::size_t li = 0; li < lines.size(); ++li) {
-        if (lines[li] == header_line) {
-            function_header_line = li;
-            break;
-        }
-    }
-    auto is_decl = [&](const std::string& line, std::string& name) {
-        // File-scope synthetic record terminators also resemble a
-        // two-token declaration. The caller limits this parser to lines
-        // after the function header, so nested case/if declarations are
-        // safe to consider as well as top-level locals.
-        if (!line.starts_with("  ")) return false;
-        std::size_t i = 0;
-        while (i < line.size() && line[i] == ' ') ++i;
-        // Type token (one word like u32, u64, bool, double).
-        const std::size_t type_start = i;
-        while (i < line.size() && line[i] != ' ') ++i;
-        if (i == type_start || i >= line.size()) return false;
-        const std::string_view type_word{
-            line.data() + type_start, i - type_start};
-        if (type_word == "return" || type_word == "if" ||
-            type_word == "for" || type_word == "while" ||
-            type_word == "switch" || type_word == "goto" ||
-            type_word == "break" || type_word == "continue") {
-            return false;
-        }
-        while (i < line.size() && line[i] == ' ') ++i;
-        // Identifier token.
-        const std::size_t name_start = i;
-        if (i >= line.size()) return false;
-        const char c0 = line[i];
-        if (!(std::isalpha(static_cast<unsigned char>(c0)) || c0 == '_')) return false;
-        ++i;
-        while (i < line.size() && c_ident_char(line[i])) ++i;
-        const std::size_t name_end = i;
-        while (i < line.size() && line[i] == ' ') ++i;
-        if (i < line.size() && line[i] == '[') {
-            ++i;
-            while (i < line.size() && line[i] != ']') ++i;
-            if (i < line.size() && line[i] == ']') ++i;
-            while (i < line.size() && line[i] == ' ') ++i;
-        }
-        if (i >= line.size() || (line[i] != '=' && line[i] != ';')) return false;
-        name = line.substr(name_start, name_end - name_start);
-        return true;
-    };
-    auto name_appears_elsewhere = [&](const std::string& name,
-                                      std::size_t skip_idx) {
-        const std::size_t declaration_indent =
-            lines[skip_idx].find_first_not_of(' ');
-        for (std::size_t li = skip_idx + 1; li < lines.size(); ++li) {
-            const std::size_t indent = lines[li].find_first_not_of(' ');
-            const std::string_view trimmed = trim_line_view(lines[li]);
-            if (indent < declaration_indent && trimmed.starts_with('}')) break;
-            if (text_contains_identifier_in_code(lines[li], name)) return true;
-        }
-        return false;
-    };
-
-    for (int pass = 0; pass < 4; ++pass) {
-        bool changed = false;
-        std::vector<std::string> kept;
-        kept.reserve(lines.size());
-        for (std::size_t li = 0; li < lines.size(); ++li) {
-            std::string name;
-            if (li > function_header_line && is_decl(lines[li], name) &&
-                !name_appears_elsewhere(name, li)) {
-                changed = true;
-                if (call_binding_names.contains(name)) {
-                    const std::size_t equals = lines[li].find('=');
-                    if (equals != std::string::npos) {
-                        const std::size_t indent_end =
-                            lines[li].find_first_not_of(' ');
-                        std::string statement = indent_end == std::string::npos
-                            ? std::string{}
-                            : lines[li].substr(0, indent_end);
-                        statement += trim_line_view(
-                            std::string_view(lines[li]).substr(equals + 1));
-                        kept.push_back(std::move(statement));
-                        continue;
-                    }
-                }
-                continue;  // dead declaration
-            }
-            kept.push_back(std::move(lines[li]));
-        }
-        lines = std::move(kept);
-        if (!changed) break;
-    }
-
-    std::string cleaned;
-    cleaned.reserve(out.size());
-    for (const auto& line : lines) {
-        cleaned += line;
-        cleaned += '\n';
-    }
-    return cleaned;
-}
-
-// Non-compilable-spelling note: subscripting through a void* is
-// deliberate RE guidance here, but unlike everything else in a
-// listing it will not compile as written. Say so once, above the
-// function, instead of letting the reader discover it at cc time.
-void prepend_untyped_pointer_note(std::string& out, const std::string& header) {
-    if (const std::size_t sites = count_untyped_pointer_index_sites(out);
-        sites > 0) {
-        std::string note = std::format(
-            "// note: {} statement{} index through untyped pointers "
-            "(void*); guidance only, not valid C without record types\n",
-            sites, sites == 1 ? "" : "s");
-        const std::string signature = header.ends_with('\n')
-            ? header.substr(0, header.size() - 1)
-            : header;
-        const std::size_t at = out.find(signature);
-        if (at != std::string::npos) {
-            out.insert(at, std::move(note) + "\n");
-        }
-    }
+    return header_from_inference(e, sf, display_name);
 }
 
 }  // namespace
@@ -1029,6 +528,13 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             "pseudo-c: StructuredFunction has no IR"));
     }
 
+    // Rendering performs a few presentation-only region rewrites (canary
+    // removal and common-tail folding). Keep those private to this call: the
+    // public API accepts a const StructuredFunction, and callers may render
+    // the same structured tree more than once with different options.
+    StructuredFunction working{
+        sf.ir, sf.body ? clone_region_tree(*sf.body) : nullptr};
+
     Emitter e(binary);
     e.annotations = annotations;
     e.options     = options;
@@ -1037,42 +543,25 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         : Abi::SysVAmd64;
 
     EmitterMetadataStorage metadata;
-    setup_emitter_metadata(e, sf, binary, metadata);
+    setup_emitter_metadata(e, working, binary, metadata);
     const SignatureContext sig_ctx =
-        setup_signature_context(e, sf, binary, annotations);
-    run_analysis_passes(e, sf, sig_ctx);
+        setup_signature_context(e, working, binary, annotations);
+    run_analysis_passes(e, working, sig_ctx, true);
 
-    const addr_t start = sf.ir->start;
+    const addr_t start = working.ir->start;
     std::string out;
-    out += std::format("// {}\n", sf.ir->name.empty()
-                                    ? std::string("<unknown>") : sf.ir->name);
+    out += std::format("// {}\n", working.ir->name.empty()
+                                    ? std::string("<unknown>") : working.ir->name);
     if (annotations && options.show_provenance) {
         out += provenance_preamble(*annotations, start);
     }
 
     // Build the function header: a declared signature wins outright, then
     // Objective-C metadata, then arity inference.
-    const std::string name = header_display_name(e, sf, binary, annotations);
-    std::string header;
-    if (annotations) {
-        if (const FunctionSig* sig = annotations->signature_for(start);
-            sig && !is_incomplete_decomp_signature(*sig)) {
-            header = header_from_signature(e, sf, *sig, name);
-        }
-    }
-    if (header.empty()) {
-        if (auto it = e.objc_by_imp.find(start);
-            it != e.objc_by_imp.end() && !it->second->type_encoding.empty()) {
-            header = header_from_objc_method(e, *it->second, name);
-        }
-    }
-    if (header.empty()) {
-        if (auto it = e.objc_block_by_invoke.find(start);
-            it != e.objc_block_by_invoke.end() && !it->second->signature.empty()) {
-            header = header_from_objc_block(e, it->second->signature, name);
-        }
-    }
-    if (header.empty()) header = header_from_inference(e, sf, name);
+    const std::string name = header_display_name(
+        e, working, binary, annotations);
+    const std::string header = select_function_header(
+        e, working, sig_ctx, annotations, name);
     out += rtti_alias_comment(e, start);
 
     // Render the body into a buffer first so we can decide which
@@ -1084,11 +573,11 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // tidy without leaning on the dead-decl pruner (which only
     // recognises `TYPE NAME = expr;` form).
     auto body = RenderChunk::capture(options.line_map, [&](std::string& text) {
-        if (sf.body) e.emit_region(*sf.body, 1, text);
+        if (working.body) e.emit_region(*working.body, 1, text);
     });
     std::string& body_buf = body.text();
-    if (sf.body && !sf.ir->blocks.empty()) {
-        body_buf += structurer_fail_markers(sf, binary);
+    if (working.body && !working.ir->blocks.empty()) {
+        body_buf += structurer_fail_markers(working, binary);
     }
 
     const std::set<std::string> matrix_locals = matrix_stack_locals(body_buf);
@@ -1162,32 +651,21 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     setup_emitter_metadata(e, sf, binary, metadata);
     const SignatureContext sig_ctx =
         setup_signature_context(e, sf, binary, annotations);
-    e.analyze(*sf.ir);
-    e.assign_synthetic_struct_types();
-    e.infer_shared_call_return_types();
-    e.name_merge_values();
-    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_body_reads();
-    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) e.bump_arity_from_merge_initializers();
-    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
-        e.infer_pointer_arg_types_from_memory_uses();
-    }
-    if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
-        e.infer_ppc_helper_preserved_arg_types();
-    }
-    e.infer_function_pointer_args();
-    e.infer_call_value_arg_names();
-    e.infer_ppc_role_arg_names();
-    e.infer_charp_args();
-    if (!sig_ctx.has_user_sig) e.promote_block_like_first_arg();
-    e.bind_call_returns();
+    run_analysis_passes(e, sf, sig_ctx, false);
+    const std::string display_name = header_display_name(
+        e, sf, binary, annotations);
+    // Per-block output does not print a C function header, but selecting it
+    // establishes the same authoritative return/parameter state used by the
+    // structured formatter (notably whether ABI return lanes are void).
+    (void)select_function_header(
+        e, sf, sig_ctx, annotations, display_name, false);
 
     // Output mirrors format_cfg's framing - same `bb_<addr>` headers,
     // same `<-` predecessor list, same `-> bb_xxx (label)` arrows - so
     // any consumer parsing the asm CFG view (UI, scripts) parses this
     // identically up to the body content swap.
     std::string out;
-    out += std::format("// {}\n", sf.ir->name.empty()
-                                    ? std::string("<unknown>") : sf.ir->name);
+    out += std::format("// {}\n", display_name);
     out += std::format("//   per-block pseudo-C ({} blocks)\n",
                        sf.ir->blocks.size());
     for (const auto& [name, local] : e.merge_locals) {

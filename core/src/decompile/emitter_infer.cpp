@@ -608,11 +608,31 @@ void Emitter::bump_arity_from_body_reads() {
             }
         }
     };
+    const auto check_stack_address = [&](const IrValue& address) {
+        const auto offset = entry_stack_offset(address);
+        if (!offset) return;
+        for (std::size_t i = 0; i < self_arg_layout.size(); ++i) {
+            const auto& argument = self_arg_layout[i];
+            if (!argument.stack_offset || *argument.stack_offset != *offset) {
+                continue;
+            }
+            if (i + 1 > need) need = static_cast<u8>(i + 1);
+            return;
+        }
+    };
     for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
         const auto& bb = fn->blocks[bi];
         for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-            if (hidden.contains({bi, ii})) continue;
             const auto& inst = bb.insts[ii];
+            // A load can be textually hidden because it is inlined into its
+            // consumer. Its visible result use still proves that the incoming
+            // stack parameter exists and must be declared in the header.
+            if (inst.op == IrOp::Load && inst.src_count >= 1 &&
+                inst.segment == Reg::None &&
+                use_count(inst.dst) > 0) {
+                check_stack_address(inst.srcs[0]);
+            }
+            if (hidden.contains({bi, ii})) continue;
             // call.args.* packs live-in regs as trailing placeholders the
             // callee may never consume; Clobbers are ABI markers; Phis
             // conservatively name every arg reg at join points regardless

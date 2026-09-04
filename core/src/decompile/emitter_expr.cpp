@@ -295,7 +295,14 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                     if (auto slot = trace_to_self_arg_slot(inner->srcs[0]);
                         slot && *slot < self_arg_names.size() &&
                         !self_arg_names[*slot].empty()) {
-                        return expr(inner->srcs[0], depth, min_prec);
+                        const auto declared_signedness =
+                            declared_arg_signedness_for_width(
+                                *slot, inner->dst.type);
+                        const bool signed_extension = d.op == IrOp::SExt;
+                        if (declared_signedness &&
+                            *declared_signedness == signed_extension) {
+                            return expr(inner->srcs[0], depth, min_prec);
+                        }
                     }
                 }
             }

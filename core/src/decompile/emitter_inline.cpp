@@ -404,9 +404,9 @@ void Emitter::emit_materializations_for_rendered_value(const IrValue& v,
 
 std::optional<i64>
 Emitter::entry_stack_offset(const IrValue& v, int depth) const {
-    if (depth > 16 || !is_ppc_abi()) return std::nullopt;
+    if (depth > 16) return std::nullopt;
     if (v.kind == IrValueKind::Reg) {
-        if (canonical_reg(v.reg) != Reg::PpcR1) {
+        if (!is_stack_base_reg(v.reg)) {
             const IrInst* d = def_of(v);
             if (d && d->op == IrOp::Assign && d->src_count >= 1) {
                 return entry_stack_offset(d->srcs[0], depth + 1);

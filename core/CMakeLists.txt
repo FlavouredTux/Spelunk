@@ -130,6 +130,7 @@ add_library(ember_core STATIC
     src/decompile/emitter_analyze.cpp
     src/decompile/emitter_block.cpp
     src/decompile/emitter_calls.cpp
+    src/decompile/emitter_document.cpp
     src/decompile/emitter_expr.cpp
     src/decompile/emitter_flags.cpp
     src/decompile/emitter_infer.cpp

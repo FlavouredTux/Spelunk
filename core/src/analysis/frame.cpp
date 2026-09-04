@@ -43,7 +43,8 @@ trace_stack(const IrValue& v, const DefMap& defs, int depth = 0) {
     if (depth > 16) return std::nullopt;
     if (v.kind == IrValueKind::Reg) {
         const Reg c = canonical_reg(v.reg);
-        if (c == Reg::Rsp || c == Reg::Rbp || c == Reg::PpcR1) return 0;
+        if (c == Reg::Rsp || c == Reg::Rbp || c == Reg::PpcR1 ||
+            c == Reg::Xsp || c == Reg::Asp) return 0;
         return std::nullopt;
     }
     if (v.kind != IrValueKind::Temp) return std::nullopt;

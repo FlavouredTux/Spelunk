@@ -2,6 +2,6 @@
 extern uint64_t sink_u64;
 
 void preserve_upper_via_al(long unsigned int x, unsigned char b) {
-  sink_u64 = x & ~0xff | (uint8_t)b;
+  sink_u64 = x & ~0xff | b;
   return;
 }

@@ -1,4 +1,5 @@
 // Region-level helpers: for-update collection and structured control flow.
+#include <algorithm>
 #include <cstddef>
 #include <format>
 #include <optional>
@@ -252,6 +253,25 @@ bool Emitter::region_always_exits(const Region& r) noexcept {
     }
 }
 
+bool Emitter::region_has_deferred_call(const Region& r) const {
+    if (r.kind == RegionKind::Block && fn) {
+        auto block = fn->block_at.find(r.block_start);
+        if (block != fn->block_at.end()) {
+            for (std::size_t i = 0;
+                 i < fn->blocks[block->second].insts.size(); ++i) {
+                const auto position = std::pair{block->second, i};
+                if (fold_call_positions.contains(position) ||
+                    inline_call_positions.contains(position)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return std::ranges::any_of(r.children, [&](const auto& child) {
+        return child && region_has_deferred_call(*child);
+    });
+}
+
 bool Emitter::rendered_region_empty(std::string_view s) noexcept {
     std::size_t line_start = 0;
     while (line_start <= s.size()) {
@@ -287,6 +307,7 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
             if (current_return_is_void && r.children.size() >= 2) {
                 const Region* tail = r.children.back().get();
                 std::size_t guard_index = r.children.size() - 1;
+                bool suffix_has_deferred_call = false;
                 const auto bindings_before_suffix = emitted_bindings;
                 auto suffix = RenderChunk::capture(
                     options.line_map, [&](std::string& text) {
@@ -299,13 +320,17 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
                                 break;
                             }
                             --guard_index;
+                            suffix_has_deferred_call |=
+                                region_has_deferred_call(*candidate);
                             emit_region(*candidate, depth, text);
                         }
                     });
                 emitted_bindings = bindings_before_suffix;
                 const Region* guarded = guard_index > 0
                     ? r.children[guard_index - 1].get() : nullptr;
-                const bool suffix_empty = rendered_region_empty(suffix.text());
+                const bool suffix_empty =
+                    rendered_region_empty(suffix.text()) &&
+                    !suffix_has_deferred_call;
                 suffix.discard();
                 if (suffix_empty && guarded && tail &&
                     guarded->kind == RegionKind::IfThen &&
@@ -581,6 +606,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     if (auto k = ssa_key(r.condition); k) {
         auto s = fold_void_call_stmt.find(*k);
         if (s != fold_void_call_stmt.end()) {
+            record_folded_call_hit(*k, out.size());
             out += std::format("{}{};\n", ind, s->second);
             append_return("return;");
             return;
@@ -591,6 +617,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
             auto f = fold_return_expr.find(*k);
             if (f != fold_return_expr.end()) {
                 emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
+                record_folded_call_hit(*k, out.size());
                 out += std::format("{}{};\n", ind, f->second);
             }
         }
@@ -617,6 +644,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         auto f = fold_return_expr.find(*k);
         if (f != fold_return_expr.end()) {
             emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
+            record_folded_call_hit(*k, out.size());
             append_return(std::format("return {};", f->second));
             return;
         }
@@ -640,6 +668,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         append_return("return;");
         return;
     }
+    record_inline_call_hit(v, out.size());
     append_return(std::format("return {};", rendered));
 }
 

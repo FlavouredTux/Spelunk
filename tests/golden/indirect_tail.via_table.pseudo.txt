@@ -2,5 +2,5 @@
 extern uint64_t fn_table[];
 
 int via_table(int idx, int x) {
-  return ((uint64_t (*)(uint32_t, uint64_t))(fn_table[(uint64_t)(uint32_t)idx]))((uint32_t)x, x);
+  return ((uint64_t (*)(uint32_t, uint64_t))(fn_table[idx]))(x, x);
 }

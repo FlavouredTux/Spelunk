@@ -25,6 +25,13 @@ bool is_incomplete_decomp_signature(const FunctionSig& signature) {
            signature.variadic;
 }
 
+std::string signature_parameter_name(const ParamSig& parameter,
+                                     std::size_t index) {
+    return parameter.name.empty()
+        ? std::format("a{}", index + 1)
+        : parameter.name;
+}
+
 void setup_emitter_metadata(Emitter& e,
                             const StructuredFunction& sf,
                             const Binary* binary,
@@ -104,45 +111,118 @@ SignatureContext setup_signature_context(Emitter& e,
             e.self_arity = static_cast<u8>(
                 std::min(sig->params.size(), kMaxAbiArgs));
             e.self_arg_layout = e.abi_layout_for(*sig);
+            for (std::size_t i = 0;
+                 i < sig->params.size() && i < e.self_arg_names.size(); ++i) {
+                e.self_arg_names[i] = signature_parameter_name(sig->params[i], i);
+                e.self_arg_type_names[i] = Emitter::normalize_c_type_alias(
+                    sig->params[i].type);
+            }
             ctx.has_user_sig = true;
+            ctx.has_authoritative_arity = true;
+            ctx.has_authoritative_types = true;
         }
     }
     if (!ctx.has_user_sig && e.current_objc_method) {
         const auto selector_names = objc_selector_arg_names(e.current_objc_method->selector);
-        e.self_arg_names[0] = "self";
-        if (e.self_arg_names.size() > 1) e.self_arg_names[1] = "_cmd";
-        for (std::size_t i = 0;
-             i < selector_names.size() && i + 2 < e.self_arg_names.size(); ++i) {
-            e.self_arg_names[i + 2] = selector_names[i];
+        const auto parts = decode_objc_type_parts(
+            e.current_objc_method->type_encoding);
+        FunctionSig signature;
+        if (!parts.empty()) signature.return_type = parts[0];
+        const std::string self_type = e.current_objc_method->cls.empty()
+            ? std::string{"id"}
+            : e.current_objc_method->cls + "*";
+        signature.params.push_back({self_type, "self"});
+        signature.params.push_back({"SEL", "_cmd"});
+        const std::size_t encoded_args = parts.size() > 3
+            ? parts.size() - 3 : 0;
+        const std::size_t source_args = std::max(
+            encoded_args, selector_names.size());
+        for (std::size_t i = 0; i < source_args; ++i) {
+            const std::string type = i < encoded_args
+                ? parts[i + 3] : std::string{};
+            const std::string name = i < selector_names.size()
+                ? selector_names[i] : std::format("arg{}", i);
+            signature.params.push_back({type, name});
         }
-        const u8 selector_arity = static_cast<u8>(std::min<std::size_t>(
-            int_arg_regs(e.abi).size(), selector_names.size() + 2));
-        if (!e.current_objc_method->type_encoding.empty()) {
-            const auto parts = decode_objc_type_parts(e.current_objc_method->type_encoding);
-            if (parts.size() > 1) {
-                e.self_arity = static_cast<u8>(std::min<std::size_t>(
-                    int_arg_regs(e.abi).size(), parts.size() - 1));
+        if (signature.params.size() > kMaxAbiArgs) {
+            signature.params.resize(kMaxAbiArgs);
+        }
+        e.self_arity = static_cast<u8>(signature.params.size());
+        e.self_arg_layout = e.abi_layout_for(signature);
+        for (std::size_t i = 0; i < signature.params.size(); ++i) {
+            e.self_arg_names[i] = signature.params[i].name;
+            if (i < 2 || i - 2 < encoded_args) {
+                e.self_arg_type_names[i] = Emitter::normalize_c_type_alias(
+                    signature.params[i].type);
             }
         }
-        if (e.self_arity < selector_arity) e.self_arity = selector_arity;
+        ctx.has_metadata_sig = true;
+        ctx.has_authoritative_arity = true;
+        ctx.has_authoritative_types =
+            parts.size() >= 3 && encoded_args >= selector_names.size();
+        ctx.effective_metadata_signature = std::move(signature);
     }
-    if (!ctx.has_user_sig) {
+    if (!ctx.has_user_sig && !ctx.has_metadata_sig) {
         if (auto it = e.objc_block_by_invoke.find(sf.ir->start);
             it != e.objc_block_by_invoke.end() && !it->second->signature.empty()) {
             const auto parts = decode_objc_type_parts(it->second->signature);
             if (parts.size() > 1) {
-                e.self_arity = static_cast<u8>(std::min<std::size_t>(
-                    int_arg_regs(e.abi).size(), parts.size() - 1));
-                e.self_arg_names[0] = "block";
+                FunctionSig signature;
+                signature.return_type = block_param_type(parts[0]);
                 for (std::size_t i = 2;
-                     i < parts.size() && i - 1 < e.self_arg_names.size(); ++i) {
-                    e.self_arg_names[i - 1] = std::format("arg{}", i - 2);
+                     i < parts.size(); ++i) {
+                    signature.params.push_back({
+                        block_param_type(parts[i]),
+                        std::format("arg{}", i - 2)});
+                }
+                signature.params.insert(
+                    signature.params.begin(),
+                    ParamSig{block_param_type(parts[1]), "block"});
+                if (signature.params.size() > kMaxAbiArgs) {
+                    signature.params.resize(kMaxAbiArgs);
+                }
+                e.self_arity = static_cast<u8>(signature.params.size());
+                e.self_arg_layout = e.abi_layout_for(signature);
+                for (std::size_t i = 0; i < signature.params.size(); ++i) {
+                    e.self_arg_names[i] = signature.params[i].name;
+                    e.self_arg_type_names[i] = Emitter::normalize_c_type_alias(
+                        signature.params[i].type);
                 }
                 ctx.has_metadata_sig = true;
+                ctx.has_authoritative_arity = true;
+                ctx.has_authoritative_types = true;
+                ctx.effective_metadata_signature = std::move(signature);
             }
         }
     }
-    if (e.self_arity == 0) {
+    if (!ctx.has_authoritative_arity && e.options.signatures &&
+        e.options.type_arena) {
+        auto inferred = e.options.signatures->find(sf.ir->start);
+        if (inferred != e.options.signatures->end()) {
+            std::size_t concrete_arity = 0;
+            const std::size_t limit = std::min<std::size_t>(
+                inferred->second.params.size(), kMaxAbiArgs);
+            for (std::size_t i = 0; i < limit; ++i) {
+                if (!e.ipa_type_name(inferred->second.params[i]).empty()) {
+                    concrete_arity = i + 1;
+                }
+            }
+            if (concrete_arity > e.self_arity) {
+                FunctionSig signature;
+                signature.params.reserve(concrete_arity);
+                for (std::size_t i = 0; i < concrete_arity; ++i) {
+                    std::string type =
+                        e.ipa_type_name(inferred->second.params[i]);
+                    if (type.empty()) type = std::string(e.abi_word_c_type());
+                    signature.params.push_back({
+                        std::move(type), std::format("a{}", i + 1)});
+                }
+                e.self_arity = static_cast<u8>(concrete_arity);
+                e.self_arg_layout = e.abi_layout_for(signature);
+            }
+        }
+    }
+    if (e.self_arity == 0 && !ctx.has_authoritative_arity) {
         if (binary) e.self_arg_layout = infer_arguments(*binary, sf.ir->start, e.abi);
         e.self_arity = static_cast<u8>(std::min<std::size_t>(
             e.self_arg_layout.size(), kMaxAbiArgs));
@@ -156,14 +236,53 @@ SignatureContext setup_signature_context(Emitter& e,
         for (std::size_t i = 0; i < regs.size(); ++i) {
             e.self_arg_layout.push_back({regs[i], e.abi_word_type()});
         }
-    } else if (e.abi != Abi::Ppc32Sysv && e.abi != Abi::Ppc64ElfV1Be &&
+    } else if (!ctx.has_authoritative_arity &&
+               e.abi != Abi::Ppc32Sysv && e.abi != Abi::Ppc64ElfV1Be &&
                e.abi != Abi::Ppc64ElfV2Le) {
         // Scalar arity gives non-PPC ABIs only the consumed prefix, while
         // later body/phi analysis still needs to recognize a higher live-in
         // register and raise that initial estimate.
         const auto regs = int_arg_regs(e.abi);
-        for (std::size_t i = e.self_arg_layout.size(); i < regs.size(); ++i) {
-            e.self_arg_layout.push_back({regs[i], e.abi_word_type()});
+        if (abi_positional_arg_slots(e.abi)) {
+            for (std::size_t i = e.self_arg_layout.size(); i < regs.size(); ++i) {
+                e.self_arg_layout.push_back({regs[i], e.abi_word_type()});
+            }
+        } else {
+            for (Reg reg : regs) {
+                const bool already_used = std::ranges::any_of(
+                    e.self_arg_layout, [&](const InferredArgument& argument) {
+                        return canonical_reg(argument.reg) == canonical_reg(reg);
+                    });
+                if (!already_used) {
+                    e.self_arg_layout.push_back({reg, e.abi_word_type()});
+                }
+            }
+        }
+    }
+    const bool has_fp_parameter = std::ranges::any_of(
+        e.self_arg_layout, [](const InferredArgument& argument) {
+            return is_float_type(argument.type);
+        });
+    if (!ctx.has_authoritative_arity && !has_fp_parameter &&
+        (e.abi == Abi::SysVAmd64 || e.abi == Abi::Win64 ||
+         e.abi == Abi::Aapcs64 || e.abi == Abi::AapcsArm32)) {
+        const std::size_t register_count = int_arg_regs(e.abi).size();
+        const i64 word = e.abi_word_type() == IrType::I32 ? 4 : 8;
+        while (e.self_arg_layout.size() < kMaxAbiArgs) {
+            const std::size_t parameter = e.self_arg_layout.size();
+            if (parameter < register_count) break;
+            i64 stack_offset = 0;
+            if (e.abi == Abi::SysVAmd64) {
+                stack_offset = 8 + static_cast<i64>(
+                    parameter - register_count) * 8;
+            } else if (e.abi == Abi::Win64) {
+                stack_offset = 8 + static_cast<i64>(parameter) * 8;
+            } else {
+                stack_offset = static_cast<i64>(
+                    parameter - register_count) * word;
+            }
+            e.self_arg_layout.push_back({
+                Reg::None, e.abi_word_type(), false, stack_offset});
         }
     }
     return ctx;

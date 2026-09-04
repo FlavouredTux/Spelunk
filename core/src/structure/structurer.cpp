@@ -188,6 +188,9 @@ Result<StructuredFunction> Structurer::structure(const IrFunction& fn) const {
     const CfgInfo info = analyze_cfg(fn);
     Builder b(fn, info);
     sf.body = b.build_sequence(fn.start, /*stop=*/kNoAddr);
+    if (const Error* error = b.error()) {
+        return std::unexpected(*error);
+    }
 
     return sf;
 }

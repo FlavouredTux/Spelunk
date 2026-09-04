@@ -274,3 +274,6 @@ inline ember::IrInst make_ret_value(ember::addr_t pc, ember::IrValue value) {
 
 // Defined in structurer_fail_ppc_test.cpp.
 int run_ppc_structurer_tests();
+
+// Defined in structurer_control_flow_test.cpp.
+int run_structurer_control_flow_tests();

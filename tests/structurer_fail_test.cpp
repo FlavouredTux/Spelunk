@@ -769,6 +769,7 @@ int main() {
     rc |= test_load_crossing_call_is_materialized();
     rc |= test_x64_xmm_clobber_phi_is_not_a_float_return();
     rc |= test_memory_use_recovers_pointer_after_integer_seed_conflict();
+    rc |= run_structurer_control_flow_tests();
     rc |= run_ppc_structurer_tests();
     return (fails == 0 && rc == 0) ? 0 : 1;
 }

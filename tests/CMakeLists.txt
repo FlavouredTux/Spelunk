@@ -224,6 +224,7 @@ add_test(NAME discovery_unit COMMAND ember_discovery_test)
 # block instead of silently omitting it.
 add_executable(ember_structurer_fail_test
     structurer_fail_test.cpp
+    structurer_control_flow_test.cpp
     structurer_fail_ppc_test.cpp
     structurer_fail_ppc_control_test.cpp
     structurer_fail_ppc_floating_test.cpp

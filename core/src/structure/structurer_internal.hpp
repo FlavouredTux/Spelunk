@@ -75,6 +75,10 @@ public:
     std::unique_ptr<Region> build_sequence(addr_t entry, addr_t stop,
                                            addr_t* out_last_block = nullptr);
 
+    [[nodiscard]] const Error* error() const noexcept {
+        return error_ ? &*error_ : nullptr;
+    }
+
     // The switch's merge = the immediate post-dominator of the dispatch
     // block itself: the first node every non-terminating case falls through
     // to. `kNoAddr` means every case terminates (return/unreachable) with no
@@ -136,6 +140,7 @@ private:
     std::set<addr_t>                    loop_headers_stack_;
     std::set<addr_t>                    loop_exits_stack_;
     bool                                inlining_bounded_ = false;
+    std::optional<Error>                error_;
 };
 
 }  // namespace ember::structurer

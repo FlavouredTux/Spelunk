@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <format>
 #include <map>
 #include <memory>
 #include <optional>
@@ -210,6 +211,21 @@ std::unique_ptr<Region> Builder::build_sequence(addr_t entry, addr_t stop,
             seq->children.push_back(std::move(loop_region));
             auto it = info_.loop_exit.find(current);
             current = (it != info_.loop_exit.end()) ? it->second : kNoAddr;
+            // The block preceding the loop is not the predecessor by which
+            // control reaches its exit. Preserve an exact predecessor only
+            // when the exit itself proves there is a single choice; otherwise
+            // leave Phi resolution in merge form.
+            last_block = kNoAddr;
+            if (current != kNoAddr) {
+                auto exit_it = fn_.block_at.find(current);
+                if (exit_it != fn_.block_at.end()) {
+                    const auto& predecessors =
+                        fn_.blocks[exit_it->second].predecessors;
+                    if (predecessors.size() == 1) {
+                        last_block = predecessors.front();
+                    }
+                }
+            }
             continue;
         }
 
@@ -244,7 +260,17 @@ std::unique_ptr<Region> Builder::build_sequence(addr_t entry, addr_t stop,
                 // reachable from every case target.
                 addr_t merge = compute_switch_merge(bb);
                 seq->children.push_back(std::move(sw));
+                if (error_) return seq;
                 if (merge == kNoAddr) return seq;
+                auto merge_it = fn_.block_at.find(merge);
+                if (merge_it != fn_.block_at.end() &&
+                    is_phi_only_return(fn_.blocks[merge_it->second])) {
+                    // build_switch sinks this return into each arm and marks
+                    // the merge visited. Continuing at the merge would inline
+                    // a duplicate block plus an unresolved extra return.
+                    if (out_last_block) *out_last_block = kNoAddr;
+                    return seq;
+                }
                 current = merge;
                 last_block = kNoAddr;  // merge has multiple structural preds
                 break;
@@ -384,6 +410,43 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     r->kind         = RegionKind::Switch;
     r->has_default  = sw_bb.has_default;
     r->switch_index = sw_bb.switch_index;
+
+    // A decoded jump table has one target per case value, followed by an
+    // optional default target. Oracle-resolved indirect branches are the one
+    // deliberate exception: they carry possible targets without selector
+    // values. Model those as a switch over the BranchIndirect target address
+    // instead of dropping every successor.
+    const std::size_t expected_successors =
+        sw_bb.case_values.size() + (sw_bb.has_default ? 1u : 0u);
+    IrValue indirect_target;
+    if (sw_bb.case_values.empty() && !sw_bb.has_default) {
+        for (auto it = sw_bb.insts.rbegin(); it != sw_bb.insts.rend(); ++it) {
+            if (it->op == IrOp::BranchIndirect && it->src_count >= 1 &&
+                it->srcs[0].kind != IrValueKind::None) {
+                indirect_target = it->srcs[0];
+                break;
+            }
+        }
+    }
+    const bool unlabeled_multiway = !sw_bb.successors.empty() &&
+        indirect_target.kind != IrValueKind::None;
+    if (!unlabeled_multiway &&
+        sw_bb.successors.size() != expected_successors) {
+        error_ = Error::invalid_format(std::format(
+            "structurer: switch at {:#x} has {} case values, {} successors, "
+            "and has_default={}", sw_bb.start, sw_bb.case_values.size(),
+            sw_bb.successors.size(), sw_bb.has_default));
+        return make_simple(RegionKind::Unreachable);
+    }
+
+    std::vector<i64> case_values = sw_bb.case_values;
+    if (unlabeled_multiway) {
+        case_values.reserve(sw_bb.successors.size());
+        for (addr_t target : sw_bb.successors) {
+            case_values.push_back(static_cast<i64>(target));
+        }
+        r->condition = indirect_target;
+    }
     // CFG switch metadata stores only the architectural selector
     // register. After SSA, recover the concrete version consumed by the
     // dispatch block (e.g. CodeWarrior's rlwinm r0,r5,2 before lwzx, or
@@ -392,7 +455,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     // leaking a bare `switch (r5)` / `switch (rdi)` into otherwise
     // source-like pseudo-C. The recovery steps are arch-neutral; only
     // the canonical register names differ.
-    if (sw_bb.switch_index != Reg::None) {
+    if (!unlabeled_multiway && sw_bb.switch_index != Reg::None) {
         const Reg selector = canonical_reg(sw_bb.switch_index);
         for (const auto& inst : sw_bb.insts) {
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
@@ -497,12 +560,12 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     // typically the case's own block when it falls through to merge
     // directly, which is the common compiler-emitted shape for big
     // jump-table switches over enums returning a value.
-    bool sink_into_cases = false;
+    const IrBlock* return_merge = nullptr;
     if (merge != kNoAddr) {
         auto mit = fn_.block_at.find(merge);
         if (mit != fn_.block_at.end() &&
             is_phi_only_return(fn_.blocks[mit->second])) {
-            sink_into_cases = true;
+            return_merge = &fn_.blocks[mit->second];
         }
     }
 
@@ -516,7 +579,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     // never letting a label attach to a foreign body (the old
     // table-order encoding let `case 1:` fall into `case 2:`'s
     // body whenever the compiler merged their blocks).
-    const std::size_t n_cases = sw_bb.case_values.size();
+    const std::size_t n_cases = case_values.size();
     std::vector<addr_t>             group_order;
     std::map<addr_t, std::vector<std::size_t>> groups;
     for (std::size_t i = 0; i < n_cases; ++i) {
@@ -528,14 +591,16 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     }
 
     auto build_case_with_optional_sink = [&](addr_t tgt) {
+        if (tgt == merge) {
+            if (!return_merge) return make_simple(RegionKind::Break);
+            auto body = make_empty();
+            sink_return_into_branch(body, *return_merge, sw_bb.start);
+            return body;
+        }
         addr_t case_last = kNoAddr;
         auto body = build_sequence(tgt, merge, &case_last);
-        if (sink_into_cases && case_last != kNoAddr) {
-            auto mit = fn_.block_at.find(merge);
-            if (mit != fn_.block_at.end()) {
-                sink_return_into_branch(body, fn_.blocks[mit->second],
-                                        case_last);
-            }
+        if (return_merge && case_last != kNoAddr) {
+            sink_return_into_branch(body, *return_merge, case_last);
         }
         return body;
     };
@@ -543,7 +608,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     for (const addr_t tgt : group_order) {
         const auto& idxs = groups[tgt];
         for (std::size_t k = 0; k < idxs.size(); ++k) {
-            r->case_values.push_back(sw_bb.case_values[idxs[k]]);
+            r->case_values.push_back(case_values[idxs[k]]);
             if (k + 1 == idxs.size()) {
                 r->children.push_back(build_case_with_optional_sink(tgt));
             } else {
@@ -555,7 +620,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
         const addr_t dflt = sw_bb.successors.back();
         r->children.push_back(build_case_with_optional_sink(dflt));
     }
-    if (sink_into_cases) visited_.insert(merge);
+    if (return_merge) visited_.insert(merge);
     return r;
 }
 
@@ -824,6 +889,7 @@ IrValue Builder::resolve_through_phis(IrValue v, addr_t from_pred,
 std::unique_ptr<Region>
 Builder::make_return_from_block(const IrBlock& bb, addr_t from_pred) {
     auto r = make_simple(RegionKind::Return);
+    r->block_start = bb.start;
     auto is_live_in_reg = [](const IrValue& v) {
         return v.kind == IrValueKind::Reg && v.version == 0;
     };

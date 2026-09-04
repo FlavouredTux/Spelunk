@@ -1,8 +1,11 @@
 #include <ember/binary/pe_view.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <expected>
 #include <format>
+#include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -25,6 +28,90 @@ constexpr u32         kDelayAttrRvaBased   = 0x1;
 constexpr u64         kOrdinalFlagBit      = 0x8000'0000'0000'0000ULL;
 constexpr std::size_t kExportDirSize       = 40;
 
+[[nodiscard]] bool rva_range_fits(u32 start, u32 size) noexcept {
+    constexpr u64 kRvaSpaceSize = u64{1} << 32;
+    return static_cast<u64>(start) + size <= kRvaSpaceSize;
+}
+
+[[nodiscard]] std::optional<u32>
+add_rva(u32 base, std::size_t offset) noexcept {
+    if (offset > std::numeric_limits<u32>::max() - base) {
+        return std::nullopt;
+    }
+    return base + static_cast<u32>(offset);
+}
+
+Result<void> collect_thunks(
+    const Binary& bin, addr_t image_base, u32 int_rva, u32 iat_rva,
+    std::vector<Symbol>& out,
+    std::unordered_map<addr_t, std::string>* got_to_name,
+    bool iat_is_name_fallback) {
+    const auto int_bytes = bytes_at_rva(bin, image_base, int_rva);
+    const auto iat_bytes = bytes_at_rva(bin, image_base, iat_rva);
+    const std::size_t available =
+        std::min(int_bytes.size(), iat_bytes.size()) / 8;
+    constexpr std::size_t kMaxImportSymbols = 1u << 20;
+    const std::size_t count = std::min(available, kMaxImportSymbols);
+
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::size_t offset = index * 8;
+        const u64 thunk = read_le_at<u64>(int_bytes.data() + offset);
+        if (thunk == 0) return {};
+
+        const auto slot_rva = add_rva(iat_rva, offset);
+        if (!slot_rva || *slot_rva >
+                std::numeric_limits<addr_t>::max() - image_base) {
+            return std::unexpected(Error::invalid_format(
+                "pe: import address table RVA overflows"));
+        }
+
+        Symbol symbol;
+        symbol.kind = SymbolKind::Function;
+        symbol.is_import = true;
+        symbol.got_addr = image_base + *slot_rva;
+
+        if ((thunk & kOrdinalFlagBit) != 0) {
+            constexpr u64 kOrdinalPayloadMask = 0x7fffffffffff0000ull;
+            if ((thunk & kOrdinalPayloadMask) != 0) {
+                if (iat_is_name_fallback) return {};
+                return std::unexpected(Error::invalid_format(
+                    "pe: import ordinal thunk has reserved bits set"));
+            }
+            const u16 ordinal = static_cast<u16>(thunk & 0xffffu);
+            symbol.name = std::format("Ordinal#{}", ordinal);
+        } else {
+            if (thunk > std::numeric_limits<u32>::max()) {
+                // When OriginalFirstThunk is absent, a loaded-memory view
+                // may expose runtime-resolved function VAs in FirstThunk.
+                // Those entries carry no recoverable static name table.
+                if (iat_is_name_fallback) return {};
+                return std::unexpected(Error::invalid_format(
+                    "pe: import name RVA exceeds 32 bits"));
+            }
+            const u32 hint_name_rva = static_cast<u32>(thunk);
+            const auto name_rva = add_rva(hint_name_rva, 2);
+            if (!name_rva) {
+                return std::unexpected(Error::invalid_format(
+                    "pe: import hint/name RVA overflows"));
+            }
+            const auto name = cstr_at_rva(bin, image_base, *name_rva);
+            if (name.empty()) continue;
+            symbol.name = std::string(name);
+        }
+
+        if (got_to_name) {
+            got_to_name->emplace(symbol.got_addr, symbol.name);
+        }
+        out.push_back(std::move(symbol));
+    }
+    if (available > kMaxImportSymbols) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "pe: import table exceeds {} entries", kMaxImportSymbols)));
+    }
+    return std::unexpected(Error::truncated(
+        "pe: import table has no terminating null thunk"));
+}
+
 }  // namespace
 
 Result<void>
@@ -36,16 +123,23 @@ collect_imports(const Binary& bin,
     if (dirs.size() <= kDdImport) return {};
     const auto& dd = dirs[kDdImport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
+    if (!rva_range_fits(dd.virtual_address, dd.size)) {
+        return std::unexpected(Error::invalid_format(
+            "pe: import directory RVA range overflows"));
+    }
     if (!rva_is_mapped(bin, image_base, dd.virtual_address, kImportDescSize)) return {};
 
     // Array of IMAGE_IMPORT_DESCRIPTOR terminated by an all-zero record.
     // Cap the loop at dd.size / kImportDescSize so a malicious missing
     // terminator can't walk forever.
     const std::size_t max_descs = dd.size / kImportDescSize;
-    u32 cur = dd.virtual_address;
-
-    for (std::size_t i = 0; i < max_descs; ++i, cur += kImportDescSize) {
-        const auto desc = bytes_at_rva(bin, image_base, cur);
+    for (std::size_t i = 0; i < max_descs; ++i) {
+        const auto current = add_rva(dd.virtual_address, i * kImportDescSize);
+        if (!current) {
+            return std::unexpected(Error::invalid_format(
+                "pe: import descriptor RVA overflows"));
+        }
+        const auto desc = bytes_at_rva(bin, image_base, *current);
         if (desc.size() < kImportDescSize) break;
 
         const u32 oft_rva     = read_le_at<u32>(desc.data() + 0x00);
@@ -61,32 +155,11 @@ collect_imports(const Binary& bin,
         // have overwritten it at runtime, but on the static image the
         // name entries are still intact.
         const u32 int_rva = (oft_rva != 0) ? oft_rva : iat_rva;
-
-        for (u32 k = 0;; ++k) {
-            const auto int_bytes = bytes_at_rva(bin, image_base, int_rva + k * 8);
-            const auto iat_bytes = bytes_at_rva(bin, image_base, iat_rva + k * 8);
-            if (int_bytes.size() < 8 || iat_bytes.size() < 8) break;
-            const u64 thunk = read_le_at<u64>(int_bytes.data());
-            if (thunk == 0) break;
-
-            Symbol sym;
-            sym.kind      = SymbolKind::Function;
-            sym.is_import = true;
-            sym.got_addr  = image_base + static_cast<addr_t>(iat_rva) + k * 8;
-
-            if ((thunk & kOrdinalFlagBit) != 0) {
-                const u16 ordinal = static_cast<u16>(thunk & 0xFFFFu);
-                sym.name = std::format("Ordinal#{}", ordinal);
-            } else {
-                // IMAGE_IMPORT_BY_NAME: u16 hint, then C-string.
-                const u32 hintname_rva = static_cast<u32>(thunk & 0xFFFF'FFFFULL);
-                const auto nm = cstr_at_rva(bin, image_base, hintname_rva + 2);
-                if (nm.empty()) continue;  // corrupt: no name, skip slot
-                sym.name = std::string(nm);
-            }
-
-            if (got_to_name) got_to_name->emplace(sym.got_addr, sym.name);
-            out.push_back(std::move(sym));
+        if (auto result = collect_thunks(
+                bin, image_base, int_rva, iat_rva, out, got_to_name,
+                oft_rva == 0);
+            !result) {
+            return result;
         }
     }
     return {};
@@ -114,13 +187,21 @@ collect_delay_imports(const Binary& bin,
     if (dirs.size() <= kDdDelayImport) return {};
     const auto& dd = dirs[kDdDelayImport];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
+    if (!rva_range_fits(dd.virtual_address, dd.size)) {
+        return std::unexpected(Error::invalid_format(
+            "pe: delay-import directory RVA range overflows"));
+    }
     if (!rva_is_mapped(bin, image_base, dd.virtual_address, kDelayImportDescSize)) return {};
 
     const std::size_t max_descs = dd.size / kDelayImportDescSize;
-    u32 cur = dd.virtual_address;
-
-    for (std::size_t i = 0; i < max_descs; ++i, cur += kDelayImportDescSize) {
-        const auto desc = bytes_at_rva(bin, image_base, cur);
+    for (std::size_t i = 0; i < max_descs; ++i) {
+        const auto current = add_rva(
+            dd.virtual_address, i * kDelayImportDescSize);
+        if (!current) {
+            return std::unexpected(Error::invalid_format(
+                "pe: delay-import descriptor RVA overflows"));
+        }
+        const auto desc = bytes_at_rva(bin, image_base, *current);
         if (desc.size() < kDelayImportDescSize) break;
 
         const u32 attrs    = read_le_at<u32>(desc.data() + 0x00);
@@ -136,30 +217,11 @@ collect_delay_imports(const Binary& bin,
         // alone is just patched function pointers at runtime.
         if (int_rva == 0 || iat_rva == 0) continue;
 
-        for (u32 k = 0;; ++k) {
-            const auto int_bytes = bytes_at_rva(bin, image_base, int_rva + k * 8);
-            const auto iat_bytes = bytes_at_rva(bin, image_base, iat_rva + k * 8);
-            if (int_bytes.size() < 8 || iat_bytes.size() < 8) break;
-            const u64 thunk = read_le_at<u64>(int_bytes.data());
-            if (thunk == 0) break;
-
-            Symbol sym;
-            sym.kind      = SymbolKind::Function;
-            sym.is_import = true;
-            sym.got_addr  = image_base + static_cast<addr_t>(iat_rva) + k * 8;
-
-            if ((thunk & kOrdinalFlagBit) != 0) {
-                const u16 ordinal = static_cast<u16>(thunk & 0xFFFFu);
-                sym.name = std::format("Ordinal#{}", ordinal);
-            } else {
-                const u32 hintname_rva = static_cast<u32>(thunk & 0xFFFF'FFFFULL);
-                const auto nm = cstr_at_rva(bin, image_base, hintname_rva + 2);
-                if (nm.empty()) continue;
-                sym.name = std::string(nm);
-            }
-
-            if (got_to_name) got_to_name->emplace(sym.got_addr, sym.name);
-            out.push_back(std::move(sym));
+        if (auto result = collect_thunks(
+                bin, image_base, int_rva, iat_rva, out, got_to_name,
+                false);
+            !result) {
+            return result;
         }
     }
     return {};
@@ -231,7 +293,11 @@ collect_exports(const Binary& bin,
 
         Symbol sym;
         sym.name      = std::string(name);
-        sym.addr      = image_base + static_cast<addr_t>(func_rva);
+        if (func_rva > std::numeric_limits<addr_t>::max() - image_base) {
+            return std::unexpected(Error::invalid_format(
+                "pe: named export address overflows"));
+        }
+        sym.addr      = image_base + func_rva;
         sym.kind      = SymbolKind::Function;
         sym.is_export = true;
         out.push_back(std::move(sym));
@@ -255,7 +321,11 @@ collect_exports(const Binary& bin,
         Symbol sym;
         sym.name      = std::format("Ordinal#{}",
                                     static_cast<u64>(ordinal_base) + i);
-        sym.addr      = image_base + static_cast<addr_t>(func_rva);
+        if (func_rva > std::numeric_limits<addr_t>::max() - image_base) {
+            return std::unexpected(Error::invalid_format(
+                "pe: ordinal export address overflows"));
+        }
+        sym.addr      = image_base + func_rva;
         sym.kind      = SymbolKind::Function;
         sym.is_export = true;
         out.push_back(std::move(sym));

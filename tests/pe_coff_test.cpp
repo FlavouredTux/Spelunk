@@ -40,6 +40,7 @@ int main() {
     put<ember::u16>(bytes, optional + 0x00, 0x20b);
     put<ember::u32>(bytes, optional + 0x10, 0x1000);
     put<ember::u64>(bytes, optional + 0x18, 0x140000000ull);
+    put<ember::u32>(bytes, optional + 0x38, 0x2000);
     put<ember::u32>(bytes, optional + 0x6c, 0);
     constexpr std::size_t section = optional + 0xf0;
     std::memcpy(bytes.data() + section, ".text", 5);

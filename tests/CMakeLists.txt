@@ -56,6 +56,12 @@ add_executable(ember_pe_coff_test pe_coff_test.cpp)
 target_link_libraries(ember_pe_coff_test PRIVATE ember::core ember::flags)
 add_test(NAME pe_coff_unit COMMAND ember_pe_coff_test)
 
+add_executable(ember_pe_loader_robustness_test pe_loader_robustness_test.cpp)
+target_link_libraries(ember_pe_loader_robustness_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME pe_loader_robustness_unit
+         COMMAND ember_pe_loader_robustness_test)
+
 add_executable(ember_dwarf_test dwarf_test.cpp)
 target_link_libraries(ember_dwarf_test PRIVATE ember::core ember::flags)
 add_test(NAME dwarf_unit COMMAND ember_dwarf_test)

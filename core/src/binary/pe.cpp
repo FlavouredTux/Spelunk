@@ -7,6 +7,7 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <map>
 #include <memory>
 #include <span>
@@ -59,6 +60,7 @@ constexpr std::size_t kCoffSymbolSize       = 18;
 constexpr std::size_t kOptMagicOff            = 0x00;
 constexpr std::size_t kOptAddressOfEntryOff   = 0x10;
 constexpr std::size_t kOptImageBaseOff        = 0x18;
+constexpr std::size_t kOptSizeOfImageOff      = 0x38;
 constexpr std::size_t kOptNumRvaAndSizesOff   = 0x6C;
 constexpr std::size_t kOptDataDirOff          = 0x70;
 
@@ -195,10 +197,26 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
         return std::unexpected(Error::invalid_format(std::format(
             "pe: unknown optional header magic {:#x}", opt_magic)));
     }
+    if (arch_ != Arch::X86_64 && arch_ != Arch::Arm64) {
+        return std::unexpected(Error::unsupported(std::format(
+            "pe: machine type {:#x} is incompatible with PE32+", machine)));
+    }
 
     const u32 entry_rva  = read_le_at<u32>(opt->data() + kOptAddressOfEntryOff);
     const u64 image_base = read_le_at<u64>(opt->data() + kOptImageBaseOff);
+    const u32 size_of_image = read_le_at<u32>(
+        opt->data() + kOptSizeOfImageOff);
     const u32 num_rva    = read_le_at<u32>(opt->data() + kOptNumRvaAndSizesOff);
+    if (size_of_image == 0 ||
+        size_of_image > std::numeric_limits<addr_t>::max() - image_base) {
+        return std::unexpected(Error::invalid_format(
+            "pe: SizeOfImage is zero or overflows the virtual address space"));
+    }
+    if (entry_rva != 0 && entry_rva >= size_of_image) {
+        return std::unexpected(Error::invalid_format(std::format(
+            "pe: entry RVA {:#x} lies outside SizeOfImage {:#x}",
+            entry_rva, size_of_image)));
+    }
 
     return ParsedHeaders{
         .coff_off          = coff_off,
@@ -210,6 +228,7 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
         .coff_symbol_count = symbol_count,
         .num_rva_and_sizes = num_rva,
         .image_base        = image_base,
+        .size_of_image     = size_of_image,
         .entry_rva         = entry_rva,
     };
 }
@@ -231,6 +250,21 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
         const u32 raw_size       = read_le_at<u32>(p + 0x10);
         const u32 raw_ptr        = read_le_at<u32>(p + 0x14);
         const u32 characteristics = read_le_at<u32>(p + 0x24);
+
+        const u64 virtual_end = static_cast<u64>(virt_rva) + virt_size;
+        if (virtual_end > h.size_of_image) {
+            return std::unexpected(Error::invalid_format(std::format(
+                "pe: section {} virtual range [{:#x}, {:#x}) exceeds "
+                "SizeOfImage {:#x}",
+                i, virt_rva, virtual_end, h.size_of_image)));
+        }
+        if (raw_size != 0 &&
+            (raw_ptr > buffer_.size() ||
+             raw_size > buffer_.size() - raw_ptr)) {
+            return std::unexpected(Error::out_of_bounds(std::format(
+                "pe: section {} raw range [{:#x}, +{:#x}) exceeds file",
+                i, raw_ptr, raw_size)));
+        }
 
         Section s;
         s.name        = read_section_name(p + 0x00);
@@ -274,13 +308,9 @@ Result<void> PeBinary::parse_sections(const ParsedHeaders& h) {
             const std::size_t backed =
                 std::min(static_cast<std::size_t>(raw_size),
                          static_cast<std::size_t>(virt_size));
-            if (auto data = r.slice(raw_ptr, backed); data) {
-                s.data = *data;
-            }
-            // A slice() failure here is either a short-read header (file
-            // truncated) or a lying raw_ptr/raw_size; both are recoverable
-            // by leaving Section.data empty - downstream will treat the
-            // range as zero-init, same as .bss.
+            auto data = r.slice(raw_ptr, backed);
+            if (!data) return std::unexpected(std::move(data).error());
+            s.data = *data;
         }
 
         sections_.push_back(std::move(s));
@@ -326,6 +356,8 @@ void PeBinary::parse_coff_symbols(const ParsedHeaders& h) {
         const u16 type = read_le_at<u16>(record + 14);
         const u8 storage_class = static_cast<u8>(record[16]);
         const u8 auxiliary_count = static_cast<u8>(record[17]);
+        const u32 advance = 1u + auxiliary_count;
+        if (advance > h.coff_symbol_count - index) break;
         const bool defined = section_number > 0 &&
             static_cast<std::size_t>(section_number) <= sections_.size();
         const bool externally_visible = storage_class == 2 || storage_class == 3;
@@ -333,27 +365,31 @@ void PeBinary::parse_coff_symbols(const ParsedHeaders& h) {
         if (defined && externally_visible) {
             const Section& section = sections_[static_cast<std::size_t>(
                 section_number - 1)];
-            const bool function = function_type && section.flags.executable;
-            std::string name = symbol_name(record);
-            if (!name.empty() && name != ".file" &&
-                (!name.starts_with('.') || function)) {
-                Symbol symbol;
-                symbol.name = std::move(name);
-                symbol.addr = section.vaddr + value;
-                symbol.kind = function ? SymbolKind::Function : SymbolKind::Object;
-                if (function && auxiliary_count > 0 && index + 1 < h.coff_symbol_count) {
-                    const u64 aux_offset = offset + kCoffSymbolSize;
-                    if (aux_offset + kCoffSymbolSize <= table_end) {
-                        const u32 total_size = read_le_at<u32>(
-                            buffer_.data() + aux_offset + 4);
-                        if (total_size <= section.size) symbol.size = total_size;
+            if (value <= section.size &&
+                value <= std::numeric_limits<addr_t>::max() - section.vaddr) {
+                const bool function = function_type && section.flags.executable;
+                std::string name = symbol_name(record);
+                if (!name.empty() && name != ".file" &&
+                    (!name.starts_with('.') || function)) {
+                    Symbol symbol;
+                    symbol.name = std::move(name);
+                    symbol.addr = section.vaddr + value;
+                    symbol.kind = function
+                        ? SymbolKind::Function : SymbolKind::Object;
+                    if (function && auxiliary_count > 0) {
+                        const u64 aux_offset = offset + kCoffSymbolSize;
+                        if (aux_offset + kCoffSymbolSize <= table_end) {
+                            const u32 total_size = read_le_at<u32>(
+                                buffer_.data() + aux_offset + 4);
+                            if (total_size <= section.size - value) {
+                                symbol.size = total_size;
+                            }
+                        }
                     }
+                    symbols_.push_back(std::move(symbol));
                 }
-                symbols_.push_back(std::move(symbol));
             }
         }
-        const u32 advance = 1u + auxiliary_count;
-        if (advance == 0 || index > h.coff_symbol_count - advance) break;
         index += advance;
     }
 }
@@ -363,6 +399,7 @@ Result<void> PeBinary::parse() {
     if (!hdrs) return std::unexpected(std::move(hdrs).error());
 
     image_base_ = hdrs->image_base;
+    size_of_image_ = hdrs->size_of_image;
     entry_      = hdrs->image_base + static_cast<addr_t>(hdrs->entry_rva);
 
     // Data-directory array follows the fixed optional-header fields. Cap
@@ -438,7 +475,12 @@ Result<void> PeBinary::parse_tls_callbacks() {
     // TLS directory pointing into junk.
     constexpr std::size_t kMaxCallbacks = 256;
     for (std::size_t i = 0; i < kMaxCallbacks; ++i) {
-        const auto slot = bytes_at(cb_array_va + i * 8);
+        const std::size_t offset = i * 8;
+        if (offset > std::numeric_limits<addr_t>::max() - cb_array_va) {
+            return std::unexpected(Error::invalid_format(
+                "pe: TLS callback array address overflows"));
+        }
+        const auto slot = bytes_at(cb_array_va + offset);
         if (slot.size() < 8) break;
         const u64 cb = read_le_at<u64>(slot.data());
         if (cb == 0) break;
@@ -487,10 +529,13 @@ std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
     if (dd.size == 0 || dd.virtual_address == 0) return out;
     if (!rva_is_mapped(dd.virtual_address, kBaseRelocBlockSize)) return out;
 
-    u32 cur = dd.virtual_address;
+    constexpr u64 kRvaSpaceSize = u64{1} << 32;
     const u64 end = static_cast<u64>(dd.virtual_address) + dd.size;
-    while (static_cast<u64>(cur) + kBaseRelocBlockSize <= end) {
-        const auto block = bytes_at_rva(cur);
+    if (end > kRvaSpaceSize) return out;
+    u64 cursor = dd.virtual_address;
+    while (cursor + kBaseRelocBlockSize <= end) {
+        const u32 block_rva = static_cast<u32>(cursor);
+        const auto block = bytes_at_rva(block_rva);
         if (block.size() < kBaseRelocBlockSize) break;
 
         const u32 page_rva   = read_le_at<u32>(block.data() + 0);
@@ -498,9 +543,9 @@ std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
         if (page_rva == 0 && block_size == 0) break;
         if (block_size < kBaseRelocBlockSize) break;
         if ((block_size & 1u) != 0) break;
-        if (static_cast<u64>(cur) + block_size > end) break;
+        if (block_size > end - cursor) break;
 
-        const auto bytes = bytes_at_rva(cur);
+        const auto bytes = bytes_at_rva(block_rva);
         if (bytes.size() < block_size) break;
 
         const std::size_t count = (block_size - kBaseRelocBlockSize) / 2;
@@ -512,16 +557,21 @@ std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
             if (type == kRelocTypeAbsolute) continue;
             if (type != kRelocTypeDir64) continue;
 
-            const u32 slot_rva = page_rva + off;
+            const u64 slot_rva_wide = static_cast<u64>(page_rva) + off;
+            if (slot_rva_wide > std::numeric_limits<u32>::max()) continue;
+            const u32 slot_rva = static_cast<u32>(slot_rva_wide);
             const auto slot = bytes_at_rva(slot_rva);
             if (slot.size() < 8) continue;
             const u64 target = read_le_at<u64>(slot.data());
             if (target == 0) continue;
-            out[image_base_ + static_cast<addr_t>(slot_rva)] =
-                static_cast<addr_t>(target);
+            if (slot_rva <=
+                std::numeric_limits<addr_t>::max() - image_base_) {
+                out[image_base_ + static_cast<addr_t>(slot_rva)] =
+                    static_cast<addr_t>(target);
+            }
         }
 
-        cur += block_size;
+        cursor += block_size;
     }
 
     return out;

@@ -45,16 +45,10 @@ public:
         return image_base_;
     }
 
-    // VA span - derived from the highest section's RVA + size. PE
-    // optional header carries SizeOfImage but it's not surfaced here;
-    // walking sections gives the same number in practice.
+    // Full loader image span from the validated PE32+ optional header,
+    // including headers and zero-filled section tails.
     [[nodiscard]] addr_t mapped_size() const noexcept override {
-        addr_t hi = image_base_;
-        for (const auto& s : sections_) {
-            const addr_t end = s.vaddr + static_cast<addr_t>(s.data.size());
-            if (end > hi) hi = end;
-        }
-        return hi - image_base_;
+        return size_of_image_;
     }
 
     // Optional header data directory entries. Fields carry RVAs - callers
@@ -76,7 +70,7 @@ public:
     // PE's symbol table. Returns the number of symbols added (zero on
     // success when the PDB has no resolvable publics, an error on
     // parse / I/O failure). Resolves (segment, offset) pairs to
-    // absolute VAs using image_base() + sections_[seg-1].vaddr + offset.
+    // absolute VAs using sections_[seg-1].vaddr + offset.
     //
     // Side effect: also harvests procedure type information from the
     // PDB's TPI stream and stores per-VA FunctionSigs (queryable via
@@ -144,6 +138,7 @@ private:
         u32         coff_symbol_count;
         u32         num_rva_and_sizes;
         u64         image_base;
+        u32         size_of_image;
         u32         entry_rva;
     };
     [[nodiscard]] Result<ParsedHeaders> parse_headers();
@@ -207,6 +202,7 @@ private:
     Arch                       arch_       = Arch::Unknown;
     addr_t                     entry_      = 0;
     addr_t                     image_base_ = 0;
+    u32                        size_of_image_ = 0;
     std::vector<Section>       sections_;
     std::vector<Symbol>        symbols_;
     std::vector<DataDirectory> data_dirs_;

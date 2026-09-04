@@ -122,6 +122,7 @@ read_module_data_dirs(const Binary& bin, addr_t module_base) {
     if (dos[0] != std::byte{'M'} || dos[1] != std::byte{'Z'}) return {};
 
     const u32 e_lfanew = read_le_at<u32>(dos.data() + kPeDosLfanewOff);
+    if (e_lfanew > std::numeric_limits<addr_t>::max() - module_base) return {};
     const auto nt = bin.bytes_at(module_base + e_lfanew);
     if (nt.size() < kPeNtSigSize + kPeCoffHdrSize) return {};
     if (nt[0] != std::byte{'P'} || nt[1] != std::byte{'E'} ||
@@ -131,8 +132,11 @@ read_module_data_dirs(const Binary& bin, addr_t module_base) {
     const u16 opt_size = read_le_at<u16>(coff + 0x10);
     if (opt_size < kPeOptDataDirOff) return {};
 
-    const auto opt = bin.bytes_at(module_base + e_lfanew +
-                                   kPeNtSigSize + kPeCoffHdrSize);
+    const u64 optional_offset = static_cast<u64>(e_lfanew) +
+                                kPeNtSigSize + kPeCoffHdrSize;
+    if (optional_offset >
+        std::numeric_limits<addr_t>::max() - module_base) return {};
+    const auto opt = bin.bytes_at(module_base + optional_offset);
     if (opt.size() < opt_size) return {};
 
     const u16 magic = read_le_at<u16>(opt.data() + kPeOptMagicOff);

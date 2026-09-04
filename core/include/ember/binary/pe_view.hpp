@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,6 +26,7 @@ struct DataDirectory { u32 virtual_address; u32 size; };
 
 [[nodiscard]] inline std::span<const std::byte>
 bytes_at_rva(const Binary& bin, addr_t image_base, u32 rva) noexcept {
+    if (rva > std::numeric_limits<addr_t>::max() - image_base) return {};
     return bin.bytes_at(image_base + static_cast<addr_t>(rva));
 }
 

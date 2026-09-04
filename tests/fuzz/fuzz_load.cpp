@@ -48,6 +48,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
             }
         }
     }
-    (void)touched;
+    volatile const std::size_t touched_sink = touched;
+    (void)touched_sink;
     return 0;
 }

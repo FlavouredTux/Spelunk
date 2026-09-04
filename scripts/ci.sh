@@ -55,17 +55,28 @@ case "$mode" in
   fuzz)
     CC=${CC:-clang} CXX=${CXX:-clang++} \
       cmake -S . -B build-fuzz "${gen[@]}" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DEMBER_SANITIZE=ON -DEMBER_BUILD_FUZZERS=ON -DEMBER_BUILD_CLI=OFF
+        -DEMBER_SANITIZE=ON -DEMBER_BUILD_FUZZERS=ON -DEMBER_BUILD_CLI=OFF \
+        -DBUILD_TESTING=OFF
     cmake --build build-fuzz
     # Seed each loader corpus with the fixtures of its format; the
     # decoders get every fixture, headers and all, as raw bytes. The
-    # generated (Mach-O, PE, minidump) fixtures only exist in a build
+    # generated (Mach-O, PE, minidump, REL) fixtures only exist in a build
     # directory that staged them, so look in the usual ones too.
-    dirs=tests/fixtures
-    for d in build/tests/fixtures build-ci/tests/fixtures; do [ -d "$d" ] && dirs="$dirs $d"; done
-    all=$(find $dirs -type f \( -name '*.prebuilt' -o ! -name '*.*' \) 2>/dev/null || true)
-    for f in $all; do
+    fixture_dirs=(tests/fixtures)
+    for d in build/tests/fixtures build-ci/tests/fixtures; do
+      [ -d "$d" ] && fixture_dirs+=("$d")
+    done
+
+    fixture_manifest=build-fuzz/fuzz-fixtures.list
+    find "${fixture_dirs[@]}" -type f \
+      \( -name '*.prebuilt' -o -name '*.rel' -o ! -name '*.*' \) \
+      -print0 > "$fixture_manifest"
+    while IFS= read -r -d '' f; do
       for t in fuzz_x64 fuzz_arm64 fuzz_arm32 fuzz_ppc fuzz_ppc_le; do mkdir -p "build-fuzz/corpus/$t"; cp -f "$f" "build-fuzz/corpus/$t/"; done
+      if [[ "$f" == *.rel ]]; then
+        mkdir -p build-fuzz/corpus/fuzz_rel
+        cp -f "$f" build-fuzz/corpus/fuzz_rel/
+      fi
       case "$(file -b "$f" 2>/dev/null)" in
         ELF*)      mkdir -p build-fuzz/corpus/fuzz_elf;      cp -f "$f" build-fuzz/corpus/fuzz_elf/ ;;
         PE32*)     mkdir -p build-fuzz/corpus/fuzz_pe;       cp -f "$f" build-fuzz/corpus/fuzz_pe/ ;;
@@ -73,12 +84,29 @@ case "$mode" in
         Mini\ DuMP*) mkdir -p build-fuzz/corpus/fuzz_minidump; cp -f "$f" build-fuzz/corpus/fuzz_minidump/ ;;
         *MSF*|*PDB*) mkdir -p build-fuzz/corpus/fuzz_pdb;    cp -f "$f" build-fuzz/corpus/fuzz_pdb/ ;;
       esac
-    done
+    done < "$fixture_manifest"
     # Inputs that found bugs before are committed under tests/fuzz/corpus
     # and replayed first on every run.
     [ -d tests/fuzz/corpus ] && cp -r tests/fuzz/corpus/. build-fuzz/corpus/
+    # Golden-test fixture generation is disabled in this lean fuzz build.
+    # Generate one valid input per loader after every corpus copy so a clean
+    # checkout has useful seeds and stale cached inputs cannot replace them.
+    mkdir -p build-fuzz/corpus/{fuzz_macho,fuzz_pe,fuzz_minidump,fuzz_dol,fuzz_rel,fuzz_pdb}
+    "${PYTHON:-python3}" tests/fixtures/make_macho_tiny.py \
+      build-fuzz/corpus/fuzz_macho/valid-macho
+    "${PYTHON:-python3}" tests/fixtures/make_pe_tiny.py \
+      build-fuzz/corpus/fuzz_pe/valid-pe
+    "${PYTHON:-python3}" tests/fixtures/make_minidump_tiny.py \
+      build-fuzz/corpus/fuzz_minidump/valid-minidump.dmp
+    "${PYTHON:-python3}" tests/fixtures/make_ppc64_tiny.py dol-scalar \
+      build-fuzz/corpus/fuzz_dol/valid.dol
+    "${PYTHON:-python3}" -B tests/fixtures/make_wii_rel.py \
+      build-fuzz/corpus/fuzz_rel/valid.rel
+    "${PYTHON:-python3}" tests/fixtures/make_pe_pdb.py \
+      build-fuzz/corpus/fuzz_pe/valid-pdb-pe \
+      build-fuzz/corpus/fuzz_pdb/valid.pdb
     rc=0
-    for t in fuzz_elf fuzz_pe fuzz_macho fuzz_minidump fuzz_dol fuzz_pdb fuzz_x64 fuzz_arm64 fuzz_arm32 fuzz_ppc fuzz_ppc_le; do
+    for t in fuzz_elf fuzz_pe fuzz_macho fuzz_minidump fuzz_dol fuzz_rel fuzz_pdb fuzz_x64 fuzz_arm64 fuzz_arm32 fuzz_ppc fuzz_ppc_le; do
       mkdir -p "build-fuzz/corpus/$t"
       echo "== $t"
       "build-fuzz/tests/fuzz/$t" -max_total_time="${FUZZ_SECONDS:-30}" -max_len=65536 \

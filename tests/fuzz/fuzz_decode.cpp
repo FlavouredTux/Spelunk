@@ -31,5 +31,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         off += step;
         pc += step;
     }
+    volatile const ember::addr_t decoded_end = pc;
+    (void)decoded_end;
     return 0;
 }

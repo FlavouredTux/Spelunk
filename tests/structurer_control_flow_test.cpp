@@ -67,6 +67,35 @@ std::size_t count_blocks(const Region& region, addr_t address) {
     return count;
 }
 
+bool is_loop_region(RegionKind kind) {
+    return kind == RegionKind::While || kind == RegionKind::DoWhile ||
+           kind == RegionKind::For || kind == RegionKind::Loop;
+}
+
+const Region* find_loop_with_header(const Region& region, addr_t header) {
+    if (is_loop_region(region.kind) && !region.children.empty() &&
+        region.children.front() &&
+        region.children.front()->kind == RegionKind::Block &&
+        region.children.front()->block_start == header) {
+        return &region;
+    }
+    for (const auto& child : region.children) {
+        if (!child) continue;
+        if (const Region* found = find_loop_with_header(*child, header)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+bool contains_goto_to(const Region& region, addr_t target) {
+    if (region.kind == RegionKind::Goto && region.target == target) return true;
+    for (const auto& child : region.children) {
+        if (child && contains_goto_to(*child, target)) return true;
+    }
+    return false;
+}
+
 IrInst make_branch_indirect(IrValue target) {
     IrInst branch;
     branch.op = IrOp::BranchIndirect;
@@ -332,6 +361,403 @@ int test_post_loop_phi_keeps_multi_predecessor_merge() {
     return 0;
 }
 
+int test_nested_loop_outer_targets_remain_explicit() {
+    constexpr addr_t kEntry = 0x6000;
+    constexpr addr_t kOuterHeader = 0x6010;
+    constexpr addr_t kInnerHeader = 0x6020;
+    constexpr addr_t kOuterContinue = 0x6030;
+    constexpr addr_t kInnerTail = 0x6040;
+    constexpr addr_t kAfterInner = 0x6050;
+    constexpr addr_t kOuterExit = 0x6060;
+    constexpr addr_t kFinal = 0x6070;
+    const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kEntry;
+    fn.end = kFinal + 4;
+    fn.name = "nested_loop_outer_targets";
+    fn.next_temp_id = 1;
+    add_block(fn, kEntry, BlockKind::Unconditional, {}, {kOuterHeader},
+              {make_branch(kEntry, kOuterHeader)});
+    add_block(fn, kOuterHeader, BlockKind::Conditional,
+              {kEntry, kOuterContinue, kAfterInner},
+              {kInnerHeader, kOuterExit},
+              {make_cond_branch(kOuterHeader, condition,
+                                kInnerHeader, kOuterExit)});
+    add_block(fn, kInnerHeader, BlockKind::Conditional,
+              {kOuterHeader, kInnerTail},
+              {kOuterContinue, kAfterInner},
+              {make_cond_branch(kInnerHeader, condition,
+                                kOuterContinue, kAfterInner)});
+    add_block(fn, kOuterContinue, BlockKind::Conditional, {kInnerHeader},
+              {kOuterHeader, kInnerTail},
+              {make_cond_branch(kOuterContinue, condition,
+                                kOuterHeader, kInnerTail)});
+    add_block(fn, kInnerTail, BlockKind::Conditional, {kOuterContinue},
+              {kInnerHeader, kOuterExit},
+              {make_cond_branch(kInnerTail, condition,
+                                kInnerHeader, kOuterExit)});
+    add_block(fn, kAfterInner, BlockKind::Unconditional, {kInnerHeader},
+              {kOuterHeader}, {make_branch(kAfterInner, kOuterHeader)});
+    add_block(fn, kOuterExit, BlockKind::Unconditional,
+              {kOuterHeader, kInnerTail}, {kFinal},
+              {make_branch(kOuterExit, kFinal)});
+    add_block(fn, kFinal, BlockKind::Return, {kOuterExit}, {},
+              {make_ret(kFinal)});
+
+    const Structurer structurer;
+    auto structured = structurer.structure(fn);
+    check(structured.has_value(), "nested loop with outer targets structures");
+    if (!structured) return 1;
+    const Region* inner = find_loop_with_header(*structured->body, kInnerHeader);
+    check(inner && contains_goto_to(*inner, kOuterHeader),
+          "inner edge to outer header remains an explicit goto");
+    check(inner && contains_goto_to(*inner, kOuterExit),
+          "inner edge to outer exit remains an explicit goto");
+    return 0;
+}
+
+int test_nested_loops_preserve_shared_exit_owner() {
+    constexpr addr_t kEntry = 0x6100;
+    constexpr addr_t kOuterHeader = 0x6110;
+    constexpr addr_t kInnerHeader = 0x6120;
+    constexpr addr_t kBody = 0x6130;
+    constexpr addr_t kExit = 0x6140;
+    const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kEntry;
+    fn.end = kExit + 4;
+    fn.name = "nested_loop_shared_exit";
+    fn.next_temp_id = 1;
+    add_block(fn, kEntry, BlockKind::Unconditional, {}, {kOuterHeader},
+              {make_branch(kEntry, kOuterHeader)});
+    add_block(fn, kOuterHeader, BlockKind::Conditional, {kEntry, kBody},
+              {kInnerHeader, kExit},
+              {make_cond_branch(kOuterHeader, condition,
+                                kInnerHeader, kExit)});
+    add_block(fn, kInnerHeader, BlockKind::Conditional,
+              {kOuterHeader, kBody}, {kBody, kExit},
+              {make_cond_branch(kInnerHeader, condition, kBody, kExit)});
+    add_block(fn, kBody, BlockKind::Conditional, {kInnerHeader},
+              {kInnerHeader, kOuterHeader},
+              {make_cond_branch(kBody, condition,
+                                kInnerHeader, kOuterHeader)});
+    add_block(fn, kExit, BlockKind::Return,
+              {kOuterHeader, kInnerHeader}, {}, {make_ret(kExit)});
+
+    const Structurer structurer;
+    auto structured = structurer.structure(fn);
+    check(structured.has_value(), "nested loops with a shared exit structure");
+    if (!structured) return 1;
+    const Region* outer = find_loop_with_header(*structured->body, kOuterHeader);
+    const Region* inner = find_loop_with_header(*structured->body, kInnerHeader);
+    check(inner && contains_goto_to(*inner, kOuterHeader),
+          "inner edge to the outer header is not an inner continue");
+    check(outer && !contains_block(*outer, kExit) &&
+              count_blocks(*structured->body, kExit) == 1,
+          "inner loop pop preserves the outer loop's shared exit owner");
+    return 0;
+}
+
+int test_loop_exit_inside_switch_remains_targeted() {
+    constexpr addr_t kEntry = 0x6180;
+    constexpr addr_t kHeader = 0x6190;
+    constexpr addr_t kSwitch = 0x61a0;
+    constexpr addr_t kLatch = 0x61b0;
+    constexpr addr_t kExit = 0x61c0;
+    constexpr addr_t kCaseReturn = 0x61d0;
+    constexpr addr_t kFinal = 0x61e0;
+    const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kEntry;
+    fn.end = kFinal + 4;
+    fn.name = "loop_exit_inside_switch";
+    fn.next_temp_id = 1;
+    add_block(fn, kEntry, BlockKind::Unconditional, {}, {kHeader},
+              {make_branch(kEntry, kHeader)});
+    add_block(fn, kHeader, BlockKind::Conditional, {kEntry, kLatch},
+              {kSwitch, kExit},
+              {make_cond_branch(kHeader, condition, kSwitch, kExit)});
+    add_block(fn, kSwitch, BlockKind::Switch, {kHeader},
+              {kExit, kCaseReturn, kLatch}, {});
+    auto& dispatch = fn.blocks[fn.block_at[kSwitch]];
+    dispatch.case_values = {0, 1, 2};
+    dispatch.switch_index = Reg::Eax;
+    add_block(fn, kLatch, BlockKind::Unconditional, {kSwitch}, {kHeader},
+              {make_branch(kLatch, kHeader)});
+    add_block(fn, kExit, BlockKind::Unconditional, {kHeader, kSwitch},
+              {kFinal}, {make_branch(kExit, kFinal)});
+    add_block(fn, kCaseReturn, BlockKind::Return, {kSwitch}, {},
+              {make_ret(kCaseReturn)});
+    add_block(fn, kFinal, BlockKind::Return, {kExit}, {}, {make_ret(kFinal)});
+
+    const Structurer structurer;
+    auto structured = structurer.structure(fn);
+    check(structured.has_value(), "loop containing an exit switch structures");
+    if (!structured) return 1;
+    const Region* loop = find_loop_with_header(*structured->body, kHeader);
+    const Region* sw = loop ? find_region(*loop, RegionKind::Switch) : nullptr;
+    check(sw && contains_goto_to(*sw, kExit),
+          "switch case loop exit remains a goto instead of switch break");
+    return 0;
+}
+
+int test_for_update_requires_one_direct_latch() {
+    const auto make_loop = [](bool conditional_latch, bool multiple_latches) {
+        constexpr addr_t kEntry = 0x6200;
+        constexpr addr_t kHeader = 0x6210;
+        constexpr addr_t kLatch = 0x6220;
+        constexpr addr_t kBody = 0x6230;
+        constexpr addr_t kExit = 0x6240;
+        constexpr addr_t kSecondExit = 0x6250;
+        const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+        IrFunction fn;
+        fn.start = kEntry;
+        fn.end = (conditional_latch ? kSecondExit : kExit) + 4;
+        fn.name = multiple_latches ? "for_multiple_latches"
+            : (conditional_latch ? "for_conditional_latch"
+                                 : "for_direct_latch");
+        fn.next_temp_id = 1;
+        add_block(fn, kEntry, BlockKind::Unconditional, {}, {kHeader},
+                  {make_branch(kEntry, kHeader)});
+        add_block(fn, kHeader, BlockKind::Conditional,
+                  multiple_latches ? std::vector<addr_t>{kEntry, kLatch, kBody}
+                                   : std::vector<addr_t>{kEntry, kLatch},
+                  {kBody, kExit},
+                  {make_cond_branch(kHeader, condition, kBody, kExit)});
+        add_block(fn, kLatch, conditional_latch ? BlockKind::Conditional
+                                                : BlockKind::Unconditional,
+                  {kBody},
+                  conditional_latch
+                      ? std::vector<addr_t>{kHeader, kSecondExit}
+                      : std::vector<addr_t>{kHeader},
+                  {make_store(IrValue::make_imm(0x7000, IrType::I64),
+                              IrValue::make_imm(1, IrType::I32)),
+                   conditional_latch
+                       ? make_cond_branch(kLatch, condition,
+                                          kHeader, kSecondExit)
+                       : make_branch(kLatch, kHeader)});
+        add_block(fn, kBody, multiple_latches ? BlockKind::Conditional
+                                              : BlockKind::Unconditional,
+                  {kHeader},
+                  multiple_latches ? std::vector<addr_t>{kLatch, kHeader}
+                                   : std::vector<addr_t>{kLatch},
+                  {multiple_latches
+                       ? make_cond_branch(kBody, condition, kLatch, kHeader)
+                       : make_branch(kBody, kLatch)});
+        add_block(fn, kExit, BlockKind::Return, {kHeader}, {},
+                  {make_ret(kExit)});
+        if (conditional_latch) {
+            add_block(fn, kSecondExit, BlockKind::Return, {kLatch}, {},
+                      {make_ret(kSecondExit)});
+        }
+        return fn;
+    };
+
+    const Structurer structurer;
+    IrFunction direct_fn = make_loop(false, false);
+    auto direct = structurer.structure(direct_fn);
+    check(direct.has_value(), "single-direct-latch loop structures");
+    if (!direct) return 1;
+    const Region* direct_loop = find_loop_with_header(*direct->body, 0x6210);
+    check(direct_loop && direct_loop->kind == RegionKind::For &&
+              direct_loop->has_update,
+          "single direct latch store remains eligible as a for update");
+
+    IrFunction conditional_fn = make_loop(true, false);
+    auto conditional = structurer.structure(conditional_fn);
+    check(conditional.has_value(), "conditional-latch loop structures");
+    if (!conditional) return 1;
+    const Region* conditional_loop =
+        find_loop_with_header(*conditional->body, 0x6210);
+    check(conditional_loop && conditional_loop->kind == RegionKind::While &&
+              !conditional_loop->has_update,
+          "conditional latch store is not hoisted into a for update");
+
+    IrFunction multiple_fn = make_loop(false, true);
+    auto multiple = structurer.structure(multiple_fn);
+    check(multiple.has_value(), "multi-latch loop structures");
+    if (!multiple) return 1;
+    const Region* multiple_loop = find_loop_with_header(*multiple->body, 0x6210);
+    check(multiple_loop && multiple_loop->kind == RegionKind::While &&
+              !multiple_loop->has_update,
+          "one latch's store is not hoisted across another back edge");
+    return 0;
+}
+
+int test_single_conditional_latch_is_do_while() {
+    constexpr addr_t kEntry = 0x6300;
+    constexpr addr_t kHeader = 0x6310;
+    constexpr addr_t kTail = 0x6320;
+    constexpr addr_t kExit = 0x6330;
+    const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kEntry;
+    fn.end = kExit + 4;
+    fn.name = "single_do_while_latch";
+    fn.next_temp_id = 1;
+    add_block(fn, kEntry, BlockKind::Unconditional, {}, {kHeader},
+              {make_branch(kEntry, kHeader)});
+    add_block(fn, kHeader, BlockKind::Unconditional, {kEntry, kTail}, {kTail},
+              {make_branch(kHeader, kTail)});
+    add_block(fn, kTail, BlockKind::Conditional, {kHeader}, {kHeader, kExit},
+              {make_cond_branch(kTail, condition, kHeader, kExit)});
+    add_block(fn, kExit, BlockKind::Return, {kTail}, {}, {make_ret(kExit)});
+
+    const Structurer structurer;
+    auto structured = structurer.structure(fn);
+    check(structured.has_value(), "single-tail do-while structures");
+    if (!structured) return 1;
+    const Region* loop = find_loop_with_header(*structured->body, kHeader);
+    check(loop && loop->kind == RegionKind::DoWhile &&
+              contains_block(*loop, kTail),
+          "one conditional tail remains eligible for do-while");
+    return 0;
+}
+
+int test_do_while_requires_sole_exiting_backedge() {
+    const auto make_extra_latch = [] {
+        constexpr addr_t kEntry = 0x6500;
+        constexpr addr_t kHeader = 0x6510;
+        constexpr addr_t kDirectLatch = 0x6520;
+        constexpr addr_t kConditionalTail = 0x6530;
+        constexpr addr_t kExit = 0x6540;
+        constexpr addr_t kFinal = 0x6550;
+        const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+        IrFunction fn;
+        fn.start = kEntry;
+        fn.end = kFinal + 4;
+        fn.name = "do_while_extra_latch";
+        fn.next_temp_id = 1;
+        add_block(fn, kEntry, BlockKind::Unconditional, {}, {kHeader},
+                  {make_branch(kEntry, kHeader)});
+        add_block(fn, kHeader, BlockKind::Conditional,
+                  {kEntry, kDirectLatch, kConditionalTail},
+                  {kDirectLatch, kConditionalTail},
+                  {make_cond_branch(kHeader, condition,
+                                    kDirectLatch, kConditionalTail)});
+        add_block(fn, kDirectLatch, BlockKind::Unconditional, {kHeader},
+                  {kHeader}, {make_branch(kDirectLatch, kHeader)});
+        add_block(fn, kConditionalTail, BlockKind::Conditional, {kHeader},
+                  {kHeader, kExit},
+                  {make_cond_branch(kConditionalTail, condition,
+                                    kHeader, kExit)});
+        add_block(fn, kExit, BlockKind::Unconditional, {kConditionalTail},
+                  {kFinal}, {make_branch(kExit, kFinal)});
+        add_block(fn, kFinal, BlockKind::Return, {kExit}, {},
+                  {make_ret(kFinal)});
+        return fn;
+    };
+
+    const auto make_internal_successor = [] {
+        constexpr addr_t kEntry = 0x6600;
+        constexpr addr_t kHeader = 0x6610;
+        constexpr addr_t kConditionalTail = 0x6620;
+        constexpr addr_t kInternalLatch = 0x6630;
+        const IrValue condition = IrValue::make_temp(0, IrType::I1);
+
+        IrFunction fn;
+        fn.start = kEntry;
+        fn.end = kInternalLatch + 4;
+        fn.name = "do_while_internal_successor";
+        fn.next_temp_id = 1;
+        add_block(fn, kEntry, BlockKind::Unconditional, {}, {kHeader},
+                  {make_branch(kEntry, kHeader)});
+        add_block(fn, kHeader, BlockKind::Unconditional,
+                  {kEntry, kConditionalTail, kInternalLatch},
+                  {kConditionalTail},
+                  {make_branch(kHeader, kConditionalTail)});
+        add_block(fn, kConditionalTail, BlockKind::Conditional, {kHeader},
+                  {kHeader, kInternalLatch},
+                  {make_cond_branch(kConditionalTail, condition,
+                                    kHeader, kInternalLatch)});
+        add_block(fn, kInternalLatch, BlockKind::Unconditional,
+                  {kConditionalTail}, {kHeader},
+                  {make_branch(kInternalLatch, kHeader)});
+        return fn;
+    };
+
+    const Structurer structurer;
+    IrFunction extra_latch_fn = make_extra_latch();
+    auto extra_latch = structurer.structure(extra_latch_fn);
+    check(extra_latch.has_value(), "loop with an extra direct latch structures");
+    if (!extra_latch) return 1;
+    const Region* extra_loop = find_loop_with_header(*extra_latch->body, 0x6510);
+    check(extra_loop && extra_loop->kind == RegionKind::Loop &&
+              contains_block(*extra_loop, 0x6520) &&
+              contains_block(*extra_loop, 0x6530) &&
+              !contains_block(*extra_loop, 0x6540),
+          "extra direct latch keeps all tests inside a generic loop");
+
+    IrFunction internal_successor_fn = make_internal_successor();
+    auto internal_successor = structurer.structure(internal_successor_fn);
+    check(internal_successor.has_value(),
+          "loop whose conditional arm stays internal structures");
+    if (!internal_successor) return 1;
+    const Region* internal_loop =
+        find_loop_with_header(*internal_successor->body, 0x6610);
+    check(internal_loop && internal_loop->kind == RegionKind::Loop &&
+              contains_block(*internal_loop, 0x6620) &&
+              contains_block(*internal_loop, 0x6630),
+          "non-header arm that reaches another latch is not treated as exit");
+    return 0;
+}
+
+int test_multiple_conditional_latches_are_not_do_while() {
+    constexpr addr_t kEntry = 0x6400;
+    constexpr addr_t kHeader = 0x6410;
+    constexpr addr_t kFirstTail = 0x6420;
+    constexpr addr_t kSecondTail = 0x6430;
+    constexpr addr_t kExit = 0x6440;
+    constexpr addr_t kFinal = 0x6450;
+    const IrValue first_condition = IrValue::make_temp(0, IrType::I1);
+    const IrValue second_condition = IrValue::make_temp(1, IrType::I1);
+
+    IrFunction fn;
+    fn.start = kEntry;
+    fn.end = kFinal + 4;
+    fn.name = "multiple_do_while_latches";
+    fn.next_temp_id = 2;
+    add_block(fn, kEntry, BlockKind::Unconditional, {}, {kHeader},
+              {make_branch(kEntry, kHeader)});
+    add_block(fn, kHeader, BlockKind::Conditional,
+              {kEntry, kFirstTail, kSecondTail},
+              {kFirstTail, kSecondTail},
+              {make_cond_branch(kHeader, first_condition,
+                                kFirstTail, kSecondTail)});
+    add_block(fn, kFirstTail, BlockKind::Conditional, {kHeader},
+              {kHeader, kExit},
+              {make_cond_branch(kFirstTail, first_condition,
+                                kHeader, kExit)});
+    add_block(fn, kSecondTail, BlockKind::Conditional, {kHeader},
+              {kHeader, kExit},
+              {make_cond_branch(kSecondTail, second_condition,
+                                kHeader, kExit)});
+    add_block(fn, kExit, BlockKind::Unconditional,
+              {kFirstTail, kSecondTail}, {kFinal},
+              {make_branch(kExit, kFinal)});
+    add_block(fn, kFinal, BlockKind::Return, {kExit}, {}, {make_ret(kFinal)});
+
+    const Structurer structurer;
+    auto structured = structurer.structure(fn);
+    check(structured.has_value(), "multi-conditional-latch loop structures");
+    if (!structured) return 1;
+    const Region* loop = find_loop_with_header(*structured->body, kHeader);
+    check(loop && loop->kind == RegionKind::Loop,
+          "multiple conditional latches remain explicit in a generic loop");
+    check(loop && contains_block(*loop, kFirstTail) &&
+              contains_block(*loop, kSecondTail) &&
+              !contains_block(*loop, kExit) &&
+              count_blocks(*structured->body, kExit) == 1,
+          "generic multi-latch loop retains both tests and its shared exit");
+    return 0;
+}
+
 }  // namespace
 
 int run_structurer_control_flow_tests() {
@@ -341,5 +767,12 @@ int run_structurer_control_flow_tests() {
     rc |= test_switch_metadata_validation_and_unlabeled_multiway();
     rc |= test_post_loop_phi_uses_exit_predecessor();
     rc |= test_post_loop_phi_keeps_multi_predecessor_merge();
+    rc |= test_nested_loop_outer_targets_remain_explicit();
+    rc |= test_nested_loops_preserve_shared_exit_owner();
+    rc |= test_loop_exit_inside_switch_remains_targeted();
+    rc |= test_for_update_requires_one_direct_latch();
+    rc |= test_single_conditional_latch_is_do_while();
+    rc |= test_do_while_requires_sole_exiting_backedge();
+    rc |= test_multiple_conditional_latches_are_not_do_while();
     return rc;
 }

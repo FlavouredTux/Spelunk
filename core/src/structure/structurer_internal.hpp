@@ -43,6 +43,10 @@ struct CfgInfo {
     // under hash-function tweaks.
     std::map<addr_t, std::set<addr_t>>      loop_headers;  // header -> back-edge sources
     std::unordered_map<addr_t, addr_t>      loop_exit;     // header -> exit successor
+    // Present only when loop discovery proved the sole back edge is one
+    // conditional test-and-exit tail. Multi-tail loops may still have a
+    // common loop_exit, but retain their tests inside a generic Loop region.
+    std::unordered_map<addr_t, addr_t>      do_while_tail;  // header -> tail
 };
 
 void find_loops(const IrFunction& fn, CfgInfo& info);
@@ -133,12 +137,22 @@ public:
 
     static bool contains_goto(const Region& r) noexcept;
 private:
+    struct LoopFrame {
+        addr_t header = kNoAddr;
+        addr_t exit = kNoAddr;
+    };
+
     const IrFunction&                   fn_;
     const CfgInfo&                      info_;
     std::map<SsaKey, const IrInst*>     defs_;
     std::set<addr_t>                    visited_;
-    std::set<addr_t>                    loop_headers_stack_;
-    std::set<addr_t>                    loop_exits_stack_;
+    // Lexical loop nesting, outermost to innermost. An unlabeled C
+    // break/continue can represent only a target owned by the innermost
+    // frame; edges to an outer loop remain explicit gotos.
+    std::vector<LoopFrame>              loop_stack_;
+    // A loop-exit `break` nested in a switch would bind to the switch in C.
+    // Case bodies therefore keep such exits as targeted gotos.
+    std::size_t                         switch_case_depth_ = 0;
     bool                                inlining_bounded_ = false;
     std::optional<Error>                error_;
 };

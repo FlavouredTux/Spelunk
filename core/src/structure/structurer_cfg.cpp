@@ -1,5 +1,6 @@
 // Dominators, post-dominators and loop discovery over the IR CFG.
 
+#include <algorithm>
 #include <cstddef>
 #include <deque>
 #include <functional>
@@ -177,19 +178,59 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
             // detection rather than leaving loop_exit unset, which would
             // strand the post-loop block in the parent build_sequence.
         }
-        // Bottom-tested loop (do-while): header isn't conditional, but a
-        // back-edge tail tests-and-exits. Pick the first qualifying tail's
-        // non-back-edge successor as the loop's exit so build_sequence can
-        // continue past the loop.
+        // Bottom-tested loop analysis. A single conditional back-edge tail can
+        // become `do { ... } while (cond)` only when it is the loop's sole
+        // latch. With multiple latches we may still retain a proven common exit
+        // for a generic Loop, but must leave every tail test explicit.
+        struct TailCandidate {
+            addr_t tail = kNoAddr;
+            addr_t exit = kNoAddr;
+        };
+        std::vector<TailCandidate> candidates;
+        bool supported_latches = true;
         for (const addr_t tail : backs) {
             auto tit = fn.block_at.find(tail);
-            if (tit == fn.block_at.end()) continue;
+            if (tit == fn.block_at.end()) {
+                supported_latches = false;
+                break;
+            }
             const auto& tbb = fn.blocks[tit->second];
-            if (tbb.kind != BlockKind::Conditional || tbb.successors.size() != 2) continue;
+            const bool direct_back_jump =
+                (tbb.kind == BlockKind::Unconditional ||
+                 tbb.kind == BlockKind::Fallthrough) &&
+                tbb.successors.size() == 1 &&
+                tbb.successors.front() == header;
+            if (direct_back_jump) continue;
+
+            if (tbb.kind != BlockKind::Conditional ||
+                tbb.successors.size() != 2) {
+                supported_latches = false;
+                break;
+            }
             const addr_t t1 = tbb.successors[0];
             const addr_t t2 = tbb.successors[1];
-            if      (t1 == header) { info.loop_exit[header] = t2; break; }
-            else if (t2 == header) { info.loop_exit[header] = t1; break; }
+            if ((t1 == header) == (t2 == header)) {
+                supported_latches = false;
+                break;
+            }
+            const addr_t candidate_exit = t1 == header ? t2 : t1;
+            if (can_reach(candidate_exit, backs, /*forbidden=*/header)) {
+                // The non-header arm remains in the loop; it is not an exit.
+                supported_latches = false;
+                break;
+            }
+            candidates.push_back({tail, candidate_exit});
+        }
+        if (!supported_latches || candidates.empty()) continue;
+
+        const addr_t common_exit = candidates.front().exit;
+        const bool share_exit = std::ranges::all_of(
+            candidates, [&](const TailCandidate& candidate) {
+                return candidate.exit == common_exit;
+            });
+        if (share_exit) info.loop_exit[header] = common_exit;
+        if (backs.size() == 1 && candidates.size() == 1) {
+            info.do_while_tail[header] = candidates.front().tail;
         }
     }
 }

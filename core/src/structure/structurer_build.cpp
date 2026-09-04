@@ -151,12 +151,29 @@ std::unique_ptr<Region> Builder::build_sequence(addr_t entry, addr_t stop,
     // and the phi resolution should leave the value as a real merge.
     addr_t last_block = kNoAddr;
     while (current != kNoAddr && current != stop) {
-        if (loop_headers_stack_.contains(current)) {
-            seq->children.push_back(make_simple(RegionKind::Continue));
-            return seq;
-        }
-        if (loop_exits_stack_.contains(current)) {
-            seq->children.push_back(make_simple(RegionKind::Break));
+        // Unlabeled C break/continue bind to the innermost lexical loop.
+        // Preserve that shorthand only for targets owned by the top frame;
+        // an edge to an outer loop header/exit needs an explicit target or it
+        // silently changes meaning when rendered inside the nested loop.
+        for (std::size_t depth = loop_stack_.size(); depth-- > 0;) {
+            const auto& frame = loop_stack_[depth];
+            const bool targets_header = current == frame.header;
+            const bool targets_exit = frame.exit != kNoAddr &&
+                                      current == frame.exit;
+            if (!targets_header && !targets_exit) continue;
+            if (depth + 1 == loop_stack_.size()) {
+                if (targets_exit && switch_case_depth_ != 0) {
+                    // `break` would bind to the surrounding switch case, not
+                    // this loop. Keep the loop exit explicit instead.
+                    seq->children.push_back(make_goto(current));
+                } else {
+                    seq->children.push_back(make_simple(
+                        targets_header ? RegionKind::Continue
+                                       : RegionKind::Break));
+                }
+            } else {
+                seq->children.push_back(make_goto(current));
+            }
             return seq;
         }
         if (visited_.contains(current)) {
@@ -605,6 +622,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
         return body;
     };
 
+    ++switch_case_depth_;
     for (const addr_t tgt : group_order) {
         const auto& idxs = groups[tgt];
         for (std::size_t k = 0; k < idxs.size(); ++k) {
@@ -620,6 +638,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
         const addr_t dflt = sw_bb.successors.back();
         r->children.push_back(build_case_with_optional_sink(dflt));
     }
+    --switch_case_depth_;
     if (return_merge) visited_.insert(merge);
     return r;
 }
@@ -659,66 +678,69 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
         }
     }
 
-    // Do-while detection: header has no usable top-of-loop condition,
-    // but at least one back-edge source is conditional and one of its
-    // successors is the loop's exit. The tail test drives the loop,
-    // body runs at least once.
-    //
-    // We accept loops with multiple back-edge tails as long as exactly
-    // one is the conditional test-and-exit shape: the other tails are
-    // unconditional back-jumps from inside the body (e.g. an early
-    // `continue` arm of an if/else inside the loop). Picking the
-    // qualifying tail and treating it as the do-while predicate is
-    // sound because every other back-edge already proceeds straight
-    // to the same header.
+    // Loop discovery records a do-while tail only after proving the loop's
+    // sole back edge is one conditional test-and-exit latch. Reusing that
+    // decision here prevents alternate paths from being forced through an
+    // unrelated trailing `while (cond)`.
     bool do_while = false;
     addr_t dw_tail = kNoAddr;
     if (!have_cond) {
-        auto lh = info_.loop_headers.find(header);
-        if (lh != info_.loop_headers.end() && !lh->second.empty()) {
-            for (const addr_t tail : lh->second) {
-                auto tit = fn_.block_at.find(tail);
-                if (tit == fn_.block_at.end()) continue;
-                const auto& tbb = fn_.blocks[tit->second];
-                if (tbb.kind != BlockKind::Conditional ||
-                    tbb.successors.size() != 2) continue;
-                const addr_t t1 = tbb.successors[0];
-                const addr_t t2 = tbb.successors[1];
-                addr_t ex = kNoAddr;
-                bool back_first = false;
-                if (t1 == header) { ex = t2; back_first = true; }
-                else if (t2 == header) { ex = t1; }
-                if (ex == kNoAddr) continue;
-
-                do_while = true;
-                dw_tail  = tail;
-                exit     = ex;
-                cond     = extract_condition(tbb);
-                invert   = !back_first;
-                break;
+        auto tail_it = info_.do_while_tail.find(header);
+        if (tail_it != info_.do_while_tail.end()) {
+            auto block_it = fn_.block_at.find(tail_it->second);
+            if (block_it != fn_.block_at.end()) {
+                const auto& tail = fn_.blocks[block_it->second];
+                if (tail.kind == BlockKind::Conditional &&
+                    tail.successors.size() == 2) {
+                    const addr_t t1 = tail.successors[0];
+                    const addr_t t2 = tail.successors[1];
+                    const bool back_first = t1 == header;
+                    do_while = back_first || t2 == header;
+                    if (do_while) {
+                        dw_tail = tail_it->second;
+                        exit = back_first ? t2 : t1;
+                        cond = extract_condition(tail);
+                        invert = !back_first;
+                    }
+                }
             }
+        }
+        // Multiple conditional latches with one shared exit are still a
+        // finite loop, but each test must remain inside a generic Loop body.
+        if (!do_while) {
+            auto exit_it = info_.loop_exit.find(header);
+            if (exit_it != info_.loop_exit.end()) exit = exit_it->second;
         }
     }
 
-    // For-loop detection: a while where the body's single back-edge
-    // predecessor ends in an increment-and-store of a stack local that
-    // the loop condition also uses. We look for the store at the last
-    // body instruction of the block that branches back to the header.
+    // For-loop detection: a while whose sole, direct latch ends in a Store
+    // that can be rendered as the update expression. The sole-latch/direct
+    // edge proof is what makes moving that Store out of the body safe across
+    // every continue and exit path.
     bool is_for = false;
     addr_t for_update_block = 0;
     u32    for_update_inst  = 0;
     auto detect_for_update = [&]() -> bool {
         if (!have_cond) return false;
         auto lh = info_.loop_headers.find(header);
-        if (lh == info_.loop_headers.end() || lh->second.empty()) return false;
-        // Pick the most-representative back-edge tail (single tail case
-        // is overwhelmingly common for natural loops).
+        if (lh == info_.loop_headers.end() || lh->second.size() != 1) {
+            return false;
+        }
         const addr_t tail = *lh->second.begin();
         auto tit = fn_.block_at.find(tail);
         if (tit == fn_.block_at.end()) return false;
         const auto& tbb = fn_.blocks[tit->second];
-        // Walk tail insts in reverse to find a Store of
-        // Add/Sub(Load(addr), imm) where addr is a stack local.
+        // A for update runs only when control proceeds to the next iteration.
+        // Hoisting from a conditional latch would incorrectly skip the store
+        // on that latch's exit arm; multiple latches would incorrectly run one
+        // path's update for every `continue`.
+        if ((tbb.kind != BlockKind::Unconditional &&
+             tbb.kind != BlockKind::Fallthrough) ||
+            tbb.successors.size() != 1 ||
+            tbb.successors.front() != header) {
+            return false;
+        }
+        // Walk tail instructions in reverse to find its last real operation.
         for (std::size_t k = tbb.insts.size(); k-- > 0;) {
             const auto& inst = tbb.insts[k];
             if (inst.op == IrOp::Branch ||
@@ -727,12 +749,6 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
                 inst.op == IrOp::Return ||
                 inst.op == IrOp::Nop) continue;
             if (inst.op != IrOp::Store || inst.src_count < 2) return false;
-            // The store's address must be a stack local.
-            // (We can't re-run stack_offset here without a defs map;
-            // approximate by requiring the address to be a Temp or Reg.)
-            // Delta RHS must be an Add/Sub(Load(same_addr), Imm) shape.
-            // That's the exact invariant we already rely on in the
-            // emitter's peephole - if it matches, it'll render cleanly.
             for_update_block = tail;
             for_update_inst  = static_cast<u32>(k);
             return true;
@@ -766,8 +782,7 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
     visited_.insert(header);
     loop_r->children.push_back(make_block(header));
 
-    loop_headers_stack_.insert(header);
-    if (exit != kNoAddr) loop_exits_stack_.insert(exit);
+    loop_stack_.push_back({header, exit});
 
     // For a do-while the body continues through fallthrough / block
     // successors from the header until (but not including) the exit.
@@ -845,8 +860,7 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
         }
     }
 
-    loop_headers_stack_.erase(header);
-    if (exit != kNoAddr) loop_exits_stack_.erase(exit);
+    loop_stack_.pop_back();
 
     return loop_r;
 }

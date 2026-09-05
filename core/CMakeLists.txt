@@ -146,6 +146,7 @@ add_library(ember_core STATIC
     src/decompile/emitter_strings.cpp
     src/decompile/emitter_tables.cpp
     src/decompile/emitter_text.cpp
+    src/decompile/emitter_text_ppc.cpp
     src/decompile/emitter_types.cpp
     src/script/declarative.cpp
     src/debug/target.cpp

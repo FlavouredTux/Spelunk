@@ -17,6 +17,8 @@
 #include <ember/structure/region.hpp>
 
 #include "emitter_internal.hpp"
+#include "emitter_setup.hpp"
+#include "emitter_text.hpp"
 
 namespace ember::emit {
 

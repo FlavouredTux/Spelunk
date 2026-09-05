@@ -39,56 +39,6 @@
 
 namespace ember::emit {
 
-// ---- rendered-text post-processing (emitter_text.cpp) ----
-
-[[nodiscard]] std::string_view trim_line_view(std::string_view line) noexcept;
-[[nodiscard]] bool is_bb_label_line(std::string_view line) noexcept;
-[[nodiscard]] bool line_semantically_empty(std::string_view line) noexcept;
-[[nodiscard]] bool c_ident_char(char c) noexcept;
-[[nodiscard]] bool text_contains_identifier(std::string_view text,
-                                            std::string_view name) noexcept;
-[[nodiscard]] bool text_contains_identifier_in_code(std::string_view text,
-                                                    std::string_view name) noexcept;
-[[nodiscard]] bool line_declares_identifier(std::string_view line,
-                                            std::string_view name) noexcept;
-[[nodiscard]] bool text_declares_identifier(std::string_view text,
-                                            std::string_view name) noexcept;
-[[nodiscard]] std::string replace_identifier(std::string_view text,
-                                             std::string_view old_name,
-                                             std::string_view new_name);
-// SSA temporaries are useful internally, but `t57` carries no meaning in the
-// final decompilation. Give materialized PPC values stable, type-oriented
-// names. The numeric suffix is retained only when more than one value of the
-// same role is simultaneously live in the rendered function.
-[[nodiscard]] std::string rename_ppc_temporaries(std::string text);
-[[nodiscard]] std::string fix_ppc_offset_pointer_declarations(std::string text);
-// Count statements that subscript or shift-index through an untyped
-// pointer. A parameter or declaration spelled `void* name` makes any
-// later `name[...]` invalid C - deliberate RE guidance in a listing,
-// but worth flagging since everything else around it compiles.
-// Casts like `((T*)p)[i]` are already valid and never match.
-[[nodiscard]] std::size_t count_untyped_pointer_index_sites(
-    const std::string& text);
-[[nodiscard]] std::string compact_ppc_type_names(std::string text);
-[[nodiscard]] std::string collapse_ppc_field_copy_runs(const std::string& text);
-[[nodiscard]] bool line_starts_empty_if(std::string_view line) noexcept;
-[[nodiscard]] std::string lower_first_ascii(std::string s);
-[[nodiscard]] std::string sanitize_ident(std::string_view s,
-                                         std::string_view fallback);
-[[nodiscard]] std::vector<std::string>
-objc_selector_arg_names(std::string_view selector);
-[[nodiscard]] std::string objc_block_literal_name(addr_t literal);
-[[nodiscard]] std::string objc_block_invoke_name(addr_t invoke);
-[[nodiscard]] std::string block_param_type(std::string_view ty);
-[[nodiscard]] bool line_is_close_brace(std::string_view line) noexcept;
-[[nodiscard]] bool line_is_else_open(std::string_view line) noexcept;
-[[nodiscard]] std::string strip_outer_parens(std::string_view s);
-[[nodiscard]] std::string invert_condition_text(std::string_view cond);
-[[nodiscard]] std::optional<std::string>
-inverted_if_line(std::string_view line);
-[[nodiscard]] std::string collapse_empty_then_else_blocks(std::string_view text);
-[[nodiscard]] std::string strip_label_only_if_blocks(std::string_view text);
-
 // C operator precedence, scaled so "tighter binds" = higher value. Used to
 // decide whether a sub-expression needs wrapping in parens. Only the handful
 // of levels the emitter actually produces are enumerated; add more as new
@@ -1478,39 +1428,5 @@ struct Emitter {
 
     [[nodiscard]] std::string render_condition(const IrValue& v, bool invert) const;
 };
-
-struct EmitterMetadataStorage {
-    std::map<addr_t, std::string> local_selrefs;
-    std::map<addr_t, std::string> local_classrefs;
-    std::vector<ObjcMethod>       local_objc_methods;
-    std::vector<ObjcIvar>         local_objc_ivars;
-    std::vector<ObjcProperty>     local_objc_properties;
-    std::vector<ObjcBlock>        local_objc_blocks;
-    std::vector<ObjcStackBlockInvoke> local_objc_stack_blocks;
-    std::map<addr_t, std::string> local_rtti_methods;
-};
-
-struct SignatureContext {
-    bool has_user_sig = false;
-    bool has_metadata_sig = false;
-    bool has_authoritative_arity = false;
-    bool has_authoritative_types = false;
-    std::optional<FunctionSig> effective_metadata_signature;
-};
-
-[[nodiscard]] bool is_incomplete_decomp_signature(const FunctionSig& signature);
-
-[[nodiscard]] std::string
-signature_parameter_name(const ParamSig& parameter, std::size_t index);
-
-void setup_emitter_metadata(Emitter& e,
-                            const StructuredFunction& sf,
-                            const Binary* binary,
-                            EmitterMetadataStorage& storage);
-
-SignatureContext setup_signature_context(Emitter& e,
-                                         const StructuredFunction& sf,
-                                         const Binary* binary,
-                                         const Annotations* annotations);
 
 }  // namespace ember::emit

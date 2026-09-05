@@ -1,25 +1,100 @@
 // Post-processing passes over rendered pseudo-C text.
-#include <algorithm>
-#include <array>
 #include <cctype>
-#include <charconv>
 #include <cstddef>
 #include <format>
-#include <map>
 #include <optional>
-#include <regex>
-#include <set>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
 #include <ember/common/types.hpp>
 
-#include "emitter_internal.hpp"
+#include "emitter_text.hpp"
 
 namespace ember::emit {
+
+namespace {
+
+struct CodeSpan {
+    std::size_t begin;
+    std::size_t end;
+};
+
+// The emitter produces ordinary C literals (including wide and ObjC strings).
+// Keep their escape handling and comment boundaries in one scanner.
+std::optional<std::size_t> non_code_end(std::string_view text,
+                                        std::size_t start) noexcept {
+    if (text.substr(start, 2) == "//") {
+        std::size_t end = start + 2;
+        while (end < text.size()) {
+            if (text[end] == '\n' &&
+                (end == 0 || text[end - 1] != '\\')) break;
+            ++end;
+        }
+        return end;
+    }
+    if (text.substr(start, 2) == "/*") {
+        const auto end = text.find("*/", start + 2);
+        return end == std::string_view::npos ? text.size() : end + 2;
+    }
+    std::size_t quote_at = start;
+    if (start == 0 || !c_ident_char(text[start - 1])) {
+        const auto tail = text.substr(start);
+        if (tail.starts_with("u8\"") || tail.starts_with("u8'")) {
+            quote_at += 2;
+        } else if (tail.size() >= 2 &&
+                   (tail[0] == 'L' || tail[0] == 'u' ||
+                    tail[0] == 'U' || tail[0] == '@') &&
+                   (tail[1] == '"' || tail[1] == '\'')) {
+            ++quote_at;
+        }
+    }
+    const char quote = text[quote_at];
+    if (quote != '"' && quote != '\'') return std::nullopt;
+    std::size_t end = quote_at + 1;
+    while (end < text.size()) {
+        if (text[end] == '\\') {
+            end += end + 1 < text.size() ? 2u : 1u;
+        } else if (text[end++] == quote) {
+            break;
+        }
+    }
+    return end;
+}
+
+std::optional<CodeSpan> next_code_span(std::string_view text,
+                                      std::size_t& cursor) noexcept {
+    std::size_t begin = cursor;
+    while (cursor < text.size()) {
+        if (auto end = non_code_end(text, cursor)) {
+            const CodeSpan span{begin, cursor};
+            cursor = *end;
+            if (span.begin != span.end) return span;
+            begin = cursor;
+        } else {
+            ++cursor;
+        }
+    }
+    if (begin != cursor) return CodeSpan{begin, cursor};
+    return std::nullopt;
+}
+
+}  // namespace
+
+std::string code_only_text(std::string_view text) {
+    std::string code(text.size(), ' ');
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n' || text[i] == '\r') code[i] = text[i];
+    }
+    std::size_t cursor = 0;
+    while (auto span = next_code_span(text, cursor)) {
+        code.replace(span->begin, span->end - span->begin,
+                     text.substr(span->begin, span->end - span->begin));
+    }
+    return code;
+}
+
 
 std::string_view trim_line_view(std::string_view line) noexcept {
     while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
@@ -67,45 +142,23 @@ bool text_contains_identifier(std::string_view text,
 }
 
 bool text_contains_identifier_in_code(std::string_view text,
-                                                    std::string_view name) noexcept {
-    bool in_block_comment = false;
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        std::size_t end = text.find('\n', start);
-        if (end == std::string_view::npos) end = text.size();
-        std::string_view line = text.substr(start, end - start);
-        if (const std::size_t comment = line.find("//");
-            comment != std::string_view::npos) {
-            line = line.substr(0, comment);
+                                      std::string_view name) noexcept {
+    if (name.empty()) return false;
+    std::size_t cursor = 0;
+    while (auto span = next_code_span(text, cursor)) {
+        if (text_contains_identifier(
+                text.substr(span->begin, span->end - span->begin), name)) {
+            return true;
         }
-        std::string code;
-        code.reserve(line.size());
-        for (std::size_t i = 0; i < line.size(); ) {
-            if (in_block_comment) {
-                const std::size_t close = line.find("*/", i);
-                if (close == std::string_view::npos) break;
-                in_block_comment = false;
-                i = close + 2;
-                continue;
-            }
-            const std::size_t open = line.find("/*", i);
-            if (open == std::string_view::npos) {
-                code.append(line.substr(i));
-                break;
-            }
-            code.append(line.substr(i, open - i));
-            in_block_comment = true;
-            i = open + 2;
-        }
-        if (text_contains_identifier(code, name)) return true;
-        if (end == text.size()) break;
-        start = end + 1;
     }
     return false;
 }
 
-bool line_declares_identifier(std::string_view line,
-                                            std::string_view name) noexcept {
+namespace {
+
+bool code_line_declares_identifier(std::string_view line,
+                                   std::string_view name) noexcept {
+    if (name.empty()) return false;
     line = trim_line_view(line);
     std::size_t pos = line.find(name);
     while (pos != std::string_view::npos) {
@@ -129,13 +182,21 @@ bool line_declares_identifier(std::string_view line,
     return false;
 }
 
+}  // namespace
+
+bool line_declares_identifier(std::string_view line, std::string_view name) {
+    return code_line_declares_identifier(code_only_text(line), name);
+}
+
 bool text_declares_identifier(std::string_view text,
-                                            std::string_view name) noexcept {
+                              std::string_view name) {
+    const std::string code = code_only_text(text);
     std::size_t start = 0;
     while (start <= text.size()) {
         std::size_t end = text.find('\n', start);
         if (end == std::string_view::npos) end = text.size();
-        if (line_declares_identifier(text.substr(start, end - start), name)) {
+        if (code_line_declares_identifier(
+                std::string_view(code).substr(start, end - start), name)) {
             return true;
         }
         if (end == text.size()) break;
@@ -145,166 +206,36 @@ bool text_declares_identifier(std::string_view text,
 }
 
 std::string replace_identifier(std::string_view text,
-                                             std::string_view old_name,
-                                             std::string_view new_name) {
+                               std::string_view old_name,
+                               std::string_view new_name) {
+    if (old_name.empty()) return std::string(text);
     std::string out;
     out.reserve(text.size());
     std::size_t cursor = 0;
-    while (cursor < text.size()) {
-        const std::size_t pos = text.find(old_name, cursor);
-        if (pos == std::string_view::npos) {
-            out.append(text.substr(cursor));
-            break;
+    std::size_t copied = 0;
+    while (auto span = next_code_span(text, cursor)) {
+        std::size_t pos = span->begin;
+        while ((pos = text.find(old_name, pos)) != std::string_view::npos &&
+               pos < span->end) {
+            const std::size_t end = pos + old_name.size();
+            const bool left_ok = pos == span->begin || !c_ident_char(text[pos - 1]);
+            const bool right_ok = end == span->end ||
+                (end < span->end && !c_ident_char(text[end]));
+            if (left_ok && right_ok) {
+                out.append(text.substr(copied, pos - copied));
+                out.append(new_name);
+                copied = end;
+            }
+            pos = end;
         }
-        const std::size_t end = pos + old_name.size();
-        const bool left_ok = pos == 0 || !c_ident_char(text[pos - 1]);
-        const bool right_ok = end == text.size() || !c_ident_char(text[end]);
-        out.append(text.substr(cursor, pos - cursor));
-        if (left_ok && right_ok) {
-            out.append(new_name);
-        } else {
-            out.append(old_name);
-        }
-        cursor = end;
     }
+    out.append(text.substr(copied));
     return out;
 }
 
-std::string rename_ppc_temporaries(std::string text) {
-    struct Rename {
-        std::string old_name;
-        std::string new_name;
-    };
-    std::vector<Rename> renames;
-    std::map<std::string, u32> next_suffix;
-    std::vector<std::string> temporary_names;
-    std::set<std::string> seen_temporaries;
-    for (std::size_t i = 0; i + 1 < text.size(); ++i) {
-        if (text[i] != 't' ||
-            !std::isdigit(static_cast<unsigned char>(text[i + 1])) ||
-            (i != 0 && c_ident_char(text[i - 1]))) {
-            continue;
-        }
-        std::size_t name_end = i + 2;
-        while (name_end < text.size() && std::isdigit(
-                   static_cast<unsigned char>(text[name_end]))) {
-            ++name_end;
-        }
-        if (name_end < text.size() && c_ident_char(text[name_end])) continue;
-        std::string name = text.substr(i, name_end - i);
-        if (seen_temporaries.insert(name).second) {
-            temporary_names.push_back(std::move(name));
-        }
-        i = name_end - 1;
-    }
-
-    for (const std::string& old_name : temporary_names) {
-        std::string_view declared_type;
-        std::size_t start = 0;
-        while (start <= text.size()) {
-            std::size_t end = text.find('\n', start);
-            if (end == std::string::npos) end = text.size();
-            const std::string_view line = std::string_view(text).substr(
-                start, end - start);
-            if (line_declares_identifier(line, old_name)) {
-                const std::size_t declared_at = line.find(old_name);
-                declared_type = trim_line_view(line.substr(0, declared_at));
-                break;
-            }
-            if (end == text.size()) break;
-            start = end + 1;
-        }
-
-        const auto used_on_line_with = [&](std::string_view needle) {
-            std::size_t line_start = 0;
-            while (line_start <= text.size()) {
-                std::size_t line_end = text.find('\n', line_start);
-                if (line_end == std::string::npos) line_end = text.size();
-                const std::string_view line = std::string_view(text).substr(
-                    line_start, line_end - line_start);
-                if (!line_declares_identifier(line, old_name) &&
-                    text_contains_identifier(line, old_name) &&
-                    line.find(needle) != std::string_view::npos) {
-                    return true;
-                }
-                if (line_end == text.size()) break;
-                line_start = line_end + 1;
-            }
-            return false;
-        };
-
-        std::string base = "value";
-        if (declared_type.find("PpcState") != std::string_view::npos) {
-            base = "state";
-        } else if (declared_type.find("PpcObject") != std::string_view::npos) {
-            base = "object";
-        } else if (declared_type.find('*') != std::string_view::npos) {
-            base = "data";
-        } else if (declared_type.find("bool") != std::string_view::npos) {
-            base = "flag";
-        } else if (declared_type.find("float") != std::string_view::npos ||
-                   declared_type.find("double") != std::string_view::npos) {
-            base = used_on_line_with(" * ") ? "scale" : "scalar";
-        } else if (declared_type.find("uint8_t") != std::string_view::npos ||
-                   declared_type.find("int8_t") != std::string_view::npos) {
-            base = "byte_value";
-        } else if (declared_type.find("uint16_t") != std::string_view::npos ||
-                   declared_type.find("int16_t") != std::string_view::npos) {
-            base = "halfword";
-        } else if (used_on_line_with("SetMessage") ||
-                   used_on_line_with("Msg(")) {
-            base = "message_id";
-        } else if (used_on_line_with(" & ")) {
-            base = "flags";
-        }
-
-        u32& suffix = next_suffix[base];
-        std::string candidate;
-        do {
-            ++suffix;
-            candidate = suffix == 1
-                ? base
-                : std::format("{}_{}", base, suffix);
-        } while (text_contains_identifier(text, candidate));
-        renames.push_back({old_name, std::move(candidate)});
-    }
-
-    for (const Rename& rename : renames) {
-        text = replace_identifier(text, rename.old_name, rename.new_name);
-    }
-    return text;
-}
-
-std::string fix_ppc_offset_pointer_declarations(std::string text) {
-    std::size_t start = 0;
-    while (start < text.size()) {
-        std::size_t end = text.find('\n', start);
-        if (end == std::string::npos) end = text.size();
-        std::string_view line(text.data() + start, end - start);
-        const std::size_t type = line.find("void* ");
-        const std::size_t equals = line.find(" = ");
-        if (type != std::string_view::npos && equals != std::string_view::npos &&
-            type < equals) {
-            const std::string_view initializer = line.substr(equals + 3);
-            const bool scaled_integer =
-                (initializer.find(" << ") != std::string_view::npos ||
-                 initializer.find(" >> ") != std::string_view::npos) &&
-                (initializer.find(" & ") != std::string_view::npos ||
-                 initializer.find(" | ") != std::string_view::npos);
-            if (scaled_integer) {
-                text.replace(start + type, 5, "uint32_t");
-                const std::size_t growth = std::string_view("uint32_t").size() - 5;
-                end += growth;
-            }
-        }
-        if (end == text.size()) break;
-        start = end + 1;
-    }
-    return text;
-}
-
 std::size_t count_untyped_pointer_index_sites(
-    const std::string& text) {
+    const std::string& source) {
+    const std::string text = code_only_text(source);
     std::vector<std::string> untyped_names;
     const auto is_ident_char = [](char c) {
         const auto uc = static_cast<unsigned char>(c);
@@ -369,168 +300,6 @@ std::size_t count_untyped_pointer_index_sites(
         start = end + 1;
     }
     return sites;
-}
-
-std::string compact_ppc_type_names(std::string text) {
-    static constexpr std::array<std::string_view, 3> families{
-        "PpcGlobalState", "PpcObject", "PpcState"
-    };
-    std::map<std::string, std::vector<std::pair<u32, std::string>>> declarations;
-    std::vector<std::pair<std::string, std::string>> renames;
-    std::size_t start = 0;
-    while (start <= text.size()) {
-        std::size_t end = text.find('\n', start);
-        if (end == std::string::npos) end = text.size();
-        const std::string_view line = std::string_view(text).substr(
-            start, end - start);
-        constexpr std::string_view prefix = "typedef union ";
-        if (line.starts_with(prefix)) {
-            const std::string_view declared = line.substr(prefix.size());
-            for (std::string_view family : families) {
-                if (!declared.starts_with(family)) continue;
-                std::size_t name_size = family.size();
-                while (name_size < declared.size() && std::isdigit(
-                           static_cast<unsigned char>(declared[name_size]))) {
-                    ++name_size;
-                }
-                const std::string old_name(declared.substr(0, name_size));
-                u32 suffix = 0;
-                if (name_size > family.size()) {
-                    const std::string_view raw = declared.substr(
-                        family.size(), name_size - family.size());
-                    (void)std::from_chars(raw.data(), raw.data() + raw.size(), suffix);
-                }
-                auto& names = declarations[std::string(family)];
-                if (std::ranges::none_of(names, [&](const auto& item) {
-                        return item.second == old_name;
-                    })) names.emplace_back(suffix, old_name);
-                break;
-            }
-        }
-        if (end == text.size()) break;
-        start = end + 1;
-    }
-    for (auto& [family, names] : declarations) {
-        std::ranges::sort(names, [](const auto& lhs, const auto& rhs) {
-            return lhs.first < rhs.first ||
-                   (lhs.first == rhs.first && lhs.second < rhs.second);
-        });
-        for (std::size_t i = 0; i < names.size(); ++i) {
-            const std::string new_name = i == 0
-                ? family : std::format("{}{}", family, i + 1);
-            if (names[i].second != new_name) {
-                renames.emplace_back(names[i].second, new_name);
-            }
-        }
-    }
-    std::vector<std::pair<std::string, std::string>> staged;
-    staged.reserve(renames.size());
-    for (std::size_t i = 0; i < renames.size(); ++i) {
-        std::string temporary = std::format("__ember_ppc_type_{}__", i);
-        text = replace_identifier(text, renames[i].first, temporary);
-        staged.emplace_back(std::move(temporary), renames[i].second);
-    }
-    for (const auto& [temporary, new_name] : staged) {
-        text = replace_identifier(text, temporary, new_name);
-    }
-    return text;
-}
-
-std::string collapse_ppc_field_copy_runs(const std::string& text) {
-    struct CopyLine {
-        std::string indent;
-        std::string destination;
-        std::string source;
-        i64 destination_offset = 0;
-        i64 source_offset = 0;
-        i64 width = 0;
-    };
-    const std::regex copy_pattern(
-        R"(^(\s*)(?:\*\([^)]*\)&)?([A-Za-z_][A-Za-z0-9_]*)->(byte|half|word|qword|float|double)_([0-9a-fA-F]+) = (?:\*\([^)]*\)&)?([A-Za-z_][A-Za-z0-9_]*)->(byte|half|word|qword|float|double)_([0-9a-fA-F]+);$)");
-    const auto width_for = [](std::string_view prefix) -> i64 {
-        if (prefix == "byte") return 1;
-        if (prefix == "half") return 2;
-        if (prefix == "qword" || prefix == "double") return 8;
-        return 4;
-    };
-    const auto parse = [&](const std::string& line) -> std::optional<CopyLine> {
-        std::smatch match;
-        if (!std::regex_match(line, match, copy_pattern)) return std::nullopt;
-        CopyLine copy;
-        copy.indent = match[1].str();
-        copy.destination = match[2].str();
-        copy.source = match[5].str();
-        copy.width = width_for(match[3].str());
-        const std::string destination_offset = match[4].str();
-        const std::string source_offset = match[7].str();
-        auto destination_result = std::from_chars(
-            destination_offset.data(),
-            destination_offset.data() + destination_offset.size(),
-            copy.destination_offset, 16);
-        auto source_result = std::from_chars(
-            source_offset.data(), source_offset.data() + source_offset.size(),
-            copy.source_offset, 16);
-        if (destination_result.ec != std::errc{} ||
-            source_result.ec != std::errc{}) return std::nullopt;
-        return copy;
-    };
-
-    std::vector<std::string> lines;
-    std::size_t start = 0;
-    while (start < text.size()) {
-        std::size_t end = text.find('\n', start);
-        if (end == std::string::npos) end = text.size();
-        lines.push_back(text.substr(start, end - start));
-        if (end == text.size()) break;
-        start = end + 1;
-    }
-    std::vector<std::string> output;
-    for (std::size_t i = 0; i < lines.size();) {
-        auto first = parse(lines[i]);
-        if (!first) {
-            output.push_back(std::move(lines[i++]));
-            continue;
-        }
-        std::size_t end = i + 1;
-        i64 destination_end = first->destination_offset + first->width;
-        i64 source_end = first->source_offset + first->width;
-        while (end < lines.size()) {
-            auto next = parse(lines[end]);
-            if (!next || next->indent != first->indent ||
-                next->destination != first->destination ||
-                next->source != first->source ||
-                next->destination_offset != destination_end ||
-                next->source_offset != source_end) break;
-            destination_end += next->width;
-            source_end += next->width;
-            ++end;
-        }
-        if (end - i < 4) {
-            output.push_back(std::move(lines[i++]));
-            continue;
-        }
-        const i64 bytes = destination_end - first->destination_offset;
-        std::string destination = first->destination;
-        std::string source = first->source;
-        if (first->destination_offset > 0) {
-            destination = std::format("(uint8_t*){} + {:#x}", destination,
-                                      static_cast<u64>(first->destination_offset));
-        }
-        if (first->source_offset > 0) {
-            source = std::format("(uint8_t*){} + {:#x}", source,
-                                 static_cast<u64>(first->source_offset));
-        }
-        output.push_back(std::format("{}memcpy({}, {}, {:#x});",
-                                     first->indent, destination,
-                                     source, static_cast<u64>(bytes)));
-        i = end;
-    }
-    std::string collapsed;
-    for (std::size_t i = 0; i < output.size(); ++i) {
-        collapsed += output[i];
-        if (i + 1 < output.size() || text.ends_with('\n')) collapsed += '\n';
-    }
-    return collapsed;
 }
 
 bool line_starts_empty_if(std::string_view line) noexcept {

@@ -119,6 +119,13 @@ add_executable(ember_ppc_decoder_test
 target_link_libraries(ember_ppc_decoder_test PRIVATE ember::core ember::flags)
 add_test(NAME ppc_decoder_unit COMMAND ember_ppc_decoder_test)
 
+add_executable(ember_emitter_text_test emitter_text_test.cpp)
+target_include_directories(ember_emitter_text_test PRIVATE
+    "${PROJECT_SOURCE_DIR}/core/src/decompile")
+target_link_libraries(ember_emitter_text_test
+    PRIVATE ember::core ember::flags)
+add_test(NAME emitter_text_unit COMMAND ember_emitter_text_test)
+
 add_executable(ember_emitter_string_literals_test
     emitter_string_literals_test.cpp)
 target_include_directories(ember_emitter_string_literals_test PRIVATE

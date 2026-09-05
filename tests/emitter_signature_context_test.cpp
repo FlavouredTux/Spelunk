@@ -1,6 +1,7 @@
 #include "structurer_fail_common.hpp"
 
 #include "emitter_internal.hpp"
+#include "emitter_setup.hpp"
 
 #include <ember/analysis/objc.hpp>
 

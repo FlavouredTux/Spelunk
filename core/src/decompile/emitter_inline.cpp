@@ -15,6 +15,7 @@
 #include <ember/ir/ssa.hpp>
 
 #include "emitter_internal.hpp"
+#include "emitter_text.hpp"
 
 namespace ember::emit {
 

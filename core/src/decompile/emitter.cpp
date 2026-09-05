@@ -32,6 +32,8 @@
 
 #include "emitter_document.hpp"
 #include "emitter_internal.hpp"
+#include "emitter_setup.hpp"
+#include "emitter_text.hpp"
 #include "emitter_render_chunk.hpp"
 #include "emitter_tables.hpp"
 

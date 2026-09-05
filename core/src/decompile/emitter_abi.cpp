@@ -25,6 +25,8 @@
 #include <ember/ir/types.hpp>
 
 #include "emitter_internal.hpp"
+#include "emitter_setup.hpp"
+#include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
 namespace ember::emit {

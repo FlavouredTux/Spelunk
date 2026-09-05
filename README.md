@@ -161,18 +161,25 @@ docs/
 ctest --test-dir build
 ```
 
-`ir_semantics_unit` interprets integer SSA before and after cleanup and
-compares return values and final memory bytes. It covers arithmetic boundaries,
-cast chains, overlapping memory accesses, and deterministic generated programs.
-The test-only interpreter rejects unsupported operations; it currently handles
-one straight-line block, 1–64-bit integers, and bounded little-endian memory.
-It does not validate the decoders, lifters, or emitted pseudo-C.
+`ir_semantics_unit` and `ir_control_flow_unit` interpret integer SSA before and
+after cleanup and compare return values and final memory bytes. They cover
+arithmetic boundaries, cast chains, overlapping memory accesses, diamonds,
+early returns, and counted loops, with deterministic generated cases.
 
-Semantic mismatches print both IR versions and the initial machine state. Generated cases
-also print a seed that can be replayed directly:
+The test-only interpreter supports 1–64-bit integers, bounded little-endian
+memory, direct/conditional branches, and predecessor-selected phi nodes. Phis
+update simultaneously, including on loop backedges. CFG and SSA validation
+rejects malformed edges and non-dominating definitions; execution stops with
+an error after 10,000 instructions by default. Unsupported operations and
+step-limit exhaustion fail comparisons even when both versions fail. These
+tests do not validate the decoders, lifters, or emitted pseudo-C.
+
+Semantic mismatches print both IR versions and the initial machine state.
+Generated cases also print a seed that can be replayed directly:
 
 ```sh
 ./build/tests/ember_ir_semantics_test --seed 42
+./build/tests/ember_ir_control_flow_test --seed 42
 ```
 
 Golden outputs live in `tests/golden/`. After an intentional output change,

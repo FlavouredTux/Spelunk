@@ -1,6 +1,6 @@
 #include "ir_interpreter.hpp"
+#include "ir_interpreter_cfg.hpp"
 
-#include <array>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -48,9 +48,9 @@ public:
         }
         const auto key = ssa_key(value);
         if (!key) throw std::runtime_error("missing destination");
-        if (!values_.emplace(*key, bits & mask(width(value.type))).second) {
-            throw std::runtime_error("SSA value defined twice");
-        }
+        // Static uniqueness is checked before execution. A loop revisits
+        // the same definition and produces its next dynamic value.
+        values_.insert_or_assign(*key, bits & mask(width(value.type)));
     }
 
     void execute(const IrInst& inst) {
@@ -209,27 +209,59 @@ private:
 }  // namespace
 
 std::expected<Execution, std::string>
-interpret(const IrFunction& function, const MachineInput& input) {
-    if (function.blocks.size() != 1 || !function.blocks[0].successors.empty()) {
-        return std::unexpected("interpreter requires one straight-line block");
+interpret(const IrFunction& function, const MachineInput& input,
+          std::size_t step_limit) {
+    try {
+        validate_interpreter_cfg(function, input);
+    } catch (const std::runtime_error& error) {
+        return std::unexpected(std::format("invalid CFG/SSA: {}", error.what()));
     }
-    Machine machine(input);
-    const auto& instructions = function.blocks[0].insts;
+    addr_t block_address = function.start;
     std::size_t index = 0;
     try {
-        for (; index < instructions.size(); ++index) {
-            const auto& inst = instructions[index];
-            machine.execute(inst);
-            if (inst.op == IrOp::Return) {
-                if (index + 1 != instructions.size()) {
-                    throw std::runtime_error("instructions after return");
+        Machine machine(input);
+        std::optional<addr_t> predecessor;
+        std::size_t steps = 0;
+        const auto tick = [&] {
+            if (steps == step_limit) throw std::runtime_error("execution step limit exceeded");
+            ++steps;
+        };
+        for (;;) {
+            const auto& block = function.blocks[function.block_at.at(block_address)];
+            index = 0;
+            // All phi operands are read before any phi destination is changed.
+            // This preserves loop-carried swaps and self-referential phis.
+            std::vector<std::pair<IrValue, u64>> incoming;
+            for (; index < block.insts.size(); ++index) {
+                const auto& inst = block.insts[index];
+                if (inst.op == IrOp::Nop) { tick(); continue; }
+                if (inst.op != IrOp::Phi) break;
+                tick();
+                if (!predecessor) throw std::runtime_error("phi without predecessor");
+                for (std::size_t pi = 0; pi < inst.phi_preds.size(); ++pi) {
+                    if (inst.phi_preds[pi] == *predecessor) {
+                        incoming.emplace_back(inst.dst, machine.read(inst.phi_operands[pi]));
+                        break;
+                    }
                 }
-                return std::move(machine.result);
+            }
+            for (const auto& [destination, value] : incoming) machine.write(destination, value);
+            for (; index < block.insts.size(); ++index) {
+                tick();
+                const auto& inst = block.insts[index];
+                if (inst.op == IrOp::Branch || inst.op == IrOp::CondBranch) {
+                    predecessor = block_address;
+                    block_address = inst.op == IrOp::Branch || machine.read(inst.srcs[0])
+                        ? inst.target1 : inst.target2;
+                    break;
+                }
+                machine.execute(inst);
+                if (inst.op == IrOp::Return) return std::move(machine.result);
             }
         }
-        return std::unexpected("block has no return");
     } catch (const std::runtime_error& error) {
-        return std::unexpected(std::format("instruction {}: {}", index, error.what()));
+        return std::unexpected(std::format("block {:#x}, instruction {}: {}",
+                                           block_address, index, error.what()));
     }
 }
 

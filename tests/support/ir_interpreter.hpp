@@ -23,13 +23,17 @@ struct Execution {
     bool operator==(const Execution&) const = default;
 };
 
-// Single-block SSA, integer widths 1..64, and bounded little-endian memory.
+// Integer SSA with direct/conditional branches, simultaneous edge-selected
+// phis, integer widths 1..64, and bounded little-endian memory.
 // Memory is ordinary, nonvolatile storage: compare final bytes, not the number
-// of stores (DSE may remove overwritten stores). Calls, control flow, floating
+// of stores (DSE may remove overwritten stores). Calls, indirect branches, floating
 // point, and ambiguous signed/unsigned Div/Mod are rejected, never skipped.
 // Shift counts follow the current scalar IR convention: low 5 bits below
 // 64-bit width, low 6 bits at 64-bit width. This is not an ISA emulator.
+// Each executed instruction (including phis and branches) consumes one step.
+// Exhaustion is an error, not proof of nontermination or equivalence.
 [[nodiscard]] std::expected<Execution, std::string>
-interpret(const IrFunction& function, const MachineInput& input);
+interpret(const IrFunction& function, const MachineInput& input,
+          std::size_t step_limit = 10000);
 
 }  // namespace ember::test

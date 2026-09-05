@@ -224,12 +224,21 @@ add_executable(ember_ir_cleanup_test ir_cleanup_test.cpp)
 target_link_libraries(ember_ir_cleanup_test PRIVATE ember::core ember::flags)
 add_test(NAME ir_cleanup_unit COMMAND ember_ir_cleanup_test)
 
-add_executable(ember_ir_semantics_test
-    ir_semantics_test.cpp
-    support/ir_interpreter.cpp)
-target_link_libraries(ember_ir_semantics_test PRIVATE ember::core ember::flags)
+add_library(ember_ir_test_support STATIC
+    support/ir_interpreter.cpp
+    support/ir_interpreter_cfg.cpp
+    support/ir_semantics_compare.cpp)
+target_link_libraries(ember_ir_test_support PUBLIC ember::core PRIVATE ember::flags)
+
+add_executable(ember_ir_semantics_test ir_semantics_test.cpp)
+target_link_libraries(ember_ir_semantics_test PRIVATE ember_ir_test_support ember::flags)
 add_test(NAME ir_semantics_unit COMMAND ember_ir_semantics_test)
-set_tests_properties(ir_semantics_unit PROPERTIES
+
+add_executable(ember_ir_control_flow_test ir_control_flow_test.cpp)
+target_link_libraries(ember_ir_control_flow_test PRIVATE ember_ir_test_support ember::flags)
+add_test(NAME ir_control_flow_unit COMMAND ember_ir_control_flow_test)
+set_tests_properties(ir_semantics_unit ir_control_flow_unit PROPERTIES
+    TIMEOUT 30
     ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1")
 
 add_executable(ember_loader_robustness_test loader_robustness_test.cpp)

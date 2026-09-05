@@ -1,4 +1,5 @@
 #include "support/ir_interpreter.hpp"
+#include "support/ir_semantics_compare.hpp"
 
 #include <array>
 #include <bit>
@@ -12,7 +13,6 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/ir/passes.hpp>
 
 namespace {
 using namespace ember;
@@ -24,8 +24,7 @@ constexpr std::array binary_ops{
     IrOp::Shl, IrOp::Lshr, IrOp::Ashr,
     IrOp::CmpEq, IrOp::CmpNe, IrOp::CmpUlt, IrOp::CmpUle, IrOp::CmpUgt,
     IrOp::CmpUge, IrOp::CmpSlt, IrOp::CmpSle, IrOp::CmpSgt, IrOp::CmpSge};
-std::size_t comparisons = 0;
-std::size_t programs = 0;
+CleanupVerifier verifier;
 
 bool check(bool condition, std::string_view message) {
     if (!condition) std::fprintf(stderr, "FAIL: %.*s\n",
@@ -102,49 +101,6 @@ MachineInput input_for(u64 seed, u64 a = 0, u64 b = 0, u64 p = 16, u64 q = 16) {
     return input;
 }
 
-bool compare_execution(const IrFunction& original, const IrFunction& cleaned,
-                       const MachineInput& input) {
-    const auto before = interpret(original, input);
-    const auto after = interpret(cleaned, input);
-    ++comparisons;
-    if (before && after && *before == *after) return true;
-    std::fprintf(stderr, "FAIL: semantic mismatch in %s\n", original.name.c_str());
-    for (const auto& [key, value] : input.values) {
-        std::fprintf(stderr, "input (%u,%u,%u) = %s\n",
-                     static_cast<unsigned>(std::get<0>(key)),
-                     std::get<1>(key), std::get<2>(key),
-                     std::format("{:#018x}", value).c_str());
-    }
-    std::fprintf(stderr, "initial memory:");
-    for (u8 byte : input.memory) std::fprintf(stderr, " %02x", static_cast<unsigned>(byte));
-    std::fprintf(stderr, "\nbefore: %s\nafter: %s\n",
-                 before ? (before->returned ? std::format("{:#x}", *before->returned).c_str() : "void") : before.error().c_str(),
-                 after ? (after->returned ? std::format("{:#x}", *after->returned).c_str() : "void") : after.error().c_str());
-    if (before && after && before->memory != after->memory) {
-        for (std::size_t i = 0; i < before->memory.size(); ++i) {
-            if (before->memory[i] != after->memory[i]) {
-                std::fprintf(stderr, "memory[%zu]: %02x -> %02x\n", i,
-                             static_cast<unsigned>(before->memory[i]),
-                             static_cast<unsigned>(after->memory[i]));
-            }
-        }
-    }
-    std::fprintf(stderr, "Original IR:\n%s\nCleaned IR:\n%s\n",
-                 format_ir_function(original).c_str(), format_ir_function(cleaned).c_str());
-    return false;
-}
-
-bool verify(const IrFunction& original, const std::vector<MachineInput>& inputs) {
-    IrFunction cleaned = original;
-    const auto result = run_cleanup(cleaned);
-    ++programs;
-    if (!result) return check(false, "cleanup failed");
-    for (const auto& input : inputs) {
-        if (!compare_execution(original, cleaned, input)) return false;
-    }
-    return true;
-}
-
 bool oracle_checks() {
     const auto expect = [](IrOp op, IrType type, std::initializer_list<IrValue> args, u64 expected) {
         Program p("oracle");
@@ -200,7 +156,7 @@ bool oracle_checks() {
     wide.ret(IrValue::make_imm(0, IrType::I128));
     if (!check(!interpret(wide.fn, {}), "unsupported widths are rejected")) return false;
     memory.fn.blocks.push_back(memory.fn.blocks[0]);
-    return check(!interpret(memory.fn, input_for(1)), "multiple blocks are rejected");
+    return check(!interpret(memory.fn, input_for(1)), "duplicate block addresses are rejected");
 }
 
 bool constant_cases() {
@@ -212,13 +168,13 @@ bool constant_cases() {
             for (u64 a : values) for (u64 b : values) {
                 Program p(std::format("constant-{}-{}-{:x}-{:x}", type_name(type), op_name(op), a, b));
                 p.ret(p.value(op, is_compare(op) ? IrType::I1 : type, {imm(a, type), imm(b, type)}));
-                if (!verify(p.fn, {input_for(1)})) return false;
+                if (!verifier.verify(p.fn, {input_for(1)})) return false;
             }
         }
         for (IrOp op : {IrOp::Neg, IrOp::Not}) for (u64 a : values) {
             Program p(std::format("unary-{}-{}-{:x}", type_name(type), op_name(op), a));
             p.ret(p.value(op, type, {imm(a, type)}));
-            if (!verify(p.fn, {input_for(1)})) return false;
+            if (!verifier.verify(p.fn, {input_for(1)})) return false;
         }
     }
     return true;
@@ -238,7 +194,7 @@ bool cast_cases() {
             for (u64 bits : {u64{0}, u64{1}, high - 1, high, high + 1, ~u64{0}}) {
                 inputs.push_back(input_for(1, bits));
             }
-            if (!verify(p.fn, inputs)) return false;
+            if (!verifier.verify(p.fn, inputs)) return false;
         }
     }
     return true;
@@ -263,7 +219,7 @@ bool memory_cases() {
                                u64{16} + type_bits(first) / 8, u64{40}}) {
                 inputs.push_back(input_for(1, 0, 0, 16, address));
             }
-            if (!verify(program.fn, inputs)) return false;
+            if (!verifier.verify(program.fn, inputs)) return false;
         }
     }
     return true;
@@ -322,7 +278,7 @@ bool generated_case(u64 seed) {
         const u64 q_address = std::array<u64, 4>{16, 17, 16 + type_bits(type) / 8, 40}[i % 4];
         inputs.push_back(input_for(seed ^ i, a, b, 16, q_address));
     }
-    if (verify(program.fn, inputs)) return true;
+    if (verifier.verify(program.fn, inputs)) return true;
     std::fprintf(stderr, "Replay: ember_ir_semantics_test --seed %s\n", std::to_string(seed).c_str());
     return false;
 }
@@ -343,6 +299,6 @@ int main(int argc, char** argv) {
     }
     if (!oracle_checks() || !constant_cases() || !cast_cases() || !memory_cases()) return 1;
     for (u64 seed = 1; seed <= 256; ++seed) if (!generated_case(seed)) return 1;
-    std::printf("Verified %zu cleanup programs across %zu executions\n", programs, comparisons);
+    std::printf("Verified %zu cleanup programs across %zu executions\n", verifier.programs, verifier.executions);
     return 0;
 }

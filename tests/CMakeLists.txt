@@ -224,6 +224,14 @@ add_executable(ember_ir_cleanup_test ir_cleanup_test.cpp)
 target_link_libraries(ember_ir_cleanup_test PRIVATE ember::core ember::flags)
 add_test(NAME ir_cleanup_unit COMMAND ember_ir_cleanup_test)
 
+add_executable(ember_ir_semantics_test
+    ir_semantics_test.cpp
+    support/ir_interpreter.cpp)
+target_link_libraries(ember_ir_semantics_test PRIVATE ember::core ember::flags)
+add_test(NAME ir_semantics_unit COMMAND ember_ir_semantics_test)
+set_tests_properties(ir_semantics_unit PROPERTIES
+    ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1")
+
 add_executable(ember_loader_robustness_test loader_robustness_test.cpp)
 target_link_libraries(ember_loader_robustness_test PRIVATE ember::core ember::flags)
 # Inputs the fuzzers found bugs with are replayed through every loader.

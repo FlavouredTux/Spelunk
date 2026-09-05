@@ -20,13 +20,18 @@ namespace ember::ir_passes {
 std::optional<IrValue>
 try_fold(const IrInst& inst) noexcept {
     const IrType dt = inst.dst.type;
+    // Integer IR wraps at its declared width; host signed overflow is UB even
+    // when the result is immediately masked. Compute the bit pattern first.
+    const auto wrapped = [dt](u64 bits) {
+        return IrValue::make_imm(mask_signed(std::bit_cast<i64>(bits), dt), dt);
+    };
 
     // Unary
     if (inst.src_count == 1) {
         const auto& a = inst.srcs[0];
         if (a.kind != IrValueKind::Imm) return std::nullopt;
         switch (inst.op) {
-            case IrOp::Neg:   return IrValue::make_imm(mask_signed(-a.imm, dt), dt);
+            case IrOp::Neg:   return wrapped(u64{0} - static_cast<u64>(a.imm));
             case IrOp::Not:   return IrValue::make_imm(mask_signed(~a.imm, dt), dt);
             case IrOp::Clz: {
                 const u32 value = static_cast<u32>(mask_unsigned(a.imm, IrType::I32));
@@ -106,9 +111,9 @@ try_fold(const IrInst& inst) noexcept {
 
         // Full constant folding
         switch (inst.op) {
-            case IrOp::Add: return IrValue::make_imm(mask_signed(a.imm + b.imm, dt), dt);
-            case IrOp::Sub: return IrValue::make_imm(mask_signed(a.imm - b.imm, dt), dt);
-            case IrOp::Mul: return IrValue::make_imm(mask_signed(a.imm * b.imm, dt), dt);
+            case IrOp::Add: return wrapped(static_cast<u64>(a.imm) + static_cast<u64>(b.imm));
+            case IrOp::Sub: return wrapped(static_cast<u64>(a.imm) - static_cast<u64>(b.imm));
+            case IrOp::Mul: return wrapped(static_cast<u64>(a.imm) * static_cast<u64>(b.imm));
             // IrOp::Div / IrOp::Mod don't carry signedness - the same opcode
             // is emitted for both DIV (unsigned) and IDIV (signed) lowerings.
             // Folding with C++ `/` and `%` always uses signed semantics, so

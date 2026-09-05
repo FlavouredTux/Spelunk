@@ -161,6 +161,20 @@ docs/
 ctest --test-dir build
 ```
 
+`ir_semantics_unit` interprets integer SSA before and after cleanup and
+compares return values and final memory bytes. It covers arithmetic boundaries,
+cast chains, overlapping memory accesses, and deterministic generated programs.
+The test-only interpreter rejects unsupported operations; it currently handles
+one straight-line block, 1–64-bit integers, and bounded little-endian memory.
+It does not validate the decoders, lifters, or emitted pseudo-C.
+
+Semantic mismatches print both IR versions and the initial machine state. Generated cases
+also print a seed that can be replayed directly:
+
+```sh
+./build/tests/ember_ir_semantics_test --seed 42
+```
+
 Golden outputs live in `tests/golden/`. After an intentional output change,
 regenerate them in the same commit:
 

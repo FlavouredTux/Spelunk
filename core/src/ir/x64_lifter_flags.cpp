@@ -13,6 +13,24 @@
 
 namespace ember::x64_lift {
 
+void update_shift_parity(LiftCtx& ctx, IrValue result,
+                         IrValue original_count, IrValue nonzero) {
+    const u64 mask = type_bits(result.type) == 64 ? 63u : 31u;
+    const bool known = original_count.kind == IrValueKind::Imm;
+    if (known && (static_cast<u64>(original_count.imm) & mask) == 0) return;
+    IrValue previous;
+    if (!known) previous = jcc_predicate(Mnemonic::Jp, ctx);
+    ctx.last_flag_src = result;
+    ctx.last_pf_value = {};
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+    if (!known) {
+        const IrValue updated = jcc_predicate(Mnemonic::Jp, ctx);
+        ctx.last_pf_value = ctx.select(nonzero, updated, previous);
+        ctx.last_flag_src = {};
+    }
+}
+
 IrValue flag_to_i64_bit(LiftCtx& ctx, IrValue flag, unsigned shift) {
     IrValue bit = ctx.emit_convert(IrOp::ZExt, flag, IrType::I64);
     if (shift != 0) {
@@ -162,6 +180,10 @@ void lift_bmi_three_operand(LiftCtx& ctx, Mnemonic mnemonic) {
     IrValue result;
     if (mnemonic == Mnemonic::Andn) {
         result = ctx.emit_binop(IrOp::And, ctx.emit_unop(IrOp::Not, first), second);
+        ctx.set_zf_sf(result);
+        ctx.clear_cf_of();
+        // ANDN leaves PF undefined, so do not infer it from the result.
+        ctx.last_flag_src = {};
     } else if (mnemonic == Mnemonic::Shlx) {
         result = ctx.emit_binop(IrOp::Shl, first, second);
     } else if (mnemonic == Mnemonic::Shrx) {
@@ -193,18 +215,21 @@ void lift_mulx(LiftCtx& ctx) {
     IrValue multiplier = ctx.match_size(
         ctx.read_reg(result_type == IrType::I64 ? Reg::Rdx : Reg::Edx),
         result_type, /*sign_ext=*/false);
+    IrValue results[2];
     for (u8 output = 0; output < 2; ++output) {
         IrInst intrinsic;
         intrinsic.op = IrOp::Intrinsic;
-        intrinsic.name = output == 0 ? "mulx.low" : "mulx.high";
+        intrinsic.name = output == 0 ? "mulx.high" : "mulx.low";
+        if (result_type == IrType::I32) intrinsic.name += "32";
         intrinsic.dst = ctx.temp(result_type);
         intrinsic.srcs[0] = multiplier;
         intrinsic.srcs[1] = source;
         intrinsic.src_count = 2;
-        IrValue result = intrinsic.dst;
+        results[output] = intrinsic.dst;
         ctx.emit(std::move(intrinsic));
-        store_lvalue(insn.operands[output], result, ctx);
     }
+    for (u8 output = 0; output < 2; ++output)
+        store_lvalue(insn.operands[output], results[output], ctx);
 }
 
 void lift_fma(LiftCtx& ctx) {

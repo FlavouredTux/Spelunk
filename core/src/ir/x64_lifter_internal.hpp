@@ -85,6 +85,27 @@ struct LiftCtx {
         emit(std::move(i));
     }
 
+    IrValue snapshot(IrValue value) {
+        if (value.kind != IrValueKind::Reg && value.kind != IrValueKind::Flag)
+            return value;
+        IrValue saved = temp(value.type);
+        emit_assign(saved, value);
+        return saved;
+    }
+
+    IrValue select(IrValue condition, IrValue yes, IrValue no) {
+        IrInst i;
+        i.op = IrOp::Select;
+        i.dst = temp(yes.type);
+        i.srcs[0] = condition;
+        i.srcs[1] = yes;
+        i.srcs[2] = no;
+        i.src_count = 3;
+        IrValue result = i.dst;
+        emit(std::move(i));
+        return result;
+    }
+
     IrValue emit_binop(IrOp op, IrValue a, IrValue b) {
         IrValue t = temp(a.type);
         IrInst i;
@@ -303,6 +324,8 @@ void store_lvalue(const Operand& op, IrValue value, LiftCtx& ctx);
 // jcc_predicate is naturally placed next to the jcc/setcc family further
 // down. Decl up here lets us keep both groupings.
 [[nodiscard]] IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx);
+void update_shift_parity(LiftCtx& ctx, IrValue result,
+                         IrValue original_count, IrValue nonzero);
 
 void lift_mov(LiftCtx& ctx);
 

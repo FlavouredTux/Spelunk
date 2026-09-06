@@ -1670,6 +1670,17 @@ ember_golden_test(
 # against regressions even on Linux CI.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        add_executable(ember_x64_pipeline_probe x64_pipeline_probe.cpp)
+        target_link_libraries(ember_x64_pipeline_probe
+            PRIVATE ember_ir_test_support ember::flags)
+        add_test(NAME x64_pipeline_semantics
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tests/x64_pipeline_test.py"
+                "$<TARGET_FILE:ember_cli>" "$<TARGET_FILE:ember_x64_pipeline_probe>"
+                "${CMAKE_C_COMPILER}" "${CMAKE_SOURCE_DIR}/tests/support")
+        set_tests_properties(x64_pipeline_semantics PROPERTIES TIMEOUT 120)
+    endif()
     add_test(
         NAME ppc_quality_benchmark_unit
         COMMAND ${Python3_EXECUTABLE}

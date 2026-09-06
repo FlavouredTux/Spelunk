@@ -241,8 +241,20 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         case IrOp::Or:   return format_bitop(d, "|", depth, min_prec, Prec::BitOr);
         case IrOp::Xor:  return format_bitop(d, "^", depth, min_prec, Prec::BitXor);
         case IrOp::Shl:  return format_binop(d, "<<", depth, min_prec, Prec::Shift, false);
-        case IrOp::Lshr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
-        case IrOp::Ashr: return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
+        case IrOp::Lshr:
+        case IrOp::Ashr: {
+            const unsigned bits = type_bits(d.srcs[0].type);
+            if (bits < 8 || bits > 64)
+                return format_binop(d, ">>", depth, min_prec, Prec::Shift, false);
+            const std::string type = std::format("{}int{}_t",
+                d.op == IrOp::Ashr ? "" : "u", bits);
+            std::string left = expr(d.srcs[0], depth,
+                                    std::to_underlying(Prec::Unary));
+            const std::string right = expr(d.srcs[1], depth,
+                std::to_underlying(Prec::Shift) + 1);
+            return wrap_if_lt(std::format("({}){} >> {}", type, left, right),
+                               Prec::Shift, min_prec);
+        }
 
         case IrOp::Neg: {
             std::string inner = expr(d.srcs[0], depth, std::to_underlying(Prec::Unary));

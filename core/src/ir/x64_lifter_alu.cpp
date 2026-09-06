@@ -161,6 +161,7 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
     if (insn.num_operands != 2) return;
     IrValue a = materialize_rvalue(insn.operands[0], ctx);
     IrValue cnt = materialize_rvalue(insn.operands[1], ctx);
+    const IrValue original_count = cnt;
     cnt = ctx.match_size(cnt, a.type, /*sign_ext=*/false);
 
     const unsigned width = type_bits(a.type);
@@ -171,22 +172,10 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
     IrValue zero_t    = ctx.imm(0, a.type);
     IrValue nonzero = ctx.emit_cmp(IrOp::CmpNe, cnt, zero_t);
 
-    auto select = [&](IrValue condition, IrValue yes, IrValue no) {
-        IrInst i;
-        i.op = IrOp::Select;
-        i.dst = ctx.temp(yes.type);
-        i.srcs[0] = condition;
-        i.srcs[1] = yes;
-        i.srcs[2] = no;
-        i.src_count = 3;
-        IrValue result = i.dst;
-        ctx.emit(std::move(i));
-        return result;
-    };
     // Avoid constructing a width-sized shift in the flag expression when
     // the effective count is zero. Architectural state is selected back to
     // its old value in that case.
-    IrValue safe_cnt = select(nonzero, cnt, one_t);
+    IrValue safe_cnt = ctx.select(nonzero, cnt, one_t);
 
     IrValue cf_bit;
     if (op == IrOp::Shl) {
@@ -200,10 +189,10 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
     }
     IrValue cf_new = ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t);
     ctx.emit_set_flag(Flag::Cf,
-        select(nonzero, cf_new, ctx.flag_val(Flag::Cf)));
+        ctx.select(nonzero, cf_new, ctx.flag_val(Flag::Cf)));
 
     IrValue shifted = ctx.emit_binop(op, a, safe_cnt);
-    IrValue r = select(nonzero, shifted, a);
+    IrValue r = ctx.select(nonzero, shifted, a);
 
     IrValue of_new;
     if (op == IrOp::Shl) {
@@ -221,14 +210,15 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
         of_new = ctx.imm(0, IrType::I1);
     }
     ctx.emit_set_flag(Flag::Of,
-        select(nonzero, of_new, ctx.flag_val(Flag::Of)));
+        ctx.select(nonzero, of_new, ctx.flag_val(Flag::Of)));
 
     IrValue zf_new = ctx.emit_cmp(IrOp::CmpEq, shifted, zero_t);
     IrValue sf_new = ctx.emit_cmp(IrOp::CmpSlt, shifted, zero_t);
     ctx.emit_set_flag(Flag::Zf,
-        select(nonzero, zf_new, ctx.flag_val(Flag::Zf)));
+        ctx.select(nonzero, zf_new, ctx.flag_val(Flag::Zf)));
     ctx.emit_set_flag(Flag::Sf,
-        select(nonzero, sf_new, ctx.flag_val(Flag::Sf)));
+        ctx.select(nonzero, sf_new, ctx.flag_val(Flag::Sf)));
+    update_shift_parity(ctx, shifted, original_count, nonzero);
     store_lvalue(insn.operands[0], r, ctx);
 }
 
@@ -240,9 +230,8 @@ void lift_sar(LiftCtx& ctx) { lift_shift(ctx, IrOp::Ashr); }
 
 // ROL/ROR are common in hashes, PRNGs, checksums, and crypto-ish mixers.
 // Preserve their value flow as rotate intrinsics instead of falling back to
-// a side-effect-only `/* x64.rol(...) */` comment. CF/OF are approximated for
-// downstream flag readers; ZF/SF are intentionally left untouched because
-// x86 rotates do not define them.
+// a side-effect-only `/* x64.rol(...) */` comment. A masked zero count preserves
+// CF/OF; OF is defined only for count one. ZF/SF/PF remain unchanged.
 void lift_rotate(LiftCtx& ctx, bool right) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
@@ -253,12 +242,16 @@ void lift_rotate(LiftCtx& ctx, bool right) {
     cnt = ctx.match_size(cnt, a.type, /*sign_ext=*/false);
 
     const unsigned width = type_bits(a.type);
+    const IrValue masked_count = ctx.emit_binop(IrOp::And, cnt,
+        ctx.imm(width == 64 ? 63 : 31, a.type));
+    const IrValue nonzero = ctx.emit_cmp(IrOp::CmpNe, masked_count,
+                                         ctx.imm(0, a.type));
     IrInst i;
     i.op   = IrOp::Intrinsic;
     i.name = std::format("{}{}", right ? "rotr" : "rotl", width);
     i.dst  = ctx.temp(a.type);
     i.srcs[0]   = a;
-    i.srcs[1]   = cnt;
+    i.srcs[1]   = masked_count;
     i.src_count = 2;
     IrValue r = i.dst;
     ctx.emit(std::move(i));
@@ -275,7 +268,7 @@ void lift_rotate(LiftCtx& ctx, bool right) {
         cf_bit = ctx.emit_binop(IrOp::And, r, one_t);
     }
     IrValue cf_i1 = ctx.emit_cmp(IrOp::CmpNe, cf_bit, zero_t);
-    ctx.emit_set_flag(Flag::Cf, cf_i1);
+    ctx.emit_set_flag(Flag::Cf, ctx.select(nonzero, cf_i1, ctx.flag_val(Flag::Cf)));
 
     if (width > 1) {
         IrValue msb_shift = ctx.imm(static_cast<i64>(width - 1), a.type);
@@ -289,9 +282,11 @@ void lift_rotate(LiftCtx& ctx, bool right) {
                                              ctx.emit_binop(IrOp::Lshr, r, next_shift),
                                              one_t);
             IrValue next_i1 = ctx.emit_cmp(IrOp::CmpNe, next_bit, zero_t);
-            ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Xor, msb_i1, next_i1));
+            ctx.emit_set_flag(Flag::Of, ctx.select(nonzero,
+                ctx.emit_binop_i1(IrOp::Xor, msb_i1, next_i1), ctx.flag_val(Flag::Of)));
         } else {
-            ctx.emit_set_flag(Flag::Of, ctx.emit_binop_i1(IrOp::Xor, msb_i1, cf_i1));
+            ctx.emit_set_flag(Flag::Of, ctx.select(nonzero,
+                ctx.emit_binop_i1(IrOp::Xor, msb_i1, cf_i1), ctx.flag_val(Flag::Of)));
         }
     }
 
@@ -392,38 +387,46 @@ void lift_rotate_through_carry(LiftCtx& ctx, bool right) {
     store_lvalue(insn.operands[0], r, ctx);
 }
 
-// SHLD dst, src, count: dst = (dst << count) | (src >> (W - count))
-// SHRD dst, src, count: dst = (dst >> count) | (src << (W - count))
-// Lift as the equivalent shift+or expression so the reader sees the actual
-// bit-stitch rather than an opaque intrinsic. Flag handling is approximate:
-// we set ZF/SF on the result and leave CF/OF as their pre-shift values
-// (true Intel semantics: undefined for count >= W, otherwise CF = last bit
-// shifted out - which adds another four ops per shift; the dataflow is the
-// part that matters for decompiled output).
+// SHLD/SHRD use masked counts; effective zero preserves the value and flags.
 void lift_double_shift(LiftCtx& ctx, bool right) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 3) return;
     IrValue dst = materialize_rvalue(insn.operands[0], ctx);
     IrValue src = materialize_rvalue(insn.operands[1], ctx);
     IrValue cnt = materialize_rvalue(insn.operands[2], ctx);
+    const IrValue original_count = cnt;
     src = ctx.match_size(src, dst.type, /*sign_ext=*/false);
     cnt = ctx.match_size(cnt, dst.type, /*sign_ext=*/false);
 
     const unsigned width = type_bits(dst.type);
-    IrValue width_imm = ctx.imm(static_cast<i64>(width), dst.type);
-    IrValue cnt_compl = ctx.emit_binop(IrOp::Sub, width_imm, cnt);
+    const IrValue zero = ctx.imm(0, dst.type);
+    const IrValue one = ctx.imm(1, dst.type);
+    cnt = ctx.emit_binop(IrOp::And, cnt, ctx.imm(width == 64 ? 63 : 31, dst.type));
+    const IrValue nonzero = ctx.emit_cmp(IrOp::CmpNe, cnt, zero);
+    const IrValue safe_count = ctx.select(nonzero, cnt, one);
+    const IrValue complement = ctx.emit_binop(IrOp::Sub,
+        ctx.imm(static_cast<i64>(width), dst.type), safe_count);
+    const IrValue lo = ctx.emit_binop(right ? IrOp::Lshr : IrOp::Shl, dst, safe_count);
+    const IrValue hi = ctx.emit_binop(right ? IrOp::Shl : IrOp::Lshr, src, complement);
+    const IrValue shifted = ctx.emit_binop(IrOp::Or, lo, hi);
+    const IrValue result = ctx.select(nonzero, shifted, dst);
 
-    IrValue lo, hi;
-    if (right) {
-        lo = ctx.emit_binop(IrOp::Lshr, dst, cnt);
-        hi = ctx.emit_binop(IrOp::Shl,  src, cnt_compl);
-    } else {
-        lo = ctx.emit_binop(IrOp::Shl,  dst, cnt);
-        hi = ctx.emit_binop(IrOp::Lshr, src, cnt_compl);
-    }
-    IrValue r = ctx.emit_binop(IrOp::Or, lo, hi);
-    ctx.set_zf_sf(r);
-    store_lvalue(insn.operands[0], r, ctx);
+    const IrValue carry_shift = right
+        ? ctx.emit_binop(IrOp::Sub, safe_count, one) : complement;
+    const IrValue carry_bit = ctx.emit_binop(IrOp::And,
+        ctx.emit_binop(IrOp::Lshr, dst, carry_shift), one);
+    const IrValue carry = ctx.emit_cmp(IrOp::CmpNe, carry_bit, zero);
+    const IrValue sign_change = ctx.emit_cmp(IrOp::CmpSlt,
+        ctx.emit_binop(IrOp::Xor, dst, shifted), zero);
+    ctx.emit_set_flag(Flag::Cf, ctx.select(nonzero, carry, ctx.flag_val(Flag::Cf)));
+    // OF is defined for count one; larger nonzero counts leave it undefined.
+    ctx.emit_set_flag(Flag::Of, ctx.select(nonzero, sign_change, ctx.flag_val(Flag::Of)));
+    ctx.emit_set_flag(Flag::Zf, ctx.select(nonzero,
+        ctx.emit_cmp(IrOp::CmpEq, shifted, zero), ctx.flag_val(Flag::Zf)));
+    ctx.emit_set_flag(Flag::Sf, ctx.select(nonzero,
+        ctx.emit_cmp(IrOp::CmpSlt, shifted, zero), ctx.flag_val(Flag::Sf)));
+    update_shift_parity(ctx, shifted, original_count, nonzero);
+    store_lvalue(insn.operands[0], result, ctx);
 }
 
 // 1-op MUL/IMUL: rax = rax * src, with the high half going into rdx (or
@@ -468,12 +471,8 @@ void lift_mul_one_op(LiftCtx& ctx, bool signed_mul) {
             ctx.write_reg(hi_dst, hi);
         }
     } else {
-        // 64-bit: low half is just rax * src; high half degrades to a named
-        // intrinsic so the reader sees both operands. RAX is also clobbered
-        // first by the low product before RDX takes the high - that ordering
-        // matches Intel's atomicity (both updated together).
+        // Both products must read the original registers before either write.
         IrValue lo = ctx.emit_binop(IrOp::Mul, a, b);
-        ctx.write_reg(lo_dst, lo);
 
         IrInst high;
         high.op   = IrOp::Intrinsic;
@@ -484,6 +483,7 @@ void lift_mul_one_op(LiftCtx& ctx, bool signed_mul) {
         high.src_count = 2;
         IrValue hi_v = high.dst;
         ctx.emit(std::move(high));
+        ctx.write_reg(lo_dst, lo);
         ctx.write_reg(hi_dst, hi_v);
     }
 }

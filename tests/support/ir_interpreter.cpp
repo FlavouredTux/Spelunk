@@ -2,6 +2,7 @@
 #include "ir_interpreter_cfg.hpp"
 
 #include <format>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -26,7 +27,7 @@ u64 mask(unsigned bits) {
 
 class Machine {
 public:
-    explicit Machine(const MachineInput& input) : values_(input.values) {
+    explicit Machine(const MachineInput& input) : values_(input.values), input_(input) {
         result.memory = input.memory;
     }
 
@@ -61,6 +62,17 @@ public:
         };
         if (inst.segment != Reg::None) throw std::runtime_error("segmented memory");
         switch (inst.op) {
+            case IrOp::Intrinsic: {
+                if (!input_.intrinsic || inst.src_count > 3)
+                    throw std::runtime_error("unsupported intrinsic");
+                std::array<u64, 3> args{};
+                for (u8 i = 0; i < inst.src_count; ++i) args[i] = read(inst.srcs[i]);
+                auto result_value = input_.intrinsic(inst,
+                    std::span<const u64>{args.data(), inst.src_count});
+                if (!result_value) throw std::runtime_error(result_value.error());
+                write(inst.dst, *result_value);
+                return;
+            }
             case IrOp::Nop: arity(0); return;
             case IrOp::Return:
                 if (inst.src_count > 1) throw std::runtime_error("wrong return arity");
@@ -136,12 +148,16 @@ public:
             case IrOp::CmpEq: case IrOp::CmpNe:
             case IrOp::CmpUlt: case IrOp::CmpUle: case IrOp::CmpUgt: case IrOp::CmpUge:
             case IrOp::CmpSlt: case IrOp::CmpSle: case IrOp::CmpSgt: case IrOp::CmpSge:
+            case IrOp::AddCarry: case IrOp::SubBorrow:
+            case IrOp::AddOverflow: case IrOp::SubOverflow:
                 break;
             default: throw std::runtime_error("unsupported opcode");
         }
         arity(2);
         const auto bits = width(inst.srcs[0].type);
-        const bool comparison = inst.op >= IrOp::CmpEq && inst.op <= IrOp::CmpSge;
+        const bool comparison = (inst.op >= IrOp::CmpEq && inst.op <= IrOp::CmpSge) ||
+            inst.op == IrOp::AddCarry || inst.op == IrOp::SubBorrow ||
+            inst.op == IrOp::AddOverflow || inst.op == IrOp::SubOverflow;
         const bool shift = inst.op == IrOp::Shl || inst.op == IrOp::Lshr ||
                            inst.op == IrOp::Ashr;
         if ((!shift && inst.srcs[0].type != inst.srcs[1].type) ||
@@ -161,6 +177,14 @@ public:
             case IrOp::Add: value = a + b; break;
             case IrOp::Sub: value = a - b; break;
             case IrOp::Mul: value = a * b; break;
+            case IrOp::AddCarry: value = b > mask(bits) - a; break;
+            case IrOp::SubBorrow: value = a < b; break;
+            case IrOp::AddOverflow:
+                value = ((~(a ^ b) & (a ^ (a + b))) >> (bits - 1)) & 1;
+                break;
+            case IrOp::SubOverflow:
+                value = (((a ^ b) & (a ^ (a - b))) >> (bits - 1)) & 1;
+                break;
             case IrOp::And: value = a & b; break;
             case IrOp::Or: value = a | b; break;
             case IrOp::Xor: value = a ^ b; break;
@@ -204,6 +228,7 @@ private:
     }
 
     std::map<SsaKey, u64> values_;
+    const MachineInput& input_;
 };
 
 }  // namespace

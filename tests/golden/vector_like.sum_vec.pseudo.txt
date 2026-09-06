@@ -4,7 +4,7 @@ extern uint32_t g_sink;
 int sum_vec(vec_int* v, int idx) {
   uint64_t t0 = v->begin;
   void* t11 = (void*)(t0 + idx * 4);
-  g_sink = (uint32_t)(v->capacity - t0 >> 2);
+  g_sink = (uint32_t)((int64_t)(v->capacity - t0) >> 2);
   if (t11 < v->end) {
     return t0[idx];
   }

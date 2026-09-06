@@ -62,17 +62,30 @@ void lift_cmov(LiftCtx& ctx, Mnemonic mn) {
     store_lvalue(insn.operands[0], r, ctx);
 }
 
-// XCHG dst, src: swap. We materialize src first so the read isn't shadowed
-// by the dst write. For memory operands this is still atomic at the SSA
-// level (two assigns), which is enough for the decompiled-output reader.
+// Capture both values and effective addresses before either destination write.
 void lift_xchg(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
-    IrValue dst_v = materialize_rvalue(insn.operands[0], ctx);
-    IrValue src_v = materialize_rvalue(insn.operands[1], ctx);
-    src_v = ctx.match_size(src_v, dst_v.type, /*sign_ext=*/false);
-    store_lvalue(insn.operands[0], src_v, ctx);
-    store_lvalue(insn.operands[1], dst_v, ctx);
+    IrValue addresses[2];
+    IrValue values[2];
+    for (u8 i = 0; i < 2; ++i) {
+        const auto& operand = insn.operands[i];
+        if (operand.kind == Operand::Kind::Memory) {
+            addresses[i] = ctx.snapshot(compute_ea(operand.mem, ctx));
+            values[i] = ctx.emit_load(addresses[i], operand_type(operand),
+                                      operand.mem.segment);
+        } else {
+            values[i] = ctx.snapshot(materialize_rvalue(operand, ctx));
+        }
+    }
+    for (u8 i = 0; i < 2; ++i) {
+        const auto& operand = insn.operands[i];
+        IrValue value = ctx.match_size(values[1 - i], operand_type(operand), false);
+        if (operand.kind == Operand::Kind::Memory)
+            ctx.emit_store(addresses[i], value, operand.mem.segment);
+        else
+            store_lvalue(operand, value, ctx);
+    }
 }
 
 // XADD dst, src: tmp = dst + src; src = dst; dst = tmp. Atomic in hardware;

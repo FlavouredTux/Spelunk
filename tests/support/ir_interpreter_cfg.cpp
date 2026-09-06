@@ -9,8 +9,11 @@
 namespace ember::test {
 namespace {
 
-u8 operand_count(const IrInst& inst) {
+u8 operand_count(const IrInst& inst, bool allow_intrinsics) {
     switch (inst.op) {
+        case IrOp::Intrinsic:
+            if (allow_intrinsics && inst.src_count <= 3) return inst.src_count;
+            throw std::runtime_error("unsupported intrinsic");
         case IrOp::Nop: case IrOp::Phi: case IrOp::Branch: return 0;
         case IrOp::Return:
             if (inst.src_count > 1) throw std::runtime_error("wrong return arity");
@@ -24,6 +27,8 @@ u8 operand_count(const IrInst& inst) {
         case IrOp::CmpEq: case IrOp::CmpNe:
         case IrOp::CmpUlt: case IrOp::CmpUle: case IrOp::CmpUgt: case IrOp::CmpUge:
         case IrOp::CmpSlt: case IrOp::CmpSle: case IrOp::CmpSgt: case IrOp::CmpSge:
+        case IrOp::AddCarry: case IrOp::SubBorrow:
+        case IrOp::AddOverflow: case IrOp::SubOverflow:
             return 2;
         case IrOp::Select: return 3;
         default: throw std::runtime_error("unsupported opcode");
@@ -54,7 +59,8 @@ void validate_interpreter_cfg(const IrFunction& fn, const MachineInput& input) {
         bool seen_body = false;
         for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
             const auto& inst = block.insts[ii];
-            if (inst.src_count != operand_count(inst)) throw std::runtime_error("wrong operand count");
+            if (inst.src_count != operand_count(inst, static_cast<bool>(input.intrinsic)))
+                throw std::runtime_error("wrong operand count");
             if (inst.segment != Reg::None) throw std::runtime_error("segmented memory");
             if (inst.op == IrOp::Phi) {
                 if (seen_body) throw std::runtime_error("phi after block body");

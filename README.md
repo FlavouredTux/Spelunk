@@ -174,6 +174,17 @@ an error after 10,000 instructions by default. Unsupported operations and
 step-limit exhaustion fail comparisons even when both versions fail. These
 tests do not validate the decoders, lifters, or emitted pseudo-C.
 
+`x64_pipeline_semantics` separately compares locally compiled x86-64 fixtures
+against decoded/lifted SSA before and after cleanup and against emitted C
+compiled at `-O0` and `-O2`. It covers register exchanges, multiply halves,
+ANDN flags, shift signedness, parity, and zero/masked shift and rotate counts.
+An address-aliasing exchange additionally checks native and IR memory; it is
+not an emitted-C memory test. The adapter supplies explicit multiply/rotate
+intrinsic semantics, and unsupported intrinsics still fail by default.
+BMI cases execute only when the host CPU supports them. A separate UBSan run
+checks that emitted zero-count double shifts do not evaluate invalid shifts.
+This is targeted integer coverage, not general machine-code equivalence.
+
 Semantic mismatches print both IR versions and the initial machine state.
 Generated cases also print a seed that can be replayed directly:
 

@@ -108,6 +108,7 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
     e.bind_call_returns();
     e.refine_synthetic_member_types_from_stores();
     e.analyze_merge_definite_assignment();
+    if (structured_render) e.prepare_phi_copies();
 }
 
 // Optional provenance preamble: when --show-provenance is set and
@@ -602,6 +603,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     out += synthetic_merge_stack_declarations(e);
     out += frame_slot_declarations(e, body_buf, matrix_locals);
     out += merge_local_declarations(e, body_buf);
+    out += e.scoped_ssa_declarations();
 
     std::move(body).append_to(out);
 

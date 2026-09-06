@@ -183,6 +183,13 @@ struct Emitter {
     // the merge declaration is already emitted at the function head.
     std::set<std::pair<std::size_t, std::size_t>>    merge_bound_calls;
     std::map<SsaKey, std::string>                    merge_value_names;
+    bool explicit_phi_copies = false;
+    std::map<SsaKey, std::pair<IrValue, std::string>> scoped_ssa_values;
+    void prepare_phi_copies();
+    [[nodiscard]] const std::string* scoped_ssa_name(const IrValue& value) const;
+    [[nodiscard]] std::string scoped_ssa_declarations() const;
+    void emit_phi_copies(const IrBlock& block, std::string_view ind,
+                         std::string& out) const;
     std::map<std::string, SsaMergeLocal>             merge_locals;
     std::set<SsaKey>                                 structured_return_values;
     std::set<std::string>                            definitely_assigned_merge_locals;
@@ -1143,7 +1150,8 @@ struct Emitter {
     // `(*v)[i]` once the inner deref is rendered cleanly.
     [[nodiscard]] std::optional<std::string>
     try_render_runtime_array_index(const IrValue& addr, IrType t,
-                                    int depth = 0) const;
+                                    int depth = 0,
+                                    std::string_view loaded_type = {}) const;
 
     struct PpcScaledIndex {
         IrValue index;

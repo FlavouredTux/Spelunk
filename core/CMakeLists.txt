@@ -137,6 +137,7 @@ add_library(ember_core STATIC
     src/decompile/emitter_inline.cpp
     src/decompile/emitter_leaf.cpp
     src/decompile/emitter_mem.cpp
+    src/decompile/emitter_phi.cpp
     src/decompile/emitter_noise.cpp
     src/decompile/emitter_objc.cpp
     src/decompile/emitter_records.cpp

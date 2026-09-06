@@ -178,11 +178,16 @@ tests do not validate the decoders, lifters, or emitted pseudo-C.
 against decoded/lifted SSA before and after cleanup and against emitted C
 compiled at `-O0` and `-O2`. It covers register exchanges, multiply halves,
 ANDN flags, shift signedness, parity, and zero/masked shift and rotate counts.
-An address-aliasing exchange additionally checks native and IR memory; it is
-not an emitted-C memory test. The adapter supplies explicit multiply/rotate
+Branch diamonds, early returns, counted loops, simultaneous loop phis, and
+overlapping memory operations also run through every stage. Each execution
+starts with the same memory bytes; comparisons check the return value and the
+entire final memory image, including untouched guard bytes. Known pointer
+slots are normalized explicitly between native addresses and IR offsets.
+The adapter supplies explicit multiply/rotate
 intrinsic semantics, and unsupported intrinsics still fail by default.
 BMI cases execute only when the host CPU supports them. A separate UBSan run
-checks that emitted zero-count double shifts do not evaluate invalid shifts.
+exercises emitted shifts, loop exits, and memory accesses. Failures retain the
+generated C and complete IR input transcript in the reported temporary directory.
 This is targeted integer coverage, not general machine-code equivalence.
 
 Semantic mismatches print both IR versions and the initial machine state.

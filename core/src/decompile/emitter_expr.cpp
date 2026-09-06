@@ -23,6 +23,7 @@
 namespace ember::emit {
 
 std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
+    if (const auto* name = scoped_ssa_name(v)) return *name;
     // Recognize compiler flag-based compare idioms and emit direct C comparisons.
     if (v.type == IrType::I1 &&
         (v.kind == IrValueKind::Temp || v.kind == IrValueKind::Flag)) {
@@ -532,7 +533,7 @@ std::string Emitter::format_store(const IrInst& inst) const {
         }
     }
     if (lhs.empty()) {
-        lhs = format_mem(addr, val.type, inst.segment);
+        lhs = format_mem(addr, val.type, inst.segment, 0, c_type_name_for(val));
     }
     if (annotations && inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {

@@ -197,4 +197,19 @@ end \op\()_\flag
 .endr
 .endr
 
+// Force a genuine diamond and a phi at the join, independent of compiler
+// if-conversion of the C fixtures.
+begin branch_phi
+mov rax,rdi
+test rdx,rdx
+jz .Lphi_else
+add rax,rsi
+jmp .Lphi_merge
+.Lphi_else:
+sub rax,rsi
+.Lphi_merge:
+xor rax,0x55
+ret
+end branch_phi
+
 .section .note.GNU-stack,"",@progbits

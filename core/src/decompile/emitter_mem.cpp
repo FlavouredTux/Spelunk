@@ -22,6 +22,25 @@
 #include "emitter_tables.hpp"
 
 namespace ember::emit {
+namespace {
+std::optional<std::string> cast_untyped_array_base(
+    const Emitter& e, const IrValue& base, IrType access_type,
+    int depth, std::string_view loaded_type = {}) {
+    std::string declared = e.c_type_name_for(base);
+    if (auto slot = e.trace_to_self_arg_slot(base);
+        slot && *slot < e.self_arg_type_names.size() &&
+        !e.self_arg_type_names[*slot].empty()) {
+        declared = Emitter::normalize_c_type_alias(e.self_arg_type_names[*slot]);
+    }
+    if (declared != "void*" && declared != "const void*") return std::nullopt;
+    // Preserve the signature while giving the individual access a sized
+    // lvalue. A stored pointer needs one more indirection than an integer.
+    const std::string element = loaded_type.ends_with('*')
+        ? std::string(loaded_type) : std::string(c_type_name(access_type));
+    return std::format("(({}*){})", element, e.expr(base, depth + 1));
+}
+}  // namespace
+
 
 std::optional<i64>
 Emitter::try_resolve_imm_addr(const IrValue& v, int depth) const {
@@ -209,6 +228,9 @@ Emitter::try_render_array_index(const IrValue& addr, IrType t, int depth,
         }
     }
     std::string rendered_base = expr(base, depth + 1);
+    if (auto typed = cast_untyped_array_base(*this, base, t, depth, loaded_type)) {
+        return std::format("{}[{}]", *typed, off / stride);
+    }
     // A pointer loaded from memory still has an integer-width Load in
     // IR, even when local type inference has proved that the assigned
     // value is a pointer. Indexing the raw rendered load would produce
@@ -268,7 +290,7 @@ Emitter::try_render_array_index(const IrValue& addr, IrType t, int depth,
 
 std::optional<std::string>
 Emitter::try_render_runtime_array_index(const IrValue& addr, IrType t,
-                                int depth) const {
+                                int depth, std::string_view loaded_type) const {
     if (is_float_type(t)) return std::nullopt;
     const i64 stride = static_cast<i64>(type_bits(t) / 8);
     if (stride <= 0) return std::nullopt;
@@ -329,9 +351,10 @@ Emitter::try_render_runtime_array_index(const IrValue& addr, IrType t,
     if (base.kind != IrValueKind::Reg && base.kind != IrValueKind::Temp) {
         return std::nullopt;
     }
+    const auto typed = cast_untyped_array_base(*this, base, t, depth, loaded_type);
     return std::format("{}[{}]",
-        expr(base, depth + 1, std::to_underlying(Prec::Unary)),
-        expr(idx,  depth + 1));
+        typed ? *typed : expr(base, depth + 1, std::to_underlying(Prec::Unary)),
+        expr(idx, depth + 1));
 }
 
 std::optional<Emitter::PpcScaledIndex>
@@ -933,7 +956,7 @@ std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
         if (auto s = try_render_array_index(addr, t, depth, loaded_type); s) {
             return *s;
         }
-        if (auto s = try_render_runtime_array_index(addr, t, depth); s) {
+        if (auto s = try_render_runtime_array_index(addr, t, depth, loaded_type); s) {
             return *s;
         }
         // Struct-field form: if this base has been observed at multiple

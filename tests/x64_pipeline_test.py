@@ -1,5 +1,6 @@
 """Compare native fixtures, pre/post-cleanup integer SSA, and emitted C."""
 import ctypes
+from dataclasses import dataclass
 import pathlib
 import random
 import re
@@ -10,6 +11,36 @@ import tempfile
 EMBER, PROBE, CC, SUPPORT = sys.argv[1:]
 SUPPORT = pathlib.Path(SUPPORT)
 MASK = (1 << 64) - 1
+
+
+@dataclass(frozen=True)
+class Case:
+    name: str
+    args: tuple[int, int, int]
+    memory: bytes = bytes(128)
+    pointer_args: tuple[int, ...] = ()
+    pointer_slots: tuple[int, ...] = ()
+
+
+def execute(lib, case, width):
+    # uint64_t storage supplies alignment; every backend gets a fresh copy.
+    storage = (ctypes.c_uint64 * (len(case.memory) // 8)).from_buffer_copy(case.memory)
+    base = ctypes.addressof(storage)
+    args = list(case.args)
+    for index in case.pointer_args:
+        args[index] += base
+    fn = getattr(lib, case.name)
+    fn.argtypes = [ctypes.c_uint64] * 4
+    fn.restype = ctypes.c_uint8 if width == 8 else ctypes.c_uint64
+    result = fn(*args, 0) & ((1 << width) - 1)
+    memory = bytearray(storage)
+    # Normalize only slots explicitly known to contain pointers. Integer
+    # bytes are never heuristically rewritten to make two executions agree.
+    for offset in case.pointer_slots:
+        value = int.from_bytes(memory[offset:offset + 8], 'little')
+        if base <= value < base + len(memory):
+            memory[offset:offset + 8] = (value - base).to_bytes(8, 'little')
+    return result, bytes(memory)
 
 
 def run(args, **kwargs):
@@ -95,15 +126,37 @@ def main(directory):
                     add(op + '_o', a, 0x813579BDF2468ACE, count)
     add('shift_pf')
     add('ror_zero_cf')
-    add('xchg_address', 16)
-    names = sorted({case[0] for case in cases})
+    for x in values:
+        for y in [0, 1, 7, MASK]:
+            add('branch_early', x, y)
+            for choose in [0, 1]:
+                add('branch_diamond', x, y, choose)
+                add('branch_phi', x, y, choose)
+        for n in [0, 1, 2, 3, 8, 16]:
+            add('loop_sum', n, x)
+            add('loop_pair', n, x, 3)
+            for stop in range(n + 2):
+                add('loop_early', n, stop, x)
+    cases = [Case(name, (a, b, c)) for name, a, b, c in cases]
+    for seed in range(8):
+        initial = rng.randbytes(128)
+        cases.append(Case('xchg_address', (16, 0, 0), initial, (0,), (16,)))
+        for index in [0, 1, 3, 7]:
+            cases.append(Case('void_index', (16, index, MASK), initial, (0,)))
+        for q in [16, 24, 48]:
+            for value in [0, 1, MASK, rng.getrandbits(64)]:
+                cases.append(Case('alias_snapshot', (16, q, value), initial, (0, 1)))
+            for choose in [0, 1]:
+                cases.append(Case('branch_memory', (16, q, choose), initial, (0, 1)))
+            for n in [0, 1, 2, 3, 4]:
+                cases.append(Case('loop_alias', (16, q, n), initial, (0, 1)))
+        for q in [16, 17, 19, 23, 24, 48]:
+            for value in [0, 0xff, 0x7f]:
+                cases.append(Case('alias_byte', (16, q, value), initial, (0, 1)))
+    names = sorted({case.name for case in cases})
 
     code = HELPERS
     for name in names:
-        # The address-alias probe checks native memory against IR. Its
-        # inferred void-pointer signature is outside the emitter probes.
-        if name == 'xchg_address':
-            continue
         output = run([EMBER, '--no-cache', '-p', '-s', name, str(native_path)])
         (root / (name + '.pseudo.c')).write_text(output)
         # Intrinsics have explicit semantics here; only their invalid C names
@@ -121,13 +174,16 @@ def main(directory):
         run([CC, '-O' + opt, '-shared', '-fPIC', str(generated), '-o', str(path)])
         libraries.append(ctypes.CDLL(str(path)))
 
-    probe_input = ''.join(f'{n} {a} {b} {c}\n' for n, a, b, c in cases)
+    probe_input = ''.join(f'{case.name} {case.args[0]} {case.args[1]} {case.args[2]} {case.memory.hex()}\n' for case in cases)
+    (root / 'probe-input.txt').write_text(probe_input)
     result = run([PROBE, str(native_path)], input=probe_input).splitlines()
     if len(result) != len(cases):
         raise AssertionError('IR probe returned the wrong number of cases')
 
     failures = []
-    for (name, a, b, c), ir in zip(cases, result):
+    for case, ir in zip(cases, result):
+        name = case.name
+        a, b, c = case.args
         label, before, after, memory = ir.split()
         assert label == name
         width = 32 if name in ['logical32_from_signed', 'arithmetic32_from_unsigned'] else 64
@@ -136,38 +192,43 @@ def main(directory):
         if re.search(r'_(?:c|o|z|s|p|pf|sahf_pf|cf|sf|of|zf)$', name):
             width = 8
         mask = (1 << width) - 1
-        observed = []
-        stored = []
-        for lib in [native] + ([] if name == 'xchg_address' else libraries):
-            fn = getattr(lib, name)
-            fn.argtypes = [ctypes.c_uint64] * 4
-            fn.restype = ctypes.c_uint8 if width == 8 else ctypes.c_uint64
-            if name == 'xchg_address':
-                cell = ctypes.c_uint64(3)
-                ptr = ctypes.addressof(cell)
-                observed.append(fn(ptr, b, c, 0) & mask)
-                stored.append(16 if cell.value == ptr else cell.value)
-            else:
-                observed.append(fn(a, b, c, 0) & mask)
+        observed = [execute(lib, case, width) for lib in [native] + libraries]
         expected = observed[0]
-        if any(v != expected for v in observed[1:] + [int(before) & mask, int(after) & mask]):
-            failures.append(f'{name}({a:#x},{b:#x},{c}): native/C0/C2={observed}, IR={before}/{after}')
-        if name == 'xchg_address' and stored + [int(memory)] != [16] * 2:
-            failures.append(f'{name}: memory={stored}, IR memory={memory}')
+        ir_result = (int(after) & mask, bytes.fromhex(memory))
+        if any(value != expected for value in observed[1:] + [ir_result]) or (int(before) & mask) != expected[0]:
+            failures.append(f'{name}({a:#x},{b:#x},{c}): native/C0/C2={[r for r, _ in observed]}, '
+                            f'IR={before}/{after}; initial={case.memory.hex()} native={expected[1].hex()} '
+                            f'C0={observed[1][1].hex()} C2={observed[2][1].hex()} IR={memory}')
     if failures:
         raise AssertionError('\n'.join(failures[:25]) + f'\n{len(failures)} failing cases; artifacts: {root}')
 
-    # Execute emitted C in a separate process with UBSan; a zero-count
-    # double shift must never evaluate a width-sized shift, even at -O0.
+    # Execute emitted C separately with UBSan, including memory accesses,
+    # loop exits, and zero counts that must never evaluate width-sized shifts.
     runner = root / 'ubsan.c'
-    runner.write_text('#include "generated.c"\nint main(void) { return '
-                      'shrd_zero(1,2,0) != 1 || shld_zero(1,2,64) != 1; }\n')
+    runner.write_text(r'''#include "generated.c"
+int main(void) {
+    uint64_t data[16] = {0};
+    data[2] = 3;
+    if (xchg_address(&data[2]) != 3 || data[2] != (uintptr_t)&data[2]) return 1;
+    data[2] = 10;
+    if (alias_snapshot(&data[2], &data[2], 7) != 17 || data[2] != 7) return 2;
+    data[2] = 0x1234;
+    if (alias_byte(&data[2], (unsigned char*)&data[2] + 1, 0xff) != (0x1234 ^ 0xff34)) return 3;
+    if (void_index(&data[2], 1, 9) != 0 || data[3] != 9) return 4;
+    data[2] = 10;
+    if (loop_alias(&data[2], &data[3], 4) != 46 || data[6] != 14) return 5;
+    if (loop_pair(0, 2, 3) != 1 || loop_pair(3, 2, 3) != (8 ^ 13)) return 6;
+    if (loop_sum(0, 7) != 7 || loop_sum(4, 7) != 13) return 7;
+    if (loop_early(4, 2, 7) != 8 || branch_phi(3, 7, 1) != (10 ^ 0x55)) return 8;
+    return shrd_zero(1,2,0) != 1 || shld_zero(1,2,64) != 1;
+}
+''')
     exe = root / 'ubsan'
     run([CC, '-O0', '-fsanitize=undefined', '-fno-sanitize-recover=undefined',
          str(runner), '-o', str(exe)])
     run([str(exe)])
     print(f'OK: {len(cases)} cases across {len(names)} functions; native, SSA, cleaned SSA; '
-          f'C -O0/-O2 for {len(names) - 1} functions; UBSan zero-count shifts. BMI mask={bmi}')
+          f'C -O0/-O2 and full memory comparison; UBSan shifts/control-flow/memory. BMI mask={bmi}')
 
 
 if __name__ == '__main__':

@@ -572,8 +572,8 @@ int test_phi_index_name_is_mined() {
           "unit-step memory-index phi is named idx");
     check(pc_r->find("idx++;") != std::string::npos,
           "indexed phi update renders as an increment");
-    check(pc_r->find("return a1[idx];") != std::string::npos,
-          "indexed phi name is used in array-like memory access");
+    check(pc_r->find("return ((uint64_t*)a1)[idx];") != std::string::npos,
+          "indexed phi uses a sized lvalue for the untyped pointer");
     check(pc_r->find("uint32_t i;") == std::string::npos,
           "memory-index phi is not mislabeled as generic induction i");
 

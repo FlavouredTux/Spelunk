@@ -802,6 +802,7 @@ Emitter::try_render_ppc_tick_elapsed_condition(const IrValue& condition,
 }
 
 std::string Emitter::render_condition(const IrValue& v, bool invert) const {
+    if (const auto* name = scoped_ssa_name(v)) return invert ? "!" + *name : *name;
     // Condition is rendered into `if (...)`, so no outer wrapping needed.
     if (auto ctr = render_ppc_ctr_condition(v, invert); ctr) return *ctr;
     if (auto elapsed = try_render_ppc_tick_elapsed_condition(v, invert);

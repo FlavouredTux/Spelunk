@@ -806,6 +806,11 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
 // Assignments the structurer hoisted onto this block's outgoing edge.
 void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view ind,
                                           std::string& out) const {
+    if (explicit_phi_copies) {
+        if (auto block = fn->block_at.find(block_start); block != fn->block_at.end())
+            emit_phi_copies(fn->blocks[block->second], ind, out);
+        return;
+    }
     auto assignments = merge_edge_assignments.find(block_start);
     if (assignments == merge_edge_assignments.end()) return;
     for (const auto& [name, value] : assignments->second) {
@@ -891,6 +896,18 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
 
     for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
         const auto& inst = bb.insts[ii];
+        if (const auto* name = scoped_ssa_name(inst.dst);
+            name && inst.op != IrOp::Phi && inst.op != IrOp::Call &&
+            inst.op != IrOp::CallIndirect && inst.op != IrOp::Clobber) {
+            const std::string statement = format_merge_assignment(inst, *name);
+            if (!statement.empty()) {
+                if (options.line_map)
+                    options.line_map->hits.push_back({out.size(), inst.source_addr});
+                out += std::format("{}{}\n", ind, statement);
+                mark_binding_emitted(inst.dst);
+                continue;
+            }
+        }
         if (ppc_args.stores.contains(ii)) continue;
         // Skip ABI-noise prologue/epilogue insts detected during analysis.
         // A hidden PPC save/restore helper still terminates the preceding

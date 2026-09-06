@@ -42,6 +42,7 @@ void Emitter::collect_goto_targets(const Region& r) {
 std::string
 Emitter::render_update_inst(addr_t block_addr, u32 inst_idx,
                             u32* resolved_inst) const {
+    if (explicit_phi_copies) return {};
     auto it = fn->block_at.find(block_addr);
     if (it == fn->block_at.end()) return {};
     const auto& bb = fn->blocks[it->second];
@@ -582,6 +583,7 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
 void Emitter::emit_region_return(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     addr_t return_source = 0;
+    IrValue returned = r.condition;
     if (fn) {
         auto block = fn->block_at.find(r.block_start);
         if (block != fn->block_at.end()) {
@@ -589,6 +591,14 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
             for (auto it = instructions.rbegin(); it != instructions.rend(); ++it) {
                 if (it->op == IrOp::Return) {
                     return_source = it->source_addr;
+                    // Duplicated return regions can resolve a phi using one
+                    // predecessor even when several loop exits reach this
+                    // copy. Explicit edge copies already selected the value.
+                    if (explicit_phi_copies && it->src_count > 0 &&
+                        !is_float_type(returned.type) && scoped_ssa_name(it->srcs[0])) {
+                        if (const IrInst* source = def_of(it->srcs[0]);
+                            source && source->op == IrOp::Phi) returned = it->srcs[0];
+                    }
                     break;
                 }
             }
@@ -600,11 +610,11 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         }
         out += ind + std::move(statement) + "\n";
     };
-    if (r.condition.kind == IrValueKind::None) {
+    if (returned.kind == IrValueKind::None) {
         append_return("return;");
         return;
     }
-    if (auto k = ssa_key(r.condition); k) {
+    if (auto k = ssa_key(returned); k) {
         auto s = fold_void_call_stmt.find(*k);
         if (s != fold_void_call_stmt.end()) {
             record_folded_call_hit(*k, out.size());
@@ -614,10 +624,10 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         }
     }
     if (current_return_is_void) {
-        if (auto k = ssa_key(r.condition); k) {
+        if (auto k = ssa_key(returned); k) {
             auto f = fold_return_expr.find(*k);
             if (f != fold_return_expr.end()) {
-                emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
+                emit_materializations_for_rendered_value(returned, f->second, out, ind);
                 record_folded_call_hit(*k, out.size());
                 out += std::format("{}{};\n", ind, f->second);
             }
@@ -625,26 +635,26 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         append_return("return;");
         return;
     }
-    if (is_void_call_result(r.condition)) {
+    if (is_void_call_result(returned)) {
         append_return("return;");
         return;
     }
-    if (is_unbound_clobber_result(r.condition)) {
+    if (is_unbound_clobber_result(returned)) {
         append_return("return;");
         return;
     }
-    if (is_incidental_x86_fp_return(r.condition)) {
+    if (is_incidental_x86_fp_return(returned)) {
         append_return("return;");
         return;
     }
-    if (renders_stack_chk_guard_value(r.condition)) {
+    if (renders_stack_chk_guard_value(returned)) {
         append_return("return;");
         return;
     }
-    if (auto k = ssa_key(r.condition); k) {
+    if (auto k = ssa_key(returned); k) {
         auto f = fold_return_expr.find(*k);
         if (f != fold_return_expr.end()) {
-            emit_materializations_for_rendered_value(r.condition, f->second, out, ind);
+            emit_materializations_for_rendered_value(returned, f->second, out, ind);
             record_folded_call_hit(*k, out.size());
             append_return(std::format("return {};", f->second));
             return;
@@ -654,7 +664,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     // declared type already coerces, so `return (u64)x;` where `x` has the
     // return type reads as noise. One hop only - deeper casts are
     // semantically real.
-    IrValue v = r.condition;
+    IrValue v = returned;
     if (auto payload = low_byte_return_payload(v); payload) {
         v = *payload;
     }

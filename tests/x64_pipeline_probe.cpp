@@ -2,8 +2,10 @@
 
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cstdio>
 #include <iostream>
+#include <iomanip>
 #include <map>
 #include <string>
 
@@ -64,14 +66,19 @@ int main(int argc, char** argv) {
     CfgBuilder builder(**binary, decoder);
     std::map<std::string, std::pair<IrFunction, IrFunction>> functions;
     std::string name;
+    std::string memory_hex;
     u64 a = 0, b = 0, c = 0;
-    while (std::cin >> name >> a >> b >> c) {
+    while (std::cin >> name >> a >> b >> c >> memory_hex) {
         auto it = functions.find(name);
         if (it == functions.end()) {
             const auto* symbol = (*binary)->find_by_name(name);
             if (!symbol) return 4;
             auto cfg = builder.build(symbol->addr, name);
             if (!cfg) return 5;
+            if (name == "branch_phi" && cfg->blocks.size() < 4) {
+                std::fprintf(stderr, "branch fixture lost its diamond CFG\n");
+                return 13;
+            }
             auto ir = X64Lifter{}.lift(*cfg);
             if (!ir) return 6;
             // All fixtures return integers; discard the alternative FP lane.
@@ -79,12 +86,29 @@ int main(int argc, char** argv) {
                 for (auto& inst : block.insts)
                     if (inst.op == IrOp::Return) inst.src_count = 1;
             if (!SsaBuilder{}.convert(*ir)) return 7;
+            if (name.starts_with("loop_")) {
+                bool has_phi = false;
+                for (const auto& block : ir->blocks)
+                    for (const auto& inst : block.insts) has_phi |= inst.op == IrOp::Phi;
+                if (!has_phi || ir->blocks.size() < 2) {
+                    std::fprintf(stderr, "%s: fixture lost loop/phi coverage\n", name.c_str());
+                    return 14;
+                }
+            }
             IrFunction cleaned = *ir;
             if (!run_cleanup(cleaned)) return 8;
             it = functions.emplace(name, std::pair{std::move(*ir), std::move(cleaned)}).first;
         }
         test::MachineInput input;
-        input.memory.resize(64);
+        if (memory_hex.size() % 2 != 0 || memory_hex.size() > 1024) return 11;
+        for (std::size_t i = 0; i < memory_hex.size(); i += 2) {
+            unsigned byte = 0;
+            const auto parsed = std::from_chars(memory_hex.data() + i,
+                memory_hex.data() + i + 2, byte, 16);
+            if (parsed.ec != std::errc{} || parsed.ptr != memory_hex.data() + i + 2)
+                return 12;
+            input.memory.push_back(static_cast<u8>(byte));
+        }
         input.intrinsic = intrinsic;
         const std::array regs{Reg::Rax, Reg::Rbx, Reg::Rcx, Reg::Rdx,
                               Reg::Rsi, Reg::Rdi, Reg::Rbp, Reg::Rsp};
@@ -94,7 +118,6 @@ int main(int argc, char** argv) {
         input.values[*ssa_key(IrValue::make_reg(Reg::Rdx, IrType::I64))] = c;
         for (Flag flag : {Flag::Cf, Flag::Of, Flag::Sf, Flag::Zf})
             input.values[*ssa_key(IrValue::make_flag(flag))] = 0;
-        if (name == "xchg_address") input.memory[16] = 3;
         const auto before = test::interpret(it->second.first, input);
         const auto after = test::interpret(it->second.second, input);
         if (!before || !after) {
@@ -105,10 +128,15 @@ int main(int argc, char** argv) {
             return 9;
         }
         if (*before != *after) {
-            std::fprintf(stderr, "%s: cleanup changed execution\n", name.c_str());
+            std::fprintf(stderr, "%s: cleanup changed execution\n%s\n%s\n", name.c_str(),
+                format_ir_function(it->second.first).c_str(),
+                format_ir_function(it->second.second).c_str());
             return 10;
         }
         std::cout << name << ' ' << before->returned.value_or(0) << ' '
-                  << after->returned.value_or(0) << ' ' << unsigned(after->memory[16]) << '\n';
+                  << after->returned.value_or(0) << ' ';
+        for (u8 byte : after->memory)
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << unsigned(byte);
+        std::cout << std::dec << '\n';
     }
 }

@@ -84,6 +84,7 @@ bool Emitter::is_flag_feeder_temp(const IrValue& v) const {
 }
 
 bool Emitter::should_inline(const IrValue& v) const {
+    if (scoped_ssa_name(v)) return false;
     if (v.kind != IrValueKind::Temp) return false;
     const auto* d = def_of(v);
     if (!d) return false;
@@ -262,6 +263,7 @@ void Emitter::emit_materializations_for_value(const IrValue& v,
                                               int depth,
                                               std::string& out,
                                               std::string_view ind) const {
+    if (scoped_ssa_name(v)) return;
     if (depth > 12) return;
     if (v.kind != IrValueKind::Reg && v.kind != IrValueKind::Temp) return;
     auto k = ssa_key(v);

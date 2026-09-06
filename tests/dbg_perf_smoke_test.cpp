@@ -1,18 +1,18 @@
 // Drives the Linux perf_event_open backend end-to-end against the
-// `dbg_target` fixture. Exercises the same shape as dbg_smoke_test.cpp
+// cooperative fixture. Exercises the same shape as dbg_smoke_test.cpp
 // but through BackendKind::Perf - HW execute breakpoint, HW data
 // watchpoint, and the cached-register-from-sample read path.
 //
-// Skip semantics: perf_event_open(PERF_TYPE_BREAKPOINT) is gated by
-// /proc/sys/kernel/perf_event_paranoid (>=2 denies for non-root) and
-// by CAP_PERFMON. When the kernel returns EACCES/EPERM the backend
-// surfaces Error::unsupported; we treat that as a skip (exit 77,
-// matching CMake's SKIP_RETURN_CODE convention) so the test passes
-// in restricted environments where the perf path simply isn't usable.
+// Host permission denials skip (77); invalid perf attributes must fail.
+// User-space events work at perf_event_paranoid=2 without CAP_PERFMON.
 
+#include <array>
 #include <cstdio>
 #include <filesystem>
+#include <fcntl.h>
+#include <string>
 #include <system_error>
+#include <unistd.h>
 #include <utility>
 #include <variant>
 
@@ -32,6 +32,24 @@
     } while (0)
 
 namespace {
+
+struct Pipes {
+    std::array<int, 2> gate{-1, -1};
+    std::array<int, 2> ready{-1, -1};
+    static void close(int& fd) {
+        if (fd >= 0) ::close(std::exchange(fd, -1));
+    }
+    ~Pipes() {
+        for (auto& fd : gate) close(fd);
+        for (auto& fd : ready) close(fd);
+    }
+};
+
+struct TargetCleanup {
+    ember::debug::Target& target;
+    bool exited = false;
+    ~TargetCleanup() { if (!exited) (void)target.kill(); }
+};
 
 ember::addr_t compute_slide(ember::debug::Target& tgt,
                             const ember::Binary& bin,
@@ -55,13 +73,11 @@ ember::addr_t compute_slide(ember::debug::Target& tgt,
 }
 
 bool is_perf_denial(const ember::Error& e) {
-    return e.kind_name() == std::string_view("unsupported");
+    return e.kind == ember::ErrorKind::UnsupportedFormat;
 }
 
-template <typename TargetPtr>
-int skip_perf(TargetPtr& t, const char* what, const ember::Error& e) {
+int skip_perf(const char* what, const ember::Error& e) {
     std::fprintf(stderr, "SKIP: %s (%s)\n", what, e.message.c_str());
-    (void)t->kill();
     return 77;
 }
 
@@ -81,16 +97,22 @@ int main(int argc, char** argv) {
     const auto* slot   = (*bin)->find_by_name("watch_slot");
     CHECK(slot   != nullptr,            "find watch_slot");
 
+    Pipes pipes;
+    CHECK(::pipe2(pipes.gate.data(), O_CLOEXEC) == 0, "gate pipe");
+    CHECK(::pipe2(pipes.ready.data(), O_CLOEXEC) == 0, "ready pipe");
+    CHECK(::fcntl(pipes.gate[0], F_SETFD, 0) == 0, "inherit gate reader");
+    CHECK(::fcntl(pipes.ready[1], F_SETFD, 0) == 0, "inherit ready writer");
+
     ember::debug::LaunchOptions opts;
     opts.program       = argv[1];
-    opts.stop_at_entry = true;
+    opts.args          = {std::to_string(pipes.gate[0]), std::to_string(pipes.ready[1])};
+    opts.stop_at_entry = false;
     opts.backend       = ember::debug::BackendKind::Perf;
     auto t_r = ember::debug::launch(opts);
     if (!t_r) {
         if (is_perf_denial(t_r.error())) {
             std::fprintf(stderr,
-                "SKIP: perf backend denied (%s) - set "
-                "/proc/sys/kernel/perf_event_paranoid <= 1 or run as root\n",
+                "SKIP: perf backend unavailable (%s)\n",
                 t_r.error().message.c_str());
             return 77;
         }
@@ -101,6 +123,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     auto t = std::move(*t_r);
+    TargetCleanup cleanup{*t};
+    Pipes::close(pipes.gate[0]);
+    Pipes::close(pipes.ready[1]);
+    char token = 0;
+    CHECK(::read(pipes.ready[0], &token, 1) == 1, "fixture ready");
 
     const ember::addr_t slide   = compute_slide(*t, **bin, argv[1]);
     const ember::addr_t bp_va   = marker->addr + slide;
@@ -109,12 +136,11 @@ int main(int argc, char** argv) {
     auto bp_r = t->set_breakpoint(bp_va);
     if (!bp_r) {
         if (is_perf_denial(bp_r.error())) {
-            return skip_perf(t, "HW breakpoint allocation unavailable",
+            return skip_perf("HW breakpoint allocation unavailable",
                              bp_r.error());
         }
         std::fprintf(stderr, "FAIL: set_breakpoint: %s\n",
                      bp_r.error().message.c_str());
-        (void)t->kill();
         return 1;
     }
     const auto bp_id = *bp_r;
@@ -122,12 +148,11 @@ int main(int argc, char** argv) {
     auto wp_r = t->set_watchpoint(slot_va, 8, ember::debug::WatchMode::Write);
     if (!wp_r) {
         if (is_perf_denial(wp_r.error())) {
-            return skip_perf(t, "HW watchpoint allocation unavailable",
+            return skip_perf("HW watchpoint allocation unavailable",
                              wp_r.error());
         }
         std::fprintf(stderr, "FAIL: set_watchpoint: %s\n",
                      wp_r.error().message.c_str());
-        (void)t->kill();
         return 1;
     }
     const auto wp_id = *wp_r;
@@ -136,7 +161,7 @@ int main(int argc, char** argv) {
     {
         const auto step_r = t->step(0);
         CHECK(!step_r.has_value(),  "step should be unsupported");
-        CHECK(step_r.error().kind_name() == std::string_view("UnsupportedFormat"),
+        CHECK(step_r.error().kind == ember::ErrorKind::UnsupportedFormat,
               "step error kind == unsupported");
     }
     // set_regs must report unsupported.
@@ -151,10 +176,11 @@ int main(int argc, char** argv) {
         CHECK(!sc.has_value(), "syscall catch should be unsupported");
     }
 
-    // Resume: SIGCONT wakes the child. Two HW slots are armed; we
+    // Release the fixture. Two HW slots are armed; we
     // expect EvBreakpointHit for dbg_marker, then EvWatchpointHit
     // for the store to watch_slot, then EvExited{42}.
     CHECK(t->cont().has_value(), "cont 1");
+    CHECK(::write(pipes.gate[1], &token, 1) == 1, "release fixture");
 
     auto ev_r = t->wait_event();
     CHECK(ev_r.has_value(),                                  "wait_event 1");
@@ -196,10 +222,12 @@ int main(int argc, char** argv) {
         CHECK(v == 0xdeadbeefcafebabeULL,                    "watch_slot post-store value");
     }
 
+    CHECK(::write(pipes.gate[1], &token, 1) == 1, "allow fixture exit");
     ev_r = t->wait_event();
     CHECK(ev_r.has_value(), "wait_event final");
     const auto* exited = std::get_if<ember::debug::EvExited>(&*ev_r);
     CHECK(exited != nullptr,    "expected EvExited");
+    cleanup.exited = true;
     CHECK(exited->code == 42,   "exit code");
 
     std::printf("OK (slide=0x%llx)\n", static_cast<unsigned long long>(slide));

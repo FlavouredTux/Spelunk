@@ -615,18 +615,17 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     set_tests_properties(dbg_smoke dbg_smoke_pie
         PROPERTIES SKIP_RETURN_CODE 77)
 
-    # Same fixture run through the perf_event_open backend. Skips at
-    # runtime (exit 77) when the kernel denies perf_event_open due to
-    # /proc/sys/kernel/perf_event_paranoid >= 2 without CAP_PERFMON,
-    # so the test passes uniformly across paranoid and permissive
-    # CI environments.
+    # Perf samples do not stop the target. This cooperative fixture waits
+    # for event setup and stays alive through the memory-read assertion.
+    # It has no golden addresses, so build it with the host toolchain.
+    add_executable(ember_dbg_perf_target support/dbg_perf_target.c)
     add_executable(ember_dbg_perf_smoke_test dbg_perf_smoke_test.cpp)
     target_link_libraries(ember_dbg_perf_smoke_test
         PRIVATE ember::core ember::flags)
-    add_dependencies(ember_dbg_perf_smoke_test ember_fixture_dbg_target)
+    add_dependencies(ember_dbg_perf_smoke_test ember_dbg_perf_target)
     add_test(NAME dbg_perf_smoke
-             COMMAND ember_dbg_perf_smoke_test "${EMBER_FIXTURE_dbg_target_PATH}")
-    set_tests_properties(dbg_perf_smoke PROPERTIES SKIP_RETURN_CODE 77)
+             COMMAND ember_dbg_perf_smoke_test "$<TARGET_FILE:ember_dbg_perf_target>")
+    set_tests_properties(dbg_perf_smoke PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
 
     # .eh_frame unwinder vs RBP-walk on -fomit-frame-pointer.
     add_executable(ember_dbg_eh_unwind_test dbg_eh_unwind_test.cpp)

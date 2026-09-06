@@ -71,18 +71,16 @@ REPL prints those errors verbatim; the session keeps going.
 
 ### Permissions
 
-`perf_event_open(PERF_TYPE_BREAKPOINT)` is gated by
-`/proc/sys/kernel/perf_event_paranoid`:
+The backend requests per-process user-space events, excluding kernel and
+hypervisor execution. This works with `perf_event_paranoid=2` for a permitted
+target without additional capabilities. See the
+[kernel's perf access-control documentation](https://www.kernel.org/doc/html/latest/admin-guide/perf-security.html).
 
-- `paranoid <= 1`: works for any task you can ptrace (same uid, or
-  with `CAP_SYS_PTRACE`).
-- `paranoid >= 2`: denied unless the binary has `CAP_PERFMON` /
-  `CAP_SYS_ADMIN`. Grant via `setcap cap_perfmon+ep ./build/cli/ember`.
-
-When denied, the backend reports `unsupported: perf_event_open
-denied - set /proc/sys/kernel/perf_event_paranoid to 1 (or below),
-or grant CAP_PERFMON to ember`. With `--debug-backend=auto` the CLI
-falls through to `ptrace` automatically.
+Stricter distribution policies, target access checks, or container restrictions
+can still deny `perf_event_open`. Permission denials report `unsupported` with
+the relevant policy checks; invalid breakpoint configurations report
+`invalid-format`. With `--debug-backend=auto` the CLI falls through to `ptrace`
+when perf is unavailable.
 
 ### Stealth caveats
 

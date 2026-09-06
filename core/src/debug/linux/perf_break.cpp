@@ -76,6 +76,10 @@ install_perf_event(PerfTarget& t, addr_t addr, u32 bp_type, u8 len_bytes) {
     attr.sample_regs_user = user_regs_mask();
     attr.wakeup_events    = 1;     // wake poll() on every sample
     attr.disabled         = 0;
+    // Only observe the target's user-space execution. Requesting kernel
+    // events unnecessarily requires privilege at perf_event_paranoid=2.
+    attr.exclude_kernel   = 1;
+    attr.exclude_hv       = 1;
     // No inherit / task tracking on HW BP: those flags are mutually
     // exclusive with PERF_TYPE_BREAKPOINT on most kernels and surface
     // as EINVAL. Thread discovery is best-effort via /proc/<pid>/task
@@ -91,12 +95,11 @@ install_perf_event(PerfTarget& t, addr_t addr, u32 bp_type, u8 len_bytes) {
         }
         if (errno == EACCES || errno == EPERM) {
             return std::unexpected(Error::unsupported(
-                "debugger: perf_event_open denied - set "
-                "/proc/sys/kernel/perf_event_paranoid to 1 (or below), "
-                "or grant CAP_PERFMON to ember"));
+                "debugger: user-space perf_event_open denied by host policy "
+                "(check perf_event_paranoid, CAP_PERFMON, and container restrictions)"));
         }
         if (errno == EINVAL) {
-            return std::unexpected(Error::unsupported(
+            return std::unexpected(Error::invalid_format(
                 "debugger: perf_event_open rejected HW breakpoint/watchpoint "
                 "configuration on this kernel or container host"));
         }
@@ -140,7 +143,10 @@ Result<BreakpointId> PerfTarget::set_breakpoint(addr_t va) {
         }
     }
 
-    auto idx = install_perf_event(*this, va, HW_BREAKPOINT_X, 1);
+    // Linux x86 requires sizeof(long) for execute breakpoints, regardless
+    // of instruction length; data watchpoints use their actual width.
+    auto idx = install_perf_event(*this, va, HW_BREAKPOINT_X,
+                                  static_cast<u8>(sizeof(long)));
     if (!idx) return std::unexpected(std::move(idx).error());
 
     auto* s = slot(*idx);

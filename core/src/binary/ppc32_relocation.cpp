@@ -74,6 +74,18 @@ RelocationInfo info(u32 relocation_type) noexcept {
         case ADDR32:
             return {.name = "R_PPC_ADDR32", .width = 4, .alignment = 4,
                     .elf_supported = true};
+        case REL32:
+            return {.name = "R_PPC_REL32", .width = 4, .alignment = 4,
+                    .pc_relative = true, .elf_supported = true};
+        case GHS_REL16_HA:
+            return {.name = "R_PPC_GHS_REL16_HA", .width = 2, .alignment = 2,
+                    .pc_relative = true, .elf_supported = true};
+        case GHS_REL16_HI:
+            return {.name = "R_PPC_GHS_REL16_HI", .width = 2, .alignment = 2,
+                    .pc_relative = true, .elf_supported = true};
+        case GHS_REL16_LO:
+            return {.name = "R_PPC_GHS_REL16_LO", .width = 2, .alignment = 2,
+                    .pc_relative = true, .elf_supported = true};
         case ADDR24:
             return {.name = "R_PPC_ADDR24", .width = 4, .alignment = 4,
                     .branch = true, .callable = true, .elf_supported = true};
@@ -142,6 +154,18 @@ bool encode(std::span<std::byte> field, u32 relocation_type,
         case ADDR32:
         case UADDR32:
             write_at<u32>(endian, field.data(), resolved);
+            return true;
+        case REL32:
+            write_at<u32>(endian, field.data(), relative(resolved, place));
+            return true;
+        case GHS_REL16_HA:
+            write_at<u16>(endian, field.data(), static_cast<u16>((relative(resolved, place) + 0x8000u) >> 16));
+            return true;
+        case GHS_REL16_HI:
+            write_at<u16>(endian, field.data(), static_cast<u16>(relative(resolved, place) >> 16));
+            return true;
+        case GHS_REL16_LO:
+            write_at<u16>(endian, field.data(), static_cast<u16>(relative(resolved, place)));
             return true;
         case ADDR24:
             if (!fits_signed(resolved, 3u, -0x02000000LL, 0x01fffffcLL)) {

@@ -73,8 +73,9 @@ cmake --build build -j
 
 Wii U RPX/RPL compressed sections are expanded automatically when system zlib
 development files are available at configure time. Use `-DEMBER_WITH_ZLIB=OFF`
-to disable this optional dependency. This enables static section loading;
-Cafe import resolution and runtime relocation are not yet implemented.
+to disable this optional dependency. Cafe imports are named by module, and
+supported relocations are applied to the analysis image. External addresses
+remain symbolic; this does not load Wii U system libraries or execute the game.
 
 The Qt 6 desktop front end is optional:
 

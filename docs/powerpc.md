@@ -13,9 +13,37 @@ uncompressed size, without trailing bytes. Expansion is limited to 256 MiB
 per section and 512 MiB total. Builds without zlib report an unsupported
 compression error. Configure with `-DEMBER_WITH_ZLIB=OFF` to disable support.
 
-This is static loading support, not a Cafe OS dynamic linker: Wii U imports
-and runtime relocations are not resolved. Decompiled addresses and calls
-that depend on those mechanisms still need verification.
+Cafe import tables and ELF symbols identify function and data imports as
+`module!symbol`, for example `coreinit!OSBlockMove`. Function-pointer references
+retain the file's symbolic import-slot addresses. Calls whose destinations
+are outside the PowerPC branch range use named, analysis-only veneers;
+disassembly and pseudo-C can therefore identify the imported function without
+guessing its address in a running Wii U. Data-import slots have no readable
+runtime bytes: their on-disk module names are not treated as global values.
+
+The loader applies supported absolute 32-bit and 16-bit relocations, relative
+branches, REL32, and Green Hills relative halfword relocations. RELA records
+use their absolute patch addresses and explicit signed addends. Local TLS
+offsets are applied, while runtime TLS module IDs, unresolved symbols, and
+unsupported relocations remain visible through `Binary::relocations()` with
+`applied == false`. This flag describes the static analysis image, not a
+running process. The default CLI inventory reports applied/unapplied counts
+and lists unapplied records, bounded by `--row-limit`. Export tables are read
+after relocation. BSS relocation
+targets are materialized with zero-filled owned storage (64 MiB total limit).
+
+Generated veneers and materialized BSS have no file-backed bytes;
+their `file_offset` is `image().size()`. They are present in `sections()` and
+`bytes_at()`, but not serialized into `image()`. Import/export metadata is not
+scanned as executable code. The loader limits relocation records to 4 million
+and generated veneers to 65,536. Cafe SHT_REL records with implicit addends
+are rejected; this path expects SHT_RELA.
+
+System-library implementations, runtime module addresses, TLS module IDs,
+and SDA relocations are not supplied by this static linker. Check unapplied
+records before treating an address as resolved. The format constants and
+relocation expressions can be cross-checked against
+[Decaf's Cafe loader](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/loader/cafe_loader_reloc.cpp).
 
 Ember supports PPC32 and PPC64 binary loading, instruction decoding, partial IR
 lifting, and pseudo-C emission. Wii-oriented work can load a DOL, a standalone

@@ -261,6 +261,9 @@ if(EMBER_ZLIB_ENABLED)
     target_compile_definitions(ember_elf_cafe_test PRIVATE EMBER_TEST_ZLIB=1)
 endif()
 add_test(NAME elf_cafe_unit COMMAND ember_elf_cafe_test)
+add_executable(ember_elf_cafe_link_test elf_cafe_link_test.cpp)
+target_link_libraries(ember_elf_cafe_link_test PRIVATE ember::core ember::flags)
+add_test(NAME elf_cafe_link_unit COMMAND ember_elf_cafe_link_test)
 
 add_executable(ember_elf_loader_robustness_test
     elf_loader_robustness_test.cpp

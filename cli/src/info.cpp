@@ -37,6 +37,22 @@ void print_info(const Binary& b, std::string_view path,
     std::println("endian  {}", endian_name(b.endian()));
     std::println("entry   {:#018x}", b.entry_point());
     std::println("base    {:#018x}", b.preferred_load_base());
+    if (const auto relocations = b.relocations(); !relocations.empty()) {
+        std::size_t applied = 0;
+        for (const auto& relocation : relocations) applied += relocation.applied;
+        std::println("relocations (analysis image): {} applied, {} unapplied",
+                     applied, relocations.size() - applied);
+        std::size_t shown = 0;
+        for (const auto& relocation : relocations) {
+            if (relocation.applied) continue;
+            if (!verbose && row_limit != 0 && shown >= row_limit) continue;
+            std::println("  unapplied {:#x}: {} ({})", relocation.site,
+                         relocation.type_name, relocation.symbol_name);
+            ++shown;
+        }
+        if (shown < relocations.size() - applied)
+            std::println("  ... {} more unapplied relocation(s)", relocations.size() - applied - shown);
+    }
 
     const auto secs = b.sections();
     std::println("");

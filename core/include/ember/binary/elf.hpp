@@ -100,6 +100,7 @@ private:
     };
     [[nodiscard]] Result<ParsedEhdr>   parse_ehdr();
     [[nodiscard]] Result<void> decompress_cafe_sections(const ParsedEhdr& h);
+    [[nodiscard]] Result<void> link_cafe_sections(const ParsedEhdr& h);
     [[nodiscard]] Result<void>         parse_segments(const ParsedEhdr& h);
     [[nodiscard]] Result<void>         parse_sections(const ParsedEhdr& h);
     // Parses SYMTAB + DYNSYM into symbols_; records dynsym string names so
@@ -138,6 +139,8 @@ private:
         addr_t      addr = 0;
         SymbolKind  kind = SymbolKind::Unknown;
         bool        undefined = false;
+        bool        imported = false;
+        bool        tls = false;
     };
 
     std::vector<std::byte>    buffer_;
@@ -154,6 +157,10 @@ private:
     addr_t                    next_external_addr_ = 0;
     bool                      is_relocatable_ = false;
     bool                      has_load_segments_ = false;
+    bool                      is_cafe_ = false;
+    // Analysis-only branch veneers and materialized BSS relocation targets.
+    // Map nodes keep their byte storage stable as sections are added.
+    std::map<addr_t, std::vector<std::byte>> cafe_storage_;
 };
 
 }  // namespace ember

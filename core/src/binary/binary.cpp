@@ -32,7 +32,7 @@ const Binary::LookupCaches& Binary::caches() const {
 
         if (s.is_import) {
             if (s.got_addr != 0) c.import_by_got.emplace(s.got_addr, &s);
-            if (s.addr != 0)     c.imports_by_addr.push_back(&s);
+            if (s.addr != 0 && s.kind != SymbolKind::Object) c.imports_by_addr.push_back(&s);
         } else if (s.kind == SymbolKind::Function || s.kind == SymbolKind::Object) {
             c.defined_objects_by_addr.push_back(&s);
         }
@@ -66,7 +66,8 @@ const Symbol* Binary::import_at_plt(addr_t plt_addr, unsigned slot_size) const n
     // the original linear scan did.
     while (it != c.imports_by_addr.begin() && (*(it - 1))->addr == (*it)->addr) --it;
     const Symbol* s = *it;
-    if (plt_addr >= s->addr && plt_addr < s->addr + slot_size) return s;
+    const u64 extent = s->size == 0 ? slot_size : std::min<u64>(slot_size, s->size);
+    if (plt_addr >= s->addr && plt_addr - s->addr < extent) return s;
     return nullptr;
 }
 

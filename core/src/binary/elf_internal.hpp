@@ -52,6 +52,8 @@ inline constexpr u32 NOBITS       = 8;
 inline constexpr u32 REL          = 9;
 inline constexpr u32 DYNSYM       = 11;
 inline constexpr u32 SYMTAB_SHNDX = 18;
+inline constexpr u32 CAFE_EXPORTS = 0x80000001;
+inline constexpr u32 CAFE_IMPORTS = 0x80000002;
 }  // namespace sht
 
 namespace shn {

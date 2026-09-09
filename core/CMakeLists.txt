@@ -1,6 +1,7 @@
 add_library(ember_core STATIC
     src/binary/elf.cpp
     src/binary/elf_cafe.cpp
+    src/binary/elf_cafe_link.cpp
     src/binary/elf_phdr.cpp
     src/binary/elf_symbols.cpp
     src/binary/dol.cpp

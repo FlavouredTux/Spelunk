@@ -28,6 +28,10 @@ inline constexpr u32 REL14 = 11;
 inline constexpr u32 REL14_BRTAKEN = 12;
 inline constexpr u32 REL14_BRNTAKEN = 13;
 inline constexpr u32 UADDR32 = 24;
+inline constexpr u32 REL32 = 26;
+inline constexpr u32 GHS_REL16_HA = 251;
+inline constexpr u32 GHS_REL16_HI = 252;
+inline constexpr u32 GHS_REL16_LO = 253;
 inline constexpr u32 EMB_SDA21 = 109;
 
 inline constexpr u32 DOLPHIN_NOP = 201;

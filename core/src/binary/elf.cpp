@@ -702,7 +702,8 @@ Result<void> ElfBinary::parse_relocations(const ParsedEhdr& h) {
 
             ParsedSymbol& parsed = table_it->second[r_symbol];
             const ppc32::RelocationInfo properties = ppc32::info(r_type);
-            const bool supported = properties.elf_supported;
+            const bool ghs_half = r_type >= rppc::GHS_REL16_HA && r_type <= rppc::GHS_REL16_LO;
+            const bool supported = properties.elf_supported && (has_explicit_addend || !ghs_half);
             const RelocationTarget target = ensure_external_target(
                 parsed, supported && properties.callable);
             const addr_t symbol_addr = target.addr;
@@ -741,7 +742,7 @@ Result<void> ElfBinary::parse_relocations(const ParsedEhdr& h) {
             std::byte* patch = buffer_.data() + target_sh.offset + r_offset;
             i64 addend = explicit_addend;
             if (!has_explicit_addend) {
-                if (r_type == rppc::ADDR32) {
+                if (r_type == rppc::ADDR32 || r_type == rppc::REL32) {
                     addend = static_cast<i64>(read_at<i32>(endian_, patch));
                 } else if (r_type == rppc::ADDR24 || r_type == rppc::REL24) {
                     addend = sign_extend(read_at<u32>(endian_, patch) & 0x03fffffcu, 26);
@@ -838,7 +839,8 @@ void ElfBinary::sort_and_dedupe_symbols() {
         if (a.is_import != b.is_import) return a.is_import < b.is_import;
         if (a.addr      != b.addr)      return a.addr < b.addr;
         if (a.name      != b.name)      return a.name < b.name;
-        return a.size < b.size;
+        if (a.size != b.size) return a.size < b.size;
+        return a.is_export > b.is_export;
     });
     auto dups = std::ranges::unique(symbols_,
         [](const Symbol& a, const Symbol& b) noexcept {
@@ -896,6 +898,8 @@ Result<void> ElfBinary::parse() {
     arch_  = arch_from_machine(hdr->e_machine, hdr->is_64bit);
     entry_ = hdr->e_entry;
     is_relocatable_ = hdr->e_type == et::REL;
+    is_cafe_ = !hdr->is_64bit && arch_ == Arch::Ppc32 && endian_ == Endian::Big &&
+        buffer_[7] == std::byte{0xca};
 
     if (auto rv = decompress_cafe_sections(*hdr); !rv) return std::unexpected(rv.error());
     if (auto rv = parse_segments(*hdr);  !rv) return std::unexpected(rv.error());
@@ -916,7 +920,7 @@ Result<void> ElfBinary::parse() {
         !rv) {
         return std::unexpected(rv.error());
     }
-    if (auto rv = parse_relocations(*hdr); !rv) {
+    if (auto rv = is_cafe_ ? link_cafe_sections(*hdr) : parse_relocations(*hdr); !rv) {
         return std::unexpected(rv.error());
     }
 

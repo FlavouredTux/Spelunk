@@ -168,6 +168,26 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
     if (!discovered) return std::unexpected(std::move(discovered).error());
     const ExtendedIndexTables& extended_indices = *discovered;
 
+    std::unordered_map<u32, std::string> cafe_imports;
+    std::unordered_map<u32, u32> cafe_import_counts;
+    if (is_cafe_) {
+        for (u32 i = 0; i < h.e_shnum; ++i) {
+            const Shdr sh = shdr_at(endian_, section_table->data(), i, false);
+            if (sh.type != sht::CAFE_IMPORTS) continue;
+            auto bytes = reader.slice(sh.offset, sh.size);
+            if (!bytes) return std::unexpected(bytes.error());
+            if (bytes->size() < 9 || (sh.flags & 2u) == 0)
+                return std::unexpected(Error::invalid_format("cafe: invalid import section"));
+            const ByteReader imports(*bytes);
+            auto module = imports.read_cstr(8);
+            if (!module || module->empty() ||
+                read_be_at<u32>(bytes->data()) > (sh.size - 8) / 8)
+                return std::unexpected(Error::invalid_format("cafe: invalid import module or count"));
+            cafe_imports.emplace(i, std::string(*module));
+            cafe_import_counts.emplace(i, read_be_at<u32>(bytes->data()));
+        }
+    }
+
     const std::size_t symbol_size =
         h.is_64bit ? elf::kSym64Size : elf::kSym32Size;
     const std::size_t absolute_max_symbols = buffer_.size() / symbol_size;
@@ -269,6 +289,20 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
             const bool ordinary_section_index = section_index->extended ||
                 (raw_section_index != shn::UNDEF &&
                  raw_section_index < shn::LORESERVE);
+            if (is_cafe_ && ordinary_section_index && section_index->value >= h.e_shnum)
+                return std::unexpected(Error::invalid_format("cafe: invalid symbol section index"));
+            const auto cafe_module = cafe_imports.find(section_index->value);
+            const bool cafe_import = cafe_module != cafe_imports.end() &&
+                (st_info & 0xf) != elf::stt::SECTION;
+            if (cafe_import) {
+                const Shdr defining = shdr_at(endian_, section_table->data(), section_index->value, false);
+                if (name.empty() || st_value < defining.addr + 8 ||
+                    st_value - defining.addr > defining.size - 8 ||
+                    (st_value - defining.addr - 8) % 8 != 0 ||
+                    (st_value - defining.addr - 8) / 8 >= cafe_import_counts.at(section_index->value))
+                    return std::unexpected(Error::invalid_format("cafe: invalid imported symbol slot"));
+                name = cafe_module->second + "!" + name;
+            }
             if (is_relocatable_ && ordinary_section_index) {
                 if (section_index->value >= h.e_shnum ||
                     section_index->value >= section_bases_.size()) {
@@ -307,6 +341,8 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
             parsed.addr = resolved_address;
             parsed.kind = elf::symbol_kind_from_info(st_info);
             parsed.undefined = raw_section_index == shn::UNDEF;
+            parsed.imported = cafe_import;
+            parsed.tls = (st_info & 0xf) == 6;
             parsed_table[k] = parsed;
 
             if (name.empty()) continue;
@@ -315,7 +351,13 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
             symbol.addr = resolved_address;
             symbol.size = st_size;
             symbol.kind = elf::symbol_kind_from_info(st_info);
-            symbol.is_import = raw_section_index == shn::UNDEF;
+            symbol.is_import = raw_section_index == shn::UNDEF || cafe_import;
+            if (cafe_import) {
+                const Shdr defining = shdr_at(endian_, section_table->data(), section_index->value, false);
+                symbol.kind = (defining.flags & 4u) != 0 ? SymbolKind::Function : SymbolKind::Object;
+                parsed_table[k].kind = symbol.kind;
+                symbol.size = 8;
+            }
             symbol.is_export = !symbol.is_import &&
                 (is_dynsym || (is_relocatable_ && (st_info >> 4) != 0));
             symbols_.push_back(std::move(symbol));

@@ -3,8 +3,8 @@
 Ember is a reverse-engineering toolkit written from scratch in C++23. It
 loads a binary, decodes the machine code, lifts it into its own IR, builds
 SSA, runs cleanup passes, recovers control flow and prints pseudo-C. It
-depends only on the C++ standard library: no LLVM, Capstone, Zydis, SLEIGH,
-and no debug info required.
+requires only the C++ standard library for its core analysis: no LLVM,
+Capstone, Zydis, SLEIGH, and no debug info required.
 
 ```
 binary -> loader -> decoder -> CFG -> IR -> SSA -> cleanup -> structure -> pseudo-C
@@ -70,6 +70,11 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ./build/cli/ember --help
 ```
+
+Wii U RPX/RPL compressed sections are expanded automatically when system zlib
+development files are available at configure time. Use `-DEMBER_WITH_ZLIB=OFF`
+to disable this optional dependency. This enables static section loading;
+Cafe import resolution and runtime relocation are not yet implemented.
 
 The Qt 6 desktop front end is optional:
 

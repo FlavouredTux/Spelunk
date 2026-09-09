@@ -99,6 +99,7 @@ private:
         u32 e_phnum, e_shnum, e_shstrndx;
     };
     [[nodiscard]] Result<ParsedEhdr>   parse_ehdr();
+    [[nodiscard]] Result<void> decompress_cafe_sections(const ParsedEhdr& h);
     [[nodiscard]] Result<void>         parse_segments(const ParsedEhdr& h);
     [[nodiscard]] Result<void>         parse_sections(const ParsedEhdr& h);
     // Parses SYMTAB + DYNSYM into symbols_; records dynsym string names so

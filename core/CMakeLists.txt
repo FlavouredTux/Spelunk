@@ -1,5 +1,6 @@
 add_library(ember_core STATIC
     src/binary/elf.cpp
+    src/binary/elf_cafe.cpp
     src/binary/elf_phdr.cpp
     src/binary/elf_symbols.cpp
     src/binary/dol.cpp
@@ -203,3 +204,16 @@ target_link_libraries(ember_core
 set_target_properties(ember_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
+
+option(EMBER_WITH_ZLIB "Enable Wii U RPX/RPL section decompression when zlib is available" ON)
+set(EMBER_ZLIB_ENABLED OFF PARENT_SCOPE)
+if(EMBER_WITH_ZLIB)
+    find_package(ZLIB QUIET)
+    if(ZLIB_FOUND)
+        target_link_libraries(ember_core PRIVATE ZLIB::ZLIB)
+        target_compile_definitions(ember_core PRIVATE EMBER_HAS_ZLIB=1)
+        set(EMBER_ZLIB_ENABLED ON PARENT_SCOPE)
+    else()
+        message(STATUS "zlib not found: compressed Wii U RPX/RPL sections disabled")
+    endif()
+endif()

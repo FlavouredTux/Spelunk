@@ -105,6 +105,18 @@ public:
         put(0x1c4, static_cast<ember::u32>(kBase + 0x168));
         put(0x1c8, static_cast<ember::u32>(kBase + 0x170));
 
+        // Two forwarding layers before the real load/store consumer.
+        put(0x1d0, 0x48000011); // bl wrapper_two
+        put(0x1d4, 0x4e800020);
+        put(0x1e0, 0x48000011); // bl wrapper_leaf
+        put(0x1e4, 0x4e800020);
+        put(0x1f0, 0x90640000); // stw r3,0(r4)
+        put(0x1f4, 0x4e800020);
+        put(0x200, 0x7c641b78); // mr r4,r3: size moves behind a receiver
+        put(0x204, 0x38600000); // li r3,0
+        put(0x208, 0x4e800421); // bctrl
+        put(0x20c, 0x4e800020);
+
         section_.name = ".text";
         section_.vaddr = kBase;
         section_.size = text_.size();
@@ -128,6 +140,10 @@ public:
         add_symbol("codewarrior_switch", kBase + 0x140, 0x40);
         add_symbol("unknown_fp_leaf", kBase + 0x180, 0x08);
         add_symbol("unknown_fp_forwarder", kBase + 0x190, 0x08);
+        add_symbol("wrapper_one", kBase + 0x1d0, 0x08);
+        add_symbol("wrapper_two", kBase + 0x1e0, 0x08);
+        add_symbol("wrapper_leaf", kBase + 0x1f0, 0x08);
+        add_symbol("virtual_wrapper", kBase + 0x200, 0x10);
     }
 
     [[nodiscard]] ember::Format format() const noexcept override {
@@ -176,7 +192,7 @@ private:
         symbols_.push_back(std::move(symbol));
     }
 
-    std::array<std::byte, 0x200> text_{};
+    std::array<std::byte, 0x220> text_{};
     ember::Section section_{};
     std::vector<ember::Symbol> symbols_;
 };
@@ -308,6 +324,13 @@ int main() {
                      "FAIL: scoped IPA keeps the direct-callee closure only\n");
         ++failures;
     }
+
+    const auto wrappers = ember::infer_arguments(binary, 0x800011d0);
+    check_eq(static_cast<ember::u8>(wrappers.size()), 2,
+             "two-level wrapper preserves both forwarded integer arguments");
+    check_pointer(wrappers, 1, "pointer evidence propagates through wrapper chain");
+    check_eq(ember::infer_arity(binary, 0x80001200), 1,
+             "explicitly forwarded virtual-call argument is retained");
 
     auto decoder = ember::make_decoder(binary);
     if (!decoder) {

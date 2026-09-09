@@ -897,6 +897,7 @@ Result<void> ElfBinary::parse() {
     entry_ = hdr->e_entry;
     is_relocatable_ = hdr->e_type == et::REL;
 
+    if (auto rv = decompress_cafe_sections(*hdr); !rv) return std::unexpected(rv.error());
     if (auto rv = parse_segments(*hdr);  !rv) return std::unexpected(rv.error());
     if (hdr->e_shnum == 0) return parse_from_phdr(*hdr);
     if (auto rv = parse_sections(*hdr);  !rv) {

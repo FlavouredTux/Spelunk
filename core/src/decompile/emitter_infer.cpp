@@ -857,6 +857,7 @@ void Emitter::infer_ppc_helper_preserved_arg_types() {
 void Emitter::infer_ppc_role_arg_names() {
     if (!is_ppc_abi()) return;
     std::set<std::string> claimed;
+    for (const auto& [name, _] : merge_locals) claimed.insert(name);
     for (const std::string& name : self_arg_names) {
         if (!name.empty()) claimed.insert(name);
     }

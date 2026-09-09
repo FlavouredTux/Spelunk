@@ -939,6 +939,45 @@ void Emitter::name_merge_values() {
         }
     }
 
+    // A computed pointer may feed both a guard and a later call-only Phi.
+    // It is not a single-use feeder, but still needs to initialize the merge
+    // local before the guard. Coalesce only predecessor-local values with no
+    // other-block users: otherwise overwriting the local on the other path
+    // could destroy an independently live SSA value.
+    if (is_ppc_abi()) {
+        for (const auto& block : fn->blocks) {
+            for (const auto& phi : block.insts) {
+                if (phi.op != IrOp::Phi) continue;
+                auto phi_key = ssa_key(phi.dst);
+                if (!phi_key) continue;
+                auto named = merge_value_names.find(*phi_key);
+                if (named == merge_value_names.end()) continue;
+                for (std::size_t i = 0; i < phi.phi_operands.size() && i < phi.phi_preds.size(); ++i) {
+                    const auto& operand = phi.phi_operands[i];
+                    auto key = ssa_key(operand);
+                    auto position = key ? ssa_uses.definition_position(*key) : std::nullopt;
+                    if (!position || merge_value_names.contains(*key)) continue;
+                    const auto [bi, ii] = *position;
+                    const auto& predecessor = fn->blocks[bi];
+                    const auto& definition = predecessor.insts[ii];
+                    if (predecessor.start != phi.phi_preds[i] ||
+                        predecessor.start == block.start ||
+                        (definition.op != IrOp::Add && definition.op != IrOp::Sub)) continue;
+                    bool local_uses = true;
+                    for (const auto& [user_bi, user_ii] : ssa_uses.syntactic_user_positions(*key)) {
+                        if (user_bi != bi && &fn->blocks[user_bi].insts[user_ii] != &phi) {
+                            local_uses = false;
+                            break;
+                        }
+                    }
+                    if (!local_uses) continue;
+                    merge_value_names.emplace(*key, named->second);
+                    merge_locals.at(named->second).keys.push_back(*key);
+                }
+            }
+        }
+    }
+
     // Register induction updates commonly feed both the back-edge Phi and
     // the loop comparison (`next = i + 1; cmp next, limit`). Their use
     // count is therefore two, so the generic pure-Phi-feeder rule does not

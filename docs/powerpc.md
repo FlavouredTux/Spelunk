@@ -1,5 +1,22 @@
 # PowerPC decompilation
 
+## Wii U RPX/RPL input
+
+With optional system zlib support, Ember loads Cafe OS ELF32 big-endian
+PowerPC files directly, including compressed code, symbol, string, and
+relocation sections. Decompression happens in the owned in-memory image;
+the input file is unchanged. `image()` and section file offsets describe
+that normalized image, not the original compressed layout.
+
+Streams must pass zlib checksum validation and exactly match their declared
+uncompressed size, without trailing bytes. Expansion is limited to 256 MiB
+per section and 512 MiB total. Builds without zlib report an unsupported
+compression error. Configure with `-DEMBER_WITH_ZLIB=OFF` to disable support.
+
+This is static loading support, not a Cafe OS dynamic linker: Wii U imports
+and runtime relocations are not resolved. Decompiled addresses and calls
+that depend on those mechanisms still need verification.
+
 Ember supports PPC32 and PPC64 binary loading, instruction decoding, partial IR
 lifting, and pseudo-C emission. Wii-oriented work can load a DOL, a standalone
 REL, a relocatable PPC32 ELF object, or a complete DTK project. The decompiler
@@ -43,8 +60,17 @@ values that are read before being overwritten. It then:
 2. preserves ABI order inside each lane;
 3. performs a stable merge using each value's first meaningful use in the
    callee; and
-4. follows one level of direct callee forwarding when a parameter is used only
-   as an argument to another function.
+4. follows bounded direct-callee wrapper chains when a parameter is used only
+   as an argument to another function (four call levels, at most 64 lifted
+   functions per inference query). Explicit moves between integer argument
+   lanes also provide evidence for forwarding through an indirect call.
+
+Inference reuses a function-entry index within each query. Call-return
+folding preserves calls before branches and memory operations; a unique use
+alone does not justify moving a call to a conditional return. Computed
+pointer values used by guarded call-argument merges are materialized before
+the guard, so both the existing-pointer and allocation paths initialize the
+value passed to the callee.
 
 The resulting layout drives both the recovered function header and its call
 sites. Direct calls and resolved or signature-known indirect calls use the

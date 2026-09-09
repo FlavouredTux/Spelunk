@@ -29,6 +29,42 @@
 
 namespace ember::emit {
 
+namespace {
+
+// A unique SSA use does not imply that the use executes whenever the call
+// does. Only sink a call through a straight-line path, without crossing
+// memory operations or another side effect. In particular, a return in one
+// arm of a diamond must not absorb a call from before the branch.
+bool can_defer_call_to_return(const IrFunction& fn,
+                              std::pair<std::size_t, std::size_t> position,
+                              addr_t return_block) {
+    auto [bi, ii] = position;
+    std::set<addr_t> seen;
+    ++ii;
+    while (bi < fn.blocks.size()) {
+        const IrBlock& block = fn.blocks[bi];
+        if (!seen.insert(block.start).second) return false;
+        for (; ii < block.insts.size(); ++ii) {
+            const IrInst& inst = block.insts[ii];
+            if (inst.op == IrOp::Return)
+                return return_block == 0 || return_block == block.start;
+            if (inst.op == IrOp::CondBranch || inst.op == IrOp::BranchIndirect ||
+                inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
+                inst.op == IrOp::Load || inst.op == IrOp::Store ||
+                inst.op == IrOp::Intrinsic || inst.op == IrOp::Unreachable ||
+                inst.op == IrOp::Div || inst.op == IrOp::Mod) return false;
+        }
+        if (block.successors.size() != 1) return false;
+        auto next = fn.block_at.find(block.successors.front());
+        if (next == fn.block_at.end()) return false;
+        bi = next->second;
+        ii = 0;
+    }
+    return false;
+}
+
+}  // namespace
+
 const FunctionSig*
 Emitter::call_annotation_signature(const IrInst& inst) const noexcept {
     if (!annotations) return nullptr;
@@ -553,6 +589,7 @@ void Emitter::analyze_return_folds(const Region& r) {
                 canonical_reg(call_result_reg(prev))) {
                 return;
             }
+            if (!can_defer_call_to_return(*fn, {bi, ii}, r.block_start)) return;
             fold_call_positions.insert({bi, ii});
             fold_call_ssa_key.emplace(std::pair{bi, ii}, *cond_key);
         }
@@ -581,6 +618,7 @@ void Emitter::analyze_return_expr_call_folds(const Region& r) {
     auto pos = call_position_for_return_key(*ret_key);
     if (!pos) return;
     if (fold_call_positions.contains(*pos)) return;
+    if (!can_defer_call_to_return(*fn, *pos, r.block_start)) return;
     if (auto slot = self_funcptr_slot_for_call_pos(*pos); slot) {
         if (auto ty = narrowed_call_return_type_in_expr(r.condition, *ret_key); ty) {
             record_funcptr_return_type(*slot, *ty);

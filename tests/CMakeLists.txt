@@ -255,6 +255,13 @@ target_link_libraries(ember_macho_loader_robustness_test
 add_test(NAME macho_loader_robustness_unit
          COMMAND ember_macho_loader_robustness_test)
 
+add_executable(ember_elf_cafe_test elf_cafe_test.cpp)
+target_link_libraries(ember_elf_cafe_test PRIVATE ember_core ember::flags)
+if(EMBER_ZLIB_ENABLED)
+    target_compile_definitions(ember_elf_cafe_test PRIVATE EMBER_TEST_ZLIB=1)
+endif()
+add_test(NAME elf_cafe_unit COMMAND ember_elf_cafe_test)
+
 add_executable(ember_elf_loader_robustness_test
     elf_loader_robustness_test.cpp
     elf_test_builder.cpp)
@@ -288,6 +295,10 @@ add_executable(ember_structurer_fail_test
 target_link_libraries(ember_structurer_fail_test
     PRIVATE ember::core ember::flags)
 add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)
+
+add_executable(ember_call_order_test emitter_call_order_test.cpp)
+target_link_libraries(ember_call_order_test PRIVATE ember::core ember::flags)
+add_test(NAME emitter_call_order_unit COMMAND ember_call_order_test)
 
 # Unit tests for the TeefCorpus loader/recognizer. Synthesizes tiny
 # F/C/S/T-row TSVs in-memory, writes them to a temp file, loads via

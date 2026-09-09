@@ -53,7 +53,9 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
     // same conservative register set at joins, and Return reads r3/f1 even
     // for a source-level void function.  Counting any of those would turn
     // nearly every PPC function into an eight-argument value-returning one.
-    if (!visiting.insert(target).second) return {};
+    const bool uncached = !cache.by_addr.contains(target) && !cache.failed.contains(target);
+    if (depth > 4 || (uncached && cache.by_addr.size() + cache.failed.size() >= 64) ||
+        !visiting.insert(target).second) return {};
     IrFunction* fn = lift_cached(cache, b, target);
     if (!fn) {
         visiting.erase(target);
@@ -240,12 +242,10 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                 continue;
             }
             if (inst.op == IrOp::Call) {
-                // One callee level is enough to recognize a parameter that
-                // this function only forwards. Going recursively through an
-                // entire call graph makes per-function pseudo-C needlessly
-                // expensive and does not resolve the fundamental ambiguity
-                // of unused parameters.
-                if (depth < 1) {
+                // Follow short wrapper chains, with a depth and graph budget
+                // above. One level loses parameters passed through multiple
+                // constructors or allocation wrappers.
+                if (depth < 4) {
                     std::vector<InferredArgument> callee_layout;
                     bool callee_layout_is_declared = false;
                     if (const Symbol* callee = b.defined_object_at(inst.target1);
@@ -306,6 +306,15 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                 continue;
             }
             if (inst.op == IrOp::CallIndirect) {
+                // An untouched snapshot is not evidence of a parameter.
+                // Moving an incoming integer argument to a different outgoing
+                // ABI lane is: virtual allocation wrappers commonly move the
+                // requested size from r3 to r4 after installing a receiver.
+                for (std::size_t i = 0; i < pending_int.size() && i < int_args.size(); ++i) {
+                    auto source = trace_candidate(trace_candidate, pending_int[i], 0);
+                    if (source && !source->first && source->second != i)
+                        mark_evidence(pending_int[i], order);
+                }
                 pending_int.clear();
                 pending_fp.clear();
                 continue;

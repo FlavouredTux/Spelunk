@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <ember/analysis/cfg_builder.hpp>
+#include <ember/analysis/pipeline.hpp>
 #include <ember/binary/binary.hpp>
 #include <ember/common/types.hpp>
 #include <ember/disasm/decoder.hpp>
@@ -22,6 +23,16 @@ IrFunction* lift_cached(IrCache& cache, const Binary& b, addr_t fn) {
     auto dec_r = make_decoder(b);
     if (!dec_r) { cache.failed.insert(fn); return nullptr; }
     const CfgBuilder cfgb(b, **dec_r);
+    if (!cache.known_entries) {
+        cache.known_entries.emplace();
+        for (const auto& symbol : b.symbols()) {
+            if (!symbol.is_import && symbol.kind == SymbolKind::Function && symbol.addr != 0)
+                cache.known_entries->insert(symbol.addr);
+        }
+        for (const auto& function : enumerate_functions(b, EnumerateMode::Cheap))
+            cache.known_entries->insert(function.addr);
+    }
+    cfgb.seed_known_entries(*cache.known_entries);
     auto fn_r = cfgb.build(fn, {});
     if (!fn_r) { cache.failed.insert(fn); return nullptr; }
     auto lifter_r = make_lifter(b);

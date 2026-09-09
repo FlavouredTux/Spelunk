@@ -1,5 +1,6 @@
 // uses_buffer
 int uses_buffer(const char* s) {
   char local_58[72];
-  return stpcpy(local_58, s) - (uint32_t)&local_58;
+  uint64_t r_stpcpy = stpcpy(local_58, s);
+  return (uint32_t)r_stpcpy - (uint32_t)&local_58;
 }

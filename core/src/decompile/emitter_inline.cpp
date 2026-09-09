@@ -160,11 +160,12 @@ Emitter::merge_assignment_name_for(const IrInst& inst) const {
     bool has_non_return_reader = false;
     for (const auto& local_key : local_it->second.keys) {
         for (const auto& [bi, ii] :
-             ssa_uses.visible_user_positions(local_key)) {
+             ssa_uses.syntactic_user_positions(local_key)) {
             if (!fn || bi >= fn->blocks.size()) continue;
             const auto& bb = fn->blocks[bi];
             if (ii >= bb.insts.size()) continue;
-            if (bb.insts[ii].op != IrOp::Return) {
+            if (!hidden.contains({bi, ii}) &&
+                bb.insts[ii].op != IrOp::Return && bb.insts[ii].op != IrOp::Phi) {
                 has_non_return_reader = true;
                 break;
             }

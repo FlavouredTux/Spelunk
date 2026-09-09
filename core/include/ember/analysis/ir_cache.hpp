@@ -3,6 +3,8 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <optional>
+#include <unordered_set>
 
 #include <ember/common/types.hpp>
 #include <ember/ir/ir.hpp>
@@ -21,6 +23,8 @@ class Binary;
 struct IrCache {
     std::map<addr_t, std::unique_ptr<IrFunction>> by_addr;
     std::set<addr_t> failed;
+    // Shared by all CFG builds for this binary, including wrapper inference.
+    std::optional<std::unordered_set<addr_t>> known_entries;
 };
 
 // Look up - and build on cache miss - the SSA-cleaned IR of the function

@@ -20,17 +20,91 @@ const std::string* Emitter::scoped_ssa_name(const IrValue& value) const {
 
 void Emitter::prepare_phi_copies() {
     if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_ppc_abi())) return;
-    // Call-result binding and aggregate return recovery use their own locals.
-    // Keep that path until it can participate in explicit SSA destruction.
+    // Calls are eligible only when their declared x64 signature establishes
+    // scalar register arguments. Unknown/FP/aggregate calls keep the existing
+    // path rather than treating their conservative ABI snapshots as real uses.
+    std::map<addr_t, std::size_t> call_arities;
+    std::set<addr_t> void_calls;
+    for (const auto& block : fn->blocks) {
+        for (const auto& inst : block.insts) {
+            if (inst.op == IrOp::CallIndirect) return;
+            if (inst.op != IrOp::Call) continue;
+            if (is_ppc_abi()) return;
+            const FunctionSig* signature = call_annotation_signature(inst);
+            if (!signature && binary) {
+                auto found = binary->debug_signatures().find(inst.target1);
+                if (found != binary->debug_signatures().end()) signature = &found->second;
+            }
+            const auto scalar = [&](std::string_view type) {
+                const std::string normalized = normalize_c_type_alias(type);
+                return normalized.ends_with('*') ||
+                    (!is_declared_fp_scalar(normalized) && declared_scalar_size(normalized).has_value());
+            };
+            if (!signature || signature->variadic ||
+                (signature->return_type != "void" && !scalar(signature->return_type)) ||
+                signature->params.size() > int_arg_regs(abi).size()) return;
+            for (const auto& param : signature->params) if (!scalar(param.type)) return;
+            call_arities[inst.target1] = signature->params.size();
+            if (signature->return_type == "void") void_calls.insert(inst.target1);
+        }
+    }
+    const bool with_calls = !call_arities.empty();
+    std::set<SsaKey> live;
+    std::vector<IrValue> call_arguments;
+    if (with_calls) {
+        live = structured_return_values;
+        const auto root = [&](const IrValue& value) { if (auto key = ssa_key(value)) live.insert(*key); };
+        for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+            std::vector<IrValue> args;
+            const auto& block = fn->blocks[bi];
+            for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
+                const auto& inst = block.insts[ii];
+                if (is_call_arg_barrier(inst)) {
+                    if (inst.name == "call.args.1") args.clear();
+                    if (inst.name.starts_with("call.args."))
+                        for (u8 i = 0; i < inst.src_count; ++i) args.push_back(inst.srcs[i]);
+                    continue;
+                }
+                if (inst.op == IrOp::Call) {
+                    const auto count = call_arities.at(inst.target1);
+                    if (count > args.size()) return;
+                    for (std::size_t i = 0; i < count; ++i) { root(args[i]); call_arguments.push_back(args[i]); }
+                    args.clear();
+                    continue;
+                }
+                if (hidden.contains({bi, ii}) || inst.op == IrOp::Phi || inst.op == IrOp::Return) continue;
+                for (u8 i = 0; i < inst.src_count; ++i) root(inst.srcs[i]);
+            }
+        }
+        std::vector<SsaKey> pending(live.begin(), live.end());
+        while (!pending.empty()) {
+            const auto key = pending.back(); pending.pop_back();
+            const auto* definition = ssa_uses.definition(key);
+            if (!definition) continue;
+            if (is_float_type(definition->dst.type) || type_bits(definition->dst.type) > 64) return;
+            if (definition->op == IrOp::Clobber) {
+                const auto position = call_position_for_return_key(key);
+                if (!position || definition->dst.kind != IrValueKind::Reg ||
+                    canonical_reg(definition->dst.reg) != int_return_reg(abi) ||
+                    void_calls.contains(fn->blocks[position->first].insts[position->second].target1) ||
+                    call_inst_returns_void(fn->blocks[position->first].insts[position->second])) return;
+            }
+            const auto use = [&](const IrValue& value) {
+                if (auto source = ssa_key(value); source && live.insert(*source).second) pending.push_back(*source);
+            };
+            for (u8 i = 0; i < definition->src_count; ++i) use(definition->srcs[i]);
+            for (const auto& value : definition->phi_operands) use(value);
+        }
+    }
     for (const auto& block : fn->blocks) {
         if (block.insts.empty() ||
             (block.successors.size() > 1 && block.insts.back().op != IrOp::CondBranch))
             return;
         for (const auto& inst : block.insts) {
             if (inst.op == IrOp::BranchIndirect) return;
-            if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) return;
             if (inst.op == IrOp::Phi &&
-                (is_float_type(inst.dst.type) || type_bits(inst.dst.type) > 64)) return;
+                (is_float_type(inst.dst.type) || type_bits(inst.dst.type) > 64) &&
+                (!with_calls || (ssa_key(inst.dst) && live.contains(*ssa_key(inst.dst))))) return;
         }
     }
     bool cyclic_phi = false;
@@ -63,7 +137,7 @@ void Emitter::prepare_phi_copies() {
     std::set<std::string> used_names(self_arg_names.begin(), self_arg_names.end());
     const auto remember = [&](const IrValue& value, std::string_view prefix) {
         auto key = ssa_key(value);
-        if (!key || scoped_ssa_values.contains(*key)) return;
+        if (!key || scoped_ssa_values.contains(*key) || (with_calls && !live.contains(*key))) return;
         // Frame addresses already render as named local storage. Hoisting
         // their register definitions would expose the hidden RSP prologue.
         if (stack_offset(value)) return;
@@ -84,6 +158,7 @@ void Emitter::prepare_phi_copies() {
     }
     for (const auto& block : fn->blocks) {
         for (const auto& inst : block.insts) {
+            if (with_calls && is_call_arg_barrier(inst)) continue;
             const auto require_value = [&](const IrValue& value, bool force) {
                 auto key = ssa_key(value);
                 if (!key) return;
@@ -96,6 +171,20 @@ void Emitter::prepare_phi_copies() {
             for (u8 i = 0; i < inst.src_count; ++i)
                 require_value(inst.srcs[i], inst.op == IrOp::CondBranch);
         }
+    }
+    for (const auto& value : call_arguments) if (def_of(value)) remember(value, "ssa");
+    for (const auto& [key, item] : scoped_ssa_values) {
+        const auto* definition = ssa_uses.definition(key);
+        if (!definition || definition->op != IrOp::Clobber) continue;
+        const auto position = call_position_for_return_key(key);
+        if (!position) continue;
+        fold_call_positions.erase(*position);
+        inline_call_positions.erase(*position);
+        fold_call_ssa_key.erase(*position);
+        inline_call_ssa_key.erase(*position);
+        bound_call_key[*position] = key;
+        call_return_names[key] = item.second;
+        merge_bound_calls.insert(*position); // declaration is now at function scope
     }
 }
 

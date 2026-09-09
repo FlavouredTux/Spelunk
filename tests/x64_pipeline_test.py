@@ -22,7 +22,7 @@ class Case:
     pointer_slots: tuple[int, ...] = ()
 
 
-def execute(lib, case, width):
+def execute(lib, case, width, counter):
     # uint64_t storage supplies alignment; every backend gets a fresh copy.
     storage = (ctypes.c_uint64 * (len(case.memory) // 8)).from_buffer_copy(case.memory)
     base = ctypes.addressof(storage)
@@ -32,6 +32,7 @@ def execute(lib, case, width):
     fn = getattr(lib, case.name)
     fn.argtypes = [ctypes.c_uint64] * 4
     fn.restype = ctypes.c_uint8 if width == 8 else ctypes.c_uint64
+    counter.pipeline_reset_calls()
     result = fn(*args, 0) & ((1 << width) - 1)
     memory = bytearray(storage)
     # Normalize only slots explicitly known to contain pointers. Integer
@@ -40,7 +41,7 @@ def execute(lib, case, width):
         value = int.from_bytes(memory[offset:offset + 8], 'little')
         if base <= value < base + len(memory):
             memory[offset:offset + 8] = (value - base).to_bytes(8, 'little')
-    return result, bytes(memory)
+    return result, bytes(memory), counter.pipeline_get_calls()
 
 
 def run(args, **kwargs):
@@ -50,6 +51,9 @@ def run(args, **kwargs):
 HELPERS = r'''
 #include <stdint.h>
 #include <stdbool.h>
+extern uint64_t call_step(uint64_t, uint64_t);
+extern uint64_t call_mutate(uint64_t*, uint64_t);
+extern uint64_t call_clobber(uint64_t);
 static uint64_t helper_high(uint64_t a, uint64_t b) {
     return (uint64_t)(((unsigned __int128)a * b) >> 64);
 }
@@ -79,11 +83,14 @@ def main(directory):
     root = pathlib.Path(directory)
     assembly = root / 'assembly.o'
     typed = root / 'typed.o'
+    calls = root / 'calls.o'
     native_path = root / 'native.so'
     run([CC, '-c', '-fPIC', str(SUPPORT / 'x64_pipeline.S'), '-o', str(assembly)])
     run([CC, '-O2', '-g', '-c', '-fPIC', str(SUPPORT / 'x64_pipeline_types.c'), '-o', str(typed)])
-    run([CC, '-shared', str(assembly), str(typed), '-o', str(native_path)])
+    run([CC, '-O2', '-g', '-c', '-fPIC', str(SUPPORT / 'x64_pipeline_calls.c'), '-o', str(calls)])
+    run([CC, '-shared', '-Wl,-Bsymbolic-functions', str(assembly), str(typed), str(calls), '-o', str(native_path)])
     native = ctypes.CDLL(str(native_path))
+    native.pipeline_get_calls.restype = ctypes.c_uint64
     bmi = native.cpu_bmi()
     cases = []
 
@@ -135,8 +142,11 @@ def main(directory):
         for n in [0, 1, 2, 3, 8, 16]:
             add('loop_sum', n, x)
             add('loop_pair', n, x, 3)
+            add('loop_call_result', n, x, 7)
+            add('loop_call_preserve', n, x, 3)
             for stop in range(n + 2):
                 add('loop_early', n, stop, x)
+                add('loop_call_exit', n, stop, x)
     cases = [Case(name, (a, b, c)) for name, a, b, c in cases]
     for seed in range(8):
         initial = rng.randbytes(128)
@@ -150,6 +160,7 @@ def main(directory):
                 cases.append(Case('branch_memory', (16, q, choose), initial, (0, 1)))
             for n in [0, 1, 2, 3, 4]:
                 cases.append(Case('loop_alias', (16, q, n), initial, (0, 1)))
+                cases.append(Case('loop_call_memory', (16, q, n), initial, (0, 1)))
         for q in [16, 17, 19, 23, 24, 48]:
             for value in [0, 0xff, 0x7f]:
                 cases.append(Case('alias_byte', (16, q, value), initial, (0, 1)))
@@ -171,7 +182,7 @@ def main(directory):
     libraries = []
     for opt in ['0', '2']:
         path = root / ('generated_O' + opt + '.so')
-        run([CC, '-O' + opt, '-shared', '-fPIC', str(generated), '-o', str(path)])
+        run([CC, '-O' + opt, '-shared', '-fPIC', str(generated), str(native_path), '-o', str(path)])
         libraries.append(ctypes.CDLL(str(path)))
 
     probe_input = ''.join(f'{case.name} {case.args[0]} {case.args[1]} {case.args[2]} {case.memory.hex()}\n' for case in cases)
@@ -184,7 +195,7 @@ def main(directory):
     for case, ir in zip(cases, result):
         name = case.name
         a, b, c = case.args
-        label, before, after, memory = ir.split()
+        label, before, after, memory, call_count = ir.split()
         assert label == name
         width = 32 if name in ['logical32_from_signed', 'arithmetic32_from_unsigned'] else 64
         # Flag fixtures return a byte; emitted C may use uint8_t rather than
@@ -192,12 +203,12 @@ def main(directory):
         if re.search(r'_(?:c|o|z|s|p|pf|sahf_pf|cf|sf|of|zf)$', name):
             width = 8
         mask = (1 << width) - 1
-        observed = [execute(lib, case, width) for lib in [native] + libraries]
+        observed = [execute(lib, case, width, native) for lib in [native] + libraries]
         expected = observed[0]
-        ir_result = (int(after) & mask, bytes.fromhex(memory))
+        ir_result = (int(after) & mask, bytes.fromhex(memory), int(call_count))
         if any(value != expected for value in observed[1:] + [ir_result]) or (int(before) & mask) != expected[0]:
-            failures.append(f'{name}({a:#x},{b:#x},{c}): native/C0/C2={[r for r, _ in observed]}, '
-                            f'IR={before}/{after}; initial={case.memory.hex()} native={expected[1].hex()} '
+            failures.append(f'{name}({a:#x},{b:#x},{c}): native/C0/C2={[value[0] for value in observed]}, '
+                            f'IR={before}/{after}; calls={[value[2] for value in observed]}/{call_count}; initial={case.memory.hex()} native={expected[1].hex()} '
                             f'C0={observed[1][1].hex()} C2={observed[2][1].hex()} IR={memory}')
     if failures:
         raise AssertionError('\n'.join(failures[:25]) + f'\n{len(failures)} failing cases; artifacts: {root}')
@@ -225,7 +236,7 @@ int main(void) {
 ''')
     exe = root / 'ubsan'
     run([CC, '-O0', '-fsanitize=undefined', '-fno-sanitize-recover=undefined',
-         str(runner), '-o', str(exe)])
+         str(runner), str(native_path), '-o', str(exe)])
     run([str(exe)])
     print(f'OK: {len(cases)} cases across {len(names)} functions; native, SSA, cleaned SSA; '
           f'C -O0/-O2 and full memory comparison; UBSan shifts/control-flow/memory. BMI mask={bmi}')
@@ -237,7 +248,9 @@ if __name__ == '__main__':
     try:
         main(directory)
     except subprocess.CalledProcessError as error:
-        print(error.stdout, error.stderr, f'Artifacts: {directory}', file=sys.stderr)
+        pathlib.Path(directory, 'failed-command.stdout').write_text(error.stdout or '')
+        pathlib.Path(directory, 'failed-command.stderr').write_text(error.stderr or '')
+        print((error.stdout or '')[-1000:], (error.stderr or '')[-6000:], f'Artifacts: {directory}', file=sys.stderr)
         raise
     else:
         import shutil

@@ -196,6 +196,15 @@ exercises emitted shifts, loop exits, and memory accesses. Failures retain the
 generated C and complete IR input transcript in the reported temporary directory.
 This is targeted integer coverage, not general machine-code equivalence.
 
+The x64 corpus also covers loop-carried call results, early exits after calls,
+callee-saved values across deliberately clobbering helpers, and calls that
+mutate aliased memory. It compares call counts as well as return values and
+buffer bytes. Declared integer call arguments are projected into an explicit
+test oracle; unknown calls and reads of unmodeled clobbers fail. Private frame
+storage is excluded from the observable buffer comparison. Known scalar call
+signatures allow the emitter to keep loop arguments and results in explicit
+SSA locals, including when optimized code uses RBP as an ordinary counter.
+
 `ppc_pipeline_semantics` checks synthetic PPC32 big-endian programs against
 an independent Unicorn CPU reference, interpreted SSA before/after cleanup,
 and emitted C compiled back to PPC at `-O0` and `-O2`. It compares integer

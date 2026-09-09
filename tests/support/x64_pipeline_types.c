@@ -66,3 +66,36 @@ uint64_t void_index(void* memory, uint64_t index, uint64_t value) {
     words[index] = value;
     return old;
 }
+
+extern uint64_t call_step(uint64_t, uint64_t);
+extern uint64_t call_mutate(uint64_t*, uint64_t);
+extern uint64_t call_clobber(uint64_t);
+uint64_t loop_call_result(uint64_t n, uint64_t seed, uint64_t delta) {
+    for (uint64_t i = 0; i < n; ++i) seed = call_step(seed, delta + i);
+    return seed;
+}
+uint64_t loop_call_memory(uint64_t* p, uint64_t* q, uint64_t n) {
+    uint64_t sum = 0;
+    for (uint64_t i = 0; i < n; ++i) {
+        uint64_t saved = *p;
+        uint64_t value = call_mutate(q, i + 1);
+        sum += saved + *p + value;
+    }
+    return sum;
+}
+uint64_t loop_call_preserve(uint64_t n, uint64_t seed, uint64_t extra) {
+    uint64_t sum = extra;
+    for (uint64_t i = 0; i < n; ++i) {
+        uint64_t old = seed + i;
+        sum += old + call_clobber(seed);
+        seed += extra;
+    }
+    return sum;
+}
+uint64_t loop_call_exit(uint64_t n, uint64_t stop, uint64_t seed) {
+    for (uint64_t i = 0; i < n; ++i) {
+        seed = call_step(seed, i);
+        if (i == stop) return seed;
+    }
+    return seed;
+}

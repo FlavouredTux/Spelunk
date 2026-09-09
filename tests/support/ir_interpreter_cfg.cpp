@@ -9,9 +9,18 @@
 namespace ember::test {
 namespace {
 
-u8 operand_count(const IrInst& inst, bool allow_intrinsics) {
+u8 operand_count(const IrInst& inst, bool allow_intrinsics, bool allow_calls) {
     switch (inst.op) {
+        case IrOp::Call: case IrOp::Clobber:
+            if (allow_calls) return 0;
+            throw std::runtime_error("unsupported call or clobber");
         case IrOp::Intrinsic:
+            if (inst.name.starts_with("call.args.")) {
+                if (allow_calls && inst.src_count <= 3 &&
+                    (inst.name == "call.args.1" || inst.name == "call.args.2" || inst.name == "call.args.3"))
+                    return inst.src_count;
+                throw std::runtime_error("unsupported call argument pack");
+            }
             if (allow_intrinsics && inst.src_count <= 3) return inst.src_count;
             throw std::runtime_error("unsupported intrinsic");
         case IrOp::Nop: case IrOp::Phi: case IrOp::Branch: return 0;
@@ -35,9 +44,10 @@ u8 operand_count(const IrInst& inst, bool allow_intrinsics) {
     }
 }
 
-bool defines_value(IrOp op) {
-    return op != IrOp::Nop && op != IrOp::Store && op != IrOp::Branch &&
-           op != IrOp::CondBranch && op != IrOp::Return;
+bool defines_value(const IrInst& inst) {
+    if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.args.")) return false;
+    return inst.op != IrOp::Nop && inst.op != IrOp::Store && inst.op != IrOp::Branch &&
+           inst.op != IrOp::CondBranch && inst.op != IrOp::Return && inst.op != IrOp::Call;
 }
 
 }  // namespace
@@ -57,9 +67,21 @@ void validate_interpreter_cfg(const IrFunction& fn, const MachineInput& input) {
         }
         if (block.insts.empty()) throw std::runtime_error("block has no terminator");
         bool seen_body = false;
+        bool call_clobbers = false;
+        unsigned next_pack = 1;
         for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
             const auto& inst = block.insts[ii];
-            if (inst.src_count != operand_count(inst, static_cast<bool>(input.intrinsic)))
+            if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.args.")) {
+                if (inst.name != "call.args." + std::to_string(next_pack++))
+                    throw std::runtime_error("out-of-order call argument packs");
+            }
+            if (inst.op == IrOp::Call) next_pack = 1;
+            if (inst.op == IrOp::Clobber && !call_clobbers)
+                throw std::runtime_error("clobber outside a call's clobber sequence");
+            if (inst.op != IrOp::Nop)
+                call_clobbers = inst.op == IrOp::Call || (inst.op == IrOp::Clobber && call_clobbers);
+            if (inst.src_count != operand_count(inst, static_cast<bool>(input.intrinsic),
+                                                static_cast<bool>(input.call)))
                 throw std::runtime_error("wrong operand count");
             if (inst.segment != Reg::None) throw std::runtime_error("segmented memory");
             if (inst.op == IrOp::Phi) {
@@ -76,7 +98,7 @@ void validate_interpreter_cfg(const IrFunction& fn, const MachineInput& input) {
             if (is_terminator(inst.op) && ii + 1 != block.insts.size()) {
                 throw std::runtime_error("instructions after terminator");
             }
-            if (defines_value(inst.op)) {
+            if (defines_value(inst)) {
                 const auto key = ssa_key(inst.dst);
                 if (!key || inst.dst.kind == IrValueKind::Imm) {
                     throw std::runtime_error("missing or immediate destination");
@@ -88,6 +110,7 @@ void validate_interpreter_cfg(const IrFunction& fn, const MachineInput& input) {
             }
         }
         const auto& terminator = block.insts.back();
+        if (next_pack != 1) throw std::runtime_error("call argument pack without a call in the block");
         std::set<addr_t> targets;
         if (terminator.op == IrOp::Branch) {
             targets.insert(terminator.target1);

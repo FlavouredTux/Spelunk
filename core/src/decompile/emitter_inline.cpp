@@ -449,7 +449,13 @@ Emitter::entry_stack_offset(const IrValue& v, int depth) const {
 std::optional<i64> Emitter::stack_offset(const IrValue& v, int depth) const {
     if (depth > 16) return std::nullopt;
     if (v.kind == IrValueKind::Reg) {
-        if (is_stack_base_reg(v.reg)) return 0;
+        if (is_stack_base_reg(v.reg)) {
+            // Optimized code may use RBP as an induction variable. A merged
+            // register value is not evidence of a fixed frame base.
+            if (const auto* definition = def_of(v); definition && definition->op == IrOp::Phi)
+                return std::nullopt;
+            return 0;
+        }
         return std::nullopt;
     }
     if (v.kind != IrValueKind::Temp) return std::nullopt;

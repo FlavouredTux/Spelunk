@@ -229,6 +229,9 @@ add_library(ember_ir_test_support STATIC
     support/ir_interpreter_cfg.cpp
     support/ir_semantics_compare.cpp)
 target_link_libraries(ember_ir_test_support PUBLIC ember::core PRIVATE ember::flags)
+add_executable(ember_ir_call_test ir_call_test.cpp)
+target_link_libraries(ember_ir_call_test PRIVATE ember_ir_test_support ember::flags)
+add_test(NAME ir_call_unit COMMAND ember_ir_call_test)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)

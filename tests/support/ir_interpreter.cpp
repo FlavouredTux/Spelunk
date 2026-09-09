@@ -62,7 +62,35 @@ public:
         };
         if (inst.segment != Reg::None) throw std::runtime_error("segmented memory");
         switch (inst.op) {
+            case IrOp::Call: {
+                arity(0);
+                if (!input_.call) throw std::runtime_error("unsupported call");
+                std::vector<u64> args;
+                for (const auto& value : call_args_) args.push_back(read(value));
+                auto returned = input_.call(inst.target1, args, result.memory);
+                if (!returned) throw std::runtime_error(returned.error());
+                call_return_ = *returned;
+                call_args_.clear();
+                ++result.call_count;
+                return;
+            }
+            case IrOp::Clobber: {
+                arity(0);
+                if (!input_.call || !call_return_)
+                    throw std::runtime_error("clobber without modeled call");
+                if (inst.dst.kind != IrValueKind::Reg)
+                    throw std::runtime_error("unsupported clobber destination");
+                if (canonical_reg(inst.dst.reg) == Reg::Rax) write(inst.dst, *call_return_);
+                else if (auto key = ssa_key(inst.dst); key) values_.erase(*key);
+                return;
+            }
             case IrOp::Intrinsic: {
+                if (input_.call && inst.name.starts_with("call.args.")) {
+                    if (inst.src_count > 3) throw std::runtime_error("call pack too large");
+                    if (inst.name == "call.args.1") call_args_.clear();
+                    for (u8 i = 0; i < inst.src_count; ++i) call_args_.push_back(inst.srcs[i]);
+                    return;
+                }
                 if (!input_.intrinsic || inst.src_count > 3)
                     throw std::runtime_error("unsupported intrinsic");
                 std::array<u64, 3> args{};
@@ -229,6 +257,8 @@ private:
 
     std::map<SsaKey, u64> values_;
     const MachineInput& input_;
+    std::vector<IrValue> call_args_;
+    std::optional<u64> call_return_;
 };
 
 }  // namespace

@@ -1308,6 +1308,9 @@ struct Emitter {
     render_indirect_call(const IrInst& inst, std::size_t call_index,
                          const CallArgPack& pack,
                          const PpcOutgoingStackArgs& ppc_args) const;
+    // PPC uses ABI-sized slots and verifies the outgoing receiver.
+    [[nodiscard]] std::optional<RenderedCall>
+    render_ppc_virtual_call(const IrInst& inst, const CallArgPack& pack) const;
     void emit_merge_edge_assignments(addr_t block_start, std::string_view ind,
                                      std::string& out) const;
     void emit_block(addr_t block_addr, int depth, std::string& out) const;

@@ -129,6 +129,7 @@ add_library(ember_core STATIC
     src/structure/structurer_cfg.cpp
     src/decompile/emitter.cpp
     src/decompile/emitter_abi.cpp
+    src/decompile/emitter_virtual.cpp
     src/decompile/emitter_analyze.cpp
     src/decompile/emitter_block.cpp
     src/decompile/emitter_calls.cpp

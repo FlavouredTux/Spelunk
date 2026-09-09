@@ -53,6 +53,26 @@ and floating-point register files.
 
 ## Calling conventions
 
+### Virtual dispatch
+
+PowerPC virtual-style calls use four-byte slots on PPC32 and eight-byte slots
+on PPC64. When the loaded vtable belongs to the object passed in `r3`, output
+uses `object->vfn_N(...)`, with the receiver implicit and the vptr displacement
+shown in a comment. `vfn_N` is a slot label, not a recovered method name.
+
+For unresolved signatures, a bounded 128-byte preparation window supplies
+register-write evidence. Dispatch scratch registers and stale snapshot values
+are omitted; explicit argument copies (including copies of the vtable itself)
+are retained. Register comments such as `/* r4 */` and `/* f1 */` preserve lane
+identity without claiming a known mixed-parameter order. Established incoming
+parameters are retained even when prepared before the current block.
+
+The `inferred ABI args` comment means the displayed argument list is heuristic:
+extra arguments prepared earlier, stack arguments, and the full prototype may
+still be unknown. Resolved call signatures take precedence, including floating
+return lanes. If memory analysis requires a captured vptr or function pointer,
+the emitter preserves the explicit target instead of reloading a virtual slot.
+
 The currently modelled PowerPC ABIs use independent integer and floating-point
 argument sequences:
 

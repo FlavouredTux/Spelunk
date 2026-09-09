@@ -302,6 +302,9 @@ add_test(NAME structurer_fail_unit COMMAND ember_structurer_fail_test)
 add_executable(ember_call_order_test emitter_call_order_test.cpp)
 target_link_libraries(ember_call_order_test PRIVATE ember::core ember::flags)
 add_test(NAME emitter_call_order_unit COMMAND ember_call_order_test)
+add_executable(ember_virtual_test emitter_virtual_test.cpp)
+target_link_libraries(ember_virtual_test PRIVATE ember::core ember::flags)
+add_test(NAME emitter_virtual_unit COMMAND ember_virtual_test)
 
 # Unit tests for the TeefCorpus loader/recognizer. Synthesizes tiny
 # F/C/S/T-row TSVs in-memory, writes them to a temp file, loads via

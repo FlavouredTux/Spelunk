@@ -752,6 +752,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
         }
     }
     if (call_expr.empty()) {
+        if (auto virtual_call = render_ppc_virtual_call(inst, pack)) return *virtual_call;
         const std::string args = format_call_args_fallback(pack.ints,
                                                            &used_args);
         // Virtual-method-dispatch shape recognition: when the
@@ -764,7 +765,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
         // method name. Fixed-base `Load(Add(<rip-rel-vtable>, K))`
         // is already covered by the call_resolutions path above
         // (--resolve-calls); this handles the per-instance case.
-        if (auto vt = try_render_vfn_dispatch(inst.srcs[0]); vt) {
+        if (auto vt = is_ppc_abi() ? std::nullopt : try_render_vfn_dispatch(inst.srcs[0]); vt) {
             call_expr = std::format("{}({})", *vt, args);
         } else if (auto slot = constant_fnptr_slot_for_call_target(inst.srcs[0]); slot) {
             const std::string slot_expr = format_numeric_imm(

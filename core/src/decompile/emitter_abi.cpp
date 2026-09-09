@@ -200,6 +200,13 @@ declared_integer_type(std::string_view type, Abi abi) noexcept {
 
 }  // namespace
 
+std::optional<std::size_t> Emitter::declared_scalar_size(std::string_view type) const {
+    if (type == "bool" || type == "_Bool") return 1;
+    if (auto integer = declared_integer_type(type, abi)) return integer->bits / 8;
+    if (auto floating = declared_fp_ir_type(type)) return type_bits(*floating) / 8;
+    return std::nullopt;
+}
+
 u8 Emitter::cached_arity(addr_t target) const {
     auto it = arity_cache.find(static_cast<u64>(target));
     if (it != arity_cache.end()) return it->second;

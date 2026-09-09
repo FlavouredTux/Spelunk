@@ -207,6 +207,47 @@ update(*(float*)(r2 + constant), object, object + 0xbc);
 
 ## Measuring decoder and lift coverage
 
+### Semantic execution tests
+
+Run `ctest --test-dir build -R '^ppc_pipeline_semantics$' --output-on-failure`.
+The default corpus contains 406 seeded cases across eight synthetic assembly
+functions in `tests/support/ppc_pipeline.S`. Every case checks five executions
+against a small mathematical reference: original PPC instructions in Unicorn,
+SSA before cleanup, SSA after cleanup, and emitted C compiled to PPC at both
+`-O0` and `-O2` and executed in Unicorn. Function signatures are supplied by
+the fixtures; this test does not measure unknown-signature inference.
+
+The comparison includes the 32-bit return, every byte of a 256-byte data
+region (including untouched guard bytes), and the order, arguments, and
+observed memory values of two explicitly modeled helper calls. Private stack
+frames are not compared because recompilation changes their layout. Writes
+outside the data and stack regions fail. CPU/interpreter instruction limits,
+unmodeled calls, and unsupported intrinsics fail rather than count as matches.
+
+The test adapter preserves raw IR dumps and separately projects the fixture's
+integer ABI: `r3` is the return lane, unused ABI snapshots are discarded, and
+big-endian loads/stores are adapted to the shared little-endian interpreter
+with explicit byte swaps. Helper-call effects are modeled at the call site.
+The emitted function bodies are compiled unchanged; a small preamble supplies
+integer types and the documented `carry_add` operation.
+
+Required test-only dependencies are Python Unicorn 2+ with PowerPC support,
+Clang's PPC backend, and `ld.lld`. They are not core library dependencies.
+Missing tools produce a CTest skip, not a pass. To replay or vary a seed:
+
+```sh
+python3 tests/ppc_pipeline_test.py \
+  --probe build/tests/ember_ppc_pipeline_probe \
+  --clang clang --lld ld.lld --support tests/support --seed 0x505043
+```
+
+Failures retain a temporary directory containing the seed, input transcript,
+ELFs, emitted C, original and adapted IR, command logs, and mismatch details.
+This first corpus covers integer arithmetic, branches, CTR loops, overlapping
+word/halfword accesses, carry, and direct calls. It does not establish general
+PPC equivalence or cover floating point, paired-single/GQR operations, indirect
+calls, exceptions, or concurrency.
+
 `--ppc-coverage` scans every four-byte word in executable sections. It reports
 hard decoder failures first, then ranks decoded instructions that still lift to
 an opaque `ppc.*` intrinsic:

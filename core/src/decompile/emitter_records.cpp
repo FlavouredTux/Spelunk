@@ -141,10 +141,12 @@ Emitter::pointer_pointee_size(const IrValue& pointer) const {
         }
     }
     if (type.ends_with('*')) {
+        if (type.find('*') != type.rfind('*')) return type_bits(abi_word_type()) / 8;
         type = imported_record_base(std::move(type));
     } else {
         type.clear();
     }
+    if (auto scalar = declared_scalar_size(type)) return scalar;
     if (annotations && !type.empty()) {
         if (auto size = annotations->type_size_for(type); size && *size != 0) {
             return size;

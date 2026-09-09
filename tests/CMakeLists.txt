@@ -230,6 +230,20 @@ add_library(ember_ir_test_support STATIC
     support/ir_semantics_compare.cpp)
 target_link_libraries(ember_ir_test_support PUBLIC ember::core PRIVATE ember::flags)
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    find_program(EMBER_PPC_TEST_CLANG NAMES clang)
+    find_program(EMBER_PPC_TEST_LLD NAMES ld.lld)
+    add_executable(ember_ppc_pipeline_probe ppc_pipeline_probe.cpp)
+    target_link_libraries(ember_ppc_pipeline_probe PRIVATE ember_ir_test_support ember::flags)
+    add_test(NAME ppc_pipeline_semantics
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/ppc_pipeline_test.py"
+            --probe "$<TARGET_FILE:ember_ppc_pipeline_probe>"
+            --clang "${EMBER_PPC_TEST_CLANG}" --lld "${EMBER_PPC_TEST_LLD}"
+            --support "${CMAKE_SOURCE_DIR}/tests/support")
+    set_tests_properties(ppc_pipeline_semantics PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+endif()
+
 add_executable(ember_ir_semantics_test ir_semantics_test.cpp)
 target_link_libraries(ember_ir_semantics_test PRIVATE ember_ir_test_support ember::flags)
 add_test(NAME ir_semantics_unit COMMAND ember_ir_semantics_test)

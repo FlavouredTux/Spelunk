@@ -530,7 +530,7 @@ Emitter::try_simplify_flag(const IrValue& v, int depth, bool negate,
 
 std::optional<std::string>
 Emitter::render_ppc_ctr_condition(const IrValue& v, bool invert) const {
-    if (!is_ppc_abi()) return std::nullopt;
+    if (!is_ppc_abi() || explicit_phi_copies) return std::nullopt;
     if (auto key = ssa_key(v); key && deferred_ctr_conditions.contains(*key) &&
         !active_ctr_tail_conditions.contains(*key)) {
         return std::nullopt;

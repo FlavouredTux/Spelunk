@@ -196,6 +196,17 @@ exercises emitted shifts, loop exits, and memory accesses. Failures retain the
 generated C and complete IR input transcript in the reported temporary directory.
 This is targeted integer coverage, not general machine-code equivalence.
 
+`ppc_pipeline_semantics` checks synthetic PPC32 big-endian programs against
+an independent Unicorn CPU reference, interpreted SSA before/after cleanup,
+and emitted C compiled back to PPC at `-O0` and `-O2`. It compares integer
+returns, all 256 data-memory bytes, and ordered helper-call traces that include
+the memory value observed at each call. It covers arithmetic boundaries,
+branches, CTR loops, overlapping stores, carry, and calls around branches and
+memory writes. It requires Python `unicorn` with PPC support, `clang`, and
+`ld.lld`; CTest reports a skip when these test-only dependencies are absent.
+See [the PPC semantic test notes](docs/powerpc.md#semantic-execution-tests)
+for scope, adapters, and seed replay.
+
 Semantic mismatches print both IR versions and the initial machine state.
 Generated cases also print a seed that can be replayed directly:
 

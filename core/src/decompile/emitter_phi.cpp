@@ -1,4 +1,4 @@
-// Explicit SSA destruction for scalar x86 loops. Copies belong to edges,
+// Explicit SSA destruction for scalar integer loops. Copies belong to edges,
 // and every right-hand side is evaluated before any phi destination changes.
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
@@ -19,7 +19,7 @@ const std::string* Emitter::scoped_ssa_name(const IrValue& value) const {
 }
 
 void Emitter::prepare_phi_copies() {
-    if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return;
+    if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_ppc_abi())) return;
     // Call-result binding and aggregate return recovery use their own locals.
     // Keep that path until it can participate in explicit SSA destruction.
     for (const auto& block : fn->blocks) {

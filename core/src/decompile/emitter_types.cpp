@@ -971,6 +971,19 @@ std::string Emitter::fallback_field_name(i64 off, IrType t) const {
 }
 
 bool Emitter::is_struct_pointer(const IrValue& base) const {
+    // Declared pointers use their declared layout. Imported and explicitly
+    // annotated fields have their own rendering path; do not invent members
+    // that the declared pointee (including scalar buffers) does not contain.
+    if (annotations && fn) {
+        if (auto slot = trace_pointer_alias_to_self_arg_slot(base); slot) {
+            if (const auto* signature = annotations->signature_for(fn->start);
+                signature && *slot < signature->params.size()) {
+                const std::string type = normalize_c_type_alias(signature->params[*slot].type);
+                const std::string pointee = imported_record_base(type);
+                if (type.ends_with('*') && (pointee == "void" || declared_scalar_size(pointee))) return false;
+            }
+        }
+    }
     auto access = canonical_struct_access(base);
     if (!access) return false;
     auto k = ssa_key(access->first);

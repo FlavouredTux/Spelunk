@@ -1043,6 +1043,7 @@ struct Emitter {
 
     [[nodiscard]] std::optional<std::size_t>
     pointer_pointee_size(const IrValue& pointer) const;
+    [[nodiscard]] std::optional<std::size_t> declared_scalar_size(std::string_view type) const;
 
     [[nodiscard]] bool pointer_step_matches(const IrValue& pointer,
                                             i64 byte_step) const;

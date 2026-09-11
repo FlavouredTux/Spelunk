@@ -273,12 +273,16 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         case IrOp::CmpEq:  return format_binop(d, "==", depth, min_prec, Prec::Eq,  true);
         case IrOp::CmpNe:  return format_binop(d, "!=", depth, min_prec, Prec::Eq,  true);
         case IrOp::CmpSlt:
+            return render_cmp("<", d.srcs[0], d.srcs[1], depth, true, false, min_prec);
         case IrOp::CmpUlt: return format_binop(d, "<",  depth, min_prec, Prec::Rel, false);
         case IrOp::CmpSle:
+            return render_cmp("<=", d.srcs[0], d.srcs[1], depth, true, false, min_prec);
         case IrOp::CmpUle: return format_binop(d, "<=", depth, min_prec, Prec::Rel, false);
         case IrOp::CmpSgt:
+            return render_cmp(">", d.srcs[0], d.srcs[1], depth, true, false, min_prec);
         case IrOp::CmpUgt: return format_binop(d, ">",  depth, min_prec, Prec::Rel, false);
         case IrOp::CmpSge:
+            return render_cmp(">=", d.srcs[0], d.srcs[1], depth, true, false, min_prec);
         case IrOp::CmpUge: return format_binop(d, ">=", depth, min_prec, Prec::Rel, false);
 
         case IrOp::ZExt:

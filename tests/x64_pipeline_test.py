@@ -108,6 +108,8 @@ def main(directory):
     for a in values:
         for b in [0, 1, 2, 7, MASK]:
             for name in ['xchg_pair', 'mul_high', 'mul_signed_high', 'mul_square_high',
+                         'signed8_s', 'signed16_s', 'signed32_s', 'signed32_max',
+                         'signed8_imm_s',
                          'mulx_high', 'mulx_low', 'mulx_alias', 'mulx32_high',
                          'andn_zf', 'andn_cf', 'andn_sf', 'andn_of']:
                 add(name, a, b)
@@ -133,6 +135,10 @@ def main(directory):
                     add(op + '_o', a, 0x813579BDF2468ACE, count)
     add('shift_pf')
     add('ror_zero_cf')
+    for n in [0, 1, 2, 3, 8]:
+        for seed in [0, 1, 7, MASK]:
+            for keep_going in [0, 1]:
+                add('loop_internal_diamond', n, seed, keep_going)
     for x in values:
         for y in [0, 1, 7, MASK]:
             add('branch_early', x, y)

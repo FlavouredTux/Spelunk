@@ -643,7 +643,7 @@ std::unique_ptr<Region> Builder::build_switch(const IrBlock& sw_bb) {
     return r;
 }
 
-std::unique_ptr<Region> Builder::build_loop(addr_t header) {
+std::unique_ptr<Region> Builder::build_loop(addr_t header, bool allow_do_while) {
     auto bit = fn_.block_at.find(header);
     if (bit == fn_.block_at.end()) return make_empty();
     const auto& bb = fn_.blocks[bit->second];
@@ -686,7 +686,7 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
     addr_t dw_tail = kNoAddr;
     if (!have_cond) {
         auto tail_it = info_.do_while_tail.find(header);
-        if (tail_it != info_.do_while_tail.end()) {
+        if (allow_do_while && tail_it != info_.do_while_tail.end()) {
             auto block_it = fn_.block_at.find(tail_it->second);
             if (block_it != fn_.block_at.end()) {
                 const auto& tail = fn_.blocks[block_it->second];
@@ -779,6 +779,7 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
         loop_r->kind = RegionKind::Loop;
     }
 
+    const auto visited_before = do_while ? visited_ : std::set<addr_t>{};
     visited_.insert(header);
     loop_r->children.push_back(make_block(header));
 
@@ -854,6 +855,15 @@ std::unique_ptr<Region> Builder::build_loop(addr_t header) {
             } else {
                 auto body = build_sequence(bb.successors.front(), dw_tail);
                 loop_r->children.push_back(std::move(body));
+            }
+            // A nested branch can consume the latch before the outer walk's
+            // stop, especially with early exits. Appending it again duplicates
+            // effects and leaves the trailing condition outside their scope.
+            // Keep the tests inside a generic loop in that case.
+            if (visited_.contains(dw_tail)) {
+                visited_ = visited_before;
+                loop_stack_.pop_back();
+                return build_loop(header, false);
             }
             visited_.insert(dw_tail);
             loop_r->children.push_back(make_block(dw_tail));

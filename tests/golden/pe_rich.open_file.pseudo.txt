@@ -1,5 +1,5 @@
 // sub_1800010c0
-uint64_t sub_1800010c0(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+uint64_t sub_1800010c0(void) {
   uint64_t local_18;
   uint64_t local_10;
   uint64_t local_8;

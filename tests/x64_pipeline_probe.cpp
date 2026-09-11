@@ -94,7 +94,9 @@ bool project_integer_calls(IrFunction& fn, const CallSpecs& specs) {
         for (auto& inst : block.insts) {
             if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.args."))
                 packs.push_back(&inst);
-            if (inst.op == IrOp::Intrinsic && inst.name.starts_with("call.fp_args."))
+            if (inst.op == IrOp::Intrinsic &&
+                (inst.name.starts_with("call.fp_args.") ||
+                 inst.name == "call.stack_pointer"))
                 inst = IrInst{};
             if (inst.op == IrOp::CallIndirect) return false;
             if (inst.op != IrOp::Call) continue;

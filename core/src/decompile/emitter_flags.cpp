@@ -406,7 +406,6 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
     }
     const Prec own = (op == "==" || op == "!=") ? Prec::Eq : Prec::Rel;
     const int p = std::to_underlying(own);
-    const std::string_view c = "int64_t";
     // CmpS* also represents ordered floating-point comparisons in the
     // IR. Signed integer casts are appropriate for integer flags, but
     // applying them to FPR operands destroys the source semantics.
@@ -414,12 +413,26 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
         signed_cmp && !is_float_type(a.type) && !is_float_type(b.type);
     const bool cast_l = signed_integer_cmp && a.kind != IrValueKind::Imm;
     const bool cast_r = signed_integer_cmp && b.kind != IrValueKind::Imm;
-    // If we're going to wrap in `(int64_t)`, the inner must bind at Unary;
+    // Interpret the operand at its machine width before C promotes it.
+    // Widening uint32_t directly to int64_t loses the sign of a CMP r32.
+    const auto signed_type = [](IrType type) {
+        return std::format("int{}_t", std::max(8u, type_bits(type)));
+    };
+    // If we're going to cast, the inner must bind at Unary;
     // otherwise the compare's own precedence is enough.
     const int lp = cast_l ? std::to_underlying(Prec::Unary) : p;
     const int rp = cast_r ? std::to_underlying(Prec::Unary) : p + 1;
     auto cmp_expr = [&](const IrValue& v, int prec) {
-        if (v.kind == IrValueKind::Imm) return format_numeric_imm(v);
+        if (v.kind == IrValueKind::Imm) {
+            IrValue literal = v;
+            const unsigned bits = type_bits(v.type);
+            if (signed_integer_cmp && bits > 0 && bits < 64) {
+                const u64 sign = u64{1} << (bits - 1);
+                const u64 value = static_cast<u64>(v.imm) & ((u64{1} << bits) - 1);
+                literal.imm = static_cast<i64>((value ^ sign) - sign);
+            }
+            return format_numeric_imm(literal);
+        }
         if (const IrInst* d = def_stripped(v);
             d && (d->op == IrOp::ZExt || d->op == IrOp::SExt ||
                   d->op == IrOp::Trunc)) {
@@ -429,8 +442,8 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
     };
     std::string left  = cmp_expr(a, lp);
     std::string right = cmp_expr(b, rp);
-    if (cast_l) left  = std::format("({}){}", c, left);
-    if (cast_r) right = std::format("({}){}", c, right);
+    if (cast_l) left  = std::format("({}){}", signed_type(a.type), left);
+    if (cast_r) right = std::format("({}){}", signed_type(b.type), right);
     return wrap_if_lt(std::format("{} {} {}", left, op, right), own, min_prec);
 }
 

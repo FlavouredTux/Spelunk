@@ -57,6 +57,9 @@ def main() -> int:
     elif args and args[0] == "--fat":
         mode = "fat"
         args = args[1:]
+    elif args and args[0] == "--x64-signatures":
+        mode = "x64-signatures"
+        args = args[1:]
     if len(args) != 1:
         print(__doc__, file=sys.stderr)
         return 2
@@ -97,6 +100,22 @@ def main() -> int:
     data_guard = bytes.fromhex("b801000000") + enc_call_data + bytes.fromhex("b802000000c3")
     if mode == "data-in-code":
         code += data_guard
+    extra_symbols = []
+    if mode == "x64-signatures":
+        def function(name, body):
+            extra_symbols.append((name, text_vmaddr + len(code), 1))
+            return body
+        # Incoming float lanes, with an untouched integer return carrier.
+        code += function("_store_floats", bytes.fromhex(
+            "f30f1107 f30f114f04 f30f115708 f30f115f0c c3"))
+        # A void early exit plus incidental EAX on the writing path.
+        code += function("_optional_store", bytes.fromhex(
+            "4885ff 7407 b82a000000 8907 c3"))
+        # Seventh SysV argument forwarded to a one-argument callee.
+        start = text_vmaddr + len(code)
+        code += function("_stack_forward", bytes.fromhex("55 4889e5 488b7d10 e8") +
+                         struct.pack("<i", add42_vmaddr - (start + 13)) +
+                         bytes.fromhex("5d c3"))
     data = struct.pack("<I", 0x12345678)
 
     # Build the __TEXT segment load command (72 header + 80-byte section entry).
@@ -149,6 +168,8 @@ def main() -> int:
     if mode == "data-in-code":
         add_string("_data_guard")
     add_string("_g_answer")
+    for name, _, _ in extra_symbols:
+        add_string(name)
     strtab = bytes(strings)
 
     nlist = bytearray()
@@ -163,6 +184,7 @@ def main() -> int:
     if mode == "data-in-code":
         syms.append(("_data_guard", data_guard_vmaddr, 1))
     syms.append(("_g_answer", data_vmaddr, 2))
+    syms.extend(extra_symbols)
     for name, vm, sect in syms:
         nlist += struct.pack("<IBBHQ", sym_offs[name], 0x0F, sect, 0, vm)  # N_SECT|N_EXT
     # LC_FUNCTION_STARTS data: ULEB128 deltas from __TEXT base.

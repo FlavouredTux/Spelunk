@@ -10,6 +10,6 @@ int dowhile_with_skip(const int* xs, int n) {
     if (t19) {
       local_10 += t19;
     }
-  } while ((int64_t)local_c < (int64_t)(uint32_t)n);
+  } while ((int32_t)local_c < (int32_t)(uint32_t)n);
   return local_10;
 }

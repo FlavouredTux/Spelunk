@@ -1,0 +1,8 @@
+// store_floats
+void store_floats(void* a1, float a2, float a3, float a4, float a5) {
+  *(float*)&a1->field_0 = a2;
+  *(float*)&a1->field_4 = a3;
+  *(float*)&a1->field_8 = a4;
+  *(float*)&a1->field_c = a5;
+  return;
+}

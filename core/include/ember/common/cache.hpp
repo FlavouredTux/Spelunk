@@ -9,8 +9,8 @@
 
 namespace ember::cache {
 
-// Bump when any cached payload's on-disk format changes.
-inline constexpr int kVersion = 15;
+// Bump when cached payload formats or the analyses producing them change.
+inline constexpr int kVersion = 16;
 
 std::filesystem::path default_dir();
 

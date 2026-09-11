@@ -104,6 +104,15 @@ bool Emitter::objc_selector_takes_format_varargs(
            selector == "appendFormat:";
 }
 
+bool Emitter::objc_selector_takes_nil_varargs(std::string_view selector) noexcept {
+    return selector == "initWithObjectsAndKeys:" ||
+           selector == "dictionaryWithObjectsAndKeys:" ||
+           selector == "initWithObjects:" ||
+           selector == "arrayWithObjects:" ||
+           selector == "setWithObjects:" ||
+           selector == "orderedSetWithObjects:";
+}
+
 u8 Emitter::count_objc_format_specifiers(std::string_view fmt) noexcept {
     u8 count = 0;
     for (std::size_t i = 0; i < fmt.size(); ) {
@@ -171,6 +180,13 @@ Emitter::objc_call_arity(std::string_view name,
     if (!sel) return std::nullopt;
     const u8 base = static_cast<u8>(stret ? 3 : 2);
     unsigned arity = static_cast<unsigned>(base + selector_argument_count(*sel));
+    if (objc_selector_takes_nil_varargs(*sel)) {
+        for (std::size_t i = base; i < args.size() && i < kMaxAbiArgs; ++i) {
+            if (!objc_selector_arg_is_usable(args[i])) break;
+            arity = static_cast<unsigned>(i + 1);
+            if (auto value = resolve_imm(args[i]); value && *value == 0) break;
+        }
+    }
     if (objc_selector_takes_format_varargs(*sel)) {
         const std::size_t fmt_index = static_cast<std::size_t>(base);
         if (fmt_index < args.size()) {
@@ -179,7 +195,7 @@ Emitter::objc_call_arity(std::string_view name,
             }
         }
     }
-    return static_cast<u8>(std::min<unsigned>(kMaxAbiIntArgs, arity));
+    return static_cast<u8>(std::min<unsigned>(kMaxAbiArgs, arity));
 }
 
 std::string Emitter::simplify_objc_class_receiver(std::string s) {
@@ -368,7 +384,14 @@ Emitter::render_objc_message_call(std::string_view name,
             out += expr(args[arg_base + i]);
         }
     }
-    if (objc_selector_takes_format_varargs(*selector)) {
+    if (objc_selector_takes_nil_varargs(*selector)) {
+        const auto arity = objc_call_arity(name, args);
+        if (!arity) return std::nullopt;
+        for (std::size_t i = arg_base + selector_args; i < *arity; ++i) {
+            if (!objc_selector_arg_is_usable(args[i])) return std::nullopt;
+            out += ", " + expr(args[i]);
+        }
+    } else if (objc_selector_takes_format_varargs(*selector)) {
         const std::size_t fmt_index = arg_base;
         if (fmt_index < args.size()) {
             if (auto fmt = resolve_string_value(args[fmt_index]); fmt) {

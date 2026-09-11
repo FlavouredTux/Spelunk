@@ -184,6 +184,9 @@ tests do not validate the decoders, lifters, or emitted pseudo-C.
 against decoded/lifted SSA before and after cleanup and against emitted C
 compiled at `-O0` and `-O2`. It covers register exchanges, multiply halves,
 ANDN flags, shift signedness, parity, and zero/masked shift and rotate counts.
+Narrow signed comparisons include negative values, sign-bit immediates, and
+conditional moves. A loop with an internal diamond and early exits checks
+that its shared latch is emitted only once.
 Branch diamonds, early returns, counted loops, simultaneous loop phis, and
 overlapping memory operations also run through every stage. Each execution
 starts with the same memory bytes; comparisons check the return value and the

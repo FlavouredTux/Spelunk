@@ -36,7 +36,8 @@ void for_each_operand(const IrInst& inst, Visitor&& visitor) {
 
 bool SsaUseIndex::is_call_arg_barrier(const IrInst& inst) noexcept {
     return inst.op == IrOp::Intrinsic &&
-           (inst.name.starts_with("call.args.") ||
+           (inst.name == "call.stack_pointer" ||
+            inst.name.starts_with("call.args.") ||
             inst.name.starts_with("call.fp_args."));
 }
 

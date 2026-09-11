@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <format>
+#include <map>
+#include <set>
 #include <utility>
 
 #include <ember/analysis/arity.hpp>
@@ -21,6 +23,78 @@
 #include "emitter_text.hpp"
 
 namespace ember::emit {
+
+namespace {
+
+void infer_x64_fp_parameters(Emitter& e, const IrFunction& fn) {
+    if (e.abi != Abi::SysVAmd64 && e.abi != Abi::Win64) return;
+    std::map<SsaKey, const IrInst*> definitions;
+    for (const auto& block : fn.blocks) {
+        for (const auto& inst : block.insts) {
+            if (auto key = ssa_key(inst.dst)) definitions[*key] = &inst;
+        }
+    }
+    const auto registers = fp_arg_regs(e.abi);
+    std::map<Reg, IrType> live;
+    std::set<std::pair<SsaKey, IrType>> seen;
+    std::vector<std::pair<IrValue, IrType>> pending;
+    for (const auto& block : fn.blocks) {
+        for (const auto& inst : block.insts) {
+            if (inst.op == IrOp::Return || inst.op == IrOp::Phi ||
+                Emitter::is_call_arg_barrier(inst)) continue;
+            for (u8 i = 0; i < inst.src_count; ++i) {
+                if (is_float_type(inst.srcs[i].type)) {
+                    pending.emplace_back(inst.srcs[i], inst.srcs[i].type);
+                }
+            }
+        }
+    }
+    while (!pending.empty()) {
+        auto [value, type] = pending.back();
+        pending.pop_back();
+        if (is_float_type(value.type)) type = value.type;
+        auto key = ssa_key(value);
+        if (!key || !seen.emplace(*key, type).second) continue;
+        if (value.kind == IrValueKind::Reg && value.version == 0 &&
+            std::ranges::find(registers, canonical_reg(value.reg)) != registers.end()) {
+            auto [it, inserted] = live.emplace(canonical_reg(value.reg), type);
+            if (!inserted && type_bits(type) > type_bits(it->second)) it->second = type;
+            continue;
+        }
+        auto found = definitions.find(*key);
+        if (found == definitions.end()) continue;
+        const auto& inst = *found->second;
+        if (inst.op == IrOp::Assign || inst.op == IrOp::Trunc) {
+            if (inst.src_count) pending.emplace_back(inst.srcs[0], type);
+        } else if (inst.op == IrOp::Phi) {
+            for (const auto& operand : inst.phi_operands) pending.emplace_back(operand, type);
+        }
+    }
+    // SysV's independent banks do not encode their source-level interleaving.
+    // Keep the integer prefix, then name proven scalar FP lanes in ABI order.
+    std::size_t fp_count = 0;
+    for (std::size_t i = 0; i < registers.size(); ++i) {
+        if (live.contains(canonical_reg(registers[i]))) fp_count = i + 1;
+    }
+    for (std::size_t i = 0; i < fp_count; ++i) {
+        auto found = live.find(canonical_reg(registers[i]));
+        if (abi_positional_arg_slots(e.abi)) {
+            if (found == live.end()) continue;
+            const auto ints = int_arg_regs(e.abi);
+            while (e.self_arg_layout.size() <= i) {
+                e.self_arg_layout.push_back({ints[e.self_arg_layout.size()], IrType::I64});
+            }
+            e.self_arg_layout[i] = {registers[i], found->second};
+        } else {
+            if (e.self_arg_layout.size() == kMaxAbiArgs) break;
+            e.self_arg_layout.push_back({registers[i],
+                found == live.end() ? IrType::F64 : found->second});
+        }
+    }
+    e.self_arity = static_cast<u8>(e.self_arg_layout.size());
+}
+
+}  // namespace
 
 bool is_incomplete_decomp_signature(const FunctionSig& signature) {
     return signature.return_type.empty() && signature.params.empty() &&
@@ -228,6 +302,12 @@ SignatureContext setup_signature_context(Emitter& e,
         if (binary) e.self_arg_layout = infer_arguments(*binary, sf.ir->start, e.abi);
         e.self_arity = static_cast<u8>(std::min<std::size_t>(
             e.self_arg_layout.size(), kMaxAbiArgs));
+    }
+    if (!ctx.has_authoritative_arity &&
+        std::ranges::none_of(e.self_arg_layout, [](const InferredArgument& arg) {
+            return is_float_type(arg.type);
+        })) {
+        infer_x64_fp_parameters(e, *sf.ir);
     }
     if (e.self_arg_layout.empty()) {
         // Keep the complete candidate bank available even when the initial

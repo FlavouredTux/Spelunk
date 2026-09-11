@@ -2,5 +2,5 @@
 int abs_i32(int x) {
   uint32_t t0 = (uint32_t)x;
   int32_t t5 = -t0;
-  return (int64_t)t5 < 0 ? t0 : t5;
+  return (int32_t)t5 < 0 ? t0 : t5;
 }

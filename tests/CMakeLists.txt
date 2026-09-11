@@ -1752,6 +1752,15 @@ if(Python3_Interpreter_FOUND)
     endfunction()
 
     ember_build_python_macho_fixture(macho_tiny make_macho_tiny.py)
+    ember_build_python_macho_fixture(macho_x64_signatures make_macho_tiny.py --x64-signatures)
+    foreach(_signature_case store_floats optional_store stack_forward)
+        ember_golden_test(
+            NAME macho_x64_${_signature_case}_pseudo
+            FIXTURE macho_x64_signatures
+            ARGS "-p|-s|${_signature_case}"
+            GOLDEN macho_x64_signatures.${_signature_case}.pseudo.txt
+        )
+    endforeach()
     ember_build_python_macho_fixture(macho_unixthread make_macho_tiny.py
         --unixthread)
     ember_build_python_macho_fixture(macho_fat_tiny make_macho_tiny.py --fat)
@@ -1814,6 +1823,8 @@ if(Python3_Interpreter_FOUND)
     ember_build_python_macho_fixture(macho_objc_stret make_macho_objc_stret.py)
     ember_build_python_macho_fixture(
         macho_objc_stack_arg make_macho_objc_stack_arg.py)
+    ember_build_python_macho_fixture(
+        macho_objc_nil_varargs make_macho_objc_stack_arg.py --nil-varargs)
     ember_build_python_macho_fixture(macho_objc_fpret make_macho_objc_fpret.py)
     ember_build_python_macho_fixture(macho_objc_super make_macho_objc_super.py)
     ember_build_python_macho_fixture(macho_cpp_rtti make_macho_cpp_rtti.py)
@@ -2454,6 +2465,12 @@ if(Python3_Interpreter_FOUND)
         FIXTURE macho_objc_stack_arg
         ARGS    "-p|-s|main"
         GOLDEN  macho_objc_stack_arg.main.pseudo.txt
+    )
+    ember_golden_test(
+        NAME    macho_objc_nil_varargs_main_pseudo
+        FIXTURE macho_objc_nil_varargs
+        ARGS    "-p|-s|main"
+        GOLDEN  macho_objc_nil_varargs.main.pseudo.txt
     )
     ember_golden_test(
         NAME    macho_objc_fpret_main_pseudo

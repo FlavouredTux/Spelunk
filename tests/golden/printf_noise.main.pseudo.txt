@@ -6,7 +6,7 @@ extern FILE* stdout;
 int main(int argc, char** argv) {
   uint64_t r_strlen = strlen(argv[0]);
   printf("len=%zu\n", r_strlen);
-  if ((int64_t)(uint32_t)argc > 1) {
+  if ((int32_t)(uint32_t)argc > 1) {
     fprintf(stderr, "a=%s b=%s\n", argv[0], argv[1]);
   }
   fwrite("hello\n", 1, 6, stdout);

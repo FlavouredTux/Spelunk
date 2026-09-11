@@ -35,10 +35,14 @@ def cstr_table(names):
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    nil_varargs = bool(args and args[0] == "--nil-varargs")
+    if nil_varargs:
+        args = args[1:]
+    if len(args) != 1:
         print("usage: make_macho_objc_stack_arg.py <output-path>", file=sys.stderr)
         return 2
-    out_path = sys.argv[1]
+    out_path = args[0]
 
     text_file_off = PAGE
     data_file_off = PAGE * 2
@@ -124,6 +128,14 @@ def main() -> int:
     emit(b"\x48\xc7\x44\x24\x08\x00\x00\x00\x00")
     emit(b"\x48\xc7\x44\x24\x10\x00\x00\x00\x00")
     emit(b"\x48\xc7\x44\x24\x18\x00\x00\x00\x00")
+    if nil_varargs:
+        # Three object/key pairs cross the SysV register/stack boundary.
+        emit(b"\xba\x11\x00\x00\x00")
+        emit(b"\xb9\x22\x00\x00\x00")
+        emit(b"\x41\xb8\x33\x00\x00\x00")
+        emit(b"\x41\xb9\x44\x00\x00\x00")
+        emit(b"\x48\xc7\x04\x24\x55\x00\x00\x00")
+        emit(b"\x48\xc7\x44\x24\x08\x66\x00\x00\x00")
     call_off = len(code)
     emit(b"\xe8\x00\x00\x00\x00")             # patched below
     emit(b"\x31\xc0")                         # xor eax, eax
@@ -187,7 +199,7 @@ def main() -> int:
             stub_nonatomic_setprop_vmaddr + 6,
             methname_vmaddr,
         ) +
-        b"initWithFrame:configuration:\0"
+        (b"initWithObjectsAndKeys:\0" if nil_varargs else b"initWithFrame:configuration:\0")
     )
 
     seg_text = bytearray()

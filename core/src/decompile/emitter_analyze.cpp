@@ -544,6 +544,8 @@ void Emitter::analyze(const IrFunction& f) {
         for (const auto& inst : bb.insts) {
             if (transports_pointer(inst.op) && ssa_key(inst.dst)) continue;
             if (inst.op == IrOp::Phi) continue;
+            // Recording RSP at a call does not pass a pointer to the callee.
+            if (inst.op == IrOp::Intrinsic && inst.name == "call.stack_pointer") continue;
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
                 const bool memory_address =
                     (inst.op == IrOp::Load || inst.op == IrOp::Store) && i == 0;

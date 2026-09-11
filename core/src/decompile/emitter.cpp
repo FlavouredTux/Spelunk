@@ -227,10 +227,18 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
 
     std::vector<ReturnTypeCandidate> candidates;
     bool saw_void_return = false;
+    bool saw_undefined_integer_return = false;
     std::function<void(const Region&)> walk = [&](const Region& r) {
         if (r.kind == RegionKind::Return &&
             r.condition.kind != IrValueKind::None) {
             IrValue return_value = r.condition;
+            if ((e.abi == Abi::SysVAmd64 || e.abi == Abi::Win64) &&
+                return_value.kind == IrValueKind::Reg &&
+                canonical_reg(return_value.reg) == Reg::Rax &&
+                return_value.version == 0) {
+                saw_undefined_integer_return = true;
+                return;
+            }
             if (e.is_msvc_cookie_return_clobber(return_value)) {
                 auto preserved = e.return_value_before_msvc_cookie(return_value);
                 if (!preserved) {
@@ -256,6 +264,9 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
         for (const auto& c : r.children) if (c) walk(*c);
     };
     walk(*sf.body);
+    // An untouched RAX on a reachable exit is not a source-level result.
+    // Other exits can still leave incidental arithmetic or call results there.
+    if (saw_undefined_integer_return) return "void";
     // A C function cannot be value-returning on only some paths. On PPC,
     // a sibling path often carries an unknown call's incidental r3 while
     // a known SDK void call proves the real source signature is void.

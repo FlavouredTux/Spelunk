@@ -1,0 +1,17 @@
+// main
+int main(void) {
+  uint64_t local_18[2];
+  objc_msgSend();
+  objc_storeStrong(&local_18, 0x777);
+  objc_release(0x888);
+  objc_msgSend();
+  objc_getProperty(0x1111, 0x2222, 8, 1);
+  objc_setProperty_atomic_copy(0x1111, 0x2222, 0x3333, 8);
+  objc_setProperty_nonatomic(0x1111, 0x2222, 0x4444, 8);
+  objc_getProperty(0x1111, 0x2222, 8, 1);
+  uint64_t r_objc_begin_catch = objc_begin_catch(0x4444);
+  objc_release(r_objc_begin_catch);
+  objc_unsafeClaimAutoreleasedReturnValue(0x5555);
+  [0x1234 initWithObjectsAndKeys:0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0];
+  return 0;
+}

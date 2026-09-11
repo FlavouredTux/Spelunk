@@ -91,7 +91,7 @@ public:
 
     std::unique_ptr<Region> build_switch(const IrBlock& sw_bb);
 
-    std::unique_ptr<Region> build_loop(addr_t header);
+    std::unique_ptr<Region> build_loop(addr_t header, bool allow_do_while = true);
 
     // Walk a Reg/Temp value chain through Assign and predecessor-resolved Phi
     // nodes. When `from_pred` is set, a Phi whose `phi_preds` contains it is

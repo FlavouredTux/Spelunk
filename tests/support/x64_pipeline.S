@@ -10,6 +10,56 @@
 .size \name,.-\name
 .endm
 
+// Narrow signed comparisons must reinterpret the sign bit before promotion.
+.macro signed_compare bits, lhs, rhs
+begin signed\bits\()_s
+xor eax,eax
+cmp \lhs,\rhs
+setg al
+ret
+end signed\bits\()_s
+.endm
+signed_compare 8,dil,sil
+signed_compare 16,di,si
+signed_compare 32,edi,esi
+
+begin signed8_imm_s
+xor eax,eax
+cmp dil,0x80
+setg al
+ret
+end signed8_imm_s
+
+begin signed32_max
+mov eax,edi
+cmp esi,edi
+cmovg eax,esi
+ret
+end signed32_max
+
+// Internal header diamond, early exits, and a shared conditional latch.
+// The latch's updates must appear once, even when a nested branch consumes it.
+begin loop_internal_diamond
+xor eax,eax
+mov rcx,rsi
+.Ldiamond_header:
+test rcx,rcx
+jnz .Ldiamond_shared
+mov ecx,2
+.Ldiamond_shared:
+add rax,rcx
+test rdx,rdx
+jz .Ldiamond_exit
+test rdi,rdi
+jz .Ldiamond_exit
+dec rdi
+inc rcx
+test rdi,rdi
+jnz .Ldiamond_header
+.Ldiamond_exit:
+ret
+end loop_internal_diamond
+
 // Value probes cover zero and architecturally masked counts.
 .irp op,shld,shrd
 begin \op\()_zero

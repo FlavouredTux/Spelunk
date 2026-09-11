@@ -37,6 +37,16 @@ void emit_call_clobbers(LiftCtx& ctx) {
 // slot is looked up from the current ABI's int_arg_regs table so the
 // same sig_inference logic that reads these can decode Win64 too.
 void emit_arg_barriers(LiftCtx& ctx) {
+    // Preserve the outgoing stack base for argument recovery after SSA/DCE.
+    // A tail jump reuses the caller's return address, unlike CALL.
+    IrInst stack;
+    stack.op = IrOp::Intrinsic;
+    stack.name = "call.stack_pointer";
+    stack.srcs[0] = ctx.insn->mnemonic == Mnemonic::Jmp
+        ? ctx.emit_binop(IrOp::Add, ctx.reg(Reg::Rsp), ctx.imm(8, IrType::I64))
+        : ctx.reg(Reg::Rsp);
+    stack.src_count = 1;
+    ctx.emit(std::move(stack));
     const auto args = int_arg_regs(ctx.abi);
     auto arg_value = [&](std::size_t slot) -> IrValue {
         if (slot < args.size()) return ctx.reg(args[slot]);

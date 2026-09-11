@@ -575,9 +575,8 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     // capped at kMaxVisits; addresses already visited with a strictly weaker
     // (subset) written mask are skipped to keep the worklist bounded.
     //
-    // Calls don't mark args as written - caller-saved clobbering happens
-    // *after* the call site's argument setup, and we want to count whatever
-    // setup landed before the call.
+    // Read the call's incoming arguments before marking its caller-saved
+    // lanes written; later register reads cannot prove entry live-ins.
     constexpr std::size_t kMaxVisits = 1024;
 
     std::array<bool, kMaxAbiIntArgs> live_in{};
@@ -635,6 +634,12 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
             const DstRole role = dst_role(insn.mnemonic);
             const bool dst_writes = (role == DstRole::WriteOnly || role == DstRole::ReadWrite);
             const bool dst_reads  = (role == DstRole::ReadOnly  || role == DstRole::ReadWrite);
+            const bool zero_idiom =
+                (insn.mnemonic == Mnemonic::Xor || insn.mnemonic == Mnemonic::Sub) &&
+                insn.num_operands == 2 &&
+                insn.operands[0].kind == Operand::Kind::Register &&
+                insn.operands[1].kind == Operand::Kind::Register &&
+                insn.operands[0].reg == insn.operands[1].reg;
 
             auto touch = [&](Reg r, bool read, bool write) {
                 const int idx = arg_reg_index(args, r);
@@ -647,7 +652,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
             for (u8 j = 0; j < insn.num_operands; ++j) {
                 const Operand& op = insn.operands[j];
                 const bool is_dst = (j == 0);
-                const bool read  = is_dst ? dst_reads  : true;
+                const bool read  = !zero_idiom && (is_dst ? dst_reads : true);
                 const bool write = is_dst ? dst_writes : false;
 
                 if (op.kind == Operand::Kind::Register) {
@@ -677,6 +682,8 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
             if (insn.mnemonic == Mnemonic::Ret ||
                 insn.mnemonic == Mnemonic::Ud2 ||
                 insn.mnemonic == Mnemonic::Hlt) break;
+
+            if (insn.mnemonic == Mnemonic::Call) written.fill(true);
 
             // Unconditional jmp: follow the target if it's a known relative,
             // otherwise stop this path.

@@ -623,6 +623,9 @@ Emitter::render_direct_call(const IrInst& inst, std::size_t call_index,
     std::vector<std::string> rendered_call_args;
     const std::string direct_name = import_name
         ? *import_name : function_display_name(inst.target1);
+    if (abi == Abi::SysVAmd64 && is_objc_msgsend_name(direct_name)) {
+        call_args.insert(call_args.end(), pack.stack.begin(), pack.stack.end());
+    }
     const FunctionSig* annotated_sig = call_annotation_signature(inst);
     const bool known_variadic =
         (annotated_sig && annotated_sig->variadic) ||
@@ -669,6 +672,9 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
     std::vector<IrValue> used_args;
     if (auto name = import_name_for_indirect_call(inst.srcs[0]); name) {
         std::vector<IrValue> indirect_args = pack.ints;
+        if (abi == Abi::SysVAmd64 && is_objc_msgsend_name(*name)) {
+            indirect_args.insert(indirect_args.end(), pack.stack.begin(), pack.stack.end());
+        }
         std::vector<std::string> rendered_indirect_args;
         if (is_ppc_abi()) {
             const auto layout = abi_layout_for_import(*name);
@@ -895,8 +901,31 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         }
     };
 
+    std::map<i64, IrValue> recent_stack_stores;
     for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
         const auto& inst = bb.insts[ii];
+        if (abi == Abi::SysVAmd64 && inst.op == IrOp::Store && inst.src_count >= 2) {
+            if (auto offset = entry_stack_offset(inst.srcs[0])) {
+                const i64 width = static_cast<i64>(type_bits(inst.srcs[1].type) / 8);
+                std::erase_if(recent_stack_stores, [&](const auto& stored) {
+                    return stored.first < *offset + width && *offset < stored.first + 8;
+                });
+                if (width == 8) recent_stack_stores[*offset] = inst.srcs[1];
+            }
+        }
+        if (inst.op == IrOp::Intrinsic && inst.name == "call.stack_pointer") {
+            pack.stack.clear();
+            if (inst.src_count && abi == Abi::SysVAmd64) {
+                if (auto offset = entry_stack_offset(inst.srcs[0])) {
+                    for (std::size_t i = 0; i < kMaxAbiArgs - int_arg_regs(abi).size(); ++i) {
+                        auto found = recent_stack_stores.find(*offset + static_cast<i64>(i) * 8);
+                        if (found == recent_stack_stores.end()) break;
+                        pack.stack.push_back(found->second);
+                    }
+                }
+            }
+            continue;
+        }
         if (const auto* name = scoped_ssa_name(inst.dst);
             name && inst.op != IrOp::Phi && inst.op != IrOp::Call &&
             inst.op != IrOp::CallIndirect && inst.op != IrOp::Clobber) {
@@ -917,6 +946,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         if (hidden.contains({block_index, ii})) {
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
                 pack.clear();
+                recent_stack_stores.clear();
             }
             continue;
         }
@@ -969,6 +999,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 emit_materializations_for_value(a, 0, out, ind);
             }
             pack.clear();
+            recent_stack_stores.clear();
             emit_call_binding(out, ind, std::pair{block_index, ii}, call.expr,
                               call_inst_returns_void(inst));
             continue;

@@ -426,6 +426,9 @@ struct Emitter {
     [[nodiscard]] static bool objc_selector_takes_format_varargs(
         std::string_view selector) noexcept;
 
+    [[nodiscard]] static bool objc_selector_takes_nil_varargs(
+        std::string_view selector) noexcept;
+
     [[nodiscard]] static u8 count_objc_format_specifiers(std::string_view fmt) noexcept;
 
     [[nodiscard]] std::optional<std::string>
@@ -1248,8 +1251,9 @@ struct Emitter {
     struct CallArgPack {
         std::vector<IrValue> ints;   // call.args.N packs, in order
         std::vector<IrValue> fps;    // call.fp_args.N packs
+        std::vector<IrValue> stack;  // contiguous, explicitly stored x64 arguments
         bool have_pending = false;
-        void clear() { ints.clear(); fps.clear(); have_pending = false; }
+        void clear() { ints.clear(); fps.clear(); stack.clear(); have_pending = false; }
     };
     struct PpcOutgoingStackArgs {
         // call inst index -> parameter-area offset -> stored value

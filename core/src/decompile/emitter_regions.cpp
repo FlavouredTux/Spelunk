@@ -101,6 +101,11 @@ Emitter::trace_to_self_arg_slot(const IrValue& v, int depth) const {
             }
             if (d->op == IrOp::Load && d->segment == Reg::None &&
                 d->src_count >= 1) {
+                if (auto entry = entry_stack_offset(d->srcs[0])) {
+                    for (u8 i = 0; i < self_arg_layout.size(); ++i) {
+                        if (self_arg_layout[i].stack_offset == entry) return i;
+                    }
+                }
                 if (auto off = stack_offset(d->srcs[0]); off) {
                     if (auto init = init_only_slot_value.find(*off);
                         init != init_only_slot_value.end()) {
@@ -131,6 +136,11 @@ Emitter::trace_to_self_arg_slot(const IrValue& v, int depth) const {
         }
         if (d->op == IrOp::Load && d->segment == Reg::None &&
             d->src_count >= 1) {
+            if (auto entry = entry_stack_offset(d->srcs[0])) {
+                for (u8 i = 0; i < self_arg_layout.size(); ++i) {
+                    if (self_arg_layout[i].stack_offset == entry) return i;
+                }
+            }
             if (auto off = stack_offset(d->srcs[0]); off) {
                 if (auto init = init_only_slot_value.find(*off);
                     init != init_only_slot_value.end()) {

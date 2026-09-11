@@ -60,13 +60,16 @@ def main() -> int:
     elif args and args[0] == "--x64-signatures":
         mode = "x64-signatures"
         args = args[1:]
+    elif args and args[0] == "--zero-base":
+        mode = "zero-base"
+        args = args[1:]
     if len(args) != 1:
         print(__doc__, file=sys.stderr)
         return 2
     out_path = args[0]
 
     PAGE = 0x1000
-    BASE = 0x100000000
+    BASE = 0 if mode == "zero-base" else 0x100000000
 
     # Machine code:
     #  entry:   b8 2a 00 00 00   mov eax, 42
@@ -123,8 +126,10 @@ def main() -> int:
     seg_text += struct.pack("<II", 0x19, 72 + 80)        # cmd=LC_SEGMENT_64, cmdsize
     seg_text += b"__TEXT".ljust(16, b"\0")                # segname[16]
     seg_text += struct.pack("<QQQQ",
-                            text_vmaddr, text_vmsize,    # vmaddr, vmsize
-                            text_file_off, len(code))    # fileoff, filesize
+                            0 if mode == "zero-base" else text_vmaddr,
+                            PAGE * 2 if mode == "zero-base" else text_vmsize,
+                            0 if mode == "zero-base" else text_file_off,
+                            PAGE + len(code) if mode == "zero-base" else len(code))
     seg_text += struct.pack("<IIII", 5, 5, 1, 0)          # maxprot, initprot, nsects, flags
     seg_text += b"__text".ljust(16, b"\0")                # sectname[16]
     seg_text += b"__TEXT".ljust(16, b"\0")                # segname[16]
@@ -162,9 +167,10 @@ def main() -> int:
 
     if mode in ("main", "fat"):
         add_string("_main")
-    if mode != "exports-trie":
+    if mode not in ("exports-trie", "zero-base"):
         add_string("_add42")
-    add_string("_read_answer")
+    if mode != "zero-base":
+        add_string("_read_answer")
     if mode == "data-in-code":
         add_string("_data_guard")
     add_string("_g_answer")
@@ -176,11 +182,10 @@ def main() -> int:
     syms = []
     if mode in ("main", "fat"):
         syms.append(("_main", entry_vmaddr, 1))
-    if mode != "exports-trie":
+    if mode not in ("exports-trie", "zero-base"):
         syms.append(("_add42", add42_vmaddr, 1))
-    syms += [
-        ("_read_answer", read_vmaddr, 1),
-    ]
+    if mode != "zero-base":
+        syms.append(("_read_answer", read_vmaddr, 1))
     if mode == "data-in-code":
         syms.append(("_data_guard", data_guard_vmaddr, 1))
     syms.append(("_g_answer", data_vmaddr, 2))
@@ -196,6 +201,7 @@ def main() -> int:
     # __TEXT base itself as implicitly a function start when the first
     # delta is non-zero - matches what we want for coverage anyway.
     fn_starts = (
+        (uleb128(text_vmaddr) if mode == "zero-base" else b"") +
         uleb128(add42_vmaddr - text_vmaddr) +
         uleb128(read_vmaddr - add42_vmaddr) +
         (uleb128(data_guard_vmaddr - read_vmaddr) if mode == "data-in-code" else b"") +

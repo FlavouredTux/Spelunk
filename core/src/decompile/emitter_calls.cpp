@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <ember/analysis/import_sigs.hpp>
+#include <ember/analysis/ir_cache.hpp>
 #include <ember/analysis/sig_inference.hpp>
 #include <ember/binary/symbol.hpp>
 #include <ember/common/annotations.hpp>
@@ -65,18 +66,135 @@ bool can_defer_call_to_return(const IrFunction& fn,
 
 }  // namespace
 
-const FunctionSig*
-Emitter::call_annotation_signature(const IrInst& inst) const noexcept {
-    if (!annotations) return nullptr;
-    if (inst.op == IrOp::Call) {
-        return annotations->signature_for(inst.target1);
+std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
+    if (!binary || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return std::nullopt;
+    if (auto it = fp_return_cache.find(target); it != fp_return_cache.end()) return it->second;
+    auto& result = fp_return_cache[target];
+    IrCache cache;
+    const auto* callee = lift_cached(cache, *binary, target);
+    if (!callee) return result;
+    std::map<SsaKey, const IrInst*> definitions;
+    for (const auto& block : callee->blocks) for (const auto& inst : block.insts) {
+        if (auto key = ssa_key(inst.dst)) definitions[*key] = &inst;
     }
+    const auto producer = [&](IrValue value) -> const IrInst* {
+        std::set<SsaKey> seen;
+        while (auto key = ssa_key(value)) {
+            if (!seen.insert(*key).second) return nullptr;
+            auto it = definitions.find(*key);
+            if (it == definitions.end()) return nullptr;
+            if (it->second->op != IrOp::Assign || it->second->src_count != 1) return it->second;
+            value = it->second->srcs[0];
+        }
+        return nullptr;
+    };
+    std::optional<IrType> type;
+    const auto body_uses = [&](const IrInst* producer_inst) {
+        const auto key = producer_inst ? ssa_key(producer_inst->dst) : std::nullopt;
+        if (!key) return false;
+        for (const auto& block : callee->blocks) for (const auto& inst : block.insts) {
+            if (inst.op == IrOp::Return || inst.op == IrOp::Assign ||
+                is_call_arg_barrier(inst)) continue;
+            for (u8 i = 0; i < inst.src_count; ++i) {
+                if (ssa_key(inst.srcs[i]) == key) return true;
+            }
+        }
+        return false;
+    };
+    for (const auto& block : callee->blocks) for (const auto& inst : block.insts) {
+        if (inst.op != IrOp::Return) continue;
+        if (inst.src_count < 2) return result;
+        const auto* integer = producer(inst.srcs[0]);
+        const auto* floating = producer(inst.srcs[1]);
+        if (!floating ||
+            floating->op == IrOp::Clobber || !is_float_type(floating->dst.type)) return result;
+        // A scalar FP calculation used only as the return, alongside an
+        // integer scratch value already consumed by the body, identifies the
+        // FP lane even when address arithmetic happened to use RAX.
+        if (integer && integer->op != IrOp::Clobber &&
+            (!body_uses(integer) || body_uses(floating))) return result;
+        if (type && *type != floating->dst.type) return result;
+        type = floating->dst.type;
+    }
+    result = type;
+    return result;
+}
+
+void Emitter::refine_call_return_regions(Region& region) const {
+    if (region.kind == RegionKind::Return) {
+        const auto* declared = annotations ? annotations->signature_for(fn->start) : nullptr;
+        if (declared && !declared->return_type.empty() &&
+            !is_declared_fp_scalar(declared->return_type)) return;
+        if (auto type = cached_fp_return_type(fn->start)) {
+            if (auto block = fn->block_at.find(region.block_start); block != fn->block_at.end()) {
+                for (const auto& inst : fn->blocks[block->second].insts) {
+                    if (inst.op == IrOp::Return && inst.src_count >= 2) {
+                        region.condition = inst.srcs[1];
+                        region.condition.type = *type;
+                    }
+                }
+            }
+        }
+        const auto* definition = def_stripped(region.condition);
+        if (definition && definition->op == IrOp::Clobber) {
+            const auto key = ssa_key(definition->dst);
+            const auto pos = key ? ssa_uses.definition_position(*key) : std::nullopt;
+            if (pos) {
+                const auto& block = fn->blocks[pos->first];
+                std::size_t call = pos->second;
+                while (call && block.insts[call].op == IrOp::Clobber) --call;
+                if ((block.insts[call].op == IrOp::Call || block.insts[call].op == IrOp::CallIndirect) &&
+                    known_call_return_lane(block.insts[call]) == CallReturnLane::Floating) {
+                    for (std::size_t i = call + 1; i < block.insts.size() &&
+                         block.insts[i].op == IrOp::Clobber; ++i) {
+                        if (block.insts[i].dst.kind == IrValueKind::Reg &&
+                            canonical_reg(block.insts[i].dst.reg) == fp_return_reg(abi)) {
+                            region.condition = block.insts[i].dst;
+                            const auto type = known_call_return_c_type(block.insts[call]);
+                            region.condition.type = type == "float" ? IrType::F32 : IrType::F64;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (auto& child : region.children) if (child) refine_call_return_regions(*child);
+}
+
+std::optional<addr_t> Emitter::call_signature_target(const IrInst& inst) const {
+    if (inst.op == IrOp::Call) return inst.target1;
     if (inst.op == IrOp::CallIndirect && options.call_resolutions &&
         inst.source_addr != 0) {
         auto it = options.call_resolutions->find(inst.source_addr);
         if (it != options.call_resolutions->end()) {
-            return annotations->signature_for(it->second);
+            return it->second;
         }
+    }
+    // A named function-pointer initializer supplies signature evidence. Keep
+    // the call indirect: writable slots may change their target at runtime.
+    if (binary && inst.op == IrOp::CallIndirect && inst.src_count &&
+        (abi == Abi::SysVAmd64 || abi == Abi::Win64)) {
+        const auto* load = def_stripped(inst.srcs[0]);
+        if (load && load->op == IrOp::Load && load->src_count) {
+            if (auto slot = try_resolve_imm_addr(load->srcs[0])) {
+                const auto* object = binary->defined_object_at(static_cast<addr_t>(*slot));
+                const auto bytes = binary->bytes_at(static_cast<addr_t>(*slot));
+                if (object && object->kind == SymbolKind::Object &&
+                    object->addr == static_cast<addr_t>(*slot) && bytes.size() >= 8) {
+                    const addr_t target = read_le_at<u64>(bytes.data());
+                    const auto* symbol = binary->defined_object_at(target);
+                    if (symbol && symbol->kind == SymbolKind::Function && symbol->addr == target) return target;
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+const FunctionSig*
+Emitter::call_annotation_signature(const IrInst& inst) const noexcept {
+    if (annotations) {
+        if (auto target = call_signature_target(inst)) return annotations->signature_for(*target);
     }
     return nullptr;
 }
@@ -174,6 +292,9 @@ Emitter::known_call_return_lane(const IrInst& inst) const {
             default:              return CallReturnLane::Integer;
         }
     }
+    if (auto target = call_signature_target(inst)) {
+        if (cached_fp_return_type(*target)) return CallReturnLane::Floating;
+    }
     return std::nullopt;
 }
 
@@ -254,21 +375,13 @@ Emitter::known_call_return_c_type(const IrInst& inst) const {
         std::string inferred = ipa_type_name(signature->return_type);
         if (!inferred.empty()) return inferred;
     }
-    std::optional<addr_t> target;
-    if (inst.op == IrOp::Call) {
-        target = inst.target1;
-    } else if (inst.op == IrOp::CallIndirect && options.call_resolutions &&
-               inst.source_addr != 0) {
-        if (auto it = options.call_resolutions->find(inst.source_addr);
-            it != options.call_resolutions->end()) {
-            target = it->second;
-        }
-    }
+    const auto target = call_signature_target(inst);
     if (target) {
         if (auto it = inferred_call_return_types.find(*target);
             it != inferred_call_return_types.end()) {
             return it->second;
         }
+        if (auto type = cached_fp_return_type(*target)) return std::string(c_type_name(*type));
     }
     return std::nullopt;
 }

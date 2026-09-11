@@ -177,7 +177,12 @@ file_scope_declarations(const Emitter& e, const std::string& declaration_context
         out += std::format("extern void {}(void);\n", function);
     }
     if (!e.address_taken_function_decls.empty()) out += "\n";
+    bool have_globals = false;
     for (const auto& [name, ty] : e.global_decls) {
+        // Inlining a read-only constant can remove the last use of a global
+        // collected during analysis, including compiler-local dotted names.
+        if (!text_contains_identifier(declaration_context, name)) continue;
+        have_globals = true;
         if (ty.find("(*") != std::string::npos) {
             out += std::format("extern {};\n", ty);
         } else if (ty.ends_with("[]")) {
@@ -188,7 +193,7 @@ file_scope_declarations(const Emitter& e, const std::string& declaration_context
             out += std::format("extern {} {};\n", ty, name);
         }
     }
-    if (!e.global_decls.empty()) out += "\n";
+    if (have_globals) out += "\n";
     return out;
 }
 

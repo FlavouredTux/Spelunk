@@ -1023,7 +1023,7 @@ void MachOBinary::synthesize_entry_symbol() {
 // and UI sidebar all see the complete function set.
 void MachOBinary::apply_function_starts(const ParseState& st) {
     if (!st.fn_starts_bytes.empty()) {
-        addr_t text_base = 0;
+        std::optional<addr_t> text_base;
         u64    text_end  = 0;
         for (const auto& s : st.seg_info) {
             if (s.name == "__TEXT") {
@@ -1032,11 +1032,11 @@ void MachOBinary::apply_function_starts(const ParseState& st) {
                 break;
             }
         }
-        if (text_base != 0) {
+        if (text_base) {
             std::vector<addr_t> starts;
             const std::byte* bp = st.fn_starts_bytes.data();
             const std::byte* be = bp + st.fn_starts_bytes.size();
-            addr_t cur = text_base;
+            addr_t cur = *text_base;
             while (bp < be) {
                 const u64 delta = read_uleb128(bp, be);
                 if (delta == 0) break;  // terminator
@@ -1082,12 +1082,13 @@ void MachOBinary::finalize_symbols() {
         if (a.addr      != b.addr)      return a.addr < b.addr;
         if (a.got_addr  != b.got_addr)  return a.got_addr < b.got_addr;
         if (a.name      != b.name)      return a.name < b.name;
-        return a.size < b.size;
+        return a.size > b.size;
     });
+    // Export-trie and nlist entries can acquire different extents from the
+    // function-start table. Keep the largest extent for one name/address.
     auto dups = std::ranges::unique(symbols_,
         [](const Symbol& a, const Symbol& b) noexcept {
             return a.addr == b.addr
-                && a.size == b.size
                 && a.got_addr == b.got_addr
                 && a.is_import == b.is_import
                 && a.name == b.name;

@@ -715,6 +715,90 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     return static_cast<u8>(max_live_in + 1);
 }
 
+void extend_x64_fp_arguments(const IrFunction& fn, Abi abi,
+                             std::vector<InferredArgument>& arguments,
+                             std::span<const IrValue> call_arguments) {
+    if (abi != Abi::SysVAmd64 && abi != Abi::Win64) return;
+    std::map<SsaKey, const IrInst*> definitions;
+    for (const auto& block : fn.blocks) {
+        for (const auto& inst : block.insts) {
+            if (auto key = ssa_key(inst.dst)) definitions[*key] = &inst;
+        }
+    }
+    const auto registers = fp_arg_regs(abi);
+    const auto integer_registers = int_arg_regs(abi);
+    std::size_t integer_count = arguments.size();
+    std::map<Reg, IrType> live;
+    std::set<std::pair<SsaKey, IrType>> seen;
+    std::vector<std::pair<IrValue, IrType>> pending;
+    for (const auto& block : fn.blocks) {
+        for (const auto& inst : block.insts) {
+            if (inst.op == IrOp::Return || inst.op == IrOp::Phi ||
+                (inst.op == IrOp::Intrinsic && (inst.name.starts_with("call.args.") ||
+                 inst.name.starts_with("call.fp_args.") || inst.name == "call.stack_pointer"))) continue;
+            for (u8 i = 0; i < inst.src_count; ++i) {
+                if (is_float_type(inst.srcs[i].type)) {
+                    pending.emplace_back(inst.srcs[i], inst.srcs[i].type);
+                }
+            }
+        }
+    }
+    for (const auto& value : call_arguments) pending.emplace_back(value, value.type);
+    while (!pending.empty()) {
+        auto [value, type] = pending.back();
+        pending.pop_back();
+        if (is_float_type(value.type)) type = value.type;
+        auto key = ssa_key(value);
+        if (!key || !seen.emplace(*key, type).second) continue;
+        if (value.kind == IrValueKind::Reg && value.version == 0 && !is_float_type(type)) {
+            const auto it = std::ranges::find(integer_registers, canonical_reg(value.reg));
+            if (it != integer_registers.end()) {
+                integer_count = std::max(integer_count,
+                    static_cast<std::size_t>(it - integer_registers.begin()) + 1);
+            }
+        }
+        if (value.kind == IrValueKind::Reg && value.version == 0 &&
+            is_float_type(type) &&
+            std::ranges::find(registers, canonical_reg(value.reg)) != registers.end()) {
+            auto [it, inserted] = live.emplace(canonical_reg(value.reg), type);
+            if (!inserted && type_bits(type) > type_bits(it->second)) it->second = type;
+            continue;
+        }
+        auto found = definitions.find(*key);
+        if (found == definitions.end()) continue;
+        const auto& inst = *found->second;
+        if (inst.op == IrOp::Assign || inst.op == IrOp::Trunc) {
+            if (inst.src_count) pending.emplace_back(inst.srcs[0], type);
+        } else if (inst.op == IrOp::Phi) {
+            for (const auto& operand : inst.phi_operands) pending.emplace_back(operand, type);
+        }
+    }
+    // SysV's independent banks do not encode their source-level interleaving.
+    // Keep the integer prefix, then name proven scalar FP lanes in ABI order.
+    while (arguments.size() < integer_count && arguments.size() < integer_registers.size()) {
+        arguments.push_back({integer_registers[arguments.size()], IrType::I64});
+    }
+    std::size_t fp_count = 0;
+    for (std::size_t i = 0; i < registers.size(); ++i) {
+        if (live.contains(canonical_reg(registers[i]))) fp_count = i + 1;
+    }
+    for (std::size_t i = 0; i < fp_count; ++i) {
+        auto found = live.find(canonical_reg(registers[i]));
+        if (abi_positional_arg_slots(abi)) {
+            if (found == live.end()) continue;
+            const auto ints = int_arg_regs(abi);
+            while (arguments.size() <= i) {
+                arguments.push_back({ints[arguments.size()], IrType::I64});
+            }
+            arguments[i] = {registers[i], found->second};
+        } else {
+            if (arguments.size() == kMaxAbiArgs) break;
+            arguments.push_back({registers[i],
+                found == live.end() ? IrType::F64 : found->second});
+        }
+    }
+}
+
 std::vector<InferredArgument>
 infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept {
     if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
@@ -727,6 +811,12 @@ infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept {
     result.reserve(count);
     const IrType type = (b.arch() == Arch::Arm) ? IrType::I32 : IrType::I64;
     for (std::size_t i = 0; i < count; ++i) result.push_back({regs[i], type});
+    if (b.arch() == Arch::X86_64) {
+        IrCache cache;
+        if (auto* function = lift_cached(cache, b, target)) {
+            extend_x64_fp_arguments(*function, abi, result);
+        }
+    }
     return result;
 }
 

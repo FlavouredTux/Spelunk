@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,10 +45,16 @@ struct InferredArgument {
           aggregate_type(std::move(aggregate_name)) {}
 };
 
+// Add scalar XMM live-ins to an integer parameter prefix. Typed call
+// arguments supply evidence for values forwarded without local arithmetic.
+void extend_x64_fp_arguments(const IrFunction& fn, Abi abi,
+                             std::vector<InferredArgument>& arguments,
+                             std::span<const IrValue> call_arguments = {});
+
 // Recover register arguments in likely source order. For PPC, the order is a
 // stable merge of the GPR and FPR lanes using each live-in's first meaningful
 // use; order within each ABI lane is always preserved. Other architectures
-// return the inferred integer-register prefix.
+// return the inferred integer-register prefix; x86-64 adds scalar XMM lanes.
 [[nodiscard]] std::vector<InferredArgument>
 infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept;
 

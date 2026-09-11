@@ -70,6 +70,7 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
                          const SignatureContext& sig_ctx,
                          bool structured_render) {
     e.analyze(*sf.ir);
+    if (structured_render && sf.body) e.refine_call_return_regions(*sf.body);
     e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
     if (sf.body) e.collect_structured_return_values(*sf.body);

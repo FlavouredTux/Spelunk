@@ -84,6 +84,24 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
                                      int depth,
                                      int min_prec) const {
     if (d.op != IrOp::Load || d.src_count < 1) return "";
+    if (binary && d.segment == Reg::None &&
+        (d.dst.type == IrType::F32 || d.dst.type == IrType::F64)) {
+        if (auto address = try_resolve_imm_addr(d.srcs[0])) {
+            const addr_t va = static_cast<addr_t>(*address);
+            for (const auto& section : binary->sections()) {
+                const std::size_t width = type_bits(d.dst.type) / 8;
+                if (section.flags.writable || section.flags.executable ||
+                    va < section.vaddr || va - section.vaddr > section.size ||
+                    width > section.size - (va - section.vaddr)) continue;
+                const auto bytes = binary->bytes_at(va);
+                if (bytes.size() < width) break;
+                const u64 bits = width == 4
+                    ? (binary->endian() == Endian::Little ? read_le_at<u32>(bytes.data()) : read_be_at<u32>(bytes.data()))
+                    : (binary->endian() == Endian::Little ? read_le_at<u64>(bytes.data()) : read_be_at<u64>(bytes.data()));
+                return format_numeric_imm(IrValue::make_imm(static_cast<i64>(bits), d.dst.type));
+            }
+        }
+    }
     const std::string refined = c_type_name_for(d.dst);
     // Init-only stack slot: forward to the live-in value the entry prologue
     // stored. Keeping this in one helper prevents merge-local materializers

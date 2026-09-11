@@ -212,6 +212,10 @@ struct Emitter {
     [[nodiscard]] u8 cached_arity(addr_t target) const;
 
     mutable std::map<u64, std::vector<InferredArgument>> argument_layout_cache;
+    mutable std::map<addr_t, std::optional<IrType>> fp_return_cache;
+    [[nodiscard]] std::optional<IrType> cached_fp_return_type(addr_t target) const;
+    [[nodiscard]] std::optional<addr_t> call_signature_target(const IrInst& inst) const;
+    void refine_call_return_regions(Region& region) const;
 
     [[nodiscard]] const std::vector<InferredArgument>&
     cached_argument_layout(addr_t target) const;

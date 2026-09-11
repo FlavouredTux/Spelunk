@@ -1,0 +1,4 @@
+// sub_1006
+uint32_t sub_1006(uint64_t a1) {
+  return (uint32_t)(a1 + 0x2a);
+}

@@ -1,5 +1,6 @@
 // Inlining decisions, materialization and immediate formatting.
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -527,13 +528,23 @@ std::string Emitter::format_imm_impl(const IrValue& v,
         float f;
         const u32 bits = static_cast<u32>(static_cast<u64>(v.imm));
         std::memcpy(&f, &bits, sizeof(f));
-        return std::format("{}f", f);
+        if (!std::isfinite(f)) {
+            return std::format("((union {{ uint32_t bits; float value; }}){{ .bits = {:#x}u }}).value", bits);
+        }
+        std::string literal = std::format("{}", f);
+        if (literal.find_first_of(".eE") == std::string::npos) literal += ".0";
+        return literal + "f";
     }
     if (v.type == IrType::F64) {
         double d;
         const u64 bits = static_cast<u64>(v.imm);
         std::memcpy(&d, &bits, sizeof(d));
-        return std::format("{}", d);
+        if (!std::isfinite(d)) {
+            return std::format("((union {{ uint64_t bits; double value; }}){{ .bits = {:#x}ULL }}).value", bits);
+        }
+        std::string literal = std::format("{}", d);
+        if (literal.find_first_of(".eE") == std::string::npos) literal += ".0";
+        return literal;
     }
     const addr_t address = normalized_address(v.imm);
     const bool plausible_address = binary &&

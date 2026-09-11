@@ -62,7 +62,7 @@ int test_ppc_mixed_call_arguments_follow_callee_layout() {
     check(pc.has_value(), "mixed PPC call pseudo-C emits");
     if (!pc) return 1;
     const bool ordered =
-        pc->find("mixed_callee(1, 0xb, 2, 0x16)") != std::string::npos;
+        pc->find("mixed_callee(1.0, 0xb, 2.0, 0x16)") != std::string::npos;
     if (!ordered) std::fprintf(stderr, "mixed PPC output:\n%s\n", pc->c_str());
     check(ordered, "mixed PPC call follows f1,r3,f2,r4 callee order");
     return 0;
@@ -475,7 +475,7 @@ int test_ppc_gx_mixed_signature_layout() {
     check(pc.has_value(), "GX mixed signature emits");
     if (!pc) return 1;
     const bool ordered = pc->find(
-        "GXSetFog(1, 1f, 2f, 3f, 4f, (GXColor){0x5000})") != std::string::npos;
+        "GXSetFog(1, 1.0f, 2.0f, 3.0f, 4.0f, (GXColor){0x5000})") != std::string::npos;
     if (!ordered) std::fprintf(stderr, "GX signature output:\n%s\n", pc->c_str());
     check(ordered, "GXSetFog prototype interleaves r3/f1-f4/r4 in source order");
     return 0;

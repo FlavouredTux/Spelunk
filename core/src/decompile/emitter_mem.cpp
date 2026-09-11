@@ -927,6 +927,15 @@ std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
         // Strong struct evidence beats array syntax. Mixed-width or
         // non-stride offset sets usually mean a record layout, not
         // argv-style indexing.
+        if (auto bo = try_base_plus_offset(addr)) {
+            const auto width = static_cast<i64>(type_bits(t) / 8);
+            if (width && bo->second % width == 0 &&
+                c_type_name_for(bo->first) == std::format("{}*", c_type_name(t))) {
+                return std::format("{}[{}]",
+                    expr(bo->first, depth + 1, std::to_underlying(Prec::Postfix)),
+                    bo->second / width);
+            }
+        }
         if (auto bo = try_base_plus_offset(addr);
             bo && is_strong_struct_pointer(bo->first)) {
             auto shared = canonical_struct_access(addr);

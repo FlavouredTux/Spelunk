@@ -208,6 +208,12 @@ storage is excluded from the observable buffer comparison. Known scalar call
 signatures allow the emitter to keep loop arguments and results in explicit
 SSA locals, including when optimized code uses RBP as an ordinary counter.
 
+`macho_pipeline_semantics` compares Clang-generated Intel Mach-O functions
+against native C and recompiled pseudo-C, including mixed float/integer calls,
+stack arguments, mutable function pointers, and memory writes. It also checks
+stripped copies. See [the x86 testing notes](docs/x86.md#executable-checks-and-real-binary-audits)
+for dependencies and the reusable corpus audit and C output checker.
+
 `ppc_pipeline_semantics` checks synthetic PPC32 big-endian programs against
 an independent Unicorn CPU reference, interpreted SSA before/after cleanup,
 and emitted C compiled back to PPC at `-O0` and `-O2`. It compares integer

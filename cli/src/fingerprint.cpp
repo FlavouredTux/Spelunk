@@ -726,4 +726,28 @@ int run_diff(const Args& args) {
     return EXIT_SUCCESS;
 }
 
+int run_fingerprints(const Args& args, const Binary& b) {
+    const int rc = run_cached(args, fingerprints_cache_tag(args),
+                              [&] {
+                                  return build_fingerprints_output(
+                                      b, args.min_fn_bytes, args.max_fn_bytes);
+                              });
+    // Mirror the output to --fingerprint-out PATH so the fingerprints can
+    // travel between machines / repo checkouts where the disk cache
+    // doesn't apply.
+    if (rc == EXIT_SUCCESS && !args.fp_out.empty()) {
+        const auto dir = args.cache_dir.empty()
+            ? cache::default_dir()
+            : std::filesystem::path(args.cache_dir);
+        auto k = cache::key_for(args.binary, cache_scope_tag(args));
+        if (k) {
+            if (auto hit = cache::read(dir, *k, fingerprints_cache_tag(args)); hit) {
+                std::ofstream f(args.fp_out, std::ios::binary | std::ios::trunc);
+                if (f) f.write(hit->data(), static_cast<std::streamsize>(hit->size()));
+            }
+        }
+    }
+    return rc;
+}
+
 }  // namespace spelunk::cli

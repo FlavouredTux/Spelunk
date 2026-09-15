@@ -15,10 +15,9 @@ class Binary;
 // against functions in a binary by scanning for characteristic magic
 // constants, byte patterns, and import call sequences.
 //
-// This is orthogonal to the TEEF recognizer (which matches whole
-// functions against a corpus of known library builds).  Identification
-// recognises *algorithm families* - e.g. "this function is SHA-256"
-// even if it's a custom implementation, not a stock library copy.
+// Identification recognises *algorithm families* - e.g. "this function
+// is SHA-256" even if it's a custom implementation, not a stock
+// library copy.
 
 // Category of an identified profile.
 enum class IdentifyCategory : u8 {

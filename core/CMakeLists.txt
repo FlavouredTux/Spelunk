@@ -64,13 +64,6 @@ add_library(spelunk_core STATIC
     src/analysis/pipeline_resolve.cpp
     src/analysis/name_resolver.cpp
     src/analysis/fingerprint.cpp
-    src/analysis/teef.cpp
-    src/analysis/teef_corpus.cpp
-    src/analysis/teef_recognize.cpp
-    src/analysis/egraph.cpp
-    src/analysis/teef_orbit.cpp
-    src/analysis/teef_behav.cpp
-    src/analysis/teef_behav_interpreter.cpp
     src/analysis/demangle.cpp
     src/analysis/demangle_itanium.cpp
     src/analysis/demangle_simplify.cpp

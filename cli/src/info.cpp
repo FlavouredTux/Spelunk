@@ -228,11 +228,6 @@ void help_ana() {
     std::println("      --int3-resolve   classify embedded int3 bytes (handler / pad / dead)");
     std::println("      --identify       YARA-like crypto/protocol identifier");
     std::println("      --identify-threshold T  confidence floor (default 0.4)");
-    std::println("      --recognize      library-function recognition against --corpus");
-    std::println("      --recognize-threshold T  margin floor (default 0.6)");
-    std::println("      --corpus PATH    repeatable; TEEF TSV (output of `spelunk --teef <lib>`)");
-    std::println("      --anti-corpus PATH  repeatable; queries matching any blocked hash short-");
-    std::println("                       circuit. Use for UPX prologues / packer trampolines / CRT.");
     std::println("      --pat PATH       repeatable; FLIRT-style .pat sig file");
     std::println("      --list-syscalls VA  walk fn @ VA, report each `syscall` site as TSV");
     std::println("                       (file_offset, va, nr, name). Linux x86-64.");
@@ -240,24 +235,16 @@ void help_ana() {
     std::println("                       from ENTRY; --json for machine form");
 }
 
-void help_teef() {
-    std::println("TEEF / fingerprints / cross-binary diff:");
+void help_fingerprints() {
+    std::println("Fingerprints / cross-binary diff:");
     std::println("      --fingerprints   address-independent content hash per fn");
-    std::println("      --teef           Tree-Edit Equivalence Fingerprint per fn");
-    std::println("      --teef-no-l4     skip behavioral L4 (faster/lower-RAM corpus build)");
-    std::println("      --orbit-dump     side-by-side diagnostic of all per-fn signatures");
+    std::println("      --min-fn-size N  drop fns smaller than N bytes before fingerprinting");
+    std::println("      --max-fn-size N  drop fns larger than N bytes");
     std::println("      --diff OLD       diff OLD vs the positional binary by fingerprint");
     std::println("      --diff-format    'tsv' (default) or 'json'");
     std::println("      --fingerprint-out P  also write --fingerprints TSV to P");
     std::println("      --fingerprint-old P  read OLD-side TSV from P (skip OLD compute in --diff)");
     std::println("      --fingerprint-new P  read NEW-side TSV from P");
-    std::println("      --l0-prefilter   in --recognize, skip K=64 L4 traces on fns whose L0");
-    std::println("                       topology hash isn't represented in the corpus");
-    std::println("      --min-fn-size N  drop fns smaller than N bytes before fingerprinting");
-    std::println("      --max-fn-size N  drop fns larger than N bytes");
-    std::println("      --max-cfg-blocks N / --max-cfg-edges N / --max-cfg-insts N");
-    std::println("                       skip fns above the cap (0 = disabled)");
-    std::println("      --max-ir-insts N  override post-lift IR inst cap");
 }
 
 void help_ann() {
@@ -318,7 +305,7 @@ void help_load() {
     std::println("                       obfuscator-merged / mid-body real entries cause spelunk to");
     std::println("                       silently rebind to a closest-below symbol.");
     std::println("      --module NAME    scope fn iteration to one loaded module (minidumps,");
-    std::println("                       multi-module containers). Affects --functions and --recognize.");
+    std::println("                       multi-module containers). Affects --functions.");
     std::println("                       Out-of-scope addresses are skipped before lifting.");
 }
 
@@ -370,10 +357,9 @@ void print_help() {
     std::println("  syms     functions, strings, symtable, symuses, symresolve,");
     std::println("           refs-to, callees, validate, collisions");
     std::println("  xrefs    --xrefs, --data-xrefs, --refs-to, --refs-to-loose, --trace");
-    std::println("  ana      ipa, eh, rtti, objc, identify, recognize, resolve-calls,");
+    std::println("  ana      ipa, eh, rtti, objc, identify, resolve-calls,");
     std::println("           int3, syscalls, forge-spec, FLIRT");
-    std::println("  teef     fingerprints, teef, recognize, diff, orbit-dump,");
-    std::println("           corpus, size caps");
+    std::println("  fingerprints  content hashes, diff");
     std::println("  ann      annotate, apply, list-annotations, dry-run, .spelunk scripts");
     std::println("  dbg      --debug, attach, backends, aux-bin");
     std::println("  load     DTK projects, pdb, Kismet, regions, raw-bytes, force-fn-start, module");
@@ -391,7 +377,7 @@ void print_help_topic(std::string_view topic) {
     else if (topic == "syms")  { help_syms();  return; }
     else if (topic == "xrefs") { help_xrefs(); return; }
     else if (topic == "ana")   { help_ana();   return; }
-    else if (topic == "teef")  { help_teef();  return; }
+    else if (topic == "fingerprints")  { help_fingerprints();  return; }
     else if (topic == "ann")   { help_ann();   return; }
     else if (topic == "dbg")   { help_dbg();   return; }
     else if (topic == "load")  { help_load();  return; }

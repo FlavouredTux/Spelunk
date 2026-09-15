@@ -104,18 +104,15 @@ functions through one load; `--json` is available where a machine-readable
 form makes sense.
 
 Whole-binary queries include `--functions`, `--strings`, `--xrefs`,
-`--refs-to`, `--callees`, `--vtables`, `--identify` and `--recognize`.
+`--refs-to`, `--callees`, `--vtables` and `--identify`.
 `spelunk --help <topic>` lists the rest by area (`view`, `syms`, `xrefs`,
-`ana`, `teef`, `ann`, `dbg`, `load`, `data`, `patch`, `cache`).
+`ana`, `fingerprints`, `ann`, `dbg`, `load`, `data`, `patch`, `cache`).
 
 Other pieces, each documented under `docs/`:
 
 - **Debugger** (`--debug`): breakpoints on pseudo-C lines, backtraces
-  through `.eh_frame`, ptrace on Linux and Mach on macOS. See
-  [docs/debugger.md](docs/debugger.md).
-- **Function recognition** (`--teef`, `--recognize`): fingerprint a
-  library, then name functions in a stripped binary from the corpus. See
-  [docs/teef.md](docs/teef.md).
+   through `.eh_frame`, ptrace on Linux and Mach on macOS. See
+   [docs/debugger.md](docs/debugger.md).
 - **Annotations and `.spelunk` scripts**: renames, signatures and field
   names in a sidecar file or a small declarative script. See
   [docs/scripting.md](docs/scripting.md).

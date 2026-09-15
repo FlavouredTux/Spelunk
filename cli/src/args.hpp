@@ -95,7 +95,7 @@ struct Args {
     std::string module_filter;      // --module NAME: scope fn iteration to one loaded module
                                     // (minidumps, multi-module containers). Matched against
                                     // module Symbol basenames case-insensitively. Affects
-                                    // --functions and --recognize. Out-of-scope addresses are
+                                    // --functions. Out-of-scope addresses are
                                     // skipped before fingerprinting - the actual bottleneck on
                                     // large dumps where most fns are wine-DLL noise.
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
@@ -157,46 +157,17 @@ struct Args {
     bool log_categories = false;
     bool arities = false;
     bool fingerprints = false;      // dump address-independent content hash per function
-    bool teef = false;              // dump TEEF (Tree-Edit Equivalence Fingerprint) per function
-    bool teef_no_l4 = false;        // --teef-no-l4: skip behavioral L4 during corpus TEEF builds
-    bool orbit_dump = false;        // diagnostic dump of all per-fn signatures (L2 cleanup-canonical,
-                                    // L3 orbit, L4 behavioural) side-by-side. TSV: addr name
-                                    // L2_exact L2_mh*8 L3_exact L3_mh*16 L3_nodes L3_iters L3_budget
-                                    // L4_exact L4_mh*8 L4_done L4_aborted. Tied to --module scope.
     bool identify = false;          // run YARA-like function identification (crypto/network profiles)
     float identify_threshold = 0.4f; // --identify-threshold T (confidence floor; default 0.4)
-    bool recognize = false;         // run library-function recognition against --corpus
-    std::vector<std::string> corpus_paths;  // --corpus PATH (repeatable): TEEF TSVs to load
-    std::vector<std::string> anti_corpus_paths;  // --anti-corpus PATH (repeatable): TSVs whose
-                                                 // hashes block recognition (UPX, packer
-                                                 // prologues, CRT bootloaders that have no
-                                                 // semantic identity beyond their wrapper shape).
-    float recognize_threshold = 0.6f;        // --recognize-threshold T (margin floor; default 0.6)
     spelunk::u64 min_fn_bytes = 0;             // --min-fn-size N: drop fns smaller than N bytes
-                                             // before fingerprinting. Useful on obfuscator-spawned
-                                             // targets (Themida / Lua VM / hellgate) whose hundreds
-                                             // of thousands of trivial stubs add no signal but
-                                             // dominate corpus build time.
+                                              // before fingerprinting. Useful on obfuscator-spawned
+                                              // targets (Themida / Lua VM / hellgate) whose hundreds
+                                              // of thousands of trivial stubs add no signal but
+                                              // dominate run time.
     spelunk::u64 max_fn_bytes = 0;             // --max-fn-size N: drop fns larger than N bytes.
-                                             // VM-dispatcher functions in obfuscated targets can
-                                             // span entire sections and dominate cfg.build cost
-                                             // even when --l0-prefilter would otherwise skip
-                                             // their lift. 0 = no upper bound.
-    bool l0_prefilter = false;               // --l0-prefilter: when fingerprinting a target for
-                                             // --recognize, skip the K=64 L4 traces on fns whose
-                                             // L0 topology hash isn't represented in the loaded
-                                             // corpus. Big throughput win on obfuscator-heavy
-                                             // targets where most fns have unique-shape CFGs;
-                                             // lossy on cross-opt-level matches whose topology
-                                             // shifts. Off by default.
-    spelunk::u64 max_cfg_blocks = 0;           // --max-cfg-blocks N: skip TEEF fns whose pre-lift CFG
-                                             // exceeds N blocks. 0 = disabled.
-    spelunk::u64 max_cfg_edges = 0;            // --max-cfg-edges N: skip TEEF fns whose pre-lift CFG
-                                             // exceeds N edges. 0 = disabled.
-    spelunk::u64 max_cfg_insts = 0;            // --max-cfg-insts N: skip TEEF fns whose decoded CFG
-                                             // exceeds N instructions. 0 = disabled.
-    spelunk::u64 max_ir_insts = 0;             // --max-ir-insts N: override the post-lift TEEF IR cap.
-                                             // 0 = built-in default.
+                                              // VM-dispatcher functions in obfuscated targets can
+                                              // span entire sections and dominate cfg.build cost.
+                                              // 0 = no upper bound.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool show_provenance = false;   // emit `// confidence: 0.9 (cli) - evidence`
                                     // header lines under -p when the resolved

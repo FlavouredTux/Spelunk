@@ -185,13 +185,6 @@ add_executable(spelunk_arity_test arity_test.cpp)
 target_link_libraries(spelunk_arity_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME arity_unit COMMAND spelunk_arity_test)
 
-# Unit tests for the e-graph saturation engine that backs TEEF v6's L3
-# orbit-class fingerprint. Self-contained: builds e-graphs from synthetic
-# terms, no IR involved.
-add_executable(spelunk_egraph_test egraph_test.cpp)
-target_link_libraries(spelunk_egraph_test PRIVATE spelunk::core spelunk::flags)
-add_test(NAME egraph_unit COMMAND spelunk_egraph_test)
-
 # Unit test for the int3 resolver. Self-contained: a MockBinary with
 # hand-placed 0xCC bytes so the classifier is exercised without a
 # compiled C fixture.
@@ -322,18 +315,6 @@ add_test(NAME emitter_call_order_unit COMMAND spelunk_call_order_test)
 add_executable(spelunk_virtual_test emitter_virtual_test.cpp)
 target_link_libraries(spelunk_virtual_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME emitter_virtual_unit COMMAND spelunk_virtual_test)
-
-# Unit tests for the TeefCorpus loader/recognizer. Synthesizes tiny
-# F/C/S/T-row TSVs in-memory, writes them to a temp file, loads via
-# the public API, and asserts recognize() returns the expected
-# matches. Covers basic L2 exact, sub_* drop, multi-TSV merge name
-# interning, distinct-name guard, T-row runtime transitions,
-# 24-field back-compat, L1 prefix-exact, chunk-vote, and the
-# string-anchor filter - all paths previously had zero coverage.
-add_executable(spelunk_teef_corpus_test teef_corpus_test.cpp)
-target_link_libraries(spelunk_teef_corpus_test
-    PRIVATE spelunk::core spelunk::flags)
-add_test(NAME teef_corpus_unit COMMAND spelunk_teef_corpus_test)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "spelunk tests: fixture goldens skipped (Linux only)")
@@ -1608,13 +1589,6 @@ spelunk_expect_fail_test(
     FIXTURE    return_value
     ARGS       "--identify-threshold|0.5junk|--identify"
     ERR_SUBSTR "--identify-threshold"
-)
-
-spelunk_expect_fail_test(
-    NAME       recognize_threshold_nan_rejected
-    FIXTURE    return_value
-    ARGS       "--recognize-threshold|nan|--recognize"
-    ERR_SUBSTR "--recognize-threshold"
 )
 
 # ---- dead_store (DSE on global-address stores) ----------------------------

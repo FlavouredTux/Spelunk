@@ -22,12 +22,11 @@ add_executable(spelunk_cli
     src/commands/disasm.cpp
     src/commands/explain.cpp
     src/commands/functions.cpp
+    src/commands/identify.cpp
     src/commands/inventory.cpp
     src/commands/metadata.cpp
     src/commands/state.cpp
     src/commands/symbols.cpp
-    src/commands/teef.cpp
-    src/commands/teef_recognize.cpp
     src/commands/views.cpp
 )
 

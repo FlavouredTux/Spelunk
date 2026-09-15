@@ -403,17 +403,6 @@ class Spelunk:
         )
         return result.json() if json else result.stdout
 
-    def recognize(
-        self,
-        corpus: Union[PathLike, Sequence[PathLike]],
-        **options: object,
-    ) -> str:
-        corpora = [corpus] if isinstance(corpus, (str, os.PathLike)) else corpus
-        args: list[object] = ["--recognize"]
-        for path in corpora:
-            args.extend(["--corpus", path])
-        return self.run(*args, *self._options(options)).stdout
-
     def _merged_env(self) -> Optional[dict[str, str]]:
         if self.env is None:
             return None

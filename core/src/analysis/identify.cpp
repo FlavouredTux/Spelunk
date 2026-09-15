@@ -604,9 +604,8 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
 
             // Tiny-fn collision guard. A 12-instruction stub loading
             // XTEA's `0x9E3779B9` is NOT XTEA - that constant appears
-            // in countless hash helpers and PRNGs. Same shape as the
-            // teef compareMappings rename: a thin signal in a small
-            // function fingerprints to anything. Require ≥ 2 distinct
+            // in countless hash helpers and PRNGs: a thin signal in a
+            // small function fingerprints to anything. Require ≥ 2 distinct
             // signals to emit a high-confidence hit on tiny fns;
             // single-signal hits get capped below the 0.85 promotion
             // bar so they surface for review but won't auto-rename.

@@ -50,11 +50,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--log-categories", &Args::log_categories},
     {"",   "--arities",   &Args::arities},
     {"",   "--fingerprints", &Args::fingerprints},
-    {"",   "--teef",     &Args::teef},
-    {"",   "--teef-no-l4", &Args::teef_no_l4},
-    {"",   "--orbit-dump", &Args::orbit_dump},
-    {"",   "--l0-prefilter", &Args::l0_prefilter},
-    {"",   "--recognize", &Args::recognize},
     {"",   "--ipa",       &Args::ipa},
     {"",   "--resolve-calls", &Args::resolve_calls},
     {"",   "--eh",        &Args::eh},
@@ -295,15 +290,6 @@ Result<Args> parse_args(int argc, char** argv) {
             continue;
         }
 
-        // `--corpus PATH` - repeatable. Each is a TEEF TSV (output of
-        // `spelunk --teef <lib>`); the recognizer merges them.
-        if (s == "--corpus") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format("--corpus requires a path"));
-            }
-            a.corpus_paths.emplace_back(argv[i]);
-            continue;
-        }
         if (s == "--dll") {
             if (++i >= argc) {
                 return std::unexpected(Error::invalid_format("--dll requires a path"));
@@ -311,43 +297,8 @@ Result<Args> parse_args(int argc, char** argv) {
             a.recover_dll_paths.emplace_back(argv[i]);
             continue;
         }
-        if (s.starts_with("--corpus=")) {
-            a.corpus_paths.emplace_back(s.substr(9));
-            continue;
-        }
-        // `--anti-corpus PATH` - repeatable. Same TSV format as
-        // --corpus, but only the hash fields are kept; queries
-        // matching any blocked hash short-circuit recognize() and
-        // return no suggestions. Use to suppress recognition of
-        // structurally-identifiable junk (UPX prologues, packer
-        // trampolines, CRT bootloaders).
-        if (s == "--anti-corpus") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format("--anti-corpus requires a path"));
-            }
-            a.anti_corpus_paths.emplace_back(argv[i]);
-            continue;
-        }
-        if (s.starts_with("--anti-corpus=")) {
-            a.anti_corpus_paths.emplace_back(s.substr(14));
-            continue;
-        }
-        // `--recognize-threshold T`
-        if (s == "--recognize-threshold") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--recognize-threshold requires a value"));
-            }
-            auto value = parse_cli_double(argv[i]);
-            if (!value || *value < 0.0 || *value > 1.0) {
-                return std::unexpected(Error::invalid_format(
-                    "--recognize-threshold: expected a finite value in 0..1"));
-            }
-            a.recognize_threshold = static_cast<float>(*value);
-            continue;
-        }
         // `--min-fn-size N` - drop fns smaller than N bytes before
-        // building TEEF fingerprints. 0 = disabled. Helps on obfuscator-
+        // fingerprinting. 0 = disabled. Helps on obfuscator-
         // spawned targets where most fns are trivial stubs.
         if (s == "--min-fn-size") {
             if (++i >= argc) {
@@ -428,58 +379,6 @@ Result<Args> parse_args(int argc, char** argv) {
             } else {
                 return std::unexpected(Error::invalid_format(
                     "--max-callsites: bad integer"));
-            }
-            continue;
-        }
-        if (s == "--max-cfg-blocks") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--max-cfg-blocks requires a value"));
-            }
-            if (auto v = parse_u64_strict(argv[i]); v) {
-                a.max_cfg_blocks = *v;
-            } else {
-                return std::unexpected(Error::invalid_format(
-                    "--max-cfg-blocks: bad integer"));
-            }
-            continue;
-        }
-        if (s == "--max-cfg-edges") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--max-cfg-edges requires a value"));
-            }
-            if (auto v = parse_u64_strict(argv[i]); v) {
-                a.max_cfg_edges = *v;
-            } else {
-                return std::unexpected(Error::invalid_format(
-                    "--max-cfg-edges: bad integer"));
-            }
-            continue;
-        }
-        if (s == "--max-cfg-insts") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--max-cfg-insts requires a value"));
-            }
-            if (auto v = parse_u64_strict(argv[i]); v) {
-                a.max_cfg_insts = *v;
-            } else {
-                return std::unexpected(Error::invalid_format(
-                    "--max-cfg-insts: bad integer"));
-            }
-            continue;
-        }
-        if (s == "--max-ir-insts") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--max-ir-insts requires a value"));
-            }
-            if (auto v = parse_u64_strict(argv[i]); v) {
-                a.max_ir_insts = *v;
-            } else {
-                return std::unexpected(Error::invalid_format(
-                    "--max-ir-insts: bad integer"));
             }
             continue;
         }

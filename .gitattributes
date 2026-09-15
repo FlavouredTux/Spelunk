@@ -7,5 +7,4 @@ tests/golden/**     linguist-generated=true
 # Binary fixtures - don't try to diff these.
 tests/fixtures/**   binary
 tests/fixtures/*.py text diff merge eol=lf
-*.teef              binary
 tests/fuzz/corpus/** binary

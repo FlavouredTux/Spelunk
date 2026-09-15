@@ -52,8 +52,7 @@ namespace spelunk::cli {
 // code paths run unchanged. When active, fn-walking subcommands skip
 // every address outside [lo, hi) before fingerprinting/decompiling - the
 // motivating case is a process minidump where ~95% of discovered fns
-// belong to wine ntdll/kernelbase reimpl pages and would never match
-// the real-Microsoft TEEF corpus.
+// belong to wine ntdll/kernelbase reimpl pages and only add noise.
 struct ModuleScope {
     addr_t lo = 0;
     addr_t hi = 0;

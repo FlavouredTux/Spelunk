@@ -45,13 +45,13 @@ class SpelunkWrapperTest(unittest.TestCase):
             "import sys\n"
             "print(' '.join(sys.argv[1:]))\n"
         )
-        out = Spelunk("target.bin", spelunk_bin=fake).recognize(
-            ["a.tsv", "b.tsv"],
+        out = Spelunk("target.bin", spelunk_bin=fake).strings(
+            pat=["a.pat", "b.pat"],
             no_cache=True,
         )
         self.assertEqual(
             out.strip(),
-            "--recognize --corpus a.tsv --corpus b.tsv --no-cache target.bin",
+            "--strings --pat a.pat --pat b.pat --no-cache target.bin",
         )
 
     def test_function_handle_uses_address_commands(self):

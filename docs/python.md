@@ -134,12 +134,6 @@ print(e.strings())
 print(e.xrefs())
 ```
 
-For library recognition:
-
-```python
-print(e.recognize(["corpus/libcrypto.tsv", "corpus/libssl.tsv"]))
-```
-
 ## Annotation Batches
 
 `annotate_batch()` turns Python findings into a `.spelunk` script and

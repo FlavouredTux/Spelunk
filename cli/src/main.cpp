@@ -463,9 +463,6 @@ int main(int argc, char** argv) {
     if (args.graphics)           return run_graphics(args, b);
     if (args.log_categories)     return run_log_categories(args, b);
     if (args.fingerprints)       return run_fingerprints(args, b);
-    if (args.teef)               return run_teef(args, b);
-    if (args.orbit_dump)         return run_orbit_dump(args, b);
-    if (args.recognize)          return run_recognize(args, b);
     if (args.identify)           return run_identify(args, b);
     if (args.objc_names)         return run_objc_names(args, b);
     if (args.objc_protos)        return run_objc_protos(args, b);

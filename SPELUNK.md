@@ -86,7 +86,7 @@ spelunk --help view
 spelunk --help syms
 spelunk --help xrefs
 spelunk --help ana
-spelunk --help teef
+spelunk --help fingerprints
 spelunk --help ann
 spelunk --help dbg
 spelunk --help load
@@ -180,23 +180,18 @@ spelunk -p -s NAME --trace runtime-facts.tsv ./target
 Observed facts constrain unresolved indirect calls and loaded objects; they do
 not prove that an unobserved target is impossible.
 
-### Recognition and cross-binary comparison
+### Function fingerprints and cross-binary comparison
 
 ```sh
 spelunk --fingerprints ./library > fingerprints.tsv
-spelunk --teef ./library > corpus.tsv
-spelunk --recognize --corpus corpus.tsv ./stripped-target
 spelunk --identify ./target
 spelunk --diff ./old-target ./new-target
 ```
 
-TEEF combines CFG shape, cleaned IR similarity, and an optional behavioral
-signature. Filter corpus work with `--min-fn-size`, `--max-fn-size`, CFG/IR
-caps, or `--teef-no-l4` when scale requires it. A high fuzzy score is useful
-evidence, but only a unique exact identity should be described as exact.
-
-See [docs/teef.md](docs/teef.md) for corpus fields, confidence, size caps, and
-recognition behavior.
+`--fingerprints` dumps an address-independent content hash per function;
+`--diff` compares two binaries by it, and `--identify` matches crypto and
+protocol profiles. A high fuzzy score is useful evidence, but only a
+unique exact identity should be described as exact.
 
 ### Raw captures and minidumps
 
@@ -502,7 +497,7 @@ for exact syntax, escaping, provenance, storage, and conflict rules.
   dependency chain could not be rendered safely; its zero initializer prevents
   undefined C use but is not a recovered source value.
 - A named call can come from a binary symbol, DTK symbol, relocation, import,
-  header, annotation, recognition corpus, or runtime trace. Keep the provenance
+  header, annotation, or runtime trace. Keep the provenance
   when that distinction affects confidence.
 - Roundtrip data/event success is different from source compilation success.
 - Compilation success is different from objdiff exactness.
@@ -602,7 +597,6 @@ documented in [docs/python.md](docs/python.md).
 - [docs/scripting.md](docs/scripting.md): `.spelunk` annotations
 - [docs/debugger.md](docs/debugger.md): pseudo-C debugger
 - [docs/raw-input.md](docs/raw-input.md): raw bytes and region manifests
-- [docs/teef.md](docs/teef.md): cross-binary recognition
 - [docs/forge-spec.md](docs/forge-spec.md): minimum reachability shapes
 - [docs/python.md](docs/python.md): Python wrapper
 

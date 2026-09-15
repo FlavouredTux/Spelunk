@@ -7,11 +7,11 @@
 namespace spelunk {
 
 // Compute a worker thread count for parallel-fan-out passes
-// (TEEF compute, CFG sweep, function discovery, etc).
+// (CFG sweep, function discovery, etc).
 //
 // Honors the `SPELUNK_THREADS` environment variable when set: lets users
-// cap thread oversubscription on shared boxes ("3 spelunk cascades + 1
-// recognize all running, please don't spawn 16 threads each").
+// cap thread oversubscription on shared boxes ("3 spelunk cascades running,
+// please don't spawn 16 threads each").
 //
 // Resolution order:
 //   - If SPELUNK_THREADS is set to a positive integer, use that

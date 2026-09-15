@@ -8,7 +8,6 @@
 #include <array>
 #include <cctype>
 #include <format>
-#include <regex>
 
 namespace spelunk::emit {
 namespace {
@@ -142,6 +141,78 @@ constexpr std::array kCHelpers{
         if (helper.name == name) return true;
     }
     return false;
+}
+
+// ASCII `\w` / `\s` equivalents for the defined-name scans below. They match
+// the character classes the std::regex scans used, independent of locale.
+[[nodiscard]] bool c_type_name_char(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+           c == '_';
+}
+
+[[nodiscard]] bool c_type_name_start(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+
+[[nodiscard]] bool c_type_space(char c) noexcept {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+// Names the context already defines: `typedef ... NAME[..];` (with no `{`
+// before the `;`, so `typedef struct { ... } NAME;` falls through to the
+// brace scan) and `} NAME;`. Previously two std::regex scans; now a single
+// linear pass each with no exceptions and no <regex>.
+void collect_defined_c_type_names(std::string_view code, std::set<std::string>& out) {
+    for (std::size_t i = 0; i < code.size(); ++i) {
+        if (code[i] != '}') continue;
+        std::size_t j = i + 1;
+        while (j < code.size() && c_type_space(code[j])) ++j;
+        if (j >= code.size() || !c_type_name_start(code[j])) continue;
+        const std::size_t begin = j;
+        while (j < code.size() && c_type_name_char(code[j])) ++j;
+        std::size_t k = j;
+        while (k < code.size() && c_type_space(code[k])) ++k;
+        if (k >= code.size() || code[k] != ';') continue;
+        out.emplace(code.substr(begin, j - begin));
+        i = k;
+    }
+    constexpr std::string_view kTypedef = "typedef";
+    for (std::size_t i = 0; i + kTypedef.size() <= code.size();) {
+        if (code.compare(i, kTypedef.size(), kTypedef) != 0) {
+            ++i;
+            continue;
+        }
+        const bool left_ok = i == 0 || !c_type_name_char(code[i - 1]);
+        const bool right_ok =
+            i + kTypedef.size() >= code.size() || !c_type_name_char(code[i + kTypedef.size()]);
+        if (!left_ok || !right_ok) {
+            ++i;
+            continue;
+        }
+        std::size_t semi = i + kTypedef.size();
+        while (semi < code.size() && code[semi] != ';' && code[semi] != '{') ++semi;
+        if (semi >= code.size() || code[semi] != ';') {
+            i += kTypedef.size();
+            continue;
+        }
+        std::size_t end = semi;
+        while (end > i + kTypedef.size() && c_type_space(code[end - 1])) --end;
+        if (end > i + kTypedef.size() && code[end - 1] == ']') {
+            std::size_t lb = end - 1;
+            while (lb > i + kTypedef.size() && code[lb] != '[') --lb;
+            if (lb > i + kTypedef.size() && code[lb] == '[') {
+                end = lb;
+                while (end > i + kTypedef.size() && c_type_space(code[end - 1])) --end;
+            }
+        }
+        const std::size_t name_end = end;
+        std::size_t begin = name_end;
+        while (begin > i + kTypedef.size() && c_type_name_char(code[begin - 1])) --begin;
+        if (begin < name_end && c_type_name_start(code[begin])) {
+            out.emplace(code.substr(begin, name_end - begin));
+        }
+        i = semi + 1;
+    }
 }
 
 }  // namespace
@@ -351,17 +422,8 @@ std::string Emitter::c_forward_type_declarations(std::string_view context) const
         if (!inserted) it->second = it->second && pointer_use;
     }
     // Anything the context already defines needs nothing from us.
-    // TODO: replace the std::regex scan below with a manual scan (perf,
-    // exceptions, and the <regex> sanitizer workaround noted in CMakeLists).
     std::set<std::string> defined;
-    for (const std::regex& pattern : {
-             std::regex(R"(\btypedef\b[^;{]*?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*;)"),
-             std::regex(R"(\}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)")}) {
-        for (std::sregex_iterator it(code.begin(), code.end(), pattern), end;
-             it != end; ++it) {
-            defined.insert((*it)[1].str());
-        }
-    }
+    collect_defined_c_type_names(code, defined);
 
     std::string out;
     std::set<std::string_view> forward_declared;

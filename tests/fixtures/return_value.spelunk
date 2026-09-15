@@ -1,6 +1,6 @@
-# Declarative .ember fixture against the stable return_value binary
+# Declarative .spelunk fixture against the stable return_value binary
 # (-no-pie, gcc -O2 -g). Exercises [rename] / [note] / [signature]
-# end-to-end via `ember --apply ... --dry-run` so the resulting
+# end-to-end via `spelunk --apply ... --dry-run` so the resulting
 # annotations TSV gets diffed against a checked-in golden.
 #
 # [pattern-rename] and [from-strings] are deliberately skipped here:

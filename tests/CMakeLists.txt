@@ -20,6 +20,12 @@ add_executable(spelunk_demangle_test demangle_test.cpp)
 target_link_libraries(spelunk_demangle_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME demangle_unit COMMAND spelunk_demangle_test)
 
+# Rebrand guard: locks the runtime-visible Ember->Spelunk rename
+# (cache dir leaf, no stale "ember" paths, key scoping, namespace smoke).
+add_executable(spelunk_rebrand_guard_test rebrand_guard_test.cpp)
+target_link_libraries(spelunk_rebrand_guard_test PRIVATE spelunk::core spelunk::flags)
+add_test(NAME rebrand_guard_unit COMMAND spelunk_rebrand_guard_test)
+
 add_executable(spelunk_annotations_resolver_test annotations_resolver_test.cpp)
 target_link_libraries(spelunk_annotations_resolver_test
     PRIVATE spelunk::core spelunk::flags)

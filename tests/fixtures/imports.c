@@ -9,7 +9,7 @@
  * length, peephole choices, function ordering); pinning them out is the
  * cheapest way to keep the goldens stable across local vs. CI
  * toolchains. The binary is unrunnable (libc doesn't get initialised),
- * but ember only ever parses it. */
+ * but spelunk only ever parses it. */
 
 #include <string.h>
 #include <stdio.h>

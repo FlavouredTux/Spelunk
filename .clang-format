@@ -1,0 +1,37 @@
+# Spelunk clang-format baseline.
+#
+# Matches the current code: 4-space indent (see .editorconfig), attached
+# braces, `Type* name` pointer alignment, ~100-col limit.
+#
+# This file only *declares* the style. It does not reformat existing
+# sources — run `clang-format -i <files>` per touched files instead of a
+# whole-tree reformat.
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: Latest
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+
+AllowShortCaseLabelsOnASingleLine: false
+IndentCaseLabels: true
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+Cpp11BracedListStyle: true
+AllowAllParametersOfDeclarationOnNextLine: false
+BinPackParameters: true
+ExperimentalAutoDetectBinPacking: false

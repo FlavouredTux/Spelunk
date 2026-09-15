@@ -35,8 +35,12 @@ def main(args):
     # never consult the emitted declaration and cannot see a wrong return type
     # - a `double` function exported as `void` still passes them. Check the
     # emitted signature directly.
+    # start_record's source type is u32, but it returns a bare literal 1 with
+    # no width-carrying arithmetic, so the binary cannot distinguish u32 from
+    # u64 and the decompiler's uint64_t default stands. Execution still
+    # compares the low 32 bits.
     returns = {'branch_scale': 'float', 'read_brightness': 'float',
-               'update_packed': 'uint64_t', 'start_record': 'uint32_t',
+               'update_packed': 'uint64_t', 'start_record': 'uint64_t',
                'call_join': 'double', 'next_handle': 'uint32_t',
                'length_or_zero': 'uint64_t', 'call_atof_bridge': 'double'}
     exported = ''

@@ -49,7 +49,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binaries', nargs='+', type=pathlib.Path)
     parser.add_argument('--output', required=True, type=pathlib.Path)
-    parser.add_argument('--ember', default='ember')
+    parser.add_argument('--spelunk', default='spelunk')
     parser.add_argument('--strip', default='llvm-strip')
     parser.add_argument('--nm', default='llvm-nm')
     parser.add_argument('--compiler', default='clang')
@@ -75,7 +75,7 @@ def main():
                    if (m := re.match(r'^([0-9a-fA-F]+) [tT] (.+)$', line))}
         inventories = {}
         for label, binary in [('original', original), ('stripped', stripped)]:
-            output = run([args.ember, '--no-cache', '--functions', '--json', binary], args.timeout)
+            output = run([args.spelunk, '--no-cache', '--functions', '--json', binary], args.timeout)
             (folder / f'{label}-functions.json').write_text(output)
             inventories[label] = {int(row['addr'], 16): row for row in json.loads(output)}
         before, after = inventories['original'], inventories['stripped']
@@ -92,7 +92,7 @@ def main():
                 try:
                     if not row['discovered']:
                         raise RuntimeError('Function entry was not enumerated; no nearest-symbol fallback attempted')
-                    output = run([args.ember, '--no-cache', '--emit-c' if args.emit_c else '-p', '-s', hex(address), binary], args.timeout)
+                    output = run([args.spelunk, '--no-cache', '--emit-c' if args.emit_c else '-p', '-s', hex(address), binary], args.timeout)
                     destination.write_text(output)
                     diagnostics = check_source(output, filename=str(destination),
                                                compiler=args.compiler, preamble=preamble)

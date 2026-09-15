@@ -1,6 +1,6 @@
 // TEEF fingerprint construction, orbit dumps and --identify.
 
-#include <ember/analysis/teef.hpp>
+#include <spelunk/analysis/teef.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -23,18 +23,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/analysis/teef_behav.hpp>
-#include <ember/analysis/teef_orbit.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/common/progress.hpp>
-#include <ember/common/threads.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/analysis/teef_behav.hpp>
+#include <spelunk/analysis/teef_orbit.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/common/progress.hpp>
+#include <spelunk/common/threads.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "../fingerprint.hpp"
 #include "../progress_panel.hpp"
@@ -42,7 +42,7 @@
 #include "common.hpp"
 #include "teef_internal.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace teef_internal {
 
@@ -132,7 +132,7 @@ namespace {
 
 namespace teef_internal {
 
-// Parse a TEEF TSV (output of build_tsv / `ember --teef`) back into
+// Parse a TEEF TSV (output of build_tsv / `spelunk --teef`) back into
 // a per-function structure suitable for the recognizer's query path.
 // Lets `--recognize` reuse the disk cache that `--teef` writes - no need
 // to re-fingerprint a binary that was already analyzed once.
@@ -299,12 +299,12 @@ build_tsv(const Binary& b,
         }
         if (show && filtered_small > 0) {
             std::println(stderr,
-                "ember: TEEF: --min-fn-size dropped {} fns smaller than {} bytes",
+                "spelunk: TEEF: --min-fn-size dropped {} fns smaller than {} bytes",
                 filtered_small, min_fn_bytes);
         }
         if (show && filtered_large > 0) {
             std::println(stderr,
-                "ember: TEEF: --max-fn-size dropped {} fns larger than {} bytes",
+                "spelunk: TEEF: --max-fn-size dropped {} fns larger than {} bytes",
                 filtered_large, max_fn_bytes);
         }
 
@@ -337,7 +337,7 @@ build_tsv(const Binary& b,
 
         std::unordered_map<addr_t, std::vector<std::string>> strings_by_fn;
         if (show) {
-            std::println(stderr, "ember: TEEF: scanning strings for per-fn anchors...");
+            std::println(stderr, "spelunk: TEEF: scanning strings for per-fn anchors...");
             std::fflush(stderr);
         }
         for (const auto& s : scan_strings(b)) {
@@ -379,7 +379,7 @@ build_tsv(const Binary& b,
         const unsigned threads = thread_pool_size(16);
         if (show) {
             std::println(stderr,
-                "ember: TEEF on {} functions across {} threads (full decompile per fn)...",
+                "spelunk: TEEF on {} functions across {} threads (full decompile per fn)...",
                 total, threads);
             std::fflush(stderr);
         }
@@ -562,7 +562,7 @@ build_tsv(const Binary& b,
             panel.finish(total, ee);
             const std::size_t full_pipe = (total > ee + eg) ? (total - ee - eg) : 0;
             std::println(stderr,
-                "ember: TEEF: {} fns full-pipeline, {} early-exit (l0-prefilter), "
+                "spelunk: TEEF: {} fns full-pipeline, {} early-exit (l0-prefilter), "
                 "{} empty (insn-cap / lift bail)",
                 full_pipe, ee, eg);
         }
@@ -697,4 +697,4 @@ int run_fingerprints(const Args& args, const Binary& b) {
     return rc;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

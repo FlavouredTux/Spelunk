@@ -4,7 +4,7 @@
 Companion to make_pe_refdll.py. Models a Scylla-style scrape of a process
 that imported refdll.dll: the loader resolved each IAT slot to
 `loaded_base + export_rva`, but the import directory is gone, so the slots
-are just bare pointers. `ember --recover-imports` must base-solve them back
+are just bare pointers. `spelunk --recover-imports` must base-solve them back
 to dll!func names.
 
 Writes two files next to the given manifest path:

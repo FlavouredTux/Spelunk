@@ -14,13 +14,13 @@
 #include <system_error>
 #include <vector>
 
-#include <ember/analysis/forge_spec.hpp>
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/syscalls.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/analysis/forge_spec.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/syscalls.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
 #include "../args.hpp"
 #include "../cli_error.hpp"
@@ -28,7 +28,7 @@
 #include "../util.hpp"
 #include "common.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -43,7 +43,7 @@ namespace {
     constexpr u64 kMaxCount =
         static_cast<u64>(std::numeric_limits<addr_t>::max() / 15);
     if (r.ec != std::errc{} || r.ptr != last || n == 0 || n > kMaxCount) {
-        std::println(stderr, "ember: {}: bad --count '{}'", command, raw);
+        std::println(stderr, "spelunk: {}: bad --count '{}'", command, raw);
         return false;
     }
     out = static_cast<std::size_t>(n);
@@ -62,11 +62,11 @@ namespace {
 int run_patch_plan(const Args& args, const Binary& b) {
     auto va = parse_cli_addr(args.patch_plan);
     if (!va) {
-        std::println(stderr, "ember: --patch-plan: bad address '{}'", args.patch_plan);
+        std::println(stderr, "spelunk: --patch-plan: bad address '{}'", args.patch_plan);
         return EXIT_FAILURE;
     }
     if (!addr_in_executable_section_cli(b, *va)) {
-        std::println(stderr, "ember: --patch-plan: {:#x} is not in executable code", *va);
+        std::println(stderr, "spelunk: --patch-plan: {:#x} is not in executable code", *va);
         return EXIT_FAILURE;
     }
     auto probe = decode_disasm_probe(b, *va, 12);
@@ -205,7 +205,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
     // file, runs the same per-VA window each --disasm-at does, and
     // separates blocks with a `# <hex-va>` line so a downstream
     // splitter can pull them apart. Saves the per-invocation
-    // ember startup cost when sweeping thousands of refs-to / scan
+    // spelunk startup cost when sweeping thousands of refs-to / scan
     // hits.
     std::vector<addr_t> vas;
     auto push_va = [&](std::string_view tok) -> bool {
@@ -218,7 +218,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
         auto a = parse_cli_addr(tok);
         if (!a) {
             std::println(stderr,
-                "ember: --disasm-window: bad address '{}'", tok);
+                "spelunk: --disasm-window: bad address '{}'", tok);
             return false;
         }
         vas.push_back(*a);
@@ -232,7 +232,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
         const std::string path{raw.substr(1)};
         std::ifstream f(path);
         if (!f) {
-            std::println(stderr, "ember: --disasm-window: cannot open '{}'", path);
+            std::println(stderr, "spelunk: --disasm-window: cannot open '{}'", path);
             return EXIT_FAILURE;
         }
         std::string line;
@@ -253,7 +253,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
     }
 
     if (vas.empty()) {
-        std::println(stderr, "ember: --disasm-window: empty VA list");
+        std::println(stderr, "spelunk: --disasm-window: empty VA list");
         return EXIT_FAILURE;
     }
 
@@ -359,7 +359,7 @@ int run_forge_spec(const Args& args, const Binary& b) {
     const auto colon = raw.find(':');
     if (colon == std::string_view::npos) {
         std::println(stderr,
-            "ember: --forge-spec: expected ENTRY:VA, got '{}'", raw);
+            "spelunk: --forge-spec: expected ENTRY:VA, got '{}'", raw);
         return EXIT_FAILURE;
     }
     const std::string_view entry_tok = raw.substr(0, colon);
@@ -372,7 +372,7 @@ int run_forge_spec(const Args& args, const Binary& b) {
     auto target_va = parse_cli_addr(target_tok);
     if (!target_va) {
         std::println(stderr,
-            "ember: --forge-spec: bad target VA '{}'", target_tok);
+            "spelunk: --forge-spec: bad target VA '{}'", target_tok);
         return EXIT_FAILURE;
     }
 
@@ -387,4 +387,4 @@ int run_forge_spec(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

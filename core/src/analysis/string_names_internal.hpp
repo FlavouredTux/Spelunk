@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace ember::string_names {
+namespace spelunk::string_names {
 
 struct ReflectionDescriptorNameParts {
     std::string owner;
@@ -68,4 +68,4 @@ engine_feature_anchor_name(std::string_view text);
 [[nodiscard]] std::optional<std::string>
 graphics_phrase_name_from_string(std::string_view text);
 
-}  // namespace ember::string_names
+}  // namespace spelunk::string_names

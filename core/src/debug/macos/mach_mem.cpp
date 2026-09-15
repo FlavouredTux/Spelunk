@@ -19,7 +19,7 @@
 #include <mach/vm_prot.h>
 #include <mach/vm_region.h>
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 namespace {
 
@@ -103,4 +103,4 @@ MachOTarget::write_mem(addr_t va, std::span<const std::byte> in) {
     return in.size();
 }
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

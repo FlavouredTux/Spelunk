@@ -8,11 +8,11 @@
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    QApplication::setApplicationName(QStringLiteral("Ember"));
-    QApplication::setApplicationVersion(QStringLiteral(EMBER_GUI_VERSION));
+    QApplication::setApplicationName(QStringLiteral("Spelunk"));
+    QApplication::setApplicationVersion(QStringLiteral(SPELUNK_GUI_VERSION));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("Ember desktop front end"));
+    parser.setApplicationDescription(QStringLiteral("Spelunk desktop front end"));
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addPositionalArgument(QStringLiteral("binary"), QStringLiteral("File to open"));
@@ -22,9 +22,12 @@ int main(int argc, char** argv) {
                                   QStringLiteral("Render the window to <png> and exit."),
                                   QStringLiteral("png"));
     QCommandLineOption pseudocode(QStringLiteral("pseudocode"),
-                                  QStringLiteral("Open the pseudocode view before the screenshot."));
+                                   QStringLiteral("Open the pseudocode view before the screenshot."));
+    QCommandLineOption hex(QStringLiteral("hex"),
+                           QStringLiteral("Open the hex dump view before the screenshot."));
     parser.addOption(screenshot);
     parser.addOption(pseudocode);
+    parser.addOption(hex);
     parser.process(app);
 
     // Fusion with its stock light palette is the closest built-in match
@@ -32,15 +35,17 @@ int main(int argc, char** argv) {
     app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     app.setPalette(app.style()->standardPalette());
 
-    ember::gui::MainWindow window;
+    spelunk::gui::MainWindow window;
     window.show();
 
     if (parser.isSet(screenshot)) {
         const QString out = parser.value(screenshot);
         const bool want_pseudo = parser.isSet(pseudocode);
-        QObject::connect(&window, &ember::gui::MainWindow::analysis_finished, &window,
-                         [&window, out, want_pseudo] {
+        const bool want_hex = parser.isSet(hex);
+        QObject::connect(&window, &spelunk::gui::MainWindow::analysis_finished, &window,
+                          [&window, out, want_pseudo, want_hex] {
             if (want_pseudo) window.open_pseudocode_for_test();
+            if (want_hex) window.open_hex_for_test();
             QTimer::singleShot(250, &window, [&window, out] {
                 const bool ok = window.grab().save(out);
                 QApplication::exit(ok ? 0 : 2);

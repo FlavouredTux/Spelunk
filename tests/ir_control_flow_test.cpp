@@ -12,8 +12,8 @@
 #include <utility>
 
 namespace {
-using namespace ember;
-using namespace ember::test;
+using namespace spelunk;
+using namespace spelunk::test;
 
 constexpr addr_t entry = 0x1000;
 constexpr addr_t yes = 0x1100;
@@ -335,7 +335,7 @@ bool seeded_case(u64 seed) {
         states.push_back(input(n, y, z));
     }
     if (verifier.verify(fn, states)) return true;
-    std::fprintf(stderr, "Replay: ember_ir_control_flow_test --seed %s\n", std::to_string(seed).c_str());
+    std::fprintf(stderr, "Replay: spelunk_ir_control_flow_test --seed %s\n", std::to_string(seed).c_str());
     return false;
 }
 

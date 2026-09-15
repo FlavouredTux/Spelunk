@@ -1,4 +1,4 @@
-#include <ember/analysis/egraph.hpp>
+#include <spelunk/analysis/egraph.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -7,10 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/hash.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::egraph {
+namespace spelunk::egraph {
 
 namespace {
 
@@ -464,4 +464,4 @@ u64 EGraph::canonical_hash(ClassId root, std::size_t max_depth) const {
     return hash_class_(find(root), max_depth);
 }
 
-}  // namespace ember::egraph
+}  // namespace spelunk::egraph

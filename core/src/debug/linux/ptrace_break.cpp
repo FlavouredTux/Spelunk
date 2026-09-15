@@ -7,13 +7,13 @@
 #include <expected>
 #include <utility>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/breakpoint.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
 
 #include "ptrace_target.hpp"
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 namespace {
 
@@ -87,9 +87,9 @@ Result<void> enable_bp(LinuxTarget& t, addr_t va) {
     return write_byte(t, va, kInt3);
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 // Drop kernel-bound state after PTRACE_EVENT_EXEC. Software bp
 // patches are gone with the dead address space and DR slots were
@@ -107,4 +107,4 @@ void LinuxTarget::clear_all_after_exec() {
     }
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

@@ -41,7 +41,7 @@
 #include <mach/thread_state.h>
 #include <mach/i386/thread_status.h>
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 namespace {
 
@@ -365,4 +365,4 @@ Result<Event> MachOTarget::wait_event() {
     }
 }
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

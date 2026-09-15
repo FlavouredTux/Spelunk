@@ -3,10 +3,10 @@
 #include <optional>
 #include <string_view>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 [[nodiscard]] std::optional<u8>
 variadic_format_index(std::string_view name) noexcept;
@@ -23,4 +23,4 @@ import_returns_void(std::string_view name) noexcept;
 [[nodiscard]] std::string_view
 c_type_name(IrType t) noexcept;
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

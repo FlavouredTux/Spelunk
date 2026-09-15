@@ -13,17 +13,17 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/fingerprint.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/fingerprint.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::pipeline {
+namespace spelunk::pipeline {
 
-}  // namespace ember::pipeline
+}  // namespace spelunk::pipeline
 
-namespace ember {
+namespace spelunk {
 
 using namespace pipeline;
 
@@ -211,4 +211,4 @@ collect_collisions(const Binary& b,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -9,6 +9,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -24,19 +25,20 @@
 
 #include <algorithm>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/common/timing.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/common/timing.hpp>
 
 #include "code_view.hpp"
 #include "function_model.hpp"
+#include "hex_view.hpp"
 #include "highlighters.hpp"
 #include "nav_band.hpp"
 #include "session.hpp"
 #include "theme.hpp"
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 namespace {
 
@@ -88,7 +90,7 @@ QTableView* make_table(QAbstractItemModel* model, QWidget* parent, int sort_colu
 // ---------------------------------------------------------------------------
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle(QStringLiteral("Ember"));
+    setWindowTitle(QStringLiteral("Spelunk"));
     resize(1400, 900);
     setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowNestedDocks |
                    QMainWindow::AllowTabbedDocks);
@@ -108,7 +110,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     statusBar()->addPermanentWidget(addr_label_);
 
     update_history_actions();
-    log(QStringLiteral("Ember %1 ready. File > Open to load a binary.")
+    log(QStringLiteral("Spelunk %1 ready. File > Open to load a binary.")
             .arg(QApplication::applicationVersion()));
 }
 
@@ -166,6 +168,10 @@ void MainWindow::build_actions() {
         if (auto* v = ensure_disassembly_tab()) tabs_->setCurrentWidget(v);
     });
 
+    act_hex_ = new QAction(QStringLiteral("&Hex Dump"), this);
+    act_hex_->setShortcut(QKeySequence(QStringLiteral("H")));
+    connect(act_hex_, &QAction::triggered, this, &MainWindow::open_hex);
+
     act_pseudo_ = new QAction(QStringLiteral("&Pseudocode"), this);
     act_pseudo_->setShortcut(QKeySequence(QStringLiteral("F5")));
     connect(act_pseudo_, &QAction::triggered, this, &MainWindow::open_pseudocode);
@@ -186,15 +192,15 @@ void MainWindow::build_actions() {
 
     act_about_ = new QAction(QStringLiteral("&About"), this);
     connect(act_about_, &QAction::triggered, this, [this] {
-        QMessageBox::about(this, QStringLiteral("About Ember"),
-            QStringLiteral("<b>Ember %1</b><br>Reverse engineering toolkit.<br>"
-                           "Qt %2 front end linked directly against ember::core.")
+        QMessageBox::about(this, QStringLiteral("About Spelunk"),
+            QStringLiteral("<b>Spelunk %1</b><br>Reverse engineering toolkit.<br>"
+                           "Qt %2 front end linked directly against spelunk::core.")
                 .arg(QApplication::applicationVersion(), QString::fromLatin1(qVersion())));
     });
 
     for (QAction* a : {act_back_, act_forward_, act_jump_addr_, act_jump_fn_, act_jump_entry_,
-                       act_disasm_, act_pseudo_, act_strings_, act_imports_, act_exports_,
-                       act_segments_})
+                        act_disasm_, act_hex_, act_pseudo_, act_strings_, act_imports_, act_exports_,
+                        act_segments_})
         a->setEnabled(false);
 }
 
@@ -216,6 +222,7 @@ void MainWindow::build_menus() {
     QMenu* sub  = view->addMenu(QStringLiteral("&Open subviews"));
     sub->addAction(act_disasm_);
     sub->addAction(act_pseudo_);
+    sub->addAction(act_hex_);
     sub->addSeparator();
     sub->addAction(act_strings_);
     sub->addAction(act_imports_);
@@ -396,7 +403,7 @@ void MainWindow::on_session_loaded(std::shared_ptr<Session> s, const QString& er
     session_ = std::move(s);
     const Binary& b = *session_->binary;
     const QString name = QString::fromStdString(session_->path.filename().string());
-    setWindowTitle(QStringLiteral("Ember - %1").arg(name));
+    setWindowTitle(QStringLiteral("Spelunk - %1").arg(name));
 
     log(QStringLiteral("Format: %1, arch: %2, %3 sections, %4 symbols, entry point %5")
             .arg(QString::fromUtf8(format_name(b.format()).data(),
@@ -415,8 +422,8 @@ void MainWindow::on_session_loaded(std::shared_ptr<Session> s, const QString& er
                               std::clamp(fn_table_->columnWidth(FunctionModel::Name), 200, 320));
     band_->set_session(session_.get());
 
-    for (QAction* a : {act_jump_addr_, act_jump_fn_, act_jump_entry_, act_disasm_, act_pseudo_,
-                       act_strings_, act_imports_, act_exports_, act_segments_})
+    for (QAction* a : {act_jump_addr_, act_jump_fn_, act_jump_entry_, act_disasm_, act_hex_,
+                        act_pseudo_, act_strings_, act_imports_, act_exports_, act_segments_})
         a->setEnabled(true);
 
     jump_to_entry();
@@ -486,7 +493,7 @@ void MainWindow::close_session() {
     current_fn_.reset();
     session_.reset();
     addr_label_->clear();
-    setWindowTitle(QStringLiteral("Ember"));
+    setWindowTitle(QStringLiteral("Spelunk"));
     update_history_actions();
 }
 
@@ -517,19 +524,39 @@ void MainWindow::jump_to(addr_t va, bool record) {
     if (record) push_history(va);
 }
 
+void MainWindow::jump_to_or_hex(addr_t va, bool record) {
+    if (!session_) return;
+    if (session_->function_at(va)) {
+        jump_to(va, record);
+        return;
+    }
+    // Data address (strings, tables, ...): the disassembly has nothing to
+    // show, so surface the raw bytes instead of an error.
+    if (session_->section_at(va)) {
+        if (HexView* h = ensure_hex_tab()) {
+            h->show_address(va);
+            tabs_->setCurrentWidget(h);
+        }
+        update_chrome(va);
+        if (record) push_history(va);
+        return;
+    }
+    log(QStringLiteral("Cannot jump to %1: address is not mapped.").arg(hex(va)));
+}
+
 void MainWindow::jump_to_token(const QString& token) {
     if (!session_ || token.isEmpty()) return;
     bool ok = false;
     if (token.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
         const addr_t va = token.mid(2).toULongLong(&ok, 16);
-        if (ok) { jump_to(va); return; }
+        if (ok) { jump_to_or_hex(va); return; }
     }
     if (auto w = resolve_function(*session_->binary, token.toStdString())) {
         jump_to(w->start);
         return;
     }
     const addr_t va = token.toULongLong(&ok, 16);
-    if (ok) { jump_to(va); return; }
+    if (ok) { jump_to_or_hex(va); return; }
     log(QStringLiteral("Cannot find '%1'.").arg(token));
 }
 
@@ -544,14 +571,14 @@ void MainWindow::push_history(addr_t va) {
 void MainWindow::jump_back() {
     if (history_pos_ == 0 || history_.empty()) return;
     --history_pos_;
-    jump_to(history_[history_pos_], /*record=*/false);
+    jump_to_or_hex(history_[history_pos_], /*record=*/false);
     update_history_actions();
 }
 
 void MainWindow::jump_forward() {
     if (history_.empty() || history_pos_ + 1 >= history_.size()) return;
     ++history_pos_;
-    jump_to(history_[history_pos_], /*record=*/false);
+    jump_to_or_hex(history_[history_pos_], /*record=*/false);
     update_history_actions();
 }
 
@@ -585,6 +612,17 @@ void MainWindow::jump_to_entry() {
 }
 
 void MainWindow::sync_chrome(addr_t va) {
+    update_chrome(va);
+    // Follow the code cursor in the hex window, if it is open. Block the
+    // hex's own change signal so the status bar keeps the exact address
+    // rather than snapping to the 16-byte row start.
+    if (hex_) {
+        const QSignalBlocker block(hex_);
+        hex_->show_address(va, /*center=*/false);
+    }
+}
+
+void MainWindow::update_chrome(addr_t va) {
     if (!session_) return;
     band_->set_current(va);
     QString label = QStringLiteral("%1:%2")
@@ -616,7 +654,7 @@ MainWindow::Rendered MainWindow::render_disassembly(const FuncWindow& w) {
         out.lines.push_back(0);
         return out;
     }
-    // Rewrite ember's `0x<16 hex>` line prefix into IDA's `<segment>:<16 hex>`.
+    // Rewrite spelunk's `0x<16 hex>` line prefix into IDA's `<segment>:<16 hex>`.
     std::string_view text(*r);
     std::string      rewritten;
     rewritten.reserve(text.size() + text.size() / 8);
@@ -687,7 +725,7 @@ CodeView* MainWindow::ensure_disassembly_tab() {
         connect(disasm_, &CodeView::jump_requested, this, &MainWindow::jump_to_token);
         connect(disasm_, &CodeView::back_requested, this, &MainWindow::jump_back);
         connect(disasm_, &CodeView::line_address_changed, this, &MainWindow::sync_chrome);
-        tabs_->insertTab(0, disasm_, QStringLiteral("Ember View-A"));
+        tabs_->insertTab(0, disasm_, QStringLiteral("Spelunk View-A"));
         if (current_fn_) {
             if (const auto* fn = session_->function_at(*current_fn_)) {
                 auto it = disasm_cache_.find(fn->addr);
@@ -783,11 +821,53 @@ void MainWindow::open_table_tab(const QString& title, QStandardItemModel* model)
     model->setParent(table);
     connect(table, &QAbstractItemView::activated, this, [this, table](const QModelIndex& idx) {
         const QVariant v = table->model()->index(idx.row(), 0).data(kAddressRole);
-        if (v.isValid()) jump_to(static_cast<addr_t>(v.toULongLong()));
+        if (v.isValid()) jump_to_or_hex(static_cast<addr_t>(v.toULongLong()));
     });
     tabs_->addTab(table, title);
     tabs_->setCurrentWidget(table);
     table->resizeColumnsToContents();
+}
+
+HexView* MainWindow::ensure_hex_tab() {
+    if (!session_) return nullptr;
+    if (!hex_) {
+        hex_ = new HexView(tabs_);
+        hex_->set_session(session_.get());
+        connect(hex_, &HexView::jump_requested, this, &MainWindow::jump_to_token);
+        // Hex cursor movement updates the chrome only; the disassembly
+        // cursor is never steered from here (see sync_chrome).
+        connect(hex_, &HexView::line_address_changed, this, &MainWindow::update_chrome);
+        // Insert after the pseudocode tab when it exists, else after
+        // the disassembly, else at the front.
+        int at = 0;
+        if (pseudo_) at = tabs_->indexOf(pseudo_) + 1;
+        else if (disasm_) at = tabs_->indexOf(disasm_) + 1;
+        tabs_->insertTab(at, hex_, QStringLiteral("Hex Dump"));
+    }
+    return hex_;
+}
+
+void MainWindow::open_hex() {
+    if (!session_) return;
+    HexView* h = ensure_hex_tab();
+    std::optional<addr_t> va;
+    if (disasm_) va = disasm_->current_line_address();
+    if (!va && pseudo_) va = pseudo_->current_line_address();
+    if (!va) va = current_fn_;
+    if (!va) {
+        const addr_t entry = session_->binary->entry_point();
+        va = session_->function_at(entry) ? std::optional<addr_t>(entry)
+             : (!session_->functions.empty() ? std::optional<addr_t>(session_->functions.front().addr)
+                                             : std::nullopt);
+    }
+    if (!va) {
+        for (const auto& sec : session_->binary->sections()) {
+            if (sec.size != 0) { va = sec.vaddr; break; }
+        }
+    }
+    if (va) h->show_address(*va);
+    tabs_->setCurrentWidget(h);
+    h->setFocus();
 }
 
 void MainWindow::open_strings() {
@@ -800,9 +880,9 @@ void MainWindow::open_strings() {
     model->setHorizontalHeaderLabels({QStringLiteral("Address"), QStringLiteral("Length"),
                                       QStringLiteral("Type"), QStringLiteral("String")});
     for (const auto& s : strings) {
-        // Double-click follows the first code reference; the listing has no
-        // data view yet, so a string with no xrefs cannot be jumped to.
-        const addr_t target = s.xrefs.empty() ? 0 : s.xrefs.front();
+        // Double-click follows the first code reference when one exists;
+        // otherwise it lands on the string bytes themselves in the hex view.
+        const addr_t target = s.xrefs.empty() ? s.addr : s.xrefs.front();
         QString seg = QString::fromStdString(session_->segment_name(s.addr));
         model->appendRow({addr_item(target, QStringLiteral("%1:%2").arg(seg, hex16(s.addr))),
                           text_item(QStringLiteral("%1").arg(s.text.size() + 1, 8, 16, QChar('0'))),
@@ -865,7 +945,8 @@ void MainWindow::on_tab_close(int index) {
     tabs_->removeTab(index);
     if (w == disasm_) disasm_ = nullptr;
     if (w == pseudo_) pseudo_ = nullptr;
+    if (w == hex_) hex_ = nullptr;
     w->deleteLater();
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

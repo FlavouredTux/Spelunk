@@ -10,12 +10,12 @@
 #include <intrin.h>
 #endif
 
-#include <ember/analysis/teef_behav.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/analysis/teef_behav.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/ir/ir.hpp>
 
-namespace ember::teef_behav_detail {
+namespace spelunk::teef_behav_detail {
 
 namespace {
 
@@ -771,4 +771,4 @@ namespace {
     return true;
 }
 
-}  // namespace ember::teef_behav_detail
+}  // namespace spelunk::teef_behav_detail

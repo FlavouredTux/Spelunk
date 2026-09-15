@@ -1,4 +1,4 @@
-add_executable(ember_cli
+add_executable(spelunk_cli
     src/args.cpp
     src/builders.cpp
     src/builders_graphics.cpp
@@ -32,23 +32,23 @@ add_executable(ember_cli
 )
 
 # Header/type import is optional at build time. The CLI keeps a useful error
-# path on machines without libclang rather than making core Ember depend on it.
-find_path(EMBER_LIBCLANG_INCLUDE_DIR clang-c/Index.h)
-find_library(EMBER_LIBCLANG_LIBRARY NAMES clang libclang)
-if (EMBER_LIBCLANG_INCLUDE_DIR AND EMBER_LIBCLANG_LIBRARY)
-    target_include_directories(ember_cli PRIVATE ${EMBER_LIBCLANG_INCLUDE_DIR})
-    target_link_libraries(ember_cli PRIVATE ${EMBER_LIBCLANG_LIBRARY})
-    target_compile_definitions(ember_cli PRIVATE EMBER_HAVE_LIBCLANG=1)
+# path on machines without libclang rather than making core Spelunk depend on it.
+find_path(SPELUNK_LIBCLANG_INCLUDE_DIR clang-c/Index.h)
+find_library(SPELUNK_LIBCLANG_LIBRARY NAMES clang libclang)
+if (SPELUNK_LIBCLANG_INCLUDE_DIR AND SPELUNK_LIBCLANG_LIBRARY)
+    target_include_directories(spelunk_cli PRIVATE ${SPELUNK_LIBCLANG_INCLUDE_DIR})
+    target_link_libraries(spelunk_cli PRIVATE ${SPELUNK_LIBCLANG_LIBRARY})
+    target_compile_definitions(spelunk_cli PRIVATE SPELUNK_HAVE_LIBCLANG=1)
 endif()
 
-set_target_properties(ember_cli PROPERTIES
-    OUTPUT_NAME ember
+set_target_properties(spelunk_cli PROPERTIES
+    OUTPUT_NAME spelunk
 )
-target_compile_definitions(ember_cli PRIVATE
-    EMBER_VERSION_STRING="${PROJECT_VERSION}"
+target_compile_definitions(spelunk_cli PRIVATE
+    SPELUNK_VERSION_STRING="${PROJECT_VERSION}"
 )
 
-target_link_libraries(ember_cli PRIVATE
-    ember::core
-    ember::flags
+target_link_libraries(spelunk_cli PRIVATE
+    spelunk::core
+    spelunk::flags
 )

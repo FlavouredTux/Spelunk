@@ -1,6 +1,6 @@
 #include "emitter_ssa_use_index.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 namespace {
 
 [[nodiscard]] std::optional<SsaKey>
@@ -174,4 +174,4 @@ SsaUseIndex::visible_user_positions(const SsaKey& key) const noexcept {
     return entry->visible_user_positions;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

@@ -1,14 +1,14 @@
 # Unreal Kismet bundles
 
-Ember can inspect Blueprint bytecode captured from a live Unreal Engine runtime:
+Spelunk can inspect Blueprint bytecode captured from a live Unreal Engine runtime:
 
 ```text
-ember --kismet PATH --functions[=FILTER]
-ember --kismet PATH -d -s FUNCTION
-ember --kismet PATH -c -s FUNCTION
-ember --kismet PATH -p -s FUNCTION
-ember --kismet PATH --kismet-events -s ExecuteUbergraph_NAME
-ember --kismet PATH -p -s ExecuteUbergraph_NAME --kismet-event EVENT
+spelunk --kismet PATH --functions[=FILTER]
+spelunk --kismet PATH -d -s FUNCTION
+spelunk --kismet PATH -c -s FUNCTION
+spelunk --kismet PATH -p -s FUNCTION
+spelunk --kismet PATH --kismet-events -s ExecuteUbergraph_NAME
+spelunk --kismet PATH -p -s ExecuteUbergraph_NAME --kismet-event EVENT
 ```
 
 `PATH` may name the bundle directory or `manifest.tsv`. `--json` works for both
@@ -31,12 +31,12 @@ succeeded.
 Version 1 is a tab-separated manifest with sidecar files:
 
 ```text
-EMBER_KISMET_BUNDLE  1  engine=5.7.4  pointer_size=8  bytecode=live_pointer_expanded
+SPELUNK_KISMET_BUNDLE  1  engine=5.7.4  pointer_size=8  bytecode=live_pointer_expanded
 FUNCTION  000001  BYTE_COUNT  FUNCTION_FLAGS  CLASS_PATH  FUNCTION_PATH  RAW_PATH  DISASM_PATH
 ```
 
 Fields shown separated by spaces above are literal tabs on disk. Sidecar paths
-must be relative and cannot contain a `..` component. Ember validates duplicate
+must be relative and cannot contain a `..` component. Spelunk validates duplicate
 IDs/function paths and checks each selected raw file against its declared size.
 
 The raw stream is the live `UFunction::Script` representation. Object, field,
@@ -50,5 +50,5 @@ the canonical textual disassembly beside the bytes.
 The disassembly preserves executable operations, named properties and
 functions, constants, jumps, calls, and bytecode offsets. Cooking usually strips
 visual node coordinates, comments, and some editor-only graph organization.
-Ember therefore reports recovered behavior and does not claim to recreate the
+Spelunk therefore reports recovered behavior and does not claim to recreate the
 original Blueprint editor graph exactly.

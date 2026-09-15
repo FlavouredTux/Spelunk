@@ -1,4 +1,4 @@
-#include <ember/analysis/demangle.hpp>
+#include <spelunk/analysis/demangle.hpp>
 
 #include <cstddef>
 #include <optional>
@@ -6,9 +6,9 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/analysis/msvc_demangle.hpp>
+#include <spelunk/analysis/msvc_demangle.hpp>
 
-namespace ember {
+namespace spelunk {
 
 std::string pretty_symbol(std::string_view name) {
     if (auto r = demangle_itanium(name); r) {
@@ -144,4 +144,4 @@ arity_from_mangled(std::string_view mangled) {
     return std::nullopt;
 }
 
-}  // namespace ember
+}  // namespace spelunk

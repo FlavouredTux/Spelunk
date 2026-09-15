@@ -1,7 +1,7 @@
 // Focused coverage for the emitter's private string decoding and rendering.
 #include "emitter_internal.hpp"
 
-#include <ember/binary/binary.hpp>
+#include <spelunk/binary/binary.hpp>
 
 #include <algorithm>
 #include <array>
@@ -20,10 +20,10 @@
 
 namespace {
 
-constexpr ember::addr_t kText = 0x1000;
-constexpr ember::addr_t kRodata = 0x2000;
-constexpr ember::addr_t kCfstrings = 0x3000;
-constexpr ember::addr_t kCfdata = 0x4000;
+constexpr spelunk::addr_t kText = 0x1000;
+constexpr spelunk::addr_t kRodata = 0x2000;
+constexpr spelunk::addr_t kCfstrings = 0x3000;
+constexpr spelunk::addr_t kCfdata = 0x4000;
 
 int failures = 0;
 
@@ -66,11 +66,11 @@ void write_native(std::array<std::byte, N>& destination,
     std::memcpy(destination.data() + offset, &value, sizeof(value));
 }
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
-    explicit MockBinary(ember::Format format = ember::Format::MachO,
-                        ember::addr_t rodata_address = kRodata,
-                        ember::addr_t cfstrings_address = kCfstrings,
+    explicit MockBinary(spelunk::Format format = spelunk::Format::MachO,
+                        spelunk::addr_t rodata_address = kRodata,
+                        spelunk::addr_t cfstrings_address = kCfstrings,
                         bool rodata_executable = false)
         : format_(format) {
         text_.fill(std::byte{0});
@@ -102,23 +102,23 @@ public:
                           cfdata_, false);
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
+    [[nodiscard]] spelunk::Format format() const noexcept override {
         return format_;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kText;
     }
-    [[nodiscard]] std::span<const ember::Section>
+    [[nodiscard]] std::span<const spelunk::Section>
     sections() const noexcept override {
         return sections_;
     }
-    [[nodiscard]] std::span<const ember::Symbol>
+    [[nodiscard]] std::span<const spelunk::Symbol>
     symbols() const noexcept override {
         return symbols_;
     }
@@ -126,27 +126,27 @@ public:
         return {};
     }
     [[nodiscard]] std::span<const std::byte>
-    bytes_at(ember::addr_t address) const noexcept override {
+    bytes_at(spelunk::addr_t address) const noexcept override {
         ++byte_reads_[address];
         return Binary::bytes_at(address);
     }
 
-    [[nodiscard]] std::size_t byte_reads_at(ember::addr_t address) const {
+    [[nodiscard]] std::size_t byte_reads_at(spelunk::addr_t address) const {
         auto it = byte_reads_.find(address);
         return it == byte_reads_.end() ? 0 : it->second;
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>&
+    [[nodiscard]] std::vector<spelunk::Symbol>&
     mutable_symbols() noexcept override {
         return symbols_;
     }
 
 private:
     template <std::size_t N>
-    static void configure_section(ember::Section& section,
+    static void configure_section(spelunk::Section& section,
                                   std::string name,
-                                  ember::addr_t address,
+                                  spelunk::addr_t address,
                                   const std::array<std::byte, N>& bytes,
                                   bool executable) {
         section.name = std::move(name);
@@ -158,33 +158,33 @@ private:
     }
 
     void write_cfstring_record(std::size_t index,
-                               ember::addr_t data_address,
-                               ember::u64 length) {
+                               spelunk::addr_t data_address,
+                               spelunk::u64 length) {
         const std::size_t offset = index * 32;
         write_native(cfstrings_, offset + 16,
-                     static_cast<ember::u64>(data_address));
+                     static_cast<spelunk::u64>(data_address));
         write_native(cfstrings_, offset + 24, length);
     }
 
-    ember::Format format_;
+    spelunk::Format format_;
     std::array<std::byte, 0x20> text_{};
     std::array<std::byte, 0x40> rodata_{};
     std::array<std::byte, 0x80> cfstrings_{};
     std::array<std::byte, 0x40> cfdata_{};
-    std::array<ember::Section, 4> sections_{};
-    std::vector<ember::Symbol> symbols_;
-    mutable std::map<ember::addr_t, std::size_t> byte_reads_;
+    std::array<spelunk::Section, 4> sections_{};
+    std::vector<spelunk::Symbol> symbols_;
+    mutable std::map<spelunk::addr_t, std::size_t> byte_reads_;
 };
 
 void test_null_binary() {
-    const ember::emit::BinaryStringLiterals strings(nullptr);
+    const spelunk::emit::BinaryStringLiterals strings(nullptr);
     check(!strings.try_c_string_at(kRodata), "null binary rejects C string");
     check(!strings.try_cfstring_at(kCfstrings), "null binary rejects CFString");
 }
 
 void test_c_strings() {
     MockBinary binary;
-    const ember::emit::BinaryStringLiterals strings(&binary);
+    const spelunk::emit::BinaryStringLiterals strings(&binary);
 
     check_string(strings.try_c_string_at(kRodata), "hello",
                  "non-executable C string");
@@ -197,14 +197,14 @@ void test_c_strings() {
     check_string(decoded_specials, raw_specials,
                  "C string decoder returns raw bytes");
     if (decoded_specials) {
-        check_text(ember::emit::Emitter::escape_string(*decoded_specials),
+        check_text(spelunk::emit::Emitter::escape_string(*decoded_specials),
                    "\"A\\n\\\"\\\\\\x01\\x80\" \"B\"",
                    "decoded C string is escaped exactly once when rendered");
     }
     check(!strings.try_c_string_at(kRodata + 0x30),
           "unterminated C string is rejected");
 
-    const ember::addr_t short_string = kRodata + 0x18;
+    const spelunk::addr_t short_string = kRodata + 0x18;
     check(!strings.try_c_string_at(short_string),
           "default printable minimum rejects one character");
     check(binary.byte_reads_at(short_string) == 1,
@@ -227,33 +227,33 @@ void test_c_strings() {
 }
 
 void test_c_literal_rendering() {
-    check_text(ember::emit::Emitter::escape_string(
+    check_text(spelunk::emit::Emitter::escape_string(
                    std::string("\n\"\\\x01\x80")),
                "\"\\n\\\"\\\\\\x01\\x80\"",
                "C literal renderer escapes special bytes exactly once");
 }
 
 void test_overflow_safe_section_membership() {
-    constexpr auto kTopRodata = std::numeric_limits<ember::addr_t>::max() - 0x3f;
-    MockBinary c_binary(ember::Format::MachO, kTopRodata, kCfstrings,
+    constexpr auto kTopRodata = std::numeric_limits<spelunk::addr_t>::max() - 0x3f;
+    MockBinary c_binary(spelunk::Format::MachO, kTopRodata, kCfstrings,
                         true);
-    const ember::emit::BinaryStringLiterals c_strings(&c_binary);
+    const spelunk::emit::BinaryStringLiterals c_strings(&c_binary);
     check(!c_strings.try_c_string_at(kTopRodata),
           "overflowing executable section range rejects C-string bytes");
     check(c_binary.byte_reads_at(kTopRodata) == 0,
           "overflowing executable section is rejected before reading bytes");
 
     constexpr auto kTopCfstrings =
-        std::numeric_limits<ember::addr_t>::max() - 0x7f;
-    MockBinary cf_binary(ember::Format::MachO, kRodata, kTopCfstrings);
-    const ember::emit::BinaryStringLiterals cf_strings(&cf_binary);
+        std::numeric_limits<spelunk::addr_t>::max() - 0x7f;
+    MockBinary cf_binary(spelunk::Format::MachO, kRodata, kTopCfstrings);
+    const spelunk::emit::BinaryStringLiterals cf_strings(&cf_binary);
     check_string(cf_strings.try_cfstring_at(kTopCfstrings), "h\xc3\xa9",
                  "overflowing CFString section range contains its base");
 }
 
 void test_cfstrings() {
     MockBinary binary;
-    const ember::emit::BinaryStringLiterals strings(&binary);
+    const spelunk::emit::BinaryStringLiterals strings(&binary);
 
     check_string(strings.try_cfstring_at(kCfstrings), "h\xc3\xa9",
                  "UTF-8 CFString");
@@ -266,8 +266,8 @@ void test_cfstrings() {
     check(!strings.try_cfstring_at(kCfstrings + 0x80),
           "address above CFString section is rejected");
 
-    MockBinary elf_binary(ember::Format::Elf);
-    const ember::emit::BinaryStringLiterals elf_strings(&elf_binary);
+    MockBinary elf_binary(spelunk::Format::Elf);
+    const spelunk::emit::BinaryStringLiterals elf_strings(&elf_binary);
     check(!elf_strings.try_cfstring_at(kCfstrings),
           "non-Mach-O __cfstring section is ignored");
 }

@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 const std::string* Emitter::scoped_ssa_name(const IrValue& value) const {
     auto key = ssa_key(value);
@@ -356,4 +356,4 @@ void Emitter::emit_phi_copies(const IrBlock& block, std::string_view ind,
     }
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

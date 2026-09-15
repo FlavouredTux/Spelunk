@@ -1,4 +1,4 @@
-#include <ember/binary/pdb.hpp>
+#include <spelunk/binary/pdb.hpp>
 
 #include <cstddef>
 #include <cstring>
@@ -14,13 +14,13 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "pdb_internal.hpp"
 
-namespace ember::pdb {
+namespace spelunk::pdb {
 
 namespace {
 
@@ -473,4 +473,4 @@ load_publics_from_buffer(std::vector<std::byte> data) {
     return std::move(rdr->publics);
 }
 
-}  // namespace ember::pdb
+}  // namespace spelunk::pdb

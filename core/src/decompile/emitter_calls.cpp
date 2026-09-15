@@ -11,24 +11,24 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/ir_cache.hpp>
-#include <ember/analysis/sig_inference.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
+#include <spelunk/analysis/sig_inference.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 namespace {
 
@@ -1231,4 +1231,4 @@ std::string Emitter::callee_display_short(const IrInst& call_inst) const {
     return out.empty() ? std::string("call") : out;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

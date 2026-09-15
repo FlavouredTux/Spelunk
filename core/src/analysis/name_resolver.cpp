@@ -1,15 +1,15 @@
-#include <ember/analysis/name_resolver.hpp>
+#include <spelunk/analysis/name_resolver.hpp>
 
 #include <format>
 #include <optional>
 #include <string>
 
-#include <ember/analysis/demangle.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 std::optional<ResolvedName>
 resolve_address_name(const Binary& b, addr_t addr) {
@@ -75,4 +75,4 @@ std::string format_address_expr(const ResolvedName& r) {
     return format_address_comment(r);
 }
 
-}  // namespace ember
+}  // namespace spelunk

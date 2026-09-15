@@ -9,20 +9,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
 #include "../args.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 // Quiet sibling of load_annotations_for(): resolves and reads the
 // annotations file using the same precedence chain (explicit > sidecar
 // > cache, with --no-cache suppressing the cache leg) but never prints
-// the "ember: annotations: …" status line. Used by the per-command
+// the "spelunk: annotations: …" status line. Used by the per-command
 // resolvers that just need to thread renames into resolve_function;
 // the noisy variant, load_annotations_for(), runs once per emit pass.
 [[nodiscard]] Annotations load_annotations_quiet(const Args& args);
@@ -137,4 +137,4 @@ classify_object_fields(const Binary& b, addr_t obj, addr_t size);
 // was successfully read; returns the populated Annotations either way.
 [[nodiscard]] Annotations load_annotations_for(const Args& args, bool& loaded);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

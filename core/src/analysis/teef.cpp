@@ -1,4 +1,4 @@
-#include <ember/analysis/teef.hpp>
+#include <spelunk/analysis/teef.hpp>
 
 #include <algorithm>
 #include <array>
@@ -12,23 +12,23 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/analysis/teef_behav.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
-#include <ember/structure/structurer.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/teef_behav.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
+#include <spelunk/structure/structurer.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -369,12 +369,12 @@ namespace {
 
 // Per-fn IR insn cap. Bails the L2 path on huge VMP / Themida / Enigma
 // fns whose region-tree walk is O(insns × region_depth) and would
-// dominate a parallel sweep for 30+ minutes per fn. EMBER_TEEF_MAX_INSNS
+// dominate a parallel sweep for 30+ minutes per fn. SPELUNK_TEEF_MAX_INSNS
 // overrides the default of 4096; at that limit a normal 50–500 insn
 // fn isn't affected and aggressive inlining still fits.
 [[nodiscard]] std::size_t teef_max_insns_per_fn() noexcept {
     static const std::size_t v = []() -> std::size_t {
-        if (const char* s = std::getenv("EMBER_TEEF_MAX_INSNS")) {
+        if (const char* s = std::getenv("SPELUNK_TEEF_MAX_INSNS")) {
             try { return static_cast<std::size_t>(std::stoull(s)); }
             catch (...) { /* malformed → fall through to default */ }
         }
@@ -634,4 +634,4 @@ compute_teef_max(const Binary& b, addr_t fn_start,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

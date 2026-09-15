@@ -10,9 +10,9 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::debug::linux_detail {
+namespace spelunk::debug::linux_detail {
 
 namespace {
 
@@ -133,4 +133,4 @@ std::vector<pid_t> read_task_tids(pid_t pid) {
     return tids;
 }
 
-}  // namespace ember::debug::linux_detail
+}  // namespace spelunk::debug::linux_detail

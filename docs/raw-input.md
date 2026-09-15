@@ -1,6 +1,6 @@
 # Raw Input
 
-Two ways to feed Ember bytes that aren't a complete PE / ELF / Mach-O
+Two ways to feed Spelunk bytes that aren't a complete PE / ELF / Mach-O
 container - runtime memory captures, Scylla scrapes, hand-rolled
 fixtures, anything where the file-magic dispatch in `load_binary()`
 doesn't have a container to recognise.
@@ -13,10 +13,10 @@ manifest. Used for runtime captures of one contiguous range:
 
 ```sh
 # Disassemble bytes pulled from a debugger at 0x180010000.
-ember --raw-bytes dump.bin --base-va 0x180010000 -p -s 0x180012a40
+spelunk --raw-bytes dump.bin --base-va 0x180010000 -p -s 0x180012a40
 
 # Dump every discovered function in a runtime region.
-ember --raw-bytes runtime.bin --base-va 0x180010000 --functions
+spelunk --raw-bytes runtime.bin --base-va 0x180010000 --functions
 ```
 
 `--base-va` is mandatory. It accepts `0x`-prefixed hex or bare hex
@@ -55,7 +55,7 @@ with zeros if the file is shorter (for uninitialised BSS-like
 ranges), truncate if longer.
 
 ```sh
-ember --regions /path/to/scrape/regions.txt -p -s 0x140012a40
+spelunk --regions /path/to/scrape/regions.txt -p -s 0x140012a40
 ```
 
 When to pick which:
@@ -74,7 +74,7 @@ Raw input bypasses all the container-specific extras:
 - No symbol table - every discovered function reads as `sub_<hex>`
   unless you pair with `--annotations` or `--apply <script>`.
 - No imports / exports *out of the box* - runtime captures of a
-  process *do* contain the IAT bytes, but Ember can't recognise an IAT
+  process *do* contain the IAT bytes, but Spelunk can't recognise an IAT
   without the IMAGE_DIRECTORY_ENTRY_IMPORT directory the PE loader
   normally parses. Indirect calls through the captured IAT slots stay
   unresolved unless you reconstruct the table with `--recover-imports`
@@ -90,11 +90,11 @@ captured bytes are what actually run.
 
 A capture with no import directory still has the IAT *bytes*: the loader
 filled each slot with a resolved `loaded_module_base + export_rva`
-pointer. Given the actual DLLs the process imported, Ember can name those
+pointer. Given the actual DLLs the process imported, Spelunk can name those
 slots back to `dll!func`.
 
 ```sh
-ember --regions capture.regions --recover-imports \
+spelunk --regions capture.regions --recover-imports \
       --dll-dir /mnt/win/System32 --image-base 0x140000000 --json
 ```
 
@@ -107,7 +107,7 @@ How it works:
    contain) is recorded as `(slot, target)`.
 2. **Cluster.** Targets are sorted and split on gaps larger than a DLL
    image (16 MiB) - one cluster per loaded module.
-3. **Base-solve.** For each cluster, Ember tries 64 KiB-aligned bases
+3. **Base-solve.** For each cluster, Spelunk tries 64 KiB-aligned bases
    stepping down from the cluster's low pointer and picks the
    `(reference DLL, base)` that lands the most pointers on a real export
    RVA. The winning base also identifies *which* DLL the cluster is. A
@@ -147,8 +147,8 @@ fast path for `.data.rel.ro` vtables whose on-disk ELF view would show
 zero-filled relocation targets:
 
 ```sh
-ember --regions module.regions --vtables
-ember --regions module.regions --vtable-at 0xVTABLE_OR_SLOT --limit 24
+spelunk --regions module.regions --vtables
+spelunk --regions module.regions --vtable-at 0xVTABLE_OR_SLOT --limit 24
 ```
 
 Use `--vtable-at` for interactive work on large clients; it prints only
@@ -156,7 +156,7 @@ the runtime vtable containing or immediately adjacent to the queried VA
 instead of dumping every pointer-dense table.
 
 `--refs-to-loose` also accepts a module-relative offset for raw-region
-captures. If the requested address is not mapped, Ember tries
+captures. If the requested address is not mapped, Spelunk tries
 `lowest_region_vaddr + offset` as the runtime address. For example, a
 query for `0x2987800` against a dump whose first mapped region starts at
 `0x7fe341c0d000` also searches slots containing
@@ -173,7 +173,7 @@ target, then print the target section, first disassembly line, and a
 short pseudo-C summary when the target function can be recovered.
 
 ```sh
-ember --regions module.regions --explain-vcall 0x7fe350001000:0x8
+spelunk --regions module.regions --explain-vcall 0x7fe350001000:0x8
 ```
 
 Pair it with runtime facts when the object pointer lives in a singleton
@@ -189,5 +189,5 @@ each as `vtable`, `code`, `string`, `ptr`, `null`, or `raw`. This is the
 quick snapshot view for AppBridge / SingleSurface-style runtime objects:
 
 ```sh
-ember --regions module.regions --dump-object 0x7fe350001000 --size 0x100
+spelunk --regions module.regions --dump-object 0x7fe350001000 --size 0x100
 ```

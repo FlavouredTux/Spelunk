@@ -5,9 +5,9 @@
 #include <optional>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 struct Session;
 
@@ -25,7 +25,7 @@ public:
     [[nodiscard]] QSize sizeHint() const override;
 
 signals:
-    void address_clicked(ember::addr_t va);
+    void address_clicked(spelunk::addr_t va);
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -50,4 +50,4 @@ private:
     static constexpr int kMarkerHeight = 6;
 };
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

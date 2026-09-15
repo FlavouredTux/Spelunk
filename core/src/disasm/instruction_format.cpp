@@ -1,4 +1,4 @@
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
 #include <array>
 #include <cstddef>
@@ -6,10 +6,10 @@
 #include <string>
 #include <string_view>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
 
-namespace ember {
+namespace spelunk {
 
 // ARM condition-code suffix (bits 31:28). AL/NV render empty - callers gate
 // on that via kArmCondAL.
@@ -287,4 +287,4 @@ std::string format_instruction(const Instruction& insn) {
     return s;
 }
 
-}  // namespace ember
+}  // namespace spelunk

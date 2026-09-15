@@ -19,7 +19,7 @@ Two functions are emitted:
 
 The binary is not actually runnable (it isn't signed, the PE checksum is
 zero, and there's no DOS stub payload), but it passes every structural
-check Ember's PeBinary loader performs.
+check Spelunk's PeBinary loader performs.
 
 Usage:
   make_pe_tiny.py <output-path>
@@ -246,7 +246,7 @@ def main() -> int:
     # ---- Headers --------------------------------------------------------
     # DOS header with only MZ magic + e_lfanew at 0x3C. We point e_lfanew
     # at 0x40 so the PE sig sits immediately after the DOS header (no DOS
-    # stub - Ember doesn't execute the stub and Windows ignores an empty
+    # stub - Spelunk doesn't execute the stub and Windows ignores an empty
     # one for our purposes).
     dos = bytearray(b"\x00" * 0x40)
     dos[0:2] = b"MZ"

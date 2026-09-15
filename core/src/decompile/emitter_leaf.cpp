@@ -9,21 +9,21 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 std::optional<std::string>
 Emitter::render_selection_phi(const IrInst& phi, int depth) const {
@@ -450,4 +450,4 @@ Emitter::import_arity(addr_t plt_addr, std::string_view name) const {
     return std::nullopt;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

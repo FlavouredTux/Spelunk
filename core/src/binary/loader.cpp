@@ -13,20 +13,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/dol.hpp>
-#include <ember/binary/dwarf.hpp>
-#include <ember/binary/elf.hpp>
-#include <ember/binary/macho.hpp>
-#include <ember/binary/minidump.hpp>
-#include <ember/binary/pe.hpp>
-#include <ember/binary/rel.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/extension/loader_registry.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/dol.hpp>
+#include <spelunk/binary/dwarf.hpp>
+#include <spelunk/binary/elf.hpp>
+#include <spelunk/binary/macho.hpp>
+#include <spelunk/binary/minidump.hpp>
+#include <spelunk/binary/pe.hpp>
+#include <spelunk/binary/rel.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/extension/loader_registry.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -175,7 +175,7 @@ slice_fat(std::vector<std::byte>& buf) {
         // decoder will fail on instructions. Warn loudly so users don't
         // wonder why decompile/disasm output is empty.
         std::fprintf(stderr,
-            "ember: fat binary has no x86_64 or arm64 slice; "
+            "spelunk: fat binary has no x86_64 or arm64 slice; "
             "falling back to cputype %#x (instructions will not decode)\n",
             pick->cputype);
     }
@@ -286,7 +286,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
         if (!opts.pdb_path.empty()) {
             if (!try_load(opts.pdb_path)) {
                 std::fprintf(stderr,
-                    "ember: --pdb: cannot read '%s'; continuing without PDB info\n",
+                    "spelunk: --pdb: cannot read '%s'; continuing without PDB info\n",
                     opts.pdb_path.string().c_str());
             }
         } else if (!opts.no_pdb) {
@@ -323,4 +323,4 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
         "unrecognized binary format (only ELF, DOL, REL, Mach-O 64-bit, and PE32+ supported)"));
 }
 
-}  // namespace ember
+}  // namespace spelunk

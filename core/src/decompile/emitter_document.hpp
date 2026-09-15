@@ -7,10 +7,10 @@
 #include <set>
 #include <string>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
 
-namespace ember {
+namespace spelunk {
 
 class Binary;
 struct StructuredFunction;
@@ -67,4 +67,4 @@ void prepend_untyped_pointer_note(std::string& output,
                                   const std::string& header);
 
 }  // namespace emit
-}  // namespace ember
+}  // namespace spelunk

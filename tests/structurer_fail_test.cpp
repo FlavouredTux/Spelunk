@@ -10,7 +10,7 @@ namespace {
 // Test 1: a disconnected block carrying a Call surfaces as STRUCTURER_FAIL
 // instead of vanishing silently.
 int test_dropped_block_diagnostic() {
-    using namespace ember;
+    using namespace spelunk;
 
     IrFunction fn;
     fn.start = 0x10404a846;
@@ -91,7 +91,7 @@ int test_dropped_block_diagnostic() {
 // fix indirectly: format_structured should reference bb_b somewhere in the
 // loop body, AND no STRUCTURER_FAIL marker should be emitted for bb_b.
 int test_infinite_loop_body_recovered() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kA = 0x401000;
     constexpr addr_t kB = 0x401010;
@@ -153,7 +153,7 @@ int test_infinite_loop_body_recovered() {
 // correct but obscures the original nested condition and makes large Wii menu
 // functions look loopy even though the CFG is acyclic.
 int test_single_shared_diamond_tail_is_cloned() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kEntry  = 0x401100;
     constexpr addr_t kAlt    = 0x401110;
@@ -214,7 +214,7 @@ int test_single_shared_diamond_tail_is_cloned() {
 // ----------------------------------------------------------------------------
 // Test 3: phi merge values get role names instead of anonymous vN names.
 int test_phi_merge_names_are_mined() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402000;
 
@@ -281,7 +281,7 @@ int test_phi_merge_names_are_mined() {
 }
 
 int test_phi_induction_name_is_mined() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402100;
 
@@ -339,7 +339,7 @@ int test_phi_induction_name_is_mined() {
 }
 
 int test_full_diamond_phi_renders_ternary() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kCondition = 0x402180;
     constexpr addr_t kTrue = 0x402190;
@@ -398,7 +398,7 @@ int test_full_diamond_phi_renders_ternary() {
 }
 
 int test_phi_livein_initializer_is_mined() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402200;
 
@@ -458,7 +458,7 @@ int test_phi_livein_initializer_is_mined() {
 }
 
 int test_phi_accumulator_name_is_mined() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402300;
 
@@ -516,7 +516,7 @@ int test_phi_accumulator_name_is_mined() {
 }
 
 int test_phi_index_name_is_mined() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402400;
 

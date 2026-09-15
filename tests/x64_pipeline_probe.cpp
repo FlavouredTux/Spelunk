@@ -10,13 +10,13 @@
 #include <set>
 #include <string>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/x64_lifter.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/x64_lifter.hpp>
 
 namespace {
-using namespace ember;
+using namespace spelunk;
 
 u64 high_product(u64 a, u64 b) {
     const u64 al = static_cast<u32>(a), ah = a >> 32;
@@ -131,7 +131,7 @@ std::expected<u64, std::string> invoke_fixture(
 }  // namespace
 
 int main(int argc, char** argv) {
-    using namespace ember;
+    using namespace spelunk;
     if (argc != 2) return 2;
     auto binary = load_binary(argv[1]);
     if (!binary) return 3;

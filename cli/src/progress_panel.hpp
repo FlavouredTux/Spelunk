@@ -8,9 +8,9 @@
 #include <string>
 #include <utility>
 
-#include <ember/common/progress.hpp>
+#include <spelunk/common/progress.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 // Multi-line live-redrawing progress panel for long CPU-bound passes
 // (corpus TEEF build, --recognize sweeps). Three lines on a TTY,
@@ -21,7 +21,7 @@ namespace ember::cli {
 //     rate 1247 fn/s   elapsed 47s   eta 1m 7s   skip 12%
 //
 // Falls back to a single carriage-return line on dumb terminals;
-// silent when EMBER_QUIET=1 or stderr isn't a TTY (`progress_enabled()`).
+// silent when SPELUNK_QUIET=1 or stderr isn't a TTY (`progress_enabled()`).
 //
 // ETA uses a 5-second windowed rate so the estimate stabilizes
 // quickly and tracks rate changes during heterogeneous workloads
@@ -58,7 +58,7 @@ public:
             // even before the first tick lands.
             render_locked(0, 0, t_start_, /*final=*/false);
         } else {
-            std::fprintf(stderr, "ember: %s - %zu items on %u thread%s\n",
+            std::fprintf(stderr, "spelunk: %s - %zu items on %u thread%s\n",
                          label_.c_str(), total_, threads_,
                          threads_ == 1 ? "" : "s");
             std::fflush(stderr);
@@ -92,7 +92,7 @@ public:
                 ? static_cast<double>(done) / elapsed : 0.0;
             char buf[256];
             std::snprintf(buf, sizeof(buf),
-                "ember: %s done - %zu items in %s (%.0f/s)\n",
+                "spelunk: %s done - %zu items in %s (%.0f/s)\n",
                 label_.c_str(), done,
                 fmt_duration(elapsed).c_str(), rate);
             std::fputs(buf, stderr);
@@ -268,4 +268,4 @@ private:
     std::mutex  mu_;
 };
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

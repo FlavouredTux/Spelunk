@@ -6,10 +6,10 @@
 
 #include <string_view>
 
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
-namespace ember::instruction_detail {
+namespace spelunk::instruction_detail {
 
 [[nodiscard]] std::string_view arm_mnemonic_name(Mnemonic m) noexcept;
 
-}  // namespace ember::instruction_detail
+}  // namespace spelunk::instruction_detail

@@ -1,4 +1,4 @@
-#include <ember/binary/macho.hpp>
+#include <spelunk/binary/macho.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -8,12 +8,12 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -288,4 +288,4 @@ void MachOBinary::scan_swift_types() {
     }
 }
 
-}  // namespace ember
+}  // namespace spelunk

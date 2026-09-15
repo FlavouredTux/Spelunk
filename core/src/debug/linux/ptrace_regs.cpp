@@ -23,15 +23,15 @@
 #include <sys/user.h>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/regs.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/regs.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "errno_io.hpp"
 #include "ptrace_target.hpp"
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 namespace {
 
@@ -357,4 +357,4 @@ Result<void> LinuxTarget::set_regs(ThreadId tid, const Registers& r) {
     return {};
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

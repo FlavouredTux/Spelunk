@@ -1,4 +1,4 @@
-#include <ember/binary/minidump.hpp>
+#include <spelunk/binary/minidump.hpp>
 
 #include <algorithm>
 #include <array>
@@ -15,16 +15,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/pe_view.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/pe_view.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -424,7 +424,7 @@ Result<void> MinidumpBinary::parse() {
                     }
                     // Trim to basename - minidump stores full paths
                     // (e.g. C:\Windows\System32\kernel32.dll), but
-                    // Ember's symbol display is friendlier with just
+                    // Spelunk's symbol display is friendlier with just
                     // `kernel32.dll`.
                     const auto sep = name.find_last_of("\\/");
                     if (sep != std::string::npos) name.erase(0, sep + 1);
@@ -486,4 +486,4 @@ Result<void> MinidumpBinary::parse() {
     return {};
 }
 
-}  // namespace ember
+}  // namespace spelunk

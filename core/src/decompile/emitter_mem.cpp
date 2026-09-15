@@ -10,18 +10,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 namespace {
 std::optional<std::string> cast_untyped_array_base(
     const Emitter& e, const IrValue& base, IrType access_type,
@@ -1037,4 +1037,4 @@ std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
                        expr(addr, depth + 1));
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

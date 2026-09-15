@@ -1,0 +1,43 @@
+#pragma once
+
+#include <string_view>
+
+namespace spelunk {
+
+enum class Format {
+    Unknown,
+    Elf,
+    Pe,
+    MachO,
+    // Microsoft minidump (.dmp): captures the live state of one or more
+    // modules from a running Windows process. Treated as a Binary so the
+    // decoder/CFG/IR/emitter pipeline runs unchanged on a runtime image.
+    Minidump,
+    // Hand-rolled (vaddr, size, flags, file) manifest pointing at a set
+    // of raw region dumps. Used for Scylla-style scrape workflows where
+    // an attacker dumped pages out of a process with no surrounding
+    // minidump container.
+    RawRegions,
+    // DOL executable: header lists up to 7 text and 11 data segments with
+    // physical/runtime addresses, no magic bytes.
+    Dol,
+    // Nintendo GameCube/Wii relocatable module. Sections and compact import
+    // relocation streams are described by an OSModuleInfo header.
+    Rel,
+};
+
+[[nodiscard]] constexpr std::string_view format_name(Format f) noexcept {
+    switch (f) {
+        case Format::Unknown:    return "unknown";
+        case Format::Elf:        return "elf";
+        case Format::Pe:         return "pe";
+        case Format::MachO:      return "mach-o";
+        case Format::Minidump:   return "minidump";
+        case Format::RawRegions: return "raw-regions";
+        case Format::Dol:        return "dol";
+        case Format::Rel:        return "rel";
+    }
+    return "unknown";
+}
+
+}  // namespace spelunk

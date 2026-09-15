@@ -4,9 +4,9 @@
 #include <QString>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 struct Session;
 
@@ -39,4 +39,4 @@ private:
     std::vector<Row> rows_;
 };
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

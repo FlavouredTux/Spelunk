@@ -1,4 +1,4 @@
-#include <ember/analysis/identify.hpp>
+#include <spelunk/analysis/identify.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,15 +10,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/progress.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/progress.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
-namespace ember {
+namespace spelunk {
 namespace {
 
 struct CS { u64 v; u8 mn; };  // constant signal: value + min_hits
@@ -681,4 +681,4 @@ std::string format_identify_tsv(const std::vector<IdentifyHit>& hits) {
     return out;
 }
 
-} // namespace ember
+} // namespace spelunk

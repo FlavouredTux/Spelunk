@@ -20,29 +20,29 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/sigs.hpp>
-#include <ember/analysis/vtables.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/decompile/emit_options.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/sigs.hpp>
+#include <spelunk/analysis/vtables.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/decompile/emit_options.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
 
 #include "../args.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 Annotations load_annotations_quiet(const Args& args) {
     Annotations ann;
@@ -87,7 +87,7 @@ std::optional<addr_t> resolve_flag_target(const Binary& b,
                                                         std::string_view spec) {
     if (auto va = parse_cli_addr(spec)) return *va;
     if (looks_like_address(spec)) {
-        std::println(stderr, "ember: invalid address '{}'", spec);
+        std::println(stderr, "spelunk: invalid address '{}'", spec);
         return std::nullopt;
     }
     const Annotations ann = load_annotations_quiet(args);
@@ -117,8 +117,8 @@ ModuleScope resolve_module_scope(const Binary& b,
     }
 
     if (candidates.empty()) {
-        std::println(stderr, "ember: --module '{}' matched no loaded module", name);
-        std::println(stderr, "ember: available modules:");
+        std::println(stderr, "spelunk: --module '{}' matched no loaded module", name);
+        std::println(stderr, "spelunk: available modules:");
         for (const auto& s : b.symbols()) {
             if (s.kind != SymbolKind::Section) continue;
             if (s.size == 0) continue;
@@ -128,7 +128,7 @@ ModuleScope resolve_module_scope(const Binary& b,
     }
     if (candidates.size() > 1) {
         std::println(stderr,
-            "ember: --module '{}' is ambiguous ({} matches); using first ({})",
+            "spelunk: --module '{}' is ambiguous ({} matches); using first ({})",
             name, candidates.size(), candidates.front()->name);
         for (const auto* c : candidates) {
             std::println(stderr, "  {}\t{:#x}\t{:#x}", c->name, c->addr, c->size);
@@ -139,7 +139,7 @@ ModuleScope resolve_module_scope(const Binary& b,
     ms.matched_name = candidates.front()->name;
     ms.active = true;
     std::println(stderr,
-        "ember: --module '{}' resolved to {} [{:#x}, {:#x})",
+        "spelunk: --module '{}' resolved to {} [{:#x}, {:#x})",
         name, ms.matched_name, ms.lo, ms.hi);
     return ms;
 }
@@ -525,7 +525,7 @@ Annotations load_annotations_for(const Args& args, bool& loaded) {
     auto rv = Annotations::load(loc.path);
     if (!rv) {
         std::println(stderr,
-            "ember: warning: {}: {}; continuing without user annotations",
+            "spelunk: warning: {}: {}; continuing without user annotations",
             rv.error().kind_name(), rv.error().message);
         return annotations;
     }
@@ -536,10 +536,10 @@ Annotations load_annotations_for(const Args& args, bool& loaded) {
                             + annotations.signatures.size()
                             + annotations.notes.size()
                             + annotations.named_constants.size();
-        std::println(stderr, "ember: annotations: {} ({}, {} entries)",
+        std::println(stderr, "spelunk: annotations: {} ({}, {} entries)",
                      loc.path.string(), annotation_source_name(loc.source), n);
     }
     return annotations;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

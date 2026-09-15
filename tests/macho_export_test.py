@@ -45,7 +45,7 @@ def main(args):
                'length_or_zero': 'uint64_t', 'call_atof_bridge': 'double'}
     exported = ''
     for name in names + ['next_handle', 'length_or_zero', 'call_atof_bridge']:
-        text = run([args.ember, '--no-cache', '--emit-c', '--annotations', annotation, '-s', name, binary])
+        text = run([args.spelunk, '--no-cache', '--emit-c', '--annotations', annotation, '-s', name, binary])
         (root / (name + '.c')).write_text(text)
         # No hand-written preamble: exports must include their declarations.
         diagnostics = check_source(text, compiler=args.clang, filename=name + '.c')
@@ -167,7 +167,7 @@ int main(void) {
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    for tool in ['ember', 'clang', 'ld64', 'nm']:
+    for tool in ['spelunk', 'clang', 'ld64', 'nm']:
         parser.add_argument('--' + tool, required=True)
     args = parser.parse_args()
     try:
@@ -175,7 +175,7 @@ if __name__ == '__main__':
     except ImportError:
         print('SKIP: Python unicorn is required')
         raise SystemExit(77)
-    support.ROOT = pathlib.Path(tempfile.mkdtemp(prefix='ember-c-export-'))
+    support.ROOT = pathlib.Path(tempfile.mkdtemp(prefix='spelunk-c-export-'))
     try:
         main(args)
     except Exception:

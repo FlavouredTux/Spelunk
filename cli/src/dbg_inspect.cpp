@@ -14,17 +14,17 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/regs.hpp>
-#include <ember/debug/types.hpp>
-#include <ember/debug/unwind.hpp>
-#include <ember/decompile/emit_options.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/regs.hpp>
+#include <spelunk/debug/types.hpp>
+#include <spelunk/debug/unwind.hpp>
+#include <spelunk/decompile/emit_options.hpp>
 
 #include "dbg_internal.hpp"
 
-namespace ember::cli::dbg {
+namespace spelunk::cli::dbg {
 
 namespace {
 
@@ -169,7 +169,7 @@ int cmd_set_reg(ReplState& rs, std::string_view reg_tok,
     u64* slot = gpr_field(*regs, reg_tok);
     if (!slot) {
         std::println(stderr,
-            "ember-dbg: set: unknown register '{}' (try rax/rbx/.../rip/rflags/cs/...)",
+            "spelunk-dbg: set: unknown register '{}' (try rax/rbx/.../rip/rflags/cs/...)",
             reg_tok);
         return 1;
     }
@@ -185,7 +185,7 @@ int cmd_set_reg(ReplState& rs, std::string_view reg_tok,
         value = static_cast<u64>(resolve_runtime_multi(*spec));
     }
     if (!value) {
-        std::println(stderr, "ember-dbg: set: bad value '{}'", value_tok);
+        std::println(stderr, "spelunk-dbg: set: bad value '{}'", value_tok);
         return 1;
     }
     *slot = *value;
@@ -200,18 +200,18 @@ int cmd_poke(ReplState& rs, std::string_view addr_tok,
     if (!rs.live) { std::println("Not attached."); return 0; }
     if (byte_toks.empty()) {
         std::println(stderr,
-            "ember-dbg: poke: usage `poke <addr> <hex-byte> [<hex-byte>...]`");
+            "spelunk-dbg: poke: usage `poke <addr> <hex-byte> [<hex-byte>...]`");
         return 1;
     }
     auto spec = parse_addr_spec_multi(addr_tok, rs);
     if (!spec) {
-        std::println(stderr, "ember-dbg: poke: bad address '{}'", addr_tok);
+        std::println(stderr, "spelunk-dbg: poke: bad address '{}'", addr_tok);
         return 1;
     }
     auto bytes = parse_hex_bytes(byte_toks);
     if (!bytes) {
         std::println(stderr,
-            "ember-dbg: poke: bad hex byte (expected pairs like c3 90 0xff)");
+            "spelunk-dbg: poke: bad hex byte (expected pairs like c3 90 0xff)");
         return 1;
     }
     const addr_t va_runtime = resolve_runtime_multi(*spec);
@@ -229,7 +229,7 @@ int cmd_xmem(ReplState& rs, std::string_view addr_tok, std::string_view count_to
     if (!rs.live) { std::println("Not attached."); return 0; }
     auto spec = parse_addr_spec_multi(addr_tok, rs);
     if (!spec) {
-        std::println(stderr, "ember-dbg: x: bad address '{}'", addr_tok);
+        std::println(stderr, "spelunk-dbg: x: bad address '{}'", addr_tok);
         return 1;
     }
     const addr_t va_runtime = resolve_runtime_multi(*spec);
@@ -330,7 +330,7 @@ int cmd_bt(ReplState& rs) {
 int cmd_code(ReplState& rs) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     if (!rs.bin && rs.aux_bins.empty()) {
-        std::println(stderr, "ember-dbg: code: no binary loaded");
+        std::println(stderr, "spelunk-dbg: code: no binary loaded");
         return 1;
     }
     auto regs = rs.tgt->get_regs(rs.current_tid);
@@ -350,22 +350,22 @@ int cmd_code(ReplState& rs) {
     }
     const addr_t pc_static = pc_runtime - slide;
 
-    auto cf = ember::containing_function(*code_bin, pc_static);
+    auto cf = spelunk::containing_function(*code_bin, pc_static);
     if (!cf) {
         std::println("No function covers {} (static {}).",
                      fmt_addr(pc_runtime), fmt_addr(pc_static));
         return 0;
     }
-    auto win = ember::resolve_function_at(*code_bin, cf->entry);
+    auto win = spelunk::resolve_function_at(*code_bin, cf->entry);
     if (!win) {
-        std::println(stderr, "ember-dbg: code: failed to resolve {}", cf->name);
+        std::println(stderr, "spelunk-dbg: code: failed to resolve {}", cf->name);
         return 1;
     }
 
     LineMap line_map;
     EmitOptions opts;
     opts.line_map = &line_map;
-    auto pseudo = ember::format_struct(*code_bin, *win, /*pseudo*/true,
+    auto pseudo = spelunk::format_struct(*code_bin, *win, /*pseudo*/true,
                                        /*ann*/nullptr, opts);
     if (!pseudo) { print_error(pseudo.error()); return 1; }
     const std::string& text = *pseudo;
@@ -434,7 +434,7 @@ int cmd_thread_switch(ReplState& rs, std::string_view tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     auto v = parse_int(tok);
     if (!v) {
-        std::println(stderr, "ember-dbg: thread: bad tid '{}'", tok);
+        std::println(stderr, "spelunk-dbg: thread: bad tid '{}'", tok);
         return 1;
     }
     rs.current_tid = static_cast<debug::ThreadId>(*v);
@@ -442,4 +442,4 @@ int cmd_thread_switch(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
-}  // namespace ember::cli::dbg
+}  // namespace spelunk::cli::dbg

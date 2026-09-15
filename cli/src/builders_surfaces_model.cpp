@@ -10,14 +10,14 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/app_surface.hpp>
-#include <ember/analysis/demangle.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/app_surface.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "builders_internal.hpp"
 #include "builders_surfaces_internal.hpp"
 
-namespace ember::cli::builders {
+namespace spelunk::cli::builders {
 
 namespace {
 
@@ -607,4 +607,4 @@ build_surface_artifact_rows(const std::vector<const AppSurfaceEvidence*>& eviden
     return out;
 }
 
-}  // namespace ember::cli::builders
+}  // namespace spelunk::cli::builders

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 struct Args;
 
@@ -11,4 +11,4 @@ struct Args;
 // analysis runs.
 int run_apply_patches(const Args& args);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

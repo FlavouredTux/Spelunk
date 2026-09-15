@@ -1,4 +1,4 @@
-#include <ember/binary/pdb.hpp>
+#include <spelunk/binary/pdb.hpp>
 
 #include <array>
 #include <cstddef>
@@ -8,11 +8,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::pdb {
+namespace spelunk::pdb {
 
 namespace {
 
@@ -165,4 +165,4 @@ Result<std::vector<std::byte>> Msf::read_stream(u32 idx) const {
     return out;
 }
 
-}  // namespace ember::pdb
+}  // namespace spelunk::pdb

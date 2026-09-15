@@ -1,9 +1,9 @@
 #pragma once
 
-#include <ember/common/annotations.hpp>
+#include <spelunk/common/annotations.hpp>
 
-namespace ember { class Binary; }
-namespace ember::cli {
+namespace spelunk { class Binary; }
+namespace spelunk::cli {
 
 struct Args;
 
@@ -12,4 +12,4 @@ struct Args;
 int apply_header_annotations(const Args& args, const Binary& b,
                              Annotations& annotations, bool& loaded);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

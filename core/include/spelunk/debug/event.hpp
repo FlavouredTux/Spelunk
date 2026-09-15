@@ -1,0 +1,89 @@
+#pragma once
+
+#include <variant>
+
+#include <spelunk/analysis/int3_resolver.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
+#include <spelunk/debug/types.hpp>
+
+namespace spelunk::debug {
+
+// Hit a software breakpoint we placed. PC is already adjusted back to
+// the breakpoint instruction (ptrace stops one byte past the int3).
+struct EvBreakpointHit { ThreadId tid; BreakpointId id; addr_t pc; };
+
+// A hardware data watchpoint fired. PC is the *next* instruction
+// (data watches trap after the access completes), `addr` is the
+// watched VA from the DR slot that fired, `slot` is 0..3 - useful
+// when the user wants to know which DR caught the hit.
+struct EvWatchpointHit {
+    ThreadId     tid;
+    WatchpointId id;
+    addr_t       pc;
+    addr_t       addr;
+    u8           slot;
+};
+
+// Tracee is paused at a `syscall` instruction (entry or exit) by the
+// catchpoint mechanism. `nr` is the original syscall number from
+// orig_rax (preserved across both stops). PC points at the syscall
+// instruction on entry, at the instruction after it on exit.
+struct EvSyscallStop {
+    ThreadId tid;
+    u32      nr;
+    addr_t   pc;
+    bool     entry;  // true = about to execute syscall; false = it just returned
+};
+
+// Single-step finished - used by step() and the breakpoint step-over.
+struct EvSingleStep    { ThreadId tid; addr_t pc; };
+
+// An int3 that wasn't placed by the debugger. `resolution` explains
+// the likely reason (padding, anti-debug trap, __debugbreak, etc.).
+// Emitted instead of bare EvSignal{SIGTRAP} when an int3_resolver
+// callback is registered on the Target.
+struct EvInt3Trap      { ThreadId tid; addr_t pc; Int3Resolution resolution; };
+
+// Tracee received a signal we don't intercept (SIGSEGV, SIGFPE, …).
+// The signal is held; cont() forwards it back unless the caller clears
+// it via set_regs / explicit suppress (deferred for v0).
+struct EvSignal        { ThreadId tid; int signo; };
+
+// Generic stop with no cause we recognised - used after attach() and
+// at launch entry when stop_at_entry=true.
+struct EvStopped       { ThreadId tid; addr_t pc; };
+
+// A new thread appeared (PTRACE_EVENT_CLONE). Already attached and
+// stopped; the next cont() resumes it alongside its siblings.
+struct EvThreadCreated { ThreadId tid; };
+struct EvThreadExited  { ThreadId tid; int code; };
+
+// A new image entered the address space. v0 emits this once at launch
+// for the main executable; dynamic loader instrumentation comes later.
+struct EvImageLoaded   { addr_t base; };
+
+// Tracee called execve(2). Old bp/wp state is dead; thread is paused
+// at the new entry so the caller can re-arm before resuming.
+struct EvExec         { ThreadId tid; addr_t pc; };
+
+struct EvExited        { int code; };
+struct EvTerminated    { int signo; };
+
+using Event = std::variant<
+    EvBreakpointHit,
+    EvWatchpointHit,
+    EvSyscallStop,
+    EvSingleStep,
+    EvInt3Trap,
+    EvSignal,
+    EvStopped,
+    EvThreadCreated,
+    EvThreadExited,
+    EvImageLoaded,
+    EvExec,
+    EvExited,
+    EvTerminated
+>;
+
+}  // namespace spelunk::debug

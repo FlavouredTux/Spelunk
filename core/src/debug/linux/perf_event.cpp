@@ -46,16 +46,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/regs.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/regs.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "errno_io.hpp"
 #include "perf_target.hpp"
 
-namespace ember::debug::linux_perf {
+namespace spelunk::debug::linux_perf {
 
 namespace {
 
@@ -316,7 +316,7 @@ Result<Event> PerfTarget::wait_event() {
                         u64 lost = 0;
                         std::memcpy(&lost, rec.body.data() + 8, 8);
                         std::fprintf(stderr,
-                            "ember: perf ring overflow - %llu sample(s) lost\n",
+                            "spelunk: perf ring overflow - %llu sample(s) lost\n",
                             static_cast<unsigned long long>(lost));
                     }
                     continue;
@@ -371,4 +371,4 @@ Result<Event> PerfTarget::wait_event() {
     }
 }
 
-}  // namespace ember::debug::linux_perf
+}  // namespace spelunk::debug::linux_perf

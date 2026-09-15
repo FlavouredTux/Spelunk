@@ -1,4 +1,4 @@
-#include <ember/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -7,20 +7,20 @@
 #include <unordered_set>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -390,4 +390,4 @@ compute_data_xrefs(const Binary& b) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

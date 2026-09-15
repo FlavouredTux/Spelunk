@@ -15,8 +15,8 @@
 
 
 namespace {
-using namespace ember;
-using namespace ember::test;
+using namespace spelunk;
+using namespace spelunk::test;
 
 constexpr std::array types{IrType::I1, IrType::I8, IrType::I16, IrType::I32, IrType::I64};
 constexpr std::array binary_ops{
@@ -279,7 +279,7 @@ bool generated_case(u64 seed) {
         inputs.push_back(input_for(seed ^ i, a, b, 16, q_address));
     }
     if (verifier.verify(program.fn, inputs)) return true;
-    std::fprintf(stderr, "Replay: ember_ir_semantics_test --seed %s\n", std::to_string(seed).c_str());
+    std::fprintf(stderr, "Replay: spelunk_ir_semantics_test --seed %s\n", std::to_string(seed).c_str());
     return false;
 }
 
@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
         return generated_case(seed) ? 0 : 1;
     }
     if (argc != 1) {
-        std::fprintf(stderr, "usage: ember_ir_semantics_test [--seed N]\n");
+        std::fprintf(stderr, "usage: spelunk_ir_semantics_test [--seed N]\n");
         return 2;
     }
     if (!oracle_checks() || !constant_cases() || !cast_cases() || !memory_cases()) return 1;

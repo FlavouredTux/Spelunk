@@ -5,7 +5,7 @@
 
 namespace {
 
-using namespace ember;
+using namespace spelunk;
 
 void add_block(IrFunction& fn, addr_t start, BlockKind kind,
                std::vector<addr_t> predecessors,

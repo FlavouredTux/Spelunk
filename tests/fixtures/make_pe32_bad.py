@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit a tiny malformed-for-Ember PE32 image.
+"""Emit a tiny malformed-for-Spelunk PE32 image.
 
 The file is structurally PE, but uses the PE32 optional-header magic so
 the loader must reject it with the explicit PE32+ only error.

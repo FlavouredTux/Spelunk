@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a minimal big-endian PPC32 ELF ET_REL object.
 
-The fixture deliberately uses relocations in both code and data so Ember's
+The fixture deliberately uses relocations in both code and data so Spelunk's
 relocatable-object loader can be tested without requiring a cross compiler.
 """
 

@@ -1,4 +1,4 @@
-#include <ember/script/declarative.hpp>
+#include <spelunk/script/declarative.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -19,15 +19,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/text.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/text.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::script {
+namespace spelunk::script {
 
 namespace {
 
@@ -247,7 +247,7 @@ expand_template(std::string_view tmpl, std::span<const std::string> caps) {
 unquote(std::string_view s, std::size_t line) {
     if (s.size() < 2 || s.front() != '"' || s.back() != '"') {
         return std::unexpected(Error::invalid_format(std::format(
-            "ember: line {}: expected quoted string, got `{}`", line, s)));
+            "spelunk: line {}: expected quoted string, got `{}`", line, s)));
     }
     std::string out;
     out.reserve(s.size() - 2);
@@ -262,7 +262,7 @@ unquote(std::string_view s, std::size_t line) {
                 case '"':  out += '"';  break;
                 default:
                     return std::unexpected(Error::invalid_format(std::format(
-                        "ember: line {}: unknown escape `\\{}`", line, n)));
+                        "spelunk: line {}: unknown escape `\\{}`", line, n)));
             }
         } else {
             out += s[i];
@@ -316,7 +316,7 @@ struct KvPair {
                 const std::string_view val = trim(chunk.substr(eq + 1));
                 if (key == "conf") {
                     float v = 0.0f;
-                    if (ember::parse_float_clamped(val, v)) {
+                    if (spelunk::parse_float_clamped(val, v)) {
                         m.confidence = v;
                     }
                 } else if (key == "src") {
@@ -345,7 +345,7 @@ split_kv(std::string_view line, std::size_t lineno) {
         }
         if (i >= line.size()) {
             return std::unexpected(Error::invalid_format(std::format(
-                "ember: line {}: unterminated quoted string", lineno)));
+                "spelunk: line {}: unterminated quoted string", lineno)));
         }
         ++i;  // skip the closing quote
     } else {
@@ -359,7 +359,7 @@ split_kv(std::string_view line, std::size_t lineno) {
     while (sep < line.size() && (line[sep] == ' ' || line[sep] == '\t')) ++sep;
     if (sep >= line.size()) {
         return std::unexpected(Error::invalid_format(std::format(
-            "ember: line {}: missing `=` or `->` separator", lineno)));
+            "spelunk: line {}: missing `=` or `->` separator", lineno)));
     }
     bool arrow = false;
     std::size_t after;
@@ -370,7 +370,7 @@ split_kv(std::string_view line, std::size_t lineno) {
         after = sep + 2;
     } else {
         return std::unexpected(Error::invalid_format(std::format(
-            "ember: line {}: missing `=` or `->` separator", lineno)));
+            "spelunk: line {}: missing `=` or `->` separator", lineno)));
     }
 
     KvPair kv;
@@ -788,14 +788,14 @@ Result<std::vector<Directive>> parse(std::string_view text) {
             const auto rb = line.find(']');
             if (rb == std::string_view::npos) {
                 return std::unexpected(Error::invalid_format(std::format(
-                    "ember: line {}: unterminated section header", lineno)));
+                    "spelunk: line {}: unterminated section header", lineno)));
             }
             section = trim(line.substr(1, rb - 1));
             continue;
         }
         if (section.empty()) {
             return std::unexpected(Error::invalid_format(std::format(
-                "ember: line {}: directive outside any section", lineno)));
+                "spelunk: line {}: directive outside any section", lineno)));
         }
 
         auto kv = split_kv(line, lineno);
@@ -836,7 +836,7 @@ Result<std::vector<Directive>> parse(std::string_view text) {
         else if (iequals(section, "delete"))         d.kind = Directive::Kind::Delete;
         else {
             return std::unexpected(Error::invalid_format(std::format(
-                "ember: line {}: unknown section `[{}]`", lineno, section)));
+                "spelunk: line {}: unknown section `[{}]`", lineno, section)));
         }
 
         // Section-specific separator validation: `=` for direct sections,
@@ -846,11 +846,11 @@ Result<std::vector<Directive>> parse(std::string_view text) {
             d.kind == Directive::Kind::FromStrings;
         if (kv->arrow && !wants_arrow) {
             return std::unexpected(Error::invalid_format(std::format(
-                "ember: line {}: [{}] uses `=`, not `->`", lineno, section)));
+                "spelunk: line {}: [{}] uses `=`, not `->`", lineno, section)));
         }
         if (!kv->arrow && wants_arrow) {
             return std::unexpected(Error::invalid_format(std::format(
-                "ember: line {}: [{}] uses `->`, not `=`", lineno, section)));
+                "spelunk: line {}: [{}] uses `->`, not `=`", lineno, section)));
         }
         out.push_back(std::move(d));
     }
@@ -862,7 +862,7 @@ parse_file(const std::filesystem::path& path) {
     std::ifstream f(path);
     if (!f) {
         return std::unexpected(Error::io(std::format(
-            "ember: cannot open '{}'", path.string())));
+            "spelunk: cannot open '{}'", path.string())));
     }
     std::stringstream buf;
     buf << f.rdbuf();
@@ -908,4 +908,4 @@ Result<ApplyStats> apply_file(const std::filesystem::path& path,
     return apply(*directives, b, ann);
 }
 
-}  // namespace ember::script
+}  // namespace spelunk::script

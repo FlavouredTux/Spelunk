@@ -1,4 +1,4 @@
-#include <ember/analysis/teef_orbit.hpp>
+#include <spelunk/analysis/teef_orbit.hpp>
 
 #include <algorithm>
 #include <array>
@@ -10,18 +10,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/egraph.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/egraph.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -530,10 +530,10 @@ void install_rules(EGraph& g) {
     static const auto pair = []() -> std::pair<std::size_t, std::size_t> {
         std::size_t mn = kOrbitDefaultMaxNodes;
         std::size_t mi = kOrbitDefaultMaxIters;
-        if (const char* s = std::getenv("EMBER_ORBIT_MAX_NODES")) {
+        if (const char* s = std::getenv("SPELUNK_ORBIT_MAX_NODES")) {
             try { mn = static_cast<std::size_t>(std::stoull(s)); } catch (...) {}
         }
-        if (const char* s = std::getenv("EMBER_ORBIT_MAX_ITERS")) {
+        if (const char* s = std::getenv("SPELUNK_ORBIT_MAX_ITERS")) {
             try { mi = static_cast<std::size_t>(std::stoull(s)); } catch (...) {}
         }
         return {mn, mi};
@@ -615,4 +615,4 @@ OrbitSig compute_orbit_sig(const Binary& bin, addr_t fn_start) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

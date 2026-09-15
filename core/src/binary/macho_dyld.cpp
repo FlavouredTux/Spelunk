@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::macho {
+namespace spelunk::macho {
 
 namespace {
 
@@ -661,4 +661,4 @@ void parse_chained_fixups(
     }
 }
 
-}  // namespace ember::macho
+}  // namespace spelunk::macho

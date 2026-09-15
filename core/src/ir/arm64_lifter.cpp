@@ -1,4 +1,4 @@
-#include <ember/ir/arm64_lifter.hpp>
+#include <spelunk/ir/arm64_lifter.hpp>
 
 #include <cstddef>
 #include <format>
@@ -6,16 +6,16 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/analysis/function.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -938,4 +938,4 @@ Result<IrFunction> Arm64Lifter::lift(const Function& fn) const {
     return ir;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -2,14 +2,14 @@
 
 #include <array>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "ppc_lifter_internal.hpp"
 
-namespace ember::ppc_lift {
+namespace spelunk::ppc_lift {
 
 namespace {
 
@@ -160,4 +160,4 @@ void lift_fp_cmp(LiftCtx& ctx, IrType t) {
     set_fp_compare_flags(ctx, lhs, rhs, insn.ppc_cr_field);
 }
 
-}  // namespace ember::ppc_lift
+}  // namespace spelunk::ppc_lift

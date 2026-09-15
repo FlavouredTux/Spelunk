@@ -1,4 +1,4 @@
-#include <ember/binary/elf.hpp>
+#include <spelunk/binary/elf.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -15,21 +15,21 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/relocation.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/relocation.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
 #include "elf_internal.hpp"
 #include "ppc32_relocation.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -1011,4 +1011,4 @@ std::map<addr_t, addr_t> ElfBinary::relocated_qwords() const {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

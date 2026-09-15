@@ -3,49 +3,49 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from emberpy import Ember, EmberError
+from spelunkpy import Spelunk, SpelunkError
 
 
-class EmberWrapperTest(unittest.TestCase):
-    def make_fake_ember(self, body):
+class SpelunkWrapperTest(unittest.TestCase):
+    def make_fake_spelunk(self, body):
         tmp = tempfile.TemporaryDirectory()
-        path = Path(tmp.name) / "ember"
+        path = Path(tmp.name) / "spelunk"
         path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
         self.addCleanup(tmp.cleanup)
         return path
 
     def test_builds_pseudo_command(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import sys\n"
             "print('\\n'.join(sys.argv[1:]))\n"
         )
-        out = Ember("target.bin", ember_bin=fake).pseudo("entry", ipa=True)
+        out = Spelunk("target.bin", spelunk_bin=fake).pseudo("entry", ipa=True)
         self.assertEqual(out.splitlines(), ["-p", "-s", "entry", "--ipa", "target.bin"])
 
     def test_raises_on_failure(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import sys\n"
             "print('bad binary', file=sys.stderr)\n"
             "sys.exit(7)\n"
         )
-        with self.assertRaises(EmberError) as caught:
-            Ember("missing.bin", ember_bin=fake).strings()
+        with self.assertRaises(SpelunkError) as caught:
+            Spelunk("missing.bin", spelunk_bin=fake).strings()
         self.assertEqual(caught.exception.result.returncode, 7)
         self.assertIn("bad binary", str(caught.exception))
 
     def test_can_return_unchecked_result(self):
-        fake = self.make_fake_ember("import sys\nsys.exit(3)\n")
-        result = Ember("target.bin", ember_bin=fake).run("--strings", check=False)
+        fake = self.make_fake_spelunk("import sys\nsys.exit(3)\n")
+        result = Spelunk("target.bin", spelunk_bin=fake).run("--strings", check=False)
         self.assertFalse(result.ok)
         self.assertEqual(result.returncode, 3)
 
     def test_options_repeat_sequences(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import sys\n"
             "print(' '.join(sys.argv[1:]))\n"
         )
-        out = Ember("target.bin", ember_bin=fake).recognize(
+        out = Spelunk("target.bin", spelunk_bin=fake).recognize(
             ["a.tsv", "b.tsv"],
             no_cache=True,
         )
@@ -55,7 +55,7 @@ class EmberWrapperTest(unittest.TestCase):
         )
 
     def test_function_handle_uses_address_commands(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import json\n"
             "import sys\n"
             "if '--json' in sys.argv:\n"
@@ -63,7 +63,7 @@ class EmberWrapperTest(unittest.TestCase):
             "else:\n"
             "    print(' '.join(sys.argv[1:]))\n"
         )
-        fn = Ember("target.bin", ember_bin=fake).function(0x1041EA0D0)
+        fn = Spelunk("target.bin", spelunk_bin=fake).function(0x1041EA0D0)
         self.assertEqual(
             fn.disasm(count=120).strip(),
             "--disasm-at 0x1041ea0d0 --count 120 target.bin",
@@ -82,7 +82,7 @@ class EmberWrapperTest(unittest.TestCase):
         )
 
     def test_explain_path_returns_json_rows(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import json, sys\n"
             "if '--callees' in sys.argv:\n"
             "    print(json.dumps({'va': sys.argv[sys.argv.index('--callees') + 1], 'callees': []}))\n"
@@ -90,7 +90,7 @@ class EmberWrapperTest(unittest.TestCase):
             "addr = sys.argv[sys.argv.index('--explain-address') + 1]\n"
             "print(json.dumps({'address': addr, 'kind': 'code'}))\n"
         )
-        rows = Ember("target.bin", ember_bin=fake).explain_path([0x10, 0x20])
+        rows = Spelunk("target.bin", spelunk_bin=fake).explain_path([0x10, 0x20])
         self.assertEqual(
             rows,
             [
@@ -100,13 +100,13 @@ class EmberWrapperTest(unittest.TestCase):
         )
 
     def test_jsonable_helpers(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import json, sys\n"
             "flag = next(a for a in sys.argv if a.startswith('--') and a != '--json')\n"
             "idx = sys.argv.index(flag)\n"
             "print(json.dumps({'flag': flag, 'value': sys.argv[idx + 1], 'json': '--json' in sys.argv}))\n"
         )
-        e = Ember("target.bin", ember_bin=fake)
+        e = Spelunk("target.bin", spelunk_bin=fake)
         self.assertEqual(
             e.containing_function(0x401234),
             {"flag": "--containing-fn", "value": "0x401234", "json": True},
@@ -121,7 +121,7 @@ class EmberWrapperTest(unittest.TestCase):
         )
 
     def test_investigate_bundle(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import json, sys\n"
             "if '-p' in sys.argv:\n"
             "    print('pseudo body')\n"
@@ -131,7 +131,7 @@ class EmberWrapperTest(unittest.TestCase):
             "    flag = next(a for a in sys.argv if a.startswith('--') and a != '--json')\n"
             "    print(json.dumps({'flag': flag}))\n"
         )
-        report = Ember("target.bin", ember_bin=fake).investigate(
+        report = Spelunk("target.bin", spelunk_bin=fake).investigate(
             0x401234,
             include_pseudo=False,
         )
@@ -141,13 +141,13 @@ class EmberWrapperTest(unittest.TestCase):
         self.assertNotIn("pseudo", report)
 
     def test_annotate_batch_writes_script_and_applies_it(self):
-        fake = self.make_fake_ember(
+        fake = self.make_fake_spelunk(
             "import sys\n"
             "print(' '.join(sys.argv[1:]))\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
-            script = Path(tmp) / "findings.ember"
-            result = Ember("target.bin", ember_bin=fake).annotate_batch(
+            script = Path(tmp) / "findings.spelunk"
+            result = Spelunk("target.bin", spelunk_bin=fake).annotate_batch(
                 script,
                 [
                     {

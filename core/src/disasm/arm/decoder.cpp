@@ -6,12 +6,12 @@
 #include <optional>
 #include <span>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/arm64_decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/arm64_decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
 
 // AArch64 (ARMv8-A) instruction decoder.
 //
@@ -41,11 +41,11 @@
 // linear sweep doesn't fall apart in their presence; the lifter renders
 // them as `arm64.<op>(...)` block comments. SVE / SME are unmapped.
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
-using u32 = ember::u32;
+using u32 = spelunk::u32;
 
 [[nodiscard]] inline u32 bits(u32 v, unsigned hi, unsigned lo) noexcept {
     const unsigned w = hi - lo + 1;
@@ -883,4 +883,4 @@ Arm64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcep
     return insn;
 }
 
-}  // namespace ember
+}  // namespace spelunk

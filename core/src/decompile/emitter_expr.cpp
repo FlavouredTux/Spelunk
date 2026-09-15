@@ -10,17 +10,17 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
     if (const auto* name = scoped_ssa_name(v)) return *name;
@@ -104,7 +104,7 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
     }
     const std::string refined = c_type_name_for(d.dst);
     if (options.c_source && d.segment == Reg::None && !stack_offset(d.srcs[0])) {
-        std::string loaded = std::format("ember_read_{}({})", c_memory_suffix(d.dst.type), c_address(d.srcs[0]));
+        std::string loaded = std::format("spelunk_read_{}({})", c_memory_suffix(d.dst.type), c_address(d.srcs[0]));
         if (refined.ends_with('*')) loaded = std::format("({})(uintptr_t){}", refined, loaded);
         return loaded;
     }
@@ -527,7 +527,7 @@ std::string Emitter::format_store(const IrInst& inst) const {
     if (options.c_source && inst.segment == Reg::None && !stack_offset(addr)) {
         const std::string value = is_float_type(val.type) ? expr(val)
             : std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val));
-        return std::format("ember_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
+        return std::format("spelunk_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
     }
     std::string lhs;
     if (inst.segment == Reg::None) {
@@ -993,4 +993,4 @@ std::string Emitter::format_bitop(const IrInst& d, std::string_view op,
                       self_prec, min_prec);
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

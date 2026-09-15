@@ -12,19 +12,19 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/ir/lifter.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/ir/lifter.hpp>
 
 #include "strings_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -183,4 +183,4 @@ mine_log_categories(const Binary& b) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

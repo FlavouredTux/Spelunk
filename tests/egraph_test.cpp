@@ -4,15 +4,15 @@
 // hand-crafted rule sets, and verifies canonical_hash convergence on
 // the orbit-equivalent forms of a few small algebraic identities.
 
-#include <ember/analysis/egraph.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/egraph.hpp>
+#include <spelunk/common/types.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
 
-using namespace ember::egraph;
-using ember::u64;
+using namespace spelunk::egraph;
+using spelunk::u64;
 
 namespace {
 

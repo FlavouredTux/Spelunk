@@ -1,17 +1,17 @@
 # Debugger
 
-`ember --debug PATH` (Linux ptrace, macOS Mach) launches a REPL-driven
+`spelunk --debug PATH` (Linux ptrace, macOS Mach) launches a REPL-driven
 debugger with the same view you decompile against - pseudo-C lines as
-the source view, ember's symbol resolution for breakpoints, and the
+the source view, spelunk's symbol resolution for breakpoints, and the
 same `Annotations` pulled in for naming. The point is not to replace
 gdb; it's to debug the binary you've been reading without leaving
-ember's namespace.
+spelunk's namespace.
 
 ## Launch / attach
 
 ```sh
-ember --debug ./target -- arg1 arg2     # launch under the debugger
-ember --debug --attach-pid 1234         # attach to a running process
+spelunk --debug ./target -- arg1 arg2     # launch under the debugger
+spelunk --debug --attach-pid 1234         # attach to a running process
 ```
 
 `--attach-pid` doesn't need a binary path; the REPL resolves symbols
@@ -166,19 +166,19 @@ The reason `set` and `poke` exist: a breakpoint or fault lands you at
 to nudge state.
 
 ```
-(ember) bt
+(spelunk) bt
 #0  0x401234 sub_401234+0x0
 #1  ...
-(ember) regs
+(spelunk) regs
 rax=0x000000000000003c  rbx=0x...  rcx=0x...  rdx=0x...
 rip=0x0000000000401234  rflags=0x0000000000000346
-(ember) set rip 0x401236      # skip the 2-byte instruction
-(ember) c
+(spelunk) set rip 0x401236      # skip the 2-byte instruction
+(spelunk) c
 
 # Or NOP-out a check before continuing:
-(ember) poke 0x401234 90 90 90 90 90
+(spelunk) poke 0x401234 90 90 90 90 90
 wrote 5 byte(s) at 0x0000000000401234
-(ember) c
+(spelunk) c
 ```
 
 `set rip <value>` accepts any address spec `b` does, so
@@ -187,15 +187,15 @@ wrote 5 byte(s) at 0x0000000000401234
 ## Pseudo-C-line breakpoints
 
 ```
-(ember) code
-... (ember prints the pseudo-C with line numbers)
-(ember) b sub_4000b0:42        # break at the asm address that maps to line 42
-(ember) c
+(spelunk) code
+... (spelunk prints the pseudo-C with line numbers)
+(spelunk) b sub_4000b0:42        # break at the asm address that maps to line 42
+(spelunk) c
 ```
 
 The mapping comes from the same `LineMap` the emitter records when it
 generates the function's pseudo-C. There's no DWARF requirement -
-ember derives line numbers from its own decompile output, not from
+spelunk derives line numbers from its own decompile output, not from
 the binary's debug info.
 
 ## Aux symbol oracles
@@ -205,8 +205,8 @@ won't show up in `/proc/<pid>/maps` with a useful path. Load them as
 aux oracles:
 
 ```
-(ember) aux /path/to/payload.dylib
-(ember) bp
+(spelunk) aux /path/to/payload.dylib
+(spelunk) bp
 # breakpoints set against `payload:foo` resolve via the aux oracle's symbol
 ```
 
@@ -223,20 +223,20 @@ the trace. The `ignored` set names PCs whose fault should be silently
 forwarded to the tracee's own handler:
 
 ```
-(ember) ignore 0x401234
-(ember) ignored
+(spelunk) ignore 0x401234
+(spelunk) ignored
 0x0000000000401234
-(ember) c        # SEGV at 0x401234 now passes through; no stop
+(spelunk) c        # SEGV at 0x401234 now passes through; no stop
 ```
 
-Static (un-slid) addresses; ember slide-corrects at match time using
+Static (un-slid) addresses; spelunk slide-corrects at match time using
 whichever Binary owns the live PC.
 
 ## Stack unwinder
 
 `bt` uses `.eh_frame` / `.debug_frame` CFI when the primary binary has
 it (which is essentially always on Linux, even with debug symbols
-stripped). Without CFI ember falls back to RBP walking, which is
+stripped). Without CFI spelunk falls back to RBP walking, which is
 correct for `-fno-omit-frame-pointer` code and degrades gracefully on
 the rest. The choice is automatic per-call.
 
@@ -258,7 +258,7 @@ obvious they're best-effort, and the order isn't necessarily
 caller→callee:
 
 ```
-(ember) bt
+(spelunk) bt
 #0  0x000055...  <fn_a+0x40>
 #1  0x000055...  <__rust_start_panic+0x18>
 #2  0x000055...  <fn_b+0x80>            *scavenged*
@@ -275,13 +275,13 @@ candidate. Pure unknown PCs stay bare so the user can see them.
 
 Multi-threaded targets get one event per thread on stops. `threads`
 lists them, `thread <tid>` switches the current focus (which `regs`,
-`s`, `code`, `bt` operate on). `c` resumes all of them; ember tracks
+`s`, `code`, `bt` operate on). `c` resumes all of them; spelunk tracks
 each thread's signal state independently.
 
 ## Ctrl+C
 
 Interrupts the tracee back to the prompt instead of killing the REPL.
-Internally ember installs a `SIGINT` handler that calls
+Internally spelunk installs a `SIGINT` handler that calls
 `Target::interrupt()` on the active session - without it, the
 `PTRACE_O_EXITKILL` linkage we install for safety would take the
 tracee down on the first Ctrl+C.
@@ -295,11 +295,11 @@ is the *next* instruction; the watched VA comes from the slot itself
 event). Use this for the cases breakpoints can't reach:
 
 ```
-(ember) watch 0x600820 w 8        # DT_INIT_ARRAY[0]: who zeroes it?
-(ember) c
+(spelunk) watch 0x600820 w 8        # DT_INIT_ARRAY[0]: who zeroes it?
+(spelunk) c
 Watchpoint #1 (DR0) hit: data 0x0000000000600820 touched at PC ...
                         in thread ...
-(ember) bt
+(spelunk) bt
 #0  0x...   sub_b7410+0x44   <-- the zero-er
 #1  ...
 ```
@@ -329,18 +329,18 @@ sites, indirect rax aliases, JIT-emitted code that the walker never
 sees in the static binary.
 
 ```
-(ember) catch syscall execve exit_group
+(spelunk) catch syscall execve exit_group
 Catching syscalls: execve(59) exit_group(231)
-(ember) c
+(spelunk) c
 Syscall ENTRY execve(59) at PC 0x... in thread ...
-(ember) bt          # the actual call site, regardless of how
+(spelunk) bt          # the actual call site, regardless of how
                     # rax got loaded
-(ember) c
+(spelunk) c
 Syscall EXIT  execve(59) at PC 0x... in thread ...
-(ember) dcatch      # clear when done
+(spelunk) dcatch      # clear when done
 ```
 
-Behind the scenes ember sets `PTRACE_O_TRACESYSGOOD` so syscall-stops
+Behind the scenes spelunk sets `PTRACE_O_TRACESYSGOOD` so syscall-stops
 arrive as `SIGTRAP | 0x80` and never collide with int3 hits or DR
 watchpoints. With a non-empty filter, sites whose `orig_rax` doesn't
 match the user's set are silently re-issued as `PTRACE_SYSCALL` -
@@ -350,20 +350,20 @@ the user only sees the syscalls they asked for.
 
 Breakpoints and watchpoints survive `execve`. The kernel cleared
 every int3 byte and every DR slot when it replaced the address
-space; ember replays each one against the new image, re-resolving
+space; spelunk replays each one against the new image, re-resolving
 the original spec text the user typed (`sub_b7410`,
 `libloader:0x4de8`, `marker`, etc.) so a watch by symbol picks up
 the new VA automatically:
 
 ```
-(ember) watch marker w 8
+(spelunk) watch marker w 8
 Watchpoint #1 at 0x0000000000404038 (size 8, write)
-(ember) c
+(spelunk) c
 parent: marker=aaaaaaaaaaaaaaaa, about to execve child
 exec into new binary: /path/to/child (primary reloaded)
 Re-armed across exec: 0 bp (1 dropped), 1 wp (0 dropped).
 execve completed; tracee paused at new entry … in thread …
-(ember) c
+(spelunk) c
 Watchpoint #2 (DR0) hit: data 0x0000000000404018 touched at PC
                          0x0000000000401143 <child_writer+0x15> in thread …
 ```

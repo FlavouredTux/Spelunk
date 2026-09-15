@@ -1,4 +1,4 @@
-#include <ember/analysis/app_surface.hpp>
+#include <spelunk/analysis/app_surface.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -11,16 +11,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -798,4 +798,4 @@ AppSurfaceAnalysis analyze_app_surfaces(const Binary& b,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

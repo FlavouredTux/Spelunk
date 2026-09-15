@@ -1,4 +1,4 @@
-#include <ember/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
 
 #include <algorithm>
 #include <expected>
@@ -7,15 +7,15 @@
 #include <unordered_set>
 #include <utility>
 
-#include <ember/analysis/eh_frame.hpp>
-#include <ember/analysis/pe_unwind.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/error.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
+#include <spelunk/analysis/pe_unwind.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/error.hpp>
 
 #include "cfg_builder_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 void CfgBuilder::ensure_unwind_ranges_() const {
     if (unwind_ranges_init_) return;
@@ -161,4 +161,4 @@ CfgBuilder::build(addr_t entry, std::string name) const {
     return fn;
 }
 
-}  // namespace ember
+}  // namespace spelunk

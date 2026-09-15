@@ -2,7 +2,7 @@
 
 #include "theme.hpp"
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 namespace {
 
@@ -121,4 +121,4 @@ void PseudoHighlighter::highlightBlock(const QString& text) {
     }
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

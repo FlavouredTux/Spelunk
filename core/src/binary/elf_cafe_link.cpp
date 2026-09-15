@@ -1,5 +1,5 @@
 // Static Cafe linkage. Import slots are symbolic addresses, not OS exports.
-#include <ember/binary/elf.hpp>
+#include <spelunk/binary/elf.hpp>
 
 #include <algorithm>
 #include <array>
@@ -12,7 +12,7 @@
 #include "elf_internal.hpp"
 #include "ppc32_relocation.hpp"
 
-namespace ember {
+namespace spelunk {
 namespace {
 void put32(std::span<std::byte> bytes, u32 value) {
     for (unsigned i = 0; i < 4; ++i)
@@ -241,4 +241,4 @@ Result<void> ElfBinary::link_cafe_sections(const ParsedEhdr& h) {
 
     return {};
 }
-} // namespace ember
+} // namespace spelunk

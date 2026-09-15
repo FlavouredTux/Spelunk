@@ -17,9 +17,9 @@
     } while (0)
 
 int main() {
-    using ember::debug::linux_detail::OwnedArgv;
-    using ember::debug::linux_detail::build_argv;
-    using ember::debug::linux_detail::build_envp;
+    using spelunk::debug::linux_detail::OwnedArgv;
+    using spelunk::debug::linux_detail::build_argv;
+    using spelunk::debug::linux_detail::build_envp;
 
     OwnedArgv argv = build_argv("/bin/program", {"first", "second"});
     CHECK(argv.ptrs.size() == 4, "argv includes program, args, and null");
@@ -51,13 +51,13 @@ int main() {
     CHECK(env.ptrs[2] == nullptr, "environment null terminator");
 
     const pid_t self = ::getpid();
-    const auto images = ember::debug::linux_detail::read_proc_maps(self);
+    const auto images = spelunk::debug::linux_detail::read_proc_maps(self);
     CHECK(!images.empty(), "/proc/self/maps yields loaded images");
     CHECK(std::ranges::all_of(images, [](const auto& image) {
               return !image.path.empty() && image.base != 0;
           }), "loaded image records are complete");
 
-    const auto tids = ember::debug::linux_detail::read_task_tids(self);
+    const auto tids = spelunk::debug::linux_detail::read_task_tids(self);
     CHECK(std::ranges::find(tids, self) != tids.end(),
           "/proc/self/task includes the main thread");
     return 0;

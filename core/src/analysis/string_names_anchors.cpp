@@ -8,7 +8,7 @@
 
 #include "string_names_internal.hpp"
 
-namespace ember::string_names {
+namespace spelunk::string_names {
 
 namespace {
 
@@ -411,4 +411,4 @@ graphics_phrase_name_from_string(std::string_view text) {
     return std::nullopt;
 }
 
-}  // namespace ember::string_names
+}  // namespace spelunk::string_names

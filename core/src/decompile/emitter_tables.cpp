@@ -7,10 +7,10 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 namespace {
 
@@ -267,4 +267,4 @@ std::string_view c_type_name(IrType t) noexcept {
     return "?";
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

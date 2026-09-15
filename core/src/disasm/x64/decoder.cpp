@@ -6,14 +6,14 @@
 #include <span>
 #include <utility>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
 #include "decoder_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -398,4 +398,4 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     return insn;
 }
 
-}  // namespace ember
+}  // namespace spelunk

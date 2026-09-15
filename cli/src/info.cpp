@@ -5,13 +5,13 @@
 #include <print>
 #include <string_view>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -105,7 +105,7 @@ void print_info(const Binary& b, std::string_view path,
 namespace {
 
 // One topic = one detailed section. Splitting print_help out by topic
-// keeps the default `--help` legible (the surface ember exposes is
+// keeps the default `--help` legible (the surface spelunk exposes is
 // big enough that a single dump no longer fits a screen) and gives
 // scripts a stable token to ask about (`--help syms`).
 void help_view() {
@@ -230,7 +230,7 @@ void help_ana() {
     std::println("      --identify-threshold T  confidence floor (default 0.4)");
     std::println("      --recognize      library-function recognition against --corpus");
     std::println("      --recognize-threshold T  margin floor (default 0.6)");
-    std::println("      --corpus PATH    repeatable; TEEF TSV (output of `ember --teef <lib>`)");
+    std::println("      --corpus PATH    repeatable; TEEF TSV (output of `spelunk --teef <lib>`)");
     std::println("      --anti-corpus PATH  repeatable; queries matching any blocked hash short-");
     std::println("                       circuit. Use for UPX prologues / packer trampolines / CRT.");
     std::println("      --pat PATH       repeatable; FLIRT-style .pat sig file");
@@ -261,12 +261,12 @@ void help_teef() {
 }
 
 void help_ann() {
-    std::println("Annotations / .ember scripts:");
+    std::println("Annotations / .spelunk scripts:");
     std::println("      --annotate ADDR  append one annotation to the resolved file. Companion");
     std::println("                       flags: --set-name NEW / --set-note TEXT / --set-signature DECL,");
     std::println("                       optionally --confidence FLOAT / --evidence TEXT / --source TAG");
     std::println("                       (default `cli`). Pair with --dry-run to preview.");
-    std::println("      --apply PATH     apply a declarative .ember script (renames, sigs, notes,");
+    std::println("      --apply PATH     apply a declarative .spelunk script (renames, sigs, notes,");
     std::println("                       constants, pattern-renames, log-format renames, deletes)");
     std::println("      --dry-run        with --apply: dump the would-be TSV to stdout, don't write");
     std::println("      --list-annotations  dump every record in the resolved annotations file");
@@ -278,7 +278,7 @@ void help_ann() {
 
 void help_dbg() {
     std::println("Interactive debugger:");
-    std::println("      --debug          launch under the built-in REPL debugger (uses ember's");
+    std::println("      --debug          launch under the built-in REPL debugger (uses spelunk's");
     std::println("                       pseudo-C as the source view; no DWARF). Linux ptrace");
     std::println("                       backend by default; macOS uses Mach.");
     std::println("      --attach-pid PID  attach to a running process instead of launching");
@@ -315,7 +315,7 @@ void help_load() {
     std::println("                       reference DLLs. --json emits a slot-RVA->name manifest.");
     std::println("                       --image-base 0xVA sets the RVA key base (default: image base)");
     std::println("      --force-fn-start 0xVA  repeatable; treat VA as a function entry. Use when");
-    std::println("                       obfuscator-merged / mid-body real entries cause ember to");
+    std::println("                       obfuscator-merged / mid-body real entries cause spelunk to");
     std::println("                       silently rebind to a closest-below symbol.");
     std::println("      --module NAME    scope fn iteration to one loaded module (minidumps,");
     std::println("                       multi-module containers). Affects --functions and --recognize.");
@@ -348,7 +348,7 @@ void help_patch() {
 
 void help_cache() {
     std::println("Disk cache:");
-    std::println("      --cache-dir DIR  override $XDG_CACHE_HOME/ember for disk cache");
+    std::println("      --cache-dir DIR  override $XDG_CACHE_HOME/spelunk for disk cache");
     std::println("      --no-cache       bypass disk cache (--xrefs / --strings / --arities /");
     std::println("                       --fingerprints). Cache key = abspath|size|mtime|kVersion;");
     std::println("                       --module is folded into the key so per-module runs don't");
@@ -358,9 +358,9 @@ void help_cache() {
 }  // namespace
 
 void print_help() {
-    std::println("usage: ember [view-flag] [-s NAME] <binary>");
-    std::println("       ember [view-flag] --dtk <project> [--dtk-version ID] [-s NAME]");
-    std::println("       ember --help <topic>");
+    std::println("usage: spelunk [view-flag] [-s NAME] <binary>");
+    std::println("       spelunk [view-flag] --dtk <project> [--dtk-version ID] [-s NAME]");
+    std::println("       spelunk --help <topic>");
     std::println("");
     std::println("View pipeline:");
     std::println("  -d  -c  --cfg-pseudo  -i  --ssa  -O  --struct  -p  [-s NAME]");
@@ -374,7 +374,7 @@ void print_help() {
     std::println("           int3, syscalls, forge-spec, FLIRT");
     std::println("  teef     fingerprints, teef, recognize, diff, orbit-dump,");
     std::println("           corpus, size caps");
-    std::println("  ann      annotate, apply, list-annotations, dry-run, .ember scripts");
+    std::println("  ann      annotate, apply, list-annotations, dry-run, .spelunk scripts");
     std::println("  dbg      --debug, attach, backends, aux-bin");
     std::println("  load     DTK projects, pdb, Kismet, regions, raw-bytes, force-fn-start, module");
     std::println("  data     Clang headers, typed initializers, SPM event scripts");
@@ -383,7 +383,7 @@ void print_help() {
     std::println("");
     std::println("Common:  --json  -q/--quiet  -h/--help  --version");
     std::println("");
-    std::println("Get topic detail:  ember --help <topic>   (or --help=<topic>)");
+    std::println("Get topic detail:  spelunk --help <topic>   (or --help=<topic>)");
 }
 
 void print_help_topic(std::string_view topic) {
@@ -400,9 +400,9 @@ void print_help_topic(std::string_view topic) {
     else if (topic == "cache") { help_cache(); return; }
     // Unknown topics are an error, not a help request: report the bad
     // topic and point at the full banner instead of dumping it (the
-    // topic list itself lives in `ember --help`).
-    std::println(stderr, "ember: --help: unknown topic '{}'", topic);
-    std::println(stderr, "run 'ember --help' for full usage");
+    // topic list itself lives in `spelunk --help`).
+    std::println(stderr, "spelunk: --help: unknown topic '{}'", topic);
+    std::println(stderr, "run 'spelunk --help' for full usage");
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

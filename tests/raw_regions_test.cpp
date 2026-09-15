@@ -1,6 +1,6 @@
-#include <ember/analysis/data_xrefs.hpp>
-#include <ember/analysis/vtables.hpp>
-#include <ember/binary/raw_regions.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/vtables.hpp>
+#include <spelunk/binary/raw_regions.hpp>
 
 #include <array>
 #include <cstddef>
@@ -30,13 +30,13 @@ void write_file(const fs::path& path, const void* data, std::size_t size) {
 }  // namespace
 
 int main() {
-    const fs::path dir = fs::temp_directory_path() / "ember_raw_regions_test";
+    const fs::path dir = fs::temp_directory_path() / "spelunk_raw_regions_test";
     fs::create_directories(dir);
 
-    constexpr ember::addr_t base = 0x7fe341c0d000ull;
-    constexpr ember::addr_t code = base + 0x2987800ull;
-    constexpr ember::addr_t code2 = code + 1;
-    constexpr ember::addr_t slot = base + 0x3000000ull;
+    constexpr spelunk::addr_t base = 0x7fe341c0d000ull;
+    constexpr spelunk::addr_t code = base + 0x2987800ull;
+    constexpr spelunk::addr_t code2 = code + 1;
+    constexpr spelunk::addr_t slot = base + 0x3000000ull;
 
     const std::array<unsigned char, 2> code_bytes{0xc3, 0xc3};
     const std::array<unsigned char, 16> data_bytes{
@@ -67,13 +67,13 @@ int main() {
         "0x7fe344c0d000  0x10  r--  data.bin\n";
     write_file(manifest, manifest_text.data(), manifest_text.size());
 
-    auto loaded = ember::RawRegionsBinary::load_from_manifest(manifest);
+    auto loaded = spelunk::RawRegionsBinary::load_from_manifest(manifest);
     if (!loaded) {
         fail("load raw regions manifest");
         return fails == 0 ? 0 : 1;
     }
 
-    const auto xrefs = ember::compute_data_xrefs(**loaded);
+    const auto xrefs = spelunk::compute_data_xrefs(**loaded);
     auto it = xrefs.find(code);
     if (it == xrefs.end()) {
         fail("relocated pointer target was not indexed");
@@ -84,10 +84,10 @@ int main() {
         const auto& xr = it->second.front();
         if (xr.from_pc != slot) fail("xref slot address");
         if (xr.to_addr != code) fail("xref target address");
-        if (xr.kind != ember::DataXrefKind::CodePtr) fail("xref kind");
+        if (xr.kind != spelunk::DataXrefKind::CodePtr) fail("xref kind");
     }
 
-    const auto vtables = ember::discover_runtime_vtables(**loaded);
+    const auto vtables = spelunk::discover_runtime_vtables(**loaded);
     if (vtables.size() != 1) fail("runtime vtable count");
     else {
         if (vtables.front().vaddr != slot) fail("runtime vtable address");
@@ -100,7 +100,7 @@ int main() {
                                    std::string_view contents) {
         const fs::path path = dir / std::string(name);
         write_file(path, contents.data(), contents.size());
-        if (ember::RawRegionsBinary::load_from_manifest(path)) {
+        if (spelunk::RawRegionsBinary::load_from_manifest(path)) {
             fail(std::string("accepted malformed manifest: ").append(name).c_str());
         }
     };
@@ -111,8 +111,8 @@ int main() {
     expect_bad_manifest("zero.txt", "0x1000 0x0 r-- code.bin\n");
     expect_bad_manifest("flags.txt", "0x1000 0x2 read code.bin\n");
     expect_bad_manifest("extra.txt", "0x1000 0x2 r-- code.bin junk\n");
-    if (ember::RawRegionsBinary::load_from_raw_bytes(
-            dir / "code.bin", std::numeric_limits<ember::addr_t>::max())) {
+    if (spelunk::RawRegionsBinary::load_from_raw_bytes(
+            dir / "code.bin", std::numeric_limits<spelunk::addr_t>::max())) {
         fail("accepted wrapping raw-bytes extent");
     }
 

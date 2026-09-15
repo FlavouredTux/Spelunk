@@ -4,12 +4,12 @@
 
 #include <span>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "ptrace_target.hpp"
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 Result<void>
 LinuxTarget::set_syscall_catch(bool catch_all, std::span<const u32> nrs) {
@@ -29,4 +29,4 @@ Result<void> LinuxTarget::clear_syscall_catch() {
     return {};
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

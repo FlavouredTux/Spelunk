@@ -11,16 +11,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/function.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "structurer_internal.hpp"
 
-namespace ember::structurer {
+namespace spelunk::structurer {
 
 namespace {
 
@@ -1081,4 +1081,4 @@ bool Builder::contains_goto(const Region& r) noexcept {
     return false;
 }
 
-}  // namespace ember::structurer
+}  // namespace spelunk::structurer

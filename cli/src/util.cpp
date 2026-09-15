@@ -8,9 +8,9 @@
 #include <string_view>
 #include <system_error>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 std::optional<addr_t> parse_cli_addr(std::string_view s) {
     if (s.starts_with("sub_"))                            s.remove_prefix(4);
@@ -83,4 +83,4 @@ std::string escape_for_line(std::string_view s) {
     return out;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

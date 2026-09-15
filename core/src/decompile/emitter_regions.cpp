@@ -7,17 +7,17 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_render_chunk.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 void Emitter::collect_for_updates(const Region& r) {
     if (r.kind == RegionKind::For && r.has_update) {
@@ -748,4 +748,4 @@ void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) c
     out += std::format("{}}}\n", ind);
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

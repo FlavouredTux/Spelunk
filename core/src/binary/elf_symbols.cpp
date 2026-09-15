@@ -1,4 +1,4 @@
-#include <ember/binary/elf.hpp>
+#include <spelunk/binary/elf.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -12,15 +12,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "elf_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 namespace {
 
 using elf::align_up_bounded;
@@ -387,4 +387,4 @@ ElfBinary::parse_symbols(const ParsedEhdr& h,
     return {};
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -1,4 +1,4 @@
-#include <ember/decompile/emitter.hpp>
+#include <spelunk/decompile/emitter.hpp>
 
 #include <cstddef>
 #include <expected>
@@ -12,23 +12,23 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_util.hpp>
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/frame.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/sig_inference.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/decompile/emit_options.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/analysis/cfg_util.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/frame.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/sig_inference.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/decompile/emit_options.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "emitter_document.hpp"
 #include "emitter_internal.hpp"
@@ -37,7 +37,7 @@
 #include "emitter_render_chunk.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember {
+namespace spelunk {
 
 using namespace emit;
 
@@ -772,4 +772,4 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

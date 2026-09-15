@@ -17,30 +17,30 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/eh_frame.hpp>
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/indirect_calls.hpp>
-#include <ember/analysis/ir_cache.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/pe_unwind.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/sig_inference.hpp>
-#include <ember/analysis/sigs.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/pe.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/decompile/emit_options.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/indirect_calls.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/pe_unwind.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/sig_inference.hpp>
+#include <spelunk/analysis/sigs.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/pe.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/decompile/emit_options.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "../cli_error.hpp"
 #include "../header_import.hpp"
@@ -48,7 +48,7 @@
 #include "../subcommands.hpp"
 #include "common.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -140,7 +140,7 @@ int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
     for (const auto& p : args.pat_paths) paths.emplace_back(p);
     auto db = sigs::load_pats(paths);
     if (!db) {
-        std::println(stderr, "ember: --pat: {}: {}",
+        std::println(stderr, "spelunk: --pat: {}: {}",
                      db.error().kind_name(), db.error().message);
         return EXIT_FAILURE;
     }
@@ -156,7 +156,7 @@ int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
     else                 ann_loaded = true;
     if (!args.quiet) {
         std::println(stderr,
-            "ember: sigs: loaded {} sig(s) from {} file(s), {} match(es)",
+            "spelunk: sigs: loaded {} sig(s) from {} file(s), {} match(es)",
             db->size(), args.pat_paths.size(), matches.size());
     }
     return EXIT_SUCCESS;
@@ -262,7 +262,7 @@ int run_emit(const Args& args, const Binary& b) {
         ann_loaded = true;
         if (!args.quiet) {
             std::println(stderr,
-                "ember: debug info: {} function signature{}",
+                "spelunk: debug info: {} function signature{}",
                 debug_added, debug_added == 1 ? "" : "s");
         }
     }
@@ -312,7 +312,7 @@ int run_emit(const Args& args, const Binary& b) {
     if ((args.ipa || project_ipa) && (args.pseudo || args.strct)) {
         ScopedTimer t("ipa");
         if (!args.quiet) {
-            std::println(stderr, "ember: running {} IPA...",
+            std::println(stderr, "spelunk: running {} IPA...",
                          args.ipa ? "whole-binary" : "project-scoped");
             std::fflush(stderr);
         }
@@ -321,7 +321,7 @@ int run_emit(const Args& args, const Binary& b) {
             args.ipa ? std::span<const addr_t>{}
                      : std::span<const addr_t>(view_scope));
         if (!args.quiet) {
-            std::println(stderr, "ember: IPA done: {} functions analyzed", ipa.sigs.size());
+            std::println(stderr, "spelunk: IPA done: {} functions analyzed", ipa.sigs.size());
         }
         emit_opts.signatures = &ipa.sigs;
         emit_opts.type_arena = &ipa.arena;
@@ -335,11 +335,11 @@ int run_emit(const Args& args, const Binary& b) {
         // about to bail with "no symbol named X", so don't bother
         // resolving anything either.
         if (!view_scope.empty()) {
-            std::println(stderr, "ember: resolving indirect calls (vtable + "
+            std::println(stderr, "spelunk: resolving indirect calls (vtable + "
                                  "import back-trace)...");
             std::fflush(stderr);
             resolutions = resolve_indirect_calls(b, &shared_ir_cache, view_scope);
-            std::println(stderr, "ember: indirect-call resolver: {} sites resolved",
+            std::println(stderr, "spelunk: indirect-call resolver: {} sites resolved",
                          resolutions.size());
             emit_opts.call_resolutions = &resolutions;
         }
@@ -348,7 +348,7 @@ int run_emit(const Args& args, const Binary& b) {
     if (args.eh && (args.pseudo || args.strct)) {
         ScopedTimer t("eh_landing_pads");
         lp_map = parse_landing_pads(b);
-        std::println(stderr, "ember: EH data: {} landing-pad ranges parsed",
+        std::println(stderr, "spelunk: EH data: {} landing-pad ranges parsed",
                      lp_map.size());
         emit_opts.landing_pads = &lp_map;
     }
@@ -384,7 +384,7 @@ int run_emit(const Args& args, const Binary& b) {
             if (batch) {
                 if (emitted != 0)
                     std::println("");
-                std::println("// ember-symbol: {}", view_symbols[i]);
+                std::println("// spelunk-symbol: {}", view_symbols[i]);
             }
             if (const int rc = emit_one(view_symbols[i]); rc != EXIT_SUCCESS) {
                 return rc;
@@ -421,7 +421,7 @@ int run_emit(const Args& args, const Binary& b) {
         return run_each([&](std::string_view symbol) { return run_disasm(b, symbol, ann_ptr); });
     }
     if (batch) {
-        std::println(stderr, "ember: --symbols requires a function view such as -p or -d");
+        std::println(stderr, "spelunk: --symbols requires a function view such as -p or -d");
         return EXIT_FAILURE;
     }
     constexpr std::size_t kDefaultInfoRowLimit = 2000;
@@ -432,4 +432,4 @@ int run_emit(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

@@ -1,4 +1,4 @@
-#include <ember/analysis/int3_resolver.hpp>
+#include <spelunk/analysis/int3_resolver.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,15 +10,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -618,4 +618,4 @@ resolve_int3_at(const Binary& b, addr_t va) {
     return res;
 }
 
-}  // namespace ember
+}  // namespace spelunk

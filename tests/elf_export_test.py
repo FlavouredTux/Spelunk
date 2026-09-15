@@ -36,7 +36,7 @@ def main(args):
     assert fixtures, f'no fixtures under {args.fixtures}'
     clean, failed = [], {}
     for fixture in fixtures:
-        emitted = subprocess.run([args.ember, '--no-cache', '--emit-c', str(fixture)],
+        emitted = subprocess.run([args.spelunk, '--no-cache', '--emit-c', str(fixture)],
                                  capture_output=True, text=True, timeout=120)
         if emitted.returncode != 0:
             continue  # not a decompilable image (raw blobs, debugger payloads)
@@ -61,7 +61,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--ember', required=True)
+    parser.add_argument('--spelunk', required=True)
     parser.add_argument('--clang', required=True)
     parser.add_argument('--fixtures', required=True)
     main(parser.parse_args())

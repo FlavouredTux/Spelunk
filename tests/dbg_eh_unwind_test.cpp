@@ -9,11 +9,11 @@
 #include <utility>
 #include <variant>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/unwind.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/unwind.hpp>
 
 #include "dbg_test_util.hpp"
 
@@ -28,12 +28,12 @@
 
 namespace {
 
-ember::addr_t compute_slide(ember::debug::Target& tgt,
-                            const ember::Binary& bin,
+spelunk::addr_t compute_slide(spelunk::debug::Target& tgt,
+                            const spelunk::Binary& bin,
                             const std::string& bin_path) {
     const auto images = tgt.images();
     if (images.empty()) return 0;
-    const ember::addr_t pref = bin.preferred_load_base();
+    const spelunk::addr_t pref = bin.preferred_load_base();
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -56,27 +56,27 @@ int main(int argc, char** argv) {
         return 99;
     }
 
-    auto bin = ember::load_binary(argv[1]);
+    auto bin = spelunk::load_binary(argv[1]);
     CHECK(bin.has_value(), "load_binary");
 
     const auto* marker = (*bin)->find_by_name("dbg_marker");
     CHECK(marker != nullptr, "find dbg_marker");
 
-    ember::debug::LaunchOptions opts;
+    spelunk::debug::LaunchOptions opts;
     opts.program       = argv[1];
     opts.stop_at_entry = true;
-    auto t_r = ember::debug::launch(opts);
+    auto t_r = spelunk::debug::launch(opts);
     if (!t_r) {
-        if (ember_dbg_unavailable(t_r.error())) {
-            return ember_dbg_skip("ptrace launch unavailable", t_r.error());
+        if (spelunk_dbg_unavailable(t_r.error())) {
+            return spelunk_dbg_skip("ptrace launch unavailable", t_r.error());
         }
         std::fprintf(stderr, "FAIL: launch: %s\n", t_r.error().message.c_str());
         return 1;
     }
     auto t = std::move(*t_r);
 
-    const ember::addr_t slide = compute_slide(*t, **bin, argv[1]);
-    const ember::addr_t bp_va = marker->addr + slide;
+    const spelunk::addr_t slide = compute_slide(*t, **bin, argv[1]);
+    const spelunk::addr_t bp_va = marker->addr + slide;
 
     auto bp_r = t->set_breakpoint(bp_va);
     CHECK(bp_r.has_value(), "set_breakpoint");
@@ -85,20 +85,20 @@ int main(int argc, char** argv) {
 
     auto ev_r = t->wait_event();
     CHECK(ev_r.has_value(), "wait_event 1");
-    const auto* hit = std::get_if<ember::debug::EvBreakpointHit>(&*ev_r);
+    const auto* hit = std::get_if<spelunk::debug::EvBreakpointHit>(&*ev_r);
     CHECK(hit != nullptr, "expected EvBreakpointHit");
     CHECK(hit->pc == bp_va, "bp pc mismatch");
 
-    const ember::debug::ThreadId tid = hit->tid;
+    const spelunk::debug::ThreadId tid = hit->tid;
 
     // RBP-walk fails on -fomit-frame-pointer past frame 0. We don't
     // assert exactly 1 (the prologue may save RBP for other reasons
     // even with -fomit-frame-pointer), but it should be much shorter
     // than the .eh_frame trace.
-    auto rbp_frames = ember::debug::unwind_rbp(*t, tid);
+    auto rbp_frames = spelunk::debug::unwind_rbp(*t, tid);
     CHECK(rbp_frames.has_value(), "rbp unwind");
 
-    auto eh_frames = ember::debug::unwind_eh_frame(*t, tid, **bin, slide);
+    auto eh_frames = spelunk::debug::unwind_eh_frame(*t, tid, **bin, slide);
     CHECK(eh_frames.has_value(), "eh unwind");
 
     // Anchored at dbg_marker.

@@ -1,4 +1,4 @@
-#include <ember/analysis/teef_behav.hpp>
+#include <spelunk/analysis/teef_behav.hpp>
 
 #include "teef_behav_interpreter_internal.hpp"
 
@@ -10,19 +10,19 @@
 #include <optional>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -62,7 +62,7 @@ void seed_trace(Trace& t, const std::array<u64, 6>& argv) {
 // Trace. Returns the outcome hash, or 0 on abort.
 [[nodiscard]] u64 run_trace_body(Trace& t, u64 input_seed,
                                  std::size_t max_blocks_visited) {
-    static const bool dbg = std::getenv("EMBER_BEHAV_DEBUG") != nullptr;
+    static const bool dbg = std::getenv("SPELUNK_BEHAV_DEBUG") != nullptr;
     auto bail = [&](const char* why) -> u64 {
         if (dbg) {
             std::fprintf(stderr, "behav abort: %s @insns=%zu fn=0x%lx\n",
@@ -344,4 +344,4 @@ BehavSig compute_behav_sig(const Binary& bin, addr_t fn_start) {
     return compute_behav_sig_from_ir(*ir_r, bin);
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -10,7 +10,7 @@
 #include <mach/mach.h>
 #include <mach/mach_port.h>
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 MachOTarget::~MachOTarget() {
     // Mirrors LinuxTarget's policy: detach()/kill() are the user's
@@ -71,4 +71,4 @@ std::vector<Breakpoint> MachOTarget::breakpoints() const {
     return out;
 }
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

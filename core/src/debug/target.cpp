@@ -1,27 +1,27 @@
-#include <ember/debug/target.hpp>
+#include <spelunk/debug/target.hpp>
 
 #include <expected>
 #include <memory>
 
-#include <ember/common/error.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/debug/types.hpp>
 
 #if defined(__linux__) && defined(__x86_64__)
-#define EMBER_DBG_LINUX_X64 1
+#define SPELUNK_DBG_LINUX_X64 1
 #include "linux/ptrace_target.hpp"
 #include "linux/perf_target.hpp"
 #endif
 
 #if defined(__APPLE__) && defined(__x86_64__)
-#define EMBER_DBG_MACOS_X64 1
+#define SPELUNK_DBG_MACOS_X64 1
 #include "macos/mach_target.hpp"
 #endif
 
-namespace ember::debug {
+namespace spelunk::debug {
 
 [[nodiscard]] Result<std::unique_ptr<Target>>
 launch(const LaunchOptions& opts) {
-#if defined(EMBER_DBG_LINUX_X64)
+#if defined(SPELUNK_DBG_LINUX_X64)
     switch (opts.backend) {
         case BackendKind::Perf:
             return linux_perf::launch_perf(opts);
@@ -31,7 +31,7 @@ launch(const LaunchOptions& opts) {
     }
     return std::unexpected(Error::unsupported(
         "debugger: launch: unknown backend kind"));
-#elif defined(EMBER_DBG_MACOS_X64)
+#elif defined(SPELUNK_DBG_MACOS_X64)
     if (opts.backend != BackendKind::Default) {
         return std::unexpected(Error::unsupported(
             "debugger: launch: only the Default backend is supported on macOS"));
@@ -46,7 +46,7 @@ launch(const LaunchOptions& opts) {
 
 [[nodiscard]] Result<std::unique_ptr<Target>>
 attach(ProcessId pid, BackendKind kind) {
-#if defined(EMBER_DBG_LINUX_X64)
+#if defined(SPELUNK_DBG_LINUX_X64)
     switch (kind) {
         case BackendKind::Perf:
             return linux_perf::attach_perf(pid);
@@ -56,7 +56,7 @@ attach(ProcessId pid, BackendKind kind) {
     }
     return std::unexpected(Error::unsupported(
         "debugger: attach: unknown backend kind"));
-#elif defined(EMBER_DBG_MACOS_X64)
+#elif defined(SPELUNK_DBG_MACOS_X64)
     if (kind != BackendKind::Default) {
         return std::unexpected(Error::unsupported(
             "debugger: attach: only the Default backend is supported on macOS"));
@@ -70,4 +70,4 @@ attach(ProcessId pid, BackendKind kind) {
 #endif
 }
 
-}  // namespace ember::debug
+}  // namespace spelunk::debug

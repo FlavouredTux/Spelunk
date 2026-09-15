@@ -7,7 +7,7 @@
 // Approximation of IDA's default (light) palette. Every colour the code
 // views, tables and navigation band paint comes from here, so a dark
 // variant is a one-file change.
-namespace ember::gui::theme {
+namespace spelunk::gui::theme {
 
 // Code views
 inline const QColor kViewBackground {0xff, 0xff, 0xff};
@@ -43,4 +43,4 @@ inline QFont code_font() {
     return f;
 }
 
-}  // namespace ember::gui::theme
+}  // namespace spelunk::gui::theme

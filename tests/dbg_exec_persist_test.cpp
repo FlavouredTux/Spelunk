@@ -7,10 +7,10 @@
 #include <utility>
 #include <variant>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
 
 #include "dbg_test_util.hpp"
 
@@ -24,13 +24,13 @@
 
 namespace {
 
-ember::addr_t compute_slide(ember::debug::Target& tgt,
-                            const ember::Binary& bin,
+spelunk::addr_t compute_slide(spelunk::debug::Target& tgt,
+                            const spelunk::Binary& bin,
                             const std::string& bin_path) {
     const auto images = tgt.images();
     if (images.empty()) return 0;
-    constexpr ember::addr_t kPage = 0x1000;
-    const ember::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
+    constexpr spelunk::addr_t kPage = 0x1000;
+    const spelunk::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
     namespace fs = std::filesystem;
     std::error_code ec;
     std::string canon = bin_path;
@@ -53,21 +53,21 @@ int main(int argc, char** argv) {
     const std::string parent_path = argv[1];
     const std::string child_path  = argv[2];
 
-    auto parent_bin = ember::load_binary(parent_path);
+    auto parent_bin = spelunk::load_binary(parent_path);
     CHECK(parent_bin.has_value(), "load parent binary");
     const auto* preexec = (*parent_bin)->find_by_name("preexec_marker");
     const auto* marker_p = (*parent_bin)->find_by_name("marker");
     CHECK(preexec  && preexec->addr  != 0, "parent preexec_marker symbol");
     CHECK(marker_p && marker_p->addr != 0, "parent marker symbol");
 
-    ember::debug::LaunchOptions opts;
+    spelunk::debug::LaunchOptions opts;
     opts.program       = parent_path;
     opts.args          = { child_path };
     opts.stop_at_entry = true;
-    auto t_r = ember::debug::launch(opts);
+    auto t_r = spelunk::debug::launch(opts);
     if (!t_r) {
-        if (ember_dbg_unavailable(t_r.error())) {
-            return ember_dbg_skip("ptrace launch unavailable", t_r.error());
+        if (spelunk_dbg_unavailable(t_r.error())) {
+            return spelunk_dbg_skip("ptrace launch unavailable", t_r.error());
         }
         std::fprintf(stderr, "FAIL: launch parent: %s\n",
                      t_r.error().message.c_str());
@@ -75,38 +75,38 @@ int main(int argc, char** argv) {
     }
     auto t = std::move(*t_r);
 
-    const ember::addr_t parent_slide =
+    const spelunk::addr_t parent_slide =
         compute_slide(*t, **parent_bin, parent_path);
 
     auto bp_r = t->set_breakpoint(preexec->addr + parent_slide);
     CHECK(bp_r.has_value(), "set bp on preexec_marker");
 
     auto wp_r = t->set_watchpoint(marker_p->addr + parent_slide, 8,
-                                  ember::debug::WatchMode::Write);
+                                  spelunk::debug::WatchMode::Write);
     CHECK(wp_r.has_value(), "set watchpoint on parent marker");
 
     // Catch `write` (nr 1). Survives execve - same flag the user
     // would set via the REPL's `catch syscall write`.
-    constexpr ember::u32 kWrite = 1;
-    const ember::u32 catch_nrs[1] = { kWrite };
-    CHECK(t->set_syscall_catch(false, std::span<const ember::u32>{catch_nrs}).has_value(),
+    constexpr spelunk::u32 kWrite = 1;
+    const spelunk::u32 catch_nrs[1] = { kWrite };
+    CHECK(t->set_syscall_catch(false, std::span<const spelunk::u32>{catch_nrs}).has_value(),
           "set syscall catch (write)");
     CHECK(t->is_syscall_catching(), "catching active pre-exec");
 
     CHECK(t->cont().has_value(), "cont 1");
     auto ev = t->wait_event();
     CHECK(ev.has_value(), "wait 1");
-    CHECK(std::holds_alternative<ember::debug::EvBreakpointHit>(*ev),
+    CHECK(std::holds_alternative<spelunk::debug::EvBreakpointHit>(*ev),
           "expected bp hit at preexec_marker");
 
     // Loop until EvExec - printf may fire spurious watch events first.
     bool saw_exec = false;
-    ember::addr_t exec_pc = 0;
+    spelunk::addr_t exec_pc = 0;
     while (!saw_exec) {
         CHECK(t->cont().has_value(), "cont toward exec");
         ev = t->wait_event();
         CHECK(ev.has_value(), "wait toward exec");
-        if (auto* ex = std::get_if<ember::debug::EvExec>(&*ev); ex) {
+        if (auto* ex = std::get_if<spelunk::debug::EvExec>(&*ev); ex) {
             saw_exec = true;
             exec_pc  = ex->pc;
             break;
@@ -119,17 +119,17 @@ int main(int argc, char** argv) {
     CHECK(t->is_syscall_catching(),
           "syscall catch survived clear_all_after_exec");
 
-    auto child_bin = ember::load_binary(child_path);
+    auto child_bin = spelunk::load_binary(child_path);
     CHECK(child_bin.has_value(), "load child binary");
     const auto* marker_c = (*child_bin)->find_by_name("marker");
     const auto* writer_c = (*child_bin)->find_by_name("child_writer");
     CHECK(marker_c && marker_c->addr != 0, "child marker symbol");
     CHECK(writer_c && writer_c->addr != 0, "child child_writer symbol");
 
-    const ember::addr_t child_slide =
+    const spelunk::addr_t child_slide =
         compute_slide(*t, **child_bin, child_path);
     auto wp2 = t->set_watchpoint(marker_c->addr + child_slide, 8,
-                                 ember::debug::WatchMode::Write);
+                                 spelunk::debug::WatchMode::Write);
     CHECK(wp2.has_value(), "re-arm watchpoint in child");
     const auto wp2_id = *wp2;
 
@@ -137,18 +137,18 @@ int main(int argc, char** argv) {
     // should fire on the child's printf write - if it doesn't,
     // the catch didn't survive the exec.
     bool saw_write_in_child = false;
-    ember::addr_t wp_fire_pc = 0;
-    const ember::addr_t writer_lo = writer_c->addr + child_slide;
-    const ember::addr_t writer_hi = writer_lo + (writer_c->size ? writer_c->size : 0x40);
+    spelunk::addr_t wp_fire_pc = 0;
+    const spelunk::addr_t writer_lo = writer_c->addr + child_slide;
+    const spelunk::addr_t writer_hi = writer_lo + (writer_c->size ? writer_c->size : 0x40);
     while (wp_fire_pc == 0) {
         CHECK(t->cont().has_value(), "cont after re-arm");
         ev = t->wait_event();
         CHECK(ev.has_value(), "wait for watch fire");
-        if (auto* sc = std::get_if<ember::debug::EvSyscallStop>(&*ev); sc) {
+        if (auto* sc = std::get_if<spelunk::debug::EvSyscallStop>(&*ev); sc) {
             if (sc->nr == kWrite) saw_write_in_child = true;
             continue;
         }
-        if (auto* whit = std::get_if<ember::debug::EvWatchpointHit>(&*ev); whit) {
+        if (auto* whit = std::get_if<spelunk::debug::EvWatchpointHit>(&*ev); whit) {
             CHECK(whit->id == wp2_id,               "watchpoint id mismatch");
             CHECK(whit->addr == marker_c->addr + child_slide,
                                                     "watchpoint addr mismatch");
@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
     CHECK(t->cont().has_value(), "cont to exit");
     ev = t->wait_event();
     CHECK(ev.has_value(), "wait exit");
-    const auto* exited = std::get_if<ember::debug::EvExited>(&*ev);
+    const auto* exited = std::get_if<spelunk::debug::EvExited>(&*ev);
     CHECK(exited != nullptr,  "expected EvExited");
     CHECK(exited->code == 0,  "child exit code");
 

@@ -13,17 +13,17 @@
 #include <system_error>
 #include <vector>
 
-#include <ember/analysis/identify.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "../args.hpp"
 #include "../builders.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -135,7 +135,7 @@ make_surface_filter(const Args& args, bool include_artifacts) {
     if (!filter.function_raw.empty()) {
         filter.function = parse_cli_addr(filter.function_raw);
         if (!filter.function) {
-            std::println(stderr, "ember: --surface-function: bad address '{}'",
+            std::println(stderr, "spelunk: --surface-function: bad address '{}'",
                          filter.function_raw);
             return std::nullopt;
         }
@@ -203,7 +203,7 @@ int run_graphics(const Args& args, const Binary& b) {
     if (!filter.function_raw.empty()) {
         filter.function = parse_cli_addr(filter.function_raw);
         if (!filter.function) {
-            std::println(stderr, "ember: --graphics-function: bad address '{}'",
+            std::println(stderr, "spelunk: --graphics-function: bad address '{}'",
                          filter.function_raw);
             return 2;
         }
@@ -227,4 +227,4 @@ int run_log_categories(const Args& args, const Binary& b) {
                       [&] { return build_log_categories_output(b); });
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

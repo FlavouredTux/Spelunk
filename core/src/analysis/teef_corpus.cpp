@@ -1,4 +1,4 @@
-#include <ember/analysis/teef_recognize.hpp>
+#include <spelunk/analysis/teef_recognize.hpp>
 
 #include <algorithm>
 #include <array>
@@ -27,7 +27,7 @@
 #include <unistd.h>
 #endif
 
-namespace ember {
+namespace spelunk {
 
 u32 TeefCorpus::intern_string(std::string_view s) {
     // Fast path: heterogeneous find avoids allocating a std::string
@@ -330,13 +330,13 @@ std::size_t TeefCorpus::load_anti_tsv(const std::filesystem::path& path) {
 std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     using steady_t  = std::chrono::steady_clock;
     using ms_t     = std::chrono::duration<double, std::milli>;
-    // Per-file load timing. Suppressed when EMBER_QUIET=1; printed
+    // Per-file load timing. Suppressed when SPELUNK_QUIET=1; printed
     // unconditionally otherwise (even when stderr isn't a TTY, since
     // these lines are diagnostic - users running the recognizer over
     // multi-100MB corpora want to know what's slow). progress_enabled()
     // gates the noisy progress bars; this is a one-shot per file.
-    const bool dbg = !(std::getenv("EMBER_QUIET") != nullptr &&
-                       std::getenv("EMBER_QUIET")[0] == '1');
+    const bool dbg = !(std::getenv("SPELUNK_QUIET") != nullptr &&
+                       std::getenv("SPELUNK_QUIET")[0] == '1');
     const auto t_open = steady_t::now();
 
     // ---- Acquire the file as a contiguous byte range -------------------
@@ -649,7 +649,7 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
         const auto   t_merge_ms  = ms_t(t_merged - t_parsed).count();
         const auto   t_total_ms  = ms_t(t_merged - t_open).count();
         std::fprintf(stderr,
-            "ember: corpus %s: %.1f MB / %zu rows  "
+            "spelunk: corpus %s: %.1f MB / %zu rows  "
             "(mmap+pre %.0fms · parse %.0fms ×%u · merge %.0fms · total %.0fms)\n",
             path.string().c_str(), mb, rows,
             t_open_ms, t_parse_ms, threads, t_merge_ms, t_total_ms);
@@ -657,4 +657,4 @@ std::size_t TeefCorpus::load_tsv(const std::filesystem::path& path) {
     return rows;
 }
 
-}  // namespace ember
+}  // namespace spelunk

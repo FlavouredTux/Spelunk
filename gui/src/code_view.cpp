@@ -6,7 +6,7 @@
 
 #include "theme.hpp"
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 CodeView::CodeView(Kind kind, QWidget* parent)
     : QPlainTextEdit(parent), kind_(kind) {
@@ -115,4 +115,4 @@ QString CodeView::token_at(const QTextCursor& c) const {
     return text.mid(a, b - a);
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

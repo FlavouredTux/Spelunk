@@ -12,7 +12,7 @@
 
 #include "errno_io.hpp"
 
-namespace ember::debug::linux_detail {
+namespace spelunk::debug::linux_detail {
 
 int ensure_proc_mem_fd(ProcessId pid, int& fd) {
     if (fd >= 0) return fd;
@@ -71,4 +71,4 @@ write_proc_mem(ProcessId pid, int& fd, addr_t va,
     return total;
 }
 
-}  // namespace ember::debug::linux_detail
+}  // namespace spelunk::debug::linux_detail

@@ -31,11 +31,11 @@
 #include <span>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
 
-namespace ember::debug::linux_perf {
+namespace spelunk::debug::linux_perf {
 
 // Per-thread state. The cached sample is populated by the event loop
 // every time a HW BP/WP fires for that tid. get_regs() returns the
@@ -194,4 +194,4 @@ void close_slot(PerfSlot& s);
 // exposing the queue on the public surface.
 void perf_drain_into_target(PerfTarget& t, int slot_idx, std::size_t page);
 
-}  // namespace ember::debug::linux_perf
+}  // namespace spelunk::debug::linux_perf

@@ -1,4 +1,4 @@
-#include <ember/common/annotations.hpp>
+#include <spelunk/common/annotations.hpp>
 
 #include <charconv>
 #include <cstddef>
@@ -15,12 +15,12 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/hash.hpp>
-#include <ember/common/text.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/hash.hpp>
+#include <spelunk/common/text.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -203,8 +203,8 @@ Annotations::load(const std::filesystem::path& path) {
             // Subkind: rename | note | sig. Tail keys are pipe-separated
             // key=value pairs; embedded `|` is `\|`, `\n` / `\r` / `\\`
             // also escape themselves. Unknown subkinds and unknown keys
-            // are silently dropped - newer ember can produce records old
-            // ember reads cleanly without exploding.
+            // are silently dropped - newer spelunk can produce records old
+            // spelunk reads cleanly without exploding.
             const std::size_t sp1 = rest.find(' ');
             if (sp1 == std::string_view::npos) continue;
             const std::string_view subkind = rest.substr(0, sp1);
@@ -322,7 +322,7 @@ void append_meta_line(std::string& out, std::string_view subkind,
 }  // namespace
 
 std::string Annotations::to_text() const {
-    std::string out = "# ember annotations\n";
+    std::string out = "# spelunk annotations\n";
     for (const auto& [addr, name] : renames) {
         out += std::format("rename {:x} {}\n", addr, name);
         if (auto it = rename_meta.find(addr); it != rename_meta.end()) {
@@ -401,7 +401,7 @@ sidecar_annotation_path(const std::filesystem::path& binary) {
     namespace fs = std::filesystem;
     if (binary.empty()) return {};
     fs::path p = binary;
-    p += ".ember-annotations";
+    p += ".spelunk-annotations";
     return p;
 }
 
@@ -446,4 +446,4 @@ resolve_annotation_location(const std::filesystem::path& binary,
     return {cache_annotation_path(binary, cache_dir), AnnotationSource::Cache};
 }
 
-}  // namespace ember
+}  // namespace spelunk

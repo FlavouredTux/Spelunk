@@ -9,9 +9,9 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
+#include <spelunk/binary/binary.hpp>
 
-namespace ember {
+namespace spelunk {
 
 const Binary::LookupCaches& Binary::caches() const {
     if (caches_) return *caches_;
@@ -271,4 +271,4 @@ std::size_t Binary::runtime_qword_count() const noexcept {
     return runtime_qwords_.size();
 }
 
-}  // namespace ember
+}  // namespace spelunk

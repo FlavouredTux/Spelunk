@@ -1,4 +1,4 @@
-#include <ember/analysis/teef_recognize.hpp>
+#include <spelunk/analysis/teef_recognize.hpp>
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -434,13 +434,13 @@ TeefCorpus::match_whole_jaccard(const RecognizeQuery& rq) const {
     // Stage 1: L2 MinHash inverted index. Entries hit by at least
     // kMinSlotHits of the query's 8 slot values have an estimated
     // jaccard >= kMinSlotHits/8 and are the only ones scored. Slot
-    // buckets larger than EMBER_TEEF_MAX_SLOT_BUCKET are boilerplate
+    // buckets larger than SPELUNK_TEEF_MAX_SLOT_BUCKET are boilerplate
     // and skipped. 2/8 keeps L4-rescued candidates: weak L2 (0.25)
     // with L4 = 1.0 scores 0.625, above the 0.6 bar; 3/8 lost 4/361
     // matches on the probe2 matrix.
     constexpr u8 kMinSlotHits = 2;     // estimate jaccard ≥ 2/8 = 0.25
     static const std::size_t kMaxSlotBucket = []() -> std::size_t {
-        if (const char* s = std::getenv("EMBER_TEEF_MAX_SLOT_BUCKET")) {
+        if (const char* s = std::getenv("SPELUNK_TEEF_MAX_SLOT_BUCKET")) {
             try { return static_cast<std::size_t>(std::stoull(s)); }
             catch (...) { /* fall through */ }
         }
@@ -648,4 +648,4 @@ TeefCorpus::recognize(const TeefFunction& query, std::size_t top_k,
     return match_chunk_vote(rq);
 }
 
-}  // namespace ember
+}  // namespace spelunk

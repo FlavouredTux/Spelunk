@@ -1,4 +1,4 @@
-#include <ember/analysis/syscalls.hpp>
+#include <spelunk/analysis/syscalls.hpp>
 
 #include <array>
 #include <cstddef>
@@ -8,17 +8,17 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -471,4 +471,4 @@ analyze_syscalls(const Binary& b, addr_t fn_va) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

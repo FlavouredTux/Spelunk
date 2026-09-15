@@ -1,6 +1,6 @@
-# Contributing to ember
+# Contributing to spelunk
 
-ember is MIT-licensed and welcomes contributions to the core tool. This
+spelunk is MIT-licensed and welcomes contributions to the core tool. This
 document covers what we accept, what we don't, and why.
 
 ## What we accept
@@ -62,7 +62,7 @@ publish the output of it.
 ## Reporting bugs
 
 A useful report has the exact command line, what happened (output,
-error, or the wrong pseudo-C), what you expected, and the ember version
+error, or the wrong pseudo-C), what you expected, and the spelunk version
 or commit, OS and build type. A reproducer helps most: a small binary
 or the build script that produces one. Public binaries (distro
 packages, open-source builds) are the easiest to chase.
@@ -74,7 +74,7 @@ annotations from reverse-engineered builds are not (see above).
 
 ## Reporting security issues
 
-For vulnerabilities in ember itself (parser bugs, debugger memory
+For vulnerabilities in spelunk itself (parser bugs, debugger memory
 safety, etc.), see `SECURITY.md`; report them privately, not in the
 tracker.
 
@@ -103,8 +103,8 @@ as `build-fuzz/crash-<target>-<hash>`; reproduce it with
   invariants, workarounds, or surprises.
 - One topic per translation unit. When a file outgrows ~1,500 lines,
   split it by concern and put what the pieces share in a sibling
-  `<name>_internal.hpp` under a named namespace (`ember::x64_lift`,
-  `ember::cli::dbg`, ...). Helpers used by a single unit stay in that
+  `<name>_internal.hpp` under a named namespace (`spelunk::x64_lift`,
+  `spelunk::cli::dbg`, ...). Helpers used by a single unit stay in that
   unit's anonymous namespace. Public headers under `core/include` never
   include internal ones.
 - Goldens live in `tests/golden/`. When you intentionally change

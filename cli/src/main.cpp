@@ -14,15 +14,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/dtk_project.hpp>
-#include <ember/binary/raw_regions.hpp>
-#include <ember/binary/rel.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/dtk_project.hpp>
+#include <spelunk/binary/raw_regions.hpp>
+#include <spelunk/binary/rel.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "args.hpp"
 #include "cli_error.hpp"
@@ -36,24 +36,24 @@
 
 namespace {
 
-void apply_quiet_env(const ember::cli::Args& args) {
+void apply_quiet_env(const spelunk::cli::Args& args) {
     if (!args.quiet) return;
 #ifdef _WIN32
-    ::_putenv_s("EMBER_QUIET", "1");
+    ::_putenv_s("SPELUNK_QUIET", "1");
 #else
-    ::setenv("EMBER_QUIET", "1", 1);
+    ::setenv("SPELUNK_QUIET", "1", 1);
 #endif
 }
 
-[[nodiscard]] ember::Result<std::unique_ptr<ember::Binary>>
-load_binary_from_args(const ember::cli::Args& args) {
+[[nodiscard]] spelunk::Result<std::unique_ptr<spelunk::Binary>>
+load_binary_from_args(const spelunk::cli::Args& args) {
     // --regions skips magic-byte dispatch and loads via the manifest
     // path; the manifest's first region's vaddr becomes the natural
     // entry for analysis (the user can override with -s <addr>).
     if (!args.regions_manifest.empty()) {
-        auto rr = ember::RawRegionsBinary::load_from_manifest(args.regions_manifest);
+        auto rr = spelunk::RawRegionsBinary::load_from_manifest(args.regions_manifest);
         if (!rr) return std::unexpected(std::move(rr).error());
-        return std::unique_ptr<ember::Binary>(std::move(*rr));
+        return std::unique_ptr<spelunk::Binary>(std::move(*rr));
     }
     // --raw-bytes is the one-region shortcut for runtime captures -
     // splice a memory dump into a single rwx region at --base-va. No
@@ -61,79 +61,79 @@ load_binary_from_args(const ember::cli::Args& args) {
     // bare hex; bases parsed as hex regardless of prefix to match the
     // rest of the CLI's address-flag style.
     if (!args.raw_bytes_path.empty()) {
-        const auto va = ember::cli::parse_cli_addr(args.raw_base_va);
+        const auto va = spelunk::cli::parse_cli_addr(args.raw_base_va);
         if (!va) {
-            return std::unexpected(ember::Error::invalid_format(
+            return std::unexpected(spelunk::Error::invalid_format(
                 "raw-bytes: --base-va must be a non-empty 64-bit hex address"));
         }
-        auto rr = ember::RawRegionsBinary::load_from_raw_bytes(
+        auto rr = spelunk::RawRegionsBinary::load_from_raw_bytes(
             args.raw_bytes_path, *va);
         if (!rr) return std::unexpected(std::move(rr).error());
-        return std::unique_ptr<ember::Binary>(std::move(*rr));
+        return std::unique_ptr<spelunk::Binary>(std::move(*rr));
     }
-    ember::LoadOptions opts;
+    spelunk::LoadOptions opts;
     if (!args.pdb_path.empty()) opts.pdb_path = args.pdb_path;
     if (!args.dtk_symbols_path.empty()) opts.dol_symbols_path = args.dtk_symbols_path;
     opts.no_pdb = args.no_pdb;
-    return ember::load_binary(args.binary, opts);
+    return spelunk::load_binary(args.binary, opts);
 }
 
-[[nodiscard]] ember::Result<std::size_t>
-apply_dtk_rel_context(const ember::DtkProject& main_project,
-                      std::span<const ember::DtkProject> rel_projects,
+[[nodiscard]] spelunk::Result<std::size_t>
+apply_dtk_rel_context(const spelunk::DtkProject& main_project,
+                      std::span<const spelunk::DtkProject> rel_projects,
                       std::string_view selected_module,
-                      ember::Binary& primary) {
-    auto* selected = dynamic_cast<ember::RelBinary*>(&primary);
+                      spelunk::Binary& primary) {
+    auto* selected = dynamic_cast<spelunk::RelBinary*>(&primary);
     if (!selected) {
-        return std::unexpected(ember::Error::invalid_format(
+        return std::unexpected(spelunk::Error::invalid_format(
             "dtk: selected module did not load as a Wii REL"));
     }
 
-    ember::LoadOptions main_options;
+    spelunk::LoadOptions main_options;
     main_options.dol_symbols_path = main_project.symbols_path;
-    auto main_binary = ember::load_binary(main_project.object_path, main_options);
+    auto main_binary = spelunk::load_binary(main_project.object_path, main_options);
     if (!main_binary) return std::unexpected(std::move(main_binary).error());
 
-    std::vector<std::unique_ptr<ember::Binary>> peer_storage;
+    std::vector<std::unique_ptr<spelunk::Binary>> peer_storage;
     std::vector<std::string> peer_names;
-    std::vector<ember::RelLinkModule> link_modules;
+    std::vector<spelunk::RelLinkModule> link_modules;
     peer_storage.reserve(rel_projects.size());
     peer_names.reserve(rel_projects.size());
     link_modules.reserve(rel_projects.size());
     link_modules.push_back({selected, selected_module});
 
-    constexpr ember::addr_t kContextAlignment = 0x10000;
-    const ember::addr_t selected_high = selected->preferred_load_base() +
+    constexpr spelunk::addr_t kContextAlignment = 0x10000;
+    const spelunk::addr_t selected_high = selected->preferred_load_base() +
                                         selected->mapped_size();
     if (selected_high < selected->preferred_load_base() ||
-        selected_high > std::numeric_limits<ember::u32>::max() -
+        selected_high > std::numeric_limits<spelunk::u32>::max() -
                         (kContextAlignment - 1)) {
-        return std::unexpected(ember::Error::invalid_format(
+        return std::unexpected(spelunk::Error::invalid_format(
             "dtk: selected REL leaves no room for peer modules"));
     }
-    ember::addr_t cursor = (selected_high + kContextAlignment - 1) &
+    spelunk::addr_t cursor = (selected_high + kContextAlignment - 1) &
                            ~(kContextAlignment - 1);
 
     for (const auto& project : rel_projects) {
         if (project.module_name == selected_module) continue;
 
-        ember::LoadOptions options;
+        spelunk::LoadOptions options;
         options.dol_symbols_path = project.symbols_path;
         options.rel_load_base = cursor;
-        auto loaded = ember::load_binary(project.object_path, options);
+        auto loaded = spelunk::load_binary(project.object_path, options);
         if (!loaded) return std::unexpected(std::move(loaded).error());
-        auto* peer = dynamic_cast<ember::RelBinary*>(loaded->get());
+        auto* peer = dynamic_cast<spelunk::RelBinary*>(loaded->get());
         if (!peer) {
-            return std::unexpected(ember::Error::invalid_format(std::format(
+            return std::unexpected(spelunk::Error::invalid_format(std::format(
                 "dtk: module '{}' did not load as a Wii REL",
                 project.module_name)));
         }
-        const ember::addr_t high = peer->preferred_load_base() +
+        const spelunk::addr_t high = peer->preferred_load_base() +
                                    peer->mapped_size();
         if (high < peer->preferred_load_base() ||
-            high > std::numeric_limits<ember::u32>::max() -
+            high > std::numeric_limits<spelunk::u32>::max() -
                    (kContextAlignment - 1)) {
-            return std::unexpected(ember::Error::invalid_format(std::format(
+            return std::unexpected(spelunk::Error::invalid_format(std::format(
                 "dtk: REL context exceeds PPC32 after module '{}'",
                 project.module_name)));
         }
@@ -143,7 +143,7 @@ apply_dtk_rel_context(const ember::DtkProject& main_project,
         link_modules.push_back({peer, project.module_name});
     }
 
-    auto linked = ember::link_rel_modules(link_modules, main_binary->get());
+    auto linked = spelunk::link_rel_modules(link_modules, main_binary->get());
     if (!linked) return std::unexpected(std::move(linked).error());
 
     for (std::size_t index = 0; index < peer_storage.size(); ++index) {
@@ -176,12 +176,12 @@ resolve_dsym_bundle_path(const std::filesystem::path& p,
 }
 
 [[nodiscard]] std::filesystem::path
-resolve_dsym_path(const ember::cli::Args& args) {
+resolve_dsym_path(const spelunk::cli::Args& args) {
     return resolve_dsym_bundle_path(args.dsym_path, args.binary);
 }
 
 [[nodiscard]] std::filesystem::path
-auto_dsym_path(const ember::cli::Args& args) {
+auto_dsym_path(const spelunk::cli::Args& args) {
     const std::filesystem::path primary(args.binary);
     std::error_code ec;
     for (const auto& candidate : {
@@ -198,14 +198,14 @@ auto_dsym_path(const ember::cli::Args& args) {
     return {};
 }
 
-[[nodiscard]] int apply_dsym_overlay(const ember::cli::Args& args,
-                                     ember::Binary& primary) {
+[[nodiscard]] int apply_dsym_overlay(const spelunk::cli::Args& args,
+                                     spelunk::Binary& primary) {
     const bool explicit_dsym = !args.dsym_path.empty();
     const auto path = explicit_dsym ? resolve_dsym_path(args) : auto_dsym_path(args);
     if (path.empty()) return EXIT_SUCCESS;
-    auto loaded = ember::load_binary(path);
+    auto loaded = spelunk::load_binary(path);
     if (!loaded) {
-        std::println(stderr, "ember: {} {}: {}: {}",
+        std::println(stderr, "spelunk: {} {}: {}: {}",
                      explicit_dsym ? "--dsym" : "auto-dSYM",
                      path.string(), loaded.error().kind_name(),
                      loaded.error().message);
@@ -213,47 +213,47 @@ auto_dsym_path(const ember::cli::Args& args) {
     }
     const std::size_t added = primary.overlay_symbols_from(**loaded);
     if (!args.quiet) {
-        std::println(stderr, "ember: dSYM symbols: {} ({})",
+        std::println(stderr, "spelunk: dSYM symbols: {} ({})",
                      added, path.string());
     }
     return EXIT_SUCCESS;
 }
 
-[[nodiscard]] int apply_string_name_inference(const ember::cli::Args& args,
-                                              ember::Binary& b) {
+[[nodiscard]] int apply_string_name_inference(const spelunk::cli::Args& args,
+                                              spelunk::Binary& b) {
     if (!args.infer_string_names) return EXIT_SUCCESS;
-    const auto candidates = ember::infer_function_names_from_strings(b);
+    const auto candidates = spelunk::infer_function_names_from_strings(b);
     std::size_t added = 0;
     for (const auto& c : candidates) {
         if (b.add_inferred_function_name(c.function, c.name)) ++added;
     }
     if (!args.quiet) {
-        std::println(stderr, "ember: string-inferred names: {}", added);
+        std::println(stderr, "spelunk: string-inferred names: {}", added);
     }
     return EXIT_SUCCESS;
 }
 
-[[nodiscard]] bool inferred_functions_cache_available(const ember::cli::Args& args) {
+[[nodiscard]] bool inferred_functions_cache_available(const spelunk::cli::Args& args) {
     if (!args.infer_string_names || !args.functions || args.no_cache) return false;
-    const auto dir = args.cache_dir.empty() ? ember::cache::default_dir()
+    const auto dir = args.cache_dir.empty() ? spelunk::cache::default_dir()
                                             : std::filesystem::path(args.cache_dir);
-    auto key = ember::cache::key_for(args.binary, ember::cli::cache_scope_tag(args));
+    auto key = spelunk::cache::key_for(args.binary, spelunk::cli::cache_scope_tag(args));
     if (!key) return false;
-    return ember::cache::read(dir, *key, ember::cli::functions_cache_tag(args)).has_value();
+    return spelunk::cache::read(dir, *key, spelunk::cli::functions_cache_tag(args)).has_value();
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    using namespace ember::cli;
+    using namespace spelunk::cli;
 
     auto args_r = parse_args(argc, argv);
     if (!args_r) {
         // Parse errors get the specific message plus a one-line pointer
         // to --help; the full banner stays reserved for explicit
         // -h/--help so failures don't scroll the terminal.
-        std::println(stderr, "ember: {}", args_r.error().message);
-        std::println(stderr, "run 'ember --help' for full usage");
+        std::println(stderr, "spelunk: {}", args_r.error().message);
+        std::println(stderr, "run 'spelunk --help' for full usage");
         return EXIT_FAILURE;
     }
     auto args = std::move(*args_r);
@@ -264,33 +264,33 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
     if (args.version) {
-        std::println("ember {}", EMBER_VERSION_STRING);
+        std::println("spelunk {}", SPELUNK_VERSION_STRING);
         return EXIT_SUCCESS;
     }
-    std::optional<ember::DtkProject> dtk_main_project;
-    std::vector<ember::DtkProject> dtk_rel_projects;
+    std::optional<spelunk::DtkProject> dtk_main_project;
+    std::vector<spelunk::DtkProject> dtk_rel_projects;
     std::string selected_dtk_module;
     if (!args.dtk_project_path.empty()) {
-        auto project = ember::resolve_dtk_project(
+        auto project = spelunk::resolve_dtk_project(
             args.dtk_project_path, args.dtk_version, args.dtk_module);
         if (!project) return report(project.error());
         args.binary = project->object_path.string();
         args.dtk_symbols_path = project->symbols_path.string();
         if (!args.quiet) {
-            std::println(stderr, "ember: DTK {} [{}]", project->module_name,
+            std::println(stderr, "spelunk: DTK {} [{}]", project->module_name,
                          project->version.empty() ? "default" : project->version);
-            std::println(stderr, "ember: object  {}", args.binary);
-            std::println(stderr, "ember: symbols {}", args.dtk_symbols_path);
+            std::println(stderr, "spelunk: object  {}", args.binary);
+            std::println(stderr, "spelunk: symbols {}", args.dtk_symbols_path);
         }
         if (!args.dtk_module.empty()) {
             // A REL context depends on the main DOL and every configured peer,
             // while the legacy cache key hashes only the selected object.
             // Bypass it until context-wide cache identities are available.
             args.no_cache = true;
-            auto main_project = ember::resolve_dtk_project(
+            auto main_project = spelunk::resolve_dtk_project(
                 args.dtk_project_path, args.dtk_version);
             if (!main_project) return report(main_project.error());
-            auto modules = ember::resolve_dtk_project_modules(
+            auto modules = spelunk::resolve_dtk_project_modules(
                 args.dtk_project_path, args.dtk_version);
             if (!modules) return report(modules.error());
             selected_dtk_module = project->module_name;
@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
             requested_list += view_flags[i];
         }
         std::println(stderr,
-                     "ember: multiple view flags requested ({}); running {} only",
+                     "spelunk: multiple view flags requested ({}); running {} only",
                      requested_list, view_flags.front());
     }
     if (view_flags.size() <= 1 || view_flags.front() == "--functions") {
@@ -347,27 +347,27 @@ int main(int argc, char** argv) {
     // Each `--aux-binary PATH[@HEX]` token is split on '@'; the
     // optional hex tail pins the runtime base for the slide computation
     // (the debugger will skip its /proc/maps size-match heuristic).
-    std::vector<std::unique_ptr<ember::Binary>>          aux_storage;
-    std::vector<ember::cli::AuxBinarySpec>               aux_specs;
+    std::vector<std::unique_ptr<spelunk::Binary>>          aux_storage;
+    std::vector<spelunk::cli::AuxBinarySpec>               aux_specs;
     aux_storage.reserve(args.aux_binary_paths.size());
     aux_specs.reserve(args.aux_binary_paths.size());
     for (const auto& tok : args.aux_binary_paths) {
         std::string path = tok;
-        std::optional<ember::addr_t> manual_base;
+        std::optional<spelunk::addr_t> manual_base;
         if (auto at = tok.find('@'); at != std::string::npos) {
             path = tok.substr(0, at);
             const std::string_view va_tok = std::string_view(tok).substr(at + 1);
-            auto parsed = ember::cli::parse_cli_addr(va_tok);
+            auto parsed = spelunk::cli::parse_cli_addr(va_tok);
             if (!parsed) {
                 std::println(stderr,
-                    "ember: --aux-binary: bad hex base after '@' in '{}'", tok);
+                    "spelunk: --aux-binary: bad hex base after '@' in '{}'", tok);
                 return EXIT_FAILURE;
             }
             manual_base = *parsed;
         }
-        auto loaded = ember::load_binary(path);
+        auto loaded = spelunk::load_binary(path);
         if (!loaded) {
-            std::println(stderr, "ember: --aux-binary {}: {}: {}",
+            std::println(stderr, "spelunk: --aux-binary {}: {}: {}",
                          path, loaded.error().kind_name(),
                          loaded.error().message);
             return EXIT_FAILURE;
@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
     }
 
     auto bin = [&] {
-        ember::ScopedTimer t("load_binary");
+        spelunk::ScopedTimer t("load_binary");
         return load_binary_from_args(args);
     }();
     if (!bin) return report(bin.error());
@@ -394,7 +394,7 @@ int main(int argc, char** argv) {
         if (!linked) return report(linked.error());
         if (!args.quiet) {
             std::println(stderr,
-                "ember: REL context {} modules, {} external relocations resolved",
+                "spelunk: REL context {} modules, {} external relocations resolved",
                 dtk_rel_projects.size(), *linked);
         }
     }
@@ -412,18 +412,18 @@ int main(int argc, char** argv) {
     // the VA instead of rebinding to the closest-below symbol. Common
     // when obfuscators merge functions or stash a real entry mid-body.
     for (const auto& tok : args.force_fn_starts) {
-        auto va = ember::cli::parse_cli_addr(tok);
+        auto va = spelunk::cli::parse_cli_addr(tok);
         if (!va) {
-            std::println(stderr, "ember: --force-fn-start: bad hex VA '{}'", tok);
+            std::println(stderr, "spelunk: --force-fn-start: bad hex VA '{}'", tok);
             return EXIT_FAILURE;
         }
         (*bin)->add_synthetic_function_start(*va);
     }
-    const ember::Binary& b = **bin;
+    const spelunk::Binary& b = **bin;
 
     if (!args.trace_path.empty())          load_trace_edges(args, b);
     if (!args.export_annotations.empty())  return run_export_annotations(args);
-    if (!args.apply_ember.empty())         return run_apply_ember(args, b);
+    if (!args.apply_spelunk.empty())         return run_apply_spelunk(args, b);
 
     if (args.debug)                        return run_debug(args, &b, aux_specs);
     if (args.xrefs)              return run_xrefs(args, b);

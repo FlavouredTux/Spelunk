@@ -10,17 +10,17 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/app_surface.hpp>
-#include <ember/analysis/graphics.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/app_surface.hpp>
+#include <spelunk/analysis/graphics.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "builders.hpp"
 #include "builders_internal.hpp"
 #include "builders_surfaces_internal.hpp"
 #include "util.hpp"
 
-namespace ember::cli::builders {
+namespace spelunk::cli::builders {
 
 namespace {
 
@@ -181,9 +181,9 @@ bool row_type_matches(const GraphicsOutputFilter& filter,
     return filter.row_type.empty() || equals_ci(filter.row_type, row_type);
 }
 
-}  // namespace ember::cli::builders
+}  // namespace spelunk::cli::builders
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 using namespace builders;
 
@@ -445,4 +445,4 @@ std::string build_surface_artifacts_output(const std::vector<std::string>& artif
     return format_surfaces_output(analysis, json, filter);
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

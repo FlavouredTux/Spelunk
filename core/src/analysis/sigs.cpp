@@ -1,4 +1,4 @@
-#include <ember/analysis/sigs.hpp>
+#include <spelunk/analysis/sigs.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -15,16 +15,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>  // DiscoveredFunction
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/analysis/pipeline.hpp>  // DiscoveredFunction
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
-namespace ember::sigs {
+namespace spelunk::sigs {
 
 // ============================================================================
 // CRC16 - FLIRT polynomial 0x8408 (reversed CCITT). Public so a future
@@ -226,7 +226,7 @@ Result<SigDb> load_pat(const std::filesystem::path& path) {
     }
     if (skipped > 0) {
         std::fprintf(stderr,
-            "ember: --pat: %s: skipped %zu malformed line(s)\n",
+            "spelunk: --pat: %s: skipped %zu malformed line(s)\n",
             path.string().c_str(), skipped);
     }
     return db;
@@ -416,4 +416,4 @@ apply_signatures(const Binary& b,
     return out;
 }
 
-}  // namespace ember::sigs
+}  // namespace spelunk::sigs

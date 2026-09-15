@@ -7,12 +7,12 @@
 #include <span>
 #include <type_traits>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
-namespace ember::x64_decode {
+namespace spelunk::x64_decode {
 
 enum class OpSpec : u8 {
     None,
@@ -147,4 +147,4 @@ extern const std::array<OpcodeEntry, 256> kVexMap2_F2;
 extern const std::array<std::array<OpcodeEntry, 8>, Grp_Count> kGroups;
 extern const OpcodeEntry kVzeroupper;
 
-}  // namespace ember::x64_decode
+}  // namespace spelunk::x64_decode

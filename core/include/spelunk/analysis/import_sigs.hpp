@@ -1,0 +1,69 @@
+#pragma once
+
+#include <optional>
+#include <string_view>
+#include <vector>
+
+#include <spelunk/ir/types.hpp>
+
+namespace spelunk {
+
+// Known signature for a libc / POSIX / pthread / Win32 import or a curated set
+// of platform SDK routines with stable public prototypes. Wii coverage includes
+// common Revolution MTX, GX, OS, DVD, KPAD/WPAD, and CX entry points. Used by
+// IPA and the emitter's local pass to type call arguments and call
+// return values without touching the IR-level lattice (`infer_local_types`
+// then propagates the seeded types through the rest of the function).
+//
+// All TypeRefs index into the arena passed to `lookup_import_sig`. The
+// arena is content-interned, so repeated lookups for the same name into
+// the same arena are cheap and produce identical TypeRefs.
+//
+// `variadic` is informational: callers should iterate `params.size()`
+// fixed args and rely on the format-string parser (in the emitter) for
+// downstream variadic slots.
+struct ImportSigSpec {
+    TypeRef                ret;
+    std::vector<TypeRef>   params;
+    bool                   variadic = false;
+};
+
+// Look up a known import. `name` is the bare symbol name returned by
+// `strip_import_name_decorations`. Returns nullopt for any unknown name.
+[[nodiscard]] std::optional<ImportSigSpec>
+lookup_import_sig(std::string_view name, TypeArena& arena);
+
+enum class ImportStringKind : u8 {
+    None,
+    Narrow,
+    Wide,
+};
+
+// String representation expected by the fixed argument at the given 1-based
+// position. `name` follows `lookup_import_sig`: it is the cleaned, bare symbol
+// name. Wide identifies Win32 UTF-16 strings; callers without wide-string
+// support must not treat them as narrow strings.
+[[nodiscard]] ImportStringKind
+import_arg_string_kind(std::string_view name, u8 arg_index_1based) noexcept;
+
+class Binary;     // <spelunk/binary/binary.hpp>
+struct IrFunction;  // <spelunk/ir/ir.hpp>
+
+// Pre-seed the function's `value_types` from each Call to a known routine:
+//
+//   - The post-call ABI return lane (the next matching Clobber's dst, after
+//     SSA) is refined to the routine's return type - `infer_local_types` then
+//     propagates that forward through the body. So `void* p = fopen(...)`
+//     keeps its `void*` typing through every subsequent fread/fclose.
+//
+//   - For each call argument that traces back to one of the caller's own
+//     int-arg registers (a version-0 read), the corresponding caller-arg
+//     slot is refined to the import's expected param type. So a function
+//     that ends up calling `fopen(arg0, arg1)` gets `arg0: char*` /
+//     `arg1: char*` even without the full IPA pass.
+//
+// Idempotent (`meet`s into any existing entry), so safe to call more
+// than once.
+void seed_call_return_types(const Binary& b, IrFunction& fn);
+
+}  // namespace spelunk

@@ -2,7 +2,7 @@
 
 #include "ir_interpreter.hpp"
 
-namespace ember::test {
+namespace spelunk::test {
 
 struct CleanupVerifier {
     std::size_t programs = 0;
@@ -13,4 +13,4 @@ struct CleanupVerifier {
     bool verify(const IrFunction& original, const std::vector<MachineInput>& inputs);
 };
 
-}  // namespace ember::test
+}  // namespace spelunk::test

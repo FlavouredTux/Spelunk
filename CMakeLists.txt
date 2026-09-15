@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(ember
+project(spelunk
     VERSION 1.3.0
-    DESCRIPTION "Ember - reverse engineering toolkit"
+    DESCRIPTION "Spelunk - reverse engineering toolkit"
     LANGUAGES C CXX
 )
 
@@ -16,19 +16,19 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-option(EMBER_WERROR    "Treat warnings as errors"     ON)
-option(EMBER_SANITIZE  "Enable AddressSanitizer+UBSan" OFF)
-option(EMBER_BUILD_CLI "Build the command-line tool"  ON)
-option(EMBER_BUILD_GUI "Build the Qt 6 desktop front end" OFF)
-option(EMBER_BUILD_FUZZERS "Build the libFuzzer targets (clang + EMBER_SANITIZE)" OFF)
-option(EMBER_COMPILE_FIXTURES
+option(SPELUNK_WERROR    "Treat warnings as errors"     ON)
+option(SPELUNK_SANITIZE  "Enable AddressSanitizer+UBSan" OFF)
+option(SPELUNK_BUILD_CLI "Build the command-line tool"  ON)
+option(SPELUNK_BUILD_GUI "Build the Qt 6 desktop front end" OFF)
+option(SPELUNK_BUILD_FUZZERS "Build the libFuzzer targets (clang + SPELUNK_SANITIZE)" OFF)
+option(SPELUNK_COMPILE_FIXTURES
     "Compile test fixtures from source instead of staging the committed binaries" OFF)
 
-add_library(ember_flags INTERFACE)
-add_library(ember::flags ALIAS ember_flags)
+add_library(spelunk_flags INTERFACE)
+add_library(spelunk::flags ALIAS spelunk_flags)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(ember_flags INTERFACE
+    target_compile_options(spelunk_flags INTERFACE
         -Wall -Wextra -Wpedantic
         -Wshadow -Wconversion -Wsign-conversion
         -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
@@ -36,49 +36,49 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wdouble-promotion -Wformat=2
         -Wmisleading-indentation
     )
-    if(EMBER_WERROR)
-        target_compile_options(ember_flags INTERFACE -Werror)
+    if(SPELUNK_WERROR)
+        target_compile_options(spelunk_flags INTERFACE -Werror)
     endif()
-    if(EMBER_SANITIZE)
-        target_compile_options(ember_flags INTERFACE
+    if(SPELUNK_SANITIZE)
+        target_compile_options(spelunk_flags INTERFACE
             -fsanitize=address,undefined -fno-omit-frame-pointer)
-        target_link_options(ember_flags INTERFACE
+        target_link_options(spelunk_flags INTERFACE
             -fsanitize=address,undefined)
         # gcc's maybe-uninitialized heuristic misfires inside <regex> once
         # the sanitizer instrumentation is in; the sanitizers themselves
         # catch real uninitialized reads at run time.
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            target_compile_options(ember_flags INTERFACE -Wno-maybe-uninitialized)
+            target_compile_options(spelunk_flags INTERFACE -Wno-maybe-uninitialized)
         endif()
     endif()
 elseif(MSVC)
-    target_compile_options(ember_flags INTERFACE /W4 /permissive- /Zc:preprocessor)
+    target_compile_options(spelunk_flags INTERFACE /W4 /permissive- /Zc:preprocessor)
     # MSVC's CRT deprecates standard C functions (getenv, sprintf, ...) in
     # favour of its _s variants; with /WX every getenv call would be a
     # build failure. We use the standard names deliberately for portability.
-    target_compile_definitions(ember_flags INTERFACE
+    target_compile_definitions(spelunk_flags INTERFACE
         _CRT_SECURE_NO_WARNINGS
         _CRT_NONSTDC_NO_WARNINGS
     )
-    if(EMBER_WERROR)
-        target_compile_options(ember_flags INTERFACE /WX)
+    if(SPELUNK_WERROR)
+        target_compile_options(spelunk_flags INTERFACE /WX)
     endif()
 endif()
 
 include(CTest)
 add_subdirectory(core)
-if(EMBER_BUILD_CLI)
+if(SPELUNK_BUILD_CLI)
     add_subdirectory(cli)
 endif()
-if(EMBER_BUILD_GUI)
+if(SPELUNK_BUILD_GUI)
     add_subdirectory(gui)
 endif()
 if(BUILD_TESTING)
     # Toolchain-independent unit tests don't need the CLI. Fixture-based
     # golden tests inside tests/CMakeLists.txt gate themselves on the
-    # ember_cli target so they no-op when EMBER_BUILD_CLI=OFF.
+    # spelunk_cli target so they no-op when SPELUNK_BUILD_CLI=OFF.
     add_subdirectory(tests)
 endif()
-if(EMBER_BUILD_FUZZERS)
+if(SPELUNK_BUILD_FUZZERS)
     add_subdirectory(tests/fuzz)
 endif()

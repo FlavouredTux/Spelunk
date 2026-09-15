@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
 class QAction;
 class QLabel;
@@ -20,16 +20,17 @@ class QTabWidget;
 class QTableView;
 class QThread;
 
-namespace ember {
+namespace spelunk {
 struct FuncWindow;
 struct DiscoveredFunction;
-}  // namespace ember
+}  // namespace spelunk
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 struct Session;
 class CodeView;
 class FunctionModel;
+class HexView;
 class NavBand;
 
 class MainWindow : public QMainWindow {
@@ -42,6 +43,8 @@ public:
 
     // Test hook for --screenshot --pseudocode; same as pressing F5.
     void open_pseudocode_for_test() { open_pseudocode(); }
+    // Test hook for --screenshot --hex; same as pressing H.
+    void open_hex_for_test() { open_hex(); }
 
 signals:
     // Fired once the file is loaded and the first view is showing.
@@ -79,6 +82,7 @@ private:
 
     // navigation
     void jump_to(addr_t va, bool record = true);
+    void jump_to_or_hex(addr_t va, bool record = true);
     void jump_to_token(const QString& token);
     void jump_back();
     void jump_forward();
@@ -88,6 +92,7 @@ private:
     void push_history(addr_t va);
     void update_history_actions();
     void sync_chrome(addr_t va);
+    void update_chrome(addr_t va);
 
     // views
     void     show_function(const DiscoveredFunction& fn);
@@ -95,7 +100,9 @@ private:
     Rendered render_pseudocode(const FuncWindow& w);
     CodeView* ensure_disassembly_tab();
     CodeView* ensure_pseudocode_tab();
+    HexView* ensure_hex_tab();
     void      open_pseudocode();
+    void      open_hex();
     void      open_strings();
     void      open_imports();
     void      open_exports();
@@ -117,6 +124,7 @@ private:
     QTabWidget*            tabs_      = nullptr;
     CodeView*              disasm_    = nullptr;
     CodeView*              pseudo_    = nullptr;
+    HexView*               hex_       = nullptr;
     FunctionModel*         fn_model_  = nullptr;
     QSortFilterProxyModel* fn_proxy_  = nullptr;
     QTableView*            fn_table_  = nullptr;
@@ -139,6 +147,7 @@ private:
     QAction* act_jump_entry_ = nullptr;
     QAction* act_pseudo_    = nullptr;
     QAction* act_disasm_    = nullptr;
+    QAction* act_hex_       = nullptr;
     QAction* act_strings_   = nullptr;
     QAction* act_imports_   = nullptr;
     QAction* act_exports_   = nullptr;
@@ -146,4 +155,4 @@ private:
     QAction* act_about_     = nullptr;
 };
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

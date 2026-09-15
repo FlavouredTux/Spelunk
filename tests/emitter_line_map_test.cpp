@@ -1,6 +1,6 @@
-#include <ember/common/annotations.hpp>
-#include <ember/decompile/emitter.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/decompile/emitter.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -13,7 +13,7 @@
 
 namespace {
 
-using namespace ember;
+using namespace spelunk;
 
 int failures = 0;
 

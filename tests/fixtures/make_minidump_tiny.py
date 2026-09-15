@@ -18,7 +18,7 @@ golden: returns its first arg + 0x2a under the Win64 ABI.
 The minidump is structurally valid: signature, version, stream directory,
 and per-stream RVAs all line up. It is not a real process snapshot -
 there are no thread contexts, no exception record, no handle table. None
-of those are needed to drive Ember's static-analysis pipeline.
+of those are needed to drive Spelunk's static-analysis pipeline.
 
 Usage:
   make_minidump_tiny.py <output-path>
@@ -79,7 +79,7 @@ def main() -> int:
 
     # ---- SystemInfoStream payload ---------------------------------------
     # The struct is large in real DbgHelp; we only populate the prefix
-    # Ember reads (u16 ProcessorArchitecture).
+    # Spelunk reads (u16 ProcessorArchitecture).
     sysinfo_rva  = len(blob)
     sysinfo_data = bytearray(56)   # full size of MINIDUMP_SYSTEM_INFO
     struct.pack_into("<H", sysinfo_data, 0, PROCESSOR_ARCHITECTURE_AMD64)

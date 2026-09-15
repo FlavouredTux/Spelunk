@@ -1,4 +1,4 @@
-#include <ember/binary/rel.hpp>
+#include <spelunk/binary/rel.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -22,18 +22,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/relocation.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/text.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/relocation.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/text.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "ppc32_relocation.hpp"
 
-namespace ember {
+namespace spelunk {
 namespace {
 
 constexpr std::size_t kHeaderV1Size = 0x40;
@@ -1069,4 +1069,4 @@ link_rel_modules(std::span<RelLinkModule> modules, const Binary* main_dol) {
     return resolved;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -1,4 +1,4 @@
-#include <ember/analysis/demangle.hpp>
+#include <spelunk/analysis/demangle.hpp>
 
 #include <cctype>
 #include <cstddef>
@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -340,4 +340,4 @@ std::string simplify_stdlib_templates(std::string s) {
     return simplify_stdlib_templates_balanced(s);
 }
 
-}  // namespace ember
+}  // namespace spelunk

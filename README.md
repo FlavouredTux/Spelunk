@@ -1,6 +1,6 @@
-# Ember
+# Spelunk
 
-Ember is a reverse-engineering toolkit written from scratch in C++23. It
+Spelunk is a reverse-engineering toolkit written from scratch in C++23. It
 loads a binary, decodes the machine code, lifts it into its own IR, builds
 SSA, runs cleanup passes, recovers control flow and prints pseudo-C. It
 requires only the C++ standard library for its core analysis: no LLVM,
@@ -26,7 +26,7 @@ fail:
 ```
 
 ```
-$ ember -p -s sub_401156 gotos
+$ spelunk -p -s sub_401156 gotos
 // sub_401156
 uint64_t sub_401156(char* a1, char* a2) {
   if (!a1) {
@@ -68,11 +68,11 @@ C++23 (gcc 16+ or a recent clang) and CMake 3.28+:
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/cli/ember --help
+./build/cli/spelunk --help
 ```
 
 Wii U RPX/RPL compressed sections are expanded automatically when system zlib
-development files are available at configure time. Use `-DEMBER_WITH_ZLIB=OFF`
+development files are available at configure time. Use `-DSPELUNK_WITH_ZLIB=OFF`
 to disable this optional dependency. Cafe imports are named by module, and
 supported relocations are applied to the analysis image. External addresses
 remain symbolic; this does not load Wii U system libraries or execute the game.
@@ -81,7 +81,7 @@ The Qt 6 desktop front end is optional:
 
 ```sh
 cmake --preset gui && cmake --build --preset gui
-./build/gui/gui/ember-gui path/to/binary
+./build/gui/gui/spelunk-gui path/to/binary
 ```
 
 ## Usage
@@ -89,14 +89,14 @@ cmake --preset gui && cmake --build --preset gui
 Each view flag runs the pipeline up to that stage:
 
 ```sh
-ember -d -s NAME ./target        # disassembly
-ember -c -s NAME ./target        # CFG
-ember -i -s NAME ./target        # lifted IR
-ember --ssa -s NAME ./target     # SSA form
-ember -O -s NAME ./target        # after cleanup passes
-ember --struct -s NAME ./target  # structured regions
-ember -p -s NAME ./target        # pseudo-C
-ember --emit-c -s NAME ./target  # C export with declarations and explicit memory accesses
+spelunk -d -s NAME ./target        # disassembly
+spelunk -c -s NAME ./target        # CFG
+spelunk -i -s NAME ./target        # lifted IR
+spelunk --ssa -s NAME ./target     # SSA form
+spelunk -O -s NAME ./target        # after cleanup passes
+spelunk --struct -s NAME ./target  # structured regions
+spelunk -p -s NAME ./target        # pseudo-C
+spelunk --emit-c -s NAME ./target  # C export with declarations and explicit memory accesses
 ```
 
 Without `-s` the default symbol is `main`. `--symbols FILE` batches many
@@ -105,7 +105,7 @@ form makes sense.
 
 Whole-binary queries include `--functions`, `--strings`, `--xrefs`,
 `--refs-to`, `--callees`, `--vtables`, `--identify` and `--recognize`.
-`ember --help <topic>` lists the rest by area (`view`, `syms`, `xrefs`,
+`spelunk --help <topic>` lists the rest by area (`view`, `syms`, `xrefs`,
 `ana`, `teef`, `ann`, `dbg`, `load`, `data`, `patch`, `cache`).
 
 Other pieces, each documented under `docs/`:
@@ -116,7 +116,7 @@ Other pieces, each documented under `docs/`:
 - **Function recognition** (`--teef`, `--recognize`): fingerprint a
   library, then name functions in a stripped binary from the corpus. See
   [docs/teef.md](docs/teef.md).
-- **Annotations and `.ember` scripts**: renames, signatures and field
+- **Annotations and `.spelunk` scripts**: renames, signatures and field
   names in a sidecar file or a small declarative script. See
   [docs/scripting.md](docs/scripting.md).
 - **Runtime memory**: minidumps and raw region scrapes for packed targets,
@@ -126,8 +126,8 @@ Other pieces, each documented under `docs/`:
   data and event-script decompilation. See [docs/powerpc.md](docs/powerpc.md).
 - **x86-64 details** in [docs/x86.md](docs/x86.md).
 
-Expensive passes cache under `~/.cache/ember/`, keyed on the file's path,
-size, mtime and the Ember version. `--no-cache` bypasses it.
+Expensive passes cache under `~/.cache/spelunk/`, keyed on the file's path,
+size, mtime and the Spelunk version. `--no-cache` bypasses it.
 
 Python wrapper (shells out to the CLI):
 
@@ -136,9 +136,9 @@ python -m pip install -e .
 ```
 
 ```python
-from emberpy import Ember
+from spelunkpy import Spelunk
 
-e = Ember("tests/fixtures/gotos")
+e = Spelunk("tests/fixtures/gotos")
 print(e.function("multi_exit").pseudo())
 ```
 
@@ -154,10 +154,10 @@ core/       the library
   structure/  region builder
   decompile/  pseudo-C emitter
   debug/      ptrace, perf and Mach targets, unwinders
-  script/     .ember scripts
-cli/        the ember command
+  script/     .spelunk scripts
+cli/        the spelunk command
 gui/        Qt 6 front end
-python/     emberpy
+python/     spelunkpy
 tests/      unit tests and golden-output tests
 docs/
 ```
@@ -230,8 +230,8 @@ Semantic mismatches print both IR versions and the initial machine state.
 Generated cases also print a seed that can be replayed directly:
 
 ```sh
-./build/tests/ember_ir_semantics_test --seed 42
-./build/tests/ember_ir_control_flow_test --seed 42
+./build/tests/spelunk_ir_semantics_test --seed 42
+./build/tests/spelunk_ir_control_flow_test --seed 42
 ```
 
 Golden outputs live in `tests/golden/`. After an intentional output change,

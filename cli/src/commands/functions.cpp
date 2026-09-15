@@ -16,24 +16,24 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/sigs.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/ppc_decoder.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/script/declarative.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/sigs.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/ppc_decoder.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/script/declarative.hpp>
 
 #include "../args.hpp"
 #include "../builders.hpp"
@@ -42,7 +42,7 @@
 #include "../util.hpp"
 #include "common.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -238,7 +238,7 @@ std::optional<int> run_functions_cache_only(const Args& args) {
 
 int run_ppc_coverage(const Args& args, const Binary& b) {
     if (b.arch() != Arch::Ppc32 && b.arch() != Arch::Ppc64) {
-        std::println(stderr, "ember: --ppc-coverage: binary arch is {}, expected ppc32/ppc64",
+        std::println(stderr, "spelunk: --ppc-coverage: binary arch is {}, expected ppc32/ppc64",
                      arch_name(b.arch()));
         return EXIT_FAILURE;
     }
@@ -471,7 +471,7 @@ int run_functions(const Args& args, const Binary& b) {
         if (k)
             key = std::move(*k);
         else {
-            std::println(stderr, "ember: warning: {}: {} (caching disabled)", k.error().kind_name(),
+            std::println(stderr, "spelunk: warning: {}: {} (caching disabled)", k.error().kind_name(),
                          k.error().message);
             cacheable = false;
         }
@@ -493,7 +493,7 @@ int run_functions(const Args& args, const Binary& b) {
         if (cacheable) {
             ScopedTimer write_phase("functions.cache_write");
             if (auto rv = cache::write(dir, key, fns_tag, tsv); !rv) {
-                std::println(stderr, "ember: warning: {}: {}", rv.error().kind_name(),
+                std::println(stderr, "spelunk: warning: {}: {}", rv.error().kind_name(),
                              rv.error().message);
             }
         }
@@ -637,4 +637,4 @@ int run_functions(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

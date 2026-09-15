@@ -1,19 +1,19 @@
-#include <ember/analysis/ir_cache.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
 
 #include <memory>
 #include <utility>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 IrFunction* lift_cached(IrCache& cache, const Binary& b, addr_t fn) {
     if (cache.failed.contains(fn)) return nullptr;
@@ -49,4 +49,4 @@ IrFunction* lift_cached(IrCache& cache, const Binary& b, addr_t fn) {
     return raw;
 }
 
-}  // namespace ember
+}  // namespace spelunk

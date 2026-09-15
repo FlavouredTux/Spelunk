@@ -13,13 +13,13 @@
 #include <linux/hw_breakpoint.h>
 #include <utility>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/breakpoint.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
 
 #include "perf_target.hpp"
 
-namespace ember::debug::linux_perf {
+namespace spelunk::debug::linux_perf {
 
 namespace {
 
@@ -67,4 +67,4 @@ Result<void> PerfTarget::clear_watchpoint(WatchpointId id) {
     return {};
 }
 
-}  // namespace ember::debug::linux_perf
+}  // namespace spelunk::debug::linux_perf

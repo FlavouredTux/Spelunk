@@ -1,7 +1,7 @@
 #include "proc_mem.hpp"
 #include "ptrace_target.hpp"
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 Result<std::size_t>
 LinuxTarget::read_mem(addr_t va, std::span<std::byte> out) {
@@ -15,4 +15,4 @@ LinuxTarget::write_mem(addr_t va, std::span<const std::byte> in) {
         pid(), MemFdAccess::fd_of(*this), va, in);
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

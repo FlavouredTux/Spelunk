@@ -1,6 +1,6 @@
 #include "decoder_internal.hpp"
 
-namespace ember::ppc_decode {
+namespace spelunk::ppc_decode {
 
 bool decode_floating_point(Fields fields, bool single,
                            Instruction& insn) noexcept {
@@ -162,4 +162,4 @@ bool decode_floating_point(Fields fields, bool single,
     return true;
 }
 
-}  // namespace ember::ppc_decode
+}  // namespace spelunk::ppc_decode

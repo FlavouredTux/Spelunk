@@ -17,11 +17,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 struct SoftwareBreakpoint {
     Breakpoint info{};
@@ -141,4 +141,4 @@ private:
 [[nodiscard]] Result<void> disable_bp(MachOTarget& t, addr_t va, u8 orig_byte);
 [[nodiscard]] Result<void> enable_bp (MachOTarget& t, addr_t va);
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

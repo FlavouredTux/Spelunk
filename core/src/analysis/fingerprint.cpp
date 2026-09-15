@@ -1,4 +1,4 @@
-#include <ember/analysis/fingerprint.hpp>
+#include <spelunk/analysis/fingerprint.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -9,18 +9,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/cfg_util.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/cfg_util.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -309,4 +309,4 @@ FunctionFingerprint compute_fingerprint(const Binary& b, addr_t fn_start) {
     return compute_fingerprint_with(b, cfg, **lifter_r, fn_start);
 }
 
-}  // namespace ember
+}  // namespace spelunk

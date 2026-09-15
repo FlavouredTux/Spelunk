@@ -5,12 +5,12 @@
 #include <initializer_list>
 #include <span>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/arm32_decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/arm32_decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
 
 // ARM (A32 / ARMv7-A) instruction decoder.
 //
@@ -39,7 +39,7 @@
 // access address is correct; the base-register update is elided) - the same
 // simplification the AArch64 cut makes.
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -581,4 +581,4 @@ Arm32Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcep
     return in;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -11,25 +11,25 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/name_resolver.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/name_resolver.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_setup.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 namespace {
 
@@ -922,4 +922,4 @@ Emitter::preserved_call_arg_for_clobber(Reg r, u32 version) const {
     return args[*slot];
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

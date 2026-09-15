@@ -10,12 +10,12 @@
 #include <utility>
 #include <variant>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/unwind.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/unwind.hpp>
 
 #include "dbg_test_util.hpp"
 
@@ -32,13 +32,13 @@ namespace {
 
 // Mirror of cli/src/dbg.cpp's compute_slide so the test exercises
 // the same shape without importing CLI-private code.
-ember::addr_t compute_slide(ember::debug::Target& tgt,
-                            const ember::Binary& bin,
+spelunk::addr_t compute_slide(spelunk::debug::Target& tgt,
+                            const spelunk::Binary& bin,
                             const std::string& bin_path) {
     const auto images = tgt.images();
     if (images.empty()) return 0;
-    constexpr ember::addr_t kPage = 0x1000;
-    const ember::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
+    constexpr spelunk::addr_t kPage = 0x1000;
+    const spelunk::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -61,28 +61,28 @@ int main(int argc, char** argv) {
         return 99;
     }
 
-    auto bin = ember::load_binary(argv[1]);
+    auto bin = spelunk::load_binary(argv[1]);
     CHECK(bin.has_value(), "load_binary");
 
     const auto* marker = (*bin)->find_by_name("dbg_marker");
     CHECK(marker != nullptr, "find dbg_marker");
     CHECK(marker->addr != 0, "dbg_marker addr");
 
-    ember::debug::LaunchOptions opts;
+    spelunk::debug::LaunchOptions opts;
     opts.program       = argv[1];
     opts.stop_at_entry = true;
-    auto t_r = ember::debug::launch(opts);
+    auto t_r = spelunk::debug::launch(opts);
     if (!t_r) {
-        if (ember_dbg_unavailable(t_r.error())) {
-            return ember_dbg_skip("ptrace launch unavailable", t_r.error());
+        if (spelunk_dbg_unavailable(t_r.error())) {
+            return spelunk_dbg_skip("ptrace launch unavailable", t_r.error());
         }
         std::fprintf(stderr, "FAIL: launch: %s\n", t_r.error().message.c_str());
         return 1;
     }
     auto t = std::move(*t_r);
 
-    const ember::addr_t slide = compute_slide(*t, **bin, argv[1]);
-    const ember::addr_t bp_va = marker->addr + slide;
+    const spelunk::addr_t slide = compute_slide(*t, **bin, argv[1]);
+    const spelunk::addr_t bp_va = marker->addr + slide;
 
     auto bp_r = t->set_breakpoint(bp_va);
     CHECK(bp_r.has_value(), "set_breakpoint");
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
 
     auto ev_r = t->wait_event();
     CHECK(ev_r.has_value(), "wait_event 1");
-    const auto* hit = std::get_if<ember::debug::EvBreakpointHit>(&*ev_r);
+    const auto* hit = std::get_if<spelunk::debug::EvBreakpointHit>(&*ev_r);
     CHECK(hit != nullptr,         "expected EvBreakpointHit");
     CHECK(hit->id == bp_id,       "bp id mismatch");
     CHECK(hit->pc == bp_va,       "bp pc mismatch");
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
         auto regs1 = t->get_regs(tid);
         CHECK(regs1.has_value(), "get_regs at bp");
         const auto saved_r12 = regs1->r12;
-        constexpr ember::u64 kTestPattern = 0xfeedface'cafebabeULL;
+        constexpr spelunk::u64 kTestPattern = 0xfeedface'cafebabeULL;
         auto regs_w = *regs1;
         regs_w.r12 = kTestPattern;
         CHECK(t->set_regs(tid, regs_w).has_value(), "set_regs round-trip");
@@ -133,12 +133,12 @@ int main(int argc, char** argv) {
         // Pick a slot a few bytes below RSP - within the red zone the
         // SysV ABI guarantees the kernel won't trample. Read it,
         // verify, then write a fresh pattern, verify, then restore.
-        const ember::addr_t scratch = regs->rsp - 16;
+        const spelunk::addr_t scratch = regs->rsp - 16;
         std::byte original[8] = {};
         auto rrv = t->read_mem(scratch, std::span<std::byte>{original});
         CHECK(rrv.has_value() && *rrv == sizeof(original),
               "read_mem scratch (initial)");
-        constexpr ember::u8 kPattern[8] = {
+        constexpr spelunk::u8 kPattern[8] = {
             0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
         std::byte payload[8];
         for (std::size_t i = 0; i < sizeof(payload); ++i) {
@@ -169,17 +169,17 @@ int main(int argc, char** argv) {
         const auto* main_sym = (*bin)->find_by_name("main");
         CHECK(main_sym != nullptr && main_sym->size > 0,
               "main symbol with size");
-        const ember::addr_t main_lo = main_sym->addr;
-        const ember::addr_t main_hi = main_sym->addr + main_sym->size;
+        const spelunk::addr_t main_lo = main_sym->addr;
+        const spelunk::addr_t main_hi = main_sym->addr + main_sym->size;
 
-        const ember::debug::BinarySlide bs{(*bin).get(), slide};
-        std::span<const ember::debug::BinarySlide> bins{&bs, 1};
-        auto sc = ember::debug::unwind_scavenge(*t, t->threads().front(), bins);
+        const spelunk::debug::BinarySlide bs{(*bin).get(), slide};
+        std::span<const spelunk::debug::BinarySlide> bins{&bs, 1};
+        auto sc = spelunk::debug::unwind_scavenge(*t, t->threads().front(), bins);
         CHECK(sc.has_value(),                       "unwind_scavenge");
         bool found = false;
         for (const auto& f : *sc) {
             if (!f.scavenged) continue;
-            const ember::addr_t static_pc = f.pc - slide;
+            const spelunk::addr_t static_pc = f.pc - slide;
             if (static_pc >= main_lo && static_pc < main_hi) {
                 found = true;
                 break;
@@ -196,8 +196,8 @@ int main(int argc, char** argv) {
         const auto* slot_sym = (*bin)->find_by_name("watch_slot");
         CHECK(slot_sym != nullptr,    "find watch_slot");
         CHECK(slot_sym->addr != 0,    "watch_slot addr");
-        const ember::addr_t slot_va = slot_sym->addr + slide;
-        auto wp = t->set_watchpoint(slot_va, 8, ember::debug::WatchMode::Write);
+        const spelunk::addr_t slot_va = slot_sym->addr + slide;
+        auto wp = t->set_watchpoint(slot_va, 8, spelunk::debug::WatchMode::Write);
         CHECK(wp.has_value(),         "set_watchpoint");
         const auto wp_id = *wp;
 
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
         CHECK(t->cont().has_value(), "cont 2 (to wp)");
         ev_r = t->wait_event();
         CHECK(ev_r.has_value(),                     "wait_event after wp arm");
-        const auto* whit = std::get_if<ember::debug::EvWatchpointHit>(&*ev_r);
+        const auto* whit = std::get_if<spelunk::debug::EvWatchpointHit>(&*ev_r);
         CHECK(whit != nullptr,                      "expected EvWatchpointHit");
         CHECK(whit->id == wp_id,                    "wp id mismatch");
         CHECK(whit->addr == slot_va,                "wp addr mismatch");
@@ -219,17 +219,17 @@ int main(int argc, char** argv) {
     // (nr 231) on `return 42`. Filter on that nr, continue, and expect
     // an EvSyscallStop entry stop before the process actually exits.
     {
-        constexpr ember::u32 kExitGroup = 231;
-        constexpr ember::u32 kFilter[1] = { kExitGroup };
+        constexpr spelunk::u32 kExitGroup = 231;
+        constexpr spelunk::u32 kFilter[1] = { kExitGroup };
         CHECK(t->set_syscall_catch(false,
-                  std::span<const ember::u32>{kFilter}).has_value(),
+                  std::span<const spelunk::u32>{kFilter}).has_value(),
               "set_syscall_catch(exit_group)");
         CHECK(t->is_syscall_catching(),                "catching on");
 
         CHECK(t->cont().has_value(), "cont 3 (to syscall)");
         ev_r = t->wait_event();
         CHECK(ev_r.has_value(),                              "wait_event after catch");
-        const auto* sc = std::get_if<ember::debug::EvSyscallStop>(&*ev_r);
+        const auto* sc = std::get_if<spelunk::debug::EvSyscallStop>(&*ev_r);
         CHECK(sc != nullptr,                                 "expected EvSyscallStop");
         CHECK(sc->nr == kExitGroup,                          "syscall nr is exit_group");
         CHECK(sc->entry == true,                             "syscall entry stop");
@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
 
     ev_r = t->wait_event();
     CHECK(ev_r.has_value(), "wait_event final");
-    const auto* exited = std::get_if<ember::debug::EvExited>(&*ev_r);
+    const auto* exited = std::get_if<spelunk::debug::EvExited>(&*ev_r);
     CHECK(exited != nullptr,  "expected EvExited");
     CHECK(exited->code == 42, "exit code");
 

@@ -4,11 +4,11 @@
 #include <string>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember { class Binary; }
+namespace spelunk { class Binary; }
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 struct GraphicsOutputFilter {
     std::string backend;
@@ -56,8 +56,8 @@ struct SurfaceOutputFilter {
 [[nodiscard]] std::string build_objc_surfaces_output(const Binary& b);
 [[nodiscard]] std::string build_rtti_output        (const Binary& b);
 [[nodiscard]] std::string build_vtables_output     (const Binary& b);
-[[nodiscard]] std::string build_vtable_at_output   (const Binary& b, ember::addr_t va,
-                                                    ember::u64 limit);
+[[nodiscard]] std::string build_vtable_at_output   (const Binary& b, spelunk::addr_t va,
+                                                    spelunk::u64 limit);
 [[nodiscard]] std::string build_int3_resolve_output(const Binary& b);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

@@ -2,7 +2,7 @@
 # Build a Windows-targeted TEEF corpus.
 #
 # Output: $DEST/*.teef.tsv - one TSV per Windows DLL. Pass them all to
-#   ember --recognize <bin> --corpus DIR/*.teef.tsv
+#   spelunk --recognize <bin> --corpus DIR/*.teef.tsv
 # when analyzing a stripped Windows binary (PE32+, MSVC build, RAT
 # samples, etc).
 #
@@ -35,14 +35,14 @@
 
 set -e
 
-EMBER=${EMBER:-$(pwd)/build/cli/ember}
+SPELUNK=${SPELUNK:-$(pwd)/build/cli/spelunk}
 DEST=${DEST:-/tmp/corpus_windows_x86_64}
 WIN_LIBS=${WIN_LIBS:-}
 
 mkdir -p "$DEST"
 
-if [ ! -x "$EMBER" ]; then
-    echo "ERROR: $EMBER not found or not executable. Build ember first or set \$EMBER." >&2
+if [ ! -x "$SPELUNK" ]; then
+    echo "ERROR: $SPELUNK not found or not executable. Build spelunk first or set \$SPELUNK." >&2
     exit 1
 fi
 
@@ -110,7 +110,7 @@ for L in "$WIN_LIBS"/*.dll "$WIN_LIBS"/*.DLL; do
     out="$DEST/$(basename "$L").teef.tsv"
     [ -s "$out" ] && continue
     echo "==> $(basename "$L") (${sz} bytes)" >&2
-    if ! "$EMBER" --teef "$L" > "$out" 2>>"$DEST/build.log"; then
+    if ! "$SPELUNK" --teef "$L" > "$out" 2>>"$DEST/build.log"; then
         echo "    FAILED - see $DEST/build.log" >&2
         rm -f "$out"
         continue
@@ -134,4 +134,4 @@ total_f=$(grep -hc '^F' "$DEST"/*.teef.tsv 2>/dev/null | awk '{s+=$1} END{print 
 total_c=$(grep -hc '^C' "$DEST"/*.teef.tsv 2>/dev/null | awk '{s+=$1} END{print s+0}')
 echo "  TOTAL: F=$total_f C=$total_c across $(ls "$DEST"/*.teef.tsv 2>/dev/null | wc -l) TSVs" >&2
 echo >&2
-echo "Use with: $EMBER --recognize <binary> $(ls "$DEST"/*.teef.tsv 2>/dev/null | sed 's|^| --corpus |' | tr -d '\n') --recognize-threshold 0.85" >&2
+echo "Use with: $SPELUNK --recognize <binary> $(ls "$DEST"/*.teef.tsv 2>/dev/null | sed 's|^| --corpus |' | tr -d '\n') --recognize-threshold 0.85" >&2

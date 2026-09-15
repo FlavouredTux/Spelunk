@@ -6,9 +6,9 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 // Mask literals and comments with spaces, preserving offsets and newlines.
 [[nodiscard]] std::string code_only_text(std::string_view text);
@@ -62,4 +62,4 @@ inverted_if_line(std::string_view line);
 [[nodiscard]] std::string collapse_empty_then_else_blocks(std::string_view text);
 [[nodiscard]] std::string strip_label_only_if_blocks(std::string_view text);
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

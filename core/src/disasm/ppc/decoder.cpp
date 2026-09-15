@@ -3,17 +3,17 @@
 #include <expected>
 #include <span>
 
-#include <ember/binary/arch.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/ppc_decoder.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/ppc_decoder.hpp>
+#include <spelunk/disasm/register.hpp>
 
 #include "decoder_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -328,4 +328,4 @@ PpcDecoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     return std::unexpected(Error::unsupported("ppc: unsupported opcode"));
 }
 
-}  // namespace ember
+}  // namespace spelunk

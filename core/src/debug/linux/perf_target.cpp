@@ -12,11 +12,11 @@
 #include <unistd.h>
 #include <vector>
 
-#include <ember/debug/breakpoint.hpp>
-#include <ember/debug/regs.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
+#include <spelunk/debug/regs.hpp>
+#include <spelunk/debug/types.hpp>
 
-namespace ember::debug::linux_perf {
+namespace spelunk::debug::linux_perf {
 
 void close_slot(PerfSlot& s) {
     if (s.ring && s.ring_bytes) ::munmap(s.ring, s.ring_bytes);
@@ -99,4 +99,4 @@ void PerfTarget::clear_all_after_exec() {
     }
 }
 
-}  // namespace ember::debug::linux_perf
+}  // namespace spelunk::debug::linux_perf

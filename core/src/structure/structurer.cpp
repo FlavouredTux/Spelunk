@@ -1,6 +1,6 @@
 // Region printing and the Structurer entry point.
 
-#include <ember/structure/structurer.hpp>
+#include <spelunk/structure/structurer.hpp>
 
 #include <cstddef>
 #include <format>
@@ -12,15 +12,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "structurer_internal.hpp"
 
-namespace ember::structurer {
+namespace spelunk::structurer {
 
 namespace {
 
@@ -170,9 +170,9 @@ void print_region(const Region& r, const IrFunction& fn,
 
 }  // namespace
 
-}  // namespace ember::structurer
+}  // namespace spelunk::structurer
 
-namespace ember {
+namespace spelunk {
 
 using namespace structurer;
 
@@ -225,4 +225,4 @@ std::string format_structured(const StructuredFunction& sf) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

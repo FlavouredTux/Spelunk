@@ -12,7 +12,7 @@
 #include <system_error>
 #include <utility>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 std::string rename_ppc_temporaries(std::string text) {
     const std::string code = code_only_text(text);
@@ -206,7 +206,7 @@ std::string compact_ppc_type_names(std::string text) {
     std::vector<std::pair<std::string, std::string>> staged;
     staged.reserve(renames.size());
     for (std::size_t i = 0; i < renames.size(); ++i) {
-        std::string temporary = std::format("__ember_ppc_type_{}__", i);
+        std::string temporary = std::format("__spelunk_ppc_type_{}__", i);
         text = replace_identifier(text, renames[i].first, temporary);
         staged.emplace_back(std::move(temporary), renames[i].second);
     }
@@ -313,4 +313,4 @@ std::string collapse_ppc_field_copy_runs(const std::string& text) {
     return collapsed;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

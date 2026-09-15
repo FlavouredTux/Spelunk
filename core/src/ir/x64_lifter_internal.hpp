@@ -6,12 +6,12 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/ir/x64_lifter.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ssa.hpp>  // canonical_reg
+#include <spelunk/ir/x64_lifter.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ssa.hpp>  // canonical_reg
 
-namespace ember::x64_lift {
+namespace spelunk::x64_lift {
 
 // ah/bh/ch/dh - the upper 8 bits of the low 16.
 [[nodiscard]] constexpr bool is_high_byte(Reg r) noexcept {
@@ -504,4 +504,4 @@ void lift_instruction(LiftCtx& ctx);
 
 void ensure_terminator(IrBlock& bb);
 
-}  // namespace ember::x64_lift
+}  // namespace spelunk::x64_lift

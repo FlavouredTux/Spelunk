@@ -11,7 +11,7 @@
 
 #include <cstddef>
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 namespace {
 
@@ -109,4 +109,4 @@ void MachOTarget::clear_all_after_exec() {
     bps_.clear();
 }
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

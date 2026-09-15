@@ -18,26 +18,26 @@
 #include <unordered_set>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/progress.hpp>
-#include <ember/common/threads.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/progress.hpp>
+#include <spelunk/common/threads.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "pipeline_internal.hpp"
 
-namespace ember::pipeline {
+namespace spelunk::pipeline {
 
 namespace {
 
@@ -64,9 +64,9 @@ namespace {
 
 }  // namespace
 
-}  // namespace ember::pipeline
+}  // namespace spelunk::pipeline
 
-namespace ember {
+namespace spelunk {
 
 using namespace pipeline;
 
@@ -170,7 +170,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     const std::size_t total = work.size();
     // Cap at 8: local timings on a 104MB Blender binary showed no win
     // from 16 workers (the CFG walk stayed ~4.35s), while higher caps
-    // risk oversubscribing cascades with many ember processes. EMBER_THREADS
+    // risk oversubscribing cascades with many spelunk processes. SPELUNK_THREADS
     // can still lower this when many passes run concurrently.
     const std::size_t worker_count =
         std::min<std::size_t>(static_cast<std::size_t>(thread_pool_size(8)), total);
@@ -184,7 +184,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
 
     const bool force_cfg_call_graph = mode == CallGraphMode::FullCfg ||
         b.arch() != Arch::X86_64 || [] {
-        const char* s = std::getenv("EMBER_CFG_CALL_GRAPH");
+        const char* s = std::getenv("SPELUNK_CFG_CALL_GRAPH");
         return s != nullptr && *s != '\0' && *s != '0';
     }();
 
@@ -711,4 +711,4 @@ compute_call_resolutions(const Binary& b, addr_t fn,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

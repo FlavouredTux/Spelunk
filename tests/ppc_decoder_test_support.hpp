@@ -1,8 +1,8 @@
 #pragma once
 
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/ppc_decoder.hpp>
-#include <ember/ir/ppc_lifter.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/ppc_decoder.hpp>
+#include <spelunk/ir/ppc_lifter.hpp>
 
 #include <array>
 #include <cstddef>
@@ -36,9 +36,9 @@ inline std::array<std::byte, 4> be32(std::uint32_t v) {
     };
 }
 
-inline ember::Instruction must_decode(std::uint32_t raw) {
+inline spelunk::Instruction must_decode(std::uint32_t raw) {
     auto bytes = be32(raw);
-    const ember::PpcDecoder dec(ember::Endian::Big);
+    const spelunk::PpcDecoder dec(spelunk::Endian::Big);
     auto insn = dec.decode(std::span<const std::byte>(bytes.data(), bytes.size()), 0x80003100);
     if (!insn) {
         std::fprintf(stderr, "FAIL: ppc decode %#010x: %s\n",
@@ -49,17 +49,17 @@ inline ember::Instruction must_decode(std::uint32_t raw) {
     return *insn;
 }
 
-inline ember::IrFunction lift_one(std::uint32_t raw) {
-    ember::Function fn;
+inline spelunk::IrFunction lift_one(std::uint32_t raw) {
+    spelunk::Function fn;
     fn.start = 0x80003100;
     fn.end = fn.start + 4;
-    ember::BasicBlock bb;
+    spelunk::BasicBlock bb;
     bb.start = fn.start;
     bb.end = fn.end;
-    bb.kind = ember::BlockKind::Return;
+    bb.kind = spelunk::BlockKind::Return;
     bb.instructions.push_back(must_decode(raw));
     fn.blocks.push_back(std::move(bb));
-    ember::PpcLifter lifter(ember::Abi::Ppc32Sysv);
+    spelunk::PpcLifter lifter(spelunk::Abi::Ppc32Sysv);
     auto ir = lifter.lift(fn);
     if (!ir) {
         std::fprintf(stderr, "FAIL: ppc lift %#010x: %s\n",
@@ -70,15 +70,15 @@ inline ember::IrFunction lift_one(std::uint32_t raw) {
     return std::move(*ir);
 }
 
-inline ember::IrFunction lift_words(std::initializer_list<std::uint32_t> words) {
-    ember::Function fn;
+inline spelunk::IrFunction lift_words(std::initializer_list<std::uint32_t> words) {
+    spelunk::Function fn;
     fn.start = 0x80003100;
     fn.end = fn.start + words.size() * 4;
-    ember::BasicBlock bb;
+    spelunk::BasicBlock bb;
     bb.start = fn.start;
     bb.end = fn.end;
-    bb.kind = ember::BlockKind::Return;
-    ember::addr_t address = fn.start;
+    bb.kind = spelunk::BlockKind::Return;
+    spelunk::addr_t address = fn.start;
     for (std::uint32_t raw : words) {
         auto instruction = must_decode(raw);
         instruction.address = address;
@@ -86,7 +86,7 @@ inline ember::IrFunction lift_words(std::initializer_list<std::uint32_t> words) 
         address += 4;
     }
     fn.blocks.push_back(std::move(bb));
-    ember::PpcLifter lifter(ember::Abi::Ppc32Sysv);
+    spelunk::PpcLifter lifter(spelunk::Abi::Ppc32Sysv);
     auto ir = lifter.lift(fn);
     if (!ir) {
         std::fprintf(stderr, "FAIL: multi-word PPC lift: %s\n",
@@ -97,37 +97,37 @@ inline ember::IrFunction lift_words(std::initializer_list<std::uint32_t> words) 
     return std::move(*ir);
 }
 
-inline ember::IrFunction lift_conditional_pair(std::uint32_t first, std::uint32_t branch) {
-    ember::Function fn;
+inline spelunk::IrFunction lift_conditional_pair(std::uint32_t first, std::uint32_t branch) {
+    spelunk::Function fn;
     fn.start = 0x80003100;
     fn.end = fn.start + 16;
 
-    ember::BasicBlock entry;
+    spelunk::BasicBlock entry;
     entry.start = fn.start;
     entry.end = fn.start + 8;
-    entry.kind = ember::BlockKind::Conditional;
+    entry.kind = spelunk::BlockKind::Conditional;
     entry.instructions.push_back(must_decode(first));
     auto branch_insn = must_decode(branch);
     branch_insn.address = fn.start + 4;
     entry.instructions.push_back(std::move(branch_insn));
     entry.successors = {fn.start + 12, fn.start + 8};
 
-    ember::BasicBlock fallthrough;
+    spelunk::BasicBlock fallthrough;
     fallthrough.start = fn.start + 8;
     fallthrough.end = fn.start + 12;
-    fallthrough.kind = ember::BlockKind::Return;
+    fallthrough.kind = spelunk::BlockKind::Return;
     fallthrough.predecessors = {fn.start};
 
-    ember::BasicBlock taken;
+    spelunk::BasicBlock taken;
     taken.start = fn.start + 12;
     taken.end = fn.start + 16;
-    taken.kind = ember::BlockKind::Return;
+    taken.kind = spelunk::BlockKind::Return;
     taken.predecessors = {fn.start};
 
     fn.blocks.push_back(std::move(entry));
     fn.blocks.push_back(std::move(fallthrough));
     fn.blocks.push_back(std::move(taken));
-    ember::PpcLifter lifter(ember::Abi::Ppc32Sysv);
+    spelunk::PpcLifter lifter(spelunk::Abi::Ppc32Sysv);
     auto ir = lifter.lift(fn);
     if (!ir) {
         std::fprintf(stderr, "FAIL: conditional PPC lift: %s\n", ir.error().message.c_str());

@@ -6,13 +6,13 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/binary/rel.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/disasm/decoder.hpp>
+#include <spelunk/binary/rel.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 namespace {
 
-using namespace ember;
+using namespace spelunk;
 
 void check(bool condition, std::string_view message) {
     if (condition) return;

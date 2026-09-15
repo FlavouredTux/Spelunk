@@ -4,9 +4,9 @@
 // ARMv8 reference manual; the constants are chosen so a reader can spot
 // them in a one-line `xxd` of a real binary) and check that each one
 // decodes to the right mnemonic + operand shape.
-#include <ember/disasm/arm64_decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/ir/arm64_lifter.hpp>
+#include <spelunk/disasm/arm64_decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/ir/arm64_lifter.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,7 +16,7 @@
 #include <string_view>
 #include <utility>
 
-using namespace ember;
+using namespace spelunk;
 
 namespace {
 

@@ -6,14 +6,14 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "ppc_lifter_internal.hpp"
 
-namespace ember::ppc_lift {
+namespace spelunk::ppc_lift {
 
 IrValue materialize_ps_value(const Operand& operand, LiftCtx& ctx) {
     if (operand.kind == Operand::Kind::Register) {
@@ -227,4 +227,4 @@ void lift_psq_memory(LiftCtx& ctx, bool load, bool update) {
     if (update && mem.base != Reg::None) ctx.write_reg(mem.base, ea);
 }
 
-}  // namespace ember::ppc_lift
+}  // namespace spelunk::ppc_lift

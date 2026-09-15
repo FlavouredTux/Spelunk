@@ -1,5 +1,5 @@
-#include <ember/binary/elf.hpp>
-#include <ember/common/bytes.hpp>
+#include <spelunk/binary/elf.hpp>
+#include <spelunk/common/bytes.hpp>
 #include <cstdio>
 #include <vector>
 
@@ -34,7 +34,7 @@ std::vector<std::byte> sample() {
     for (auto byte : fixture) out.push_back(static_cast<std::byte>(byte));
     return out;
 }
-void put(std::vector<std::byte>& b, std::size_t at, ember::u32 value) {
+void put(std::vector<std::byte>& b, std::size_t at, spelunk::u32 value) {
     for (unsigned j = 0; j < 4; ++j)
         b[at+j] = static_cast<std::byte>((value >> ((3-j)*8)) & 0xffu);
 }
@@ -44,33 +44,33 @@ void check(bool ok, const char* message) {
 }
 }
 int main() {
-    auto loaded = ember::ElfBinary::load_from_buffer(sample());
-#ifdef EMBER_TEST_ZLIB
+    auto loaded = spelunk::ElfBinary::load_from_buffer(sample());
+#ifdef SPELUNK_TEST_ZLIB
     check(loaded.has_value(), "compressed Cafe ELF loads");
     if (loaded) {
         const auto& b = **loaded;
         const auto code = b.bytes_at(0x2000000);
-        check(b.arch() == ember::Arch::Ppc32 && b.endian() == ember::Endian::Big,
+        check(b.arch() == spelunk::Arch::Ppc32 && b.endian() == spelunk::Endian::Big,
               "architecture retained");
-        check(code.size() == 8 && ember::read_be_at<ember::u32>(code.data()) == 0x38600007,
+        check(code.size() == 8 && spelunk::read_be_at<spelunk::u32>(code.data()) == 0x38600007,
               "expanded instruction bytes mapped at original VA");
         check(b.find_by_name("test_fn") && b.find_by_name("test_fn")->addr == 0x2000000,
               "compressed symbol and string tables decoded");
         check(b.sections().size() == 5 && b.sections()[1].name == ".text",
               "compressed section names decoded");
-        auto again = ember::ElfBinary::load_from_buffer(
+        auto again = spelunk::ElfBinary::load_from_buffer(
             std::vector<std::byte>(b.image().begin(), b.image().end()));
         check(again.has_value(), "normalized image can be reloaded without double decompression");
     }
 #else
-    check(!loaded && loaded.error().kind == ember::ErrorKind::UnsupportedFormat,
+    check(!loaded && loaded.error().kind == spelunk::ErrorKind::UnsupportedFormat,
           "no-zlib build explains unsupported compression");
 #endif
     for (int mode = 0; mode < 8; ++mode) {
         auto b = sample();
         const std::size_t sh = 52+40;
-        const auto offset = ember::read_be_at<ember::u32>(b.data()+sh+16);
-        const auto size = ember::read_be_at<ember::u32>(b.data()+sh+20);
+        const auto offset = spelunk::read_be_at<spelunk::u32>(b.data()+sh+16);
+        const auto size = spelunk::read_be_at<spelunk::u32>(b.data()+sh+20);
         switch (mode) {
             case 0: put(b, offset, 9); break; // incorrect output length
             case 1: b[offset+size-1] ^= std::byte{1}; break; // checksum
@@ -81,7 +81,7 @@ int main() {
             case 6: put(b, sh+4, 8); break; // NOBITS
             case 7: put(b, sh+20, size+1); break; // trailing junk
         }
-        check(!ember::ElfBinary::load_from_buffer(std::move(b)), "malformed compressed section rejected");
+        check(!spelunk::ElfBinary::load_from_buffer(std::move(b)), "malformed compressed section rejected");
     }
     return fails ? 1 : 0;
 }

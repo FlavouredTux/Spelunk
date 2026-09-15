@@ -1,13 +1,13 @@
 // Operand access: effective addresses, rvalue reads and lvalue writes.
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "x64_lifter_internal.hpp"
 
-namespace ember::x64_lift {
+namespace spelunk::x64_lift {
 
 // Effective address for a memory operand.
 IrValue compute_ea(const Mem& m, LiftCtx& ctx) {
@@ -99,4 +99,4 @@ IrType operand_type(const Operand& op) noexcept {
     }
 }
 
-}  // namespace ember::x64_lift
+}  // namespace spelunk::x64_lift

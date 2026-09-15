@@ -15,25 +15,25 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "string_names_internal.hpp"
 #include "strings_internal.hpp"
 
-namespace ember::string_names {
+namespace spelunk::string_names {
 
 namespace {
 
@@ -534,9 +534,9 @@ void infer_assertion_function_names(const Binary& b,
 
 }  // namespace
 
-}  // namespace ember::string_names
+}  // namespace spelunk::string_names
 
-namespace ember {
+namespace spelunk {
 
 using namespace string_names;
 
@@ -677,4 +677,4 @@ infer_function_names_from_strings(const Binary &b, StringNameInferenceOptions op
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

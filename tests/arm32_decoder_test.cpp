@@ -3,16 +3,16 @@
 // Hand-encoded 32-bit little-endian words (assembled from the ARM ARM) fed
 // through the decoder; each check pins a mnemonic + operand shape, plus the
 // A32-specific carriers arm_cond / arm_setflags / operand barrel-shift.
-#include <ember/disasm/arm32_decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/ir/arm32_lifter.hpp>
+#include <spelunk/disasm/arm32_decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/ir/arm32_lifter.hpp>
 
 #include <array>
 #include <cstdio>
 #include <span>
 #include <string>
 
-using namespace ember;
+using namespace spelunk;
 
 namespace {
 

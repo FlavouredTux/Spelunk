@@ -17,15 +17,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/breakpoint.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "errno_io.hpp"
 #include "ptrace_target.hpp"
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 namespace {
 
@@ -195,4 +195,4 @@ void rearm_watchpoints_on_new_thread(LinuxTarget& t, ThreadId tid) {
     [[maybe_unused]] auto _ = apply_to_thread(t, tid);
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

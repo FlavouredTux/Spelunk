@@ -1,8 +1,8 @@
 #include "structurer_fail_common.hpp"
 #include "../core/src/decompile/emitter_internal.hpp"
 
-using namespace ember;
-using ember::emit::Emitter;
+using namespace spelunk;
+using spelunk::emit::Emitter;
 
 namespace {
 class VirtualBinary final : public Binary {

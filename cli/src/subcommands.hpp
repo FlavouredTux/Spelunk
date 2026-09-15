@@ -10,23 +10,23 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/annotations.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/decompile/emit_options.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/decompile/emit_options.hpp>
 
 #include "args.hpp"
 
-namespace ember { class Binary; }
+namespace spelunk { class Binary; }
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 // One-shot helpers (run before any analysis pipeline kicks in).
 
 int run_dump_types();
 int run_export_annotations(const Args& args);
-int run_apply_ember(const Args& args, const Binary& b);
+int run_apply_spelunk(const Args& args, const Binary& b);
 
 // Pre-analysis side effects (no exit code - caller continues).
 
@@ -156,7 +156,7 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
         if (k) {
             key = std::move(*k);
         } else {
-            std::println(stderr, "ember: warning: {}: {} (caching disabled)",
+            std::println(stderr, "spelunk: warning: {}: {} (caching disabled)",
                          k.error().kind_name(), k.error().message);
             cacheable = false;
         }
@@ -181,11 +181,11 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
     if (cacheable) {
         ScopedTimer t("cache.write");
         if (auto rv = cache::write(dir, key, tag, out); !rv) {
-            std::println(stderr, "ember: warning: {}: {}",
+            std::println(stderr, "spelunk: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);
         }
     }
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

@@ -4,11 +4,11 @@
 #include <unistd.h>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/debug/breakpoint.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
+#include <spelunk/debug/types.hpp>
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 LinuxTarget::~LinuxTarget() {
     // detach()/kill() are the user's responsibility; if they didn't
@@ -63,4 +63,4 @@ std::vector<Breakpoint> LinuxTarget::breakpoints() const {
     return out;
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

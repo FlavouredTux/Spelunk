@@ -1,4 +1,4 @@
-#include <ember/analysis/packed.hpp>
+#include <spelunk/analysis/packed.hpp>
 
 #include <array>
 #include <cmath>
@@ -7,11 +7,11 @@
 #include <span>
 #include <string_view>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -94,4 +94,4 @@ bool binary_looks_packed(const Binary& b) noexcept {
     return false;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -17,10 +17,10 @@
 #include <string>
 #include <string_view>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::ehfi {
+namespace spelunk::ehfi {
 
 // DW_EH_PE_* encoding bits from the Itanium exception-handling ABI.
 enum : u8 {
@@ -444,4 +444,4 @@ inline void for_each_decoded_fde(const Binary& b, Visitor&& visitor) {
     }
 }
 
-}  // namespace ember::ehfi
+}  // namespace spelunk::ehfi

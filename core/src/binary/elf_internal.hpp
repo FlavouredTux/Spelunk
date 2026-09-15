@@ -3,11 +3,11 @@
 #include <cstddef>
 #include <optional>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::elf {
+namespace spelunk::elf {
 
 inline constexpr std::size_t kPhdr64Size = 56;
 inline constexpr std::size_t kPhdr32Size = 32;
@@ -148,4 +148,4 @@ align_up_bounded(addr_t value, addr_t alignment, addr_t maximum) noexcept {
     }
 }
 
-}  // namespace ember::elf
+}  // namespace spelunk::elf

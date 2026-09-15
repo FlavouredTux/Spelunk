@@ -9,12 +9,12 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/analysis/graphics.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/graphics.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "builders.hpp"
 
-namespace ember::cli::builders {
+namespace spelunk::cli::builders {
 
 [[nodiscard]] bool contains_ci(std::string_view haystack, std::string_view needle);
 
@@ -49,4 +49,4 @@ template <class T, class Pred>
     return out;
 }
 
-}  // namespace ember::cli::builders
+}  // namespace spelunk::cli::builders

@@ -6,7 +6,7 @@
 namespace ppc_structurer_tests {
 
 int test_ppc_typed_pointer_stride_is_scaled_once() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2360;
     IrFunction fn;
@@ -66,7 +66,7 @@ int test_ppc_typed_pointer_stride_is_scaled_once() {
 }
 
 int test_ppc_rotate_mask_pointer_stride_is_scaled_once() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2370;
     IrFunction fn;
@@ -146,7 +146,7 @@ int test_ppc_rotate_mask_pointer_stride_is_scaled_once() {
 }
 
 int test_ppc_field_copy_run_collapses_to_memcpy() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2380;
     IrFunction fn;

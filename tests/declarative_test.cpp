@@ -1,11 +1,11 @@
-// Unit tests for the .ember declarative scripting format.
+// Unit tests for the .spelunk declarative scripting format.
 //
 // Self-contained: a tiny MockBinary carries one defined function plus a
 // rodata string the function references via lea, so [from-strings]
 // has a real string→containing-fn pipeline to walk.
-#include <ember/script/declarative.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/annotations.hpp>
+#include <spelunk/script/declarative.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/annotations.hpp>
 
 #include <array>
 #include <cstdio>
@@ -66,8 +66,8 @@ void check(bool cond, const char* ctx) {
 //     90 90 90 ...           padding (NOPs)
 //   .rodata (r-only) at 0x402000, 0x20 bytes
 //     "[HttpClient] hello\0..."
-constexpr ember::addr_t kFnAddr      = 0x401000;
-constexpr ember::addr_t kStrAddr     = 0x402000;
+constexpr spelunk::addr_t kFnAddr      = 0x401000;
+constexpr spelunk::addr_t kStrAddr     = 0x402000;
 constexpr std::size_t   kTextLen     = 0x10;
 constexpr std::size_t   kRodataLen   = 0x20;
 
@@ -95,7 +95,7 @@ struct RodataBytes {
     }
 };
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
     MockBinary() {
         text_.name = ".text";
@@ -113,37 +113,37 @@ public:
 
         secs_ = {text_, ro_};
 
-        ember::Symbol s;
+        spelunk::Symbol s;
         s.name = "log_handler";
         s.addr = kFnAddr;
         s.size = kTextLen;
-        s.kind = ember::SymbolKind::Function;
+        s.kind = spelunk::SymbolKind::Function;
         syms_.push_back(std::move(s));
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override { return ember::Format::Elf; }
-    [[nodiscard]] ember::Arch   arch()   const noexcept override { return ember::Arch::X86_64; }
-    [[nodiscard]] ember::Endian endian() const noexcept override { return ember::Endian::Little; }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override { return kFnAddr; }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override { return secs_; }
-    [[nodiscard]] std::span<const ember::Symbol>  symbols()  const noexcept override { return syms_; }
+    [[nodiscard]] spelunk::Format format() const noexcept override { return spelunk::Format::Elf; }
+    [[nodiscard]] spelunk::Arch   arch()   const noexcept override { return spelunk::Arch::X86_64; }
+    [[nodiscard]] spelunk::Endian endian() const noexcept override { return spelunk::Endian::Little; }
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override { return kFnAddr; }
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override { return secs_; }
+    [[nodiscard]] std::span<const spelunk::Symbol>  symbols()  const noexcept override { return syms_; }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override { return syms_; }
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override { return syms_; }
 public:
     [[nodiscard]] std::span<const std::byte>      image()    const noexcept override { return text_.data; }
 
 private:
     CodeBytes                  code_{};
     RodataBytes                rodata_{};
-    ember::Section             text_{};
-    ember::Section             ro_{};
-    std::array<ember::Section, 2> secs_{};
-    std::vector<ember::Symbol>    syms_{};
+    spelunk::Section             text_{};
+    spelunk::Section             ro_{};
+    std::array<spelunk::Section, 2> secs_{};
+    std::vector<spelunk::Symbol>    syms_{};
 };
 
 fs::path scratch_root() {
-    auto p = fs::temp_directory_path() / "ember_declarative_test";
+    auto p = fs::temp_directory_path() / "spelunk_declarative_test";
     std::error_code ec;
     fs::remove_all(p, ec);
     fs::create_directories(p);
@@ -160,7 +160,7 @@ fs::path write_text(const fs::path& dir, std::string_view name, std::string_view
 }  // namespace
 
 int main() {
-    using ember::script::Directive;
+    using spelunk::script::Directive;
 
     // ---- Parser: sections, comments, separators ---------------------------
     {
@@ -188,7 +188,7 @@ int main() {
             "[from-strings]\n"
             "\"[HttpClient] %s\" -> HttpClient_$1\n";
 
-        auto rv = ember::script::parse(src);
+        auto rv = spelunk::script::parse(src);
         check(rv.has_value(), "parse: clean input parses");
         if (!rv) std::fprintf(stderr, "  err: %s\n", rv.error().message.c_str());
         if (rv) {
@@ -226,23 +226,23 @@ int main() {
 
     // ---- Parser: errors ----------------------------------------------------
     {
-        check(!ember::script::parse("0x401000 = foo\n").has_value(),
+        check(!spelunk::script::parse("0x401000 = foo\n").has_value(),
               "parse: directive outside any section errors");
-        check(!ember::script::parse("[rename]\nfoo bar baz\n").has_value(),
+        check(!spelunk::script::parse("[rename]\nfoo bar baz\n").has_value(),
               "parse: missing separator errors");
-        check(!ember::script::parse("[unknown]\nfoo = bar\n").has_value(),
+        check(!spelunk::script::parse("[unknown]\nfoo = bar\n").has_value(),
               "parse: unknown section errors");
-        check(!ember::script::parse("[rename\n").has_value(),
+        check(!spelunk::script::parse("[rename\n").has_value(),
               "parse: unterminated section header errors");
-        check(!ember::script::parse("[rename]\nfoo -> bar\n").has_value(),
+        check(!spelunk::script::parse("[rename]\nfoo -> bar\n").has_value(),
               "parse: [rename] rejects `->`");
-        check(!ember::script::parse("[pattern-rename]\nfoo = bar\n").has_value(),
+        check(!spelunk::script::parse("[pattern-rename]\nfoo = bar\n").has_value(),
               "parse: [pattern-rename] rejects `=`");
     }
 
     // ---- Parser: [const] alias -------------------------------------------
     {
-        auto rv = ember::script::parse("[const]\n31337 = decimal_magic\n");
+        auto rv = spelunk::script::parse("[const]\n31337 = decimal_magic\n");
         check(rv.has_value(), "parse: [const] alias parses");
         if (rv && !rv->empty()) {
             check_eq(static_cast<int>((*rv)[0].kind),
@@ -254,7 +254,7 @@ int main() {
     // ---- Apply: direct sections -------------------------------------------
     MockBinary mb;
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         const std::vector<Directive> ds = {
             {Directive::Kind::Rename,    "0x401000",    "renamed_by_va",                                                    1},
             {Directive::Kind::Rename,    "log_handler", "skipped_due_to_first_win",                                          2},
@@ -265,7 +265,7 @@ int main() {
             {Directive::Kind::Constant,  "0xDEADBEEF",  "resolver_hash",                                                     7},
             {Directive::Kind::Constant,  "31337",       "decimal_magic",                                                     8},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_added,    1, "apply: 1 rename added (first wins)");
         check_eq_sz(st.notes_added,      1, "apply: 1 note added");
         check_eq_sz(st.signatures_added, 1, "apply: 1 signature added");
@@ -304,25 +304,25 @@ int main() {
 
     // ---- Apply: name resolution falls back to user renames ----------------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         ann.renames[0x401000] = "user_first";
         const std::vector<Directive> ds = {
             {Directive::Kind::Note, "user_first", "found via existing rename", 1},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.notes_added, 1, "apply: name-resolves-via-existing-rename");
     }
 
     // ---- Apply: pattern-rename --------------------------------------------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         // No prior rename → discovered name from symbol is "log_handler".
         // Pattern `log_*` -> `Logger_*` should match and produce
         // "Logger_handler".
         const std::vector<Directive> ds = {
             {Directive::Kind::PatternRename, "log_*", "Logger_*", 1},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.pattern_renames_applied, 1, "apply: pattern-rename matched 1");
         if (auto* n = ann.name_for(0x401000)) {
             check_eq_str(*n, "Logger_handler", "apply: pattern-rename value");
@@ -331,12 +331,12 @@ int main() {
 
     // ---- Apply: pattern doesn't override an existing user rename ----------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         ann.renames[0x401000] = "user_choice";
         const std::vector<Directive> ds = {
             {Directive::Kind::PatternRename, "log_*", "Logger_*", 1},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.pattern_renames_applied, 0, "apply: pattern can't beat user rename");
         if (auto* n = ann.name_for(0x401000)) {
             check_eq_str(*n, "user_choice", "apply: user rename preserved");
@@ -345,11 +345,11 @@ int main() {
 
     // ---- Apply: from-strings (lea xref → containing-fn rename) ------------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         const std::vector<Directive> ds = {
             {Directive::Kind::FromStrings, "[HttpClient] %s", "HttpClient_$1", 1},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.string_renames_applied, 1, "apply: from-strings 1 fn renamed");
         if (auto* n = ann.name_for(0x401000)) {
             check_eq_str(*n, "HttpClient_hello", "apply: from-strings rendered $1");
@@ -358,12 +358,12 @@ int main() {
 
     // ---- Apply: [delete] removes existing entries -------------------------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         ann.renames[0x401000]    = "old_rename";
         ann.notes[0x401000]      = "old_note";
         ann.named_constants[0xDEADBEEFull] = "old_const";
         ann.field_names[{0x401000, 0, 0x10}] = "old_field";
-        ember::FunctionSig sig;
+        spelunk::FunctionSig sig;
         sig.return_type = "int";
         ann.signatures[0x401000] = sig;
         const std::vector<Directive> ds = {
@@ -373,7 +373,7 @@ int main() {
             {Directive::Kind::Delete, "0x401000", "field",     4},
             {Directive::Kind::Delete, "0xDEADBEEF", "constant", 5},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_removed,    1, "delete: rename removed");
         check_eq_sz(st.notes_removed,      1, "delete: note removed");
         check_eq_sz(st.signatures_removed, 1, "delete: signature removed");
@@ -388,17 +388,17 @@ int main() {
 
     // ---- Apply: [delete]=all clears function-scoped entries at once -------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         ann.renames[0x401000]    = "x";
         ann.notes[0x401000]      = "y";
-        ember::FunctionSig sig;
+        spelunk::FunctionSig sig;
         sig.return_type = "void";
         ann.signatures[0x401000] = sig;
         ann.field_names[{0x401000, 0, 0x10}] = "xfield";
         const std::vector<Directive> ds = {
             {Directive::Kind::Delete, "log_handler", "all", 1},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_removed,    1, "delete=all: rename removed");
         check_eq_sz(st.notes_removed,      1, "delete=all: note removed");
         check_eq_sz(st.signatures_removed, 1, "delete=all: sig removed");
@@ -410,13 +410,13 @@ int main() {
     // value, never the old one. The pre-loaded "old" gets cleared in
     // pass 0, then "new_handler" lands in pass 1.
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         ann.renames[0x401000] = "old";
         const std::vector<Directive> ds = {
             {Directive::Kind::Rename, "0x401000", "new_handler", 1},
             {Directive::Kind::Delete, "0x401000", "rename",      2},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check_eq_sz(st.renames_removed, 1, "delete+rename: removed old");
         check_eq_sz(st.renames_added,   1, "delete+rename: added new");
         if (auto* n = ann.name_for(0x401000)) {
@@ -426,20 +426,20 @@ int main() {
 
     // ---- Apply: [delete] unknown kind warns -------------------------------
     {
-        ember::Annotations ann;
+        spelunk::Annotations ann;
         const std::vector<Directive> ds = {
             {Directive::Kind::Delete, "0x401000", "bogus", 1},
         };
-        auto st = ember::script::apply(ds, mb, ann);
+        auto st = spelunk::script::apply(ds, mb, ann);
         check(!st.warnings.empty(), "delete: unknown kind warns");
     }
 
     // ---- Annotations::to_text round-trips through load --------------------
     {
-        ember::Annotations original;
+        spelunk::Annotations original;
         original.renames[0x401000] = "round_trip";
         original.notes[0x401000]   = "with #hash and \\n newline";
-        ember::FunctionSig sig;
+        spelunk::FunctionSig sig;
         sig.return_type = "int";
         sig.params.push_back({"char*", "msg"});
         sig.params.push_back({"int",   "level"});
@@ -453,7 +453,7 @@ int main() {
         o.write(text.data(), static_cast<std::streamsize>(text.size()));
         o.close();
 
-        auto reloaded = ember::Annotations::load(p);
+        auto reloaded = spelunk::Annotations::load(p);
         check(reloaded.has_value(), "to_text: file reloads");
         if (reloaded) {
             check_eq_sz(reloaded->renames.size(),    1, "to_text: 1 rename round-trips");
@@ -469,7 +469,7 @@ int main() {
     // ---- apply_file end-to-end --------------------------------------------
     {
         const auto root = scratch_root();
-        const auto p = write_text(root, "test.ember",
+        const auto p = write_text(root, "test.spelunk",
             "[rename]\n"
             "0x401000 = end_to_end\n"
             "[note]\n"
@@ -480,8 +480,8 @@ int main() {
             "log_handler:msg+0x10 = length\n"
             "[const]\n"
             "0xDEADBEEF = resolver_hash\n");
-        ember::Annotations ann;
-        auto rv = ember::script::apply_file(p, mb, ann);
+        spelunk::Annotations ann;
+        auto rv = spelunk::script::apply_file(p, mb, ann);
         check(rv.has_value(), "apply_file: ok");
         if (rv) {
             check_eq_sz(rv->renames_added,    1, "apply_file: 1 rename");
@@ -498,7 +498,7 @@ int main() {
     // Metadata suffix on rename / note / signature directives.
     //
     // Phase 4 added a `; conf=… ; src=… ; ev=…` tail consumed by both
-    // hand-written .ember files and external tooling. The suffix
+    // hand-written .spelunk files and external tooling. The suffix
     // must:
     //   - parse off the rhs cleanly (so the rename / note text is not
     //     polluted by the metadata),
@@ -507,7 +507,7 @@ int main() {
     // ----------------------------------------------------------------
     {
         const auto root = scratch_root();
-        const auto p = write_text(root, "meta.ember",
+        const auto p = write_text(root, "meta.spelunk",
             "[rename]\n"
             "0x401000 = with_meta ; conf=0.85 ; src=tool:review "
                 ";  ev=3-arg, called by 0x402000\n"
@@ -515,8 +515,8 @@ int main() {
             "0x401000 = brief note ; conf=0.5 ; src=cli\n"
             "[signature]\n"
             "0x401000 = void with_meta(char* msg) ; conf=0.95 ; src=hand\n");
-        ember::Annotations ann;
-        auto rv = ember::script::apply_file(p, mb, ann);
+        spelunk::Annotations ann;
+        auto rv = spelunk::script::apply_file(p, mb, ann);
         check(rv.has_value(), "meta apply_file: ok");
 
         // The suffix must not bleed into the persisted name / note /
@@ -562,11 +562,11 @@ int main() {
     // doesn't trigger, only ` ; ` does.
     {
         const auto root = scratch_root();
-        const auto p = write_text(root, "no_split.ember",
+        const auto p = write_text(root, "no_split.spelunk",
             "[note]\n"
             "0x401000 = step 1; step 2; step 3\n");
-        ember::Annotations ann;
-        auto rv = ember::script::apply_file(p, mb, ann);
+        spelunk::Annotations ann;
+        auto rv = spelunk::script::apply_file(p, mb, ann);
         check(rv.has_value(), "no_split apply: ok");
         if (auto* n = ann.note_for(0x401000)) {
             check_eq_str(*n, "step 1; step 2; step 3",
@@ -585,21 +585,21 @@ int main() {
     {
         const auto root = scratch_root();
         const auto p = write_text(root, "persisted.cache",
-            "# ember annotations\n"
+            "# spelunk annotations\n"
             "rename 401000 cache_imported\n"
             "meta rename 401000 conf=0.95|src=tool:from_other_binary"
                 "|ev=copied across builds\n");
-        ember::Annotations ann;
-        auto rv = ember::script::apply_file(p, mb, ann);
+        spelunk::Annotations ann;
+        auto rv = spelunk::script::apply_file(p, mb, ann);
         // Important: this used to be std::unexpected. After the sniff,
-        // it's expected to fail - the helper only reads `.ember`. The
-        // CLI path (`run_apply_ember`) handles persisted files
+        // it's expected to fail - the helper only reads `.spelunk`. The
+        // CLI path (`run_apply_spelunk`) handles persisted files
         // separately. So here we exercise the *parser-level* contract:
-        // the persisted form is rejected as an .ember script. The
+        // the persisted form is rejected as an .spelunk script. The
         // Annotations::load round-trip for the same file is covered in
         // tests/annotations_resolver_test.cpp.
         check(!rv.has_value(),
-              "persisted-format file rejected by .ember parser "
+              "persisted-format file rejected by .spelunk parser "
               "(CLI sniffer reroutes it via Annotations::load)");
     }
 

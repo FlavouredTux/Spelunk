@@ -6,7 +6,7 @@
 namespace ppc_structurer_tests {
 
 int test_ppc_mixed_call_arguments_follow_callee_layout() {
-    using namespace ember;
+    using namespace spelunk;
 
     IrFunction fn;
     fn.start = 0x1000;
@@ -69,7 +69,7 @@ int test_ppc_mixed_call_arguments_follow_callee_layout() {
 }
 
 int test_ppc_sdk_signature_seeds_mixed_lanes() {
-    using namespace ember;
+    using namespace spelunk;
 
     IrFunction fn;
     fn.start = 0x1700;
@@ -121,7 +121,7 @@ int test_ppc_sdk_signature_seeds_mixed_lanes() {
 }
 
 int test_ppc_annotated_stack_argument_at_call_site() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1c00;
     constexpr addr_t kTarget = 0x1b00;
@@ -192,7 +192,7 @@ int test_ppc_annotated_stack_argument_at_call_site() {
 }
 
 int test_ppc_annotated_incoming_stack_argument_name() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1b00;
     IrFunction fn;
@@ -249,7 +249,7 @@ int test_ppc_annotated_incoming_stack_argument_name() {
 }
 
 int test_ppc_hidden_sret_shifts_declared_call_arguments() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1e00;
     constexpr addr_t kTarget = 0x1d00;
@@ -312,7 +312,7 @@ int test_ppc_hidden_sret_shifts_declared_call_arguments() {
 }
 
 int test_ppc_small_aggregate_consumes_multiple_gprs() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2000;
     constexpr addr_t kTarget = 0x1f00;
@@ -371,7 +371,7 @@ int test_ppc_small_aggregate_consumes_multiple_gprs() {
 }
 
 int test_wii_sdk_prototype_groups() {
-    using namespace ember;
+    using namespace spelunk;
 
     const auto check_spec = [](std::string_view name, std::size_t params,
                                TypeKind ret_kind) {
@@ -420,7 +420,7 @@ int test_wii_sdk_prototype_groups() {
 }
 
 int test_ppc_gx_mixed_signature_layout() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2200;
     IrFunction fn;

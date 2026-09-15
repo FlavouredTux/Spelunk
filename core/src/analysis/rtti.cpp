@@ -1,4 +1,4 @@
-#include <ember/analysis/rtti.hpp>
+#include <spelunk/analysis/rtti.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -14,13 +14,13 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/discovery.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -851,4 +851,4 @@ rtti_method_names(std::span<const RttiClass> classes) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

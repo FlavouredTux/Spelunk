@@ -5,13 +5,13 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "passes_internal.hpp"
 
-namespace ember::ir_passes {
+namespace spelunk::ir_passes {
 
 // ============================================================================
 // Pass: cast simplification
@@ -119,7 +119,7 @@ std::size_t pass_dce(
     // `std::set<pair<size_t,size_t>>` for hot binaries because the
     // hash/lookup turns into a single byte read, no heap traffic, and
     // the worklist below allocates once. (~3.5x speedup on the cleanup
-    // pipeline measured against ember-on-itself.)
+    // pipeline measured against spelunk-on-itself.)
     std::vector<std::size_t> bb_offsets(fn.blocks.size() + 1, 0);
     for (std::size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         bb_offsets[bi + 1] = bb_offsets[bi] + fn.blocks[bi].insts.size();
@@ -201,4 +201,4 @@ std::size_t pass_dce(
     return removed;
 }
 
-}  // namespace ember::ir_passes
+}  // namespace spelunk::ir_passes

@@ -261,7 +261,7 @@ if __name__ == '__main__':
     if not hasattr(unicorn, 'UC_ARCH_PPC') or not unicorn.uc_arch_supported(unicorn.UC_ARCH_PPC) or not shutil.which(args.clang) or not shutil.which(args.lld):
         print('SKIP: PPC semantics requires Unicorn PPC, clang and ld.lld')
         raise SystemExit(77)
-    directory = pathlib.Path(tempfile.mkdtemp(prefix='ember-ppc-pipeline-'))
+    directory = pathlib.Path(tempfile.mkdtemp(prefix='spelunk-ppc-pipeline-'))
     RUN_ROOT = directory
     try:
         main(args, directory)

@@ -5,9 +5,9 @@
 #include <optional>
 #include <string>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 class Binary;
 
@@ -41,4 +41,4 @@ private:
 };
 
 }  // namespace emit
-}  // namespace ember
+}  // namespace spelunk

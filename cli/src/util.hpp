@@ -4,9 +4,9 @@
 #include <string>
 #include <string_view>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 // Parse a hex address from the command line. Accepts `0x…`, `0X…`,
 // `sub_…`, or plain hex (requires a-f/A-F letter to disambiguate from
@@ -24,4 +24,4 @@ namespace ember::cli {
 // safely tokenizable downstream (e.g. by the UI).
 [[nodiscard]] std::string escape_for_line(std::string_view s);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

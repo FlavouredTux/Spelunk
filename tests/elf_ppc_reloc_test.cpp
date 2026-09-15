@@ -3,13 +3,13 @@
 #include <span>
 #include <string_view>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/disasm/decoder.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 namespace {
 
-using namespace ember;
+using namespace spelunk;
 
 void check(bool ok, std::string_view message) {
     if (ok) return;

@@ -21,8 +21,8 @@ def run(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 def main() -> int:
     if len(sys.argv) != 3:
-        raise SystemExit("usage: ppc_workflow_cli_test.py EMBER PPC_DOL")
-    ember = pathlib.Path(sys.argv[1])
+        raise SystemExit("usage: ppc_workflow_cli_test.py SPELUNK PPC_DOL")
+    spelunk = pathlib.Path(sys.argv[1])
     fixture = pathlib.Path(sys.argv[2])
 
     with tempfile.TemporaryDirectory() as directory:
@@ -36,14 +36,14 @@ def main() -> int:
             encoding="utf-8",
         )
         batch = run([
-            str(ember), "-q", "-p", "--symbols", str(manifest), str(fixture)
+            str(spelunk), "-q", "-p", "--symbols", str(manifest), str(fixture)
         ])
         markers = [line for line in batch.stdout.splitlines()
-                   if line.startswith("// ember-symbol: ")]
+                   if line.startswith("// spelunk-symbol: ")]
         assert markers == [
-            "// ember-symbol: scalar_entry",
-            "// ember-symbol: 0x80003140",
-            "// ember-symbol: 0x80003160",
+            "// spelunk-symbol: scalar_entry",
+            "// spelunk-symbol: 0x80003140",
+            "// spelunk-symbol: 0x80003160",
         ]
 
         # A conventional headers/include path automatically sees its sibling
@@ -63,7 +63,7 @@ def main() -> int:
             encoding="utf-8",
         )
         imported = run([
-            str(ember), "--verbose", "--headers", str(include),
+            str(spelunk), "--verbose", "--headers", str(include),
             "-p", "-s", "scalar_entry", str(fixture),
         ])
         assert "parse diagnostic" not in imported.stderr
@@ -71,7 +71,7 @@ def main() -> int:
         assert "typedef union UnitWork" in imported.stdout
 
         data = run([
-            str(ember), "-q", "--decompile-data", "0x80004000",
+            str(spelunk), "-q", "--decompile-data", "0x80004000",
             "--type", "uint32_t[2]", "--verify-roundtrip", str(fixture),
         ])
         assert "uint32_t data_80004000[2]" in data.stdout
@@ -90,7 +90,7 @@ def main() -> int:
         struct.pack_into(">I", image, 0xAC, len(event))
         event_dol.write_bytes(image)
         decoded = run([
-            str(ember), "-q", "--evt-script", "0x80004000",
+            str(spelunk), "-q", "--evt-script", "0x80004000",
             "--verify-roundtrip", str(event_dol),
         ])
         assert "SET(LW(1))" in decoded.stdout
@@ -100,7 +100,7 @@ def main() -> int:
         # A non-script address fails validation before anything reaches
         # stdout: no partial EVT_BEGIN body may trail the error line.
         raw = subprocess.run(
-            [str(ember), "-q", "--evt-script", "0x80004000", str(fixture)],
+            [str(spelunk), "-q", "--evt-script", "0x80004000", str(fixture)],
             capture_output=True, text=True, check=False)
         assert raw.returncode != 0
         assert "invalid opcode/count" in raw.stderr
@@ -109,14 +109,14 @@ def main() -> int:
         # --json has no evt-script form; the downgrade is announced on
         # stderr instead of silently emitting plain text.
         raw = subprocess.run(
-            [str(ember), "-q", "--evt-script", "0x80004000", "--json",
+            [str(spelunk), "-q", "--evt-script", "0x80004000", "--json",
              str(fixture)],
             capture_output=True, text=True, check=False)
         assert raw.returncode != 0
         assert "--evt-script has no --json output" in raw.stderr
 
         decoded_json = run([
-            str(ember), "-q", "--evt-script", "0x80004000",
+            str(spelunk), "-q", "--evt-script", "0x80004000",
             "--verify-roundtrip", "--json", str(event_dol),
         ])
         assert "--evt-script has no --json output" in decoded_json.stderr
@@ -127,7 +127,7 @@ def main() -> int:
         # selector plus the dispatch-order winner, then the run proceeds
         # (no hard fail - scripts keep working).
         batch = run([
-            str(ember), "-q", "--strings", "--functions", str(fixture),
+            str(spelunk), "-q", "--strings", "--functions", str(fixture),
         ])
         assert ("multiple view flags requested (--strings, --functions); "
                 "running --strings only") in batch.stderr

@@ -7,12 +7,12 @@
 #include <span>
 #include <string>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
-namespace ember::pipeline {
+namespace spelunk::pipeline {
 
 std::size_t decode_failure_advance(Arch arch, std::span<const std::byte> bytes) noexcept;
 
@@ -23,4 +23,4 @@ FuncWindow window_from_addr(addr_t start, u64 size_hint, std::string label);
 [[nodiscard]] std::optional<FuncWindow>
 resolve_containing_function(const Binary& b, addr_t addr);
 
-}  // namespace ember::pipeline
+}  // namespace spelunk::pipeline

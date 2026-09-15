@@ -6,7 +6,7 @@
 namespace ppc_structurer_tests {
 
 int test_ppc_float_phi_keeps_float_type_after_integer_seed() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402380;
     IrValue f1_live = IrValue::make_reg(Reg::PpcF1, IrType::F64);
@@ -65,7 +65,7 @@ int test_ppc_float_phi_keeps_float_type_after_integer_seed() {
 }
 
 int test_ppc_float_compare_does_not_integer_cast() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x4023c0;
     const IrValue lhs = IrValue::make_reg(Reg::PpcF1, IrType::F64);
@@ -117,7 +117,7 @@ int test_ppc_float_compare_does_not_integer_cast() {
 }
 
 int test_ppc_casted_call_result_initializes_phi_local() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402400;
     const IrValue lhs = IrValue::make_reg(Reg::PpcF1, IrType::F64);
@@ -193,7 +193,7 @@ int test_ppc_casted_call_result_initializes_phi_local() {
 }
 
 int test_ppc_known_float_call_binds_f1_result() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1400;
     IrValue f1 = IrValue::make_reg(Reg::PpcF1, IrType::F64);
@@ -255,7 +255,7 @@ int test_ppc_known_float_call_binds_f1_result() {
 }
 
 int test_ppc_annotated_float_call_selects_f1() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1500;
     constexpr addr_t kTarget = 0x1600;
@@ -310,7 +310,7 @@ int test_ppc_annotated_float_call_selects_f1() {
 }
 
 int test_ppc_unknown_float_call_recovers_f1_lane() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1580;
     constexpr addr_t kTarget = 0x1680;
@@ -365,7 +365,7 @@ int test_ppc_unknown_float_call_recovers_f1_lane() {
 }
 
 int test_ppc_frame_layout_tracks_r1_float_slots() {
-    using namespace ember;
+    using namespace spelunk;
 
     IrFunction fn;
     fn.start = 0x16c0;

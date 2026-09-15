@@ -1,4 +1,4 @@
-#include <ember/analysis/graphics.hpp>
+#include <spelunk/analysis/graphics.hpp>
 
 #include <algorithm>
 #include <array>
@@ -14,14 +14,14 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -908,4 +908,4 @@ GraphicsAnalysis analyze_graphics_surface(const Binary& b) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -1,4 +1,4 @@
-#include <ember/analysis/kismet.hpp>
+#include <spelunk/analysis/kismet.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -17,11 +17,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/text.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/text.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 namespace {
 
 struct TextNode {
@@ -930,4 +930,4 @@ std::string emit_kismet_pseudocode(
     return output;
 }
 
-}  // namespace ember
+}  // namespace spelunk

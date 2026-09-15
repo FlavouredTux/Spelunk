@@ -8,11 +8,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "emitter_text.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 namespace {
 
@@ -497,4 +497,4 @@ std::string strip_label_only_if_blocks(std::string_view text) {
     return out;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

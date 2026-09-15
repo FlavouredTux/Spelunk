@@ -1,4 +1,4 @@
-#include <ember/binary/elf.hpp>
+#include <spelunk/binary/elf.hpp>
 
 #include <cstddef>
 #include <cstdio>
@@ -21,33 +21,33 @@ void check(bool condition, const char* message) {
 
 void test_elf_rejects_invalid_load_intervals() {
     auto rejects_as_invalid_format = [](const auto& loaded) {
-        return !loaded && loaded.error().kind == ember::ErrorKind::InvalidFormat;
+        return !loaded && loaded.error().kind == spelunk::ErrorKind::InvalidFormat;
     };
 
     auto filesz_exceeds_memsz =
-        ember::ElfBinary::load_from_buffer(elf64_load(0, 0x1000, 2, 1));
+        spelunk::ElfBinary::load_from_buffer(elf64_load(0, 0x1000, 2, 1));
     check(rejects_as_invalid_format(filesz_exceeds_memsz),
           "ELF rejects PT_LOAD file bytes larger than its memory image");
-    auto elf64_virtual_wrap = ember::ElfBinary::load_from_buffer(elf64_load(
-        0, std::numeric_limits<ember::u64>::max(), 0, 1));
+    auto elf64_virtual_wrap = spelunk::ElfBinary::load_from_buffer(elf64_load(
+        0, std::numeric_limits<spelunk::u64>::max(), 0, 1));
     check(rejects_as_invalid_format(elf64_virtual_wrap),
           "ELF64 rejects a wrapping PT_LOAD virtual interval");
-    auto elf64_file_wrap = ember::ElfBinary::load_from_buffer(elf64_load(
-        std::numeric_limits<ember::u64>::max(), 0x1000, 1, 1));
+    auto elf64_file_wrap = spelunk::ElfBinary::load_from_buffer(elf64_load(
+        std::numeric_limits<spelunk::u64>::max(), 0x1000, 1, 1));
     check(rejects_as_invalid_format(elf64_file_wrap),
           "ELF64 rejects a wrapping PT_LOAD file interval");
-    auto elf32_virtual_wrap = ember::ElfBinary::load_from_buffer(elf32_load(
-        0, std::numeric_limits<ember::u32>::max(), 0, 1));
+    auto elf32_virtual_wrap = spelunk::ElfBinary::load_from_buffer(elf32_load(
+        0, std::numeric_limits<spelunk::u32>::max(), 0, 1));
     check(rejects_as_invalid_format(elf32_virtual_wrap),
           "ELF32 rejects a virtual interval that only fits after widening");
-    auto elf32_file_wrap = ember::ElfBinary::load_from_buffer(elf32_load(
-        std::numeric_limits<ember::u32>::max(), 0x1000, 1, 1));
+    auto elf32_file_wrap = spelunk::ElfBinary::load_from_buffer(elf32_load(
+        std::numeric_limits<spelunk::u32>::max(), 0x1000, 1, 1));
     check(rejects_as_invalid_format(elf32_file_wrap),
           "ELF32 rejects a file interval that only fits after widening");
 }
 
 void test_elf_load_segments_are_authoritative() {
-    auto loaded = ember::ElfBinary::load_from_buffer(
+    auto loaded = spelunk::ElfBinary::load_from_buffer(
         elf64_with_alloc_section(0x2000, 4, true));
     check(loaded.has_value(), "ELF with a valid PT_LOAD and section table loads");
     if (!loaded) return;
@@ -60,7 +60,7 @@ void test_elf_load_segments_are_authoritative() {
 
     auto zero_load_bytes = elf64_with_alloc_section(0x2000, 4, true);
     zero_elf64_load_sizes(zero_load_bytes);
-    auto zero_load = ember::ElfBinary::load_from_buffer(std::move(zero_load_bytes));
+    auto zero_load = spelunk::ElfBinary::load_from_buffer(std::move(zero_load_bytes));
     check(zero_load.has_value(), "ELF with a zero-sized PT_LOAD still loads");
     if (zero_load) {
         check((*zero_load)->segments().empty() &&
@@ -72,36 +72,36 @@ void test_elf_load_segments_are_authoritative() {
 }
 
 void test_elf_mapped_size_handles_wrapping_section_end() {
-    auto loaded = ember::ElfBinary::load_from_buffer(elf64_with_alloc_section(
-        std::numeric_limits<ember::u64>::max(), 1, false));
+    auto loaded = spelunk::ElfBinary::load_from_buffer(elf64_with_alloc_section(
+        std::numeric_limits<spelunk::u64>::max(), 1, false));
     check(loaded.has_value(), "section-only ELF with the highest virtual byte loads");
     if (!loaded) return;
     check((*loaded)->mapped_size() == 1,
           "ELF mapped size does not wrap a highest-address section to zero");
-    check((*loaded)->bytes_at(std::numeric_limits<ember::u64>::max()).size() == 1,
+    check((*loaded)->bytes_at(std::numeric_limits<spelunk::u64>::max()).size() == 1,
           "section-only ELF still maps its highest virtual byte");
 
-    auto elf64_wrap = ember::ElfBinary::load_from_buffer(elf64_with_alloc_section(
-        std::numeric_limits<ember::u64>::max(), 2, false, 1));
+    auto elf64_wrap = spelunk::ElfBinary::load_from_buffer(elf64_with_alloc_section(
+        std::numeric_limits<spelunk::u64>::max(), 2, false, 1));
     check(!elf64_wrap &&
-              elf64_wrap.error().kind == ember::ErrorKind::InvalidFormat,
+              elf64_wrap.error().kind == spelunk::ErrorKind::InvalidFormat,
           "ELF64 rejects an allocated section whose last address wraps");
-    auto elf32_wrap = ember::ElfBinary::load_from_buffer(
+    auto elf32_wrap = spelunk::ElfBinary::load_from_buffer(
         elf32_with_wrapping_alloc_section());
     check(!elf32_wrap &&
-              elf32_wrap.error().kind == ember::ErrorKind::InvalidFormat,
+              elf32_wrap.error().kind == spelunk::ErrorKind::InvalidFormat,
           "ELF32 rejects an allocated section whose last address wraps");
 }
 
 void test_elf_executable_membership_handles_wrapping_section_end() {
-    auto loaded = ember::ElfBinary::load_from_buffer(
+    auto loaded = spelunk::ElfBinary::load_from_buffer(
         elf64_ppc_descriptor_to_highest_address());
     check(loaded.has_value(), "PPC64 highest-address descriptor fixture loads");
     if (!loaded) return;
-    check((*loaded)->entry_point() == std::numeric_limits<ember::u64>::max(),
+    check((*loaded)->entry_point() == std::numeric_limits<spelunk::u64>::max(),
           "ELF executable membership recognizes a section ending past UINT64_MAX");
 
-    auto mixed = ember::ElfBinary::load_from_buffer(
+    auto mixed = spelunk::ElfBinary::load_from_buffer(
         elf64_ppc_descriptor_outside_load_segment());
     check(mixed.has_value(), "mixed PPC64 segment/section fixture loads");
     if (!mixed) return;
@@ -112,7 +112,7 @@ void test_elf_executable_membership_handles_wrapping_section_end() {
 
     auto zero_load_descriptor = elf64_ppc_descriptor_outside_load_segment();
     zero_elf64_be_load_sizes(zero_load_descriptor);
-    auto zero_mixed = ember::ElfBinary::load_from_buffer(
+    auto zero_mixed = spelunk::ElfBinary::load_from_buffer(
         std::move(zero_load_descriptor));
     check(zero_mixed.has_value(), "zero-sized mixed PPC64 PT_LOAD fixture loads");
     if (zero_mixed) {
@@ -126,22 +126,22 @@ void test_elf_executable_membership_handles_wrapping_section_end() {
 }
 
 void test_elf_relocatable_symbol_bounds() {
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(5, 0, 0)),
           "ET_REL rejects an ordinary symbol section index past e_shnum");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(1, 5, 0)),
           "ET_REL rejects a symbol value past its defining section");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(1, 3, 2)),
           "ET_REL rejects a symbol extent past its defining section");
 
-    auto endpoint = ember::ElfBinary::load_from_buffer(
+    auto endpoint = spelunk::ElfBinary::load_from_buffer(
         elf64_relocatable_symbol(1, 4, 0));
     check(endpoint.has_value(),
           "ET_REL accepts a zero-sized symbol at its section endpoint");
 
-    auto absolute = ember::ElfBinary::load_from_buffer(
+    auto absolute = spelunk::ElfBinary::load_from_buffer(
         elf64_relocatable_symbol(0xfff1, 0x1234, 0));  // SHN_ABS
     check(absolute.has_value(), "ET_REL preserves SHN_ABS symbol semantics");
     if (absolute) {
@@ -150,7 +150,7 @@ void test_elf_relocatable_symbol_bounds() {
               "ET_REL does not rebase an SHN_ABS symbol");
     }
 
-    auto common = ember::ElfBinary::load_from_buffer(
+    auto common = spelunk::ElfBinary::load_from_buffer(
         elf64_relocatable_symbol(0xfff2, 16, 8));
     check(common.has_value(), "ET_REL allocates SHN_COMMON storage");
     if (common) {
@@ -159,23 +159,23 @@ void test_elf_relocatable_symbol_bounds() {
                   symbol->size == 8,
               "SHN_COMMON value is alignment, not the exposed symbol address");
     }
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(
-                  0xfff2, ember::u64{0x100000000}, 1)),
+                  0xfff2, spelunk::u64{0x100000000}, 1)),
           "ET_REL rejects COMMON alignment beyond the PPC32 address space");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(0xfff2, 1, 0xffffffff)),
           "ET_REL rejects COMMON storage extending beyond PPC32");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(0xfff2, 3, 8)),
           "ET_REL rejects non-power-of-two COMMON alignment");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(1, 0, 1, 3)),
           "ET_REL rejects non-power-of-two section alignment");
 }
 
 void test_elf_extended_symbol_indices() {
-    auto fully_extended = ember::ElfBinary::load_from_buffer(
+    auto fully_extended = spelunk::ElfBinary::load_from_buffer(
         elf64_fully_extended_numbering());
     check(fully_extended.has_value(),
           "ELF resolves extended section, shstrtab, phdr, and symbol indices");
@@ -195,55 +195,55 @@ void test_elf_extended_symbol_indices() {
               "PN_XNUM reaches the final zero-sized PT_LOAD and preserves authority");
     }
 
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_symbol(0xffff, 2, 1)),
           "ET_REL rejects SHN_XINDEX without a companion table");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_xindex(8, 8, 2)),
           "ET_REL rejects a SYMTAB_SHNDX entry-size mismatch");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_xindex(4, 4, 2)),
           "ET_REL rejects a SYMTAB_SHNDX symbol-count mismatch");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_xindex(4, 8, 3)),
           "ET_REL rejects SYMTAB_SHNDX linked to a non-symbol section");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_xindex(4, 8, 2, 6)),
           "ET_REL rejects an out-of-range extended section index");
-    check(!ember::ElfBinary::load_from_buffer(
+    check(!spelunk::ElfBinary::load_from_buffer(
               elf64_relocatable_xindex(4, 8, 2, 1, 1)),
           "ET_REL rejects a nonzero companion entry without SHN_XINDEX");
 
     auto small_extended_count = elf64_with_alloc_section(0x2000, 4, false);
     declare_elf64_extended_section_count(small_extended_count, 3);
-    check(!ember::ElfBinary::load_from_buffer(std::move(small_extended_count)),
+    check(!spelunk::ElfBinary::load_from_buffer(std::move(small_extended_count)),
           "ELF rejects nonconforming small extended section counts");
 
     auto truncated_extended_table = elf64_with_alloc_section(0x2000, 4, false);
     declare_elf64_extended_section_count(
         truncated_extended_table, kExtendedSectionCountMinimum);
-    check(!ember::ElfBinary::load_from_buffer(std::move(truncated_extended_table)),
+    check(!spelunk::ElfBinary::load_from_buffer(std::move(truncated_extended_table)),
           "ELF bounds-checks a section-zero extended section count");
 
     auto no_section_zero = elf64_load(0, 0x1000, 0, 1);
     mark_elf64_extended_section_name_index(no_section_zero);
-    check(!ember::ElfBinary::load_from_buffer(std::move(no_section_zero)),
+    check(!spelunk::ElfBinary::load_from_buffer(std::move(no_section_zero)),
           "ELF rejects extended shstrtab numbering without section zero");
 
     auto no_section_zero_phnum = elf64_load(0, 0x1000, 0, 1);
     mark_elf64_extended_program_header_count(no_section_zero_phnum);
-    check(!ember::ElfBinary::load_from_buffer(std::move(no_section_zero_phnum)),
+    check(!spelunk::ElfBinary::load_from_buffer(std::move(no_section_zero_phnum)),
           "ELF rejects PN_XNUM without section zero");
 
     auto truncated_extended_phdrs = elf64_with_alloc_section(0x2000, 4, false);
     declare_elf64_extended_program_header_count(
         truncated_extended_phdrs, kExtendedProgramHeaderCountMinimum);
-    check(!ember::ElfBinary::load_from_buffer(std::move(truncated_extended_phdrs)),
+    check(!spelunk::ElfBinary::load_from_buffer(std::move(truncated_extended_phdrs)),
           "ELF bounds-checks the PN_XNUM program-header count");
 }
 
 void test_elf_x86_got_relocations_are_arch_specific() {
-    auto sectioned = ember::ElfBinary::load_from_buffer(
+    auto sectioned = spelunk::ElfBinary::load_from_buffer(
         elf64_non_x86_sectioned_got_relocation());
     check(sectioned.has_value(), "non-x86 sectioned ELF relocation fixture loads");
     if (sectioned) {
@@ -252,7 +252,7 @@ void test_elf_x86_got_relocations_are_arch_specific() {
               "sectioned non-x86 relocation 6 is not treated as R_X86_64_GLOB_DAT");
     }
 
-    auto phdr_only = ember::ElfBinary::load_from_buffer(
+    auto phdr_only = spelunk::ElfBinary::load_from_buffer(
         elf64_non_x86_phdr_got_relocation());
     check(phdr_only.has_value(), "non-x86 program-header ELF fixture loads");
     if (phdr_only) {

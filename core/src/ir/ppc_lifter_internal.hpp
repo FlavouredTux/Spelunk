@@ -6,15 +6,15 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/ir/ppc_lifter.hpp>
+#include <spelunk/ir/ppc_lifter.hpp>
 
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember::ppc_lift {
+namespace spelunk::ppc_lift {
 
 struct LiftCtx {
     IrFunction*        fn   = nullptr;
@@ -214,4 +214,4 @@ void lift_ps_fused_op(LiftCtx& ctx, bool subtract, bool negate);
 
 void lift_psq_memory(LiftCtx& ctx, bool load, bool update);
 
-}  // namespace ember::ppc_lift
+}  // namespace spelunk::ppc_lift

@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include <ember/decompile/emit_options.hpp>
+#include <spelunk/decompile/emit_options.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 class RenderChunk final {
 public:
@@ -87,4 +87,4 @@ private:
     std::vector<LineMap::Hit> hits_;
 };
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

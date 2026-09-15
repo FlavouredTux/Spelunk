@@ -3,10 +3,10 @@
 #include <string>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 struct Args {
     std::string binary;
@@ -36,10 +36,10 @@ struct Args {
     std::string symuses;            // --symuses VA: per-function references into the string table at VA
     std::string category_filter;    // --filter cat1,cat2,...: shared by --symresolve / --symuses; limits
                                     // rows / sites to symbols falling in the named categorize_symtable buckets
-    ember::u64  symresolve_max_callsites = 5;  // --max-callsites N: cap top_callsites column (0 = unlimited)
-    ember::u64  symuses_min_uses    = 1;   // --min-uses N: drop --symuses rows below N uses
-    ember::u64  vtable_limit        = 16;  // --limit N: slot cap for --vtable-at (0 = all)
-    ember::u64  row_limit           = 0;   // --row-limit N: cap broad list/info output (0 = all)
+    spelunk::u64  symresolve_max_callsites = 5;  // --max-callsites N: cap top_callsites column (0 = unlimited)
+    spelunk::u64  symuses_min_uses    = 1;   // --min-uses N: drop --symuses rows below N uses
+    spelunk::u64  vtable_limit        = 16;  // --limit N: slot cap for --vtable-at (0 = all)
+    spelunk::u64  row_limit           = 0;   // --row-limit N: cap broad list/info output (0 = all)
     bool        row_limit_set       = false;
     bool        symuses_show_empty  = false;  // --show-empty: emit --symuses rows with 0 post-filter uses
     bool        symuses_no_taint    = false;  // --no-taint: drop the register-taint walker; emit every
@@ -100,7 +100,7 @@ struct Args {
                                     // large dumps where most fns are wine-DLL noise.
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
     std::vector<std::string> force_fn_starts; // --force-fn-start VA (repeatable): synthetic Function symbols at these VAs
-    std::string apply_ember;        // --apply PATH: declarative .ember script applied to annotations
+    std::string apply_spelunk;        // --apply PATH: declarative .spelunk script applied to annotations
     // --annotate ADDR: append a single annotation to the resolved file
     // (explicit --annotations beats sidecar beats cache, same chain
     // --apply uses). Companion flags pick what to set: --set-name,
@@ -172,12 +172,12 @@ struct Args {
                                                  // prologues, CRT bootloaders that have no
                                                  // semantic identity beyond their wrapper shape).
     float recognize_threshold = 0.6f;        // --recognize-threshold T (margin floor; default 0.6)
-    ember::u64 min_fn_bytes = 0;             // --min-fn-size N: drop fns smaller than N bytes
+    spelunk::u64 min_fn_bytes = 0;             // --min-fn-size N: drop fns smaller than N bytes
                                              // before fingerprinting. Useful on obfuscator-spawned
                                              // targets (Themida / Lua VM / hellgate) whose hundreds
                                              // of thousands of trivial stubs add no signal but
                                              // dominate corpus build time.
-    ember::u64 max_fn_bytes = 0;             // --max-fn-size N: drop fns larger than N bytes.
+    spelunk::u64 max_fn_bytes = 0;             // --max-fn-size N: drop fns larger than N bytes.
                                              // VM-dispatcher functions in obfuscated targets can
                                              // span entire sections and dominate cfg.build cost
                                              // even when --l0-prefilter would otherwise skip
@@ -189,13 +189,13 @@ struct Args {
                                              // targets where most fns have unique-shape CFGs;
                                              // lossy on cross-opt-level matches whose topology
                                              // shifts. Off by default.
-    ember::u64 max_cfg_blocks = 0;           // --max-cfg-blocks N: skip TEEF fns whose pre-lift CFG
+    spelunk::u64 max_cfg_blocks = 0;           // --max-cfg-blocks N: skip TEEF fns whose pre-lift CFG
                                              // exceeds N blocks. 0 = disabled.
-    ember::u64 max_cfg_edges = 0;            // --max-cfg-edges N: skip TEEF fns whose pre-lift CFG
+    spelunk::u64 max_cfg_edges = 0;            // --max-cfg-edges N: skip TEEF fns whose pre-lift CFG
                                              // exceeds N edges. 0 = disabled.
-    ember::u64 max_cfg_insts = 0;            // --max-cfg-insts N: skip TEEF fns whose decoded CFG
+    spelunk::u64 max_cfg_insts = 0;            // --max-cfg-insts N: skip TEEF fns whose decoded CFG
                                              // exceeds N instructions. 0 = disabled.
-    ember::u64 max_ir_insts = 0;             // --max-ir-insts N: override the post-lift TEEF IR cap.
+    spelunk::u64 max_ir_insts = 0;             // --max-ir-insts N: override the post-lift TEEF IR cap.
                                              // 0 = built-in default.
     bool labels = false;            // keep // bb_XXXX comments in pseudo-C output
     bool show_provenance = false;   // emit `// confidence: 0.9 (cli) - evidence`
@@ -217,7 +217,7 @@ struct Args {
     bool vtables = false;           // dump runtime pointer-dense vtables from loaded data/RELRO
     bool int3_resolve = false;       // scan for embedded int3 bytes and classify them
     bool ppc_coverage = false;       // --ppc-coverage: rank decode and semantic PPC gaps
-    ember::u64 ppc_coverage_limit = 25; // --coverage-limit N: rows for --ppc-coverage (0 = all)
+    spelunk::u64 ppc_coverage_limit = 25; // --coverage-limit N: rows for --ppc-coverage (0 = all)
     bool cfg_pseudo = false;        // CFG view with pseudo-C bodies per block
     bool functions = false;         // --functions [PATTERN]: list every discovered function (symbols ∪ sub_*)
     bool collisions = false;        // --collisions: dump every name/fingerprint group bound to >1 address
@@ -275,4 +275,4 @@ struct Args {
 // once after parsing.
 void apply_stage_implications(Args& a);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

@@ -4,10 +4,10 @@
 #include <span>
 #include <string>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::pdb::detail {
+namespace spelunk::pdb::detail {
 
 // Read a null-terminated string from `body` starting at `pos`,
 // advancing `pos` past the terminator. Caps at `body.size()` to keep
@@ -46,4 +46,4 @@ static void for_each_record(std::span<const std::byte> stream, F body_handler) {
     }
 }
 
-}  // namespace ember::pdb::detail
+}  // namespace spelunk::pdb::detail

@@ -6,23 +6,23 @@
 #include <set>
 #include <utility>
 
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/msvc_rtti.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/msvc_rtti.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_setup.hpp"
 #include "emitter_text.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 bool is_incomplete_decomp_signature(const FunctionSig& signature) {
     return signature.return_type.empty() && signature.params.empty() &&
@@ -347,4 +347,4 @@ SignatureContext setup_signature_context(Emitter& e,
     return ctx;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

@@ -5,9 +5,9 @@
 #include <string>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::macho {
+namespace spelunk::macho {
 
 // Bind records collected from the LC_DYLD_INFO opcode stream or from the
 // modern LC_DYLD_CHAINED_FIXUPS format. Both converge on (slot vaddr,
@@ -51,4 +51,4 @@ void parse_chained_fixups(std::span<const std::byte> data,
                           std::span<std::byte> image,
                           std::vector<BindRec>& out);
 
-}  // namespace ember::macho
+}  // namespace spelunk::macho

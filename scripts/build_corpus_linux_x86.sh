@@ -2,7 +2,7 @@
 # Build a TEEF library-recognition corpus for Linux x86-64.
 #
 # Output: $DEST/*.teef.tsv - one TSV per library. Pass them to
-#   ember --recognize <bin> --corpus DIR/*.teef.tsv
+#   spelunk --recognize <bin> --corpus DIR/*.teef.tsv
 # to auto-rename functions in stripped Linux binaries that statically
 # link any of these runtimes.
 #
@@ -14,17 +14,17 @@
 #     "extractor" Rust binary that exercises a wide std API surface
 #     so the resulting concrete std-fn instantiations are in the corpus)
 #
-# Run from repo root or anywhere; expects ember to be at build/cli/ember
-# unless you override $EMBER.
+# Run from repo root or anywhere; expects spelunk to be at build/cli/spelunk
+# unless you override $SPELUNK.
 
 set -euo pipefail
 
-EMBER=${EMBER:-build/cli/ember}
+SPELUNK=${SPELUNK:-build/cli/spelunk}
 DEST=${DEST:-/tmp/corpus_linux_x86}
 mkdir -p "$DEST"
 
-if [ ! -x "$EMBER" ]; then
-    echo "ERROR: $EMBER not found or not executable. Build ember first or set \$EMBER." >&2
+if [ ! -x "$SPELUNK" ]; then
+    echo "ERROR: $SPELUNK not found or not executable. Build spelunk first or set \$SPELUNK." >&2
     exit 1
 fi
 
@@ -79,7 +79,7 @@ for L in "${SYSTEM_LIBS[@]}"; do
     out="$DEST/$(basename "$L").teef.tsv"
     [ -s "$out" ] && continue
     echo "==> $L (real: $REAL)" >&2
-    "$EMBER" --teef "$REAL" > "$out" 2>>"$DEST/build.log"
+    "$SPELUNK" --teef "$REAL" > "$out" 2>>"$DEST/build.log"
     emit_runtime_header "$out" "$(runtime_tag_for "$L")"
     echo "    F=$(grep -c '^F' "$out") C=$(grep -c '^C' "$out") runtime=$(runtime_tag_for "$L")" >&2
 done
@@ -95,7 +95,7 @@ if command -v rustc >/dev/null 2>&1; then
     RUST_STD_SO=$(find "$SYSROOT" -name 'libstd-*.so' 2>/dev/null | head -1)
     if [ -n "$RUST_STD_SO" ] && [ ! -s "$DEST/rust_std.teef.tsv" ]; then
         echo "==> rust std .so: $RUST_STD_SO" >&2
-        "$EMBER" --teef "$RUST_STD_SO" > "$DEST/rust_std.teef.tsv" 2>>"$DEST/build.log"
+        "$SPELUNK" --teef "$RUST_STD_SO" > "$DEST/rust_std.teef.tsv" 2>>"$DEST/build.log"
         emit_runtime_header "$DEST/rust_std.teef.tsv" rust
         echo "    F=$(grep -c '^F' "$DEST/rust_std.teef.tsv") C=$(grep -c '^C' "$DEST/rust_std.teef.tsv") runtime=rust" >&2
     fi
@@ -111,7 +111,7 @@ if command -v rustc >/dev/null 2>&1; then
             (cd "$WORK" && cargo build --release 2>>"$DEST/build.log")
             EXTRACTOR=$(find "$WORK/target/release" -maxdepth 1 -type f -executable | head -1)
             if [ -n "$EXTRACTOR" ]; then
-                "$EMBER" --teef "$EXTRACTOR" > "$DEST/rust_extractor.teef.tsv" 2>>"$DEST/build.log"
+                "$SPELUNK" --teef "$EXTRACTOR" > "$DEST/rust_extractor.teef.tsv" 2>>"$DEST/build.log"
                 emit_runtime_header "$DEST/rust_extractor.teef.tsv" rust
                 echo "    F=$(grep -c '^F' "$DEST/rust_extractor.teef.tsv") C=$(grep -c '^C' "$DEST/rust_extractor.teef.tsv") runtime=rust" >&2
             fi
@@ -131,4 +131,4 @@ total_f=$(grep -c '^F' "$DEST"/*.teef.tsv | awk -F: '{s+=$2} END{print s}')
 total_c=$(grep -c '^C' "$DEST"/*.teef.tsv | awk -F: '{s+=$2} END{print s}')
 echo "  TOTAL: F=$total_f C=$total_c across $(ls "$DEST"/*.teef.tsv 2>/dev/null | wc -l) TSVs" >&2
 echo >&2
-echo "Use with: $EMBER --recognize <binary> $(ls "$DEST"/*.teef.tsv 2>/dev/null | sed 's|^| --corpus |' | tr -d '\n') --recognize-threshold 0.85" >&2
+echo "Use with: $SPELUNK --recognize <binary> $(ls "$DEST"/*.teef.tsv 2>/dev/null | sed 's|^| --corpus |' | tr -d '\n') --recognize-threshold 0.85" >&2

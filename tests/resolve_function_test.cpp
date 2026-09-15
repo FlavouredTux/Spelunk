@@ -1,5 +1,5 @@
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
 
 #include <array>
 #include <cstdio>
@@ -19,7 +19,7 @@ void check(bool cond, const char* ctx) {
     }
 }
 
-void check_eq(ember::addr_t got, ember::addr_t want, const char* ctx) {
+void check_eq(spelunk::addr_t got, spelunk::addr_t want, const char* ctx) {
     if (got != want) {
         std::fprintf(stderr, "FAIL: %s (got %#llx, want %#llx)\n",
                      ctx,
@@ -29,7 +29,7 @@ void check_eq(ember::addr_t got, ember::addr_t want, const char* ctx) {
     }
 }
 
-void check_eq_u64(ember::u64 got, ember::u64 want, const char* ctx) {
+void check_eq_u64(spelunk::u64 got, spelunk::u64 want, const char* ctx) {
     if (got != want) {
         std::fprintf(stderr, "FAIL: %s (got %#llx, want %#llx)\n",
                      ctx,
@@ -39,12 +39,12 @@ void check_eq_u64(ember::u64 got, ember::u64 want, const char* ctx) {
     }
 }
 
-constexpr ember::addr_t kTextBase = 0x401000;
-constexpr ember::addr_t kDataBase = 0x402000;
-constexpr ember::addr_t kPpcTextBase = 0x1000;
-constexpr ember::addr_t kPpcDataBase = 0x2000;
+constexpr spelunk::addr_t kTextBase = 0x401000;
+constexpr spelunk::addr_t kDataBase = 0x402000;
+constexpr spelunk::addr_t kPpcTextBase = 0x1000;
+constexpr spelunk::addr_t kPpcDataBase = 0x2000;
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
     MockBinary() {
         text_.fill(static_cast<std::byte>(0x90u));
@@ -70,30 +70,30 @@ public:
         sections_[1].flags.allocated = true;
         sections_[1].data = std::span<const std::byte>(data_.data(), data_.size());
 
-        ember::Symbol fn;
+        spelunk::Symbol fn;
         fn.name = "entry";
         fn.addr = kTextBase;
         fn.size = 1;
-        fn.kind = ember::SymbolKind::Function;
+        fn.kind = spelunk::SymbolKind::Function;
         syms_.push_back(std::move(fn));
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Elf;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Elf;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kTextBase;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
         return sections_;
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return syms_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -101,18 +101,18 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return syms_;
     }
 
 private:
     std::array<std::byte, 0x20>      text_{};
     std::array<std::byte, 0x40>      data_{};
-    std::array<ember::Section, 2>    sections_{};
-    std::vector<ember::Symbol>       syms_{};
+    std::array<spelunk::Section, 2>    sections_{};
+    std::vector<spelunk::Symbol>       syms_{};
 };
 
-class MockPpcDol final : public ember::Binary {
+class MockPpcDol final : public spelunk::Binary {
 public:
     MockPpcDol() {
         // ret at 0x1004. 0x1001 deliberately lands inside the same executable
@@ -141,19 +141,19 @@ public:
         sections_[1].data = std::span<const std::byte>(data_.data(), data_.size());
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override { return ember::Format::Dol; }
-    [[nodiscard]] ember::Arch arch() const noexcept override { return ember::Arch::Ppc32; }
-    [[nodiscard]] ember::Endian endian() const noexcept override { return ember::Endian::Big; }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override { return kPpcTextBase + 4; }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override { return sections_; }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override { return syms_; }
+    [[nodiscard]] spelunk::Format format() const noexcept override { return spelunk::Format::Dol; }
+    [[nodiscard]] spelunk::Arch arch() const noexcept override { return spelunk::Arch::Ppc32; }
+    [[nodiscard]] spelunk::Endian endian() const noexcept override { return spelunk::Endian::Big; }
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override { return kPpcTextBase + 4; }
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override { return sections_; }
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override { return syms_; }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override { return {}; }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override { return syms_; }
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override { return syms_; }
 
 private:
-    static void write_be32(std::byte* p, ember::u32 v) noexcept {
+    static void write_be32(std::byte* p, spelunk::u32 v) noexcept {
         p[0] = static_cast<std::byte>((v >> 24) & 0xffu);
         p[1] = static_cast<std::byte>((v >> 16) & 0xffu);
         p[2] = static_cast<std::byte>((v >> 8) & 0xffu);
@@ -162,30 +162,30 @@ private:
 
     std::array<std::byte, 0x10>      text_{};
     std::array<std::byte, 0x10>      data_{};
-    std::array<ember::Section, 2>    sections_{};
-    std::vector<ember::Symbol>       syms_{};
+    std::array<spelunk::Section, 2>    sections_{};
+    std::vector<spelunk::Symbol>       syms_{};
 };
 
 void test_literal_sub_must_be_code() {
     MockBinary b;
 
-    auto text = ember::resolve_function(b, "sub_401000");
+    auto text = spelunk::resolve_function(b, "sub_401000");
     check(text.has_value(), "sub_ literal in .text resolves");
     if (text) {
         check_eq(text->start, kTextBase, "text start");
         check_eq_u64(text->size, 1, "text function size is preserved");
     }
 
-    auto data_sub = ember::resolve_function(b, "sub_402000");
+    auto data_sub = spelunk::resolve_function(b, "sub_402000");
     check(!data_sub.has_value(), "sub_ literal in .rodata is rejected");
 
-    auto data_hex = ember::resolve_function(b, "0x402000");
+    auto data_hex = spelunk::resolve_function(b, "0x402000");
     check(!data_hex.has_value(), "hex literal in .rodata is rejected");
 }
 
 void test_ppc_code_pointer_alignment() {
     MockPpcDol b;
-    const auto fns = ember::enumerate_functions(b, ember::EnumerateMode::Cheap);
+    const auto fns = spelunk::enumerate_functions(b, spelunk::EnumerateMode::Cheap);
 
     bool found_unaligned = false;
     bool found_aligned = false;

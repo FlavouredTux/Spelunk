@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace ember::test {
+namespace spelunk::test {
 namespace {
 
 u8 operand_count(const IrInst& inst, bool allow_intrinsics, bool allow_calls) {
@@ -215,4 +215,4 @@ void validate_interpreter_cfg(const IrFunction& fn, const MachineInput& input) {
     }
 }
 
-}  // namespace ember::test
+}  // namespace spelunk::test

@@ -1,5 +1,5 @@
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/binary/symbol.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/binary/symbol.hpp>
 
 #include <cstdio>
 #include <string_view>
@@ -17,14 +17,14 @@ void check(bool condition, const char* message) {
 }  // namespace
 
 int main() {
-    using ember::ImportStringKind;
-    using ember::import_arg_string_kind;
+    using spelunk::ImportStringKind;
+    using spelunk::import_arg_string_kind;
 
     const auto check_import_name = [](std::string_view decorated,
                                       std::string_view expected,
                                       const char* message,
                                       bool raw_macho = false) {
-        check(ember::strip_import_name_decorations(decorated, raw_macho) == expected,
+        check(spelunk::strip_import_name_decorations(decorated, raw_macho) == expected,
               message);
     };
     check_import_name("puts@GLIBC_2.2.5", "puts",
@@ -63,13 +63,13 @@ int main() {
     check_import_name("!puts", "!puts",
                       "empty module qualifier is preserved");
 
-    ember::TypeArena arena;
-    const auto decorated_sleep = ember::lookup_import_sig(
-        ember::strip_import_name_decorations("__imp__Sleep@4"), arena);
+    spelunk::TypeArena arena;
+    const auto decorated_sleep = spelunk::lookup_import_sig(
+        spelunk::strip_import_name_decorations("__imp__Sleep@4"), arena);
     check(decorated_sleep.has_value() && decorated_sleep->params.size() == 1,
           "decorated stdcall import reaches its typed signature");
 
-    const auto strcasestr = ember::lookup_import_sig("strcasestr", arena);
+    const auto strcasestr = spelunk::lookup_import_sig("strcasestr", arena);
     check(strcasestr.has_value(), "strcasestr has a typed import signature");
     if (strcasestr) {
         check(strcasestr->params.size() == 2,
@@ -77,10 +77,10 @@ int main() {
         check(!strcasestr->variadic,
               "strcasestr signature is not variadic");
 
-        const auto is_char_pointer = [&](ember::TypeRef type) {
+        const auto is_char_pointer = [&](spelunk::TypeRef type) {
             const auto& node = arena.node(type);
-            return node.kind == ember::TypeKind::Ptr &&
-                   arena.kind(node.p.pointee) == ember::TypeKind::Int &&
+            return node.kind == spelunk::TypeKind::Ptr &&
+                   arena.kind(node.p.pointee) == spelunk::TypeKind::Int &&
                    arena.node(node.p.pointee).i.bits == 8;
         };
         check(is_char_pointer(strcasestr->ret),

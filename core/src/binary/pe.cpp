@@ -1,4 +1,4 @@
-#include <ember/binary/pe.hpp>
+#include <spelunk/binary/pe.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -18,22 +18,22 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pe_unwind.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/pdb.hpp>
-#include <ember/binary/pe_view.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/analysis/pe_unwind.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/pdb.hpp>
+#include <spelunk/binary/pe_view.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -908,4 +908,4 @@ PeBinary::attach_pdb_from_path(const std::filesystem::path& path) {
     return added;
 }
 
-}  // namespace ember
+}  // namespace spelunk

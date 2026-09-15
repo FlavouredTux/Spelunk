@@ -1,6 +1,6 @@
 # Python Wrapper
 
-`emberpy` is a small Python client for the Ember CLI. It keeps Ember's
+`spelunkpy` is a small Python client for the Spelunk CLI. It keeps Spelunk's
 C++ pipeline as the source of truth, but gives scripts a nicer API for
 function-centric analysis, JSON probes, path explanation, and annotation
 batching.
@@ -13,29 +13,29 @@ python -m pip install -e .
 
 The wrapper finds the executable in this order:
 
-1. `EMBER_BIN`
-2. common local build paths such as `./build/cli/ember`
-3. `ember` on `PATH`
+1. `SPELUNK_BIN`
+2. common local build paths such as `./build/cli/spelunk`
+3. `spelunk` on `PATH`
 
-You can also pass `ember_bin=` explicitly:
+You can also pass `spelunk_bin=` explicitly:
 
 ```python
-from emberpy import Ember
+from spelunkpy import Spelunk
 
-e = Ember("target.elf", ember_bin="./build/cli/ember")
+e = Spelunk("target.elf", spelunk_bin="./build/cli/spelunk")
 ```
 
 ## Function Handles
 
-Use `Ember.function()` when you already have an address and want to stay
+Use `Spelunk.function()` when you already have an address and want to stay
 focused on that function. `pseudo()` can also resolve symbols and
 annotation names, but address-backed handles unlock the VA-oriented
 helpers such as `disasm(count=...)`, `callees()`, and `investigate()`:
 
 ```python
-from emberpy import Ember
+from spelunkpy import Spelunk
 
-e = Ember("samples/app.bin")
+e = Spelunk("samples/app.bin")
 fn = e.function(0x1041EA0D0)
 
 print(fn.pseudo())
@@ -142,8 +142,8 @@ print(e.recognize(["corpus/libcrypto.tsv", "corpus/libssl.tsv"]))
 
 ## Annotation Batches
 
-`annotate_batch()` turns Python findings into a `.ember` script and
-applies it with `ember --apply`.
+`annotate_batch()` turns Python findings into a `.spelunk` script and
+applies it with `spelunk --apply`.
 
 ```python
 findings = [
@@ -164,7 +164,7 @@ findings = [
     },
 ]
 
-e.annotate_batch("tools/re/http_join_findings.ember", findings)
+e.annotate_batch("tools/re/http_join_findings.spelunk", findings)
 ```
 
 The generated script uses `[rename]`, `[note]`, `[signature]`, and
@@ -176,7 +176,7 @@ Preview without writing annotations:
 
 ```python
 result = e.annotate_batch(
-    "tools/re/http_join_findings.ember",
+    "tools/re/http_join_findings.spelunk",
     findings,
     dry_run=True,
 )
@@ -186,14 +186,14 @@ print(result.stdout)
 Only write the script, without applying it:
 
 ```python
-e.annotate_batch("tools/re/http_join_findings.ember", findings, apply=False)
+e.annotate_batch("tools/re/http_join_findings.spelunk", findings, apply=False)
 ```
 
-Raw `.ember` lines can be mixed into the batch:
+Raw `.spelunk` lines can be mixed into the batch:
 
 ```python
 e.annotate_batch(
-    "tools/re/manual.ember",
+    "tools/re/manual.spelunk",
     [
         {"address": 0x401234, "name": "http_join"},
         "[constant]\n0xDEADBEEF = protocol_magic",
@@ -201,11 +201,11 @@ e.annotate_batch(
 )
 ```
 
-See [scripting.md](scripting.md) for the full `.ember` format.
+See [scripting.md](scripting.md) for the full `.spelunk` format.
 
 ## Errors And Results
 
-Low-level calls return `EmberResult`:
+Low-level calls return `SpelunkResult`:
 
 ```python
 result = e.run("--strings", check=False)
@@ -214,15 +214,15 @@ if not result.ok:
     print(result.stderr)
 ```
 
-By default, unsuccessful commands raise `EmberError` and keep the failed
+By default, unsuccessful commands raise `SpelunkError` and keep the failed
 result attached:
 
 ```python
-from emberpy import EmberError
+from spelunkpy import SpelunkError
 
 try:
     e.function(0x401234).pseudo()
-except EmberError as exc:
+except SpelunkError as exc:
     print(exc.result.args)
     print(exc.result.stderr)
 ```

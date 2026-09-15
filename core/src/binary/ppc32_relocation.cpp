@@ -4,7 +4,7 @@
 #include <cstring>
 #include <limits>
 
-namespace ember::ppc32 {
+namespace spelunk::ppc32 {
 namespace {
 
 template <typename T>
@@ -234,4 +234,4 @@ bool encode(std::span<std::byte> field, u32 relocation_type,
     }
 }
 
-}  // namespace ember::ppc32
+}  // namespace spelunk::ppc32

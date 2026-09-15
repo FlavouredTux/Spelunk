@@ -24,24 +24,24 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/fingerprint.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/progress.hpp>
-#include <ember/common/threads.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/lifter.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/fingerprint.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/progress.hpp>
+#include <spelunk/common/threads.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/lifter.hpp>
 
 #include "args.hpp"
 #include "subcommands.hpp"
 #include "util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 std::string fingerprints_cache_tag() {
     return fingerprints_cache_tag(0, 0);
@@ -66,7 +66,7 @@ std::string build_fingerprints_output(const Binary& b,
     // Build a one-shot addr -> name map; previously this was an O(n²) linear
     // rescan per function which took minutes on large stripped binaries.
     if (show) {
-        std::println(stderr, "ember: collecting named functions...");
+        std::println(stderr, "spelunk: collecting named functions...");
         std::fflush(stderr);
     }
     std::unordered_map<addr_t, std::string> name_by_addr;
@@ -83,7 +83,7 @@ std::string build_fingerprints_output(const Binary& b,
     }
 
     if (show) {
-        std::println(stderr, "ember: {} named functions; walking call graph "
+        std::println(stderr, "spelunk: {} named functions; walking call graph "
                              "(one cold pass on big binaries)...",
                              name_by_addr.size());
         std::fflush(stderr);
@@ -94,7 +94,7 @@ std::string build_fingerprints_output(const Binary& b,
         edges = compute_call_graph(b, {}, CallGraphMode::Fast);
     }
     if (show) {
-        std::println(stderr, "ember: {} call edges discovered", edges.size());
+        std::println(stderr, "spelunk: {} call edges discovered", edges.size());
         std::fflush(stderr);
     }
 
@@ -189,7 +189,7 @@ std::string build_fingerprints_output(const Binary& b,
 
     if (show) {
         std::println(stderr,
-                     "ember: fingerprinting {} functions across {} thread{}...",
+                     "spelunk: fingerprinting {} functions across {} thread{}...",
                      total, worker_count, worker_count == 1 ? "" : "s");
         std::fflush(stderr);
     }
@@ -304,14 +304,14 @@ std::string fingerprints_cached_or_compute(const std::filesystem::path& binary_p
     }
     auto bin = load_binary(binary_path);
     if (!bin) {
-        std::println(stderr, "ember: {}: {}",
+        std::println(stderr, "spelunk: {}: {}",
                      bin.error().kind_name(), bin.error().message);
         std::exit(EXIT_FAILURE);
     }
     std::string out = build_fingerprints_output(**bin);
     if (!key.empty()) {
         if (auto rv = cache::write(cache_dir, key, tag, out); !rv) {
-            std::println(stderr, "ember: warning: {}: {}",
+            std::println(stderr, "spelunk: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);
         }
     }
@@ -334,7 +334,7 @@ std::string fingerprints_tsv_for(const Args& args, const Binary& b) {
     if (!args.no_cache) {
         if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             if (auto rv = cache::write(dir, *k, tag, out); !rv) {
-                std::println(stderr, "ember: warning: {}: {}",
+                std::println(stderr, "spelunk: warning: {}: {}",
                              rv.error().kind_name(), rv.error().message);
             }
         }
@@ -544,7 +544,7 @@ format_diff(const ParsedFps& old_p, const ParsedFps& new_p,
     }
 
     std::string out;
-    out += std::format("# ember diff\n");
+    out += std::format("# spelunk diff\n");
     out += std::format("# old: {} ({} functions)\n", old_label, old_p.total);
     out += std::format("# new: {} ({} functions)\n", new_label, new_p.total);
     out += std::format(
@@ -685,7 +685,7 @@ int run_diff(const Args& args) {
     if (!args.fp_old_in.empty()) {
         old_tsv = slurp_file(args.fp_old_in);
         if (old_tsv.empty()) {
-            std::println(stderr, "ember: --fingerprint-old: cannot read '{}'",
+            std::println(stderr, "spelunk: --fingerprint-old: cannot read '{}'",
                          args.fp_old_in);
             return EXIT_FAILURE;
         }
@@ -694,7 +694,7 @@ int run_diff(const Args& args) {
     if (!args.fp_new_in.empty()) {
         new_tsv = slurp_file(args.fp_new_in);
         if (new_tsv.empty()) {
-            std::println(stderr, "ember: --fingerprint-new: cannot read '{}'",
+            std::println(stderr, "spelunk: --fingerprint-new: cannot read '{}'",
                          args.fp_new_in);
             return EXIT_FAILURE;
         }
@@ -703,18 +703,18 @@ int run_diff(const Args& args) {
 
     if (old_tsv.empty()) {
         if (args.diff_path.empty()) {
-            std::println(stderr, "ember: --diff needs --fingerprint-old PATH or --diff OLD_BINARY");
+            std::println(stderr, "spelunk: --diff needs --fingerprint-old PATH or --diff OLD_BINARY");
             return EXIT_FAILURE;
         }
-        std::println(stderr, "ember: diff OLD={}", args.diff_path);
+        std::println(stderr, "spelunk: diff OLD={}", args.diff_path);
         old_tsv = fingerprints_cached_or_compute(args.diff_path, cache_dir, args.no_cache);
     }
     if (new_tsv.empty()) {
         if (args.binary.empty()) {
-            std::println(stderr, "ember: --diff needs --fingerprint-new PATH or a positional binary");
+            std::println(stderr, "spelunk: --diff needs --fingerprint-new PATH or a positional binary");
             return EXIT_FAILURE;
         }
-        std::println(stderr, "ember: diff NEW={}", args.binary);
+        std::println(stderr, "spelunk: diff NEW={}", args.binary);
         new_tsv = fingerprints_cached_or_compute(args.binary, cache_dir, args.no_cache);
     }
     const auto old_p = parse_fingerprints_tsv(old_tsv);
@@ -726,4 +726,4 @@ int run_diff(const Args& args) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

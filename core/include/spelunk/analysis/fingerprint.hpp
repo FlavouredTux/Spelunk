@@ -1,0 +1,60 @@
+#pragma once
+
+#include <string_view>
+
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
+
+namespace spelunk {
+
+class CfgBuilder;
+class Lifter;
+
+// Schema token for the fingerprint algorithm. Folded into the hash itself
+// AND into cache tags so bumping it invalidates on-disk TSVs without
+// breaking unrelated cache entries (xrefs, strings, arities).
+// Bumped to v3 when Win64 support landed - the call.args.* barrier carries
+// different arg-reg slots under Win64 vs SysV, so hashes of the same
+// x86-64 function emitted with the two ABIs now diverge. Existing v2
+// fingerprint databases are stale after the bump; callers must
+// regenerate.
+inline constexpr std::string_view kFingerprintSchema = "v3";
+
+// Address-independent content hash of one function. Same algorithm compiled
+// in the same way across two shifted binaries → same hash, so names learned
+// on one build carry over to the next.
+//
+// What gets baked into `hash`:
+//   - opcode sequence (canonicalized IR op names, per-block in RPO order)
+//   - operand shape: kind + type + (for Reg) canonical register
+//   - import call targets by name (not by address)
+//   - referenced string literals (by content)
+//   - referenced global data symbols by name (not by address)
+//   - CFG topology (block count + per-block successor count sequence)
+//
+// What gets explicitly *excluded*:
+//   - all absolute addresses (PIE slides, rebases)
+//   - SSA versions, temp ids
+//   - concrete immediate values that look like addresses (|v| >= 0x1000)
+//   - source x86 instruction offsets
+//
+// Small immediates (|v| < 16) ARE included - they're usually loop bounds,
+// struct offsets, flag bits, and help distinguish otherwise-identical shapes.
+struct FunctionFingerprint {
+    u64 hash   = 0;   // 0 means "could not fingerprint"
+    u32 blocks = 0;
+    u32 insts  = 0;
+    u32 calls  = 0;
+};
+
+[[nodiscard]] FunctionFingerprint
+compute_fingerprint(const Binary& b, addr_t fn_start);
+
+// Same fingerprint algorithm, but reuses the caller's per-thread CFG builder
+// and lifter. Hot path for whole-binary fingerprint dumps: constructing those
+// objects per function is pure setup churn.
+[[nodiscard]] FunctionFingerprint
+compute_fingerprint_with(const Binary& b, const CfgBuilder& cfg,
+                         const Lifter& lifter, addr_t fn_start);
+
+}  // namespace spelunk

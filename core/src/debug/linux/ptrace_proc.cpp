@@ -18,10 +18,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "errno_io.hpp"
 #include "proc_utils.hpp"
@@ -29,7 +29,7 @@
 
 extern char** environ;
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 namespace {
 
@@ -225,4 +225,4 @@ std::vector<LoadedImage> LinuxTarget::images() const {
     return linux_detail::read_proc_maps(static_cast<pid_t>(pid_v_));
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

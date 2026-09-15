@@ -1,4 +1,4 @@
-#include <ember/analysis/ssa_cleanup.hpp>
+#include <spelunk/analysis/ssa_cleanup.hpp>
 
 #include <format>
 #include <map>
@@ -9,11 +9,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 std::string_view base_name_for(SsaMergeLocalRole role) noexcept {
     switch (role) {
@@ -221,4 +221,4 @@ recover_ssa_merge_locals(const IrFunction& fn,
     return result;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -1,19 +1,19 @@
 // Shared masking helpers, pass ordering and the run_cleanup entry point.
 
-#include <ember/ir/passes.hpp>
+#include <spelunk/ir/passes.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "passes_internal.hpp"
 
-namespace ember::ir_passes {
+namespace spelunk::ir_passes {
 
 // ============================================================================
 // Mask i64 result to an IrType width (sign-extending from low bits)
@@ -96,9 +96,9 @@ CleanupStats run_pipeline(IrFunction& fn) {
     return stats;
 }
 
-}  // namespace ember::ir_passes
+}  // namespace spelunk::ir_passes
 
-namespace ember {
+namespace spelunk {
 
 using namespace ir_passes;
 
@@ -106,4 +106,4 @@ Result<CleanupStats> run_cleanup(IrFunction& fn) {
     return run_pipeline(fn);
 }
 
-}  // namespace ember
+}  // namespace spelunk

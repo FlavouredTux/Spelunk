@@ -19,15 +19,15 @@
 #include <system_error>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "dbg_internal.hpp"
 
-namespace ember::cli::dbg {
+namespace spelunk::cli::dbg {
 
 namespace {
 
@@ -150,7 +150,7 @@ std::size_t load_ignored_faults_file(const std::string& path,
                                      std::set<addr_t>& out) {
     FILE* f = std::fopen(path.c_str(), "r");
     if (!f) {
-        std::println(stderr, "ember-dbg: ignore-file: {}: {}",
+        std::println(stderr, "spelunk-dbg: ignore-file: {}: {}",
                      path, std::strerror(errno));
         return 0;
     }
@@ -178,7 +178,7 @@ std::size_t load_ignored_faults_file(const std::string& path,
         if (auto h = parse_hex_addr(sv); h) {
             if (out.insert(*h).second) ++added;
         } else {
-            std::println(stderr, "ember-dbg: ignore-file: {}: bad hex '{}'",
+            std::println(stderr, "spelunk-dbg: ignore-file: {}: bad hex '{}'",
                          path, std::string(sv));
         }
     }
@@ -234,7 +234,7 @@ find_symbol(const ReplState& rs, std::string_view name) {
             tags += also_in[i];
         }
         std::println(stderr,
-            "ember-dbg: warning: '{}' resolves in {} bins; using first match - qualify with <bin>:<sym> to pick (also: {})",
+            "spelunk-dbg: warning: '{}' resolves in {} bins; using first match - qualify with <bin>:<sym> to pick (also: {})",
             name, also_in.size() + 1, tags);
     }
     return first;
@@ -424,4 +424,4 @@ void on_target_released(ReplState& rs) {
     rs.wp_specs.clear();
 }
 
-}  // namespace ember::cli::dbg
+}  // namespace spelunk::cli::dbg

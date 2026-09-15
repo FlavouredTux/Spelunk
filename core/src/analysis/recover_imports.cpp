@@ -1,4 +1,4 @@
-#include <ember/analysis/recover_imports.hpp>
+#include <spelunk/analysis/recover_imports.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -9,11 +9,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 ReferenceExports
 reference_exports_from(const Binary& dll, std::string module_name) {
@@ -221,4 +221,4 @@ recover_imports(const Binary& dump,
     return result;
 }
 
-}  // namespace ember
+}  // namespace spelunk

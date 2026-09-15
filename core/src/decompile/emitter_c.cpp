@@ -2,7 +2,7 @@
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 
-#include <ember/disasm/register.hpp>
+#include <spelunk/disasm/register.hpp>
 
 #include <algorithm>
 #include <array>
@@ -10,7 +10,7 @@
 #include <format>
 #include <regex>
 
-namespace ember::emit {
+namespace spelunk::emit {
 namespace {
 
 // Words that already name a type (or can never begin one). A candidate that
@@ -73,31 +73,31 @@ constexpr std::array kCHelpers{
             "{ int64_t r; return __builtin_sub_overflow(a, b, &r); }"},
     CHelper{"__unreachable",
             "static inline void __unreachable(void) { __builtin_unreachable(); }"},
-    CHelper{"ember_bswap16",
-            "static inline uint16_t ember_bswap16(uint16_t v) { return __builtin_bswap16(v); }"},
-    CHelper{"ember_bswap32",
-            "static inline uint32_t ember_bswap32(uint32_t v) { return __builtin_bswap32(v); }"},
-    CHelper{"ember_bswap64",
-            "static inline uint64_t ember_bswap64(uint64_t v) { return __builtin_bswap64(v); }"},
-    CHelper{"ember_popcnt64",
-            "static inline uint64_t ember_popcnt64(uint64_t v) "
+    CHelper{"spelunk_bswap16",
+            "static inline uint16_t spelunk_bswap16(uint16_t v) { return __builtin_bswap16(v); }"},
+    CHelper{"spelunk_bswap32",
+            "static inline uint32_t spelunk_bswap32(uint32_t v) { return __builtin_bswap32(v); }"},
+    CHelper{"spelunk_bswap64",
+            "static inline uint64_t spelunk_bswap64(uint64_t v) { return __builtin_bswap64(v); }"},
+    CHelper{"spelunk_popcnt64",
+            "static inline uint64_t spelunk_popcnt64(uint64_t v) "
             "{ return (uint64_t)__builtin_popcountll(v); }"},
-    CHelper{"rotl8",  "EMBER_C_ROTL(8, uint8_t)"},
-    CHelper{"rotl16", "EMBER_C_ROTL(16, uint16_t)"},
-    CHelper{"rotl32", "EMBER_C_ROTL(32, uint32_t)"},
-    CHelper{"rotl64", "EMBER_C_ROTL(64, uint64_t)"},
-    CHelper{"rotr8",  "EMBER_C_ROTR(8, uint8_t)"},
-    CHelper{"rotr16", "EMBER_C_ROTR(16, uint16_t)"},
-    CHelper{"rotr32", "EMBER_C_ROTR(32, uint32_t)"},
-    CHelper{"rotr64", "EMBER_C_ROTR(64, uint64_t)"},
+    CHelper{"rotl8",  "SPELUNK_C_ROTL(8, uint8_t)"},
+    CHelper{"rotl16", "SPELUNK_C_ROTL(16, uint16_t)"},
+    CHelper{"rotl32", "SPELUNK_C_ROTL(32, uint32_t)"},
+    CHelper{"rotl64", "SPELUNK_C_ROTL(64, uint64_t)"},
+    CHelper{"rotr8",  "SPELUNK_C_ROTR(8, uint8_t)"},
+    CHelper{"rotr16", "SPELUNK_C_ROTR(16, uint16_t)"},
+    CHelper{"rotr32", "SPELUNK_C_ROTR(32, uint32_t)"},
+    CHelper{"rotr64", "SPELUNK_C_ROTR(64, uint64_t)"},
     // REP MOVS / STOS with a known count are a forward copy and a fill.
     // The element width is in the name; the count is in RCX.
-    CHelper{"ember_rep_movsb", "EMBER_C_REP_MOVS(b, uint8_t)"},
-    CHelper{"ember_rep_movsd", "EMBER_C_REP_MOVS(d, uint32_t)"},
-    CHelper{"ember_rep_movsq", "EMBER_C_REP_MOVS(q, uint64_t)"},
-    CHelper{"ember_rep_stosb", "EMBER_C_REP_STOS(b, uint8_t)"},
-    CHelper{"ember_rep_stosd", "EMBER_C_REP_STOS(d, uint32_t)"},
-    CHelper{"ember_rep_stosq", "EMBER_C_REP_STOS(q, uint64_t)"},
+    CHelper{"spelunk_rep_movsb", "SPELUNK_C_REP_MOVS(b, uint8_t)"},
+    CHelper{"spelunk_rep_movsd", "SPELUNK_C_REP_MOVS(d, uint32_t)"},
+    CHelper{"spelunk_rep_movsq", "SPELUNK_C_REP_MOVS(q, uint64_t)"},
+    CHelper{"spelunk_rep_stosb", "SPELUNK_C_REP_STOS(b, uint8_t)"},
+    CHelper{"spelunk_rep_stosd", "SPELUNK_C_REP_STOS(d, uint32_t)"},
+    CHelper{"spelunk_rep_stosq", "SPELUNK_C_REP_STOS(q, uint64_t)"},
 };
 
 // Names the standard headers already declare. Redeclaring one from observed
@@ -240,8 +240,8 @@ void Emitter::note_c_call(const IrInst& inst, std::string_view name,
 std::string Emitter::c_preamble(std::string_view body,
                                 std::string_view scope_decls) const {
     std::string out = "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <math.h>\n";
-    if (body.find("ember_read_unsupported") != std::string_view::npos ||
-        body.find("ember_write_unsupported") != std::string_view::npos) {
+    if (body.find("spelunk_read_unsupported") != std::string_view::npos ||
+        body.find("spelunk_write_unsupported") != std::string_view::npos) {
         out += "#error Unsupported memory width in C export\n";
     }
     if (body.find("__m128") != std::string_view::npos || body.find("_mm_") != std::string_view::npos) {
@@ -253,11 +253,11 @@ std::string Emitter::c_preamble(std::string_view body,
         Scalar{"u64", "uint64_t"}, Scalar{"f32", "float"}, Scalar{"f64", "double"},
     };
     for (const auto& scalar : scalars) {
-        const auto read = std::format("ember_read_{}", scalar.suffix);
-        const auto write = std::format("ember_write_{}", scalar.suffix);
+        const auto read = std::format("spelunk_read_{}", scalar.suffix);
+        const auto write = std::format("spelunk_write_{}", scalar.suffix);
         if (!text_contains_identifier(body, read) && !text_contains_identifier(body, write)) continue;
         out += std::format(
-            "#ifndef EMBER_C_MEMORY_{0}\n#define EMBER_C_MEMORY_{0}\n"
+            "#ifndef SPELUNK_C_MEMORY_{0}\n#define SPELUNK_C_MEMORY_{0}\n"
             "static inline {1} {2}(uintptr_t p) {{ {1} v; memcpy(&v, (const void*)p, sizeof(v)); return v; }}\n"
             "static inline void {3}(uintptr_t p, {1} v) {{ memcpy((void*)p, &v, sizeof(v)); }}\n#endif\n",
             scalar.suffix, scalar.type, read, write);
@@ -267,26 +267,26 @@ std::string Emitter::c_preamble(std::string_view body,
     bool need_rot_macros = false;
     for (const auto& helper : kCHelpers) {
         if (!text_contains_identifier(body, helper.name)) continue;
-        need_rep_macros |= helper.definition.starts_with("EMBER_C_REP_");
-        need_rot_macros |= helper.definition.starts_with("EMBER_C_ROT");
+        need_rep_macros |= helper.definition.starts_with("SPELUNK_C_REP_");
+        need_rot_macros |= helper.definition.starts_with("SPELUNK_C_ROT");
         helper_text += std::format(
-            "#ifndef EMBER_C_HELPER_{0}\n#define EMBER_C_HELPER_{0}\n{1}\n#endif\n",
+            "#ifndef SPELUNK_C_HELPER_{0}\n#define SPELUNK_C_HELPER_{0}\n{1}\n#endif\n",
             helper.name, helper.definition);
     }
     if (need_rot_macros) {
-        out += "#ifndef EMBER_C_ROT\n#define EMBER_C_ROT\n"
-               "#define EMBER_C_ROTL(w, T) static inline T rotl##w(T v, uint64_t n) "
+        out += "#ifndef SPELUNK_C_ROT\n#define SPELUNK_C_ROT\n"
+               "#define SPELUNK_C_ROTL(w, T) static inline T rotl##w(T v, uint64_t n) "
                "{ n &= (w - 1); return n ? (T)((T)(v << n) | (T)(v >> (w - n))) : v; }\n"
-               "#define EMBER_C_ROTR(w, T) static inline T rotr##w(T v, uint64_t n) "
+               "#define SPELUNK_C_ROTR(w, T) static inline T rotr##w(T v, uint64_t n) "
                "{ n &= (w - 1); return n ? (T)((T)(v >> n) | (T)(v << (w - n))) : v; }\n"
                "#endif\n";
     }
     if (need_rep_macros) {
-        out += "#ifndef EMBER_C_REP\n#define EMBER_C_REP\n"
-               "#define EMBER_C_REP_MOVS(w, T) static inline void ember_rep_movs##w("
+        out += "#ifndef SPELUNK_C_REP\n#define SPELUNK_C_REP\n"
+               "#define SPELUNK_C_REP_MOVS(w, T) static inline void spelunk_rep_movs##w("
                "uintptr_t d, uintptr_t s, uint64_t n) "
                "{ memmove((void*)d, (const void*)s, n * sizeof(T)); }\n"
-               "#define EMBER_C_REP_STOS(w, T) static inline void ember_rep_stos##w("
+               "#define SPELUNK_C_REP_STOS(w, T) static inline void spelunk_rep_stos##w("
                "uintptr_t d, uint64_t v, uint64_t n) "
                "{ for (uint64_t i = 0; i < n; ++i) { T e = (T)v; "
                "memcpy((void*)(d + i * sizeof(T)), &e, sizeof(T)); } }\n#endif\n";
@@ -392,13 +392,13 @@ std::string Emitter::c_intrinsic_name(const IrInst& inst) {
     // the name; every helper is width-specific, so resolve it here.
     if (inst.name == "bswap") {
         const unsigned bits = std::max(16u, type_bits(inst.dst.type));
-        return std::format("ember_bswap{}", bits > 32 ? 64 : (bits > 16 ? 32 : 16));
+        return std::format("spelunk_bswap{}", bits > 32 ? 64 : (bits > 16 ? 32 : 16));
     }
-    if (inst.name == "popcnt") return "ember_popcnt64";
+    if (inst.name == "popcnt") return "spelunk_popcnt64";
     // `rep.movsq`, `ppc.ps_lane0`, `arm64.crc32` and friends are not C
     // identifiers. Give them a stable prefixed spelling.
     if (inst.name.find('.') == std::string::npos) return inst.name;
-    std::string out = std::format("ember_{}", inst.name);
+    std::string out = std::format("spelunk_{}", inst.name);
     std::ranges::replace(out, '.', '_');
     return out;
 }
@@ -488,4 +488,4 @@ Emitter::c_undefined_register_declarations(std::string_view body) const {
     return out;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

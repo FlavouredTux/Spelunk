@@ -44,7 +44,7 @@ class FunctionSymbol:
 
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_BATCH_MARKER = re.compile(r"^// ember-symbol: (\S+)\s*$")
+_BATCH_MARKER = re.compile(r"^// spelunk-symbol: (\S+)\s*$")
 _SYNTHETIC_TYPE = re.compile(r"\b(?:PpcGlobalState|PpcObject|PpcState)\d*\b")
 
 
@@ -264,7 +264,7 @@ def render_unit(
     missing = [function.name for function in functions if function.name not in outputs]
 
     lines = [
-        "/* Recovered by Ember from the retail object.",
+        "/* Recovered by Spelunk from the retail object.",
         f" * objdiff unit: {unit.name}",
         f" * original source: {unit.source}",
         " * The original file was not modified.",
@@ -409,7 +409,7 @@ def _write_verification(
                 "symbol": item["name"],
                 "match_percent": item["match_percent"],
                 "command": [
-                    "ember-match", "--project", str(project), "--unit", unit.name,
+                    "spelunk-match", "--project", str(project), "--unit", unit.name,
                     "--symbol", item["name"], "--auto", "--output-dir",
                     str(directory / "matches" / item["name"]),
                 ],
@@ -448,7 +448,7 @@ def verify_unit(
     compile_command: str | None,
     timeout: float,
 ) -> tuple[bool, bool]:
-    marker = directory / ".ember-unit-verification.json"
+    marker = directory / ".spelunk-unit-verification.json"
     identity = {
         "schema": 1,
         "project": str(project),
@@ -544,13 +544,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         help="write the recovered source here (default: stdout)")
     parser.add_argument("--source", type=pathlib.Path,
                         help="override metadata.source_path")
-    parser.add_argument("--ember", type=pathlib.Path)
+    parser.add_argument("--spelunk", type=pathlib.Path)
     parser.add_argument("--objdiff", type=pathlib.Path)
     parser.add_argument("--headers", type=pathlib.Path, action="append", default=[])
     parser.add_argument("--header-arg", action="append", default=[])
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--batch-size", type=int, default=24,
-                        help="functions per Ember process (default: 24)")
+                        help="functions per Spelunk process (default: 24)")
     parser.add_argument("--verify", action="store_true",
                         help="compile the recovered unit and produce whole-object objdiff feedback")
     parser.add_argument("--verify-dir", type=pathlib.Path,
@@ -563,7 +563,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--fail-unmatched", action="store_true",
                         help="with --verify, return 1 unless every function/data object is exact")
     parser.add_argument("--strict", action="store_true",
-                        help="fail if Ember cannot recover any object function")
+                        help="fail if Spelunk cannot recover any object function")
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args(argv)
 
@@ -574,14 +574,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         project = arguments.project.expanduser().resolve()
         unit = load_project_unit(project, arguments.unit, arguments.source)
         objdiff = _tool(arguments.objdiff, project, "objdiff-cli")
-        ember = _tool(arguments.ember, project, "ember")
+        spelunk = _tool(arguments.spelunk, project, "spelunk")
         functions = load_function_symbols(
             objdiff, project, arguments.unit, arguments.timeout
         )
         if arguments.batch_size < 1:
             raise UnitError("--batch-size must be at least 1")
         command = [
-            str(ember), "--dtk", str(project), "--dtk-version", arguments.version,
+            str(spelunk), "--dtk", str(project), "--dtk-version", arguments.version,
             "-q", "-p", "--symbols", "<generated-manifest>",
         ]
         for header in arguments.headers:
@@ -590,7 +590,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             command.extend(("--header-arg", header_arg))
         outputs: dict[str, str] = {}
         batch_failures: dict[str, str] = {}
-        with tempfile.TemporaryDirectory(prefix="ember-unit-") as directory:
+        with tempfile.TemporaryDirectory(prefix="spelunk-unit-") as directory:
             temporary = pathlib.Path(directory)
             batch_number = 0
 
@@ -639,7 +639,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not arguments.quiet:
             destination = str(output_path) if output_path else "stdout"
             print(
-                f"ember-unit: recovered {len(functions) - len(missing)}/{len(functions)} "
+                f"spelunk-unit: recovered {len(functions) - len(missing)}/{len(functions)} "
                 f"function(s) from {arguments.unit} -> {destination}",
                 file=sys.stderr,
             )
@@ -663,7 +663,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if not arguments.quiet:
                 print(
-                    f"ember-unit: verification {'complete' if completed else 'failed'}; "
+                    f"spelunk-unit: verification {'complete' if completed else 'failed'}; "
                     f"exact={'yes' if exact else 'no'} -> {verify_dir}",
                     file=sys.stderr,
                 )
@@ -671,7 +671,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
         return 0 if not missing else 1
     except (MatchError, UnitError, OSError, ValueError) as error:
-        print(f"ember-unit: {error}", file=sys.stderr)
+        print(f"spelunk-unit: {error}", file=sys.stderr)
         return 2
 
 

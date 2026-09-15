@@ -7,9 +7,9 @@
 #include <optional>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 class Binary;
 struct IrFunction;
@@ -83,4 +83,4 @@ struct Trace {
 [[nodiscard]] bool step(Trace& trace, const IrInst& inst);
 
 }  // namespace teef_behav_detail
-}  // namespace ember
+}  // namespace spelunk

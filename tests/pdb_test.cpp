@@ -8,7 +8,7 @@
 // The parser must walk the directory, find the DBI's sym_record_stream
 // pointer (= 4), read stream 4, and turn the S_PUB32 records into
 // PublicSymbols.
-#include <ember/binary/pdb.hpp>
+#include <spelunk/binary/pdb.hpp>
 
 #include <array>
 #include <cstddef>
@@ -524,7 +524,7 @@ std::vector<std::byte> build_rich_msf() {
 void test_publics_only() {
     auto bytes = build_msf();
 
-    auto pubs = ember::pdb::load_publics_from_buffer(std::move(bytes));
+    auto pubs = spelunk::pdb::load_publics_from_buffer(std::move(bytes));
     if (!pubs) {
         std::fprintf(stderr, "FAIL: load_publics_from_buffer: %s\n",
                      pubs.error().message.c_str());
@@ -551,7 +551,7 @@ void test_publics_only() {
 
 void test_full_pdb_with_types() {
     auto bytes = build_rich_msf();
-    auto rdr = ember::pdb::load_pdb_from_buffer(std::move(bytes));
+    auto rdr = spelunk::pdb::load_pdb_from_buffer(std::move(bytes));
     if (!rdr) {
         std::fprintf(stderr, "FAIL: load_pdb_from_buffer (rich): %s\n",
                      rdr.error().message.c_str());
@@ -591,7 +591,7 @@ void test_full_pdb_with_types() {
         ++fails;
     } else {
         check_eq(static_cast<int>(proc->kind),
-                 static_cast<int>(ember::pdb::TypeRecord::Kind::Procedure),
+                 static_cast<int>(spelunk::pdb::TypeRecord::Kind::Procedure),
                  "proc.kind");
         check_eq(proc->base_type, std::uint32_t{0x74}, "proc.return_type");
         check_eq(proc->arg_list,  std::uint32_t{0x1000}, "proc.arg_list");

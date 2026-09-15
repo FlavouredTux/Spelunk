@@ -12,8 +12,8 @@
 
 namespace {
 
-using namespace ember;
-using ember::emit::Emitter;
+using namespace spelunk;
+using spelunk::emit::Emitter;
 
 class CanaryBinary final : public Binary {
 public:

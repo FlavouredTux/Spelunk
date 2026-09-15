@@ -7,7 +7,7 @@
 #include "session.hpp"
 #include "theme.hpp"
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 NavBand::NavBand(QWidget* parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -119,4 +119,4 @@ void NavBand::mouseMoveEvent(QMouseEvent* e) {
     QToolTip::showText(e->globalPosition().toPoint(), tip, this);
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

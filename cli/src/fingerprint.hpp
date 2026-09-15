@@ -5,12 +5,12 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember { class Binary; }
+namespace spelunk { class Binary; }
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 struct Args;
 
@@ -49,4 +49,4 @@ fingerprint_rows_from_tsv(std::string_view tsv);
 // --fingerprint-old/--fingerprint-new) and emit TSV or JSON.
 int run_diff(const Args& args);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

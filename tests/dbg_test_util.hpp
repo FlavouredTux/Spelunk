@@ -3,9 +3,9 @@
 #include <cstdio>
 #include <string>
 
-#include <ember/common/error.hpp>
+#include <spelunk/common/error.hpp>
 
-inline bool ember_dbg_unavailable(const ember::Error& e) {
+inline bool spelunk_dbg_unavailable(const spelunk::Error& e) {
     const auto kind = e.kind_name();
     if (kind == "unsupported") return true;
     if (kind != "io") return false;
@@ -13,7 +13,7 @@ inline bool ember_dbg_unavailable(const ember::Error& e) {
            e.message.find("Permission denied")      != std::string::npos;
 }
 
-inline int ember_dbg_skip(const char* what, const ember::Error& e) {
+inline int spelunk_dbg_skip(const char* what, const spelunk::Error& e) {
     std::fprintf(stderr, "SKIP: %s (%s)\n", what, e.message.c_str());
     return 77;
 }

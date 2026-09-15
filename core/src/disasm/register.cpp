@@ -1,10 +1,10 @@
-#include <ember/disasm/register.hpp>
+#include <spelunk/disasm/register.hpp>
 
 #include <array>
 #include <cstddef>
 #include <string_view>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -72,4 +72,4 @@ std::string_view reg_name(Reg r) noexcept {
     return kRegNames[idx];
 }
 
-}  // namespace ember
+}  // namespace spelunk

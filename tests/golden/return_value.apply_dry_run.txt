@@ -1,4 +1,4 @@
-# ember annotations
+# spelunk annotations
 rename 401120 checked_add32
 rename 401130 compound_evaluator
 sig 401120 int|int|a|int|b

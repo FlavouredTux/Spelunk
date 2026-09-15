@@ -4,14 +4,14 @@
 #include <optional>
 #include <vector>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/ir/ssa.hpp>  // canonical_reg
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/ir/ssa.hpp>  // canonical_reg
 
-namespace ember::cfg_builder_detail {
+namespace spelunk::cfg_builder_detail {
 
 namespace {
 
@@ -720,4 +720,4 @@ resolve_ppc_ctr_target(const Binary& b, const WalkState& ws, addr_t branch_addr)
     return find_exec_section_for(b, target) ? std::optional<addr_t>(target) : std::nullopt;
 }
 
-}  // namespace ember::cfg_builder_detail
+}  // namespace spelunk::cfg_builder_detail

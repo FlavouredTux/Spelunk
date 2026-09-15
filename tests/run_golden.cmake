@@ -1,19 +1,19 @@
 # Golden-output test runner.
 #
 # Required vars on the CMake invocation:
-#   EMBER    - path to the ember CLI executable
+#   SPELUNK    - path to the spelunk CLI executable
 #   BINARY   - path to the compiled fixture binary
 #   ARGS     - semicolon-separated list of args to pass (before BINARY)
 #   GOLDEN   - path to the expected-output file
 #
 # Behavior:
-#   Runs "$EMBER $ARGS $BINARY", captures stdout, and compares against GOLDEN.
+#   Runs "$SPELUNK $ARGS $BINARY", captures stdout, and compares against GOLDEN.
 #   If UPDATE_GOLDEN is set in the environment, the captured output is written
 #   back to GOLDEN (for intentional updates) and the test passes.
 #   Otherwise, a mismatch prints a unified diff and fails.
 
-if(NOT EMBER OR NOT BINARY OR NOT GOLDEN)
-    message(FATAL_ERROR "run_golden.cmake: missing EMBER/BINARY/GOLDEN")
+if(NOT SPELUNK OR NOT BINARY OR NOT GOLDEN)
+    message(FATAL_ERROR "run_golden.cmake: missing SPELUNK/BINARY/GOLDEN")
 endif()
 
 set(_args "")
@@ -30,23 +30,23 @@ if(ARGS)
     string(REPLACE "|" ";" _args "${ARGS}")
 endif()
 
-# Per-test cache dir isolates the run from the developer's ~/.cache/ember
+# Per-test cache dir isolates the run from the developer's ~/.cache/spelunk
 # state (otherwise a stray sidecar / cached annotations file from a prior
 # session could bleed into goldens). Created under the build tree so it
 # dies with `cmake --build --target clean`.
-set(_test_cache "${CMAKE_CURRENT_BINARY_DIR}/.ember_test_cache")
+set(_test_cache "${CMAKE_CURRENT_BINARY_DIR}/.spelunk_test_cache")
 file(MAKE_DIRECTORY "${_test_cache}")
 
 if(_has_binary_placeholder)
     execute_process(
-        COMMAND "${EMBER}" --cache-dir "${_test_cache}" ${_args}
+        COMMAND "${SPELUNK}" --cache-dir "${_test_cache}" ${_args}
         OUTPUT_VARIABLE _out
         ERROR_VARIABLE  _err
         RESULT_VARIABLE _rc
     )
 else()
     execute_process(
-        COMMAND "${EMBER}" --cache-dir "${_test_cache}" ${_args} "${BINARY}"
+        COMMAND "${SPELUNK}" --cache-dir "${_test_cache}" ${_args} "${BINARY}"
         OUTPUT_VARIABLE _out
         ERROR_VARIABLE  _err
         RESULT_VARIABLE _rc
@@ -54,7 +54,7 @@ else()
 endif()
 if(NOT _rc EQUAL 0)
     message(FATAL_ERROR
-        "ember exited with ${_rc}:\n${_err}\n--- stdout ---\n${_out}")
+        "spelunk exited with ${_rc}:\n${_err}\n--- stdout ---\n${_out}")
 endif()
 
 # Normalize trailing whitespace / final newline for stable comparison.

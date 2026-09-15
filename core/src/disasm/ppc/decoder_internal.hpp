@@ -2,11 +2,11 @@
 
 #include <optional>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
 
-namespace ember::ppc_decode {
+namespace spelunk::ppc_decode {
 
 struct Fields {
     u32 word = 0;
@@ -122,4 +122,4 @@ inline void set_cr_logical_operands(Instruction& insn, u32 word) noexcept {
 [[nodiscard]] bool decode_floating_point(Fields fields, bool single,
                                          Instruction& insn) noexcept;
 
-}  // namespace ember::ppc_decode
+}  // namespace spelunk::ppc_decode

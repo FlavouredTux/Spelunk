@@ -8,14 +8,14 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/function.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
-namespace ember::cfg_builder_detail {
+namespace spelunk::cfg_builder_detail {
 
 namespace {
 
@@ -296,4 +296,4 @@ void compute_predecessors(Function& fn) {
     }
 }
 
-}  // namespace ember::cfg_builder_detail
+}  // namespace spelunk::cfg_builder_detail

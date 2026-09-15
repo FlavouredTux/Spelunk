@@ -14,17 +14,17 @@
 #include <system_error>
 #include <vector>
 
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "pipeline_internal.hpp"
 
-namespace ember::pipeline {
+namespace spelunk::pipeline {
 
 namespace {
 
@@ -64,18 +64,18 @@ try_parse_objc_bracket(const Binary& b, std::string_view s) {
     return std::nullopt;
 }
 
-// True when EMBER_QUIET=1 - the CLI sets this for --quiet, and we honour
+// True when SPELUNK_QUIET=1 - the CLI sets this for --quiet, and we honour
 // it for one-shot diagnostics too so a `--quiet` invocation produces no
 // stderr noise even when -s lands mid-function.
 [[nodiscard]] bool diagnostics_silenced() noexcept {
-    const char* q = std::getenv("EMBER_QUIET");
+    const char* q = std::getenv("SPELUNK_QUIET");
     return q && q[0] == '1';
 }
 
 void note_mid_function(addr_t addr, std::string_view name, u64 off) {
     if (diagnostics_silenced()) return;
     std::fprintf(stderr,
-        "ember: note: %#llx is inside %.*s at +%#llx\n",
+        "spelunk: note: %#llx is inside %.*s at +%#llx\n",
         static_cast<unsigned long long>(addr),
         static_cast<int>(name.size()), name.data(),
         static_cast<unsigned long long>(off));
@@ -148,9 +148,9 @@ resolve_containing_function(const Binary& b, addr_t addr) {
     return window_from_addr(addr, 0, std::format("sub_{:x}", addr));
 }
 
-}  // namespace ember::pipeline
+}  // namespace spelunk::pipeline
 
-namespace ember {
+namespace spelunk {
 
 using namespace pipeline;
 
@@ -181,7 +181,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         if (explicit_entry) {
             if (b.bytes_at(*va).empty() || !addr_in_code_section(b, *va)) {
                 std::fprintf(stderr,
-                    "ember: address %#llx is not in any code section "
+                    "spelunk: address %#llx is not in any code section "
                     "(or the bytes there are not mapped)\n",
                     static_cast<unsigned long long>(*va));
                 return std::nullopt;
@@ -197,7 +197,7 @@ resolve_function(const Binary& b, std::string_view symbol,
             // garbage indirect-jmp target on obfuscated binaries; the
             // address isn't in any mapped section so nothing decodes.
             std::fprintf(stderr,
-                "ember: address %#llx is not in any mapped section "
+                "spelunk: address %#llx is not in any mapped section "
                 "(or the bytes there don't decode as code)\n",
                 static_cast<unsigned long long>(*va));
         }
@@ -217,7 +217,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         const auto all = b.find_all_by_name(lookup);
         if (all.size() > 1) {
             std::fprintf(stderr,
-                "ember: name '%.*s' is ambiguous - matches %zu addresses:",
+                "spelunk: name '%.*s' is ambiguous - matches %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), all.size());
             const std::size_t shown = std::min<std::size_t>(all.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
@@ -234,7 +234,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         }
         if (b.bytes_at(chosen->addr).empty()) {
             std::fprintf(stderr,
-                "ember: symbol '%.*s' at %#llx has no mapped bytes\n",
+                "spelunk: symbol '%.*s' at %#llx has no mapped bytes\n",
                 static_cast<int>(lookup.size()), lookup.data(),
                 static_cast<unsigned long long>(chosen->addr));
             return std::nullopt;
@@ -245,7 +245,7 @@ resolve_function(const Binary& b, std::string_view symbol,
     // Annotation-rename fallback: a name typed by the user that doesn't
     // match the binary symbol table may match a `rename` record in the
     // resolved annotations file. Without this, freshly-named functions
-    // (`ember annotate ADDR --set-name X`) wouldn't be reachable via
+    // (`spelunk annotate ADDR --set-name X`) wouldn't be reachable via
     // `-s X` until the user remembered the original `sub_<hex>` form.
     if (ann && !symbol.empty()) {
         std::vector<addr_t> hits;
@@ -255,7 +255,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         }
         if (hits.size() > 1) {
             std::fprintf(stderr,
-                "ember: rename '%.*s' is ambiguous - bound to %zu addresses:",
+                "spelunk: rename '%.*s' is ambiguous - bound to %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), hits.size());
             const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
@@ -274,7 +274,7 @@ resolve_function(const Binary& b, std::string_view symbol,
             const addr_t a = hits.front();
             if (b.bytes_at(a).empty()) {
                 std::fprintf(stderr,
-                    "ember: rename '%.*s' resolves to %#llx but no bytes are mapped there\n",
+                    "spelunk: rename '%.*s' resolves to %#llx but no bytes are mapped there\n",
                     static_cast<int>(lookup.size()), lookup.data(),
                     static_cast<unsigned long long>(a));
                 return std::nullopt;
@@ -294,7 +294,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         }
         if (hits.size() > 1) {
             std::fprintf(stderr,
-                "ember: discovered name '%.*s' is ambiguous - matches %zu addresses:",
+                "spelunk: discovered name '%.*s' is ambiguous - matches %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), hits.size());
             const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
@@ -316,7 +316,7 @@ resolve_function(const Binary& b, std::string_view symbol,
 
     if (!symbol.empty()) {
         std::fprintf(stderr,
-            "ember: no symbol named '%.*s'\n",
+            "spelunk: no symbol named '%.*s'\n",
             static_cast<int>(lookup.size()), lookup.data());
         return std::nullopt;
     }
@@ -331,4 +331,4 @@ resolve_function_at(const Binary& b, addr_t addr) {
     return resolve_containing_function(b, addr);
 }
 
-}  // namespace ember
+}  // namespace spelunk

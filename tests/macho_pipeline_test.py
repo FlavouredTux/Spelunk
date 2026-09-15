@@ -96,14 +96,14 @@ def main(args):
 float float_helper(uint64_t, float);
 '''
     for label, path in [('named', binary), ('stripped', stripped), ('inferred', binary)]:
-        inventory = json.loads(run([args.ember, '--no-cache', '--functions', '--json', path]))
+        inventory = json.loads(run([args.spelunk, '--no-cache', '--functions', '--json', path]))
         entries = {int(row['addr'], 16) for row in inventory}
         assert all(addresses[name] in entries for name in NAMES), (label, 'lost function entry')
         selected = [name for name in NAMES if label != 'inferred' or name not in ('stack_call', 'fp_stack_call')]
         text = PREAMBLE + (inferred_prototypes if label == 'inferred' else prototypes) + '\n'
         annotation_args = [] if label == 'inferred' else ['--annotations', annotations]
         for name in selected:
-            output = run([args.ember, '--no-cache', *annotation_args, '-p', '-s',
+            output = run([args.spelunk, '--no-cache', *annotation_args, '-p', '-s',
                           name if label == 'named' else hex(addresses[name]), path])
             # Exports survive stripping; bind the fixture entry name independently.
             (ROOT / f'{label}-{name}.c').write_text(output)
@@ -192,7 +192,7 @@ float float_helper(uint64_t, float);
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    for tool in ['ember', 'clang', 'ld64', 'strip', 'nm']:
+    for tool in ['spelunk', 'clang', 'ld64', 'strip', 'nm']:
         parser.add_argument('--' + tool, required=True)
     args = parser.parse_args()
     try:
@@ -200,7 +200,7 @@ if __name__ == '__main__':
     except ImportError:
         print('SKIP: Python unicorn is required')
         raise SystemExit(77)
-    ROOT = pathlib.Path(tempfile.mkdtemp(prefix='ember-macho-pipeline-'))
+    ROOT = pathlib.Path(tempfile.mkdtemp(prefix='spelunk-macho-pipeline-'))
     try:
         main(args)
     except Exception:

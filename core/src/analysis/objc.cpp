@@ -1,4 +1,4 @@
-#include <ember/analysis/objc.hpp>
+#include <spelunk/analysis/objc.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -13,11 +13,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -79,7 +79,7 @@ constexpr addr_t kCategoryClassPropertiesOffset    = 48;
 }
 
 // Locate a Mach-O section by suffix ("__objc_classlist", "__objc_selrefs",
-// etc.). Mach-O section names are stored as __SEGMENT,__sect; Ember's loader
+// etc.). Mach-O section names are stored as __SEGMENT,__sect; Spelunk's loader
 // strips the segment prefix in most cases but some builds preserve it.
 [[nodiscard]] bool section_name_matches(std::string_view actual,
                                         std::string_view wanted) noexcept {
@@ -945,4 +945,4 @@ std::map<addr_t, std::string> parse_objc_classrefs(const Binary& b) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

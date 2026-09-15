@@ -1,12 +1,12 @@
 // Unit tests for the forge-spec inferencer
-// (ember/analysis/forge_spec.hpp).
+// (spelunk/analysis/forge_spec.hpp).
 //
 // Self-contained: a MockBinary holds hand-encoded x86-64 bytes for a
 // shape equivalent to `if (p->magic == 0x1234) goto target;` so the
 // extractor can be exercised without depending on a system C compiler.
 
-#include <ember/analysis/forge_spec.hpp>
-#include <ember/binary/binary.hpp>
+#include <spelunk/analysis/forge_spec.hpp>
+#include <spelunk/binary/binary.hpp>
 
 #include <array>
 #include <cstdio>
@@ -45,7 +45,7 @@ void check_eq(const A& got, const B& want, const char* ctx) {
 // 0x401010: 8b 47 04              mov eax, dword [rdi+4]
 // 0x401013: 03 47 08              add eax, dword [rdi+8]
 // 0x401016: c3                    ret
-constexpr ember::addr_t kBase = 0x401000;
+constexpr spelunk::addr_t kBase = 0x401000;
 constexpr std::size_t   kLen  = 0x40;
 
 struct ImageBytes {
@@ -69,7 +69,7 @@ struct ImageBytes {
     }
 };
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
     MockBinary() {
         sec_.name  = ".text";
@@ -80,31 +80,31 @@ public:
         sec_.data = std::span<const std::byte>(image_.data.data(),
                                                 image_.data.size());
 
-        ember::Symbol fn;
+        spelunk::Symbol fn;
         fn.name      = "inspect_packet";
         fn.addr      = 0x401000;
         fn.size      = 0x17;
-        fn.kind      = ember::SymbolKind::Function;
+        fn.kind      = spelunk::SymbolKind::Function;
         fn.is_import = false;
         syms_.push_back(std::move(fn));
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Elf;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Elf;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return 0x401000;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
         return {&sec_, 1};
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return syms_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -112,33 +112,33 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return syms_;
     }
 
 private:
     ImageBytes                  image_{};
-    ember::Section              sec_{};
-    std::vector<ember::Symbol>  syms_{};
+    spelunk::Section              sec_{};
+    std::vector<spelunk::Symbol>  syms_{};
 };
 
 void test_basic_field_constraint() {
     MockBinary b;
-    auto spec = ember::infer_forge_spec(b, 0x401000, 0x401010);
+    auto spec = spelunk::infer_forge_spec(b, 0x401000, 0x401010);
     check(spec.has_value(), "infer_forge_spec returns success");
     if (!spec) return;
 
     check(spec->reachable, "reach the target block");
     check_eq(spec->call_chain.size(), std::size_t{1}, "call chain length");
     if (!spec->call_chain.empty()) {
-        check_eq(spec->call_chain[0], ember::addr_t{0x401000}, "chain head");
+        check_eq(spec->call_chain[0], spelunk::addr_t{0x401000}, "chain head");
     }
 
     check_eq(spec->branches.size(), std::size_t{1}, "one branch on path");
     if (!spec->branches.empty()) {
         const auto& d = spec->branches[0];
         check(d.went_taken,                    "branch went taken");
-        check_eq(d.taken_target, ember::addr_t{0x401010}, "taken target");
+        check_eq(d.taken_target, spelunk::addr_t{0x401010}, "taken target");
     }
 
     check_eq(spec->fields.size(), std::size_t{1}, "one field requirement");
@@ -147,13 +147,13 @@ void test_basic_field_constraint() {
         check_eq(f.param_index, 0,            "param is arg0 (rdi)");
         check_eq(f.offset_chain.size(), std::size_t{1}, "offset chain has one hop");
         if (!f.offset_chain.empty()) {
-            check_eq(f.offset_chain[0], ember::i64{0}, "offset is 0");
+            check_eq(f.offset_chain[0], spelunk::i64{0}, "offset is 0");
         }
         check_eq(static_cast<int>(f.cmp_op),
-                 static_cast<int>(ember::IrOp::CmpEq), "cmp op is ==");
+                 static_cast<int>(spelunk::IrOp::CmpEq), "cmp op is ==");
         check_eq(static_cast<int>(f.rhs.kind),
-                 static_cast<int>(ember::ForgeExpr::Kind::Imm), "rhs is imm");
-        check_eq(f.rhs.imm, ember::i64{0x1234}, "rhs imm value");
+                 static_cast<int>(spelunk::ForgeExpr::Kind::Imm), "rhs is imm");
+        check_eq(f.rhs.imm, spelunk::i64{0x1234}, "rhs imm value");
     }
 }
 
@@ -161,7 +161,7 @@ void test_unreachable_target() {
     MockBinary b;
     // 0x401005 is mid-instruction; not a function entry. Expect a clean
     // "out of bounds"-style error rather than a crash.
-    auto spec = ember::infer_forge_spec(b, 0x401000, 0x4FFFFF);
+    auto spec = spelunk::infer_forge_spec(b, 0x401000, 0x4FFFFF);
     // 0x4FFFFF is outside any function - expect an Error.
     check(!spec.has_value(), "out-of-range target rejected");
 }
@@ -169,7 +169,7 @@ void test_unreachable_target() {
 void test_target_in_entry_block() {
     MockBinary b;
     // Targeting the entry block itself is reachable with no constraints.
-    auto spec = ember::infer_forge_spec(b, 0x401000, 0x401002);
+    auto spec = spelunk::infer_forge_spec(b, 0x401000, 0x401002);
     check(spec.has_value(), "entry-block target succeeds");
     if (!spec) return;
     check(spec->reachable,                   "reachable");
@@ -181,17 +181,17 @@ void test_target_in_entry_block() {
 
 void test_format_round_trips() {
     MockBinary b;
-    auto spec = ember::infer_forge_spec(b, 0x401000, 0x401010);
+    auto spec = spelunk::infer_forge_spec(b, 0x401000, 0x401010);
     check(spec.has_value(), "spec built for format check");
     if (!spec) return;
 
-    const std::string text = ember::format_forge_spec(*spec);
+    const std::string text = spelunk::format_forge_spec(*spec);
     check(text.find("0x1234") != std::string::npos,
           "text mentions the magic constant");
     check(text.find("arg0")   != std::string::npos,
           "text mentions arg0");
 
-    const std::string json = ember::format_forge_spec_json(*spec);
+    const std::string json = spelunk::format_forge_spec_json(*spec);
     check(json.find("\"reachable\":true") != std::string::npos,
           "json reports reachable=true");
     check(json.find("\"fields\":")        != std::string::npos,

@@ -1,4 +1,4 @@
-#include <ember/binary/macho.hpp>
+#include <spelunk/binary/macho.hpp>
 
 #include <array>
 #include <cstdio>
@@ -19,19 +19,19 @@ void check(bool condition, const char* message) {
     ++fails;
 }
 
-void put32(std::vector<std::byte>& bytes, std::size_t off, ember::u32 value) {
+void put32(std::vector<std::byte>& bytes, std::size_t off, spelunk::u32 value) {
     for (unsigned i = 0; i < 4; ++i) {
         bytes[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put16(std::vector<std::byte>& bytes, std::size_t off, ember::u16 value) {
+void put16(std::vector<std::byte>& bytes, std::size_t off, spelunk::u16 value) {
     for (unsigned i = 0; i < 2; ++i) {
         bytes[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put64(std::vector<std::byte>& bytes, std::size_t off, ember::u64 value) {
+void put64(std::vector<std::byte>& bytes, std::size_t off, spelunk::u64 value) {
     for (unsigned i = 0; i < 8; ++i) {
         bytes[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
@@ -46,14 +46,14 @@ void put_fixed_name(std::vector<std::byte>& bytes, std::size_t off,
 
 void put_macho_segment(std::vector<std::byte>& bytes,
                        std::size_t command_offset,
-                       ember::u32 command_size,
+                       spelunk::u32 command_size,
                        std::string_view name,
-                       ember::u64 vmaddr,
-                       ember::u64 vmsize,
-                       ember::u64 fileoff,
-                       ember::u64 filesize,
-                       ember::u32 initprot,
-                       ember::u32 section_count) {
+                       spelunk::u64 vmaddr,
+                       spelunk::u64 vmsize,
+                       spelunk::u64 fileoff,
+                       spelunk::u64 filesize,
+                       spelunk::u32 initprot,
+                       spelunk::u32 section_count) {
     put32(bytes, command_offset + 0, 0x19);  // LC_SEGMENT_64
     put32(bytes, command_offset + 4, command_size);
     put_fixed_name(bytes, command_offset + 8, name);
@@ -65,7 +65,7 @@ void put_macho_segment(std::vector<std::byte>& bytes,
     put32(bytes, command_offset + 64, section_count);
 }
 
-std::vector<std::byte> macho_header(ember::u32 ncmds, ember::u32 sizeofcmds) {
+std::vector<std::byte> macho_header(spelunk::u32 ncmds, spelunk::u32 sizeofcmds) {
     std::vector<std::byte> bytes(32 + sizeofcmds);
     put32(bytes, 0, 0xfeedfacf);
     put32(bytes, 4, 0x01000007);  // CPU_TYPE_X86_64
@@ -75,12 +75,12 @@ std::vector<std::byte> macho_header(ember::u32 ncmds, ember::u32 sizeofcmds) {
 }
 
 std::vector<std::byte> macho_chained_fixup(
-    ember::u64 vmaddr,
-    ember::u64 vmsize,
-    ember::u64 fileoff,
-    ember::u64 filesize,
-    ember::u64 segment_offset = 0,
-    ember::u16 page_start = 0)
+    spelunk::u64 vmaddr,
+    spelunk::u64 vmsize,
+    spelunk::u64 fileoff,
+    spelunk::u64 filesize,
+    spelunk::u64 segment_offset = 0,
+    spelunk::u16 page_start = 0)
 {
     constexpr std::size_t segment_command = 32;
     constexpr std::size_t fixups_command = 104;
@@ -100,7 +100,7 @@ std::vector<std::byte> macho_chained_fixup(
     put32(bytes, fixups_command + 0, 0x80000034);  // LC_DYLD_CHAINED_FIXUPS
     put32(bytes, fixups_command + 4, 16);
     put32(bytes, fixups_command + 8,
-          static_cast<ember::u32>(fixups_data));
+          static_cast<spelunk::u32>(fixups_data));
     put32(bytes, fixups_command + 12, 64);
 
     // dyld_chained_fixups_header followed by one starts-in-image entry and
@@ -121,11 +121,11 @@ std::vector<std::byte> macho_chained_fixup(
 }
 
 std::vector<std::byte> macho_two_segment_chained_fixup(
-    ember::u16 pointer_format,
-    ember::u64 first_pointer,
-    ember::u64 second_pointer)
+    spelunk::u16 pointer_format,
+    spelunk::u64 first_pointer,
+    spelunk::u64 second_pointer)
 {
-    constexpr ember::u64 image_base = 0x100000000ull;
+    constexpr spelunk::u64 image_base = 0x100000000ull;
     constexpr std::size_t text_command = 32;
     constexpr std::size_t data_command = text_command + 72;
     constexpr std::size_t fixups_command = data_command + 72;
@@ -143,7 +143,7 @@ std::vector<std::byte> macho_two_segment_chained_fixup(
     put32(bytes, fixups_command + 0, 0x80000034);  // LC_DYLD_CHAINED_FIXUPS
     put32(bytes, fixups_command + 4, 16);
     put32(bytes, fixups_command + 8,
-          static_cast<ember::u32>(fixups_data));
+          static_cast<spelunk::u32>(fixups_data));
     put32(bytes, fixups_command + 12, 96);
 
     // starts_in_image contains one empty __TEXT entry and one __DATA record.
@@ -167,7 +167,7 @@ std::vector<std::byte> macho_two_segment_chained_fixup(
 }
 
 std::vector<std::byte> macho_pagezero_order_chained_fixup() {
-    constexpr ember::u64 image_base = 0x100000000ull;
+    constexpr spelunk::u64 image_base = 0x100000000ull;
     constexpr std::size_t pagezero_command = 32;
     constexpr std::size_t text_command = pagezero_command + 72;
     constexpr std::size_t data_command = text_command + 72;
@@ -186,7 +186,7 @@ std::vector<std::byte> macho_pagezero_order_chained_fixup() {
     put32(bytes, fixups_command + 0, 0x80000034);
     put32(bytes, fixups_command + 4, 16);
     put32(bytes, fixups_command + 8,
-          static_cast<ember::u32>(fixups_data));
+          static_cast<spelunk::u32>(fixups_data));
     put32(bytes, fixups_command + 12, 96);
 
     put32(bytes, fixups_data + 4, 32);   // starts_offset
@@ -209,7 +209,7 @@ std::vector<std::byte> macho_pagezero_order_chained_fixup() {
 
 std::vector<std::byte> macho_userland24_wide_ordinal() {
     constexpr std::size_t fixups_data = 0x2100;
-    constexpr ember::u32 wide_ordinal = 0x10000;
+    constexpr spelunk::u32 wide_ordinal = 0x10000;
     constexpr std::size_t import_count = wide_ordinal + 1u;
     constexpr std::size_t starts_offset = 32;
     constexpr std::size_t imports_offset = 72;
@@ -218,21 +218,21 @@ std::vector<std::byte> macho_userland24_wide_ordinal() {
     constexpr std::size_t payload_size = symbols_offset + 11u;
 
     auto bytes = macho_two_segment_chained_fixup(
-        12, (ember::u64{1} << 62) | wide_ordinal, 0);
+        12, (spelunk::u64{1} << 62) | wide_ordinal, 0);
     bytes.resize(fixups_data + payload_size);
     put32(bytes, 32 + 72 + 72 + 8,
-          static_cast<ember::u32>(fixups_data));
+          static_cast<spelunk::u32>(fixups_data));
     put32(bytes, 32 + 72 + 72 + 12,
-          static_cast<ember::u32>(payload_size));
+          static_cast<spelunk::u32>(payload_size));
 
     put32(bytes, fixups_data + 4,
-          static_cast<ember::u32>(starts_offset));
+          static_cast<spelunk::u32>(starts_offset));
     put32(bytes, fixups_data + 8,
-          static_cast<ember::u32>(imports_offset));
+          static_cast<spelunk::u32>(imports_offset));
     put32(bytes, fixups_data + 12,
-          static_cast<ember::u32>(symbols_offset));
+          static_cast<spelunk::u32>(symbols_offset));
     put32(bytes, fixups_data + 16,
-          static_cast<ember::u32>(import_count));
+          static_cast<spelunk::u32>(import_count));
     put32(bytes, fixups_data + 20, 1);
     put32(bytes, fixups_data + starts_offset, 2);
     put32(bytes, fixups_data + starts_offset + 4, 0);
@@ -255,11 +255,11 @@ std::vector<std::byte> macho_userland24_wide_ordinal() {
     return bytes;
 }
 
-ember::u64 read_mapped_u64(std::span<const std::byte> bytes) {
-    if (bytes.size() < 8) return std::numeric_limits<ember::u64>::max();
-    ember::u64 value = 0;
+spelunk::u64 read_mapped_u64(std::span<const std::byte> bytes) {
+    if (bytes.size() < 8) return std::numeric_limits<spelunk::u64>::max();
+    spelunk::u64 value = 0;
     for (unsigned i = 0; i < 8; ++i) {
-        value |= static_cast<ember::u64>(bytes[i]) << (i * 8);
+        value |= static_cast<spelunk::u64>(bytes[i]) << (i * 8);
     }
     return value;
 }
@@ -291,9 +291,9 @@ std::vector<std::byte> macho_bind_with_sleb(
     put32(bytes, dyld_info_command + 0, 0x22);  // LC_DYLD_INFO
     put32(bytes, dyld_info_command + 4, 48);
     put32(bytes, dyld_info_command + 16,
-          static_cast<ember::u32>(bind_offset));
+          static_cast<spelunk::u32>(bind_offset));
     put32(bytes, dyld_info_command + 20,
-          static_cast<ember::u32>(stream.size()));
+          static_cast<spelunk::u32>(stream.size()));
     for (std::size_t i = 0; i < stream.size(); ++i) {
         bytes[bind_offset + i] = stream[i];
     }
@@ -301,9 +301,9 @@ std::vector<std::byte> macho_bind_with_sleb(
 }
 
 std::vector<std::byte> macho_section(
-    ember::u64 section_addr,
-    ember::u64 section_size,
-    ember::u32 section_offset)
+    spelunk::u64 section_addr,
+    spelunk::u64 section_size,
+    spelunk::u32 section_offset)
 {
     constexpr std::size_t segment_command = 32;
     constexpr std::size_t section_header = segment_command + 72;
@@ -320,7 +320,7 @@ std::vector<std::byte> macho_section(
     return bytes;
 }
 
-std::vector<std::byte> macho_mapping_with_pagezero(ember::u64 mapped_size)
+std::vector<std::byte> macho_mapping_with_pagezero(spelunk::u64 mapped_size)
 {
     constexpr std::size_t text_command = 32;
     constexpr std::size_t pagezero_command = text_command + 72;
@@ -334,15 +334,15 @@ std::vector<std::byte> macho_mapping_with_pagezero(ember::u64 mapped_size)
 }
 
 void test_macho_validates_command_count_before_allocating() {
-    check(!ember::MachOBinary::load_from_buffer(macho_header(0xffffffff, 0)),
+    check(!spelunk::MachOBinary::load_from_buffer(macho_header(0xffffffff, 0)),
           "Mach-O rejects impossible load-command count");
-    check(!ember::MachOBinary::load_from_buffer(macho_header(1, 0)),
+    check(!spelunk::MachOBinary::load_from_buffer(macho_header(1, 0)),
           "Mach-O rejects command count without command bytes");
 
     auto malformed = macho_header(1, 8);
     put32(malformed, 32, 1);
     put32(malformed, 36, 4);  // cmdsize must be at least 8
-    check(!ember::MachOBinary::load_from_buffer(std::move(malformed)),
+    check(!spelunk::MachOBinary::load_from_buffer(std::move(malformed)),
           "Mach-O rejects undersized load command");
 }
 
@@ -354,7 +354,7 @@ void test_macho_rejects_unmapped_initialized_tables() {
     put32(symtab, 44, 0xffffffff);   // nsyms: must not allocate from this
     put32(symtab, 48, 56);           // stroff
     put32(symtab, 52, 0);            // strsize
-    check(!ember::MachOBinary::load_from_buffer(std::move(symtab)),
+    check(!spelunk::MachOBinary::load_from_buffer(std::move(symtab)),
           "Mach-O rejects an out-of-file symbol table before allocation");
 
     auto segment = macho_header(1, 72);
@@ -365,14 +365,14 @@ void test_macho_rejects_unmapped_initialized_tables() {
     put64(segment, 72, 0xffffffff);  // fileoff
     put64(segment, 80, 0x10);        // filesize
     put32(segment, 92, 1);           // initprot = read
-    check(!ember::MachOBinary::load_from_buffer(std::move(segment)),
+    check(!spelunk::MachOBinary::load_from_buffer(std::move(segment)),
           "Mach-O rejects initialized segment bytes outside the image");
 
     auto empty_at_invalid_offset = macho_header(1, 72);
     put_macho_segment(empty_at_invalid_offset, 32, 72, "__DATA",
                       0x1000, 0x1000,
-                      std::numeric_limits<ember::u64>::max(), 0, 1, 0);
-    check(!ember::MachOBinary::load_from_buffer(
+                      std::numeric_limits<spelunk::u64>::max(), 0, 1, 0);
+    check(!spelunk::MachOBinary::load_from_buffer(
               std::move(empty_at_invalid_offset)),
           "Mach-O rejects an empty segment whose file offset is outside the image");
 }
@@ -380,42 +380,42 @@ void test_macho_rejects_unmapped_initialized_tables() {
 void test_macho_rejects_unsupported_cpu() {
     auto bytes = macho_header(0, 0);
     put32(bytes, 4, 0x7fffffff);
-    auto loaded = ember::MachOBinary::load_from_buffer(std::move(bytes));
-    check(!loaded && loaded.error().kind == ember::ErrorKind::UnsupportedFormat,
+    auto loaded = spelunk::MachOBinary::load_from_buffer(std::move(bytes));
+    check(!loaded && loaded.error().kind == spelunk::ErrorKind::UnsupportedFormat,
           "Mach-O rejects an unsupported CPU type");
 }
 
 void test_macho_sections_stay_within_their_declaring_segment() {
-    auto virtual_overrun = ember::MachOBinary::load_from_buffer(
+    auto virtual_overrun = spelunk::MachOBinary::load_from_buffer(
         macho_section(0x100f, 2, 184));
     check(!virtual_overrun &&
-              virtual_overrun.error().kind == ember::ErrorKind::InvalidFormat,
+              virtual_overrun.error().kind == spelunk::ErrorKind::InvalidFormat,
           "Mach-O rejects a section whose virtual end exceeds its segment");
 
-    auto file_overrun = ember::MachOBinary::load_from_buffer(
+    auto file_overrun = spelunk::MachOBinary::load_from_buffer(
         macho_section(0x1000, 2, 191));
     check(!file_overrun &&
-              file_overrun.error().kind == ember::ErrorKind::InvalidFormat,
+              file_overrun.error().kind == spelunk::ErrorKind::InvalidFormat,
           "Mach-O rejects a globally backed section outside its segment file range");
 
     auto wrong_segment_name = macho_section(0x1000, 2, 184);
     put_fixed_name(wrong_segment_name, 32 + 72 + 16, "__TEXT");
-    auto wrong_segment_result = ember::MachOBinary::load_from_buffer(
+    auto wrong_segment_result = spelunk::MachOBinary::load_from_buffer(
         std::move(wrong_segment_name));
     check(!wrong_segment_result &&
-              wrong_segment_result.error().kind == ember::ErrorKind::InvalidFormat,
+              wrong_segment_result.error().kind == spelunk::ErrorKind::InvalidFormat,
           "Mach-O rejects a section that names a different declaring segment");
 
-    auto incongruent = ember::MachOBinary::load_from_buffer(
+    auto incongruent = spelunk::MachOBinary::load_from_buffer(
         macho_section(0x1001, 2, 184));
     check(!incongruent &&
-              incongruent.error().kind == ember::ErrorKind::InvalidFormat,
+              incongruent.error().kind == spelunk::ErrorKind::InvalidFormat,
           "Mach-O rejects inconsistent section file and virtual offsets");
 
     auto object = macho_section(0x1000, 2, 184);
     put32(object, 12, 1);  // MH_OBJECT
     for (std::size_t i = 0; i < 16; ++i) object[32 + 8 + i] = std::byte{0};
-    auto object_result = ember::MachOBinary::load_from_buffer(std::move(object));
+    auto object_result = spelunk::MachOBinary::load_from_buffer(std::move(object));
     check(object_result.has_value() &&
               (*object_result)->sections().size() == 1 &&
               (*object_result)->sections().front().name == "__DATA,__test",
@@ -425,7 +425,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     for (std::size_t i = 0; i < 16; ++i) {
         anonymous_section_name[32 + 72 + 16 + i] = std::byte{0};
     }
-    auto anonymous_section_result = ember::MachOBinary::load_from_buffer(
+    auto anonymous_section_result = spelunk::MachOBinary::load_from_buffer(
         std::move(anonymous_section_name));
     check(anonymous_section_result.has_value() &&
               (*anonymous_section_result)->sections().front().name ==
@@ -434,7 +434,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
 
     auto dsym_placeholder = macho_section(0x1000, 2, 0);
     put32(dsym_placeholder, 12, 0x0a);  // MH_DSYM
-    auto dsym_placeholder_result = ember::MachOBinary::load_from_buffer(
+    auto dsym_placeholder_result = spelunk::MachOBinary::load_from_buffer(
         std::move(dsym_placeholder));
     check(dsym_placeholder_result.has_value() &&
               (*dsym_placeholder_result)->sections().size() == 1 &&
@@ -445,7 +445,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     put32(compact_dsym_section, 12, 0x0a);  // MH_DSYM
     compact_dsym_section[184] = std::byte{0x5a};
     compact_dsym_section[188] = std::byte{0xa5};
-    auto compact_dsym_result = ember::MachOBinary::load_from_buffer(
+    auto compact_dsym_result = spelunk::MachOBinary::load_from_buffer(
         std::move(compact_dsym_section));
     check(compact_dsym_result.has_value() &&
               (*compact_dsym_result)->sections().front().data.size() == 2 &&
@@ -457,7 +457,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     auto dylib_stub = macho_section(0x1000, 2, 0);
     put32(dylib_stub, 12, 0x09);  // MH_DYLIB_STUB
     put64(dylib_stub, 32 + 48, 0);
-    auto dylib_stub_result = ember::MachOBinary::load_from_buffer(
+    auto dylib_stub_result = spelunk::MachOBinary::load_from_buffer(
         std::move(dylib_stub));
     check(dylib_stub_result.has_value() &&
               (*dylib_stub_result)->sections().size() == 1 &&
@@ -467,7 +467,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     auto stripped_dylib_stub = macho_section(0, 0, 0);
     put32(stripped_dylib_stub, 12, 0x09);  // MH_DYLIB_STUB
     put64(stripped_dylib_stub, 32 + 48, 0);
-    auto stripped_stub_result = ember::MachOBinary::load_from_buffer(
+    auto stripped_stub_result = spelunk::MachOBinary::load_from_buffer(
         std::move(stripped_dylib_stub));
     check(stripped_stub_result.has_value() &&
               (*stripped_stub_result)->sections().size() == 1,
@@ -478,10 +478,10 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     put_macho_segment(oversized_file, 32, 72, "__DATA",
                       0x1000, 0x10, 104, 1, 1, 0);
     put64(oversized_file, 32 + 32, 0);  // vmsize
-    auto oversized_result = ember::MachOBinary::load_from_buffer(
+    auto oversized_result = spelunk::MachOBinary::load_from_buffer(
         std::move(oversized_file));
     check(!oversized_result &&
-              oversized_result.error().kind == ember::ErrorKind::InvalidFormat,
+              oversized_result.error().kind == spelunk::ErrorKind::InvalidFormat,
           "Mach-O rejects a mapped segment whose file size exceeds virtual size");
 
     auto nonalloc_payload = macho_header(1, 72);
@@ -489,7 +489,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     put_macho_segment(nonalloc_payload, 32, 72, "__DWARF",
                       0, 0, 104, 1, 0, 0);
     put32(nonalloc_payload, 32 + 56, 1);  // maxprot may remain readable
-    auto nonalloc_result = ember::MachOBinary::load_from_buffer(
+    auto nonalloc_result = spelunk::MachOBinary::load_from_buffer(
         std::move(nonalloc_payload));
     check(nonalloc_result.has_value() &&
               (*nonalloc_result)->segments().empty(),
@@ -506,7 +506,7 @@ void test_macho_sections_stay_within_their_declaring_segment() {
     put64(nonalloc_section, 32 + 72 + 40, 1);
     put32(nonalloc_section, 32 + 72 + 48, 184);
     nonalloc_section[184] = std::byte{0x5a};
-    auto nonalloc_section_result = ember::MachOBinary::load_from_buffer(
+    auto nonalloc_section_result = spelunk::MachOBinary::load_from_buffer(
         std::move(nonalloc_section));
     check(nonalloc_section_result.has_value() &&
               (*nonalloc_section_result)->sections().size() == 1 &&
@@ -520,12 +520,12 @@ void test_macho_sections_stay_within_their_declaring_segment() {
                       0x1000, 1, 176, 1, 5, 0);
     put_macho_segment(overlapping_files, 32 + 72, 72, "__DATA",
                       0x2000, 1, 176, 1, 3, 0);
-    check(!ember::MachOBinary::load_from_buffer(std::move(overlapping_files)),
+    check(!spelunk::MachOBinary::load_from_buffer(std::move(overlapping_files)),
           "Mach-O rejects overlapping nonempty segment file ranges");
 }
 
 void test_macho_load_segments_are_mapping_authority() {
-    auto execute_only = ember::MachOBinary::load_from_buffer(
+    auto execute_only = spelunk::MachOBinary::load_from_buffer(
         macho_mapping_with_pagezero(0x2000));
     check(execute_only.has_value(),
           "Mach-O with an execute-only segment and __PAGEZERO loads");
@@ -542,7 +542,7 @@ void test_macho_load_segments_are_mapping_authority() {
               "Mach-O does not fall back to section bytes outside loadable segments");
     }
 
-    auto zero_sized = ember::MachOBinary::load_from_buffer(
+    auto zero_sized = spelunk::MachOBinary::load_from_buffer(
         macho_mapping_with_pagezero(0));
     check(zero_sized.has_value(), "Mach-O with a zero-sized segment still loads");
     if (zero_sized) {
@@ -556,7 +556,7 @@ void test_macho_load_segments_are_mapping_authority() {
     auto file_backed_pagezero = macho_mapping_with_pagezero(0x1000);
     file_backed_pagezero.resize(file_backed_pagezero.size() + 1);
     put64(file_backed_pagezero, 32 + 72 + 48, 1);
-    check(!ember::MachOBinary::load_from_buffer(
+    check(!spelunk::MachOBinary::load_from_buffer(
               std::move(file_backed_pagezero)),
           "Mach-O rejects file-backed __PAGEZERO data");
 
@@ -565,7 +565,7 @@ void test_macho_load_segments_are_mapping_authority() {
                       0, 0x4000, 0, 0, 0, 1);
     put_fixed_name(sectioned_pagezero, 32 + 72, "__hidden");
     put_fixed_name(sectioned_pagezero, 32 + 72 + 16, "__PAGEZERO");
-    check(!ember::MachOBinary::load_from_buffer(
+    check(!spelunk::MachOBinary::load_from_buffer(
               std::move(sectioned_pagezero)),
           "Mach-O rejects sections declared inside __PAGEZERO");
 
@@ -573,10 +573,10 @@ void test_macho_load_segments_are_mapping_authority() {
     put_macho_segment(highvm, 32, 72, "__DATA",
                       0x1000, 0x1000, 0, 0, 1, 0);
     put32(highvm, 32 + 68, 1);  // SG_HIGHVM
-    auto highvm_result = ember::MachOBinary::load_from_buffer(
+    auto highvm_result = spelunk::MachOBinary::load_from_buffer(
         std::move(highvm));
     check(!highvm_result &&
-              highvm_result.error().kind == ember::ErrorKind::UnsupportedFormat,
+              highvm_result.error().kind == spelunk::ErrorKind::UnsupportedFormat,
           "Mach-O rejects unsupported SG_HIGHVM mapping explicitly");
 
     auto renamed_reservation = macho_mapping_with_pagezero(0x2000);
@@ -584,7 +584,7 @@ void test_macho_load_segments_are_mapping_authority() {
         renamed_reservation[32 + 72 + 8 + i] = std::byte{0};
     }
     put_fixed_name(renamed_reservation, 32 + 72 + 8, "__GUARD");
-    auto renamed_result = ember::MachOBinary::load_from_buffer(
+    auto renamed_result = spelunk::MachOBinary::load_from_buffer(
         std::move(renamed_reservation));
     check(renamed_result.has_value() &&
               (*renamed_result)->segments().size() == 1 &&
@@ -593,13 +593,13 @@ void test_macho_load_segments_are_mapping_authority() {
 
     auto misplaced_pagezero = macho_mapping_with_pagezero(0x1000);
     put64(misplaced_pagezero, 32 + 72 + 24, 1);
-    check(!ember::MachOBinary::load_from_buffer(
+    check(!spelunk::MachOBinary::load_from_buffer(
               std::move(misplaced_pagezero)),
           "Mach-O rejects a named __PAGEZERO outside address zero");
 
     auto overlapping_pagezero = macho_mapping_with_pagezero(0x2000);
     put64(overlapping_pagezero, 32 + 24, 0x1000);
-    check(!ember::MachOBinary::load_from_buffer(
+    check(!spelunk::MachOBinary::load_from_buffer(
               std::move(overlapping_pagezero)),
           "Mach-O rejects a load segment that overlaps the null reservation");
 
@@ -608,7 +608,7 @@ void test_macho_load_segments_are_mapping_authority() {
                       0x1000, 0x1000, 0, 0, 5, 0);
     put_macho_segment(overlapping, 32 + 72, 72, "__DATA",
                       0x1800, 0x1000, 0, 0, 3, 0);
-    check(!ember::MachOBinary::load_from_buffer(std::move(overlapping)),
+    check(!spelunk::MachOBinary::load_from_buffer(std::move(overlapping)),
           "Mach-O rejects overlapping mapped segment ranges");
 }
 
@@ -622,7 +622,7 @@ void test_macho_rejects_overflowing_bind_sleb_without_ub() {
     overflowing[80] = std::byte{0x60};  // BIND_OPCODE_SET_ADDEND_SLEB
     for (std::size_t i = 81; i < 90; ++i) overflowing[i] = std::byte{0x80};
     overflowing[90] = std::byte{0x02};  // payload spills beyond bit 63
-    check(ember::MachOBinary::load_from_buffer(std::move(overflowing)).has_value(),
+    check(spelunk::MachOBinary::load_from_buffer(std::move(overflowing)).has_value(),
           "Mach-O ignores an overflowing ten-byte bind SLEB without undefined shifts");
 
     auto unterminated = macho_header(1, 48);
@@ -633,7 +633,7 @@ void test_macho_rejects_overflowing_bind_sleb_without_ub() {
     put32(unterminated, 52, 11);    // bind_size
     unterminated[80] = std::byte{0x60};
     for (std::size_t i = 81; i < 91; ++i) unterminated[i] = std::byte{0x80};
-    check(ember::MachOBinary::load_from_buffer(std::move(unterminated)).has_value(),
+    check(spelunk::MachOBinary::load_from_buffer(std::move(unterminated)).has_value(),
           "Mach-O stops at a bind SLEB that requests an eleventh byte");
 
     const std::array<std::byte, 10> maximum{
@@ -646,7 +646,7 @@ void test_macho_rejects_overflowing_bind_sleb_without_ub() {
         std::byte{0x80}, std::byte{0x7f}};
 
     auto valid_extreme_reaches_bind = [](std::span<const std::byte> encoding) {
-        auto loaded = ember::MachOBinary::load_from_buffer(
+        auto loaded = spelunk::MachOBinary::load_from_buffer(
             macho_bind_with_sleb(encoding));
         if (!loaded) return false;
         for (const auto& symbol : (*loaded)->symbols()) {
@@ -663,14 +663,14 @@ void test_macho_rejects_overflowing_bind_sleb_without_ub() {
 }
 
 void test_macho_bounds_chained_fixup_address_arithmetic() {
-    constexpr ember::u64 packed_rebase =
-        (ember::u64{0xab} << 36) | ember::u64{0x1234};
+    constexpr spelunk::u64 packed_rebase =
+        (spelunk::u64{0xab} << 36) | spelunk::u64{0x1234};
     auto wrapped_start = macho_chained_fixup(
-        0, 0x1000, 184, 8, std::numeric_limits<ember::u64>::max(), 1);
+        0, 0x1000, 184, 8, std::numeric_limits<spelunk::u64>::max(), 1);
     wrapped_start.resize(192);
     put64(wrapped_start, 184, packed_rebase);
     auto wrapped_start_result =
-        ember::MachOBinary::load_from_buffer(std::move(wrapped_start));
+        spelunk::MachOBinary::load_from_buffer(std::move(wrapped_start));
     check(wrapped_start_result.has_value(),
           "Mach-O ignores a chained-fixup start address that wraps");
     if (wrapped_start_result) {
@@ -684,13 +684,13 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
               "Mach-O does not apply a chained fixup reached only through wrapping");
     }
 
-    constexpr ember::u64 vmaddr =
-        std::numeric_limits<ember::u64>::max() - 15;
+    constexpr spelunk::u64 vmaddr =
+        std::numeric_limits<spelunk::u64>::max() - 15;
     auto advancing = macho_chained_fixup(vmaddr, 15, 184, 8);
     advancing.resize(192);
-    put64(advancing, 184, ember::u64{0xfff} << 51);  // maximum next delta
+    put64(advancing, 184, spelunk::u64{0xfff} << 51);  // maximum next delta
     auto advancing_result =
-        ember::MachOBinary::load_from_buffer(std::move(advancing));
+        spelunk::MachOBinary::load_from_buffer(std::move(advancing));
     check(advancing_result.has_value(),
           "Mach-O stops a chained fixup before its next address wraps");
     if (advancing_result) {
@@ -705,10 +705,10 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
 
     auto redirected = macho_two_segment_chained_fixup(7, 0, 0);
     constexpr std::size_t fixups_data = 0x1800;
-    constexpr ember::u64 redirected_raw = 0x777;
+    constexpr spelunk::u64 redirected_raw = 0x777;
     put64(redirected, fixups_data + 52, 0x1010);  // not __DATA's offset
     put64(redirected, 0x1110, redirected_raw);
-    auto redirected_result = ember::MachOBinary::load_from_buffer(
+    auto redirected_result = spelunk::MachOBinary::load_from_buffer(
         std::move(redirected));
     check(redirected_result.has_value() &&
               read_mapped_u64((*redirected_result)->bytes_at(
@@ -716,12 +716,12 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
           "Mach-O ignores starts whose segment offset disagrees with the segment table");
 
     auto overlapping_metadata = macho_two_segment_chained_fixup(7, 0, 0);
-    constexpr ember::u64 boundary_raw = 0x888;
+    constexpr spelunk::u64 boundary_raw = 0x888;
     put32(overlapping_metadata, fixups_data + 8, 64);   // imports_offset
     put32(overlapping_metadata, fixups_data + 12, 68); // symbols_offset
     put32(overlapping_metadata, fixups_data + 16, 1);  // imports_count
     put64(overlapping_metadata, 0x1100, boundary_raw);
-    auto overlapping_metadata_result = ember::MachOBinary::load_from_buffer(
+    auto overlapping_metadata_result = spelunk::MachOBinary::load_from_buffer(
         std::move(overlapping_metadata));
     check(overlapping_metadata_result.has_value() &&
               read_mapped_u64((*overlapping_metadata_result)->bytes_at(
@@ -729,14 +729,14 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
           "Mach-O does not read chained starts through the imports partition");
 
     auto tiny_pages = macho_two_segment_chained_fixup(7, 0, 0);
-    constexpr ember::u64 tiny_page_raw = 0x999;
+    constexpr spelunk::u64 tiny_page_raw = 0x999;
     put32(tiny_pages, fixups_data + 44, 26);  // two page starts
     put16(tiny_pages, fixups_data + 48, 1);   // invalid page size
     put16(tiny_pages, fixups_data + 64, 2);
     put16(tiny_pages, fixups_data + 66, 0xffff);
     put16(tiny_pages, fixups_data + 68, 0);
     put64(tiny_pages, 0x1001, tiny_page_raw);
-    auto tiny_pages_result = ember::MachOBinary::load_from_buffer(
+    auto tiny_pages_result = spelunk::MachOBinary::load_from_buffer(
         std::move(tiny_pages));
     check(tiny_pages_result.has_value() &&
               read_mapped_u64((*tiny_pages_result)->bytes_at(
@@ -744,7 +744,7 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
           "Mach-O rejects nonstandard chained-fixup page sizes");
 
     auto record_in_offsets = macho_two_segment_chained_fixup(7, 0, 0);
-    constexpr ember::u64 offset_record_raw = 0xaaa;
+    constexpr spelunk::u64 offset_record_raw = 0xaaa;
     put32(record_in_offsets, fixups_data + 36, 8);   // record begins at entry 1
     put32(record_in_offsets, fixups_data + 40, 24);  // also record size
     put16(record_in_offsets, fixups_data + 44, 0x1000);
@@ -753,7 +753,7 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
     put16(record_in_offsets, fixups_data + 60, 1);
     put16(record_in_offsets, fixups_data + 62, 0x300);
     put64(record_in_offsets, 0x300, offset_record_raw);
-    auto offset_record_result = ember::MachOBinary::load_from_buffer(
+    auto offset_record_result = spelunk::MachOBinary::load_from_buffer(
         std::move(record_in_offsets));
     check(offset_record_result.has_value() &&
               read_mapped_u64((*offset_record_result)->bytes_at(
@@ -761,10 +761,10 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
           "Mach-O does not treat segment-offset entries as starts records");
 
     auto unaligned_arm64e = macho_two_segment_chained_fixup(1, 0, 0);
-    constexpr ember::u64 unaligned_arm64e_raw = 0xbbb;
+    constexpr spelunk::u64 unaligned_arm64e_raw = 0xbbb;
     put16(unaligned_arm64e, fixups_data + 66, 4);
     put64(unaligned_arm64e, 0x1004, unaligned_arm64e_raw);
-    auto unaligned_arm64e_result = ember::MachOBinary::load_from_buffer(
+    auto unaligned_arm64e_result = spelunk::MachOBinary::load_from_buffer(
         std::move(unaligned_arm64e));
     check(unaligned_arm64e_result.has_value() &&
               read_mapped_u64((*unaligned_arm64e_result)->bytes_at(
@@ -772,10 +772,10 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
           "Mach-O ignores an ARM64E fixup that is not eight-byte aligned");
 
     auto unaligned_kernel = macho_two_segment_chained_fixup(7, 0, 0);
-    constexpr ember::u64 unaligned_kernel_raw = 0xccc;
+    constexpr spelunk::u64 unaligned_kernel_raw = 0xccc;
     put16(unaligned_kernel, fixups_data + 66, 2);
     put64(unaligned_kernel, 0x1002, unaligned_kernel_raw);
-    auto unaligned_kernel_result = ember::MachOBinary::load_from_buffer(
+    auto unaligned_kernel_result = spelunk::MachOBinary::load_from_buffer(
         std::move(unaligned_kernel));
     check(unaligned_kernel_result.has_value() &&
               read_mapped_u64((*unaligned_kernel_result)->bytes_at(
@@ -784,7 +784,7 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
 
     auto compressed_symbols = macho_two_segment_chained_fixup(7, 0xddd, 0);
     put32(compressed_symbols, fixups_data + 24, 1);
-    auto compressed_symbols_result = ember::MachOBinary::load_from_buffer(
+    auto compressed_symbols_result = spelunk::MachOBinary::load_from_buffer(
         std::move(compressed_symbols));
     check(compressed_symbols_result.has_value() &&
               read_mapped_u64((*compressed_symbols_result)->bytes_at(
@@ -793,30 +793,30 @@ void test_macho_bounds_chained_fixup_address_arithmetic() {
 }
 
 void test_macho_chained_pointer_formats_and_segment_offsets() {
-    constexpr ember::u64 image_base = 0x100000000ull;
-    constexpr ember::u64 second_slot = image_base + 0x1108;
+    constexpr spelunk::u64 image_base = 0x100000000ull;
+    constexpr spelunk::u64 second_slot = image_base + 0x1108;
 
-    auto decoded_second = [&](ember::u16 format,
-                              ember::u64 first,
-                              ember::u64 second) {
-        auto loaded = ember::MachOBinary::load_from_buffer(
+    auto decoded_second = [&](spelunk::u16 format,
+                              spelunk::u64 first,
+                              spelunk::u64 second) {
+        auto loaded = spelunk::MachOBinary::load_from_buffer(
             macho_two_segment_chained_fixup(format, first, second));
         check(loaded.has_value(), "two-segment chained-fixup Mach-O loads");
-        if (!loaded) return std::numeric_limits<ember::u64>::max();
+        if (!loaded) return std::numeric_limits<spelunk::u64>::max();
         return read_mapped_u64((*loaded)->bytes_at(second_slot));
     };
 
     // Format 1 advances in 8-byte units. Authenticated targets in every
     // arm64e format are runtime offsets from the image base.
-    const ember::u64 format1 = decoded_second(
-        1, (ember::u64{1} << 51) | 0x111,
-        (ember::u64{1} << 63) | 0x222);
+    const spelunk::u64 format1 = decoded_second(
+        1, (spelunk::u64{1} << 51) | 0x111,
+        (spelunk::u64{1} << 63) | 0x222);
     check(format1 == image_base + 0x222,
           "ARM64E format 1 uses stride 8 and image-relative auth targets");
-    auto format1_absolute_image = ember::MachOBinary::load_from_buffer(
+    auto format1_absolute_image = spelunk::MachOBinary::load_from_buffer(
         macho_two_segment_chained_fixup(
-            1, (ember::u64{1} << 51) | 0x111,
-            (ember::u64{1} << 63) | 0x222));
+            1, (spelunk::u64{1} << 51) | 0x111,
+            (spelunk::u64{1} << 63) | 0x222));
     check(format1_absolute_image.has_value() &&
               read_mapped_u64((*format1_absolute_image)->bytes_at(
                   image_base + 0x1100)) == 0x111,
@@ -824,64 +824,64 @@ void test_macho_chained_pointer_formats_and_segment_offsets() {
 
     // Kernel and firmware formats use a 4-byte stride, so next=2 reaches
     // the qword eight bytes later.
-    const ember::u64 format7 = decoded_second(
-        7, (ember::u64{2} << 51) | 0x111, 0x333);
+    const spelunk::u64 format7 = decoded_second(
+        7, (spelunk::u64{2} << 51) | 0x111, 0x333);
     check(format7 == image_base + 0x333,
           "ARM64E kernel format 7 uses stride 4 and VM-offset targets");
 
-    constexpr ember::u64 firmware_raw =
-        (ember::u64{0xab} << 43) | 0x444;
-    const ember::u64 format10 = decoded_second(
-        10, (ember::u64{2} << 51) | 0x111, firmware_raw);
-    check(format10 == (ember::u64{0xab} << 56) + 0x444,
+    constexpr spelunk::u64 firmware_raw =
+        (spelunk::u64{0xab} << 43) | 0x444;
+    const spelunk::u64 format10 = decoded_second(
+        10, (spelunk::u64{2} << 51) | 0x111, firmware_raw);
+    check(format10 == (spelunk::u64{0xab} << 56) + 0x444,
           "ARM64E firmware format 10 uses stride 4 and absolute targets");
 
-    constexpr ember::u64 userland24_raw =
-        (ember::u64{0xcd} << 43) | 0x555;
-    const ember::u64 format12 = decoded_second(
-        12, (ember::u64{1} << 51) | 0x111, userland24_raw);
-    check(format12 == ((ember::u64{0xcd} << 56) | (image_base + 0x555)),
+    constexpr spelunk::u64 userland24_raw =
+        (spelunk::u64{0xcd} << 43) | 0x555;
+    const spelunk::u64 format12 = decoded_second(
+        12, (spelunk::u64{1} << 51) | 0x111, userland24_raw);
+    check(format12 == ((spelunk::u64{0xcd} << 56) | (image_base + 0x555)),
           "ARM64E userland24 format 12 uses stride 8 and VM-offset targets");
 
     auto below_text = macho_two_segment_chained_fixup(7, 0x999, 0);
     put64(below_text, 32 + 24, 0x2000);       // __TEXT vmaddr / image base
     put64(below_text, 32 + 72 + 24, 0x1000); // __DATA lies below __TEXT
     put64(below_text, 0x1800 + 52,
-          std::numeric_limits<ember::u64>::max() - 0x0fff);
-    auto below_text_result = ember::MachOBinary::load_from_buffer(
+          std::numeric_limits<spelunk::u64>::max() - 0x0fff);
+    auto below_text_result = spelunk::MachOBinary::load_from_buffer(
         std::move(below_text));
     check(below_text_result.has_value() &&
               read_mapped_u64((*below_text_result)->bytes_at(0x1100)) == 0x2999,
           "Mach-O accepts modulo-encoded starts for a segment below __TEXT");
 
-    auto decode_straddling = [&](ember::u16 format, ember::u64 raw) {
+    auto decode_straddling = [&](spelunk::u16 format, spelunk::u64 raw) {
         auto bytes = macho_two_segment_chained_fixup(format, 0, 0);
         bytes.resize(0x2004);
         put64(bytes, 32 + 72 + 32, 0x1004);  // __DATA vmsize
         put64(bytes, 32 + 72 + 48, 0x1004);  // __DATA filesize
         put16(bytes, 0x1800 + 66, 0x0ffc);   // final four bytes of the page
         put64(bytes, 0x1ffc, raw);
-        auto loaded = ember::MachOBinary::load_from_buffer(std::move(bytes));
+        auto loaded = spelunk::MachOBinary::load_from_buffer(std::move(bytes));
         check(loaded.has_value(), "straddling chained-fixup Mach-O loads");
-        if (!loaded) return std::numeric_limits<ember::u64>::max();
+        if (!loaded) return std::numeric_limits<spelunk::u64>::max();
         return read_mapped_u64((*loaded)->bytes_at(image_base + 0x1ffc));
     };
     check(decode_straddling(7, 0x666) == image_base + 0x666,
           "ARM64E kernel fixup may start four bytes before a page boundary");
-    constexpr ember::u64 straddling_firmware =
-        (ember::u64{0xee} << 43) | 0x777;
+    constexpr spelunk::u64 straddling_firmware =
+        (spelunk::u64{0xee} << 43) | 0x777;
     check(decode_straddling(10, straddling_firmware) ==
-              ((ember::u64{0xee} << 56) | 0x777),
+              ((spelunk::u64{0xee} << 56) | 0x777),
           "ARM64E firmware fixup may straddle a backed page boundary");
 
-    auto conventional_order = ember::MachOBinary::load_from_buffer(
+    auto conventional_order = spelunk::MachOBinary::load_from_buffer(
         macho_pagezero_order_chained_fixup());
     check(conventional_order.has_value() &&
               read_mapped_u64((*conventional_order)->bytes_at(
                   image_base + 0x1100)) == image_base + 0x123,
           "PAGEZERO keeps chained-fixup segment indices aligned");
 
-    auto wide_ordinal = ember::MachOBinary::load_from_buffer(
+    auto wide_ordinal = spelunk::MachOBinary::load_from_buffer(
         macho_userland24_wide_ordinal());
     bool recovered_wide_import = false;
     if (wide_ordinal) {

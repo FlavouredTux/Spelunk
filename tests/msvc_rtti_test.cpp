@@ -2,14 +2,14 @@
 #include <iostream>
 #include <vector>
 
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/msvc_rtti.hpp>
-#include <ember/binary/pe.hpp>
-#include <ember/common/bytes.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/msvc_rtti.hpp>
+#include <spelunk/binary/pe.hpp>
+#include <spelunk/common/bytes.hpp>
 
 namespace {
 
-using namespace ember;
+using namespace spelunk;
 
 void put16(std::vector<std::byte>& b, std::size_t off, u16 v) {
     b[off + 0] = static_cast<std::byte>(v & 0xffu);

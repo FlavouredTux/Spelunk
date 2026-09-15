@@ -743,7 +743,7 @@ def _candidate_rank(result: dict[str, Any]) -> tuple[float, float, float, int, s
 
 
 def _prepare_output_directory(output: pathlib.Path, run_identity: dict[str, Any]) -> None:
-    marker = output / ".ember-match-run.json"
+    marker = output / ".spelunk-match-run.json"
     if output.exists() and not output.is_dir():
         raise MatchError(f"output path is not a directory: {output}")
     if output.exists() and any(output.iterdir()) and not marker.is_file():
@@ -915,11 +915,11 @@ def evaluate_candidates(
                     suffix = " exact" if score["exact"] else ""
                     cached = " cached" if result.get("cached") else ""
                     print(
-                        f"ember-match: {candidate.candidate_id} "
+                        f"spelunk-match: {candidate.candidate_id} "
                         f"{score['match_percent']:.6f}%{suffix}{cached}"
                     )
                 else:
-                    print(f"ember-match: {candidate.candidate_id} failed: {result.get('error')}")
+                    print(f"spelunk-match: {candidate.candidate_id} failed: {result.get('error')}")
     return results
 
 
@@ -1118,7 +1118,7 @@ def run(arguments: argparse.Namespace) -> int:
             f"beam width {arguments.beam_width}"
             if arguments.auto else f"{len(candidates)} candidates"
         )
-        print(f"ember-match: {len(choices)} choice(s), {count}, symbol {arguments.symbol}")
+        print(f"spelunk-match: {len(choices)} choice(s), {count}, symbol {arguments.symbol}")
     if arguments.dry_run:
         if arguments.auto:
             original = candidate_from_selections(source_text, choices, {})
@@ -1228,7 +1228,7 @@ def run(arguments: argparse.Namespace) -> int:
             shutil.copy2(best_diff, output / "best.objdiff.json")
         if not arguments.quiet:
             print(
-                f"ember-match: best {best['candidate_id']} "
+                f"spelunk-match: best {best['candidate_id']} "
                 f"{best['score']['match_percent']:.6f}% -> {output}"
             )
     if not arguments.keep_diffs:
@@ -1248,7 +1248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return run(parser.parse_args(argv))
     except MatchError as error:
-        print(f"ember-match: {error}", file=sys.stderr)
+        print(f"spelunk-match: {error}", file=sys.stderr)
         return 2
 
 

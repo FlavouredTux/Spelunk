@@ -4,7 +4,7 @@
 
 #include "session.hpp"
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 void FunctionModel::set_session(const Session* s) {
     beginResetModel();
@@ -74,4 +74,4 @@ QVariant FunctionModel::headerData(int section, Qt::Orientation o, int role) con
     }
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

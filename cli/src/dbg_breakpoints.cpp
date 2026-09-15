@@ -13,15 +13,15 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/syscalls.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/breakpoint.hpp>
-#include <ember/decompile/emit_options.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/syscalls.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/breakpoint.hpp>
+#include <spelunk/decompile/emit_options.hpp>
 
 #include "dbg_internal.hpp"
 
-namespace ember::cli::dbg {
+namespace spelunk::cli::dbg {
 
 namespace {
 
@@ -83,19 +83,19 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
 
     auto sh = find_symbol(rs, sym_tok);
     if (!sh) {
-        std::println(stderr, "ember-dbg: b: symbol '{}' not found", sym_tok);
+        std::println(stderr, "spelunk-dbg: b: symbol '{}' not found", sym_tok);
         return true;
     }
-    auto win = ember::resolve_function_at(*sh->bin, sh->addr);
+    auto win = spelunk::resolve_function_at(*sh->bin, sh->addr);
     if (!win) {
-        std::println(stderr, "ember-dbg: b: cannot resolve {}", sym_tok);
+        std::println(stderr, "spelunk-dbg: b: cannot resolve {}", sym_tok);
         return true;
     }
 
     LineMap line_map;
     EmitOptions opts;
     opts.line_map = &line_map;
-    auto pseudo = ember::format_struct(*sh->bin, *win, /*pseudo*/true,
+    auto pseudo = spelunk::format_struct(*sh->bin, *win, /*pseudo*/true,
                                        /*ann*/nullptr, opts);
     if (!pseudo) { print_error(pseudo.error()); return true; }
     const std::string& text = *pseudo;
@@ -116,7 +116,7 @@ bool try_break_at_pseudo_line(ReplState& rs, std::string_view tok) {
         }
     }
     if (!found) {
-        std::println(stderr, "ember-dbg: b: no IR statement on line {} of {}",
+        std::println(stderr, "spelunk-dbg: b: no IR statement on line {} of {}",
                      target_line, sym_tok);
         return true;
     }
@@ -146,7 +146,7 @@ int cmd_break(ReplState& rs, std::string_view tok) {
     }
     auto spec = parse_addr_spec_multi(tok, rs);
     if (!spec) {
-        std::println(stderr, "ember-dbg: b: '{}' is neither hex, a known symbol, nor sym:line", tok);
+        std::println(stderr, "spelunk-dbg: b: '{}' is neither hex, a known symbol, nor sym:line", tok);
         return 1;
     }
     const addr_t va = resolve_runtime_multi(*spec);
@@ -178,7 +178,7 @@ int cmd_delete(ReplState& rs, std::string_view tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     auto id = parse_int(tok);
     if (!id) {
-        std::println(stderr, "ember-dbg: d: bad bp id '{}'", tok);
+        std::println(stderr, "spelunk-dbg: d: bad bp id '{}'", tok);
         return 1;
     }
     const auto bp_id = static_cast<debug::BreakpointId>(*id);
@@ -194,12 +194,12 @@ int cmd_catch(ReplState& rs, std::span<const std::string> toks) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     if (toks.empty()) {
         std::println(stderr,
-            "ember-dbg: catch: usage: catch syscall [<nr|name> ...]");
+            "spelunk-dbg: catch: usage: catch syscall [<nr|name> ...]");
         return 1;
     }
     if (toks[0] != "syscall") {
         std::println(stderr,
-            "ember-dbg: catch: only `catch syscall [args]` is supported");
+            "spelunk-dbg: catch: only `catch syscall [args]` is supported");
         return 1;
     }
     if (toks.size() == 1) {
@@ -223,7 +223,7 @@ int cmd_catch(ReplState& rs, std::span<const std::string> toks) {
             continue;
         }
         std::println(stderr,
-            "ember-dbg: catch: unknown syscall '{}' (use a decimal nr or Linux x64 name)", t);
+            "spelunk-dbg: catch: unknown syscall '{}' (use a decimal nr or Linux x64 name)", t);
         return 1;
     }
     if (auto rv = rs.tgt->set_syscall_catch(false, std::span<const u32>{nrs}); !rv) {
@@ -252,12 +252,12 @@ int cmd_watch(ReplState& rs, std::span<const std::string> toks) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     if (toks.empty()) {
         std::println(stderr,
-            "ember-dbg: watch: usage: watch <addr> [r|w|rw] [size]");
+            "spelunk-dbg: watch: usage: watch <addr> [r|w|rw] [size]");
         return 1;
     }
     auto spec = parse_addr_spec_multi(toks[0], rs);
     if (!spec) {
-        std::println(stderr, "ember-dbg: watch: bad address '{}'", toks[0]);
+        std::println(stderr, "spelunk-dbg: watch: bad address '{}'", toks[0]);
         return 1;
     }
     debug::WatchMode mode = debug::WatchMode::ReadWrite;
@@ -272,7 +272,7 @@ int cmd_watch(ReplState& rs, std::span<const std::string> toks) {
             size = static_cast<u8>(*n);
         } else {
             std::println(stderr,
-                "ember-dbg: watch: unknown mode/size '{}' (expected r|w|rw or 1/2/4/8)", t);
+                "spelunk-dbg: watch: unknown mode/size '{}' (expected r|w|rw or 1/2/4/8)", t);
             return 1;
         }
     }
@@ -306,7 +306,7 @@ int cmd_dwp(ReplState& rs, std::string_view tok) {
     if (!rs.live) { std::println("Not attached."); return 0; }
     auto id = parse_int(tok);
     if (!id) {
-        std::println(stderr, "ember-dbg: dwp: bad watchpoint id '{}'", tok);
+        std::println(stderr, "spelunk-dbg: dwp: bad watchpoint id '{}'", tok);
         return 1;
     }
     const auto wp_id = static_cast<debug::WatchpointId>(*id);
@@ -318,4 +318,4 @@ int cmd_dwp(ReplState& rs, std::string_view tok) {
     return 0;
 }
 
-}  // namespace ember::cli::dbg
+}  // namespace spelunk::cli::dbg

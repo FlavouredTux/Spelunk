@@ -6,12 +6,12 @@
 #include <string>
 #include <vector>
 
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 struct Emitter;
 
@@ -50,4 +50,4 @@ SignatureContext setup_signature_context(Emitter& e,
                                          const Binary* binary,
                                          const Annotations* annotations);
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

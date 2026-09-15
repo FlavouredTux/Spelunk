@@ -1,10 +1,10 @@
-#include <ember/analysis/type_infer_local.hpp>
+#include <spelunk/analysis/type_infer_local.hpp>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -208,4 +208,4 @@ void infer_local_types(IrFunction& fn) {
     }
 }
 
-}  // namespace ember
+}  // namespace spelunk

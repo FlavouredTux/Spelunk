@@ -1,4 +1,4 @@
-#include <ember/analysis/import_sigs.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
 
 #include <cstddef>
 #include <map>
@@ -8,16 +8,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -782,4 +782,4 @@ void seed_call_return_types(const Binary& b, IrFunction& fn) {
     }
 }
 
-}  // namespace ember
+}  // namespace spelunk

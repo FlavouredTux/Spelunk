@@ -4,9 +4,9 @@
 #include <expected>
 #include <utility>
 
-#include <ember/analysis/demangle.hpp>
+#include <spelunk/analysis/demangle.hpp>
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 const Section* Session::section_at(addr_t va) const noexcept {
     for (const auto& s : binary->sections()) {
@@ -88,9 +88,9 @@ Result<std::unique_ptr<Session>> open_session(const std::filesystem::path& path)
     return s;
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 namespace {
 
@@ -196,4 +196,4 @@ std::string display_name(std::string_view raw) {
     return pretty;
 }
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

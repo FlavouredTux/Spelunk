@@ -15,24 +15,24 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/data_xrefs.hpp>
-#include <ember/analysis/int3_resolver.hpp>
-#include <ember/analysis/msvc_rtti.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/analysis/vtables.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/int3_resolver.hpp>
+#include <spelunk/analysis/msvc_rtti.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/analysis/vtables.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "util.hpp"
 
-namespace ember::cli::builders {
+namespace spelunk::cli::builders {
 
 namespace {
 
@@ -53,9 +53,9 @@ namespace {
 
 }  // namespace
 
-}  // namespace ember::cli::builders
+}  // namespace spelunk::cli::builders
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 using namespace builders;
 
@@ -453,4 +453,4 @@ std::string build_int3_resolve_output(const Binary& b) {
     return out;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

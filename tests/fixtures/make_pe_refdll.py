@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit a tiny x86_64 PE32+ DLL whose only point is its export table.
 
-Used as a *reference DLL* for `ember --recover-imports`: the recovery
+Used as a *reference DLL* for `spelunk --recover-imports`: the recovery
 base-solves harvested IAT pointers against a reference DLL's export
 RVA→name map. This fixture has five named exports at fixed RVAs and a
 preferred image base (0x180000000) deliberately different from the base

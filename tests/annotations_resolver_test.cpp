@@ -1,5 +1,5 @@
-#include <ember/common/annotations.hpp>
-#include <ember/common/text.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/text.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -26,19 +26,19 @@ void check_eq(const std::string& got, const std::string& want, const char* ctx) 
     }
 }
 
-void check_source(ember::AnnotationSource got, ember::AnnotationSource want,
+void check_source(spelunk::AnnotationSource got, spelunk::AnnotationSource want,
                   const char* ctx) {
     if (got != want) {
         std::fprintf(stderr, "FAIL: %s\n  got:  %s\n  want: %s\n",
                      ctx,
-                     std::string(ember::annotation_source_name(got)).c_str(),
-                     std::string(ember::annotation_source_name(want)).c_str());
+                     std::string(spelunk::annotation_source_name(got)).c_str(),
+                     std::string(spelunk::annotation_source_name(want)).c_str());
         ++fails;
     }
 }
 
 fs::path scratch_root() {
-    auto p = fs::temp_directory_path() / "ember_resolver_test";
+    auto p = fs::temp_directory_path() / "spelunk_resolver_test";
     std::error_code ec;
     fs::remove_all(p, ec);
     fs::create_directories(p);
@@ -75,7 +75,7 @@ int main() {
         };
         for (const auto& test : valid) {
             float value = -1.0f;
-            if (!ember::parse_float_clamped(test.text, value) ||
+            if (!spelunk::parse_float_clamped(test.text, value) ||
                 value != test.expected) {
                 fail("confidence parser rejected or changed a valid value",
                      std::string(test.text));
@@ -87,7 +87,7 @@ int main() {
         };
         for (const auto text : invalid) {
             float value = 0.375f;
-            if (ember::parse_float_clamped(text, value) || value != 0.375f) {
+            if (spelunk::parse_float_clamped(text, value) || value != 0.375f) {
                 fail("confidence parser accepted invalid input or changed output",
                      std::string(text));
             }
@@ -99,8 +99,8 @@ int main() {
     // first commit has a destination).
     const auto bin_a = write_stub(root / "a" / "prog", "v1");
     {
-        auto loc = ember::resolve_annotation_location(bin_a, {}, cache);
-        check_source(loc.source, ember::AnnotationSource::Cache,
+        auto loc = spelunk::resolve_annotation_location(bin_a, {}, cache);
+        check_source(loc.source, spelunk::AnnotationSource::Cache,
                      "no sidecar → cache");
         if (loc.path.parent_path().parent_path().filename() != "annotations") {
             fail("cache path not under <cache>/annotations/",
@@ -110,13 +110,13 @@ int main() {
 
     // Dropping the sidecar flips the resolver from cache to sidecar
     // without any flag change.
-    write_stub(ember::sidecar_annotation_path(bin_a), "rename 100 foo\n");
+    write_stub(spelunk::sidecar_annotation_path(bin_a), "rename 100 foo\n");
     {
-        auto loc = ember::resolve_annotation_location(bin_a, {}, cache);
-        check_source(loc.source, ember::AnnotationSource::Sidecar,
+        auto loc = spelunk::resolve_annotation_location(bin_a, {}, cache);
+        check_source(loc.source, spelunk::AnnotationSource::Sidecar,
                      "sidecar present → sidecar");
         check_eq(loc.path.string(),
-                 ember::sidecar_annotation_path(bin_a).string(),
+                 spelunk::sidecar_annotation_path(bin_a).string(),
                  "sidecar path");
     }
 
@@ -125,9 +125,9 @@ int main() {
     // it exists yet.
     const auto explicit_path = root / "some" / "file.db";
     {
-        auto loc = ember::resolve_annotation_location(
+        auto loc = spelunk::resolve_annotation_location(
             bin_a, explicit_path, cache);
-        check_source(loc.source, ember::AnnotationSource::Explicit,
+        check_source(loc.source, spelunk::AnnotationSource::Explicit,
                      "explicit overrides sidecar");
         check_eq(loc.path.string(), explicit_path.string(),
                  "explicit path preserved");
@@ -136,16 +136,16 @@ int main() {
     // Cache key is stable across content changes at the same path - the
     // whole reason for path-keying over content-hashing. Rewrite the
     // fixture and expect the same cache path back.
-    const auto cache_before = ember::cache_annotation_path(bin_a, cache);
+    const auto cache_before = spelunk::cache_annotation_path(bin_a, cache);
     write_stub(bin_a, "v2 - different bytes entirely, longer");
-    const auto cache_after = ember::cache_annotation_path(bin_a, cache);
+    const auto cache_after = spelunk::cache_annotation_path(bin_a, cache);
     check_eq(cache_before.string(), cache_after.string(),
              "cache path stable across binary content change");
 
     // Cache key changes when the binary moves directories - same
     // basename in a different parent must not share annotations.
     const auto bin_b = write_stub(root / "b" / "prog", "v1");
-    const auto cache_b = ember::cache_annotation_path(bin_b, cache);
+    const auto cache_b = spelunk::cache_annotation_path(bin_b, cache);
     if (cache_b.string() == cache_after.string()) {
         fail("cache key collides across directories",
              cache_b.string());
@@ -168,20 +168,20 @@ int main() {
     // ----------------------------------------------------------------
     {
         const auto path = root / "meta_round_trip.ann";
-        ember::Annotations a;
+        spelunk::Annotations a;
         a.renames[0x401000]      = "do_thing";
         a.notes[0x401000]        = "see ticket #42";
-        ember::AnnotationMeta rm;
+        spelunk::AnnotationMeta rm;
         rm.confidence = 0.875f;
         rm.evidence   = "3-arg, called by 0x3f94380; pipe |, newline\n in ev";
         rm.source     = "tool:review";
         a.rename_meta[0x401000] = rm;
-        a.note_meta[0x401000]   = ember::AnnotationMeta{0.5f, "from doc-comment", "cli"};
+        a.note_meta[0x401000]   = spelunk::AnnotationMeta{0.5f, "from doc-comment", "cli"};
 
         if (auto rv = a.save(path); !rv) {
             fail("save with metadata", "ought to write cleanly");
         }
-        auto loaded = ember::Annotations::load(path);
+        auto loaded = spelunk::Annotations::load(path);
         if (!loaded) {
             fail("load round-trip", "save then load failed");
         } else {
@@ -217,7 +217,7 @@ int main() {
         write_stub(path, "# legacy file\n"
                          "rename 401000 do_thing\n"
                          "note   401000 hand-written; no meta line\n");
-        auto loaded = ember::Annotations::load(path);
+        auto loaded = spelunk::Annotations::load(path);
         if (!loaded) fail("backward compat load", "legacy file rejected");
         else {
             if (loaded->meta_for_rename(0x401000) != nullptr) {
@@ -236,18 +236,18 @@ int main() {
 
     // Forward compat: an unknown meta subkind and unknown meta keys
     // must not corrupt the primary records or crash the parser. An
-    // older ember reading a file produced by a newer ember should see
+    // older spelunk reading a file produced by a newer spelunk should see
     // the names / notes intact and silently drop what it doesn't
     // recognise.
     {
         const auto path = root / "future_meta.ann";
         write_stub(path,
-            "# ember annotations\n"
+            "# spelunk annotations\n"
             "rename 401000 do_thing\n"
             "meta rename 401000 conf=0.9|src=cli|future_key=x|ev=ok\n"
             "meta unknown_kind 401000 conf=1|src=mystery\n"
             "rename 402000 other_fn\n");
-        auto loaded = ember::Annotations::load(path);
+        auto loaded = spelunk::Annotations::load(path);
         if (!loaded) fail("forward compat load", "newer-format file rejected");
         else {
             const auto* m = loaded->meta_for_rename(0x401000);
@@ -279,7 +279,7 @@ int main() {
             "meta rename 401000 conf=2.5\n"
             "rename 402000 too_low\n"
             "meta rename 402000 conf=-0.5\n");
-        auto loaded = ember::Annotations::load(path);
+        auto loaded = spelunk::Annotations::load(path);
         if (!loaded) fail("clamp load", "rejected unexpectedly");
         else {
             const auto* hi = loaded->meta_for_rename(0x401000);

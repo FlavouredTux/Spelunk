@@ -10,11 +10,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
 
-namespace ember {
+namespace spelunk {
 
 class Binary;
 class Decoder;
@@ -63,4 +63,4 @@ void partition(const Binary& binary, const WalkState& state, Function& function)
 void compute_predecessors(Function& function);
 
 }  // namespace cfg_builder_detail
-}  // namespace ember
+}  // namespace spelunk

@@ -5,9 +5,9 @@
 #include <QTextCharFormat>
 #include <vector>
 
-namespace ember::gui {
+namespace spelunk::gui {
 
-// Colours ember's `format_disasm` lines after the view has rewritten the
+// Colours spelunk's `format_disasm` lines after the view has rewritten the
 // `0x<va>` prefix into IDA's `<segment>:<va>` form:
 //   .text:0000000000001169  48 85 f6      test rsi, rsi  ; comment
 class AsmHighlighter : public QSyntaxHighlighter {
@@ -34,4 +34,4 @@ private:
     std::vector<Rule> rules_;
 };
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

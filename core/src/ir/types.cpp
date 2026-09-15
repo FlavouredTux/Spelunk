@@ -1,4 +1,4 @@
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
 #include <cstddef>
 #include <format>
@@ -6,10 +6,10 @@
 #include <utility>
 #include <vector>
 
-#include <ember/ir/abi.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -269,4 +269,4 @@ std::string TypeArena::format(TypeRef r, int depth) const {
     return "?";
 }
 
-}  // namespace ember
+}  // namespace spelunk

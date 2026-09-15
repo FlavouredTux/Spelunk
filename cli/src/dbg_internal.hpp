@@ -14,16 +14,16 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
 
 #include "args.hpp"
 #include "dbg.hpp"
 
-namespace ember::cli::dbg {
+namespace spelunk::cli::dbg {
 
 // Active target for the SIGINT forwarder. The debugger blocks on
 // wait_event() inside cont/step; Ctrl+C otherwise has nowhere to go
@@ -232,4 +232,4 @@ int cmd_threads(ReplState& rs);
 
 int cmd_thread_switch(ReplState& rs, std::string_view tok);
 
-}  // namespace ember::cli::dbg
+}  // namespace spelunk::cli::dbg

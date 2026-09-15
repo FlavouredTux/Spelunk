@@ -18,15 +18,15 @@
 #include <sys/wait.h>
 #include <utility>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "errno_io.hpp"
 #include "ptrace_target.hpp"
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 namespace {
 
@@ -343,4 +343,4 @@ Result<Event> LinuxTarget::wait_event() {
     }
 }
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

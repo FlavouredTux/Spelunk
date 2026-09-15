@@ -1,4 +1,4 @@
-#include <ember/analysis/pe_unwind.hpp>
+#include <spelunk/analysis/pe_unwind.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -6,13 +6,13 @@
 #include <optional>
 #include <vector>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/pe.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/pe.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -215,4 +215,4 @@ std::map<addr_t, addr_t> build_prologue_ranges(const Binary& b) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -5,16 +5,16 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/analysis/function.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "x64_lifter_internal.hpp"
 
-namespace ember::x64_lift {
+namespace spelunk::x64_lift {
 
 void emit_call_clobbers(LiftCtx& ctx) {
     for (Reg r : caller_saved_int_regs(ctx.abi)) {
@@ -303,4 +303,4 @@ void lift_unreachable(LiftCtx& ctx) {
     ctx.emit(std::move(i));
 }
 
-}  // namespace ember::x64_lift
+}  // namespace spelunk::x64_lift

@@ -1,5 +1,5 @@
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/msvc_demangle.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/msvc_demangle.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -11,7 +11,7 @@ namespace {
 int fails = 0;
 
 void check(std::string_view mangled, std::string_view expected) {
-    const std::string got = ember::pretty_symbol(mangled);
+    const std::string got = spelunk::pretty_symbol(mangled);
     if (got != expected) {
         std::fprintf(stderr, "FAIL: %.*s\n  got:      %s\n  expected: %.*s\n",
                      static_cast<int>(mangled.size()), mangled.data(),
@@ -22,7 +22,7 @@ void check(std::string_view mangled, std::string_view expected) {
 }
 
 void check_msvc(std::string_view mangled, std::string_view expected) {
-    auto got_opt = ember::demangle_msvc(mangled);
+    auto got_opt = spelunk::demangle_msvc(mangled);
     const std::string got = got_opt ? *got_opt : std::string("<nullopt>");
     if (got != expected) {
         std::fprintf(stderr, "FAIL msvc: %.*s\n  got:      %s\n  expected: %.*s\n",
@@ -34,7 +34,7 @@ void check_msvc(std::string_view mangled, std::string_view expected) {
 }
 
 void check_msvc_full(std::string_view mangled, std::string_view expected) {
-    auto got_opt = ember::demangle_msvc_full(mangled);
+    auto got_opt = spelunk::demangle_msvc_full(mangled);
     const std::string got = got_opt ? *got_opt : std::string("<nullopt>");
     if (got != expected) {
         std::fprintf(stderr, "FAIL msvc full: %.*s\n  got:      %s\n  expected: %.*s\n",
@@ -46,7 +46,7 @@ void check_msvc_full(std::string_view mangled, std::string_view expected) {
 }
 
 void check_simplify(std::string_view input, std::string_view expected) {
-    const std::string got = ember::simplify_stdlib_templates(std::string(input));
+    const std::string got = spelunk::simplify_stdlib_templates(std::string(input));
     if (got != expected) {
         std::fprintf(stderr, "FAIL simplify:\n  in:       %.*s\n  got:      %s\n  expected: %.*s\n",
                      static_cast<int>(input.size()), input.data(),
@@ -92,7 +92,7 @@ int main() {
 #if defined(__has_include)
 #if __has_include(<cxxabi.h>)
     // Fallback through __cxa_demangle covers deep but valid Itanium
-    // template payloads that Ember's conservative parser may not handle.
+    // template payloads that Spelunk's conservative parser may not handle.
     check("_ZN6Engine10Reflection13BoundFuncDescINS_19AnimationControllerEFNSt3__110shared_ptrINS_14AnimationTrackEEENS4_INS_9AnimationEEEELb0ELi1EEE",
           "Engine::Reflection::BoundFuncDesc<Engine::AnimationController, std::__1::shared_ptr<Engine::AnimationTrack> (std::__1::shared_ptr<Engine::Animation>), false, 1>");
 #endif
@@ -105,7 +105,7 @@ int main() {
     // pretty_symbol_base strips the trailing signature so the header
     // builder can attach its own argument list without duplication.
     auto check_base = [](std::string_view m, std::string_view want) {
-        const std::string got = ember::pretty_symbol_base(m);
+        const std::string got = spelunk::pretty_symbol_base(m);
         if (got != want) {
             std::fprintf(stderr, "FAIL base: %.*s\n  got:      %s\n  expected: %.*s\n",
                          static_cast<int>(m.size()), m.data(),

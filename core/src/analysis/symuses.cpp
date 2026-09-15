@@ -1,4 +1,4 @@
-#include <ember/analysis/symuses.hpp>
+#include <spelunk/analysis/symuses.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -12,20 +12,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/data_xrefs.hpp>
-#include <ember/analysis/fn_table.hpp>
-#include <ember/analysis/symtable.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/fn_table.hpp>
+#include <spelunk/analysis/symtable.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
-namespace ember::analysis {
+namespace spelunk::analysis {
 
 namespace {
 
@@ -461,4 +461,4 @@ collect_symbol_uses(const Binary& b, addr_t table_va, SymUseOptions opts) {
     return out;
 }
 
-}  // namespace ember::analysis
+}  // namespace spelunk::analysis

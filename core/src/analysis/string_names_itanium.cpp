@@ -10,7 +10,7 @@
 
 #include "string_names_internal.hpp"
 
-namespace ember::string_names {
+namespace spelunk::string_names {
 
 namespace {
 
@@ -515,4 +515,4 @@ itanium_embedded_function_name_prefix(std::string_view text) {
     return std::nullopt;
 }
 
-}  // namespace ember::string_names
+}  // namespace spelunk::string_names

@@ -1,4 +1,4 @@
-#include <ember/binary/pe_view.hpp>
+#include <spelunk/binary/pe_view.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -12,9 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/bytes.hpp>
+#include <spelunk/common/bytes.hpp>
 
-namespace ember::pe {
+namespace spelunk::pe {
 
 namespace {
 
@@ -333,4 +333,4 @@ collect_exports(const Binary& bin,
     return {};
 }
 
-}  // namespace ember::pe
+}  // namespace spelunk::pe

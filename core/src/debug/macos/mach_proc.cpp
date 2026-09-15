@@ -5,7 +5,7 @@
 // exception-port registration before the optional task_resume.
 //
 // task_for_pid privilege caveat - failure here is overwhelmingly
-// the cause of "the debugger doesn't work on macOS." The ember
+// the cause of "the debugger doesn't work on macOS." The spelunk
 // binary needs ONE of:
 //
 //   * com.apple.security.cs.debugger entitlement at codesign time
@@ -46,7 +46,7 @@
 
 extern char** environ;
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 namespace {
 
@@ -179,7 +179,7 @@ launch_macos(const LaunchOptions& opts) {
         ::kill(child, SIGKILL);
         ::waitpid(child, nullptr, 0);
         return std::unexpected(Error::io(std::format(
-            "task_for_pid({}) failed: {} - codesign ember with the "
+            "task_for_pid({}) failed: {} - codesign spelunk with the "
             "com.apple.security.cs.debugger entitlement, or run as root "
             "with SIP disabled, or build the tracee with get-task-allow",
             child, ::mach_error_string(kr))));
@@ -214,7 +214,7 @@ attach_macos(ProcessId pid) {
                                       static_cast<pid_t>(pid), &task_port);
     if (kr != KERN_SUCCESS) {
         return std::unexpected(Error::io(std::format(
-            "task_for_pid({}) failed: {} - codesign ember with the "
+            "task_for_pid({}) failed: {} - codesign spelunk with the "
             "com.apple.security.cs.debugger entitlement, or run as root "
             "with SIP disabled",
             pid, ::mach_error_string(kr))));
@@ -308,4 +308,4 @@ std::vector<LoadedImage> MachOTarget::images() const {
     return out;
 }
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

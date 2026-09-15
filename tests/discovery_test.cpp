@@ -1,8 +1,8 @@
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/indirect_calls.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/vtables.hpp>
-#include <ember/binary/binary.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/indirect_calls.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/vtables.hpp>
+#include <spelunk/binary/binary.hpp>
 
 #include <algorithm>
 #include <array>
@@ -23,7 +23,7 @@ void check(bool cond, const char* ctx) {
     }
 }
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
     MockBinary() {
         text_.fill(static_cast<std::byte>(0x90u));
@@ -59,13 +59,13 @@ public:
         for (std::size_t i = 0; i < overlapping.size(); ++i) {
             text_[0x20 + i] = static_cast<std::byte>(overlapping[i]);
         }
-        ember::Symbol overlap_owner;
+        spelunk::Symbol overlap_owner;
         overlap_owner.name = "overlap_owner";
         overlap_owner.addr = kBase + 0x20;
         // Leave the owner unsized so this specifically exercises the
         // instruction-overlap filter rather than sized-symbol containment.
         overlap_owner.size = 0;
-        overlap_owner.kind = ember::SymbolKind::Function;
+        overlap_owner.kind = spelunk::SymbolKind::Function;
         syms_.push_back(std::move(overlap_owner));
 
         // A CET-enabled function:
@@ -87,22 +87,22 @@ public:
         section_.data = std::span<const std::byte>(text_.data(), text_.size());
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Elf;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Elf;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kBase;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
-        return std::span<const ember::Section>(&section_, 1);
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
+        return std::span<const spelunk::Section>(&section_, 1);
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return syms_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -110,19 +110,19 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return syms_;
     }
 
 private:
-    static constexpr ember::addr_t kBase = 0x401000;
+    static constexpr spelunk::addr_t kBase = 0x401000;
 
     std::array<std::byte, 0x80> text_{};
-    ember::Section             section_{};
-    std::vector<ember::Symbol>  syms_{};
+    spelunk::Section             section_{};
+    std::vector<spelunk::Symbol>  syms_{};
 };
 
-class Arm64MockBinary final : public ember::Binary {
+class Arm64MockBinary final : public spelunk::Binary {
 public:
     Arm64MockBinary() {
         text_.fill(std::byte{0});
@@ -168,22 +168,22 @@ public:
         sections_[1] = data_section_;
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::MachO;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::MachO;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::Arm64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::Arm64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kBase;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
-        return std::span<const ember::Section>(sections_.data(), sections_.size());
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
+        return std::span<const spelunk::Section>(sections_.data(), sections_.size());
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return {};
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -191,7 +191,7 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return syms_;
     }
 
@@ -204,23 +204,23 @@ private:
         dst[off + 3] = static_cast<std::byte>((v >> 24) & 0xffu);
     }
 
-    static constexpr ember::addr_t kBase = 0x100000000;
-    static constexpr ember::addr_t kDataBase = 0x100001000;
+    static constexpr spelunk::addr_t kBase = 0x100000000;
+    static constexpr spelunk::addr_t kDataBase = 0x100001000;
 
     std::array<std::byte, 0x80> text_{};
     std::array<std::byte, 0x20> rodata_{};
-    ember::Section             text_section_{};
-    ember::Section             data_section_{};
-    std::array<ember::Section, 2> sections_{};
-    std::vector<ember::Symbol>  syms_{};
+    spelunk::Section             text_section_{};
+    spelunk::Section             data_section_{};
+    std::array<spelunk::Section, 2> sections_{};
+    std::vector<spelunk::Symbol>  syms_{};
 };
 
-class NamedCodeTargetBinary final : public ember::Binary {
+class NamedCodeTargetBinary final : public spelunk::Binary {
 public:
-    static constexpr ember::addr_t kCaller = 0x401000;
-    static constexpr ember::addr_t kSlot   = 0x402000;
-    static constexpr ember::addr_t kTarget = 0x403000;
-    static constexpr ember::addr_t kUnrelated = 0x404000;
+    static constexpr spelunk::addr_t kCaller = 0x401000;
+    static constexpr spelunk::addr_t kSlot   = 0x402000;
+    static constexpr spelunk::addr_t kTarget = 0x403000;
+    static constexpr spelunk::addr_t kUnrelated = 0x404000;
 
     NamedCodeTargetBinary() {
         caller_.fill(std::byte{0x90});
@@ -275,44 +275,44 @@ public:
         sections_[3].flags.allocated = true;
         sections_[3].data = unrelated_;
 
-        ember::Symbol caller;
+        spelunk::Symbol caller;
         caller.name = "caller";
         caller.addr = kCaller;
         caller.size = 7;
-        caller.kind = ember::SymbolKind::Function;
+        caller.kind = spelunk::SymbolKind::Function;
         symbols_.push_back(std::move(caller));
 
-        ember::Symbol target;
+        spelunk::Symbol target;
         target.name = "target";
         target.addr = kTarget;
         target.size = 1;
-        target.kind = ember::SymbolKind::Function;
+        target.kind = spelunk::SymbolKind::Function;
         symbols_.push_back(std::move(target));
 
-        ember::Symbol unrelated;
+        spelunk::Symbol unrelated;
         unrelated.name = "unrelated_indirect";
         unrelated.addr = kUnrelated;
         unrelated.size = 3;
-        unrelated.kind = ember::SymbolKind::Function;
+        unrelated.kind = spelunk::SymbolKind::Function;
         symbols_.push_back(std::move(unrelated));
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Elf;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Elf;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kCaller;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
         return sections_;
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return symbols_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -320,7 +320,7 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return symbols_;
     }
 
@@ -345,13 +345,13 @@ private:
     std::array<std::byte, 0x10> slot_{};
     std::array<std::byte, 0x10> target_{};
     std::array<std::byte, 0x10> unrelated_{};
-    std::array<ember::Section, 4> sections_{};
-    std::vector<ember::Symbol> symbols_{};
+    std::array<spelunk::Section, 4> sections_{};
+    std::vector<spelunk::Symbol> symbols_{};
 };
 
 void test_stack_alloc_after_frame_setup_not_split() {
     MockBinary b;
-    auto hits = ember::discover_from_prologues(b);
+    auto hits = spelunk::discover_from_prologues(b);
     std::ranges::sort(hits);
 
     check(std::ranges::find(hits, 0x401000) != hits.end(),
@@ -368,7 +368,7 @@ void test_stack_alloc_after_frame_setup_not_split() {
 
 void test_candidate_inside_instruction_is_rejected() {
     MockBinary binary;
-    auto functions = ember::enumerate_functions(binary);
+    auto functions = spelunk::enumerate_functions(binary);
     check(std::ranges::find_if(functions, [](const auto& function) {
               return function.addr == 0x401020;
           }) != functions.end(),
@@ -381,16 +381,16 @@ void test_candidate_inside_instruction_is_rejected() {
 
 void test_arm64_prologue_discovery() {
     Arm64MockBinary b;
-    auto hits = ember::discover_from_prologues(b);
+    auto hits = spelunk::discover_from_prologues(b);
     std::ranges::sort(hits);
 
-    check(std::ranges::find(hits, ember::addr_t{0x100000000}) != hits.end(),
+    check(std::ranges::find(hits, spelunk::addr_t{0x100000000}) != hits.end(),
           "arm64 hint plus framed function start discovered");
-    check(std::ranges::find(hits, ember::addr_t{0x100000040}) != hits.end(),
+    check(std::ranges::find(hits, spelunk::addr_t{0x100000040}) != hits.end(),
           "arm64 frameless sub-sp function start discovered");
-    check(std::ranges::find(hits, ember::addr_t{0x100000061}) == hits.end(),
+    check(std::ranges::find(hits, spelunk::addr_t{0x100000061}) == hits.end(),
           "arm64 unaligned prologue-shaped bytes are ignored");
-    check(std::ranges::find(hits, ember::addr_t{0x100001000}) == hits.end(),
+    check(std::ranges::find(hits, spelunk::addr_t{0x100001000}) == hits.end(),
           "arm64 prologue-shaped bytes in data are ignored");
 }
 
@@ -398,14 +398,14 @@ void test_named_code_addresses_without_executable_flags() {
     NamedCodeTargetBinary binary;
     check(!binary.sections()[0].flags.executable,
           "named code caller fixture has no executable flag");
-    check(ember::addr_in_code_section(binary, NamedCodeTargetBinary::kCaller),
+    check(spelunk::addr_in_code_section(binary, NamedCodeTargetBinary::kCaller),
           "canonical predicate accepts a non-executable .text caller");
     check(!binary.sections()[2].flags.executable,
           "named code target fixture has no executable flag");
-    check(ember::addr_in_code_section(binary, NamedCodeTargetBinary::kTarget),
+    check(spelunk::addr_in_code_section(binary, NamedCodeTargetBinary::kTarget),
           "canonical predicate accepts a non-executable .text address");
 
-    const auto vtables = ember::discover_runtime_vtables(binary);
+    const auto vtables = spelunk::discover_runtime_vtables(binary);
     check(vtables.size() == 1 &&
               vtables.front().vaddr == NamedCodeTargetBinary::kSlot &&
               vtables.front().methods.size() == 2 &&
@@ -413,18 +413,18 @@ void test_named_code_addresses_without_executable_flags() {
               vtables.front().methods[1] == NamedCodeTargetBinary::kTarget,
           "runtime vtable accepts methods in non-executable .text");
 
-    const auto classified = ember::compute_classified_callees(
+    const auto classified = spelunk::compute_classified_callees(
         binary, NamedCodeTargetBinary::kCaller);
     check(std::ranges::find_if(classified, [](const auto& edge) {
               return edge.target == NamedCodeTargetBinary::kTarget &&
-                     edge.kind == ember::CalleeKind::IndirectConst &&
+                     edge.kind == spelunk::CalleeKind::IndirectConst &&
                      edge.site == NamedCodeTargetBinary::kCaller;
           }) != classified.end(),
           "static function pointer resolves from non-executable .text");
 
     const std::array scope{NamedCodeTargetBinary::kCaller};
     const auto statically_resolved =
-        ember::resolve_indirect_calls(binary, nullptr, scope);
+        spelunk::resolve_indirect_calls(binary, nullptr, scope);
     const auto static_it =
         statically_resolved.find(NamedCodeTargetBinary::kCaller);
     check(static_it != statically_resolved.end() &&
@@ -436,7 +436,7 @@ void test_named_code_addresses_without_executable_flags() {
     binary.record_indirect_edge(NamedCodeTargetBinary::kCaller,
                                 NamedCodeTargetBinary::kTarget);
     const auto traced_resolved =
-        ember::resolve_indirect_calls(binary, nullptr, scope);
+        spelunk::resolve_indirect_calls(binary, nullptr, scope);
     const auto traced_it =
         traced_resolved.find(NamedCodeTargetBinary::kCaller);
     check(traced_it != traced_resolved.end() &&

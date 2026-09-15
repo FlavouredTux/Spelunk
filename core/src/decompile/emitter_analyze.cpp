@@ -11,18 +11,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/ssa_cleanup.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/ssa_cleanup.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "emitter_internal.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 void Emitter::record_x86_string_intrinsic_extents(const IrInst& inst) {
     if (inst.op != IrOp::Intrinsic || inst.src_count < 3) return;
@@ -1233,4 +1233,4 @@ void Emitter::analyze_merge_definite_assignment() {
     }
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

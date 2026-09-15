@@ -25,7 +25,7 @@ analysis can recover the prologue RSP delta), no Windows toolchain needed:
       value with an undefined post-call RAX clobber.
 
 The image is structural-only (zero checksum, no real DOS stub) but passes
-every check Ember's PeBinary loader performs.
+every check Spelunk's PeBinary loader performs.
 
 Usage:
   make_pe_stackargs.py <output-path>

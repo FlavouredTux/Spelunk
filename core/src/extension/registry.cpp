@@ -3,12 +3,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include <ember/binary/arch.hpp>
-#include <ember/extension/decoder_registry.hpp>
-#include <ember/extension/lifter_registry.hpp>
-#include <ember/extension/loader_registry.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/extension/decoder_registry.hpp>
+#include <spelunk/extension/lifter_registry.hpp>
+#include <spelunk/extension/loader_registry.hpp>
 
-namespace ember::ext {
+namespace spelunk::ext {
 
 namespace {
 
@@ -84,4 +84,4 @@ registered_loaders() noexcept {
     return loader_list();
 }
 
-}  // namespace ember::ext
+}  // namespace spelunk::ext

@@ -25,17 +25,17 @@
 #include <variant>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/syscalls.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/syscalls.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
 
 #include "dbg_internal.hpp"
 
-namespace ember::cli::dbg {
+namespace spelunk::cli::dbg {
 
 namespace {
 
@@ -107,13 +107,13 @@ int cmd_aux(ReplState& rs, std::string_view tok) {
             v = (v << 4) | static_cast<addr_t>(d);
         }
         if (!ok) {
-            std::println(stderr, "ember-dbg: aux: bad hex base in '{}'", tok);
+            std::println(stderr, "spelunk-dbg: aux: bad hex base in '{}'", tok);
             return 1;
         }
         manual = v;
         path.resize(at);
     }
-    auto loaded = ember::load_binary(path);
+    auto loaded = spelunk::load_binary(path);
     if (!loaded) { print_error(loaded.error()); return 1; }
     rs.aux_storage.push_back(std::move(*loaded));
     AuxBin aux;
@@ -150,7 +150,7 @@ int cmd_ignore(ReplState& rs, std::string_view tok) {
     }
     auto h = parse_hex_addr(tok);
     if (!h) {
-        std::println(stderr, "ember-dbg: ignore: bad hex '{}'", tok);
+        std::println(stderr, "spelunk-dbg: ignore: bad hex '{}'", tok);
         return 1;
     }
     if (rs.ignored_faults.insert(*h).second) {
@@ -164,7 +164,7 @@ int cmd_ignore(ReplState& rs, std::string_view tok) {
 int cmd_unignore(ReplState& rs, std::string_view tok) {
     auto h = parse_hex_addr(tok);
     if (!h) {
-        std::println(stderr, "ember-dbg: unignore: bad hex '{}'", tok);
+        std::println(stderr, "spelunk-dbg: unignore: bad hex '{}'", tok);
         return 1;
     }
     if (rs.ignored_faults.erase(*h) > 0) {
@@ -177,7 +177,7 @@ int cmd_unignore(ReplState& rs, std::string_view tok) {
 
 int cmd_ignore_file(ReplState& rs, std::string_view tok) {
     if (tok.empty()) {
-        std::println(stderr, "ember-dbg: ignore-file: usage: ignore-file <path>");
+        std::println(stderr, "spelunk-dbg: ignore-file: usage: ignore-file <path>");
         return 1;
     }
     const std::size_t added = load_ignored_faults_file(
@@ -274,7 +274,7 @@ std::string sym_at_in_bin(addr_t runtime_pc, const Binary* bin, addr_t slide) {
     for (const auto& s : bin->symbols()) {
         if (s.addr == static_pc) return " <" + s.name + ">";
     }
-    if (auto cf = ember::containing_function(*bin, static_pc); cf) {
+    if (auto cf = spelunk::containing_function(*bin, static_pc); cf) {
         return std::format(" <{}+{:#x}>", cf->name, cf->offset_within);
     }
     return {};
@@ -334,7 +334,7 @@ bool print_event(const debug::Event& ev, const ReplState& rs) {
 }
 
 void print_error(const Error& e) {
-    std::println(stderr, "ember-dbg: {}: {}", e.kind_name(), e.message);
+    std::println(stderr, "spelunk-dbg: {}: {}", e.kind_name(), e.message);
 }
 
 // Parse hex literal first; if not hex, look up `tok` as a symbol in
@@ -414,9 +414,9 @@ std::optional<int> parse_int(std::string_view s) {
     return v;
 }
 
-}  // namespace ember::cli::dbg
+}  // namespace spelunk::cli::dbg
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 using namespace dbg;
 
@@ -441,7 +441,7 @@ int run_debug(const Args& args, const Binary* bin,
             rs.ignored_faults.insert(*h);
         } else {
             std::println(stderr,
-                "ember-dbg: --ignore-fault-at: bad hex '{}'", tok);
+                "spelunk-dbg: --ignore-fault-at: bad hex '{}'", tok);
         }
     }
     for (const auto& path : args.ignore_fault_files) {
@@ -470,7 +470,7 @@ int run_debug(const Args& args, const Binary* bin,
             for (const auto& s : seen) {
                 if (s == a.short_name) {
                     std::println(stderr,
-                        "ember-dbg: warning: short name '{}' collides between "
+                        "spelunk-dbg: warning: short name '{}' collides between "
                         "primary and aux - `<bin>:<sym>` will pick the first match",
                         a.short_name);
                     break;
@@ -488,12 +488,12 @@ int run_debug(const Args& args, const Binary* bin,
     } else if (!args.binary.empty()) {
         cmd_run(rs, args);
     } else {
-        std::println("ember-dbg: no binary path and no --attach-pid; use `run` or `attach`.");
+        std::println("spelunk-dbg: no binary path and no --attach-pid; use `run` or `attach`.");
     }
 
     std::string line;
     while (true) {
-        std::print("(ember) ");
+        std::print("(spelunk) ");
         std::fflush(stdout);
         if (!std::getline(std::cin, line)) { std::print("\n"); break; }
         const auto toks = tokenize(line);
@@ -542,7 +542,7 @@ int run_debug(const Args& args, const Binary* bin,
             cmd_ignore_file(rs, toks[1]);
         else if (cmd == "threads")                             cmd_threads(rs);
         else if (cmd == "thread" && toks.size() > 1)           cmd_thread_switch(rs, toks[1]);
-        else std::println(stderr, "ember-dbg: unknown command '{}' (try `help`)", cmd);
+        else std::println(stderr, "spelunk-dbg: unknown command '{}' (try `help`)", cmd);
     }
 
     if (rs.live) {
@@ -556,4 +556,4 @@ int run_debug(const Args& args, const Binary* bin,
     return 0;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

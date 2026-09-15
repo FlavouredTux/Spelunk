@@ -23,18 +23,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/data_xrefs.hpp>
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/symresolve.hpp>
-#include <ember/analysis/symtable.hpp>
-#include <ember/analysis/symuses.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/symresolve.hpp>
+#include <spelunk/analysis/symtable.hpp>
+#include <spelunk/analysis/symuses.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "../args.hpp"
 #include "../builders.hpp"
@@ -42,7 +42,7 @@
 #include "../util.hpp"
 #include "common.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -259,7 +259,7 @@ int run_refs_to_loose_impl(const Args& args, const Binary& b) {
         : std::span<const addr_t>(targets);
     if (targets.size() > 1) {
         std::println(stderr,
-            "ember: --refs-to-loose: treating {:#x} as raw-region offset; runtime target {:#x}",
+            "spelunk: --refs-to-loose: treating {:#x} as raw-region offset; runtime target {:#x}",
             *va, targets.back());
     }
     const bool raw_data_first = b.format() == Format::RawRegions;
@@ -384,7 +384,7 @@ int run_refs_to_loose_impl(const Args& args, const Binary& b) {
         : format_ref_rows_tsv(rows, &b, args.verbose);
     std::fwrite(out.data(), 1, out.size(), stdout);
     if (rows.empty()) {
-        std::println(stderr, "ember: --refs-to-loose: 0 references found "
+        std::println(stderr, "spelunk: --refs-to-loose: 0 references found "
                              "({} static slot{}, {} relocated slot{}, 0 readers)",
                      slot_addrs.size(),
                      slot_addrs.size() == 1 ? "" : "s",
@@ -403,7 +403,7 @@ void load_trace_edges(const Args& args, const Binary& b) {
     // subsequent passes.
     std::ifstream tf(args.trace_path);
     if (!tf) {
-        std::println(stderr, "ember: cannot open trace '{}'", args.trace_path);
+        std::println(stderr, "spelunk: cannot open trace '{}'", args.trace_path);
         return;
     }
     auto parse_hex = [](std::string_view s, addr_t& out) {
@@ -432,7 +432,7 @@ void load_trace_edges(const Args& args, const Binary& b) {
             !b_tok.empty() && !c.empty()) {
             if (!parse_hex(b_tok, from) || !parse_hex(c, to)) {
                 std::println(stderr,
-                    "ember: trace '{}' line {}: bad runtime qword fact",
+                    "spelunk: trace '{}' line {}: bad runtime qword fact",
                     args.trace_path, line_no);
                 continue;
             }
@@ -446,26 +446,26 @@ void load_trace_edges(const Args& args, const Binary& b) {
         }
         if (!parse_hex(a, from) || !parse_hex(b_tok, to)) {
             std::println(stderr,
-                "ember: trace '{}' line {}: expected `from to`, `indirect from to`, `qword addr value`, or `object addr vtable`",
+                "spelunk: trace '{}' line {}: expected `from to`, `indirect from to`, `qword addr value`, or `object addr vtable`",
                 args.trace_path, line_no);
             continue;
         }
         b.record_indirect_edge(from, to);
         ++loaded_edges;
     }
-    std::println(stderr, "ember: loaded {} indirect edge(s), {} runtime qword fact(s) from '{}'",
+    std::println(stderr, "spelunk: loaded {} indirect edge(s), {} runtime qword fact(s) from '{}'",
                  loaded_edges, loaded_qwords, args.trace_path);
 }
 
 int run_symtable(const Args& args, const Binary& b) {
     auto va = parse_cli_addr(args.symtable);
     if (!va) {
-        std::println(stderr, "ember: --symtable: bad address '{}'", args.symtable);
+        std::println(stderr, "spelunk: --symtable: bad address '{}'", args.symtable);
         return EXIT_FAILURE;
     }
     auto walk = analysis::walk_symtable(b, *va);
     if (!walk) {
-        std::println(stderr, "ember: --symtable: {}", walk.error().message);
+        std::println(stderr, "spelunk: --symtable: {}", walk.error().message);
         return EXIT_FAILURE;
     }
 
@@ -510,12 +510,12 @@ int run_symtable(const Args& args, const Binary& b) {
 int run_symresolve(const Args& args, const Binary& b) {
     auto va = parse_cli_addr(args.symresolve);
     if (!va) {
-        std::println(stderr, "ember: --symresolve: bad address '{}'", args.symresolve);
+        std::println(stderr, "spelunk: --symresolve: bad address '{}'", args.symresolve);
         return EXIT_FAILURE;
     }
     auto res = analysis::resolve_symtable(b, *va);
     if (!res) {
-        std::println(stderr, "ember: --symresolve: {}", res.error().message);
+        std::println(stderr, "spelunk: --symresolve: {}", res.error().message);
         return EXIT_FAILURE;
     }
 
@@ -545,10 +545,10 @@ int run_symresolve(const Args& args, const Binary& b) {
                                 r.fn_name.empty() ? "<unnamed>" : r.fn_name,
                                 r.slots, r.base_va);
         }
-        std::println(stderr, "ember: --symresolve: resolver(s) = {}", list);
+        std::println(stderr, "spelunk: --symresolve: resolver(s) = {}", list);
     } else {
         std::println(stderr,
-            "ember: --symresolve: no resolver function found for table at "
+            "spelunk: --symresolve: no resolver function found for table at "
             "{:#x} - falling back to string table only", *va);
     }
     {
@@ -558,11 +558,11 @@ int run_symresolve(const Args& args, const Binary& b) {
                                        : (100.0 * static_cast<double>(resolved)
                                                   / static_cast<double>(total));
         std::println(stderr,
-            "ember: --symresolve: coverage: {}/{} slots resolved ({:.1f}%)",
+            "spelunk: --symresolve: coverage: {}/{} slots resolved ({:.1f}%)",
             resolved, total, pct);
         if (total != 0 && pct < 50.0) {
             std::println(stderr,
-                "ember: --symresolve: tip: try --symuses {:#x} for the "
+                "spelunk: --symresolve: tip: try --symuses {:#x} for the "
                 "lazy/per-function dispatch pattern", *va);
         }
     }
@@ -600,14 +600,14 @@ int run_symresolve(const Args& args, const Binary& b) {
 int run_symuses(const Args& args, const Binary& b) {
     auto va = parse_cli_addr(args.symuses);
     if (!va) {
-        std::println(stderr, "ember: --symuses: bad address '{}'", args.symuses);
+        std::println(stderr, "spelunk: --symuses: bad address '{}'", args.symuses);
         return EXIT_FAILURE;
     }
     analysis::SymUseOptions opts;
     opts.no_taint = args.symuses_no_taint;
     auto uses = analysis::collect_symbol_uses(b, *va, opts);
     if (!uses) {
-        std::println(stderr, "ember: --symuses: {}", uses.error().message);
+        std::println(stderr, "spelunk: --symuses: {}", uses.error().message);
         return EXIT_FAILURE;
     }
 
@@ -633,7 +633,7 @@ int run_symuses(const Args& args, const Binary& b) {
     // could mean "no consumers exist" or "the scope detector found
     // nothing to feed the per-fn pass".
     std::println(stderr,
-        "ember: --symuses: scope: {} candidate function{} "
+        "spelunk: --symuses: scope: {} candidate function{} "
         "({} imm64-stored slot{}, {} relocated slot{})",
         uses->scope_fn_count, uses->scope_fn_count == 1 ? "" : "s",
         uses->scope_imm64_slots, uses->scope_imm64_slots == 1 ? "" : "s",
@@ -650,7 +650,7 @@ int run_symuses(const Args& args, const Binary& b) {
             std::unordered_set<std::string_view> uniq;
             for (const auto& s : row.sites) uniq.insert(s.name);
             std::println(stderr,
-                "ember: --symuses:   {}: {} base-load{}, "
+                "spelunk: --symuses:   {}: {} base-load{}, "
                 "{} IMM match{} -> {} unique entr{}",
                 row.fn_name.empty()
                     ? std::format("{:#x}", row.fn_addr)
@@ -747,7 +747,7 @@ int run_refs_to(const Args& args, const Binary& b) {
     // piping the output keep working; it just gets a stderr note.
     if (b.bytes_at(*va).empty()) {
         std::println(stderr,
-                     "ember: --refs-to: {:#x} is not in any mapped section",
+                     "spelunk: --refs-to: {:#x} is not in any mapped section",
                      *va);
         return EXIT_FAILURE;
     }
@@ -757,7 +757,7 @@ int run_refs_to(const Args& args, const Binary& b) {
         : format_ref_rows_tsv(rows, &b, args.verbose);
     std::fwrite(out.data(), 1, out.size(), stdout);
     if (rows.empty()) {
-        std::println(stderr, "ember: --refs-to: 0 references found ({:#x})", *va);
+        std::println(stderr, "spelunk: --refs-to: 0 references found ({:#x})", *va);
     }
     return EXIT_SUCCESS;
 }
@@ -766,4 +766,4 @@ int run_refs_to_loose(const Args& args, const Binary& b) {
     return run_refs_to_loose_impl(args, b);
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

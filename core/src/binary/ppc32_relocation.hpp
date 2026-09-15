@@ -4,10 +4,10 @@
 #include <span>
 #include <string_view>
 
-#include <ember/binary/arch.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::ppc32 {
+namespace spelunk::ppc32 {
 
 // PowerPC System V/EABI relocation numbers plus Nintendo's REL stream
 // control records. Keeping the raw values here lets both loaders preserve
@@ -62,4 +62,4 @@ struct RelocationInfo {
                           Endian endian, u32 resolved,
                           addr_t place) noexcept;
 
-}  // namespace ember::ppc32
+}  // namespace spelunk::ppc32

@@ -11,15 +11,15 @@
 #include <system_error>
 #include <utility>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "emitter_internal.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 std::optional<std::pair<IrValue, i64>>
 Emitter::canonical_struct_access(const IrValue& addr) const {
@@ -376,4 +376,4 @@ Emitter::imported_enum_value(const IrValue& value, std::string type) const {
     return value_it->second;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

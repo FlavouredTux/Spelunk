@@ -15,15 +15,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "args.hpp"
 #include "cli_error.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -100,12 +100,12 @@ parse_patches_file(const std::string& path) {
 
 int run_apply_patches(const Args& args) {
     if (args.output_path.empty()) {
-        std::println(stderr, "ember: --apply-patches requires -o/--output PATH");
+        std::println(stderr, "spelunk: --apply-patches requires -o/--output PATH");
         return EXIT_FAILURE;
     }
     auto patches_r = parse_patches_file(args.apply_patches);
     if (!patches_r) {
-        std::println(stderr, "ember: {}", patches_r.error().message);
+        std::println(stderr, "spelunk: {}", patches_r.error().message);
         return EXIT_FAILURE;
     }
     auto bin = load_binary(args.binary);
@@ -115,7 +115,7 @@ int run_apply_patches(const Args& args) {
     // Slurp the original binary file.
     std::ifstream src(args.binary, std::ios::binary | std::ios::ate);
     if (!src) {
-        std::println(stderr, "ember: cannot read '{}'", args.binary);
+        std::println(stderr, "spelunk: cannot read '{}'", args.binary);
         return EXIT_FAILURE;
     }
     const auto sz = src.tellg();
@@ -133,12 +133,12 @@ int run_apply_patches(const Args& args) {
             }
         }
         if (!host) {
-            std::println(stderr, "ember: patch @ 0x{:x}: no containing section", p.vaddr);
+            std::println(stderr, "spelunk: patch @ 0x{:x}: no containing section", p.vaddr);
             return EXIT_FAILURE;
         }
         const auto file_off = host->file_offset + (p.vaddr - host->vaddr);
         if (file_off + p.bytes.size() > buf.size()) {
-            std::println(stderr, "ember: patch @ 0x{:x}: extends past EOF", p.vaddr);
+            std::println(stderr, "spelunk: patch @ 0x{:x}: extends past EOF", p.vaddr);
             return EXIT_FAILURE;
         }
         for (std::size_t i = 0; i < p.bytes.size(); ++i) {
@@ -149,16 +149,16 @@ int run_apply_patches(const Args& args) {
 
     std::ofstream dst(args.output_path, std::ios::binary | std::ios::trunc);
     if (!dst) {
-        std::println(stderr, "ember: cannot write '{}'", args.output_path);
+        std::println(stderr, "spelunk: cannot write '{}'", args.output_path);
         return EXIT_FAILURE;
     }
     dst.write(buf.data(), static_cast<std::streamsize>(buf.size()));
     if (!dst) {
-        std::println(stderr, "ember: write failed for '{}'", args.output_path);
+        std::println(stderr, "spelunk: write failed for '{}'", args.output_path);
         return EXIT_FAILURE;
     }
-    std::println(stderr, "ember: applied {} patch(es) -> {}", applied, args.output_path);
+    std::println(stderr, "spelunk: applied {} patch(es) -> {}", applied, args.output_path);
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

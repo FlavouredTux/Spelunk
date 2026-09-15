@@ -1,20 +1,20 @@
-#include <ember/ir/lifter.hpp>
+#include <spelunk/ir/lifter.hpp>
 
 #include <expected>
 #include <format>
 #include <memory>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/extension/lifter_registry.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/arm32_lifter.hpp>
-#include <ember/ir/arm64_lifter.hpp>
-#include <ember/ir/ppc_lifter.hpp>
-#include <ember/ir/x64_lifter.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/extension/lifter_registry.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/arm32_lifter.hpp>
+#include <spelunk/ir/arm64_lifter.hpp>
+#include <spelunk/ir/ppc_lifter.hpp>
+#include <spelunk/ir/x64_lifter.hpp>
 
-namespace ember {
+namespace spelunk {
 
 Result<std::unique_ptr<Lifter>>
 make_lifter(const Binary& b) {
@@ -42,4 +42,4 @@ make_lifter(const Binary& b) {
         "no lifter for arch {}", arch_name(b.arch()))));
 }
 
-}  // namespace ember
+}  // namespace spelunk

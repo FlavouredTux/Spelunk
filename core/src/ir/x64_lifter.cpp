@@ -1,20 +1,20 @@
 // Instruction dispatch and the X64Lifter entry point.
 
-#include <ember/ir/x64_lifter.hpp>
+#include <spelunk/ir/x64_lifter.hpp>
 
 #include <cstddef>
 #include <format>
 #include <utility>
 
-#include <ember/analysis/function.hpp>
-#include <ember/common/error.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "x64_lifter_internal.hpp"
 
-namespace ember::x64_lift {
+namespace spelunk::x64_lift {
 
 void lift_instruction(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
@@ -493,9 +493,9 @@ void ensure_terminator(IrBlock& bb) {
     }
 }
 
-}  // namespace ember::x64_lift
+}  // namespace spelunk::x64_lift
 
-namespace ember {
+namespace spelunk {
 
 using namespace x64_lift;
 
@@ -540,4 +540,4 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
     return ir;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -1,6 +1,6 @@
 #include "decoder_internal.hpp"
 
-namespace ember::ppc_decode {
+namespace spelunk::ppc_decode {
 
 bool decode_integer_extended(Fields fields, Instruction& insn) noexcept {
     const u32 w = fields.word;
@@ -346,4 +346,4 @@ bool decode_integer_extended(Fields fields, Instruction& insn) noexcept {
     }
 }
 
-}  // namespace ember::ppc_decode
+}  // namespace spelunk::ppc_decode

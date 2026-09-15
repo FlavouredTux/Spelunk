@@ -7,11 +7,11 @@
 #include <span>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
 
-namespace ember {
+namespace spelunk {
 
 inline constexpr std::size_t kMinStringLen = 4;
 inline constexpr std::size_t kMaxStringLen = 1024;
@@ -34,4 +34,4 @@ scan_strings_impl(const Binary& b, const StringScanOptions& options,
                   std::span<const DiscoveredFunction> discovered_functions,
                   bool have_discovered_functions);
 
-}  // namespace ember
+}  // namespace spelunk

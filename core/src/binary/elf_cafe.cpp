@@ -1,16 +1,16 @@
 // Cafe RPX/RPL sections use a big-endian size followed by a zlib stream.
-#include <ember/binary/elf.hpp>
+#include <spelunk/binary/elf.hpp>
 
 #include <format>
 #include <utility>
 
 #include "elf_internal.hpp"
 
-#ifdef EMBER_HAS_ZLIB
+#ifdef SPELUNK_HAS_ZLIB
 #include <zlib.h>
 #endif
 
-namespace ember {
+namespace spelunk {
 
 Result<void> ElfBinary::decompress_cafe_sections(const ParsedEhdr& h) {
     // The processor-specific flag must not be interpreted on ordinary ELF.
@@ -30,7 +30,7 @@ Result<void> ElfBinary::decompress_cafe_sections(const ParsedEhdr& h) {
     for (u32 i = 0; i < h.e_shnum; ++i)
         headers.push_back(elf::shdr_at(endian_, table->data(), i, false));
 
-#ifdef EMBER_HAS_ZLIB
+#ifdef SPELUNK_HAS_ZLIB
     constexpr std::size_t section_limit = 256u * 1024u * 1024u;
     constexpr std::size_t total_limit = 512u * 1024u * 1024u;
     std::size_t expanded_total = 0;
@@ -46,7 +46,7 @@ Result<void> ElfBinary::decompress_cafe_sections(const ParsedEhdr& h) {
         }
         auto input = reader.slice(sh.offset, sh.size);
         if (!input) return std::unexpected(input.error());
-#ifndef EMBER_HAS_ZLIB
+#ifndef SPELUNK_HAS_ZLIB
         return std::unexpected(Error::unsupported(
             "cafe: compressed RPX/RPL sections require a build with zlib"));
 #else
@@ -78,7 +78,7 @@ Result<void> ElfBinary::decompress_cafe_sections(const ParsedEhdr& h) {
         expanded.push_back({i, std::move(output)});
 #endif
     }
-#ifdef EMBER_HAS_ZLIB
+#ifdef SPELUNK_HAS_ZLIB
     if (expanded.empty()) return {};
     if (buffer_.size() > 0xffffffffULL - expanded_total) {
         return std::unexpected(Error::invalid_format("cafe: expanded image exceeds ELF32 offsets"));
@@ -102,4 +102,4 @@ Result<void> ElfBinary::decompress_cafe_sections(const ParsedEhdr& h) {
     return {};
 }
 
-} // namespace ember
+} // namespace spelunk

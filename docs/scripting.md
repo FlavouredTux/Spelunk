@@ -1,32 +1,32 @@
-# Ember Scripting
+# Spelunk Scripting
 
-Ember scripts are declarative `.ember` files consumed by `ember --apply
+Spelunk scripts are declarative `.spelunk` files consumed by `spelunk --apply
 PATH`. The format is flat and section-keyed; every directive is a
 single `key = value` (or `pattern -> template`) pair, no expressions or
 control flow. Scripts populate the same `Annotations` struct that drives
 emit-time rename / signature / note rendering.
 
 The on-disk annotation file is plain TSV (loaded by `Annotations::load`,
-written by `Annotations::save`); `.ember` is the friendly authoring
+written by `Annotations::save`); `.spelunk` is the friendly authoring
 surface above it.
 
 ## Running
 
 ```sh
-ember --apply project.ember --annotations out.proj <binary>
-ember --apply project.ember --dry-run <binary>          # preview only
+spelunk --apply project.spelunk --annotations out.proj <binary>
+spelunk --apply project.spelunk --dry-run <binary>          # preview only
 ```
 
 The applier resolves the destination annotation file the same way emit
-does (`--annotations` → `<binary>.ember-annotations` sidecar →
-`~/.cache/ember/annotations/<key>`), loads the existing contents (if
+does (`--annotations` → `<binary>.spelunk-annotations` sidecar →
+`~/.cache/spelunk/annotations/<key>`), loads the existing contents (if
 any), applies the directives, writes back. User intent beats inference:
 any address that already carries a rename in the loaded annotations
 survives a `[pattern-rename]` or `[from-strings]` match unchanged.
 
 ## Format
 
-```ember
+```spelunk
 # Lines starting with `#` are comments. ` # …` after whitespace mid-line
 # is a trailing comment too (but `note = see ticket #42` keeps `#42`).
 
@@ -106,8 +106,8 @@ result. The would-be annotation TSV is dumped to stdout (so you can
 + proposed destination still go to stderr.
 
 ```sh
-ember --apply project.ember --dry-run --annotations current.proj <binary>
-ember --apply project.ember --dry-run --annotations current.proj <binary> \
+spelunk --apply project.spelunk --dry-run --annotations current.proj <binary>
+spelunk --apply project.spelunk --dry-run --annotations current.proj <binary> \
     | diff -u current.proj -
 ```
 
@@ -122,7 +122,7 @@ are taken verbatim from the trimmed line.
 `[rename]`, `[note]`, and `[signature]` directives accept an optional
 metadata suffix carrying confidence + source + evidence:
 
-```ember
+```spelunk
 [rename]
 0x401234 = do_thing ; conf=0.9 ; src=tool:review ; ev=3-arg, called by 0x401120
 
@@ -149,7 +149,7 @@ Recognised keys:
   suffix block, so embed `;` in evidence by replacing it with
   `,` upstream.
 
-Unknown keys are silently ignored - older ember reading a newer
+Unknown keys are silently ignored - older spelunk reading a newer
 script keeps the rename/note/signature, just drops the metadata.
 
 Provenance lands in parallel maps (`rename_meta` / `note_meta` /
@@ -177,7 +177,7 @@ meta   <kind> <hex-addr> conf=<float>|src=<tag>|ev=<text>
 `rename`, `note`, or `sig`. Pipes are the field separator inside the
 `meta` tail; embedded `|` is `\|`. `\n` / `\r` / `\\` also escape
 themselves. Unknown record kinds and unknown meta subkinds are
-silently skipped, so an older ember reading a newer file pulls the
+silently skipped, so an older spelunk reading a newer file pulls the
 names through cleanly and just loses the metadata.
 
 ### Importing a persisted cache file
@@ -188,7 +188,7 @@ annotations between binary versions:
 
 ```sh
 # Bulk-copy renames from binary v1 to binary v2:
-ember --apply ~/.cache/ember/annotations/<v1-key>/annotations.db v2.elf
+spelunk --apply ~/.cache/spelunk/annotations/<v1-key>/annotations.db v2.elf
 ```
 
 Detection is automatic - if the file's first non-comment line starts
@@ -199,26 +199,26 @@ existing destination value.
 
 ### One-shot annotate
 
-`ember annotate ADDR ...` is the single-call equivalent of writing a
-one-line `.ember` file and `--apply`-ing it:
+`spelunk annotate ADDR ...` is the single-call equivalent of writing a
+one-line `.spelunk` file and `--apply`-ing it:
 
 ```sh
-ember annotate 0x2f8908a --set-name cap_check_v2 \
+spelunk annotate 0x2f8908a --set-name cap_check_v2 \
     --confidence 0.9 --source tool:review \
     --evidence "3-arg, called by 0x3f94380 with esi=immediate" \
     <binary>
 
 # Multiple kinds in one call (rename + signature):
-ember annotate 0x401234 --set-name do_thing \
+spelunk annotate 0x401234 --set-name do_thing \
     --set-signature "int do_thing(char*, int)" \
     --confidence 0.85 --source hand <binary>
 
 # Preview only:
-ember annotate 0x401234 --set-name foo --confidence 0.6 --dry-run <binary>
+spelunk annotate 0x401234 --set-name foo --confidence 0.6 --dry-run <binary>
 ```
 
 Resolves the destination using the same precedence as `--apply`
-(explicit `--annotations` > `<binary>.ember-annotations` sidecar >
+(explicit `--annotations` > `<binary>.spelunk-annotations` sidecar >
 cache slot); the cache slot is created on first use.
 
 ### Limits
@@ -236,5 +236,5 @@ For workflows that genuinely need expressions or control flow (walk
 callees, decide based on string contents, drive renames from a CFG
 shape), this format isn't the right fit. The
 `Annotations` struct is exposed as a public API in
-`core/include/ember/common/annotations.hpp`; build a one-off C++ tool
-against `ember::core` for those cases.
+`core/include/spelunk/common/annotations.hpp`; build a one-off C++ tool
+against `spelunk::core` for those cases.

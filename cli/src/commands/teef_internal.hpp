@@ -8,9 +8,9 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/teef.hpp>
+#include <spelunk/analysis/teef.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 struct Args;
 struct ModuleScope;
@@ -35,4 +35,4 @@ build_tsv(const Binary& binary,
           std::ostream* stream = nullptr);
 
 }  // namespace teef_internal
-}  // namespace ember::cli
+}  // namespace spelunk::cli

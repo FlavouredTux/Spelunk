@@ -14,23 +14,23 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/data_xrefs.hpp>
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/script/declarative.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/script/declarative.hpp>
 
 #include "../fingerprint.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 #include "common.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -48,7 +48,7 @@ int run_explain_address(const Args& args, const Binary& b) {
     ScopedTimer total_timer("explain_address.total");
     auto va = parse_cli_addr(args.explain_address);
     if (!va) {
-        std::println(stderr, "ember: --explain-address: bad address '{}'",
+        std::println(stderr, "spelunk: --explain-address: bad address '{}'",
                      args.explain_address);
         return EXIT_FAILURE;
     }
@@ -167,7 +167,7 @@ int run_explain_vcall(const Args& args, const Binary& b) {
     const auto spec = parse_obj_off_spec(args.explain_vcall);
     if (!spec) {
         std::println(stderr,
-            "ember: --explain-vcall: expected OBJ:OFF, got '{}'",
+            "spelunk: --explain-vcall: expected OBJ:OFF, got '{}'",
             args.explain_vcall);
         return EXIT_FAILURE;
     }
@@ -175,14 +175,14 @@ int run_explain_vcall(const Args& args, const Binary& b) {
     const auto vptr = read_pointer_value(b, obj);
     if (!vptr) {
         std::println(stderr,
-            "ember: --explain-vcall: cannot read object vptr at {:#x}", obj);
+            "spelunk: --explain-vcall: cannot read object vptr at {:#x}", obj);
         return EXIT_FAILURE;
     }
     const addr_t slot_addr = *vptr + slot_off;
     const auto target = read_pointer_value(b, slot_addr);
     if (!target) {
         std::println(stderr,
-            "ember: --explain-vcall: cannot read vtable slot {:#x}", slot_addr);
+            "spelunk: --explain-vcall: cannot read vtable slot {:#x}", slot_addr);
         return EXIT_FAILURE;
     }
 
@@ -231,11 +231,11 @@ int run_dump_object(const Args& args, const Binary& b) {
     auto obj = parse_cli_addr(args.dump_object);
     auto size = parse_cli_addr(args.object_size);
     if (!obj) {
-        std::println(stderr, "ember: --dump-object: bad address '{}'", args.dump_object);
+        std::println(stderr, "spelunk: --dump-object: bad address '{}'", args.dump_object);
         return EXIT_FAILURE;
     }
     if (!size || *size == 0) {
-        std::println(stderr, "ember: --dump-object requires --size <hex>");
+        std::println(stderr, "spelunk: --dump-object requires --size <hex>");
         return EXIT_FAILURE;
     }
     const auto rows = classify_object_fields(b, static_cast<addr_t>(*obj),
@@ -274,7 +274,7 @@ int run_containing_fn(const Args& args, const Binary& b) {
     if (!va) return EXIT_FAILURE;  // resolver reported the reason
     auto cf = containing_function(b, *va);
     if (!cf) {
-        std::println(stderr, "ember: --containing-fn: no function covers {:#x}", *va);
+        std::println(stderr, "spelunk: --containing-fn: no function covers {:#x}", *va);
         return EXIT_FAILURE;
     }
     if (args.json) {
@@ -457,7 +457,7 @@ int run_callees(const Args& args, const Binary& b) {
     const Annotations callees_ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.callees, &callees_ann);
     if (!win) {
-        std::println(stderr, "ember: --callees: could not resolve '{}'", args.callees);
+        std::println(stderr, "spelunk: --callees: could not resolve '{}'", args.callees);
         return EXIT_FAILURE;
     }
     const auto va = win->start;
@@ -493,7 +493,7 @@ int run_callees_class(const Args& args, const Binary& b) {
     }
     if (!match) {
         std::println(stderr,
-                     "ember: --callees-class: no RTTI class matching '{}'",
+                     "spelunk: --callees-class: no RTTI class matching '{}'",
                      args.callees_class);
         return EXIT_FAILURE;
     }
@@ -524,4 +524,4 @@ int run_callees_class(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

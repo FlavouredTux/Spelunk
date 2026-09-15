@@ -32,10 +32,10 @@ int main() {
     std::fill(bytes, bytes + page_size, std::byte{0x5a});
 
     int mem_fd = -1;
-    const auto pid = static_cast<ember::debug::ProcessId>(::getpid());
+    const auto pid = static_cast<spelunk::debug::ProcessId>(::getpid());
     errno = 0;
     const int opened_fd =
-        ember::debug::linux_detail::ensure_proc_mem_fd(pid, mem_fd);
+        spelunk::debug::linux_detail::ensure_proc_mem_fd(pid, mem_fd);
     if (opened_fd < 0 && (errno == EACCES || errno == EPERM)) {
         const int open_errno = errno;
         (void)::munmap(mapping, page_size * 2);
@@ -46,15 +46,15 @@ int main() {
     }
     CHECK(opened_fd >= 0, "open /proc/self/mem");
     CHECK(mem_fd == opened_fd, "lazy open stores fd");
-    CHECK(ember::debug::linux_detail::ensure_proc_mem_fd(pid, mem_fd) ==
+    CHECK(spelunk::debug::linux_detail::ensure_proc_mem_fd(pid, mem_fd) ==
               opened_fd,
           "lazy open reuses fd");
 
     constexpr std::size_t kProbeSize = 16;
     std::array<std::byte, kProbeSize> readback{};
-    const auto base = static_cast<ember::addr_t>(
+    const auto base = static_cast<spelunk::addr_t>(
         reinterpret_cast<std::uintptr_t>(bytes));
-    auto read_result = ember::debug::linux_detail::read_proc_mem(
+    auto read_result = spelunk::debug::linux_detail::read_proc_mem(
         pid, mem_fd, base, std::span<std::byte>{readback});
     CHECK(read_result.has_value(), "read mapped memory");
     CHECK(*read_result == readback.size(), "full mapped read count");
@@ -64,7 +64,7 @@ int main() {
 
     std::array<std::byte, kProbeSize> payload{};
     payload.fill(std::byte{0xa5});
-    auto write_result = ember::debug::linux_detail::write_proc_mem(
+    auto write_result = spelunk::debug::linux_detail::write_proc_mem(
         pid, mem_fd, base, std::span<const std::byte>{payload});
     CHECK(write_result.has_value(), "write mapped memory");
     CHECK(*write_result == payload.size(), "full mapped write count");
@@ -76,10 +76,10 @@ int main() {
     CHECK(::munmap(bytes + page_size, page_size) == 0,
           "munmap boundary page");
 
-    const ember::addr_t boundary =
-        base + static_cast<ember::addr_t>(page_size - kProbeSize);
+    const spelunk::addr_t boundary =
+        base + static_cast<spelunk::addr_t>(page_size - kProbeSize);
     std::array<std::byte, kProbeSize * 2> boundary_read{};
-    read_result = ember::debug::linux_detail::read_proc_mem(
+    read_result = spelunk::debug::linux_detail::read_proc_mem(
         pid, mem_fd, boundary, std::span<std::byte>{boundary_read});
     CHECK(read_result.has_value(), "read across unmapped boundary");
     CHECK(*read_result == kProbeSize, "partial boundary read count");
@@ -90,7 +90,7 @@ int main() {
 
     std::array<std::byte, kProbeSize * 2> boundary_payload{};
     boundary_payload.fill(std::byte{0xc3});
-    write_result = ember::debug::linux_detail::write_proc_mem(
+    write_result = spelunk::debug::linux_detail::write_proc_mem(
         pid, mem_fd, boundary,
         std::span<const std::byte>{boundary_payload});
     CHECK(write_result.has_value(), "write across unmapped boundary");

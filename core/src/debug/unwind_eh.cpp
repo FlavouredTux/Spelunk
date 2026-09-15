@@ -1,4 +1,4 @@
-// .eh_frame-driven runtime unwinder. Bridges ember::cfi::recover()
+// .eh_frame-driven runtime unwinder. Bridges spelunk::cfi::recover()
 // (the static CFI VM, which works against the on-disk binary) to
 // the live tracee's registers and memory.
 //
@@ -20,16 +20,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfi.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/regs.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
-#include <ember/debug/unwind.hpp>
+#include <spelunk/analysis/cfi.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/regs.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
+#include <spelunk/debug/unwind.hpp>
 
-namespace ember::debug {
+namespace spelunk::debug {
 
 namespace {
 
@@ -167,4 +167,4 @@ unwind_eh_frame(Target& t, ThreadId tid, const Binary& bin, addr_t slide,
     return out;
 }
 
-}  // namespace ember::debug
+}  // namespace spelunk::debug

@@ -1,9 +1,9 @@
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/sig_inference.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/disasm/decoder.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/sig_inference.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 #include <array>
 #include <cstdio>
@@ -12,7 +12,7 @@
 
 namespace {
 
-class PpcArityBinary final : public ember::Binary {
+class PpcArityBinary final : public spelunk::Binary {
 public:
     PpcArityBinary() {
         // one_arg: cmpwi r3,0; beq return; li r3,1; blr
@@ -101,9 +101,9 @@ public:
         put(0x184, 0x4e800020); // blr
         put(0x190, 0x4bfffff1); // bl unknown_fp_leaf
         put(0x194, 0x4e800020); // blr
-        put(0x1c0, static_cast<ember::u32>(kBase + 0x160));
-        put(0x1c4, static_cast<ember::u32>(kBase + 0x168));
-        put(0x1c8, static_cast<ember::u32>(kBase + 0x170));
+        put(0x1c0, static_cast<spelunk::u32>(kBase + 0x160));
+        put(0x1c4, static_cast<spelunk::u32>(kBase + 0x168));
+        put(0x1c8, static_cast<spelunk::u32>(kBase + 0x170));
 
         // Two forwarding layers before the real load/store consumer.
         put(0x1d0, 0x48000011); // bl wrapper_two
@@ -146,22 +146,22 @@ public:
         add_symbol("virtual_wrapper", kBase + 0x200, 0x10);
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Dol;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Dol;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::Ppc32;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::Ppc32;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Big;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Big;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kBase;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
-        return std::span<const ember::Section>(&section_, 1);
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
+        return std::span<const spelunk::Section>(&section_, 1);
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return symbols_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -169,37 +169,37 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return symbols_;
     }
 
 private:
-    static constexpr ember::addr_t kBase = 0x80001000;
+    static constexpr spelunk::addr_t kBase = 0x80001000;
 
-    void put(std::size_t off, ember::u32 word) {
+    void put(std::size_t off, spelunk::u32 word) {
         text_[off + 0] = static_cast<std::byte>(word >> 24);
         text_[off + 1] = static_cast<std::byte>(word >> 16);
         text_[off + 2] = static_cast<std::byte>(word >> 8);
         text_[off + 3] = static_cast<std::byte>(word);
     }
 
-    void add_symbol(const char* name, ember::addr_t addr, ember::u64 size) {
-        ember::Symbol symbol;
+    void add_symbol(const char* name, spelunk::addr_t addr, spelunk::u64 size) {
+        spelunk::Symbol symbol;
         symbol.name = name;
         symbol.addr = addr;
         symbol.size = size;
-        symbol.kind = ember::SymbolKind::Function;
+        symbol.kind = spelunk::SymbolKind::Function;
         symbols_.push_back(std::move(symbol));
     }
 
     std::array<std::byte, 0x220> text_{};
-    ember::Section section_{};
-    std::vector<ember::Symbol> symbols_;
+    spelunk::Section section_{};
+    std::vector<spelunk::Symbol> symbols_;
 };
 
 int failures = 0;
 
-void check_eq(ember::u8 got, ember::u8 expected, const char* message) {
+void check_eq(spelunk::u8 got, spelunk::u8 expected, const char* message) {
     if (got == expected) return;
     std::fprintf(stderr, "FAIL: %s (got %u, expected %u)\n",
                  message, static_cast<unsigned>(got),
@@ -207,23 +207,23 @@ void check_eq(ember::u8 got, ember::u8 expected, const char* message) {
     ++failures;
 }
 
-void check_reg(const std::vector<ember::InferredArgument>& args,
-               std::size_t index, ember::Reg expected, const char* message) {
+void check_reg(const std::vector<spelunk::InferredArgument>& args,
+               std::size_t index, spelunk::Reg expected, const char* message) {
     if (index < args.size() && args[index].reg == expected) return;
     std::fprintf(stderr, "FAIL: %s\n", message);
     ++failures;
 }
 
-void check_pointer(const std::vector<ember::InferredArgument>& args,
+void check_pointer(const std::vector<spelunk::InferredArgument>& args,
                    std::size_t index, const char* message) {
     if (index < args.size() && args[index].pointer_like) return;
     std::fprintf(stderr, "FAIL: %s\n", message);
     ++failures;
 }
 
-void check_stack(const std::vector<ember::InferredArgument>& args,
-                 std::size_t index, ember::i64 expected, const char* message) {
-    if (index < args.size() && args[index].reg == ember::Reg::None &&
+void check_stack(const std::vector<spelunk::InferredArgument>& args,
+                 std::size_t index, spelunk::i64 expected, const char* message) {
+    if (index < args.size() && args[index].reg == spelunk::Reg::None &&
         args[index].stack_offset && *args[index].stack_offset == expected) return;
     std::fprintf(stderr, "FAIL: %s\n", message);
     ++failures;
@@ -234,22 +234,22 @@ void check_stack(const std::vector<ember::InferredArgument>& args,
 int main() {
     PpcArityBinary binary;
 
-    ember::TypeArena win_types;
-    const auto write_process = ember::lookup_import_sig(
+    spelunk::TypeArena win_types;
+    const auto write_process = spelunk::lookup_import_sig(
         "WriteProcessMemory", win_types);
     if (!write_process || write_process->params.size() != 5 ||
-        win_types.kind(write_process->ret) != ember::TypeKind::Int ||
-        win_types.kind(write_process->params[0]) != ember::TypeKind::Ptr ||
-        win_types.kind(write_process->params[4]) != ember::TypeKind::Ptr) {
+        win_types.kind(write_process->ret) != spelunk::TypeKind::Int ||
+        win_types.kind(write_process->params[0]) != spelunk::TypeKind::Ptr ||
+        win_types.kind(write_process->params[4]) != spelunk::TypeKind::Ptr) {
         std::fprintf(stderr,
                      "FAIL: WriteProcessMemory has its five-argument pointer signature\n");
         ++failures;
     }
-    const auto snapshot = ember::lookup_import_sig(
+    const auto snapshot = spelunk::lookup_import_sig(
         "CreateToolhelp32Snapshot", win_types);
-    const auto process_first = ember::lookup_import_sig(
+    const auto process_first = spelunk::lookup_import_sig(
         "Process32First", win_types);
-    const auto open_process = ember::lookup_import_sig(
+    const auto open_process = spelunk::lookup_import_sig(
         "OpenProcess", win_types);
     if (!snapshot || snapshot->params.size() != 2 ||
         !process_first || process_first->params.size() != 2 ||
@@ -258,64 +258,64 @@ int main() {
                      "FAIL: Win32 process-discovery signatures keep exact arity\n");
         ++failures;
     }
-    check_eq(ember::infer_arity(binary, 0x80001000), 1,
+    check_eq(spelunk::infer_arity(binary, 0x80001000), 1,
              "PPC direct live-in r3 read implies one parameter");
-    check_eq(ember::infer_arity(binary, 0x80001020), 2,
+    check_eq(spelunk::infer_arity(binary, 0x80001020), 2,
              "Metrowerks save helper preserves incoming r3/r4 parameters");
-    check_eq(ember::infer_arity(binary, 0x80001040), 0,
+    check_eq(spelunk::infer_arity(binary, 0x80001040), 0,
              "implicit PPC return-register read is not a parameter");
-    const auto mixed = ember::infer_arguments(binary, 0x80001060);
-    check_eq(static_cast<ember::u8>(mixed.size()), 4,
+    const auto mixed = spelunk::infer_arguments(binary, 0x80001060);
+    check_eq(static_cast<spelunk::u8>(mixed.size()), 4,
              "mixed PPC signature counts both register banks");
-    check_reg(mixed, 0, ember::Reg::PpcF1, "mixed arg 1 is f1");
-    check_reg(mixed, 1, ember::Reg::PpcR3, "mixed arg 2 is r3");
-    check_reg(mixed, 2, ember::Reg::PpcF2, "mixed arg 3 is f2");
-    check_reg(mixed, 3, ember::Reg::PpcR4, "mixed arg 4 is r4");
-    check_eq(ember::infer_arity(binary, 0x80001080), 0,
+    check_reg(mixed, 0, spelunk::Reg::PpcF1, "mixed arg 1 is f1");
+    check_reg(mixed, 1, spelunk::Reg::PpcR3, "mixed arg 2 is r3");
+    check_reg(mixed, 2, spelunk::Reg::PpcF2, "mixed arg 3 is f2");
+    check_reg(mixed, 3, spelunk::Reg::PpcR4, "mixed arg 4 is r4");
+    check_eq(spelunk::infer_arity(binary, 0x80001080), 0,
              "post-call f1 clobber is not a live-in argument");
-    const auto pointer = ember::infer_arguments(binary, 0x800010a0);
-    check_eq(static_cast<ember::u8>(pointer.size()), 1,
+    const auto pointer = spelunk::infer_arguments(binary, 0x800010a0);
+    check_eq(static_cast<spelunk::u8>(pointer.size()), 1,
              "PPC memory-base parameter is recovered");
     check_pointer(pointer, 0, "direct PPC memory-base parameter is pointer-like");
-    const auto forwarded = ember::infer_arguments(binary, 0x800010c0);
-    check_eq(static_cast<ember::u8>(forwarded.size()), 2,
+    const auto forwarded = spelunk::infer_arguments(binary, 0x800010c0);
+    check_eq(static_cast<spelunk::u8>(forwarded.size()), 2,
              "forwarded PPC second parameter preserves the ABI prefix");
     check_pointer(forwarded, 1,
                   "pointer evidence follows a PPC parameter through one direct call");
-    const auto paired = ember::infer_arguments(binary, 0x800010e0);
-    check_eq(static_cast<ember::u8>(paired.size()), 1,
+    const auto paired = spelunk::infer_arguments(binary, 0x800010e0);
+    check_eq(static_cast<spelunk::u8>(paired.size()), 1,
              "paired-single PPC address parameter is recovered");
     check_pointer(paired, 0,
                   "paired-single PPC memory address is pointer-like");
-    const auto overflow = ember::infer_arguments(binary, 0x80001108);
-    check_eq(static_cast<ember::u8>(overflow.size()), 9,
+    const auto overflow = spelunk::infer_arguments(binary, 0x80001108);
+    check_eq(static_cast<spelunk::u8>(overflow.size()), 9,
              "PPC overflow load preserves the eight-register argument prefix");
     check_stack(overflow, 8, 0x28,
                 "PPC ninth integer parameter is recovered at entry sp+0x28");
-    const auto fmod_wrapper = ember::infer_arguments(binary, 0x80001128);
-    check_eq(static_cast<ember::u8>(fmod_wrapper.size()), 2,
+    const auto fmod_wrapper = spelunk::infer_arguments(binary, 0x80001128);
+    check_eq(static_cast<spelunk::u8>(fmod_wrapper.size()), 2,
              "defined math prototype sizes a PPC floating wrapper");
-    check_reg(fmod_wrapper, 0, ember::Reg::PpcF1,
+    check_reg(fmod_wrapper, 0, spelunk::Reg::PpcF1,
               "defined fmod wrapper arg 1 is f1");
-    check_reg(fmod_wrapper, 1, ember::Reg::PpcF2,
+    check_reg(fmod_wrapper, 1, spelunk::Reg::PpcF2,
               "defined fmod wrapper arg 2 is f2");
-    check_eq(ember::infer_arity(binary, 0x80001180), 1,
+    check_eq(spelunk::infer_arity(binary, 0x80001180), 1,
              "direct unknown PPC floating use remains an f1 parameter");
-    check_eq(ember::infer_arity(binary, 0x80001190), 0,
+    check_eq(spelunk::infer_arity(binary, 0x80001190), 0,
              "unknown callee snapshots do not recursively manufacture f1 "
              "parameters");
 
-    const ember::InferenceResult ipa = ember::infer_signatures(binary);
+    const spelunk::InferenceResult ipa = spelunk::infer_signatures(binary);
     const auto forwarded_sig = ipa.sigs.find(0x800010c0);
     const bool propagated_pointer = forwarded_sig != ipa.sigs.end() &&
-        ipa.arena.kind(forwarded_sig->second.params[1]) == ember::TypeKind::Ptr;
+        ipa.arena.kind(forwarded_sig->second.params[1]) == spelunk::TypeKind::Ptr;
     if (!propagated_pointer) {
         std::fprintf(stderr,
                      "FAIL: typed IPA propagates a leaf pointer through a wrapper\n");
         ++failures;
     }
-    const std::array<ember::addr_t, 1> scoped_roots{0x800010c0};
-    const ember::InferenceResult scoped = ember::infer_signatures(
+    const std::array<spelunk::addr_t, 1> scoped_roots{0x800010c0};
+    const spelunk::InferenceResult scoped = spelunk::infer_signatures(
         binary, nullptr, scoped_roots);
     if (!scoped.sigs.contains(0x800010c0) ||
         !scoped.sigs.contains(0x800010a0) ||
@@ -325,19 +325,19 @@ int main() {
         ++failures;
     }
 
-    const auto wrappers = ember::infer_arguments(binary, 0x800011d0);
-    check_eq(static_cast<ember::u8>(wrappers.size()), 2,
+    const auto wrappers = spelunk::infer_arguments(binary, 0x800011d0);
+    check_eq(static_cast<spelunk::u8>(wrappers.size()), 2,
              "two-level wrapper preserves both forwarded integer arguments");
     check_pointer(wrappers, 1, "pointer evidence propagates through wrapper chain");
-    check_eq(ember::infer_arity(binary, 0x80001200), 1,
+    check_eq(spelunk::infer_arity(binary, 0x80001200), 1,
              "explicitly forwarded virtual-call argument is retained");
 
-    auto decoder = ember::make_decoder(binary);
+    auto decoder = spelunk::make_decoder(binary);
     if (!decoder) {
         std::fprintf(stderr, "FAIL: PPC decoder creation for switch fixture\n");
         ++failures;
     } else {
-        ember::CfgBuilder builder(binary, **decoder);
+        spelunk::CfgBuilder builder(binary, **decoder);
         auto cfg = builder.build(0x80001140, "codewarrior_switch");
         if (!cfg) {
             std::fprintf(stderr, "FAIL: CodeWarrior switch CFG builds\n");
@@ -345,11 +345,11 @@ int main() {
         } else {
             const auto bit = cfg->block_at.find(0x80001148);
             const bool recovered = bit != cfg->block_at.end() &&
-                cfg->blocks[bit->second].kind == ember::BlockKind::Switch &&
+                cfg->blocks[bit->second].kind == spelunk::BlockKind::Switch &&
                 cfg->blocks[bit->second].case_values ==
-                    std::vector<ember::i64>{0, 1, 2} &&
+                    std::vector<spelunk::i64>{0, 1, 2} &&
                 cfg->blocks[bit->second].has_default &&
-                cfg->blocks[bit->second].switch_index == ember::Reg::PpcR3;
+                cfg->blocks[bit->second].switch_index == spelunk::Reg::PpcR3;
             if (!recovered) {
                 std::fprintf(stderr,
                              "FAIL: lwzx/mtctr/bctr recovers cases and selector\n");

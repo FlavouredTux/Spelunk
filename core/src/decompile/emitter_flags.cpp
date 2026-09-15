@@ -10,15 +10,15 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "emitter_internal.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 const IrInst* Emitter::def_stripped(const IrValue& v) const noexcept {
     const IrInst* d = def_of(v);
@@ -828,4 +828,4 @@ std::string Emitter::render_condition(const IrValue& v, bool invert) const {
     return expr(v, 0, 0);
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

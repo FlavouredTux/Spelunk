@@ -1,0 +1,143 @@
+#pragma once
+
+#include <cstddef>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+
+namespace spelunk {
+
+class Binary;
+
+namespace script {
+
+// Declarative project script (`*.spelunk`). A flat, section-keyed config
+// file consumed by `apply()` to populate / mutate an `Annotations`
+// struct. No expressions or control flow - every directive is a single
+// key=value (or pattern->template) pair. Designed for the high-volume
+// but low-complexity workflows: bulk renames, signature batches,
+// log-format driven recovery, glob renames over the discovered
+// function set.
+//
+// Sections (case-insensitive):
+//
+//   [rename]
+//     0x401234 = do_thing                    # by VA
+//     sub_4051a0 = main_loop                 # by sub_-name
+//     resolve_path = resolve_canonical_path  # by user-rename or symbol
+//
+//   [note]
+//     0x401234 = entry point; see ticket #42
+//     do_thing = first thing the binary does
+//
+//   [signature]
+//     0x401234 = int do_thing(char* name, int x)
+//     do_thing = void do_thing(void)
+//
+//   [field]
+//     do_thing:ctx+0x10 = length              # by signature param name
+//     do_thing:a1+0x18 = flags                # by ABI param slot (1-based)
+//
+//   [constant]                                # `[const]` is accepted too
+//     0xDEADBEEF = kernel32_CreateFileW_hash
+//     31337      = protocol_magic
+//
+//   [pattern-rename]
+//     sub_4* -> sample_sub_*                 # `*` in template = matched part
+//
+//   [from-strings]
+//     "[HttpClient] %s" -> HttpClient_$1     # captured %s/%d/%* → $1, $2, …
+//     "NetworkClient::%s" -> NetworkClient_$1
+//
+//   [delete]
+//     0x401234   = rename                    # drop one entry kind
+//     log_handler = all                      # drop rename + note + signature
+//
+// Comments start with `#`. Mid-line ` # …` (whitespace before `#`,
+// outside `"..."`) is also treated as a trailing comment, so values
+// like `note = see ticket #42` keep `#42`. Quoted forms `"..."` allow
+// values with spaces or special characters; standard escapes
+// (`\\`, `\"`, `\n`, `\t`).
+
+struct Directive {
+    enum class Kind : u8 {
+        Rename,
+        Note,
+        Signature,
+        Field,
+        Constant,
+        PatternRename,
+        FromStrings,
+        Delete,
+    };
+    Kind           kind = Kind::Rename;
+    std::string    lhs;        // VA, identifier, glob, or string-pattern
+    std::string    rhs;        // new name, note, signature decl, template, or delete-kind
+    std::size_t    line = 0;   // 1-based source line, for error/warning context
+    // Optional `; conf=… src=… ev=…` suffix. When `kind` is Rename /
+    // Note / Signature, this gets stored in the corresponding
+    // `Annotations::*_meta` map alongside the primary value.
+    AnnotationMeta meta{};
+    bool           has_meta = false;
+};
+
+[[nodiscard]] Result<std::vector<Directive>>
+parse(std::string_view text);
+
+[[nodiscard]] Result<std::vector<Directive>>
+parse_file(const std::filesystem::path& path);
+
+struct ApplyStats {
+    std::size_t renames_added            = 0;
+    std::size_t notes_added              = 0;
+    std::size_t signatures_added         = 0;
+    std::size_t fields_added             = 0;
+    std::size_t constants_added          = 0;
+    std::size_t pattern_renames_applied  = 0;
+    std::size_t string_renames_applied   = 0;
+    std::size_t renames_removed          = 0;
+    std::size_t notes_removed            = 0;
+    std::size_t signatures_removed       = 0;
+    std::size_t fields_removed           = 0;
+    std::size_t constants_removed        = 0;
+    // Non-fatal issues encountered while applying directives:
+    // unresolvable names, malformed signature bodies, glob templates
+    // that produced empty names, etc. Each entry is prefixed with the
+    // source line number.
+    std::vector<std::string> warnings;
+};
+
+// Apply parsed directives to `ann`, using `b` for symbol lookup,
+// pattern-walking the discovered-function set, and string-xref
+// resolution. Direct VA / name → action directives are applied first;
+// pattern-rename and from-strings are best-effort and only assign to
+// addresses without an existing user rename. `ann` is mutated in place.
+[[nodiscard]] ApplyStats
+apply(std::span<const Directive> directives,
+      const Binary& b,
+      Annotations& ann);
+
+// Convenience wrapper that parses + applies in one call.
+[[nodiscard]] Result<ApplyStats>
+apply_file(const std::filesystem::path& path,
+           const Binary& b,
+           Annotations& ann);
+
+// Parse a C-style function signature into the Annotations representation.
+// Accepts the same form `[signature]` directives use:
+//   "int do_thing(char* name, int x)"  -> ret="int", params={(char*,name),(int,x)}
+//   "void foo(void)"                   -> ret="void", params={}
+// Returns nullopt on malformed input. Exposed so the one-shot
+// `spelunk annotate --set-signature` CLI can reuse the parser instead of
+// duplicating it.
+[[nodiscard]] std::optional<FunctionSig>
+parse_signature(std::string_view src);
+
+}  // namespace script
+}  // namespace spelunk

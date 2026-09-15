@@ -1,5 +1,5 @@
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/ir/x64_lifter.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/ir/x64_lifter.hpp>
 
 #include <array>
 #include <cstdio>
@@ -27,7 +27,7 @@ void test_popcnt_f3_0f_b8() {
         std::byte{0xF3}, std::byte{0x48}, std::byte{0x0F},
         std::byte{0xB8}, std::byte{0xC2},
     };
-    const ember::X64Decoder dec;
+    const spelunk::X64Decoder dec;
     auto insn = dec.decode(code, 0x69e92e5);
     if (!insn) {
         std::fprintf(stderr, "FAIL: popcnt decode failed: %s\n",
@@ -35,36 +35,36 @@ void test_popcnt_f3_0f_b8() {
         ++fails;
         return;
     }
-    check_eq(insn->mnemonic, ember::Mnemonic::Popcnt, "popcnt mnemonic");
-    check_eq(insn->length, static_cast<ember::u8>(5), "popcnt length");
-    check_eq(insn->num_operands, static_cast<ember::u8>(2), "popcnt operands");
-    check_eq(insn->operands[0].kind, ember::Operand::Kind::Register, "dst reg");
-    check_eq(insn->operands[0].reg, ember::Reg::Rax, "dst rax");
-    check_eq(insn->operands[1].kind, ember::Operand::Kind::Register, "src reg");
-    check_eq(insn->operands[1].reg, ember::Reg::Rdx, "src rdx");
+    check_eq(insn->mnemonic, spelunk::Mnemonic::Popcnt, "popcnt mnemonic");
+    check_eq(insn->length, static_cast<spelunk::u8>(5), "popcnt length");
+    check_eq(insn->num_operands, static_cast<spelunk::u8>(2), "popcnt operands");
+    check_eq(insn->operands[0].kind, spelunk::Operand::Kind::Register, "dst reg");
+    check_eq(insn->operands[0].reg, spelunk::Reg::Rax, "dst rax");
+    check_eq(insn->operands[1].kind, spelunk::Operand::Kind::Register, "src reg");
+    check_eq(insn->operands[1].reg, spelunk::Reg::Rdx, "src rdx");
 }
 
 void test_flag_control_one_byte_opcodes() {
     struct Case {
         std::byte byte;
-        ember::Mnemonic mnemonic;
+        spelunk::Mnemonic mnemonic;
         const char* name;
     };
     constexpr std::array<Case, 11> cases{{
-        {std::byte{0x9C}, ember::Mnemonic::Pushf,  "pushf"},
-        {std::byte{0x9D}, ember::Mnemonic::Popf,   "popf"},
-        {std::byte{0x9E}, ember::Mnemonic::Sahf,   "sahf"},
-        {std::byte{0x9F}, ember::Mnemonic::Lahf,   "lahf"},
-        {std::byte{0xF5}, ember::Mnemonic::Cmc,    "cmc"},
-        {std::byte{0xF8}, ember::Mnemonic::Clc,    "clc"},
-        {std::byte{0xF9}, ember::Mnemonic::Stc,    "stc"},
-        {std::byte{0xFA}, ember::Mnemonic::Cli,    "cli"},
-        {std::byte{0xFB}, ember::Mnemonic::Sti,    "sti"},
-        {std::byte{0xFC}, ember::Mnemonic::Cld,    "cld"},
-        {std::byte{0xFD}, ember::Mnemonic::StdDir, "std"},
+        {std::byte{0x9C}, spelunk::Mnemonic::Pushf,  "pushf"},
+        {std::byte{0x9D}, spelunk::Mnemonic::Popf,   "popf"},
+        {std::byte{0x9E}, spelunk::Mnemonic::Sahf,   "sahf"},
+        {std::byte{0x9F}, spelunk::Mnemonic::Lahf,   "lahf"},
+        {std::byte{0xF5}, spelunk::Mnemonic::Cmc,    "cmc"},
+        {std::byte{0xF8}, spelunk::Mnemonic::Clc,    "clc"},
+        {std::byte{0xF9}, spelunk::Mnemonic::Stc,    "stc"},
+        {std::byte{0xFA}, spelunk::Mnemonic::Cli,    "cli"},
+        {std::byte{0xFB}, spelunk::Mnemonic::Sti,    "sti"},
+        {std::byte{0xFC}, spelunk::Mnemonic::Cld,    "cld"},
+        {std::byte{0xFD}, spelunk::Mnemonic::StdDir, "std"},
     }};
 
-    const ember::X64Decoder dec;
+    const spelunk::X64Decoder dec;
     for (const auto& c : cases) {
         const std::array<std::byte, 1> code{c.byte};
         auto insn = dec.decode(code, 0x401000);
@@ -75,13 +75,13 @@ void test_flag_control_one_byte_opcodes() {
             continue;
         }
         check_eq(insn->mnemonic, c.mnemonic, c.name);
-        check_eq(insn->length, static_cast<ember::u8>(1), c.name);
-        check_eq(insn->num_operands, static_cast<ember::u8>(0), c.name);
+        check_eq(insn->length, static_cast<spelunk::u8>(1), c.name);
+        check_eq(insn->num_operands, static_cast<spelunk::u8>(0), c.name);
     }
 }
 
 void test_rotate_through_carry_group2() {
-    const ember::X64Decoder dec;
+    const spelunk::X64Decoder dec;
 
     {
         const std::array<std::byte, 2> code = {
@@ -93,13 +93,13 @@ void test_rotate_through_carry_group2() {
                          insn.error().message.c_str());
             ++fails;
         } else {
-            check_eq(insn->mnemonic, ember::Mnemonic::Rcl, "rcl mnemonic");
-            check_eq(insn->length, static_cast<ember::u8>(2), "rcl length");
-            check_eq(insn->num_operands, static_cast<ember::u8>(2), "rcl operands");
-            check_eq(insn->operands[0].kind, ember::Operand::Kind::Register, "rcl dst kind");
-            check_eq(insn->operands[0].reg, ember::Reg::Eax, "rcl dst eax");
-            check_eq(insn->operands[1].kind, ember::Operand::Kind::Immediate, "rcl count kind");
-            check_eq(insn->operands[1].imm.value, static_cast<ember::i64>(1), "rcl count");
+            check_eq(insn->mnemonic, spelunk::Mnemonic::Rcl, "rcl mnemonic");
+            check_eq(insn->length, static_cast<spelunk::u8>(2), "rcl length");
+            check_eq(insn->num_operands, static_cast<spelunk::u8>(2), "rcl operands");
+            check_eq(insn->operands[0].kind, spelunk::Operand::Kind::Register, "rcl dst kind");
+            check_eq(insn->operands[0].reg, spelunk::Reg::Eax, "rcl dst eax");
+            check_eq(insn->operands[1].kind, spelunk::Operand::Kind::Immediate, "rcl count kind");
+            check_eq(insn->operands[1].imm.value, static_cast<spelunk::i64>(1), "rcl count");
         }
     }
 
@@ -113,19 +113,19 @@ void test_rotate_through_carry_group2() {
                          insn.error().message.c_str());
             ++fails;
         } else {
-            check_eq(insn->mnemonic, ember::Mnemonic::Rcr, "rcr mnemonic");
-            check_eq(insn->length, static_cast<ember::u8>(3), "rcr length");
-            check_eq(insn->num_operands, static_cast<ember::u8>(2), "rcr operands");
-            check_eq(insn->operands[0].kind, ember::Operand::Kind::Register, "rcr dst kind");
-            check_eq(insn->operands[0].reg, ember::Reg::Eax, "rcr dst eax");
-            check_eq(insn->operands[1].kind, ember::Operand::Kind::Immediate, "rcr count kind");
-            check_eq(insn->operands[1].imm.value, static_cast<ember::i64>(2), "rcr count");
+            check_eq(insn->mnemonic, spelunk::Mnemonic::Rcr, "rcr mnemonic");
+            check_eq(insn->length, static_cast<spelunk::u8>(3), "rcr length");
+            check_eq(insn->num_operands, static_cast<spelunk::u8>(2), "rcr operands");
+            check_eq(insn->operands[0].kind, spelunk::Operand::Kind::Register, "rcr dst kind");
+            check_eq(insn->operands[0].reg, spelunk::Reg::Eax, "rcr dst eax");
+            check_eq(insn->operands[1].kind, spelunk::Operand::Kind::Immediate, "rcr count kind");
+            check_eq(insn->operands[1].imm.value, static_cast<spelunk::i64>(2), "rcr count");
         }
     }
 }
 
 void test_long_mode_prefix_edge_cases() {
-    const ember::X64Decoder dec;
+    const spelunk::X64Decoder dec;
     {
         const std::array<std::byte, 8> code{
             std::byte{0x67}, std::byte{0x48}, std::byte{0x8b}, std::byte{0x05},
@@ -134,11 +134,11 @@ void test_long_mode_prefix_edge_cases() {
         auto i = dec.decode(code, 0x1000);
         check_eq(i.has_value(), true, "addr32 absolute decode");
         if (i) {
-            check_eq(i->operands[1].mem.base, ember::Reg::None,
+            check_eq(i->operands[1].mem.base, spelunk::Reg::None,
                      "addr32 mod00/rm5 is not RIP-relative");
-            check_eq(i->operands[1].mem.address_size, static_cast<ember::u8>(4),
+            check_eq(i->operands[1].mem.address_size, static_cast<spelunk::u8>(4),
                      "addr32 memory address width");
-            check_eq(i->operands[1].mem.disp, static_cast<ember::i64>(0x12345678),
+            check_eq(i->operands[1].mem.disp, static_cast<spelunk::i64>(0x12345678),
                      "addr32 absolute displacement");
         }
     }
@@ -150,17 +150,17 @@ void test_long_mode_prefix_edge_cases() {
         auto i = dec.decode(code, 0x1000);
         check_eq(i.has_value(), true, "prefixed near call decode");
         if (i) {
-            check_eq(i->length, static_cast<ember::u8>(6),
+            check_eq(i->length, static_cast<spelunk::u8>(6),
                      "prefixed near call keeps rel32");
-            check_eq(i->operands[0].rel.size, static_cast<ember::u8>(4),
+            check_eq(i->operands[0].rel.size, static_cast<spelunk::u8>(4),
                      "prefixed near call displacement width");
         }
     }
 }
 
-ember::IrFunction lift_one(std::span<const std::byte> code,
-                           ember::Abi abi = ember::Abi::SysVAmd64) {
-    const ember::X64Decoder dec;
+spelunk::IrFunction lift_one(std::span<const std::byte> code,
+                           spelunk::Abi abi = spelunk::Abi::SysVAmd64) {
+    const spelunk::X64Decoder dec;
     auto decoded = dec.decode(code, 0x1000);
     if (!decoded) {
         std::fprintf(stderr, "FAIL: x64 lift decode: %s\n",
@@ -168,16 +168,16 @@ ember::IrFunction lift_one(std::span<const std::byte> code,
         ++fails;
         return {};
     }
-    ember::Function fn;
+    spelunk::Function fn;
     fn.start = 0x1000;
     fn.end = 0x1000 + decoded->length;
-    ember::BasicBlock bb;
+    spelunk::BasicBlock bb;
     bb.start = fn.start;
     bb.end = fn.end;
-    bb.kind = ember::BlockKind::Return;
+    bb.kind = spelunk::BlockKind::Return;
     bb.instructions.push_back(*decoded);
     fn.blocks.push_back(std::move(bb));
-    ember::X64Lifter lifter{abi};
+    spelunk::X64Lifter lifter{abi};
     auto ir = lifter.lift(fn);
     if (!ir) {
         std::fprintf(stderr, "FAIL: x64 lift: %s\n", ir.error().message.c_str());
@@ -188,24 +188,24 @@ ember::IrFunction lift_one(std::span<const std::byte> code,
 }
 
 void test_vex_evex_and_bmi_decode() {
-    const ember::X64Decoder decoder;
+    const spelunk::X64Decoder decoder;
     {
         const std::array<std::byte, 4> code{
             std::byte{0xC5}, std::byte{0xF4}, std::byte{0x58}, std::byte{0xC2}};
         auto instruction = decoder.decode(code, 0x1000);
         check_eq(instruction.has_value(), true, "VEX vaddps decode");
         if (instruction) {
-            check_eq(instruction->mnemonic, ember::Mnemonic::Addps,
+            check_eq(instruction->mnemonic, spelunk::Mnemonic::Addps,
                      "VEX vaddps mnemonic");
-            check_eq(instruction->num_operands, static_cast<ember::u8>(3),
+            check_eq(instruction->num_operands, static_cast<spelunk::u8>(3),
                      "VEX vaddps operand count");
-            check_eq(instruction->operands[0].reg, ember::Reg::Ymm0,
+            check_eq(instruction->operands[0].reg, spelunk::Reg::Ymm0,
                      "VEX vaddps destination");
-            check_eq(instruction->operands[1].reg, ember::Reg::Ymm1,
+            check_eq(instruction->operands[1].reg, spelunk::Reg::Ymm1,
                      "VEX vaddps first source");
-            check_eq(instruction->operands[2].reg, ember::Reg::Ymm2,
+            check_eq(instruction->operands[2].reg, spelunk::Reg::Ymm2,
                      "VEX vaddps second source");
-            check_eq(ember::format_instruction(*instruction),
+            check_eq(spelunk::format_instruction(*instruction),
                      std::string("vaddps ymm0, ymm1, ymm2"),
                      "VEX vaddps formatting");
         }
@@ -217,13 +217,13 @@ void test_vex_evex_and_bmi_decode() {
         auto instruction = decoder.decode(code, 0x2000);
         check_eq(instruction.has_value(), true, "EVEX vaddps decode");
         if (instruction) {
-            check_eq(instruction->operands[0].reg, ember::Reg::Zmm0,
+            check_eq(instruction->operands[0].reg, spelunk::Reg::Zmm0,
                      "EVEX destination width");
-            check_eq(instruction->operands[1].reg, ember::Reg::Zmm1,
+            check_eq(instruction->operands[1].reg, spelunk::Reg::Zmm1,
                      "EVEX first source width");
-            check_eq(instruction->operands[2].reg, ember::Reg::Zmm2,
+            check_eq(instruction->operands[2].reg, spelunk::Reg::Zmm2,
                      "EVEX second source width");
-            check_eq(ember::format_instruction(*instruction),
+            check_eq(spelunk::format_instruction(*instruction),
                      std::string("vaddps zmm0, zmm1, zmm2"),
                      "EVEX vaddps formatting");
         }
@@ -235,10 +235,10 @@ void test_vex_evex_and_bmi_decode() {
         auto instruction = decoder.decode(code, 0x2800);
         check_eq(instruction.has_value(), true, "masked EVEX vaddps decode");
         if (instruction) {
-            check_eq(instruction->x86_mask, static_cast<ember::u8>(1),
+            check_eq(instruction->x86_mask, static_cast<spelunk::u8>(1),
                      "EVEX mask register");
             check_eq(instruction->x86_zeroing, true, "EVEX zeroing mode");
-            check_eq(ember::format_instruction(*instruction),
+            check_eq(spelunk::format_instruction(*instruction),
                      std::string("vaddps zmm0 {k1} {z}, zmm1, zmm2"),
                      "masked EVEX formatting");
         }
@@ -250,9 +250,9 @@ void test_vex_evex_and_bmi_decode() {
         auto instruction = decoder.decode(code, 0x3000);
         check_eq(instruction.has_value(), true, "BMI andn decode");
         if (instruction) {
-            check_eq(instruction->mnemonic, ember::Mnemonic::Andn,
+            check_eq(instruction->mnemonic, spelunk::Mnemonic::Andn,
                      "BMI andn mnemonic");
-            check_eq(ember::format_instruction(*instruction),
+            check_eq(spelunk::format_instruction(*instruction),
                      std::string("andn rax, rcx, rdx"),
                      "BMI andn formatting");
         }
@@ -264,9 +264,9 @@ void test_vex_evex_and_bmi_decode() {
         auto instruction = decoder.decode(code, 0x3800);
         check_eq(instruction.has_value(), true, "FMA vfmadd132ps decode");
         if (instruction) {
-            check_eq(instruction->mnemonic, ember::Mnemonic::Vfmadd132ps,
+            check_eq(instruction->mnemonic, spelunk::Mnemonic::Vfmadd132ps,
                      "FMA mnemonic");
-            check_eq(ember::format_instruction(*instruction),
+            check_eq(spelunk::format_instruction(*instruction),
                      std::string("vfmadd132ps ymm0, ymm1, ymm2"),
                      "FMA formatting");
         }
@@ -277,9 +277,9 @@ void test_vex_evex_and_bmi_decode() {
         auto instruction = decoder.decode(code, 0x4000);
         check_eq(instruction.has_value(), true, "vzeroupper decode");
         if (instruction) {
-            check_eq(instruction->mnemonic, ember::Mnemonic::Vzeroupper,
+            check_eq(instruction->mnemonic, spelunk::Mnemonic::Vzeroupper,
                      "vzeroupper mnemonic");
-            check_eq(ember::format_instruction(*instruction),
+            check_eq(spelunk::format_instruction(*instruction),
                      std::string("vzeroupper"), "vzeroupper formatting");
         }
     }
@@ -289,31 +289,31 @@ void test_vex_map2_opcode_tables() {
     struct Case {
         std::byte vex;
         std::byte opcode;
-        ember::Mnemonic mnemonic;
+        spelunk::Mnemonic mnemonic;
         const char* text;
     };
     constexpr std::array<Case, 9> cases{{
-        {std::byte{0xF0}, std::byte{0xF5}, ember::Mnemonic::Bzhi,
+        {std::byte{0xF0}, std::byte{0xF5}, spelunk::Mnemonic::Bzhi,
          "bzhi rax, rdx, rcx"},
-        {std::byte{0xF1}, std::byte{0xF7}, ember::Mnemonic::Shlx,
+        {std::byte{0xF1}, std::byte{0xF7}, spelunk::Mnemonic::Shlx,
          "shlx rax, rdx, rcx"},
-        {std::byte{0xF2}, std::byte{0xF5}, ember::Mnemonic::Pext,
+        {std::byte{0xF2}, std::byte{0xF5}, spelunk::Mnemonic::Pext,
          "pext rax, rcx, rdx"},
-        {std::byte{0xF2}, std::byte{0xF7}, ember::Mnemonic::Sarx,
+        {std::byte{0xF2}, std::byte{0xF7}, spelunk::Mnemonic::Sarx,
          "sarx rax, rdx, rcx"},
-        {std::byte{0xF3}, std::byte{0xF5}, ember::Mnemonic::Pdep,
+        {std::byte{0xF3}, std::byte{0xF5}, spelunk::Mnemonic::Pdep,
          "pdep rax, rcx, rdx"},
-        {std::byte{0xF3}, std::byte{0xF6}, ember::Mnemonic::Mulx,
+        {std::byte{0xF3}, std::byte{0xF6}, spelunk::Mnemonic::Mulx,
          "mulx rax, rcx, rdx"},
-        {std::byte{0xF3}, std::byte{0xF7}, ember::Mnemonic::Shrx,
+        {std::byte{0xF3}, std::byte{0xF7}, spelunk::Mnemonic::Shrx,
          "shrx rax, rdx, rcx"},
-        {std::byte{0xF5}, std::byte{0xA8}, ember::Mnemonic::Vfmadd213pd,
+        {std::byte{0xF5}, std::byte{0xA8}, spelunk::Mnemonic::Vfmadd213pd,
          "vfmadd213pd ymm0, ymm1, ymm2"},
-        {std::byte{0xF1}, std::byte{0xB9}, ember::Mnemonic::Vfmadd231sd,
+        {std::byte{0xF1}, std::byte{0xB9}, spelunk::Mnemonic::Vfmadd231sd,
          "vfmadd231sd xmm0, xmm1, xmm2"},
     }};
 
-    const ember::X64Decoder decoder;
+    const spelunk::X64Decoder decoder;
     for (const auto& c : cases) {
         const std::array<std::byte, 5> code{
             std::byte{0xC4}, std::byte{0xE2}, c.vex, c.opcode,
@@ -327,16 +327,16 @@ void test_vex_map2_opcode_tables() {
             continue;
         }
         check_eq(instruction->mnemonic, c.mnemonic, c.text);
-        check_eq(instruction->length, static_cast<ember::u8>(code.size()),
+        check_eq(instruction->length, static_cast<spelunk::u8>(code.size()),
                  c.text);
-        check_eq(instruction->num_operands, static_cast<ember::u8>(3),
+        check_eq(instruction->num_operands, static_cast<spelunk::u8>(3),
                  c.text);
         check_eq(instruction->x86_vex, true, c.text);
-        for (ember::u8 i = 0; i < instruction->num_operands; ++i) {
+        for (spelunk::u8 i = 0; i < instruction->num_operands; ++i) {
             check_eq(instruction->operands[i].kind,
-                     ember::Operand::Kind::Register, c.text);
+                     spelunk::Operand::Kind::Register, c.text);
         }
-        check_eq(ember::format_instruction(*instruction), std::string(c.text),
+        check_eq(spelunk::format_instruction(*instruction), std::string(c.text),
                  c.text);
     }
 }
@@ -346,19 +346,19 @@ void test_x64_fp_call_lanes_and_vex_lift() {
         std::byte{0xE8}, std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
     for (const auto& [abi, expected_args, expected_clobbers] :
          std::array{
-             std::tuple{ember::Abi::SysVAmd64, 8u, 16u},
-             std::tuple{ember::Abi::Win64, 4u, 6u}}) {
+             std::tuple{spelunk::Abi::SysVAmd64, 8u, 16u},
+             std::tuple{spelunk::Abi::Win64, 4u, 6u}}) {
         auto ir = lift_one(call, abi);
         unsigned fp_args = 0;
         unsigned fp_clobbers = 0;
         for (const auto& instruction : ir.blocks[0].insts) {
-            if (instruction.op == ember::IrOp::Intrinsic &&
+            if (instruction.op == spelunk::IrOp::Intrinsic &&
                 instruction.name.starts_with("call.fp_args.")) {
                 fp_args += instruction.src_count;
             }
-            if (instruction.op == ember::IrOp::Clobber &&
-                instruction.dst.kind == ember::IrValueKind::Reg &&
-                ember::is_xmm(instruction.dst.reg)) {
+            if (instruction.op == spelunk::IrOp::Clobber &&
+                instruction.dst.kind == spelunk::IrValueKind::Reg &&
+                spelunk::is_xmm(instruction.dst.reg)) {
                 ++fp_clobbers;
             }
         }
@@ -372,15 +372,15 @@ void test_x64_fp_call_lanes_and_vex_lift() {
     bool saw_avx_intrinsic = false;
     bool wrote_ymm0 = false;
     for (const auto& instruction : ir.blocks[0].insts) {
-        saw_avx_intrinsic |= instruction.op == ember::IrOp::Intrinsic &&
+        saw_avx_intrinsic |= instruction.op == spelunk::IrOp::Intrinsic &&
             instruction.name == "_mm256_add_ps" &&
-            instruction.dst.type == ember::IrType::I256 &&
+            instruction.dst.type == spelunk::IrType::I256 &&
             instruction.src_count == 2 &&
-            instruction.srcs[0].reg == ember::Reg::Ymm1 &&
-            instruction.srcs[1].reg == ember::Reg::Ymm2;
-        wrote_ymm0 |= instruction.op == ember::IrOp::Assign &&
-            instruction.dst.kind == ember::IrValueKind::Reg &&
-            instruction.dst.reg == ember::Reg::Ymm0;
+            instruction.srcs[0].reg == spelunk::Reg::Ymm1 &&
+            instruction.srcs[1].reg == spelunk::Reg::Ymm2;
+        wrote_ymm0 |= instruction.op == spelunk::IrOp::Assign &&
+            instruction.dst.kind == spelunk::IrValueKind::Reg &&
+            instruction.dst.reg == spelunk::Reg::Ymm0;
     }
     check_eq(saw_avx_intrinsic && wrote_ymm0, true,
              "VEX non-destructive AVX lift");
@@ -391,11 +391,11 @@ void test_x64_fp_call_lanes_and_vex_lift() {
     ir = lift_one(masked_avx512);
     bool preserved_mask = false;
     for (const auto& instruction : ir.blocks[0].insts) {
-        preserved_mask |= instruction.op == ember::IrOp::Intrinsic &&
+        preserved_mask |= instruction.op == spelunk::IrOp::Intrinsic &&
             instruction.name == "avx512.maskz._mm512_add_ps" &&
-            instruction.dst.type == ember::IrType::I512 &&
+            instruction.dst.type == spelunk::IrType::I512 &&
             instruction.src_count == 3 &&
-            instruction.srcs[2].reg == ember::Reg::K1;
+            instruction.srcs[2].reg == spelunk::Reg::K1;
     }
     check_eq(preserved_mask, true, "EVEX mask semantics remain explicit in IR");
 
@@ -405,9 +405,9 @@ void test_x64_fp_call_lanes_and_vex_lift() {
     ir = lift_one(fma);
     bool saw_fma = false;
     for (const auto& instruction : ir.blocks[0].insts) {
-        saw_fma |= instruction.op == ember::IrOp::Intrinsic &&
+        saw_fma |= instruction.op == spelunk::IrOp::Intrinsic &&
             instruction.name == "_mm256_fmadd132ps" &&
-            instruction.dst.type == ember::IrType::I256 &&
+            instruction.dst.type == spelunk::IrType::I256 &&
             instruction.src_count == 3;
     }
     check_eq(saw_fma, true, "FMA3 operand ordering remains explicit in IR");
@@ -418,10 +418,10 @@ void test_word_push_pop_width() {
     auto ir = lift_one(push);
     bool store_i16 = false, sub_two = false;
     for (const auto& i : ir.blocks[0].insts) {
-        store_i16 |= i.op == ember::IrOp::Store &&
-                     i.srcs[1].type == ember::IrType::I16;
-        sub_two |= i.op == ember::IrOp::Sub && i.src_count == 2 &&
-                   i.srcs[1].kind == ember::IrValueKind::Imm &&
+        store_i16 |= i.op == spelunk::IrOp::Store &&
+                     i.srcs[1].type == spelunk::IrType::I16;
+        sub_two |= i.op == spelunk::IrOp::Sub && i.src_count == 2 &&
+                   i.srcs[1].kind == spelunk::IrValueKind::Imm &&
                    i.srcs[1].imm == 2;
     }
     check_eq(store_i16 && sub_two, true, "pushw uses a two-byte stack slot");
@@ -430,15 +430,15 @@ void test_word_push_pop_width() {
     ir = lift_one(pop);
     bool load_i16 = false, add_two = false;
     for (const auto& i : ir.blocks[0].insts) {
-        load_i16 |= i.op == ember::IrOp::Load && i.dst.type == ember::IrType::I16;
-        add_two |= i.op == ember::IrOp::Add && i.src_count == 2 &&
-                   i.srcs[1].kind == ember::IrValueKind::Imm &&
+        load_i16 |= i.op == spelunk::IrOp::Load && i.dst.type == spelunk::IrType::I16;
+        add_two |= i.op == spelunk::IrOp::Add && i.src_count == 2 &&
+                   i.srcs[1].kind == spelunk::IrValueKind::Imm &&
                    i.srcs[1].imm == 2;
     }
     check_eq(load_i16 && add_two, true, "popw uses a two-byte stack slot");
 }
 
-using M = ember::Mnemonic;
+using M = spelunk::Mnemonic;
 
 // ---- x87 FPU escapes (D8-DF) ---------------------------------------------
 // Hand-packed byte arrays. Every positive case asserts mnemonic, length and
@@ -453,7 +453,7 @@ std::vector<std::byte> xb(Bs... bs) {
 
 struct X87Case {
     std::vector<std::byte> code;
-    ember::Mnemonic m;
+    spelunk::Mnemonic m;
     const char* text;
 };
 
@@ -464,7 +464,7 @@ struct X87Bad {
 
 void run_x87(const std::vector<X87Case>& pos, const std::vector<X87Bad>& neg,
              bool neg_want_addr) {
-    const ember::X64Decoder dec;
+    const spelunk::X64Decoder dec;
     for (const auto& c : pos) {
         auto insn = dec.decode(c.code, 0x401000);
         if (!insn) {
@@ -475,8 +475,8 @@ void run_x87(const std::vector<X87Case>& pos, const std::vector<X87Bad>& neg,
         }
         check_eq(insn->mnemonic, c.m, c.text);
         check_eq(insn->length,
-                 static_cast<ember::u8>(c.code.size()), c.text);
-        check_eq(ember::format_instruction(*insn), std::string(c.text),
+                 static_cast<spelunk::u8>(c.code.size()), c.text);
+        check_eq(spelunk::format_instruction(*insn), std::string(c.text),
                  c.text);
     }
     for (const auto& b : neg) {
@@ -620,15 +620,15 @@ void test_x87_db_de_df_integer_pop_fini() {
         true);
 
     // Segment override must flow through to x87 memory operands.
-    const ember::X64Decoder dec;
+    const spelunk::X64Decoder dec;
     auto insn =
         dec.decode(xb(0x64, 0xD8, 0x05, 0x78, 0x56, 0x34, 0x12),
                    0x401000);
     check_eq(insn.has_value(), true, "fs-prefixed x87 decode");
     if (insn) {
-        check_eq(insn->operands[0].mem.segment, ember::Reg::Fs,
+        check_eq(insn->operands[0].mem.segment, spelunk::Reg::Fs,
                  "segment override on x87 memory operand");
-        check_eq(insn->length, static_cast<ember::u8>(7),
+        check_eq(insn->length, static_cast<spelunk::u8>(7),
                  "prefix counted in x87 length");
     }
 }

@@ -1,4 +1,4 @@
-#include <ember/binary/dol.hpp>
+#include <spelunk/binary/dol.hpp>
 
 #include <algorithm>
 #include <array>
@@ -19,14 +19,14 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/text.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/text.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -457,4 +457,4 @@ void DolBinary::sort_and_dedupe_symbols() {
     symbols_.erase(last.begin(), last.end());
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -1,6 +1,6 @@
 // Text views: disassembly, CFG and structured regions.
 
-#include <ember/analysis/pipeline.hpp>
+#include <spelunk/analysis/pipeline.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -16,32 +16,32 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/name_resolver.hpp>
-#include <ember/analysis/type_infer_local.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/decompile/emit_options.hpp>
-#include <ember/decompile/emitter.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
-#include <ember/structure/structurer.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/name_resolver.hpp>
+#include <spelunk/analysis/type_infer_local.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/decompile/emit_options.hpp>
+#include <spelunk/decompile/emitter.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
+#include <spelunk/structure/structurer.hpp>
 
 #include "pipeline_internal.hpp"
 
-namespace ember::pipeline {
+namespace spelunk::pipeline {
 
 namespace {
 
@@ -280,9 +280,9 @@ FuncWindow window_from_addr(addr_t start, u64 size_hint, std::string label) {
     return w;
 }
 
-}  // namespace ember::pipeline
+}  // namespace spelunk::pipeline
 
-namespace ember {
+namespace spelunk {
 
 using namespace pipeline;
 
@@ -570,4 +570,4 @@ format_struct(const Binary& b, const FuncWindow& w,
     return format_structured(*s_r);
 }
 
-}  // namespace ember
+}  // namespace spelunk

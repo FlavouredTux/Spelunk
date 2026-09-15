@@ -3,7 +3,7 @@
 #include "emitter_internal.hpp"
 #include "emitter_setup.hpp"
 
-#include <ember/analysis/objc.hpp>
+#include <spelunk/analysis/objc.hpp>
 
 #include <array>
 #include <cstdio>
@@ -16,8 +16,8 @@
 
 namespace {
 
-using namespace ember;
-using ember::emit::Emitter;
+using namespace spelunk;
+using spelunk::emit::Emitter;
 
 class AbiBinary final : public Binary {
 public:
@@ -304,7 +304,7 @@ void test_f32_layout_and_ipa_precedence() {
     const auto return_lane =
         arm32_return_emitter.known_call_return_lane(float_call);
     check(fp_return_reg(Abi::AapcsArm32) == Reg::ArmR0 &&
-              return_lane && *return_lane == ember::emit::CallReturnLane::Floating &&
+              return_lane && *return_lane == spelunk::emit::CallReturnLane::Floating &&
               arm32_return_emitter.call_result_reg(float_call) == Reg::ArmR0,
           "known ARM32 soft-float returns bind the r0 result lane");
 
@@ -352,7 +352,7 @@ void test_objc_method_metadata_precedes_block_metadata() {
     emitter.current_objc_method = &method;
     emitter.objc_block_by_invoke.emplace(kStart, &block);
 
-    const auto context = ember::emit::setup_signature_context(
+    const auto context = spelunk::emit::setup_signature_context(
         emitter, bodyless, nullptr, nullptr);
     const FunctionSig* effective = context.effective_metadata_signature
         ? &*context.effective_metadata_signature : nullptr;

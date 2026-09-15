@@ -6,7 +6,7 @@
 namespace ppc_structurer_tests {
 
 int test_ppc_memory_base_live_in_is_pointer() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1300;
     IrValue r3 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
@@ -56,7 +56,7 @@ int test_ppc_memory_base_live_in_is_pointer() {
 }
 
 int test_ppc_small_data_bases_resolve_named_globals() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1380;
     IrFunction fn;
@@ -116,7 +116,7 @@ int test_ppc_small_data_bases_resolve_named_globals() {
 }
 
 int test_ppc_struct_shape_is_shared_across_pointer_aliases() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x13c0;
     IrFunction fn;
@@ -179,7 +179,7 @@ int test_ppc_struct_shape_is_shared_across_pointer_aliases() {
 }
 
 int test_ppc_struct_member_recovers_pointer_type() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x13d0;
     IrFunction fn;
@@ -237,7 +237,7 @@ int test_ppc_struct_member_recovers_pointer_type() {
 }
 
 int test_ppc_struct_member_recovers_nested_object() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1410;
     IrFunction fn;
@@ -304,7 +304,7 @@ int test_ppc_struct_member_recovers_nested_object() {
 }
 
 int test_ppc_pointer_return_type_is_shared_across_calls() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x13e0;
     IrFunction fn;
@@ -364,7 +364,7 @@ int test_ppc_pointer_return_type_is_shared_across_calls() {
 }
 
 int test_ppc_pointer_parameters_shape_stack_locals() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1c80;
     constexpr addr_t kTarget = 0x1ca0;
@@ -452,7 +452,7 @@ int test_ppc_pointer_parameters_shape_stack_locals() {
 }
 
 int test_ppc_preferred_global_alias_is_rendered() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x23c0;
     constexpr addr_t kGlobal = 0x805ae0f8;

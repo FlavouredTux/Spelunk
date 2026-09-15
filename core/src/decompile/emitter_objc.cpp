@@ -10,19 +10,19 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/objc.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 bool Emitter::is_objc_msgsend_name(std::string_view name) noexcept {
     return name == "objc_msgSend" ||
@@ -822,4 +822,4 @@ void Emitter::infer_objc_block_capture_names() {
     }
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

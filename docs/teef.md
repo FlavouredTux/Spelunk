@@ -7,7 +7,7 @@ IDA, without inheriting FLIRT's brittleness to byte-level perturbation.
 
 This is the high-level walkthrough. For wire-format details, schema
 strings, and the recognizer's verdict thresholds, see the inline
-docstrings on `core/include/ember/analysis/teef*.hpp`.
+docstrings on `core/include/spelunk/analysis/teef*.hpp`.
 
 ---
 
@@ -153,7 +153,7 @@ things*. A real win, not a workaround.
 
 ## How recognize uses the cascade
 
-`ember --recognize` runs each query function through this pipeline of
+`spelunk --recognize` runs each query function through this pipeline of
 match paths, in order. The first one to fire returns; later paths
 only run if earlier ones didn't reach the confidence floor.
 
@@ -255,9 +255,9 @@ libstdc++ + libc) total ~80 MB / 1.4M rows. Load is mmap'd and
 parallel-parsed:
 
 ```
-ember: corpus libcrypto.tsv: 35.2 MB / 666973 rows
+spelunk: corpus libcrypto.tsv: 35.2 MB / 666973 rows
        (mmap+pre 0ms · parse 89ms ×16 · merge 178ms · total 267ms)
-ember: corpus loaded: 41200 fns / 8421 chunks across 4 TSVs
+spelunk: corpus loaded: 41200 fns / 8421 chunks across 4 TSVs
        (1398470 rows) in 564 ms
 ```
 
@@ -274,7 +274,7 @@ inverted index built at load time (`whole_minhash_[k] : slot_value →
 slots, count per-entry hits, and only score entries with ≥ 2 slot
 hits. Reduces O(N) full-scan to O(slot_bucket × 8). Slot values that
 match more than 5000 entries are skipped (set with
-`EMBER_TEEF_MAX_SLOT_BUCKET`) - popular trivial bits.
+`SPELUNK_TEEF_MAX_SLOT_BUCKET`) - popular trivial bits.
 
 Live progress + ETA on the scan:
 
@@ -293,15 +293,15 @@ addr-sorted; `| sort -n` if you want sorted.
 ### Build a corpus
 
 ```sh
-ember --teef <library>                       # write corpus to disk cache
-ember --teef --no-cache <library> > foo.tsv  # write corpus TSV to a file
-ember --teef --min-fn-size 32 <library>      # drop tiny stubs first
+spelunk --teef <library>                       # write corpus to disk cache
+spelunk --teef --no-cache <library> > foo.tsv  # write corpus TSV to a file
+spelunk --teef --min-fn-size 32 <library>      # drop tiny stubs first
 ```
 
 Outputs a TSV with `F` rows (one per fn), `S` rows (per-fn reachable
 strings), and `C` rows (per-fn structured chunks). 24-field `F` row,
 keyed by the schema string `kTeefSchema = "max.2"`. Cache lives at
-`~/.cache/ember/<binary-key>/teef-max.2`.
+`~/.cache/spelunk/<binary-key>/teef-max.2`.
 
 `scripts/build_corpus_linux_x86.sh` builds a Linux x86-64 corpus
 covering glibc, libstdc++, libgcc_s, libm, libpthread, libssl,
@@ -316,10 +316,10 @@ script refuses by default).
 ### Recognize
 
 ```sh
-ember --recognize --corpus libcrypto.tsv --corpus libssl.tsv <binary>
-ember --recognize --corpus libcrypto.tsv --recognize-threshold 0.7 <binary>
-ember --recognize --l0-prefilter --corpus ... <binary>      # speedup, lossy on cross-opt
-ember --recognize --min-fn-size 32 --corpus ... <binary>    # drop stubs first
+spelunk --recognize --corpus libcrypto.tsv --corpus libssl.tsv <binary>
+spelunk --recognize --corpus libcrypto.tsv --recognize-threshold 0.7 <binary>
+spelunk --recognize --l0-prefilter --corpus ... <binary>      # speedup, lossy on cross-opt
+spelunk --recognize --min-fn-size 32 --corpus ... <binary>    # drop stubs first
 ```
 
 Output rows:
@@ -352,10 +352,10 @@ Output rows:
 
 | Env var | Default | What it does |
 |---|---|---|
-| `EMBER_TEEF_MAX_INSNS` | 4096 | Per-fn IR insn cap; huge VMP fns past this skip L2 |
-| `EMBER_TEEF_MAX_SLOT_BUCKET` | 5000 | Skip MinHash slot values matching more entries than this (popular trivial bits) |
-| `EMBER_BEHAV_DEBUG` | off | Log every L4 trace abort with reason |
-| `EMBER_QUIET` | off | Suppress all stderr progress / phase output |
+| `SPELUNK_TEEF_MAX_INSNS` | 4096 | Per-fn IR insn cap; huge VMP fns past this skip L2 |
+| `SPELUNK_TEEF_MAX_SLOT_BUCKET` | 5000 | Skip MinHash slot values matching more entries than this (popular trivial bits) |
+| `SPELUNK_BEHAV_DEBUG` | off | Log every L4 trace abort with reason |
+| `SPELUNK_QUIET` | off | Suppress all stderr progress / phase output |
 
 ---
 
@@ -467,7 +467,7 @@ huge buckets specifically benefit from L4.
 
 **Heavy obfuscation**. VMProtect, Themida virtualization, and Lua-VM-
 style interpreters expand each original fn into thousands of junk-
-injected dispatcher steps. The `EMBER_TEEF_MAX_INSNS=4096` gate
+injected dispatcher steps. The `SPELUNK_TEEF_MAX_INSNS=4096` gate
 short-circuits L2 on those, and L4's per-trace `kBehavMaxInsnsTrace`
 similarly bounds the interpreter. Output: empty fingerprint, zero
 match. `--min-fn-size 32` reduces the noise but doesn't recover the
@@ -494,9 +494,9 @@ output.
 
 | File | What |
 |---|---|
-| `core/include/ember/analysis/teef.hpp` | `TeefSig`, `TeefFunction`, `TeefChunk`, schema |
-| `core/include/ember/analysis/teef_behav.hpp` | L4 surface (`BehavSig`, `compute_behav_sig`) |
-| `core/include/ember/analysis/teef_recognize.hpp` | `TeefCorpus`, `TeefMatch` |
+| `core/include/spelunk/analysis/teef.hpp` | `TeefSig`, `TeefFunction`, `TeefChunk`, schema |
+| `core/include/spelunk/analysis/teef_behav.hpp` | L4 surface (`BehavSig`, `compute_behav_sig`) |
+| `core/include/spelunk/analysis/teef_recognize.hpp` | `TeefCorpus`, `TeefMatch` |
 | `core/src/analysis/teef.cpp` | L2 + L0; `compute_teef_max` (shared pipeline) |
 | `core/src/analysis/teef_behav.cpp` | L4 interpreter, intrinsic semantic modeling |
 | `core/src/analysis/teef_corpus.cpp` | Corpus load, mmap parsing, interning, and index construction |
@@ -508,5 +508,5 @@ output.
 Self-contained unit tests in `tests/egraph_test.cpp` cover the
 e-graph core (hash-cons, congruence closure, every rule family,
 budget bail-out). The TEEF-itself behaviour is validated through
-the cross-config matrix in `/tmp/ember_orbit_exp/` and the existing
+the cross-config matrix in `/tmp/spelunk_orbit_exp/` and the existing
 golden tests in `tests/golden/`.

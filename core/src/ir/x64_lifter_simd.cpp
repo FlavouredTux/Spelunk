@@ -6,13 +6,13 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "x64_lifter_internal.hpp"
 
-namespace ember::x64_lift {
+namespace spelunk::x64_lift {
 
 // Read an operand as a scalar floating-point value at the requested type
 // (F32 or F64). Xmm registers come back as `IrValue::make_reg(r, t)`;
@@ -500,4 +500,4 @@ void lift_string_op(LiftCtx& ctx, std::string_view name,
     clobber(Reg::Rcx);
 }
 
-}  // namespace ember::x64_lift
+}  // namespace spelunk::x64_lift

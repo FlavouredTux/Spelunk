@@ -68,9 +68,9 @@ void pluswinMain(void) {
     assert broken_pluswin["metrics"]["semantic_expectation_failures"] == 9
 
     split = benchmark.split_batch_output("""\
-// ember-symbol: first
+// spelunk-symbol: first
 void first(void) {}\n
-// ember-symbol: second
+// spelunk-symbol: second
 void second(void) {}\n
 """)
     assert split == {

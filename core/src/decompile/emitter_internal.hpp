@@ -2,7 +2,7 @@
 
 // Private state and helpers of the pseudo-C emitter, shared by the
 // emitter_*.cpp translation units. Nothing here is part of the public
-// <ember/decompile/emitter.hpp> surface.
+// <spelunk/decompile/emitter.hpp> surface.
 
 #include <array>
 #include <cstddef>
@@ -15,29 +15,29 @@
 #include <utility>
 #include <vector>
 
-#include <ember/decompile/emitter.hpp>
-#include <ember/analysis/arity.hpp>
-#include <ember/analysis/cfg_util.hpp>
-#include <ember/analysis/demangle.hpp>
-#include <ember/analysis/frame.hpp>
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/name_resolver.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/msvc_rtti.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/analysis/ssa_cleanup.hpp>
-#include <ember/common/types.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/decompile/emitter.hpp>
+#include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/cfg_util.hpp>
+#include <spelunk/analysis/demangle.hpp>
+#include <spelunk/analysis/frame.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/name_resolver.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/msvc_rtti.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/analysis/ssa_cleanup.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "emitter_tables.hpp"
 #include "emitter_ssa_use_index.hpp"
 #include "emitter_string_literals.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 // C operator precedence, scaled so "tighter binds" = higher value. Used to
 // decide whether a sub-expression needs wrapping in parens. Only the handful
@@ -1482,4 +1482,4 @@ struct Emitter {
     [[nodiscard]] std::string render_condition(const IrValue& v, bool invert) const;
 };
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

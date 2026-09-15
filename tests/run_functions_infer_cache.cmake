@@ -1,13 +1,13 @@
-if(NOT EMBER OR NOT BINARY)
-    message(FATAL_ERROR "run_functions_infer_cache.cmake: missing EMBER/BINARY")
+if(NOT SPELUNK OR NOT BINARY)
+    message(FATAL_ERROR "run_functions_infer_cache.cmake: missing SPELUNK/BINARY")
 endif()
 
-set(_test_cache "${CMAKE_CURRENT_BINARY_DIR}/.ember_functions_infer_cache")
+set(_test_cache "${CMAKE_CURRENT_BINARY_DIR}/.spelunk_functions_infer_cache")
 file(REMOVE_RECURSE "${_test_cache}")
 file(MAKE_DIRECTORY "${_test_cache}")
 
 execute_process(
-    COMMAND "${EMBER}" --cache-dir "${_test_cache}" "${BINARY}" --functions recoverCachedValue
+    COMMAND "${SPELUNK}" --cache-dir "${_test_cache}" "${BINARY}" --functions recoverCachedValue
     OUTPUT_VARIABLE _plain_out
     ERROR_VARIABLE  _plain_err
     RESULT_VARIABLE _plain_rc
@@ -20,7 +20,7 @@ if(_plain_out MATCHES "recoverCachedValue")
 endif()
 
 execute_process(
-    COMMAND "${EMBER}" --cache-dir "${_test_cache}" "${BINARY}" --infer-string-names --functions recoverCachedValue
+    COMMAND "${SPELUNK}" --cache-dir "${_test_cache}" "${BINARY}" --infer-string-names --functions recoverCachedValue
     OUTPUT_VARIABLE _infer_out
     ERROR_VARIABLE  _infer_err
     RESULT_VARIABLE _infer_rc
@@ -35,8 +35,8 @@ if(NOT _infer_out MATCHES "recoverCachedValue")
 endif()
 
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env EMBER_TIMING=1
-            "${EMBER}" --cache-dir "${_test_cache}" "${BINARY}"
+    COMMAND "${CMAKE_COMMAND}" -E env SPELUNK_TIMING=1
+            "${SPELUNK}" --cache-dir "${_test_cache}" "${BINARY}"
             --infer-string-names --functions --row-limit 1
     OUTPUT_VARIABLE _hot_out
     ERROR_VARIABLE  _hot_err

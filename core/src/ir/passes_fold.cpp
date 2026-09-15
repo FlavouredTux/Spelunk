@@ -6,13 +6,13 @@
 #include <span>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "passes_internal.hpp"
 
-namespace ember::ir_passes {
+namespace spelunk::ir_passes {
 
 // ============================================================================
 // Pass: constant folding + identity folding
@@ -466,4 +466,4 @@ std::size_t pass_trivial_phi(
     return removed;
 }
 
-}  // namespace ember::ir_passes
+}  // namespace spelunk::ir_passes

@@ -64,12 +64,12 @@ if "-1" in args:
 else:
     print(json.dumps({"left": {"symbols": inventory[:2]}, "right": {"symbols": inventory}}))
 """)
-        ember = root / "ember"
-        executable(ember, """#!/usr/bin/env python3
+        spelunk = root / "spelunk"
+        executable(spelunk, """#!/usr/bin/env python3
 import pathlib, sys
 manifest = pathlib.Path(sys.argv[sys.argv.index('--symbols') + 1])
 for name in manifest.read_text().splitlines():
-    print(f'// ember-symbol: {name}')
+    print(f'// spelunk-symbol: {name}')
     print('typedef union PpcState {')
     print('  struct { uint32_t word_0; };')
     print('} PpcState;')
@@ -84,7 +84,7 @@ for name in manifest.read_text().splitlines():
         command = [
             sys.executable, str(script), "--project", str(project),
             "--unit", "main/unit", "--objdiff", str(objdiff),
-            "--ember", str(ember), "--output", str(output), "--strict",
+            "--spelunk", str(spelunk), "--output", str(output), "--strict",
             "--batch-size", "2",
         ]
         result = subprocess.run(command, text=True, capture_output=True, check=False)

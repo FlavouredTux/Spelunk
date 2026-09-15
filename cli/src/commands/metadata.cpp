@@ -15,18 +15,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/recover_imports.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/pe.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/recover_imports.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/pe.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "../args.hpp"
 #include "../builders.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 int run_objc_names(const Args& args, const Binary& b) {
     return run_cached(args, "objc-names", [&] { return build_objc_names_output(b); });
@@ -64,13 +64,13 @@ int run_recover_imports(const Args& args, const Binary& b) {
             if (ext == ".dll") dll_paths.push_back(e.path());
         }
         if (ec) {
-            std::println(stderr, "ember: --dll-dir: cannot read '{}': {}",
+            std::println(stderr, "spelunk: --dll-dir: cannot read '{}': {}",
                          args.recover_dll_dir, ec.message());
         }
     }
     if (dll_paths.empty()) {
         std::println(stderr,
-            "ember: --recover-imports needs reference DLLs. Pass --dll-dir DIR "
+            "spelunk: --recover-imports needs reference DLLs. Pass --dll-dir DIR "
             "(a folder of *.dll) and/or --dll PATH. Point it at real Windows "
             "system DLLs (ntdll, kernel32, kernelbase, user32, ...): a pointer "
             "into a DLL you don't have cannot be named.");
@@ -86,13 +86,13 @@ int run_recover_imports(const Args& args, const Binary& b) {
     for (const auto& path : dll_paths) {
         auto loaded = load_binary(path);
         if (!loaded) {
-            std::println(stderr, "ember: --recover-imports: skipping '{}': {}",
+            std::println(stderr, "spelunk: --recover-imports: skipping '{}': {}",
                          path.string(), loaded.error().message);
             continue;
         }
         if ((*loaded)->format() != Format::Pe) {
             std::println(stderr,
-                "ember: --recover-imports: skipping '{}': not a PE image",
+                "spelunk: --recover-imports: skipping '{}': not a PE image",
                 path.string());
             continue;
         }
@@ -106,7 +106,7 @@ int run_recover_imports(const Args& args, const Binary& b) {
     }
     if (refs.empty()) {
         std::println(stderr,
-            "ember: --recover-imports: no usable reference DLLs loaded");
+            "spelunk: --recover-imports: no usable reference DLLs loaded");
         return EXIT_FAILURE;
     }
 
@@ -119,7 +119,7 @@ int run_recover_imports(const Args& args, const Binary& b) {
         if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
         auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
         if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) {
-            std::println(stderr, "ember: --image-base: bad hex '{}'",
+            std::println(stderr, "spelunk: --image-base: bad hex '{}'",
                          args.recover_image_base);
             return EXIT_FAILURE;
         }
@@ -139,7 +139,7 @@ int run_recover_imports(const Args& args, const Binary& b) {
 
     // Diagnostics to stderr; the machine-readable contract goes to stdout.
     std::println(stderr,
-        "ember: {} reference DLL(s), {} export(s); harvested {} IAT slot(s) "
+        "spelunk: {} reference DLL(s), {} export(s); harvested {} IAT slot(s) "
         "into {} cluster(s)",
         refs.size(), total_exports, result.harvested, result.clusters.size());
     for (const auto& c : result.clusters) {
@@ -182,7 +182,7 @@ int run_vtables(const Args& args, const Binary& b) {
     if (!args.vtable_at.empty()) {
         auto va = parse_cli_addr(args.vtable_at);
         if (!va) {
-            std::println(stderr, "ember: --vtable-at: bad address '{}'", args.vtable_at);
+            std::println(stderr, "spelunk: --vtable-at: bad address '{}'", args.vtable_at);
             return 2;
         }
         std::print("{}", build_vtable_at_output(b, *va, args.vtable_limit));
@@ -195,4 +195,4 @@ int run_int3_resolve(const Args& args, const Binary& b) {
     return run_cached(args, "int3-resolve", [&] { return build_int3_resolve_output(b); });
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

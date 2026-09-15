@@ -9,14 +9,14 @@
 #include <unordered_set>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/strings.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/decompile/emit_options.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/strings.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/decompile/emit_options.hpp>
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 // Everything the widgets need from one loaded binary. Built on a worker
 // thread (load + function enumeration are the slow parts), then owned by
@@ -66,4 +66,4 @@ open_session(const std::filesystem::path& path);
 // so Rust and LTO-split symbols still come out readable.
 [[nodiscard]] std::string display_name(std::string_view raw);
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

@@ -22,8 +22,8 @@
 //   - S-row identifying-string filter rejects structural FPs across
 //     unrelated codebases
 
-#include <ember/analysis/teef.hpp>
-#include <ember/analysis/teef_recognize.hpp>
+#include <spelunk/analysis/teef.hpp>
+#include <spelunk/analysis/teef_recognize.hpp>
 
 #include <array>
 #include <cstdio>
@@ -58,7 +58,7 @@ void check_true(bool cond, const char* ctx) {
 }
 
 // Format a u64 as 16-char lowercase hex - matches build_teef_tsv output.
-std::string hex16(ember::u64 v) {
+std::string hex16(spelunk::u64 v) {
     char buf[17];
     std::snprintf(buf, sizeof(buf), "%016lx", static_cast<unsigned long>(v));
     return std::string(buf, 16);
@@ -67,7 +67,7 @@ std::string hex16(ember::u64 v) {
 // Write a string to a temp file path; caller is responsible for unlink.
 fs::path write_tmp(const std::string& contents, const char* tag) {
     const auto base = fs::temp_directory_path();
-    const auto path = base / (std::string("ember_teef_corpus_test_") + tag + ".tsv");
+    const auto path = base / (std::string("spelunk_teef_corpus_test_") + tag + ".tsv");
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     f.write(contents.data(), static_cast<std::streamsize>(contents.size()));
     f.close();
@@ -77,23 +77,23 @@ fs::path write_tmp(const std::string& contents, const char* tag) {
 // Build an F row matching the build_teef_tsv format. minhash_seed
 // generates 8 distinct slot values so each test fn has its own
 // L2 minhash without us spelling all 8 out by hand.
-std::string make_f_row(ember::u64 addr, ember::u64 l2_exact,
-                       ember::u64 minhash_seed,
+std::string make_f_row(spelunk::u64 addr, spelunk::u64 l2_exact,
+                       spelunk::u64 minhash_seed,
                        std::string_view name,
-                       ember::u64 l4_exact = 0,
-                       ember::u64 topo = 0,
-                       ember::u64 prefix = 0) {
+                       spelunk::u64 l4_exact = 0,
+                       spelunk::u64 topo = 0,
+                       spelunk::u64 prefix = 0) {
     std::string row = "F\t";
     row += hex16(addr);                row += '\t';
     row += hex16(l2_exact);            row += '\t';
     for (std::size_t k = 0; k < 8; ++k) {
-        row += hex16(minhash_seed + static_cast<ember::u64>(k));
+        row += hex16(minhash_seed + static_cast<spelunk::u64>(k));
         row += '\t';
     }
     row += name;                       row += '\t';
     row += hex16(l4_exact);            row += '\t';
     for (std::size_t k = 0; k < 8; ++k) {
-        row += hex16(l4_exact ? (l4_exact + static_cast<ember::u64>(k)) : 0u);
+        row += hex16(l4_exact ? (l4_exact + static_cast<spelunk::u64>(k)) : 0u);
         row += '\t';
     }
     row += "0\t0\t";                                  // L4_done, L4_aborted
@@ -104,15 +104,15 @@ std::string make_f_row(ember::u64 addr, ember::u64 l2_exact,
 
 // Same as make_f_row but emits a 24-field row (no prefix_hash) - the
 // pre-max.4 corpus shape we still claim back-compat for.
-std::string make_f_row_24(ember::u64 addr, ember::u64 l2_exact,
-                          ember::u64 minhash_seed,
+std::string make_f_row_24(spelunk::u64 addr, spelunk::u64 l2_exact,
+                          spelunk::u64 minhash_seed,
                           std::string_view name,
-                          ember::u64 topo = 0) {
+                          spelunk::u64 topo = 0) {
     std::string row = "F\t";
     row += hex16(addr);                row += '\t';
     row += hex16(l2_exact);            row += '\t';
     for (std::size_t k = 0; k < 8; ++k) {
-        row += hex16(minhash_seed + static_cast<ember::u64>(k));
+        row += hex16(minhash_seed + static_cast<spelunk::u64>(k));
         row += '\t';
     }
     row += name;                       row += '\t';
@@ -123,22 +123,22 @@ std::string make_f_row_24(ember::u64 addr, ember::u64 l2_exact,
     return row;
 }
 
-std::string make_c_row(ember::u64 addr, ember::u64 chunk_hash,
-                       ember::u32 inst_count, std::string_view name) {
+std::string make_c_row(spelunk::u64 addr, spelunk::u64 chunk_hash,
+                       spelunk::u32 inst_count, std::string_view name) {
     std::string row = "C\t";
     row += hex16(addr);                row += '\t';
     row += "0\t";                                     // kind
     row += std::to_string(inst_count); row += '\t';
     row += hex16(chunk_hash);          row += '\t';
     for (std::size_t k = 0; k < 8; ++k) {
-        row += hex16(chunk_hash + static_cast<ember::u64>(k + 1));
+        row += hex16(chunk_hash + static_cast<spelunk::u64>(k + 1));
         row += '\t';
     }
     row += name;                       row += '\n';
     return row;
 }
 
-std::string make_s_row(ember::u64 addr, std::vector<ember::u64> hashes) {
+std::string make_s_row(spelunk::u64 addr, std::vector<spelunk::u64> hashes) {
     std::string row = "S\t";
     row += hex16(addr);                row += '\t';
     bool first = true;
@@ -161,20 +161,20 @@ std::string make_t_runtime(std::string_view tag) {
 // Build a synthetic query TeefFunction. Test cases populate only the
 // signal lanes they care about and leave the others at zero so we
 // know which recognizer tier the match came from.
-ember::TeefFunction make_query(ember::u64 l2_exact,
-                               ember::u64 minhash_seed,
-                               ember::u64 l4_exact = 0,
-                               ember::u64 topo = 0,
-                               ember::u64 prefix = 0) {
-    ember::TeefFunction q;
+spelunk::TeefFunction make_query(spelunk::u64 l2_exact,
+                               spelunk::u64 minhash_seed,
+                               spelunk::u64 l4_exact = 0,
+                               spelunk::u64 topo = 0,
+                               spelunk::u64 prefix = 0) {
+    spelunk::TeefFunction q;
     q.whole.exact_hash = l2_exact;
     for (std::size_t k = 0; k < 8; ++k) {
-        q.whole.minhash[k] = minhash_seed + static_cast<ember::u64>(k);
+        q.whole.minhash[k] = minhash_seed + static_cast<spelunk::u64>(k);
     }
     q.behav.exact_hash = l4_exact;
     if (l4_exact != 0) {
         for (std::size_t k = 0; k < 8; ++k) {
-            q.behav.minhash[k] = l4_exact + static_cast<ember::u64>(k);
+            q.behav.minhash[k] = l4_exact + static_cast<spelunk::u64>(k);
         }
     }
     q.topo_hash   = topo;
@@ -190,7 +190,7 @@ void test_basic_l2_exact() {
     tsv += make_f_row(0x2000, /*l2*/0xBBBB2, /*mh*/0x20, "decrypt_block");
     const auto path = write_tmp(tsv, "basic");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     const std::size_t rows = c.load_tsv(path);
     check_eq(rows, std::size_t{2}, "basic_l2_exact: rows ingested");
     check_eq(c.function_count(), std::size_t{2}, "basic_l2_exact: function_count");
@@ -215,7 +215,7 @@ void test_sub_star_dropped() {
     tsv += make_f_row(0x3000, 0x3333, 0x30, "real_function");
     const auto path = write_tmp(tsv, "substar");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     check_eq(c.function_count(), std::size_t{1}, "sub_star_dropped: only real_function indexed");
 
@@ -248,7 +248,7 @@ void test_multi_tsv_merge() {
     const auto pa = write_tmp(a, "merge_a");
     const auto pb = write_tmp(b, "merge_b");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(pa);
     (void)c.load_tsv(pb);
     check_eq(c.function_count(), std::size_t{4},
@@ -282,7 +282,7 @@ void test_distinct_name_guard_rejects_ambiguous() {
     tsv += make_f_row(0x2000, /*l2*/0x4242, 0x20, "candidate_b");
     const auto path = write_tmp(tsv, "ambiguous");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     auto q = make_query(0x4242, 0x10);
     auto m = c.recognize(q, 3);
@@ -306,7 +306,7 @@ void test_t_runtime_transition() {
     tsv += make_f_row(0x2000, /*l2*/0x7002, 0x20, "_ZNSt6vectorIiE_M_emplaceEv");
     const auto path = write_tmp(tsv, "runtime");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     check_eq(c.function_count(), std::size_t{2}, "t_runtime: both rows loaded");
 
@@ -330,7 +330,7 @@ void test_24_field_back_compat() {
     tsv += make_f_row_24(0x1000, /*l2*/0x5500, 0x10, "old_format_fn");
     const auto path = write_tmp(tsv, "v24");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     check_eq(c.function_count(), std::size_t{1},
              "24_field_back_compat: row ingested");
@@ -352,7 +352,7 @@ void test_prefix_exact_l1_lane() {
                       /*l4*/0, /*topo*/0, /*prefix*/0xDEADBEEFCAFE);
     const auto path = write_tmp(tsv, "prefix");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     auto q = make_query(/*l2*/0x6601, /*mh*/0x10,
                         /*l4*/0, /*topo*/0, /*prefix*/0xDEADBEEFCAFE);
@@ -378,15 +378,15 @@ void test_chunk_vote() {
     tsv += make_c_row(0x1000, /*chunk*/0xC0FFEE03, 20, "voter_target");
     const auto path = write_tmp(tsv, "vote");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     check_eq(c.chunk_count(), std::size_t{3}, "chunk_vote: 3 distinct chunks");
 
     // Query L2 hash deliberately doesn't match the corpus - exercises
     // the chunk-vote fallback exclusively.
     auto q = make_query(/*l2*/0xDEAD, 0x99);
-    ember::TeefChunk c1; c1.sig.exact_hash = 0xC0FFEE01; c1.inst_count = 50;
-    ember::TeefChunk c2; c2.sig.exact_hash = 0xC0FFEE02; c2.inst_count = 30;
+    spelunk::TeefChunk c1; c1.sig.exact_hash = 0xC0FFEE01; c1.inst_count = 50;
+    spelunk::TeefChunk c2; c2.sig.exact_hash = 0xC0FFEE02; c2.inst_count = 30;
     q.chunks = {c1, c2};
 
     auto m = c.recognize(q, 3);
@@ -406,7 +406,7 @@ void test_thin_evidence_cap() {
     std::string tsv;
     tsv += make_f_row(0x1000, /*l2*/0xCAFE01, 0x10, "some_helper");
     const auto path = write_tmp(tsv, "thin");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     // Thin query: no strings, no L4. Should hit whole-exact with cap.
@@ -441,7 +441,7 @@ void test_boilerplate_label_cap() {
     tsv += make_f_row(0x2000, /*l2*/0xBEEFC0DE, 0x20,
                       "core::panicking::panic_fmt");
     const auto path = write_tmp(tsv, "boilerplate");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     // Query with matching strings - would normally get conf 1.0 via
@@ -503,10 +503,10 @@ void test_boilerplate_label_mangled_forms() {
     tsv += make_f_row(0x9000, /*l2*/0x999, 0x90,
                       "_RNvXs_NtNtCs_4core3ops8function2Fn4callNtB6_OurClosure");
     const auto path = write_tmp(tsv, "mangled");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
-    struct Case { ember::u64 hash; ember::u64 mh; const char* desc; };
+    struct Case { spelunk::u64 hash; spelunk::u64 mh; const char* desc; };
     const Case cases[] = {
         {0x111, 0x10, "legacy mangle drop_in_place"},
         {0x222, 0x20, "v0 mangle panic_fmt"},
@@ -545,7 +545,7 @@ void test_behav_exact_l2_corroboration() {
                       "regex_quantifier",
                       /*l4*/0xC0FFEE);
     const auto path = write_tmp(tsv, "behav_l2corr");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     // Strong L2: minhash matches corpus exactly. behav-exact stays 1.0.
@@ -593,11 +593,11 @@ void test_behav_exact_low_entropy_floor() {
         row += '\t';
     }
     row += "small_wrapper\t" + hex16(0xCAFE) + "\t";
-    for (int k = 0; k < 8; ++k) row += hex16(0xCAFE + static_cast<ember::u64>(k)) + "\t";
+    for (int k = 0; k < 8; ++k) row += hex16(0xCAFE + static_cast<spelunk::u64>(k)) + "\t";
     row += "0\t0\t" + hex16(0) + "\t" + hex16(0) + "\n";
     corpus_tsv += row;
     const auto path = write_tmp(corpus_tsv, "low_entropy");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     // Query: SAME low-entropy minhash pattern (2 unique slot values).
@@ -606,7 +606,7 @@ void test_behav_exact_low_entropy_floor() {
     // best_l2j = 1.0 still ≥ 0.625 → 1.000. So this case alone
     // doesn't catch the FP; we need to verify the case where
     // ENTROPY IS LOW AND L2 jaccard is moderate (e.g., 0.5 = 4/8).
-    ember::TeefFunction q;
+    spelunk::TeefFunction q;
     q.whole.exact_hash = 0xDEADBEEF;
     // Query minhash: low entropy + only 4/8 slots agree with corpus
     // (alternating pattern but offset).
@@ -617,7 +617,7 @@ void test_behav_exact_low_entropy_floor() {
     }
     // → q has 4 unique slot values (AA/BB/CC/DD); j = 4/8 = 0.5.
     q.behav.exact_hash = 0xCAFE;
-    for (std::size_t k = 0; k < 8; ++k) q.behav.minhash[k] = 0xCAFE + static_cast<ember::u64>(k);
+    for (std::size_t k = 0; k < 8; ++k) q.behav.minhash[k] = 0xCAFE + static_cast<spelunk::u64>(k);
 
     auto m = c.recognize(q, 3);
     check_true(!m.empty(), "low_entropy: still surfaces");
@@ -643,7 +643,7 @@ void test_behav_exact_topo_disagreement() {
                       "real_fn", /*l4*/0xC0FFEE,
                       /*topo*/0xAAAA);
     const auto path = write_tmp(tsv, "topo_disagree");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     // Query agrees on L4 + L2 minhash but topo differs.
@@ -682,7 +682,7 @@ void test_partition_variants_dropped_at_load() {
     tsv += make_f_row(0x5000, /*l2*/0xEEEE, 0x50, "real_fn.part.0");
     tsv += make_f_row(0x6000, /*l2*/0xFFFF, 0x60, "real_fn.lto_priv.42");
     const auto path = write_tmp(tsv, "partition");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
     // Only real_fn (no suffix) should be indexed; the 5 variants drop.
     check_eq(c.function_count(), std::size_t{1},
@@ -719,7 +719,7 @@ void test_anti_corpus_blocks_l2() {
     anti_tsv += make_f_row(0xFA51000, /*l2*/0xAAAA, 0x10, "upx_stub");
     const auto anti_path = write_tmp(anti_tsv, "anti_l2_anti");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(corpus_path);
     check_eq(c.load_anti_tsv(anti_path), std::size_t{1},
              "anti_corpus_l2: anti row ingested");
@@ -732,7 +732,7 @@ void test_anti_corpus_blocks_l2() {
     // A second corpus instance loaded WITHOUT anti-corpus must surface
     // the match - confirms the block is what made the difference, not
     // some pre-existing reason the query couldn't match.
-    ember::TeefCorpus c2;
+    spelunk::TeefCorpus c2;
     (void)c2.load_tsv(corpus_path);
     auto m2 = c2.recognize(q, 3);
     check_true(!m2.empty(), "anti_corpus_l2: unblocked corpus DOES surface");
@@ -763,7 +763,7 @@ void test_anti_corpus_blocks_l4_and_prefix() {
                            /*prefix*/0xBABE);
     const auto anti_path = write_tmp(anti_tsv, "anti_lp_anti");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(corpus_path);
     (void)c.load_anti_tsv(anti_path);
 
@@ -792,12 +792,12 @@ void test_chunk_vote_thin_evidence_cap() {
     tsv += make_c_row(0x1000, /*chunk*/0xCC01, 50, "vote_winner");
     tsv += make_c_row(0x1000, /*chunk*/0xCC02, 30, "vote_winner");
     const auto path = write_tmp(tsv, "votecap");
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     auto q = make_query(/*l2 mismatch*/0xDEAD, 0x99);
-    ember::TeefChunk c1; c1.sig.exact_hash = 0xCC01; c1.inst_count = 50;
-    ember::TeefChunk c2; c2.sig.exact_hash = 0xCC02; c2.inst_count = 30;
+    spelunk::TeefChunk c1; c1.sig.exact_hash = 0xCC01; c1.inst_count = 50;
+    spelunk::TeefChunk c2; c2.sig.exact_hash = 0xCC02; c2.inst_count = 30;
     q.chunks = {c1, c2};
 
     auto m = c.recognize(q, 3);
@@ -820,7 +820,7 @@ void test_strings_filter_rejects_disjoint() {
     tsv += make_s_row(0x1000, {0xAAA1, 0xAAA2});
     const auto path = write_tmp(tsv, "strings");
 
-    ember::TeefCorpus c;
+    spelunk::TeefCorpus c;
     (void)c.load_tsv(path);
 
     auto q = make_query(0xBEEF, 0x10);

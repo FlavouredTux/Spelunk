@@ -2,8 +2,8 @@
 #include <cstdio>
 
 namespace {
-using namespace ember;
-using namespace ember::test;
+using namespace spelunk;
+using namespace spelunk::test;
 int failures=0;
 void check(bool ok,const char* message){if(!ok){std::fprintf(stderr,"FAIL: %s\n",message);++failures;}}
 IrFunction function(bool read_clobbered=false) {

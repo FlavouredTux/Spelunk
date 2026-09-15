@@ -8,16 +8,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/rel.hpp>
-#include <ember/disasm/decoder.hpp>
+#include <spelunk/binary/rel.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::vector<std::byte> buffer(size);
     if (size != 0) std::memcpy(buffer.data(), data, size);
 
-    auto loaded = ember::RelBinary::load_from_buffer(std::move(buffer));
+    auto loaded = spelunk::RelBinary::load_from_buffer(std::move(buffer));
     if (!loaded) return 0;
-    const ember::RelBinary& rel = **loaded;
+    const spelunk::RelBinary& rel = **loaded;
 
     std::size_t touched = static_cast<std::size_t>(rel.module_id()) +
                           static_cast<std::size_t>(rel.version());
@@ -33,7 +33,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                    (relocation.applied ? 1u : 0u);
         touched += static_cast<std::size_t>(
             relocation.site ^ relocation.target ^
-            static_cast<ember::u64>(relocation.addend));
+            static_cast<spelunk::u64>(relocation.addend));
         touched += static_cast<std::size_t>(
             relocation.type + relocation.source_section +
             relocation.target_module + relocation.target_section +
@@ -42,10 +42,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     touched += static_cast<std::size_t>(rel.preferred_load_base() +
                                         rel.mapped_size());
 
-    const ember::addr_t entry = rel.entry_point();
+    const spelunk::addr_t entry = rel.entry_point();
     if (entry != 0) {
-        if (auto decoder = ember::make_decoder(rel)) {
-            ember::addr_t pc = entry;
+        if (auto decoder = spelunk::make_decoder(rel)) {
+            spelunk::addr_t pc = entry;
             for (int i = 0; i < 32; ++i) {
                 auto code = rel.bytes_at(pc);
                 if (code.empty()) break;

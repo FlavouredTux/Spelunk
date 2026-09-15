@@ -3,16 +3,16 @@
 #include <cstdlib>
 #include <print>
 
-#include <ember/common/error.hpp>
+#include <spelunk/common/error.hpp>
 
-namespace ember::cli {
+namespace spelunk::cli {
 
-// Standard CLI failure path: print "ember: <kind>: <message>" to stderr and
+// Standard CLI failure path: print "spelunk: <kind>: <message>" to stderr and
 // return EXIT_FAILURE. The 5 `run_*` runners and several main() code paths
 // repeated this verbatim.
 [[nodiscard]] inline int report(const Error& e) {
-    std::println(stderr, "ember: {}: {}", e.kind_name(), e.message);
+    std::println(stderr, "spelunk: {}: {}", e.kind_name(), e.message);
     return EXIT_FAILURE;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

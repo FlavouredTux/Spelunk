@@ -6,7 +6,7 @@
 namespace ppc_structurer_tests {
 
 int test_ppc_ctr_loop_keeps_predecrement() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x402180;
     IrValue ctr1 = IrValue::make_reg(Reg::PpcCtr, IrType::I32);
@@ -66,7 +66,7 @@ int test_ppc_ctr_loop_keeps_predecrement() {
 }
 
 int test_ppc_void_return_merge_becomes_entry_guard() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1000;
     constexpr addr_t kBody = 0x1010;
@@ -149,7 +149,7 @@ int test_ppc_void_return_merge_becomes_entry_guard() {
 }
 
 int test_ppc_small_incidental_return_merge_is_void() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1200;
     IrValue r3_1 = IrValue::make_reg(Reg::PpcR3, IrType::I32);
@@ -208,7 +208,7 @@ int test_ppc_small_incidental_return_merge_is_void() {
 }
 
 int test_ppc_replicated_store_return_is_void() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x1320;
     IrFunction fn;
@@ -266,7 +266,7 @@ int test_ppc_replicated_store_return_is_void() {
 }
 
 int test_ppc_switch_selector_prefers_bounds_operand() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kBounds = 0x2280;
     constexpr addr_t kSwitch = 0x22a0;

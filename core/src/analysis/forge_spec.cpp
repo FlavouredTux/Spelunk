@@ -1,4 +1,4 @@
-#include <ember/analysis/forge_spec.hpp>
+#include <spelunk/analysis/forge_spec.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -12,22 +12,22 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/type_infer_local.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/type_infer_local.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -898,4 +898,4 @@ std::string format_forge_spec_json(const ForgeSpec& spec) {
     return s;
 }
 
-}  // namespace ember
+}  // namespace spelunk

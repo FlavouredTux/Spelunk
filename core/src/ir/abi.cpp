@@ -1,10 +1,10 @@
-#include <ember/ir/abi.hpp>
+#include <spelunk/ir/abi.hpp>
 
 #include <span>
 
-#include <ember/disasm/register.hpp>
+#include <spelunk/disasm/register.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -198,4 +198,4 @@ Reg fp_return_reg(Abi a) noexcept {
     }
 }
 
-}  // namespace ember
+}  // namespace spelunk

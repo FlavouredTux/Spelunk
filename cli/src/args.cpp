@@ -11,11 +11,11 @@
 #include <string_view>
 #include <system_error>
 
-#include <ember/common/error.hpp>
+#include <spelunk/common/error.hpp>
 
 #include "util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -144,7 +144,7 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--evidence",     &Args::annotate_evidence},
     {"",   "--source",       &Args::annotate_source},
     {"",   "--apply-patches", &Args::apply_patches},
-    {"",   "--apply",       &Args::apply_ember},
+    {"",   "--apply",       &Args::apply_spelunk},
     {"",   "--pdb",         &Args::pdb_path},
     {"",   "--kismet",      &Args::kismet_bundle},
     {"",   "--kismet-event", &Args::kismet_event},
@@ -296,7 +296,7 @@ Result<Args> parse_args(int argc, char** argv) {
         }
 
         // `--corpus PATH` - repeatable. Each is a TEEF TSV (output of
-        // `ember --teef <lib>`); the recognizer merges them.
+        // `spelunk --teef <lib>`); the recognizer merges them.
         if (s == "--corpus") {
             if (++i >= argc) {
                 return std::unexpected(Error::invalid_format("--corpus requires a path"));
@@ -588,8 +588,8 @@ Result<Args> parse_args(int argc, char** argv) {
                    (a.disasm || a.cfg || a.cfg_pseudo || a.ir ||
                     a.ssa    || a.opt || a.strct      || a.pseudo)) {
             // The natural shorthand for "decompile / disassemble this
-            // function" is `ember -p BIN 0x4012a0` rather than
-            // `ember -p BIN -s 0x4012a0`. Accept it for the view modes
+            // function" is `spelunk -p BIN 0x4012a0` rather than
+            // `spelunk -p BIN -s 0x4012a0`. Accept it for the view modes
             // where -s is the only thing a second positional could be.
             a.symbol = s;
         } else {
@@ -597,7 +597,7 @@ Result<Args> parse_args(int argc, char** argv) {
                 std::format("unexpected positional argument: {}", s)));
         }
     }
-    // Rescue the common `ember --functions PATTERN BINARY` mis-order:
+    // Rescue the common `spelunk --functions PATTERN BINARY` mis-order:
     // positionals are taken left-to-right, so a user who types the filter
     // first has PATTERN interpreted as the binary path. If the binary slot
     // names a non-existent path but the pattern slot names an existing
@@ -646,4 +646,4 @@ Result<Args> parse_args(int argc, char** argv) {
     return a;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

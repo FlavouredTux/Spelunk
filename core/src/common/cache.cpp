@@ -1,4 +1,4 @@
-#include <ember/common/cache.hpp>
+#include <spelunk/common/cache.hpp>
 
 #include <cstdlib>
 #include <expected>
@@ -12,20 +12,20 @@
 #include <string_view>
 #include <system_error>
 
-#include <ember/common/error.hpp>
-#include <ember/common/hash.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/hash.hpp>
 
-namespace ember::cache {
+namespace spelunk::cache {
 
 std::filesystem::path default_dir() {
     namespace fs = std::filesystem;
     if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg) {
-        return fs::path(xdg) / "ember";
+        return fs::path(xdg) / "spelunk";
     }
     if (const char* home = std::getenv("HOME"); home && *home) {
-        return fs::path(home) / ".cache" / "ember";
+        return fs::path(home) / ".cache" / "spelunk";
     }
-    return fs::current_path() / ".ember-cache";
+    return fs::current_path() / ".spelunk-cache";
 }
 
 Result<std::string>
@@ -113,4 +113,4 @@ write(const std::filesystem::path& cache_dir,
     return {};
 }
 
-}  // namespace ember::cache
+}  // namespace spelunk::cache

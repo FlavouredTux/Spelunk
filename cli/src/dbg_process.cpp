@@ -14,16 +14,16 @@
 #include <variant>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "args.hpp"
 #include "dbg_internal.hpp"
 
-namespace ember::cli::dbg {
+namespace spelunk::cli::dbg {
 
 namespace {
 
@@ -44,7 +44,7 @@ void rearm_after_exec(ReplState& rs) {
             return e ? rs.bin_path : p.string();
         }();
         if (new_path != old_canon) {
-            if (auto reloaded = ember::load_binary(new_path); reloaded) {
+            if (auto reloaded = spelunk::load_binary(new_path); reloaded) {
                 g_post_exec_bin = std::move(*reloaded);
                 rs.bin            = g_post_exec_bin.get();
                 rs.bin_path       = new_path;
@@ -52,7 +52,7 @@ void rearm_after_exec(ReplState& rs) {
                 std::println("exec into new binary: {} (primary reloaded)", new_path);
             } else {
                 std::println(stderr,
-                    "ember-dbg: re-arm: failed to reload new primary {}: {}",
+                    "spelunk-dbg: re-arm: failed to reload new primary {}: {}",
                     new_path, reloaded.error().message);
             }
         }
@@ -80,7 +80,7 @@ void rearm_after_exec(ReplState& rs) {
         auto spec = parse_addr_spec_multi(desc.spec, rs);
         if (!spec) {
             std::println(stderr,
-                "ember-dbg: re-arm: bp '{}' no longer resolves; dropped", desc.spec);
+                "spelunk-dbg: re-arm: bp '{}' no longer resolves; dropped", desc.spec);
             ++bp_lost;
             continue;
         }
@@ -88,7 +88,7 @@ void rearm_after_exec(ReplState& rs) {
         auto id = rs.tgt->set_breakpoint(va);
         if (!id) {
             std::println(stderr,
-                "ember-dbg: re-arm: bp '{}' at {}: {}", desc.spec,
+                "spelunk-dbg: re-arm: bp '{}' at {}: {}", desc.spec,
                 fmt_addr(va), id.error().message);
             ++bp_lost;
             continue;
@@ -101,7 +101,7 @@ void rearm_after_exec(ReplState& rs) {
         auto spec = parse_addr_spec_multi(desc.spec, rs);
         if (!spec) {
             std::println(stderr,
-                "ember-dbg: re-arm: wp '{}' no longer resolves; dropped", desc.spec);
+                "spelunk-dbg: re-arm: wp '{}' no longer resolves; dropped", desc.spec);
             ++wp_lost;
             continue;
         }
@@ -109,7 +109,7 @@ void rearm_after_exec(ReplState& rs) {
         auto id = rs.tgt->set_watchpoint(va, desc.size, desc.mode);
         if (!id) {
             std::println(stderr,
-                "ember-dbg: re-arm: wp '{}' at {}: {}", desc.spec,
+                "spelunk-dbg: re-arm: wp '{}' at {}: {}", desc.spec,
                 fmt_addr(va), id.error().message);
             ++wp_lost;
             continue;
@@ -130,7 +130,7 @@ BackendChoice parse_debug_backend(std::string_view s) {
     if (s == "perf")                return {debug::BackendKind::Perf,    false};
     if (s == "auto")                return {debug::BackendKind::Perf,    true};
     std::println(stderr,
-        "ember-dbg: --debug-backend: unknown value '{}' (expected ptrace|perf|auto) - using ptrace",
+        "spelunk-dbg: --debug-backend: unknown value '{}' (expected ptrace|perf|auto) - using ptrace",
         s);
     return {debug::BackendKind::Ptrace, false};
 }
@@ -141,7 +141,7 @@ int cmd_run(ReplState& rs, const Args& args) {
         return 0;
     }
     if (args.binary.empty()) {
-        std::println(stderr, "ember-dbg: run: no binary path (re-launch ember with --debug PATH)");
+        std::println(stderr, "spelunk-dbg: run: no binary path (re-launch spelunk with --debug PATH)");
         return 1;
     }
     debug::LaunchOptions opts;
@@ -170,7 +170,7 @@ int cmd_attach(ReplState& rs, std::string_view pid_str) {
     }
     auto pid = parse_int(pid_str);
     if (!pid) {
-        std::println(stderr, "ember-dbg: attach: bad pid '{}'", pid_str);
+        std::println(stderr, "spelunk-dbg: attach: bad pid '{}'", pid_str);
         return 1;
     }
     auto t = debug::attach(static_cast<debug::ProcessId>(*pid),
@@ -265,4 +265,4 @@ int cmd_step(ReplState& rs) {
     return 0;
 }
 
-}  // namespace ember::cli::dbg
+}  // namespace spelunk::cli::dbg

@@ -3,7 +3,7 @@
 
 namespace {
 void test_call_stays_before_branch(bool cast_return) {
-    using namespace ember;
+    using namespace spelunk;
     IrFunction fn;
     fn.start = 0x5000;
     fn.end = 0x5040;
@@ -57,7 +57,7 @@ void test_call_stays_before_branch(bool cast_return) {
           "unconditional call emitted exactly once");
 }
 void test_call_stays_before_store() {
-    using namespace ember;
+    using namespace spelunk;
     IrFunction fn; fn.start = 0x6000; fn.end = 0x6010; fn.name = "call_before_store";
     IrValue result = IrValue::make_reg(Reg::PpcR3, IrType::I32); result.version = 1;
     IrBlock block; block.start = fn.start; block.end = fn.end; block.kind = BlockKind::Return;
@@ -77,7 +77,7 @@ void test_call_stays_before_store() {
 }
 
 void test_merge_used_only_as_call_argument() {
-    using namespace ember;
+    using namespace spelunk;
     IrFunction fn;
     fn.start = 0x7000; fn.end = 0x7040; fn.name = "optional_buffer";
     auto source = IrValue::make_reg(Reg::PpcR3, IrType::I32);
@@ -134,12 +134,12 @@ void test_merge_used_only_as_call_argument() {
 }
 int main() {
     {
-        ember::IrFunction fn;
-        ember::emit::Emitter e(nullptr);
+        spelunk::IrFunction fn;
+        spelunk::emit::Emitter e(nullptr);
         e.fn = &fn;
-        e.abi = ember::Abi::Ppc32Sysv;
+        e.abi = spelunk::Abi::Ppc32Sysv;
         e.self_arity = 1;
-        e.self_arg_layout.emplace_back(ember::Reg::PpcR3, ember::IrType::I32);
+        e.self_arg_layout.emplace_back(spelunk::Reg::PpcR3, spelunk::IrType::I32);
         e.merge_locals.try_emplace("value");
         e.infer_ppc_role_arg_names();
         check(e.self_arg_names[0] != "value",

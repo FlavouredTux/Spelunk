@@ -4,14 +4,14 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "x64_lifter_internal.hpp"
 
-namespace ember::x64_lift {
+namespace spelunk::x64_lift {
 
 // Build the same i1 condition that jcc would produce, given the CMOVcc
 // mnemonic. Reuses jcc_predicate by mapping cmov→jcc.
@@ -314,4 +314,4 @@ void lift_pop(LiftCtx& ctx) {
     store_lvalue(insn.operands[0], val, ctx);
 }
 
-}  // namespace ember::x64_lift
+}  // namespace spelunk::x64_lift

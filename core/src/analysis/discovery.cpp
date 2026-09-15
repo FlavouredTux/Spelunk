@@ -1,4 +1,4 @@
-#include <ember/analysis/discovery.hpp>
+#include <spelunk/analysis/discovery.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -11,20 +11,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/packed.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/threads.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/arm64_decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/ppc_decoder.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
+#include <spelunk/analysis/packed.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/threads.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/arm64_decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/ppc_decoder.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 
-namespace ember {
+namespace spelunk {
 
 // "Code-shaped" = either flagged executable, or has the canonical text
 // section name. Byfron / VMProtect strip the executable bit on disk
@@ -464,4 +464,4 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

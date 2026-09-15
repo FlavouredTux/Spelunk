@@ -1,4 +1,4 @@
-#include <ember/binary/elf.hpp>
+#include <spelunk/binary/elf.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,16 +10,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/eh_frame.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "elf_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -481,4 +481,4 @@ Result<void> ElfBinary::parse_from_phdr(const ParsedEhdr& h) {
     return {};
 }
 
-}  // namespace ember
+}  // namespace spelunk

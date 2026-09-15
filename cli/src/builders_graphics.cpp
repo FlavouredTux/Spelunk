@@ -9,15 +9,15 @@
 #include <string>
 #include <vector>
 
-#include <ember/analysis/graphics.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/graphics.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "builders.hpp"
 #include "builders_internal.hpp"
 #include "util.hpp"
 
-namespace ember::cli::builders {
+namespace spelunk::cli::builders {
 
 namespace {
 
@@ -98,9 +98,9 @@ namespace {
 
 }  // namespace
 
-}  // namespace ember::cli::builders
+}  // namespace spelunk::cli::builders
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 using namespace builders;
 
@@ -350,4 +350,4 @@ std::string build_graphics_output(const Binary& b, bool json,
     return out;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

@@ -10,14 +10,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include <ember/structure/structurer.hpp>
+#include <spelunk/structure/structurer.hpp>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
 
-namespace ember::structurer {
+namespace spelunk::structurer {
 
 // Sentinel for "no valid block address" in the structurer. Using 0 would
 // collide with functions that legitimately start at 0x0 (e.g. unlinked .o
@@ -157,4 +157,4 @@ private:
     std::optional<Error>                error_;
 };
 
-}  // namespace ember::structurer
+}  // namespace spelunk::structurer

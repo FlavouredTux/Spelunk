@@ -11,13 +11,13 @@
 
 #include <expected>
 
-#include <ember/common/error.hpp>
-#include <ember/debug/regs.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/debug/regs.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "perf_target.hpp"
 
-namespace ember::debug::linux_perf {
+namespace spelunk::debug::linux_perf {
 
 Result<Registers> PerfTarget::get_regs(ThreadId tid) {
     const auto* ts = thread_state_lookup(tid);
@@ -37,4 +37,4 @@ Result<void> PerfTarget::set_regs(ThreadId, const Registers&) {
         "(no PTRACE_SETREGS surface - use the ptrace backend if you need it)"));
 }
 
-}  // namespace ember::debug::linux_perf
+}  // namespace spelunk::debug::linux_perf

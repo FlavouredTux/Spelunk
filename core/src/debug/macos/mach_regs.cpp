@@ -31,7 +31,7 @@
 #include <mach/thread_state.h>
 #include <mach/i386/thread_status.h>
 
-namespace ember::debug::mach_ {
+namespace spelunk::debug::mach_ {
 
 namespace {
 
@@ -315,4 +315,4 @@ Result<void> MachOTarget::set_regs(ThreadId tid, const Registers& r) {
     return {};
 }
 
-}  // namespace ember::debug::mach_
+}  // namespace spelunk::debug::mach_

@@ -6,10 +6,10 @@
 #include <format>
 #include <map>
 
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/lifter.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/lifter.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 std::optional<Emitter::RenderedCall>
 Emitter::render_ppc_virtual_call(const IrInst& call, const CallArgPack& pack) const {
@@ -118,4 +118,4 @@ Emitter::render_ppc_virtual_call(const IrInst& call, const CallArgPack& pack) co
     return result;
 }
 
-} // namespace ember::emit
+} // namespace spelunk::emit

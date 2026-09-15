@@ -1,4 +1,4 @@
-add_library(ember_core STATIC
+add_library(spelunk_core STATIC
     src/binary/elf.cpp
     src/binary/elf_cafe.cpp
     src/binary/elf_cafe_link.cpp
@@ -159,11 +159,11 @@ add_library(ember_core STATIC
     src/debug/unwind_eh.cpp
     src/debug/unwind_scavenge.cpp
 )
-add_library(ember::core ALIAS ember_core)
+add_library(spelunk::core ALIAS spelunk_core)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
    CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    target_sources(ember_core PRIVATE
+    target_sources(spelunk_core PRIVATE
         src/debug/linux/proc_mem.cpp
         src/debug/linux/proc_utils.cpp
         src/debug/linux/ptrace_target.cpp
@@ -184,7 +184,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
        CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    target_sources(ember_core PRIVATE
+    target_sources(spelunk_core PRIVATE
         src/debug/macos/mach_target.cpp
         src/debug/macos/mach_proc.cpp
         src/debug/macos/mach_mem.cpp
@@ -194,28 +194,28 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
     )
 endif()
 
-target_include_directories(ember_core
+target_include_directories(spelunk_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-target_compile_features(ember_core PUBLIC cxx_std_23)
-target_link_libraries(ember_core
-    PRIVATE ember::flags
+target_compile_features(spelunk_core PUBLIC cxx_std_23)
+target_link_libraries(spelunk_core
+    PRIVATE spelunk::flags
 )
 
-set_target_properties(ember_core PROPERTIES
+set_target_properties(spelunk_core PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-option(EMBER_WITH_ZLIB "Enable Wii U RPX/RPL section decompression when zlib is available" ON)
-set(EMBER_ZLIB_ENABLED OFF PARENT_SCOPE)
-if(EMBER_WITH_ZLIB)
+option(SPELUNK_WITH_ZLIB "Enable Wii U RPX/RPL section decompression when zlib is available" ON)
+set(SPELUNK_ZLIB_ENABLED OFF PARENT_SCOPE)
+if(SPELUNK_WITH_ZLIB)
     find_package(ZLIB QUIET)
     if(ZLIB_FOUND)
-        target_link_libraries(ember_core PRIVATE ZLIB::ZLIB)
-        target_compile_definitions(ember_core PRIVATE EMBER_HAS_ZLIB=1)
-        set(EMBER_ZLIB_ENABLED ON PARENT_SCOPE)
+        target_link_libraries(spelunk_core PRIVATE ZLIB::ZLIB)
+        target_compile_definitions(spelunk_core PRIVATE SPELUNK_HAS_ZLIB=1)
+        set(SPELUNK_ZLIB_ENABLED ON PARENT_SCOPE)
     else()
         message(STATUS "zlib not found: compressed Wii U RPX/RPL sections disabled")
     endif()

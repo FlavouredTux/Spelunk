@@ -1,5 +1,5 @@
-#include <ember/binary/binary.hpp>
-#include <ember/binary/dwarf.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/dwarf.hpp>
 
 #include <array>
 #include <cstdio>
@@ -18,33 +18,33 @@ void check(bool condition, const char* message) {
     }
 }
 
-void put_u16(std::vector<std::byte>& bytes, ember::u16 value) {
+void put_u16(std::vector<std::byte>& bytes, spelunk::u16 value) {
     bytes.push_back(static_cast<std::byte>(value));
     bytes.push_back(static_cast<std::byte>(value >> 8));
 }
 
-void put_u32(std::vector<std::byte>& bytes, ember::u32 value) {
+void put_u32(std::vector<std::byte>& bytes, spelunk::u32 value) {
     for (unsigned shift = 0; shift < 32; shift += 8) {
         bytes.push_back(static_cast<std::byte>(value >> shift));
     }
 }
 
-void put_u64(std::vector<std::byte>& bytes, ember::u64 value) {
+void put_u64(std::vector<std::byte>& bytes, spelunk::u64 value) {
     for (unsigned shift = 0; shift < 64; shift += 8) {
         bytes.push_back(static_cast<std::byte>(value >> shift));
     }
 }
 
 void patch_u32(std::vector<std::byte>& bytes, std::size_t offset,
-               ember::u32 value) {
+               spelunk::u32 value) {
     for (unsigned index = 0; index < 4; ++index) {
         bytes[offset + index] = static_cast<std::byte>(value >> (index * 8));
     }
 }
 
-void put_uleb(std::vector<std::byte>& bytes, ember::u64 value) {
+void put_uleb(std::vector<std::byte>& bytes, spelunk::u64 value) {
     do {
-        ember::u8 byte = static_cast<ember::u8>(value & 0x7fu);
+        spelunk::u8 byte = static_cast<spelunk::u8>(value & 0x7fu);
         value >>= 7;
         if (value != 0) byte |= 0x80u;
         bytes.push_back(static_cast<std::byte>(byte));
@@ -56,7 +56,7 @@ void put_string(std::vector<std::byte>& bytes, const char* value) {
     bytes.push_back(std::byte{0});
 }
 
-class DwarfBinary final : public ember::Binary {
+class DwarfBinary final : public spelunk::Binary {
 public:
     DwarfBinary() {
         // Abbrev 1: compile unit with children, no attributes.
@@ -91,9 +91,9 @@ public:
         put_u32(info_, 0);                  // abbrev offset
         info_.push_back(std::byte{8});       // address size
         put_uleb(info_, 1);                 // compile unit
-        const ember::u32 base_offset = static_cast<ember::u32>(info_.size());
+        const spelunk::u32 base_offset = static_cast<spelunk::u32>(info_.size());
         put_uleb(info_, 2); put_string(info_, "int"); info_.push_back(std::byte{4});
-        const ember::u32 pointer_offset = static_cast<ember::u32>(info_.size());
+        const spelunk::u32 pointer_offset = static_cast<spelunk::u32>(info_.size());
         put_uleb(info_, 3); put_u32(info_, base_offset);
         put_uleb(info_, 4); put_string(info_, "main");
         put_u64(info_, 0x401000); put_u32(info_, 0x20); put_u32(info_, base_offset);
@@ -101,7 +101,7 @@ public:
         put_uleb(info_, 0);                 // end subprogram children
         put_uleb(info_, 0);                 // end CU children
         patch_u32(info_, length_at,
-                  static_cast<ember::u32>(info_.size() - length_at - 4));
+                  static_cast<spelunk::u32>(info_.size() - length_at - 4));
 
         sections_[0].name = ".debug_info";
         sections_[0].size = info_.size();
@@ -111,33 +111,33 @@ public:
         sections_[1].data = abbrev_;
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override { return ember::Format::Elf; }
-    [[nodiscard]] ember::Arch arch() const noexcept override { return ember::Arch::X86_64; }
-    [[nodiscard]] ember::Endian endian() const noexcept override { return ember::Endian::Little; }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override { return 0x401000; }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+    [[nodiscard]] spelunk::Format format() const noexcept override { return spelunk::Format::Elf; }
+    [[nodiscard]] spelunk::Arch arch() const noexcept override { return spelunk::Arch::X86_64; }
+    [[nodiscard]] spelunk::Endian endian() const noexcept override { return spelunk::Endian::Little; }
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override { return 0x401000; }
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
         return sections_;
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override { return {}; }
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override { return {}; }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override { return {}; }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return symbols_;
     }
 
 private:
     std::vector<std::byte> info_;
     std::vector<std::byte> abbrev_;
-    std::array<ember::Section, 2> sections_{};
-    std::vector<ember::Symbol> symbols_;
+    std::array<spelunk::Section, 2> sections_{};
+    std::vector<spelunk::Symbol> symbols_;
 };
 
 }  // namespace
 
 int main() {
     DwarfBinary binary;
-    const auto functions = ember::parse_dwarf_functions(binary);
+    const auto functions = spelunk::parse_dwarf_functions(binary);
     auto main_function = functions.find(0x401000);
     check(main_function != functions.end(), "DWARF subprogram address imported");
     if (main_function != functions.end()) {

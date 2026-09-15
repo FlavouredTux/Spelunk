@@ -1,4 +1,4 @@
-#include <ember/binary/dtk_project.hpp>
+#include <spelunk/binary/dtk_project.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -14,10 +14,10 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/text.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/text.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -391,4 +391,4 @@ resolve_dtk_project_modules(const std::filesystem::path& input,
     return projects;
 }
 
-}  // namespace ember
+}  // namespace spelunk

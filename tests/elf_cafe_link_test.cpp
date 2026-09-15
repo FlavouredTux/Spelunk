@@ -1,13 +1,13 @@
-#include <ember/binary/elf.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/analysis/pipeline.hpp>
+#include <spelunk/binary/elf.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/analysis/pipeline.hpp>
 #include <array>
 #include <cstdio>
 #include <string>
 #include <vector>
 
 namespace {
-using namespace ember;
+using namespace spelunk;
 void put32(std::vector<std::byte>& b, std::size_t off, u32 x) {
     for (unsigned j = 0; j < 4; ++j) b[off+j] = static_cast<std::byte>((x >> ((3-j)*8)) & 255u);
 }

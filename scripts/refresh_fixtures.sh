@@ -14,10 +14,10 @@ cd "$(dirname "$0")/.."
 
 gen=()
 command -v ninja >/dev/null 2>&1 && gen=(-G Ninja)
-cmake -S . -B build-fixtures "${gen[@]}" -DCMAKE_BUILD_TYPE=Release -DEMBER_COMPILE_FIXTURES=ON
+cmake -S . -B build-fixtures "${gen[@]}" -DCMAKE_BUILD_TYPE=Release -DSPELUNK_COMPILE_FIXTURES=ON
 cmake --build build-fixtures
 
-names=$(grep -oE '^\s*ember_build_fixture\([A-Za-z0-9_]+' tests/CMakeLists.txt | sed -E 's/.*\(//')
+names=$(grep -oE '^\s*spelunk_build_fixture\([A-Za-z0-9_]+' tests/CMakeLists.txt | sed -E 's/.*\(//')
 for name in $names; do
     cp "build-fixtures/tests/fixtures/$name" "tests/fixtures/$name.prebuilt"
 done

@@ -4,9 +4,9 @@
 #include <sys/types.h>
 #include <vector>
 
-#include <ember/debug/target.hpp>
+#include <spelunk/debug/target.hpp>
 
-namespace ember::debug::linux_detail {
+namespace spelunk::debug::linux_detail {
 
 // Owns the null-terminated string array passed to execvpe. The strings are
 // released only when exec fails; a successful exec replaces the process image.
@@ -30,4 +30,4 @@ build_argv(const std::string& program, const std::vector<std::string>& args);
 
 [[nodiscard]] std::vector<pid_t> read_task_tids(pid_t pid);
 
-}  // namespace ember::debug::linux_detail
+}  // namespace spelunk::debug::linux_detail

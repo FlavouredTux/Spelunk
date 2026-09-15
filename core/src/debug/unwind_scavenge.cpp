@@ -12,17 +12,17 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
-#include <ember/debug/unwind.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
+#include <spelunk/debug/unwind.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
-namespace ember::debug {
+namespace spelunk::debug {
 
 namespace {
 
@@ -59,7 +59,7 @@ identify(addr_t runtime_pc, std::span<const BinarySlide> bins) {
     for (const auto& bs : bins) {
         if (!bs.bin) continue;
         const addr_t static_pc = runtime_pc - bs.slide;
-        auto cf = ember::containing_function(*bs.bin, static_pc);
+        auto cf = spelunk::containing_function(*bs.bin, static_pc);
         if (!cf) continue;
         if (cf->offset_within == 0) continue;
         return Hit{bs.bin, bs.slide, static_pc};
@@ -121,4 +121,4 @@ unwind_scavenge(Target& t, ThreadId tid,
     return out;
 }
 
-}  // namespace ember::debug
+}  // namespace spelunk::debug

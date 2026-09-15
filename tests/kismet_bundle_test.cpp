@@ -1,4 +1,4 @@
-#include <ember/binary/kismet_bundle.hpp>
+#include <spelunk/binary/kismet_bundle.hpp>
 
 #include <cassert>
 #include <chrono>
@@ -11,7 +11,7 @@ int main() {
     namespace fs = std::filesystem;
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     const fs::path root = fs::temp_directory_path() /
-        ("ember-kismet-test-" + std::to_string(nonce));
+        ("spelunk-kismet-test-" + std::to_string(nonce));
     const fs::path functions = root / "functions";
     fs::create_directories(functions);
 
@@ -26,13 +26,13 @@ int main() {
     }
     {
         std::ofstream manifest(root / "manifest.tsv");
-        manifest << "EMBER_KISMET_BUNDLE\t1\tengine=5.7.4\tpointer_size=8\n";
+        manifest << "SPELUNK_KISMET_BUNDLE\t1\tengine=5.7.4\tpointer_size=8\n";
         manifest << "FUNCTION\t000001\t2\t0\t/Game/BP_Test.BP_Test_C\t"
                     "/Game/BP_Test.BP_Test_C:Run\tfunctions/000001.bin\t"
                     "functions/000001.txt\n";
     }
 
-    auto bundle = ember::KismetBundle::load(root);
+    auto bundle = spelunk::KismetBundle::load(root);
     assert(bundle);
     assert(bundle->engine_version() == "5.7.4");
     assert(bundle->pointer_size() == 8);

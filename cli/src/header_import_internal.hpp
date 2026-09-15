@@ -14,17 +14,17 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/binary/arch.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 class Binary;
 struct Relocation;
 }
 
-namespace ember::cli::header_import_model {
+namespace spelunk::cli::header_import_model {
 
 struct HeaderField {
     std::string name;
@@ -100,4 +100,4 @@ extern const std::array<std::string_view, kEvtOpcodeCount> kEvtNames;
 [[nodiscard]] std::optional<i32>
 evt_scalar_from_rendered(std::string_view rendered);
 
-}  // namespace ember::cli::header_import_model
+}  // namespace spelunk::cli::header_import_model

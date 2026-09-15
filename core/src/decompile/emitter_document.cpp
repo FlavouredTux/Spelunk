@@ -13,18 +13,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 // When the header name is a long RTTI `Class::vfn_N` - especially for
 // templates - advertise a shorter alias the user can type with `-s`.
@@ -554,4 +554,4 @@ void prepend_untyped_pointer_note(std::string& out, const std::string& header) {
     }
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

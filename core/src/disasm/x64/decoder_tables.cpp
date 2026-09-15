@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-namespace ember::x64_decode {
+namespace spelunk::x64_decode {
 
 namespace {
 
@@ -561,4 +561,4 @@ constinit const std::array<std::array<OpcodeEntry, 8>, Grp_Count> kGroups =
     build_groups();
 constinit const OpcodeEntry kVzeroupper = op(Mnemonic::Vzeroupper);
 
-}  // namespace ember::x64_decode
+}  // namespace spelunk::x64_decode

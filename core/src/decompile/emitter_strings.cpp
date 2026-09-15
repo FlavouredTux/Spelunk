@@ -7,14 +7,14 @@
 #include <string_view>
 #include <utility>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "emitter_string_literals.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 namespace {
 
@@ -187,4 +187,4 @@ BinaryStringLiterals::try_cfstring_at(u64 addr) const {
     return s;
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

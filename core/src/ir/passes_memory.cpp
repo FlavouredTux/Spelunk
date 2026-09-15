@@ -8,14 +8,14 @@
 #include <span>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "passes_internal.hpp"
 
-namespace ember::ir_passes {
+namespace spelunk::ir_passes {
 
 // ============================================================================
 // Pass: dead code elimination
@@ -329,4 +329,4 @@ std::size_t pass_memory_forward(
     return count;
 }
 
-}  // namespace ember::ir_passes
+}  // namespace spelunk::ir_passes

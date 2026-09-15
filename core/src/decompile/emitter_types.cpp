@@ -14,18 +14,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 std::string Emitter::normalize_c_type_alias(std::string_view t) {
     auto map_base = [](std::string_view base) -> std::string_view {
@@ -1050,4 +1050,4 @@ Emitter::annotated_field_name(const IrValue& base, i64 off) const {
     return annotations->field_name_for(fn->start, *slot, off);
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

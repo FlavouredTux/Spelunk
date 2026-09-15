@@ -6,16 +6,16 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/region.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/region.hpp>
 
 #include "emitter_internal.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 void Emitter::analyze_abi_noise() {
     // Pass 0: PE UNWIND_INFO-driven prologue suppression. The byte range
@@ -466,4 +466,4 @@ void Emitter::fold_common_tail_returns(Region& r) const {
     }
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

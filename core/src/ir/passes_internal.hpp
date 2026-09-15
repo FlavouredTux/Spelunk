@@ -13,11 +13,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/ir/passes.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember::ir_passes {
+namespace spelunk::ir_passes {
 
 [[nodiscard]] i64 mask_signed(i64 v, IrType t) noexcept;
 
@@ -62,7 +62,7 @@ struct DefLoc { u32 block; u32 inst; };
 // SsaKey is std::tuple<u8, u32, u32>; the standard library doesn't auto-
 // hash tuples, so the cleanup pipeline historically stored its lookups
 // in std::map<SsaKey, …> (red-black tree, every probe = O(log N) plus
-// a heap-allocated node per insert). Profiling on ember-on-itself
+// a heap-allocated node per insert). Profiling on spelunk-on-itself
 // identified copy_prop, trivial_phi, and the def-map cache as hot - all
 // of them are hash-shaped lookups by their nature. A simple mix of the
 // three fields is enough; all SsaKeys with kind != 3 (Imm) have the
@@ -236,4 +236,4 @@ std::size_t pass_msvc_security_cookie_return(IrFunction& fn,
 
 CleanupStats run_pipeline(IrFunction& fn);
 
-}  // namespace ember::ir_passes
+}  // namespace spelunk::ir_passes

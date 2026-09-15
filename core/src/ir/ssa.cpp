@@ -1,4 +1,4 @@
-#include <ember/ir/ssa.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include <algorithm>
 #include <array>
@@ -13,13 +13,13 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_util.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/analysis/cfg_util.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ir.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -178,7 +178,7 @@ bool same_ssa_value(const IrValue& a, const IrValue& b) noexcept {
 
 namespace {
 
-// compute_rpo + compute_idoms live in <ember/analysis/cfg_util.hpp>.
+// compute_rpo + compute_idoms live in <spelunk/analysis/cfg_util.hpp>.
 
 [[nodiscard]] std::map<addr_t, std::set<addr_t>>
 compute_df(const IrFunction& fn, const std::unordered_map<addr_t, addr_t>& idom) {
@@ -440,4 +440,4 @@ Result<void> SsaBuilder::convert(IrFunction& fn) const {
     return {};
 }
 
-}  // namespace ember
+}  // namespace spelunk

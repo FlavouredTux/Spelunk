@@ -1,20 +1,20 @@
-#include <ember/analysis/cfi.hpp>
+#include <spelunk/analysis/cfi.hpp>
 
 #include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "eh_frame_internal.hpp"
 
-namespace ember::cfi {
+namespace spelunk::cfi {
 
 namespace {
 
-using ember::ehfi::Reader;
+using spelunk::ehfi::Reader;
 
 // DW_CFA_* opcode constants. The "primary" opcodes pack a small
 // operand into the low 6 bits of the byte; the high 2 bits select
@@ -316,4 +316,4 @@ std::optional<State> recover(const Binary& b, addr_t target_pc) {
     return result;
 }
 
-}  // namespace ember::cfi
+}  // namespace spelunk::cfi

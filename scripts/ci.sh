@@ -32,30 +32,30 @@ case "$mode" in
   clang)
     CC=${CC:-clang} CXX=${CXX:-clang++} \
     CXXFLAGS="${CXXFLAGS:-} -stdlib=libc++" LDFLAGS="${LDFLAGS:-} -stdlib=libc++" \
-      cmake -S . -B build-ci-clang "${gen[@]}" -DCMAKE_BUILD_TYPE=Release -DEMBER_BUILD_CLI=OFF
-    cmake --build build-ci-clang --target ember_core ember_demangle_test \
-                                          ember_annotations_resolver_test ember_sigs_test \
-                                          ember_import_sigs_test
+      cmake -S . -B build-ci-clang "${gen[@]}" -DCMAKE_BUILD_TYPE=Release -DSPELUNK_BUILD_CLI=OFF
+    cmake --build build-ci-clang --target spelunk_core spelunk_demangle_test \
+                                          spelunk_annotations_resolver_test spelunk_sigs_test \
+                                          spelunk_import_sigs_test
     ctest --test-dir build-ci-clang --output-on-failure \
       -R '^(demangle_unit|annotations_resolver_unit|sigs_unit|import_sigs_unit)$'
     ;;
   release)
     cmake -S . -B build-release "${gen[@]}" -DCMAKE_BUILD_TYPE=Release
-    cmake --build build-release --target ember_cli
-    strip build-release/cli/ember
-    version=$(build-release/cli/ember --version | awk '{print $2}')
-    tar czf "ember-${version}-linux-x86_64.tar.gz" -C build-release/cli ember
-    echo "ember-${version}-linux-x86_64.tar.gz"
+    cmake --build build-release --target spelunk_cli
+    strip build-release/cli/spelunk
+    version=$(build-release/cli/spelunk --version | awk '{print $2}')
+    tar czf "spelunk-${version}-linux-x86_64.tar.gz" -C build-release/cli spelunk
+    echo "spelunk-${version}-linux-x86_64.tar.gz"
     ;;
   asan)
-    cmake -S . -B build-ci-asan "${gen[@]}" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DEMBER_SANITIZE=ON
+    cmake -S . -B build-ci-asan "${gen[@]}" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSPELUNK_SANITIZE=ON
     cmake --build build-ci-asan
     ctest --test-dir build-ci-asan --output-on-failure -E '^dbg_'
     ;;
   fuzz)
     CC=${CC:-clang} CXX=${CXX:-clang++} \
       cmake -S . -B build-fuzz "${gen[@]}" -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DEMBER_SANITIZE=ON -DEMBER_BUILD_FUZZERS=ON -DEMBER_BUILD_CLI=OFF \
+        -DSPELUNK_SANITIZE=ON -DSPELUNK_BUILD_FUZZERS=ON -DSPELUNK_BUILD_CLI=OFF \
         -DBUILD_TESTING=OFF
     cmake --build build-fuzz
     # Seed each loader corpus with the fixtures of its format; the

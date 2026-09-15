@@ -2,42 +2,42 @@
 
 #include <limits>
 
-#include <ember/common/bytes.hpp>
+#include <spelunk/common/bytes.hpp>
 
 namespace elf_test {
 namespace {
 
-void put16(std::vector<std::byte>& bytes, std::size_t off, ember::u16 value) {
+void put16(std::vector<std::byte>& bytes, std::size_t off, spelunk::u16 value) {
     for (unsigned i = 0; i < 2; ++i) {
         bytes[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put32(std::vector<std::byte>& bytes, std::size_t off, ember::u32 value) {
+void put32(std::vector<std::byte>& bytes, std::size_t off, spelunk::u32 value) {
     for (unsigned i = 0; i < 4; ++i) {
         bytes[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put64(std::vector<std::byte>& bytes, std::size_t off, ember::u64 value) {
+void put64(std::vector<std::byte>& bytes, std::size_t off, spelunk::u64 value) {
     for (unsigned i = 0; i < 8; ++i) {
         bytes[off + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put64_be(std::vector<std::byte>& bytes, std::size_t off, ember::u64 value) {
+void put64_be(std::vector<std::byte>& bytes, std::size_t off, spelunk::u64 value) {
     for (unsigned i = 0; i < 8; ++i) {
         bytes[off + 7 - i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put16_be(std::vector<std::byte>& bytes, std::size_t off, ember::u16 value) {
+void put16_be(std::vector<std::byte>& bytes, std::size_t off, spelunk::u16 value) {
     for (unsigned i = 0; i < 2; ++i) {
         bytes[off + 1 - i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
 }
 
-void put32_be(std::vector<std::byte>& bytes, std::size_t off, ember::u32 value) {
+void put32_be(std::vector<std::byte>& bytes, std::size_t off, spelunk::u32 value) {
     for (unsigned i = 0; i < 4; ++i) {
         bytes[off + 3 - i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
     }
@@ -51,11 +51,11 @@ void put_literal(std::vector<std::byte>& bytes, std::size_t off,
     }
 }
 
-void init_elf64_header(std::vector<std::byte>& bytes, ember::u16 type,
-                       ember::u16 machine, ember::u64 entry,
-                       ember::u64 phoff, ember::u16 phnum,
-                       ember::u64 shoff, ember::u16 shnum,
-                       ember::u16 shstrndx) {
+void init_elf64_header(std::vector<std::byte>& bytes, spelunk::u16 type,
+                       spelunk::u16 machine, spelunk::u64 entry,
+                       spelunk::u64 phoff, spelunk::u16 phnum,
+                       spelunk::u64 shoff, spelunk::u16 shnum,
+                       spelunk::u16 shstrndx) {
     put32(bytes, 0, 0x464c457f);
     bytes[4] = std::byte{2};  // ELFCLASS64
     bytes[5] = std::byte{1};  // ELFDATA2LSB
@@ -74,10 +74,10 @@ void init_elf64_header(std::vector<std::byte>& bytes, ember::u16 type,
     put16(bytes, 62, shstrndx);
 }
 
-void init_elf32_header(std::vector<std::byte>& bytes, ember::u16 type,
-                       ember::u16 machine, ember::u32 phoff,
-                       ember::u16 phnum, ember::u32 shoff = 0,
-                       ember::u16 shnum = 0, ember::u16 shstrndx = 0) {
+void init_elf32_header(std::vector<std::byte>& bytes, spelunk::u16 type,
+                       spelunk::u16 machine, spelunk::u32 phoff,
+                       spelunk::u16 phnum, spelunk::u32 shoff = 0,
+                       spelunk::u16 shnum = 0, spelunk::u16 shstrndx = 0) {
     put32(bytes, 0, 0x464c457f);
     bytes[4] = std::byte{1};  // ELFCLASS32
     bytes[5] = std::byte{1};  // ELFDATA2LSB
@@ -96,10 +96,10 @@ void init_elf32_header(std::vector<std::byte>& bytes, ember::u16 type,
 }
 
 void put_elf64_shdr(std::vector<std::byte>& bytes, std::size_t off,
-                    ember::u32 name, ember::u32 type, ember::u64 flags,
-                    ember::u64 addr, ember::u64 file_offset, ember::u64 size,
-                    ember::u32 link = 0, ember::u32 info = 0,
-                    ember::u64 alignment = 1, ember::u64 entsize = 0) {
+                    spelunk::u32 name, spelunk::u32 type, spelunk::u64 flags,
+                    spelunk::u64 addr, spelunk::u64 file_offset, spelunk::u64 size,
+                    spelunk::u32 link = 0, spelunk::u32 info = 0,
+                    spelunk::u64 alignment = 1, spelunk::u64 entsize = 0) {
     put32(bytes, off + 0x00, name);
     put32(bytes, off + 0x04, type);
     put64(bytes, off + 0x08, flags);
@@ -113,9 +113,9 @@ void put_elf64_shdr(std::vector<std::byte>& bytes, std::size_t off,
 }
 
 void put_elf64_be_shdr(std::vector<std::byte>& bytes, std::size_t off,
-                       ember::u32 name, ember::u32 type, ember::u64 flags,
-                       ember::u64 addr, ember::u64 file_offset,
-                       ember::u64 size, ember::u64 alignment = 1) {
+                       spelunk::u32 name, spelunk::u32 type, spelunk::u64 flags,
+                       spelunk::u64 addr, spelunk::u64 file_offset,
+                       spelunk::u64 size, spelunk::u64 alignment = 1) {
     put32_be(bytes, off + 0x00, name);
     put32_be(bytes, off + 0x04, type);
     put64_be(bytes, off + 0x08, flags);
@@ -126,9 +126,9 @@ void put_elf64_be_shdr(std::vector<std::byte>& bytes, std::size_t off,
 }
 
 void put_elf32_shdr(std::vector<std::byte>& bytes, std::size_t off,
-                    ember::u32 name, ember::u32 type, ember::u32 flags,
-                    ember::u32 addr, ember::u32 file_offset, ember::u32 size,
-                    ember::u32 alignment = 1) {
+                    spelunk::u32 name, spelunk::u32 type, spelunk::u32 flags,
+                    spelunk::u32 addr, spelunk::u32 file_offset, spelunk::u32 size,
+                    spelunk::u32 alignment = 1) {
     put32(bytes, off + 0x00, name);
     put32(bytes, off + 0x04, type);
     put32(bytes, off + 0x08, flags);
@@ -145,7 +145,7 @@ void zero_elf64_load_sizes(std::vector<std::byte>& bytes) {
     constexpr std::size_t kFileSizeField = 0x20;
     constexpr std::size_t kMemorySizeField = 0x28;
     const auto program_header = static_cast<std::size_t>(
-        ember::read_le_at<ember::u64>(
+        spelunk::read_le_at<spelunk::u64>(
             bytes.data() + kProgramHeaderOffsetField));
     put64(bytes, program_header + kFileSizeField, 0);
     put64(bytes, program_header + kMemorySizeField, 0);
@@ -156,19 +156,19 @@ void zero_elf64_be_load_sizes(std::vector<std::byte>& bytes) {
     constexpr std::size_t kFileSizeField = 0x20;
     constexpr std::size_t kMemorySizeField = 0x28;
     const auto program_header = static_cast<std::size_t>(
-        ember::read_be_at<ember::u64>(
+        spelunk::read_be_at<spelunk::u64>(
             bytes.data() + kProgramHeaderOffsetField));
     put64_be(bytes, program_header + kFileSizeField, 0);
     put64_be(bytes, program_header + kMemorySizeField, 0);
 }
 
 void declare_elf64_extended_section_count(std::vector<std::byte>& bytes,
-                                          ember::u64 count) {
+                                          spelunk::u64 count) {
     constexpr std::size_t kSectionHeaderOffsetField = 0x28;
     constexpr std::size_t kSectionCountField = 0x3c;
     constexpr std::size_t kSectionZeroSizeField = 0x20;
     const auto section_table = static_cast<std::size_t>(
-        ember::read_le_at<ember::u64>(
+        spelunk::read_le_at<spelunk::u64>(
             bytes.data() + kSectionHeaderOffsetField));
     put16(bytes, kSectionCountField, 0);
     put64(bytes, section_table + kSectionZeroSizeField, count);
@@ -185,20 +185,20 @@ void mark_elf64_extended_program_header_count(std::vector<std::byte>& bytes) {
 }
 
 void declare_elf64_extended_program_header_count(
-    std::vector<std::byte>& bytes, ember::u32 count) {
+    std::vector<std::byte>& bytes, spelunk::u32 count) {
     constexpr std::size_t kSectionHeaderOffsetField = 0x28;
     constexpr std::size_t kSectionZeroInfoField = 0x2c;
     const auto section_table = static_cast<std::size_t>(
-        ember::read_le_at<ember::u64>(
+        spelunk::read_le_at<spelunk::u64>(
             bytes.data() + kSectionHeaderOffsetField));
     mark_elf64_extended_program_header_count(bytes);
     put32(bytes, section_table + kSectionZeroInfoField, count);
 }
 
-std::vector<std::byte> elf64_load(ember::u64 file_offset,
-                                  ember::u64 vaddr,
-                                  ember::u64 filesz,
-                                  ember::u64 memsz) {
+std::vector<std::byte> elf64_load(spelunk::u64 file_offset,
+                                  spelunk::u64 vaddr,
+                                  spelunk::u64 filesz,
+                                  spelunk::u64 memsz) {
     std::vector<std::byte> bytes(64 + 56);
     init_elf64_header(bytes, 2, 62, 0, 64, 1, 0, 0, 0);
     put32(bytes, 64, 1);      // PT_LOAD
@@ -210,10 +210,10 @@ std::vector<std::byte> elf64_load(ember::u64 file_offset,
     return bytes;
 }
 
-std::vector<std::byte> elf32_load(ember::u32 file_offset,
-                                  ember::u32 vaddr,
-                                  ember::u32 filesz,
-                                  ember::u32 memsz) {
+std::vector<std::byte> elf32_load(spelunk::u32 file_offset,
+                                  spelunk::u32 vaddr,
+                                  spelunk::u32 filesz,
+                                  spelunk::u32 memsz) {
     std::vector<std::byte> bytes(52 + 32);
     init_elf32_header(bytes, 2, 3, 52, 1);
     put32(bytes, 52, 1);      // PT_LOAD
@@ -225,10 +225,10 @@ std::vector<std::byte> elf32_load(ember::u32 file_offset,
     return bytes;
 }
 
-std::vector<std::byte> elf64_with_alloc_section(ember::u64 section_vaddr,
-                                                ember::u64 section_size,
+std::vector<std::byte> elf64_with_alloc_section(spelunk::u64 section_vaddr,
+                                                spelunk::u64 section_size,
                                                 bool with_load,
-                                                ember::u16 elf_type) {
+                                                spelunk::u16 elf_type) {
     constexpr std::size_t kLoadOffset = 0x80;
     constexpr std::size_t kSectionOffset = 0x84;
     constexpr std::size_t kShstrOffset = 0x88;
@@ -236,8 +236,8 @@ std::vector<std::byte> elf64_with_alloc_section(ember::u64 section_vaddr,
     constexpr char kShstr[] = "\0.text\0.shstrtab\0";
     std::vector<std::byte> bytes(kShoff + 3 * 64);
     init_elf64_header(bytes, elf_type, 62, 0,
-                      with_load ? ember::u64{64} : ember::u64{0},
-                      with_load ? ember::u16{1} : ember::u16{0},
+                      with_load ? spelunk::u64{64} : spelunk::u64{0},
+                      with_load ? spelunk::u16{1} : spelunk::u16{0},
                       kShoff, 3, 2);
     if (with_load) {
         put32(bytes, 64, 1);  // PT_LOAD
@@ -263,10 +263,10 @@ std::vector<std::byte> elf64_with_alloc_section(ember::u64 section_vaddr,
     return bytes;
 }
 
-std::vector<std::byte> elf64_relocatable_symbol(ember::u16 shndx,
-                                                ember::u64 value,
-                                                ember::u64 size,
-                                                ember::u64 text_alignment) {
+std::vector<std::byte> elf64_relocatable_symbol(spelunk::u16 shndx,
+                                                spelunk::u64 value,
+                                                spelunk::u64 size,
+                                                spelunk::u64 text_alignment) {
     constexpr std::size_t kTextOffset = 0x40;
     constexpr std::size_t kSymtabOffset = 0x48;
     constexpr std::size_t kStrtabOffset = 0x78;
@@ -300,9 +300,9 @@ std::vector<std::byte> elf64_relocatable_symbol(ember::u16 shndx,
 }
 
 std::vector<std::byte> elf64_relocatable_xindex(
-    ember::u64 companion_entsize, ember::u64 companion_size,
-    ember::u32 companion_link, ember::u32 extended_index,
-    ember::u16 raw_shndx) {
+    spelunk::u64 companion_entsize, spelunk::u64 companion_size,
+    spelunk::u32 companion_link, spelunk::u32 extended_index,
+    spelunk::u16 raw_shndx) {
     constexpr std::size_t kTextOffset = 0x40;
     constexpr std::size_t kSymtabOffset = 0x48;
     constexpr std::size_t kStrtabOffset = 0x78;
@@ -341,10 +341,10 @@ std::vector<std::byte> elf64_relocatable_xindex(
 }
 
 std::vector<std::byte> elf64_fully_extended_numbering() {
-    constexpr ember::u32 kPhnum = 0x10000;
-    constexpr ember::u32 kShstrIndex = 0x10000;
-    constexpr ember::u32 kTextIndex = kFullyExtendedTextSectionIndex;
-    constexpr ember::u32 kShnum = kFullyExtendedSectionCount;
+    constexpr spelunk::u32 kPhnum = 0x10000;
+    constexpr spelunk::u32 kShstrIndex = 0x10000;
+    constexpr spelunk::u32 kTextIndex = kFullyExtendedTextSectionIndex;
+    constexpr spelunk::u32 kShnum = kFullyExtendedSectionCount;
     constexpr std::size_t kPhoff = 64;
     constexpr std::size_t kShoff =
         kPhoff + static_cast<std::size_t>(kPhnum) * 56;
@@ -408,7 +408,7 @@ std::vector<std::byte> elf32_with_wrapping_alloc_section() {
     bytes[kTextOffset + 1] = std::byte{0x90};
     put_literal(bytes, kShstrOffset, kShstr);
     put_elf32_shdr(bytes, kShoff + 40, 1, 1, 0x6,
-                   std::numeric_limits<ember::u32>::max(), kTextOffset, 2, 1);
+                   std::numeric_limits<spelunk::u32>::max(), kTextOffset, 2, 1);
     put_elf32_shdr(bytes, kShoff + 2 * 40, 7, 3, 0,
                    0, kShstrOffset, sizeof(kShstr) - 1);
     return bytes;
@@ -428,7 +428,7 @@ std::vector<std::byte> elf64_non_x86_sectioned_got_relocation() {
     put32(bytes, kDynsymOffset + 24, 1);
     bytes[kDynsymOffset + 28] = std::byte{0x12};
     put64(bytes, kRelaOffset, 0x2000);
-    put64(bytes, kRelaOffset + 8, (ember::u64{1} << 32) | 6);  // not R_X86_64_GLOB_DAT
+    put64(bytes, kRelaOffset + 8, (spelunk::u64{1} << 32) | 6);  // not R_X86_64_GLOB_DAT
     put_literal(bytes, kDynstrOffset, kDynstr);
     put_literal(bytes, kShstrOffset, kShstr);
     put_elf64_shdr(bytes, kShoff + 64, 1, 11, 0, 0,
@@ -443,7 +443,7 @@ std::vector<std::byte> elf64_non_x86_sectioned_got_relocation() {
 }
 
 std::vector<std::byte> elf64_non_x86_phdr_got_relocation() {
-    constexpr ember::u64 kBase = 0x400000;
+    constexpr spelunk::u64 kBase = 0x400000;
     constexpr std::size_t kDynamicOffset = 0x100;
     constexpr std::size_t kDynsymOffset = 0x180;
     constexpr std::size_t kDynstrOffset = 0x1b0;
@@ -470,7 +470,7 @@ std::vector<std::byte> elf64_non_x86_phdr_got_relocation() {
     put64(bytes, 160, 0x80);
     put64(bytes, 168, 8);
 
-    auto put_dynamic = [&](std::size_t index, ember::u64 tag, ember::u64 val) {
+    auto put_dynamic = [&](std::size_t index, spelunk::u64 tag, spelunk::u64 val) {
         put64(bytes, kDynamicOffset + index * 16, tag);
         put64(bytes, kDynamicOffset + index * 16 + 8, val);
     };
@@ -489,7 +489,7 @@ std::vector<std::byte> elf64_non_x86_phdr_got_relocation() {
     put32(bytes, kHashOffset, 1);       // nbucket
     put32(bytes, kHashOffset + 4, 2);   // nchain / dynsym count
     put64(bytes, kRelaOffset, 0x500000);
-    put64(bytes, kRelaOffset + 8, (ember::u64{1} << 32) | 7);  // not R_X86_64_JUMP_SLOT
+    put64(bytes, kRelaOffset + 8, (spelunk::u64{1} << 32) | 7);  // not R_X86_64_JUMP_SLOT
     return bytes;
 }
 
@@ -518,10 +518,10 @@ std::vector<std::byte> elf64_ppc_descriptor_to_highest_address() {
     put16_be(bytes, 60, 4);
     put16_be(bytes, 62, 3);
     bytes[kTextOffset] = std::byte{0x4e};
-    put64_be(bytes, kOpdOffset, std::numeric_limits<ember::u64>::max());
+    put64_be(bytes, kOpdOffset, std::numeric_limits<spelunk::u64>::max());
     put_literal(bytes, kShstrOffset, kShstr);
     put_elf64_be_shdr(bytes, kShoff + 64, 1, 1, 0x6,
-                      std::numeric_limits<ember::u64>::max(), kTextOffset, 1);
+                      std::numeric_limits<spelunk::u64>::max(), kTextOffset, 1);
     put_elf64_be_shdr(bytes, kShoff + 2 * 64, 7, 1, 0x2,
                       0x1000, kOpdOffset, 8, 8);
     put_elf64_be_shdr(bytes, kShoff + 3 * 64, 12, 3, 0,

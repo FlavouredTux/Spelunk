@@ -8,11 +8,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
 
-namespace ember::debug::linux_ {
+namespace spelunk::debug::linux_ {
 
 // Per-breakpoint bookkeeping kept alongside the public Breakpoint
 // view - we need the original code byte to restore on clear and
@@ -162,4 +162,4 @@ public:
 int  dr6_consume_hit(ThreadId tid);
 void rearm_watchpoints_on_new_thread(LinuxTarget& t, ThreadId tid);
 
-}  // namespace ember::debug::linux_
+}  // namespace spelunk::debug::linux_

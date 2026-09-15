@@ -1,4 +1,4 @@
-#include <ember/binary/kismet_bundle.hpp>
+#include <spelunk/binary/kismet_bundle.hpp>
 
 #include <charconv>
 #include <cstddef>
@@ -14,10 +14,10 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 namespace {
 
 [[nodiscard]] std::vector<std::string_view> split_tabs(std::string_view line) {
@@ -101,9 +101,9 @@ Result<KismetBundle> KismetBundle::load(const std::filesystem::path& path) {
     }
     if (!line.empty() && line.back() == '\r') line.pop_back();
     const auto header = split_tabs(line);
-    if (header.size() < 2 || header[0] != "EMBER_KISMET_BUNDLE" || header[1] != "1") {
+    if (header.size() < 2 || header[0] != "SPELUNK_KISMET_BUNDLE" || header[1] != "1") {
         return std::unexpected(Error::invalid_format(
-            "kismet bundle: expected EMBER_KISMET_BUNDLE version 1"));
+            "kismet bundle: expected SPELUNK_KISMET_BUNDLE version 1"));
     }
     for (std::size_t i = 2; i < header.size(); ++i) {
         if (header[i].starts_with("engine=")) {
@@ -181,4 +181,4 @@ KismetBundle::read_bytecode(const KismetFunction& function) const {
     return bytes;
 }
 
-}  // namespace ember
+}  // namespace spelunk

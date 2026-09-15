@@ -1,4 +1,4 @@
-#include <ember/binary/pdb.hpp>
+#include <spelunk/binary/pdb.hpp>
 
 #include <cstddef>
 #include <expected>
@@ -7,13 +7,13 @@
 #include <string>
 #include <vector>
 
-#include <ember/common/bytes.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "pdb_internal.hpp"
 
-namespace ember::pdb {
+namespace spelunk::pdb {
 
 namespace {
 
@@ -328,7 +328,7 @@ std::string render_primitive(u32 ti) {
     auto base = name_for();
     if (mode != 0) {
         // Any non-zero mode = pointer-flavored variant. We don't
-        // distinguish near/far/huge here - Ember decompiles 64-bit
+        // distinguish near/far/huge here - Spelunk decompiles 64-bit
         // binaries; the size is implicit.
         base += "*";
     }
@@ -500,4 +500,4 @@ std::string TpiTable::render_type(u32 type_index, int depth) const {
     return "?";
 }
 
-}  // namespace ember::pdb
+}  // namespace spelunk::pdb

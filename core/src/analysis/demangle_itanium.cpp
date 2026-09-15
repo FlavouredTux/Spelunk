@@ -1,4 +1,4 @@
-#include <ember/analysis/demangle.hpp>
+#include <spelunk/analysis/demangle.hpp>
 
 #include <cstddef>
 #include <cstdlib>
@@ -11,14 +11,14 @@
 #if defined(__has_include)
 #if __has_include(<cxxabi.h>)
 #include <cxxabi.h>
-#define EMBER_HAS_CXXABI 1
+#define SPELUNK_HAS_CXXABI 1
 #endif
 #endif
-#ifndef EMBER_HAS_CXXABI
-#define EMBER_HAS_CXXABI 0
+#ifndef SPELUNK_HAS_CXXABI
+#define SPELUNK_HAS_CXXABI 0
 #endif
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -768,7 +768,7 @@ std::string parse_encoding(Dem& d) {
 namespace {
 
 std::optional<std::string> demangle_itanium_system(std::string_view mangled) {
-#if EMBER_HAS_CXXABI
+#if SPELUNK_HAS_CXXABI
     std::string owned(mangled);
     int status = -1;
     char* demangled = abi::__cxa_demangle(owned.c_str(), nullptr, nullptr, &status);
@@ -807,4 +807,4 @@ std::optional<std::string> demangle_itanium(std::string_view mangled) {
     return result;
 }
 
-}  // namespace ember
+}  // namespace spelunk

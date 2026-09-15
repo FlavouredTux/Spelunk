@@ -10,14 +10,14 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/kismet.hpp>
-#include <ember/binary/kismet_bundle.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/kismet.hpp>
+#include <spelunk/binary/kismet_bundle.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "args.hpp"
 #include "util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 namespace {
 
 [[nodiscard]] std::string lower(std::string_view value) {
@@ -47,7 +47,7 @@ matching(const KismetBundle& bundle, std::string_view query) {
 int run_kismet(const Args& args) {
     auto bundle = KismetBundle::load(args.kismet_bundle);
     if (!bundle) {
-        std::println(stderr, "ember: --kismet: {}: {}",
+        std::println(stderr, "spelunk: --kismet: {}: {}",
                      bundle.error().kind_name(), bundle.error().message);
         return EXIT_FAILURE;
     }
@@ -80,17 +80,17 @@ int run_kismet(const Args& args) {
     if (!args.disasm && !args.cfg && !args.cfg_pseudo && !args.pseudo &&
         !args.kismet_events) {
         std::println(stderr,
-            "ember: --kismet requires --functions, -d/-c/-p, or --kismet-events");
+            "spelunk: --kismet requires --functions, -d/-c/-p, or --kismet-events");
         return EXIT_FAILURE;
     }
     if (args.symbol.empty()) {
-        std::println(stderr, "ember: Kismet views require -s FUNCTION");
+        std::println(stderr, "spelunk: Kismet views require -s FUNCTION");
         return EXIT_FAILURE;
     }
 
     auto matches = matching(*bundle, args.symbol);
     if (matches.size() != 1) {
-        std::println(stderr, "ember: --kismet: '{}' matched {} functions",
+        std::println(stderr, "spelunk: --kismet: '{}' matched {} functions",
                      args.symbol, matches.size());
         for (std::size_t i = 0; i < std::min<std::size_t>(matches.size(), 12); ++i) {
             std::println(stderr, "  {}", matches[i]->function_path);
@@ -101,20 +101,20 @@ int run_kismet(const Args& args) {
     const KismetFunction& function = *matches.front();
     auto bytecode = bundle->read_bytecode(function);
     if (!bytecode) {
-        std::println(stderr, "ember: --kismet: {}: {}",
+        std::println(stderr, "spelunk: --kismet: {}: {}",
                      bytecode.error().kind_name(), bytecode.error().message);
         return EXIT_FAILURE;
     }
     auto disassembly = bundle->read_disassembly(function);
     if (!disassembly) {
-        std::println(stderr, "ember: --kismet: {}: {}",
+        std::println(stderr, "spelunk: --kismet: {}: {}",
                      disassembly.error().kind_name(), disassembly.error().message);
         return EXIT_FAILURE;
     }
 
     auto cfg = parse_kismet_cfg(*disassembly);
     if (!cfg) {
-        std::println(stderr, "ember: --kismet: {}: {}",
+        std::println(stderr, "spelunk: --kismet: {}: {}",
                      cfg.error().kind_name(), cfg.error().message);
         return EXIT_FAILURE;
     }
@@ -126,7 +126,7 @@ int run_kismet(const Args& args) {
         for (const auto& candidate : bundle->functions()) {
             auto text = bundle->read_disassembly(candidate);
             if (!text) {
-                std::println(stderr, "ember: --kismet: {}: {}",
+                std::println(stderr, "spelunk: --kismet: {}: {}",
                              text.error().kind_name(), text.error().message);
                 return EXIT_FAILURE;
             }
@@ -156,7 +156,7 @@ int run_kismet(const Args& args) {
         return EXIT_SUCCESS;
     }
 
-    std::optional<ember::u64> selected_entry;
+    std::optional<spelunk::u64> selected_entry;
     std::string pseudo_name = function.function_path;
     if (!args.kismet_event.empty()) {
         const std::string needle = lower(args.kismet_event);
@@ -167,7 +167,7 @@ int run_kismet(const Args& args) {
             }
         }
         if (event_matches.size() != 1) {
-            std::println(stderr, "ember: --kismet-event: '{}' matched {} wrappers",
+            std::println(stderr, "spelunk: --kismet-event: '{}' matched {} wrappers",
                          args.kismet_event, event_matches.size());
             for (const auto* entry : event_matches) {
                 std::println(stderr, "  0x{:x} {}", entry->offset,
@@ -209,4 +209,4 @@ int run_kismet(const Args& args) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

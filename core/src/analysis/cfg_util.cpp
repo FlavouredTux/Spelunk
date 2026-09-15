@@ -1,4 +1,4 @@
-#include <ember/analysis/cfg_util.hpp>
+#include <spelunk/analysis/cfg_util.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
 
-namespace ember {
+namespace spelunk {
 
 std::vector<addr_t> compute_rpo(const IrFunction& fn) {
     std::vector<addr_t> post;
@@ -110,4 +110,4 @@ compute_idoms(const IrFunction& fn,
     return idom;
 }
 
-}  // namespace ember
+}  // namespace spelunk

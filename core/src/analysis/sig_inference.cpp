@@ -1,4 +1,4 @@
-#include <ember/analysis/sig_inference.hpp>
+#include <spelunk/analysis/sig_inference.hpp>
 
 #include <array>
 #include <cstddef>
@@ -10,25 +10,25 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/ir_cache.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/type_infer_local.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/type_infer_local.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
-// IrCache + lift_cached now live in <ember/analysis/ir_cache.hpp> so the
+// IrCache + lift_cached now live in <spelunk/analysis/ir_cache.hpp> so the
 // IPA fixed-point and the indirect-call resolver can share one cache and
 // only pay each function's lift cost once.
 
@@ -522,4 +522,4 @@ InferenceResult infer_signatures(const Binary& b, IrCache* cache,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

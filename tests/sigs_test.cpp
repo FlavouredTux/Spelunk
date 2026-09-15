@@ -9,9 +9,9 @@
 // and the `.pat` text parser. Self-contained: a tiny MockBinary carries one
 // hand-written x86-64 function so the tests don't depend on the C-fixture
 // toolchain version.
-#include <ember/analysis/sigs.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/binary.hpp>
+#include <spelunk/analysis/sigs.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/binary.hpp>
 
 #include <array>
 #include <cstdio>
@@ -64,8 +64,8 @@ void check(bool cond, const char* ctx) {
 //   0x401000  e8 1b 00 00 00   call rel32  -> 0x401020
 //   0x401005  c3               ret
 // Followed by NOPs to fill the section out to where the PLT stub sits.
-constexpr ember::addr_t kFnAddr  = 0x401000;
-constexpr ember::addr_t kPltAddr = 0x401020;
+constexpr spelunk::addr_t kFnAddr  = 0x401000;
+constexpr spelunk::addr_t kPltAddr = 0x401020;
 constexpr std::size_t   kSecLen  = 0x40;
 
 struct ImageBytes {
@@ -85,7 +85,7 @@ struct ImageBytes {
     }
 };
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
     MockBinary() {
         sec_.name = ".text";
@@ -99,30 +99,30 @@ public:
         // One imported symbol to back the @ref test. Address = the PLT
         // stub address; import_at_plt() resolves any addr in the 16-byte
         // slot back to this entry.
-        ember::Symbol s;
+        spelunk::Symbol s;
         s.name      = "strlen";
         s.addr      = kPltAddr;
-        s.kind      = ember::SymbolKind::Function;
+        s.kind      = spelunk::SymbolKind::Function;
         s.is_import = true;
         syms_.push_back(std::move(s));
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Elf;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Elf;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return kFnAddr;
     }
-    [[nodiscard]] std::span<const ember::Section> sections() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Section> sections() const noexcept override {
         return {&sec_, 1};
     }
-    [[nodiscard]] std::span<const ember::Symbol> symbols() const noexcept override {
+    [[nodiscard]] std::span<const spelunk::Symbol> symbols() const noexcept override {
         return syms_;
     }
     [[nodiscard]] std::span<const std::byte> image() const noexcept override {
@@ -130,18 +130,18 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>& mutable_symbols() noexcept override {
+    [[nodiscard]] std::vector<spelunk::Symbol>& mutable_symbols() noexcept override {
         return syms_;
     }
 
 private:
     ImageBytes              image_{};
-    ember::Section          sec_{};
-    std::vector<ember::Symbol> syms_{};
+    spelunk::Section          sec_{};
+    std::vector<spelunk::Symbol> syms_{};
 };
 
 fs::path scratch_root() {
-    auto p = fs::temp_directory_path() / "ember_sigs_test";
+    auto p = fs::temp_directory_path() / "spelunk_sigs_test";
     std::error_code ec;
     fs::remove_all(p, ec);
     fs::create_directories(p);
@@ -159,7 +159,7 @@ fs::path write_pat(const fs::path& dir, std::string_view name,
 }  // namespace
 
 int main() {
-    using namespace ember;
+    using namespace spelunk;
 
     // ---- crc16 ------------------------------------------------------------
     // Empty input: init 0xFFFF, no bytes consumed, byte-swap is a no-op on

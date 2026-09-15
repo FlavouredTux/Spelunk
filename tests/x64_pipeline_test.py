@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-EMBER, PROBE, CC, SUPPORT = sys.argv[1:]
+SPELUNK, PROBE, CC, SUPPORT = sys.argv[1:]
 SUPPORT = pathlib.Path(SUPPORT)
 MASK = (1 << 64) - 1
 
@@ -174,7 +174,7 @@ def main(directory):
 
     code = HELPERS
     for name in names:
-        output = run([EMBER, '--no-cache', '-p', '-s', name, str(native_path)])
+        output = run([SPELUNK, '--no-cache', '-p', '-s', name, str(native_path)])
         (root / (name + '.pseudo.c')).write_text(output)
         # Intrinsics have explicit semantics here; only their invalid C names
         # are adapted. Never rewrite arithmetic or casts in generated output.
@@ -250,7 +250,7 @@ int main(void) {
 
 if __name__ == '__main__':
     # Retain failures for inspection; remove successful run artifacts.
-    directory = tempfile.mkdtemp(prefix='ember-x64-pipeline-')
+    directory = tempfile.mkdtemp(prefix='spelunk-x64-pipeline-')
     try:
         main(directory)
     except subprocess.CalledProcessError as error:

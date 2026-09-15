@@ -1,14 +1,14 @@
-#include <ember/ir/ir.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include <cstddef>
 #include <format>
 #include <string>
 #include <string_view>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
 
-namespace ember {
+namespace spelunk {
 
 std::string_view op_name(IrOp op) noexcept {
     switch (op) {
@@ -265,4 +265,4 @@ std::string format_ir_function(const IrFunction& fn) {
     return s;
 }
 
-}  // namespace ember
+}  // namespace spelunk

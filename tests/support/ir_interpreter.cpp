@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace ember::test {
+namespace spelunk::test {
 namespace {
 
 unsigned width(IrType type) {
@@ -320,4 +320,4 @@ interpret(const IrFunction& function, const MachineInput& input,
     }
 }
 
-}  // namespace ember::test
+}  // namespace spelunk::test

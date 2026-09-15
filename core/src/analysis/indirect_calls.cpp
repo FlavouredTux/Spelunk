@@ -1,4 +1,4 @@
-#include <ember/analysis/indirect_calls.hpp>
+#include <spelunk/analysis/indirect_calls.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -11,26 +11,26 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/ir_cache.hpp>
-#include <ember/analysis/msvc_rtti.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/analysis/vtables.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
+#include <spelunk/analysis/msvc_rtti.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/analysis/vtables.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
-// IrCache + lift_cached now live in <ember/analysis/ir_cache.hpp> so this
+// IrCache + lift_cached now live in <spelunk/analysis/ir_cache.hpp> so this
 // pass and the IPA pass can share one cache and amortise the lift cost.
 
 [[nodiscard]] std::optional<u64> read_u64_le(const Binary& b, addr_t a) noexcept {
@@ -301,7 +301,7 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
     // A scan that flags any `FF <one of those bytes>` byte position is
     // a superset of indirect calls (false positives in immediate /
     // displacement bytes don't matter - they just cost a lift). For
-    // ember itself this collapses 7606 candidate functions down to ~50.
+    // spelunk itself this collapses 7606 candidate functions down to ~50.
     auto looks_like_indirect_modrm = [](u8 byte) noexcept {
         const u8 mid = (byte >> 3) & 0b111;
         return mid == 0b010 || mid == 0b100;
@@ -417,4 +417,4 @@ resolve_indirect_calls(const Binary& b, IrCache* shared_cache,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

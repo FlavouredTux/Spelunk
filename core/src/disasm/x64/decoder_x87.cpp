@@ -5,14 +5,14 @@
 #include <format>
 #include <utility>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
 
 #include "decoder_internal.hpp"
 
-namespace ember::x64_decode {
+namespace spelunk::x64_decode {
 
 namespace {
 
@@ -229,4 +229,4 @@ decode_x87_escape(Context& ctx, addr_t addr) noexcept {
     return insn;
 }
 
-}  // namespace ember::x64_decode
+}  // namespace spelunk::x64_decode

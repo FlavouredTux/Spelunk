@@ -1,19 +1,19 @@
-#include <ember/disasm/decoder.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 #include <expected>
 #include <format>
 #include <memory>
 
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/disasm/arm32_decoder.hpp>
-#include <ember/disasm/arm64_decoder.hpp>
-#include <ember/disasm/ppc_decoder.hpp>
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/extension/decoder_registry.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/disasm/arm32_decoder.hpp>
+#include <spelunk/disasm/arm64_decoder.hpp>
+#include <spelunk/disasm/ppc_decoder.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/extension/decoder_registry.hpp>
 
-namespace ember {
+namespace spelunk {
 
 Result<std::unique_ptr<Decoder>>
 make_decoder(const Binary& b) {
@@ -37,4 +37,4 @@ make_decoder(const Binary& b) {
         "no decoder for arch {}", arch_name(b.arch()))));
 }
 
-}  // namespace ember
+}  // namespace spelunk

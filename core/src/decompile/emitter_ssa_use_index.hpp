@@ -14,11 +14,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 class SsaUseIndex final {
 public:
@@ -103,4 +103,4 @@ private:
     std::map<SsaKey, Entry> entries_;
 };
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

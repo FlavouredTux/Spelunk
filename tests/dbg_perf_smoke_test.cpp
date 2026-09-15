@@ -16,11 +16,11 @@
 #include <utility>
 #include <variant>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/error.hpp>
-#include <ember/debug/event.hpp>
-#include <ember/debug/target.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/debug/event.hpp>
+#include <spelunk/debug/target.hpp>
 
 #define CHECK(cond, msg)                                                   \
     do {                                                                   \
@@ -46,18 +46,18 @@ struct Pipes {
 };
 
 struct TargetCleanup {
-    ember::debug::Target& target;
+    spelunk::debug::Target& target;
     bool exited = false;
     ~TargetCleanup() { if (!exited) (void)target.kill(); }
 };
 
-ember::addr_t compute_slide(ember::debug::Target& tgt,
-                            const ember::Binary& bin,
+spelunk::addr_t compute_slide(spelunk::debug::Target& tgt,
+                            const spelunk::Binary& bin,
                             const std::string& bin_path) {
     const auto images = tgt.images();
     if (images.empty()) return 0;
-    constexpr ember::addr_t kPage = 0x1000;
-    const ember::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
+    constexpr spelunk::addr_t kPage = 0x1000;
+    const spelunk::addr_t pref = bin.preferred_load_base() & ~(kPage - 1);
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -72,11 +72,11 @@ ember::addr_t compute_slide(ember::debug::Target& tgt,
     return (images.front().base & ~(kPage - 1)) - pref;
 }
 
-bool is_perf_denial(const ember::Error& e) {
-    return e.kind == ember::ErrorKind::UnsupportedFormat;
+bool is_perf_denial(const spelunk::Error& e) {
+    return e.kind == spelunk::ErrorKind::UnsupportedFormat;
 }
 
-int skip_perf(const char* what, const ember::Error& e) {
+int skip_perf(const char* what, const spelunk::Error& e) {
     std::fprintf(stderr, "SKIP: %s (%s)\n", what, e.message.c_str());
     return 77;
 }
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         return 99;
     }
 
-    auto bin = ember::load_binary(argv[1]);
+    auto bin = spelunk::load_binary(argv[1]);
     CHECK(bin.has_value(), "load_binary");
 
     const auto* marker = (*bin)->find_by_name("dbg_marker");
@@ -103,12 +103,12 @@ int main(int argc, char** argv) {
     CHECK(::fcntl(pipes.gate[0], F_SETFD, 0) == 0, "inherit gate reader");
     CHECK(::fcntl(pipes.ready[1], F_SETFD, 0) == 0, "inherit ready writer");
 
-    ember::debug::LaunchOptions opts;
+    spelunk::debug::LaunchOptions opts;
     opts.program       = argv[1];
     opts.args          = {std::to_string(pipes.gate[0]), std::to_string(pipes.ready[1])};
     opts.stop_at_entry = false;
-    opts.backend       = ember::debug::BackendKind::Perf;
-    auto t_r = ember::debug::launch(opts);
+    opts.backend       = spelunk::debug::BackendKind::Perf;
+    auto t_r = spelunk::debug::launch(opts);
     if (!t_r) {
         if (is_perf_denial(t_r.error())) {
             std::fprintf(stderr,
@@ -129,9 +129,9 @@ int main(int argc, char** argv) {
     char token = 0;
     CHECK(::read(pipes.ready[0], &token, 1) == 1, "fixture ready");
 
-    const ember::addr_t slide   = compute_slide(*t, **bin, argv[1]);
-    const ember::addr_t bp_va   = marker->addr + slide;
-    const ember::addr_t slot_va = slot->addr   + slide;
+    const spelunk::addr_t slide   = compute_slide(*t, **bin, argv[1]);
+    const spelunk::addr_t bp_va   = marker->addr + slide;
+    const spelunk::addr_t slot_va = slot->addr   + slide;
 
     auto bp_r = t->set_breakpoint(bp_va);
     if (!bp_r) {
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     }
     const auto bp_id = *bp_r;
 
-    auto wp_r = t->set_watchpoint(slot_va, 8, ember::debug::WatchMode::Write);
+    auto wp_r = t->set_watchpoint(slot_va, 8, spelunk::debug::WatchMode::Write);
     if (!wp_r) {
         if (is_perf_denial(wp_r.error())) {
             return skip_perf("HW watchpoint allocation unavailable",
@@ -161,12 +161,12 @@ int main(int argc, char** argv) {
     {
         const auto step_r = t->step(0);
         CHECK(!step_r.has_value(),  "step should be unsupported");
-        CHECK(step_r.error().kind == ember::ErrorKind::UnsupportedFormat,
+        CHECK(step_r.error().kind == spelunk::ErrorKind::UnsupportedFormat,
               "step error kind == unsupported");
     }
     // set_regs must report unsupported.
     {
-        ember::debug::Registers r{};
+        spelunk::debug::Registers r{};
         const auto sr = t->set_regs(0, r);
         CHECK(!sr.has_value(),  "set_regs should be unsupported");
     }
@@ -184,7 +184,7 @@ int main(int argc, char** argv) {
 
     auto ev_r = t->wait_event();
     CHECK(ev_r.has_value(),                                  "wait_event 1");
-    const auto* hit = std::get_if<ember::debug::EvBreakpointHit>(&*ev_r);
+    const auto* hit = std::get_if<spelunk::debug::EvBreakpointHit>(&*ev_r);
     CHECK(hit != nullptr,                                    "expected EvBreakpointHit");
     CHECK(hit->id == bp_id,                                  "bp id mismatch");
 
@@ -194,14 +194,14 @@ int main(int argc, char** argv) {
     {
         auto regs = t->get_regs(hit->tid);
         CHECK(regs.has_value(),                          "get_regs (cached)");
-        CHECK((regs->present & ember::debug::Registers::PresentGpr) != 0,
+        CHECK((regs->present & spelunk::debug::Registers::PresentGpr) != 0,
               "PresentGpr after sample");
         CHECK(regs->rip == bp_va,                        "cached rip == bp_va");
     }
 
     ev_r = t->wait_event();
     CHECK(ev_r.has_value(),                                  "wait_event 2");
-    const auto* whit = std::get_if<ember::debug::EvWatchpointHit>(&*ev_r);
+    const auto* whit = std::get_if<spelunk::debug::EvWatchpointHit>(&*ev_r);
     CHECK(whit != nullptr,                                   "expected EvWatchpointHit");
     CHECK(whit->id == wp_id,                                 "wp id mismatch");
     CHECK(whit->addr == slot_va,                             "wp addr mismatch");
@@ -215,9 +215,9 @@ int main(int argc, char** argv) {
         std::byte buf[8] = {};
         auto rrv = t->read_mem(slot_va, std::span<std::byte>{buf});
         CHECK(rrv.has_value() && *rrv == sizeof(buf),       "read_mem watch_slot");
-        ember::u64 v = 0;
+        spelunk::u64 v = 0;
         for (int i = 0; i < 8; ++i) {
-            v |= static_cast<ember::u64>(static_cast<unsigned char>(buf[i])) << (i * 8);
+            v |= static_cast<spelunk::u64>(static_cast<unsigned char>(buf[i])) << (i * 8);
         }
         CHECK(v == 0xdeadbeefcafebabeULL,                    "watch_slot post-store value");
     }
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
     CHECK(::write(pipes.gate[1], &token, 1) == 1, "allow fixture exit");
     ev_r = t->wait_event();
     CHECK(ev_r.has_value(), "wait_event final");
-    const auto* exited = std::get_if<ember::debug::EvExited>(&*ev_r);
+    const auto* exited = std::get_if<spelunk::debug::EvExited>(&*ev_r);
     CHECK(exited != nullptr,    "expected EvExited");
     cleanup.exited = true;
     CHECK(exited->code == 42,   "exit code");

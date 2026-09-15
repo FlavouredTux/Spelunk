@@ -9,15 +9,15 @@
 
 namespace {
 
-using ember::Flag;
-using ember::IrBlock;
-using ember::IrFunction;
-using ember::IrInst;
-using ember::IrOp;
-using ember::IrType;
-using ember::IrValue;
-using ember::SsaKey;
-using ember::emit::SsaUseIndex;
+using spelunk::Flag;
+using spelunk::IrBlock;
+using spelunk::IrFunction;
+using spelunk::IrInst;
+using spelunk::IrOp;
+using spelunk::IrType;
+using spelunk::IrValue;
+using spelunk::SsaKey;
+using spelunk::emit::SsaUseIndex;
 
 int failures = 0;
 
@@ -27,7 +27,7 @@ void check(bool condition, const char* context) {
     ++failures;
 }
 
-void check_count(ember::u32 actual, ember::u32 expected,
+void check_count(spelunk::u32 actual, spelunk::u32 expected,
                  const char* context) {
     if (actual == expected) return;
     std::fprintf(stderr, "FAIL: %s (got %u, expected %u)\n",
@@ -44,12 +44,12 @@ void check_positions(std::span<const SsaUseIndex::Position> actual,
     ++failures;
 }
 
-[[nodiscard]] IrValue temp(ember::u32 id) {
+[[nodiscard]] IrValue temp(spelunk::u32 id) {
     return IrValue::make_temp(id, IrType::I64);
 }
 
 [[nodiscard]] SsaKey key_of(const IrValue& value) {
-    return *ember::ssa_key(value);
+    return *spelunk::ssa_key(value);
 }
 
 [[nodiscard]] IrInst instruction(IrOp op, IrValue dst,
@@ -57,7 +57,7 @@ void check_positions(std::span<const SsaUseIndex::Position> actual,
     IrInst inst;
     inst.op = op;
     inst.dst = dst;
-    inst.src_count = static_cast<ember::u8>(operands.size());
+    inst.src_count = static_cast<spelunk::u8>(operands.size());
     std::ranges::copy(operands, inst.srcs.begin());
     return inst;
 }

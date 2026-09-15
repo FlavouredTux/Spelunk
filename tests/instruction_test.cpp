@@ -1,14 +1,14 @@
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 
 int main() {
     int failures = 0;
-    const auto count = static_cast<ember::u16>(ember::Mnemonic::Count);
-    for (ember::u16 value = 1; value < count; ++value) {
-        const auto mnemonic = static_cast<ember::Mnemonic>(value);
-        if (ember::mnemonic_name(mnemonic) != "???") continue;
+    const auto count = static_cast<spelunk::u16>(spelunk::Mnemonic::Count);
+    for (spelunk::u16 value = 1; value < count; ++value) {
+        const auto mnemonic = static_cast<spelunk::Mnemonic>(value);
+        if (spelunk::mnemonic_name(mnemonic) != "???") continue;
         std::fprintf(stderr, "FAIL: mnemonic %u has no display name\n",
                      static_cast<unsigned>(value));
         ++failures;

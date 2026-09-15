@@ -21,19 +21,19 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/teef_recognize.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/progress.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/teef_recognize.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/progress.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "../subcommands.hpp"
 #include "common.hpp"
 #include "teef_internal.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -55,7 +55,7 @@ load_corpus_from_args(const Args& args) {
     const double total_ms = std::chrono::duration<double, std::milli>(
         t_end - t_start).count();
     std::println(stderr,
-        "ember: corpus loaded: {} fns / {} chunks across {} TSVs "
+        "spelunk: corpus loaded: {} fns / {} chunks across {} TSVs "
         "({} rows) in {:.0f} ms",
         corpus->function_count(), corpus->chunk_count(),
         args.corpus_paths.size(), total_rows, total_ms);
@@ -71,7 +71,7 @@ load_corpus_from_args(const Args& args) {
         const double anti_ms = std::chrono::duration<double, std::milli>(
             t_anti_end - t_anti_start).count();
         std::println(stderr,
-            "ember: anti-corpus loaded: {} blocked hashes from {} rows "
+            "spelunk: anti-corpus loaded: {} blocked hashes from {} rows "
             "across {} TSVs in {:.0f} ms",
             corpus->blocked_count(), anti_rows,
             args.anti_corpus_paths.size(), anti_ms);
@@ -153,7 +153,7 @@ load_corpus_from_args(const Args& args) {
 int run_recognize(const Args& args, const Binary& b) {
     if (args.corpus_paths.empty()) {
         std::println(stderr,
-            "ember: --recognize requires at least one --corpus PATH");
+            "spelunk: --recognize requires at least one --corpus PATH");
         return EXIT_FAILURE;
     }
     // Identical --corpus PATH lists reuse the parsed in-memory indices
@@ -170,7 +170,7 @@ int run_recognize(const Args& args, const Binary& b) {
         cached_anti_paths = args.anti_corpus_paths;
     } else {
         std::println(stderr,
-            "ember: reusing cached corpus ({} fns / {} chunks)",
+            "spelunk: reusing cached corpus ({} fns / {} chunks)",
             cached_corpus->function_count(), cached_corpus->chunk_count());
     }
     const TeefCorpus& corpus = *cached_corpus;
@@ -220,7 +220,7 @@ int run_recognize(const Args& args, const Binary& b) {
     }
     if (shadow_dropped > 0) {
         std::println(stderr,
-            "ember: recognize: dropped {} shadow entries (stride-1 dedup)",
+            "spelunk: recognize: dropped {} shadow entries (stride-1 dedup)",
             shadow_dropped);
     }
 
@@ -252,11 +252,11 @@ int run_recognize(const Args& args, const Binary& b) {
         // the corpus skip L4. Fast on obfuscated targets, lossy across
         // opt levels, so off by default. Topologies shared by more than
         // kMaxTopoPopularity corpus entries are generic shapes and are
-        // excluded (EMBER_TEEF_MAX_TOPO_POPULARITY, 0 disables).
+        // excluded (SPELUNK_TEEF_MAX_TOPO_POPULARITY, 0 disables).
         std::unordered_set<u64> corpus_topos;
         if (args.l0_prefilter) {
             static const std::size_t kMaxTopoPopularity = []() -> std::size_t {
-                if (const char* s = std::getenv("EMBER_TEEF_MAX_TOPO_POPULARITY")) {
+                if (const char* s = std::getenv("SPELUNK_TEEF_MAX_TOPO_POPULARITY")) {
                     try { return static_cast<std::size_t>(std::stoull(s)); }
                     catch (...) {}
                 }
@@ -264,7 +264,7 @@ int run_recognize(const Args& args, const Binary& b) {
             }();
             corpus_topos = corpus.topo_hashes(kMaxTopoPopularity);
             std::println(stderr,
-                "ember: --l0-prefilter on; {} corpus topologies "
+                "spelunk: --l0-prefilter on; {} corpus topologies "
                 "(after popularity guard ≤{})",
                 corpus_topos.size(), kMaxTopoPopularity);
         }
@@ -285,7 +285,7 @@ int run_recognize(const Args& args, const Binary& b) {
         const double fp_ms = std::chrono::duration<double, std::milli>(
             t_fp_end - t_fp_start).count();
         std::println(stderr,
-            "ember: target fingerprint built in {:.0f} ms ({} bytes, {} fns)",
+            "spelunk: target fingerprint built in {:.0f} ms ({} bytes, {} fns)",
             fp_ms, target_tsv.size(), total);
         if (cacheable) {
             const auto dir = args.cache_dir.empty()
@@ -297,7 +297,7 @@ int run_recognize(const Args& args, const Binary& b) {
             }
         }
     } else {
-        std::println(stderr, "ember: reusing cached TEEF for target ({} bytes)",
+        std::println(stderr, "spelunk: reusing cached TEEF for target ({} bytes)",
                      target_tsv.size());
     }
 
@@ -332,7 +332,7 @@ int run_recognize(const Args& args, const Binary& b) {
     const std::string_view query_runtime = detect_query_runtime(b);
     if (!query_runtime.empty()) {
         std::println(stderr,
-            "ember: recognize: query runtime detected as '{}'", query_runtime);
+            "spelunk: recognize: query runtime detected as '{}'", query_runtime);
     }
 
     std::atomic<std::size_t> next{0};
@@ -342,7 +342,7 @@ int run_recognize(const Args& args, const Binary& b) {
     const bool show = progress_enabled();
     if (show) {
         std::println(stderr,
-            "ember: recognize {} functions across {} threads (corpus has {} fns)...",
+            "spelunk: recognize {} functions across {} threads (corpus has {} fns)...",
             total, threads, corpus.function_count());
         std::fflush(stderr);
     }
@@ -458,10 +458,10 @@ int run_recognize(const Args& args, const Binary& b) {
     const double per_fn_us = total > 0
         ? (scan_s * 1e6) / static_cast<double>(total) : 0.0;
     std::println(stderr,
-        "ember: recognize: {} suggestions at threshold {:.2f} "
+        "spelunk: recognize: {} suggestions at threshold {:.2f} "
         "(scan {:.2f}s, {:.0f} µs/fn)",
         hit_count.load(), threshold, scan_s, per_fn_us);
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

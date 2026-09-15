@@ -1,4 +1,4 @@
-#include <ember/analysis/strings.hpp>
+#include <spelunk/analysis/strings.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -10,21 +10,21 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/pipeline.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/ir/lifter.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/ir/lifter.hpp>
 
 #include "strings_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -272,4 +272,4 @@ std::vector<StringEntry> scan_strings(const Binary &b, const StringScanOptions &
     return scan_strings_impl(b, options, {}, false);
 }
 
-}  // namespace ember
+}  // namespace spelunk

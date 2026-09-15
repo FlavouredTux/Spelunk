@@ -11,18 +11,18 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/cfg_util.hpp>
-#include <ember/analysis/function.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/analysis/cfg_util.hpp>
+#include <spelunk/analysis/function.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "structurer_internal.hpp"
 
-namespace ember::structurer {
+namespace spelunk::structurer {
 
 namespace {
 
-// compute_rpo + compute_idoms live in <ember/analysis/cfg_util.hpp>.
+// compute_rpo + compute_idoms live in <spelunk/analysis/cfg_util.hpp>.
 // Cooper-Harvey-Kennedy on the reverse CFG: compute immediate post-dominators.
 // The virtual exit (kNoAddr) is the root; forward-terminating blocks are its
 // reverse-CFG predecessors.
@@ -247,4 +247,4 @@ CfgInfo analyze_cfg(const IrFunction& fn) {
     return info;
 }
 
-}  // namespace ember::structurer
+}  // namespace spelunk::structurer

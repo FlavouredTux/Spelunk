@@ -1,10 +1,10 @@
-#include <ember/disasm/instruction.hpp>
+#include <spelunk/disasm/instruction.hpp>
 
 #include <string_view>
 
 #include "instruction_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 std::string_view mnemonic_name(Mnemonic m) noexcept {
     switch (m) {
@@ -534,4 +534,4 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
     return instruction_detail::arm_mnemonic_name(m);
 }
 
-}  // namespace ember
+}  // namespace spelunk

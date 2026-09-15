@@ -2,14 +2,14 @@
 // Endianness and call oracles are test adapters, never production IR rewrites.
 #include "support/ir_interpreter.hpp"
 
-#include <ember/analysis/cfg_builder.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/decompile/emitter.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/ir/lifter.hpp>
-#include <ember/ir/passes.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/structure/structurer.hpp>
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/decompile/emitter.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/ir/lifter.hpp>
+#include <spelunk/ir/passes.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/structure/structurer.hpp>
 
 #include <array>
 #include <filesystem>
@@ -21,7 +21,7 @@
 #include <stdexcept>
 
 namespace {
-using namespace ember;
+using namespace spelunk;
 constexpr addr_t data_base=0x10000, observe_addr=0x110000, mutate_addr=0x110010;
 constexpr addr_t stack_top=0x28000, stop=0x120000;
 constexpr std::size_t data_size=256;
@@ -181,8 +181,8 @@ int main(int argc,char** argv) {
     }
     if(argc!=3)return 2;
     try {
-        auto binary=ember::load_binary(argv[1]);if(!binary)throw std::runtime_error(binary.error().message);
-        auto decoder=ember::make_decoder(**binary);auto lifter=ember::make_lifter(**binary);
+        auto binary=spelunk::load_binary(argv[1]);if(!binary)throw std::runtime_error(binary.error().message);
+        auto decoder=spelunk::make_decoder(**binary);auto lifter=spelunk::make_lifter(**binary);
         if(!decoder || !lifter)throw std::runtime_error("missing PPC decoder/lifter");
         std::filesystem::create_directories(argv[2]);
         Annotations annotations;

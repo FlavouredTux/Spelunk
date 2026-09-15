@@ -4,13 +4,13 @@
 #include <utility>
 #include <vector>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
-#include <ember/debug/unwind.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
+#include <spelunk/debug/unwind.hpp>
 
-namespace ember::debug {
+namespace spelunk::debug {
 
 Result<std::vector<Frame>>
 unwind_rbp(Target& t, ThreadId tid, std::size_t max_frames) {
@@ -49,4 +49,4 @@ unwind_rbp(Target& t, ThreadId tid, std::size_t max_frames) {
     return out;
 }
 
-}  // namespace ember::debug
+}  // namespace spelunk::debug

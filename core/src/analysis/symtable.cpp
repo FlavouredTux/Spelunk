@@ -1,4 +1,4 @@
-#include <ember/analysis/symtable.hpp>
+#include <spelunk/analysis/symtable.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,11 +11,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::analysis {
+namespace spelunk::analysis {
 
 namespace {
 
@@ -180,4 +180,4 @@ std::string_view symtable_termination_name(SymtableTermination t) noexcept {
     return "unknown";
 }
 
-}  // namespace ember::analysis
+}  // namespace spelunk::analysis

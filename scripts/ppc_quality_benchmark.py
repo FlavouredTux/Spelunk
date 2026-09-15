@@ -45,7 +45,7 @@ _CONSTANT_CONDITION = re.compile(
 )
 _RAW_POINTER = re.compile(r"\bPTR\s*\(\s*0x[0-9a-fA-F]+\s*\)")
 _SELF_ASSIGNMENT = re.compile(r"^\s*(.+?)\s+=\s+\1;\s*$", re.MULTILINE)
-_BATCH_MARKER = re.compile(r"^// ember-symbol: (\S+)\s*$")
+_BATCH_MARKER = re.compile(r"^// spelunk-symbol: (\S+)\s*$")
 _TIMING = re.compile(
     r"^\[timing\]\s+(.+?):\s+([0-9]+(?:\.[0-9]+)?)\s+ms$"
 )
@@ -190,13 +190,13 @@ def compare_totals(current: dict[str, int], baseline: dict[str, int]) -> dict[st
     }
 
 
-def run_function(ember: pathlib.Path, dtk: pathlib.Path, version: str,
+def run_function(spelunk: pathlib.Path, dtk: pathlib.Path, version: str,
                  symbol: str, timeout: float,
                  collect_timings: bool = False,
                  headers: list[pathlib.Path] | None = None,
                  header_args: list[str] | None = None,
                  syntax_compiler: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
-    command = [str(ember), "--dtk", str(dtk), "--dtk-version", version, "-p", "-s", symbol]
+    command = [str(spelunk), "--dtk", str(dtk), "--dtk-version", version, "-p", "-s", symbol]
     for path in headers or []:
         command.extend(("--headers", str(path)))
     for argument in header_args or []:
@@ -204,7 +204,7 @@ def run_function(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     environment = None
     if collect_timings:
         environment = os.environ.copy()
-        environment["EMBER_TIMING"] = "1"
+        environment["SPELUNK_TIMING"] = "1"
     started = time.perf_counter()
     try:
         result = subprocess.run(
@@ -218,7 +218,7 @@ def run_function(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     except subprocess.TimeoutExpired:
         return None, f"{symbol}: timed out after {timeout:g}s"
     except OSError as error:
-        return None, f"{symbol}: could not execute {ember}: {error}"
+        return None, f"{symbol}: could not execute {spelunk}: {error}"
     if result.returncode != 0:
         detail = result.stderr.strip().splitlines()
         suffix = detail[-1] if detail else f"exit {result.returncode}"
@@ -268,14 +268,14 @@ def split_batch_output(text: str) -> dict[str, str]:
     return {symbol: "".join(lines) for symbol, lines in outputs.items()}
 
 
-def run_batch(ember: pathlib.Path, dtk: pathlib.Path, version: str,
+def run_batch(spelunk: pathlib.Path, dtk: pathlib.Path, version: str,
               manifest: pathlib.Path, symbols: list[str], timeout: float,
               collect_timings: bool = False,
               headers: list[pathlib.Path] | None = None,
               header_args: list[str] | None = None,
               syntax_compiler: str | None = None
               ) -> tuple[list[dict[str, Any]], list[str], dict[str, float]]:
-    command = [str(ember), "--dtk", str(dtk), "--dtk-version", version,
+    command = [str(spelunk), "--dtk", str(dtk), "--dtk-version", version,
                "-q", "-p", "--symbols", str(manifest)]
     for path in headers or []:
         command.extend(("--headers", str(path)))
@@ -284,7 +284,7 @@ def run_batch(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     environment = None
     if collect_timings:
         environment = os.environ.copy()
-        environment["EMBER_TIMING"] = "1"
+        environment["SPELUNK_TIMING"] = "1"
     started = time.perf_counter()
     try:
         result = subprocess.run(
@@ -294,7 +294,7 @@ def run_batch(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     except subprocess.TimeoutExpired:
         return [], [f"batch timed out after {timeout:g}s"], {}
     except OSError as error:
-        return [], [f"could not execute {ember}: {error}"], {}
+        return [], [f"could not execute {spelunk}: {error}"], {}
     if result.returncode != 0:
         details = result.stderr.strip().splitlines()
         suffix = details[-1] if details else f"exit {result.returncode}"
@@ -315,7 +315,7 @@ def run_batch(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     return functions, failures, timings
 
 
-def run_roundtrip_cases(ember: pathlib.Path, dtk: pathlib.Path, version: str,
+def run_roundtrip_cases(spelunk: pathlib.Path, dtk: pathlib.Path, version: str,
                         cases: list[tuple[str, str, str]], timeout: float,
                         headers: list[pathlib.Path] | None = None,
                         header_args: list[str] | None = None
@@ -323,7 +323,7 @@ def run_roundtrip_cases(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     passed = 0
     failures: list[str] = []
     for kind, symbol, type_name in cases:
-        command = [str(ember), "--dtk", str(dtk), "--dtk-version", version,
+        command = [str(spelunk), "--dtk", str(dtk), "--dtk-version", version,
                    "-q", "--verify-roundtrip"]
         for path in headers or []:
             command.extend(("--headers", str(path)))
@@ -353,7 +353,7 @@ def run_roundtrip_cases(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     return {"requested": len(cases), "passed": passed}, failures
 
 
-def make_report(ember: pathlib.Path, dtk: pathlib.Path, version: str,
+def make_report(spelunk: pathlib.Path, dtk: pathlib.Path, version: str,
                 manifest: pathlib.Path, symbols: list[str], timeout: float,
                 collect_timings: bool = False,
                 headers: list[pathlib.Path] | None = None,
@@ -365,12 +365,12 @@ def make_report(ember: pathlib.Path, dtk: pathlib.Path, version: str,
     batch_timings: dict[str, float] = {}
     if batch:
         functions, failures, batch_timings = run_batch(
-            ember, dtk, version, manifest, symbols, timeout, collect_timings,
+            spelunk, dtk, version, manifest, symbols, timeout, collect_timings,
             headers, header_args, syntax_compiler)
     else:
         for symbol in symbols:
             function, error = run_function(
-                ember, dtk, version, symbol, timeout, collect_timings,
+                spelunk, dtk, version, symbol, timeout, collect_timings,
                 headers, header_args, syntax_compiler)
             if function is not None:
                 functions.append(function)
@@ -428,7 +428,7 @@ def print_human(report: dict[str, Any]) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     root = pathlib.Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ember", type=pathlib.Path, default=root / "build/cli/ember")
+    parser.add_argument("--spelunk", type=pathlib.Path, default=root / "build/cli/spelunk")
     parser.add_argument("--dtk", type=pathlib.Path, required=True)
     parser.add_argument("--version", default="EU0")
     parser.add_argument("--manifest", type=pathlib.Path,
@@ -438,17 +438,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=120.0,
                         help="per-function timeout in seconds (default: 120)")
     parser.add_argument("--timings", action="store_true",
-                        help="collect wall-clock and Ember pipeline timings")
+                        help="collect wall-clock and Spelunk pipeline timings")
     parser.add_argument("--headers", action="append", type=pathlib.Path, default=[],
-                        help="header path forwarded to Ember; repeatable")
+                        help="header path forwarded to Spelunk; repeatable")
     parser.add_argument("--header-arg", action="append", default=[],
-                        help="header parser argument forwarded to Ember; repeatable")
+                        help="header parser argument forwarded to Spelunk; repeatable")
     parser.add_argument("--syntax-check", action="store_true",
                         help="run clang -fsyntax-only on every pseudo-C function")
     parser.add_argument("--compiler", default="clang",
                         help="compiler used by --syntax-check (default: clang)")
     parser.add_argument("--no-batch", action="store_true",
-                        help="run one Ember process per symbol (diagnostic compatibility mode)")
+                        help="run one Spelunk process per symbol (diagnostic compatibility mode)")
     parser.add_argument("--roundtrip-manifest", type=pathlib.Path,
                         help="also verify typed-data/event cases from a TSV manifest")
     parser.add_argument("--json", action="store_true")
@@ -464,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         symbols = load_manifest(args.manifest)
-        report = make_report(args.ember, args.dtk, args.version, args.manifest,
+        report = make_report(args.spelunk, args.dtk, args.version, args.manifest,
                              symbols, args.timeout, args.timings,
                              args.headers, args.header_arg,
                              args.compiler if args.syntax_check else None,
@@ -472,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.roundtrip_manifest is not None:
             roundtrip_cases = load_roundtrip_manifest(args.roundtrip_manifest)
             report["roundtrip"], roundtrip_failures = run_roundtrip_cases(
-                args.ember, args.dtk, args.version, roundtrip_cases, args.timeout,
+                args.spelunk, args.dtk, args.version, roundtrip_cases, args.timeout,
                 args.headers, args.header_arg)
             report["failures"].extend(roundtrip_failures)
         if args.baseline is not None:

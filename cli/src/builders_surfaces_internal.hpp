@@ -9,10 +9,10 @@
 #include <string_view>
 #include <vector>
 
-#include <ember/analysis/app_surface.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/analysis/app_surface.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::cli::builders {
+namespace spelunk::cli::builders {
 
 struct SurfaceCategoryRow {
     std::string subsystem;
@@ -89,4 +89,4 @@ build_surface_descriptor_rows(const std::vector<const AppSurfaceEvidence*>& evid
 [[nodiscard]] std::vector<SurfaceArtifactRow>
 build_surface_artifact_rows(const std::vector<const AppSurfaceEvidence*>& evidence);
 
-}  // namespace ember::cli::builders
+}  // namespace spelunk::cli::builders

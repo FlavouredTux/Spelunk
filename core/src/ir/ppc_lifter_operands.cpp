@@ -2,15 +2,15 @@
 
 #include <algorithm>
 
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
 
 #include "ppc_lifter_internal.hpp"
 
-namespace ember::ppc_lift {
+namespace spelunk::ppc_lift {
 
 namespace {
 
@@ -98,4 +98,4 @@ void store_fp_lvalue(const Operand& op, IrValue value, LiftCtx& ctx, IrType t) {
     if (op.kind == Operand::Kind::Memory) ctx.emit_store(compute_ea(op.mem, ctx), value);
 }
 
-}  // namespace ember::ppc_lift
+}  // namespace spelunk::ppc_lift

@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
 
-namespace ember::test {
+namespace spelunk::test {
 
 struct MachineInput {
     std::map<SsaKey, u64> values;
@@ -52,4 +52,4 @@ struct Execution {
 interpret(const IrFunction& function, const MachineInput& input,
           std::size_t step_limit = 10000);
 
-}  // namespace ember::test
+}  // namespace spelunk::test

@@ -11,11 +11,11 @@
 #include <system_error>
 #include <utility>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/relocation.hpp>
-#include <ember/binary/symbol.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/relocation.hpp>
+#include <spelunk/binary/symbol.hpp>
 
-namespace ember::cli::header_import_model {
+namespace spelunk::cli::header_import_model {
 namespace {
 
 std::size_t scalar_size(std::string name) {
@@ -478,4 +478,4 @@ std::optional<i32> evt_scalar_from_rendered(std::string_view rendered) {
     return std::nullopt;
 }
 
-}  // namespace ember::cli::header_import_model
+}  // namespace spelunk::cli::header_import_model

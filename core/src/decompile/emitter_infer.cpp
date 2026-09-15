@@ -12,20 +12,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
 #include "emitter_internal.hpp"
 #include "emitter_tables.hpp"
 
-namespace ember::emit {
+namespace spelunk::emit {
 
 const Symbol*
 Emitter::global_object_for_load(const IrValue& v) const {
@@ -187,7 +187,7 @@ void Emitter::infer_charp_args() {
                     // Override its frame-layout type so the local
                     // declaration emits as `char local_X[N]` instead
                     // of `u64 local_X[N/8]`. Catches fgets/strcpy/
-                    // strcmp buffers that ember would otherwise leave
+                    // strcmp buffers that spelunk would otherwise leave
                     // as opaque u64 arrays.
                     if (auto off = stack_offset(args[i]); off) {
                         charp_local_slots.insert(*off);
@@ -927,4 +927,4 @@ void Emitter::infer_ppc_role_arg_names() {
     }
 }
 
-}  // namespace ember::emit
+}  // namespace spelunk::emit

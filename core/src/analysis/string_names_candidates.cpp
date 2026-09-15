@@ -8,11 +8,11 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/demangle.hpp>
+#include <spelunk/analysis/demangle.hpp>
 
 #include "string_names_internal.hpp"
 
-namespace ember::string_names {
+namespace spelunk::string_names {
 
 namespace {
 
@@ -412,4 +412,4 @@ bool is_bad_plain_function_name(std::string_view name) noexcept {
            name == "dynamic_cast";
 }
 
-}  // namespace ember::string_names
+}  // namespace spelunk::string_names

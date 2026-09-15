@@ -1,4 +1,4 @@
-#include <ember/binary/raw_regions.hpp>
+#include <spelunk/binary/raw_regions.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -18,11 +18,11 @@
 #include <system_error>
 #include <utility>
 
-#include <ember/binary/section.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -250,4 +250,4 @@ RawRegionsBinary::load_from_raw_bytes(const std::filesystem::path& file,
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

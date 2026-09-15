@@ -4,25 +4,25 @@
 
 namespace {
 
-ember::StructuredFunction linear_structured_function(
-    const ember::IrFunction& function,
-    std::optional<ember::IrValue> returned = std::nullopt)
+spelunk::StructuredFunction linear_structured_function(
+    const spelunk::IrFunction& function,
+    std::optional<spelunk::IrValue> returned = std::nullopt)
 {
-    auto statements = std::make_unique<ember::Region>();
-    statements->kind = ember::RegionKind::Block;
+    auto statements = std::make_unique<spelunk::Region>();
+    statements->kind = spelunk::RegionKind::Block;
     statements->block_start = function.start;
-    auto tail = std::make_unique<ember::Region>();
-    tail->kind = ember::RegionKind::Return;
+    auto tail = std::make_unique<spelunk::Region>();
+    tail->kind = spelunk::RegionKind::Return;
     if (returned) tail->condition = *returned;
-    auto root = std::make_unique<ember::Region>();
-    root->kind = ember::RegionKind::Seq;
+    auto root = std::make_unique<spelunk::Region>();
+    root->kind = spelunk::RegionKind::Seq;
     root->children.push_back(std::move(statements));
     root->children.push_back(std::move(tail));
-    return ember::StructuredFunction{&function, std::move(root)};
+    return spelunk::StructuredFunction{&function, std::move(root)};
 }
 
 int test_load_crossing_call_is_materialized() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x22e0;
     constexpr addr_t kReset = 0x2500;
@@ -84,7 +84,7 @@ int test_load_crossing_call_is_materialized() {
 }
 
 int test_x64_load_crossing_aliasing_store_is_materialized() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2320;
     IrFunction fn;
@@ -142,7 +142,7 @@ int test_x64_load_crossing_aliasing_store_is_materialized() {
 }
 
 int test_x64_unknown_pointer_store_may_alias_load() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2460;
     IrFunction fn;
@@ -194,7 +194,7 @@ int test_x64_unknown_pointer_store_may_alias_load() {
 }
 
 int test_absolute_ranges_alias_across_sign_boundary() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2468;
     IrFunction fn;
@@ -233,7 +233,7 @@ int test_absolute_ranges_alias_across_sign_boundary() {
 }
 
 int test_memory_writing_intrinsic_forces_snapshot() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2470;
     IrFunction fn;
@@ -285,7 +285,7 @@ int test_memory_writing_intrinsic_forces_snapshot() {
 }
 
 int test_destination_intrinsic_remains_memory_barrier() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2478;
     IrFunction fn;
@@ -327,7 +327,7 @@ int test_destination_intrinsic_remains_memory_barrier() {
 }
 
 int test_x64_loop_revisit_observes_late_memory_barrier() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kEntry = 0x2420;
     constexpr addr_t kLoop = 0x2430;
@@ -414,7 +414,7 @@ int test_x64_loop_revisit_observes_late_memory_barrier() {
 }
 
 int test_x64_many_disjoint_loads_remain_inline() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2480;
     constexpr std::size_t kLoadCount = 32;
@@ -471,7 +471,7 @@ int test_x64_many_disjoint_loads_remain_inline() {
 }
 
 int test_deferred_expression_keeps_load_snapshot() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2490;
     IrFunction fn;
@@ -511,7 +511,7 @@ int test_deferred_expression_keeps_load_snapshot() {
 }
 
 int test_call_argument_keeps_load_snapshot() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x24a0;
     constexpr addr_t kConsume = 0x420200;
@@ -571,7 +571,7 @@ int test_call_argument_keeps_load_snapshot() {
 }
 
 int test_stack_slot_does_not_forward_load_dependent_value() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x24b0;
     constexpr addr_t kBarrier = 0x420300;
@@ -623,7 +623,7 @@ int test_stack_slot_does_not_forward_load_dependent_value() {
 }
 
 int test_opaque_ppc_intrinsic_forces_snapshot() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x24c0;
     IrFunction fn;
@@ -664,7 +664,7 @@ int test_opaque_ppc_intrinsic_forces_snapshot() {
 }
 
 int test_x64_escaped_stack_slot_store_is_retained() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2520;
     constexpr addr_t kConsume = 0x420100;
@@ -730,7 +730,7 @@ int test_x64_escaped_stack_slot_store_is_retained() {
 }
 
 int test_x64_partial_stack_load_retains_overlapping_store() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2530;
     IrFunction fn;
@@ -774,7 +774,7 @@ int test_x64_partial_stack_load_retains_overlapping_store() {
 }
 
 int test_x64_overlapping_store_disables_slot_forwarding() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2534;
     IrFunction fn;
@@ -819,7 +819,7 @@ int test_x64_overlapping_store_disables_slot_forwarding() {
 }
 
 int test_x64_equal_width_stack_type_pun_uses_byte_storage() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2536;
     IrFunction fn;
@@ -866,7 +866,7 @@ int test_x64_equal_width_stack_type_pun_uses_byte_storage() {
 }
 
 int test_x64_interior_stack_pointer_escape_retains_store() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2538;
     constexpr addr_t kConsume = 0x420180;
@@ -924,7 +924,7 @@ int test_x64_interior_stack_pointer_escape_retains_store() {
 }
 
 int test_x64_one_past_stack_pointer_keeps_storage_identity() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x253c;
     constexpr addr_t kConsume = 0x420190;
@@ -986,7 +986,7 @@ int test_x64_one_past_stack_pointer_keeps_storage_identity() {
 }
 
 int test_x64_unobserved_stack_spill_is_suppressed() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2540;
     IrFunction fn;
@@ -1030,7 +1030,7 @@ int test_x64_unobserved_stack_spill_is_suppressed() {
 }
 
 int test_unused_nonvoid_call_keeps_side_effect() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2340;
     constexpr addr_t kCall = 0x410100;
@@ -1087,7 +1087,7 @@ int test_unused_nonvoid_call_keeps_side_effect() {
 }
 
 int test_x64_xmm_clobber_phi_is_not_a_float_return() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2378;
     IrFunction fn;
@@ -1138,7 +1138,7 @@ int test_x64_xmm_clobber_phi_is_not_a_float_return() {
 }
 
 int test_memory_use_recovers_pointer_after_integer_seed_conflict() {
-    using namespace ember;
+    using namespace spelunk;
 
     constexpr addr_t kStart = 0x2300;
     IrFunction fn;
@@ -1198,7 +1198,7 @@ int test_memory_use_recovers_pointer_after_integer_seed_conflict() {
 }
 
 int test_runtime_pointer_offset_uses_byte_arithmetic() {
-    using namespace ember;
+    using namespace spelunk;
 
     const auto render = [](addr_t start, IrOp op, bool pointer_first,
                            std::string pointer_type,

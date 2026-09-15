@@ -2,7 +2,7 @@
 
 ## Wii U RPX/RPL input
 
-With optional system zlib support, Ember loads Cafe OS ELF32 big-endian
+With optional system zlib support, Spelunk loads Cafe OS ELF32 big-endian
 PowerPC files directly, including compressed code, symbol, string, and
 relocation sections. Decompression happens in the owned in-memory image;
 the input file is unchanged. `image()` and section file offsets describe
@@ -11,7 +11,7 @@ that normalized image, not the original compressed layout.
 Streams must pass zlib checksum validation and exactly match their declared
 uncompressed size, without trailing bytes. Expansion is limited to 256 MiB
 per section and 512 MiB total. Builds without zlib report an unsupported
-compression error. Configure with `-DEMBER_WITH_ZLIB=OFF` to disable support.
+compression error. Configure with `-DSPELUNK_WITH_ZLIB=OFF` to disable support.
 
 Cafe import tables and ELF symbols identify function and data imports as
 `module!symbol`, for example `coreinit!OSBlockMove`. Function-pointer references
@@ -45,7 +45,7 @@ records before treating an address as resolved. The format constants and
 relocation expressions can be cross-checked against
 [Decaf's Cafe loader](https://github.com/decaf-emu/decaf-emu/blob/master/src/libdecaf/src/cafe/loader/cafe_loader_reloc.cpp).
 
-Ember supports PPC32 and PPC64 binary loading, instruction decoding, partial IR
+Spelunk supports PPC32 and PPC64 binary loading, instruction decoding, partial IR
 lifting, and pseudo-C emission. Wii-oriented work can load a DOL, a standalone
 REL, a relocatable PPC32 ELF object, or a complete DTK project. The decompiler
 also recovers scalar function arguments passed through both the general-purpose
@@ -90,7 +90,7 @@ as:
 void update(double scale, Object* object, double limit, Vec3* position);
 ```
 
-is passed through `f1`, `r3`, `f2`, and `r4`, respectively. Ember records both
+is passed through `f1`, `r3`, `f2`, and `r4`, respectively. Spelunk records both
 register banks at each call and treats `f0` through `f13` as caller-clobbered.
 The clobber model prevents a result or temporary left in an FPR by an earlier
 call from becoming a phantom argument to a later call.
@@ -101,7 +101,7 @@ The ABI references used by the implementation are the
 
 ## Binary-only argument recovery
 
-Without type information, Ember lifts the callee and finds argument-register
+Without type information, Spelunk lifts the callee and finds argument-register
 values that are read before being overwritten. It then:
 
 1. builds the live-in GPR and FPR lanes independently;
@@ -126,7 +126,7 @@ callee layout to select and interleave the saved GPR/FPR values.
 
 Scalar overflow parameters are recovered from the ABI parameter area as well.
 On PPC32 the first integer overflow word is at entry `r1 + 0x28`, after the
-linkage area and eight GPR home slots. Ember follows a versioned `r1` through a
+linkage area and eight GPR home slots. Spelunk follows a versioned `r1` through a
 Metrowerks `stwu` frame allocation, so the same incoming slot is recognized in
 leaf and framed callees. At call sites, layout-gated stores to the outgoing
 parameter area are folded into the following call instead of leaking as
@@ -136,7 +136,7 @@ width and alignment; stripped binary-only recovery remains conservative.
 ## Aggregate values and structure returns
 
 Signature-backed small aggregates consume their complete consecutive GPR word
-span. Ember rebuilds those words as a C compound literal at a call site, so an
+span. Spelunk rebuilds those words as a C compound literal at a call site, so an
 eight-byte `CXParsedHeader` is emitted as one source argument and the following
 scalar is taken from `r5`, not mistaken for the second half in `r4`.
 
@@ -158,7 +158,7 @@ the ABI word is an integer or guessing a structure name.
 
 `blr` does not distinguish a source-level `return;` from returning the value
 currently left in `r3` or `f1`. Integer and pointer results use `r3`; scalar
-floating-point results use `f1`. Ember selects `f1` only when an explicit
+floating-point results use `f1`. Spelunk selects `f1` only when an explicit
 annotation or a known routine prototype says the return is `float`/`double`.
 Unknown calls remain on the established `r3` path, so merely clobbering `f1`
 does not invent a floating result.
@@ -183,7 +183,7 @@ lanes, mixed scalar ordering, callback-as-pointer positions, and known
 `GXColor`/`CXParsedHeader` aggregate sizes. User annotations still take
 precedence over every built-in entry.
 
-For `r3`, Ember keeps direct definitions, call results with real consumers,
+For `r3`, Spelunk keeps direct definitions, call results with real consumers,
 and ordinary conditional return expressions. It suppresses an incidental
 merge when the evidence instead consists of unconsumed call clobbers or
 live-in state mixed with values already used for side effects. This also
@@ -237,7 +237,7 @@ Missing tools produce a CTest skip, not a pass. To replay or vary a seed:
 
 ```sh
 python3 tests/ppc_pipeline_test.py \
-  --probe build/tests/ember_ppc_pipeline_probe \
+  --probe build/tests/spelunk_ppc_pipeline_probe \
   --clang clang --lld ld.lld --support tests/support --seed 0x505043
 ```
 
@@ -253,7 +253,7 @@ hard decoder failures first, then ranks decoded instructions that still lift to
 an opaque `ppc.*` intrinsic:
 
 ```sh
-ember --dtk ./spm --dtk-version EU0 --ppc-coverage --coverage-limit 20
+spelunk --dtk ./spm --dtk-version EU0 --ppc-coverage --coverage-limit 20
 ```
 
 Use `--json` for tooling and `--coverage-limit 0` for the complete ranking. The
@@ -301,7 +301,7 @@ evidence; mixed-width field bases remain deliberately opaque `void*` values.
 ### CodeWarrior jump tables
 
 PPC32 CFG recovery recognizes the bounded CodeWarrior dispatch shape built
-from `lwzx`, `mtctr`, and `bctr`. Ember resolves the absolute big-endian target
+from `lwzx`, `mtctr`, and `bctr`. Spelunk resolves the absolute big-endian target
 table, adds every in-range target plus the bounds-check default edge to the
 CFG, preserves duplicate targets as grouped cases, and emits a structured
 `switch`. The selector is traced back through the scaled table index and its
@@ -313,7 +313,7 @@ where an unresolved `bctr` otherwise hides nearly the entire function.
 
 ### Header-aware Wii source recovery
 
-Pass one or more header files/directories with `--headers`. Ember asks
+Pass one or more header files/directories with `--headers`. Spelunk asks
 libclang for 32-bit PowerPC layouts and overlays matching function prototypes,
 parameter names, direct record fields, arrays, globals, and enums. Imported
 pointer-valued globals also retain their record layouts, so SDA accesses can
@@ -324,15 +324,15 @@ manual annotations retain priority. Extra include paths or project defines can
 be passed with repeatable `--header-arg` values:
 
 ```sh
-ember --headers /path/to/spm/spm-headers/include \
+spelunk --headers /path/to/spm/spm-headers/include \
   --header-arg=-I/path/to/spm/spm-headers/decomp \
   --dtk /path/to/spm --dtk-version EU0 -p -s seq_mapChangeMain
 ```
 
 For multi-function work, `--symbols FILE` accepts the same comment-friendly,
-one-symbol-per-line format as the quality corpus. Ember loads the DOL/REL,
+one-symbol-per-line format as the quality corpus. Spelunk loads the DOL/REL,
 DTK symbols, annotations, and headers once, prefixes each result with
-`// ember-symbol: NAME`, and reuses that project context across the batch.
+`// spelunk-symbol: NAME`, and reuses that project context across the batch.
 
 The importer is an optional CLI dependency. Builds made without libclang keep
 all ordinary decompilation features and report a focused error only when
@@ -350,7 +350,7 @@ back to live-in parameters and allocator returns, and direct aggregate globals
 use imported field names. When a byte offset has no known field, fallback
 pointer arithmetic is explicitly cast through `uint8_t*` so it remains valid C.
 
-When headers accompany a DTK project, Ember also imports simple prototypes
+When headers accompany a DTK project, Spelunk also imports simple prototypes
 from sibling source units and runs signature inference over only the requested
 functions and their transitive direct callees. Public headers retain priority;
 source declarations fill private gaps, while scoped IPA supplies return lanes
@@ -369,7 +369,7 @@ followed automatically and rendered as typed compound initializers; recursion
 is bounded so corrupt or cyclic data cannot make the command run forever.
 
 ```sh
-ember --headers /path/to/spm/spm-headers/include \
+spelunk --headers /path/to/spm/spm-headers/include \
   --dtk /path/to/spm --dtk-version EU0 \
   --decompile-data mapData --type 'MapData *[468]' --verify-roundtrip
 ```
@@ -458,7 +458,7 @@ silently truncate it beyond `--max-candidates` (256 by default).
 For a useful first pass without writing a spec, use automatic discovery:
 
 ```sh
-ember-match \
+spelunk-match \
   --project /path/to/spm \
   --unit main/mario_motion \
   --symbol mot_22 \
@@ -501,7 +501,7 @@ matching.
 
 `scripts/ppc_decompile_unit.py` bridges function-oriented pseudo-C and an
 objdiff source unit. It asks objdiff for the retail object's function symbols,
-keeps their object order, decompiles them through Ember's shared DTK batch
+keeps their object order, decompiles them through Spelunk's shared DTK batch
 context, and combines them with the original source preamble and includes:
 
 ```sh
@@ -525,7 +525,7 @@ with the unit's real CodeWarrior command and objdiff.
 Add `--verify` to perform that validation immediately:
 
 ```sh
-ember-unit \
+spelunk-unit \
   --project /path/to/spm \
   --unit main/main \
   --headers /path/to/spm/spm-headers/include \
@@ -541,10 +541,10 @@ candidate object, the full `objdiff.json`, `verification.json`, and a compact
 `verification.txt`. Function and data matches follow objdiff's target-symbol
 mapping, so CodeWarrior local-label renumbering does not create false data
 failures. Nonmatching functions are written to `matcher-symbols.txt` and
-`matcher-queue.json` with ready-to-run bounded `ember-match --auto` commands;
+`matcher-queue.json` with ready-to-run bounded `spelunk-match --auto` commands;
 compiler diagnostics and likely missing header/annotation names are retained
 when compilation fails. `--compile-command` provides the same placeholder
-override as `ember-match` for projects that do not expose Ninja commands.
+override as `spelunk-match` for projects that do not expose Ninja commands.
 
 ### Project-scale expectations
 
@@ -569,9 +569,9 @@ the remaining auto-split units are bookkeeping boundaries, not 4,749 separate
 C files that must each be written by hand. Thirteen units were completely
 matched in this snapshot.
 
-These figures are a dated project snapshot, not an Ember benchmark or a
-completion forecast. `ember-unit` can create and verify a starting point for a
-unit, and its matcher queue can drive `ember-match` across the remaining
+These figures are a dated project snapshot, not a Spelunk benchmark or a
+completion forecast. `spelunk-unit` can create and verify a starting point for a
+unit, and its matcher queue can drive `spelunk-match` across the remaining
 functions. Exact completion still requires human decisions for compiler-
 sensitive control flow and expressions, translation-unit layout, static data,
 relocations, and types that the binary cannot uniquely prove. The tools reduce
@@ -588,19 +588,19 @@ CodeWarrior integer-to-float conversion. Run it with:
 
 ```sh
 python3 scripts/ppc_quality_benchmark.py \
-  --ember ./build/cli/ember \
+  --spelunk ./build/cli/spelunk \
   --dtk /path/to/spm \
   --dtk-version EU0 \
   --headers /path/to/spm/spm-headers/include \
   --roundtrip-manifest benchmarks/spm_eu0_roundtrip.txt
 ```
 
-Add `--timings` to collect wall-clock cost plus Ember's CFG, lift, SSA,
+Add `--timings` to collect wall-clock cost plus Spelunk's CFG, lift, SSA,
 cleanup, type-inference, structurer, and emitter phase timings. Timing values
 are reported for diagnosis but deliberately excluded from pass/fail baseline
 comparisons because machine load is noisy.
 
-The benchmark uses Ember's batch mode by default, so project loading happens
+The benchmark uses Spelunk's batch mode by default, so project loading happens
 once. `--no-batch` retains the older one-process-per-function behavior for
 diagnosis. Repeatable `--headers` and `--header-arg` options exercise the same
 type overlay used during real decompilation. `--syntax-check` runs Clang over
@@ -670,7 +670,7 @@ time comparison can consequently render as
 `OSTicksToMilliseconds(gp->time - work->openingTime) <= 500` instead of an
 `__div2i` call, two raw word fields, carry expressions, and `0x10624dd3`.
 
-Header-aware pseudo-C is self-contained for the types it uses. Ember emits
+Header-aware pseudo-C is self-contained for the types it uses. Spelunk emits
 compact union overlays containing the imported fields referenced by the
 function, opaque storage for otherwise incomplete records, required forward
 declarations, and array aliases such as `Mtx34`. Nested aggregate accesses use
@@ -679,7 +679,7 @@ the imported layout and access width, so scalar traffic at the start of a
 whole vector. Four- and eight-byte aggregate transfers use `_raw` compound
 literals for valid C while retaining the named aggregate type.
 
-When a DTK version accompanies conventional `spm-headers`, Ember reads the
+When a DTK version accompanies conventional `spm-headers`, Spelunk reads the
 matching `linker/spm.<version>.lst` and overlays header globals by address.
 This turns anonymous map names such as `lbl_805ae930` into the project spelling
 `pausewin_wp`, allowing subsequent accesses to become
@@ -716,7 +716,7 @@ An annotation takes precedence over inferred arity, types, and interleaving.
 This is the preferred way to pin a known SDK or decompilation-project
 prototype:
 
-```ember
+```spelunk
 [signature]
 0x8011f45c = void update(double scale, Object* object, Vec3* position)
 ```
@@ -724,7 +724,7 @@ prototype:
 Apply it with the normal annotation workflow:
 
 ```sh
-ember --apply ppc-signatures.ember --annotations project.annotations <binary>
+spelunk --apply ppc-signatures.spelunk --annotations project.annotations <binary>
 ```
 
 Known import and platform SDK signatures receive the same mapping. Parameter

@@ -1,6 +1,6 @@
 #include "instruction_internal.hpp"
 
-namespace ember::instruction_detail {
+namespace spelunk::instruction_detail {
 
 std::string_view arm_mnemonic_name(Mnemonic m) noexcept {
     switch (m) {
@@ -191,4 +191,4 @@ std::string_view arm_mnemonic_name(Mnemonic m) noexcept {
     }
 }
 
-}  // namespace ember::instruction_detail
+}  // namespace spelunk::instruction_detail

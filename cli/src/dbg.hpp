@@ -4,11 +4,11 @@
 #include <span>
 #include <string>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember { class Binary; }
+namespace spelunk { class Binary; }
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 struct Args;
 
@@ -31,4 +31,4 @@ struct AuxBinarySpec {
 int run_debug(const Args& args, const Binary* bin,
               std::span<const AuxBinarySpec> aux);
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

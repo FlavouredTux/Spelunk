@@ -1,8 +1,8 @@
-#include <ember/common/text.hpp>
+#include <spelunk/common/text.hpp>
 
 #include <cstddef>
 
-namespace ember {
+namespace spelunk {
 
 bool parse_float_clamped(std::string_view s, float& out) noexcept {
     if (s.empty()) return false;
@@ -67,4 +67,4 @@ bool parse_float_clamped(std::string_view s, float& out) noexcept {
     return true;
 }
 
-}  // namespace ember
+}  // namespace spelunk

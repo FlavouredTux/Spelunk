@@ -2,12 +2,12 @@
 """Emit a tiny PE32+ and a matching v7 MSF PDB sidecar.
 
 Used to lock the PE → CodeView (RSDS) → MSF → S_PUB32 → symbol-table
-flow that ember does when a Microsoft binary lands next to its `.pdb`.
+flow that spelunk does when a Microsoft binary lands next to its `.pdb`.
 The PE has no imports/exports/PDATA - only the bare minimum that loads.
 
 Two arguments: the output PE path and the output PDB path. The PE
 embeds the basename of the PDB path in its CodeView RSDS record, so
-ember's loader-side sidecar lookup picks it up by basename.
+spelunk's loader-side sidecar lookup picks it up by basename.
 
 Usage:
     make_pe_pdb.py <output.exe> <output.pdb>
@@ -63,7 +63,7 @@ BLOCK_SIZE = 1024
 
 def build_dbi_header(sym_record_stream_idx: int,
                      mod_info_size: int = 0) -> bytes:
-    """NewDBI (v7). SymRecordStream + ModInfoSize are the fields ember
+    """NewDBI (v7). SymRecordStream + ModInfoSize are the fields spelunk
     actually consumes; the rest are placeholders that pass our header-
     size sanity check."""
     out = bytearray()
@@ -277,7 +277,7 @@ def build_msf(streams: list[bytes]) -> bytes:
 def build_pdb() -> bytes:
     # Streams:
     #   0: old directory (empty)
-    #   1: PDB info (we put 4 bytes; ember doesn't validate it)
+    #   1: PDB info (we put 4 bytes; spelunk doesn't validate it)
     #   2: TPI - LF_ARGLIST(int,int), LF_PROCEDURE(int <- int,int)
     #   3: DBI header + 1 ModInfo entry pointing at stream 5
     #   4: global symbol-record stream - two S_PUB32

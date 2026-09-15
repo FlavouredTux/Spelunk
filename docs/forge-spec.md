@@ -1,6 +1,6 @@
 # forge-spec inference
 
-Given an entry function and a target virtual address, ember computes the
+Given an entry function and a target virtual address, spelunk computes the
 minimum heap/struct field shape and the sequence of branch decisions
 that one representative call chain from the entry to the target
 requires. The output is a *witness* for reachability, not the meet of
@@ -12,8 +12,8 @@ fakes head-to-head.
 ## CLI
 
 ```sh
-ember --forge-spec ENTRY:VA <binary>
-ember --forge-spec ENTRY:VA --json <binary>
+spelunk --forge-spec ENTRY:VA <binary>
+spelunk --forge-spec ENTRY:VA --json <binary>
 ```
 
 `ENTRY` is a function name, hex VA, or `sub_<hex>`. `VA` is a hex
@@ -48,7 +48,7 @@ int inspect_packet(struct packet* p) {
 ```
 
 ```
-$ ember --forge-spec inspect_packet:0x401130 ./struct_fields
+$ spelunk --forge-spec inspect_packet:0x401130 ./struct_fields
 // forge-spec: reach 0x401130 (inspect_packet) from 0x401120 (inspect_packet)
 // call chain: 0x401120
 
@@ -61,7 +61,7 @@ branch decisions:
 
 ## Cross-function chains
 
-When `ENTRY` doesn't itself contain `VA`, ember walks the static call
+When `ENTRY` doesn't itself contain `VA`, spelunk walks the static call
 graph to find the shortest chain of direct/tail/indirect-const calls
 from `ENTRY` to the function containing `VA`. For each function on the
 chain, the inside-the-function path is from that function's entry block
@@ -69,7 +69,7 @@ to (a) the call site that targets the next function on the chain, or
 (b) the block containing `VA` for the final function.
 
 ```
-$ ember --forge-spec main:0x401130 ./struct_fields
+$ spelunk --forge-spec main:0x401130 ./struct_fields
 // forge-spec: reach 0x401130 (inspect_packet) from 0x401020 (main)
 // call chain: 0x401020 -> 0x401120
 
@@ -132,4 +132,4 @@ Known gaps:
 
 These are deliberate v1 compromises - every one of them is
 implementable as an extension on top of the same `ForgeExpr` /
-`FieldRequirement` data model in `ember/analysis/forge_spec.hpp`.
+`FieldRequirement` data model in `spelunk/analysis/forge_spec.hpp`.

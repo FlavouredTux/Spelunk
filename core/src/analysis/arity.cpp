@@ -1,4 +1,4 @@
-#include <ember/analysis/arity.hpp>
+#include <spelunk/analysis/arity.hpp>
 
 #include <algorithm>
 #include <array>
@@ -12,20 +12,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/import_sigs.hpp>
-#include <ember/analysis/ir_cache.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/disasm/x64_decoder.hpp>
-#include <ember/ir/abi.hpp>
-#include <ember/ir/ir.hpp>
-#include <ember/ir/ssa.hpp>
-#include <ember/ir/types.hpp>
+#include <spelunk/analysis/import_sigs.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
+#include <spelunk/ir/abi.hpp>
+#include <spelunk/ir/ir.hpp>
+#include <spelunk/ir/ssa.hpp>
+#include <spelunk/ir/types.hpp>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -830,4 +830,4 @@ u8 infer_arity(const Binary& b, addr_t target) noexcept {
     return infer_arity(b, target, abi_for(b.format(), b.arch(), b.endian()));
 }
 
-}  // namespace ember
+}  // namespace spelunk

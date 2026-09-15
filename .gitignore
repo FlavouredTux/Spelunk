@@ -38,7 +38,7 @@ Testing/
 nohup.out
 *.log
 ROADMAP.md
-.pi/ember-artifacts/
+.pi/spelunk-artifacts/
 crackme_test/
-ember-*.tar.gz
-ember-*.zip
+spelunk-*.tar.gz
+spelunk-*.zip

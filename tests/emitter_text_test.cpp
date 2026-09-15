@@ -24,7 +24,7 @@ void check_text(std::string_view actual, std::string_view expected,
 }
 
 void test_identifier_queries() {
-    using ember::emit::text_contains_identifier_in_code;
+    using spelunk::emit::text_contains_identifier_in_code;
     check(!text_contains_identifier_in_code(
               R"(log("value", 'v'); /* value */ // value)", "value"),
           "literals and comments are not code uses");
@@ -48,7 +48,7 @@ void test_identifier_queries() {
 }
 
 void test_identifier_replacement() {
-    using ember::emit::replace_identifier;
+    using spelunk::emit::replace_identifier;
     check_text(replace_identifier(
         "t7 += t7; log(\"t7\", 't'); // t7\n/* t7 */ t70 = t7;",
         "t7", "saved"),
@@ -67,7 +67,7 @@ void test_identifier_replacement() {
 }
 
 void test_code_mask_and_declarations() {
-    using namespace ember::emit;
+    using namespace spelunk::emit;
     const std::string source = "x; /* hidden\ncontinued */ y = \"value\";\n";
     const std::string code = code_only_text(source);
     check(code.size() == source.size(), "mask preserves byte offsets");
@@ -92,7 +92,7 @@ void test_code_mask_and_declarations() {
 }
 
 void test_ppc_presentation() {
-    using namespace ember::emit;
+    using namespace spelunk::emit;
     check_text(rename_ppc_temporaries(
         "  uint32_t t7 = read();\n  log(\"t7\", t7); // t7\n"),
         "  uint32_t value = read();\n  log(\"t7\", value); // t7\n",

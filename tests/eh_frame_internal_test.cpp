@@ -1,6 +1,6 @@
 #include "eh_frame_internal.hpp"
 
-#include <ember/binary/binary.hpp>
+#include <spelunk/binary/binary.hpp>
 
 #include <cstddef>
 #include <cstdio>
@@ -12,9 +12,9 @@
 
 namespace {
 
-using ember::u8;
-using ember::u32;
-using ember::u64;
+using spelunk::u8;
+using spelunk::u32;
+using spelunk::u64;
 
 int failures = 0;
 
@@ -72,8 +72,8 @@ std::size_t append_lsda_cie(std::vector<std::byte>& section) {
     append_u8(payload, 0x78);  // data alignment: -8 (SLEB128)
     append_u8(payload, 16);  // return-address register
     append_u8(payload, 2);   // CIE augmentation length
-    append_u8(payload, ember::ehfi::DW_EH_PE_udata8);
-    append_u8(payload, ember::ehfi::DW_EH_PE_udata4);
+    append_u8(payload, spelunk::ehfi::DW_EH_PE_udata8);
+    append_u8(payload, spelunk::ehfi::DW_EH_PE_udata4);
     append_record(section, payload);
     return offset;
 }
@@ -91,9 +91,9 @@ std::size_t append_undersized_lsda_cie(std::vector<std::byte>& section) {
     append_u8(payload, 0x78);  // data alignment: -8 (SLEB128)
     append_u8(payload, 16);  // return-address register
     append_u8(payload, 1);   // Too short for both L and R fields.
-    append_u8(payload, ember::ehfi::DW_EH_PE_udata8);
+    append_u8(payload, spelunk::ehfi::DW_EH_PE_udata8);
     // This is the first CFI instruction, not part of the augmentation.
-    append_u8(payload, ember::ehfi::DW_EH_PE_udata4);
+    append_u8(payload, spelunk::ehfi::DW_EH_PE_udata4);
     append_record(section, payload);
     return offset;
 }
@@ -111,7 +111,7 @@ std::size_t append_aarch64_marker_cie(std::vector<std::byte>& section) {
     append_u8(payload, 0x78);  // data alignment: -8 (SLEB128)
     append_u8(payload, 16);  // return-address register
     append_u8(payload, 1);   // Only R contributes augmentation data.
-    append_u8(payload, ember::ehfi::DW_EH_PE_udata4);
+    append_u8(payload, spelunk::ehfi::DW_EH_PE_udata4);
     append_record(section, payload);
     return offset;
 }
@@ -132,7 +132,7 @@ void append_abs_fde(std::vector<std::byte>& section,
     append_record(section, payload);
 }
 
-class MockBinary final : public ember::Binary {
+class MockBinary final : public spelunk::Binary {
 public:
     explicit MockBinary(std::vector<std::byte> eh_frame)
         : bytes_(std::move(eh_frame)) {
@@ -143,23 +143,23 @@ public:
         section_.data = bytes_;
     }
 
-    [[nodiscard]] ember::Format format() const noexcept override {
-        return ember::Format::Elf;
+    [[nodiscard]] spelunk::Format format() const noexcept override {
+        return spelunk::Format::Elf;
     }
-    [[nodiscard]] ember::Arch arch() const noexcept override {
-        return ember::Arch::X86_64;
+    [[nodiscard]] spelunk::Arch arch() const noexcept override {
+        return spelunk::Arch::X86_64;
     }
-    [[nodiscard]] ember::Endian endian() const noexcept override {
-        return ember::Endian::Little;
+    [[nodiscard]] spelunk::Endian endian() const noexcept override {
+        return spelunk::Endian::Little;
     }
-    [[nodiscard]] ember::addr_t entry_point() const noexcept override {
+    [[nodiscard]] spelunk::addr_t entry_point() const noexcept override {
         return 0;
     }
-    [[nodiscard]] std::span<const ember::Section>
+    [[nodiscard]] std::span<const spelunk::Section>
     sections() const noexcept override {
-        return std::span<const ember::Section>(&section_, 1);
+        return std::span<const spelunk::Section>(&section_, 1);
     }
-    [[nodiscard]] std::span<const ember::Symbol>
+    [[nodiscard]] std::span<const spelunk::Symbol>
     symbols() const noexcept override {
         return symbols_;
     }
@@ -169,23 +169,23 @@ public:
     }
 
 protected:
-    [[nodiscard]] std::vector<ember::Symbol>&
+    [[nodiscard]] std::vector<spelunk::Symbol>&
     mutable_symbols() noexcept override {
         return symbols_;
     }
 
 private:
     std::vector<std::byte> bytes_;
-    ember::Section section_;
-    std::vector<ember::Symbol> symbols_;
+    spelunk::Section section_;
+    std::vector<spelunk::Symbol> symbols_;
 };
 
 std::size_t visit_count(const MockBinary& binary) {
     std::size_t count = 0;
-    ember::ehfi::for_each_decoded_fde(
-        binary, [&](const ember::ehfi::DecodedFde&) {
+    spelunk::ehfi::for_each_decoded_fde(
+        binary, [&](const spelunk::ehfi::DecodedFde&) {
             ++count;
-            return ember::ehfi::FdeVisit::Continue;
+            return spelunk::ehfi::FdeVisit::Continue;
         });
     return count;
 }
@@ -226,8 +226,8 @@ void test_lsda_decode_stays_inside_augmentation() {
 
     MockBinary binary(std::move(section));
     std::size_t count = 0;
-    ember::ehfi::for_each_decoded_fde(
-        binary, [&](const ember::ehfi::DecodedFde& decoded) {
+    spelunk::ehfi::for_each_decoded_fde(
+        binary, [&](const spelunk::ehfi::DecodedFde& decoded) {
             ++count;
             check(decoded.augmentation_valid,
                   "bounded but undersized LSDA augmentation keeps CFI boundary");
@@ -235,7 +235,7 @@ void test_lsda_decode_stays_inside_augmentation() {
                   "LSDA decoder cannot consume following CFI instructions");
             check(decoded.instructions.size() == 8,
                   "CFI instructions start after the declared augmentation");
-            return ember::ehfi::FdeVisit::Continue;
+            return spelunk::ehfi::FdeVisit::Continue;
         });
     check(count == 1, "bounded LSDA test visits its FDE");
 }
@@ -271,12 +271,12 @@ void test_cie_marker_has_no_payload_byte() {
 
     MockBinary binary(std::move(section));
     std::size_t count = 0;
-    ember::ehfi::for_each_decoded_fde(
-        binary, [&](const ember::ehfi::DecodedFde& decoded) {
+    spelunk::ehfi::for_each_decoded_fde(
+        binary, [&](const spelunk::ehfi::DecodedFde& decoded) {
             ++count;
             check(decoded.pc_begin == 0x2000 && decoded.pc_range == 0x40,
                   "marker-only CIE preserves FDE pointer encoding");
-            return ember::ehfi::FdeVisit::Continue;
+            return spelunk::ehfi::FdeVisit::Continue;
         });
     check(count == 1, "AArch64 B marker consumes no augmentation byte");
 }
@@ -297,8 +297,8 @@ void test_truncated_augmentation_is_marked_invalid() {
 
     MockBinary binary(std::move(section));
     std::size_t count = 0;
-    ember::ehfi::for_each_decoded_fde(
-        binary, [&](const ember::ehfi::DecodedFde& decoded) {
+    spelunk::ehfi::for_each_decoded_fde(
+        binary, [&](const spelunk::ehfi::DecodedFde& decoded) {
             ++count;
             check(!decoded.augmentation_valid,
                   "truncated augmentation is invalid");
@@ -306,7 +306,7 @@ void test_truncated_augmentation_is_marked_invalid() {
                   "truncated augmentation cannot produce an LSDA address");
             check(decoded.instructions.empty(),
                   "invalid augmentation has no instruction boundary");
-            return ember::ehfi::FdeVisit::Continue;
+            return spelunk::ehfi::FdeVisit::Continue;
         });
     check(count == 1, "extent-tolerant walk still reports malformed FDE");
 }

@@ -13,20 +13,20 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/data_xrefs.hpp>
-#include <ember/analysis/identify.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/sigs.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/common/annotations.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/abi.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/sigs.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/common/annotations.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/abi.hpp>
 
 #include "../args.hpp"
 #include "../cli_error.hpp"
@@ -34,7 +34,7 @@
 #include "../util.hpp"
 #include "common.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 namespace {
 
@@ -481,7 +481,7 @@ int run_state_map(const Args& args, const Binary& b) {
     ScopedTimer total_timer("state_map.total");
     auto va = parse_cli_addr(args.state_map);
     if (!va) {
-        std::println(stderr, "ember: --state-map: bad address '{}'", args.state_map);
+        std::println(stderr, "spelunk: --state-map: bad address '{}'", args.state_map);
         return EXIT_FAILURE;
     }
 
@@ -563,7 +563,7 @@ int run_branch_on(const Args& args, const Binary& b) {
     ScopedTimer total_timer("branch_on.total");
     auto va = parse_cli_addr(args.branch_on);
     if (!va) {
-        std::println(stderr, "ember: --branch-on: bad address '{}'", args.branch_on);
+        std::println(stderr, "spelunk: --branch-on: bad address '{}'", args.branch_on);
         return EXIT_FAILURE;
     }
 
@@ -623,7 +623,7 @@ int run_guard_map(const Args& args, const Binary& b) {
     const Annotations ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.guard_map, &ann);
     if (!win) {
-        std::println(stderr, "ember: --guard-map: could not resolve '{}'", args.guard_map);
+        std::println(stderr, "spelunk: --guard-map: could not resolve '{}'", args.guard_map);
         return EXIT_FAILURE;
     }
     const auto rows = compute_guard_map(b, win->start, win->size);
@@ -682,7 +682,7 @@ int run_state_lifetime(const Args& args, const Binary& b) {
     ScopedTimer total_timer("state_lifetime.total");
     auto va = parse_cli_addr(args.state_lifetime);
     if (!va) {
-        std::println(stderr, "ember: --state-lifetime: bad address '{}'",
+        std::println(stderr, "spelunk: --state-lifetime: bad address '{}'",
                      args.state_lifetime);
         return EXIT_FAILURE;
     }
@@ -802,7 +802,7 @@ int run_side_effects(const Args& args, const Binary& b) {
     const Annotations ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.side_effects, &ann);
     if (!win) {
-        std::println(stderr, "ember: --side-effects: could not resolve '{}'",
+        std::println(stderr, "spelunk: --side-effects: could not resolve '{}'",
                      args.side_effects);
         return EXIT_FAILURE;
     }
@@ -857,7 +857,7 @@ int run_object_roles(const Args& args, const Binary& b) {
     const Annotations ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.object_roles, &ann);
     if (!win) {
-        std::println(stderr, "ember: --object-roles: could not resolve '{}'",
+        std::println(stderr, "spelunk: --object-roles: could not resolve '{}'",
                      args.object_roles);
         return EXIT_FAILURE;
     }
@@ -903,4 +903,4 @@ int run_object_roles(const Args& args, const Binary& b) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

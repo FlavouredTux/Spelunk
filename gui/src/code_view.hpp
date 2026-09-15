@@ -4,9 +4,9 @@
 #include <optional>
 #include <vector>
 
-#include <ember/common/types.hpp>
+#include <spelunk/common/types.hpp>
 
-namespace ember::gui {
+namespace spelunk::gui {
 
 // Read-only code listing with IDA's navigation feel: a highlighted
 // current line, Enter / double-click on a name or address to follow it,
@@ -28,7 +28,7 @@ public:
 signals:
     void jump_requested(const QString& token);
     void back_requested();
-    void line_address_changed(ember::addr_t va);
+    void line_address_changed(spelunk::addr_t va);
 
 protected:
     void keyPressEvent(QKeyEvent* e) override;
@@ -42,4 +42,4 @@ private:
     std::vector<addr_t> line_addrs_;
 };
 
-}  // namespace ember::gui
+}  // namespace spelunk::gui

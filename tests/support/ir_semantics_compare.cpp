@@ -2,9 +2,9 @@
 
 #include <cstdio>
 #include <format>
-#include <ember/ir/passes.hpp>
+#include <spelunk/ir/passes.hpp>
 
-namespace ember::test {
+namespace spelunk::test {
 namespace {
 
 bool compare_execution(const IrFunction& original, const IrFunction& cleaned,
@@ -55,4 +55,4 @@ bool CleanupVerifier::verify(const IrFunction& original, const std::vector<Machi
     return true;
 }
 
-}  // namespace ember::test
+}  // namespace spelunk::test

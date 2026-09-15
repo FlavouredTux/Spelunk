@@ -1,9 +1,9 @@
 # Security policy
 
-ember parses untrusted binaries - ELF, Mach-O, PE, minidumps, raw
+spelunk parses untrusted binaries - ELF, Mach-O, PE, minidumps, raw
 memory regions, PDB sidecars. Bugs in the parsers, the disassembler,
 the lifter, or the debugger backends are a real attack surface for
-anyone using ember on hostile inputs (malware samples, CTF
+anyone using spelunk on hostile inputs (malware samples, CTF
 challenges, captured payloads).
 
 If you find a memory-safety issue, parser crash on a crafted input,

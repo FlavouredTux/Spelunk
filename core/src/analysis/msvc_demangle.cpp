@@ -1,4 +1,4 @@
-#include <ember/analysis/msvc_demangle.hpp>
+#include <spelunk/analysis/msvc_demangle.hpp>
 
 #include <cstddef>
 #include <optional>
@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -608,4 +608,4 @@ std::optional<std::string> demangle_msvc_full(std::string_view mangled) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

@@ -36,7 +36,7 @@
             "inherits": "base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-                "EMBER_SANITIZE": "ON"
+                "SPELUNK_SANITIZE": "ON"
             }
         },
         {
@@ -45,7 +45,7 @@
             "inherits": "base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "EMBER_BUILD_CLI": "OFF"
+                "SPELUNK_BUILD_CLI": "OFF"
             }
         },
         {
@@ -54,7 +54,7 @@
             "inherits": "base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "EMBER_BUILD_GUI": "ON"
+                "SPELUNK_BUILD_GUI": "ON"
             }
         }
     ],

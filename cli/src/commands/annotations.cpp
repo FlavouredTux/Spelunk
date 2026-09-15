@@ -1,6 +1,6 @@
-// Annotation import/export: .ember scripts, --annotate, type dumps.
+// Annotation import/export: .spelunk scripts, --annotate, type dumps.
 
-#include <ember/common/annotations.hpp>
+#include <spelunk/common/annotations.hpp>
 
 #include <charconv>
 #include <cstddef>
@@ -16,20 +16,20 @@
 #include <system_error>
 #include <utility>
 
-#include <ember/analysis/identify.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/common/cache.hpp>
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/ir/types.hpp>
-#include <ember/script/declarative.hpp>
+#include <spelunk/analysis/identify.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/common/cache.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/ir/types.hpp>
+#include <spelunk/script/declarative.hpp>
 
 #include "../args.hpp"
 #include "../cli_error.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 
-namespace ember::cli {
+namespace spelunk::cli {
 
 int run_dump_types() {
     TypeArena arena;
@@ -81,7 +81,7 @@ int run_export_annotations(const Args& args) {
         const std::size_t n = a.renames.size() + a.signatures.size()
                             + a.notes.size()   + a.named_constants.size();
         std::println(stderr,
-            "ember: exported {} annotation(s) from {} to '{}'",
+            "spelunk: exported {} annotation(s) from {} to '{}'",
             n,
             src.source == AnnotationSource::None ? std::string{"<empty>"}
                                                  : src.path.string(),
@@ -90,7 +90,7 @@ int run_export_annotations(const Args& args) {
     return EXIT_SUCCESS;
 }
 
-int run_apply_ember(const Args& args, const Binary& b) {
+int run_apply_spelunk(const Args& args, const Binary& b) {
     // Resolver for the destination file. Same precedence as emit:
     // explicit --annotations beats sidecar beats cache. The resolver
     // returns a cache path even when the file doesn't exist yet, so a
@@ -113,14 +113,14 @@ int run_apply_ember(const Args& args, const Binary& b) {
 
     // Sniff the input format. The persisted on-disk format (what
     // `Annotations::save` writes - what the cache stores) is line-per-
-    // record without section headers; the .ember declarative format is
+    // record without section headers; the .spelunk declarative format is
     // section-keyed (`[rename]` etc.). Feeding the persisted form to
     // the script parser used to fail with "directive outside any
     // section". Detect it and merge via `Annotations::load` instead so
     // a cache file from one binary copies cleanly onto another.
     bool is_persisted_form = false;
     {
-        std::ifstream sniff(args.apply_ember);
+        std::ifstream sniff(args.apply_spelunk);
         std::string line;
         while (std::getline(sniff, line)) {
             std::string_view sv = line;
@@ -141,7 +141,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
 
     script::ApplyStats import_stats;
     if (is_persisted_form) {
-        auto loaded = Annotations::load(args.apply_ember);
+        auto loaded = Annotations::load(args.apply_spelunk);
         if (!loaded) return report(loaded.error());
         // Merge into the destination, preserving existing values on
         // conflict - same precedence the declarative apply uses.
@@ -177,7 +177,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
 
     auto rv = is_persisted_form
         ? Result<script::ApplyStats>{std::move(import_stats)}
-        : script::apply_file(args.apply_ember, b, ann);
+        : script::apply_file(args.apply_spelunk, b, ann);
     if (!rv) return report(rv.error());
 
     if (args.dry_run) {
@@ -188,7 +188,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
         std::fwrite(text.data(), 1, text.size(), stdout);
     } else {
         if (loc.source == AnnotationSource::None || loc.path.empty()) {
-            std::println(stderr, "ember: --apply: nowhere to write annotations "
+            std::println(stderr, "spelunk: --apply: nowhere to write annotations "
                                  "(no --annotations / sidecar / cache)");
             return EXIT_FAILURE;
         }
@@ -198,7 +198,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
     if (!args.quiet) {
         const char* tag = args.dry_run ? "--apply --dry-run" : "--apply";
         std::println(stderr,
-            "ember: {}: +{} renames, +{} notes, +{} sigs, +{} fields, +{} consts, "
+            "spelunk: {}: +{} renames, +{} notes, +{} sigs, +{} fields, +{} consts, "
             "{} pattern-matches, {} from-strings, "
             "-{} renames / -{} notes / -{} sigs / -{} fields / -{} consts -> {} ({})",
             tag,
@@ -210,7 +210,7 @@ int run_apply_ember(const Args& args, const Binary& b) {
             loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
             annotation_source_name(loc.source));
         for (const auto& w : rv->warnings) {
-            std::println(stderr, "ember: {}: warning: {}", tag, w);
+            std::println(stderr, "spelunk: {}: warning: {}", tag, w);
         }
     }
     return EXIT_SUCCESS;
@@ -226,14 +226,14 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     auto va = parse_cli_addr(args.annotate_addr);
     if (!va) {
         std::println(stderr,
-            "ember: --annotate: bad address '{}'", args.annotate_addr);
+            "spelunk: --annotate: bad address '{}'", args.annotate_addr);
         return EXIT_FAILURE;
     }
 
     if (args.annotate_name.empty() && args.annotate_note.empty() &&
         args.annotate_signature.empty()) {
         std::println(stderr,
-            "ember: --annotate: nothing to set "
+            "spelunk: --annotate: nothing to set "
             "(pass --set-name, --set-note, or --set-signature)");
         return EXIT_FAILURE;
     }
@@ -248,7 +248,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
         auto rc = std::from_chars(first, last, v);
         if (rc.ec != std::errc{} || rc.ptr != last) {
             std::println(stderr,
-                "ember: --confidence: expected a float in [0,1], got '{}'",
+                "spelunk: --confidence: expected a float in [0,1], got '{}'",
                 args.annotate_conf);
             return EXIT_FAILURE;
         }
@@ -274,7 +274,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
     if (loc.source == AnnotationSource::None || loc.path.empty()) {
         std::println(stderr,
-            "ember: --annotate: nowhere to write annotations "
+            "spelunk: --annotate: nowhere to write annotations "
             "(no --annotations / sidecar / cache)");
         return EXIT_FAILURE;
     }
@@ -303,10 +303,10 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
         ann.note_meta[*va]    = meta;
     }
     if (!args.annotate_signature.empty()) {
-        auto sig = ::ember::script::parse_signature(args.annotate_signature);
+        auto sig = ::spelunk::script::parse_signature(args.annotate_signature);
         if (!sig) {
             std::println(stderr,
-                "ember: --set-signature: cannot parse '{}'",
+                "spelunk: --set-signature: cannot parse '{}'",
                 args.annotate_signature);
             return EXIT_FAILURE;
         }
@@ -324,7 +324,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     if (!args.quiet) {
         const char* tag = args.dry_run ? "--annotate --dry-run" : "--annotate";
         std::println(stderr,
-            "ember: {}: {:#x} -> {} ({})",
+            "spelunk: {}: {:#x} -> {} ({})",
             tag, static_cast<u64>(*va),
             loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
             annotation_source_name(loc.source));
@@ -479,4 +479,4 @@ int run_list_annotations(const Args& args, const Binary& /*b*/) {
     return EXIT_SUCCESS;
 }
 
-}  // namespace ember::cli
+}  // namespace spelunk::cli

@@ -28,10 +28,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <ember/common/error.hpp>
-#include <ember/common/types.hpp>
-#include <ember/debug/target.hpp>
-#include <ember/debug/types.hpp>
+#include <spelunk/common/error.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/debug/target.hpp>
+#include <spelunk/debug/types.hpp>
 
 #include "errno_io.hpp"
 #include "perf_target.hpp"
@@ -46,7 +46,7 @@
 
 extern char** environ;
 
-namespace ember::debug::linux_perf {
+namespace spelunk::debug::linux_perf {
 
 namespace {
 
@@ -215,4 +215,4 @@ std::vector<LoadedImage> PerfTarget::images() const {
     return linux_detail::read_proc_maps(static_cast<pid_t>(pid_v_));
 }
 
-}  // namespace ember::debug::linux_perf
+}  // namespace spelunk::debug::linux_perf

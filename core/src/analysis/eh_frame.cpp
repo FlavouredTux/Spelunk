@@ -1,4 +1,4 @@
-#include <ember/analysis/eh_frame.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -9,14 +9,14 @@
 #include <utility>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/macho.hpp>
-#include <ember/common/types.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/macho.hpp>
+#include <spelunk/common/types.hpp>
 
 #include "eh_frame_internal.hpp"
 
-namespace ember {
+namespace spelunk {
 
 namespace {
 
@@ -356,4 +356,4 @@ std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

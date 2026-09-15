@@ -17,30 +17,30 @@
 #include <utility>
 #include <vector>
 
-#include <ember/analysis/discovery.hpp>
-#include <ember/analysis/eh_frame.hpp>
-#include <ember/analysis/msvc_rtti.hpp>
-#include <ember/analysis/name_resolver.hpp>
-#include <ember/analysis/objc.hpp>
-#include <ember/analysis/packed.hpp>
-#include <ember/analysis/pipeline.hpp>
-#include <ember/analysis/rtti.hpp>
-#include <ember/binary/arch.hpp>
-#include <ember/binary/binary.hpp>
-#include <ember/binary/format.hpp>
-#include <ember/binary/section.hpp>
-#include <ember/binary/symbol.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/common/timing.hpp>
-#include <ember/common/types.hpp>
-#include <ember/disasm/decoder.hpp>
-#include <ember/disasm/instruction.hpp>
-#include <ember/disasm/register.hpp>
-#include <ember/ir/ssa.hpp>
+#include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
+#include <spelunk/analysis/msvc_rtti.hpp>
+#include <spelunk/analysis/name_resolver.hpp>
+#include <spelunk/analysis/objc.hpp>
+#include <spelunk/analysis/packed.hpp>
+#include <spelunk/analysis/pipeline.hpp>
+#include <spelunk/analysis/rtti.hpp>
+#include <spelunk/binary/arch.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
+#include <spelunk/binary/section.hpp>
+#include <spelunk/binary/symbol.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/common/timing.hpp>
+#include <spelunk/common/types.hpp>
+#include <spelunk/disasm/decoder.hpp>
+#include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/register.hpp>
+#include <spelunk/ir/ssa.hpp>
 
 #include "pipeline_internal.hpp"
 
-namespace ember::pipeline {
+namespace spelunk::pipeline {
 
 namespace {
 
@@ -584,9 +584,9 @@ discover_objc_stack_block_invokes_impl(const Binary& b) {
 
 }  // namespace
 
-}  // namespace ember::pipeline
+}  // namespace spelunk::pipeline
 
-namespace ember {
+namespace spelunk {
 
 using namespace pipeline;
 
@@ -847,4 +847,4 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     return out;
 }
 
-}  // namespace ember
+}  // namespace spelunk

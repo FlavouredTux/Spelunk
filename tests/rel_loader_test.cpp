@@ -10,14 +10,14 @@
 #include <system_error>
 #include <vector>
 
-#include <ember/binary/binary.hpp>
-#include <ember/binary/rel.hpp>
-#include <ember/common/bytes.hpp>
-#include <ember/disasm/decoder.hpp>
+#include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/rel.hpp>
+#include <spelunk/common/bytes.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 namespace {
 
-using namespace ember;
+using namespace spelunk;
 
 namespace fixture {
 
@@ -239,7 +239,7 @@ public:
         const auto base = std::filesystem::temp_directory_path();
         for (unsigned attempt = 0; attempt < 1024; ++attempt) {
             const auto candidate = base /
-                ("ember_rel_loader_test_" + std::to_string(seed) + "_" +
+                ("spelunk_rel_loader_test_" + std::to_string(seed) + "_" +
                  std::to_string(attempt));
             std::error_code error;
             if (std::filesystem::create_directory(candidate, error)) {

@@ -663,7 +663,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
                 }
             }
 
-            if (insn.mnemonic == Mnemonic::Call &&
+            if ((insn.mnemonic == Mnemonic::Call || insn.mnemonic == Mnemonic::Jmp) &&
                 insn.num_operands == 1 &&
                 insn.operands[0].kind == Operand::Kind::Relative) {
                 const Symbol* s = b.import_at_plt(insn.operands[0].rel.target);

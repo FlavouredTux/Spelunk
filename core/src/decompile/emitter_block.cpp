@@ -470,6 +470,13 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
                 }
             }
         }
+        if (options.c_source && annotated_sig && arg_i < annotated_sig->params.size()) {
+            const std::string type = normalize_c_type_alias(annotated_sig->params[arg_i].type);
+            if (type.ends_with('*')) {
+                const std::string value = rendered_call_args[arg_i].empty() ? expr(call_args[arg_i]) : rendered_call_args[arg_i];
+                rendered_call_args[arg_i] = std::format("({})({})", type, value);
+            }
+        }
     }
 }
 
@@ -685,6 +692,7 @@ Emitter::render_direct_call(const IrInst& inst, std::size_t call_index,
                                       &used_args, &rendered_call_args)
         : format_call_args_fallback(call_args, &used_args);
     const std::string& callee = direct_name;
+    if (options.c_source) note_c_call(inst, callee, used_args);
     note_buffer_extents(callee, used_args);
     if (auto aggregate = memset_aggregate_args(callee, used_args)) {
         args = *aggregate;
@@ -730,6 +738,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
             ? format_call_args_with_arity(indirect_args, *arity, !objc_sized,
                                           &used_args, &rendered_indirect_args)
             : format_call_args_fallback(indirect_args, &used_args);
+        if (options.c_source) note_c_call(inst, *name, used_args);
         call_expr = render_objc_runtime_call(*name, indirect_args)
             .value_or(std::format("{}({})", *name, args));
     } else if (options.call_resolutions && inst.source_addr != 0) {
@@ -786,6 +795,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
                                               &used_args,
                                               &rendered_resolved_args)
                 : format_call_args_fallback(resolved_args, &used_args);
+            if (options.c_source) note_c_call(inst, fname, used_args);
             call_expr = std::format("{}({}){}",
                                     fname, args,
                                     observed_targets_comment(inst.source_addr));
@@ -832,7 +842,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
         // method name. Fixed-base `Load(Add(<rip-rel-vtable>, K))`
         // is already covered by the call_resolutions path above
         // (--resolve-calls); this handles the per-instance case.
-        if (auto vt = is_ppc_abi() ? std::nullopt : try_render_vfn_dispatch(inst.srcs[0]); vt) {
+        if (auto vt = (is_ppc_abi() || options.c_source) ? std::nullopt : try_render_vfn_dispatch(inst.srcs[0]); vt) {
             call_expr = std::format("{}({})", *vt, args);
         } else if (auto slot = constant_fnptr_slot_for_call_target(inst.srcs[0]); slot) {
             const std::string slot_expr = format_numeric_imm(
@@ -874,10 +884,10 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
 // Assignments the structurer hoisted onto this block's outgoing edge.
 void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view ind,
                                           std::string& out) const {
-    if (explicit_phi_copies) {
+    if (explicit_phi_copies || scalar_join_copies) {
         if (auto block = fn->block_at.find(block_start); block != fn->block_at.end())
             emit_phi_copies(fn->blocks[block->second], ind, out);
-        return;
+        if (explicit_phi_copies) return;
     }
     auto assignments = merge_edge_assignments.find(block_start);
     if (assignments == merge_edge_assignments.end()) return;

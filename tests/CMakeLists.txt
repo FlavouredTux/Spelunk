@@ -1760,6 +1760,11 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME pseudocode_check_unit
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/pseudocode_check_test.py"
                 "${EMBER_MACHO_TEST_CLANG}")
+        add_test(NAME elf_c_export_check
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/elf_export_test.py"
+                --ember "$<TARGET_FILE:ember_cli>" --clang "${EMBER_MACHO_TEST_CLANG}"
+                --fixtures "${CMAKE_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(elf_c_export_check PROPERTIES TIMEOUT 300)
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND
        EMBER_MACHO_TEST_CLANG AND EMBER_MACHO_TEST_LD64 AND EMBER_MACHO_TEST_STRIP AND EMBER_MACHO_TEST_NM)
@@ -1769,6 +1774,11 @@ if(Python3_Interpreter_FOUND)
                 --ld64 "${EMBER_MACHO_TEST_LD64}" --strip "${EMBER_MACHO_TEST_STRIP}"
                 --nm "${EMBER_MACHO_TEST_NM}")
         set_tests_properties(macho_pipeline_semantics PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+        add_test(NAME macho_c_export_semantics
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/macho_export_test.py"
+                --ember "$<TARGET_FILE:ember_cli>" --clang "${EMBER_MACHO_TEST_CLANG}"
+                --ld64 "${EMBER_MACHO_TEST_LD64}" --nm "${EMBER_MACHO_TEST_NM}")
+        set_tests_properties(macho_c_export_semantics PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
     endif()
     ember_build_python_macho_fixture(macho_zero_base make_macho_tiny.py --zero-base)
     ember_golden_test(

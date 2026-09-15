@@ -118,6 +118,7 @@ void help_view() {
     std::println("  -O, --opt            run cleanup passes (implies --ssa)");
     std::println("      --struct         structured regions (implies -O)");
     std::println("  -p, --pseudo         pseudo-C output (implies --struct)");
+    std::println("      --emit-c         C export with declarations and explicit memory accesses");
     std::println("  -s, --symbol NAME    target a specific symbol (default: main)");
     std::println("      --symbols FILE   batch the selected view over one "
                  "symbol per line;");

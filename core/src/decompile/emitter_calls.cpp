@@ -106,6 +106,30 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
         if (inst.src_count < 2) return result;
         const auto* integer = producer(inst.srcs[0]);
         const auto* floating = producer(inst.srcs[1]);
+        if (floating && floating->op == IrOp::Clobber) {
+            std::optional<IrType> delegated;
+            for (std::size_t i = 0; i < block.insts.size(); ++i) {
+                if (&block.insts[i] != floating) continue;
+                while (i && block.insts[i].op == IrOp::Clobber) --i;
+                const auto& call = block.insts[i];
+                if (call.op != IrOp::Call) break;
+                if (const auto* imported = binary->import_at_plt(call.target1)) {
+                    TypeArena arena;
+                    if (auto signature = lookup_import_sig(clean_import_name(imported->name), arena);
+                        signature && arena.kind(signature->ret) == TypeKind::Float) {
+                        delegated = arena.node(signature->ret).f.bits <= 32 ? IrType::F32 : IrType::F64;
+                    }
+                } else {
+                    delegated = cached_fp_return_type(call.target1);
+                }
+                break;
+            }
+            if (delegated && (!integer || integer->op == IrOp::Clobber)) {
+                if (type && type != delegated) return result;
+                type = delegated;
+                continue;
+            }
+        }
         if (!floating ||
             floating->op == IrOp::Clobber || !is_float_type(floating->dst.type)) return result;
         // A scalar FP calculation used only as the return, alongside an
@@ -125,6 +149,17 @@ void Emitter::refine_call_return_regions(Region& region) const {
         const auto* declared = annotations ? annotations->signature_for(fn->start) : nullptr;
         if (declared && !declared->return_type.empty() &&
             !is_declared_fp_scalar(declared->return_type)) return;
+        if (auto block = fn->block_at.find(region.block_start); block != fn->block_at.end()) {
+            for (const auto& inst : fn->blocks[block->second].insts) {
+                if (inst.op != IrOp::Return || inst.src_count < 2) continue;
+                if (auto key = ssa_key(inst.srcs[1])) {
+                    if (auto type = scalar_join_types.find(*key); type != scalar_join_types.end() && is_float_type(type->second)) {
+                        region.condition = inst.srcs[1];
+                        region.condition.type = type->second;
+                    }
+                }
+            }
+        }
         if (auto type = cached_fp_return_type(fn->start)) {
             if (auto block = fn->block_at.find(region.block_start); block != fn->block_at.end()) {
                 for (const auto& inst : fn->blocks[block->second].insts) {
@@ -488,6 +523,26 @@ Emitter::return_value_before_msvc_cookie(const IrValue& value) const {
     return found->second;
 }
 
+bool Emitter::is_fp_call_return(const IrValue& value) const {
+    if (!fn) return false;
+    const IrInst* definition = def_of(value);
+    if (!definition || definition->op != IrOp::Clobber) return false;
+    if (definition->dst.kind != IrValueKind::Reg ||
+        canonical_reg(definition->dst.reg) !=
+            canonical_reg(fp_return_reg(abi))) {
+        return false;
+    }
+    const auto key = ssa_key(value);
+    if (!key) return false;
+    const auto position = call_position_for_return_key(*key);
+    if (!position || position->first >= fn->blocks.size()) return false;
+    const auto& block = fn->blocks[position->first];
+    if (position->second >= block.insts.size()) return false;
+    const auto declared =
+        known_call_return_c_type(block.insts[position->second]);
+    return declared == "float" || declared == "double";
+}
+
 bool Emitter::is_incidental_x86_fp_return(const IrValue& value) const {
     if (abi != Abi::SysVAmd64 && abi != Abi::Win64) return false;
     if (value.kind != IrValueKind::Reg ||
@@ -508,7 +563,12 @@ bool Emitter::is_incidental_x86_fp_return(const IrValue& value) const {
         if (key && !seen.insert(*key).second) return true;
         const IrInst* definition = def_of(candidate);
         if (!definition) return false;
-        if (definition->op == IrOp::Clobber) return true;
+        // A clobber of XMM0 is transport noise only when the call behind it
+        // is not known to return a float. When the callee's signature says
+        // it does, this operand carries the function's actual result - a
+        // `double f()` whose every path returns a call's double reaches here
+        // as a Phi of nothing but clobbers.
+        if (definition->op == IrOp::Clobber) return !is_fp_call_return(candidate);
         if (definition->op == IrOp::Assign && definition->src_count == 1) {
             return self(self, definition->srcs[0], depth + 1);
         }

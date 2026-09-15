@@ -53,6 +53,7 @@ def main():
     parser.add_argument('--strip', default='llvm-strip')
     parser.add_argument('--nm', default='llvm-nm')
     parser.add_argument('--compiler', default='clang')
+    parser.add_argument('--emit-c', action='store_true', help='Audit C exports with generated declarations')
     parser.add_argument('--preamble', type=pathlib.Path)
     parser.add_argument('--sample', type=int, default=24)
     parser.add_argument('--seed', type=int, default=20260911)
@@ -91,7 +92,7 @@ def main():
                 try:
                     if not row['discovered']:
                         raise RuntimeError('Function entry was not enumerated; no nearest-symbol fallback attempted')
-                    output = run([args.ember, '--no-cache', '-p', '-s', hex(address), binary], args.timeout)
+                    output = run([args.ember, '--no-cache', '--emit-c' if args.emit_c else '-p', '-s', hex(address), binary], args.timeout)
                     destination.write_text(output)
                     diagnostics = check_source(output, filename=str(destination),
                                                compiler=args.compiler, preamble=preamble)
@@ -102,6 +103,7 @@ def main():
                 samples.append(row)
         lost = sorted(symbols.keys() - after.keys())
         result = {'input': str(path.resolve()), 'input_sha256': hashlib.sha256(raw).hexdigest(),
+                  'view': 'c' if args.emit_c else 'pseudo',
                   'reference_text_entries': len(symbols), 'retained_text_entries': len(symbols.keys() & after.keys()),
                   'missing_text_entries': [{'address': hex(x), 'name': symbols[x]} for x in lost],
                   'original_entries': len(before), 'stripped_entries': len(after),

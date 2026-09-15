@@ -30,6 +30,20 @@ def check_source(source, *, compiler='clang', filename='pseudo.c', preamble=''):
                '-Werror=unreachable-code-aggressive', '-']
     result = subprocess.run(command, input=translation_unit, text=True, capture_output=True, timeout=30)
     diagnostics = []
+    tokens = re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*[\s\S]*?\*/|//[^\n]*', source)
+    markers = ('STRUCTURER_FAIL', 'unresolved expression materialization', 'unresolved SSA merge',
+               'stray call.args', 'unresolved register read', 'unresolved record type',
+               'unresolved intrinsic', 'unresolved string operation',
+               'unresolved call signature')
+    for token in tokens:
+        if not token[0].startswith(('/*', '//')):
+            continue
+        for marker in markers:
+            if marker in token[0]:
+                line = source.count('\n', 0, token.start()) + 1
+                column = token.start() - source.rfind('\n', 0, token.start())
+                diagnostics.append(Diagnostic(str(filename), line, column, 'error',
+                                              'incomplete decompiler output: ' + marker))
     for line in result.stderr.splitlines():
         match = re.match(r'^(.*):(\d+):(\d+): (fatal error|error|warning): (.*)$', line)
         if match:

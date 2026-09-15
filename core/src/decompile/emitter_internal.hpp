@@ -529,8 +529,38 @@ struct Emitter {
     standard_global_type(std::string_view name) noexcept;
 
     [[nodiscard]] std::string global_display_name(const Symbol& symbol) const;
+    std::map<SsaKey, IrType> scalar_join_types;
+    bool scalar_join_copies = false;
+    bool prepare_scalar_join_copies();
 
     void note_global_decl(const Symbol& s, std::string type_name) const;
+    mutable std::map<std::string, std::string> c_call_declarations;
+    [[nodiscard]] std::string c_address(const IrValue& value) const;
+    [[nodiscard]] static std::string_view c_memory_suffix(IrType type);
+    [[nodiscard]] std::string c_preamble(std::string_view body,
+                                        std::string_view scope_decls) const;
+    void note_c_call(const IrInst& inst, std::string_view name,
+                     const std::vector<IrValue>& args) const;
+    // Record types recovered from debug info or annotations reach the C
+    // export only as a name. Forward-declare the ones nothing else defines
+    // so `T*` parameters and casts still compile against an opaque type.
+    [[nodiscard]] std::string
+    c_forward_type_declarations(std::string_view context) const;
+    void note_c_type_name(std::string_view type) const;
+    mutable std::set<std::string> c_signature_type_names;
+    // Intrinsics print as plain calls; in C export mode they need names that
+    // are valid identifiers and carry the operand width the helper needs.
+    [[nodiscard]] static std::string c_intrinsic_name(const IrInst& inst);
+    // Single rendering path for intrinsic calls, so C-export naming and
+    // operand casts apply wherever an intrinsic surfaces.
+    [[nodiscard]] std::string render_intrinsic_call(const IrInst& inst,
+                                                    int depth = 0) const;
+    void note_c_intrinsic(std::string_view name, u8 arity) const;
+    mutable std::map<std::string, std::string> c_intrinsic_declarations;
+    // Machine registers with no reaching definition render under their own
+    // name. Declare them so the export compiles, marked unresolved.
+    [[nodiscard]] std::string
+    c_undefined_register_declarations(std::string_view body) const;
 
     // Render an IPA-arena TypeRef as a C type name. Returns empty if the
     // ref is Top or no arena is supplied - caller should fall back.
@@ -742,6 +772,9 @@ struct Emitter {
     // ordinary integer/void function returns a vector or double. Preserve a
     // directly returned live-in FP argument, but reject merge webs containing
     // no actual FP computation/load/constant.
+    // True when the value is the XMM0 clobber standing for a call whose
+    // signature is known to return float or double.
+    [[nodiscard]] bool is_fp_call_return(const IrValue& value) const;
     [[nodiscard]] bool is_incidental_x86_fp_return(const IrValue& value) const;
 
     // PPC has no distinct `return void` instruction: blr simply leaves

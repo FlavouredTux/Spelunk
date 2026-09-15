@@ -2,7 +2,7 @@
 int main(int argc, char** argv) {
   char local_16[14];
   memset(local_16, 0, 0xe);
-  if ((uint32_t)argc && !((int32_t)(uint32_t)argc < 0 ^ overflow_sub((uint32_t)argc, 0))) {
+  if ((uint32_t)argc && !(((int32_t)(uint32_t)argc < 0) ^ overflow_sub((uint32_t)argc, 0))) {
     __isoc23_sscanf(argv[0], "%13s", local_16);
     return strcmp(local_16, argv[0]);
   }

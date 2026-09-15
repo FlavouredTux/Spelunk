@@ -3,6 +3,7 @@
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
 
+#include <algorithm>
 #include <format>
 #include <map>
 #include <set>
@@ -18,8 +19,106 @@ const std::string* Emitter::scoped_ssa_name(const IrValue& value) const {
     return found == scoped_ssa_values.end() ? nullptr : &found->second.second;
 }
 
+bool Emitter::prepare_scalar_join_copies() {
+    if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return false;
+    std::set<SsaKey> visiting;
+    const auto scalar_type = [&](auto&& self, const IrValue& value) -> std::optional<IrType> {
+        const auto key = ssa_key(value);
+        if (key) {
+            if (auto it = scalar_join_types.find(*key); it != scalar_join_types.end()) return it->second;
+            if (!visiting.insert(*key).second) return std::nullopt;
+        }
+        const auto* definition = def_of(value);
+        std::optional<IrType> type;
+        if (!definition) {
+            if (is_float_type(value.type) || value.kind == IrValueKind::Imm) type = value.type;
+        } else if (definition->op == IrOp::Assign && definition->src_count) {
+            type = self(self, definition->srcs[0]);
+        } else if (definition->op == IrOp::Phi) {
+            for (const auto& operand : definition->phi_operands) {
+                auto incoming = self(self, operand);
+                if (!incoming || (type && type != incoming)) { type.reset(); break; }
+                type = incoming;
+            }
+        } else if (definition->op == IrOp::Clobber && key &&
+                   definition->dst.kind == IrValueKind::Reg &&
+                   canonical_reg(definition->dst.reg) == fp_return_reg(abi)) {
+            if (auto position = call_position_for_return_key(*key)) {
+                const auto declared = known_call_return_c_type(fn->blocks[position->first].insts[position->second]);
+                if (declared == "float") type = IrType::F32;
+                if (declared == "double") type = IrType::F64;
+            }
+        } else if (definition->dst.type == IrType::F32 || definition->dst.type == IrType::F64) {
+            type = definition->dst.type;
+        }
+        if (key) {
+            visiting.erase(*key);
+            if (type && is_float_type(*type)) scalar_join_types.emplace(*key, *type);
+        }
+        return type;
+    };
+    std::vector<const IrInst*> phis;
+    for (const auto& block : fn->blocks) for (const auto& inst : block.insts) {
+        if (inst.op != IrOp::Phi) continue;
+        const auto key = ssa_key(inst.dst);
+        const bool constant_call_argument = key && !use_count(inst.dst) &&
+            ssa_uses.syntactic_use_count(*key) &&
+            std::ranges::all_of(inst.phi_operands, [](const IrValue& value) {
+                return value.kind == IrValueKind::Imm;
+            });
+        const auto type = scalar_type(scalar_type, inst.dst);
+        if (type && ((is_float_type(*type) && use_count(inst.dst)) || constant_call_argument)) {
+            phis.push_back(&inst);
+            if (key) scalar_join_types.insert_or_assign(*key, *type);
+        }
+    }
+    if (phis.empty()) return false;
+    std::set<std::string> replaced;
+    const auto remember = [&](const IrValue& original, std::string_view prefix) {
+        const auto key = ssa_key(original);
+        if (!key || scoped_ssa_values.contains(*key)) return;
+        const auto type = scalar_type(scalar_type, original);
+        if (!type) return;
+        IrValue value = original;
+        value.type = *type;
+        std::string name = std::format("{}_{}", prefix, scoped_ssa_values.size());
+        while (std::ranges::find(self_arg_names, name) != self_arg_names.end()) name += "_";
+        scoped_ssa_values.emplace(*key, std::pair{value, std::move(name)});
+        if (auto old = merge_value_names.find(*key); old != merge_value_names.end()) {
+            replaced.insert(old->second);
+            merge_value_names.erase(old);
+        }
+    };
+    for (const auto* phi : phis) {
+        remember(phi->dst, is_float_type(*scalar_type(scalar_type, phi->dst)) ? "phi_fp" : "phi_arg");
+        for (const auto& operand : phi->phi_operands) {
+            if (def_of(operand)) remember(operand, "ssa_fp");
+        }
+    }
+    for (const auto& name : replaced) merge_locals.erase(name);
+    for (auto& [_, copies] : merge_edge_assignments) {
+        std::erase_if(copies, [&](const auto& copy) { return replaced.contains(copy.first); });
+    }
+    for (const auto& [key, item] : scoped_ssa_values) {
+        const auto* definition = ssa_uses.definition(key);
+        if (!definition || definition->op != IrOp::Clobber) continue;
+        const auto position = call_position_for_return_key(key);
+        if (!position) continue;
+        fold_call_positions.erase(*position);
+        inline_call_positions.erase(*position);
+        fold_call_ssa_key.erase(*position);
+        inline_call_ssa_key.erase(*position);
+        bound_call_key[*position] = key;
+        call_return_names[key] = item.second;
+        merge_bound_calls.insert(*position);
+    }
+    scalar_join_copies = true;
+    return true;
+}
+
 void Emitter::prepare_phi_copies() {
     if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_ppc_abi())) return;
+    if (prepare_scalar_join_copies()) return;
     // Calls are eligible only when their declared x64 signature establishes
     // scalar register arguments. Unknown/FP/aggregate calls keep the existing
     // path rather than treating their conservative ABI snapshots as real uses.
@@ -213,7 +312,14 @@ void Emitter::emit_phi_copies(const IrBlock& block, std::string_view ind,
         }
         if (copies.empty()) continue;
         std::vector<std::string> values;
-        for (const auto& [_, source] : copies) values.push_back(expr(source));
+        for (const auto& [destination, source] : copies) {
+            std::string value = expr(source);
+            if (options.c_source && !is_float_type(destination.type) &&
+                (value.starts_with('"') || value.starts_with('&'))) {
+                value = std::format("({})(uintptr_t)({})", c_type_name_for(destination), value);
+            }
+            values.push_back(std::move(value));
+        }
         std::set<std::string> reserved(self_arg_names.begin(), self_arg_names.end());
         for (const auto& [_, value] : scoped_ssa_values) reserved.insert(value.second);
         std::vector<std::string> scratch;

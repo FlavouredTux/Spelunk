@@ -142,6 +142,9 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "reallocarray")  return m(t_voidp(a),  {t_voidp(a), t_size(a), t_size(a)});
     if (name == "free")          return m(t_void(a),   {t_voidp(a)});
     if (name == "atoi")          return m(t_int32s(a), {t_charp(a)});
+    if (name == "atof")          return m(t_float64(a), {t_charp(a)});
+    if (name == "strtod")        return m(t_float64(a), {t_charp(a), a.ptr_t(t_charp(a))});
+    if (name == "strtof")        return m(t_float32(a), {t_charp(a), a.ptr_t(t_charp(a))});
     if (name == "atol")          return m(t_int64s(a), {t_charp(a)});
     if (name == "atoll")         return m(t_int64s(a), {t_charp(a)});
     if (name == "strtol")        return m(t_int64s(a), {t_charp(a), a.ptr_t(t_charp(a)), t_int32s(a)});

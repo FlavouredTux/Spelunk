@@ -241,12 +241,7 @@ Emitter::format_merge_assignment(const IrInst& inst, std::string_view name) cons
         if (inst.src_count < 1) return "";
         rhs = format_load_rhs(inst);
     } else if (inst.op == IrOp::Intrinsic) {
-        std::string args;
-        for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
-            if (i > 0) args += ", ";
-            args += expr(inst.srcs[i]);
-        }
-        rhs = std::format("{}({})", inst.name, args);
+        rhs = render_intrinsic_call(inst);
     } else if (inlinable_op(inst.op)) {
         rhs = expand(inst, 0);
     }
@@ -301,12 +296,7 @@ void Emitter::emit_materializations_for_value(const IrValue& v,
 
     std::string rhs;
     if (d->op == IrOp::Intrinsic) {
-        std::string args;
-        for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
-            if (i > 0) args += ", ";
-            args += expr(d->srcs[i]);
-        }
-        rhs = std::format("{}({})", d->name, args);
+        rhs = render_intrinsic_call(*d);
     } else if (d->op == IrOp::Load) {
         if (d->src_count < 1) return;
         rhs = format_load_rhs(*d);

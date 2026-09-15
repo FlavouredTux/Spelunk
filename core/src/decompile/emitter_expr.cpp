@@ -103,6 +103,11 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
         }
     }
     const std::string refined = c_type_name_for(d.dst);
+    if (options.c_source && d.segment == Reg::None && !stack_offset(d.srcs[0])) {
+        std::string loaded = std::format("ember_read_{}({})", c_memory_suffix(d.dst.type), c_address(d.srcs[0]));
+        if (refined.ends_with('*')) loaded = std::format("({})(uintptr_t){}", refined, loaded);
+        return loaded;
+    }
     // Init-only stack slot: forward to the live-in value the entry prologue
     // stored. Keeping this in one helper prevents merge-local materializers
     // from rendering the same load as a raw `local_X` while normal expr()
@@ -414,14 +419,8 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             return std::format("overflow_sub({}, {})",
                                expr(d.srcs[0], depth, 0), expr(d.srcs[1], depth, 0));
 
-        case IrOp::Intrinsic: {
-            std::string args;
-            for (u8 i = 0; i < d.src_count && i < d.srcs.size(); ++i) {
-                if (i > 0) args += ", ";
-                args += expr(d.srcs[i], depth, 0);
-            }
-            return std::format("{}({})", d.name, args);
-        }
+        case IrOp::Intrinsic:
+            return render_intrinsic_call(d, depth);
 
         case IrOp::Select: {
             if (d.src_count < 3) return std::format("t{}", d.dst.temp);
@@ -525,6 +524,11 @@ std::string Emitter::format_store(const IrInst& inst) const {
     if (inst.src_count < 2) return "";
     const auto& addr = inst.srcs[0];
     const auto& val  = inst.srcs[1];
+    if (options.c_source && inst.segment == Reg::None && !stack_offset(addr)) {
+        const std::string value = is_float_type(val.type) ? expr(val)
+            : std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val));
+        return std::format("ember_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
+    }
     std::string lhs;
     if (inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {
@@ -694,23 +698,21 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             // If the intrinsic produces a value that survives downstream,
             // bind it to a named temp so subsequent reads have something
             // to refer to. Otherwise emit as a void statement.
+            const std::string call = render_intrinsic_call(inst);
             if (inst.dst.kind == IrValueKind::Temp &&
                 visible_use_count(inst.dst) > 0) {
-                return std::format("{} t{} = {}({});",
+                return std::format("{} t{} = {};",
                                    c_type_name_for(inst.dst),
-                                   inst.dst.temp,
-                                   inst.name, args);
+                                   inst.dst.temp, call);
             }
             if (inst.dst.kind == IrValueKind::Reg &&
                 visible_use_count(inst.dst) > 0) {
-                return std::format("{} = {}({});",
-                                   reg_name(inst.dst.reg), inst.name, args);
+                return std::format("{} = {};", reg_name(inst.dst.reg), call);
             }
             if (inst.dst.kind == IrValueKind::Flag && use_count(inst.dst) > 0) {
-                return std::format("{} = {}({});",
-                                   flag_name(inst.dst.flag), inst.name, args);
+                return std::format("{} = {};", flag_name(inst.dst.flag), call);
             }
-            return std::format("{}({});", inst.name, args);
+            return std::format("{};", call);
         }
 
         default:
@@ -744,6 +746,12 @@ std::string Emitter::format_binop(const IrInst& d, std::string_view op,
                                         Prec self_prec,
                                         bool commutative) const {
     const int p = static_cast<int>(self_prec);
+    if (options.c_source && (d.op == IrOp::Add || d.op == IrOp::Sub || d.op == IrOp::Mul) &&
+        !is_float_type(d.dst.type) && type_bits(d.dst.type) <= 64 &&
+        !c_type_name_for(d.dst).ends_with('*')) {
+        return std::format("({})((uint64_t)(uintptr_t)({}) {} (uint64_t)(uintptr_t)({}))",
+            c_type_name(d.dst.type), expr(d.srcs[0], depth + 1), op, expr(d.srcs[1], depth + 1));
+    }
     if (is_ppc_abi() && binary && d.op == IrOp::Add && d.src_count >= 2) {
         for (u8 base_i = 0; base_i < 2; ++base_i) {
             auto address = try_resolve_imm_addr(d.srcs[base_i]);
@@ -951,7 +959,25 @@ std::string Emitter::format_bitop(const IrInst& d, std::string_view op,
                                         int depth, int min_prec,
                                         Prec self_prec) const {
     const int p = static_cast<int>(self_prec);
+    // A comparison binds tighter than `& | ^`, so C reads `a < b ^ c` the way
+    // the flag semantics mean it - but both gcc and clang warn, and a reader
+    // has to stop and check. Parenthesize comparison operands explicitly.
+    const auto comparison = [&](const IrValue& v) {
+        const IrInst* definition = def_stripped(v);
+        if (!definition) return false;
+        switch (definition->op) {
+            case IrOp::CmpEq:  case IrOp::CmpNe:
+            case IrOp::CmpSlt: case IrOp::CmpUlt:
+            case IrOp::CmpSle: case IrOp::CmpUle:
+            case IrOp::CmpSgt: case IrOp::CmpUgt:
+            case IrOp::CmpSge: case IrOp::CmpUge: return true;
+            default: return false;
+        }
+    };
     auto render = [&](const IrValue& v) -> std::string {
+        if (comparison(v)) {
+            return std::format("({})", expr(v, depth, 0));
+        }
         if (v.kind == IrValueKind::Imm && v.imm < 0) {
             const u64 absv =
                 static_cast<u64>(0) - static_cast<u64>(v.imm);

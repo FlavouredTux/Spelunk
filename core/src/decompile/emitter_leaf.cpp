@@ -123,6 +123,7 @@ std::string Emitter::render_reg_leaf(Reg r, u32 version,
     u32 cur_ver = version;
     for (int hop = 0; hop < 8; ++hop) {
         SsaKey k{u8{0}, static_cast<u32>(canonical_reg(cur_reg)), cur_ver};
+        if (auto it = scoped_ssa_values.find(k); it != scoped_ssa_values.end()) return it->second.second;
         if (auto it = inline_call_expr.find(k); it != inline_call_expr.end()) {
             return it->second;
         }

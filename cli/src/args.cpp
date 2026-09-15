@@ -41,6 +41,7 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"-O", "--opt",       &Args::opt},
     {"",   "--struct",    &Args::strct},
     {"-p", "--pseudo",    &Args::pseudo},
+    {"",   "--emit-c",    &Args::emit_c},
     {"-X", "--xrefs",     &Args::xrefs},
     {"",   "--data-xrefs", &Args::data_xrefs},
     {"",   "--strings",   &Args::strings},
@@ -190,6 +191,7 @@ parse_u64_strict(std::string_view s) noexcept {
 }  // namespace
 
 void apply_stage_implications(Args& a) {
+    if (a.emit_c) a.pseudo = true;
     if (a.pseudo) a.strct = true;
     if (a.strct)  a.opt   = true;
     if (a.opt)    a.ssa   = true;

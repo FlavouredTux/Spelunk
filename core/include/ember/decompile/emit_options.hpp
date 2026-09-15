@@ -29,6 +29,9 @@ struct LineMap {
 
 
 struct EmitOptions {
+    // Emit C declarations and byte-addressed memory accesses without assuming
+    // an unavailable source record layout. Unknown operations remain visible.
+    bool c_source = false;
     // Emit `// bb_XXXX` labels before each block. Off by default - labels
     // are useful when cross-ref'ing with the CFG view but pure clutter in
     // day-to-day reading.

@@ -284,6 +284,18 @@ Emitter::named_address_for_imm(addr_t target) const {
             }
         }
     }
+    if (options.c_source && resolved->kind == ResolvedNameKind::Got) {
+        // `sym@GOT` is a linker spelling, not a C identifier. The slot itself
+        // is a pointer-sized global, so name it and take its address.
+        const std::string slot =
+            std::format("{}_got", sanitize_ident(resolved->name, "got"));
+        global_decls.try_emplace(slot, "void*");
+        if (resolved->addr != resolved->base) {
+            return std::format("(uint8_t*)&{} + {:#x}", slot,
+                               resolved->addr - resolved->base);
+        }
+        return "&" + slot;
+    }
     return format_address_expr(*resolved);
 }
 

@@ -135,6 +135,7 @@ struct Args {
     bool opt    = false;
     bool strct  = false;
     bool pseudo = false;
+    bool emit_c = false;
     bool xrefs  = false;
     bool strings = false;
     bool surfaces = false;          // --surfaces: app/subsystem surface inventory

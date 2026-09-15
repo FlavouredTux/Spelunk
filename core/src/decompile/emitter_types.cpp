@@ -100,6 +100,10 @@ std::string Emitter::global_display_name(const Symbol& symbol) const {
         if (preferred != annotations->preferred_global_names.end() &&
             !preferred->second.empty()) return preferred->second;
     }
+    if (options.c_source) {
+        const std::string clean = sanitize_ident(symbol.name, "global");
+        if (clean != symbol.name) return std::format("{}_{:x}", clean, symbol.addr);
+    }
     return symbol.name;
 }
 
@@ -250,6 +254,9 @@ Emitter::pointer_type_from_memory_uses(const IrValue& value) const {
 }
 
 std::string Emitter::c_type_name_for(const IrValue& v) const {
+    if (auto key = ssa_key(v)) {
+        if (auto it = scalar_join_types.find(*key); it != scalar_join_types.end()) return std::string(c_type_name(it->second));
+    }
     if (!fn) return std::string(c_type_name(v.type));
     if (auto access = canonical_struct_access(v); access) {
         if (auto key = ssa_key(access->first); key) {

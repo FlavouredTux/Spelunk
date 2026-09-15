@@ -13,8 +13,10 @@ for source, message in [
     ('int callee(int); int f(void) { return callee(1, 2); }', 'too many arguments'),
     ('int f(int x) { return x; x++; }', 'never be executed'),
     ('int f(int *p) { return p->field_8; }', 'not a structure'),
+    ('int f(void) { int x=0; /* unresolved SSA merge */ return x; }', 'incomplete decompiler output'),
 ]:
     diagnostics = check_source(source, compiler=compiler, filename='fixture.c')
     assert any(message in d.message and d.severity == 'error' for d in diagnostics), diagnostics
     assert all(d.file == 'fixture.c' and d.line == 1 for d in diagnostics), diagnostics
+assert not check_source('const char *note = "/* unresolved SSA merge */";', compiler=compiler)
 print('Output checker detects undeclared values, call arity, unreachable statements, and invalid member accesses')

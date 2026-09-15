@@ -109,7 +109,10 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
     e.bind_call_returns();
     e.refine_synthetic_member_types_from_stores();
     e.analyze_merge_definite_assignment();
-    if (structured_render) e.prepare_phi_copies();
+    if (structured_render) {
+        e.prepare_phi_copies();
+        if (sf.body) e.refine_call_return_regions(*sf.body);
+    }
 }
 
 // Optional provenance preamble: when --show-provenance is set and
@@ -606,12 +609,16 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     }
     const auto fallbacks = fallback_materializations(e, body_buf);
 
-    out += file_scope_declarations(e, declaration_context);
+    const std::string scope_decls =
+        file_scope_declarations(e, declaration_context);
+    if (options.c_source) out += e.c_preamble(declaration_context, scope_decls);
+    out += scope_decls;
     out += header;
     if (text_contains_identifier_in_code(body_buf, "stack_top")) {
         out += "  uint64_t stack_top; /* entry stack word */\n";
     }
     out += fallback_temp_declarations(e, fallbacks);
+    if (options.c_source) out += e.c_undefined_register_declarations(body_buf);
     out += synthetic_merge_stack_declarations(e);
     out += frame_slot_declarations(e, body_buf, matrix_locals);
     out += merge_local_declarations(e, body_buf);

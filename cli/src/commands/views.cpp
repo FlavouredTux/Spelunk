@@ -271,6 +271,7 @@ int run_emit(const Args& args, const Binary& b) {
 
     EmitOptions emit_opts;
     emit_opts.show_bb_labels  = args.labels;
+    emit_opts.c_source = args.emit_c;
     emit_opts.show_provenance = args.show_provenance;
     std::unordered_set<addr_t> known_function_entries;
     if (batch && (args.pseudo || args.strct || args.cfg_pseudo)) {

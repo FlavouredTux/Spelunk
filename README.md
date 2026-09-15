@@ -96,6 +96,7 @@ ember --ssa -s NAME ./target     # SSA form
 ember -O -s NAME ./target        # after cleanup passes
 ember --struct -s NAME ./target  # structured regions
 ember -p -s NAME ./target        # pseudo-C
+ember --emit-c -s NAME ./target  # C export with declarations and explicit memory accesses
 ```
 
 Without `-s` the default symbol is `main`. `--symbols FILE` batches many

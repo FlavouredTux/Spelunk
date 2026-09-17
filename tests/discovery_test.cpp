@@ -87,6 +87,29 @@ public:
         section_.data = std::span<const std::byte>(text_.data(), text_.size());
     }
 
+    void set_dense_prologues() {
+        // Cross both the parallel-sweep and dense-hit thresholds. Each
+        // slot contains aligned and unaligned frame setups, plus a weaker
+        // unaligned stack allocation that dense filtering should discard.
+        dense_text_.assign(65536 * 32, std::byte{0x90});
+        const std::array<unsigned char, 6> frame{0x55, 0x48, 0x89, 0xe5, 0x5d, 0xc3};
+        const std::array<unsigned char, 9> weak{
+            0x48, 0x83, 0xec, 0x20, 0x48, 0x83, 0xc4, 0x20, 0xc3};
+        for (std::size_t slot = 0; slot < dense_text_.size(); slot += 32) {
+            for (auto offset : {0u, 9u}) {
+                for (std::size_t i = 0; i < frame.size(); ++i) {
+                    dense_text_[slot + offset + i] = static_cast<std::byte>(frame[i]);
+                }
+            }
+            for (std::size_t i = 0; i < weak.size(); ++i) {
+                dense_text_[slot + 19 + i] = static_cast<std::byte>(weak[i]);
+            }
+        }
+        section_.size = dense_text_.size();
+        section_.data = dense_text_;
+        syms_.clear();
+    }
+
     [[nodiscard]] spelunk::Format format() const noexcept override {
         return spelunk::Format::Elf;
     }
@@ -118,6 +141,7 @@ private:
     static constexpr spelunk::addr_t kBase = 0x401000;
 
     std::array<std::byte, 0x80> text_{};
+    std::vector<std::byte> dense_text_;
     spelunk::Section             section_{};
     std::vector<spelunk::Symbol>  syms_{};
 };
@@ -379,6 +403,27 @@ void test_candidate_inside_instruction_is_rejected() {
           "prologue-shaped displacement byte rejected as function start");
 }
 
+void test_dense_unaligned_frame_entry_is_retained() {
+    MockBinary binary;
+    binary.set_dense_prologues();
+    const auto functions = spelunk::enumerate_functions(binary, spelunk::EnumerateMode::Cheap);
+    const auto entry = std::ranges::find(functions, 0x401009,
+                                       &spelunk::DiscoveredFunction::addr);
+    check(entry != functions.end(), "dense sweep retains unaligned frame entry");
+    const auto wrapper = std::ranges::find(functions, 0x401000,
+                                         &spelunk::DiscoveredFunction::addr);
+    check(wrapper != functions.end() && wrapper->size == 9,
+          "wrapper estimated extent stops at the recovered entry");
+    check(std::ranges::find(functions, 0x401013, &spelunk::DiscoveredFunction::addr) == functions.end(),
+          "dense sweep still filters weak unaligned candidates");
+    const auto containing = spelunk::containing_function(binary, 0x401009);
+    check(containing && containing->entry == 0x401009,
+          "containing-fn does not assign the real entry to the wrapper");
+    const auto numeric = spelunk::resolve_function(binary, "0x401009");
+    check(numeric && numeric->start == 0x401009,
+          "numeric selection resolves to the requested real entry");
+}
+
 void test_arm64_prologue_discovery() {
     Arm64MockBinary b;
     auto hits = spelunk::discover_from_prologues(b);
@@ -449,6 +494,7 @@ void test_named_code_addresses_without_executable_flags() {
 int main() {
     test_stack_alloc_after_frame_setup_not_split();
     test_candidate_inside_instruction_is_rejected();
+    test_dense_unaligned_frame_entry_is_retained();
     test_arm64_prologue_discovery();
     test_named_code_addresses_without_executable_flags();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

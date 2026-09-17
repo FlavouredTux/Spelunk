@@ -258,11 +258,16 @@ namespace {
     if (hit < base) return false;
     const auto off = static_cast<std::size_t>(hit - base);
     if (off >= data.size()) return false;
-    // Most optimized x86-64 entries are at least 16-byte aligned. In
-    // dense-false-positive mode this one predicate removes the bulk of
-    // in-body prologue-shaped instruction tails while preserving the
-    // common compiler layout.
-    return (hit & 0xfu) == 0;
+    if ((hit & 0xfu) == 0) return true;
+    // Alignment alone loses densely packed functions (including code
+    // rebuilt from runtime images). A complete frame setup is stronger
+    // evidence than the loose push/sub patterns used by the broad sweep.
+    auto bytes = data.subspan(off);
+    if (is_x86_endbr(bytes)) bytes = bytes.subspan(4);
+    if (bytes.size() < 4) return false;
+    return bytes[0] == std::byte{0x55} && bytes[1] == std::byte{0x48} &&
+           ((bytes[2] == std::byte{0x89} && bytes[3] == std::byte{0xe5}) ||
+            (bytes[2] == std::byte{0x8b} && bytes[3] == std::byte{0xec}));
 }
 
 }  // namespace

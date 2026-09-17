@@ -73,8 +73,8 @@ void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
         bool inside_instruction = false;
         if (!out.empty() && fn.kind == DiscoveredFunction::Kind::Sub) {
             // Continue a conservative linear decode from the preceding
-            // accepted entry until this candidate. We stop on the first
-            // undecodable byte rather than guessing alignment through data.
+            // accepted entry until this candidate. Stop when fallthrough
+            // ends: unreachable padding must not hide a later real entry.
             while (scan_pc < fn.addr) {
                 auto bytes = b.bytes_at(scan_pc);
                 if (bytes.empty()) break;
@@ -86,6 +86,8 @@ void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
                     scan_pc = end;
                     break;
                 }
+                if (is_return_like(instruction->mnemonic) ||
+                    is_unconditional_jmp(instruction->mnemonic)) break;
                 scan_pc = end;
             }
         }

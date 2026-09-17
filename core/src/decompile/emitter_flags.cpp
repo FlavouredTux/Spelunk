@@ -442,6 +442,11 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
     };
     std::string left  = cmp_expr(a, lp);
     std::string right = cmp_expr(b, rp);
+    if (options.c_source && !is_float_type(a.type) && !is_float_type(b.type) &&
+        (c_type_name_for(a).ends_with('*') || c_type_name_for(b).ends_with('*'))) {
+        left = std::format("({})(uintptr_t)({})", c_type_name(a.type), left);
+        right = std::format("({})(uintptr_t)({})", c_type_name(b.type), right);
+    }
     if (cast_l) left  = std::format("({}){}", signed_type(a.type), left);
     if (cast_r) right = std::format("({}){}", signed_type(b.type), right);
     return wrap_if_lt(std::format("{} {} {}", left, op, right), own, min_prec);

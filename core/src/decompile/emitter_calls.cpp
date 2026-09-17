@@ -550,6 +550,7 @@ bool Emitter::is_incidental_x86_fp_return(const IrValue& value) const {
         return false;
     }
     const IrInst* root = def_of(value);
+    if (root && root->op == IrOp::Clobber) return !is_fp_call_return(value);
     if (!root || root->op != IrOp::Phi) return false;
     std::set<SsaKey> seen;
     const auto transport_only = [&](const auto& self, const IrValue& candidate,

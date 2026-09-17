@@ -325,7 +325,7 @@ frame_slot_declarations(const Emitter& e, const std::string& body,
                 suffix = std::format("[{}]", required->second);
             }
         }
-        if (suffix.empty() && !matrix_locals.contains(slot.name) &&
+        if (!e.options.c_source && suffix.empty() && !matrix_locals.contains(slot.name) &&
             slot.type_override.empty() && elem_size > 0 &&
             !assigned_as_scalar(slot.name)) {
             if (auto next_off = next_slot_offset(slot.offset)) {

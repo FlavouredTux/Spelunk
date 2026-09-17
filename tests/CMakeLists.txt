@@ -1694,6 +1694,13 @@ if(Python3_Interpreter_FOUND)
                 "$<TARGET_FILE:spelunk_cli>" "$<TARGET_FILE:spelunk_x64_pipeline_probe>"
                 "${CMAKE_C_COMPILER}" "${CMAKE_SOURCE_DIR}/tests/support")
         set_tests_properties(x64_pipeline_semantics PROPERTIES TIMEOUT 120)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(NAME x64_export_regressions
+                COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_SOURCE_DIR}/tests/export_regressions_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
+            set_tests_properties(x64_export_regressions PROPERTIES TIMEOUT 120)
+        endif()
     endif()
     add_test(
         NAME ppc_quality_benchmark_unit

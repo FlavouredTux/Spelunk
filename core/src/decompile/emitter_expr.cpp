@@ -430,6 +430,11 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             std::string c = expr(d.srcs[0], depth, std::to_underlying(Prec::LogOr));
             std::string a = expr(d.srcs[1], depth, std::to_underlying(Prec::Cond));
             std::string b = expr(d.srcs[2], depth, std::to_underlying(Prec::Cond));
+            if (options.c_source && !is_float_type(d.dst.type) && type_bits(d.dst.type) <= 64) {
+                const auto type = c_type_name_for(d.dst);
+                a = std::format("({})(uintptr_t)({})", type, a);
+                b = std::format("({})(uintptr_t)({})", type, b);
+            }
             return wrap_if_lt(std::format("{} ? {} : {}", c, a, b),
                               Prec::Cond, min_prec);
         }
@@ -525,7 +530,7 @@ std::string Emitter::format_store(const IrInst& inst) const {
     const auto& addr = inst.srcs[0];
     const auto& val  = inst.srcs[1];
     if (options.c_source && inst.segment == Reg::None && !stack_offset(addr)) {
-        const std::string value = is_float_type(val.type) ? expr(val)
+        const std::string value = (is_float_type(val.type) || type_bits(val.type) > 64) ? expr(val)
             : std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val));
         return std::format("spelunk_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
     }
@@ -585,7 +590,9 @@ std::string Emitter::format_store(const IrInst& inst) const {
     if (auto compound = try_compound_store(lhs, addr, val); !compound.empty()) {
         return compound;
     }
-    return std::format("{} = {};", lhs, expr(val));
+    const std::string rhs = options.c_source && !is_float_type(val.type) && type_bits(val.type) <= 64
+        ? std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val)) : expr(val);
+    return std::format("{} = {};", lhs, rhs);
 }
 
 std::string Emitter::format_stmt(const IrInst& inst) const {
@@ -747,10 +754,9 @@ std::string Emitter::format_binop(const IrInst& d, std::string_view op,
                                         bool commutative) const {
     const int p = static_cast<int>(self_prec);
     if (options.c_source && (d.op == IrOp::Add || d.op == IrOp::Sub || d.op == IrOp::Mul) &&
-        !is_float_type(d.dst.type) && type_bits(d.dst.type) <= 64 &&
-        !c_type_name_for(d.dst).ends_with('*')) {
+        !is_float_type(d.dst.type) && type_bits(d.dst.type) <= 64) {
         return std::format("({})((uint64_t)(uintptr_t)({}) {} (uint64_t)(uintptr_t)({}))",
-            c_type_name(d.dst.type), expr(d.srcs[0], depth + 1), op, expr(d.srcs[1], depth + 1));
+            c_type_name_for(d.dst), expr(d.srcs[0], depth + 1), op, expr(d.srcs[1], depth + 1));
     }
     if (is_ppc_abi() && binary && d.op == IrOp::Add && d.src_count >= 2) {
         for (u8 base_i = 0; base_i < 2; ++base_i) {

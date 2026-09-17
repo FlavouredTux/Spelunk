@@ -86,6 +86,10 @@ void test_code_mask_and_declarations() {
           "declaration checks find a real declaration after comments");
     check(!line_declares_identifier("uint32_t x;", ""),
           "an empty name is not a declaration");
+    check(!line_declares_identifier("return xmm0_5;", "xmm0_5"),
+          "return expressions are not declarations");
+    check(!line_declares_identifier("goto label;", "label"),
+          "goto targets are not declarations");
     check(count_untyped_pointer_index_sites(
               "void* p;\nlog(\"p[0]\"); /* p[1] */\np[2];") == 1,
           "untyped pointer diagnostics count code uses only");

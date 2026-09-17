@@ -50,6 +50,9 @@ bool Emitter::prepare_scalar_join_copies() {
             }
         } else if (definition->dst.type == IrType::F32 || definition->dst.type == IrType::F64) {
             type = definition->dst.type;
+        } else if (options.c_source && inlinable_op(definition->op) &&
+                   type_bits(definition->dst.type) <= 64) {
+            type = definition->dst.type;
         }
         if (key) {
             visiting.erase(*key);
@@ -67,7 +70,13 @@ bool Emitter::prepare_scalar_join_copies() {
                 return value.kind == IrValueKind::Imm;
             });
         const auto type = scalar_type(scalar_type, inst.dst);
-        if (type && ((is_float_type(*type) && use_count(inst.dst)) || constant_call_argument)) {
+        const bool snapshot_join = options.c_source && key &&
+            ssa_uses.syntactic_use_count(*key) &&
+            std::ranges::any_of(inst.phi_operands, [&](const IrValue& operand) {
+                const auto operand_key = ssa_key(operand);
+                return operand_key && memory_snapshot_loads.contains(*operand_key);
+            });
+        if (type && ((is_float_type(*type) && use_count(inst.dst)) || constant_call_argument || snapshot_join)) {
             phis.push_back(&inst);
             if (key) scalar_join_types.insert_or_assign(*key, *type);
         }
@@ -315,7 +324,7 @@ void Emitter::emit_phi_copies(const IrBlock& block, std::string_view ind,
         for (const auto& [destination, source] : copies) {
             std::string value = expr(source);
             if (options.c_source && !is_float_type(destination.type) &&
-                (value.starts_with('"') || value.starts_with('&'))) {
+                type_bits(destination.type) <= 64) {
                 value = std::format("({})(uintptr_t)({})", c_type_name_for(destination), value);
             }
             values.push_back(std::move(value));

@@ -349,8 +349,8 @@ Emitter::format_call_args_fallback(const std::vector<IrValue>& args,
         if (is_stale_arg_reg(a)) continue;
         if (used) used->push_back(a);
         if (!first) s += ", ";
-        if (auto name = source_arg_name_for_call_transport(a)) s += *name;
-        else s += expr(a);
+        const auto name = source_arg_name_for_call_transport(a);
+        s += c_transport_cast(a, name ? std::string(*name) : expr(a));
         first = false;
     }
     return s;
@@ -363,7 +363,10 @@ Emitter::fallback_call_arg_types(const std::vector<IrValue>& args) const {
     for (const auto& a : args) {
         if (is_stale_arg_reg(a)) continue;
         if (!first) s += ", ";
-        s += c_type_name(call_arg_display_type(a));
+        const std::string rendered = expr(a);
+        s += options.c_source
+            ? (rendered.starts_with('&') ? "void*" : rendered.starts_with('"') ? "const char*" : c_type_name_for(a))
+            : std::string(c_type_name(call_arg_display_type(a)));
         first = false;
     }
     return first ? std::string{"void"} : s;
@@ -401,9 +404,9 @@ Emitter::format_call_args_with_arity(const std::vector<IrValue>& args, u8 arity,
         if (rendered && i < rendered->size() && !(*rendered)[i].empty()) {
             s += (*rendered)[i];
         } else if (auto name = source_arg_name_for_call_transport(args[i])) {
-            s += *name;
+            s += c_transport_cast(args[i], std::string(*name));
         } else {
-            s += expr(args[i]);
+            s += c_transport_cast(args[i], expr(args[i]));
         }
         first = false;
     }
@@ -1081,6 +1084,12 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         const std::string stmt = format_stmt(inst);
         if (!stmt.empty()) {
             emit_materializations_for_inst(inst, out, ind);
+            if (options.c_source) {
+                const auto assignment = stmt.find(" = ");
+                emit_materializations_for_raw_temps(
+                    assignment == std::string::npos ? std::string_view(stmt)
+                        : std::string_view(stmt).substr(assignment + 3), out, ind);
+            }
             flush_args_as_intrinsics();
             if (options.line_map) {
                 // Record where the statement starts so `byte_offset`

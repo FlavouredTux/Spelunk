@@ -38,6 +38,23 @@ Emitter::render_selection_phi(const IrInst& phi, int depth) const {
         return std::nullopt;
     }
     const addr_t merge = fn->blocks[position->first].start;
+    const auto operand = [&](const IrValue& value) {
+        std::string rendered = expr(value, depth + 1, std::to_underlying(Prec::Cond));
+        const auto* definition = def_of(value);
+        const auto value_key = ssa_key(value);
+        // Loads in a selection arm stay conditional when substituted into
+        // the ternary. Phi-only uses need not leave an undeclared temp behind.
+        if (value.kind == IrValueKind::Temp && definition &&
+            definition->op == IrOp::Load && value_key &&
+            !memory_snapshot_loads.contains(*value_key) &&
+            rendered == std::format("t{}", value.temp)) {
+            rendered = expand(*definition, depth + 1, std::to_underlying(Prec::Cond));
+        }
+        if (options.c_source && !is_float_type(phi.dst.type) && type_bits(phi.dst.type) <= 64) {
+            rendered = std::format("({})(uintptr_t)({})", c_type_name_for(phi.dst), rendered);
+        }
+        return rendered;
+    };
     for (std::size_t direct_i = 0; direct_i < 2; ++direct_i) {
         const addr_t direct_pred = phi.phi_preds[direct_i];
         const addr_t arm_pred = phi.phi_preds[1 - direct_i];
@@ -57,10 +74,8 @@ Emitter::render_selection_phi(const IrInst& phi, int depth) const {
 
         const std::string condition = expr(branch.srcs[0], depth + 1,
                                            std::to_underlying(Prec::Cond));
-        const std::string direct = expr(phi.phi_operands[direct_i], depth + 1,
-                                        std::to_underlying(Prec::Cond));
-        const std::string arm = expr(phi.phi_operands[1 - direct_i], depth + 1,
-                                     std::to_underlying(Prec::Cond));
+        const std::string direct = operand(phi.phi_operands[direct_i]);
+        const std::string arm = operand(phi.phi_operands[1 - direct_i]);
         if (condition.empty() || direct.empty() || arm.empty()) continue;
         return true_to_arm
             ? std::format("({} ? {} : {})", condition, arm, direct)
@@ -103,10 +118,8 @@ Emitter::render_selection_phi(const IrInst& phi, int depth) const {
             if (!first_is_true && !second_is_true) continue;
             const std::string condition = expr(
                 branch.srcs[0], depth + 1, std::to_underlying(Prec::Cond));
-            const std::string first = expr(
-                phi.phi_operands[0], depth + 1, std::to_underlying(Prec::Cond));
-            const std::string second = expr(
-                phi.phi_operands[1], depth + 1, std::to_underlying(Prec::Cond));
+            const std::string first = operand(phi.phi_operands[0]);
+            const std::string second = operand(phi.phi_operands[1]);
             if (condition.empty() || first.empty() || second.empty()) continue;
             return first_is_true
                 ? std::format("({} ? {} : {})", condition, first, second)
@@ -407,16 +420,16 @@ bool Emitter::is_stale_arg_reg(const IrValue& a, int depth) const {
     }
     if (const IrInst* d = def_stripped(a);
         d && d->op == IrOp::Phi && !d->phi_operands.empty()) {
-        bool saw_operand = false;
         const auto self = ssa_key(a);
         for (const auto& op : d->phi_operands) {
             if (auto ok = ssa_key(op); self && ok && *ok == *self) {
                 continue;
             }
-            saw_operand = true;
-            if (!is_stale_arg_reg(op, depth + 1)) return false;
+            // A conservative call snapshot is not a real argument when
+            // even one incoming path leaves its register clobbered.
+            if (is_stale_arg_reg(op, depth + 1)) return true;
         }
-        return saw_operand;
+        return false;
     }
     return false;
 }

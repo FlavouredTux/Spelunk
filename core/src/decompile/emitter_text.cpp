@@ -160,6 +160,7 @@ bool code_line_declares_identifier(std::string_view line,
                                    std::string_view name) noexcept {
     if (name.empty()) return false;
     line = trim_line_view(line);
+    if (line.starts_with("return ") || line.starts_with("goto ")) return false;
     std::size_t pos = line.find(name);
     while (pos != std::string_view::npos) {
         const std::size_t end = pos + name.size();

@@ -52,6 +52,17 @@ namespace {
 // preamble the caller has to supply.
 struct CHelper { std::string_view name; std::string_view definition; };
 constexpr std::array kCHelpers{
+    CHelper{"spelunk_divq_u_64",
+            "static inline uint64_t spelunk_divq_u_64(uint64_t hi, uint64_t lo, uint64_t d) "
+            "{ if (!d || hi >= d) abort(); uint64_t q = 0; "
+            "for (unsigned i = 64; i-- > 0;) { uint64_t carry = hi >> 63; "
+            "hi = (hi << 1) | ((lo >> i) & 1); if (carry || hi >= d) "
+            "{ hi -= d; q |= UINT64_C(1) << i; } } return q; }"},
+    CHelper{"spelunk_divr_u_64",
+            "static inline uint64_t spelunk_divr_u_64(uint64_t hi, uint64_t lo, uint64_t d) "
+            "{ if (!d || hi >= d) abort(); for (unsigned i = 64; i-- > 0;) "
+            "{ uint64_t carry = hi >> 63; hi = (hi << 1) | ((lo >> i) & 1); "
+            "if (carry || hi >= d) hi -= d; } return hi; }"},
     CHelper{"cvtsd2ss", "static inline float cvtsd2ss(double x) { return (float)x; }"},
     CHelper{"cvtss2sd", "static inline double cvtss2sd(float x) { return (double)x; }"},
     CHelper{"cvtsi2sd", "static inline double cvtsi2sd(int64_t x) { return (double)x; }"},
@@ -223,10 +234,20 @@ std::string_view Emitter::c_memory_suffix(IrType type) {
         case IrType::I16: return "u16";
         case IrType::I32: return "u32";
         case IrType::I64: return "u64";
+        case IrType::I128: return "v128";
+        case IrType::I256: return "v256";
+        case IrType::I512: return "v512";
         case IrType::F32: return "f32";
         case IrType::F64: return "f64";
         default: return "unsupported";
     }
+}
+
+std::string Emitter::c_transport_cast(const IrValue& value, std::string rendered) const {
+    if (!options.c_source || is_float_type(value.type) || type_bits(value.type) > 64) return rendered;
+    const std::string type = rendered.starts_with('&') ? "void*"
+        : rendered.starts_with('"') ? "const char*" : c_type_name_for(value);
+    return std::format("({})(uintptr_t)({})", type, rendered);
 }
 
 std::string Emitter::c_address(const IrValue& value) const {
@@ -315,13 +336,19 @@ std::string Emitter::c_preamble(std::string_view body,
         body.find("spelunk_write_unsupported") != std::string_view::npos) {
         out += "#error Unsupported memory width in C export\n";
     }
-    if (body.find("__m128") != std::string_view::npos || body.find("_mm_") != std::string_view::npos) {
+    if (body.find("__m128") != std::string_view::npos ||
+        body.find("__m256") != std::string_view::npos ||
+        body.find("__m512") != std::string_view::npos ||
+        body.find("_mm_") != std::string_view::npos ||
+        body.find("spelunk_read_v") != std::string_view::npos ||
+        body.find("spelunk_write_v") != std::string_view::npos) {
         out += "#include <immintrin.h>\n";
     }
     struct Scalar { std::string_view suffix; std::string_view type; };
     constexpr std::array scalars{
         Scalar{"u8", "uint8_t"}, Scalar{"u16", "uint16_t"}, Scalar{"u32", "uint32_t"},
         Scalar{"u64", "uint64_t"}, Scalar{"f32", "float"}, Scalar{"f64", "double"},
+        Scalar{"v128", "__m128i"}, Scalar{"v256", "__m256i"}, Scalar{"v512", "__m512i"},
     };
     for (const auto& scalar : scalars) {
         const auto read = std::format("spelunk_read_{}", scalar.suffix);

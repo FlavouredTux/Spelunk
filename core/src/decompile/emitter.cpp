@@ -1,4 +1,5 @@
 #include <spelunk/decompile/emitter.hpp>
+#include <algorithm>
 
 #include <cstddef>
 #include <expected>
@@ -256,7 +257,10 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
                 return;
             }
             if (e.is_unbound_clobber_result(return_value)) return;
-            if (e.is_incidental_x86_fp_return(return_value)) return;
+            if (e.is_incidental_x86_fp_return(return_value)) {
+                saw_void_return = true;
+                return;
+            }
             if (e.renders_stack_chk_guard_value(return_value)) return;
             // ABI return registers are often wider than the source-level
             // value and usually appear behind an `Assign` to RAX. Prefer
@@ -275,6 +279,29 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
     // a sibling path often carries an unknown call's incidental r3 while
     // a known SDK void call proves the real source signature is void.
     if (e.is_ppc_abi() && saw_void_return) return "void";
+    if (saw_void_return && !candidates.empty() &&
+        std::ranges::all_of(candidates, [](const ReturnTypeCandidate& candidate) {
+            return type_bits(candidate.value.type) > 64;
+        })) return "void";
+    // A vector used for a memory copy is not return-type evidence when
+    // another exit only carries an unknown integer call result. The ABI
+    // cannot return through a different lane on each branch.
+    const bool has_scalar = std::ranges::any_of(candidates, [](const ReturnTypeCandidate& candidate) {
+        return type_bits(candidate.value.type) <= 64;
+    });
+    if (has_scalar) {
+        for (const auto& candidate : candidates) {
+            if (type_bits(candidate.value.type) <= 64) continue;
+            const auto* producer = e.def_stripped(candidate.value);
+            if (!producer) continue;
+            for (const auto& block : sf.ir->blocks) {
+                for (const auto& inst : block.insts) {
+                    if (inst.op == IrOp::Store && inst.src_count >= 2 &&
+                        e.def_stripped(inst.srcs[1]) == producer) return "void";
+                }
+            }
+        }
+    }
     if (candidates.empty()) return "void";
     // Pick the most-informative Return candidate. Many functions have
     // an early-return arm with `return 0;` (e.g. `if (!v0) return 0;`)

@@ -87,6 +87,26 @@ public:
         section_.data = std::span<const std::byte>(text_.data(), text_.size());
     }
 
+    void set_padding_after_wrapper(bool tail_call) {
+        text_.fill(std::byte{0x90});
+        text_[0] = tail_call ? std::byte{0xeb} : std::byte{0xc3};
+        if (tail_call) text_[1] = std::byte{0x5e};
+        text_[0x20] = std::byte{0xb8}; // padding decodes across the real entry
+        const std::array<unsigned char, 6> frame{0x55, 0x48, 0x89, 0xe5, 0x5d, 0xc3};
+        for (std::size_t i = 0; i < frame.size(); ++i) {
+            text_[0x21 + i] = static_cast<std::byte>(frame[i]);
+        }
+        text_[0x60] = std::byte{0xc3};
+        syms_.clear();
+        for (auto offset : {0u, 0x60u}) {
+            spelunk::Symbol fn;
+            fn.name = offset == 0 ? "wrapper" : "next_owner";
+            fn.addr = kBase + offset;
+            fn.kind = spelunk::SymbolKind::Function;
+            syms_.push_back(std::move(fn));
+        }
+    }
+
     void set_dense_prologues() {
         // Cross both the parallel-sweep and dense-hit thresholds. Each
         // slot contains aligned and unaligned frame setups, plus a weaker
@@ -424,6 +444,24 @@ void test_dense_unaligned_frame_entry_is_retained() {
           "numeric selection resolves to the requested real entry");
 }
 
+void test_padding_does_not_shadow_entry() {
+    for (bool tail_call : {false, true}) {
+        MockBinary binary;
+        binary.set_padding_after_wrapper(tail_call);
+        for (auto mode : {spelunk::EnumerateMode::Cheap, spelunk::EnumerateMode::Auto}) {
+            const auto fns = spelunk::enumerate_functions(binary, mode);
+            check(std::ranges::find(fns, 0x401021, &spelunk::DiscoveredFunction::addr) != fns.end(),
+                  "entry after unreachable padding survives overlap filtering");
+        }
+        const auto containing = spelunk::containing_function(binary, 0x401021);
+        check(containing && containing->entry == 0x401021,
+              "padding does not extend wrapper over the next entry");
+        const auto numeric = spelunk::resolve_function(binary, "0x401021");
+        check(numeric && numeric->start == 0x401021,
+              "numeric selection after padding resolves to the actual function");
+    }
+}
+
 void test_arm64_prologue_discovery() {
     Arm64MockBinary b;
     auto hits = spelunk::discover_from_prologues(b);
@@ -495,6 +533,7 @@ int main() {
     test_stack_alloc_after_frame_setup_not_split();
     test_candidate_inside_instruction_is_rejected();
     test_dense_unaligned_frame_entry_is_retained();
+    test_padding_does_not_shadow_entry();
     test_arm64_prologue_discovery();
     test_named_code_addresses_without_executable_flags();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

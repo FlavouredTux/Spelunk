@@ -1700,6 +1700,10 @@ if(Python3_Interpreter_FOUND)
                     "${CMAKE_SOURCE_DIR}/tests/export_regressions_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
             set_tests_properties(x64_export_regressions PROPERTIES TIMEOUT 120)
+            add_test(NAME cmpss_export_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/cmpss_export_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
+            set_tests_properties(cmpss_export_semantics PROPERTIES TIMEOUT 120)
         endif()
     endif()
     add_test(
@@ -1751,6 +1755,8 @@ if(Python3_Interpreter_FOUND)
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/elf_export_test.py"
                 --spelunk "$<TARGET_FILE:spelunk_cli>" --clang "${SPELUNK_MACHO_TEST_CLANG}"
                 --fixtures "${CMAKE_SOURCE_DIR}/tests/fixtures")
+        add_test(NAME elf_export_guard_unit
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/elf_export_guard_test.py")
         set_tests_properties(elf_c_export_check PROPERTIES TIMEOUT 300)
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND

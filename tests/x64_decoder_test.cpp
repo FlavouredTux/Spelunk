@@ -457,6 +457,52 @@ struct X87Case {
     const char* text;
 };
 
+void test_cmpss() {
+    const spelunk::X64Decoder decoder;
+    for (unsigned predicate = 0; predicate < 8; ++predicate) {
+        const auto code = xb(0xF3, 0x0F, 0xC2, 0xCA, predicate);
+        const auto insn = decoder.decode(code, 0x401000);
+        check_eq(insn.has_value(), true, "cmpss register decode");
+        if (!insn) continue;
+        check_eq(insn->mnemonic, M::Cmpss, "cmpss mnemonic");
+        check_eq(insn->length, 5, "cmpss length includes immediate");
+        check_eq(insn->num_operands, 3, "cmpss operand count");
+        check_eq(insn->operands[0].reg, spelunk::Reg::Xmm1, "cmpss destination");
+        check_eq(insn->operands[1].reg, spelunk::Reg::Xmm2, "cmpss source");
+        check_eq(insn->operands[2].imm.value, predicate, "cmpss predicate");
+        check_eq(insn->prefixes.rep, false, "cmpss consumes F3 prefix");
+        const auto ir = lift_one(code);
+        bool mask = false;
+        for (const auto& i : ir.blocks[0].insts) {
+            mask |= i.op == spelunk::IrOp::Intrinsic && i.dst.type == spelunk::IrType::I128 &&
+                    i.src_count == 2 && i.srcs[0].type == spelunk::IrType::I128 &&
+                    i.srcs[1].type == spelunk::IrType::F32;
+            check_eq(i.dst.kind == spelunk::IrValueKind::Flag, false, "cmpss leaves flags intact");
+        }
+        check_eq(mask, true, "cmpss retains upper lanes in mask result");
+    }
+    const auto memory = xb(0xF3, 0x44, 0x0F, 0xC2, 0x05, 0x10, 0, 0, 0, 0x07);
+    const auto insn = decoder.decode(memory, 0x401000);
+    check_eq(insn.has_value(), true, "cmpss RIP-relative decode");
+    if (insn) {
+        check_eq(insn->length, 10, "cmpss memory length");
+        check_eq(insn->operands[0].reg, spelunk::Reg::Xmm8, "cmpss extended register");
+        check_eq(insn->operands[1].mem.size, 4, "cmpss memory width");
+    }
+    const auto ir = lift_one(memory);
+    bool scalar_load = false;
+    for (const auto& i : ir.blocks[0].insts)
+        scalar_load |= i.op == spelunk::IrOp::Load && i.dst.type == spelunk::IrType::F32;
+    check_eq(scalar_load, true, "cmpss memory reads only four bytes");
+    for (std::size_t n = 0; n < memory.size(); ++n)
+        check_eq(decoder.decode(std::span(memory).first(n), 0x401000).has_value(), false,
+                 "truncated cmpss rejected");
+    for (const auto& code : {xb(0xC5, 0xF2, 0xC2, 0xC2, 0x01),
+                            xb(0x62, 0xF1, 0x76, 0x08, 0xC2, 0xC2, 0x01)})
+        check_eq(decoder.decode(code, 0x401000).has_value(), false,
+                 "VCMPSS does not inherit legacy predicate or destination semantics");
+}
+
 struct X87Bad {
     std::vector<std::byte> code;
     const char* what;
@@ -636,6 +682,7 @@ void test_x87_db_de_df_integer_pop_fini() {
 }  // namespace
 
 int main() {
+    test_cmpss();
     test_popcnt_f3_0f_b8();
     test_flag_control_one_byte_opcodes();
     test_rotate_through_carry_group2();

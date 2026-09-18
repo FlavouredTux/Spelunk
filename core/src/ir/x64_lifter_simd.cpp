@@ -1,5 +1,6 @@
 // Scalar floating point and packed SIMD.
 
+#include <array>
 #include <cstddef>
 #include <format>
 #include <string>
@@ -13,6 +14,28 @@
 #include "x64_lifter_internal.hpp"
 
 namespace spelunk::x64_lift {
+
+void lift_cmpss(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3 ||
+        insn.operands[2].kind != Operand::Kind::Immediate) return;
+    static constexpr std::array names{
+        "_mm_cmpeq_ss", "_mm_cmplt_ss", "_mm_cmple_ss", "_mm_cmpunord_ss",
+        "_mm_cmpneq_ss", "_mm_cmpnlt_ss", "_mm_cmpnle_ss", "_mm_cmpord_ss",
+    };
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = names[static_cast<u64>(insn.operands[2].imm.value) & 7u];
+    i.dst = ctx.temp(IrType::I128);
+    // The destination contributes all 128 bits; the source contributes only
+    // its low float, including a four-byte load for the memory form.
+    i.srcs[0] = read_xmm(ctx, insn.operands[0], IrType::I128);
+    i.srcs[1] = materialize_fp_rvalue(insn.operands[1], ctx, IrType::F32);
+    i.src_count = 2;
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, IrType::I128);
+}
 
 // Read an operand as a scalar floating-point value at the requested type
 // (F32 or F64). Xmm registers come back as `IrValue::make_reg(r, t)`;
@@ -31,6 +54,25 @@ IrValue materialize_fp_rvalue(const Operand& op, LiftCtx& ctx, IrType t) {
 // Store a scalar FP value back to an xmm destination or memory operand.
 void store_fp_lvalue(const Operand& op, IrValue value, LiftCtx& ctx, IrType t) {
     if (op.kind == Operand::Kind::Register) {
+        if (ctx.preserve_scalar_lanes && is_xmm(op.reg)) {
+            const auto& insn = *ctx.insn;
+            const bool memory_load = (insn.mnemonic == Mnemonic::MovssLoad ||
+                                      insn.mnemonic == Mnemonic::MovsdXmm) &&
+                                     insn.operands[1].kind == Operand::Kind::Memory;
+            const bool vex = (insn.x86_vex || insn.x86_evex) && insn.num_operands >= 3;
+            IrInst lane;
+            lane.op = IrOp::Intrinsic;
+            lane.dst = ctx.temp(IrType::I128);
+            lane.name = t == IrType::F32 ? "xmm.insert_f32" : "xmm.insert_f64";
+            lane.srcs[0] = memory_load ? ctx.imm(0, IrType::I128)
+                : IrValue::make_reg(vex ? insn.operands[1].reg : op.reg, IrType::I128);
+            lane.srcs[1] = value;
+            lane.src_count = 2;
+            const auto result = lane.dst;
+            ctx.emit(std::move(lane));
+            ctx.emit_assign(IrValue::make_reg(op.reg, IrType::I128), result);
+            return;
+        }
         ctx.emit_assign(IrValue::make_reg(op.reg, t), value);
         return;
     }
@@ -99,6 +141,10 @@ IrValue read_xmm(LiftCtx& ctx, const Operand& op, IrType t) {
 }
 
 void write_xmm(LiftCtx& ctx, const Operand& op, IrValue v, IrType t) {
+    if (ctx.preserve_scalar_lanes && is_float_type(t)) {
+        store_fp_lvalue(op, v, ctx, t);
+        return;
+    }
     if (op.kind == Operand::Kind::Register) {
         if (!is_x86_vector(op.reg)) {
             v = ctx.match_size(v, operand_type(op), /*sign_ext=*/false);

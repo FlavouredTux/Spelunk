@@ -21,9 +21,7 @@ from check_pseudocode import check_source
 
 # fixture -> what is still missing from its export.
 KNOWN_GAPS = {
-    'fp_scalar': 'scalar doubles flow into vector intrinsic operands (_mm_max_sd)',
     'dbg_target_ofp': 'omit-frame-pointer target reads rax with no reaching definition',
-    'indirect_tail': 'xmm0 is read at entry with no reaching definition',
     'indirect_trace': 'op_t is a function-pointer typedef debug info gives by name only',
     'decoder_misc': 'REP CMPS/SCAS/LODS and sized global arrays are not modelled',
     'dbg_exec_parent': 'a string pointer loaded from memory is passed to %s as uint64_t',
@@ -38,9 +36,15 @@ def main(args):
     for fixture in fixtures:
         emitted = subprocess.run([args.spelunk, '--no-cache', '--emit-c', str(fixture)],
                                  capture_output=True, text=True, timeout=120)
-        if emitted.returncode != 0:
-            continue  # not a decompilable image (raw blobs, debugger payloads)
         name = fixture.stem
+        if emitted.returncode != 0:
+            assert emitted.returncode == 1, (name, 'unexpected exit', emitted.returncode, emitted.stderr)
+            if 'C export for ' in emitted.stderr and 'is incomplete:' in emitted.stderr:
+                assert not emitted.stdout, (name, 'incomplete export leaked partial C')
+                failed[name] = [emitted.stderr.strip()]
+            else:
+                raise AssertionError((name, 'unexpected export failure', emitted.stderr))
+            continue
         diagnostics = check_source(emitted.stdout, compiler=args.clang,
                                    filename=name + '.c')
         if diagnostics:

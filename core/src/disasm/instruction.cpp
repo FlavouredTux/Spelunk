@@ -473,6 +473,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Cvtss2sd:      return "cvtss2sd";
         case Mnemonic::Ucomiss:       return "ucomiss";
         case Mnemonic::Comiss:        return "comiss";
+        case Mnemonic::Cmpss:         return "cmpss";
 
         case Mnemonic::MovsdXmm:      return "movsd";
         case Mnemonic::MovsdXmmStore: return "movsd";

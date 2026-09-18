@@ -234,6 +234,7 @@ void lift_instruction(LiftCtx& ctx) {
         // difference is the QNaN-vs-SNaN exception behaviour, which the
         // emitted code reads identically.
         case Mnemonic::Comiss:  lift_ucomi(ctx, IrType::F32); break;
+        case Mnemonic::Cmpss:   lift_cmpss(ctx); break;
         case Mnemonic::Comisd:  lift_ucomi(ctx, IrType::F64); break;
 
         // ---- Packed SSE: arithmetic / logical / unpack / shuffle / compare.
@@ -505,6 +506,13 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
     ir.end   = fn.end;
     ir.name  = fn.name;
 
+    // Compare masks can flow into full-width bitwise selects. Keep scalar
+    // writes in their XMM containers throughout these functions, including
+    // across basic-block boundaries, rather than inventing upper lanes later.
+    bool preserve_scalar_lanes = false;
+    for (const auto& block : fn.blocks) for (const auto& insn : block.instructions)
+        preserve_scalar_lanes |= insn.mnemonic == Mnemonic::Cmpss;
+
     ir.blocks.reserve(fn.blocks.size());
     for (const auto& bb : fn.blocks) {
         IrBlock irb;
@@ -528,6 +536,7 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
         ctx.fn  = &ir;
         ctx.blk = &dst_bb;
         ctx.abi = abi_;
+        ctx.preserve_scalar_lanes = preserve_scalar_lanes;
 
         for (const auto& insn : src_bb.instructions) {
             ctx.insn = &insn;

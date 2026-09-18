@@ -219,6 +219,7 @@ enum class Mnemonic : u16 {
     Cvtss2sd,         // f64 <- f32
     Ucomiss,          // compare, sets ZF/PF/CF
     Comiss,           // ordered compare (signaling-NaN), same flags as ucomiss
+    Cmpss,            // scalar compare mask; upper 96 destination bits preserved
     // Double-precision (F2 0F ..):
     MovsdXmm,         // movsd xmm, xmm/m64   (distinct from the string op)
     MovsdXmmStore,    // movsd xmm/m64, xmm

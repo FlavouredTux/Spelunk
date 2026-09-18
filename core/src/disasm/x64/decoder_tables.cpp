@@ -391,6 +391,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     t[0x5D] = op(Mnemonic::Minss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x5E] = op(Mnemonic::Divss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x5F] = op(Mnemonic::Maxss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0xC2] = op(Mnemonic::Cmpss,       OpSpec::Vx, OpSpec::Wss, OpSpec::Ib, true);
     // Existing packed-integer SSE2 entries.
     t[0x6F] = op(Mnemonic::Movdqu,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x70] = op(Mnemonic::Pshufhw,     OpSpec::Vx, OpSpec::Wx, OpSpec::Ib,   true);

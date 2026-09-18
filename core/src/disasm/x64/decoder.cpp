@@ -338,6 +338,10 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     }
 
     OpcodeEntry vector_entry;
+    if ((ctx.vex || ctx.evex) && entry->mnemonic == Mnemonic::Cmpss) {
+        return std::unexpected(Error::not_implemented(std::format(
+            "x64: unsupported vector-prefix form of cmpss at {:#x}", addr)));
+    }
     if ((ctx.vex || ctx.evex) && vex_has_nondestructive_source(entry->mnemonic)) {
         vector_entry = *entry;
         if (entry->op3 == OpSpec::None) {

@@ -23,6 +23,7 @@ struct LiftCtx {
     IrBlock*           blk  = nullptr;
     const Instruction* insn = nullptr;
     Abi                abi  = Abi::SysVAmd64;
+    bool preserve_scalar_lanes = false;
 
     // Last flag-setting computation in this block, if any. Used by Jp/Jnp/
     // Setp/Cmovp to compute PF from the actual result rather than emitting
@@ -467,6 +468,7 @@ void lift_intrinsic(LiftCtx& ctx, std::string_view name);
 void store_fp_lvalue(const Operand& op, IrValue value, LiftCtx& ctx, IrType t);
 
 void lift_fp_binop(LiftCtx& ctx, IrOp op, IrType t);
+void lift_cmpss(LiftCtx& ctx);
 
 void lift_fp_mov(LiftCtx& ctx, IrType t, bool storing);
 

@@ -52,6 +52,7 @@ namespace {
 // preamble the caller has to supply.
 struct CHelper { std::string_view name; std::string_view definition; };
 constexpr std::array kCHelpers{
+    CHelper{"spelunk_max_sd", "static inline double spelunk_max_sd(double a, double b) { return a > b ? a : b; }"},
     CHelper{"spelunk_divq_u_64",
             "static inline uint64_t spelunk_divq_u_64(uint64_t hi, uint64_t lo, uint64_t d) "
             "{ if (!d || hi >= d) abort(); uint64_t q = 0; "
@@ -477,6 +478,7 @@ std::string Emitter::c_forward_type_declarations(std::string_view context) const
 }
 
 std::string Emitter::c_intrinsic_name(const IrInst& inst) {
+    if (inst.name == "_mm_max_sd") return "spelunk_max_sd";
     // `bswap` and `popcnt` carry their width in the destination type, not in
     // the name; every helper is width-specific, so resolve it here.
     if (inst.name == "bswap") {
@@ -493,6 +495,26 @@ std::string Emitter::c_intrinsic_name(const IrInst& inst) {
 }
 
 std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const {
+    if (options.c_source && inst.src_count == 2 &&
+        (inst.name == "xmm.insert_f32" || inst.name == "xmm.insert_f64")) {
+        const bool single = inst.name == "xmm.insert_f32";
+        const auto suffix = single ? "ps" : "pd";
+        const auto scalar = single ? "ss" : "sd";
+        const auto value = expr(inst.srcs[1], depth, 0);
+        if (inst.srcs[0].kind == IrValueKind::Imm && inst.srcs[0].imm == 0)
+            return std::format("_mm_cast{}_si128(_mm_set_{}({}))", suffix, scalar, value);
+        return std::format("_mm_cast{0}_si128(_mm_move_{1}(_mm_castsi128_{0}({2}), _mm_set_{1}({3})))",
+                           suffix, scalar, expr(inst.srcs[0], depth, 0), value);
+    }
+    const bool scalar_compare = inst.name.starts_with("_mm_cmp") &&
+                                inst.name.ends_with("_ss") && inst.src_count == 2;
+    const bool packed_logic = inst.name == "_mm_and_ps" || inst.name == "_mm_andnot_ps" ||
+                              inst.name == "_mm_or_ps" || inst.name == "_mm_xor_ps";
+    if (options.c_source && inst.src_count == 2 &&
+        (inst.name == "_mm_xor_si128" || inst.name == "_mm_xor_ps" || inst.name == "_mm_xor_pd") &&
+        same_ssa_value(inst.srcs[0], inst.srcs[1])) {
+        return "_mm_setzero_si128()";
+    }
     // REP string operands are RDI / RSI / RAX / RCX: two addresses, or an
     // address and a fill value, plus a count. The helpers take them as
     // uintptr_t / uint64_t, so cast at the call site rather than relying on
@@ -503,6 +525,11 @@ std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const 
     for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
         if (i > 0) args += ", ";
         std::string rendered = expr(inst.srcs[i], depth, 0);
+        if (options.c_source && (scalar_compare || packed_logic)) {
+            rendered = scalar_compare && i == 1
+                ? std::format("_mm_set_ss({})", rendered)
+                : std::format("_mm_castsi128_ps({})", rendered);
+        }
         if (!rep) { args += std::move(rendered); continue; }
         const bool address = i == 0 || (i == 1 && !fill);
         args += std::format("({})({})",
@@ -511,6 +538,9 @@ std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const 
     if (!options.c_source) return std::format("{}({})", inst.name, args);
     std::string name = c_intrinsic_name(inst);
     note_c_intrinsic(name, inst.src_count);
+    if (scalar_compare || packed_logic) {
+        return std::format("_mm_castps_si128({}({}))", name, args);
+    }
     return std::format("{}({})", name, args);
 }
 

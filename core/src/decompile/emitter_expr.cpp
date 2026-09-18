@@ -24,6 +24,17 @@ namespace spelunk::emit {
 
 std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
     if (const auto* name = scoped_ssa_name(v)) return *name;
+    if (options.c_source && is_float_type(v.type)) {
+        const auto* definition = def_stripped(v);
+        if (definition && definition->dst.type == IrType::I128 &&
+            c_type_name_for(definition->dst) == "__m128i" &&
+            !is_fp_call_return(definition->dst)) {
+            const auto vector = expr(definition->dst, depth + 1);
+            return v.type == IrType::F32
+                ? std::format("_mm_cvtss_f32(_mm_castsi128_ps({}))", vector)
+                : std::format("_mm_cvtsd_f64(_mm_castsi128_pd({}))", vector);
+        }
+    }
     // Recognize compiler flag-based compare idioms and emit direct C comparisons.
     if (v.type == IrType::I1 &&
         (v.kind == IrValueKind::Temp || v.kind == IrValueKind::Flag)) {
@@ -610,7 +621,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // already chase the destination to a source expression, an
                 // explicit `f31 = value;`/`r30 = ptr;` line is dead
                 // architectural noise even when the alias has several uses.
-                if (is_ppc_abi() &&
+                if ((is_ppc_abi() || options.c_source) &&
                     !renders_raw_arch_reg_name(inst.dst)) return "";
                 // With rvalue forwarding in render_reg_leaf, a single reader
                 // inlines the source expression directly. The `reg = expr;`

@@ -477,6 +477,13 @@ Emitter::try_simplify_flag(const IrValue& v, int depth, bool negate,
     };
     auto emit_cmp = [&](std::string_view op, std::string_view neg_op,
                         const IrValue& a, const IrValue& b, bool sign_cmp) {
+        if (negate && op != "==" && op != "!=" &&
+            (is_float_type(a.type) || is_float_type(b.type))) {
+            // !(a < b) includes unordered inputs; a >= b does not.
+            return wrap_if_lt("!(" + render_cmp(op, a, b, depth, sign_cmp,
+                                                in_bool_ctx, 0) + ")",
+                              Prec::Unary, min_prec);
+        }
         return render_cmp(negate ? neg_op : op, a, b, depth, sign_cmp,
                           in_bool_ctx, min_prec);
     };

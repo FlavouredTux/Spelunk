@@ -71,8 +71,13 @@ constexpr std::array kCHelpers{
     CHelper{"cvtss2sd", "static inline double cvtss2sd(float x) { return (double)x; }"},
     CHelper{"cvtsi2sd", "static inline double cvtsi2sd(int64_t x) { return (double)x; }"},
     CHelper{"cvtsi2ss", "static inline float cvtsi2ss(int64_t x) { return (float)x; }"},
-    CHelper{"cvttsd2si", "static inline int64_t cvttsd2si(double x) { return (int64_t)x; }"},
-    CHelper{"cvttss2si", "static inline int64_t cvttss2si(float x) { return (int64_t)x; }"},
+    // Compare before casting: NaNs and out-of-range values produce x86's
+    // masked-invalid result. Truncation permits fractions below INT32_MIN.
+    CHelper{"spelunk_cvttsd2si_32", "static inline int32_t spelunk_cvttsd2si_32(double x) { return x > -2147483649.0 && x < 0x1p31 ? (int32_t)x : INT32_MIN; }"},
+    CHelper{"spelunk_cvttss2si_32", "static inline int32_t spelunk_cvttss2si_32(float x) { return x > -2147483649.0 && x < 0x1p31 ? (int32_t)x : INT32_MIN; }"},
+    CHelper{"spelunk_cvttsd2si_64", "static inline int64_t spelunk_cvttsd2si_64(double x) { return x >= -0x1p63 && x < 0x1p63 ? (int64_t)x : INT64_MIN; }"},
+    CHelper{"spelunk_cvttss2si_64", "static inline int64_t spelunk_cvttss2si_64(float x) { return x >= -0x1p63 && x < 0x1p63 ? (int64_t)x : INT64_MIN; }"},
+    CHelper{"unordered_fp_compare", "static inline bool unordered_fp_compare(double a, double b) { return isnan(a) || isnan(b); }"},
     CHelper{"carry_add",
             "static inline int carry_add(uint64_t a, uint64_t b) "
             "{ uint64_t r; return __builtin_add_overflow(a, b, &r); }"},
@@ -484,6 +489,9 @@ std::string Emitter::c_forward_type_declarations(std::string_view context) const
 }
 
 std::string Emitter::c_intrinsic_name(const IrInst& inst) {
+    if (inst.name == "cvttss2si" || inst.name == "cvttsd2si") {
+        return std::format("spelunk_{}_{}", inst.name, type_bits(inst.dst.type));
+    }
     if (inst.name == "_mm_max_sd") return "spelunk_max_sd";
     if (inst.name == "_mm_min_sd") return "spelunk_min_sd";
     if (inst.name == "_mm_max_ss") return "spelunk_max_ss";

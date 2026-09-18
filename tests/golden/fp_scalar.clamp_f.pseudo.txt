@@ -1,8 +1,9 @@
 // clamp_f
 float clamp_f(float x, float lo, float hi) {
-  if (lo != x && lo >= x) {
+  bool t0 = unordered_fp_compare(lo, x);
+  if ((!t0 && lo != x) && (!t0 && !(lo < x))) {
     return lo;
   }
-  float t5 = _mm_min_ss(hi, x);
-  return t5;
+  float t8 = _mm_min_ss(hi, x);
+  return t8;
 }

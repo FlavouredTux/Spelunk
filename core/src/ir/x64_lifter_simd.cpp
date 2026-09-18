@@ -377,30 +377,29 @@ void lift_gpr_scalar_from_xmm(LiftCtx& ctx) {
 //   ordered:    ZF = (a == b)   CF = (a < b)   PF = 0
 //   unordered:  ZF = 1          CF = 1         PF = 1     (one of a, b is NaN)
 //
-// We model the ordered case directly with CmpEq / CmpUlt - that's what
-// downstream `ja`/`jb`/`je` need to render as `if (a > b)` etc, and it's
-// correct for any compare where neither operand is NaN (the overwhelming
-// common case).
-//
-// For PF (the "unordered" predicate): we record both operands on the
-// LiftCtx; a subsequent Jp/Jnp/Setp/Cmovp picks them up and lowers to an
-// `unordered_fp_compare(a, b)` intrinsic instead of the integer XOR-fold
-// parity formula that's correct for arith results but meaningless after
-// a scalar-FP compare. NaN-aware codecs (audio decoders, math kernels)
-// rely on `jp` after `ucomi*` to detect unordered - without this they
-// would silently take the ordered branch. `last_flag_src` is intentionally
-// left as-is: it carries integer-arith provenance, the FP pair takes
-// precedence in the parity-lowering path.
+// Materialize unordered at the compare, so a later XMM write cannot change
+// the parity predicate. SF and OF are cleared even if an integer operation
+// left them set before the comparison.
 void lift_ucomi(LiftCtx& ctx, IrType t) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
     IrValue a = materialize_fp_rvalue(insn.operands[0], ctx, t);
     IrValue b = materialize_fp_rvalue(insn.operands[1], ctx, t);
     if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
-    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq,  a, b));
-    ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpUlt, a, b));
+    IrInst unordered;
+    unordered.op = IrOp::Intrinsic;
+    unordered.name = "unordered_fp_compare";
+    unordered.dst = ctx.temp(IrType::I1);
+    unordered.srcs[0] = a;
+    unordered.srcs[1] = b;
+    unordered.src_count = 2;
+    const auto pf = unordered.dst;
+    ctx.emit(std::move(unordered));
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_binop_i1(IrOp::Or, pf, ctx.emit_cmp(IrOp::CmpEq, a, b)));
+    ctx.emit_set_flag(Flag::Cf, ctx.emit_binop_i1(IrOp::Or, pf, ctx.emit_cmp(IrOp::CmpUlt, a, b)));
+    ctx.emit_set_flag(Flag::Sf, ctx.imm(0, IrType::I1));
     ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
-    ctx.last_pf_value = {};
+    ctx.last_pf_value = pf;
     ctx.last_fp_cmp_a = a;
     ctx.last_fp_cmp_b = b;
 }

@@ -671,6 +671,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         prepend_untyped_pointer_note(out, header);
     }
 
+    if (options.c_source) {
+        if (auto reason = incomplete_c_export_reason(out)) {
+            return std::unexpected(Error::not_implemented(std::format(
+                "C export for {} is incomplete: {}; use -p to inspect the partial result",
+                name, *reason)));
+        }
+    }
+
     return out;
 }
 

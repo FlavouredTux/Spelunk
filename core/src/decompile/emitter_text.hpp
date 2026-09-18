@@ -10,6 +10,9 @@
 
 namespace spelunk::emit {
 
+[[nodiscard]] std::optional<std::string_view>
+incomplete_c_export_reason(std::string_view text);
+
 // Mask literals and comments with spaces, preserving offsets and newlines.
 [[nodiscard]] std::string code_only_text(std::string_view text);
 

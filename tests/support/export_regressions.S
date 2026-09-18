@@ -105,4 +105,33 @@ export_stale:
     pop %rbx
     ret
 .size export_stale, .-export_stale
+
+.globl export_vprintf
+.type export_vprintf, @function
+export_vprintf:
+    mov %rdi, %rsi
+    lea .Lformat(%rip), %rdi
+    xor %eax, %eax
+    jmp vprintf@PLT
+.size export_vprintf, .-export_vprintf
+
+.globl export_x87_copy
+.type export_x87_copy, @function
+export_x87_copy:
+    flds (%rsi)
+    fstps (%rdi)
+    xor %eax, %eax
+    ret
+.size export_x87_copy, .-export_x87_copy
+
+.globl export_undecoded
+.type export_undecoded, @function
+export_undecoded:
+    xor %eax, %eax
+    .byte 0x0f, 0x38, 0xff, 0xc0
+    ret
+.size export_undecoded, .-export_undecoded
+
+.section .rodata
+.Lformat: .string "%d\n"
 .section .note.GNU-stack,"",@progbits

@@ -103,6 +103,11 @@ Without `-s` the default symbol is `main`. `--symbols FILE` batches many
 functions through one load; `--json` is available where a machine-readable
 form makes sense.
 
+`--emit-c` fails when the function has undecoded control-flow targets or the
+output still contains unresolved values, types, or operations. Use `-p` to
+inspect partial pseudo-C; it is not a compilable or verified replacement for
+the original function.
+
 Whole-binary queries include `--functions`, `--strings`, `--xrefs`,
 `--refs-to`, `--callees`, `--vtables` and `--identify`.
 `spelunk --help <topic>` lists the rest by area (`view`, `syms`, `xrefs`,

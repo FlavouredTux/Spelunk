@@ -53,6 +53,9 @@ namespace {
 struct CHelper { std::string_view name; std::string_view definition; };
 constexpr std::array kCHelpers{
     CHelper{"spelunk_max_sd", "static inline double spelunk_max_sd(double a, double b) { return a > b ? a : b; }"},
+    CHelper{"spelunk_min_sd", "static inline double spelunk_min_sd(double a, double b) { return a < b ? a : b; }"},
+    CHelper{"spelunk_max_ss", "static inline float spelunk_max_ss(float a, float b) { return a > b ? a : b; }"},
+    CHelper{"spelunk_min_ss", "static inline float spelunk_min_ss(float a, float b) { return a < b ? a : b; }"},
     CHelper{"spelunk_divq_u_64",
             "static inline uint64_t spelunk_divq_u_64(uint64_t hi, uint64_t lo, uint64_t d) "
             "{ if (!d || hi >= d) abort(); uint64_t q = 0; "
@@ -333,6 +336,9 @@ void Emitter::note_c_call(const IrInst& inst, std::string_view name,
 std::string Emitter::c_preamble(std::string_view body,
                                 std::string_view scope_decls) const {
     std::string out = "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <math.h>\n";
+    if (text_contains_identifier(body, "wint_t") || text_contains_identifier(body, "wchar_t")) {
+        out += "#include <wchar.h>\n";
+    }
     if (body.find("spelunk_read_unsupported") != std::string_view::npos ||
         body.find("spelunk_write_unsupported") != std::string_view::npos) {
         out += "#error Unsupported memory width in C export\n";
@@ -479,6 +485,9 @@ std::string Emitter::c_forward_type_declarations(std::string_view context) const
 
 std::string Emitter::c_intrinsic_name(const IrInst& inst) {
     if (inst.name == "_mm_max_sd") return "spelunk_max_sd";
+    if (inst.name == "_mm_min_sd") return "spelunk_min_sd";
+    if (inst.name == "_mm_max_ss") return "spelunk_max_ss";
+    if (inst.name == "_mm_min_ss") return "spelunk_min_ss";
     // `bswap` and `popcnt` carry their width in the destination type, not in
     // the name; every helper is width-specific, so resolve it here.
     if (inst.name == "bswap") {

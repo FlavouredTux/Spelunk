@@ -436,6 +436,16 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
     if (rendered_call_args.size() < call_args.size()) {
         rendered_call_args.resize(call_args.size());
     }
+    std::vector<std::string> printf_types;
+    const auto format_index = variadic_format_index(direct_name);
+    // The v* variants take one va_list, not the format's individual arguments.
+    if (options.c_source && !direct_name.starts_with('v') &&
+        direct_name.find("printf") != std::string::npos &&
+        format_index && *format_index < call_args.size()) {
+        if (auto format = resolve_string_value(call_args[*format_index])) {
+            printf_types = printf_argument_types(*format);
+        }
+    }
     for (std::size_t arg_i = 0; arg_i < call_args.size(); ++arg_i) {
         if (low_byte_merge_has_raw_carrier(call_args[arg_i])) {
             if (auto payload = match_low_byte_setcc_merge(call_args[arg_i]);
@@ -478,6 +488,16 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
             if (type.ends_with('*')) {
                 const std::string value = rendered_call_args[arg_i].empty() ? expr(call_args[arg_i]) : rendered_call_args[arg_i];
                 rendered_call_args[arg_i] = std::format("({})({})", type, value);
+            }
+        }
+        if (options.c_source && format_index && arg_i > *format_index &&
+            arg_i - *format_index - 1 < printf_types.size()) {
+            const std::string& type = printf_types[arg_i - *format_index - 1];
+            if (!type.empty()) {
+                const std::string value = rendered_call_args[arg_i].empty() ? expr(call_args[arg_i]) : rendered_call_args[arg_i];
+                const bool floating = type == "double" || type == "long double";
+                rendered_call_args[arg_i] = std::format("({}){}({})", type,
+                    floating ? "" : "(uintptr_t)", value);
             }
         }
     }

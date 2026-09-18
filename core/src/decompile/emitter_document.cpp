@@ -185,10 +185,10 @@ file_scope_declarations(const Emitter& e, const std::string& declaration_context
         have_globals = true;
         if (ty.find("(*") != std::string::npos) {
             out += std::format("extern {};\n", ty);
-        } else if (ty.ends_with("[]")) {
-            out += std::format("extern {} {}[];\n",
-                               std::string_view(ty).substr(0, ty.size() - 2),
-                               name);
+        } else if (auto bracket = ty.find('['); bracket != std::string::npos && ty.ends_with(']')) {
+            out += std::format("extern {} {}{};\n",
+                               std::string_view(ty).substr(0, bracket), name,
+                               std::string_view(ty).substr(bracket));
         } else {
             out += std::format("extern {} {};\n", ty, name);
         }

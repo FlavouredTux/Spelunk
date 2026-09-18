@@ -703,6 +703,9 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             // `sqrtss(x)` that the lifter emits deliberately - stay as
             // calls because they carry real dataflow.
             if (inst.name.starts_with("x64.")) {
+                if (options.c_source) {
+                    return std::format("/* unresolved intrinsic: {}({}) */", inst.name, args);
+                }
                 return std::format("/* {}({}) */", inst.name, args);
             }
             if (inst.name.starts_with("ppc.ps_cmp") &&

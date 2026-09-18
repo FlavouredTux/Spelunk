@@ -23,9 +23,7 @@ from check_pseudocode import check_source
 KNOWN_GAPS = {
     'dbg_target_ofp': 'omit-frame-pointer target reads rax with no reaching definition',
     'indirect_trace': 'op_t is a function-pointer typedef debug info gives by name only',
-    'decoder_misc': 'REP CMPS/SCAS/LODS and sized global arrays are not modelled',
-    'dbg_exec_parent': 'a string pointer loaded from memory is passed to %s as uint64_t',
-    'printf_noise': 'a string pointer loaded from memory is passed to %s as uint64_t',
+    'decoder_misc': 'carry-rotate intrinsics are not modelled by the C exporter',
 }
 
 

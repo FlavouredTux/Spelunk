@@ -2,6 +2,8 @@
 
 #include "emitter_tables.hpp"
 
+#include <algorithm>
+
 #include <cstddef>
 #include <optional>
 #include <string_view>
@@ -49,6 +51,67 @@ std::optional<u8> variadic_format_index(std::string_view n) noexcept {
         if (v.name == n) return v.format_index;
     }
     return std::nullopt;
+}
+
+std::vector<std::string> printf_argument_types(std::string_view fmt) {
+    std::vector<std::string> types;
+    std::size_t sequential = 0;
+    auto position = [&](std::size_t& i) -> std::optional<std::size_t> {
+        std::size_t j = i, number = 0;
+        while (j < fmt.size() && fmt[j] >= '0' && fmt[j] <= '9') {
+            number = std::min<std::size_t>(256, number * 10 + static_cast<std::size_t>(fmt[j++] - '0'));
+        }
+        if (j == i || j == fmt.size() || fmt[j] != '$' || number == 0 || number > 255) return {};
+        i = j + 1;
+        return number - 1;
+    };
+    auto add = [&](std::optional<std::size_t> pos, std::string type) {
+        const std::size_t index = pos ? *pos : sequential++;
+        if (index >= 255) return;
+        if (types.size() <= index) types.resize(index + 1);
+        types[index] = std::move(type);
+    };
+    for (std::size_t i = 0; i < fmt.size();) {
+        if (fmt[i++] != '%') continue;
+        if (i == fmt.size()) break;
+        if (fmt[i] == '%') { ++i; continue; }
+        const auto pos = position(i);
+        while (i < fmt.size() && std::string_view("-+ #0'").find(fmt[i]) != std::string_view::npos) ++i;
+        for (int field = 0; field < 2; ++field) {
+            if (field == 1) {
+                if (i == fmt.size() || fmt[i] != '.') break;
+                ++i;
+            }
+            if (i < fmt.size() && fmt[i] == '*') {
+                ++i;
+                add(position(i), "int");
+            } else {
+                while (i < fmt.size() && fmt[i] >= '0' && fmt[i] <= '9') ++i;
+            }
+        }
+        std::string length;
+        if (i < fmt.size() && std::string_view("hljztL").find(fmt[i]) != std::string_view::npos) {
+            length += fmt[i++];
+            if (i < fmt.size() && (length == "h" || length == "l") && fmt[i] == length[0]) length += fmt[i++];
+        }
+        if (i == fmt.size()) break;
+        const char conversion = fmt[i++];
+        const std::string integer = length == "ll" ? "long long" : length == "l" ? "long" :
+            length == "j" ? "intmax_t" : length == "z" ? "ptrdiff_t" : length == "t" ? "ptrdiff_t" : "int";
+        if (conversion == 's') add(pos, length == "l" ? "const wchar_t*" : "const char*");
+        else if (conversion == 'p') add(pos, "void*");
+        else if (conversion == 'c') add(pos, length == "l" ? "wint_t" : "int");
+        else if (conversion == 'd' || conversion == 'i') add(pos, integer);
+        else if (std::string_view("ouxX").find(conversion) != std::string_view::npos) {
+            add(pos, length == "j" ? "uintmax_t" : length == "z" ? "size_t" :
+                length == "t" ? "uintptr_t" : "unsigned " + integer);
+        } else if (conversion == 'n') {
+            add(pos, (length == "hh" ? std::string("signed char") : length == "h" ? std::string("short") : integer) + "*");
+        } else if (std::string_view("aAeEfFgG").find(conversion) != std::string_view::npos) {
+            add(pos, length == "L" ? "long double" : "double");
+        }
+    }
+    return types;
 }
 
 // Count arg-consuming `%` specifiers in a printf-style format string.

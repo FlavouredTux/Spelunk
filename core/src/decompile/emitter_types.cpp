@@ -118,6 +118,14 @@ void Emitter::note_global_decl(const Symbol& s, std::string type_name) const {
             type_name = by_name->second;
     }
     type_name = normalize_c_type_alias(type_name);
+    const bool declared = annotations && (annotations->global_type_for(s.addr) ||
+        annotations->imported_global_types_by_name.contains(s.name));
+    if (options.c_source && !declared && s.size > 8 &&
+        type_name.find("(*") == std::string::npos) {
+        // Keep the loader's object extent when a register-width access is
+        // the only type evidence. Addresses still use byte offsets in C.
+        type_name = std::format("uint8_t[{}]", s.size);
+    }
     if (type_name.find("(*") == std::string::npos &&
         !type_name.ends_with("[]")) {
         if (auto standard = standard_global_type(display_name); standard) {

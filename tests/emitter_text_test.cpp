@@ -1,4 +1,5 @@
 #include "emitter_text.hpp"
+#include "emitter_tables.hpp"
 
 #include <cstdio>
 #include <string>
@@ -68,6 +69,21 @@ void test_identifier_replacement() {
 
 void test_code_mask_and_declarations() {
     using namespace spelunk::emit;
+    check(!incomplete_c_export_reason("puts(\"/* unresolved register read */\");"),
+          "literal diagnostic text does not reject a complete export");
+    check(incomplete_c_export_reason("uint64_t x = {0}; /* unresolved register read */") ==
+              "unresolved register read", "unresolved register placeholders reject C exports");
+    check(incomplete_c_export_reason("#error Unsupported memory width") ==
+              "unsupported C export operation", "unsupported export operations reject C exports");
+    check(printf_argument_types("%s %*.*lld %zu %%") ==
+              std::vector<std::string>{"const char*", "int", "int", "long long", "size_t"},
+          "printf types include pointer, width, precision and integer length");
+    check(printf_argument_types("%2$*1$s %3$n") ==
+              std::vector<std::string>{"int", "const char*", "int*"},
+          "printf positional types follow argument indexes");
+    check(printf_argument_types("%ls %lc %Lf %hhn") ==
+              std::vector<std::string>{"const wchar_t*", "wint_t", "long double", "signed char*"},
+          "printf wide and pointer length modifiers are preserved");
     const std::string source = "x; /* hidden\ncontinued */ y = \"value\";\n";
     const std::string code = code_only_text(source);
     check(code.size() == source.size(), "mask preserves byte offsets");

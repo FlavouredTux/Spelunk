@@ -82,6 +82,28 @@ std::optional<CodeSpan> next_code_span(std::string_view text,
 
 }  // namespace
 
+std::optional<std::string_view> incomplete_c_export_reason(std::string_view text) {
+    for (std::size_t at = 0; at < text.size();) {
+        if (auto end = non_code_end(text, at)) {
+            if (text.substr(at, 2) == "//" || text.substr(at, 2) == "/*") {
+                const auto comment = text.substr(at, *end - at);
+                for (std::string_view marker : {
+                         "STRUCTURER_FAIL", "unresolved expression materialization",
+                         "unresolved SSA merge", "stray call.args", "unresolved register read",
+                         "unresolved record type", "unresolved intrinsic",
+                         "unresolved string operation", "unresolved call signature"}) {
+                    if (comment.find(marker) != std::string_view::npos) return marker;
+                }
+            }
+            at = *end;
+        } else {
+            if (text.substr(at).starts_with("#error")) return "unsupported C export operation";
+            ++at;
+        }
+    }
+    return std::nullopt;
+}
+
 std::string code_only_text(std::string_view text) {
     std::string code(text.size(), ' ');
     for (std::size_t i = 0; i < text.size(); ++i) {

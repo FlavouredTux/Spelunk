@@ -528,6 +528,19 @@ format_struct(const Binary& b, const FuncWindow& w,
     }();
     if (!fn_r) return std::unexpected(fn_r.error());
 
+    if (options.c_source) {
+        for (const auto& block : fn_r->blocks) {
+            if (block.kind == BlockKind::TailCall) continue;
+            for (addr_t target : block.successors) {
+                if (!fn_r->block_at.contains(target)) {
+                    return std::unexpected(Error::not_implemented(std::format(
+                        "C export for {} is incomplete: undecoded control-flow target {:#x}; use -d to inspect it",
+                        w.label, target)));
+                }
+            }
+        }
+    }
+
     auto lifter_r = make_lifter(b);
     if (!lifter_r) return std::unexpected(lifter_r.error());
     auto ir_r = [&] {

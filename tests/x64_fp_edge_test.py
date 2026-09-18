@@ -1,4 +1,4 @@
-"""Execute floating flag consumers and truncating conversions against x86."""
+"""Execute floating arithmetic, flag consumers, and conversions against x86."""
 import ctypes
 import math
 from pathlib import Path
@@ -21,6 +21,7 @@ def main():
     folder = Path(tempfile.mkdtemp(prefix='spelunk-fp-edges-'))
     print(f'Floating-point edge fixtures: {folder}', flush=True)
     assembly, signatures, compares, conversions = ['.text'], {}, [], []
+    arithmetic, int_conversions = [], []
 
     def function(name, body, signature):
         assembly.extend([f'.globl {name}', f'.type {name}, @function', f'{name}:',
@@ -31,6 +32,22 @@ def main():
                   's', 'ns', 'o', 'no', 'l', 'ge', 'le', 'g']
     for suffix, ctype, pytype in [('ss', 'float', ctypes.c_float),
                                 ('sd', 'double', ctypes.c_double)]:
+        for operation in ['sub_self', 'div_self', 'add_zero', 'mul_zero']:
+            name = f'arithmetic_{suffix}_{operation}'
+            op, operand = operation.split('_')
+            body = [] if operand == 'self' else ['pxor %xmm1, %xmm1']
+            source = '%xmm0' if operand == 'self' else '%xmm1'
+            function(name, body + [f'{op}{suffix} {source}, %xmm0', 'ret'], f'{ctype}|{ctype}|x')
+            arithmetic.append((name, pytype))
+        for memory in [False, True]:
+            for width in [32, 64]:
+                name = f'from_integer_{suffix}_{int(memory)}_{width}'
+                source = '(%rdi)' if memory else ('%edi' if width == 32 else '%rdi')
+                # Unsigned annotations cannot change the instruction's signed
+                # interpretation. Register cases also exercise ignored high bits.
+                arg = f'const uint{width}_t*' if memory else 'uint64_t'
+                function(name, [f'cvtsi2{suffix} {source}, %xmm0', 'ret'], f'{ctype}|{arg}|x')
+                int_conversions.append((name, pytype, memory, width))
         for ordered in [False, True]:
             mnemonic = ('comi' if ordered else 'ucomi') + suffix
             for condition in conditions:
@@ -82,6 +99,40 @@ def main():
         libs.append(ctypes.CDLL(str(target)))
 
     values = [-math.inf, -100.5, -1.0, -0.0, 0.0, 1.0, 100.5, math.inf, math.nan]
+    def same_float(a, b, pytype):
+        if math.isnan(a) and math.isnan(b):
+            return True
+        fmt = '<f' if pytype == ctypes.c_float else '<d'
+        return struct.pack(fmt, a) == struct.pack(fmt, b)
+
+    for name, pytype in arithmetic:
+        functions = [getattr(lib, name) for lib in libs]
+        for fn in functions:
+            fn.argtypes, fn.restype = [pytype], pytype
+        for x in values + [2.0, 1e-30, -1e-30, 1e30, -1e30]:
+            results = [fn(x) for fn in functions]
+            assert all(same_float(results[0], value, pytype) for value in results[1:]), (name, x, results)
+        if name.endswith('div_self'):
+            assert all(fn(2.0) == 1.0 for fn in functions), name
+
+    integer_rng = random.Random(20260919)
+    for name, pytype, memory, width in int_conversions:
+        functions = [getattr(lib, name) for lib in libs]
+        storage = ctypes.c_uint32 if width == 32 else ctypes.c_uint64
+        for fn in functions:
+            fn.argtypes = [ctypes.POINTER(storage) if memory else ctypes.c_uint64]
+            fn.restype = pytype
+        inputs = [0, 1, -1, -2, -(1 << (width - 1)), (1 << (width - 1)) - 1,
+                  (1 << (width - 1)), (1 << width) - 1]
+        inputs += [integer_rng.getrandbits(64) for _ in range(200)]
+        for x in inputs:
+            value = storage(x)
+            arg = ctypes.byref(value) if memory else x
+            results = [fn(arg) for fn in functions]
+            assert all(same_float(results[0], result, pytype) for result in results[1:]), (name, x, results)
+            if x == -1:
+                assert results == [-1.0] * len(functions), (name, results)
+
     for name, pytype, condition in compares:
         functions = [getattr(lib, name) for lib in libs]
         for fn in functions:
@@ -157,7 +208,7 @@ def main():
     run([compiler, '-std=c11', '-Werror', '-O1', '-fsanitize=undefined,float-cast-overflow',
          '-fno-sanitize-recover=all', checked, '-lm', '-o', target])
     run([target])
-    print('Floating flags and 32/64-bit conversions match native execution; UBSan checks pass')
+    print('Floating arithmetic, flags and 32/64-bit conversions match native execution; UBSan checks pass')
 
 
 if __name__ == '__main__':

@@ -344,6 +344,46 @@ void test_and_partial_mask_is_kept() {
           "x & 0xff is never rewritten");
 }
 
+void test_float_folding_preserves_operations() {
+    using namespace spelunk;
+    for (const auto type : {IrType::F32, IrType::F64, IrType::V2F32}) {
+        const auto x = IrValue::make_reg(Reg::Xmm0, type);
+        const auto zero = IrValue::make_imm(0, type);
+        const auto bit_one = IrValue::make_imm(1, type);
+        const auto result = IrValue::make_temp(0, type);
+        for (const auto op : {IrOp::Add, IrOp::Sub, IrOp::Mul, IrOp::Div}) {
+            for (const auto rhs : {x, zero, bit_one}) {
+                auto fn = base_function();
+                fn.next_temp_id = 1;
+                fn.blocks[0].insts = {binary(op, result, x, rhs), ret(result)};
+                check(run_cleanup(fn).has_value(), "floating cleanup succeeds");
+                check(count_op(fn, op) == 1, "integer identities do not rewrite floating arithmetic");
+            }
+        }
+        for (const auto op : {IrOp::Add, IrOp::Sub, IrOp::Mul, IrOp::CmpEq, IrOp::CmpUlt}) {
+            auto fn = base_function();
+            fn.next_temp_id = 1;
+            const auto dst = IrValue::make_temp(0,
+                op == IrOp::CmpEq || op == IrOp::CmpUlt ? IrType::I1 : type);
+            fn.blocks[0].insts = {binary(op, dst, bit_one, zero), ret(dst)};
+            check(run_cleanup(fn).has_value(), "floating constant cleanup succeeds");
+            check(count_op(fn, op) == 1, "FP bit patterns are not integer constants");
+        }
+        auto fn = base_function();
+        fn.next_temp_id = 2;
+        const auto negative = IrValue::make_temp(1, type);
+        fn.blocks[0].insts = {unary(IrOp::Neg, negative, x),
+                             binary(IrOp::Add, result, x, negative), ret(result)};
+        check(run_cleanup(fn).has_value(), "floating add-negate cleanup succeeds");
+        check(count_op(fn, IrOp::Add) == 1, "x + -x retains floating NaN behavior");
+        fn = base_function();
+        fn.next_temp_id = 1;
+        fn.blocks[0].insts = {unary(IrOp::Neg, result, bit_one), ret(result)};
+        check(run_cleanup(fn).has_value(), "floating constant negation cleanup succeeds");
+        check(count_op(fn, IrOp::Neg) == 1, "FP negation does not negate the integer bit pattern");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -359,5 +399,6 @@ int main() {
     test_add_negate_cancels_to_zero();
     test_and_all_ones_mask_is_identity();
     test_and_partial_mask_is_kept();
+    test_float_folding_preserves_operations();
     return fails == 0 ? 0 : 1;
 }

@@ -331,7 +331,7 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
             // destination type, repeating `(u32)a1` at every use just leaks
             // ABI width back into otherwise source-like output.
             if (auto slot = trace_to_self_arg_slot(src);
-                slot && *slot < self_arg_type_overrides.size() &&
+                d.op != IrOp::SExt && slot && *slot < self_arg_type_overrides.size() &&
                 self_arg_type_overrides[*slot] &&
                 *self_arg_type_overrides[*slot] == d.dst.type) {
                 return expr(src, depth, min_prec);
@@ -398,6 +398,17 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
                         expr(inner->srcs[0], depth, std::to_underlying(Prec::Unary)));
                     return wrap_if_lt(std::move(casted), Prec::Unary, min_prec);
                 }
+            }
+            if (d.op == IrOp::SExt && type_bits(src.type) < type_bits(d.dst.type) &&
+                type_bits(d.dst.type) <= 64) {
+                // Interpret the source sign bit before widening; casting an
+                // unsigned source straight to the destination zero-extends it.
+                const std::string value = expr(src, depth, std::to_underlying(Prec::Unary));
+                const std::string signed_value = src.type == IrType::I1
+                    ? std::format("(-({}))", value)
+                    : std::format("(int{}_t){}", type_bits(src.type), value);
+                return wrap_if_lt(std::format("({}){}", c_type_name(d.dst.type), signed_value),
+                                  Prec::Unary, min_prec);
             }
             std::string casted = std::format(
                 "({}){}",

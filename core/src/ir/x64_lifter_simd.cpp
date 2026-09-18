@@ -439,6 +439,9 @@ void lift_int_to_fp(LiftCtx& ctx, std::string_view name, IrType dst_t) {
         (vex_form && insn.num_operands < 3)) return;
     IrValue src = materialize_rvalue(insn.operands[vex_form ? 2 : 1], ctx);
     if (src.kind == IrValueKind::None) return;
+    // CVTSI2S* interprets the encoded integer width as signed, independently
+    // of parameter types or the zero-extension caused by an earlier EAX write.
+    src = ctx.match_size(src, IrType::I64, /*sign_ext=*/true);
     IrInst i;
     i.op   = IrOp::Intrinsic;
     i.name = std::string(name);

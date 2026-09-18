@@ -20,6 +20,15 @@ namespace spelunk::ir_passes {
 std::optional<IrValue>
 try_fold(const IrInst& inst) noexcept {
     const IrType dt = inst.dst.type;
+    // FP immediates hold IEEE bit patterns. Integer identities and arithmetic
+    // on those bits lose NaNs, signed zero, and rounding behavior. Copies and
+    // selections remain valid because they preserve the chosen representation.
+    if (inst.op != IrOp::Assign && inst.op != IrOp::Select) {
+        if (is_float_type(dt)) return std::nullopt;
+        for (u8 i = 0; i < inst.src_count; ++i) {
+            if (is_float_type(inst.srcs[i].type)) return std::nullopt;
+        }
+    }
     // Integer IR wraps at its declared width; host signed overflow is UB even
     // when the result is immediately masked. Compute the bit pattern first.
     const auto wrapped = [dt](u64 bits) {
@@ -262,7 +271,8 @@ std::size_t pass_constant_fold(
             }
 
             // Add(x, Neg(x)) -> 0 (either operand order)
-            if (inst.op == IrOp::Add && inst.src_count == 2) {
+            if (inst.op == IrOp::Add && inst.src_count == 2 &&
+                !is_float_type(inst.dst.type)) {
                 for (u8 side = 0; side < 2; ++side) {
                     const IrValue& other = inst.srcs[side];
                     if (other.kind == IrValueKind::Imm) continue;

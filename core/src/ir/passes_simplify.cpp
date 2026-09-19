@@ -46,6 +46,30 @@ std::size_t pass_cast_simplify(
             auto it = defs.find(*k);
             if (it == defs.end()) continue;
             const IrInst* def = &fn.blocks[it->second.block].insts[it->second.inst];
+            // A partial-register write replaces the low bits with a literal.
+            // Narrowing it must not retain the old high-register dependency.
+            if (inst.op == IrOp::Trunc && type_bits(dt) <= 64 &&
+                def->op == IrOp::Or && def->src_count == 2) {
+                for (u8 literal = 0; literal < 2; ++literal) {
+                    if (def->srcs[literal].kind != IrValueKind::Imm) continue;
+                    const auto other = ssa_key(def->srcs[1 - literal]);
+                    if (!other) continue;
+                    const auto masked = defs.find(*other);
+                    if (masked == defs.end()) continue;
+                    const auto& mask_inst = fn.blocks[masked->second.block].insts[masked->second.inst];
+                    if (mask_inst.op != IrOp::And || mask_inst.src_count != 2) continue;
+                    bool clears_low = false;
+                    for (u8 i = 0; i < 2; ++i)
+                        clears_low |= mask_inst.srcs[i].kind == IrValueKind::Imm &&
+                            mask_unsigned(mask_inst.srcs[i].imm, dt) == 0;
+                    if (!clears_low) continue;
+                    inst.op = IrOp::Assign;
+                    inst.srcs[0] = IrValue::make_imm(mask_signed(def->srcs[literal].imm, dt), dt);
+                    ++changes;
+                    break;
+                }
+                if (inst.op == IrOp::Assign) continue;
+            }
             if (!is_cast(def->op) || def->src_count != 1) continue;
             const IrValue& inner = def->srcs[0];
 

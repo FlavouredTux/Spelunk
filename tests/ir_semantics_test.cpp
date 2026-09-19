@@ -200,6 +200,35 @@ bool cast_cases() {
     return true;
 }
 
+bool partial_register_cases() {
+    for (IrType narrow : {IrType::I1, IrType::I8, IrType::I16, IrType::I32}) {
+        const u64 low_mask = (u64{1} << type_bits(narrow)) - 1;
+        for (u64 retained : {u64{0}, u64{1}}) {
+            for (bool reverse : {false, true}) {
+                for (u64 literal : {u64{0}, u64{100}, low_mask, ~u64{0}}) {
+                    Program p("partial-register-low-bits");
+                    const auto input = IrValue::make_reg(Reg::Rdi, IrType::I64);
+                    const auto mask = imm(~low_mask | retained, IrType::I64);
+                    const auto high = p.value(IrOp::And, IrType::I64,
+                        reverse ? std::initializer_list<IrValue>{mask, input}
+                                : std::initializer_list<IrValue>{input, mask});
+                    const auto bits = imm(literal, IrType::I64);
+                    const auto merged = p.value(IrOp::Or, IrType::I64,
+                        reverse ? std::initializer_list<IrValue>{bits, high}
+                                : std::initializer_list<IrValue>{high, bits});
+                    p.ret(p.value(IrOp::Trunc, narrow, {merged}));
+                    std::vector<MachineInput> inputs;
+                    for (u64 value : {u64{0}, u64{1}, low_mask, ~u64{0},
+                                      u64{0x123456789abcdef0}})
+                        inputs.push_back(input_for(1, value));
+                    if (!verifier.verify(p.fn, inputs)) return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 bool memory_cases() {
     const auto p = IrValue::make_reg(Reg::Rdx, IrType::I64);
     const auto q = IrValue::make_reg(Reg::Rcx, IrType::I64);
@@ -297,7 +326,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: spelunk_ir_semantics_test [--seed N]\n");
         return 2;
     }
-    if (!oracle_checks() || !constant_cases() || !cast_cases() || !memory_cases()) return 1;
+    if (!oracle_checks() || !constant_cases() || !cast_cases() ||
+        !partial_register_cases() || !memory_cases()) return 1;
     for (u64 seed = 1; seed <= 256; ++seed) if (!generated_case(seed)) return 1;
     std::printf("Verified %zu cleanup programs across %zu executions\n", verifier.programs, verifier.executions);
     return 0;

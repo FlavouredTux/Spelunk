@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import random
 import subprocess
+import sys
 
 
 SAMPLES = {
@@ -21,10 +22,10 @@ def run(args):
                           capture_output=True, timeout=30).stdout
 
 
-def compare(sample, name, native, exported):
+def compare(sample, name, native, exported, seed, random_cases):
     libraries = [ctypes.CDLL(str(path)) for path in (native, exported)]
     functions = [getattr(lib, name) for lib in libraries]
-    rng = random.Random(20260919)
+    rng = random.Random(seed)
     if sample == 'records':
         for fn in functions:
             fn.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
@@ -56,15 +57,15 @@ def compare(sample, name, native, exported):
         values = (-2147483648, -100, -7, -1, 0, 1, 7, 100, 2147483647)
         cases = [(x, y) for x in values for y in values]
         cases += [(rng.randint(-2147483648, 2147483647),
-                   rng.randint(-2147483648, 2147483647)) for _ in range(300)]
+                   rng.randint(-2147483648, 2147483647)) for _ in range(random_cases)]
     elif signed:
         cases = [(x, mode) for x in (-2147483648, -101, -100, -1, 0, 1, 99, 100, 101, 2147483647)
                  for mode in (-1, 0, 1, 2, 3, 4, 2147483647)]
-        cases += [(rng.randint(-200, 200), rng.randint(-2, 5)) for _ in range(300)]
+        cases += [(rng.randint(-200, 200), rng.randint(-2, 5)) for _ in range(random_cases)]
     else:
         cases = [(limit, seed) for limit in (0, 1, 2, 3, 4, 9, 32, 100)
                  for seed in (0, 1, 999, 1000, 1001, 0xffffffff)]
-        cases += [(rng.randrange(100), rng.getrandbits(32)) for _ in range(300)]
+        cases += [(rng.randrange(100), rng.getrandbits(32)) for _ in range(random_cases)]
     for case in cases:
         expected, actual = [fn(*case) for fn in functions]
         if expected != actual:
@@ -77,13 +78,24 @@ def main():
     root = Path(__file__).resolve().parents[1]
     parser.add_argument('--spelunk', type=Path, default=root / 'build/cli/spelunk')
     parser.add_argument('--cc', default='cc')
+    parser.add_argument('--optimizations', nargs='+', choices=('0', '1', '2', '3', 's'),
+                        default=('0', '2'))
+    parser.add_argument('--seed', type=int, default=20260919)
+    parser.add_argument('--random-cases', type=int, default=300)
     parser.add_argument('--output', type=Path, default=root / 'build/pseudocode-samples')
+    parser.add_argument('--compare', nargs=4, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.random_cases < 0:
+        parser.error('--random-cases must be nonnegative')
+    if args.compare:
+        sample, name, native, exported = args.compare
+        print(compare(sample, name, Path(native), Path(exported), args.seed, args.random_cases))
+        return 0
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     report = []
     for sample, (name, signature) in SAMPLES.items():
-        for optimization in ('0', '2'):
+        for optimization in args.optimizations:
             folder = output / f'{sample}-O{optimization}'
             folder.mkdir(exist_ok=True)
             native = folder / 'native.so'
@@ -94,7 +106,9 @@ def main():
             annotations = folder / 'signatures.ann'
             annotations.write_text(f'sig {address} {signature}\n')
             common = [args.spelunk.resolve(), '--no-cache', '--annotations', annotations, '-s', name]
-            row = {'sample': sample, 'native_optimization': optimization, 'checks': []}
+            row = {'sample': sample, 'native_optimization': optimization,
+                   'compiler': args.cc, 'seed': args.seed,
+                   'random_cases': args.random_cases, 'checks': []}
             try:
                 (folder / 'pseudo.c').write_text(run([*common, '-p', native]))
                 source = folder / 'exported.c'
@@ -102,7 +116,11 @@ def main():
                 for opt in ('0', '2'):
                     exported = folder / f'exported-O{opt}.so'
                     run([args.cc, '-std=c11', '-Werror', '-O' + opt, '-shared', '-fPIC', source, '-o', exported])
-                    count = compare(sample, name, native, exported)
+                    # A bad export can crash or loop forever. Keep its execution
+                    # in a disposable process with the same timeout as tools.
+                    count = int(run([sys.executable, Path(__file__).resolve(),
+                                     '--seed', args.seed, '--random-cases', args.random_cases,
+                                     '--compare', sample, name, native, exported]))
                     row['checks'].append({'export_optimization': opt, 'cases': count})
                 row['status'] = 'passed'
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, AssertionError) as error:

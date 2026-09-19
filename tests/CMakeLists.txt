@@ -1579,6 +1579,7 @@ if(Python3_Interpreter_FOUND)
                     "${CMAKE_SOURCE_DIR}/scripts/pseudocode_samples.py"
                     --spelunk "$<TARGET_FILE:spelunk_cli>"
                     --cc "${CMAKE_C_COMPILER}"
+                    --optimizations 0 1 2 3 s
                     --output "${CMAKE_CURRENT_BINARY_DIR}/pseudocode-samples")
             set_tests_properties(pseudocode_samples_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME x64_export_regressions
@@ -1638,6 +1639,17 @@ if(Python3_Interpreter_FOUND)
     find_program(SPELUNK_MACHO_TEST_STRIP NAMES llvm-strip)
     find_program(SPELUNK_MACHO_TEST_NM NAMES llvm-nm)
     if(SPELUNK_MACHO_TEST_CLANG)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+           CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+            add_test(NAME pseudocode_samples_clang_semantics
+                COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_SOURCE_DIR}/scripts/pseudocode_samples.py"
+                    --spelunk "$<TARGET_FILE:spelunk_cli>"
+                    --cc "${SPELUNK_MACHO_TEST_CLANG}"
+                    --optimizations 0 1 2 3 s
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/pseudocode-samples-clang")
+            set_tests_properties(pseudocode_samples_clang_semantics PROPERTIES TIMEOUT 120)
+        endif()
         add_test(NAME pseudocode_check_unit
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/pseudocode_check_test.py"
                 "${SPELUNK_MACHO_TEST_CLANG}")

@@ -12,6 +12,29 @@
 
 namespace spelunk::emit {
 
+namespace {
+bool has_cyclic_phi(const IrFunction& fn) {
+    for (const auto& block : fn.blocks) {
+        if (!std::ranges::any_of(block.insts, [](const IrInst& inst) {
+                return inst.op == IrOp::Phi;
+            })) continue;
+        std::vector<addr_t> pending = block.successors;
+        std::set<addr_t> seen;
+        while (!pending.empty()) {
+            const addr_t address = pending.back();
+            pending.pop_back();
+            if (address == block.start) return true;
+            if (!seen.insert(address).second) continue;
+            const auto found = fn.block_at.find(address);
+            if (found == fn.block_at.end()) continue;
+            const auto& successors = fn.blocks[found->second].successors;
+            pending.insert(pending.end(), successors.begin(), successors.end());
+        }
+    }
+    return false;
+}
+}  // namespace
+
 const std::string* Emitter::scoped_ssa_name(const IrValue& value) const {
     auto key = ssa_key(value);
     if (!key) return nullptr;
@@ -21,6 +44,7 @@ const std::string* Emitter::scoped_ssa_name(const IrValue& value) const {
 
 bool Emitter::prepare_scalar_join_copies() {
     if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return false;
+    const bool cyclic_phi = has_cyclic_phi(*fn);
     std::set<SsaKey> visiting;
     const auto scalar_type = [&](auto&& self, const IrValue& value) -> std::optional<IrType> {
         const auto key = ssa_key(value);
@@ -31,7 +55,10 @@ bool Emitter::prepare_scalar_join_copies() {
         const auto* definition = def_of(value);
         std::optional<IrType> type;
         if (!definition) {
-            if (is_float_type(value.type) || value.kind == IrValueKind::Imm) type = value.type;
+            if (is_float_type(value.type) || value.kind == IrValueKind::Imm ||
+                (value.kind == IrValueKind::Reg && value.version == 0 &&
+                 type_bits(value.type) <= 64 && arg_name_for_live_in(value.reg)))
+                type = value.type;
         } else if (definition->op == IrOp::Assign && definition->src_count) {
             type = self(self, definition->srcs[0]);
         } else if (definition->op == IrOp::Phi) {
@@ -50,7 +77,7 @@ bool Emitter::prepare_scalar_join_copies() {
             }
         } else if (definition->dst.type == IrType::F32 || definition->dst.type == IrType::F64) {
             type = definition->dst.type;
-        } else if (options.c_source && inlinable_op(definition->op) &&
+        } else if (inlinable_op(definition->op) &&
                    type_bits(definition->dst.type) <= 64) {
             type = definition->dst.type;
         }
@@ -76,7 +103,20 @@ bool Emitter::prepare_scalar_join_copies() {
                 const auto operand_key = ssa_key(operand);
                 return operand_key && memory_snapshot_loads.contains(*operand_key);
             });
-        if (type && ((is_float_type(*type) && use_count(inst.dst)) || constant_call_argument || snapshot_join)) {
+        const bool conditional_integer_join = !cyclic_phi && type && !is_float_type(*type) &&
+            key && merge_value_names.contains(*key) && use_count(inst.dst) &&
+            std::ranges::any_of(ssa_uses.visible_user_positions(*key), [&](const auto& user) {
+                return fn->blocks[user.first].insts[user.second].op != IrOp::Return;
+            }) &&
+            std::ranges::any_of(inst.phi_preds, [&](addr_t pred) {
+                const auto found = fn->block_at.find(pred);
+                if (found == fn->block_at.end()) return false;
+                const auto& incoming = fn->blocks[found->second];
+                return !incoming.insts.empty() &&
+                    incoming.insts.back().op == IrOp::CondBranch;
+            });
+        if (type && ((is_float_type(*type) && use_count(inst.dst)) ||
+                     constant_call_argument || snapshot_join || conditional_integer_join)) {
             phis.push_back(&inst);
             if (key) scalar_join_types.insert_or_assign(*key, *type);
         }
@@ -215,26 +255,7 @@ void Emitter::prepare_phi_copies() {
                 (!with_calls || (ssa_key(inst.dst) && live.contains(*ssa_key(inst.dst))))) return;
         }
     }
-    bool cyclic_phi = false;
-    for (const auto& block : fn->blocks) {
-        bool has_phi = false;
-        for (const auto& inst : block.insts) has_phi |= inst.op == IrOp::Phi;
-        if (!has_phi) continue;
-        std::vector<addr_t> pending = block.successors;
-        std::set<addr_t> seen;
-        while (!pending.empty() && !cyclic_phi) {
-            const addr_t address = pending.back();
-            pending.pop_back();
-            if (address == block.start) { cyclic_phi = true; break; }
-            if (!seen.insert(address).second) continue;
-            auto next = fn->block_at.find(address);
-            if (next == fn->block_at.end()) continue;
-            const auto& successors = fn->blocks[next->second].successors;
-            pending.insert(pending.end(), successors.begin(), successors.end());
-        }
-        if (cyclic_phi) break;
-    }
-    if (!cyclic_phi) return;
+    if (!has_cyclic_phi(*fn)) return;
     explicit_phi_copies = true;
     merge_value_names.clear();
     merge_locals.clear();

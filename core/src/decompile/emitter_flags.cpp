@@ -234,6 +234,8 @@ Emitter::low_byte_return_payload(const IrValue& value, int depth) const {
         if (value.type == IrType::I1 || value.type == IrType::I8) return value;
         return std::nullopt;
     }
+    // A sign-extended byte is a signed result, not just its low-byte bits.
+    if (definition->op == IrOp::SExt) return std::nullopt;
     if ((definition->op == IrOp::Assign || definition->op == IrOp::Trunc ||
          definition->op == IrOp::ZExt || definition->op == IrOp::SExt) &&
         definition->src_count >= 1) {

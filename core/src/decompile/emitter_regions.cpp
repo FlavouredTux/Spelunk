@@ -731,19 +731,21 @@ void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) c
             out += "\n";
             continue;
         }
-        out += "\n";
+        out += options.c_source ? " {\n" : "\n";
         emit_region(*child, depth + 2, out);
         if (!ends_in_terminator(*child)) {
             out += std::format("{}  break;\n", cind);
         }
+        if (options.c_source) out += std::format("{}}}\n", cind);
     }
     if (r.has_default && r.children.size() > n_cases) {
-        out += std::format("{}default:\n", cind);
+        out += std::format("{}default:{}\n", cind, options.c_source ? " {" : "");
         const Region& dflt = *r.children.back();
         emit_region(dflt, depth + 2, out);
         if (!ends_in_terminator(dflt)) {
             out += std::format("{}  break;\n", cind);
         }
+        if (options.c_source) out += std::format("{}}}\n", cind);
     }
     out += std::format("{}}}\n", ind);
 }

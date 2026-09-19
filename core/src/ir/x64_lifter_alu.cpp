@@ -191,8 +191,11 @@ void lift_shift(LiftCtx& ctx, IrOp op) {
     ctx.emit_set_flag(Flag::Cf,
         ctx.select(nonzero, cf_new, ctx.flag_val(Flag::Cf)));
 
-    IrValue shifted = ctx.emit_binop(op, a, safe_cnt);
-    IrValue r = ctx.select(nonzero, shifted, a);
+    // A zero shift already preserves the value. The safe nonzero count is
+    // needed only by CF's (width-count)/(count-1) expressions, not the value
+    // operation; keeping it here leaked flag bookkeeping into pseudo-C.
+    IrValue shifted = ctx.emit_binop(op, a, cnt);
+    IrValue r = shifted;
 
     IrValue of_new;
     if (op == IrOp::Shl) {

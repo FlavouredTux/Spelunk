@@ -44,10 +44,20 @@ using namespace emit;
 
 namespace {
 
-std::optional<Annotations> with_debug_types(const Binary* binary, const Annotations* user) {
-    if (!binary || (binary->debug_types().imported_records.empty() &&
-                    binary->debug_types().imported_aliases.empty())) return std::nullopt;
+std::optional<Annotations> with_debug_types(const Binary* binary, const Annotations* user,
+                                          const IrFunction& function) {
+    if (!binary) return std::nullopt;
     Annotations merged = user ? *user : Annotations{};
+    std::set<addr_t> targets{function.start};
+    for (const auto& block : function.blocks) for (const auto& inst : block.insts)
+        if (inst.op == IrOp::Call) targets.insert(inst.target1);
+    for (const auto target : targets) {
+        if (merged.signatures.contains(target)) continue;
+        const auto* symbol = binary->defined_object_at(target);
+        if (!symbol || symbol->addr != target || symbol->kind != SymbolKind::Function) continue;
+        if (auto signature = free_function_signature_from_mangled(symbol->name))
+            merged.signatures.emplace(target, std::move(*signature));
+    }
     const auto& types = binary->debug_types();
     // Per-parameter field annotations may intentionally use different names.
     if (!user || user->field_names.empty())
@@ -596,7 +606,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     StructuredFunction working{
         sf.ir, sf.body ? clone_region_tree(*sf.body) : nullptr};
 
-    auto type_annotations = with_debug_types(binary, annotations);
+    auto type_annotations = with_debug_types(binary, annotations, *sf.ir);
     if (type_annotations) annotations = &*type_annotations;
 
     Emitter e(binary);
@@ -749,7 +759,7 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
             "pseudo-c per-block: StructuredFunction has no IR"));
     }
 
-    auto type_annotations = with_debug_types(binary, annotations);
+    auto type_annotations = with_debug_types(binary, annotations, *sf.ir);
     if (type_annotations) annotations = &*type_annotations;
     // Setup mirrors emit() - same ABI plumbing, same ObjC / RTTI lookup,
     // same per-emit signature inference. We deliberately skip the

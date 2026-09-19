@@ -420,6 +420,21 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
                                         const FunctionSig* annotated_sig,
                                         const std::vector<IrValue>& call_args,
                                         std::vector<std::string>& rendered_call_args) const {
+    const auto char_address = [&](i64 offset) {
+        // char* also describes an out-parameter pointing to one scalar byte.
+        // Only arrays decay: an initialized scalar still needs its address.
+        const auto required = stack_required_extents.find(offset);
+        const auto storage = stack_byte_storage_ranges.find(offset);
+        if (fn && (required == stack_required_extents.end() || required->second <= 1) &&
+            (storage == stack_byte_storage_ranges.end() || storage->second <= 1)) {
+            for (const auto& block : fn->blocks) for (const auto& inst : block.insts) {
+                if (inst.op == IrOp::Store && inst.src_count >= 2 &&
+                    inst.srcs[1].type == IrType::I8 && stack_offset(inst.srcs[0]) == offset)
+                    return "&" + stack_name(offset);
+            }
+        }
+        return stack_name(offset);
+    };
     if (annotated_sig) {
         if (rendered_call_args.size() < call_args.size()) {
             rendered_call_args.resize(call_args.size());
@@ -458,7 +473,7 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
             // A char array decays at a call boundary; `&array` has
             // pointer-to-array type and is needlessly incompatible.
             // This is a C rule, not a PPC ABI special case.
-            rendered_call_args[arg_i] = stack_name(*off);
+            rendered_call_args[arg_i] = char_address(*off);
         }
         bool expects_string = import_arg_string_kind(
             direct_name, static_cast<u8>(arg_i + 1)) ==
@@ -474,7 +489,7 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
         if (expects_string) {
             if (auto off = stack_offset(call_args[arg_i]); off) {
                 charp_local_slots.insert(*off);
-                rendered_call_args[arg_i] = stack_name(*off);
+                rendered_call_args[arg_i] = char_address(*off);
             }
             if (auto address = try_resolve_imm_addr(call_args[arg_i]); address) {
                 if (auto literal = string_literals.try_c_string_at(
@@ -947,6 +962,10 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     const auto& bb = fn->blocks[it->second];
 
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    if (shared_throw_blocks.contains(bb.start) && !emitted_throw_blocks.insert(bb.start).second) {
+        out += std::format("{}goto bb_{:x};\n", ind, bb.start);
+        return;
+    }
     // C label for any block referenced by a structurer-emitted goto. Sit
     // one indent shallower than the block body when possible - that's the
     // conventional layout for `bb_<addr>:` and avoids the label appearing

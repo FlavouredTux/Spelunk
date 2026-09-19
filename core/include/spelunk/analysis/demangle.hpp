@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <spelunk/common/annotations.hpp>
 
 namespace spelunk {
 
@@ -56,5 +57,11 @@ demangle_itanium(std::string_view mangled);
 // needing a hand-maintained table for every member function spelunk sees.
 [[nodiscard]] std::optional<unsigned char>
 arity_from_mangled(std::string_view mangled);
+
+// Recover ABI parameter types only for provably free functions (unscoped,
+// internal-linkage, or directly in the anonymous namespace). References are
+// lowered to pointers for pseudo-C. An unencoded return type remains unknown.
+[[nodiscard]] std::optional<FunctionSig>
+free_function_signature_from_mangled(std::string_view mangled);
 
 }  // namespace spelunk

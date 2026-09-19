@@ -200,6 +200,9 @@ struct Emitter {
     // these blocks so the gotos resolve. Without this the structurer's
     // gotos point at comments and the C is ill-formed.
     std::set<addr_t>                                 goto_targets;
+    std::map<addr_t, std::size_t>                    rendered_block_counts;
+    std::set<addr_t>                                 shared_throw_blocks;
+    mutable std::set<addr_t>                         emitted_throw_blocks;
     // SSA values whose C binding has already been emitted in this function
     // body. Used by the materializer to avoid exposing fallback names like
     // `rax_3` / `t17` when a structured condition or return reads a value

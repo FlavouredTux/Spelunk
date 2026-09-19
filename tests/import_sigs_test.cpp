@@ -64,6 +64,18 @@ int main() {
                       "empty module qualifier is preserved");
 
     spelunk::TypeArena arena;
+    for (const auto& [name, count] : {
+             std::pair{"__cxa_allocate_exception", 1u},
+             std::pair{"__cxa_free_exception", 1u},
+             std::pair{"__cxa_throw", 3u},
+             std::pair{"__cxa_rethrow", 0u},
+             std::pair{"__cxa_begin_catch", 1u},
+             std::pair{"__cxa_end_catch", 0u},
+             std::pair{"_Unwind_Resume", 1u}}) {
+        const auto signature = spelunk::lookup_import_sig(name, arena);
+        check(signature && !signature->variadic && signature->params.size() == count,
+              "exception runtime has a fixed ABI prototype");
+    }
     const auto decorated_sleep = spelunk::lookup_import_sig(
         spelunk::strip_import_name_decorations("__imp__Sleep@4"), arena);
     check(decorated_sleep.has_value() && decorated_sleep->params.size() == 1,

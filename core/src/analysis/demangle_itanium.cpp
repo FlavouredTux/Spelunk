@@ -43,6 +43,8 @@ struct Dem {
     // templated - without this flag, parse_encoding silently drops the
     // first real argument as if it were the return.
     bool is_ctor_dtor = false;
+    bool internal_linkage = false;
+    std::optional<FunctionSig> signature;
     bool failed = false;
 
     // Guard against pathologically nested mangled types (5000-level
@@ -426,6 +428,10 @@ void parse_expression_or_literal(Dem& d, std::string& out) {
 void parse_unqualified_into(Dem& d, std::string& out,
                             std::string_view enclosing) {
     if (d.eof()) { d.fail(); return; }
+    if (d.peek() == 'L' && d.peek(1) >= '0' && d.peek(1) <= '9') {
+        d.internal_linkage = true;
+        ++d.pos;
+    }
     const char c = d.peek();
     if (c >= '0' && c <= '9') {
         out += parse_source_name(d);
@@ -728,6 +734,7 @@ std::string parse_encoding(Dem& d) {
     std::string cv_suffix;
     parse_name(d, name, &cv_suffix);
     if (d.failed) return {};
+    const bool internal_name = d.internal_linkage;
     if (d.eof()) return name + cv_suffix;
     if (d.peek() == 'E') return name + cv_suffix;
 
@@ -752,6 +759,25 @@ std::string parse_encoding(Dem& d) {
     std::size_t first_arg = 0;
     if (template_instance && !types.empty() && !d.is_ctor_dtor) {
         first_arg = 1;  // drop return type for templated free / member fns
+    }
+
+    const bool free_function = cv_suffix.empty() && !d.is_ctor_dtor &&
+        (internal_name || name.find("::") == std::string::npos ||
+         name == "_GLOBAL__N_1::" + last_component(name));
+    if (free_function && d.eof() && !types.empty()) {
+        FunctionSig signature;
+        const auto abi_type = [](std::string type) {
+            if (type.ends_with("&&")) type.replace(type.size() - 2, 2, "*");
+            else if (type.ends_with('&')) type.back() = '*';
+            return type;
+        };
+        if (first_arg) signature.return_type = abi_type(types[0]);
+        for (std::size_t i = first_arg; i < types.size(); ++i) {
+            if (types[i] == "void") continue;
+            if (types[i] == "...") signature.variadic = true;
+            else signature.params.push_back({abi_type(types[i]), {}});
+        }
+        d.signature = std::move(signature);
     }
 
     std::string args;
@@ -805,6 +831,17 @@ std::optional<std::string> demangle_itanium(std::string_view mangled) {
     std::string result = parse_encoding(d);
     if (d.failed || result.empty()) return demangle_itanium_system(mangled);
     return result;
+}
+
+std::optional<FunctionSig> free_function_signature_from_mangled(std::string_view mangled) {
+    Dem d;
+    d.in = mangled;
+    if (mangled.starts_with("__Z")) d.pos = 3;
+    else if (mangled.starts_with("_Z")) d.pos = 2;
+    else return std::nullopt;
+    (void)parse_encoding(d);
+    if (d.failed || !d.eof()) return std::nullopt;
+    return d.signature;
 }
 
 }  // namespace spelunk

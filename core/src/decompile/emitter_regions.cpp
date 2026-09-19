@@ -73,6 +73,24 @@ void Emitter::collect_for_updates(const Region& r) {
 }
 
 void Emitter::collect_goto_targets(const Region& r) {
+    if (r.kind == RegionKind::Block && fn && binary &&
+        ++rendered_block_counts[r.block_start] > 1) {
+        const auto found = fn->block_at.find(r.block_start);
+        if (found != fn->block_at.end()) {
+            const auto& block = fn->blocks[found->second];
+            if (!block.insts.empty() && block.insts.back().op == IrOp::Unreachable) {
+                for (const auto& inst : block.insts) {
+                    if (inst.op != IrOp::Call) continue;
+                    const auto* imported = binary->import_at_plt(inst.target1);
+                    if (imported && (strip_import_name_decorations(imported->name) == "__cxa_throw" ||
+                                     strip_import_name_decorations(imported->name) == "__cxa_rethrow")) {
+                        shared_throw_blocks.insert(r.block_start);
+                        goto_targets.insert(r.block_start);
+                    }
+                }
+            }
+        }
+    }
     if (r.kind == RegionKind::Goto) {
         goto_targets.insert(r.target);
     }

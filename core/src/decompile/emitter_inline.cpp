@@ -159,6 +159,15 @@ Emitter::merge_assignment_name_for(const IrInst& inst) const {
     if (it == merge_value_names.end()) return std::nullopt;
     auto local_it = merge_locals.find(it->second);
     if (local_it == merge_locals.end()) return std::nullopt;
+    // An in-place update feeding this same merge web is observable on the
+    // next loop iteration even when its only visible reader is a Phi.
+    for (u8 i = 0; i < inst.src_count; ++i) {
+        if (auto source = ssa_key(inst.srcs[i]); source) {
+            auto named = merge_value_names.find(*source);
+            if (named != merge_value_names.end() && named->second == it->second &&
+                inst.op != IrOp::Assign) return it->second;
+        }
+    }
     bool has_non_return_reader = false;
     for (const auto& local_key : local_it->second.keys) {
         for (const auto& [bi, ii] :
@@ -247,6 +256,9 @@ Emitter::format_merge_assignment(const IrInst& inst, std::string_view name) cons
         rhs = expand(inst, 0);
     }
     if (rhs.empty()) return "";
+    if (options.c_source && scoped_ssa_name(inst.dst) &&
+        !is_float_type(inst.dst.type) && type_bits(inst.dst.type) <= 64)
+        rhs = std::format("({})(uintptr_t)({})", c_type_name_for(inst.dst), rhs);
     const auto merge_local = merge_locals.find(std::string(name));
     if (merge_local != merge_locals.end()) {
         const std::string type = c_type_name_for(merge_local->second.type_value);

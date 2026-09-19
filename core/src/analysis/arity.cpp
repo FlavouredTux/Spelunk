@@ -539,7 +539,8 @@ enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 
 }  // namespace
 
-u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
+static u8 infer_arity_impl(const Binary& b, addr_t target, Abi abi,
+                           unsigned depth, std::size_t& remaining) noexcept {
     if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
         return static_cast<u8>(std::min<std::size_t>(
             infer_ppc_arguments_from_ir(b, target, abi).size(),
@@ -553,6 +554,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
     // and the Win64 shadow-space variant) so forwarding stubs inherit the
     // underlying callee's arity instead of appearing variadic or arg-less.
     for (int hops = 0; hops < 6; ++hops) {
+        if (b.is_data_in_code(target)) return 0;
         auto hop_target = follow_trivial_wrapper(b, target);
         if (!hop_target) break;
         target = *hop_target;
@@ -614,8 +616,9 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
         // Per-path linear walk; on branches we enqueue successors and stop.
         // Cap the per-path step count separately so a tight self-loop without
         // a back-edge break can't spin forever.
-        for (int step = 0; step < 256 && visits < kMaxVisits; ++step) {
+        for (int step = 0; step < 256 && visits < kMaxVisits && remaining; ++step) {
             ++visits;
+            --remaining;
             // Visit guard: skip if we've seen this addr with a written mask
             // at least as restrictive (subset). We approximate "subset" with
             // exact equality keyed on (ip), to keep the table small - picks
@@ -625,6 +628,7 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
             (void)it;
             if (!inserted) break;
 
+            if (b.is_data_in_code(ip)) break;
             auto span = b.bytes_at(ip);
             if (span.empty()) break;
             auto decoded = dec.decode(span, ip);
@@ -676,6 +680,15 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
                             if (!written[i]) live_in[i] = true;
                         }
                     }
+                } else if (depth < 3 && remaining &&
+                           std::ranges::any_of(written, [](bool value) { return !value; })) {
+                    // Calls consume their incoming argument registers. A
+                    // wrapper may forward rdi/rsi unchanged while only
+                    // setting rdx; those are still inputs of the wrapper.
+                    const auto count = infer_arity_impl(
+                        b, insn.operands[0].rel.target, abi, depth + 1, remaining);
+                    for (std::size_t i = 0; i < std::min<std::size_t>(count, args.size()); ++i)
+                        if (!written[i]) live_in[i] = true;
                 }
             }
 
@@ -713,6 +726,11 @@ u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
         if (live_in[i]) max_live_in = static_cast<int>(i);
     }
     return static_cast<u8>(max_live_in + 1);
+}
+
+u8 infer_arity(const Binary& b, addr_t target, Abi abi) noexcept {
+    std::size_t remaining = 4096;
+    return infer_arity_impl(b, target, abi, 0, remaining);
 }
 
 void extend_x64_fp_arguments(const IrFunction& fn, Abi abi,

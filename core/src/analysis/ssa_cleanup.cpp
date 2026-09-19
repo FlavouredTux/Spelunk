@@ -184,7 +184,21 @@ recover_ssa_merge_locals(const IrFunction& fn,
                 // Only remap pure phi-feeder values. If a value also appears
                 // in real emitted code, keeping its original name avoids
                 // coalescing two source variables by guess.
-                if (callbacks.use_count(*ok) != 1) continue;
+                if (callbacks.use_count(*ok) != 1) {
+                    // A loop-carried accumulator can also be consumed at an
+                    // exit (e.g. store the decoded varint). Coalescing its
+                    // update is safe when the old Phi value is read only by
+                    // that update, so no use needs the pre-update value.
+                    const bool arithmetic = od->op == IrOp::Add || od->op == IrOp::Sub ||
+                        od->op == IrOp::Mul || od->op == IrOp::And ||
+                        od->op == IrOp::Or || od->op == IrOp::Xor;
+                    bool in_place = false;
+                    if (arithmetic && keys.size() == 1 && callbacks.use_count(keys[0]) == 1) {
+                        for (u8 i = 0; i < od->src_count; ++i)
+                            in_place |= ssa_key(od->srcs[i]) == keys[0];
+                    }
+                    if (!in_place) continue;
+                }
                 result.value_names.emplace(*ok, name);
                 local.keys.push_back(*ok);
             }

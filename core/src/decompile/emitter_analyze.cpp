@@ -1043,10 +1043,16 @@ void Emitter::name_merge_values() {
             }
             auto phi_key = ssa_key(phi.dst);
             if (!phi_key) continue;
-            if (!is_ppc_abi() &&
-                !structured_return_values.contains(*phi_key)) continue;
             auto named = merge_value_names.find(*phi_key);
             if (named == merge_value_names.end()) continue;
+            if (!is_ppc_abi() && !structured_return_values.contains(*phi_key) &&
+                !(std::ranges::all_of(phi.phi_operands, [](const IrValue& value) {
+                    return value.kind == IrValueKind::Imm;
+                }) && std::ranges::any_of(ssa_uses.visible_user_positions(*phi_key),
+                    [&](const auto& position) {
+                        const auto op = fn->blocks[position.first].insts[position.second].op;
+                        return op != IrOp::Return && op != IrOp::Phi && !hidden.contains(position);
+                    }))) continue;
             bool selection_phi = false;
             if (phi.phi_operands.size() == 2 && phi.phi_preds.size() == 2) {
                 for (std::size_t direct_i = 0; direct_i < 2 && !selection_phi;

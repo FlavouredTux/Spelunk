@@ -1026,7 +1026,8 @@ std::string Emitter::format_bitop(const IrInst& d, std::string_view op,
             case IrOp::CmpSlt: case IrOp::CmpUlt:
             case IrOp::CmpSle: case IrOp::CmpUle:
             case IrOp::CmpSgt: case IrOp::CmpUgt:
-            case IrOp::CmpSge: case IrOp::CmpUge: return true;
+            case IrOp::CmpSge: case IrOp::CmpUge:
+            case IrOp::SubBorrow: return true;
             default: return false;
         }
     };

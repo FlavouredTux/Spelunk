@@ -59,6 +59,25 @@ void check_simplify(std::string_view input, std::string_view expected) {
 }  // namespace
 
 int main() {
+    const auto source_signature = spelunk::free_function_signature_from_mangled(
+        "_ZN3RBX7NetworkL23deserializeUInt64VarintERyRNS0_13NetworkStreamE");
+    if (!source_signature || !source_signature->return_type.empty() ||
+        source_signature->params.size() != 2 ||
+        source_signature->params[0].type != "unsigned long long*" ||
+        source_signature->params[1].type != "RBX::Network::NetworkStream*") {
+        std::fprintf(stderr, "FAIL: internal free-function reference signature\n");
+        ++fails;
+    }
+    if (spelunk::free_function_signature_from_mangled("_ZN3Foo3barEi")) {
+        std::fprintf(stderr, "FAIL: ambiguous member/namespace function must not guess this\n");
+        ++fails;
+    }
+    const auto template_signature = spelunk::free_function_signature_from_mangled("_Z3fooIiEvRT_");
+    if (!template_signature || template_signature->return_type != "void" ||
+        template_signature->params.size() != 1 || template_signature->params[0].type != "int*") {
+        std::fprintf(stderr, "FAIL: free function template preserves its encoded return type\n");
+        ++fails;
+    }
     // Top-level free function with a plain arg list.
     check("_Z3foov",  "foo()");
     check("_Z3fooi",  "foo(int)");

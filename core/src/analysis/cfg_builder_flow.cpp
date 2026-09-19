@@ -22,6 +22,9 @@ namespace {
 [[nodiscard]] bool is_noreturn_import_name(std::string_view name) noexcept {
     name = strip_import_name_decorations(name);
     return name == "__stack_chk_fail" ||
+           name == "__cxa_throw" ||
+           name == "__cxa_rethrow" ||
+           name == "_Unwind_Resume" ||
            name == "__android_log_assert" ||
            name == "__assert" ||
            name == "__assert2" ||

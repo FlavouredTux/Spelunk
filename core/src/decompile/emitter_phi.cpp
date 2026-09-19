@@ -2,6 +2,7 @@
 // and every right-hand side is evaluated before any phi destination changes.
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
+#include <spelunk/analysis/import_sigs.hpp>
 
 #include <algorithm>
 #include <format>
@@ -167,7 +168,9 @@ bool Emitter::prepare_scalar_join_copies() {
 
 void Emitter::prepare_phi_copies() {
     if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_ppc_abi())) return;
-    if (prepare_scalar_join_copies()) return;
+    // A snapshot join can coexist with other loop-carried values. Do not
+    // stop after lowering just that one Phi and lose the remaining updates.
+    if (prepare_scalar_join_copies() && !has_cyclic_phi(*fn)) return;
     // Calls are eligible only when their declared x64 signature establishes
     // scalar register arguments. Unknown/FP/aggregate calls keep the existing
     // path rather than treating their conservative ABI snapshots as real uses.
@@ -182,6 +185,23 @@ void Emitter::prepare_phi_copies() {
             if (!signature && binary) {
                 auto found = binary->debug_signatures().find(inst.target1);
                 if (found != binary->debug_signatures().end()) signature = &found->second;
+            }
+            if (!signature && binary) {
+                if (const auto* imported = binary->import_at_plt(inst.target1)) {
+                    TypeArena types;
+                    const auto spec = lookup_import_sig(strip_import_name_decorations(imported->name), types);
+                    const auto scalar_type = [&](TypeRef type) {
+                        const auto kind = types.kind(type);
+                        return kind == TypeKind::Int || kind == TypeKind::Ptr;
+                    };
+                    if (spec && !spec->variadic &&
+                        (types.kind(spec->ret) == TypeKind::Void || scalar_type(spec->ret)) &&
+                        std::ranges::all_of(spec->params, scalar_type) && spec->params.size() <= int_arg_regs(abi).size()) {
+                        call_arities[inst.target1] = spec->params.size();
+                        if (types.kind(spec->ret) == TypeKind::Void) void_calls.insert(inst.target1);
+                        continue;
+                    }
+                }
             }
             const auto scalar = [&](std::string_view type) {
                 const std::string normalized = normalize_c_type_alias(type);
@@ -259,6 +279,8 @@ void Emitter::prepare_phi_copies() {
     }
     if (!has_cyclic_phi(*fn)) return;
     explicit_phi_copies = true;
+    scalar_join_copies = false;
+    scoped_ssa_values.clear();
     merge_value_names.clear();
     merge_locals.clear();
     merge_edge_assignments.clear();
@@ -273,6 +295,7 @@ void Emitter::prepare_phi_copies() {
         // Frame addresses already render as named local storage. Hoisting
         // their register definitions would expose the hidden RSP prologue.
         if (stack_offset(value)) return;
+        if (traces_to_canary_load(value) || is_canary_condition(value)) return;
         std::size_t index = scoped_ssa_values.size();
         std::string name;
         do { name = std::format("{}_{}", prefix, index++); }

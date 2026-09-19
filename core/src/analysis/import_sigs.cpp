@@ -70,6 +70,16 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
         return ImportSigSpec{ret, std::move(params), variadic};
     };
 
+    // Itanium C++ exception runtime. These fixed prototypes prevent stale
+    // argument registers from being printed as extra allocation/throw args.
+    if (name == "__cxa_allocate_exception") return m(t_voidp(a), {t_size(a)});
+    if (name == "__cxa_free_exception") return m(t_void(a), {t_voidp(a)});
+    if (name == "__cxa_throw") return m(t_void(a), {t_voidp(a), t_voidp(a), t_voidp(a)});
+    if (name == "__cxa_rethrow" || name == "__cxa_end_catch") return m(t_void(a), {});
+    if (name == "__cxa_begin_catch") return m(t_voidp(a), {t_voidp(a)});
+    if (name == "_Unwind_Resume") return m(t_void(a), {t_voidp(a)});
+    if (name == "__stack_chk_fail") return m(t_void(a), {});
+
     // ---- <string.h> --------------------------------------------------------
     if (name == "strlen")    return m(t_size(a),   {t_charp(a)});
     if (name == "strnlen")   return m(t_size(a),   {t_charp(a), t_size(a)});

@@ -212,10 +212,17 @@ std::size_t pass_dce(
 
     std::vector<std::pair<u32, u32>> wl;
     wl.reserve(64);
+    const auto observable = [](const IrInst& inst) {
+        // Reading entry PF is pure. Keep it if used by a branch, but not
+        // merely because shift lifting captured flags that later went dead.
+        if (inst.op == IrOp::Intrinsic && inst.src_count == 0 &&
+            (inst.name == "parity" || inst.name == "not_parity")) return false;
+        return is_side_effect(inst.op);
+    };
     for (std::size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         auto& bb = fn.blocks[bi];
         for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
-            if (is_side_effect(bb.insts[ii].op)) {
+            if (observable(bb.insts[ii])) {
                 if (mark_live(bi, ii)) {
                     wl.push_back({static_cast<u32>(bi), static_cast<u32>(ii)});
                 }
@@ -251,7 +258,7 @@ std::size_t pass_dce(
         for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
             const auto& inst = bb.insts[ii];
             if (inst.op == IrOp::Nop) { any_dead = true; break; }
-            if (!live[base + ii] && !is_side_effect(inst.op)) {
+            if (!live[base + ii] && !observable(inst)) {
                 any_dead = true; break;
             }
         }
@@ -262,7 +269,7 @@ std::size_t pass_dce(
         for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
             auto& inst = bb.insts[ii];
             if (inst.op == IrOp::Nop) { ++removed; continue; }
-            if (live[base + ii] || is_side_effect(inst.op)) {
+            if (live[base + ii] || observable(inst)) {
                 if (write != ii) bb.insts[write] = std::move(inst);
                 ++write;
             } else {

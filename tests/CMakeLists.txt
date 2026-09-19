@@ -421,6 +421,10 @@ enable_language(C)
 spelunk_build_fixture(switch_basic)
 spelunk_build_fixture(partial_reg)
 spelunk_build_fixture(return_value)
+add_executable(spelunk_gui_session_test gui_session_test.cpp ../gui/src/session.cpp)
+target_link_libraries(spelunk_gui_session_test PRIVATE spelunk::core spelunk::flags)
+add_dependencies(spelunk_gui_session_test spelunk_fixture_return_value)
+add_test(NAME gui_session_annotations COMMAND spelunk_gui_session_test "${SPELUNK_FIXTURE_return_value_PATH}")
 # Compile at -O0 so the compiler spills every local; this is the shape
 # where memory-forwarding has maximum leverage.
 spelunk_build_fixture(mem_forward OPT "-O0")
@@ -1595,6 +1599,14 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/simd_shuffle_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
             set_tests_properties(simd_shuffle_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME carry_rotate_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/carry_rotate_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
+            set_tests_properties(carry_rotate_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME dwarf_export_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/dwarf_export_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
+            set_tests_properties(dwarf_export_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME x64_fp_edge_semantics
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/x64_fp_edge_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
@@ -1653,6 +1665,10 @@ if(Python3_Interpreter_FOUND)
                     --optimizations 0 1 2 3 s
                     --output "${CMAKE_CURRENT_BINARY_DIR}/pseudocode-samples-clang")
             set_tests_properties(pseudocode_samples_clang_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME dwarf_export_clang_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/dwarf_export_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${SPELUNK_MACHO_TEST_CLANG}")
+            set_tests_properties(dwarf_export_clang_semantics PROPERTIES TIMEOUT 120)
         endif()
         add_test(NAME pseudocode_check_unit
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/pseudocode_check_test.py"

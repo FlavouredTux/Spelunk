@@ -12,7 +12,7 @@ import sys
 SAMPLES = {
     'branches': ('classify', 'int32_t|int32_t|value|int32_t|mode'),
     'loops': ('accumulate', 'uint32_t|uint32_t|limit|uint32_t|seed'),
-    'records': ('update_counter', 'uint32_t|void*|counter|uint32_t|amount'),
+    'records': ('update_counter', 'uint32_t|Counter*|counter|uint32_t|amount'),
     'division': ('divide_pair', 'int32_t|int32_t|numerator|int32_t|denominator'),
     'arrays': ('transform_bytes', 'uint32_t|uint8_t*|data|uint32_t|count'),
     'overlap': ('shift_bytes', 'uint32_t|uint8_t*|data|uint32_t|count'),

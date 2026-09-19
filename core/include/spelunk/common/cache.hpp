@@ -10,7 +10,7 @@
 namespace spelunk::cache {
 
 // Bump when cached payload formats or the analyses producing them change.
-inline constexpr int kVersion = 22;
+inline constexpr int kVersion = 23;
 
 std::filesystem::path default_dir();
 

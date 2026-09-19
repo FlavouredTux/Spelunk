@@ -1,4 +1,6 @@
 // call_fp
+typedef int (*op_t)(int);
+
 int call_fp(op_t fn, int x) {
   return plus7(x) /* observed targets: plus7, minus3 */ + 1;
 }

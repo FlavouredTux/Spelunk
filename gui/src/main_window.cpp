@@ -551,7 +551,7 @@ void MainWindow::jump_to_token(const QString& token) {
         const addr_t va = token.mid(2).toULongLong(&ok, 16);
         if (ok) { jump_to_or_hex(va); return; }
     }
-    if (auto w = resolve_function(*session_->binary, token.toStdString())) {
+    if (auto w = resolve_function(*session_->binary, token.toStdString(), &session_->annotations)) {
         jump_to(w->start);
         return;
     }

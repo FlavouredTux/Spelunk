@@ -1,4 +1,9 @@
 // via_member
+typedef union Handler {
+  uint8_t _storage[16];
+  struct { void* op; };
+} Handler;
+
 int via_member(Handler* h, int x) {
-  return ((uint64_t (*)(uint32_t, uint64_t))(h[0]))(x, x);
+  return ((int (*)(int))(h->op))(x);
 }

@@ -5,6 +5,7 @@
 #include <utility>
 
 #include <spelunk/analysis/demangle.hpp>
+#include <spelunk/common/cache.hpp>
 
 namespace spelunk::gui {
 
@@ -37,7 +38,10 @@ const DiscoveredFunction* Session::function_after(addr_t va) const noexcept {
 }
 
 std::optional<FuncWindow> Session::window_for(const DiscoveredFunction& fn) const {
-    if (auto w = resolve_function_at(*binary, fn.addr)) return w;
+    if (auto w = resolve_function_at(*binary, fn.addr)) {
+        w->label = fn.name;
+        return w;
+    }
     return FuncWindow{fn.addr, fn.size, fn.name};
 }
 
@@ -60,7 +64,7 @@ Result<std::string> Session::pseudocode(const FuncWindow& w, LineMap* map) const
     EmitOptions opts;
     opts.known_function_entries = &entries;
     opts.line_map               = map;
-    return format_struct(*binary, w, /*pseudo=*/true, /*ann=*/nullptr, opts);
+    return format_struct(*binary, w, /*pseudo=*/true, &annotations, opts);
 }
 
 const std::vector<StringEntry>& Session::string_table() {
@@ -75,7 +79,16 @@ Result<std::unique_ptr<Session>> open_session(const std::filesystem::path& path)
     auto s    = std::make_unique<Session>();
     s->path   = path;
     s->binary = std::move(*bin);
+    const auto location = resolve_annotation_location(path, {}, cache::default_dir());
+    std::error_code ec;
+    if (std::filesystem::exists(location.path, ec) && !ec) {
+        auto annotations = Annotations::load(location.path);
+        if (!annotations) return std::unexpected(annotations.error());
+        s->annotations = std::move(*annotations);
+    }
     s->functions = enumerate_functions(*s->binary, EnumerateMode::Auto);
+    for (auto& function : s->functions)
+        if (const auto* name = s->annotations.name_for(function.addr)) function.name = *name;
     std::sort(s->functions.begin(), s->functions.end(),
               [](const DiscoveredFunction& a, const DiscoveredFunction& b) {
                   return a.addr < b.addr;

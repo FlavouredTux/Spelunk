@@ -495,7 +495,8 @@ struct Emitter {
     call_import_name(const IrInst& inst) const;
 
     [[nodiscard]] const FunctionSig*
-    call_annotation_signature(const IrInst& inst) const noexcept;
+    call_annotation_signature(const IrInst& inst) const;
+    mutable std::map<std::string, FunctionSig> callback_signatures;
 
     [[nodiscard]] const InferredSig*
     call_inferred_signature(const IrInst& inst) const noexcept;

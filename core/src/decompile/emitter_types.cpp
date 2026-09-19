@@ -705,16 +705,24 @@ Emitter::synthetic_struct_declarations(std::string_view rendered_function) const
 
 std::string
 Emitter::imported_record_declarations(std::string_view rendered_function) const {
-    if (!annotations || annotations->imported_records.empty()) return {};
+    if (!annotations) return {};
     std::string out;
     for (const auto& [alias, underlying_raw] : annotations->imported_aliases) {
         if (annotations->imported_records.contains(alias)) continue;
-        bool alias_used = text_contains_identifier(rendered_function, alias);
+        bool alias_used = text_contains_identifier(rendered_function, alias) ||
+            c_signature_type_names.contains(alias);
         for (const auto& [_, slot] : frame_layout.slots) {
             alias_used |= imported_record_base(slot.type_override) == alias;
         }
         if (!alias_used) continue;
         std::string underlying = underlying_raw;
+        if (const auto pointer = underlying.find("(*)"); pointer != std::string::npos) {
+            if (!options.c_source) {
+                underlying.insert(pointer + 2, alias);
+                out += std::format("typedef {};\n", underlying);
+            }
+            continue;
+        }
         const auto array = underlying.find('[');
         std::string suffix;
         if (array != std::string::npos) {
@@ -900,14 +908,37 @@ Emitter::imported_record_declarations(std::string_view rendered_function) const 
     for (const std::string& name : forward_only) {
         const auto& record = annotations->imported_records.at(name);
         out += std::format(
-            "typedef union {} {{ uint8_t _storage[{}]; }} {};\n",
+            "typedef {} {} {{ uint8_t _storage[{}]; }} {};\n",
+            rendered_function.find("struct " + name) != std::string_view::npos ? "struct" : "union",
             name, std::max<std::size_t>(record.size, 1), name);
     }
     if (!forward_only.empty()) out += "\n";
 
     for (const std::string& name : ordered) {
         const auto& record = annotations->imported_records.at(name);
-        out += std::format("typedef union {} {{\n", name);
+        bool plain_record = !record.is_union;
+        std::size_t cursor = 0, alignment = 1;
+        for (const auto& [offset, field] : record.fields) {
+            const auto size = scalar_bytes(normalize_c_type_alias(field.type));
+            if (!size || field.size != size) { plain_record = false; break; }
+            cursor = (cursor + size - 1) / size * size;
+            if (offset < 0 || static_cast<std::size_t>(offset) != cursor) { plain_record = false; break; }
+            cursor += size;
+            alignment = std::max(alignment, size);
+        }
+        plain_record &= !record.fields.empty() &&
+            (cursor + alignment - 1) / alignment * alignment == record.size &&
+            !fallback_fields.contains(name);
+        if (plain_record) {
+            out += std::format("typedef struct {} {{\n", name);
+            for (const auto& [_, field] : record.fields)
+                out += std::format("  {} {};\n", normalize_c_type_alias(field.type), field.name);
+            out += std::format("}} {};\n\n", name);
+            continue;
+        }
+        const bool struct_tag = rendered_function.find("struct " + name) != std::string_view::npos;
+        out += std::format("typedef {} {} {{\n", struct_tag ? "struct" : "union", name);
+        if (struct_tag) out += "  union {\n";
         if (record.size != 0) {
             out += std::format("  uint8_t _storage[{}];\n", record.size);
             if (record.size == 1) out += "  uint8_t _raw;\n";
@@ -964,6 +995,7 @@ Emitter::imported_record_declarations(std::string_view rendered_function) const 
                 out += std::format("{} {}; }};\n", type, field);
             }
         }
+        if (struct_tag) out += "  };\n";
         out += std::format("}} {};\n\n", name);
     }
     return out;

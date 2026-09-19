@@ -12,6 +12,13 @@
 namespace spelunk::emit {
 namespace {
 
+bool carry_rotate_name(std::string_view name) {
+    for (unsigned width : {8u, 16u, 32u, 64u})
+        for (std::string_view prefix : {"rcl", "rcr", "rcl_cf", "rcr_cf"})
+            if (name == std::format("{}{}", prefix, width)) return true;
+    return false;
+}
+
 // Words that already name a type (or can never begin one). A candidate that
 // survives the "only ever used as `NAME *`" test still has to clear this
 // list before we invent a record for it.
@@ -216,6 +223,15 @@ void collect_defined_c_type_names(std::string_view code, std::set<std::string>& 
             continue;
         }
         std::size_t end = semi;
+        const auto pointer = code.find("(*", i + kTypedef.size());
+        if (pointer != std::string::npos && pointer < semi) {
+            std::size_t begin = pointer + 2;
+            while (begin < semi && c_type_space(code[begin])) ++begin;
+            std::size_t finish = begin;
+            while (finish < semi && c_type_name_char(code[finish])) ++finish;
+            if (finish > begin && finish < semi && code[finish] == ')')
+                out.emplace(code.substr(begin, finish - begin));
+        }
         while (end > i + kTypedef.size() && c_type_space(code[end - 1])) --end;
         if (end > i + kTypedef.size() && code[end - 1] == ']') {
             std::size_t lb = end - 1;
@@ -373,6 +389,31 @@ std::string Emitter::c_preamble(std::string_view body,
             scalar.suffix, scalar.type, read, write);
     }
     std::string helper_text;
+    bool carry_helper = false;
+    for (unsigned width : {8u, 16u, 32u, 64u}) {
+        bool used = false;
+        for (std::string_view prefix : {"rcl", "rcr", "rcl_cf", "rcr_cf"})
+            used |= text_contains_identifier(body, std::format("{}{}", prefix, width));
+        if (!used) continue;
+        if (!carry_helper) {
+            out += "#ifndef SPELUNK_C_CARRY_ROTATE\n#define SPELUNK_C_CARRY_ROTATE\n"
+                "static inline uint64_t spelunk_carry_rotate(unsigned w, uint64_t v, uint64_t n, uint64_t cf, bool right, bool carry_out) { "
+                "n &= w == 64 ? 63 : 31; if (w < 32) n %= w + 1; "
+                "uint64_t mask = UINT64_MAX >> (64 - w); v &= mask; cf &= 1; "
+                "while (n--) { uint64_t next = right ? (v & 1) : (v >> (w - 1)); "
+                "v = right ? ((v >> 1) | (cf << (w - 1))) : (((v << 1) | cf) & mask); cf = next; } "
+                "return carry_out ? cf : v; }\n#endif\n";
+            carry_helper = true;
+        }
+        for (std::string_view prefix : {"rcl", "rcr", "rcl_cf", "rcr_cf"}) {
+            const auto name = std::format("{}{}", prefix, width);
+            out += std::format("#ifndef SPELUNK_C_HELPER_{0}\n#define SPELUNK_C_HELPER_{0}\n"
+                "static inline uint64_t {0}(uint64_t v, uint64_t n, uint64_t cf) "
+                "{{ return spelunk_carry_rotate({1}, v, n, cf, {2}, {3}); }}\n#endif\n",
+                name, width, prefix.starts_with("rcr") ? "true" : "false",
+                prefix.ends_with("_cf") ? "true" : "false");
+        }
+    }
     bool need_rep_macros = false;
     bool need_rot_macros = false;
     for (const auto& helper : kCHelpers) {
@@ -422,7 +463,7 @@ std::string Emitter::c_preamble(std::string_view body,
     context += scope_decls;
     context += '\n';
     context += declarations;
-    return out + c_forward_type_declarations(context) + declarations + "\n";
+    return out + c_forward_type_declarations(context) + std::string(scope_decls) + declarations + "\n";
 }
 
 void Emitter::note_c_type_name(std::string_view type) const {
@@ -465,6 +506,16 @@ std::string Emitter::c_forward_type_declarations(std::string_view context) const
     collect_defined_c_type_names(code, defined);
 
     std::string out;
+    if (annotations) {
+        for (const auto& [alias, underlying] : annotations->imported_aliases) {
+            const auto pointer = underlying.find("(*)");
+            if (pointer == std::string::npos || !text_contains_identifier(context, alias)) continue;
+            std::string declaration = underlying;
+            declaration.insert(pointer + 2, alias);
+            out += std::format("typedef {};\n", declaration);
+            defined.insert(alias);
+        }
+    }
     std::set<std::string_view> forward_declared;
     for (const auto& [name, pointer_use] : record_shaped) {
         if (!pointer_use || known_c_type_word(name) || defined.contains(std::string(name))) {
@@ -564,7 +615,7 @@ std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const 
 void Emitter::note_c_intrinsic(std::string_view name, u8 arity) const {
     // Compiler intrinsics come from <immintrin.h>, libc from its own headers,
     // and helpers define themselves.
-    if (name.starts_with("_mm") || defined_c_helper(name) ||
+    if (name.starts_with("_mm") || defined_c_helper(name) || carry_rotate_name(name) ||
         standard_c_library_name(name)) return;
     std::string parameters;
     for (u8 i = 0; i < arity; ++i) {

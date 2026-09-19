@@ -31,10 +31,12 @@ namespace spelunk {
 namespace {
 
 void attach_embedded_dwarf(Binary& binary) {
-    for (auto& [address, function] : parse_dwarf_functions(binary)) {
+    Annotations types;
+    for (auto& [address, function] : parse_dwarf_functions(binary, &types)) {
         binary.add_inferred_function_name(address, function.name);
         binary.add_debug_signature(address, function.signature);
     }
+    binary.add_debug_types(std::move(types));
 }
 
 [[nodiscard]] Result<std::vector<std::byte>>

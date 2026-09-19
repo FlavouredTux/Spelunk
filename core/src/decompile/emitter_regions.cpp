@@ -19,6 +19,46 @@
 
 namespace spelunk::emit {
 
+namespace {
+void append_if_opening(const Emitter& e, const IrValue& condition,
+                       std::string_view cond, std::string_view ind, std::string& out) {
+    const std::string opening = std::format("{}if ({}) {{\n", ind, cond);
+    const std::string closing = std::format("{}}}\n", ind);
+    if (!e.options.line_map) {
+        if (const auto* condition_name = e.scoped_ssa_name(condition);
+            condition_name && out.ends_with(closing)) {
+            const auto previous = out.rfind(opening);
+            if (previous != std::string::npos) {
+                auto assignments = std::string_view(out).substr(previous + opening.size(),
+                    out.size() - closing.size() - previous - opening.size());
+                bool copies_only = assignments.find_first_of("{}") == std::string_view::npos &&
+                    !text_contains_identifier_in_code(assignments, *condition_name);
+                while (copies_only && !assignments.empty()) {
+                    const auto end = assignments.find('\n');
+                    auto line = assignments.substr(0, end);
+                    const auto begin = line.find_first_not_of(" \t");
+                    if (begin != std::string_view::npos) {
+                        line.remove_prefix(begin);
+                        const auto equals = line.find(" = ");
+                        copies_only = equals != std::string_view::npos &&
+                            std::ranges::any_of(e.scoped_ssa_values, [&](const auto& entry) {
+                                return entry.second.second == line.substr(0, equals);
+                            });
+                    }
+                    if (end == std::string_view::npos) break;
+                    assignments.remove_prefix(end + 1);
+                }
+                if (copies_only) {
+                    out.resize(out.size() - closing.size());
+                    return;
+                }
+            }
+        }
+    }
+    out += opening;
+}
+}  // namespace
+
 void Emitter::collect_for_updates(const Region& r) {
     if (r.kind == RegionKind::For && r.has_update) {
         auto it = fn->block_at.find(r.update_block);
@@ -408,7 +448,7 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string cond = render_condition(r.condition, r.invert);
     emit_materializations_for_rendered_value(r.condition, cond, out, ind);
-    out += std::format("{}if ({}) {{\n", ind, cond);
+    append_if_opening(*this, r.condition, cond, ind, out);
     std::move(body).append_to(out);
     emitted_bindings.insert(bindings_after_body.begin(), bindings_after_body.end());
     out += std::format("{}}}\n", ind);
@@ -476,7 +516,7 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         const auto bindings_after_else_outer = emitted_bindings;
         emitted_bindings = bindings_before_else_outer;
         if (!rendered_region_empty(else_outer.text())) {
-            out += std::format("{}if ({}) {{\n", ind, cond);
+            append_if_opening(*this, r.condition, cond, ind, out);
             std::move(then_buf).append_to(out);
             emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
             out += std::format("{}}}\n", ind);
@@ -488,7 +528,7 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         }
         else_outer.discard();
     }
-    out += std::format("{}if ({}) {{\n", ind, cond);
+    append_if_opening(*this, r.condition, cond, ind, out);
     std::move(then_buf).append_to(out);
     emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
     if (!else_empty) {

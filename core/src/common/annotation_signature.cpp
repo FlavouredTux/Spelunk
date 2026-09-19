@@ -92,6 +92,7 @@ parse_signature(std::string_view src) {
     }
     // Params: top-level comma-split; strip outer paren contents.
     std::string_view body = v.substr(lp + 1, rp - lp - 1);
+    if (trim(body) == "void") return sig;
     std::size_t depth = 0, prev = 0;
     for (std::size_t i = 0; i <= body.size(); ++i) {
         const char c = (i < body.size()) ? body[i] : ',';

@@ -8,6 +8,7 @@
 #include <span>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <spelunk/binary/arch.hpp>
@@ -154,6 +155,8 @@ public:
     }
     [[nodiscard]] const std::map<addr_t, FunctionSig>&
     debug_signatures() const noexcept { return debug_signatures_; }
+    [[nodiscard]] const Annotations& debug_types() const noexcept { return debug_types_; }
+    void add_debug_types(Annotations types) { debug_types_ = std::move(types); }
 
     // Merge defined Function/Object symbols from a separate symbol-bearing
     // binary by linked-image offset. This covers split-debug companions such
@@ -169,6 +172,7 @@ protected:
     // const-only.
     [[nodiscard]] virtual std::vector<Symbol>& mutable_symbols() noexcept = 0;
     std::map<addr_t, FunctionSig> debug_signatures_;
+    Annotations debug_types_;
 public:
 
     // ---- Indirect-edge oracle ----------------------------------------

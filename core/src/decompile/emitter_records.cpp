@@ -130,6 +130,9 @@ Emitter::imported_field_expression_typed(const ImportedRecordLayout& record,
 std::optional<std::size_t>
 Emitter::pointer_pointee_size(const IrValue& pointer) const {
     std::string type = c_type_name_for(pointer);
+    if (auto slot = trace_pointer_alias_to_self_arg_slot(pointer);
+        slot && *slot < self_arg_type_names.size() && self_arg_type_names[*slot].ends_with('*'))
+        type = self_arg_type_names[*slot];
     if (annotations && fn) {
         if (auto slot = trace_pointer_alias_to_self_arg_slot(pointer); slot) {
             if (const FunctionSig* signature = annotations->signature_for(fn->start);
@@ -340,6 +343,9 @@ Emitter::imported_typed_pointer_field(const IrValue& base, i64 off, int depth,
                                       std::optional<IrType> access_type) const {
     if (!annotations || off < 0) return std::nullopt;
     std::string type = c_type_name_for(base);
+    if (auto slot = trace_pointer_alias_to_self_arg_slot(base);
+        slot && *slot < self_arg_type_names.size() && self_arg_type_names[*slot].ends_with('*'))
+        type = self_arg_type_names[*slot];
     if (!type.ends_with('*')) {
         const IrInst* load = def_stripped(base);
         if (load && load->op == IrOp::Load && load->src_count >= 1) {

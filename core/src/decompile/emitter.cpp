@@ -44,6 +44,19 @@ using namespace emit;
 
 namespace {
 
+std::optional<Annotations> with_debug_types(const Binary* binary, const Annotations* user) {
+    if (!binary || (binary->debug_types().imported_records.empty() &&
+                    binary->debug_types().imported_aliases.empty())) return std::nullopt;
+    Annotations merged = user ? *user : Annotations{};
+    const auto& types = binary->debug_types();
+    // Per-parameter field annotations may intentionally use different names.
+    if (!user || user->field_names.empty())
+        merged.imported_records.insert(types.imported_records.begin(), types.imported_records.end());
+    merged.imported_aliases.insert(types.imported_aliases.begin(), types.imported_aliases.end());
+    merged.type_sizes.insert(types.type_sizes.begin(), types.type_sizes.end());
+    return merged;
+}
+
 [[nodiscard]] std::unique_ptr<Region> clone_region_tree(const Region& source) {
     auto clone = std::make_unique<Region>();
     clone->kind = source.kind;
@@ -394,9 +407,12 @@ header_from_signature(Emitter& e, const StructuredFunction& sf,
     } else {
         for (std::size_t i = 0; i < sig.params.size(); ++i) {
             if (i > 0) params += ", ";
-            params += std::format("{} {}",
-                                  Emitter::normalize_c_type_alias(sig.params[i].type),
-                                  signature_parameter_name(sig.params[i], i));
+            auto type = Emitter::normalize_c_type_alias(sig.params[i].type);
+            const auto parameter = signature_parameter_name(sig.params[i], i);
+            if (const auto pointer = type.find("(*)"); pointer != std::string::npos) {
+                type.insert(pointer + 2, parameter);
+                params += type;
+            } else params += std::format("{} {}", type, parameter);
         }
         if (sig.variadic) params += ", ...";
     }
@@ -580,6 +596,9 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     StructuredFunction working{
         sf.ir, sf.body ? clone_region_tree(*sf.body) : nullptr};
 
+    auto type_annotations = with_debug_types(binary, annotations);
+    if (type_annotations) annotations = &*type_annotations;
+
     Emitter e(binary);
     e.annotations = annotations;
     e.options     = options;
@@ -676,7 +695,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     const std::string scope_decls =
         file_scope_declarations(e, declaration_context);
     if (options.c_source) out += e.c_preamble(declaration_context, scope_decls);
-    out += scope_decls;
+    else out += scope_decls;
     out += header;
     if (text_contains_identifier_in_code(body_buf, "stack_top")) {
         out += "  uint64_t stack_top; /* entry stack word */\n";
@@ -730,6 +749,8 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
             "pseudo-c per-block: StructuredFunction has no IR"));
     }
 
+    auto type_annotations = with_debug_types(binary, annotations);
+    if (type_annotations) annotations = &*type_annotations;
     // Setup mirrors emit() - same ABI plumbing, same ObjC / RTTI lookup,
     // same per-emit signature inference. We deliberately skip the
     // body-tree walks (suppress_canary_regions / analyze_return_folds /

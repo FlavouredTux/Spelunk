@@ -20,10 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts'))
 from check_pseudocode import check_source
 
 # fixture -> what is still missing from its export.
-KNOWN_GAPS = {
-    'indirect_trace': 'op_t is a function-pointer typedef debug info gives by name only',
-    'decoder_misc': 'carry-rotate intrinsics are not modelled by the C exporter',
-}
+KNOWN_GAPS = {}
 
 
 def main(args):

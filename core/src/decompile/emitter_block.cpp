@@ -826,10 +826,11 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
     }
     if (call_expr.empty()) {
         if ((abi == Abi::SysVAmd64 || abi == Abi::Win64) && inst.src_count) {
-            if (auto target = call_signature_target(inst)) {
-                const auto* signature = call_annotation_signature(inst);
+            const auto target = call_signature_target(inst);
+            const auto* signature = call_annotation_signature(inst);
+            if (target || signature) {
                 const auto layout = signature ? abi_layout_for(*signature) : cached_argument_layout(*target);
-                if (std::ranges::any_of(layout, [](const auto& arg) {
+                if (signature || std::ranges::any_of(layout, [](const auto& arg) {
                         return is_float_type(arg.type) || arg.stack_offset.has_value();
                     })) {
                     std::vector<std::string> rendered;
@@ -843,6 +844,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
                             ? normalize_c_type_alias(signature->params[i].type)
                             : std::string(c_type_name(layout[i].type));
                     }
+                    if (types.empty()) types = "void";
                     const std::string ret = known_call_return_c_type(inst).value_or("uint64_t");
                     const std::string indirect = expr(inst.srcs[0]);
                     if (const auto* object = global_object_for_load(inst.srcs[0])) {

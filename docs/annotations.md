@@ -14,6 +14,11 @@ Add `--dry-run` to print the proposed file without writing it.
 The destination is selected in this order: explicit `--annotations PATH`,
 existing `<binary>.spelunk-annotations` sidecar, then the annotation cache.
 
+The Qt GUI loads the same sidecar or cache when opening a binary. Saved
+function names appear in the function list and navigation; signatures and
+field annotations are used in the pseudo-C view. Reopen the binary after
+changing annotations externally.
+
 ```sh
 spelunk --list-annotations --annotations project.annotations ./target
 spelunk --export-annotations exported.annotations ./target

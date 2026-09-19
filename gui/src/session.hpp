@@ -26,6 +26,7 @@ namespace spelunk::gui {
 struct Session {
     std::filesystem::path           path;
     std::unique_ptr<Binary>         binary;
+    Annotations                    annotations;
     std::vector<DiscoveredFunction> functions;   // sorted by addr
     std::unordered_set<addr_t>      entries;     // every functions[i].addr
 

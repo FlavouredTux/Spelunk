@@ -284,7 +284,7 @@ void Emitter::prepare_phi_copies() {
         for (const auto& inst : block.insts) {
             if (auto key = ssa_key(inst.dst); key) {
                 definitions.emplace(*key, std::pair{block.start, &inst});
-                if (inst.op == IrOp::Phi) remember(inst.dst, "phi");
+                if (inst.op == IrOp::Phi) remember(inst.dst, base_name_for(merge_role_for_phi(inst)));
             }
         }
     }
@@ -354,6 +354,25 @@ void Emitter::emit_phi_copies(const IrBlock& block, std::string_view ind,
             values.push_back(std::move(value));
         }
         std::set<std::string> reserved(self_arg_names.begin(), self_arg_names.end());
+        bool independent = true;
+        for (const auto& [destination, source] : copies) {
+            (void)source;
+            const auto& name = *scoped_ssa_name(destination);
+            for (const auto& value : values)
+                independent &= !text_contains_identifier_in_code(value, name);
+        }
+        if (independent || copies.size() == 1) {
+            std::string inner(ind);
+            if (terminator.op == IrOp::CondBranch) {
+                const auto condition = render_condition(terminator.srcs[0], target != terminator.target1);
+                out += std::format("{}if ({}) {{\n", ind, condition);
+                inner += "  ";
+            }
+            for (std::size_t i = 0; i < copies.size(); ++i)
+                out += std::format("{}{} = {};\n", inner, *scoped_ssa_name(copies[i].first), values[i]);
+            if (terminator.op == IrOp::CondBranch) out += std::format("{}}}\n", ind);
+            continue;
+        }
         for (const auto& [_, value] : scoped_ssa_values) reserved.insert(value.second);
         std::vector<std::string> scratch;
         std::size_t number = 0;

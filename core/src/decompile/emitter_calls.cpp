@@ -228,9 +228,40 @@ std::optional<addr_t> Emitter::call_signature_target(const IrInst& inst) const {
 }
 
 const FunctionSig*
-Emitter::call_annotation_signature(const IrInst& inst) const noexcept {
+Emitter::call_annotation_signature(const IrInst& inst) const {
     if (annotations) {
         if (auto target = call_signature_target(inst)) return annotations->signature_for(*target);
+        if (inst.op == IrOp::CallIndirect && inst.src_count) {
+            std::string type;
+            if (auto slot = trace_to_self_arg_slot(inst.srcs[0]); slot && *slot < self_arg_type_names.size()) {
+                type = self_arg_type_names[*slot];
+            }
+            if (const auto* load = def_stripped(inst.srcs[0]); load && load->op == IrOp::Load && load->src_count) {
+                if (auto access = canonical_struct_access(load->srcs[0])) {
+                    if (auto slot = trace_pointer_alias_to_self_arg_slot(access->first);
+                        slot && *slot < self_arg_type_names.size()) {
+                        const auto owner = imported_record_base(self_arg_type_names[*slot]);
+                        if (auto record = annotations->imported_records.find(owner); record != annotations->imported_records.end()) {
+                            if (auto field = record->second.fields.find(access->second); field != record->second.fields.end())
+                                type = field->second.type;
+                        }
+                    }
+                }
+            }
+            if (auto alias = annotations->imported_aliases.find(type); alias != annotations->imported_aliases.end())
+                type = alias->second;
+            if (auto found = callback_signatures.find(type); found != callback_signatures.end()) return &found->second;
+            const auto pointer = type.find("(*)");
+            if (pointer != std::string::npos && type.find("...") == std::string::npos) {
+                std::string declaration = type;
+                declaration.replace(pointer, 3, "callback");
+                if (auto signature = parse_signature(declaration)) {
+                    auto [entry, inserted] = callback_signatures.emplace(type, std::move(*signature));
+                    (void)inserted;
+                    return &entry->second;
+                }
+            }
+        }
     }
     return nullptr;
 }

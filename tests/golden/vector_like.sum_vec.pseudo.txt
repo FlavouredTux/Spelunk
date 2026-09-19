@@ -1,4 +1,11 @@
 // sum_vec
+typedef union vec_int {
+  uint8_t _storage[24];
+  struct { void* begin; };
+  struct { uint8_t _pad_end[8]; void* end; };
+  struct { uint8_t _pad_capacity[16]; void* capacity; };
+} vec_int;
+
 extern uint32_t g_sink;
 
 int sum_vec(vec_int* v, int idx) {

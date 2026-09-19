@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cctype>
 #include <cstring>
 #include <map>
 #include <optional>
@@ -27,6 +28,7 @@ constexpr u64 DW_TAG_formal_parameter = 0x05;
 constexpr u64 DW_TAG_pointer_type = 0x0f;
 constexpr u64 DW_TAG_reference_type = 0x10;
 constexpr u64 DW_TAG_structure_type = 0x13;
+constexpr u64 DW_TAG_member = 0x0d;
 constexpr u64 DW_TAG_subroutine_type = 0x15;
 constexpr u64 DW_TAG_typedef = 0x16;
 constexpr u64 DW_TAG_union_type = 0x17;
@@ -41,6 +43,11 @@ constexpr u64 DW_TAG_rvalue_reference_type = 0x42;
 
 constexpr u64 DW_AT_name = 0x03;
 constexpr u64 DW_AT_byte_size = 0x0b;
+constexpr u64 DW_AT_data_member_location = 0x38;
+constexpr u64 DW_AT_bit_size = 0x0d;
+constexpr u64 DW_AT_data_bit_offset = 0x6b;
+constexpr u64 DW_AT_str_offsets_base = 0x72;
+constexpr u64 DW_AT_addr_base = 0x73;
 constexpr u64 DW_AT_low_pc = 0x11;
 constexpr u64 DW_AT_high_pc = 0x12;
 constexpr u64 DW_AT_declaration = 0x3c;
@@ -194,6 +201,10 @@ struct Die {
     u64 low_pc = 0;
     u64 high_pc = 0;
     u64 byte_size = 0;
+    u64 member_offset = 0;
+    bool member_offset_known = false;
+    bool bit_field = false;
+    std::vector<std::size_t> members;
     bool high_is_offset = false;
     bool declaration = false;
     bool variadic = false;
@@ -361,13 +372,15 @@ struct FormValue {
 }  // namespace
 
 std::map<addr_t, DwarfFunctionInfo>
-parse_dwarf_functions(const Binary& binary) {
+parse_dwarf_functions(const Binary& binary, Annotations* types) {
     std::map<addr_t, DwarfFunctionInfo> output;
     auto info = section_bytes(binary, ".debug_info");
     auto abbrev_bytes = section_bytes(binary, ".debug_abbrev");
     if (info.empty() || abbrev_bytes.empty()) return output;
     const auto debug_str = section_bytes(binary, ".debug_str");
     const auto line_str = section_bytes(binary, ".debug_line_str");
+    const auto str_offsets = section_bytes(binary, ".debug_str_offsets");
+    const auto addresses = section_bytes(binary, ".debug_addr");
     const bool little = binary.endian() != Endian::Big;
     Reader units{info, 0, info.size(), little};
     std::vector<Die> dies;
@@ -413,6 +426,13 @@ parse_dwarf_functions(const Binary& binary) {
         auto abbrevs = parse_abbrevs(abbrev_bytes, abbrev_offset, little);
         if (abbrevs.empty()) { units.pos = unit_end; continue; }
         std::vector<std::size_t> parents;
+        u64 string_base = 0, address_base = 0;
+        const auto indexed = [&](std::span<const std::byte> bytes, u64 base,
+                                 u64 index, unsigned width) -> std::optional<u64> {
+            if (!width || base > bytes.size() || index >= (bytes.size() - base) / width) return std::nullopt;
+            Reader table{bytes, static_cast<std::size_t>(base + index * width), bytes.size(), little};
+            return table.uint_n(width);
+        };
 
         while (reader.pos < unit_end) {
             const u64 die_offset = reader.pos;
@@ -427,12 +447,23 @@ parse_dwarf_functions(const Binary& binary) {
             Die die;
             die.offset = die_offset;
             die.tag = abbreviation->second.tag;
+            std::optional<u64> name_index, linkage_index, low_pc_index;
             bool failed = false;
             for (const AbbrevAttr& attribute : abbreviation->second.attrs) {
                 auto value = read_form(reader, attribute.form, attribute.implicit,
                     address_size, offset_size, unit_start, debug_str, line_str);
                 if (!value) { failed = true; break; }
+                const bool string_index = attribute.form == DW_FORM_strx ||
+                    (attribute.form >= DW_FORM_strx1 && attribute.form <= DW_FORM_strx4);
+                const bool address_index = attribute.form == DW_FORM_addrx ||
+                    (attribute.form >= DW_FORM_addrx1 && attribute.form <= DW_FORM_addrx4);
+                if (string_index && attribute.name == DW_AT_name) name_index = value->number;
+                if (string_index && (attribute.name == DW_AT_linkage_name || attribute.name == DW_AT_MIPS_linkage_name))
+                    linkage_index = value->number;
+                if (address_index && attribute.name == DW_AT_low_pc) low_pc_index = value->number;
                 switch (attribute.name) {
+                    case DW_AT_str_offsets_base: string_base = value->number; break;
+                    case DW_AT_addr_base: address_base = value->number; break;
                     case DW_AT_name: die.name = value->text; break;
                     case DW_AT_linkage_name:
                     case DW_AT_MIPS_linkage_name: die.linkage = value->text; break;
@@ -445,16 +476,34 @@ parse_dwarf_functions(const Binary& binary) {
                         die.high_is_offset = attribute.form != DW_FORM_addr;
                         break;
                     case DW_AT_byte_size: die.byte_size = value->number; break;
+                    case DW_AT_data_member_location:
+                        die.member_offset = value->number;
+                        die.member_offset_known = attribute.form == DW_FORM_data1 ||
+                            attribute.form == DW_FORM_data2 || attribute.form == DW_FORM_data4 ||
+                            attribute.form == DW_FORM_data8 || attribute.form == DW_FORM_udata;
+                        break;
+                    case DW_AT_bit_size:
+                    case DW_AT_data_bit_offset: die.bit_field = true; break;
                     case DW_AT_declaration: die.declaration = value->number != 0; break;
                     default: break;
                 }
             }
             if (failed) break;
+            if (name_index) {
+                const auto offset = indexed(str_offsets, string_base, *name_index, offset_size);
+                die.name = offset ? string_at(debug_str, *offset) : std::string{};
+            }
+            if (linkage_index) {
+                const auto offset = indexed(str_offsets, string_base, *linkage_index, offset_size);
+                die.linkage = offset ? string_at(debug_str, *offset) : std::string{};
+            }
+            if (low_pc_index) die.low_pc = indexed(addresses, address_base, *low_pc_index, address_size).value_or(0);
             const std::size_t index = dies.size();
             dies.push_back(std::move(die));
             die_by_offset[die_offset] = index;
             if (!parents.empty()) {
                 Die& parent = dies[parents.back()];
+                if (dies[index].tag == DW_TAG_member) parent.members.push_back(index);
                 if (dies[index].tag == DW_TAG_formal_parameter) {
                     parent.params.emplace_back(dies[index].name, dies[index].type);
                     if (dies[index].origin != 0) {
@@ -485,6 +534,19 @@ parse_dwarf_functions(const Binary& binary) {
             case DW_TAG_unspecified_type:
                 return normalize_base_type(die->name, die->byte_size);
             case DW_TAG_pointer_type:
+                if (const auto* target = find_die(die->type);
+                    target && target->tag == DW_TAG_subroutine_type) {
+                    auto return_seen = seen;
+                    std::string result = self(self, target->type, return_seen, depth + 1) + " (*)(";
+                    for (std::size_t i = 0; i < target->params.size(); ++i) {
+                        if (i) result += ", ";
+                        auto param_seen = seen;
+                        result += self(self, target->params[i].second, param_seen, depth + 1);
+                    }
+                    if (target->variadic) result += target->params.empty() ? "..." : ", ...";
+                    else if (target->params.empty()) result += "void";
+                    return result + ")";
+                }
                 return self(self, die->type, seen, depth + 1) + "*";
             case DW_TAG_reference_type:
                 return self(self, die->type, seen, depth + 1) + "&";
@@ -509,6 +571,51 @@ parse_dwarf_functions(const Binary& binary) {
                     ? self(self, die->type, seen, depth + 1) : "void*";
         }
     };
+
+    if (types) {
+        const auto identifier = [](std::string_view name) {
+            if (name.empty() || !(std::isalpha(static_cast<unsigned char>(name.front())) || name.front() == '_')) return false;
+            for (char c : name)
+                if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+            return true;
+        };
+        const auto byte_size = [&](u64 offset) {
+            std::set<u64> seen;
+            while (offset && seen.insert(offset).second) {
+                const auto* die = find_die(offset);
+                if (!die) break;
+                if (die->byte_size) return die->byte_size;
+                offset = die->type;
+            }
+            return u64{0};
+        };
+        for (const auto& die : dies) {
+            if (!identifier(die.name)) continue;
+            if (die.tag == DW_TAG_typedef) {
+                std::set<u64> seen;
+                const auto type = resolve_type(resolve_type, die.type, seen, 0);
+                if (type.find("(*)") != std::string::npos)
+                    types->imported_aliases.try_emplace(die.name, type);
+            }
+            if (die.tag != DW_TAG_structure_type || !die.byte_size || die.byte_size > 1048576) continue;
+            ImportedRecordLayout record;
+            record.size = static_cast<std::size_t>(die.byte_size);
+            for (const auto index : die.members) {
+                const auto& member = dies[index];
+                const auto size = byte_size(member.type);
+                if (!member.member_offset_known || member.bit_field || !identifier(member.name) ||
+                    !size || member.member_offset > die.byte_size || size > die.byte_size - member.member_offset) continue;
+                std::set<u64> seen;
+                record.fields.try_emplace(static_cast<i64>(member.member_offset), ImportedRecordField{
+                    member.name, resolve_type(resolve_type, member.type, seen, 0),
+                    static_cast<std::size_t>(member.member_offset), static_cast<std::size_t>(size)});
+            }
+            if (!record.fields.empty()) {
+                types->type_sizes.try_emplace(die.name, record.size);
+                types->imported_records.try_emplace(die.name, std::move(record));
+            }
+        }
+    }
 
     for (const Die& definition : dies) {
         if (definition.tag != DW_TAG_subprogram || definition.low_pc == 0 ||

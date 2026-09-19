@@ -174,6 +174,22 @@ file_scope_declarations(const Emitter& e, const std::string& declaration_context
     out += e.imported_record_declarations(declaration_context);
     out += e.synthetic_struct_declarations(declaration_context);
     for (const std::string& function : e.address_taken_function_decls) {
+        if (e.binary) {
+            if (const auto* symbol = e.binary->find_by_name(function)) {
+                const auto signature = e.binary->debug_signatures().find(symbol->addr);
+                if (signature != e.binary->debug_signatures().end()) {
+                    std::string params;
+                    for (const auto& parameter : signature->second.params) {
+                        if (!params.empty()) params += ", ";
+                        params += parameter.type;
+                    }
+                    if (signature->second.variadic) params += params.empty() ? "..." : ", ...";
+                    else if (params.empty()) params = "void";
+                    out += std::format("extern {} {}({});\n", signature->second.return_type, function, params);
+                    continue;
+                }
+            }
+        }
         out += std::format("extern void {}(void);\n", function);
     }
     if (!e.address_taken_function_decls.empty()) out += "\n";

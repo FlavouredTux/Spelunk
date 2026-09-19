@@ -17,9 +17,9 @@ struct DwarfFunctionInfo {
 };
 
 // Best-effort DWARF v4/v5 .debug_info reader. It intentionally focuses on
-// source-level subprogram names and signature type chains; malformed or
+// subprogram signatures, callback typedefs and constant-offset struct fields; malformed or
 // unsupported DIEs are skipped without making the containing binary unloadable.
 [[nodiscard]] std::map<addr_t, DwarfFunctionInfo>
-parse_dwarf_functions(const Binary& binary);
+parse_dwarf_functions(const Binary& binary, Annotations* types = nullptr);
 
 }  // namespace spelunk

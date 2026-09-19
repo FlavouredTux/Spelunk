@@ -291,6 +291,7 @@ struct MachOBinary::ParseState {
 Result<void> MachOBinary::parse() {
     ParseState st(buffer_);
     if (auto res = read_load_commands(st); !res) return res;
+    is_relocatable_ = st.filetype == MH_OBJECT;
     if (auto res = parse_segments(st); !res) return res;
     if (auto res = read_linkedit_commands(st); !res) return res;
     parse_nlist_symbols(st);

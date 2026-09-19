@@ -12,6 +12,7 @@
 #include <spelunk/binary/binary.hpp>
 #include <spelunk/binary/format.hpp>
 #include <spelunk/binary/macho.hpp>
+#include <spelunk/common/bytes.hpp>
 #include <spelunk/common/types.hpp>
 
 #include "eh_frame_internal.hpp"
@@ -256,6 +257,24 @@ std::vector<FdeExtent> enumerate_compact_unwind_extents(const Binary& b) {
     std::span<const std::byte> bytes;
     for (const auto& s : b.sections()) {
         const std::string_view n = s.name;
+        if (b.is_relocatable_object() &&
+            (n == "__compact_unwind" || n.ends_with(",__compact_unwind"))) {
+            // MH_OBJECT stores the compiler's fixed-width compact-unwind
+            // records directly: function address/section offset (u64),
+            // length (u32), encoding (u32), personality and LSDA (u64 each).
+            // Relocations may rewrite the address at link time, but within an
+            // object its raw value is the __text offset we expose as the VA.
+            constexpr std::size_t kRecordSize = 32;
+            if (s.data.size() % kRecordSize != 0) return {};
+            for (std::size_t offset = 0; offset < s.data.size(); offset += kRecordSize) {
+                const addr_t start = read_le_at<u64>(s.data.data() + offset);
+                const u32 size = read_le_at<u32>(s.data.data() + offset + 8);
+                if (size != 0 && !b.bytes_at(start).empty()) out.push_back({start, size});
+            }
+            std::ranges::sort(out, {}, &FdeExtent::pc_begin);
+            out.erase(std::ranges::unique(out, {}, &FdeExtent::pc_begin).begin(), out.end());
+            return out;
+        }
         if (n == "__unwind_info" || n == "__TEXT,__unwind_info" ||
             n.ends_with(",__unwind_info")) {
             bytes = s.data;

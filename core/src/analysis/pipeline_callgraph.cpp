@@ -21,6 +21,7 @@
 
 #include <spelunk/analysis/cfg_builder.hpp>
 #include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
 #include <spelunk/analysis/pipeline.hpp>
 #include <spelunk/analysis/rtti.hpp>
 #include <spelunk/binary/arch.hpp>
@@ -362,11 +363,12 @@ std::vector<addr_t> compute_callers(const Binary& b, addr_t fn) {
     return out;
 }
 
-std::vector<ClassifiedCallee>
-compute_classified_callees(const Binary& b, addr_t fn,
-                           const std::unordered_set<addr_t>* known_entries) {
+CalleeReport
+compute_callee_report(const Binary& b, addr_t fn,
+                      const std::unordered_set<addr_t>* known_entries) {
+    CalleeReport report;
     auto dec_r = make_decoder(b);
-    if (!dec_r) return {};
+    if (!dec_r) return report;
     const Decoder& dec = **dec_r;
     const CfgBuilder builder(b, dec);
     if (known_entries) {
@@ -379,7 +381,7 @@ compute_classified_callees(const Binary& b, addr_t fn,
         if (s.addr == fn && !s.name.empty()) { name = s.name; break; }
     }
     auto fn_r = builder.build(fn, name);
-    if (!fn_r) return {};
+    if (!fn_r) return report;
 
     // Vtable index for the back-trace. Itanium ABI covers both Mach-O
     // and ELF C++ binaries; `parse_itanium_rtti` already walks
@@ -629,6 +631,49 @@ compute_classified_callees(const Binary& b, addr_t fn,
         }
     }
 
+    // CFG reachability intentionally excludes landing pads. When authoritative
+    // metadata supplies the complete function extent, scan every instruction
+    // in that range to surface direct EH cleanup calls as `direct_extent` and
+    // record opaque indirect call sites instead of silently promising a
+    // complete callee list.
+    u64 extent = 0;
+    for (const auto& symbol : b.symbols()) {
+        if (!symbol.is_import && symbol.kind == SymbolKind::Function &&
+            symbol.addr == fn && symbol.size != 0) {
+            extent = symbol.size;
+            break;
+        }
+    }
+    if (extent == 0) for (const auto& candidate : enumerate_compact_unwind_extents(b))
+        if (candidate.pc_begin == fn) { extent = candidate.pc_range; break; }
+    if (extent == 0) for (const auto& candidate : enumerate_fde_extents(b))
+        if (candidate.pc_begin == fn) { extent = candidate.pc_range; break; }
+    report.extent_complete = extent != 0;
+    if (extent != 0) {
+        const auto bytes = b.bytes_at(fn);
+        const auto limit = std::min<std::size_t>(bytes.size(), static_cast<std::size_t>(extent));
+        for (std::size_t offset = 0; offset < limit;) {
+            const addr_t address = fn + offset;
+            auto instruction = dec.decode(bytes.subspan(offset, limit - offset), address);
+            if (!instruction || instruction->length == 0 || instruction->length > limit - offset) {
+                offset += (b.arch() == Arch::X86_64 ? 1u : 4u);
+                continue;
+            }
+            if (is_call(instruction->mnemonic) && instruction->num_operands != 0) {
+                const auto& operand = instruction->operands[0];
+                const bool site_known = std::ranges::any_of(out, [&](const auto& edge) {
+                    return edge.site == address;
+                });
+                if (operand.kind == Operand::Kind::Relative) {
+                    if (!site_known) out.push_back({operand.rel.target, CalleeKind::DirectExtent, address});
+                } else if (!site_known) {
+                    report.unresolved_indirect_sites.push_back(address);
+                }
+            }
+            offset += instruction->length;
+        }
+    }
+
     std::sort(out.begin(), out.end(),
               [](const ClassifiedCallee& a, const ClassifiedCallee& bb) {
                   if (a.target != bb.target) return a.target < bb.target;
@@ -641,7 +686,18 @@ compute_classified_callees(const Binary& b, addr_t fn,
                               return a.target == bb.target && a.kind == bb.kind;
                           }),
               out.end());
-    return out;
+    report.callees = std::move(out);
+    std::ranges::sort(report.unresolved_indirect_sites);
+    report.unresolved_indirect_sites.erase(
+        std::ranges::unique(report.unresolved_indirect_sites).begin(),
+        report.unresolved_indirect_sites.end());
+    return report;
+}
+
+std::vector<ClassifiedCallee>
+compute_classified_callees(const Binary& b, addr_t fn,
+                           const std::unordered_set<addr_t>* known_entries) {
+    return compute_callee_report(b, fn, known_entries).callees;
 }
 
 std::optional<ContainingFn>

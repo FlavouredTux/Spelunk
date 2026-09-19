@@ -458,21 +458,34 @@ int run_callees(const Args& args, const Binary& b) {
         return EXIT_FAILURE;
     }
     const auto va = win->start;
-    const auto cs = compute_classified_callees(b, va);
+    const auto report = compute_callee_report(b, va);
+    const auto& cs = report.callees;
     if (args.json) {
-        std::string out = std::format("{{\"va\":\"{:#x}\",\"callees\":[", va);
+        std::string out = std::format(
+            "{{\"va\":\"{:#x}\",\"extent_complete\":{},\"callees\":[",
+            va, report.extent_complete ? "true" : "false");
         for (std::size_t i = 0; i < cs.size(); ++i) {
             if (i) out += ',';
             out += std::format("{{\"va\":\"{:#x}\",\"kind\":\"{}\"}}",
                                cs[i].target, callee_kind_name(cs[i].kind));
+        }
+        out += "],\"unresolved_indirect_sites\":[";
+        for (std::size_t i = 0; i < report.unresolved_indirect_sites.size(); ++i) {
+            if (i) out += ',';
+            out += std::format("\"{:#x}\"", report.unresolved_indirect_sites[i]);
         }
         out += "]}\n";
         std::fwrite(out.data(), 1, out.size(), stdout);
     } else {
         std::string out;
         for (const auto& c : cs) {
-            out += std::format("{:#x}\n", c.target);
+            out += std::format("{:#x}\t{}\t@{:#x}\n", c.target,
+                               callee_kind_name(c.kind), c.site);
         }
+        for (const auto site : report.unresolved_indirect_sites)
+            out += std::format("?\tindirect_unresolved\t@{:#x}\n", site);
+        if (!report.extent_complete)
+            out += "; incomplete: no authoritative function extent; landing-pad scan unavailable\n";
         std::fwrite(out.data(), 1, out.size(), stdout);
     }
     return EXIT_SUCCESS;

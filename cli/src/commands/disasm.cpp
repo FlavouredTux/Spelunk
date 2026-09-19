@@ -22,6 +22,7 @@
 #include <spelunk/common/annotations.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/instruction.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 #include "../args.hpp"
 #include "../cli_error.hpp"
@@ -56,6 +57,29 @@ namespace {
     if (p.safe_abs_trampoline) return "absolute-jump-ok";
     if (p.needs_relocation) return "copy-with-relocation";
     return "manual-review";
+}
+
+[[nodiscard]] std::optional<bool>
+is_instruction_boundary(const Binary& b, addr_t address) {
+    auto containing = containing_function(b, address);
+    if (!containing) return std::nullopt;
+    if (containing->entry == address) return true;
+    if (containing->size != 0 && address >= containing->entry + containing->size)
+        return std::nullopt;
+    auto decoder = make_decoder(b);
+    if (!decoder) return std::nullopt;
+    addr_t pc = containing->entry;
+    std::size_t budget = containing->size != 0
+        ? static_cast<std::size_t>(containing->size)
+        : 1u << 20;
+    while (pc < address && budget) {
+        auto decoded = (*decoder)->decode(b.bytes_at(pc), pc);
+        if (!decoded || decoded->length == 0 || decoded->length > budget)
+            return std::nullopt;
+        pc += decoded->length;
+        budget -= decoded->length;
+    }
+    return pc == address;
 }
 
 }  // namespace
@@ -151,6 +175,12 @@ int run_disasm_at(const Args& args, const Binary& b) {
     if (!parse_disasm_count(args.disasm_count, count, "--disasm-at")) {
         return EXIT_FAILURE;
     }
+    const auto boundary = is_instruction_boundary(b, *va);
+    if (boundary == false) {
+        spelunk::diagnostic::print(
+            "spelunk: --disasm-at: warning: {:#x} is not an instruction boundary in its containing function",
+            *va);
+    }
     if (args.json) {
         auto out = disasm_probe_json(b, static_cast<addr_t>(*va), count);
         if (!out) {
@@ -170,6 +200,11 @@ int run_disasm_at(const Args& args, const Binary& b) {
     // Trim to N lines of disassembly (skip the header/comments).
     std::size_t emitted = 0;
     std::string out;
+    if (boundary == false) {
+        out += std::format(
+            "; warning: {:#x} is not an instruction boundary; decoding starts mid-instruction\n",
+            *va);
+    }
     if (!addr_in_executable_section_cli(b, static_cast<addr_t>(*va))) {
         const auto sec = section_name_containing(b, static_cast<addr_t>(*va));
         if (!sec.empty()) {

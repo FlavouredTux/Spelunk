@@ -37,6 +37,7 @@ public:
     [[nodiscard]] Arch   arch() const noexcept   override { return arch_;  }
     [[nodiscard]] Endian endian() const noexcept override { return endian_; }
     [[nodiscard]] addr_t entry_point() const noexcept override { return entry_; }
+    [[nodiscard]] bool is_relocatable_object() const noexcept override { return is_relocatable_; }
 
     [[nodiscard]] std::span<const Section> sections() const noexcept override { return sections_; }
     [[nodiscard]] std::span<const Symbol>  symbols() const noexcept  override { return symbols_;  }

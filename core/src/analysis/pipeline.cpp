@@ -110,6 +110,18 @@ std::string format_instruction_annotated(const Binary& b, const Instruction& ins
     }
     if (!target) target = rip_relative_target(insn);
     if (!target) return text;
+    const bool branch_like = is_call(insn.mnemonic) ||
+        is_unconditional_jmp(insn.mnemonic) || is_conditional_branch(insn.mnemonic);
+    if (!branch_like) {
+        for (const auto& section : b.sections()) {
+            if (*target < section.vaddr || *target >= section.vaddr + section.size ||
+                section.flags.executable || section.flags.writable) continue;
+            if (auto s = disasm_string_at(b, *target); s) {
+                text += std::format("  ; \"{}\"", *s);
+                return text;
+            }
+        }
+    }
     if (auto label = resolve_address_name(b, *target); label) {
         text += std::format("  ; {}", format_address_comment(*label));
         return text;
@@ -308,14 +320,8 @@ format_disasm(const Binary& b, const FuncWindow& w, const DisasmOptions& opts) {
     // first invocation (~1s on a 12k-fn binary), but the result reads as a
     // jump-off point - `; xrefs from: foo, bar, baz (+12 more)` saves the
     // common "open disasm, then go grep callers separately" round trip.
-    std::vector<addr_t>     computed;
     std::span<const addr_t> callers;
-    if (opts.callers) {
-        callers = *opts.callers;
-    } else {
-        computed = compute_callers(b, w.start);
-        callers  = computed;
-    }
+    if (opts.callers) callers = *opts.callers;
     if (!callers.empty()) {
         constexpr std::size_t kMaxShown = 8;
         const std::size_t shown = std::min(callers.size(), kMaxShown);

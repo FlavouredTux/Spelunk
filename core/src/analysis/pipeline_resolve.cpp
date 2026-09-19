@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <spelunk/analysis/discovery.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
 #include <spelunk/analysis/objc.hpp>
 #include <spelunk/analysis/pipeline.hpp>
 #include <spelunk/binary/binary.hpp>
@@ -89,6 +90,14 @@ exact_discovered_function(const Binary& b, addr_t addr, EnumerateMode mode) {
         return window_from_addr(fn.addr, fn.size, fn.name);
     }
     return std::nullopt;
+}
+
+[[nodiscard]] u64 metadata_extent_at(const Binary& b, addr_t addr) {
+    for (const auto& extent : enumerate_compact_unwind_extents(b))
+        if (extent.pc_begin == addr) return extent.pc_range;
+    for (const auto& extent : enumerate_fde_extents(b))
+        if (extent.pc_begin == addr) return extent.pc_range;
+    return 0;
 }
 
 }  // namespace
@@ -234,7 +243,15 @@ resolve_function(const Binary& b, std::string_view symbol,
                 static_cast<unsigned long long>(chosen->addr));
             return std::nullopt;
         }
-        return window_from_addr(chosen->addr, chosen->size, chosen->name);
+        const u64 size = chosen->size != 0 ? chosen->size
+                                           : metadata_extent_at(b, chosen->addr);
+        if (b.is_relocatable_object() && size == 0) {
+            spelunk::diagnostic::printf(
+                "spelunk: symbol '%.*s' is in a relocatable object with no reliable function extent\n",
+                static_cast<int>(lookup.size()), lookup.data());
+            return std::nullopt;
+        }
+        return window_from_addr(chosen->addr, size, chosen->name);
     }
 
     // Annotation-rename fallback: a name typed by the user that doesn't

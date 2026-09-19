@@ -36,6 +36,7 @@ public:
     [[nodiscard]] virtual Arch   arch() const noexcept        = 0;
     [[nodiscard]] virtual Endian endian() const noexcept      = 0;
     [[nodiscard]] virtual addr_t entry_point() const noexcept = 0;
+    [[nodiscard]] virtual bool is_relocatable_object() const noexcept { return false; }
 
     // The virtual address the binary was *linked* to load at. Subtract
     // this from a symbol address to get the file-offset / RVA, then add

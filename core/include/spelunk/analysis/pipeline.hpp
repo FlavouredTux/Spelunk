@@ -37,9 +37,8 @@ resolve_function_at(const Binary& b, addr_t addr);
 
 // Optional knobs for `format_disasm`.
 struct DisasmOptions {
-    // Callers to list in the `;   xrefs from:` header. Unset: compute them
-    // with `compute_callers`, which costs one whole-program call-graph
-    // walk per call. Set: use as-is; an empty span omits the header.
+    // Callers to list in the `;   xrefs from:` header. Unset or empty omits
+    // the header. Computing callers is whole-binary work and must be explicit.
     // Interactive front ends build the graph once per session and pass
     // the slice for this function here.
     std::optional<std::span<const addr_t>> callers;
@@ -144,17 +143,20 @@ enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto,
                     addr_t lo = 0, addr_t hi = 0);
 
 // Per-call edge classification used by `spelunk --callees`. `Direct` covers
-// `call <imm>`; `Tail` covers an unconditional `jmp` whose target is a
+// reachable `call <imm>`; `DirectExtent` covers a direct call found only by
+// the complete extent scan (normally a landing pad); `Tail` covers an
+// unconditional `jmp` whose target is a
 // known function entry (defined symbol or PLT stub); `IndirectConst`
 // covers `call qword ptr [rip + disp]` where the dereferenced 8 bytes
 // resolve to a code address (vtable/IAT/RTTI thunk patterns).
-// Genuinely opaque indirect calls are dropped - by design the primitive
-// only emits edges with a concrete callee VA.
-enum class CalleeKind : u8 { Direct, Tail, IndirectConst };
+// Genuinely opaque indirect calls have no concrete edge and are returned as
+// sites by compute_callee_report().
+enum class CalleeKind : u8 { Direct, DirectExtent, Tail, IndirectConst };
 
 [[nodiscard]] constexpr std::string_view callee_kind_name(CalleeKind k) noexcept {
     switch (k) {
         case CalleeKind::Direct:        return "direct";
+        case CalleeKind::DirectExtent:  return "direct_extent";
         case CalleeKind::Tail:          return "tail";
         case CalleeKind::IndirectConst: return "indirect_const";
     }
@@ -168,6 +170,16 @@ struct ClassifiedCallee {
     // tooling wants to back-reference the edge to a specific opcode.
     addr_t     site   = 0;
 };
+
+struct CalleeReport {
+    std::vector<ClassifiedCallee> callees;
+    std::vector<addr_t> unresolved_indirect_sites;
+    bool extent_complete = false;
+};
+
+[[nodiscard]] CalleeReport
+compute_callee_report(const Binary& b, addr_t fn,
+                      const std::unordered_set<addr_t>* known_entries = nullptr);
 
 // Resolve an address to the function whose extent contains it. Uses
 // the union of defined function symbols + CFG-discovered `sub_*`
@@ -270,11 +282,9 @@ struct Collisions {
 collect_collisions(const Binary& b,
                    std::span<const FingerprintRow> precomputed = {});
 
-// Outgoing direct call / tail / indirect-const edges of the function at
-// `fn`, sorted by target and deduped on (target, kind); empty when `fn`
-// does not decode. `call [reg + disp]` resolves to a vtable slot when
-// the same block loaded `reg` from a known Itanium vtable; no
-// cross-block tracking.
+// Concrete outgoing edges. `DirectExtent` means a direct call found only by
+// the authoritative extent scan (normally an EH landing pad). For completeness
+// and opaque indirect sites, use compute_callee_report().
 [[nodiscard]] std::vector<ClassifiedCallee>
 compute_classified_callees(const Binary& b, addr_t fn,
                            const std::unordered_set<addr_t>* known_entries = nullptr);

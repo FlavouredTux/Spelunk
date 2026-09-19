@@ -612,7 +612,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     for (const auto& s : b.symbols()) {
         if (s.is_import) continue;
         if (s.kind != SymbolKind::Function) continue;
-        if (s.addr == 0 || s.name.empty()) continue;
+        if ((s.addr == 0 && !b.is_relocatable_object()) || s.name.empty()) continue;
         if (!in_scope(s.addr)) continue;
         if (index.count(s.addr)) continue;
         index.emplace(s.addr, out.size());
@@ -639,10 +639,14 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
                               compact_unwind_extents.end());
     }
     auto add_unwind_extent = [&](const FdeExtent& fde) {
-        if (fde.pc_begin == 0 || fde.pc_range == 0) return;
+        if ((fde.pc_begin == 0 && !b.is_relocatable_object()) || fde.pc_range == 0) return;
         if (!in_scope(fde.pc_begin)) return;
         if (b.import_at_plt(fde.pc_begin) != nullptr) return;
-        if (index.count(fde.pc_begin)) return;
+        if (auto existing = index.find(fde.pc_begin); existing != index.end()) {
+            auto& function = out[existing->second];
+            if (function.size == 0) function.size = fde.pc_range;
+            return;
+        }
         index.emplace(fde.pc_begin, out.size());
         out.push_back({fde.pc_begin, fde.pc_range,
                        std::format("sub_{:x}", fde.pc_begin),

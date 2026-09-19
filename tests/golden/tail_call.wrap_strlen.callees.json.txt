@@ -1,1 +1,1 @@
-{"va":"0x401160","callees":[{"va":"0x401030","kind":"tail"}]}
+{"va":"0x401160","extent_complete":true,"callees":[{"va":"0x401030","kind":"tail"}],"unresolved_indirect_sites":[]}

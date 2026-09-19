@@ -1622,6 +1622,10 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/x64_call_frame_test.py"
                     $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
             set_tests_properties(x64_call_frame_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME cli_analysis_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/cli_analysis_test.py"
+                    $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
+            set_tests_properties(cli_analysis_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME dwarf_export_semantics
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/dwarf_export_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
@@ -1696,6 +1700,10 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/varint_control_test.py"
                     $<TARGET_FILE:spelunk_cli> "${SPELUNK_MACHO_TEST_CLANG}")
             set_tests_properties(varint_control_clang_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME macho_object_extent_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/macho_object_extent_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${SPELUNK_MACHO_TEST_CLANG}")
+            set_tests_properties(macho_object_extent_semantics PROPERTIES TIMEOUT 120)
         endif()
         add_test(NAME pseudocode_check_unit
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/pseudocode_check_test.py"

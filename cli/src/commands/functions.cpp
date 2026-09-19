@@ -11,6 +11,7 @@
 #include <format>
 #include <optional>
 #include <print>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -20,6 +21,7 @@
 #include <spelunk/analysis/arity.hpp>
 #include <spelunk/analysis/function.hpp>
 #include <spelunk/analysis/identify.hpp>
+#include <spelunk/analysis/eh_frame.hpp>
 #include <spelunk/analysis/pipeline.hpp>
 #include <spelunk/analysis/sigs.hpp>
 #include <spelunk/binary/arch.hpp>
@@ -456,6 +458,20 @@ int run_arities(const Args& args, const Binary& b) {
 
 int run_functions(const Args& args, const Binary& b) {
     ScopedTimer total_timer("functions.total");
+    if (b.is_relocatable_object()) {
+        std::set<addr_t> extents;
+        for (const auto& extent : enumerate_compact_unwind_extents(b))
+            if (extent.pc_range != 0) extents.insert(extent.pc_begin);
+        for (const auto& extent : enumerate_fde_extents(b))
+            if (extent.pc_range != 0) extents.insert(extent.pc_begin);
+        for (const auto& symbol : b.symbols()) {
+            if (symbol.is_import || symbol.kind != SymbolKind::Function || symbol.name.empty() ||
+                symbol.size != 0 || extents.contains(symbol.addr)) continue;
+            return report(Error::unsupported(std::format(
+                "function inventory for relocatable object '{}' lacks reliable extent metadata for '{}'",
+                args.binary, symbol.name)));
+        }
+    }
     // Full TSV is cacheable independent of the pattern - build once,
     // filter at print time so the cache works across grep sessions.
     std::string tsv;

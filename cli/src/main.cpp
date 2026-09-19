@@ -1,4 +1,5 @@
 #include <spelunk/common/diagnostic.hpp>
+#include <spelunk/common/progress.hpp>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
@@ -329,11 +330,15 @@ int run_cli(spelunk::cli::Args args) {
         return run_surface_artifacts(args);
     }
 
+    if (spelunk::progress_enabled())
+        spelunk::diagnostic::print("spelunk: loading {}...", args.binary);
     auto bin = [&] {
         spelunk::ScopedTimer t("load_binary");
         return load_binary_from_args(args);
     }();
     if (!bin) return report(bin.error());
+    if (spelunk::progress_enabled())
+        spelunk::diagnostic::print("spelunk: loaded {}; running analysis...", args.binary);
     if (dtk_main_project) {
         auto linked = apply_dtk_rel_context(
             *dtk_main_project, dtk_rel_projects, selected_dtk_module, **bin);

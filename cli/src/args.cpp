@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -426,6 +427,8 @@ Result<Args> parse_args(int argc, char** argv) {
                         std::format("{} requires an argument", s)));
                 }
                 a.*f.field = argv[i];
+                if (f.field == &Args::timeout && a.timeout.empty())
+                    return std::unexpected(Error::invalid_format("--timeout requires a nonempty duration"));
                 hit = true;
                 break;
             }
@@ -452,6 +455,23 @@ Result<Args> parse_args(int argc, char** argv) {
                 std::format("unexpected positional argument: {}", s)));
         }
     }
+    if (!a.timeout.empty()) {
+        std::string_view duration = a.timeout;
+        double multiplier = 1000; // bare values are seconds
+        if (duration.ends_with("ms")) { multiplier = 1; duration.remove_suffix(2); }
+        else if (duration.ends_with('s')) duration.remove_suffix(1);
+        else if (duration.ends_with('m')) { multiplier = 60000; duration.remove_suffix(1); }
+        else if (duration.ends_with('h')) { multiplier = 3600000; duration.remove_suffix(1); }
+        const auto number = parse_cli_double(duration);
+        const double milliseconds = number ? *number * multiplier : 0;
+        if (!number || milliseconds < 1 || milliseconds > 86400000 ||
+            !std::isfinite(milliseconds)) {
+            return std::unexpected(Error::invalid_format(
+                "--timeout requires a duration from 1ms to 24h (e.g. 250ms, 0.5s, 2m; bare values are seconds)"));
+        }
+        a.time_budget = std::chrono::milliseconds(static_cast<std::int64_t>(std::ceil(milliseconds)));
+    }
+
     // Rescue the common `spelunk --functions PATTERN BINARY` mis-order:
     // positionals are taken left-to-right, so a user who types the filter
     // first has PATTERN interpreted as the binary path. If the binary slot

@@ -125,6 +125,8 @@ void help_view() {
                  "symbol per line;");
     std::println("                       loads the binary/DTK project and "
                  "headers only once");
+    std::println("                       --json emits one result/error record per function; batches continue on errors");
+    std::println("      --timeout TIME    whole-command deadline (250ms, 10s, 2m); timeout exits 124");
     std::println("      --labels         keep // bb_XXXX comments in pseudo-C output");
     std::println("      --show-provenance  emit `// confidence: ...` headers when annotation meta is set");
     std::println("      --disasm-at FN|VA  disasm a bounded window at FN or VA (default 32 insns)");
@@ -345,7 +347,7 @@ void print_help() {
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
     std::println("");
-    std::println("Common:  --json  -q/--quiet  -h/--help  --version");
+    std::println("Common:  --json  --timeout TIME  -q/--quiet  -h/--help  --version");
     std::println("");
     std::println("Get topic detail:  spelunk --help <topic>   (or --help=<topic>)");
 }

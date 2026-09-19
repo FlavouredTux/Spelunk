@@ -71,7 +71,10 @@ spelunk --emit-c -s NAME ./target  # strict C export
 
 Without `-s`, the selected function defaults to `main`. Use `--symbols FILE`
 to process a list of functions in one run. Commands that support structured
-output accept `--json`.
+output accept `--json`. Function views emit one JSON result per function,
+including failures, and batches continue after individual errors. Use
+`--timeout 30s` to bound the whole command; expiry exits with status `124`.
+See [CLI results and timeouts](docs/cli-output.md) for the record format.
 
 With `--json`, stderr contains one JSON diagnostic per line, including argument
 and loading errors. Records have `type` (`error` or `diagnostic`), `kind`, and

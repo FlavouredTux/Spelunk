@@ -1606,6 +1606,10 @@ if(Python3_Interpreter_FOUND)
             add_test(NAME cli_json_errors
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/cli_json_errors_test.py"
                     $<TARGET_FILE:spelunk_cli> "${_fixture_dir}/return_value.prebuilt")
+            add_test(NAME cli_batch_timeout
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/cli_batch_timeout_test.py"
+                    $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
+            set_tests_properties(cli_batch_timeout PROPERTIES TIMEOUT 120)
             add_test(NAME dwarf_export_semantics
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/dwarf_export_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")

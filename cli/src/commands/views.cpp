@@ -9,6 +9,7 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <print>
 #include <set>
 #include <span>
@@ -95,8 +96,8 @@ namespace {
     return symbols;
 }
 
-int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
-                      const Annotations* annotations, EmitOptions opts) {
+Result<std::string> render_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
+                                         const Annotations* annotations, EmitOptions opts) {
     // Vtable back-trace: resolve indirect call sites in this function
     // once, up-front. Per-function so we only pay the RTTI parse + CFG
     // build for the one function the user is viewing.
@@ -105,10 +106,34 @@ int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
         call_res = compute_call_resolutions(b, win.start, opts.known_function_entries);
         if (!call_res.empty()) opts.call_resolutions = &call_res;
     }
-    auto out = format_struct(b, win, pseudo, annotations, opts);
-    if (!out) return report(out.error());
-    std::print("{}", *out);
-    return EXIT_SUCCESS;
+    return format_struct(b, win, pseudo, annotations, opts);
+}
+
+Result<std::string> render_ir_window(const Binary& b, const FuncWindow& win,
+                                     bool run_ssa, bool run_opt) {
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return std::unexpected(dec_r.error());
+    const CfgBuilder builder(b, **dec_r);
+    auto fn_r = builder.build(win.start, win.label);
+    if (!fn_r) return std::unexpected(fn_r.error());
+    auto lifter_r = make_lifter(b);
+    if (!lifter_r) return std::unexpected(lifter_r.error());
+    auto ir_r = (*lifter_r)->lift(*fn_r);
+    if (!ir_r) return std::unexpected(ir_r.error());
+    if (run_ssa) {
+        const SsaBuilder ssa;
+        if (auto rv = ssa.convert(*ir_r); !rv) return std::unexpected(rv.error());
+    }
+    std::string output;
+    if (run_opt) {
+        auto stats = run_cleanup(*ir_r);
+        if (!stats) return std::unexpected(stats.error());
+        output = std::format("; cleanup: {} iter, removed {} insts / {} phis, folded {}, propagated {}\n\n",
+            stats->iterations, stats->insts_removed, stats->phis_removed,
+            stats->constants_folded, stats->copies_propagated);
+    }
+    output += format_ir_function(*ir_r);
+    return output;
 }
 
 // PDB-derived signature injection. PE binaries get a per-VA
@@ -199,32 +224,9 @@ int run_ir(const Binary& b, std::string_view symbol,
     auto win = resolve_function(b, symbol, ann);
     if (!win) return EXIT_FAILURE;
 
-    auto dec_r = make_decoder(b);
-    if (!dec_r) return report(dec_r.error());
-    const CfgBuilder builder(b, **dec_r);
-    auto fn_r = builder.build(win->start, win->label);
-    if (!fn_r) return report(fn_r.error());
-
-    auto lifter_r = make_lifter(b);
-    if (!lifter_r) return report(lifter_r.error());
-    auto ir_r = (*lifter_r)->lift(*fn_r);
-    if (!ir_r) return report(ir_r.error());
-
-    if (run_ssa) {
-        const SsaBuilder ssa;
-        if (auto rv = ssa.convert(*ir_r); !rv) return report(rv.error());
-    }
-
-    if (run_opt) {
-        auto stats = run_cleanup(*ir_r);
-        if (!stats) return report(stats.error());
-        std::println("; cleanup: {} iter, removed {} insts / {} phis, folded {}, propagated {}",
-                     stats->iterations, stats->insts_removed, stats->phis_removed,
-                     stats->constants_folded, stats->copies_propagated);
-        std::println("");
-    }
-
-    std::print("{}", format_ir_function(*ir_r));
+    auto out = render_ir_window(b, *win, run_ssa, run_opt);
+    if (!out) return report(out.error());
+    std::print("{}", *out);
     return EXIT_SUCCESS;
 }
 
@@ -232,7 +234,10 @@ int run_struct(const Binary& b, std::string_view symbol, bool pseudo,
                const Annotations* annotations, EmitOptions opts) {
     auto win = resolve_function(b, symbol, annotations);
     if (!win) return EXIT_FAILURE;
-    return run_struct_window(b, *win, pseudo, annotations, opts);
+    auto out = render_struct_window(b, *win, pseudo, annotations, opts);
+    if (!out) return report(out.error());
+    std::print("{}", *out);
+    return EXIT_SUCCESS;
 }
 
 int run_emit(const Args& args, const Binary& b) {
@@ -241,6 +246,10 @@ int run_emit(const Args& args, const Binary& b) {
         return report(view_symbols_r.error());
     const std::vector<std::string>& view_symbols = *view_symbols_r;
     const bool batch = !args.symbols_path.empty();
+    const bool function_view = args.pseudo || args.strct || args.ir ||
+        args.cfg_pseudo || args.cfg || args.disasm;
+    if (batch && !function_view)
+        return report(Error::invalid_format("--symbols requires a function view such as -p or -d"));
     bool ann_loaded = false;
     Annotations annotations = load_annotations_for(args, ann_loaded);
 
@@ -282,18 +291,15 @@ int run_emit(const Args& args, const Binary& b) {
         emit_opts.known_function_entries = &known_function_entries;
     }
     std::vector<addr_t> view_scope;
-    std::vector<bool> symbol_resolved;
-    symbol_resolved.reserve(view_symbols.size());
+    std::vector<std::optional<FuncWindow>> windows;
+    windows.reserve(view_symbols.size());
     view_scope.reserve(view_symbols.size());
     for (const auto& symbol : view_symbols) {
-        if (auto win = resolve_function(b, symbol, ann_ptr)) {
+        auto win = resolve_function(b, symbol, ann_ptr);
+        if (win) {
             view_scope.push_back(win->start);
-            symbol_resolved.push_back(true);
-        } else {
-            // resolve_function already reported why; keep the slot so
-            // per-view runners below neither re-report nor emit it.
-            symbol_resolved.push_back(false);
         }
+        windows.push_back(std::move(win));
     }
 
     // IPA: one-shot fixed-point over the call graph before emission so
@@ -371,57 +377,73 @@ int run_emit(const Args& args, const Binary& b) {
         selrefs = parse_objc_selrefs(b);
         if (!selrefs.empty()) emit_opts.objc_selrefs = &selrefs;
     }
-    auto run_each = [&](auto&& emit_one) {
+    const std::string_view view = args.pseudo ? (args.emit_c ? "emit-c" : "pseudo") :
+        args.strct ? "struct" : args.ir ? (args.opt ? "opt" : args.ssa ? "ssa" : "ir") :
+        args.cfg_pseudo ? "cfg-pseudo" : args.cfg ? "cfg" : "disasm";
+    const auto render_one = [&](const FuncWindow& win) -> Result<std::string> {
+        if (args.pseudo || args.strct)
+            return render_struct_window(b, win, args.pseudo, ann_ptr, emit_opts);
+        if (args.ir) return render_ir_window(b, win, args.ssa, args.opt);
+        if (args.cfg_pseudo) return format_cfg_pseudo(b, win, ann_ptr, emit_opts);
+        if (args.cfg) return format_cfg(b, win);
+        return format_disasm(b, win);
+    };
+    auto run_each = [&] {
         int status = EXIT_SUCCESS;
         std::size_t emitted = 0;
         for (std::size_t i = 0; i < view_symbols.size(); ++i) {
-            if (!symbol_resolved[i]) {
-                // Failure already reported once during scoping.
-                status = EXIT_FAILURE;
+            const auto& win = windows[i];
+            Result<std::string> output = win ? render_one(*win) :
+                Result<std::string>{std::unexpected(Error::invalid_format(
+                    std::format("could not resolve function '{}'", view_symbols[i])))};
+            if (!output) status = EXIT_FAILURE;
+            if (args.json) {
+                const auto quote = [](std::string_view text) {
+                    return "\"" + diagnostic::escape(text) + "\"";
+                };
+                const auto kind = win ? (output ? std::string_view{} : output.error().kind_name()) : "resolve-failed";
+                const std::string error = output ? "null" : std::format(
+                    "{{\"kind\":{},\"message\":{}}}", quote(kind), quote(output.error().message));
+                std::println("{{\"schema_version\":1,\"type\":\"function\",\"symbol\":{},\"address\":{},\"name\":{},\"view\":{},\"status\":\"{}\",\"output\":{},\"error\":{}}}",
+                    quote(view_symbols[i]), win ? quote(std::format("{:#x}", win->start)) : "null",
+                    win ? quote(win->label) : "null", quote(view), output ? "ok" : "error",
+                    output ? quote(*output) : "null", error);
+                // Preserve completed results if a later function times out.
+                std::fflush(stdout);
+                if (!output) diagnostic::write(output.error().message, kind, true);
                 continue;
             }
+            if (!win) continue; // resolver already reported the failure
             if (batch) {
                 if (emitted != 0)
                     std::println("");
                 std::println("// spelunk-symbol: {}", view_symbols[i]);
             }
-            if (const int rc = emit_one(view_symbols[i]); rc != EXIT_SUCCESS) {
-                return rc;
-            }
+            if (output) std::print("{}", *output);
+            else (void)report(output.error());
             ++emitted;
         }
         return status;
     };
     if (args.pseudo) {
         ScopedTimer t("emit_pseudo");
-        return run_each([&](std::string_view symbol) {
-            return run_struct(b, symbol, /*pseudo=*/true, ann_ptr, emit_opts);
-        });
+        return run_each();
     }
     if (args.strct) {
         ScopedTimer t("emit_struct");
-        return run_each([&](std::string_view symbol) {
-            return run_struct(b, symbol, /*pseudo=*/false, ann_ptr, emit_opts);
-        });
+        return run_each();
     }
     if (args.ir) {
-        return run_each([&](std::string_view symbol) {
-            return run_ir(b, symbol, args.ssa, args.opt, ann_ptr);
-        });
+        return run_each();
     }
     if (args.cfg_pseudo) {
-        return run_each(
-            [&](std::string_view symbol) { return run_cfg_pseudo(b, symbol, ann_ptr, emit_opts); });
+        return run_each();
     }
     if (args.cfg) {
-        return run_each([&](std::string_view symbol) { return run_cfg(b, symbol, ann_ptr); });
+        return run_each();
     }
     if (args.disasm) {
-        return run_each([&](std::string_view symbol) { return run_disasm(b, symbol, ann_ptr); });
-    }
-    if (batch) {
-        spelunk::diagnostic::print("spelunk: --symbols requires a function view such as -p or -d");
-        return EXIT_FAILURE;
+        return run_each();
     }
     constexpr std::size_t kDefaultInfoRowLimit = 2000;
     const std::size_t info_limit = args.row_limit_set

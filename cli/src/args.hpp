@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <chrono>
 #include <vector>
 
 #include <spelunk/common/error.hpp>
@@ -54,7 +55,8 @@ struct Args {
                                     // target as a literal - the fn-ptr-only case where direct
                                      // E8/E9 callers are absent.
     std::string refs_access;        // --access read|write|lea|code-ptr|all: filter refs/data-xrefs
-    std::string timeout;            // --timeout 10s: soft budget for quick refs probes
+    std::string timeout;            // --timeout 10s: whole-command hard deadline
+    std::chrono::milliseconds time_budget{0}; // zero means no deadline
     std::string state_map;          // --state-map VA: mutation/read map for one state/global address
     std::string branch_on;          // --branch-on VA: reads of VA that feed nearby branches
     std::string guard_map;          // --guard-map FN/VA: conditional branches and nearby guard conditions

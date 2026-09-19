@@ -27,6 +27,7 @@
 
 #include "args.hpp"
 #include "cli_error.hpp"
+#include "deadline.hpp"
 #include "fingerprint.hpp"
 #include "info.hpp"
 #include "patches.hpp"
@@ -243,21 +244,8 @@ auto_dsym_path(const spelunk::cli::Args& args) {
 
 }  // namespace
 
-int run_cli(int argc, char** argv) {
+int run_cli(spelunk::cli::Args args) {
     using namespace spelunk::cli;
-
-    auto args_r = parse_args(argc, argv);
-    if (!args_r) {
-        if (spelunk::diagnostic::json) return report(args_r.error());
-        // Parse errors get the specific message plus a one-line pointer
-        // to --help; the full banner stays reserved for explicit
-        // -h/--help so failures don't scroll the terminal.
-        spelunk::diagnostic::print("spelunk: {}", args_r.error().message);
-        spelunk::diagnostic::print("run 'spelunk --help' for full usage");
-        return EXIT_FAILURE;
-    }
-    auto args = std::move(*args_r);
-    spelunk::diagnostic::json = args.json;
 
     if (args.help) {
         if (args.help_topic.empty()) print_help();
@@ -433,13 +421,26 @@ int run_cli(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    using namespace spelunk::cli;
     // Recognize JSON even when parsing fails before reaching the flag.
-    spelunk::diagnostic::json = spelunk::cli::requests_json(argc, argv);
-    const int status = run_cli(argc, argv);
+    spelunk::diagnostic::json = requests_json(argc, argv);
+    auto args = parse_args(argc, argv);
+    if (!args) {
+        if (spelunk::diagnostic::json) return report(args.error());
+        spelunk::diagnostic::print("spelunk: {}", args.error().message);
+        spelunk::diagnostic::print("run 'spelunk --help' for full usage");
+        return EXIT_FAILURE;
+    }
+    spelunk::diagnostic::json = args->json;
+    const CommandDeadline deadline(args->time_budget);
+    const int status = run_cli(std::move(*args));
     if (status != EXIT_SUCCESS && spelunk::diagnostic::json &&
         !spelunk::diagnostic::error_reported) {
         spelunk::diagnostic::write("command failed; see preceding diagnostics",
                                    "command-failed", true);
     }
+    // Keep the deadline alive through buffered output, not just analysis.
+    std::fflush(stdout);
+    std::fflush(stderr);
     return status;
 }

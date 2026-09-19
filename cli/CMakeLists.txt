@@ -41,7 +41,9 @@ target_compile_definitions(spelunk_cli PRIVATE
     SPELUNK_VERSION_STRING="${PROJECT_VERSION}"
 )
 
+find_package(Threads REQUIRED)
 target_link_libraries(spelunk_cli PRIVATE
+    Threads::Threads
     spelunk::core
     spelunk::flags
 )

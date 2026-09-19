@@ -84,10 +84,8 @@ struct EmitOptions {
     // prologue and never exceed its byte count in practice).
     const std::map<addr_t, addr_t>* prologue_ranges = nullptr;
     // When non-null, the emitter records (byte_offset, source_addr)
-    // pairs into this map at every per-IR statement emit point. Used
-    // by the debugger's `code` command to mark the line corresponding
-    // to a runtime PC, and by `b <symbol>:<line>` to set bps from
-    // pseudo-C lines back to PC ranges.
+    // pairs into this map at every per-IR statement emit point. Front ends
+    // use it to map pseudo-C lines back to instruction addresses.
     LineMap* line_map = nullptr;
 };
 

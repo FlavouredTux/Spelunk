@@ -17,7 +17,6 @@ add_library(spelunk_core STATIC
     src/binary/pdb_msf.cpp
     src/binary/pdb_tpi.cpp
     src/binary/dwarf.cpp
-    src/binary/kismet_bundle.cpp
     src/binary/minidump.cpp
     src/binary/raw_regions.cpp
     src/binary/binary.cpp
@@ -86,7 +85,6 @@ add_library(spelunk_core STATIC
     src/analysis/frame.cpp
     src/analysis/sigs.cpp
     src/analysis/identify.cpp
-    src/analysis/kismet.cpp
     src/analysis/rtti.cpp
     src/analysis/msvc_rtti.cpp
     src/analysis/vtables.cpp
@@ -147,45 +145,8 @@ add_library(spelunk_core STATIC
     src/decompile/emitter_text_ppc.cpp
     src/decompile/emitter_types.cpp
     src/common/annotation_signature.cpp
-    src/debug/target.cpp
-    src/debug/unwind_rbp.cpp
-    src/debug/unwind_eh.cpp
-    src/debug/unwind_scavenge.cpp
 )
 add_library(spelunk::core ALIAS spelunk_core)
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    target_sources(spelunk_core PRIVATE
-        src/debug/linux/proc_mem.cpp
-        src/debug/linux/proc_utils.cpp
-        src/debug/linux/ptrace_target.cpp
-        src/debug/linux/ptrace_proc.cpp
-        src/debug/linux/ptrace_mem.cpp
-        src/debug/linux/ptrace_regs.cpp
-        src/debug/linux/ptrace_break.cpp
-        src/debug/linux/ptrace_watch.cpp
-        src/debug/linux/ptrace_catch.cpp
-        src/debug/linux/ptrace_event.cpp
-        src/debug/linux/perf_target.cpp
-        src/debug/linux/perf_proc.cpp
-        src/debug/linux/perf_mem.cpp
-        src/debug/linux/perf_regs.cpp
-        src/debug/linux/perf_break.cpp
-        src/debug/linux/perf_watch.cpp
-        src/debug/linux/perf_event.cpp
-    )
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND
-       CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    target_sources(spelunk_core PRIVATE
-        src/debug/macos/mach_target.cpp
-        src/debug/macos/mach_proc.cpp
-        src/debug/macos/mach_mem.cpp
-        src/debug/macos/mach_regs.cpp
-        src/debug/macos/mach_break.cpp
-        src/debug/macos/mach_event.cpp
-    )
-endif()
 
 target_include_directories(spelunk_core
     PUBLIC

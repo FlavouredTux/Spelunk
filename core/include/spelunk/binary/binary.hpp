@@ -38,19 +38,15 @@ public:
 
     // The virtual address the binary was *linked* to load at. Subtract
     // this from a symbol address to get the file-offset / RVA, then add
-    // the runtime load base to get the slid runtime address (the
-    // debugger does exactly this dance for `b <symbol>` against PIE/ASLR
-    // binaries). Default 0 - appropriate for raw-region inputs and any
+    // the runtime load base to get the slid runtime address. Default 0 -
+    // appropriate for raw-region inputs and any
     // format that treats addresses as already-absolute.
     [[nodiscard]] virtual addr_t preferred_load_base() const noexcept { return 0; }
 
     // Total VA span the loader will consume when mapping the binary's
     // segments - i.e. max(seg.vaddr + seg.memsz) - preferred_load_base().
-    // Used by the debugger's aux-symbol-oracle path to size-match a
-    // foreign-format binary (Mach-O / PE / raw) that an in-process
-    // userspace loader mmap'd into the tracee, against an anon-rwx
-    // region in /proc/<pid>/maps. Default 0 - formats with segments
-    // override.
+    // Used when linking loaded modules and overlays. Default 0 - formats
+    // with segments override.
     [[nodiscard]] virtual addr_t mapped_size() const noexcept { return 0; }
 
     [[nodiscard]] virtual std::span<const Section> sections() const noexcept = 0;

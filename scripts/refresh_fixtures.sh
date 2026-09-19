@@ -23,6 +23,6 @@ for name in $names; do
 done
 echo "refreshed $(echo "$names" | wc -w) fixture binaries with $(cc --version | head -1)"
 
-UPDATE_GOLDEN=1 ctest --test-dir build-fixtures --output-on-failure -E '^dbg_' || true
-ctest --test-dir build-fixtures --output-on-failure -E '^dbg_'
+UPDATE_GOLDEN=1 ctest --test-dir build-fixtures --output-on-failure || true
+ctest --test-dir build-fixtures --output-on-failure
 git status --short tests/fixtures tests/golden

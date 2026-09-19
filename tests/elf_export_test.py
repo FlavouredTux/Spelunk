@@ -21,7 +21,6 @@ from check_pseudocode import check_source
 
 # fixture -> what is still missing from its export.
 KNOWN_GAPS = {
-    'dbg_target_ofp': 'omit-frame-pointer target reads rax with no reaching definition',
     'indirect_trace': 'op_t is a function-pointer typedef debug info gives by name only',
     'decoder_misc': 'carry-rotate intrinsics are not modelled by the C exporter',
 }

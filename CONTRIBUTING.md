@@ -74,16 +74,15 @@ annotations from reverse-engineered builds are not (see above).
 
 ## Reporting security issues
 
-For vulnerabilities in spelunk itself (parser bugs, debugger memory
-safety, etc.), see `SECURITY.md`; report them privately, not in the
+For vulnerabilities in spelunk itself (parser bugs, memory safety, etc.),
+see `SECURITY.md`; report them privately, not in the
 tracker.
 
 ## Continuous integration
 
-`scripts/ci.sh test` is the reference job: a gcc build and the full
-suite minus the `dbg_*` smoke tests, which need ptrace. Run it with the
-gcc major the goldens were generated with (gcc 16 today; a `gcc:16`
-container works). `scripts/ci.sh clang` builds the core with clang and
+`scripts/ci.sh test` is the reference job: a gcc build and the full suite. Run
+it with the gcc major the goldens were generated with (gcc 16 today; a
+`gcc:16` container works). `scripts/ci.sh clang` builds the core with clang and
 libc++ and runs the toolchain-independent unit tests; `scripts/ci.sh
 release` builds, strips and packages the CLI. `scripts/ci.sh asan` runs
 the suite under AddressSanitizer and UBSan, and `scripts/ci.sh fuzz`

@@ -261,32 +261,12 @@ void help_ann() {
     std::println("      --show-provenance  emit `// confidence: ...` headers under -p");
 }
 
-void help_dbg() {
-    std::println("Interactive debugger:");
-    std::println("      --debug          launch under the built-in REPL debugger (uses spelunk's");
-    std::println("                       pseudo-C as the source view; no DWARF). Linux ptrace");
-    std::println("                       backend by default; macOS uses Mach.");
-    std::println("      --attach-pid PID  attach to a running process instead of launching");
-    std::println("      --debug-backend  ptrace (default), perf (HW BP/WP only, sets TracerPid=0),");
-    std::println("                       or auto (try perf, fall back to ptrace)");
-    std::println("      --aux-binary PATH[@HEX]  repeatable; secondary Binary as a symbol oracle");
-    std::println("                       for non-ELF code regions in the tracee");
-    std::println("      --ignore-fault-at HEX / --ignore-fault-file PATH  repeatable; static VAs");
-    std::println("                       where SIGSEGV/SIGBUS/SIGFPE/SIGILL is recovered by the");
-    std::println("                       tracee's own handler (silently forwarded back)");
-    std::println("      -- ARG...        sentinel; remaining tokens are argv for the launched program");
-}
-
 void help_load() {
     std::println("Loading non-default inputs / non-default function-entry hints:");
     std::println("      --dtk PROJECT    load the main object and exact symbols from a DTK project");
     std::println("      --dtk-version ID select config/<ID>/config.yml inside the project");
     std::println("      --dtk-module NAME load a named REL and link its configured peers");
     std::println("      --pdb PATH       use this PDB instead of auto-discovering one (PE only)");
-    std::println("      --kismet PATH    read a live Unreal Kismet bundle directory or manifest");
-    std::println("                       --functions lists functions; -d, -c, or -p selects a view");
-    std::println("      --kismet-events  list wrapper functions and their Ubergraph entry offsets");
-    std::println("      --kismet-event N with -p, emit one wrapper's reachable Ubergraph path");
     std::println("      --dsym PATH      overlay symbols from a Mach-O dSYM file or .dSYM bundle");
     std::println("      --infer-string-names  synthesize names from strong log/string anchors");
     std::println("      --no-pdb         skip PDB sidecar discovery / ingestion entirely");
@@ -359,8 +339,7 @@ void print_help() {
     std::println("           int3, syscalls, forge-spec, FLIRT");
     std::println("  fingerprints  content hashes, diff");
     std::println("  ann      annotate, list-annotations, dry-run");
-    std::println("  dbg      --debug, attach, backends, aux-bin");
-    std::println("  load     DTK projects, pdb, Kismet, regions, raw-bytes, force-fn-start, module");
+    std::println("  load     DTK projects, pdb, regions, raw-bytes, force-fn-start, module");
     std::println("  data     Clang headers, typed initializers, SPM event scripts");
     std::println("  patch    --apply-patches");
     std::println("  cache    --cache-dir, --no-cache");
@@ -377,7 +356,6 @@ void print_help_topic(std::string_view topic) {
     else if (topic == "ana")   { help_ana();   return; }
     else if (topic == "fingerprints")  { help_fingerprints();  return; }
     else if (topic == "ann")   { help_ann();   return; }
-    else if (topic == "dbg")   { help_dbg();   return; }
     else if (topic == "load")  { help_load();  return; }
     else if (topic == "data")  { help_data();  return; }
     else if (topic == "patch") { help_patch(); return; }

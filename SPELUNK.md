@@ -207,20 +207,6 @@ Raw inputs do not provide container symbols, imports, unwind ranges, or
 relocations unless they are reconstructed or supplied separately. A region
 manifest is documented in [docs/raw-input.md](docs/raw-input.md).
 
-### Debugger
-
-```sh
-spelunk --debug ./target -- arg1 arg2
-spelunk --debug --attach-pid PID ./target
-spelunk --debug --debug-backend auto ./target
-spelunk --debug --aux-binary helper.bin@0xBASE ./target
-```
-
-The debugger maps breakpoints to Spelunk's generated pseudo-C rather than DWARF
-source. Linux uses ptrace or hardware perf breakpoints; macOS uses Mach. See
-[docs/debugger.md](docs/debugger.md) before relying on attach, unwind, fault
-forwarding, or auxiliary-binary behavior.
-
 ## PowerPC and Wii workflow
 
 The Wii uses a 32-bit PowerPC CPU. For Wii work, prefer a DTK project over a
@@ -562,7 +548,6 @@ ln -sfn "$PWD/build/release-local/cli/spelunk" "$HOME/.local/bin/spelunk"
 - [docs/x86.md](docs/x86.md): x86-64 discovery, ABI/type recovery, COFF/DWARF,
   strings, imports, and current limitations
 - [docs/annotations.md](docs/annotations.md): annotations
-- [docs/debugger.md](docs/debugger.md): pseudo-C debugger
 - [docs/raw-input.md](docs/raw-input.md): raw bytes and region manifests
 - [docs/forge-spec.md](docs/forge-spec.md): minimum reachability shapes
 

@@ -65,7 +65,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--collisions", &Args::collisions},
     {"",   "--no-cache",  &Args::no_cache},
     {"",   "--no-pdb",    &Args::no_pdb},
-    {"",   "--kismet-events", &Args::kismet_events},
     {"",   "--infer-string-names", &Args::infer_string_names},
     {"",   "--full-analysis", &Args::full_analysis},
     {"",   "--dump-types", &Args::dump_types},
@@ -76,7 +75,6 @@ constexpr auto kBoolFlags = std::to_array<BoolFlag>({
     {"",   "--quick",     &Args::quick},
     {"-q", "--quiet",     &Args::quiet},
     {"",   "--dry-run",   &Args::dry_run},
-    {"",   "--debug",     &Args::debug},
     {"",   "--show-empty", &Args::symuses_show_empty},
     {"",   "--no-taint",  &Args::symuses_no_taint},
     {"",   "--verbose",   &Args::verbose},
@@ -140,8 +138,6 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--source",       &Args::annotate_source},
     {"",   "--apply-patches", &Args::apply_patches},
     {"",   "--pdb",         &Args::pdb_path},
-    {"",   "--kismet",      &Args::kismet_bundle},
-    {"",   "--kismet-event", &Args::kismet_event},
     {"",   "--dsym",        &Args::dsym_path},
     {"-o", "--output",      &Args::output_path},
     {"",   "--regions",     &Args::regions_manifest},
@@ -163,8 +159,6 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--graphics-role", &Args::graphics_role},
     {"",   "--graphics-row-type", &Args::graphics_row_type},
     {"",   "--graphics-function", &Args::graphics_function},
-    {"",   "--attach-pid",  &Args::attach_pid},
-    {"",   "--debug-backend", &Args::debug_backend},
     {"",   "--module",      &Args::module_filter},
 });
 
@@ -220,15 +214,6 @@ Result<Args> parse_args(int argc, char** argv) {
         if (s == "--version" || s == "-V") {
             a.version = true;
             continue;
-        }
-
-        // `--` sentinel: every remaining token is argv for the launched
-        // program under --debug. Stash and stop parsing flags.
-        if (s == "--") {
-            for (int j = i + 1; j < argc; ++j) {
-                a.debug_args.emplace_back(argv[j]);
-            }
-            break;
         }
 
         // `--functions=PATTERN` - unambiguous way to specify the filter
@@ -394,51 +379,6 @@ Result<Args> parse_args(int argc, char** argv) {
             }
             continue;
         }
-        // `--aux-binary PATH[@HEX]` - repeatable. Each entry is a
-        // secondary Binary the debugger loads as an extra symbol
-        // oracle (e.g. a Mach-O blob in a Linux tracee). Optional
-        // `@<hex>` suffix overrides the runtime-base auto-detection.
-        if (s == "--aux-binary") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--aux-binary requires a path"));
-            }
-            a.aux_binary_paths.emplace_back(argv[i]);
-            continue;
-        }
-        if (s.starts_with("--aux-binary=")) {
-            a.aux_binary_paths.emplace_back(s.substr(13));
-            continue;
-        }
-
-        // `--ignore-fault-at HEX` and `--ignore-fault-file PATH` -
-        // repeatable. Both feed the same set of known-recovered
-        // fault PCs the debugger silently passes back to the tracee.
-        if (s == "--ignore-fault-at") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--ignore-fault-at requires a hex VA"));
-            }
-            a.ignore_fault_addrs.emplace_back(argv[i]);
-            continue;
-        }
-        if (s.starts_with("--ignore-fault-at=")) {
-            a.ignore_fault_addrs.emplace_back(s.substr(18));
-            continue;
-        }
-        if (s == "--ignore-fault-file") {
-            if (++i >= argc) {
-                return std::unexpected(Error::invalid_format(
-                    "--ignore-fault-file requires a path"));
-            }
-            a.ignore_fault_files.emplace_back(argv[i]);
-            continue;
-        }
-        if (s.starts_with("--ignore-fault-file=")) {
-            a.ignore_fault_files.emplace_back(s.substr(20));
-            continue;
-        }
-
         // `--force-fn-start VA` - repeatable. Each VA becomes a
         // synthetic Function symbol so resolve_containing_function
         // returns a window AT the VA instead of rebinding to the
@@ -516,7 +456,6 @@ Result<Args> parse_args(int argc, char** argv) {
     // --regions / --raw-bytes point at non-PE inputs that bypass the
     // positional argument.
     const bool diffs_from_tsvs = !a.fp_old_in.empty() && !a.fp_new_in.empty();
-    const bool attach_only = a.debug && !a.attach_pid.empty();
     if (!a.dtk_project_path.empty() && !a.binary.empty()) {
         return std::unexpected(Error::invalid_format(
             "--dtk cannot be combined with a positional binary"));
@@ -531,9 +470,7 @@ Result<Args> parse_args(int argc, char** argv) {
     }
     if (!a.help && !a.version && a.binary.empty() && a.dtk_project_path.empty()
         && !diffs_from_tsvs && !a.dump_types
-        && a.regions_manifest.empty() && a.raw_bytes_path.empty()
-        && a.kismet_bundle.empty()
-        && !attach_only) {
+        && a.regions_manifest.empty() && a.raw_bytes_path.empty()) {
         return std::unexpected(Error::invalid_format("no binary specified"));
     }
     if (!a.raw_bytes_path.empty() && a.raw_base_va.empty()) {

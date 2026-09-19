@@ -113,11 +113,8 @@ struct Args {
     std::string annotate_evidence;  // --evidence TEXT: short reason; survives in the meta record
     std::string annotate_source;    // --source TAG: who's claiming. Defaults to `cli`.
     std::string pdb_path;           // --pdb PATH: explicit PDB file (skips auto-discovery)
-    std::string kismet_bundle;      // --kismet PATH: live UE Kismet bundle directory/manifest
-    std::string kismet_event;       // --kismet-event NAME: select one Ubergraph wrapper entry
     std::string dsym_path;          // --dsym PATH: explicit Mach-O dSYM file/bundle symbol overlay
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely
-    bool kismet_events = false;     // --kismet-events: list wrapper -> Ubergraph entry offsets
     bool infer_string_names = false; // --infer-string-names: derive names from strong log/string anchors
     bool dry_run = false;           // --dry-run: with --annotate, don't write the result; print TSV to stdout
     bool no_cache = false;          // disable the disk cache entirely
@@ -197,36 +194,6 @@ struct Args {
         false; // verify typed data/event decoding reproduces source bytes
     bool data_xrefs = false;        // --data-xrefs: dump every rip-rel/abs data reference
     bool dump_types = false;        // --dump-types: type-lattice self-test, no binary required
-    bool debug  = false;            // --debug: launch the binary under the built-in REPL debugger
-    std::string attach_pid;         // --attach-pid PID: attach to an existing process instead of launching
-    std::string debug_backend;      // --debug-backend: "ptrace" (default), "perf", or "auto"
-                                    //   ptrace = classic Linux ptrace backend; full features
-                                    //   perf   = perf_event_open + /proc/<pid>/mem; HW BP/WP only,
-                                    //            no SW BP / no step / no on-demand reg read /
-                                    //            no syscall catch. Sets TracerPid=0 in the
-                                    //            target's /proc/self/status - useful when an
-                                    //            anti-cheat or other tracer is already attached.
-                                    //   auto   = try perf first; fall back to ptrace if the
-                                    //            kernel denies perf_event_open (e.g. paranoid≥2)
-    std::vector<std::string> debug_args;  // tokens after `--`: argv for the launched program
-    // --aux-binary PATH (repeatable): secondary Binary to load as a
-    // symbol oracle for non-ELF code regions in the tracee - i.e.
-    // Mach-O / PE / raw blobs that an in-process userspace loader
-    // mmap'd into anon-rwx memory. Optional `@0xBASE` suffix pins the
-    // runtime base when /proc/maps auto-detection isn't unique.
-    std::vector<std::string> aux_binary_paths;
-    // --ignore-fault-at HEX (repeatable): static address (un-slid)
-    // where a fault-class signal (SIGSEGV / SIGBUS / SIGFPE / SIGILL)
-    // is known to be recovered by the tracee's own handler. The
-    // debugger silently forwards the signal back instead of stopping,
-    // so a session through code that traps-and-recovers many times
-    // doesn't drown the user in `c`s. Slide-corrected at match time.
-    std::vector<std::string> ignore_fault_addrs;
-    // --ignore-fault-file PATH (repeatable): file of hex addrs (one
-    // per line, '#' comments OK) to seed the same set. Convention:
-    // a runtime that knows its own recovery sites writes this sidecar
-    // at startup, the debugger consumes it, new entries auto-pick-up.
-    std::vector<std::string> ignore_fault_files;
     bool help    = false;
     bool version = false;           // --version / -V: print the version and exit
     std::string help_topic;         // --help <topic>: pick one section of the

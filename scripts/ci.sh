@@ -13,9 +13,7 @@
 # The reference job must run with the same gcc major the goldens were
 # generated with (currently gcc 16): the golden files pin addresses and
 # signature hashes that drift across compilers. Use a gcc:16 container
-# if the host compiler differs. The dbg_* smoke tests need ptrace and
-# perf, which containers rarely allow, so they are excluded here and run
-# on a real Linux box.
+# if the host compiler differs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,7 +25,7 @@ case "$mode" in
   test)
     cmake -S . -B build-ci "${gen[@]}" -DCMAKE_BUILD_TYPE=Release
     cmake --build build-ci
-    ctest --test-dir build-ci --output-on-failure -E '^dbg_'
+    ctest --test-dir build-ci --output-on-failure
     ;;
   clang)
     CC=${CC:-clang} CXX=${CXX:-clang++} \
@@ -50,7 +48,7 @@ case "$mode" in
   asan)
     cmake -S . -B build-ci-asan "${gen[@]}" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSPELUNK_SANITIZE=ON
     cmake --build build-ci-asan
-    ctest --test-dir build-ci-asan --output-on-failure -E '^dbg_'
+    ctest --test-dir build-ci-asan --output-on-failure
     ;;
   fuzz)
     CC=${CC:-clang} CXX=${CXX:-clang++} \

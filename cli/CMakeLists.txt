@@ -4,16 +4,10 @@ add_executable(spelunk_cli
     src/builders_graphics.cpp
     src/builders_surfaces.cpp
     src/builders_surfaces_model.cpp
-    src/dbg.cpp
-    src/dbg_breakpoints.cpp
-    src/dbg_inspect.cpp
-    src/dbg_process.cpp
-    src/dbg_resolve.cpp
     src/fingerprint.cpp
     src/header_import.cpp
     src/header_import_model.cpp
     src/info.cpp
-    src/kismet.cpp
     src/main.cpp
     src/patches.cpp
     src/util.cpp

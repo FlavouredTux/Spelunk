@@ -111,13 +111,10 @@ the original function.
 Whole-binary queries include `--functions`, `--strings`, `--xrefs`,
 `--refs-to`, `--callees`, `--vtables` and `--identify`.
 `spelunk --help <topic>` lists the rest by area (`view`, `syms`, `xrefs`,
-`ana`, `fingerprints`, `ann`, `dbg`, `load`, `data`, `patch`, `cache`).
+`ana`, `fingerprints`, `ann`, `load`, `data`, `patch`, `cache`).
 
 Other pieces, each documented under `docs/`:
 
-- **Debugger** (`--debug`): breakpoints on pseudo-C lines, backtraces
-   through `.eh_frame`, ptrace on Linux and Mach on macOS. See
-   [docs/debugger.md](docs/debugger.md).
 - **Annotations**: renames, signatures, notes and field names in a sidecar
   file. See [docs/annotations.md](docs/annotations.md).
 - **Runtime memory**: minidumps and raw region scrapes for packed targets,
@@ -141,7 +138,6 @@ core/       the library
   ir/         IR, lifters, SSA, cleanup passes
   structure/  region builder
   decompile/  pseudo-C emitter
-  debug/      ptrace, perf and Mach targets, unwinders
 cli/        the spelunk command
 gui/        Qt 6 front end
 tests/      unit tests and golden-output tests

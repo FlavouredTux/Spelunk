@@ -657,8 +657,8 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
 
     // Text-level cleanups are skipped when a LineMap is being collected:
     // deleting lines would invalidate the byte_offset values already
-    // recorded (the debugger can live with a slightly noisier function
-    // listing in exchange for accurate PC-to-line mapping).
+    // recorded. Preserve accurate source-to-output mappings even if the
+    // resulting function listing is slightly noisier.
     if (!options.line_map) {
         out = strip_label_only_if_blocks(out);
         out = strip_dead_declarations(e, out, header);

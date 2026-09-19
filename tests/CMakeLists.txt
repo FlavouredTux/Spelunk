@@ -64,14 +64,6 @@ add_executable(spelunk_dwarf_test dwarf_test.cpp)
 target_link_libraries(spelunk_dwarf_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME dwarf_unit COMMAND spelunk_dwarf_test)
 
-add_executable(spelunk_kismet_bundle_test kismet_bundle_test.cpp)
-target_link_libraries(spelunk_kismet_bundle_test PRIVATE spelunk::core spelunk::flags)
-add_test(NAME kismet_bundle_unit COMMAND spelunk_kismet_bundle_test)
-
-add_executable(spelunk_kismet_analysis_test kismet_analysis_test.cpp)
-target_link_libraries(spelunk_kismet_analysis_test PRIVATE spelunk::core spelunk::flags)
-add_test(NAME kismet_analysis_unit COMMAND spelunk_kismet_analysis_test)
-
 add_executable(spelunk_pe_reloc_test pe_reloc_test.cpp)
 target_link_libraries(spelunk_pe_reloc_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME pe_reloc_unit COMMAND spelunk_pe_reloc_test)
@@ -317,23 +309,6 @@ add_test(NAME emitter_virtual_unit COMMAND spelunk_virtual_test)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "spelunk tests: fixture goldens skipped (Linux only)")
     return()
-endif()
-
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    add_executable(spelunk_proc_mem_test proc_mem_test.cpp)
-    target_include_directories(spelunk_proc_mem_test PRIVATE
-        "${PROJECT_SOURCE_DIR}/core/src/debug/linux")
-    target_link_libraries(spelunk_proc_mem_test
-        PRIVATE spelunk::core spelunk::flags)
-    add_test(NAME proc_mem_unit COMMAND spelunk_proc_mem_test)
-    set_tests_properties(proc_mem_unit PROPERTIES SKIP_RETURN_CODE 77)
-
-    add_executable(spelunk_proc_utils_test proc_utils_test.cpp)
-    target_include_directories(spelunk_proc_utils_test PRIVATE
-        "${PROJECT_SOURCE_DIR}/core/src/debug/linux")
-    target_link_libraries(spelunk_proc_utils_test
-        PRIVATE spelunk::core spelunk::flags)
-    add_test(NAME proc_utils_unit COMMAND spelunk_proc_utils_test)
 endif()
 
 # Fixture-based golden tests shell out to the CLI; skip them entirely
@@ -591,79 +566,6 @@ spelunk_build_fixture(vector_like)
 spelunk_build_fixture(struct_fields)
 spelunk_build_fixture(global_resolution)
 spelunk_build_fixture(x86_types OPT "-O0")
-# -O0 so dbg_marker stays a real function (no inlining, no tail-call
-# fold) and gets a stable symbol address the smoke test can set a
-# software breakpoint at. Built once non-PIE (dbg_target) and once
-# PIE (dbg_target_pie) so the smoke tests cover both load shapes -
-# slide-aware breakpoint resolution flows through the same path for
-# both, with the slide degenerating to 0 in the non-PIE case.
-spelunk_build_fixture(dbg_target     OPT "-O0")
-spelunk_build_fixture(dbg_target_pie OPT "-O0" PIE SRC "dbg_target.c")
-# -O2 + -fomit-frame-pointer: RBP-walk fails past frame 0 because the
-# call to dbg_marker doesn't preserve RBP. The .eh_frame unwinder
-# must still produce a multi-frame trace.
-spelunk_build_fixture(dbg_target_ofp OPT "-O2" FP "omit" SRC "dbg_target.c")
-# Parent/child pair for the exec-persistence smoke test. -O0 keeps
-# preexec_marker / child_writer as real symbols so the test can
-# anchor breakpoints by name.
-spelunk_build_fixture(dbg_exec_parent OPT "-O0")
-spelunk_build_fixture(dbg_exec_child  OPT "-O0")
-
-# Debugger smoke test: launches the dbg_target fixture under the
-# Linux ptrace backend, sets a breakpoint at `dbg_marker`, asserts
-# the bp fires and the process exits with code 42. Runs against
-# both fixtures so the slide-correction path is exercised. Linux /
-# x86-64 only - matches the backend's CMake gate. yama ptrace_scope
-# is irrelevant for child tracees so any sysctl works.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    add_executable(spelunk_dbg_smoke_test dbg_smoke_test.cpp)
-    target_link_libraries(spelunk_dbg_smoke_test
-        PRIVATE spelunk::core spelunk::flags)
-    add_dependencies(spelunk_dbg_smoke_test
-        spelunk_fixture_dbg_target spelunk_fixture_dbg_target_pie)
-    add_test(NAME dbg_smoke
-             COMMAND spelunk_dbg_smoke_test "${SPELUNK_FIXTURE_dbg_target_PATH}")
-    add_test(NAME dbg_smoke_pie
-             COMMAND spelunk_dbg_smoke_test "${SPELUNK_FIXTURE_dbg_target_pie_PATH}")
-    set_tests_properties(dbg_smoke dbg_smoke_pie
-        PROPERTIES SKIP_RETURN_CODE 77)
-
-    # Perf samples do not stop the target. This cooperative fixture waits
-    # for event setup and stays alive through the memory-read assertion.
-    # It has no golden addresses, so build it with the host toolchain.
-    add_executable(spelunk_dbg_perf_target support/dbg_perf_target.c)
-    add_executable(spelunk_dbg_perf_smoke_test dbg_perf_smoke_test.cpp)
-    target_link_libraries(spelunk_dbg_perf_smoke_test
-        PRIVATE spelunk::core spelunk::flags)
-    add_dependencies(spelunk_dbg_perf_smoke_test spelunk_dbg_perf_target)
-    add_test(NAME dbg_perf_smoke
-             COMMAND spelunk_dbg_perf_smoke_test "$<TARGET_FILE:spelunk_dbg_perf_target>")
-    set_tests_properties(dbg_perf_smoke PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
-
-    # .eh_frame unwinder vs RBP-walk on -fomit-frame-pointer.
-    add_executable(spelunk_dbg_eh_unwind_test dbg_eh_unwind_test.cpp)
-    target_link_libraries(spelunk_dbg_eh_unwind_test
-        PRIVATE spelunk::core spelunk::flags)
-    add_dependencies(spelunk_dbg_eh_unwind_test spelunk_fixture_dbg_target_ofp)
-    add_test(NAME dbg_eh_unwind
-             COMMAND spelunk_dbg_eh_unwind_test "${SPELUNK_FIXTURE_dbg_target_ofp_PATH}")
-    set_tests_properties(dbg_eh_unwind PROPERTIES SKIP_RETURN_CODE 77)
-
-    # Persisted breakpoints/watchpoints across exec(2). Parent arms a
-    # write-watch on `marker`, execve's into the child, expects the
-    # watch to fire on the child's child_writer store.
-    add_executable(spelunk_dbg_exec_persist_test dbg_exec_persist_test.cpp)
-    target_link_libraries(spelunk_dbg_exec_persist_test
-        PRIVATE spelunk::core spelunk::flags)
-    add_dependencies(spelunk_dbg_exec_persist_test
-        spelunk_fixture_dbg_exec_parent spelunk_fixture_dbg_exec_child)
-    add_test(NAME dbg_exec_persist
-             COMMAND spelunk_dbg_exec_persist_test
-                     "${SPELUNK_FIXTURE_dbg_exec_parent_PATH}"
-                     "${SPELUNK_FIXTURE_dbg_exec_child_PATH}")
-    set_tests_properties(dbg_exec_persist PROPERTIES SKIP_RETURN_CODE 77)
-endif()
-
 # Register one golden test. ARGS is a |-separated list (translated to ';' by
 # the driver script), because CTest's own quoting gets ugly with ";" in
 # a -D argument.

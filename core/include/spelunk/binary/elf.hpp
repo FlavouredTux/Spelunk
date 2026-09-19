@@ -64,8 +64,7 @@ public:
     // base (typically 0x400000 on x86-64 sysv) for non-PIE.
     [[nodiscard]] addr_t preferred_load_base() const noexcept override;
 
-    // VA span of the binary's PT_LOAD segments. Used as a runtime
-    // anon-region size hint by the debugger's aux-binary path.
+    // VA span of the binary's PT_LOAD segments.
     [[nodiscard]] addr_t mapped_size() const noexcept override;
 
 protected:

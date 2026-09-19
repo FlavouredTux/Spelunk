@@ -26,10 +26,8 @@
 
 #include "args.hpp"
 #include "cli_error.hpp"
-#include "dbg.hpp"
 #include "fingerprint.hpp"
 #include "info.hpp"
-#include "kismet.hpp"
 #include "patches.hpp"
 #include "subcommands.hpp"
 #include "util.hpp"
@@ -302,7 +300,6 @@ int main(int argc, char** argv) {
     apply_quiet_env(args);
 
     if (args.dump_types)  { return run_dump_types();                       }
-    if (!args.kismet_bundle.empty()) { return run_kismet(args);             }
 
     if (!args.diff_path.empty() ||
         !args.fp_old_in.empty() ||
@@ -340,47 +337,6 @@ int main(int argc, char** argv) {
     }
     if (surfaces_artifacts_only_requested(args)) {
         return run_surface_artifacts(args);
-    }
-
-    // Aux-binary loading happens once, up front, so both the no-primary
-    // (--attach-pid) and primary-loaded paths share the same setup.
-    // Each `--aux-binary PATH[@HEX]` token is split on '@'; the
-    // optional hex tail pins the runtime base for the slide computation
-    // (the debugger will skip its /proc/maps size-match heuristic).
-    std::vector<std::unique_ptr<spelunk::Binary>>          aux_storage;
-    std::vector<spelunk::cli::AuxBinarySpec>               aux_specs;
-    aux_storage.reserve(args.aux_binary_paths.size());
-    aux_specs.reserve(args.aux_binary_paths.size());
-    for (const auto& tok : args.aux_binary_paths) {
-        std::string path = tok;
-        std::optional<spelunk::addr_t> manual_base;
-        if (auto at = tok.find('@'); at != std::string::npos) {
-            path = tok.substr(0, at);
-            const std::string_view va_tok = std::string_view(tok).substr(at + 1);
-            auto parsed = spelunk::cli::parse_cli_addr(va_tok);
-            if (!parsed) {
-                std::println(stderr,
-                    "spelunk: --aux-binary: bad hex base after '@' in '{}'", tok);
-                return EXIT_FAILURE;
-            }
-            manual_base = *parsed;
-        }
-        auto loaded = spelunk::load_binary(path);
-        if (!loaded) {
-            std::println(stderr, "spelunk: --aux-binary {}: {}: {}",
-                         path, loaded.error().kind_name(),
-                         loaded.error().message);
-            return EXIT_FAILURE;
-        }
-        aux_storage.push_back(std::move(*loaded));
-        aux_specs.push_back({aux_storage.back().get(), std::move(path), manual_base});
-    }
-
-    // --debug --attach-pid PID can run without a binary path; the
-    // REPL auto-attaches and symbol resolution falls back to aux
-    // binaries (or nothing).
-    if (args.debug && args.binary.empty()) {
-        return run_debug(args, nullptr, aux_specs);
     }
 
     auto bin = [&] {
@@ -424,7 +380,6 @@ int main(int argc, char** argv) {
     if (!args.trace_path.empty())          load_trace_edges(args, b);
     if (!args.export_annotations.empty())  return run_export_annotations(args);
 
-    if (args.debug)                        return run_debug(args, &b, aux_specs);
     if (args.xrefs)              return run_xrefs(args, b);
     if (args.data_xrefs)         return run_data_xrefs(args, b);
     if (!args.symtable.empty())  return run_symtable(args, b);

@@ -2,7 +2,7 @@
 
 spelunk parses untrusted binaries - ELF, Mach-O, PE, minidumps, raw
 memory regions, PDB sidecars. Bugs in the parsers, the disassembler,
-the lifter, or the debugger backends are a real attack surface for
+or the lifter are a real attack surface for
 anyone using spelunk on hostile inputs (malware samples, CTF
 challenges, captured payloads).
 
@@ -16,8 +16,6 @@ the maintainer; the contact address is published with the repository.
 - Heap / stack corruption from a crafted binary, sidecar, or trace.
 - Out-of-bounds reads in any parser or decoder.
 - Path traversal or arbitrary-write through annotation files or cache paths.
-- Anything in the debugger backends that lets a tracee escape its
-  intended sandbox.
 
 ## What doesn't
 

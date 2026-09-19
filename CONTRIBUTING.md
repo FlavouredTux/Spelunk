@@ -1,116 +1,47 @@
-# Contributing to spelunk
+# Contributing to Spelunk
 
-spelunk is MIT-licensed and welcomes contributions to the core tool. This
-document covers what we accept, what we don't, and why.
-
-## What we accept
-
-- **Bug fixes and algorithm improvements** anywhere in `core/` or `cli/`.
-  Send a merge request or a patch; include a test if you're fixing
-  user-visible behavior.
-- **New analyses, decoders, lifters, structurer passes.** Same flow.
-  See the style notes at the bottom of this file.
-- **Documentation.** Fixes to `docs/`, the README, this file, code
-  comments. Typos through reorganization, all welcome.
-- **Test fixtures you built yourself.** A small C/Rust/asm source plus
-  a build script that produces a tiny binary - fair game, since
-  you produced the binary from scratch. Compiled fixtures are committed
-  as `tests/fixtures/<name>.prebuilt` because the goldens pin their
-  addresses; `scripts/refresh_fixtures.sh` rebuilds them and regenerates
-  the goldens when a source changes.
-- **Issue reports.** Bug reports with reproducible inputs are valuable
-  even without a fix attached.
-
-By submitting a change you agree it is licensed under the project's
-MIT license.
-
-## What we don't accept
-
-### Corpus recipes, prebuilt corpora, or annotations for third-party binaries
-
-The corpus build recipes under `scripts/` are open, but **we don't
-accept community contributions to them**, nor prebuilt corpora or
-annotations derived from third-party binaries.
-
-Reasons:
-
-- A recipe has to be checked for the right to process and redistribute
-  hashes derived from third-party binaries. That's license-clearance
-  work we can't outsource without a contributor license agreement we
-  don't want to maintain.
-- Annotations layered on top of reverse-engineered runtimes are
-  themselves potentially copyrightable. Accepting them without a CLA
-  muddies the licensing of the result.
-- Recipes that point at proprietary or grey-area binary sources are a
-  liability we'd rather control directly.
-
-If you want a runtime supported, **open an issue** describing it. If we
-agree it's useful and we can clear the licensing, we'll build it
-ourselves.
-
-### Reverse-engineered work product on closed-source software
-
-PRs that include disassembly, decompilation output, or annotations
-derived from closed-source binaries we don't have a license to
-redistribute will be closed without merge. This includes anti-cheat
-internals, DRM internals, game runtime internals, and anything covered
-by a license that prohibits RE.
-
-The tool is designed for that work. The repository is not the place to
-publish the output of it.
+Bug fixes, improvements to the CLI or Qt GUI, and documentation changes are
+welcome. For larger changes, open an issue first to discuss the approach.
 
 ## Reporting bugs
 
-A useful report has the exact command line, what happened (output,
-error, or the wrong pseudo-C), what you expected, and the spelunk version
-or commit, OS and build type. A reproducer helps most: a small binary
-or the build script that produces one. Public binaries (distro
-packages, open-source builds) are the easiest to chase.
+Include the Spelunk version or commit, your OS and compiler, the command you
+ran, and what happened compared to what you expected. A small source file and
+the command used to compile it make a useful reproducer.
 
-Runtime and library recognition requests: name the runtime, where its
-binaries come from and under what license, and what recognizing it
-would unlock. Public references are welcome; binary samples and
-annotations from reverse-engineered builds are not (see above).
+Report security vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
-## Reporting security issues
+## Pull requests
 
-For vulnerabilities in spelunk itself (parser bugs, memory safety, etc.),
-see `SECURITY.md`; report them privately, not in the
-tracker.
+Keep each pull request focused on one change. Explain what it fixes and how
+you tested it. Add a regression test for bug fixes where practical.
 
-## Continuous integration
+Use small, self-contained test fixtures with source and build instructions.
+Only include files you have permission to redistribute.
 
-`scripts/ci.sh test` is the reference job: a gcc build and the full suite. Run
-it with the gcc major the goldens were generated with (gcc 16 today; a
-`gcc:16` container works). `scripts/ci.sh clang` builds the core with clang and
-libc++ and runs the toolchain-independent unit tests; `scripts/ci.sh
-release` builds, strips and packages the CLI. `scripts/ci.sh asan` runs
-the suite under AddressSanitizer and UBSan, and `scripts/ci.sh fuzz`
-builds the libFuzzer harnesses in `tests/fuzz/` (every loader, every
-decoder, the PDB reader) and runs each for `FUZZ_SECONDS`. A crash lands
-as `build-fuzz/crash-<target>-<hash>`; reproduce it with
-`build-fuzz/tests/fuzz/<target> <file>`. Wire what the host can run.
+## Building and testing
+
+See the [README](README.md#build) for CLI and Qt build instructions.
+
+```sh
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Golden output files live in `tests/golden/`. If a change intentionally alters
+the output, update the affected files and explain why in the pull request.
+Committed `.prebuilt` fixtures keep addresses stable across compiler versions;
+use `scripts/refresh_fixtures.sh` when changing their source.
+
+Additional checks are available through `scripts/ci.sh`: `test`, `clang`,
+`asan`, and `fuzz`.
 
 ## Code style
 
-- C++23, CMake, warnings-as-errors on.
-- stdlib only - no Capstone, Zydis, Ghidra, LLVM, or vendored deps.
-  Don't propose adding libraries.
-- Terse and decisive. No speculative error handling, no fallbacks for
-  cases that can't happen, no validation outside system boundaries.
-- Don't add comments that narrate the obvious. Only note non-obvious
-  invariants, workarounds, or surprises.
-- One topic per translation unit. When a file outgrows ~1,500 lines,
-  split it by concern and put what the pieces share in a sibling
-  `<name>_internal.hpp` under a named namespace (`spelunk::x64_lift`,
-  `spelunk::cli::dbg`, ...). Helpers used by a single unit stay in that
-  unit's anonymous namespace. Public headers under `core/include` never
-  include internal ones.
-- Goldens live in `tests/golden/`. When you intentionally change
-  behaviour that shifts output, update goldens in the same commit and
-  narrate what changed in the commit message.
-- Build + run tests before pushing:
-  ```sh
-  cmake --build build
-  ctest --test-dir build
-  ```
+- Use C++23 and follow the surrounding code.
+- Keep the core analysis independent of external disassembly libraries.
+- Keep files focused. Split large implementations by concern.
+- Keep internal headers out of the public API under `core/include/`.
+- Explain non-obvious behavior in comments.
+
+Contributions are licensed under the project's [MIT license](LICENSE).

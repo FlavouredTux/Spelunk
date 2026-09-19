@@ -53,7 +53,8 @@ bool can_defer_call_to_return(const IrFunction& fn,
                 inst.op == IrOp::Call || inst.op == IrOp::CallIndirect ||
                 inst.op == IrOp::Load || inst.op == IrOp::Store ||
                 inst.op == IrOp::Intrinsic || inst.op == IrOp::Unreachable ||
-                inst.op == IrOp::Div || inst.op == IrOp::Mod) return false;
+                inst.op == IrOp::Div || inst.op == IrOp::Mod ||
+                inst.op == IrOp::SDiv || inst.op == IrOp::SMod) return false;
         }
         if (block.successors.size() != 1) return false;
         auto next = fn.block_at.find(block.successors.front());

@@ -2,5 +2,5 @@
 int signed_divmod_runtime(int a, int b) {
   int64_t t15 = a;
   int64_t t16 = b;
-  return (uint32_t)(t15 % t16) + (uint32_t)(t15 / t16);
+  return (uint32_t)((int64_t)(t15) % (int64_t)(t16)) + (uint32_t)((int64_t)(t15) / (int64_t)(t16));
 }

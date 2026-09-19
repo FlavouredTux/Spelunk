@@ -1574,6 +1574,13 @@ if(Python3_Interpreter_FOUND)
                 "${CMAKE_C_COMPILER}" "${CMAKE_SOURCE_DIR}/tests/support")
         set_tests_properties(x64_pipeline_semantics PROPERTIES TIMEOUT 120)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(NAME pseudocode_samples_semantics
+                COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_SOURCE_DIR}/scripts/pseudocode_samples.py"
+                    --spelunk "$<TARGET_FILE:spelunk_cli>"
+                    --cc "${CMAKE_C_COMPILER}"
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/pseudocode-samples")
+            set_tests_properties(pseudocode_samples_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME x64_export_regressions
                 COMMAND ${Python3_EXECUTABLE}
                     "${CMAKE_SOURCE_DIR}/tests/export_regressions_test.py"

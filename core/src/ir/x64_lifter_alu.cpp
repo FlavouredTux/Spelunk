@@ -538,8 +538,8 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
         IrValue ax = ctx.read_reg(Reg::Ax);
         IrOp ext = signed_div ? IrOp::SExt : IrOp::ZExt;
         IrValue dw = ctx.emit_convert(ext, divisor, IrType::I16);
-        IrValue q  = ctx.emit_binop(IrOp::Div, ax, dw);
-        IrValue r  = ctx.emit_binop(IrOp::Mod, ax, dw);
+        IrValue q  = ctx.emit_binop(signed_div ? IrOp::SDiv : IrOp::Div, ax, dw);
+        IrValue r  = ctx.emit_binop(signed_div ? IrOp::SMod : IrOp::Mod, ax, dw);
         IrValue ql = ctx.emit_convert(IrOp::Trunc, q, IrType::I8);
         IrValue rl = ctx.emit_convert(IrOp::Trunc, r, IrType::I8);
         ctx.write_reg(lo_dst, ql);
@@ -564,8 +564,8 @@ void lift_div_one_op(LiftCtx& ctx, bool signed_div) {
             dividend = ctx.emit_binop(IrOp::Or, hi_shift, lo_w);
         }
         IrValue dw = ctx.emit_convert(ext, divisor, wide);
-        IrValue q  = ctx.emit_binop(IrOp::Div, dividend, dw);
-        IrValue r  = ctx.emit_binop(IrOp::Mod, dividend, dw);
+        IrValue q  = ctx.emit_binop(signed_div ? IrOp::SDiv : IrOp::Div, dividend, dw);
+        IrValue r  = ctx.emit_binop(signed_div ? IrOp::SMod : IrOp::Mod, dividend, dw);
         IrValue ql = ctx.emit_convert(IrOp::Trunc, q, t);
         IrValue rl = ctx.emit_convert(IrOp::Trunc, r, t);
         ctx.write_reg(lo_dst, ql);

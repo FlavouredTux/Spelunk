@@ -77,7 +77,8 @@ public:
                                  const IrBlock& mbb, addr_t pred);
 
     std::unique_ptr<Region> build_sequence(addr_t entry, addr_t stop,
-                                           addr_t* out_last_block = nullptr);
+                                           addr_t* out_last_block = nullptr,
+                                           addr_t from_pred = kNoAddr);
 
     [[nodiscard]] const Error* error() const noexcept {
         return error_ ? &*error_ : nullptr;

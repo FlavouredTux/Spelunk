@@ -258,6 +258,15 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         case IrOp::Mul:  return format_binop(d, "*", depth, min_prec, Prec::Mul,   true);
         case IrOp::Div:  return format_binop(d, "/", depth, min_prec, Prec::Mul,   false);
         case IrOp::Mod:  return format_binop(d, "%", depth, min_prec, Prec::Mul,   false);
+        case IrOp::SDiv:
+        case IrOp::SMod: {
+            const auto bits = type_bits(d.srcs[0].type);
+            const auto left = expr(d.srcs[0], depth, 0);
+            const auto right = expr(d.srcs[1], depth, 0);
+            return wrap_if_lt(std::format("(int{}_t)({}) {} (int{}_t)({})",
+                bits, left, d.op == IrOp::SDiv ? "/" : "%", bits, right),
+                Prec::Mul, min_prec);
+        }
         case IrOp::And: {
             if (is_ppc_abi()) {
                 const IrValue value = d.dst.kind == IrValueKind::Temp

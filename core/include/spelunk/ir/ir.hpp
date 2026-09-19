@@ -213,6 +213,7 @@ enum class IrOp : u16 {
                // Non-side-effecting; DCE removes it if the new SSA value is unused.
 
     Intrinsic,
+    SDiv, SMod,  // Signed integer division and remainder at operand width.
 };
 
 [[nodiscard]] std::string_view op_name(IrOp op) noexcept;

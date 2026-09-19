@@ -21,6 +21,8 @@ std::string_view op_name(IrOp op) noexcept {
         case IrOp::Mul:            return "mul";
         case IrOp::Div:            return "div";
         case IrOp::Mod:            return "mod";
+        case IrOp::SDiv:           return "sdiv";
+        case IrOp::SMod:           return "smod";
         case IrOp::Select:         return "select";
         case IrOp::And:            return "and";
         case IrOp::Or:             return "or";

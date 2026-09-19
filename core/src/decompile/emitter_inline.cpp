@@ -44,6 +44,7 @@ bool Emitter::inlinable_op(IrOp op) noexcept {
         case IrOp::Assign:
         case IrOp::Add: case IrOp::Sub: case IrOp::Mul:
         case IrOp::Div: case IrOp::Mod:
+        case IrOp::SDiv: case IrOp::SMod:
         case IrOp::And: case IrOp::Or:  case IrOp::Xor:
         case IrOp::Neg: case IrOp::Not: case IrOp::Clz:
         case IrOp::Shl: case IrOp::Lshr: case IrOp::Ashr:

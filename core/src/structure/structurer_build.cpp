@@ -134,7 +134,8 @@ void Builder::sink_return_into_branch(std::unique_ptr<Region>& branch,
 }
 
 std::unique_ptr<Region> Builder::build_sequence(addr_t entry, addr_t stop,
-                                                addr_t* out_last_block) {
+                                                addr_t* out_last_block,
+                                                addr_t from_pred) {
     auto seq = std::make_unique<Region>();
     seq->kind = RegionKind::Seq;
 
@@ -144,12 +145,10 @@ std::unique_ptr<Region> Builder::build_sequence(addr_t entry, addr_t stop,
     if (out_last_block) *out_last_block = kNoAddr;
 
     addr_t current = entry;
-    // Last block we just walked through, in order to identify the CFG
-    // predecessor of a Return / inline target. Reset whenever we descend
-    // into a sub-region whose own seq could end on multiple predecessors
-    // (if/else, switch, loop) - those merge points are genuinely multi-pred
-    // and the phi resolution should leave the value as a real merge.
-    addr_t last_block = kNoAddr;
+    // Track the incoming CFG edge even when the first block is a return.
+    // Reset after regions with multiple exit predecessors so their phis
+    // remain real merges rather than selecting one arbitrary operand.
+    addr_t last_block = from_pred;
     while (current != kNoAddr && current != stop) {
         // Unlabeled C break/continue bind to the innermost lexical loop.
         // Preserve that shorthand only for targets owned by the top frame;
@@ -314,13 +313,13 @@ std::unique_ptr<Region> Builder::build_sequence(addr_t entry, addr_t stop,
                 addr_t else_last = kNoAddr;
 
                 if (merge == s_taken && merge != kNoAddr) {
-                    then_r = build_sequence(s_fall, s_taken, &then_last);
+                    then_r = build_sequence(s_fall, s_taken, &then_last, current);
                     invert = true;
                 } else if (merge == s_fall && merge != kNoAddr) {
-                    then_r = build_sequence(s_taken, s_fall, &then_last);
+                    then_r = build_sequence(s_taken, s_fall, &then_last, current);
                 } else {
-                    then_r = build_sequence(s_taken, merge, &then_last);
-                    else_r = build_sequence(s_fall, merge, &else_last);
+                    then_r = build_sequence(s_taken, merge, &then_last, current);
+                    else_r = build_sequence(s_fall, merge, &else_last, current);
                 }
 
                 // If the merge is a phi-only return block, sink the

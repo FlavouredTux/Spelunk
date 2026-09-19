@@ -889,7 +889,10 @@ void Emitter::name_merge_values() {
     // uses for merge recovery while retaining the lean visible-use map
     // everywhere else.
     callbacks.use_count = [&](const SsaKey& k) {
-        if (!is_ppc_abi()) return use_count_by_key(k);
+        // A cloned return can read a phi's incoming value directly. Count
+        // that use before coalescing the feeder into the merge local.
+        if (!is_ppc_abi()) return use_count_by_key(k) +
+            (structured_return_values.contains(k) ? 1u : 0u);
         if (dead_phis.contains(k)) return 0u;
         u32 count = non_phi_use_count(k);
         if (auto found = live_phi_operand_uses.find(k);

@@ -706,7 +706,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             if (should_inline(inst.dst)) return "";
             const std::string type = c_type_name_for(inst.dst);
             std::string initializer = format_load_rhs(inst);
-            bool already_typed = false;
+            bool already_typed = !options.c_source && declared_pointer_type(inst.dst) == type;
             if (auto access = canonical_struct_access(inst.srcs[0]); access) {
                 if (auto member = synthetic_member_type(
                         access->first, access->second); member) {
@@ -786,7 +786,8 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 if (match_low_byte_setcc_merge(inst.dst)) return "";
                 const std::string type = c_type_name_for(inst.dst);
                 std::string initializer = expand(inst, 0);
-                if (type.ends_with('*') && !initializer.starts_with('(') &&
+                if (type.ends_with('*') && (options.c_source || declared_pointer_type(inst.dst) != type) &&
+                    !initializer.starts_with('(') &&
                     initializer != "NULL") {
                     initializer = std::format("({})({})", type, initializer);
                 }

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Address explanation, containing function, callees, collisions.
 
 #include <algorithm>
@@ -47,7 +48,7 @@ int run_explain_address(const Args& args, const Binary& b) {
     ScopedTimer total_timer("explain_address.total");
     auto va = parse_cli_addr(args.explain_address);
     if (!va) {
-        std::println(stderr, "spelunk: --explain-address: bad address '{}'",
+        spelunk::diagnostic::print("spelunk: --explain-address: bad address '{}'",
                      args.explain_address);
         return EXIT_FAILURE;
     }
@@ -165,23 +166,20 @@ int run_explain_address(const Args& args, const Binary& b) {
 int run_explain_vcall(const Args& args, const Binary& b) {
     const auto spec = parse_obj_off_spec(args.explain_vcall);
     if (!spec) {
-        std::println(stderr,
-            "spelunk: --explain-vcall: expected OBJ:OFF, got '{}'",
+        spelunk::diagnostic::print("spelunk: --explain-vcall: expected OBJ:OFF, got '{}'",
             args.explain_vcall);
         return EXIT_FAILURE;
     }
     const auto [obj, slot_off] = *spec;
     const auto vptr = read_pointer_value(b, obj);
     if (!vptr) {
-        std::println(stderr,
-            "spelunk: --explain-vcall: cannot read object vptr at {:#x}", obj);
+        spelunk::diagnostic::print("spelunk: --explain-vcall: cannot read object vptr at {:#x}", obj);
         return EXIT_FAILURE;
     }
     const addr_t slot_addr = *vptr + slot_off;
     const auto target = read_pointer_value(b, slot_addr);
     if (!target) {
-        std::println(stderr,
-            "spelunk: --explain-vcall: cannot read vtable slot {:#x}", slot_addr);
+        spelunk::diagnostic::print("spelunk: --explain-vcall: cannot read vtable slot {:#x}", slot_addr);
         return EXIT_FAILURE;
     }
 
@@ -230,11 +228,11 @@ int run_dump_object(const Args& args, const Binary& b) {
     auto obj = parse_cli_addr(args.dump_object);
     auto size = parse_cli_addr(args.object_size);
     if (!obj) {
-        std::println(stderr, "spelunk: --dump-object: bad address '{}'", args.dump_object);
+        spelunk::diagnostic::print("spelunk: --dump-object: bad address '{}'", args.dump_object);
         return EXIT_FAILURE;
     }
     if (!size || *size == 0) {
-        std::println(stderr, "spelunk: --dump-object requires --size <hex>");
+        spelunk::diagnostic::print("spelunk: --dump-object requires --size <hex>");
         return EXIT_FAILURE;
     }
     const auto rows = classify_object_fields(b, static_cast<addr_t>(*obj),
@@ -273,7 +271,7 @@ int run_containing_fn(const Args& args, const Binary& b) {
     if (!va) return EXIT_FAILURE;  // resolver reported the reason
     auto cf = containing_function(b, *va);
     if (!cf) {
-        std::println(stderr, "spelunk: --containing-fn: no function covers {:#x}", *va);
+        spelunk::diagnostic::print("spelunk: --containing-fn: no function covers {:#x}", *va);
         return EXIT_FAILURE;
     }
     if (args.json) {
@@ -456,7 +454,7 @@ int run_callees(const Args& args, const Binary& b) {
     const Annotations callees_ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.callees, &callees_ann);
     if (!win) {
-        std::println(stderr, "spelunk: --callees: could not resolve '{}'", args.callees);
+        spelunk::diagnostic::print("spelunk: --callees: could not resolve '{}'", args.callees);
         return EXIT_FAILURE;
     }
     const auto va = win->start;
@@ -491,8 +489,7 @@ int run_callees_class(const Args& args, const Binary& b) {
         }
     }
     if (!match) {
-        std::println(stderr,
-                     "spelunk: --callees-class: no RTTI class matching '{}'",
+        spelunk::diagnostic::print("spelunk: --callees-class: no RTTI class matching '{}'",
                      args.callees_class);
         return EXIT_FAILURE;
     }

@@ -27,16 +27,25 @@ std::optional<std::string> cast_untyped_array_base(
     const Emitter& e, const IrValue& base, IrType access_type,
     int depth, std::string_view loaded_type = {}) {
     std::string declared = e.c_type_name_for(base);
+    if (auto pointer = e.declared_pointer_type(base)) declared = *pointer;
     if (auto slot = e.trace_to_self_arg_slot(base);
         slot && *slot < e.self_arg_type_names.size() &&
-        !e.self_arg_type_names[*slot].empty()) {
+        e.self_arg_type_names[*slot].ends_with('*')) {
         declared = Emitter::normalize_c_type_alias(e.self_arg_type_names[*slot]);
     }
-    if (declared != "void*" && declared != "const void*") return std::nullopt;
-    // Preserve the signature while giving the individual access a sized
-    // lvalue. A stored pointer needs one more indirection than an integer.
     const std::string element = loaded_type.ends_with('*')
         ? std::string(loaded_type) : std::string(c_type_name(access_type));
+    // Indexing is only valid when the rendered base really is a pointer
+    // with the access width. Integer addresses and void pointers need a cast.
+    if (declared.ends_with('*') && declared != "void*" && declared != "const void*") {
+        const auto scalar_size = e.declared_scalar_size(Emitter::imported_record_base(declared));
+        if (declared.find('*') == declared.rfind('*') && scalar_size &&
+            *scalar_size == type_bits(access_type) / 8) return std::nullopt;
+        if (auto size = e.pointer_pointee_size(base);
+            size && *size == type_bits(access_type) / 8) return std::nullopt;
+    }
+    // Preserve the signature while giving the individual access a sized
+    // lvalue. A stored pointer needs one more indirection than an integer.
     return std::format("(({}*){})", element, e.expr(base, depth + 1));
 }
 }  // namespace

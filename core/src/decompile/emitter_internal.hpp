@@ -581,6 +581,8 @@ struct Emitter {
     // `c_type_name(IrType)` when no refined type exists, which keeps
     // every untyped value rendering exactly as before.
     [[nodiscard]] std::string c_type_name_for(const IrValue& v) const;
+    [[nodiscard]] std::optional<std::string> declared_pointer_type(
+        const IrValue& v, unsigned depth = 0) const;
     [[nodiscard]] std::string c_transport_cast(const IrValue& value,
                                                std::string rendered) const;
 

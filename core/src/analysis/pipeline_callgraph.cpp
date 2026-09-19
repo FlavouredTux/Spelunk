@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Call graph, callees, callers and containing-function lookup.
 
 #include <algorithm>
@@ -175,8 +176,8 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
     const std::size_t worker_count =
         std::min<std::size_t>(static_cast<std::size_t>(thread_pool_size(8)), total);
     if (timing_enabled()) {
-        std::fprintf(stderr, "[timing] call_graph.functions: %zu\n", total);
-        std::fprintf(stderr, "[timing] call_graph.threads: %zu\n", worker_count);
+        spelunk::diagnostic::printf("[timing] call_graph.functions: %zu\n", total);
+        spelunk::diagnostic::printf("[timing] call_graph.threads: %zu\n", worker_count);
     }
     std::unordered_set<addr_t> known_entries;
     known_entries.reserve(work.size());
@@ -256,7 +257,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
                 }
                 ++done;
                 if (show && (done % tick == 0 || done == total)) {
-                    std::fprintf(stderr, "\r  call graph: [%zu/%zu]", done, total);
+                    spelunk::diagnostic::printf("\r  call graph: [%zu/%zu]", done, total);
                     std::fflush(stderr);
                 }
             }
@@ -296,7 +297,7 @@ std::vector<CallEdge> compute_call_graph(const Binary& b,
             const std::size_t d = done.fetch_add(1, std::memory_order_relaxed) + 1;
             if (show && (d % tick == 0 || d == total)) {
                 std::lock_guard lk(log_mu);
-                std::fprintf(stderr, "\r  call graph: [%zu/%zu]", d, total);
+                spelunk::diagnostic::printf("\r  call graph: [%zu/%zu]", d, total);
                 std::fflush(stderr);
             }
         }

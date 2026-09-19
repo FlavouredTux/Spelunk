@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spelunk/common/diagnostic.hpp>
+
 #include <cstdlib>
 #include <print>
 
@@ -11,7 +13,8 @@ namespace spelunk::cli {
 // return EXIT_FAILURE. The 5 `run_*` runners and several main() code paths
 // repeated this verbatim.
 [[nodiscard]] inline int report(const Error& e) {
-    std::println(stderr, "spelunk: {}: {}", e.kind_name(), e.message);
+    if (diagnostic::json) diagnostic::write(e.message, e.kind_name(), true);
+    else diagnostic::print("spelunk: {}: {}", e.kind_name(), e.message);
     return EXIT_FAILURE;
 }
 

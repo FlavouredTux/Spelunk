@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Runtime metadata: Objective-C, RTTI, vtables, import recovery.
 
 #include <algorithm>
@@ -64,13 +65,12 @@ int run_recover_imports(const Args& args, const Binary& b) {
             if (ext == ".dll") dll_paths.push_back(e.path());
         }
         if (ec) {
-            std::println(stderr, "spelunk: --dll-dir: cannot read '{}': {}",
+            spelunk::diagnostic::print("spelunk: --dll-dir: cannot read '{}': {}",
                          args.recover_dll_dir, ec.message());
         }
     }
     if (dll_paths.empty()) {
-        std::println(stderr,
-            "spelunk: --recover-imports needs reference DLLs. Pass --dll-dir DIR "
+        spelunk::diagnostic::print("spelunk: --recover-imports needs reference DLLs. Pass --dll-dir DIR "
             "(a folder of *.dll) and/or --dll PATH. Point it at real Windows "
             "system DLLs (ntdll, kernel32, kernelbase, user32, ...): a pointer "
             "into a DLL you don't have cannot be named.");
@@ -86,13 +86,12 @@ int run_recover_imports(const Args& args, const Binary& b) {
     for (const auto& path : dll_paths) {
         auto loaded = load_binary(path);
         if (!loaded) {
-            std::println(stderr, "spelunk: --recover-imports: skipping '{}': {}",
+            spelunk::diagnostic::print("spelunk: --recover-imports: skipping '{}': {}",
                          path.string(), loaded.error().message);
             continue;
         }
         if ((*loaded)->format() != Format::Pe) {
-            std::println(stderr,
-                "spelunk: --recover-imports: skipping '{}': not a PE image",
+            spelunk::diagnostic::print("spelunk: --recover-imports: skipping '{}': not a PE image",
                 path.string());
             continue;
         }
@@ -105,8 +104,7 @@ int run_recover_imports(const Args& args, const Binary& b) {
         ref_holders.push_back(std::move(*loaded));
     }
     if (refs.empty()) {
-        std::println(stderr,
-            "spelunk: --recover-imports: no usable reference DLLs loaded");
+        spelunk::diagnostic::print("spelunk: --recover-imports: no usable reference DLLs loaded");
         return EXIT_FAILURE;
     }
 
@@ -119,7 +117,7 @@ int run_recover_imports(const Args& args, const Binary& b) {
         if (s.starts_with("0x") || s.starts_with("0X")) s.remove_prefix(2);
         auto r = std::from_chars(s.data(), s.data() + s.size(), v, 16);
         if (r.ec != std::errc{} || r.ptr != s.data() + s.size()) {
-            std::println(stderr, "spelunk: --image-base: bad hex '{}'",
+            spelunk::diagnostic::print("spelunk: --image-base: bad hex '{}'",
                          args.recover_image_base);
             return EXIT_FAILURE;
         }
@@ -138,18 +136,15 @@ int run_recover_imports(const Args& args, const Binary& b) {
     const auto result = recover_imports(b, refs, opts);
 
     // Diagnostics to stderr; the machine-readable contract goes to stdout.
-    std::println(stderr,
-        "spelunk: {} reference DLL(s), {} export(s); harvested {} IAT slot(s) "
+    spelunk::diagnostic::print("spelunk: {} reference DLL(s), {} export(s); harvested {} IAT slot(s) "
         "into {} cluster(s)",
         refs.size(), total_exports, result.harvested, result.clusters.size());
     for (const auto& c : result.clusters) {
         if (!c.module.empty()) {
-            std::println(stderr,
-                "  [{:#x}..{:#x}] {} @ base {:#x}  {}/{} resolved",
+            spelunk::diagnostic::print("  [{:#x}..{:#x}] {} @ base {:#x}  {}/{} resolved",
                 c.low, c.high, c.module, c.base, c.hits, c.slots);
         } else {
-            std::println(stderr,
-                "  [{:#x}..{:#x}] UNRESOLVED  {} slot(s)",
+            spelunk::diagnostic::print("  [{:#x}..{:#x}] UNRESOLVED  {} slot(s)",
                 c.low, c.high, c.slots);
         }
     }
@@ -182,7 +177,7 @@ int run_vtables(const Args& args, const Binary& b) {
     if (!args.vtable_at.empty()) {
         auto va = parse_cli_addr(args.vtable_at);
         if (!va) {
-            std::println(stderr, "spelunk: --vtable-at: bad address '{}'", args.vtable_at);
+            spelunk::diagnostic::print("spelunk: --vtable-at: bad address '{}'", args.vtable_at);
             return 2;
         }
         std::print("{}", build_vtable_at_output(b, *va, args.vtable_limit));

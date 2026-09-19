@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spelunk/common/diagnostic.hpp>
+
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -152,7 +154,7 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
         if (k) {
             key = std::move(*k);
         } else {
-            std::println(stderr, "spelunk: warning: {}: {} (caching disabled)",
+            spelunk::diagnostic::print("spelunk: warning: {}: {} (caching disabled)",
                          k.error().kind_name(), k.error().message);
             cacheable = false;
         }
@@ -177,7 +179,7 @@ int run_cached(const Args& args, std::string_view tag, Compute compute) {
     if (cacheable) {
         ScopedTimer t("cache.write");
         if (auto rv = cache::write(dir, key, tag, out); !rv) {
-            std::println(stderr, "spelunk: warning: {}: {}",
+            spelunk::diagnostic::print("spelunk: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);
         }
     }

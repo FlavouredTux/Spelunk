@@ -261,7 +261,54 @@ Emitter::pointer_type_from_memory_uses(const IrValue& value) const {
     return std::format("{}*", c_type_name(*pointees.begin()));
 }
 
+std::optional<std::string> Emitter::declared_pointer_type(
+    const IrValue& value, unsigned depth) const {
+    if (!annotations || !fn || depth > 8 ||
+        type_bits(value.type) != type_bits(abi_word_type())) return std::nullopt;
+    if (auto slot = trace_to_self_arg_slot(value); slot) {
+        if (const auto* sig = annotations->signature_for(fn->start);
+            sig && *slot < sig->params.size()) {
+            auto type = normalize_c_type_alias(sig->params[*slot].type);
+            if (type.ends_with('*')) return type;
+        }
+    }
+    const auto* load = def_stripped(value);
+    if (load && (load->op == IrOp::Add || load->op == IrOp::Sub) && load->src_count == 2) {
+        const auto left = declared_pointer_type(load->srcs[0], depth + 1);
+        const auto right = declared_pointer_type(load->srcs[1], depth + 1);
+        // Pointer differences are byte counts, never pointers. Only carry a
+        // declaration through pointer-plus/minus-integer operations.
+        if (left && !right && fn->types.kind(fn->type_of(load->srcs[1])) != TypeKind::Ptr)
+            return left;
+        if (load->op == IrOp::Add && right && !left &&
+            fn->types.kind(fn->type_of(load->srcs[0])) != TypeKind::Ptr) return right;
+        return std::nullopt;
+    }
+    if (!load || load->op != IrOp::Load || load->segment != Reg::None ||
+        load->src_count == 0 || type_bits(value.type) != type_bits(abi_word_type()))
+        return std::nullopt;
+    const auto access = canonical_struct_access(load->srcs[0]);
+    if (!access || access->second < 0) return std::nullopt;
+    const auto owner = declared_pointer_type(access->first, depth + 1);
+    if (!owner) return std::nullopt;
+    const auto record = annotations->imported_records.find(imported_record_base(*owner));
+    if (record == annotations->imported_records.end()) return std::nullopt;
+    const auto field = record->second.fields.find(access->second);
+    if (field == record->second.fields.end() ||
+        field->second.size != type_bits(value.type) / 8) return std::nullopt;
+    auto type = normalize_c_type_alias(field->second.type);
+    return type.ends_with('*') ? std::optional{type} : std::nullopt;
+}
+
 std::string Emitter::c_type_name_for(const IrValue& v) const {
+    if (const auto* definition = def_stripped(v);
+        definition && (definition->op == IrOp::Load ||
+                       definition->op == IrOp::Add || definition->op == IrOp::Sub)) {
+        if (definition->op != IrOp::Load || definition->src_count == 0 ||
+            !stack_offset(definition->srcs[0])) {
+            if (auto declared = declared_pointer_type(v)) return *declared;
+        }
+    }
     if (auto key = ssa_key(v)) {
         if (auto it = scalar_join_types.find(*key); it != scalar_join_types.end()) return std::string(c_type_name(it->second));
     }
@@ -829,7 +876,7 @@ Emitter::imported_record_declarations(std::string_view rendered_function) const 
             if (annotations->imported_records.contains(pointee)) {
                 return pointee + "*";
             }
-            return type.find("char") != std::string::npos
+            return declared_scalar_size(pointee).has_value() || pointee == "void"
                 ? normalize_c_type_alias(type)
                 : std::string("void*");
         }
@@ -958,8 +1005,7 @@ Emitter::imported_record_declarations(std::string_view rendered_function) const 
                 suffix = std::format("[{}]", std::max<std::size_t>(count, 1));
             } else if (!annotations->imported_records.contains(
                            imported_record_base(type)) &&
-                       scalar_bytes(type) == 0 && type != "void*" &&
-                       type != "const char*" && type != "char*") {
+                       scalar_bytes(type) == 0 && !type.ends_with('*')) {
                 if (annotations->imported_enums.contains(
                         imported_record_base(type))) type = "int32_t";
                 else if (field.size == 1) type = "uint8_t";

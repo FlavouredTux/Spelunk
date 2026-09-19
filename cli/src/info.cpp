@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include "info.hpp"
 
 #include <array>
@@ -363,8 +364,8 @@ void print_help_topic(std::string_view topic) {
     // Unknown topics are an error, not a help request: report the bad
     // topic and point at the full banner instead of dumping it (the
     // topic list itself lives in `spelunk --help`).
-    std::println(stderr, "spelunk: --help: unknown topic '{}'", topic);
-    std::println(stderr, "run 'spelunk --help' for full usage");
+    spelunk::diagnostic::print("spelunk: --help: unknown topic '{}'", topic);
+    spelunk::diagnostic::print("run 'spelunk --help' for full usage");
 }
 
 }  // namespace spelunk::cli

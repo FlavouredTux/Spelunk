@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include <cstddef>
 #include <cstdio>
 #include <expected>
@@ -176,8 +177,7 @@ slice_fat(std::vector<std::byte>& buf) {
         // The slice is browsable (symbols/sections still parse) but the
         // decoder will fail on instructions. Warn loudly so users don't
         // wonder why decompile/disasm output is empty.
-        std::fprintf(stderr,
-            "spelunk: fat binary has no x86_64 or arm64 slice; "
+        spelunk::diagnostic::printf("spelunk: fat binary has no x86_64 or arm64 slice; "
             "falling back to cputype %#x (instructions will not decode)\n",
             pick->cputype);
     }
@@ -287,8 +287,7 @@ load_binary(const std::filesystem::path& path, const LoadOptions& opts) {
 
         if (!opts.pdb_path.empty()) {
             if (!try_load(opts.pdb_path)) {
-                std::fprintf(stderr,
-                    "spelunk: --pdb: cannot read '%s'; continuing without PDB info\n",
+                spelunk::diagnostic::printf("spelunk: --pdb: cannot read '%s'; continuing without PDB info\n",
                     opts.pdb_path.string().c_str());
             }
         } else if (!opts.no_pdb) {

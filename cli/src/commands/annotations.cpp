@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Annotation export, --annotate, and type dumps.
 
 #include <spelunk/common/annotations.hpp>
@@ -78,8 +79,7 @@ int run_export_annotations(const Args& args) {
     if (!args.quiet) {
         const std::size_t n = a.renames.size() + a.signatures.size()
                             + a.notes.size()   + a.named_constants.size();
-        std::println(stderr,
-            "spelunk: exported {} annotation(s) from {} to '{}'",
+        spelunk::diagnostic::print("spelunk: exported {} annotation(s) from {} to '{}'",
             n,
             src.source == AnnotationSource::None ? std::string{"<empty>"}
                                                  : src.path.string(),
@@ -97,15 +97,13 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     // stdout instead of touching disk.
     auto va = parse_cli_addr(args.annotate_addr);
     if (!va) {
-        std::println(stderr,
-            "spelunk: --annotate: bad address '{}'", args.annotate_addr);
+        spelunk::diagnostic::print("spelunk: --annotate: bad address '{}'", args.annotate_addr);
         return EXIT_FAILURE;
     }
 
     if (args.annotate_name.empty() && args.annotate_note.empty() &&
         args.annotate_signature.empty()) {
-        std::println(stderr,
-            "spelunk: --annotate: nothing to set "
+        spelunk::diagnostic::print("spelunk: --annotate: nothing to set "
             "(pass --set-name, --set-note, or --set-signature)");
         return EXIT_FAILURE;
     }
@@ -119,8 +117,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
         const auto* last  = first + args.annotate_conf.size();
         auto rc = std::from_chars(first, last, v);
         if (rc.ec != std::errc{} || rc.ptr != last) {
-            std::println(stderr,
-                "spelunk: --confidence: expected a float in [0,1], got '{}'",
+            spelunk::diagnostic::print("spelunk: --confidence: expected a float in [0,1], got '{}'",
                 args.annotate_conf);
             return EXIT_FAILURE;
         }
@@ -145,8 +142,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     auto loc = resolve_annotation_location(args.binary, args.annotations_path, cache_dir);
     if (args.no_cache && loc.source == AnnotationSource::Cache) loc = {};
     if (loc.source == AnnotationSource::None || loc.path.empty()) {
-        std::println(stderr,
-            "spelunk: --annotate: nowhere to write annotations "
+        spelunk::diagnostic::print("spelunk: --annotate: nowhere to write annotations "
             "(no --annotations / sidecar / cache)");
         return EXIT_FAILURE;
     }
@@ -177,8 +173,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
     if (!args.annotate_signature.empty()) {
         auto sig = ::spelunk::parse_signature(args.annotate_signature);
         if (!sig) {
-            std::println(stderr,
-                "spelunk: --set-signature: cannot parse '{}'",
+            spelunk::diagnostic::print("spelunk: --set-signature: cannot parse '{}'",
                 args.annotate_signature);
             return EXIT_FAILURE;
         }
@@ -195,8 +190,7 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
 
     if (!args.quiet) {
         const char* tag = args.dry_run ? "--annotate --dry-run" : "--annotate";
-        std::println(stderr,
-            "spelunk: {}: {:#x} -> {} ({})",
+        spelunk::diagnostic::print("spelunk: {}: {:#x} -> {} ({})",
             tag, static_cast<u64>(*va),
             loc.path.empty() ? std::string{"<no destination>"} : loc.path.string(),
             annotation_source_name(loc.source));

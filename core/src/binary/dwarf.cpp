@@ -497,6 +497,8 @@ parse_dwarf_functions(const Binary& binary, Annotations* types) {
                 const auto offset = indexed(str_offsets, string_base, *linkage_index, offset_size);
                 die.linkage = offset ? string_at(debug_str, *offset) : std::string{};
             }
+            if (die.tag == DW_TAG_pointer_type && !die.byte_size)
+                die.byte_size = address_size;
             if (low_pc_index) die.low_pc = indexed(addresses, address_base, *low_pc_index, address_size).value_or(0);
             const std::size_t index = dies.size();
             dies.push_back(std::move(die));

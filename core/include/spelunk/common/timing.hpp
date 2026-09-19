@@ -1,5 +1,7 @@
 #pragma once
 
+#include <spelunk/common/diagnostic.hpp>
+
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -33,7 +35,7 @@ public:
         const auto end = std::chrono::steady_clock::now();
         const auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
                             end - start_).count();
-        std::fprintf(stderr, "[timing] %.*s: %lld.%03lld ms\n",
+        spelunk::diagnostic::printf("[timing] %.*s: %lld.%03lld ms\n",
                      static_cast<int>(label_.size()), label_.data(),
                      static_cast<long long>(us / 1000),
                      static_cast<long long>(us % 1000));

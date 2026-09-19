@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Helpers shared by more than one command group.
 
 #include "common.hpp"
@@ -87,7 +88,7 @@ std::optional<addr_t> resolve_flag_target(const Binary& b,
                                                         std::string_view spec) {
     if (auto va = parse_cli_addr(spec)) return *va;
     if (looks_like_address(spec)) {
-        std::println(stderr, "spelunk: invalid address '{}'", spec);
+        spelunk::diagnostic::print("spelunk: invalid address '{}'", spec);
         return std::nullopt;
     }
     const Annotations ann = load_annotations_quiet(args);
@@ -117,29 +118,27 @@ ModuleScope resolve_module_scope(const Binary& b,
     }
 
     if (candidates.empty()) {
-        std::println(stderr, "spelunk: --module '{}' matched no loaded module", name);
-        std::println(stderr, "spelunk: available modules:");
+        spelunk::diagnostic::print("spelunk: --module '{}' matched no loaded module", name);
+        spelunk::diagnostic::print("spelunk: available modules:");
         for (const auto& s : b.symbols()) {
             if (s.kind != SymbolKind::Section) continue;
             if (s.size == 0) continue;
-            std::println(stderr, "  {}\t{:#x}\t{:#x}", s.name, s.addr, s.size);
+            spelunk::diagnostic::print("  {}\t{:#x}\t{:#x}", s.name, s.addr, s.size);
         }
         return ms;   // inactive - caller should bail
     }
     if (candidates.size() > 1) {
-        std::println(stderr,
-            "spelunk: --module '{}' is ambiguous ({} matches); using first ({})",
+        spelunk::diagnostic::print("spelunk: --module '{}' is ambiguous ({} matches); using first ({})",
             name, candidates.size(), candidates.front()->name);
         for (const auto* c : candidates) {
-            std::println(stderr, "  {}\t{:#x}\t{:#x}", c->name, c->addr, c->size);
+            spelunk::diagnostic::print("  {}\t{:#x}\t{:#x}", c->name, c->addr, c->size);
         }
     }
     ms.lo = candidates.front()->addr;
     ms.hi = candidates.front()->addr + candidates.front()->size;
     ms.matched_name = candidates.front()->name;
     ms.active = true;
-    std::println(stderr,
-        "spelunk: --module '{}' resolved to {} [{:#x}, {:#x})",
+    spelunk::diagnostic::print("spelunk: --module '{}' resolved to {} [{:#x}, {:#x})",
         name, ms.matched_name, ms.lo, ms.hi);
     return ms;
 }
@@ -524,8 +523,7 @@ Annotations load_annotations_for(const Args& args, bool& loaded) {
     if (!std::filesystem::exists(loc.path, ec) || ec) return annotations;
     auto rv = Annotations::load(loc.path);
     if (!rv) {
-        std::println(stderr,
-            "spelunk: warning: {}: {}; continuing without user annotations",
+        spelunk::diagnostic::print("spelunk: warning: {}: {}; continuing without user annotations",
             rv.error().kind_name(), rv.error().message);
         return annotations;
     }
@@ -536,7 +534,7 @@ Annotations load_annotations_for(const Args& args, bool& loaded) {
                             + annotations.signatures.size()
                             + annotations.notes.size()
                             + annotations.named_constants.size();
-        std::println(stderr, "spelunk: annotations: {} ({}, {} entries)",
+        spelunk::diagnostic::print("spelunk: annotations: {} ({}, {} entries)",
                      loc.path.string(), annotation_source_name(loc.source), n);
     }
     return annotations;

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
@@ -203,7 +204,7 @@ auto_dsym_path(const spelunk::cli::Args& args) {
     if (path.empty()) return EXIT_SUCCESS;
     auto loaded = spelunk::load_binary(path);
     if (!loaded) {
-        std::println(stderr, "spelunk: {} {}: {}: {}",
+        spelunk::diagnostic::print("spelunk: {} {}: {}: {}",
                      explicit_dsym ? "--dsym" : "auto-dSYM",
                      path.string(), loaded.error().kind_name(),
                      loaded.error().message);
@@ -211,7 +212,7 @@ auto_dsym_path(const spelunk::cli::Args& args) {
     }
     const std::size_t added = primary.overlay_symbols_from(**loaded);
     if (!args.quiet) {
-        std::println(stderr, "spelunk: dSYM symbols: {} ({})",
+        spelunk::diagnostic::print("spelunk: dSYM symbols: {} ({})",
                      added, path.string());
     }
     return EXIT_SUCCESS;
@@ -226,7 +227,7 @@ auto_dsym_path(const spelunk::cli::Args& args) {
         if (b.add_inferred_function_name(c.function, c.name)) ++added;
     }
     if (!args.quiet) {
-        std::println(stderr, "spelunk: string-inferred names: {}", added);
+        spelunk::diagnostic::print("spelunk: string-inferred names: {}", added);
     }
     return EXIT_SUCCESS;
 }
@@ -242,19 +243,21 @@ auto_dsym_path(const spelunk::cli::Args& args) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int run_cli(int argc, char** argv) {
     using namespace spelunk::cli;
 
     auto args_r = parse_args(argc, argv);
     if (!args_r) {
+        if (spelunk::diagnostic::json) return report(args_r.error());
         // Parse errors get the specific message plus a one-line pointer
         // to --help; the full banner stays reserved for explicit
         // -h/--help so failures don't scroll the terminal.
-        std::println(stderr, "spelunk: {}", args_r.error().message);
-        std::println(stderr, "run 'spelunk --help' for full usage");
+        spelunk::diagnostic::print("spelunk: {}", args_r.error().message);
+        spelunk::diagnostic::print("run 'spelunk --help' for full usage");
         return EXIT_FAILURE;
     }
     auto args = std::move(*args_r);
+    spelunk::diagnostic::json = args.json;
 
     if (args.help) {
         if (args.help_topic.empty()) print_help();
@@ -275,10 +278,10 @@ int main(int argc, char** argv) {
         args.binary = project->object_path.string();
         args.dtk_symbols_path = project->symbols_path.string();
         if (!args.quiet) {
-            std::println(stderr, "spelunk: DTK {} [{}]", project->module_name,
+            spelunk::diagnostic::print("spelunk: DTK {} [{}]", project->module_name,
                          project->version.empty() ? "default" : project->version);
-            std::println(stderr, "spelunk: object  {}", args.binary);
-            std::println(stderr, "spelunk: symbols {}", args.dtk_symbols_path);
+            spelunk::diagnostic::print("spelunk: object  {}", args.binary);
+            spelunk::diagnostic::print("spelunk: symbols {}", args.dtk_symbols_path);
         }
         if (!args.dtk_module.empty()) {
             // A REL context depends on the main DOL and every configured peer,
@@ -326,8 +329,7 @@ int main(int argc, char** argv) {
             if (i) requested_list += ", ";
             requested_list += view_flags[i];
         }
-        std::println(stderr,
-                     "spelunk: multiple view flags requested ({}); running {} only",
+        spelunk::diagnostic::print("spelunk: multiple view flags requested ({}); running {} only",
                      requested_list, view_flags.front());
     }
     if (view_flags.size() <= 1 || view_flags.front() == "--functions") {
@@ -349,8 +351,7 @@ int main(int argc, char** argv) {
             *dtk_main_project, dtk_rel_projects, selected_dtk_module, **bin);
         if (!linked) return report(linked.error());
         if (!args.quiet) {
-            std::println(stderr,
-                "spelunk: REL context {} modules, {} external relocations resolved",
+            spelunk::diagnostic::print("spelunk: REL context {} modules, {} external relocations resolved",
                 dtk_rel_projects.size(), *linked);
         }
     }
@@ -370,7 +371,7 @@ int main(int argc, char** argv) {
     for (const auto& tok : args.force_fn_starts) {
         auto va = spelunk::cli::parse_cli_addr(tok);
         if (!va) {
-            std::println(stderr, "spelunk: --force-fn-start: bad hex VA '{}'", tok);
+            spelunk::diagnostic::print("spelunk: --force-fn-start: bad hex VA '{}'", tok);
             return EXIT_FAILURE;
         }
         (*bin)->add_synthetic_function_start(*va);
@@ -429,4 +430,16 @@ int main(int argc, char** argv) {
     if (args.functions)          return run_functions(args, b);
 
     return run_emit(args, b);
+}
+
+int main(int argc, char** argv) {
+    // Recognize JSON even when parsing fails before reaching the flag.
+    spelunk::diagnostic::json = spelunk::cli::requests_json(argc, argv);
+    const int status = run_cli(argc, argv);
+    if (status != EXIT_SUCCESS && spelunk::diagnostic::json &&
+        !spelunk::diagnostic::error_reported) {
+        spelunk::diagnostic::write("command failed; see preceding diagnostics",
+                                   "command-failed", true);
+    }
+    return status;
 }

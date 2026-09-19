@@ -30,6 +30,7 @@ def main():
                     ('callback', repo / 'tests/fixtures/indirect_trace.c', ('plus7', 'minus3', 'call_fp', 'call_zero', 'main')),
                     ('record', repo / 'tests/support/pseudocode_samples/records.c', ('update_counter',)),
                     ('member', repo / 'tests/fixtures/indirect_tail.c', ('via_member',)),
+                    ('vector', repo / 'tests/fixtures/vector_like.c', ('sum_vec',)),
                 ):
                     native = folder / f'{sample}.so'
                     if sample == 'callback':
@@ -59,6 +60,17 @@ def main():
                         tagged = folder / 'record-tagged.c'
                         tagged.write_text(run([spelunk, '--no-cache', '--emit-c', '--annotations', annotation,
                                                '-s', 'update_counter', native]))
+                    elif sample == 'vector':
+                        pseudo = run([spelunk, '--no-cache', '-p', '-s', 'sum_vec', native])
+                        if 'int* begin;' not in pseudo:
+                            raise AssertionError(('lost pointer member type', pseudo))
+                        # Test the readable output as C too, so integer indexing
+                        # and incompatible pointer declarations cannot slip in.
+                        pseudo_source = folder / 'vector-pseudo.c'
+                        pseudo_source.write_text('#include <stdint.h>\n' + pseudo + '\nuint32_t g_sink;\n')
+                        run([cc, '-std=c11', '-Werror', '-shared', '-fPIC', pseudo_source,
+                             '-o', folder / 'vector-pseudo.so'])
+                        sources[0].write_text(sources[0].read_text() + '\nuint8_t g_sink[4];\n')
                     for export_opt in ('0', '2'):
                         exported = folder / f'{sample}-export-{export_opt}.so'
                         run([cc, '-std=c11', '-Werror', '-shared', '-fPIC', '-O' + export_opt, *sources, '-o', exported])
@@ -69,6 +81,20 @@ def main():
                             samples.compare('records', 'update_counter', native, tagged_lib, 42, 0)
                             continue
                         libraries = [ctypes.CDLL(str(path)) for path in (native, exported)]
+                        if sample == 'vector':
+                            libraries.append(ctypes.CDLL(str(folder / 'vector-pseudo.so')))
+                            values = (ctypes.c_int * 16)(*range(-8, 8))
+                            address = ctypes.addressof(values)
+                            vector = (ctypes.c_void_p * 3)(address, address + 12 * 4, address + 16 * 4)
+                            for lib in libraries:
+                                lib.sum_vec.argtypes, lib.sum_vec.restype = [ctypes.c_void_p, ctypes.c_int], ctypes.c_int
+                                for index in range(16):
+                                    expected = values[index] if index < 12 else 0
+                                    if lib.sum_vec(vector, index) != expected:
+                                        raise AssertionError(('pointer indexing', index))
+                                    if ctypes.c_int.in_dll(lib, 'g_sink').value != 16:
+                                        raise AssertionError('pointer difference changed scale')
+                            continue
                         if sample == 'member':
                             if 'int (*)(int)' not in sources[0].read_text():
                                 raise AssertionError('member callback prototype was not recovered')

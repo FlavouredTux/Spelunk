@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Function discovery: entries, filters, sizes, ObjC block invokes.
 
 #include <algorithm>
@@ -798,8 +799,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         for (addr_t a : discover_code_pointers(b)) add_candidate(a, "sub", true);
     }
     if (timing_enabled()) {
-        std::fprintf(stderr,
-            "[timing] enumerate_functions.seed: symbols=%zu unwind_extents=%zu unwind_added=%zu prologue=%zu total=%zu\n",
+        spelunk::diagnostic::printf("[timing] enumerate_functions.seed: symbols=%zu unwind_extents=%zu unwind_added=%zu prologue=%zu total=%zu\n",
             symbol_added, unwind_extents.size(), unwind_added, prologue_added, out.size());
     }
 

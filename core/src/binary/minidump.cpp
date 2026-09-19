@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include <spelunk/binary/minidump.hpp>
 
 #include <algorithm>
@@ -450,14 +451,12 @@ Result<void> MinidumpBinary::parse() {
 
             std::vector<Symbol> mod_syms;
             if (auto rv = pe::collect_exports(*this, mbase, dirs, mod_syms); !rv) {
-                std::fprintf(stderr,
-                    "minidump: module %s exports parse failed: %s\n",
+                spelunk::diagnostic::printf("minidump: module %s exports parse failed: %s\n",
                     mod_basename.c_str(), rv.error().message.c_str());
                 continue;
             }
             if (auto rv = pe::collect_imports(*this, mbase, dirs, mod_syms); !rv) {
-                std::fprintf(stderr,
-                    "minidump: module %s imports parse failed: %s\n",
+                spelunk::diagnostic::printf("minidump: module %s imports parse failed: %s\n",
                     mod_basename.c_str(), rv.error().message.c_str());
                 continue;
             }

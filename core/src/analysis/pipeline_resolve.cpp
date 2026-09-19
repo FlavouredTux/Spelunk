@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Resolving a symbol or address to a function window.
 
 #include <algorithm>
@@ -74,8 +75,7 @@ try_parse_objc_bracket(const Binary& b, std::string_view s) {
 
 void note_mid_function(addr_t addr, std::string_view name, u64 off) {
     if (diagnostics_silenced()) return;
-    std::fprintf(stderr,
-        "spelunk: note: %#llx is inside %.*s at +%#llx\n",
+    spelunk::diagnostic::printf("spelunk: note: %#llx is inside %.*s at +%#llx\n",
         static_cast<unsigned long long>(addr),
         static_cast<int>(name.size()), name.data(),
         static_cast<unsigned long long>(off));
@@ -180,8 +180,7 @@ resolve_function(const Binary& b, std::string_view symbol,
         const bool explicit_entry = symbol.starts_with("sub_");
         if (explicit_entry) {
             if (b.bytes_at(*va).empty() || !addr_in_code_section(b, *va)) {
-                std::fprintf(stderr,
-                    "spelunk: address %#llx is not in any code section "
+                spelunk::diagnostic::printf("spelunk: address %#llx is not in any code section "
                     "(or the bytes there are not mapped)\n",
                     static_cast<unsigned long long>(*va));
                 return std::nullopt;
@@ -196,8 +195,7 @@ resolve_function(const Binary& b, std::string_view symbol,
             // Common when --functions / call-graph discovery surfaces a
             // garbage indirect-jmp target on obfuscated binaries; the
             // address isn't in any mapped section so nothing decodes.
-            std::fprintf(stderr,
-                "spelunk: address %#llx is not in any mapped section "
+            spelunk::diagnostic::printf("spelunk: address %#llx is not in any mapped section "
                 "(or the bytes there don't decode as code)\n",
                 static_cast<unsigned long long>(*va));
         }
@@ -216,25 +214,22 @@ resolve_function(const Binary& b, std::string_view symbol,
         // bugs downstream.
         const auto all = b.find_all_by_name(lookup);
         if (all.size() > 1) {
-            std::fprintf(stderr,
-                "spelunk: name '%.*s' is ambiguous - matches %zu addresses:",
+            spelunk::diagnostic::printf("spelunk: name '%.*s' is ambiguous - matches %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), all.size());
             const std::size_t shown = std::min<std::size_t>(all.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
-                std::fprintf(stderr, " %#llx",
+                spelunk::diagnostic::printf(" %#llx",
                     static_cast<unsigned long long>(all[i]->addr));
             }
             if (all.size() > shown) {
-                std::fprintf(stderr, " ... (+%zu more)",
+                spelunk::diagnostic::printf(" ... (+%zu more)",
                     all.size() - shown);
             }
-            std::fprintf(stderr,
-                "; pass the VA (0x…) to pick one\n");
+            spelunk::diagnostic::printf("; pass the VA (0x…) to pick one\n");
             return std::nullopt;
         }
         if (b.bytes_at(chosen->addr).empty()) {
-            std::fprintf(stderr,
-                "spelunk: symbol '%.*s' at %#llx has no mapped bytes\n",
+            spelunk::diagnostic::printf("spelunk: symbol '%.*s' at %#llx has no mapped bytes\n",
                 static_cast<int>(lookup.size()), lookup.data(),
                 static_cast<unsigned long long>(chosen->addr));
             return std::nullopt;
@@ -254,27 +249,24 @@ resolve_function(const Binary& b, std::string_view symbol,
             if (name == lookup) hits.push_back(addr);
         }
         if (hits.size() > 1) {
-            std::fprintf(stderr,
-                "spelunk: rename '%.*s' is ambiguous - bound to %zu addresses:",
+            spelunk::diagnostic::printf("spelunk: rename '%.*s' is ambiguous - bound to %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), hits.size());
             const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
-                std::fprintf(stderr, " %#llx",
+                spelunk::diagnostic::printf(" %#llx",
                     static_cast<unsigned long long>(hits[i]));
             }
             if (hits.size() > shown) {
-                std::fprintf(stderr, " ... (+%zu more)",
+                spelunk::diagnostic::printf(" ... (+%zu more)",
                     hits.size() - shown);
             }
-            std::fprintf(stderr,
-                "; pass the VA (0x…) to pick one\n");
+            spelunk::diagnostic::printf("; pass the VA (0x…) to pick one\n");
             return std::nullopt;
         }
         if (hits.size() == 1) {
             const addr_t a = hits.front();
             if (b.bytes_at(a).empty()) {
-                std::fprintf(stderr,
-                    "spelunk: rename '%.*s' resolves to %#llx but no bytes are mapped there\n",
+                spelunk::diagnostic::printf("spelunk: rename '%.*s' resolves to %#llx but no bytes are mapped there\n",
                     static_cast<int>(lookup.size()), lookup.data(),
                     static_cast<unsigned long long>(a));
                 return std::nullopt;
@@ -293,19 +285,18 @@ resolve_function(const Binary& b, std::string_view symbol,
             if (hits.size() > 5) break;
         }
         if (hits.size() > 1) {
-            std::fprintf(stderr,
-                "spelunk: discovered name '%.*s' is ambiguous - matches %zu addresses:",
+            spelunk::diagnostic::printf("spelunk: discovered name '%.*s' is ambiguous - matches %zu addresses:",
                 static_cast<int>(lookup.size()), lookup.data(), hits.size());
             const std::size_t shown = std::min<std::size_t>(hits.size(), 5);
             for (std::size_t i = 0; i < shown; ++i) {
-                std::fprintf(stderr, " %#llx",
+                spelunk::diagnostic::printf(" %#llx",
                     static_cast<unsigned long long>(hits[i].addr));
             }
             if (hits.size() > shown) {
-                std::fprintf(stderr, " ... (+%zu more)",
+                spelunk::diagnostic::printf(" ... (+%zu more)",
                     hits.size() - shown);
             }
-            std::fprintf(stderr, "; pass the VA (0x…) to pick one\n");
+            spelunk::diagnostic::printf("; pass the VA (0x…) to pick one\n");
             return std::nullopt;
         }
         if (hits.size() == 1) {
@@ -315,8 +306,7 @@ resolve_function(const Binary& b, std::string_view symbol,
     }
 
     if (!symbol.empty()) {
-        std::fprintf(stderr,
-            "spelunk: no symbol named '%.*s'\n",
+        spelunk::diagnostic::printf("spelunk: no symbol named '%.*s'\n",
             static_cast<int>(lookup.size()), lookup.data());
         return std::nullopt;
     }

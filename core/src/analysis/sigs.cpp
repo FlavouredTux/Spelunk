@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include <spelunk/analysis/sigs.hpp>
 
 #include <algorithm>
@@ -225,8 +226,7 @@ Result<SigDb> load_pat(const std::filesystem::path& path) {
         db.sigs.push_back(std::move(*parsed));
     }
     if (skipped > 0) {
-        std::fprintf(stderr,
-            "spelunk: --pat: %s: skipped %zu malformed line(s)\n",
+        spelunk::diagnostic::printf("spelunk: --pat: %s: skipped %zu malformed line(s)\n",
             path.string().c_str(), skipped);
     }
     return db;

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include <spelunk/analysis/identify.hpp>
 
 #include <algorithm>
@@ -565,7 +566,7 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
     if (fns.empty()) return hits;
 
     const bool show = progress_enabled();
-    if (show) { std::fprintf(stderr, "identify: scanning %zu functions\n", fns.size()); std::fflush(stderr); }
+    if (show) { spelunk::diagnostic::printf("identify: scanning %zu functions\n", fns.size()); std::fflush(stderr); }
 
     std::size_t done = 0;
     for (const auto& fn : fns) {
@@ -650,7 +651,7 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
         }
         ++done;
         if (show && done % 200 == 0) {
-            std::fprintf(stderr, "  identify: %zu / %zu\n", done, fns.size());
+            spelunk::diagnostic::printf("  identify: %zu / %zu\n", done, fns.size());
             std::fflush(stderr);
         }
     }
@@ -659,7 +660,7 @@ std::vector<IdentifyHit> identify_functions(const Binary& b, float threshold) {
         if (lhs.addr != rhs.addr) return lhs.addr < rhs.addr;
         return lhs.confidence > rhs.confidence;
     });
-    if (show) { std::fprintf(stderr, "identify: %zu hit(s)\n", hits.size()); std::fflush(stderr); }
+    if (show) { spelunk::diagnostic::printf("identify: %zu hit(s)\n", hits.size()); std::fflush(stderr); }
     return hits;
 }
 

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Disassembly windows, patch plans, syscalls and forge specs.
 
 #include <charconv>
@@ -43,7 +44,7 @@ namespace {
     constexpr u64 kMaxCount =
         static_cast<u64>(std::numeric_limits<addr_t>::max() / 15);
     if (r.ec != std::errc{} || r.ptr != last || n == 0 || n > kMaxCount) {
-        std::println(stderr, "spelunk: {}: bad --count '{}'", command, raw);
+        spelunk::diagnostic::print("spelunk: {}: bad --count '{}'", command, raw);
         return false;
     }
     out = static_cast<std::size_t>(n);
@@ -62,11 +63,11 @@ namespace {
 int run_patch_plan(const Args& args, const Binary& b) {
     auto va = parse_cli_addr(args.patch_plan);
     if (!va) {
-        std::println(stderr, "spelunk: --patch-plan: bad address '{}'", args.patch_plan);
+        spelunk::diagnostic::print("spelunk: --patch-plan: bad address '{}'", args.patch_plan);
         return EXIT_FAILURE;
     }
     if (!addr_in_executable_section_cli(b, *va)) {
-        std::println(stderr, "spelunk: --patch-plan: {:#x} is not in executable code", *va);
+        spelunk::diagnostic::print("spelunk: --patch-plan: {:#x} is not in executable code", *va);
         return EXIT_FAILURE;
     }
     auto probe = decode_disasm_probe(b, *va, 12);
@@ -217,8 +218,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
         if (tok.empty()) return true;
         auto a = parse_cli_addr(tok);
         if (!a) {
-            std::println(stderr,
-                "spelunk: --disasm-window: bad address '{}'", tok);
+            spelunk::diagnostic::print("spelunk: --disasm-window: bad address '{}'", tok);
             return false;
         }
         vas.push_back(*a);
@@ -232,7 +232,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
         const std::string path{raw.substr(1)};
         std::ifstream f(path);
         if (!f) {
-            std::println(stderr, "spelunk: --disasm-window: cannot open '{}'", path);
+            spelunk::diagnostic::print("spelunk: --disasm-window: cannot open '{}'", path);
             return EXIT_FAILURE;
         }
         std::string line;
@@ -253,7 +253,7 @@ int run_disasm_window(const Args& args, const Binary& b) {
     }
 
     if (vas.empty()) {
-        std::println(stderr, "spelunk: --disasm-window: empty VA list");
+        spelunk::diagnostic::print("spelunk: --disasm-window: empty VA list");
         return EXIT_FAILURE;
     }
 
@@ -358,8 +358,7 @@ int run_forge_spec(const Args& args, const Binary& b) {
     const std::string_view raw = args.forge_spec;
     const auto colon = raw.find(':');
     if (colon == std::string_view::npos) {
-        std::println(stderr,
-            "spelunk: --forge-spec: expected ENTRY:VA, got '{}'", raw);
+        spelunk::diagnostic::print("spelunk: --forge-spec: expected ENTRY:VA, got '{}'", raw);
         return EXIT_FAILURE;
     }
     const std::string_view entry_tok = raw.substr(0, colon);
@@ -371,8 +370,7 @@ int run_forge_spec(const Args& args, const Binary& b) {
 
     auto target_va = parse_cli_addr(target_tok);
     if (!target_va) {
-        std::println(stderr,
-            "spelunk: --forge-spec: bad target VA '{}'", target_tok);
+        spelunk::diagnostic::print("spelunk: --forge-spec: bad target VA '{}'", target_tok);
         return EXIT_FAILURE;
     }
 

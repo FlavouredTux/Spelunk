@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include "header_import.hpp"
 
 #include <algorithm>
@@ -390,7 +391,7 @@ int apply_header_annotations(const Args& args, const Binary& b,
     if (args.header_paths.empty()) return EXIT_SUCCESS;
     auto imported = import_headers(args);
     if (!imported) {
-        std::println(stderr, "spelunk: --headers: {}: {}", imported.error().kind_name(), imported.error().message);
+        spelunk::diagnostic::print("spelunk: --headers: {}: {}", imported.error().kind_name(), imported.error().message);
         return EXIT_FAILURE;
     }
     std::size_t sigs = 0, fields = 0;
@@ -458,41 +459,40 @@ int apply_header_annotations(const Args& args, const Binary& b,
     // enum into the annotation constant map would make common values such as
     // zero acquire an arbitrary unrelated name throughout pseudo-C.
     loaded |= sigs != 0 || fields != 0;
-    if (!args.quiet) std::println(stderr,
-        "spelunk: headers: {} prototype(s), {} field(s), {} enum value(s), {} record(s){}",
+    if (!args.quiet) spelunk::diagnostic::print("spelunk: headers: {} prototype(s), {} field(s), {} enum value(s), {} record(s){}",
         sigs, fields, imported->enum_values.size(), imported->records.size(),
         imported->diagnostics ? std::format(", {} parse diagnostic(s)", imported->diagnostics) : "");
     if (args.verbose) {
         for (const auto& diagnostic : imported->diagnostic_text)
-            std::println(stderr, "spelunk: headers: {}", diagnostic);
+            spelunk::diagnostic::print("spelunk: headers: {}", diagnostic);
     }
     return EXIT_SUCCESS;
 }
 
 int run_decompile_data(const Args& args, const Binary& b) {
     if (args.data_type.empty()) {
-        std::println(stderr, "spelunk: --decompile-data requires --type TYPE");
+        spelunk::diagnostic::print("spelunk: --decompile-data requires --type TYPE");
         return EXIT_FAILURE;
     }
     auto imported = import_headers(args);
     if (!imported) {
-        std::println(stderr, "spelunk: --headers: {}: {}", imported.error().kind_name(), imported.error().message);
+        spelunk::diagnostic::print("spelunk: --headers: {}: {}", imported.error().kind_name(), imported.error().message);
         return EXIT_FAILURE;
     }
     const auto at = resolve_data_address(b, args.decompile_data);
     if (!at) {
-        std::println(stderr, "spelunk: --decompile-data: unknown symbol/address '{}'", args.decompile_data);
+        spelunk::diagnostic::print("spelunk: --decompile-data: unknown symbol/address '{}'", args.decompile_data);
         return EXIT_FAILURE;
     }
     auto type = model::parse_type(*imported, args.data_type);
     if (!type || model::type_size(*type, b.arch() == Arch::Ppc32 ? 4 : 8) == 0) {
-        std::println(stderr, "spelunk: --type: unknown or incomplete type '{}'", args.data_type);
+        spelunk::diagnostic::print("spelunk: --type: unknown or incomplete type '{}'", args.data_type);
         return EXIT_FAILURE;
     }
     const std::size_t pointer_size = b.arch() == Arch::Ppc32 ? 4 : 8;
     const std::size_t bytes = model::type_size(*type, pointer_size);
     if (b.bytes_at(*at).size() < bytes) {
-        std::println(stderr, "spelunk: --decompile-data: {} needs {:#x} bytes, only {:#x} mapped",
+        spelunk::diagnostic::print("spelunk: --decompile-data: {} needs {:#x} bytes, only {:#x} mapped",
                      args.data_type, bytes, b.bytes_at(*at).size());
         return EXIT_FAILURE;
     }
@@ -510,12 +510,11 @@ int run_decompile_data(const Args& args, const Binary& b) {
         auto verified =
             model::verify_typed_roundtrip(*imported, b, *type, *at, pointer_size);
         if (!verified) {
-            std::println(stderr, "spelunk: --verify-roundtrip: {}: {}", verified.error().kind_name(),
+            spelunk::diagnostic::print("spelunk: --verify-roundtrip: {}: {}", verified.error().kind_name(),
                          verified.error().message);
             return EXIT_FAILURE;
         }
-        std::println(stderr,
-                     "spelunk: round-trip verified: {} object(s), {:#x} bytes, {} "
+        spelunk::diagnostic::print("spelunk: round-trip verified: {} object(s), {:#x} bytes, {} "
                      "pointer(s), {} relocation(s)",
                      verified->objects, verified->bytes, verified->pointers, verified->relocations);
     }
@@ -526,15 +525,14 @@ int run_decompile_data(const Args& args, const Binary& b) {
 int run_evt_script(const Args& args, const Binary& b) {
     const auto at = resolve_data_address(b, args.evt_script);
     if (!at) {
-        std::println(stderr, "spelunk: --evt-script: unknown symbol/address '{}'", args.evt_script);
+        spelunk::diagnostic::print("spelunk: --evt-script: unknown symbol/address '{}'", args.evt_script);
         return EXIT_FAILURE;
     }
     // The manual advertises "--json where supported"; this writer has
     // no machine form, so announce the downgrade instead of silently
     // emitting plain text under a --json-expecting script.
     if (args.json) {
-        std::println(stderr,
-                     "spelunk: --evt-script has no --json output; emitting plain text");
+        spelunk::diagnostic::print("spelunk: --evt-script has no --json output; emitting plain text");
     }
     // Decode and validate the whole script before anything reaches
     // stdout. Emitting while parsing used to leave a partial EVT_BEGIN
@@ -556,14 +554,14 @@ int run_evt_script(const Args& args, const Binary& b) {
     };
     for (std::size_t inst_no = 0; inst_no < 65536; ++inst_no) {
         if (b.bytes_at(pc).size() < 4) {
-            std::println(stderr, "spelunk: --evt-script: truncated instruction at {:#x}", pc);
+            spelunk::diagnostic::print("spelunk: --evt-script: truncated instruction at {:#x}", pc);
             return EXIT_FAILURE;
         }
         const u32 word = static_cast<u32>(model::read_uint(b, pc, 4));
         const u16 opcode = static_cast<u16>(word & 0xffffu);
         const u16 argc = static_cast<u16>(word >> 16);
         if (opcode >= std::size(model::kEvtNames) || argc > 64) {
-            std::println(stderr, "spelunk: --evt-script: invalid opcode/count {:#x}/{} at {:#x}", opcode, argc, pc);
+            spelunk::diagnostic::print("spelunk: --evt-script: invalid opcode/count {:#x}/{} at {:#x}", opcode, argc, pc);
             return EXIT_FAILURE;
         }
         const std::string_view name = model::kEvtNames[opcode];
@@ -591,8 +589,7 @@ int run_evt_script(const Args& args, const Binary& b) {
                 if (auto roundtrip = model::evt_scalar_from_rendered(rendered);
                     roundtrip && !relocated) {
                     if (*roundtrip != value) {
-                        std::println(stderr,
-                                     "spelunk: --verify-roundtrip: '{}' re-encodes as "
+                        spelunk::diagnostic::print("spelunk: --verify-roundtrip: '{}' re-encodes as "
                                      "{}, expected {} at {:#x}",
                                      rendered, *roundtrip, value, arg_site);
                         return EXIT_FAILURE;
@@ -616,7 +613,7 @@ int run_evt_script(const Args& args, const Binary& b) {
             name == "BROTHER_EVT_ID" || name == "ELSE") ++indent;
     }
     if (!reached_end) {
-        std::println(stderr, "spelunk: --evt-script: instruction limit reached");
+        spelunk::diagnostic::print("spelunk: --evt-script: instruction limit reached");
         return EXIT_FAILURE;
     }
     // Byte-level round-trip check runs before the dump too, so a
@@ -624,8 +621,7 @@ int run_evt_script(const Args& args, const Binary& b) {
     if (args.verify_roundtrip) {
         const auto original = b.bytes_at(*at);
         if (original.size() < encoded.size()) {
-            std::println(stderr,
-                         "spelunk: --verify-roundtrip: re-encoded {} bytes but only "
+            spelunk::diagnostic::print("spelunk: --verify-roundtrip: re-encoded {} bytes but only "
                          "{} source bytes mapped at {:#x}",
                          encoded.size(), original.size(), *at);
             return EXIT_FAILURE;
@@ -633,8 +629,7 @@ int run_evt_script(const Args& args, const Binary& b) {
         for (std::size_t i = 0; i < encoded.size(); ++i) {
             if (original[i] == encoded[i])
                 continue;
-            std::println(stderr,
-                         "spelunk: --verify-roundtrip: event mismatch at {:#x}: "
+            spelunk::diagnostic::print("spelunk: --verify-roundtrip: event mismatch at {:#x}: "
                          "source {:#04x}, encoded {:#04x}",
                          *at + i, std::to_integer<unsigned>(original[i]),
                          std::to_integer<unsigned>(encoded[i]));
@@ -645,8 +640,7 @@ int run_evt_script(const Args& args, const Binary& b) {
     for (const auto& line : lines) std::println("{}", line);
     std::println("EVT_END()");
     if (args.verify_roundtrip) {
-        std::println(stderr,
-                     "spelunk: round-trip verified: {} event bytes, {} symbolic "
+        spelunk::diagnostic::print("spelunk: round-trip verified: {} event bytes, {} symbolic "
                      "argument(s), {} relocation(s)",
                      encoded.size(), symbolic_args, relocation_args);
     }

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Inventory outputs: strings, xrefs, functions, Objective-C, RTTI, vtables.
 
 #include "builders.hpp"
@@ -100,7 +101,7 @@ std::string build_xrefs_output(const Binary& b) {
         edges = compute_call_graph(b, {}, CallGraphMode::Fast);
     }
     if (timing_enabled()) {
-        std::fprintf(stderr, "[timing] xrefs.edges: %zu\n", edges.size());
+        spelunk::diagnostic::printf("[timing] xrefs.edges: %zu\n", edges.size());
     }
 
     // Keep --xrefs cheap: callers mostly need a stable edge list, not a

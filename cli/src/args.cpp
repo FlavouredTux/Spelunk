@@ -186,6 +186,23 @@ void apply_stage_implications(Args& a) {
     if (a.ssa)    a.ir    = true;
 }
 
+bool requests_json(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view token = argv[i];
+        if (token == "--json") return true;
+        bool takes_value = false;
+        for (const auto& flag : kValueFlags) takes_value |= matches(token, flag);
+        for (const auto special : {"--pat", "--headers", "--header-arg",
+             "--identify-threshold", "--dll", "--min-fn-size", "--max-fn-size",
+             "--min-uses", "--limit", "--row-limit", "--max-callsites",
+             "--coverage-limit", "--force-fn-start"}) {
+            takes_value |= token == special;
+        }
+        if (takes_value) ++i;
+    }
+    return false;
+}
+
 Result<Args> parse_args(int argc, char** argv) {
     Args a;
     for (int i = 1; i < argc; ++i) {

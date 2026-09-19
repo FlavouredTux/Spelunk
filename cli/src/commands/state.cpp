@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // State-machine queries: state map, guards, lifetimes, side effects.
 
 #include <algorithm>
@@ -481,7 +482,7 @@ int run_state_map(const Args& args, const Binary& b) {
     ScopedTimer total_timer("state_map.total");
     auto va = parse_cli_addr(args.state_map);
     if (!va) {
-        std::println(stderr, "spelunk: --state-map: bad address '{}'", args.state_map);
+        spelunk::diagnostic::print("spelunk: --state-map: bad address '{}'", args.state_map);
         return EXIT_FAILURE;
     }
 
@@ -563,7 +564,7 @@ int run_branch_on(const Args& args, const Binary& b) {
     ScopedTimer total_timer("branch_on.total");
     auto va = parse_cli_addr(args.branch_on);
     if (!va) {
-        std::println(stderr, "spelunk: --branch-on: bad address '{}'", args.branch_on);
+        spelunk::diagnostic::print("spelunk: --branch-on: bad address '{}'", args.branch_on);
         return EXIT_FAILURE;
     }
 
@@ -623,7 +624,7 @@ int run_guard_map(const Args& args, const Binary& b) {
     const Annotations ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.guard_map, &ann);
     if (!win) {
-        std::println(stderr, "spelunk: --guard-map: could not resolve '{}'", args.guard_map);
+        spelunk::diagnostic::print("spelunk: --guard-map: could not resolve '{}'", args.guard_map);
         return EXIT_FAILURE;
     }
     const auto rows = compute_guard_map(b, win->start, win->size);
@@ -682,7 +683,7 @@ int run_state_lifetime(const Args& args, const Binary& b) {
     ScopedTimer total_timer("state_lifetime.total");
     auto va = parse_cli_addr(args.state_lifetime);
     if (!va) {
-        std::println(stderr, "spelunk: --state-lifetime: bad address '{}'",
+        spelunk::diagnostic::print("spelunk: --state-lifetime: bad address '{}'",
                      args.state_lifetime);
         return EXIT_FAILURE;
     }
@@ -802,7 +803,7 @@ int run_side_effects(const Args& args, const Binary& b) {
     const Annotations ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.side_effects, &ann);
     if (!win) {
-        std::println(stderr, "spelunk: --side-effects: could not resolve '{}'",
+        spelunk::diagnostic::print("spelunk: --side-effects: could not resolve '{}'",
                      args.side_effects);
         return EXIT_FAILURE;
     }
@@ -857,7 +858,7 @@ int run_object_roles(const Args& args, const Binary& b) {
     const Annotations ann = load_annotations_quiet(args);
     auto win = resolve_function(b, args.object_roles, &ann);
     if (!win) {
-        std::println(stderr, "spelunk: --object-roles: could not resolve '{}'",
+        spelunk::diagnostic::print("spelunk: --object-roles: could not resolve '{}'",
                      args.object_roles);
         return EXIT_FAILURE;
     }

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Whole-binary inventories: xrefs, strings, surfaces, graphics.
 
 #include <algorithm>
@@ -135,7 +136,7 @@ make_surface_filter(const Args& args, bool include_artifacts) {
     if (!filter.function_raw.empty()) {
         filter.function = parse_cli_addr(filter.function_raw);
         if (!filter.function) {
-            std::println(stderr, "spelunk: --surface-function: bad address '{}'",
+            spelunk::diagnostic::print("spelunk: --surface-function: bad address '{}'",
                          filter.function_raw);
             return std::nullopt;
         }
@@ -203,7 +204,7 @@ int run_graphics(const Args& args, const Binary& b) {
     if (!filter.function_raw.empty()) {
         filter.function = parse_cli_addr(filter.function_raw);
         if (!filter.function) {
-            std::println(stderr, "spelunk: --graphics-function: bad address '{}'",
+            spelunk::diagnostic::print("spelunk: --graphics-function: bad address '{}'",
                          filter.function_raw);
             return 2;
         }

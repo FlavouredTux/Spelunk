@@ -1,17 +1,17 @@
 // sum_vec
 typedef union vec_int {
   uint8_t _storage[24];
-  struct { void* begin; };
-  struct { uint8_t _pad_end[8]; void* end; };
-  struct { uint8_t _pad_capacity[16]; void* capacity; };
+  struct { int* begin; };
+  struct { uint8_t _pad_end[8]; int* end; };
+  struct { uint8_t _pad_capacity[16]; int* capacity; };
 } vec_int;
 
 extern uint32_t g_sink;
 
 int sum_vec(vec_int* v, int idx) {
-  uint64_t t0 = v->begin;
-  void* t11 = (void*)(t0 + idx * 4);
-  g_sink = (uint32_t)((int64_t)(v->capacity - t0) >> 2);
+  int* t0 = v->begin;
+  int* t11 = t0 + idx;
+  g_sink = (uint32_t)((int64_t)((uint8_t*)v->capacity - (uint8_t*)t0) >> 2);
   if (t11 < v->end) {
     return t0[idx];
   }

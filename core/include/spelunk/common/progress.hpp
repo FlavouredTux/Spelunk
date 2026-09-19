@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <spelunk/common/diagnostic.hpp>
 
 #ifdef _WIN32
 #include <io.h>
@@ -15,6 +16,7 @@ namespace spelunk {
 // stderr is a TTY, and always suppressed when SPELUNK_QUIET=1 is set (the
 // CLI's --quiet flag exports it before analysis begins).
 [[nodiscard]] inline bool progress_enabled() {
+    if (diagnostic::json) return false;
     if (const char* q = std::getenv("SPELUNK_QUIET"); q && q[0] == '1') {
         return false;
     }

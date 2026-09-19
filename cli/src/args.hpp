@@ -8,6 +8,8 @@
 
 namespace spelunk::cli {
 
+[[nodiscard]] bool requests_json(int argc, char** argv);
+
 struct Args {
     std::string binary;
     std::string dtk_project_path;   // --dtk PATH: project root or version config

@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Function inventory: --functions, arities, PPC coverage.
 
 #include <algorithm>
@@ -234,7 +235,7 @@ std::optional<int> run_functions_cache_only(const Args& args) {
 
 int run_ppc_coverage(const Args& args, const Binary& b) {
     if (b.arch() != Arch::Ppc32 && b.arch() != Arch::Ppc64) {
-        std::println(stderr, "spelunk: --ppc-coverage: binary arch is {}, expected ppc32/ppc64",
+        spelunk::diagnostic::print("spelunk: --ppc-coverage: binary arch is {}, expected ppc32/ppc64",
                      arch_name(b.arch()));
         return EXIT_FAILURE;
     }
@@ -467,7 +468,7 @@ int run_functions(const Args& args, const Binary& b) {
         if (k)
             key = std::move(*k);
         else {
-            std::println(stderr, "spelunk: warning: {}: {} (caching disabled)", k.error().kind_name(),
+            spelunk::diagnostic::print("spelunk: warning: {}: {} (caching disabled)", k.error().kind_name(),
                          k.error().message);
             cacheable = false;
         }
@@ -489,7 +490,7 @@ int run_functions(const Args& args, const Binary& b) {
         if (cacheable) {
             ScopedTimer write_phase("functions.cache_write");
             if (auto rv = cache::write(dir, key, fns_tag, tsv); !rv) {
-                std::println(stderr, "spelunk: warning: {}: {}", rv.error().kind_name(),
+                spelunk::diagnostic::print("spelunk: warning: {}: {}", rv.error().kind_name(),
                              rv.error().message);
             }
         }

@@ -73,6 +73,21 @@ Without `-s`, the selected function defaults to `main`. Use `--symbols FILE`
 to process a list of functions in one run. Commands that support structured
 output accept `--json`.
 
+With `--json`, stderr contains one JSON diagnostic per line, including argument
+and loading errors. Records have `type` (`error` or `diagnostic`), `kind`, and
+`message` fields. Check the exit status for command success; informational
+diagnostics do not mean failure. stdout keeps the selected command's output
+format and may contain partial results on failure.
+
+```json
+{"type":"error","kind":"io","message":"cannot open file"}
+```
+
+Error kinds include `invalid-format`, `io`, `unsupported`, `out-of-bounds`,
+`truncated`, `not-implemented`, and `command-failed` for command-specific
+failures. Other diagnostics use kind `cli`. Without `--json`, diagnostics
+remain plain text.
+
 Common whole-binary queries include:
 
 ```sh

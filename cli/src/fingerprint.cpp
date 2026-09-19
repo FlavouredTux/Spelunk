@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 #include "fingerprint.hpp"
 
 #include <algorithm>
@@ -66,7 +67,7 @@ std::string build_fingerprints_output(const Binary& b,
     // Build a one-shot addr -> name map; previously this was an O(n²) linear
     // rescan per function which took minutes on large stripped binaries.
     if (show) {
-        std::println(stderr, "spelunk: collecting named functions...");
+        spelunk::diagnostic::print("spelunk: collecting named functions...");
         std::fflush(stderr);
     }
     std::unordered_map<addr_t, std::string> name_by_addr;
@@ -83,7 +84,7 @@ std::string build_fingerprints_output(const Binary& b,
     }
 
     if (show) {
-        std::println(stderr, "spelunk: {} named functions; walking call graph "
+        spelunk::diagnostic::print("spelunk: {} named functions; walking call graph "
                              "(one cold pass on big binaries)...",
                              name_by_addr.size());
         std::fflush(stderr);
@@ -94,7 +95,7 @@ std::string build_fingerprints_output(const Binary& b,
         edges = compute_call_graph(b, {}, CallGraphMode::Fast);
     }
     if (show) {
-        std::println(stderr, "spelunk: {} call edges discovered", edges.size());
+        spelunk::diagnostic::print("spelunk: {} call edges discovered", edges.size());
         std::fflush(stderr);
     }
 
@@ -175,21 +176,20 @@ std::string build_fingerprints_output(const Binary& b,
     const std::size_t worker_count = std::min<std::size_t>(
         static_cast<std::size_t>(thread_pool_size(8)), total);
     if (timing_enabled()) {
-        std::fprintf(stderr, "[timing] fingerprints.functions: %zu\n", total);
+        spelunk::diagnostic::printf("[timing] fingerprints.functions: %zu\n", total);
         if (min_fn_bytes != 0) {
-            std::fprintf(stderr, "[timing] fingerprints.filtered_small: %zu\n",
+            spelunk::diagnostic::printf("[timing] fingerprints.filtered_small: %zu\n",
                          filtered_small);
         }
         if (max_fn_bytes != 0) {
-            std::fprintf(stderr, "[timing] fingerprints.filtered_large: %zu\n",
+            spelunk::diagnostic::printf("[timing] fingerprints.filtered_large: %zu\n",
                          filtered_large);
         }
-        std::fprintf(stderr, "[timing] fingerprints.threads: %zu\n", worker_count);
+        spelunk::diagnostic::printf("[timing] fingerprints.threads: %zu\n", worker_count);
     }
 
     if (show) {
-        std::println(stderr,
-                     "spelunk: fingerprinting {} functions across {} thread{}...",
+        spelunk::diagnostic::print("spelunk: fingerprinting {} functions across {} thread{}...",
                      total, worker_count, worker_count == 1 ? "" : "s");
         std::fflush(stderr);
     }
@@ -224,7 +224,7 @@ std::string build_fingerprints_output(const Binary& b,
                     fingerprint_one(i, cfg, **lifter_r);
                     ++done;
                     if (show && (done % tick == 0 || done == total)) {
-                        std::fprintf(stderr, "\r  [%zu/%zu]", done, total);
+                        spelunk::diagnostic::printf("\r  [%zu/%zu]", done, total);
                         std::fflush(stderr);
                     }
                 }
@@ -249,7 +249,7 @@ std::string build_fingerprints_output(const Binary& b,
                         done.fetch_add(1, std::memory_order_relaxed) + 1;
                     if (show && (d % tick == 0 || d == total)) {
                         std::lock_guard lk(log_mu);
-                        std::fprintf(stderr, "\r  [%zu/%zu]", d, total);
+                        spelunk::diagnostic::printf("\r  [%zu/%zu]", d, total);
                         std::fflush(stderr);
                     }
                 }
@@ -304,14 +304,14 @@ std::string fingerprints_cached_or_compute(const std::filesystem::path& binary_p
     }
     auto bin = load_binary(binary_path);
     if (!bin) {
-        std::println(stderr, "spelunk: {}: {}",
-                     bin.error().kind_name(), bin.error().message);
+        if (diagnostic::json) diagnostic::write(bin.error().message, bin.error().kind_name(), true);
+        else diagnostic::print("spelunk: {}: {}", bin.error().kind_name(), bin.error().message);
         std::exit(EXIT_FAILURE);
     }
     std::string out = build_fingerprints_output(**bin);
     if (!key.empty()) {
         if (auto rv = cache::write(cache_dir, key, tag, out); !rv) {
-            std::println(stderr, "spelunk: warning: {}: {}",
+            spelunk::diagnostic::print("spelunk: warning: {}: {}",
                          rv.error().kind_name(), rv.error().message);
         }
     }
@@ -334,7 +334,7 @@ std::string fingerprints_tsv_for(const Args& args, const Binary& b) {
     if (!args.no_cache) {
         if (auto k = cache::key_for(args.binary, cache_scope_tag(args)); k) {
             if (auto rv = cache::write(dir, *k, tag, out); !rv) {
-                std::println(stderr, "spelunk: warning: {}: {}",
+                spelunk::diagnostic::print("spelunk: warning: {}: {}",
                              rv.error().kind_name(), rv.error().message);
             }
         }
@@ -685,7 +685,7 @@ int run_diff(const Args& args) {
     if (!args.fp_old_in.empty()) {
         old_tsv = slurp_file(args.fp_old_in);
         if (old_tsv.empty()) {
-            std::println(stderr, "spelunk: --fingerprint-old: cannot read '{}'",
+            spelunk::diagnostic::print("spelunk: --fingerprint-old: cannot read '{}'",
                          args.fp_old_in);
             return EXIT_FAILURE;
         }
@@ -694,7 +694,7 @@ int run_diff(const Args& args) {
     if (!args.fp_new_in.empty()) {
         new_tsv = slurp_file(args.fp_new_in);
         if (new_tsv.empty()) {
-            std::println(stderr, "spelunk: --fingerprint-new: cannot read '{}'",
+            spelunk::diagnostic::print("spelunk: --fingerprint-new: cannot read '{}'",
                          args.fp_new_in);
             return EXIT_FAILURE;
         }
@@ -703,18 +703,18 @@ int run_diff(const Args& args) {
 
     if (old_tsv.empty()) {
         if (args.diff_path.empty()) {
-            std::println(stderr, "spelunk: --diff needs --fingerprint-old PATH or --diff OLD_BINARY");
+            spelunk::diagnostic::print("spelunk: --diff needs --fingerprint-old PATH or --diff OLD_BINARY");
             return EXIT_FAILURE;
         }
-        std::println(stderr, "spelunk: diff OLD={}", args.diff_path);
+        spelunk::diagnostic::print("spelunk: diff OLD={}", args.diff_path);
         old_tsv = fingerprints_cached_or_compute(args.diff_path, cache_dir, args.no_cache);
     }
     if (new_tsv.empty()) {
         if (args.binary.empty()) {
-            std::println(stderr, "spelunk: --diff needs --fingerprint-new PATH or a positional binary");
+            spelunk::diagnostic::print("spelunk: --diff needs --fingerprint-new PATH or a positional binary");
             return EXIT_FAILURE;
         }
-        std::println(stderr, "spelunk: diff NEW={}", args.binary);
+        spelunk::diagnostic::print("spelunk: diff NEW={}", args.binary);
         new_tsv = fingerprints_cached_or_compute(args.binary, cache_dir, args.no_cache);
     }
     const auto old_p = parse_fingerprints_tsv(old_tsv);

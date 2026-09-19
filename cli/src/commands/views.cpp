@@ -1,3 +1,4 @@
+#include <spelunk/common/diagnostic.hpp>
 // Per-view runners (asm/cfg/ir/struct/pseudo) and the emit pipeline.
 
 #include <cstddef>
@@ -140,7 +141,7 @@ int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
     for (const auto& p : args.pat_paths) paths.emplace_back(p);
     auto db = sigs::load_pats(paths);
     if (!db) {
-        std::println(stderr, "spelunk: --pat: {}: {}",
+        spelunk::diagnostic::print("spelunk: --pat: {}: {}",
                      db.error().kind_name(), db.error().message);
         return EXIT_FAILURE;
     }
@@ -155,8 +156,7 @@ int run_struct_window(const Binary& b, const FuncWindow& win, bool pseudo,
     if (matches.empty()) ann_loaded |= !annotations.renames.empty();
     else                 ann_loaded = true;
     if (!args.quiet) {
-        std::println(stderr,
-            "spelunk: sigs: loaded {} sig(s) from {} file(s), {} match(es)",
+        spelunk::diagnostic::print("spelunk: sigs: loaded {} sig(s) from {} file(s), {} match(es)",
             db->size(), args.pat_paths.size(), matches.size());
     }
     return EXIT_SUCCESS;
@@ -261,8 +261,7 @@ int run_emit(const Args& args, const Binary& b) {
         debug_added > 0) {
         ann_loaded = true;
         if (!args.quiet) {
-            std::println(stderr,
-                "spelunk: debug info: {} function signature{}",
+            spelunk::diagnostic::print("spelunk: debug info: {} function signature{}",
                 debug_added, debug_added == 1 ? "" : "s");
         }
     }
@@ -312,7 +311,7 @@ int run_emit(const Args& args, const Binary& b) {
     if ((args.ipa || project_ipa) && (args.pseudo || args.strct)) {
         ScopedTimer t("ipa");
         if (!args.quiet) {
-            std::println(stderr, "spelunk: running {} IPA...",
+            spelunk::diagnostic::print("spelunk: running {} IPA...",
                          args.ipa ? "whole-binary" : "project-scoped");
             std::fflush(stderr);
         }
@@ -321,7 +320,7 @@ int run_emit(const Args& args, const Binary& b) {
             args.ipa ? std::span<const addr_t>{}
                      : std::span<const addr_t>(view_scope));
         if (!args.quiet) {
-            std::println(stderr, "spelunk: IPA done: {} functions analyzed", ipa.sigs.size());
+            spelunk::diagnostic::print("spelunk: IPA done: {} functions analyzed", ipa.sigs.size());
         }
         emit_opts.signatures = &ipa.sigs;
         emit_opts.type_arena = &ipa.arena;
@@ -335,11 +334,11 @@ int run_emit(const Args& args, const Binary& b) {
         // about to bail with "no symbol named X", so don't bother
         // resolving anything either.
         if (!view_scope.empty()) {
-            std::println(stderr, "spelunk: resolving indirect calls (vtable + "
+            spelunk::diagnostic::print("spelunk: resolving indirect calls (vtable + "
                                  "import back-trace)...");
             std::fflush(stderr);
             resolutions = resolve_indirect_calls(b, &shared_ir_cache, view_scope);
-            std::println(stderr, "spelunk: indirect-call resolver: {} sites resolved",
+            spelunk::diagnostic::print("spelunk: indirect-call resolver: {} sites resolved",
                          resolutions.size());
             emit_opts.call_resolutions = &resolutions;
         }
@@ -348,7 +347,7 @@ int run_emit(const Args& args, const Binary& b) {
     if (args.eh && (args.pseudo || args.strct)) {
         ScopedTimer t("eh_landing_pads");
         lp_map = parse_landing_pads(b);
-        std::println(stderr, "spelunk: EH data: {} landing-pad ranges parsed",
+        spelunk::diagnostic::print("spelunk: EH data: {} landing-pad ranges parsed",
                      lp_map.size());
         emit_opts.landing_pads = &lp_map;
     }
@@ -421,7 +420,7 @@ int run_emit(const Args& args, const Binary& b) {
         return run_each([&](std::string_view symbol) { return run_disasm(b, symbol, ann_ptr); });
     }
     if (batch) {
-        std::println(stderr, "spelunk: --symbols requires a function view such as -p or -d");
+        spelunk::diagnostic::print("spelunk: --symbols requires a function view such as -p or -d");
         return EXIT_FAILURE;
     }
     constexpr std::size_t kDefaultInfoRowLimit = 2000;

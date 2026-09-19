@@ -163,6 +163,33 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
         auto hit = fn.block_at.find(header);
         if (hit == fn.block_at.end()) continue;
         const auto& hbb = fn.blocks[hit->second];
+        // A throw/abort guard in the header is not the loop's normal
+        // continuation. Prefer an ordinary latch exit when one is proven;
+        // otherwise retain the old header-exit choice as a safe fallback.
+        const auto terminal_guard = [&](addr_t start) {
+            std::set<addr_t> visiting;
+            std::map<addr_t, bool> memo;
+            unsigned budget = 64;
+            const auto visit = [&](auto&& self, addr_t address) -> bool {
+                if (auto found = memo.find(address); found != memo.end()) return found->second;
+                if (!budget || !visiting.insert(address).second) return false;
+                --budget;
+                const auto found = fn.block_at.find(address);
+                if (found == fn.block_at.end()) return false;
+                const auto& block = fn.blocks[found->second];
+                bool terminal = !block.insts.empty() && block.insts.back().op == IrOp::Unreachable;
+                if (!terminal && !block.successors.empty() && block.kind != BlockKind::Return &&
+                    block.kind != BlockKind::TailCall) {
+                    terminal = std::ranges::all_of(block.successors,
+                        [&](addr_t successor) { return self(self, successor); });
+                }
+                visiting.erase(address);
+                memo.emplace(address, terminal);
+                return terminal;
+            };
+            return visit(visit, start);
+        };
+        addr_t guarded_exit = kNoAddr;
         // Top-tested loop (while/for): header itself is the predicate
         // and exactly one arm exits the loop.
         if (hbb.kind == BlockKind::Conditional && hbb.successors.size() == 2) {
@@ -170,14 +197,87 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
             addr_t s2 = hbb.successors[1];
             const bool s1_loops = can_reach(s1, backs, /*forbidden=*/header);
             const bool s2_loops = can_reach(s2, backs, /*forbidden=*/header);
-            if (s1_loops && !s2_loops)      { info.loop_exit[header] = s2; continue; }
-            else if (s2_loops && !s1_loops) { info.loop_exit[header] = s1; continue; }
+            if (s1_loops != s2_loops) {
+                const auto exit = s1_loops ? s2 : s1;
+                info.loop_exit[header] = exit;
+                if (!terminal_guard(exit)) continue;
+                guarded_exit = exit;
+            }
             // Both arms loop - header's conditional is internal to the
             // body (e.g. a skip-and-accumulate fork), and the real exit
             // sits on a back-edge tail. Fall through to do-while
             // detection rather than leaving loop_exit unset, which would
             // strand the post-loop block in the parent build_sequence.
         }
+        // Some compilers put an unconditional jump on the back edge and the
+        // actual exit test in an earlier block. Examine the complete natural
+        // loop, not just its latches, before choosing a continuation.
+        std::set<addr_t> natural{header};
+        std::vector<addr_t> pending(backs.begin(), backs.end());
+        while (!pending.empty()) {
+            const auto address = pending.back(); pending.pop_back();
+            if (!natural.insert(address).second) continue;
+            const auto found = fn.block_at.find(address);
+            if (found == fn.block_at.end()) continue;
+            for (const auto pred : fn.blocks[found->second].predecessors)
+                if (dominates(info.idom, header, pred)) pending.push_back(pred);
+        }
+        std::set<addr_t> ordinary_exits;
+        bool has_terminal_guard = false;
+        for (const auto address : natural) {
+            const auto found = fn.block_at.find(address);
+            if (found == fn.block_at.end()) continue;
+            for (const auto successor : fn.blocks[found->second].successors) {
+                if (natural.contains(successor)) continue;
+                if (terminal_guard(successor)) has_terminal_guard = true;
+                else ordinary_exits.insert(successor);
+            }
+        }
+        addr_t guarded_continuation = kNoAddr;
+        if (has_terminal_guard && !ordinary_exits.empty()) {
+            // Ordinary post-dominance includes throw paths. Find the first
+            // common continuation of *returning* paths instead, keeping each
+            // side's terminal guards before that join. Exit trampolines and
+            // exits that themselves contain a throw check both occur here.
+            const auto reaches = [&](addr_t start, addr_t candidate, bool avoid) {
+                std::vector<addr_t> work{start};
+                std::set<addr_t> seen;
+                while (!work.empty()) {
+                    const auto node = work.back(); work.pop_back();
+                    if (!seen.insert(node).second) continue;
+                    if (node == candidate) { if (!avoid) return true; else continue; }
+                    if (natural.contains(node)) { if (avoid) return true; else continue; }
+                    if (terminal_guard(node)) continue;
+                    const auto found = fn.block_at.find(node);
+                    if (found == fn.block_at.end()) { if (avoid) return true; else continue; }
+                    const auto& block = fn.blocks[found->second];
+                    if (avoid && (block.successors.empty() || block.kind == BlockKind::Return ||
+                                  block.kind == BlockKind::TailCall)) return true;
+                    work.insert(work.end(), block.successors.begin(), block.successors.end());
+                }
+                return false;
+            };
+            std::deque<addr_t> candidates{*ordinary_exits.begin()};
+            std::set<addr_t> seen;
+            unsigned budget = 128;
+            while (!candidates.empty() && budget) {
+                --budget;
+                const auto node = candidates.front(); candidates.pop_front();
+                if (!seen.insert(node).second || !fn.block_at.contains(node) ||
+                    natural.contains(node) || terminal_guard(node)) continue;
+                if (std::ranges::all_of(ordinary_exits, [&](addr_t start) {
+                        return reaches(start, node, false) && !reaches(start, node, true);
+                    })) {
+                    guarded_continuation = node;
+                    info.loop_exit[header] = node;
+                    break;
+                }
+                const auto found = fn.block_at.find(node);
+                if (found != fn.block_at.end()) for (const auto next : fn.blocks[found->second].successors)
+                    candidates.push_back(next);
+            }
+        }
+
         // Bottom-tested loop analysis. A single conditional back-edge tail can
         // become `do { ... } while (cond)` only when it is the loop's sole
         // latch. With multiple latches we may still retain a proven common exit
@@ -228,6 +328,8 @@ void find_loops(const IrFunction& fn, CfgInfo& info) {
             candidates, [&](const TailCandidate& candidate) {
                 return candidate.exit == common_exit;
             });
+        if (guarded_exit != kNoAddr && (!share_exit || terminal_guard(common_exit))) continue;
+        if (guarded_continuation != kNoAddr && common_exit != guarded_continuation) continue;
         if (share_exit) info.loop_exit[header] = common_exit;
         if (backs.size() == 1 && candidates.size() == 1) {
             info.do_while_tail[header] = candidates.front().tail;

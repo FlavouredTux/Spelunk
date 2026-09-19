@@ -703,6 +703,10 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
         append_return("return;");
         return;
     }
+    if (current_return_is_unknown) {
+        append_return(std::format("return; /* return register: {}; source return value unproven */", expr(returned)));
+        return;
+    }
     if (is_void_call_result(returned)) {
         append_return("return;");
         return;

@@ -619,6 +619,46 @@ int test_single_conditional_latch_is_do_while() {
     return 0;
 }
 
+int test_terminal_header_guard_stays_inside_loop() {
+    for (const bool terminal : {false, true}) {
+        constexpr addr_t entry = 0x6800, header = 0x6810, guard = 0x6820;
+        constexpr addr_t body = 0x6830, tail = 0x6840, exit = 0x6850;
+        const auto condition = IrValue::make_temp(0, IrType::I1);
+        IrFunction fn;
+        fn.start = entry; fn.end = exit + 4; fn.name = "guarded_loop";
+        fn.next_temp_id = 1;
+        add_block(fn, entry, BlockKind::Unconditional, {}, {header}, {make_branch(entry, header)});
+        add_block(fn, header, BlockKind::Conditional, {entry, tail}, {guard, body},
+                  {make_cond_branch(header, condition, guard, body)});
+        IrInst stop = make_ret(guard);
+        if (terminal) stop.op = IrOp::Unreachable;
+        add_block(fn, guard, terminal ? BlockKind::IndirectJmp : BlockKind::Return, {header}, {}, {stop});
+        add_block(fn, body, BlockKind::Conditional, {header}, {exit, tail},
+                  {make_cond_branch(body, condition, exit, tail)});
+        add_block(fn, tail, BlockKind::Conditional, {body}, {header, exit},
+                  {make_cond_branch(tail, condition, header, exit)});
+        add_block(fn, exit, BlockKind::Return, {body, tail}, {}, {make_ret(exit)});
+        auto structured = Structurer{}.structure(fn);
+        check(structured.has_value(), "loop with guarded header structures");
+        if (!structured) return 1;
+        const auto* loop = find_loop_with_header(*structured->body, header);
+        check(loop != nullptr, "guarded loop remains a loop");
+        if (!loop) return 1;
+        if (terminal) {
+            check((loop->kind == RegionKind::DoWhile || loop->kind == RegionKind::Loop) && contains_block(*loop, guard),
+                  "non-returning header guard is inside the loop rather than its continuation");
+            check(!contains_block(*loop, exit) && count_blocks(*structured->body, exit) == 1,
+                  "successful continuation stays after the loop exactly once");
+            check(count_regions(*structured->body, RegionKind::Goto) == 0,
+                  "normal and guarded loop exits need no jumps into conditional bodies");
+        } else {
+            check(loop->kind == RegionKind::While && !contains_block(*loop, guard),
+                  "ordinary header return is not mistaken for a terminal throw guard");
+        }
+    }
+    return 0;
+}
+
 int test_do_while_requires_sole_exiting_backedge() {
     const auto make_extra_latch = [] {
         constexpr addr_t kEntry = 0x6500;
@@ -772,6 +812,7 @@ int run_structurer_control_flow_tests() {
     rc |= test_loop_exit_inside_switch_remains_targeted();
     rc |= test_for_update_requires_one_direct_latch();
     rc |= test_single_conditional_latch_is_do_while();
+    rc |= test_terminal_header_guard_stays_inside_loop();
     rc |= test_do_while_requires_sole_exiting_backedge();
     rc |= test_multiple_conditional_latches_are_not_do_while();
     return rc;

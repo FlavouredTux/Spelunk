@@ -180,6 +180,8 @@ provenance_preamble(const Annotations& annotations, addr_t start) {
 // IrType to pick an appropriate C type rather than always saying `u64`.
 [[nodiscard]] std::string
 infer_return_type(const Emitter& e, const StructuredFunction& sf) {
+    if (!e.options.c_source && e.has_ambiguous_output_pointer_return(sf))
+        return "unknown_return_t";
     // Interprocedural inference is the strongest available type evidence and
     // wins over presentation heuristics for PPC carriers and low-byte Phis.
     if (e.options.signatures && e.options.type_arena && sf.ir) {
@@ -403,6 +405,7 @@ header_display_name(const Emitter& e, const StructuredFunction& sf,
 function_header(Emitter& e, std::string_view ret, std::string_view name,
                 std::string_view params) {
     e.current_return_is_void = ret == "void";
+    e.current_return_is_unknown = ret == "unknown_return_t";
     return std::format("{} {}({}) {{\n", ret, name, params);
 }
 

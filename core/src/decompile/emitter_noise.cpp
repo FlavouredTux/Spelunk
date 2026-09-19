@@ -17,6 +17,36 @@
 
 namespace spelunk::emit {
 
+bool Emitter::has_ambiguous_output_pointer_return(const StructuredFunction& sf) const {
+    if (!fn || !sf.body || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return false;
+    bool saw_return = false;
+    const auto visit = [&](auto&& self, const Region& region) -> bool {
+        if (region.kind == RegionKind::Return) {
+            saw_return = true;
+            const auto value = region.condition;
+            if (value.kind == IrValueKind::None || is_float_type(value.type)) return false;
+            const auto slot = trace_to_self_arg_slot(value);
+            if (!slot || *slot >= self_arg_layout.size()) return false;
+            if (!c_type_name_for(value).ends_with('*') &&
+                (*slot >= self_arg_type_names.size() || !self_arg_type_names[*slot].ends_with('*')))
+                return false;
+            const auto found = fn->block_at.find(region.block_start);
+            if (found == fn->block_at.end()) return false;
+            const auto* definition = def_stripped(value);
+            return std::ranges::any_of(fn->blocks[found->second].insts, [&](const IrInst& inst) {
+                if (inst.op != IrOp::Store || inst.src_count < 2 || inst.segment != Reg::None ||
+                    stack_offset(inst.srcs[0])) return false;
+                return same_value_key(inst.srcs[0], value) ||
+                    (definition && definition == def_stripped(inst.srcs[0]));
+            });
+        }
+        return std::ranges::all_of(region.children, [&](const auto& child) {
+            return !child || self(self, *child);
+        });
+    };
+    return visit(visit, *sf.body) && saw_return;
+}
+
 void Emitter::analyze_abi_noise() {
     // Pass 0: PE UNWIND_INFO-driven prologue suppression. The byte range
     // [entry, prologue_end) from .xdata is authoritative - every inst

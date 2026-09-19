@@ -299,7 +299,14 @@ std::string Emitter::expand(const IrInst& d, int depth, int min_prec) const {
         }
         case IrOp::Or:   return format_bitop(d, "|", depth, min_prec, Prec::BitOr);
         case IrOp::Xor:  return format_bitop(d, "^", depth, min_prec, Prec::BitXor);
-        case IrOp::Shl:  return format_binop(d, "<<", depth, min_prec, Prec::Shift, false);
+        case IrOp::Shl: {
+            if (auto count = bounded_loop_shift_count(d)) {
+                IrInst bounded = d;
+                bounded.srcs[1] = *count;
+                return format_binop(bounded, "<<", depth, min_prec, Prec::Shift, false);
+            }
+            return format_binop(d, "<<", depth, min_prec, Prec::Shift, false);
+        }
         case IrOp::Lshr:
         case IrOp::Ashr: {
             const unsigned bits = type_bits(d.srcs[0].type);

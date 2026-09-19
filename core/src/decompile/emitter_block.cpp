@@ -422,7 +422,8 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
                                         std::vector<std::string>& rendered_call_args) const {
     const auto char_address = [&](i64 offset) {
         // char* also describes an out-parameter pointing to one scalar byte.
-        // Only arrays decay: an initialized scalar still needs its address.
+        // Only arrays decay: scalar out-parameters still need their address,
+        // even when the compiler eliminated initialization before the call.
         const auto required = stack_required_extents.find(offset);
         const auto storage = stack_byte_storage_ranges.find(offset);
         if (fn && (required == stack_required_extents.end() || required->second <= 1) &&
@@ -430,6 +431,12 @@ void Emitter::refine_rendered_call_args(const std::string& direct_name,
             for (const auto& block : fn->blocks) for (const auto& inst : block.insts) {
                 if (inst.op == IrOp::Store && inst.src_count >= 2 &&
                     inst.srcs[1].type == IrType::I8 && stack_offset(inst.srcs[0]) == offset)
+                    return "&" + stack_name(offset);
+            }
+            const auto slot = frame_layout.slots.find(offset);
+            if (slot != frame_layout.slots.end() && slot->second.direct_observed && slot->second.size_bytes == 1) {
+                const auto next = std::next(slot);
+                if (options.c_source || (next != frame_layout.slots.end() && next->first - offset == 1))
                     return "&" + stack_name(offset);
             }
         }

@@ -652,6 +652,9 @@ struct Emitter {
     std::map<u64, std::string> objc_block_capture_names;
     std::string objc_block_self_class;
     bool current_return_is_void = false;
+    bool current_return_is_unknown = false;
+    [[nodiscard]] bool has_ambiguous_output_pointer_return(const StructuredFunction& sf) const;
+    [[nodiscard]] std::optional<IrValue> bounded_loop_shift_count(const IrInst& shift) const;
 
     // For-loop update-instruction positions, pulled from every RegionKind::For
     // in the structured body. emit_block skips these so the increment doesn't

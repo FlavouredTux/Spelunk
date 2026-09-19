@@ -450,7 +450,113 @@ void test_inlined_return_maps_call_and_return_sources() {
 
 }  // namespace
 
+void test_bounded_loop_shift_count() {
+    const auto prove = [](unsigned width, i64 limit, i64 initial_shift,
+                          bool bypass, bool signed_compare, bool after_update) {
+        IrFunction fn;
+        fn.start = 0x5000; fn.end = 0x5050; fn.next_temp_id = 9;
+        const auto type = width == 64 ? IrType::I64 : IrType::I32;
+        const auto shift = IrValue::make_temp(0, type);
+        const auto index = IrValue::make_temp(1, type);
+        const auto next_shift = IrValue::make_temp(2, type);
+        const auto next_index = IrValue::make_temp(3, type);
+        auto shift_phi = make_phi(shift, {IrValue::make_imm(initial_shift, type), next_shift});
+        auto index_phi = make_phi(index, {IrValue::make_imm(0, type), next_index});
+        shift_phi.phi_preds = index_phi.phi_preds = {0x5000, 0x5030};
+        const auto add = [&](addr_t address, std::vector<addr_t> successors, std::vector<IrInst> insts) {
+            IrBlock block;
+            block.start = address; block.end = address + 0x10;
+            block.successors = std::move(successors); block.insts = std::move(insts);
+            fn.block_at[address] = fn.blocks.size(); fn.blocks.push_back(std::move(block));
+        };
+        add(0x5000, {0x5010}, {make_branch(0x5000, 0x5010)});
+        add(0x5010, bypass ? std::vector<addr_t>{0x5020, 0x5030} : std::vector<addr_t>{0x5020},
+            {shift_phi, index_phi});
+        IrInst narrow;
+        narrow.op = IrOp::Trunc; narrow.dst = IrValue::make_temp(4, IrType::I8);
+        narrow.srcs[0] = shift; narrow.src_count = 1;
+        IrInst widen;
+        widen.op = IrOp::ZExt; widen.dst = IrValue::make_temp(5, type);
+        widen.srcs[0] = narrow.dst; widen.src_count = 1;
+        IrInst masked = make_add(IrValue::make_temp(6, type), widen.dst, IrValue::make_imm(width - 1, type));
+        masked.op = IrOp::And;
+        IrInst shifted = make_add(IrValue::make_temp(7, type), IrValue::make_imm(1, type), masked.dst);
+        shifted.op = IrOp::Shl;
+        IrInst comparison = make_add(IrValue::make_temp(8, IrType::I1), index, IrValue::make_imm(limit, type));
+        comparison.op = signed_compare ? IrOp::CmpSgt : IrOp::CmpUgt;
+        std::vector<IrInst> work{narrow, widen, masked};
+        if (!after_update) work.push_back(shifted);
+        work.push_back(comparison);
+        work.push_back(make_cond_branch(0x5020, comparison.dst, 0x5040, 0x5030));
+        add(0x5020, {0x5040, 0x5030}, std::move(work));
+        std::vector<IrInst> update{
+            make_add(next_shift, shift, IrValue::make_imm(7, type)),
+            make_add(next_index, index, IrValue::make_imm(1, type))};
+        if (after_update) update.push_back(shifted);
+        update.push_back(make_branch(0x5030, 0x5010));
+        add(0x5030, {0x5010}, std::move(update));
+        add(0x5040, {}, {make_ret(0x5040)});
+        for (const auto& block : fn.blocks) for (const auto successor : block.successors)
+            fn.blocks[fn.block_at.at(successor)].predecessors.push_back(block.start);
+        Emitter emitter(nullptr);
+        emitter.fn = &fn; emitter.abi = Abi::SysVAmd64;
+        emitter.ssa_uses.scan(fn);
+        return emitter.bounded_loop_shift_count(shifted).has_value();
+    };
+    check(prove(64, 8, 0, false, false, false), "nine increments of seven bound shifts to 0..63");
+    check(!prove(64, 9, 0, false, false, false), "a possible shift of 70 retains the hardware mask");
+    check(!prove(64, 8, 1, false, false, false), "nonzero seed that permits 64 retains the mask");
+    check(prove(32, 3, 0, false, false, false), "32-bit shift proof respects its smaller count range");
+    check(!prove(32, 4, 0, false, false, false), "32-bit shift at 35 is not unmasked");
+    check(!prove(64, 8, 0, true, false, false), "a path bypassing the bound invalidates the proof");
+    check(!prove(64, 8, 0, false, true, false), "signed guards are not treated as unsigned bounds");
+    check(!prove(64, 8, 0, false, false, true), "old count is not rendered through an already updated merge local");
+}
+
+void test_output_address_does_not_claim_source_return_type() {
+    constexpr addr_t start = 0x4000;
+    IrFunction fn;
+    fn.start = start; fn.end = start + 4; fn.name = "write_output";
+    const auto pointer = IrValue::make_reg(Reg::Rdi, IrType::I64);
+    IrBlock block;
+    block.start = start; block.end = fn.end; block.kind = BlockKind::Return;
+    block.insts = {make_store(pointer, IrValue::make_imm(7, IrType::I64)), make_ret_value(start + 3, pointer)};
+    fn.block_at[start] = 0;
+    fn.blocks.push_back(std::move(block));
+    std::vector<std::unique_ptr<Region>> body;
+    body.push_back(block_region(start));
+    auto returned = return_region(pointer);
+    returned->block_start = start;
+    body.push_back(std::move(returned));
+    StructuredFunction sf{&fn, sequence(std::move(body))};
+    Annotations annotations;
+    annotations.signatures[start] = FunctionSig{.return_type = "", .params = {{"uint64_t*", "output"}}};
+    PseudoCEmitter emitter;
+    auto inferred = emitter.emit(sf, nullptr, &annotations, {});
+    check(inferred && inferred->find("unknown_return_t ") != std::string::npos &&
+          inferred->find("return output;") == std::string::npos &&
+          inferred->find("source return value unproven") != std::string::npos,
+          "incidental output address is labelled unknown rather than a source pointer return");
+    for (const std::string type : {"void", "uint64_t*"}) {
+        annotations.signatures[start].return_type = type;
+        auto declared = emitter.emit(sf, nullptr, &annotations, {});
+        check(declared && declared->find("unknown_return_t") == std::string::npos,
+              "explicit void and pointer return signatures override uncertainty");
+        if (type != "void") check(declared && declared->find("return output;") != std::string::npos,
+                                  "declared pointer return remains a real value return");
+    }
+    annotations.signatures[start].return_type.clear();
+    EmitOptions strict;
+    strict.c_source = true;
+    auto exported = emitter.emit(sf, nullptr, &annotations, strict);
+    check(exported && exported->find("unknown_return_t") == std::string::npos &&
+          exported->find("return output;") != std::string::npos,
+          "strict C export continues to model the actual ABI return register");
+}
+
 int main() {
+    test_bounded_loop_shift_count();
+    test_output_address_does_not_claim_source_return_type();
     test_common_tail_strips_only_terminal_returns();
     test_public_emit_does_not_mutate_region_tree();
     test_void_tail_probe_keeps_deferred_call();

@@ -20,6 +20,151 @@
 
 namespace spelunk::emit {
 
+std::optional<IrValue> Emitter::bounded_loop_shift_count(const IrInst& shift) const {
+    // Narrow induction proof: a unit-step index bounds a synchronized shift
+    // counter on every back edge. Unproved ranges keep the hardware mask.
+    if (!fn || fn->blocks.size() > 256 || shift.src_count != 2 ||
+        (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return std::nullopt;
+    const unsigned width = type_bits(shift.dst.type);
+    if (width != 32 && width != 64) return std::nullopt;
+    const auto* masked = def_stripped(shift.srcs[1]);
+    if (!masked || masked->op != IrOp::And || masked->src_count != 2) return std::nullopt;
+    IrValue count;
+    if (resolve_imm(masked->srcs[1]) == width - 1) count = masked->srcs[0];
+    else if (resolve_imm(masked->srcs[0]) == width - 1) count = masked->srcs[1];
+    else return std::nullopt;
+    for (unsigned depth = 0; depth < 12; ++depth) {
+        const auto* cast = def_of(count);
+        if (!cast || cast->src_count != 1 || (cast->op != IrOp::Assign && cast->op != IrOp::Trunc &&
+            cast->op != IrOp::ZExt && cast->op != IrOp::SExt)) break;
+        if (type_bits(cast->dst.type) < 8 || type_bits(cast->srcs[0].type) < 8) return std::nullopt;
+        count = cast->srcs[0];
+    }
+    const auto* shift_phi = def_of(count);
+    if (!shift_phi || shift_phi->op != IrOp::Phi || shift_phi->phi_preds.size() != 2 ||
+        shift_phi->phi_operands.size() != 2 || shift_phi->dst.type != count.type ||
+        type_bits(count.type) < 8 || type_bits(count.type) > 64)
+        return std::nullopt;
+    const IrBlock* header = nullptr;
+    const IrBlock* shift_block = nullptr;
+    std::size_t shift_index = 0;
+    for (const auto& block : fn->blocks) for (std::size_t i = 0; i < block.insts.size(); ++i) {
+        if (&block.insts[i] == shift_phi) header = &block;
+        if (ssa_key(block.insts[i].dst) == ssa_key(shift.dst)) { shift_block = &block; shift_index = i; }
+    }
+    if (!header || !shift_block) return std::nullopt;
+    if (header->predecessors.size() != 2 ||
+        !std::ranges::all_of(header->predecessors, [&](addr_t pred) {
+            return std::ranges::find(shift_phi->phi_preds, pred) != shift_phi->phi_preds.end();
+        })) return std::nullopt;
+    const auto order = compute_rpo(*fn);
+    std::unordered_map<addr_t, std::size_t> indices;
+    for (std::size_t i = 0; i < order.size(); ++i) indices[order[i]] = i;
+    const auto dominators = compute_idoms(*fn, order, indices);
+    const auto dominates = [&](addr_t ancestor, addr_t node) {
+        for (std::size_t i = 0; i <= fn->blocks.size(); ++i) {
+            if (ancestor == node) return true;
+            const auto found = dominators.find(node);
+            if (found == dominators.end() || found->second == node) break;
+            node = found->second;
+        }
+        return false;
+    };
+    unsigned back = 0;
+    if (dominates(header->start, shift_phi->phi_preds[0])) back = 0;
+    else if (dominates(header->start, shift_phi->phi_preds[1])) back = 1;
+    else return std::nullopt;
+    if (dominates(header->start, shift_phi->phi_preds[1 - back])) return std::nullopt;
+    const auto step_for = [&](const IrInst& phi, unsigned index) -> std::optional<u64> {
+        const auto* step = def_stripped(phi.phi_operands[index]);
+        if (!step || step->op != IrOp::Add || step->src_count != 2 || step->dst.type != phi.dst.type ||
+            step->srcs[0].type != phi.dst.type || step->srcs[1].type != phi.dst.type)
+            return std::nullopt;
+        for (unsigned i = 0; i < 2; ++i) {
+            if (same_ssa(step->srcs[i], phi.dst)) {
+                const auto amount = resolve_imm(step->srcs[1 - i]);
+                if (amount && *amount > 0) return static_cast<u64>(*amount);
+            }
+        }
+        return std::nullopt;
+    };
+    const auto increment = step_for(*shift_phi, back);
+    if (shift_phi->phi_operands[1 - back].kind != IrValueKind::Imm ||
+        shift_phi->phi_operands[1 - back].type != shift_phi->dst.type) return std::nullopt;
+    const auto initial_shift = resolve_imm(shift_phi->phi_operands[1 - back]);
+    if (!increment || !initial_shift || *initial_shift < 0 || static_cast<u64>(*initial_shift) >= width)
+        return std::nullopt;
+    const auto* update = def_stripped(shift_phi->phi_operands[back]);
+    bool before_update = false;
+    for (const auto& block : fn->blocks) for (std::size_t i = 0; i < block.insts.size(); ++i)
+        if (&block.insts[i] == update) before_update = dominates(shift_block->start, block.start) &&
+            (shift_block->start != block.start || shift_index < i);
+    if (!before_update) return std::nullopt;
+
+    for (const auto& index_phi : header->insts) {
+        if (index_phi.op != IrOp::Phi || index_phi.phi_preds != shift_phi->phi_preds ||
+            index_phi.phi_operands.size() != 2 || step_for(index_phi, back) != 1) continue;
+        if (index_phi.phi_operands[1 - back].kind != IrValueKind::Imm ||
+            index_phi.phi_operands[1 - back].type != index_phi.dst.type) continue;
+        const auto initial_index = resolve_imm(index_phi.phi_operands[1 - back]);
+        if (!initial_index || *initial_index < 0) continue;
+        const auto index_bits = type_bits(index_phi.dst.type);
+        if (index_bits < 8 || index_bits > 64 || (index_bits < 64 &&
+            static_cast<u64>(*initial_index) >= (u64{1} << index_bits))) continue;
+        for (const auto& guard : fn->blocks) {
+            if (guard.insts.empty() || guard.insts.back().op != IrOp::CondBranch) continue;
+            const auto& branch = guard.insts.back();
+            if (!branch.src_count) continue;
+            IrValue condition = branch.srcs[0];
+            bool inverted = false;
+            for (unsigned i = 0; i < 8; ++i) {
+                const auto* negation = def_stripped(condition);
+                if (!negation || negation->op != IrOp::Not || !negation->src_count) break;
+                condition = negation->srcs[0]; inverted = !inverted;
+            }
+            auto comparison = match_and_notzf_notcf(condition); // index > bound
+            bool allowed_on_true = false;
+            if (!comparison) { comparison = match_or_cf_zf(condition); allowed_on_true = true; }
+            if (!comparison) {
+                const auto* direct = def_stripped(condition);
+                if (direct && direct->src_count == 2 &&
+                    (direct->op == IrOp::CmpUle || direct->op == IrOp::CmpUgt)) {
+                    comparison = SubOps{direct->srcs[0], direct->srcs[1]};
+                    allowed_on_true = direct->op == IrOp::CmpUle;
+                }
+            }
+            if (!comparison || comparison->a.type != index_phi.dst.type ||
+                !same_ssa(comparison->a, index_phi.dst)) continue;
+            const auto limit = resolve_imm(comparison->b);
+            if (!limit || *limit < 0 || static_cast<u64>(*limit) >= width) continue;
+            const auto allowed = allowed_on_true != inverted ? branch.target1 : branch.target2;
+            // The bounded edge must gate this iteration's back edge. Stop at
+            // the header so a bound checked in an earlier iteration cannot
+            // accidentally justify a later unguarded update.
+            bool bypass = false;
+            if (!(guard.start == shift_phi->phi_preds[back] && allowed == header->start)) {
+                std::vector<addr_t> pending{header->start};
+                std::set<addr_t> seen;
+                while (!pending.empty()) {
+                    const auto address = pending.back(); pending.pop_back();
+                    if (!seen.insert(address).second) continue;
+                    if (address == shift_phi->phi_preds[back]) { bypass = true; break; }
+                    const auto found = fn->block_at.find(address);
+                    if (found == fn->block_at.end()) { bypass = true; break; }
+                    for (const auto next : fn->blocks[found->second].successors)
+                        if (next != header->start && !(address == guard.start && next == allowed)) pending.push_back(next);
+                }
+            }
+            if (bypass) continue;
+            const u64 iterations = *initial_index <= *limit
+                ? static_cast<u64>(*limit - *initial_index) + 1 : 0;
+            const u64 room = width - 1 - static_cast<u64>(*initial_shift);
+            if (iterations <= room / *increment) return count;
+        }
+    }
+    return std::nullopt;
+}
+
 const IrInst* Emitter::def_stripped(const IrValue& v) const noexcept {
     const IrInst* d = def_of(v);
     std::array<const IrInst*, 64> visited{};

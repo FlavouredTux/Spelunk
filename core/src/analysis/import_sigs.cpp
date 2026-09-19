@@ -79,6 +79,7 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
     if (name == "__cxa_begin_catch") return m(t_voidp(a), {t_voidp(a)});
     if (name == "_Unwind_Resume") return m(t_void(a), {t_voidp(a)});
     if (name == "__stack_chk_fail") return m(t_void(a), {});
+    if (name == "longjmp") return m(t_void(a), {t_voidp(a), t_int32s(a)});
 
     // ---- <string.h> --------------------------------------------------------
     if (name == "strlen")    return m(t_size(a),   {t_charp(a)});

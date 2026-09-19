@@ -1614,6 +1614,10 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/varint_test.py"
                     $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
             set_tests_properties(varint_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME varint_control_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/varint_control_test.py"
+                    $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
+            set_tests_properties(varint_control_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME x64_call_frame_semantics
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/x64_call_frame_test.py"
                     $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
@@ -1688,6 +1692,10 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/varint_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${SPELUNK_MACHO_TEST_CLANG}")
             set_tests_properties(varint_clang_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME varint_control_clang_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/varint_control_test.py"
+                    $<TARGET_FILE:spelunk_cli> "${SPELUNK_MACHO_TEST_CLANG}")
+            set_tests_properties(varint_control_clang_semantics PROPERTIES TIMEOUT 120)
         endif()
         add_test(NAME pseudocode_check_unit
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/pseudocode_check_test.py"
